@@ -1,7 +1,9 @@
-// Folding is PURE delegation to @codemirror/lang-markdown — Quoll ships no
-// custom foldService. These state-only tests pin the DELIVERED fold contract
-// via foldable() (which consults lang-markdown's headerIndent foldService AND
-// its foldNodeProp Block fallback, the source of every list-item fold). No view
+// These state-only tests pin the DELIVERED fold contract via foldable() against
+// upstream markdown({ base }) as a REFERENCE ORACLE. Heading folds are produced by
+// Quoll's re-implementation of lang-markdown's headerIndent foldService (see
+// cm/markdown.ts); list/table/block folds still come from lang-markdown's
+// foldNodeProp. These tests assert the upstream contract our language must match; the
+// direct-build parity is pinned in cm-markdown-language.test.ts. No view
 // is mounted, so no happy-dom pragma is needed.
 
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";

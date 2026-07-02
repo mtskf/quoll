@@ -1,8 +1,10 @@
 // Quoll fold gutter: PURE UI activation of CM-core folding for Markdown.
 //
-// NO custom foldService — fold ranges come from @codemirror/lang-markdown, MINUS
-// a Blockquote/Paragraph/code-block subtraction that lives in cm/markdown.ts
-// (`nonFoldableBlocks`), NOT here. (lang-markdown folds headings via its
+// Heading folds come from Quoll's re-implementation of lang-markdown's headerIndent
+// foldService (in cm/markdown.ts — re-implemented to avoid the markdown() wrapper's
+// HTML stack); every other Block fold comes from lang-markdown's foldNodeProp on
+// markdownLanguage.parser, MINUS a Blockquote/Paragraph/code-block subtraction that
+// also lives in cm/markdown.ts (`nonFoldableBlocks`), NOT here. (lang-markdown folds headings via its
 // headerIndent foldService AND every non-Document, non-heading Block — ListItem,
 // Paragraph, Blockquote, fenced/indented code, GFM tables — via foldNodeProp. We
 // override foldNodeProp for Blockquote + Paragraph + code blocks to null so prose
