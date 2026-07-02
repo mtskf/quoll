@@ -243,6 +243,10 @@
      * the use site (cm/fold/index.ts). HC gets a solid foreground fill below so
      * the borderless marker stays visible where the surface tints collapse. */
     --quoll-fold-fill: rgba(255, 255, 255, 0.15);
+    /* Bullet-list marker dot colour (bullet-marker-reveal.ts + cm/theme.ts's
+     * .quoll-bullet-marker::before). Dark = the accent green; light brightens it;
+     * HC re-points to the host accent. */
+    --quoll-bullet-marker: var(--quoll-accent-green);
     /* Selection tint: DARKEN the host dark-theme selection by ~18% rather than
      * hardcoding a hex, so the highlight still TRACKS whatever dark theme the
      * user runs (Dark+, a 3rd-party dark, …) while reading a touch calmer on
@@ -262,6 +266,7 @@
      * chosen L1 tone) so the marker reads on a light canvas; dots knock out to
      * the white page background. */
     --quoll-fold-fill: rgba(0, 0, 0, 0.15);
+    --quoll-bullet-marker: #23b06f;
     /* Light selection stays the plain host colour (user kept the current light
      * tint). Both HC kinds map to .light-theme, so HC selection is the plain
      * host colour too — maximal contrast, no HC override needed. */
@@ -295,6 +300,7 @@
      * a maximal-contrast ellipsis affordance in both HC kinds. */
     --quoll-fold-fill: var(--vscode-editor-foreground);
     --quoll-callout-tint-strength: 0%;
+    --quoll-bullet-marker: var(--quoll-accent-green);
   }
 }
 
