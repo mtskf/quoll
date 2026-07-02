@@ -95,13 +95,13 @@ export const quollHighlightSpec: TagStyle[] = [
   // Headings: navy-blue structural accent (size/weight already differentiate level).
   {
     tag: t.heading1,
-    fontSize: "1.6em",
+    fontSize: "1.8em",
     fontWeight: "700",
     color: "var(--quoll-accent-blue, var(--vscode-editor-foreground))",
   },
   {
     tag: t.heading2,
-    fontSize: "1.4em",
+    fontSize: "1.5em",
     fontWeight: "700",
     color: "var(--quoll-accent-blue, var(--vscode-editor-foreground))",
   },

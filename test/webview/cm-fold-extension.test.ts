@@ -226,7 +226,7 @@ describe("headingFoldGutterLineClass — per-level gutter tag for the first-row 
   });
 
   it("tags a Setext heading underlined with === as level 1", () => {
-    // Setext H1: the title line carries SetextHeading1 (heading1 tag → 1.6em).
+    // Setext H1: the title line carries SetextHeading1 (heading1 tag → 1.8em).
     const byLine = taggedClassByLine("Title line\n===\n\nbody\n");
     expect(byLine.get(1)).toBe("quoll-fold-heading-1");
     expect(byLine.size).toBe(1);
