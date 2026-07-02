@@ -483,7 +483,7 @@ describe("quollCopyButtonTheme", () => {
     // drifting to a stale hardcoded offset. REVERT-CHECK: hardcoding the padding
     // term back to `8px` (while -open uses the 12px token) mis-centres the button
     // and turns this red. The button's OWN geometry stays `em` (0.9em font).
-    expect(rule.top).toContain("var(--quoll-block-pad-y");
+    expect(rule.top).toContain("var(--quoll-block-pad-y, 12px)");
     expect(rule.top).toContain("var(--quoll-line-height");
   });
 });
