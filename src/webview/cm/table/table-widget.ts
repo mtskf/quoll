@@ -65,8 +65,8 @@ export class TableBlockWidget extends WidgetType {
 
     // Resource base for relative in-cell image srcs. Static per editor
     // (resource-base.ts), so it is NOT part of eq() — reading it at
-    // toDOM/updateDOM time is always current. Fail-closed: no state → "".
-    const resourceBase = view.state?.facet(quollResourceBaseUri) ?? "";
+    // toDOM/updateDOM time is always current.
+    const resourceBase = view.state.facet(quollResourceBaseUri);
     const align = tableAlign(this.table);
     const table = document.createElement("table");
     const thead = document.createElement("thead");
@@ -166,11 +166,16 @@ export class TableBlockWidget extends WidgetType {
     // Re-stamp the margin fallback so a reused element tracks the new docFrom
     // after a distant edit shifted this table without changing its bytes.
     dom.dataset.docFrom = String(this.docFrom);
-    const resourceBase = view.state?.facet(quollResourceBaseUri) ?? "";
+    const resourceBase = view.state.facet(quollResourceBaseUri);
     const align = tableAlign(this.table);
     this.patchRow(headerRows[0], this.table.header.cells, align, resourceBase);
     for (let rowIdx = 0; rowIdx < this.table.rows.length; rowIdx++) {
-      this.patchRow(bodyRows[rowIdx] as Element, this.table.rows[rowIdx].cells, align, resourceBase);
+      this.patchRow(
+        bodyRows[rowIdx] as Element,
+        this.table.rows[rowIdx].cells,
+        align,
+        resourceBase
+      );
     }
     return true;
   }

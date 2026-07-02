@@ -464,7 +464,12 @@ describe("tableBlockField — reveal and offset pins", () => {
       if (!widget) {
         throw new Error("no table widget");
       }
-      const dom = (widget as TableBlockWidget).toDOM({ dispatch() {} } as unknown as EditorView);
+      // toDOM reads the quollResourceBaseUri facet from view.state, so the
+      // stub needs a real (empty) EditorState (no facet value → base "").
+      const dom = (widget as TableBlockWidget).toDOM({
+        state: EditorState.create({}),
+        dispatch() {},
+      } as unknown as EditorView);
       // LF doc "| a | b |\n| - | - |\n| c | d |\n": first body cell 'c' content
       // is at offset 22 (row-3 '|'=20, ' '=21, 'c'=22), NOT 24 (adding \r back)
       // and NOT 20 (the line start).

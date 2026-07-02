@@ -34,8 +34,8 @@
 // resolve: a relative <a href> never auto-fetches and the click guard blocks
 // non-absolute navigation.
 
-import type { AllowlistedUrl } from "../../../markdown/url-allowlist.js";
 import { renderSafeMarkdownDestination } from "../../../markdown/render-safe-markdown-destination.js";
+import type { AllowlistedUrl } from "../../../markdown/url-allowlist.js";
 import { resolveAgainstBase } from "../image/resource-base.js";
 import { type Resolved, resolveInline, type Segment, type Span } from "./inline-emphasis.js";
 
@@ -414,11 +414,7 @@ export function parseCellInline(raw: string): Resolved<CellLeaf>[] {
 // values, escape unescaped chars, and inert-construct source slices into a
 // single Text node (preserving the single-text-node topology that the
 // renderReadonly topology tests pin). Flushed before every element node.
-export function renderReadonly(
-  ir: Resolved<CellLeaf>[],
-  raw: string,
-  resourceBase = ""
-): Node[] {
+export function renderReadonly(ir: Resolved<CellLeaf>[], raw: string, resourceBase = ""): Node[] {
   const out: Node[] = [];
   let pendingText = "";
 
@@ -470,7 +466,8 @@ export function renderReadonly(
             // directory (resolveAgainstBase → resolveTrustedResourceUrl),
             // matching the block-image widget. Fail-closed: no base / escape
             // / resolve failure → inert source text.
-            const src = leaf.safeUrl !== null ? resolveAgainstBase(leaf.safeUrl, resourceBase) : null;
+            const src =
+              leaf.safeUrl !== null ? resolveAgainstBase(leaf.safeUrl, resourceBase) : null;
             if (src !== null) {
               flushPending();
               const el = document.createElement("img");
