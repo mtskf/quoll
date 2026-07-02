@@ -2,10 +2,12 @@
 // text editor. Direction is classified from the ACTIVE TAB (Tabs API, stable
 // since 1.67) and the active text editor — stateless, no per-panel tracking:
 //   - Active tab is the Quoll custom editor  → forward: reopen in the text editor.
-//   - Otherwise a markdown text editor is active → reverse: stash its caret, then
-//     delegate to the validated `quoll.editWith` (which opens Quoll).
+//   - Otherwise a markdown text editor is active → reverse: validate with
+//     canEditWith, stash its caret, then open Quoll via vscode.openWith directly
+//     (NOT delegated to quoll.editWith, so a swallowed rejection cannot orphan
+//     the stash — the catch cleans it up).
 //   - Anything else (diff editor, non-markdown, non-text tab) → a friendly no-op
-//     notification (do NOT blindly run editWith).
+//     notification (do NOT blindly open Quoll).
 //
 // Not a "No-dual-editor" violation: forward drives VS Code's NATIVE text editor
 // (vscode.openWith … "default"); a convenience affordance, not a second runtime.
