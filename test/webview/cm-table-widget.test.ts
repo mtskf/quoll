@@ -1,8 +1,10 @@
 // @vitest-environment happy-dom
+import { EditorState } from "@codemirror/state";
 import { type EditorView as EditorViewType, WidgetType } from "@codemirror/view";
 import { describe, expect, it } from "vitest";
 
 import { parseTable } from "../../src/markdown/table/index.js";
+import { quollResourceBaseUri } from "../../src/webview/cm/image/resource-base.js";
 import { TableBlockWidget } from "../../src/webview/cm/table/table-widget.js";
 
 function makeWidget(src: string, docFrom = 0): TableBlockWidget {
@@ -13,16 +15,19 @@ function makeWidget(src: string, docFrom = 0): TableBlockWidget {
   return new TableBlockWidget(table, src, docFrom, 0);
 }
 
-/** Minimal view stub — display-only toDOM reads only `view.dispatch`. */
-function stubView(dispatched?: unknown[]): EditorViewType {
+/** Minimal view stub — display-only toDOM reads `view.dispatch` and
+ *  `view.state.facet(quollResourceBaseUri)` (a real EditorState so facet
+ *  reads work; no doc/extensions beyond the optional resource base). */
+function stubView(dispatched?: unknown[], resourceBase?: string): EditorViewType {
   return {
+    state: EditorState.create({
+      extensions: resourceBase === undefined ? [] : [quollResourceBaseUri.of(resourceBase)],
+    }),
     dispatch: (tr: unknown) => dispatched?.push(tr),
   } as unknown as EditorViewType;
 }
 
-const mockView = {
-  dispatch: () => {},
-} as unknown as EditorViewType;
+const mockView = stubView();
 
 describe("TableBlockWidget.toDOM", () => {
   it("renders a wrapper <div> containing <table> with <thead>, <tbody>, and one <tr> per row", () => {
@@ -227,7 +232,7 @@ describe("TableBlockWidget.toDOM", () => {
       throw new Error("fixture parse failed");
     }
     const dispatched: unknown[] = [];
-    const stub = { dispatch: (s: unknown) => dispatched.push(s) } as unknown as EditorViewType;
+    const stub = stubView(dispatched);
     const dom = new TableBlockWidget(table, src, 0, 0).toDOM(stub);
     const bodyCells = dom.querySelectorAll("tbody td");
     const expected = Number((bodyCells[1] as HTMLElement).dataset.cellFrom); // 'd'
@@ -242,7 +247,7 @@ describe("TableBlockWidget.toDOM", () => {
       throw new Error("fixture parse failed");
     }
     const dispatched: unknown[] = [];
-    const stub = { dispatch: (s: unknown) => dispatched.push(s) } as unknown as EditorViewType;
+    const stub = stubView(dispatched);
     const dom = new TableBlockWidget(table, src, 7, 7).toDOM(stub);
     dom.click(); // the root div, not a cell
     expect(dispatched).toEqual([{ selection: { anchor: 7 } }]);
@@ -256,7 +261,7 @@ describe("TableBlockWidget.toDOM", () => {
       throw new Error("fixture parse failed");
     }
     const dispatched: unknown[] = [];
-    const stub = { dispatch: (s: unknown) => dispatched.push(s) } as unknown as EditorViewType;
+    const stub = stubView(dispatched);
     const dom = new TableBlockWidget(table, src, 0, 2).toDOM(stub); // docFrom=0, nodeFrom=2
     const th = dom.querySelector("thead th") as HTMLElement;
     expect(th.dataset.cellFrom).toBe("4"); // nodeFrom 2 + 'a' at 2
@@ -273,7 +278,7 @@ describe("TableBlockWidget.toDOM", () => {
       throw new Error("fixture parse failed");
     }
     const dispatched: unknown[] = [];
-    const stub = { dispatch: (s: unknown) => dispatched.push(s) } as unknown as EditorViewType;
+    const stub = stubView(dispatched);
     const dom = new TableBlockWidget(table, src, 0, 0).toDOM(stub);
     const reused = new TableBlockWidget(table, src, 5, 5).updateDOM(dom, stub as EditorViewType);
     expect(reused).toBe(true);
@@ -444,5 +449,40 @@ describe("updateDOM", () => {
     const td = dom.querySelector("tbody td") as HTMLElement;
     expect(th.style.textAlign).toBe("");
     expect(td.style.textAlign).toBe("");
+  });
+});
+
+describe("resource-base threading (relative in-cell images)", () => {
+  const BASE = "https://csp/ws/notes/a.md";
+
+  it("toDOM resolves a relative in-cell image against the facet base", () => {
+    const src = "| ![p](./img.png) |\n| - |";
+    const dom = makeWidget(src).toDOM(stubView(undefined, BASE));
+    const img = dom.querySelector<HTMLImageElement>("th img");
+    expect(img?.getAttribute("src")).toBe("https://csp/ws/notes/img.png");
+  });
+
+  it("toDOM renders a traversal in-cell image inert (../ escape)", () => {
+    const src = "| ![p](../x.png) |\n| - |";
+    const dom = makeWidget(src).toDOM(stubView(undefined, BASE));
+    expect(dom.querySelector("img")).toBeNull();
+    expect(dom.querySelector("th")?.textContent).toBe("![p](../x.png)");
+  });
+
+  it("toDOM renders a relative in-cell image inert when no base facet is set", () => {
+    const src = "| ![p](./img.png) |\n| - |";
+    const dom = makeWidget(src).toDOM(stubView());
+    expect(dom.querySelector("img")).toBeNull();
+    expect(dom.querySelector("th")?.textContent).toBe("![p](./img.png)");
+  });
+
+  it("updateDOM (patchRow) resolves a relative image added by a cell edit", () => {
+    const srcA = "| a |\n| - |\n| plain |";
+    const srcB = "| a |\n| - |\n| ![p](./img.png) |";
+    const view = stubView(undefined, BASE);
+    const dom = makeWidget(srcA).toDOM(view);
+    expect(makeWidget(srcB).updateDOM(dom, view)).toBe(true);
+    const img = dom.querySelector<HTMLImageElement>("td img");
+    expect(img?.getAttribute("src")).toBe("https://csp/ws/notes/img.png");
   });
 });
