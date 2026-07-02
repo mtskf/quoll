@@ -143,7 +143,7 @@ export function foldPlaceholderDOM(view: EditorView, onclick: (event: Event) => 
 }
 
 // Heading levels whose CONTENT font-size exceeds the body (theme.ts
-// quollHighlightSpec: H1 1.6em / H2 1.4em / H3 1.2em). H4–H6 render at body size,
+// quollHighlightSpec: H1 1.8em / H2 1.5em / H3 1.2em). H4–H6 render at body size,
 // so their gutter box is a normal row and they need no special cap.
 type HeadingLevel = 1 | 2 | 3;
 // ATX (`# …`) and Setext (`…\n===`) headings both carry the heading1/2/3 tags, so
@@ -261,9 +261,9 @@ const quollFoldTheme = EditorView.theme({
   // Per-heading-level row cap (set on the heading line's gutter element by
   // headingFoldGutterLineClass). The marker inherits the var (custom props
   // inherit) and caps at one heading row instead of one body row. Mirrors
-  // quollHighlightSpec H1 1.6em / H2 1.4em / H3 1.2em (cm/theme.ts).
-  ".cm-foldGutter .cm-gutterElement.quoll-fold-heading-1": { "--quoll-fold-row-scale": "1.6" },
-  ".cm-foldGutter .cm-gutterElement.quoll-fold-heading-2": { "--quoll-fold-row-scale": "1.4" },
+  // quollHighlightSpec H1 1.8em / H2 1.5em / H3 1.2em (cm/theme.ts).
+  ".cm-foldGutter .cm-gutterElement.quoll-fold-heading-1": { "--quoll-fold-row-scale": "1.8" },
+  ".cm-foldGutter .cm-gutterElement.quoll-fold-heading-2": { "--quoll-fold-row-scale": "1.5" },
   ".cm-foldGutter .cm-gutterElement.quoll-fold-heading-3": { "--quoll-fold-row-scale": "1.2" },
   // Folded = the same chevron-down rotated to point right, PLUS a theme-following
   // green tint so a collapsed region reads at a glance. Static (no transition): CM

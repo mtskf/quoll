@@ -19,7 +19,7 @@ import {
 } from "../../src/webview/cm/decorations/fenced-code-copy-button-widget.js";
 import { quollSyntaxReveal } from "../../src/webview/cm/decorations/index.js";
 import type { BuildContext } from "../../src/webview/cm/decorations/types.js";
-import { copyButtonThemeSpec } from "../../src/webview/cm/theme.js";
+import { collapseToggleThemeSpec, copyButtonThemeSpec } from "../../src/webview/cm/theme.js";
 import { fullTree } from "./helpers/full-tree.js";
 
 // Derive SyntaxNode from fullTree's return (a lezer Tree) — same reason as the
@@ -198,23 +198,17 @@ describe("CopyButtonWidget", () => {
     }
   });
 
-  it("eq() is keyed on (docFrom, body, singleLine)", () => {
+  it("eq() is keyed on (docFrom, body)", () => {
     const a = new CopyButtonWidget(0, "x");
     expect(a.eq(new CopyButtonWidget(0, "x"))).toBe(true);
     expect(a.eq(new CopyButtonWidget(0, "y"))).toBe(false);
     expect(a.eq(new CopyButtonWidget(1, "x"))).toBe(false);
-    // Crossing the one-line boundary must rebuild the DOM (different marker).
-    expect(a.eq(new CopyButtonWidget(0, "x", true))).toBe(false);
-    expect(new CopyButtonWidget(0, "x", true).eq(new CopyButtonWidget(0, "x", true))).toBe(true);
   });
 
-  it("adds the single-line marker class ONLY when singleLine is set", () => {
-    const multi = new CopyButtonWidget(0, "x").toDOM({} as EditorView) as HTMLButtonElement;
-    expect(multi.classList.contains("quoll-copy-button")).toBe(true);
-    expect(multi.classList.contains("quoll-copy-button-single-line")).toBe(false);
-    const single = new CopyButtonWidget(0, "x", true).toDOM({} as EditorView) as HTMLButtonElement;
-    expect(single.classList.contains("quoll-copy-button")).toBe(true);
-    expect(single.classList.contains("quoll-copy-button-single-line")).toBe(true);
+  it("always carries the base copy-button class (no single-line variant)", () => {
+    const btn = new CopyButtonWidget(0, "x").toDOM({} as EditorView) as HTMLButtonElement;
+    expect(btn.classList.contains("quoll-copy-button")).toBe(true);
+    expect(btn.classList.contains("quoll-copy-button-single-line")).toBe(false);
   });
 
   it("a rapid second click cancels the prior revert timer (no flash back to default)", async () => {
@@ -365,13 +359,16 @@ describe("fencedCodeCopyButton DOM integration", () => {
     }
   });
 
-  it("marks a SINGLE-body-line block for centring; a multi-body-line block is not", () => {
-    // Caret parked on the trailing paragraph so BOTH blocks render concealed.
+  it("gives single- and multi-body-line blocks the same button, no single-line variant", () => {
+    // Caret parked on the trailing paragraph so BOTH blocks render concealed. The
+    // single-line centring variant was removed (single-line now top-aligns like a
+    // multi-line block), so neither carries the marker class.
     const singleDoc = "```js\nconst x = 1;\n```\n\npara";
     const single = mountFenced(singleDoc, singleDoc.indexOf("para") + 1);
     try {
       const btn = single.dom.querySelector<HTMLButtonElement>(".quoll-copy-button");
-      expect(btn?.classList.contains("quoll-copy-button-single-line")).toBe(true);
+      expect(btn).not.toBeNull();
+      expect(btn?.classList.contains("quoll-copy-button-single-line")).toBe(false);
     } finally {
       single.destroy();
     }
@@ -402,7 +399,7 @@ describe("fencedCodeCopyButton DOM integration", () => {
     }
   });
 
-  it("body caret reveals the open fence row; the copy button keeps its default (non-centred) anchor", () => {
+  it("body caret reveals the open fence row; the copy button keeps its top-right anchor", () => {
     const doc = "```js\nconst x = 1;\nlet y = 2;\n```\n\npara";
     const view = mountFenced(doc, doc.indexOf("const") + 2); // caret in the body
     try {
@@ -413,7 +410,7 @@ describe("fencedCodeCopyButton DOM integration", () => {
       expect(openLine.classList.contains("quoll-fenced-code-open")).toBe(true);
       const btn = view.dom.querySelector<HTMLButtonElement>(".quoll-copy-button");
       expect(btn).not.toBeNull();
-      // Multi-body block → never the single-line centred variant.
+      // The single-line marker variant was removed, so no block ever carries it.
       expect(btn?.classList.contains("quoll-copy-button-single-line")).toBe(false);
     } finally {
       view.destroy();
@@ -466,24 +463,26 @@ describe("quollCopyButtonTheme", () => {
     expect(copyButtonThemeSpec[".cm-line.quoll-fenced-code-fence-hidden"].fontSize).toBe("0.9em");
   });
 
-  it("centres the button on a SINGLE-line panel, scoped to the concealed display state", () => {
-    // The rule lives under the concealed open-fence row's class so it only fires
-    // while the panel is one visible row (real-pixel centring → browser harness).
-    const rule =
-      copyButtonThemeSpec[
-        ".cm-line.quoll-fenced-code-fence-hidden .quoll-copy-button.quoll-copy-button-single-line"
-      ];
-    expect(rule).toBeDefined();
-    // translateY(-50%) recentres the button's own height; `top` pushes it to the
-    // row's vertical centre (overriding the default top-right `top: 0.3em`).
-    expect(rule.transform).toBe("translateY(-50%)");
-    // `top` = the -open top padding + half the line box. The padding term is the
-    // SHARED --quoll-block-pad token (the same one the visible body row's -open
-    // paddingTop uses), so this centring tracks a retuned block pad instead of
-    // drifting to a stale hardcoded offset. REVERT-CHECK: hardcoding the padding
-    // term back to `8px` (while -open uses the 16px token) mis-centres the button
-    // and turns this red. The button's OWN geometry stays `em` (0.9em font).
-    expect(rule.top).toContain("var(--quoll-block-pad");
-    expect(rule.top).toContain("var(--quoll-line-height");
+  it("has no border (borderless icon affordance)", () => {
+    // Cast to widen off the exact literal type (the `border` key was dropped from
+    // the spec): if it is ever re-added, `.border` becomes defined and this fails.
+    const rule = copyButtonThemeSpec[".quoll-copy-button"] as Record<string, string | undefined>;
+    expect(rule.border).toBeUndefined();
+  });
+
+  it("shares ONE foreground + hover-background token with the collapse toggle (single source)", () => {
+    // entry: unify copy-button + collapse-bar colours. Both specs reference the
+    // SAME shared value (not duplicated literals) so retuning one moves both.
+    const copyFg = copyButtonThemeSpec[".quoll-copy-button"].color;
+    const collapseFg = collapseToggleThemeSpec[".quoll-fenced-collapse-toggle"].color;
+    expect(copyFg).toBe(collapseFg);
+    const copyHoverBg =
+      copyButtonThemeSpec[".quoll-copy-button:hover, .quoll-copy-button:focus-visible"]
+        .backgroundColor;
+    const collapseHoverBg =
+      collapseToggleThemeSpec[
+        ".quoll-fenced-collapse-toggle:hover, .quoll-fenced-collapse-toggle:focus-visible"
+      ].backgroundColor;
+    expect(copyHoverBg).toBe(collapseHoverBg);
   });
 });

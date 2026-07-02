@@ -95,13 +95,13 @@ export const quollHighlightSpec: TagStyle[] = [
   // Headings: navy-blue structural accent (size/weight already differentiate level).
   {
     tag: t.heading1,
-    fontSize: "1.6em",
+    fontSize: "1.8em",
     fontWeight: "700",
     color: "var(--quoll-accent-blue, var(--vscode-editor-foreground))",
   },
   {
     tag: t.heading2,
-    fontSize: "1.4em",
+    fontSize: "1.5em",
     fontWeight: "700",
     color: "var(--quoll-accent-blue, var(--vscode-editor-foreground))",
   },
@@ -177,13 +177,15 @@ export const blockStyleThemeSpec = {
     // below. Transparent 6px/2px borders reserve CM's base `.cm-line` text inset
     // and `background-clip: padding-box` paints the tint only inside them, so the
     // fill lands flush with paragraph text without moving the line's layout box.
-    // The --quoll-block-pad interior padding then insets the code within the panel
-    // (a SHARED token with the blockquote below so the two surfaces never drift).
+    // The --quoll-block-pad-x interior padding then insets the code within the panel
+    // (a SHARED token with the blockquote below so the two surfaces never drift). The
+    // vertical inset is the separate --quoll-block-pad-y (tighter than the horizontal),
+    // applied on the -open/-close edge lines only.
     borderLeft: "6px solid transparent",
     borderRight: "2px solid transparent",
     backgroundClip: "padding-box",
-    paddingLeft: "var(--quoll-block-pad, 16px)",
-    paddingRight: "var(--quoll-block-pad, 16px)",
+    paddingLeft: "var(--quoll-block-pad-x, 16px)",
+    paddingRight: "var(--quoll-block-pad-x, 16px)",
   },
   // Round the top + add top breathing room only on the opening fence line. Radii
   // are ELLIPTICAL to compensate for `background-clip: padding-box` (see
@@ -192,14 +194,16 @@ export const blockStyleThemeSpec = {
   // wanted PAINTED round, so the border-box HORIZONTAL radius is bumped by the
   // transparent-border width (`radius + 6px` left, `radius + 2px` right); the
   // vertical borders are 0, so the vertical radius passes through as the token
-  // value. Padding + radius are SHARED tokens with the blockquote / collapse-bar
-  // corners below — retuning :root moves all three surfaces together.
+  // value (the vertical --quoll-block-pad-y split is orthogonal to this — it does
+  // not change any border width). The top breathing room is --quoll-block-pad-y;
+  // radius is --quoll-block-radius. Both are SHARED tokens with the blockquote /
+  // collapse-bar corners below — retuning :root moves all three surfaces together.
   ".cm-line.quoll-fenced-code-open": {
     borderTopLeftRadius:
       "calc(var(--quoll-block-radius, 8px) + 6px) var(--quoll-block-radius, 8px)",
     borderTopRightRadius:
       "calc(var(--quoll-block-radius, 8px) + 2px) var(--quoll-block-radius, 8px)",
-    paddingTop: "var(--quoll-block-pad, 16px)",
+    paddingTop: "var(--quoll-block-pad-y, 12px)",
   },
   // Round the bottom + bottom breathing room only on the closing fence line.
   ".cm-line.quoll-fenced-code-close": {
@@ -207,7 +211,7 @@ export const blockStyleThemeSpec = {
       "calc(var(--quoll-block-radius, 8px) + 6px) var(--quoll-block-radius, 8px)",
     borderBottomRightRadius:
       "calc(var(--quoll-block-radius, 8px) + 2px) var(--quoll-block-radius, 8px)",
-    paddingBottom: "var(--quoll-block-pad, 16px)",
+    paddingBottom: "var(--quoll-block-pad-y, 12px)",
   },
   // Blockquote: subtle navy fill + muted text. The fill lands on every quote
   // line so the panel is continuous; horizontal padding insets the text from
@@ -234,8 +238,9 @@ export const blockStyleThemeSpec = {
     // stays full width, so CM's line geometry and the block-widget `margin:0`
     // height invariant are both untouched; a horizontal margin was rejected for
     // that reason). Left/right borders add no vertical height, and hit-testing is
-    // unchanged, so posAtCoords stays glyph-accurate. The --quoll-block-pad interior
-    // padding (SHARED with the fenced-code panel above) then insets the quote text
+    // unchanged, so posAtCoords stays glyph-accurate. The --quoll-block-pad-x interior
+    // padding (SHARED with the fenced-code panel above; the tighter vertical inset is
+    // --quoll-block-pad-y on the -open/-close lines) then insets the quote text
     // within the panel; box-sizing:border-box keeps the border+padding inside a
     // future explicit width. See the -open/-close corners
     // for the elliptical-radius compensation the clip requires. Pinned by
@@ -246,8 +251,8 @@ export const blockStyleThemeSpec = {
     borderLeft: "6px solid transparent",
     borderRight: "2px solid transparent",
     backgroundClip: "padding-box",
-    paddingLeft: "var(--quoll-block-pad, 16px)",
-    paddingRight: "var(--quoll-block-pad, 16px)",
+    paddingLeft: "var(--quoll-block-pad-x, 16px)",
+    paddingRight: "var(--quoll-block-pad-x, 16px)",
     color: "var(--vscode-descriptionForeground, var(--vscode-editor-foreground))",
   },
   // Round the top corners on the opening quote line, mirroring the fenced-code
@@ -262,7 +267,7 @@ export const blockStyleThemeSpec = {
       "calc(var(--quoll-block-radius, 8px) + 6px) var(--quoll-block-radius, 8px)",
     borderTopRightRadius:
       "calc(var(--quoll-block-radius, 8px) + 2px) var(--quoll-block-radius, 8px)",
-    paddingTop: "var(--quoll-block-pad, 16px)",
+    paddingTop: "var(--quoll-block-pad-y, 12px)",
   },
   // Round the bottom corners on the closing quote line (same treatment as -open).
   ".cm-line.quoll-blockquote-close": {
@@ -270,7 +275,7 @@ export const blockStyleThemeSpec = {
       "calc(var(--quoll-block-radius, 8px) + 6px) var(--quoll-block-radius, 8px)",
     borderBottomRightRadius:
       "calc(var(--quoll-block-radius, 8px) + 2px) var(--quoll-block-radius, 8px)",
-    paddingBottom: "var(--quoll-block-pad, 16px)",
+    paddingBottom: "var(--quoll-block-pad-y, 12px)",
   },
   // Nested-quote deeper tint (block-style.ts blockquoteDepthClass). A `> >` /
   // `> > >` line carries `quoll-blockquote-depth-{2,3}` ON TOP of the base
@@ -348,13 +353,13 @@ export const blockStyleThemeSpec = {
   // avoid widening the default-deny CSP for a cosmetic glyph).
   ".cm-line.quoll-callout-marker": {
     position: "relative",
-    paddingLeft: "calc(var(--quoll-block-pad, 16px) + 1.5em)",
+    paddingLeft: "calc(var(--quoll-block-pad-x, 16px) + 1.5em)",
     fontWeight: "600",
   },
   ".cm-line.quoll-callout-marker::before": {
     content: 'var(--quoll-callout-icon, "")',
     position: "absolute",
-    left: "var(--quoll-block-pad, 16px)",
+    left: "var(--quoll-block-pad-x, 16px)",
     pointerEvents: "none",
   },
   // A CONCEALED fence row (its ``` content is replaced by fenced-code-reveal, so
@@ -441,6 +446,17 @@ export const quollBulletMarkerTheme = EditorView.theme(bulletMarkerThemeSpec);
 // invariance of the open fence line (accounting for CM's inline `.cm-widgetBuffer`)
 // is confirmed by the real-browser smoke. Exported as a plain spec so
 // cm-fenced-code-copy-button.test.ts can pin the contract.
+// Shared FG + hover-BG for the two fenced-code panel controls — the copy button
+// (copyButtonThemeSpec) and the "Show N more lines" collapse toggle
+// (collapseToggleThemeSpec) — so the pair reads as a set. Single source of truth:
+// retune here and both controls move together (never duplicate the literals). The
+// foreground is the neutral token both specs already fell back to; the hover tint
+// is the toolbar-control background the collapse bar already used. Correct in both
+// light and dark.
+const fencedControlForeground = "var(--vscode-foreground)";
+const fencedControlHoverBackground =
+  "var(--vscode-toolbar-hoverBackground, rgba(255, 255, 255, 0.1))";
+
 export const copyButtonThemeSpec = {
   // The open fence line is the panel's top row; making it the positioning
   // context lets the absolutely-positioned button pin to the panel top-right.
@@ -473,60 +489,23 @@ export const copyButtonThemeSpec = {
     display: "inline-flex",
     alignItems: "center",
     justifyContent: "center",
-    padding: "0.25em",
-    color: "var(--vscode-button-secondaryForeground, var(--vscode-foreground))",
+    padding: "0.2em",
+    color: fencedControlForeground,
     backgroundColor: "var(--vscode-button-secondaryBackground, rgba(255, 255, 255, 0.08))",
-    border: "1px solid var(--vscode-widget-border, transparent)",
     borderRadius: "4px",
     cursor: "pointer",
     opacity: "0.6",
     transition: "opacity 0.1s ease-in-out",
     userSelect: "none",
   },
-  // A SINGLE-body-line fenced block collapses to ONE visible panel row (its
-  // concealed open/close fences are zero-height). The button is anchored to the
-  // zero-height concealed open-fence row that sits at the panel's TOP, so the
-  // default `top: 0.3em` pins it slightly ABOVE that lone row's vertical centre
-  // (2026-07-01 report). Centre it on the row instead. SCOPED to the concealed
-  // display state via the ancestor `.quoll-fenced-code-fence-hidden`: only while
-  // the fences are collapsed is the panel a single row. When the caret enters
-  // the block the open fence REVEALS (its row becomes `.quoll-fenced-code-open`,
-  // a 3-row panel) and this selector stops matching, so the button reverts to
-  // the default top-right anchor above — multi-line blocks lack the
-  // `-single-line` marker entirely and are byte-identical either way.
-  //
-  // Under block-scoped fence reveal (fenced-code-body.ts fencedCodeBlockRevealed) both
-  // fences share ONE reveal state, so the former "open hidden + close revealed" case —
-  // where this centred anchor could sit on a two-visible-row panel — can no longer
-  // occur: a caret anywhere in the block reveals BOTH fences (the open row becomes
-  // `.quoll-fenced-code-open`, this selector stops matching, button reverts to the
-  // default top-right anchor), and a caret outside conceals BOTH (single visible row,
-  // centred). The selector therefore matches exactly the one-visible-row state it was
-  // written for.
-  //
-  // `top` targets the row's vertical centre measured from the anchor (which sits
-  // at the row's box top): the `-open` top padding (--quoll-block-pad, the SAME
-  // token the visible body row's -open paddingTop uses, so this centring tracks a
-  // retuned pad instead of drifting) plus HALF the line box (`--quoll-line-height`
-  // unitless × 0.5em, so it tracks a retuned token — the button font is 0.9em,
-  // matching the body line, so 1em here === one body-line em). translateY(-50%)
-  // then recentres the button's OWN height generically, so no button dimension is
-  // hardcoded. NOTE: this is the ONE copy-button value coupled to the block-pad
-  // token — the button's own em geometry (top/right/padding/svg) is deliberately
-  // left in `em` to track the 0.9em code font. Real-pixel centring is confirmed in
-  // the browser harness (happy-dom has no layout — the fenced-collapse precedent).
-  ".cm-line.quoll-fenced-code-fence-hidden .quoll-copy-button.quoll-copy-button-single-line": {
-    top: "calc(var(--quoll-block-pad, 16px) + var(--quoll-line-height, 1.7) * 0.5em)",
-    transform: "translateY(-50%)",
-  },
   ".quoll-copy-button svg": {
     display: "block",
-    width: "1.1em",
-    height: "1.1em",
+    width: "1em",
+    height: "1em",
   },
   ".quoll-copy-button:hover, .quoll-copy-button:focus-visible": {
     opacity: "1",
-    backgroundColor: "var(--vscode-button-secondaryHoverBackground, rgba(255, 255, 255, 0.16))",
+    backgroundColor: fencedControlHoverBackground,
   },
   ".quoll-copy-button.is-copied": {
     opacity: "1",
@@ -552,7 +531,7 @@ export const quollCopyButtonTheme = EditorView.theme(copyButtonThemeSpec);
 // The rounded, padded footer edge shared by the collapse bar's TWO footer states —
 // the collapsed "Show more" bar AND the expanded "Show less" bar when it is the
 // panel's visible bottom. Both draw the same bottom radius + bottom padding as
-// .cm-line.quoll-fenced-code-close (SHARED --quoll-block-radius / --quoll-block-pad
+// .cm-line.quoll-fenced-code-close (SHARED --quoll-block-radius / --quoll-block-pad-y
 // tokens), so the three footers can never drift. Elliptical radii compensate for the
 // bar's `background-clip: padding-box` (see .quoll-fenced-code-open): the transparent
 // border eats into the corner, so the border-box radius is bumped by the border width
@@ -563,7 +542,7 @@ const collapseBarFooterCorner = {
     "calc(var(--quoll-block-radius, 8px) + 6px) var(--quoll-block-radius, 8px)",
   borderBottomRightRadius:
     "calc(var(--quoll-block-radius, 8px) + 2px) var(--quoll-block-radius, 8px)",
-  paddingBottom: "var(--quoll-block-pad, 16px)",
+  paddingBottom: "var(--quoll-block-pad-y, 12px)",
 };
 
 export const collapseToggleThemeSpec = {
@@ -581,8 +560,8 @@ export const collapseToggleThemeSpec = {
     borderLeft: "6px solid transparent",
     borderRight: "2px solid transparent",
     backgroundClip: "padding-box",
-    paddingLeft: "var(--quoll-block-pad, 16px)",
-    paddingRight: "var(--quoll-block-pad, 16px)",
+    paddingLeft: "var(--quoll-block-pad-x, 16px)",
+    paddingRight: "var(--quoll-block-pad-x, 16px)",
   },
   // COLLAPSED-state footer: in the collapsed state the closing fence line falls
   // inside the Decoration.replace concealed range (buildFencedCollapse), so this
@@ -597,9 +576,7 @@ export const collapseToggleThemeSpec = {
   // selectionEntersCollapsed fast path fires because the block-replace now covers the
   // fence). A collapsed block therefore can NEVER simultaneously show this rounded
   // Show-more footer AND a revealed rounded `.quoll-fenced-code-close` below it: the
-  // transient double-round is structurally impossible, not merely tolerated. (The
-  // copy-button's separate caret-on-close-fence centring note is unrelated — it is a
-  // single-body-line block, which is never collapsible.)
+  // transient double-round is structurally impossible, not merely tolerated.
   ".quoll-fenced-collapse-bar-collapsed": collapseBarFooterCorner,
   // EXPANDED-state footer. The "Show less" bar is a `side:1` block widget planted
   // AFTER the last body line (buildFencedCollapse, at concealTo), so the row directly
@@ -640,7 +617,7 @@ export const collapseToggleThemeSpec = {
     margin: "0.1em 0",
     fontSize: "0.85em",
     fontFamily: "var(--vscode-font-family, sans-serif)",
-    color: "var(--vscode-textLink-foreground, var(--vscode-foreground))",
+    color: fencedControlForeground,
     background: "none",
     border: "none",
     borderRadius: "4px",
@@ -649,7 +626,7 @@ export const collapseToggleThemeSpec = {
   },
   ".quoll-fenced-collapse-toggle:hover, .quoll-fenced-collapse-toggle:focus-visible": {
     opacity: "1",
-    backgroundColor: "var(--vscode-toolbar-hoverBackground, rgba(255, 255, 255, 0.1))",
+    backgroundColor: fencedControlHoverBackground,
   },
   ".quoll-fenced-collapse-toggle svg": {
     display: "block",
