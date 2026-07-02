@@ -33,11 +33,13 @@ function foldableAt(doc: string, at: number): { from: number; to: number } | nul
   return foldable(state, line.from, line.to);
 }
 
-describe("heading folding is delegated to lang-markdown (foldable contract)", () => {
-  // We do NOT own heading fold computation — lang-markdown's headerIndent
-  // foldService does. This pins the DELIVERED contract: with the markdown
-  // language active, a heading folds to the line before the next
-  // same-or-higher heading.
+describe("heading folding matches lang-markdown's contract (reference oracle)", () => {
+  // Heading fold is Quoll's OWN re-implementation (cm/markdown.ts headerIndent
+  // foldService); this suite pins the upstream markdown({ base }) contract it
+  // must match as a REFERENCE ORACLE — with the markdown language active, a
+  // heading folds to the line before the next same-or-higher heading. (The
+  // direct-build parity against quollMarkdownLanguage lives in
+  // cm-markdown-language.test.ts.)
   it("a heading folds to the next same-or-higher heading", () => {
     const doc = "# A\nbody1\nbody2\n# B\n";
     const state = stateFor(doc);

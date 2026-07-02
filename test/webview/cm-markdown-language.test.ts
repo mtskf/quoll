@@ -110,6 +110,7 @@ describe("re-implemented headerIndent folds byte-identically to upstream", () =>
     { doc: "Setext\n===\n\nbody\ntail\n", headAt: 0 }, // setext H1
     { doc: "# top\nintro\n### deep\nx\ny\n# end\n", headAt: 0 }, // top spans H3
     { doc: "> # A\n> body\n> # B\n", headAt: 0 }, // heading INSIDE a blockquote
+    { doc: "# A\nbody\n# B\nafter\n", headAt: "# A\nbody\n".length }, // mid-doc heading (headAt > 0): "# B" folds to EOF
   ];
 
   for (const { doc, headAt } of FIXTURES) {
@@ -120,4 +121,19 @@ describe("re-implemented headerIndent folds byte-identically to upstream", () =>
       expect(q).toEqual(u); // ...with byte-identical from/to to upstream.
     });
   }
+
+  // Boundary + break-guard coverage the FIXTURES loop (all non-empty sections)
+  // cannot reach — asserted as parity-on-null (both quoll and upstream return
+  // null): an EMPTY section returns null (sectionEnd === end, so `upto > end` is
+  // false — this kills a `>=` mutant of that comparison), and a body line PAST
+  // line 0 returns null via the `node.from < start` parent-walk break guard.
+  it("empty-section and post-heading body lines fold to null, matching upstream", () => {
+    const empty = "# A\n# B\n"; // sectionEnd(A) === A.to === end → no fold
+    expect(foldHeadingRange(quollLang, empty, 0)).toBeNull();
+    expect(foldHeadingRange(upstreamLang, empty, 0)).toBeNull();
+    const body = "# A\nbody\n";
+    const bodyAt = body.indexOf("body"); // headAt > 0 → exercises `node.from < start`
+    expect(foldHeadingRange(quollLang, body, bodyAt)).toBeNull();
+    expect(foldHeadingRange(upstreamLang, body, bodyAt)).toBeNull();
+  });
 });
