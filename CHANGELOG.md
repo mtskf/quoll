@@ -35,4 +35,6 @@ Highlights:
 
 Security: a host-side write gate validates every save (URL allowlist,
 frontmatter round-trip), and image and link destinations are gated so rendering
-and writing stay in lockstep.
+and writing stay in lockstep. The editor webview runs under a default-deny CSP
+(`base-uri`/`form-action` locked down), and relative image paths that traverse
+above the document's folder render as an inert placeholder.

@@ -3,7 +3,7 @@ import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
 import { forceParsing } from "@codemirror/language";
 import { EditorSelection, EditorState, type SelectionRange } from "@codemirror/state";
 import { type DecorationSet, EditorView } from "@codemirror/view";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { ImageBlockWidget } from "../../src/webview/cm/image/image-widget.js";
 import { imageBlockField, quollResourceBaseUri } from "../../src/webview/cm/image/index.js";
@@ -387,19 +387,23 @@ describe("imageBlockField — relative resolution", () => {
     }
   });
 
-  it("resolves a bare relative (no ./), and a ../parent path (resolved here; VS Code blocks the actual fetch at runtime since it is outside localResourceRoots)", () => {
-    // The field cannot know localResourceRoots (host-side), so it resolves
-    // `../x.png` to a same-origin URI; the broken-image icon at runtime (VS
-    // Code refusing the out-of-folder fetch) is the documented limitation, NOT
-    // the inert placeholder. The unit assertion checks resolution only.
+  it("resolves a bare relative (no ./), and rejects a ../parent path (inert placeholder, not a broken image)", () => {
+    // resolveTrustedResourceUrl rejects a resolved URL that escapes the
+    // document directory (containment check, defense in depth alongside
+    // localResourceRoots) — a `../` image renders the inert 🚫 placeholder
+    // instead of an <img> whose fetch VS Code would refuse anyway. The
+    // rejection also trips the once-per-session diagnostic breadcrumb
+    // (warnedUnresolvableImage latch in image-field.ts); silence it here to
+    // keep the suite output clean. Its once-only behavior is the latch's
+    // module-global state, so no call-count assertion (test-order coupling).
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const view = mountWithBase("text\n\n![d](sub/p.png)\n\n![e](../x.png)\n", BASE);
     try {
-      const urls = widgetsOf(view.state.field(imageBlockField))
-        .map((w) => w.safeUrl)
-        .sort();
-      expect(urls).toEqual(["https://csp/ws/notes/sub/p.png", "https://csp/ws/x.png"].sort());
+      const urls = widgetsOf(view.state.field(imageBlockField)).map((w) => w.safeUrl);
+      expect(urls).toEqual(["https://csp/ws/notes/sub/p.png", null]);
     } finally {
       view.destroy();
+      warn.mockRestore();
     }
   });
 

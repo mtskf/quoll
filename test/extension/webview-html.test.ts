@@ -121,10 +121,25 @@ describe("buildWebviewHtml", () => {
 
   it("connect-src is exactly 'none' (no postMessage-bypass network channel)", () => {
     const html = buildWebviewHtml(fixture);
-    // connect-src is currently the last directive emitted; the trailing
+    // The trailing bound includes `"` so the capture stops at the meta tag
+    // close even when the directive is the last entry in the CSP string
+    // (no trailing `;`).
+    const match = /\bconnect-src\b\s+([^;"]+)/.exec(html);
+    expect(match?.[1].trim()).toBe("'none'");
+  });
+
+  it("base-uri is exactly 'none' (no <base> re-pointing of relative URL resolution)", () => {
+    const html = buildWebviewHtml(fixture);
+    const match = /\bbase-uri\b\s+([^;"]+)/.exec(html);
+    expect(match?.[1].trim()).toBe("'none'");
+  });
+
+  it("form-action is exactly 'none' (no form submission targets)", () => {
+    // form-action is currently the last directive emitted; the trailing
     // bound must include `"` so the capture stops at the meta tag close
     // rather than swallowing the rest of the HTML.
-    const match = /\bconnect-src\b\s+([^;"]+)/.exec(html);
+    const html = buildWebviewHtml(fixture);
+    const match = /\bform-action\b\s+([^;"]+)/.exec(html);
     expect(match?.[1].trim()).toBe("'none'");
   });
 
