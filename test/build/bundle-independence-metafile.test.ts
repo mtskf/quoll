@@ -9,9 +9,13 @@
 // actually land in each bundle, so a forbidden module reaching either bundle
 // through ANY import chain fails CI.
 //
-// Two directions are proven:
+// Three directions are proven:
 //   - host (dist/extension.cjs)        MUST NOT contain the webview's advisory
 //                                      lint engine (src/webview/cm/lint/**)
+//   - host (dist/extension.cjs)        MUST NOT contain ANY @codemirror/* editor
+//                                      module — the host URL-walker builds its
+//                                      parser from pure @lezer/markdown, so the
+//                                      entire CM editor stack stays webview-only
 //   - webview (dist/webview/index.js)  MUST NOT contain the host-side write
 //                                      gate (validate-for-write / lezer-url-walker)
 //
@@ -42,6 +46,11 @@ async function metafileInputs(config: esbuild.BuildOptions): Promise<string[]> {
 // prefix (if esbuild ever reports one) still matches; `.ts$` pins the file.
 const HOST_FORBIDDEN = /src\/webview\/cm\/lint\//;
 const WEBVIEW_FORBIDDEN = /src\/markdown\/(?:validate-for-write|lezer-url-walker)\.ts$/;
+// The whole @codemirror/* editor stack must stay OUT of the host bundle: the
+// URL-walker builds its parser from pure @lezer/markdown (@lezer/* only). Matches
+// the pnpm virtual-store path shape
+// (node_modules/.pnpm/@codemirror+view@x/node_modules/@codemirror/view/dist/…).
+const HOST_CM_FORBIDDEN = /@codemirror\//;
 
 describe("bundle independence (esbuild metafile)", () => {
   let hostInputs: string[];
@@ -63,6 +72,10 @@ describe("bundle independence (esbuild metafile)", () => {
     expect(webviewInputs.filter((p) => WEBVIEW_FORBIDDEN.test(p))).toEqual([]);
   });
 
+  it("the host bundle contains no @codemirror editor-stack module", () => {
+    expect(hostInputs.filter((p) => HOST_CM_FORBIDDEN.test(p))).toEqual([]);
+  });
+
   // Non-vacuity guard: prove each forbidden module is REAL and present on its
   // own side of the split. If a rename made the matchers above reference a
   // path that no longer exists, the exclusion checks would pass vacuously —
@@ -76,5 +89,9 @@ describe("bundle independence (esbuild metafile)", () => {
     expect(hostInputs.some((p) => /src\/markdown\/validate-for-write\.ts$/.test(p))).toBe(true);
     expect(hostInputs.some((p) => /src\/markdown\/lezer-url-walker\.ts$/.test(p))).toBe(true);
     expect(webviewInputs.some((p) => HOST_FORBIDDEN.test(p))).toBe(true);
+    // @codemirror/* is REAL and legitimately bundled webview-side (the editor
+    // runs there). Without this, the host @codemirror exclusion above could
+    // pass vacuously if HOST_CM_FORBIDDEN matched nothing anywhere.
+    expect(webviewInputs.some((p) => HOST_CM_FORBIDDEN.test(p))).toBe(true);
   });
 });
