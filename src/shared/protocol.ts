@@ -304,6 +304,24 @@ export type CodexContextHandoffMessage = Envelope & {
   type: "codex-context-handoff";
 };
 
+/** Webview→host request to reopen the current document in VS Code's built-in
+ *  text editor — the top-right "Open in text editor" button and the Quoll→text
+ *  half of the editor toggle. Envelope-only: the host owns `document.uri` and
+ *  reopens its OWN document, so no path/geometry crosses the wire (like
+ *  `codex-context-handoff`). A PURE SIDE CHANNEL — it never enters the
+ *  host-session reducer or the write-lock and mutates no document. The host
+ *  re-applies the caret it already tracks to the reopened text editor. */
+export type SwitchToTextMessage = Envelope & {
+  type: "switch-to-text";
+};
+
+/** Single construction point for the `switch-to-text` envelope, shared by the
+ *  webview button + the CM chord command and pinned against `isWebviewToHost`
+ *  by test/shared/protocol.test.ts. */
+export function buildSwitchToTextMessage(): SwitchToTextMessage {
+  return { protocol: PROTOCOL_VERSION, type: "switch-to-text" };
+}
+
 /** Webview→host one-shot caret report. Posted whenever the CodeMirror
  *  selection changes while Quoll is the active editor, so the host always
  *  holds the latest caret for the Quoll→text-editor handoff. 0-based
@@ -364,6 +382,7 @@ export type WebviewToHost =
   | ImageWriteMessage
   | ContextHandoffMessage
   | CodexContextHandoffMessage
+  | SwitchToTextMessage
   | LintDiagnosticsMessage
   | CaretReportMessage;
 
@@ -529,6 +548,8 @@ export function isWebviewToHost(value: unknown): value is WebviewToHost {
       );
     case "caret-report":
       return isCaretCoordinate(v.line) && isCaretCoordinate(v.character);
+    case "switch-to-text":
+      return true;
     default:
       return false;
   }
