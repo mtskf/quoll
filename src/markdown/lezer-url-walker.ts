@@ -25,6 +25,16 @@
 // the resolver removes label normalization, an empirical-Lezer-shape
 // verification step, and a class of vacuous tests.
 //
+// GFM bare-URL autolinks (`www.…` / `http://…` WITHOUT angle brackets)
+// parse as a bare URL node directly under Paragraph — NOT an Autolink
+// node — so they fall outside the four arms above by design, and this is
+// safe rather than a gap: GFM only bare-autolinks http / https / www /
+// mailto (all allowlist-permitted) schemes, so a dangerous scheme like
+// `javascript:` is never lifted into a link node to begin with. Angle-
+// bracket autolinks `<scheme:…>` DO produce Autolink(URL) and are gated
+// by the second arm. (Identical in both the old @codemirror/lang-markdown
+// parser and this pure-@lezer/markdown one — GFM was always present.)
+//
 // Decoder order (decodeBackslashEscapes -> decodeCharacterReferences)
 // matches CommonMark's definition sequence (escape first, then char-ref).
 // Do not swap without re-running the full security matrix, as future
