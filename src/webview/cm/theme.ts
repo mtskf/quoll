@@ -533,9 +533,7 @@ export const collapseToggleThemeSpec = {
   // selectionEntersCollapsed fast path fires because the block-replace now covers the
   // fence). A collapsed block therefore can NEVER simultaneously show this rounded
   // Show-more footer AND a revealed rounded `.quoll-fenced-code-close` below it: the
-  // transient double-round is structurally impossible, not merely tolerated. (The
-  // copy-button's separate caret-on-close-fence centring note is unrelated — it is a
-  // single-body-line block, which is never collapsible.)
+  // transient double-round is structurally impossible, not merely tolerated.
   ".quoll-fenced-collapse-bar-collapsed": collapseBarFooterCorner,
   // EXPANDED-state footer. The "Show less" bar is a `side:1` block widget planted
   // AFTER the last body line (buildFencedCollapse, at concealTo), so the row directly

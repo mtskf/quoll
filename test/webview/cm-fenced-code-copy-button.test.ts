@@ -399,7 +399,7 @@ describe("fencedCodeCopyButton DOM integration", () => {
     }
   });
 
-  it("body caret reveals the open fence row; the copy button keeps its default (non-centred) anchor", () => {
+  it("body caret reveals the open fence row; the copy button keeps its top-right anchor", () => {
     const doc = "```js\nconst x = 1;\nlet y = 2;\n```\n\npara";
     const view = mountFenced(doc, doc.indexOf("const") + 2); // caret in the body
     try {
@@ -410,7 +410,7 @@ describe("fencedCodeCopyButton DOM integration", () => {
       expect(openLine.classList.contains("quoll-fenced-code-open")).toBe(true);
       const btn = view.dom.querySelector<HTMLButtonElement>(".quoll-copy-button");
       expect(btn).not.toBeNull();
-      // Multi-body block → never the single-line centred variant.
+      // The single-line marker variant was removed, so no block ever carries it.
       expect(btn?.classList.contains("quoll-copy-button-single-line")).toBe(false);
     } finally {
       view.destroy();
