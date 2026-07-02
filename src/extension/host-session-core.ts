@@ -330,11 +330,21 @@ export function createHostSessionCore(context: HostSessionContext, deps: HostSes
             };
           }
           case "accept":
+            // A newer edit supersedes a pending rejected draft, so clear the
+            // rejection like every other inbound-edit arm and settlement path.
+            // This also upholds the lock-held invariant structurally: the
+            // `editRejectedDeliveryFailed` arm has no lock deferral (unlike
+            // documentChanged / viewStateVisible), so a rejection surviving
+            // into the lock would let a delayed delivery-failure post a
+            // pre-apply-version Document mid-lock — an unsolicited reseed
+            // that clears the webview's editInFlight and can transiently
+            // wipe the accepted edit's content.
             return {
               state: {
                 ...resynced,
                 pendingApplyBaseVersion: event.baseDocVersion,
                 inFlightContent: event.content,
+                rejection: NONE,
               },
               effects: [
                 { type: "applyEdit", content: event.content, baseDocVersion: event.baseDocVersion },
