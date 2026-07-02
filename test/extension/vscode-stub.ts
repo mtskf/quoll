@@ -75,6 +75,10 @@ export class TabInputCustom {
   ) {}
 }
 
+export class TabInputText {
+  constructor(public readonly uri: StubUri) {}
+}
+
 export const window = {
   get activeTextEditor(): unknown {
     return undefined;

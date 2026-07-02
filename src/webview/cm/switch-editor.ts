@@ -67,7 +67,16 @@ function createFilePenLineIcon(): SVGSVGElement {
 
 /** Post `switch-to-text`, logging (never throwing) on transport failure — a
  *  throw out of a click handler / keymap command would unwind the caller. */
-function postSwitchToText(host: SwitchEditorHost): void {
+function postSwitchToText(host: SwitchEditorHost, flushPendingEdit: () => void): void {
+  // Flush any pending debounced edit FIRST: the switch disposes this panel,
+  // so a late debounced Edit would be dropped post-dispose (data loss). FIFO
+  // — the flushed Edit reaches the host before switch-to-text, so the
+  // reopened text editor shows the just-typed content.
+  try {
+    flushPendingEdit();
+  } catch (err) {
+    console.error("[quoll] flushPendingEdit before switch failed", err);
+  }
   try {
     host.postMessage(buildSwitchToTextMessage());
   } catch (err) {
@@ -78,9 +87,9 @@ function postSwitchToText(host: SwitchEditorHost): void {
 /** The chord command. Exported so the keymap test can invoke it directly on a
  *  real EditorView (avoids a platform-flaky synthetic key event — see
  *  [[quoll-cm-keymap-test-runscopehandlers-platform-flaky]]). */
-export function switchToTextCommand(host: SwitchEditorHost): Command {
+export function switchToTextCommand(host: SwitchEditorHost, flushPendingEdit: () => void): Command {
   return () => {
-    postSwitchToText(host);
+    postSwitchToText(host, flushPendingEdit);
     // Claim the chord regardless so CodeMirror preventDefaults it.
     return true;
   };
@@ -92,7 +101,8 @@ class SwitchEditorButton implements PluginValue {
 
   constructor(
     view: EditorView,
-    private readonly messageHost: SwitchEditorHost
+    private readonly messageHost: SwitchEditorHost,
+    private readonly flushPendingEdit: () => void
   ) {
     // Mounted inside the `.quoll-editor` host (position:relative) so the button
     // overlays the surface without reflowing the reading column — identical
@@ -114,7 +124,7 @@ class SwitchEditorButton implements PluginValue {
     this.buttonEl.addEventListener("mousedown", (e) => e.preventDefault());
     this.buttonEl.addEventListener("click", (e) => {
       e.preventDefault();
-      postSwitchToText(this.messageHost);
+      postSwitchToText(this.messageHost, this.flushPendingEdit);
     });
     this.hostEl.appendChild(this.buttonEl);
   }
@@ -126,8 +136,10 @@ class SwitchEditorButton implements PluginValue {
 
 /** The switch-editor extension: the top-right overlay button + the chord keymap,
  *  both posting `switch-to-text`. */
-export function quollSwitchEditor(host: SwitchEditorHost): Extension {
-  const plugin = ViewPlugin.define((view) => new SwitchEditorButton(view, host));
-  const km = Prec.high(keymap.of([{ key: SWITCH_EDITOR_KEY, run: switchToTextCommand(host) }]));
+export function quollSwitchEditor(host: SwitchEditorHost, flushPendingEdit: () => void): Extension {
+  const plugin = ViewPlugin.define((view) => new SwitchEditorButton(view, host, flushPendingEdit));
+  const km = Prec.high(
+    keymap.of([{ key: SWITCH_EDITOR_KEY, run: switchToTextCommand(host, flushPendingEdit) }])
+  );
   return [plugin, km];
 }

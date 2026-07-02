@@ -37,8 +37,9 @@ describe("SWITCH_EDITOR_KEY", () => {
 describe("switchToTextCommand", () => {
   it("posts a switch-to-text message and claims the chord", () => {
     const postMessage = vi.fn();
+    const flush = vi.fn();
     mount([]);
-    const handled = switchToTextCommand({ postMessage })(view as EditorView);
+    const handled = switchToTextCommand({ postMessage }, flush)(view as EditorView);
     expect(handled).toBe(true);
     expect(postMessage).toHaveBeenCalledWith(EXPECTED);
   });
@@ -47,21 +48,33 @@ describe("switchToTextCommand", () => {
     const postMessage = vi.fn(() => {
       throw new Error("transport gone");
     });
+    const flush = vi.fn();
     mount([]);
-    expect(switchToTextCommand({ postMessage })(view as EditorView)).toBe(true);
+    expect(switchToTextCommand({ postMessage }, flush)(view as EditorView)).toBe(true);
+  });
+
+  it("flushes pending edits before posting switch-to-text (no data loss on type-then-switch)", () => {
+    const calls: string[] = [];
+    const flush = vi.fn(() => calls.push("flush"));
+    const postMessage = vi.fn(() => calls.push("post"));
+    mount([]);
+    switchToTextCommand({ postMessage }, flush)(view as EditorView);
+    expect(calls).toEqual(["flush", "post"]);
   });
 });
 
 describe("quollSwitchEditor button", () => {
   it("renders a top-right toggle button inside the .quoll-editor host", () => {
     const postMessage = vi.fn();
-    const host = mount([quollSwitchEditor({ postMessage })]);
+    const flush = vi.fn();
+    const host = mount([quollSwitchEditor({ postMessage }, flush)]);
     expect(host.querySelector(".quoll-switch-editor-toggle")).not.toBeNull();
   });
 
   it("posts switch-to-text when the button is clicked", () => {
     const postMessage = vi.fn();
-    const host = mount([quollSwitchEditor({ postMessage })]);
+    const flush = vi.fn();
+    const host = mount([quollSwitchEditor({ postMessage }, flush)]);
     host.querySelector<HTMLButtonElement>(".quoll-switch-editor-toggle")?.click();
     expect(postMessage).toHaveBeenCalledWith(EXPECTED);
   });

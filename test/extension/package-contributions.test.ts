@@ -22,6 +22,6 @@ describe("package.json contributions — quoll.toggleEditor", () => {
     expect(kbs).toHaveLength(1);
     expect(kbs[0].key).toBe("ctrl+alt+e");
     expect(kbs[0].mac).toBe("cmd+alt+e");
-    expect(kbs[0].when).toBe("editorLangId == markdown && editorTextFocus");
+    expect(kbs[0].when).toBe("editorLangId == markdown && editorTextFocus && !inDiffEditor");
   });
 });

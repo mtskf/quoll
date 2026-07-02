@@ -18,7 +18,7 @@
 // the CM keymap and can bounce the switch. package.json binds the chord to this
 // command ONLY in the text-editor (reverse) context.
 
-import { commands, TabInputCustom, window, workspace } from "vscode";
+import { commands, TabInputCustom, TabInputText, window, workspace } from "vscode";
 import { canEditWith } from "./canEditWith.js";
 import { stashSwitchCaret, takeSwitchCaret } from "./editor-switch-caret.js";
 import { QuollEditorPanel } from "./QuollEditorPanel.js";
@@ -59,10 +59,20 @@ export function registerToggleEditor(): { dispose(): void } {
     const onQuollTab =
       input instanceof TabInputCustom && input.viewType === QuollEditorPanel.viewType;
     const activeEditor = window.activeTextEditor;
-    const activeMarkdownUriKey =
-      activeEditor && isMarkdownUri(activeEditor.document.uri)
-        ? activeEditor.document.uri.toString()
+    // Reverse requires the ACTIVE TAB to be a plain text editor (TabInputText —
+    // a diff tab is TabInputTextDiff, excluded) for a markdown file, AND the
+    // active text editor to be that same document. Gating on the tab input (not
+    // window.activeTextEditor alone) keeps a markdown diff side from being
+    // mis-toggled into Quoll (the "diff editor → no-op" contract above).
+    const reverseEditor =
+      !onQuollTab &&
+      input instanceof TabInputText &&
+      activeEditor !== undefined &&
+      activeEditor.document.uri.toString() === input.uri.toString() &&
+      isMarkdownUri(activeEditor.document.uri)
+        ? activeEditor
         : null;
+    const activeMarkdownUriKey = reverseEditor ? reverseEditor.document.uri.toString() : null;
 
     const target = decideSwitchTarget({ onQuollTab, activeMarkdownUriKey });
     switch (target) {
@@ -92,7 +102,10 @@ export function registerToggleEditor(): { dispose(): void } {
       }
       case "to-quoll": {
         // activeEditor is a markdown editor here (activeMarkdownUriKey !== null).
-        const editor = activeEditor as NonNullable<typeof activeEditor>;
+        if (reverseEditor === null) {
+          return; // unreachable when target is "to-quoll", but narrows for TS
+        }
+        const editor = reverseEditor;
         // Validate BEFORE stashing: canEditWith may reject (non-file / readonly)
         // in which case NO Quoll panel is created and `takeSwitchCaret` would
         // never fire — a stashed caret would then leak and mis-apply on a later

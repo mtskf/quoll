@@ -381,7 +381,7 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
         // (no CM change, no write-lock); the host reopens the document in the
         // built-in text editor and re-applies the caret. Present in read-only
         // mode too (navigation).
-        quollSwitchEditor(getHost()),
+        quollSwitchEditor(getHost(), () => sync.flush()),
         // Paste/drop image ingestion: capture image files, post image-write, and
         // insert the relative link at a position-mapped anchor on the host's
         // reply. canWrite mirrors edit-sync's readonly hard-drop; the host is the

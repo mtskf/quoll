@@ -86,7 +86,7 @@
         "command": "quoll.toggleEditor",
         "key": "ctrl+alt+e",
         "mac": "cmd+alt+e",
-        "when": "editorLangId == markdown && editorTextFocus"
+        "when": "editorLangId == markdown && editorTextFocus && !inDiffEditor"
       }
     ]
   },
