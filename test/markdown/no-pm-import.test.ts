@@ -127,7 +127,7 @@ describe("C2 write-gate has no ProseMirror runtime imports declared in its own f
     // Lezer parser into the webview bundle. lezer-url-walker.ts
     // re-imports + re-exports decodeMarkdownDestination to keep the
     // historic import path green.
-    const ALLOW = new Set(["@codemirror/lang-markdown", "./url-allowlist.js", "./url-decode.js"]);
+    const ALLOW = new Set(["@lezer/markdown", "./url-allowlist.js", "./url-decode.js"]);
     const imports = listImports(readSource("src/markdown/lezer-url-walker.ts"));
     for (const { module, isType } of imports) {
       if (isType) {

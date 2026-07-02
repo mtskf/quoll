@@ -1,5 +1,16 @@
-// Lezer-based URL extraction + allowlist gate. Consumes the GFM parser
-// configured by @codemirror/lang-markdown (already a C1 dependency).
+// Lezer-based URL extraction + allowlist gate. Builds the GFM parser
+// DIRECTLY from @lezer/markdown (a direct dependency) by configuring the
+// pure CommonMark parser with the same extension set — GFM, Subscript,
+// Superscript, Emoji — that @codemirror/lang-markdown's `markdownLanguage`
+// layers on. The tree shape for every gated node name is identical (the
+// props @codemirror/lang-markdown attaches are metadata-only: fold /
+// indent / heading / languageData facets), so this swap keeps the whole
+// @codemirror editor stack (@codemirror/view + state + language +
+// autocomplete + lang-html/css/javascript) OUT of the host bundle
+// (dist/extension.cjs). We deliberately skip the `parseCode` wrapper that
+// `markdown()` adds: no code sub-languages are configured here, and both
+// fenced-code bodies and raw HTML are opaque to this walker (see the raw
+// HTML note below), so no gated URL form is lost.
 // A single tree-cursor walk gates every URL-emitting node through
 // decodeMarkdownDestination + isAllowedUrl:
 //   - Link / Image with a URL child (inline form).
@@ -13,6 +24,16 @@
 // definition they point at, which the walker already gates. Skipping
 // the resolver removes label normalization, an empirical-Lezer-shape
 // verification step, and a class of vacuous tests.
+//
+// GFM bare-URL autolinks (`www.…` / `http://…` WITHOUT angle brackets)
+// parse as a bare URL node directly under Paragraph — NOT an Autolink
+// node — so they fall outside the four arms above by design, and this is
+// safe rather than a gap: GFM only bare-autolinks http / https / www /
+// mailto (all allowlist-permitted) schemes, so a dangerous scheme like
+// `javascript:` is never lifted into a link node to begin with. Angle-
+// bracket autolinks `<scheme:…>` DO produce Autolink(URL) and are gated
+// by the second arm. (Identical in both the old @codemirror/lang-markdown
+// parser and this pure-@lezer/markdown one — GFM was always present.)
 //
 // Decoder order (decodeBackslashEscapes -> decodeCharacterReferences)
 // matches CommonMark's definition sequence (escape first, then char-ref).
@@ -32,7 +53,7 @@
 // vi.doMock() so the singleton's cached export is invalidated; this
 // ordering is what test/markdown/validate-for-write.test.ts uses.
 
-import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
+import { Emoji, GFM, parser, Subscript, Superscript } from "@lezer/markdown";
 
 import type { MarkdownError } from "./errors.js";
 import { isAllowedUrl } from "./url-allowlist.js";
@@ -45,7 +66,7 @@ import { decodeMarkdownDestination } from "./url-decode.js";
 // host-side Lezer parser into the webview bundle.
 export { decodeMarkdownDestination };
 
-const PARSER = markdown({ base: markdownLanguage }).language.parser;
+const PARSER = parser.configure([GFM, Subscript, Superscript, Emoji]);
 
 // SyntaxNode is the cursor node shape from @lezer/common. We derive it
 // indirectly via the parser's tree to avoid an explicit `@lezer/common`

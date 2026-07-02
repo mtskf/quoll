@@ -1,6 +1,6 @@
 // Single entry point for "does this markdown round-trip safely enough
 // to write to disk?". The validator is framework-agnostic: it walks the
-// Lezer tree (via @codemirror/lang-markdown's parser) for URL gating
+// Lezer tree (built directly from @lezer/markdown's parser) for URL gating
 // and detects leading frontmatter directly on the raw text. Zero
 // runtime import of prosemirror-*: the predicate it consumes
 // (isAllowedUrl) and the walker (findUnsafeUrl) survive any future
