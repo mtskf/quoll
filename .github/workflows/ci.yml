@@ -1,0 +1,83 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+# Least-privilege GITHUB_TOKEN: this workflow only needs to read repo contents
+# (checkout + install + lint + test + build). No write scopes required.
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      # All GitHub Actions are pinned to commit SHAs — supply-chain hardening.
+      # The threat (tag remutation against a compromised maintainer / repo) applies
+      # equally to first-party `actions/*` and third-party actions, so the same
+      # policy covers both. When bumping, resolve the commit SHA with
+      # `gh api repos/<owner>/<repo>/commits/<tag> --jq '.sha'` — this handles both
+      # lightweight and annotated tags (e.g. `pnpm/action-setup` uses annotated tags,
+      # and `git/refs/tags/<tag>` would return its tag-object SHA, not the commit).
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4.3.0
+        with:
+          version: 10.27.0
+
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: '22'
+          cache: 'pnpm'
+
+      # Single root install — flat package layout since Slice 7C.
+      - name: Install deps
+        run: pnpm install --frozen-lockfile
+
+      # PR/main security gate. Catches dependency regressions during review so
+      # they don't reach the publish.yml release audit. Scans the bundled
+      # runtime only — every package esbuild bakes into dist/extension.cjs /
+      # dist/webview/index.js lives in `dependencies`, so `--prod` covers
+      # exactly the surface that ships in the .vsix; pure tooling stays in
+      # `devDependencies` and is intentionally excluded. See publish.yml for
+      # the same rationale. Approved exceptions must be both documented in
+      # .claude/docs/security-audit/YYYY-MM-DD-*.md and added to a
+      # `pnpm.auditConfig.ignoreCves` array in package.json (the `pnpm` block
+      # does not exist yet — add it on first exception). See
+      # .claude/docs/security-audit/README.md.
+      - name: Audit production dependencies (security gate)
+        run: pnpm audit --prod --audit-level=high
+
+      - name: Lint
+        run: pnpm lint
+
+      - name: Unit tests
+        run: pnpm test:unit
+
+      - name: Build (host + webview via esbuild)
+        run: pnpm build
+
+      # E2E suite needs dist/ on disk and a display. Build must run
+      # first (the test host loads dist/extension.cjs via the
+      # extensionDevelopmentPath). xvfb-run gives headless Ubuntu a
+      # virtual display so VS Code's Electron can render.
+      - name: E2E tests (xvfb-run)
+        run: xvfb-run -a pnpm test:e2e
+
+      # PR/main packaging gate. We package on every PR (not just
+      # release tags) so .vscodeignore regressions surface during
+      # review, not at publish time when rollback means yanking a
+      # live Marketplace version. The audit step that follows is
+      # the actual check — packaging here only produces the .vsix
+      # it inspects.
+      - name: Package .vsix
+        run: pnpm exec vsce package --no-dependencies -o extension.vsix
+
+      - name: Audit .vsix contents
+        run: node scripts/audit-vsix.mjs extension.vsix

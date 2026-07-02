@@ -1,0 +1,61 @@
+# Dependencies
+node_modules/
+**/node_modules/
+
+# This is a pnpm-only project. Reject any stray npm-generated lockfile so
+# tooling that accidentally runs `npm install` does not poison the graph.
+package-lock.json
+**/package-lock.json
+
+# Build output — unified esbuild output:
+#   dist/extension.cjs            — host bundle (package.json "main")
+#   dist/webview/index.{js,css}   — webview bundle
+dist/
+*.tsbuildinfo
+
+# E2E test build output (tsc emit for test/extension/e2e/**, launcher harness)
+out/
+
+# Vitest coverage output (@vitest/coverage-v8)
+coverage/
+
+# VSIX package artifacts
+*.vsix
+
+# VS Code extension test runner
+.vscode-test/
+
+# Stray tsc emit under test/ (vitest runs .ts directly; a stray tsc compile
+# could otherwise leave .js artifacts in the worktree)
+test/**/*.js
+test/**/*.js.map
+
+# Environment / secrets
+.env
+.env.*
+!.env.example
+
+# Logs & caches
+*.log
+npm-debug.log*
+yarn-debug.log*
+pnpm-debug.log*
+.eslintcache
+
+# OS files
+.DS_Store
+Thumbs.db
+._*
+
+# Local history for Visual Studio Code
+.history/
+
+# Local Claude Code config / AI-facing docs (kept local, not published)
+.claude/
+
+# /review-cycle workspace (skill-internal scratch; per-session suffix)
+.review-cycle/
+.review-cycle-*/
+
+# Generated perf fixtures (scripts/gen-perf-fixtures.mjs)
+perf-fixtures/

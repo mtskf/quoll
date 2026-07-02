@@ -1,0 +1,122 @@
+{
+  "name": "quoll",
+  "icon": "icon.png",
+  "displayName": "Quoll",
+  "description": "Notion- and Obsidian-style Markdown editor, right inside VS Code.",
+  "license": "MIT",
+  "categories": [
+    "Other"
+  ],
+  "keywords": [
+    "markdown",
+    "wysiwyg",
+    "editor",
+    "codemirror",
+    "notion",
+    "obsidian",
+    "rich-text"
+  ],
+  "version": "0.1.0",
+  "publisher": "mtskf",
+  "type": "module",
+  "engines": {
+    "vscode": "^1.94.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/mtskf/quoll"
+  },
+  "main": "./dist/extension.cjs",
+  "packageManager": "pnpm@10.27.0",
+  "activationEvents": [
+    "onCustomEditor:quoll.editMarkdown",
+    "onCommand:quoll.editWith"
+  ],
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": false,
+      "description": "This extension opens markdown files with a rich editor and writes back via WorkspaceEdit; untrusted workspaces could expose this write path to untrusted content."
+    },
+    "virtualWorkspaces": {
+      "supported": false,
+      "description": "Reading and writing files require a local filesystem (workspace.applyEdit)."
+    }
+  },
+  "contributes": {
+    "commands": [
+      {
+        "command": "quoll.editWith",
+        "title": "Edit with Quoll"
+      }
+    ],
+    "customEditors": [
+      {
+        "viewType": "quoll.editMarkdown",
+        "displayName": "Markdown (Quoll)",
+        "selector": [
+          {
+            "filenamePattern": "*.md"
+          }
+        ],
+        "priority": "option"
+      }
+    ],
+    "configuration": {
+      "title": "Quoll",
+      "properties": {
+        "quoll.lint.problems.enabled": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "Mirror Quoll's advisory Markdown lint findings into the **Problems** panel. When off, in-editor lint underlines still appear; only the workspace-wide Problems entries are suppressed."
+        },
+        "quoll.lint.gutter.enabled": {
+          "type": "boolean",
+          "default": false,
+          "markdownDescription": "Show an opt-in gutter dot on each line that has an advisory Markdown lint finding (severity-coloured: warning vs info). Off by default to keep the clean centred reading column; turning it on adds a thin gutter to the left of the text. The in-editor underlines and the **Problems** mirror are unaffected."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "compile": "tsc -p ./ && tsc -p ./test/extension/tsconfig.unit.json && tsc -p ./test/webview/tsconfig.json",
+    "compile:webview": "tsc -p ./src/webview",
+    "build": "pnpm compile && pnpm compile:webview && node esbuild.config.mjs --production",
+    "watch": "node esbuild.config.mjs --watch",
+    "vscode:prepublish": "pnpm build",
+    "lint": "biome check",
+    "format": "biome format --write",
+    "check": "biome check --write",
+    "check:todo-markers": "node scripts/check-stale-todo-markers.mjs",
+    "gen:perf-fixtures": "node scripts/gen-perf-fixtures.mjs",
+    "test:unit": "vitest run",
+    "test:e2e": "pnpm build && node test/extension/build.mjs && node ./out/test-e2e/launch.js",
+    "test": "pnpm test:unit && pnpm test:e2e",
+    "test:watch": "vitest",
+    "package": "pnpm vsce package --no-dependencies --pre-release"
+  },
+  "dependencies": {
+    "@codemirror/commands": "^6.10.3",
+    "@codemirror/lang-markdown": "^6.5.0",
+    "@codemirror/language": "^6.12.3",
+    "@codemirror/state": "^6.6.0",
+    "@codemirror/view": "^6.43.0",
+    "@lezer/highlight": "^1.2.3",
+    "@lezer/markdown": "^1.6.4"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^2.4.15",
+    "@types/mocha": "^10",
+    "@types/node": "20.16.0",
+    "@types/vscode": "1.94.0",
+    "@types/vscode-webview": "^1.57.0",
+    "@vitest/coverage-v8": "^2.1.9",
+    "@vscode/test-electron": "^2.4.1",
+    "@vscode/vsce": "^3.9.1",
+    "esbuild": "^0.25.0",
+    "happy-dom": "^15.11.7",
+    "mocha": "^11",
+    "ovsx": "0.10.12",
+    "typescript": "^5.9.3",
+    "vitest": "^2.1.9"
+  }
+}

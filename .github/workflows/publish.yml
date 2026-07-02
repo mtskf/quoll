@@ -1,0 +1,97 @@
+name: Publish Extension
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+# NOTE: This workflow is dormant until the extension is set up for the Marketplace.
+# Prerequisites:
+#   1. Remove `"private": true` from package.json.
+#   2. Add secrets to the repo: VSCODE_PAT (required) and OPENVSX_PAT (optional, drop the
+#      Open VSX step if you skip it).
+# Publisher ID has been registered (`mtskf`, PR #84) and `package.json.publisher` already
+# matches. Tag pushes trigger a live publish, so do not push a `v*` tag until both
+# prerequisites above are done.
+
+# Least-privilege GITHUB_TOKEN: publishing uses VSCODE_PAT / OPENVSX_PAT secrets,
+# not the workflow token. Only repo read access (checkout + install + verify-tag +
+# audit + build + package) is needed — publish steps use dedicated PAT secrets.
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      # All GitHub Actions are pinned to commit SHAs — supply-chain hardening.
+      # The threat (tag remutation against a compromised maintainer / repo) applies
+      # equally to first-party `actions/*` and third-party actions, so the same
+      # policy covers both. When bumping, resolve the commit SHA with
+      # `gh api repos/<owner>/<repo>/commits/<tag> --jq '.sha'` — this handles both
+      # lightweight and annotated tags (e.g. `pnpm/action-setup` uses annotated tags,
+      # and `git/refs/tags/<tag>` would return its tag-object SHA, not the commit).
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4.3.0
+        with:
+          version: 10.27.0
+
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: '22'
+          cache: 'pnpm'
+
+      - name: Install extension deps
+        run: pnpm install --frozen-lockfile
+
+      - name: Verify tag matches package.json version
+        env:
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          TAG_VERSION="${REF_NAME#v}"
+          PKG_VERSION="$(node -p "require('./package.json').version")"
+          if [ "$TAG_VERSION" != "$PKG_VERSION" ]; then
+            echo "Tag version ($TAG_VERSION) does not match package.json version ($PKG_VERSION)"
+            exit 1
+          fi
+
+      # Release security gate. Fails the publish on High/Critical advisories
+      # in the bundled runtime — every package esbuild bakes into
+      # dist/extension.cjs / dist/webview/index.js lives in `dependencies`,
+      # so `--prod` scans exactly the surface that ships in the .vsix.
+      # Pure build/test tooling (Biome, Vitest, vsce, ovsx, esbuild, happy-dom,
+      # @types/*, typescript) stays in `devDependencies` and is intentionally
+      # excluded — those packages never reach a user. Approved exceptions
+      # must be both documented in a dated release-security-audit note kept
+      # with the project's private maintenance docs and added to a
+      # `pnpm.auditConfig.ignoreCves` array in package.json (the `pnpm` block
+      # does not exist yet — add it on first exception).
+      - name: Audit production dependencies (security gate)
+        run: pnpm audit --prod --audit-level=high
+
+      - name: Build (webview + extension + esbuild bundle)
+        run: pnpm build
+
+      - name: Package .vsix
+        run: pnpm exec vsce package --no-dependencies -o extension.vsix
+
+      # Release gate. Inspects the just-packaged .vsix against an
+      # allowlist (mirrors .vscodeignore) and fails the publish if
+      # any internal file (docs/, .github/, .claude/, raw *.ts,
+      # *.map, lockfiles, .env*, coverage, test fixtures) slipped
+      # into the bundle. Tag pushes go live to Marketplace + Open
+      # VSX — this is the last line of defence.
+      - name: Audit .vsix contents
+        run: node scripts/audit-vsix.mjs extension.vsix
+
+      - name: Publish to VS Code Marketplace
+        env:
+          VSCE_PAT: ${{ secrets.VSCODE_PAT }}
+        run: pnpm exec vsce publish --no-dependencies --packagePath extension.vsix -p "$VSCE_PAT"
+
+      - name: Publish to Open VSX
+        env:
+          OVSX_PAT: ${{ secrets.OPENVSX_PAT }}
+        if: ${{ env.OVSX_PAT != '' }}
+        run: pnpm exec ovsx publish extension.vsix -p "$OVSX_PAT"

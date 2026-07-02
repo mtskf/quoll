@@ -1,0 +1,22 @@
+{
+  // Extension host (Node + CJS, vscode external). Strictness inherited from
+  // tsconfig.base.json; only Node/CJS-specific knobs live here. The host
+  // bundle ships as dist/extension.cjs via esbuild.config.mjs — this config
+  // is for type-checking only (noEmit inherited).
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "module": "commonjs",
+    "lib": ["es2022", "dom"],
+    "types": ["node", "vscode"],
+    "rootDir": "src"
+  },
+  "exclude": [
+    "node_modules",
+    ".vscode-test",
+    "test",
+    "out",
+    "vitest.config.ts",
+    "esbuild.config.mjs",
+    "src/webview"
+  ]
+}

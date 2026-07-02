@@ -1,0 +1,42 @@
+{
+  // Type-check program scoped to the protocol drift-guard.
+  //
+  // Why a separate config from test/extension/tsconfig.json:
+  //   The e2e config emits CJS into out/test-e2e/ for mocha. The unit
+  //   drift-guard files (currently just types-equality.test.ts) DO need
+  //   a real tsc program so type-level AssertEqual<...> failures surface
+  //   as compile errors instead of being stripped silently by esbuild's
+  //   transpile-only path under vitest. This config wires that program.
+  //
+  // Why noEmit: tsc here is a CI gate, not a build step. vitest still
+  // runs through its own transpiler — this only fails the `pnpm compile`
+  // chain when a type-level contract drifts.
+  //
+  // Why the narrow include: this config exists ONLY to type-check the
+  // protocol drift guard. Widening to `test/**/*.test.ts` would surface
+  // long-standing vacuous-type failures in the wider unit suite
+  // (vscode-stub TextLine shape divergence in
+  // test/extension/document-message.test.ts, dead `reason` references in
+  // test/webview/persistence.test.ts) — those are real follow-up TODOs
+  // (tracked under Slice 8b/8c follow-ups) but are out of scope for the
+  // drift-guard wiring PR.
+  //
+  // Why rootDir is the repo root: the drift guard imports canonical
+  // types from src/shared/protocol.ts; the e2e config keeps rootDir
+  // narrow to "." so we explicitly widen here.
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "module": "esnext",
+    "moduleResolution": "bundler",
+    "lib": ["es2022", "dom"],
+    "types": ["node", "vscode"],
+    "noEmit": true,
+    "rootDir": "../.."
+  },
+  "include": [
+    "./types-equality.test.ts",
+    "../../src/shared/**/*.ts",
+    "./e2e/types.ts",
+    "./e2e/constants.ts"
+  ]
+}

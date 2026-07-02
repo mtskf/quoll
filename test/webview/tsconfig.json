@@ -1,0 +1,32 @@
+{
+  // Type-check program for the webview unit suite. vitest runs these files
+  // through esbuild transpile-only, so without this gate every type-level
+  // contract in test/webview (e.g. the branded SessionToken) is erased and
+  // never enforced. This config type-checks them under the SAME compiler view
+  // as the webview SOURCE (mirrors src/webview/tsconfig.json: ESM + bundler
+  // resolution + DOM lib + vscode-webview types) so the tests see the exact
+  // types the code they exercise is built with.
+  //
+  // Scope is test/webview ONLY. The wider unit suite has long-standing
+  // type drift outside this directory (vscode-stub TextLine shape in
+  // test/extension/document-message.test.ts) that is a separate follow-up;
+  // a test/webview-rooted include never pulls it in.
+  //
+  // noEmit (inherited): this is a CI gate, not a build step — vitest still
+  // runs through its own transpiler. rootDir is the repo root so the
+  // cross-layer imports from ../../src/* resolve.
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "module": "esnext",
+    "moduleResolution": "bundler",
+    "lib": ["es2022", "dom", "dom.iterable"],
+    "types": ["vscode-webview"],
+    "rootDir": "../.."
+  },
+  "include": [
+    "**/*.ts",
+    "../../src/webview/**/*.ts",
+    "../../src/markdown/**/*.ts",
+    "../../src/shared/**/*.ts"
+  ]
+}

@@ -1,0 +1,655 @@
+/* Quoll webview styles.
+ *
+ * Why VS Code CSS variables (and not a UI framework): VS Code exposes its
+ * theme as CSS variables on the host document; consuming them directly
+ * means themes update without a JS bridge, with zero theme-library
+ * dependency. The platform's contract is older than every theme library
+ * we could pick.
+ *
+ * Theme class: the host pushes `isDarkTheme` on Document/Theme messages;
+ * shell.ts toggles `.dark-theme` / `.light-theme` on <html>. The two
+ * classes are kept symmetric so future high-contrast / sepia variants can
+ * just add a third class.
+ *
+ * Cascade layers: the order is declared ONCE below as
+ *   reset < base < theme < widget
+ * so widget styling always beats base typography regardless of source
+ * order, and per-theme token overrides beat the base token defaults.
+ *
+ * Layered vs unlayered (load-bearing): cm/theme.ts injects its EditorView
+ * theme as an UNLAYERED <style> at runtime. An unlayered NORMAL declaration
+ * beats EVERY layered one, so CodeMirror's structural styling (.cm-content
+ * reading column, cursor, selection) sits above everything here by design.
+ * Keep any CSS that must influence a CM widget INSIDE a layer below — do
+ * NOT add competing unlayered rules.
+ */
+
+@layer reset, base, theme, widget;
+
+/* ───────────────────────────── reset ───────────────────────────── */
+@layer reset {
+  body {
+    margin: 0;
+    padding: 0;
+  }
+}
+
+/* ────────────────────────────── base ───────────────────────────── */
+@layer base {
+  /* Design tokens. Centralised on :root so a single edit — or a
+   * :root[data-quoll-theme="…"] override in the theme layer — retunes the
+   * whole editor. Only Quoll-owned rhythm/spacing is tokenised; pure VS
+   * Code passthroughs (colours, fonts) stay as --vscode-* at the use
+   * site. */
+  :root {
+    /* Prose line-height. Consumed by .cm-content in cm/theme.ts via var()
+     * — the single live owner of body rhythm; block widgets inherit it. */
+    --quoll-line-height: 1.7;
+    /* Shared block-panel geometry for the two rich block surfaces — the
+     * fenced-code panel AND the blockquote (plus the fenced collapse-bar
+     * footer). Both consume these via var() in cm/theme.ts, so the two panels
+     * can NEVER drift in interior padding or corner radius: retuning either
+     * token here moves BOTH surfaces at once.
+     *   --quoll-block-pad    the interior inset of the panel text from the fill
+     *                        edges, on all four sides.
+     *   --quoll-block-radius the PAINTED corner round. cm/theme.ts applies an
+     *                        elliptical border-box radius (`radius + border`
+     *                        horizontal, `radius` vertical) that compensates for
+     *                        the `background-clip: padding-box` column inset so
+     *                        the VISIBLE fill lands on exactly this value — see
+     *                        the -open/-close corners in cm/theme.ts. */
+    --quoll-block-pad: 16px;
+    --quoll-block-radius: 8px;
+    /* Callout admonition fill strength (block-style.ts callouts). The per-type
+     * accent tints the panel fill this far via color-mix in cm/theme.ts. The HC
+     * escape hatch below flips it to 0% so the fill goes fully transparent and
+     * the accent shows only on the border (matching the depth-class HC handling). */
+    --quoll-callout-tint-strength: 8%;
+    /* List soft-wrap hanging-indent: rendered width of a task-list checkbox
+     * column (the C5b widget that replaces `[ ]`). The list-hang-indent
+     * provider (cm/decorations/list-hang-indent.ts) references this via
+     * var() so a task line's continuation hangs under the TEXT, not the
+     * checkbox. Keep in sync with .quoll-task-checkbox (width 1em +
+     * margin-right 0.25em) plus the trailing source space. */
+    --quoll-task-marker-width: 1.5em;
+    /* Rendered width of ONE space in the proportional body font. The list-hang
+     * geometry (cm/decorations/list-geometry.ts) expresses source-indentation
+     * columns in this unit instead of `ch` (which, being the `0` glyph, is ~2×
+     * a space in a proportional font and made wrapped nested-list lines
+     * over-indent). prose-space-metric.ts overrides this with the measured
+     * value on the editor root; this `1ch` default keeps monospace exact and
+     * covers the pre-measurement frame. */
+    --quoll-prose-space: 1ch;
+    /* Vertical breathing room around a block-table widget. Delivered as
+     * PADDING on the wrapper (never margin) — see the widget layer. */
+    --quoll-table-block-pad: 0.75em;
+    /* Block-table cell border + inner padding. The border COLOUR resolves
+     * (lazily, at the cell use site) to the navy-tinted --quoll-surface-border
+     * accent, falling back to the host editorWidget/panel border pre-theme-class. */
+    --quoll-table-border: 1px solid
+      var(--quoll-surface-border,
+        var(--vscode-editorWidget-border, var(--vscode-panel-border, #888)));
+    --quoll-table-cell-pad: 4px 8px;
+  }
+
+  html {
+    font-size: var(--vscode-font-size);
+    background-color: var(--vscode-editor-background);
+    color: var(--vscode-editor-foreground);
+    font-family: var(--vscode-font-family);
+  }
+
+  #root {
+    min-height: 100vh;
+    background-color: var(--vscode-editor-background);
+    color: var(--vscode-editor-foreground);
+  }
+
+  main {
+    width: 100%;
+    display: flex;
+    justify-content: center;
+  }
+
+  /* Notion-style reading column. font-size scales off --vscode-font-size
+   * so the column follows the user's editor font setting; 1.15 lifts the
+   * 13px default to ~15px reading size.
+   *
+   * Review fix #40 (C1): the PM-era reading-column measure (max-width:
+   * 44em) and outer padding (3.5rem 2.5rem 6rem) MOVED to .cm-content
+   * (cm/theme.ts) — keeping them here AND there would double the measure
+   * and the insets. The .quoll-editor host now only owns layout (fill
+   * width + height so the CM editor has a height to fill) and the
+   * readonly opacity (.quoll-editor.read-only, see below — do NOT also
+   * dim .cm-content, the opacity would compound). */
+  .quoll-editor {
+    /* position: relative — containing block for the absolutely-positioned
+     * outline overlay (cm/outline). Does not affect the CM fill layout. */
+    position: relative;
+    width: 100%;
+    height: 100%;
+    font-size: calc(var(--vscode-font-size) * 1.15);
+    outline: none;
+  }
+
+  /* Read-only / write-blocked surface. The reducer's `canWrite=false` path
+   * toggles this class on the editor element; CodeMirror's editable +
+   * readOnly Compartment removes input handlers and refuses doc-mutating
+   * commands, this just makes it visible. */
+  .quoll-editor.read-only {
+    opacity: 0.85;
+    cursor: not-allowed;
+  }
+
+  /* CodeMirror surface (C1): the EditorView fills the .quoll-editor host
+   * and inherits the VS Code theme via cm/theme.ts. The reading-column
+   * measure + padding live on .cm-content (cm/theme.ts), NOT here, and
+   * readonly opacity stays on .quoll-editor.read-only above (avoids a
+   * doubled measure / compounded opacity). */
+  .quoll-editor .cm-editor {
+    height: 100%;
+  }
+
+  /* Save-policy banner. Surfaced when a serializeError blocks save (the
+   * host's `edit-rejected` → serializeError error arm — C8 retired the
+   * parse-warning banners). Kept minimal — a later PR can replace with a
+   * VS Code Webview UI Toolkit notification if one is ever needed. */
+  .quoll-banner {
+    padding: 0.5em 1em;
+    margin: 0 0 0.5em;
+    font-size: 0.9em;
+    border-left: 3px solid var(--vscode-editorWarning-foreground);
+    background-color: var(--vscode-inputValidation-warningBackground, transparent);
+    color: var(--vscode-editor-foreground);
+  }
+
+  .quoll-banner.error {
+    border-left-color: var(--vscode-editorError-foreground);
+    background-color: var(--vscode-inputValidation-errorBackground, transparent);
+  }
+
+  /* Persistence-degraded notice (setMetadata failure). Milder than .error:
+   * a subtle left border + muted foreground, no strong background — it
+   * reports lost cross-session UI metadata, not document data loss. */
+  .quoll-banner.notice {
+    border-left-color: var(--vscode-editorInfo-foreground, var(--vscode-focusBorder));
+    background-color: transparent;
+    color: var(--vscode-descriptionForeground, var(--vscode-editor-foreground));
+  }
+
+  /* Decoration syntax reveal (C4a). Caret-on-token rendering — the syntax
+   * marks (#, >, **, *, `, ~~) remain in the document but render dim so the
+   * user can read AND edit them. Caret-off renders via Decoration.replace
+   * (zero-width), governed by CodeMirror itself, no CSS needed.
+   *
+   * `opacity` (not `color`) so syntax-highlight colour from quollHighlight
+   * (theme.ts) still shows through. Pinned by styles-contract.test.ts. */
+  .quoll-syntax-reveal {
+    opacity: 0.4;
+    color: var(--vscode-descriptionForeground, var(--vscode-editor-foreground));
+  }
+
+  /* Clickable inline link content (C4b). Caret-out: the link's inline
+   * content range carries this class so the mouse cursor signals "I'm
+   * clickable". Caret-in: the marker is dropped (the user is editing the
+   * link source), so the standard text-cursor returns. The pointer cursor
+   * is the only state delta — link COLOUR is already supplied by
+   * cm/theme.ts via the t.link Lezer tag, so we don't redeclare it here. */
+  .quoll-link-clickable {
+    cursor: pointer;
+  }
+
+}
+
+/* ────────────────────────────── theme ──────────────────────────── */
+@layer theme {
+  /* Alternate-theme STUB. Nothing toggles data-quoll-theme at runtime yet
+   * — this demonstrates the override hook for future multi-theme support
+   * (compact / high-contrast / sepia). A host that sets
+   * <html data-quoll-theme="compact"> retunes the rhythm/spacing tokens
+   * with zero other CSS. Lives in the theme layer so it beats the base
+   * :root defaults by both layer order AND specificity. */
+  :root[data-quoll-theme="compact"] {
+    --quoll-line-height: 1.4;
+    --quoll-table-block-pad: 0.35em;
+    --quoll-table-cell-pad: 2px 6px;
+  }
+
+  /* Navy + green editorial-accent palette (palette refresh, 2026-06-29).
+   * Per-theme FIXED accents (the dracula/markdown-css approach): each theme
+   * class pins its own values, so the editorial identity is self-owned and
+   * churn-resistant rather than chasing the host theme's accent slots. The
+   * CANVAS (bg/text/selection + semantic lint colours) stays --vscode-* at its
+   * use sites so Quoll still tracks the host's dark/light; only these accents
+   * and the subtle navy surface tints are Quoll-owned.
+   *
+   * Surface tints are ABSOLUTE subtle-navy values (not color-mix toward the
+   * host bg): a subtle mix collapses to invisible on a near-black default dark
+   * theme, and the brief wants a cohesive blue-green surface even there.
+   *
+   * Defined in the theme layer (beats the base :root defaults by both layer
+   * order and the class specificity). Consumed with --vscode-* fallbacks at
+   * every use site, so a pre-class frame degrades to host colours. */
+  .dark-theme {
+    --quoll-accent-blue: #7ea7e0;
+    --quoll-accent-green: #5cc99a;
+    --quoll-surface-fill: #151f33;
+    --quoll-surface-header: #233156;
+    --quoll-surface-border: #33415f;
+    --quoll-on-accent: #0e1f17;
+    /* Selection tint: DARKEN the host dark-theme selection by ~18% rather than
+     * hardcoding a hex, so the highlight still TRACKS whatever dark theme the
+     * user runs (Dark+, a 3rd-party dark, …) while reading a touch calmer on
+     * the darker navy surface above. Consumed by cm/theme.ts's
+     * .cm-selectionBackground rule with a --vscode-* fallback. */
+    --quoll-selection-fill: color-mix(in srgb, var(--vscode-editor-selectionBackground) 82%, #000);
+  }
+
+  .light-theme {
+    --quoll-accent-blue: #23427a;
+    --quoll-accent-green: #1a7050;
+    --quoll-surface-fill: #f1f4fc;
+    --quoll-surface-header: #e4ebf8;
+    --quoll-surface-border: #ccd6ec;
+    --quoll-on-accent: #ffffff;
+    /* Light selection stays the plain host colour (user kept the current light
+     * tint). Both HC kinds map to .light-theme, so HC selection is the plain
+     * host colour too — maximal contrast, no HC override needed. */
+    --quoll-selection-fill: var(--vscode-editor-selectionBackground);
+  }
+
+  /* High Contrast escape hatch (Codex C98/C90, F1). The host maps BOTH HC kinds
+   * to isDarkTheme=false → shell.ts sets .light-theme, which would otherwise
+   * paint the light navy palette on a black HC background. PRIMARY selector is
+   * the DOCUMENTED VS Code webview body class `vscode-high-contrast` (+ the
+   * `-light` variant), which VS Code adds to <body> for every webview (custom
+   * editors included). The `data-vscode-theme-kind` attribute selectors are an
+   * AUXILIARY belt-and-braces (confirmed present at the Task 6 real-VS-Code
+   * smoke). A body-level token redefinition beats the html-level .light-theme
+   * for body's whole subtree (the editor) — custom-property inheritance, not
+   * specificity. Re-point the accents to host foreground/link and drop the navy
+   * surface tints so HC keeps its intended maximal contrast. */
+  body.vscode-high-contrast,
+  body.vscode-high-contrast-light,
+  body[data-vscode-theme-kind="vscode-high-contrast"],
+  body[data-vscode-theme-kind="vscode-high-contrast-light"] {
+    --quoll-accent-blue: var(--vscode-editor-foreground);
+    --quoll-accent-green: var(--vscode-textLink-foreground, var(--vscode-editor-foreground));
+    --quoll-surface-fill: transparent;
+    --quoll-surface-header: var(--vscode-editorWidget-background, transparent);
+    --quoll-surface-border: var(--vscode-contrastBorder,
+      var(--vscode-editorWidget-border, var(--vscode-panel-border, #888)));
+    --quoll-on-accent: var(--vscode-editor-background);
+    --quoll-callout-tint-strength: 0%;
+  }
+}
+
+/* ───────────────────────────── widget ──────────────────────────── */
+@layer widget {
+  /* Block-widget invariant (load-bearing for click→caret accuracy).
+   * Every block-widget ROOT carries the `quoll-block` marker class and
+   * MUST have zero margin: CodeMirror measures block-widget height via
+   * getBoundingClientRect(), which INCLUDES padding but EXCLUDES margin.
+   * Any margin on the root shifts the widget visually without updating
+   * CM's internal line-position map, accumulating a click→caret offset for
+   * every line below it. Breathing room therefore goes on PADDING (inside
+   * the measured box), never margin. Future block widgets get this for
+   * free by adding `quoll-block` to their root.
+   *
+   * Scope of the guarantee: this rule beats every other LAYERED rule
+   * (widget is the top layer). It does NOT beat unlayered rules —
+   * CodeMirror injects several unlayered <style> StyleModules at runtime
+   * (its own base theme, the syntax-highlight style, and cm/theme.ts's
+   * quollTheme), any of which would win on a shared selector. None of them
+   * target block-widget roots (they scope to `.cm-*`), so nothing overrides
+   * this today, and the manual smoke is the real measurement check. If a
+   * future CM-side rule ever needs to touch a widget root's box model, move
+   * this declaration into EditorView.theme() (cm/theme.ts) so the measure
+   * contract lives unlayered alongside CM's other structural styling. */
+  .quoll-block {
+    margin: 0;
+  }
+
+  /* C6b: readonly GFM table widget. Root is
+   * `<div class="quoll-block quoll-table-block">`; the inner `<table>` is
+   * fully self-styled here. The PM-era `.quoll-editor table/th,td/a/code`
+   * rules that used to BLEED into this widget (supplying width:100%, link
+   * underline + hover, and code font-size by descendant match) were
+   * deleted in this slice, so those properties are now declared explicitly
+   * below — there is no external bleed-through left to override. */
+  .quoll-table-block {
+    padding: var(--quoll-table-block-pad) 0;
+  }
+
+  .quoll-table-block table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 0;
+    font-size: 1em;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .quoll-table-block th,
+  .quoll-table-block td {
+    border: var(--quoll-table-border);
+    padding: var(--quoll-table-cell-pad);
+    vertical-align: top;
+    text-align: left;
+  }
+
+  .quoll-table-block thead th {
+    background: var(--quoll-surface-header, var(--vscode-editorWidget-background, transparent));
+    font-weight: 600;
+  }
+
+  .quoll-table-block a {
+    color: var(--quoll-accent-green, var(--vscode-textLink-foreground, inherit));
+    text-decoration: underline;
+    text-underline-offset: 0.2em;
+    text-decoration-thickness: 1px;
+  }
+
+  /* Hover state preserved from the deleted `.quoll-editor a:hover` (which
+   * matched widget links by descendant bleed). Fallback chain keeps a
+   * visible colour if activeForeground is unset on a given theme. */
+  .quoll-table-block a:hover {
+    color: var(--quoll-accent-green, var(--vscode-textLink-activeForeground, var(--vscode-textLink-foreground, inherit)));
+  }
+
+  .quoll-table-block code {
+    background: var(--quoll-surface-fill, var(--vscode-textCodeBlock-background, transparent));
+    padding: 0 4px;
+    border-radius: 2px;
+    font-family: var(--vscode-editor-font-family, monospace);
+    /* Preserved from the deleted `.quoll-editor code` (was inherited). */
+    font-size: 0.875em;
+  }
+
+  /* C7: image block widget. Root carries `quoll-block` (margin:0 invariant);
+   * breathing room via padding, never margin, so CM's getBoundingClientRect
+   * block-height measurement stays in lockstep with the DOM. */
+  .quoll-image-block {
+    padding: 0.5em 0;
+  }
+
+  .quoll-image-block img {
+    display: block;
+    max-width: 100%;
+    height: auto;
+  }
+
+  /* Inert placeholder for a blocked (non-allowlisted) image source. No <img>
+   * / src element is ever created for blocked URLs, so this muted, labelled
+   * chip is the only thing the user sees. */
+  .quoll-image-blocked {
+    display: inline-block;
+    padding: 0.2em 0.5em;
+    border: 1px dashed var(--vscode-editorWarning-foreground, #b89500);
+    border-radius: 3px;
+    color: var(--vscode-descriptionForeground, inherit);
+    font-style: italic;
+  }
+
+  /* C8a: read-only frontmatter metadata block. Root carries `quoll-block`
+   * (margin:0 invariant); breathing room via padding, never margin. Clean
+   * top-level frontmatter renders as a two-column <dl> (key | value); complex
+   * YAML falls back to a <pre>. role="region" + aria-label live on the root
+   * (set in frontmatter-widget.ts) for the C8 a11y roll-up. */
+  .quoll-frontmatter-block {
+    padding: 0.5em 0.75em;
+    border: 1px solid var(--vscode-panel-border, var(--vscode-editorWidget-border, #454545));
+    border-radius: 4px;
+    background: var(--vscode-editorWidget-background, transparent);
+    /* De-emphasise the whole block so a file-leading frontmatter fence reads as
+     * quiet metadata, never a heading: smaller than body prose, the muted
+     * secondary-text colour, and a compact line-height (the block inherits the
+     * 1.7 prose rhythm otherwise, which reads too airy for a metadata list).
+     * Colour lives on the root so both keys and values inherit the mute — key
+     * emphasis is carried by weight alone (dt below), keeping the block one
+     * cohesive quiet unit. */
+    color: var(--vscode-descriptionForeground, inherit);
+    font-size: 0.85em;
+    line-height: 1.5;
+    cursor: text; /* C8b: click-to-edit reveals the raw YAML source */
+  }
+
+  .quoll-frontmatter-list {
+    display: grid;
+    grid-template-columns: max-content 1fr;
+    gap: 0.15em 0.75em;
+    margin: 0;
+  }
+
+  .quoll-frontmatter-list dt {
+    /* Weight-only key/value distinction — colour is inherited from the muted
+     * block root so keys don't re-introduce body-text emphasis. */
+    font-weight: 600;
+  }
+
+  .quoll-frontmatter-list dd {
+    margin: 0;
+  }
+
+  .quoll-frontmatter-raw {
+    margin: 0;
+    white-space: pre-wrap;
+    font-family: var(--vscode-editor-font-family, monospace);
+    /* Inherit the block's 0.85em — no further shrink, so the raw fallback and
+     * the <dl> path share one metadata text size. */
+  }
+
+  /* Task-list checkbox widget (C5). Replaces the 3-char `[ ]` / `[x]`
+   * source range with a focusable, clickable checkbox. Caret-on-line
+   * suppresses the widget so the user can edit `[ ]` as raw text; caret-
+   * off re-renders the widget. The `data-checked` attribute drives the
+   * filled/empty appearance via attribute selectors (no JS class flip).
+   *
+   * This is an INLINE widget (a `<span>` in the line box), NOT a block
+   * widget — it carries no `quoll-block` marker, so the margin invariant
+   * above does not touch its `margin-right`.
+   *
+   * a11y:
+   *   - outline-on-focus uses --vscode-focusBorder so it tracks the
+   *     editor's focus-ring contract;
+   *   - inline-block + vertical-align lets the widget sit inside the
+   *     line-box without disturbing line-height. */
+  .quoll-task-checkbox {
+    display: inline-block;
+    width: 1em;
+    height: 1em;
+    margin-right: 0.25em;
+    vertical-align: -0.15em;
+    border: 1px solid var(--vscode-editor-foreground);
+    border-radius: 2px;
+    cursor: pointer;
+    background-color: transparent;
+    box-sizing: border-box;
+    /* Hide the source text underneath: the widget covers `[ ]` (3 chars),
+     * and the user sees just the box. */
+    font-size: inherit;
+    line-height: 1;
+  }
+
+  /* Checked: an accent-filled box (VS Code's button accent, the same colour
+   * native checkboxes/primary buttons use) so "done" reads at a glance.
+   * Falls back to --vscode-editor-foreground on the rare theme without a
+   * button palette (the pre-redesign look). */
+  .quoll-task-checkbox[data-checked="true"] {
+    background-color: var(--quoll-accent-green, var(--vscode-button-background, var(--vscode-editor-foreground)));
+    border-color: var(--quoll-accent-green, var(--vscode-button-background, var(--vscode-editor-foreground)));
+    position: relative;
+  }
+
+  /* Checkmark drawn as a content-less border "tick" (a box with only its
+   * right + bottom borders, rotated 45° → the ✓ shape) rather than a glyph.
+   * Two wins over the old U+2713 glyph: it is crisp and geometry-stable
+   * across fonts/DPI, AND — being EMPTY (`content: ""`) and absolutely
+   * positioned by `left`/`top` — it is IMMUNE to the negative `text-indent`
+   * this widget inherits from its `.cm-line.quoll-list-hang` line. The old
+   * glyph was TEXT, so that inherited indent shifted it left out of the box
+   * onto the editor background where it was invisible (the filled box then
+   * read as "checked but blank"). `right`/`bottom: auto` override the base
+   * box's geometry so the tick sizes by width/height; the slight upward
+   * `translateY` optically centres the asymmetric ✓. Colour is
+   * --vscode-button-foreground so it contrasts the accent fill on every
+   * theme. */
+  .quoll-task-checkbox[data-checked="true"]::after {
+    content: "";
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    right: auto;
+    bottom: auto;
+    width: 0.26em;
+    height: 0.46em;
+    transform: translate(-50%, -64%) rotate(45deg);
+    border: solid var(--quoll-on-accent, var(--vscode-button-foreground, var(--vscode-editor-background)));
+    border-width: 0 0.14em 0.14em 0;
+    border-radius: 0.5px;
+  }
+
+  .quoll-task-checkbox:focus {
+    outline: 2px solid var(--vscode-focusBorder, var(--vscode-editor-foreground));
+    outline-offset: 1px;
+  }
+
+  /* Hover affordance — scoped by checked state so the filled checked box
+   * does NOT lose its fill on hover (review fix #10). */
+  .quoll-task-checkbox:not([data-checked="true"]):hover {
+    background-color: var(--vscode-list-hoverBackground, transparent);
+  }
+
+  /* Theme-independent checked-hover cue (round-3 #24): an outline using
+   * the same --vscode-focusBorder token the focus ring uses survives any
+   * foreground colour and reads as "interactive" on every theme, without
+   * erasing the check state. */
+  .quoll-task-checkbox[data-checked="true"]:hover {
+    outline: 1px solid var(--vscode-focusBorder, var(--vscode-editor-foreground));
+    outline-offset: 1px;
+  }
+
+  /* ───────────────────── document outline navigator ─────────────────────
+   * A webview-native overlay (cm/outline): a toggle button + floating heading
+   * list. View-only — clicking an item dispatches a selection + scroll, never
+   * an edit. Absolutely positioned inside `.quoll-editor` so it overlays the
+   * CodeMirror surface WITHOUT reflowing the centred reading column. Colours
+   * are --vscode-* so dark / light / high-contrast track automatically. */
+  .quoll-outline-toggle {
+    position: absolute;
+    top: 8px;
+    right: 12px;
+    z-index: 5;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 26px;
+    height: 26px;
+    padding: 0;
+    border: 1px solid var(--vscode-editorWidget-border, var(--vscode-panel-border, transparent));
+    border-radius: 5px;
+    background: var(--vscode-editorWidget-background, var(--vscode-editor-background));
+    color: var(--vscode-icon-foreground, var(--vscode-foreground));
+    font-size: 14px;
+    line-height: 1;
+    cursor: pointer;
+    opacity: 0.5;
+    transition: opacity 0.12s ease;
+  }
+  .quoll-outline-toggle:hover,
+  .quoll-outline-toggle:focus-visible,
+  .quoll-outline-toggle.active {
+    opacity: 1;
+  }
+
+  .quoll-outline-panel {
+    position: absolute;
+    top: 42px;
+    right: 12px;
+    z-index: 5;
+    display: flex;
+    flex-direction: column;
+    width: 260px;
+    max-width: min(80vw, 260px);
+    max-height: 60vh;
+    border: 1px solid var(--vscode-editorWidget-border, var(--vscode-panel-border, #8888));
+    border-radius: 6px;
+    background: var(--vscode-editorWidget-background, var(--vscode-editor-background));
+    color: var(--vscode-editorWidget-foreground, var(--vscode-foreground));
+    box-shadow: 0 2px 8px rgb(0 0 0 / 28%);
+    overflow: hidden;
+  }
+  .quoll-outline-panel[hidden] {
+    display: none;
+  }
+
+  .quoll-outline-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 6px 10px;
+    border-bottom: 1px solid var(--vscode-editorWidget-border, var(--vscode-panel-border, transparent));
+  }
+  .quoll-outline-title {
+    font-size: 0.72rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    opacity: 0.8;
+  }
+  .quoll-outline-close {
+    padding: 0 2px;
+    border: none;
+    background: transparent;
+    color: inherit;
+    font-size: 15px;
+    line-height: 1;
+    cursor: pointer;
+    opacity: 0.7;
+  }
+  .quoll-outline-close:hover {
+    opacity: 1;
+  }
+
+  .quoll-outline-list {
+    flex: 1 1 auto;
+    margin: 0;
+    padding: 4px 0;
+    overflow-y: auto;
+    list-style: none;
+    font-size: calc(var(--vscode-font-size) * 0.92);
+  }
+  .quoll-outline-item {
+    display: block;
+    box-sizing: border-box;
+    width: 100%;
+    padding: 3px 10px;
+    border: none;
+    background: transparent;
+    color: inherit;
+    font: inherit;
+    text-align: left;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    cursor: pointer;
+  }
+  .quoll-outline-item:hover {
+    background: var(--vscode-list-hoverBackground, rgb(128 128 128 / 15%));
+  }
+  .quoll-outline-item.active {
+    background: var(--vscode-list-activeSelectionBackground, var(--vscode-list-hoverBackground, rgb(128 128 128 / 25%)));
+    color: var(--vscode-list-activeSelectionForeground, inherit);
+  }
+  .quoll-outline-item:focus-visible {
+    outline: 1px solid var(--vscode-focusBorder);
+    outline-offset: -1px;
+  }
+  .quoll-outline-item.level-1 {
+    font-weight: 600;
+  }
+  .quoll-outline-empty {
+    padding: 8px 10px;
+    font-style: italic;
+    opacity: 0.7;
+  }
+}

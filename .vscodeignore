@@ -1,0 +1,33 @@
+# Files/directories shipped in the packaged .vsix — allowlist shape.
+#
+# vsce reads this from the extension root. The default rule below
+# excludes everything (`**`); the `!` rules below re-include exactly
+# the paths the Marketplace bundle needs. Adding a new shipping path
+# means an explicit `!` line here — there is no "implicit ship by
+# absence of ignore".
+#
+# Rationale (Slice 7C release boundary): blacklist .vscodeignore is
+# fragile under file growth. Every new dotfile or generated artifact
+# at the repo root would silently ship unless someone remembered to
+# add an ignore. Allowlist makes the bundle a closed set.
+#
+# When adding a new shipping path:
+#   1. Add `!path` (file) or `!path/` followed by `!path/**` (directory).
+#   2. The directory MUST be re-included before its children; vsce
+#      cannot re-include a child of an excluded parent.
+
+# Default: ignore everything.
+**
+
+# Runtime bundle — esbuild output consumed by VS Code at activation.
+!dist/
+!dist/**
+
+# Marketplace metadata — vsce requires these at the extension root.
+!package.json
+!README.md
+!LICENSE
+!icon.png
+
+# Versioning — root CHANGELOG feeds the Marketplace "Changelog" tab.
+!CHANGELOG.md

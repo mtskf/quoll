@@ -1,0 +1,16 @@
+{
+  // Webview (browser + ESM). Strictness inherited
+  // from tsconfig.base.json; only browser/ESM-specific knobs live here.
+  // `rootDir: "../.."` keeps tsc's view of the project rooted at repo root
+  // so the cross-package imports from ../markdown / ../shared
+  // resolve.
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "module": "esnext",
+    "moduleResolution": "bundler",
+    "lib": ["es2022", "dom", "dom.iterable"],
+    "types": ["vscode-webview"],
+    "rootDir": "../.."
+  },
+  "include": ["**/*.ts", "../markdown/**/*.ts", "../shared/**/*.ts"]
+}

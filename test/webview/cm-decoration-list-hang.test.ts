@@ -1,0 +1,457 @@
+import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
+import { EditorSelection, EditorState } from "@codemirror/state";
+import type { DecorationSet, ViewUpdate } from "@codemirror/view";
+import { describe, expect, it } from "vitest";
+import {
+  blockquotePrefixCols,
+  buildListHangIndent,
+  listHangNeedsRebuild,
+} from "../../src/webview/cm/decorations/list-hang-indent.js";
+import { pointInExclusionZone } from "../../src/webview/cm/decorations/shared.js";
+import type { BuildContext } from "../../src/webview/cm/decorations/types.js";
+import { fullTree } from "./helpers/full-tree.js";
+
+function ctx(doc: string): BuildContext {
+  return ctxWithRanges(doc);
+}
+
+/** Build a context with explicit visible ranges (defaults to whole-doc). The
+ *  ranges variant exercises the per-range emission guard. */
+function ctxWithRanges(
+  doc: string,
+  visibleRanges?: ReadonlyArray<{ from: number; to: number }>
+): BuildContext {
+  const state = EditorState.create({
+    doc,
+    extensions: [markdown({ base: markdownLanguage })],
+  });
+  return {
+    state,
+    selection: EditorSelection.single(0),
+    visibleRanges: visibleRanges ?? [{ from: 0, to: state.doc.length }],
+    tree: fullTree(state),
+  };
+}
+
+/** Flatten line decorations to { from, style }. Line decorations are points
+ *  (from === to) at the line start. */
+function lines(set: DecorationSet): Array<{ from: number; style: string }> {
+  const out: Array<{ from: number; style: string }> = [];
+  const iter = set.iter();
+  while (iter.value !== null) {
+    const spec = iter.value.spec as { attributes?: { style?: string } };
+    out.push({ from: iter.from, style: spec.attributes?.style ?? "" });
+    iter.next();
+  }
+  return out;
+}
+
+describe("list hang-indent provider — plain bullet/ordered", () => {
+  it("bullet item: hang = 2ch over a 6px base", () => {
+    const set = buildListHangIndent(ctx("- alpha bravo charlie"));
+    expect(lines(set)).toEqual([
+      {
+        from: 0,
+        style:
+          "text-indent:calc(-1 * (2 * var(--quoll-prose-space, 1ch)));padding-inline-start:calc(6px + (2 * var(--quoll-prose-space, 1ch)))",
+      },
+    ]);
+  });
+
+  it("ordered item: hang = 3ch", () => {
+    const set = buildListHangIndent(ctx("1. alpha bravo"));
+    expect(lines(set)[0]?.style).toBe(
+      "text-indent:calc(-1 * (3 * var(--quoll-prose-space, 1ch)));padding-inline-start:calc(6px + (3 * var(--quoll-prose-space, 1ch)))"
+    );
+  });
+
+  it("two-digit ordered item: hang = 4ch", () => {
+    expect(lines(buildListHangIndent(ctx("10. alpha")))[0]?.style).toBe(
+      "text-indent:calc(-1 * (4 * var(--quoll-prose-space, 1ch)));padding-inline-start:calc(6px + (4 * var(--quoll-prose-space, 1ch)))"
+    );
+  });
+
+  it("top-level 2-space-indented bullet: hang = 4ch", () => {
+    expect(lines(buildListHangIndent(ctx("  - alpha")))[0]?.style).toBe(
+      "text-indent:calc(-1 * (4 * var(--quoll-prose-space, 1ch)));padding-inline-start:calc(6px + (4 * var(--quoll-prose-space, 1ch)))"
+    );
+  });
+
+  it("tab-indented nested bullet: tab expands to tabSize columns (Finding 4)", () => {
+    // "- outer\n\t- inner": inner line is "\t- inner"; "\t- " → visual col
+    // 4 (tab → 4) + 2 = 6. countColumn expands the tab; raw offset would be 3.
+    const got = lines(buildListHangIndent(ctx("- outer\n\t- inner")));
+    expect(got[1]?.style).toBe(
+      "text-indent:calc(-1 * (6 * var(--quoll-prose-space, 1ch)));padding-inline-start:calc(6px + (6 * var(--quoll-prose-space, 1ch)))"
+    );
+  });
+
+  it("non-list paragraph: no line decoration", () => {
+    expect(lines(buildListHangIndent(ctx("just a paragraph")))).toEqual([]);
+  });
+
+  it("empty bullet item (no content): no line decoration", () => {
+    expect(lines(buildListHangIndent(ctx("- ")))).toEqual([]);
+  });
+
+  it("nested sub-list: each ListItem line gets its own hang", () => {
+    // "- outer\n  - inner" → outer line 0 (2ch), inner line at offset 8 (4ch).
+    const got = lines(buildListHangIndent(ctx("- outer\n  - inner")));
+    expect(got).toEqual([
+      {
+        from: 0,
+        style:
+          "text-indent:calc(-1 * (2 * var(--quoll-prose-space, 1ch)));padding-inline-start:calc(6px + (2 * var(--quoll-prose-space, 1ch)))",
+      },
+      {
+        from: 8,
+        style:
+          "text-indent:calc(-1 * (4 * var(--quoll-prose-space, 1ch)));padding-inline-start:calc(6px + (4 * var(--quoll-prose-space, 1ch)))",
+      },
+    ]);
+  });
+});
+
+describe("list hang-indent provider — task lists", () => {
+  it("bullet task at top level: hang = checkbox column token (0ch prefix)", () => {
+    const set = buildListHangIndent(ctx("- [ ] task body that is long"));
+    expect(lines(set)[0]?.style).toBe(
+      "text-indent:calc(-1 * (0 * var(--quoll-prose-space, 1ch) + var(--quoll-task-marker-width)));" +
+        "padding-inline-start:calc(6px + (0 * var(--quoll-prose-space, 1ch) + var(--quoll-task-marker-width)))"
+    );
+  });
+
+  it("nested bullet task: prefix = leading whitespace cols (2ch) + token", () => {
+    const set = buildListHangIndent(ctx("- outer\n  - [ ] nested task"));
+    expect(lines(set)[1]?.style).toBe(
+      "text-indent:calc(-1 * (2 * var(--quoll-prose-space, 1ch) + var(--quoll-task-marker-width)));" +
+        "padding-inline-start:calc(6px + (2 * var(--quoll-prose-space, 1ch) + var(--quoll-task-marker-width)))"
+    );
+  });
+
+  it("ordered task: prefix includes the visible `N. ` (3ch) + token", () => {
+    const set = buildListHangIndent(ctx("1. [x] ordered task body"));
+    expect(lines(set)[0]?.style).toBe(
+      "text-indent:calc(-1 * (3 * var(--quoll-prose-space, 1ch) + var(--quoll-task-marker-width)));" +
+        "padding-inline-start:calc(6px + (3 * var(--quoll-prose-space, 1ch) + var(--quoll-task-marker-width)))"
+    );
+  });
+});
+
+describe("list hang-indent provider — plain child nested under a task item", () => {
+  // PR2: pad = normalised `Kch + var(...)` form, PLUS NEST_STEP (2ch) so the
+  // child is one outline step right of the parent content column (PR1 placed
+  // it flush; flush read as un-nested under the wide checkbox). text-indent
+  // (the first-line pull) is unchanged.
+  it("2-space bullet child: re-based one step past the parent task content column", () => {
+    const set = buildListHangIndent(ctx("- [ ] task\n  - nested bullet"));
+    expect(lines(set)[1]?.style).toBe(
+      "text-indent:calc(-1 * (4 * var(--quoll-prose-space, 1ch)));padding-inline-start:calc(6px + (4 * var(--quoll-prose-space, 1ch) + var(--quoll-task-marker-width)))"
+    );
+  });
+
+  it("tab-indented bullet child: text-indent uses tab-expanded col, hang re-bases +step", () => {
+    const set = buildListHangIndent(ctx("- [ ] task\n\t- nested"));
+    expect(lines(set)[1]?.style).toBe(
+      "text-indent:calc(-1 * (6 * var(--quoll-prose-space, 1ch)));padding-inline-start:calc(6px + (4 * var(--quoll-prose-space, 1ch) + var(--quoll-task-marker-width)))"
+    );
+  });
+
+  it("ordered child under bullet task: child marker width is `N. ` (3ch), +step", () => {
+    const set = buildListHangIndent(ctx("- [ ] task\n  1. item here"));
+    expect(lines(set)[1]?.style).toBe(
+      "text-indent:calc(-1 * (5 * var(--quoll-prose-space, 1ch)));padding-inline-start:calc(6px + (5 * var(--quoll-prose-space, 1ch) + var(--quoll-task-marker-width)))"
+    );
+  });
+
+  it("bullet child under ORDERED task: parent prefix keeps `1. ` visible (3ch), +step", () => {
+    const set = buildListHangIndent(ctx("1. [ ] task\n   - child here"));
+    expect(lines(set)[1]?.style).toBe(
+      "text-indent:calc(-1 * (5 * var(--quoll-prose-space, 1ch)));padding-inline-start:calc(6px + (7 * var(--quoll-prose-space, 1ch) + var(--quoll-task-marker-width)))"
+    );
+  });
+});
+
+describe("list hang-indent provider — task compensation does NOT leak", () => {
+  it("plain child under a PLAIN parent is unchanged (no task ancestor)", () => {
+    // Regression guard for the working control: `- outer\n  - inner`.
+    const set = buildListHangIndent(ctx("- outer\n  - inner"));
+    expect(lines(set)[1]?.style).toBe(
+      "text-indent:calc(-1 * (4 * var(--quoll-prose-space, 1ch)));padding-inline-start:calc(6px + (4 * var(--quoll-prose-space, 1ch)))"
+    );
+  });
+
+  it("task child under a PLAIN parent is unchanged (compensation keys on PARENT, not child)", () => {
+    // `- outer\n  - [ ] nested task`: child is a Task; its parent "outer" is
+    // a plain item, so NO compensation — the task branch's own expr stands.
+    const set = buildListHangIndent(ctx("- outer\n  - [ ] nested task"));
+    expect(lines(set)[1]?.style).toBe(
+      "text-indent:calc(-1 * (2 * var(--quoll-prose-space, 1ch) + var(--quoll-task-marker-width)));" +
+        "padding-inline-start:calc(6px + (2 * var(--quoll-prose-space, 1ch) + var(--quoll-task-marker-width)))"
+    );
+  });
+});
+
+describe("list hang-indent provider — multi-level task nesting (F1 + NEST_STEP)", () => {
+  it("task child under a task parent: checkbox renders one step past the parent content", () => {
+    const set = buildListHangIndent(ctx("- [ ] a\n  - [ ] b"));
+    expect(lines(set)[1]?.style).toBe(
+      "text-indent:calc(-1 * (2 * var(--quoll-prose-space, 1ch) + var(--quoll-task-marker-width)));" +
+        "padding-inline-start:calc(6px + (2 * var(--quoll-prose-space, 1ch) + 2 * var(--quoll-task-marker-width)))"
+    );
+  });
+
+  it("task → task → plain: the plain leaf inherits TWO checkbox shifts + TWO steps", () => {
+    const set = buildListHangIndent(ctx("- [ ] a\n  - [ ] b\n    - c"));
+    expect(lines(set)[2]?.style).toBe(
+      "text-indent:calc(-1 * (6 * var(--quoll-prose-space, 1ch)));" +
+        "padding-inline-start:calc(6px + (6 * var(--quoll-prose-space, 1ch) + 2 * var(--quoll-task-marker-width)))"
+    );
+  });
+
+  it("task → plain → plain: a plain intermediate carries the ancestor task shift+step (no 2nd step)", () => {
+    const set = buildListHangIndent(ctx("- [ ] a\n  - b\n    - c"));
+    expect(lines(set)[2]?.style).toBe(
+      "text-indent:calc(-1 * (6 * var(--quoll-prose-space, 1ch)));" +
+        "padding-inline-start:calc(6px + (6 * var(--quoll-prose-space, 1ch) + var(--quoll-task-marker-width)))"
+    );
+  });
+});
+
+describe("list hang-indent provider — per-range emission guard", () => {
+  it("adjacent visible ranges sharing a boundary emit each line exactly once", () => {
+    // Lezer's tree.iterate uses TOUCH semantics (node.from <= range.to), so a
+    // ListItem whose line starts exactly at a range boundary is visited in
+    // BOTH adjacent ranges. The `emitted` Set de-dups so that line yields one
+    // decoration, not two.
+    // "- alpha\n- bravo charlie": item 2's line starts at offset 8.
+    const doc = "- alpha\n- bravo charlie";
+    const boundary = 8; // start of line 2
+    const set = buildListHangIndent(
+      ctxWithRanges(doc, [
+        { from: 0, to: boundary },
+        { from: boundary, to: doc.length },
+      ])
+    );
+    // Exactly two decorations — one per item line, NO duplicate at `boundary`.
+    expect(lines(set).map((l) => l.from)).toEqual([0, boundary]);
+  });
+
+  it("emits the hang when a visible range starts mid-line (line-gap split — Codex #92)", () => {
+    // CodeMirror's visibleRanges can begin INSIDE a marker line when a line-gap
+    // decoration splits a very long wrapped line — here the only visible range
+    // starts at offset 5, past the marker line's start (line.from = 0). The old
+    // `line.from < range.from` guard dropped the hang for that line, leaving its
+    // soft-wrap continuations un-indented. Now the line still gets its hang.
+    // Revert-check: restoring `line.from < range.from || line.from >= range.to`
+    // reds this (the decoration set comes back empty).
+    const doc = "- alpha bravo charlie delta echo";
+    const set = buildListHangIndent(ctxWithRanges(doc, [{ from: 5, to: doc.length }]));
+    expect(lines(set).map((l) => l.from)).toEqual([0]);
+  });
+});
+
+describe("pointInExclusionZone — point-anchor containment", () => {
+  it("a point strictly inside [from,to) is contained", () => {
+    expect(pointInExclusionZone(4, [{ from: 0, to: 16 }])).toBe(true);
+  });
+  it("the zone start is contained; the zone end is NOT (half-open upper bound)", () => {
+    expect(pointInExclusionZone(0, [{ from: 0, to: 16 }])).toBe(true);
+    expect(pointInExclusionZone(16, [{ from: 0, to: 16 }])).toBe(false);
+  });
+  it("a point past the zone is not contained", () => {
+    expect(pointInExclusionZone(17, [{ from: 0, to: 16 }])).toBe(false);
+  });
+});
+
+describe("listHangIndent — exclusion zones drop hang lines inside the span", () => {
+  it("emits a hang line for a list with no zones", () => {
+    expect(buildListHangIndent(ctx(`- ${"word ".repeat(40)}`)).size).toBeGreaterThan(0);
+  });
+  it("drops the hang line when the marker-line anchor falls inside a zone", () => {
+    const doc = `- ${"word ".repeat(40)}`;
+    expect(buildListHangIndent(ctx(doc), [{ from: 0, to: doc.length }]).size).toBe(0);
+  });
+  it("keeps a hang line for a list line OUTSIDE the zone", () => {
+    const doc = `---\ntitle: x\n---\n\n- ${"word ".repeat(40)}`;
+    const fmEnd = "---\ntitle: x\n---".length; // 16
+    expect(buildListHangIndent(ctx(doc), [{ from: 0, to: fmEnd }]).size).toBeGreaterThan(0);
+  });
+});
+
+/** Build a context with the caret at `caret` (parks it OFF a tested line). */
+function ctxWithSelection(doc: string, caret: number): BuildContext {
+  const state = EditorState.create({
+    doc,
+    extensions: [markdown({ base: markdownLanguage })],
+  });
+  return {
+    state,
+    selection: EditorSelection.single(caret),
+    visibleRanges: [{ from: 0, to: state.doc.length }],
+    tree: fullTree(state),
+  };
+}
+
+/** blockquotePrefixCols for the first line of `doc`, resolving the first
+ *  ListItem's ListMark position (the byte anchor the provider passes) so the
+ *  content-vs-prefix QuoteMark guard is exercised. */
+function prefixColsLine0(doc: string): number {
+  const st = EditorState.create({ doc, extensions: [markdown({ base: markdownLanguage })] });
+  const tree = fullTree(st);
+  const line = st.doc.lineAt(0);
+  let markerFrom = line.to;
+  tree.iterate({
+    enter: (n) => {
+      if (n.name === "ListItem" && markerFrom === line.to) {
+        markerFrom = n.node.firstChild?.from ?? n.from;
+      }
+    },
+  });
+  return blockquotePrefixCols(st, tree, { from: line.from, to: line.to }, markerFrom);
+}
+
+describe("blockquotePrefixCols — per-QuoteMark hidden width (mirrors blockquote-reveal)", () => {
+  it("`> - item`: the `> ` prefix is 2 columns", () => {
+    expect(prefixColsLine0("> - item")).toBe(2);
+  });
+  it("`> 1. item`: the `> ` prefix is 2 columns (list marker excluded)", () => {
+    expect(prefixColsLine0("> 1. item")).toBe(2);
+  });
+  it("`> > - item`: both quote levels hide → 4 columns", () => {
+    expect(prefixColsLine0("> > - item")).toBe(4);
+  });
+  it("`  > - item`: leading spaces before `>` are NOT hidden → 2 (not 4)", () => {
+    expect(prefixColsLine0("  > - item")).toBe(2);
+  });
+  it("`>   - item`: absorb eats the list indent → 4 columns", () => {
+    expect(prefixColsLine0(">   - item")).toBe(4);
+  });
+  it("`>\\t- item`: the tab after `>` is absorbed → 4 columns (tabSize 4)", () => {
+    expect(prefixColsLine0(">\t- item")).toBe(4);
+  });
+  it("plain `- item`: no blockquote mark → 0", () => {
+    expect(prefixColsLine0("- item")).toBe(0);
+  });
+  it("`- > quote`: an inline blockquote as list CONTENT is NOT a prefix → 0", () => {
+    // Codex PR#248 review: Lezer parses this ListItem(ListMark, Blockquote(QuoteMark …))
+    // — the QuoteMark sits AFTER the list marker, so it is the item's content
+    // (blockquote-reveal hides it, but it does not shift the `- ` marker) and
+    // must NOT be counted. A naive full-line sum would wrongly report 2.
+    expect(prefixColsLine0("- > quote")).toBe(0);
+  });
+  it("`1. > quote`: inline blockquote after an ordered marker is NOT a prefix → 0", () => {
+    expect(prefixColsLine0("1. > quote")).toBe(0);
+  });
+});
+
+describe("list hang-indent provider — blockquoted lists (selection-aware)", () => {
+  // Two blockquoted bullets; caret on line 2 → line 1 is caret-OFF (reveal
+  // hides `> `, hang reduces to plain) and line 2 is caret-ON (`> ` shown → full hang).
+  const twoItems = "> - alpha\n> - bravo";
+  const line2From = twoItems.indexOf("\n") + 1;
+
+  it("caret-off `> - item`: hang reduces to the plain `- item` hang (2ch)", () => {
+    const set = buildListHangIndent(ctxWithSelection(twoItems, line2From + 3));
+    expect(lines(set)[0]?.style).toBe(
+      "text-indent:calc(-1 * (2 * var(--quoll-prose-space, 1ch)));padding-inline-start:calc(6px + (2 * var(--quoll-prose-space, 1ch)))"
+    );
+  });
+
+  it("caret-on `> - item`: full hang keeps the revealed `> ` (4ch)", () => {
+    const set = buildListHangIndent(ctxWithSelection(twoItems, line2From + 3));
+    expect(lines(set)[1]?.style).toBe(
+      "text-indent:calc(-1 * (4 * var(--quoll-prose-space, 1ch)));padding-inline-start:calc(6px + (4 * var(--quoll-prose-space, 1ch)))"
+    );
+  });
+
+  it("caret-off `> 1. item`: reduces to the plain `1. item` hang (3ch)", () => {
+    const d = "> 1. alpha\nx";
+    const set = buildListHangIndent(ctxWithSelection(d, d.length)); // caret on line 2
+    expect(lines(set)[0]?.style).toBe(
+      "text-indent:calc(-1 * (3 * var(--quoll-prose-space, 1ch)));padding-inline-start:calc(6px + (3 * var(--quoll-prose-space, 1ch)))"
+    );
+  });
+
+  it("caret-off `> > - item`: both hidden levels collapse → plain `- item` hang (2ch)", () => {
+    const d = "> > - alpha\nx";
+    const set = buildListHangIndent(ctxWithSelection(d, d.length));
+    expect(lines(set)[0]?.style).toBe(
+      "text-indent:calc(-1 * (2 * var(--quoll-prose-space, 1ch)));padding-inline-start:calc(6px + (2 * var(--quoll-prose-space, 1ch)))"
+    );
+  });
+
+  it("caret-off `  > - item`: leading spaces kept → 2-space-indent hang (4ch, NOT collapsed)", () => {
+    const d = "  > - alpha\nx";
+    const set = buildListHangIndent(ctxWithSelection(d, d.length));
+    expect(lines(set)[0]?.style).toBe(
+      "text-indent:calc(-1 * (4 * var(--quoll-prose-space, 1ch)));padding-inline-start:calc(6px + (4 * var(--quoll-prose-space, 1ch)))"
+    );
+  });
+
+  it("caret-off `>   - item`: absorb collapses the list indent → 2ch", () => {
+    const d = ">   - alpha\nx";
+    const set = buildListHangIndent(ctxWithSelection(d, d.length));
+    expect(lines(set)[0]?.style).toBe(
+      "text-indent:calc(-1 * (2 * var(--quoll-prose-space, 1ch)));padding-inline-start:calc(6px + (2 * var(--quoll-prose-space, 1ch)))"
+    );
+  });
+
+  it("caret-off `>\\t- item`: tab prefix absorbed → collapses to 2ch (tabSize 4)", () => {
+    const d = ">\t- alpha\nx";
+    const set = buildListHangIndent(ctxWithSelection(d, d.length));
+    expect(lines(set)[0]?.style).toBe(
+      "text-indent:calc(-1 * (2 * var(--quoll-prose-space, 1ch)));padding-inline-start:calc(6px + (2 * var(--quoll-prose-space, 1ch)))"
+    );
+  });
+
+  it("caret-off nested `> - outer\\n>   - inner`: inner collapses consistently → 2ch", () => {
+    const d = "> - outer\n>   - inner\nx";
+    const set = buildListHangIndent(ctxWithSelection(d, d.length)); // caret on the trailing `x`
+    // inner is the 2nd hang line (index 1).
+    expect(lines(set)[1]?.style).toBe(
+      "text-indent:calc(-1 * (2 * var(--quoll-prose-space, 1ch)));padding-inline-start:calc(6px + (2 * var(--quoll-prose-space, 1ch)))"
+    );
+  });
+
+  it("non-blockquoted list is unchanged regardless of caret (regression guard)", () => {
+    const d = "- alpha\nx";
+    const set = buildListHangIndent(ctxWithSelection(d, d.length));
+    expect(lines(set)[0]?.style).toBe(
+      "text-indent:calc(-1 * (2 * var(--quoll-prose-space, 1ch)));padding-inline-start:calc(6px + (2 * var(--quoll-prose-space, 1ch)))"
+    );
+  });
+
+  it("caret-off `- > quote` (inline blockquote as list content): NOT over-subtracted → 2ch", () => {
+    // Codex PR#248 review regression: the `> ` here is the item's CONTENT (a
+    // blockquote), not a prefix that shifts the `- ` marker. A naive full-line
+    // QuoteMark sum subtracted its 2 columns → 0ch (marker-flush under-hang);
+    // the marker-position guard keeps the plain `- ` hang (2ch).
+    const d = "- > quote\nx";
+    const set = buildListHangIndent(ctxWithSelection(d, d.length)); // caret on line 2
+    expect(lines(set)[0]?.style).toBe(
+      "text-indent:calc(-1 * (2 * var(--quoll-prose-space, 1ch)));padding-inline-start:calc(6px + (2 * var(--quoll-prose-space, 1ch)))"
+    );
+  });
+});
+
+describe("listHangNeedsRebuild — selection-aware rebuild trigger (revert-check)", () => {
+  it("a selection-only update triggers a rebuild (blockquote reveal lock-step)", () => {
+    const st = EditorState.create({
+      doc: "> - a",
+      extensions: [markdown({ base: markdownLanguage })],
+    });
+    // startState === state → the tree-identity and facet clauses are both false
+    // (syntaxTree(st) is cached per-state; st.facet(x) === st.facet(x)), so ONLY
+    // the selectionSet clause can flip the result. This isolates the NEW trigger:
+    // removing `u.selectionSet ||` from listHangNeedsRebuild reds the first
+    // assertion (deterministic revert-check, no flaky mounted-view / visibleRanges).
+    const base = { docChanged: false, viewportChanged: false, startState: st, state: st };
+    expect(listHangNeedsRebuild({ ...base, selectionSet: true } as unknown as ViewUpdate)).toBe(
+      true
+    );
+    expect(listHangNeedsRebuild({ ...base, selectionSet: false } as unknown as ViewUpdate)).toBe(
+      false
+    );
+  });
+});

@@ -1,0 +1,241 @@
+import { describe, expect, it, vi } from "vitest";
+
+import {
+  buildContextReference,
+  handleContextHandoff,
+} from "../../src/extension/handle-context-handoff.js";
+
+describe("buildContextReference", () => {
+  it("returns a whole-file reference when there is no selection", () => {
+    expect(buildContextReference("docs/a.md", false, 3, 7)).toBe("@docs/a.md");
+  });
+  it("returns a single-line reference when start === end", () => {
+    expect(buildContextReference("docs/a.md", true, 4, 4)).toBe("@docs/a.md#L4");
+  });
+  it("returns a range reference for a multi-line selection", () => {
+    expect(buildContextReference("docs/a.md", true, 2, 7)).toBe("@docs/a.md#L2-7");
+  });
+});
+
+type FakeTerminal = { name: string };
+
+function deps(overrides: Partial<Parameters<typeof handleContextHandoff<FakeTerminal>>[1]> = {}) {
+  const calls: {
+    clipboard: string[];
+    commands: string[];
+    info: string[];
+    warn: string[];
+    error: string[];
+    terminalText: string[];
+    sentTo: FakeTerminal[];
+    shown: FakeTerminal[];
+  } = {
+    clipboard: [],
+    commands: [],
+    info: [],
+    warn: [],
+    error: [],
+    terminalText: [],
+    sentTo: [],
+    shown: [],
+  };
+  const base = {
+    relativePath: "notes/x.md",
+    getLineCount: () => 10,
+    isDirty: false,
+    save: vi.fn(async () => true),
+    writeClipboard: vi.fn(async (t: string) => {
+      calls.clipboard.push(t);
+    }),
+    executeCommand: vi.fn(async (id: string) => {
+      calls.commands.push(id);
+    }),
+    showInfo: vi.fn(async (m: string) => {
+      calls.info.push(m);
+    }),
+    showWarn: vi.fn(async (m: string) => {
+      calls.warn.push(m);
+    }),
+    showError: vi.fn(async (m: string) => {
+      calls.error.push(m);
+    }),
+    // Default: no Claude terminal → exercises the clipboard fallback path so the
+    // pre-existing tests below keep asserting the unchanged fallback behaviour.
+    findClaudeTerminal: vi.fn((): FakeTerminal | undefined => undefined),
+    sendTerminalText: vi.fn((t: FakeTerminal, text: string) => {
+      calls.sentTo.push(t);
+      calls.terminalText.push(text);
+    }),
+    showTerminal: vi.fn((t: FakeTerminal) => {
+      calls.shown.push(t);
+    }),
+  };
+  return { calls, deps: { ...base, ...overrides } };
+}
+
+describe("handleContextHandoff", () => {
+  it("copies a range reference and opens+focuses Claude Code", async () => {
+    const { calls, deps: d } = deps();
+    await handleContextHandoff({ hasSelection: true, startLine: 2, endLine: 5 }, d);
+    expect(calls.clipboard).toEqual(["@notes/x.md#L2-5"]);
+    expect(calls.commands).toEqual(["claude-vscode.editor.open", "claude-vscode.focus"]);
+    expect(calls.info).toEqual([expect.stringContaining("@notes/x.md#L2-5")]);
+    expect(calls.warn).toEqual([]);
+    expect(calls.error).toEqual([]);
+  });
+
+  it("saves a dirty buffer before building the reference", async () => {
+    const order: string[] = [];
+    const save = vi.fn(async () => {
+      order.push("save");
+      return true;
+    });
+    const writeClipboard = vi.fn(async () => {
+      order.push("clipboard");
+    });
+    const { deps: d } = deps({ isDirty: true, save, writeClipboard });
+    await handleContextHandoff({ hasSelection: true, startLine: 1, endLine: 1 }, d);
+    expect(save).toHaveBeenCalledOnce();
+    expect(order).toEqual(["save", "clipboard"]);
+  });
+
+  it("does not save a clean buffer", async () => {
+    const { deps: d } = deps({ isDirty: false });
+    await handleContextHandoff({ hasSelection: false, startLine: 1, endLine: 1 }, d);
+    expect(d.save).not.toHaveBeenCalled();
+  });
+
+  it("clamps out-of-range lines to the document line count", async () => {
+    const { calls, deps: d } = deps({ getLineCount: () => 4 });
+    await handleContextHandoff({ hasSelection: true, startLine: 99, endLine: 999 }, d);
+    expect(calls.clipboard).toEqual(["@notes/x.md#L4"]);
+  });
+
+  it("orders a reversed range and clamps the low end to 1", async () => {
+    const { calls, deps: d } = deps({ getLineCount: () => 10 });
+    await handleContextHandoff({ hasSelection: true, startLine: 8, endLine: 0 }, d);
+    // endLine 0 clamps to 1, then ordered → L1-8
+    expect(calls.clipboard).toEqual(["@notes/x.md#L1-8"]);
+  });
+
+  it("clamps to the POST-save line count (save participant shrank the file)", async () => {
+    // Pre-save the doc has 10 lines; a save participant (e.g. format-on-save)
+    // trims it to 4. getLineCount is read AFTER save, so an endLine of 8 must
+    // clamp to the post-save count (4), not the pre-save 10 — the @-mention
+    // resolves against the saved file.
+    let lines = 10;
+    const save = vi.fn(async () => {
+      lines = 4;
+      return true;
+    });
+    const { calls, deps: d } = deps({ isDirty: true, save, getLineCount: () => lines });
+    await handleContextHandoff({ hasSelection: true, startLine: 2, endLine: 8 }, d);
+    expect(calls.clipboard).toEqual(["@notes/x.md#L2-4"]);
+  });
+
+  it("still copies + succeeds when Claude Code open commands reject (best-effort)", async () => {
+    const executeCommand = vi.fn(async () => {
+      throw new Error("command 'claude-vscode.editor.open' not found");
+    });
+    const { calls, deps: d } = deps({ executeCommand });
+    await handleContextHandoff({ hasSelection: true, startLine: 1, endLine: 2 }, d);
+    expect(calls.clipboard).toEqual(["@notes/x.md#L1-2"]);
+    expect(calls.info.length).toBe(1);
+    expect(calls.error).toEqual([]);
+  });
+
+  it("aborts with a warning when a dirty buffer fails to save (returns false)", async () => {
+    const save = vi.fn(async () => false);
+    const { calls, deps: d } = deps({ isDirty: true, save });
+    await handleContextHandoff({ hasSelection: true, startLine: 1, endLine: 2 }, d);
+    expect(save).toHaveBeenCalledOnce();
+    expect(calls.clipboard).toEqual([]); // no stale reference handed off
+    expect(calls.commands).toEqual([]); // no open/focus
+    expect(calls.info).toEqual([]); // no false success
+    expect(calls.warn.length).toBe(1);
+  });
+
+  it("aborts with a warning when save throws", async () => {
+    const save = vi.fn(async () => {
+      throw new Error("save failed");
+    });
+    const { calls, deps: d } = deps({ isDirty: true, save });
+    await handleContextHandoff({ hasSelection: false, startLine: 1, endLine: 1 }, d);
+    expect(calls.clipboard).toEqual([]);
+    expect(calls.warn.length).toBe(1);
+  });
+
+  it("aborts with an error when the clipboard write fails", async () => {
+    const writeClipboard = vi.fn(async () => {
+      throw new Error("clipboard unavailable");
+    });
+    const { calls, deps: d } = deps({ writeClipboard });
+    await handleContextHandoff({ hasSelection: true, startLine: 1, endLine: 2 }, d);
+    expect(calls.commands).toEqual([]); // no open/focus on clipboard failure
+    expect(calls.info).toEqual([]); // no false success
+    expect(calls.error.length).toBe(1);
+  });
+
+  it("falls back to clipboard (no terminal insertion) when findClaudeTerminal returns undefined", async () => {
+    // Contract pin for the LOW finding: a name miss → undefined → clipboard
+    // path. Nothing is ever sent to a terminal (no activeTerminal misfire).
+    const { calls, deps: d } = deps({ findClaudeTerminal: () => undefined });
+    await handleContextHandoff({ hasSelection: true, startLine: 2, endLine: 5 }, d);
+    expect(calls.terminalText).toEqual([]); // no insertion
+    expect(calls.sentTo).toEqual([]);
+    expect(calls.shown).toEqual([]);
+    // Clipboard + open/focus + paste toast — the v1 fallback contract.
+    expect(calls.clipboard).toEqual(["@notes/x.md#L2-5"]);
+    expect(calls.commands).toEqual(["claude-vscode.editor.open", "claude-vscode.focus"]);
+    expect(calls.info).toEqual([expect.stringContaining("paste")]);
+    expect(calls.warn).toEqual([]);
+    expect(calls.error).toEqual([]);
+  });
+
+  it("inserts into the Claude terminal and skips the open commands when a terminal is found", async () => {
+    const terminal = { name: "claude" };
+    const { calls, deps: d } = deps({ findClaudeTerminal: () => terminal });
+    await handleContextHandoff({ hasSelection: true, startLine: 2, endLine: 5 }, d);
+    // Reference inserted into the terminal (no newline) and the terminal surfaced.
+    expect(calls.terminalText).toEqual(["@notes/x.md#L2-5"]);
+    expect(calls.sentTo).toEqual([terminal]);
+    expect(calls.shown).toEqual([terminal]);
+    // No new-tab open commands on the direct-insert path.
+    expect(calls.commands).toEqual([]);
+    // Clipboard still written as a paste safety net.
+    expect(calls.clipboard).toEqual(["@notes/x.md#L2-5"]);
+    // No success toast on the terminal path — the reference is already visible in
+    // the surfaced terminal's input line, so a notification would be redundant.
+    expect(calls.info).toEqual([]);
+    expect(calls.warn).toEqual([]);
+    expect(calls.error).toEqual([]);
+  });
+
+  it("does not abort on the terminal path when the clipboard insurance write fails", async () => {
+    const terminal = { name: "claude" };
+    const writeClipboard = vi.fn(async () => {
+      throw new Error("clipboard unavailable");
+    });
+    const { calls, deps: d } = deps({ findClaudeTerminal: () => terminal, writeClipboard });
+    await handleContextHandoff({ hasSelection: true, startLine: 1, endLine: 2 }, d);
+    // Terminal insertion succeeded → still a success, no error abort.
+    expect(calls.terminalText).toEqual(["@notes/x.md#L1-2"]);
+    expect(calls.shown).toEqual([terminal]);
+    expect(calls.commands).toEqual([]);
+    expect(calls.info).toEqual([]); // no toast on the terminal path
+    expect(calls.error).toEqual([]);
+  });
+
+  it("still aborts on a failed save before reaching the terminal path", async () => {
+    const terminal = { name: "claude" };
+    const save = vi.fn(async () => false);
+    const { calls, deps: d } = deps({ isDirty: true, save, findClaudeTerminal: () => terminal });
+    await handleContextHandoff({ hasSelection: true, startLine: 1, endLine: 2 }, d);
+    expect(save).toHaveBeenCalledOnce();
+    expect(calls.terminalText).toEqual([]); // no insertion on stale disk
+    expect(calls.shown).toEqual([]);
+    expect(calls.clipboard).toEqual([]);
+    expect(calls.info).toEqual([]); // no false success
+    expect(calls.warn.length).toBe(1);
+  });
+});

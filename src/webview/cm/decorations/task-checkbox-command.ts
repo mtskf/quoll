@@ -1,0 +1,96 @@
+// Task-list checkbox toggle command. Single home for both the marker
+// validation regex and the dispatch path. Lives in its own file so
+// neither widget nor reveal imports the other (Codex round-2 #12).
+//
+// Guards layered in order of cheapness:
+//   1. readOnly state — EditorState.readOnly blocks native input but
+//      NOT programmatic dispatch; we MUST check explicitly or a
+//      read-only doc would still mutate on widget click (Codex round-2
+//      #16).
+//   2. bounds + regex on the 3-byte slice — cheapest stale-from guard
+//      (Codex round-1 #7 / EH round-1 #1).
+//   3. Lezer syntaxTree cross-check — resolve the node at markerFrom
+//      and assert it is a TaskMarker that starts EXACTLY at markerFrom.
+//      Catches the insert-above race where the captured `from` now
+//      points at a DIFFERENT (still-valid) marker (EH round-2 #21).
+//   4. try/catch on dispatch — destroyed-view race during webview
+//      tear-down (Codex round-1 #9 / EH round-1 #3).
+//
+// `isolateHistory.of("full")` forces each toggle into its own undo
+// group (Codex round-1 #8 / EH round-1 #2).
+
+import { isolateHistory } from "@codemirror/commands";
+import { syntaxTree } from "@codemirror/language";
+import type { EditorView } from "@codemirror/view";
+
+/** Single source of truth for the GFM TaskMarker shape — `[ ]`, `[x]`,
+ *  or `[X]`. Declared in `command` because both `findTaskMarker` (in
+ *  reveal) and `toggleTaskCheckbox` need it, and `command` is the
+ *  lowest node of the `command → widget → reveal` DAG that broke the
+ *  round-1 reveal ↔ widget cycle (Codex round-2 #12). */
+export const TASK_MARKER_RE = /^\[[ xX]\]$/;
+
+/** Toggle the GFM task-list checkbox marker that starts at `markerFrom`.
+ *  Returns `true` when a dispatch was issued, `false` when any guard
+ *  aborted the toggle or the dispatch threw on a dead view.
+ *
+ *  The function is total in the sense that it NEVER throws — every
+ *  abort path returns `false` and never partially mutates the doc. */
+export function toggleTaskCheckbox(view: EditorView, markerFrom: number): boolean {
+  // (1) readOnly — EditorState.readOnly blocks native input, NOT
+  // programmatic dispatch (Codex round-2 #16). Without this, a click on
+  // a widget in a read-only doc would still mutate the bytes.
+  if (view.state.readOnly) {
+    return false;
+  }
+  // (2) bounds + regex on the 3-byte slice — the cheapest stale-from
+  // guard catches the "marker deleted entirely" case (Codex round-1
+  // #7 / EH round-1 #1).
+  if (markerFrom < 0 || markerFrom + 3 > view.state.doc.length) {
+    return false;
+  }
+  const slice = view.state.doc.sliceString(markerFrom, markerFrom + 3);
+  if (!TASK_MARKER_RE.test(slice)) {
+    return false;
+  }
+  // (3) Lezer syntaxTree cross-check — structural guard that the bytes
+  // at `markerFrom` actually belong to a `TaskMarker` Lezer node that
+  // STARTS exactly there. Catches the inline-code false positive (3
+  // bytes literally spelling `[ ]` inside an `InlineCode` span — regex
+  // would pass, structure would not). Does NOT catch the
+  // insert-above-with-exact-position-alignment race (a new TaskMarker
+  // landing at exactly the OLD `markerFrom` byte offset — both checks
+  // pass, wrong task toggles); that residual is bounded in practice by
+  // the provider's docChanged rebuild and is documented in the plan's
+  // Risks §12. The tree may also be mid-incremental-parse and stale; in
+  // that case the cross-check accepts the click on the OLD marker
+  // position, which is the least-disruptive fallback (dropping ALL
+  // clicks during async parses would be far worse).
+  const tree = syntaxTree(view.state);
+  let node = tree.resolveInner(markerFrom, 1);
+  while (node.parent !== null && node.name !== "TaskMarker") {
+    node = node.parent;
+  }
+  if (node.name !== "TaskMarker" || node.from !== markerFrom) {
+    return false;
+  }
+  const middle = slice.charAt(1);
+  const checked = middle === "x" || middle === "X";
+  // GFM canonical lowercase `x` on toggle to checked; space on toggle
+  // to unchecked. `[X]` normalises to `[ ]` → ` ` → `[x]` (Risks #2).
+  const next = checked ? " " : "x";
+  // (4) try/catch — destroyed-view race during webview tear-down
+  // (Codex round-1 #9 / EH round-1 #3). The catch path is silent to
+  // the user — Risks §11 documents the no-feedback gap.
+  try {
+    view.dispatch({
+      changes: { from: markerFrom + 1, to: markerFrom + 2, insert: next },
+      userEvent: "input.checkbox.toggle",
+      annotations: isolateHistory.of("full"),
+    });
+    return true;
+  } catch (err) {
+    console.error("[quoll] checkbox toggle dispatch failed", err);
+    return false;
+  }
+}
