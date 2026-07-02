@@ -40,6 +40,7 @@ import { quollLintGutter } from "./cm/lint/gutter.js";
 import { quollLint } from "./cm/lint/index.js";
 import { quollMarkdownLanguage } from "./cm/markdown.js";
 import { quollOutline } from "./cm/outline/index.js";
+import { quollSwitchEditor } from "./cm/switch-editor.js";
 import { detectLineSeparator, splitToCmText } from "./cm/seed.js";
 import { tableBlockField, tableSkeletonField } from "./cm/table/index.js";
 import {
@@ -375,6 +376,12 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
         // debounced so the keystroke path is untouched. Present in read-only
         // mode too (navigation, not editing).
         quollOutline(),
+        // Quoll → text-editor switch: a top-right overlay button + the
+        // Mod-Alt-e chord, both posting `switch-to-text`. Pure side channel
+        // (no CM change, no write-lock); the host reopens the document in the
+        // built-in text editor and re-applies the caret. Present in read-only
+        // mode too (navigation).
+        quollSwitchEditor(getHost()),
         // Paste/drop image ingestion: capture image files, post image-write, and
         // insert the relative link at a position-mapped anchor on the host's
         // reply. canWrite mirrors edit-sync's readonly hard-drop; the host is the
