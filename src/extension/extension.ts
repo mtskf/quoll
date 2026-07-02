@@ -1,6 +1,7 @@
 import { commands, type ExtensionContext, ExtensionMode, window, workspace } from "vscode";
 import { canEditWith } from "./canEditWith.js";
 import { QuollEditorPanel } from "./QuollEditorPanel.js";
+import { registerToggleEditor } from "./toggle-editor.js";
 
 export async function activate(context: ExtensionContext) {
   // Dynamic import so esbuild tree-shakes the TestHarness class body out
@@ -13,6 +14,7 @@ export async function activate(context: ExtensionContext) {
       : undefined;
 
   context.subscriptions.push(QuollEditorPanel.register(context, harness));
+  context.subscriptions.push(registerToggleEditor());
   context.subscriptions.push(
     commands.registerCommand("quoll.editWith", async () => {
       const editor = window.activeTextEditor;

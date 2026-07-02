@@ -64,6 +64,17 @@ export const commands = {
   executeCommand: async (..._args: unknown[]): Promise<unknown> => undefined,
 };
 
+// Minimal Tabs-API surface. toggle-editor.ts does `import { TabInputCustom }`
+// and (in a callback the no-op registerCommand never invokes) reads
+// `window.tabGroups`. The import binding must resolve at module load; the
+// callback body is never run under vitest, so these can stay bare stubs.
+export class TabInputCustom {
+  constructor(
+    public readonly uri: StubUri,
+    public readonly viewType: string
+  ) {}
+}
+
 export const window = {
   get activeTextEditor(): unknown {
     return undefined;
@@ -71,6 +82,9 @@ export const window = {
   showInformationMessage: (_msg: string): Thenable<undefined> => Promise.resolve(undefined),
   showWarningMessage: (_msg: string): Thenable<undefined> => Promise.resolve(undefined),
   showErrorMessage: (_msg: string): Thenable<undefined> => Promise.resolve(undefined),
+  tabGroups: {
+    activeTabGroup: { activeTab: undefined as unknown },
+  },
 };
 
 export const workspace = {

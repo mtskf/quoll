@@ -76,6 +76,10 @@ export type CaretReportMessageShape = EnvelopeShape & {
   character: number;
 };
 
+export type SwitchToTextMessageShape = EnvelopeShape & {
+  type: "switch-to-text";
+};
+
 export type CaretApplyMessageShape = EnvelopeShape & {
   type: "caret-apply";
   line: number;
@@ -142,7 +146,8 @@ export type WebviewToHostShape =
   | ContextHandoffMessageShape
   | CodexContextHandoffMessageShape
   | LintDiagnosticsMessageShape
-  | CaretReportMessageShape;
+  | CaretReportMessageShape
+  | SwitchToTextMessageShape;
 
 export interface RecordedEventShape {
   readonly message: { type: string } & Record<string, unknown>;

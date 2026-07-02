@@ -70,6 +70,7 @@ import { getNonce } from "./getNonce.js";
 import { handleCodexContextHandoff } from "./handle-codex-context-handoff.js";
 import { handleContextHandoff } from "./handle-context-handoff.js";
 import { handleOpenExternal } from "./handle-open-external.js";
+import { openInTextEditor } from "./reopen-text-editor.js";
 import {
   createDrainingDispatcher,
   createHostSessionCore,
@@ -923,6 +924,21 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
           // context-handoff. The protocol validator already bounded the
           // coordinates; they are re-clamped at apply time.
           lastKnownCaret = { line: raw.line, character: raw.character };
+          return;
+        case "switch-to-text":
+          // Webview button / CM chord requests a Quoll→text-editor switch.
+          // `onDidChangeActiveTextEditor` already applies `lastKnownCaret`
+          // once the text editor becomes active — no extra caret work here.
+          // Pure side effect (no document-state mutation); drop if disposed.
+          if (disposed) {
+            return;
+          }
+          void openInTextEditor(document.uri).then(
+            undefined,
+            (err: unknown) => {
+              console.error("[quoll] switch-to-text openInTextEditor rejected", err);
+            }
+          );
           return;
         default: {
           // Exhaustiveness guard — when a new WebviewToHost variant is
