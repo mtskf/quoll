@@ -234,8 +234,12 @@ describe("styles.css — bullet-list marker token (HC-sensitive)", () => {
   it("defines --quoll-bullet-marker under BOTH .dark-theme and .light-theme", () => {
     const dark = css.match(/\.dark-theme\s*\{([^}]*)\}/)?.[1] ?? "";
     const light = css.match(/\.light-theme\s*\{([^}]*)\}/)?.[1] ?? "";
-    expect(dark, "--quoll-bullet-marker missing from .dark-theme").toContain("--quoll-bullet-marker");
-    expect(light, "--quoll-bullet-marker missing from .light-theme").toContain("--quoll-bullet-marker");
+    expect(dark, "--quoll-bullet-marker missing from .dark-theme").toContain(
+      "--quoll-bullet-marker"
+    );
+    expect(light, "--quoll-bullet-marker missing from .light-theme").toContain(
+      "--quoll-bullet-marker"
+    );
   });
 
   it("re-points --quoll-bullet-marker through the host accent under High Contrast (escape hatch)", () => {

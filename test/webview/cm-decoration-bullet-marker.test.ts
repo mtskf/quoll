@@ -114,7 +114,10 @@ describe("bulletMarkerReveal — provider", () => {
     const doc = "- a\n- b\n- c";
     const state = EditorState.create({
       doc,
-      extensions: [markdown({ base: markdownLanguage }), EditorState.allowMultipleSelections.of(true)],
+      extensions: [
+        markdown({ base: markdownLanguage }),
+        EditorState.allowMultipleSelections.of(true),
+      ],
       selection: EditorSelection.create(
         [EditorSelection.cursor(0), EditorSelection.cursor(doc.indexOf("c"))],
         0

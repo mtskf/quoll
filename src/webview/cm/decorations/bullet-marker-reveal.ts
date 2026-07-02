@@ -51,11 +51,7 @@ export const bulletMarkerReveal: DecorationProvider = {
           }
           const item = node.node.parent;
           // Bullet lists only — an ordered list's `N.` keeps its numeral.
-          if (
-            item === null ||
-            item.name !== "ListItem" ||
-            item.parent?.name !== "BulletList"
-          ) {
+          if (item === null || item.name !== "ListItem" || item.parent?.name !== "BulletList") {
             return;
           }
           // A rendered bullet task's `- [ ]` is owned by taskCheckboxReveal (its
@@ -68,10 +64,7 @@ export const bulletMarkerReveal: DecorationProvider = {
           // Task on a stale tree renders no checkbox, so the ListMark is free and
           // legitimately gets its dot.
           const content = node.node.nextSibling;
-          if (
-            content?.name === "Task" &&
-            resolveTaskMarkerGeometry(ctx.state, content)?.isBullet
-          ) {
+          if (content?.name === "Task" && resolveTaskMarkerGeometry(ctx.state, content)?.isBullet) {
             return;
           }
           const line = ctx.state.doc.lineAt(node.from);
