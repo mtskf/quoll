@@ -50,15 +50,24 @@
      * footer). Both consume these via var() in cm/theme.ts, so the two panels
      * can NEVER drift in interior padding or corner radius: retuning either
      * token here moves BOTH surfaces at once.
-     *   --quoll-block-pad    the interior inset of the panel text from the fill
-     *                        edges, on all four sides.
+     *   --quoll-block-pad-x  the interior inset of the panel text from the fill
+     *                        edges, on the LEFT + RIGHT (horizontal).
+     *   --quoll-block-pad-y  the interior inset on the TOP + BOTTOM (vertical),
+     *                        applied only on the -open/-close edge lines + the
+     *                        collapse-bar footer. Split from the horizontal inset
+     *                        so the panels breathe less vertically than they do
+     *                        horizontally (tighter top/bottom, roomier sides).
      *   --quoll-block-radius the PAINTED corner round. cm/theme.ts applies an
      *                        elliptical border-box radius (`radius + border`
      *                        horizontal, `radius` vertical) that compensates for
      *                        the `background-clip: padding-box` column inset so
      *                        the VISIBLE fill lands on exactly this value — see
-     *                        the -open/-close corners in cm/theme.ts. */
-    --quoll-block-pad: 16px;
+     *                        the -open/-close corners in cm/theme.ts. The vertical
+     *                        pad split does NOT touch this: the elliptical radius
+     *                        compensates for the transparent horizontal border
+     *                        only, so it is orthogonal to the top/bottom padding. */
+    --quoll-block-pad-x: 16px;
+    --quoll-block-pad-y: 12px;
     --quoll-block-radius: 8px;
     /* Callout admonition fill strength (block-style.ts callouts). The per-type
      * accent tints the panel fill this far via color-mix in cm/theme.ts. The HC
@@ -551,7 +560,7 @@
   .quoll-outline-toggle {
     position: absolute;
     top: 8px;
-    right: 12px;
+    left: 12px;
     z-index: 5;
     display: flex;
     align-items: center;
@@ -578,7 +587,7 @@
   .quoll-outline-panel {
     position: absolute;
     top: 42px;
-    right: 12px;
+    left: 12px;
     z-index: 5;
     display: flex;
     flex-direction: column;
