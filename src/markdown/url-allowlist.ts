@@ -98,7 +98,8 @@ export function renderSafeUrl(raw: unknown): RenderSafeUrl {
  *
  * Beyond scheme + authority, the resolved path must stay INSIDE the document's
  * directory (defense in depth alongside VS Code's localResourceRoots
- * containment — TODO 2026-07-02 Codex cross-review):
+ * containment, which restricts document-relative resources to the document
+ * folder):
  * 1. Directory-prefix check on the parser-normalized pathname. The WHATWG
  *    parser pops `../` — including its encoding-aware dot-segment spellings
  *    `%2e%2e` / `.%2e` / `%2e.` — during resolution, so any traversal it

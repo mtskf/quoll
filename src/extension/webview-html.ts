@@ -105,7 +105,9 @@ export function buildWebviewHtml(input: BuildWebviewHtmlInput): string {
   //     docs use `img-src ${webview.cspSource}`), so relative images resolved
   //     against the document folder load WITHOUT widening this directive.
   //     CSP is necessary but NOT sufficient: a relative image also needs the
-  //     resolved URI to be origin-trusted (resolveTrustedResourceUrl) AND to
+  //     resolved URI to be origin- and directory-trusted
+  //     (resolveTrustedResourceUrl checks scheme + authority + document-dir
+  //     path containment) AND to
   //     sit inside a localResourceRoots entry (the document folder, widened in
   //     QuollEditorPanel). Arbitrary remote origins are NOT in cspSource, so
   //     remote images (http(s) hosts) stay CSP-blocked — no `data:`, no `https:` *.
