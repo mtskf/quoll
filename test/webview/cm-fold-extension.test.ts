@@ -3,10 +3,13 @@
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
 import {
   ensureSyntaxTree,
+  foldAll,
   foldable,
   foldCode,
   foldEffect,
   foldedRanges,
+  unfoldAll,
+  unfoldCode,
   unfoldEffect,
 } from "@codemirror/language";
 import { EditorSelection, EditorState } from "@codemirror/state";
@@ -19,6 +22,8 @@ import {
   headingFoldGutterLineClass,
   markerDOM,
   quollFolding,
+  quollFoldKeymap,
+  quollFoldKeymapExtension,
 } from "../../src/webview/cm/fold/index.js";
 
 let view: EditorView | null = null;
@@ -230,5 +235,70 @@ describe("headingFoldGutterLineClass — per-level gutter tag for the first-row 
     const byLine = taggedClassByLine("Title line\n===\n\nbody\n");
     expect(byLine.get(1)).toBe("quoll-fold-heading-1");
     expect(byLine.size).toBe(1);
+  });
+});
+
+describe("quollFoldKeymap — the four fold commands are wired into the keymap", () => {
+  it("binds foldCode/unfoldCode/foldAll/unfoldAll to their expected key strings", () => {
+    // Pin the wiring CONTRACT via the binding TABLE, not runScopeHandlers: happy-dom's
+    // platform detection makes single-variant Mod- chord tests flaky (memory
+    // quoll-cm-keymap-test-runscopehandlers-platform-flaky). A silent drop of
+    // fold-all/unfold-all — the exact regression the task guards against — turns this red.
+    const byCommand = new Map(quollFoldKeymap.map((b) => [b.run, b]));
+    expect(quollFoldKeymap.length).toBe(4);
+    expect(byCommand.get(foldCode)?.key).toBe("Ctrl-Shift-[");
+    expect(byCommand.get(foldCode)?.mac).toBe("Cmd-Alt-[");
+    expect(byCommand.get(unfoldCode)?.key).toBe("Ctrl-Shift-]");
+    expect(byCommand.get(unfoldCode)?.mac).toBe("Cmd-Alt-]");
+    expect(byCommand.get(foldAll)?.key).toBe("Ctrl-Alt-[");
+    expect(byCommand.get(unfoldAll)?.key).toBe("Ctrl-Alt-]");
+    // fold-all / unfold-all are all-platform single-stroke (no mac override — the
+    // workbench Ctrl-K chord leader would swallow VS Code's standard fold-all chord).
+    expect(byCommand.get(foldAll)?.mac).toBeUndefined();
+    expect(byCommand.get(unfoldAll)?.mac).toBeUndefined();
+  });
+
+  it("quollFolding() actually mounts the fold keymap (wiring, not just the table)", () => {
+    // The binding-table assertion above proves quollFoldKeymap's CONTENTS but not
+    // that quollFolding() mounts it — deleting `quollFoldKeymapExtension` from the
+    // returned array would leave that test green (Codex finding 1). This closes the
+    // gap by reference-equality: the exact keymap extension object must appear in the
+    // composed fold extension. `keymap.of(...)` returns a single extension value, so
+    // flattening the returned array and checking identity is non-vacuous and avoids
+    // synthetic keydown (flaky in happy-dom — memory
+    // quoll-cm-keymap-test-runscopehandlers-platform-flaky). Cast to `unknown[]`
+    // before `.flat(Infinity)`: CM's `Extension` is a self-recursive type, and
+    // `FlatArray<Extension, Infinity>` blows tsc's instantiation-depth limit (TS2589);
+    // `unknown` terminates the FlatArray recursion while the runtime flatten is identical.
+    const flat = ([quollFolding()] as unknown[]).flat(Number.POSITIVE_INFINITY);
+    expect(flat).toContain(quollFoldKeymapExtension);
+  });
+
+  it("foldAll folds every heading section and unfoldAll restores it (Quoll ranges, display-only)", async () => {
+    // Mount with Quoll's OWN language so foldAll operates over the SAME heading fold
+    // ranges production uses (its re-implemented headerIndent foldService + the
+    // nonFoldableBlocks subtraction that makes paragraphs/blockquotes/code non-foldable).
+    const { quollMarkdownLanguage } = await import("../../src/webview/cm/markdown.js");
+    const doc = "# A\n\ntext a\n\n# B\n\ntext b\n";
+    const parent = document.createElement("div");
+    document.body.appendChild(parent);
+    view = new EditorView({
+      parent,
+      state: EditorState.create({ doc, extensions: [quollMarkdownLanguage(), quollFolding()] }),
+    });
+    ensureSyntaxTree(view.state, view.state.doc.length, 5000);
+
+    const before = view.state.doc.toString();
+    expect(foldedRanges(view.state).size).toBe(0);
+
+    expect(foldAll(view)).toBe(true);
+    // Exactly the two heading sections fold; paragraphs are non-foldable in Quoll's language.
+    expect(foldedRanges(view.state).size).toBe(2);
+    // Display-only: folding mutates foldState, never the document.
+    expect(view.state.doc.toString()).toBe(before);
+
+    expect(unfoldAll(view)).toBe(true);
+    expect(foldedRanges(view.state).size).toBe(0);
+    expect(view.state.doc.toString()).toBe(before);
   });
 });

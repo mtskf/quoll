@@ -72,6 +72,21 @@ export const quollTheme = EditorView.theme({
   ".cm-gutters.cm-gutters-after": {
     borderLeftWidth: "0",
   },
+  // Inter-list-item vertical breathing room. list-hang-indent.ts marks every
+  // list-item MARKER line (the item's first line) with `.quoll-list-hang`, so a
+  // top inset here separates consecutive bullet / ordered / task items without
+  // touching intra-item continuation lines. Lives in this EditorView.theme (not
+  // styles.css) for the same reason as blockStyleThemeSpec: only an unlayered,
+  // editor-scoped CM theme beats CM's baseTheme `.cm-line { padding: 0 2px 0 6px }`
+  // — and the two-class `.cm-line.quoll-list-hang` selector outranks that base
+  // `.cm-line` on specificity. `padding-top` (not margin) keeps the gap INSIDE
+  // the line box CodeMirror measures, so click→caret geometry stays accurate.
+  // It is orthogonal to the decoration's INLINE `text-indent` / `padding-inline-start`
+  // (horizontal hang), so nested-list alignment is untouched. Token retunes it
+  // from :root (styles.css); display-only — the Markdown bytes never change.
+  ".cm-line.quoll-list-hang": {
+    paddingTop: "var(--quoll-list-item-gap, 0.6em)",
+  },
   ".cm-cursor, .cm-dropCursor": {
     borderLeftColor: "var(--vscode-editorCursor-foreground)",
   },
@@ -399,6 +414,49 @@ export const blockStyleThemeSpec = {
 };
 
 export const quollBlockStyleTheme = EditorView.theme(blockStyleThemeSpec);
+
+// Bullet-list marker dot (bullet-marker-reveal.ts). The provider marks the raw
+// `-`/`*`/`+` glyph with `.quoll-bullet-marker` on every bullet line the caret
+// is NOT on; this hides the glyph and paints a round dot in its place. An
+// EditorView.theme (NOT styles.css) so it beats CM's unlayered baseTheme /
+// syntax-highlight rules on the same span — see the header note on
+// blockStyleThemeSpec. Display-only: the glyph byte stays in the document and
+// its advance width is preserved (color: transparent keeps the glyph box), so
+// the content column and list-hang-indent geometry never shift between the
+// dotted and revealed (caret-on) states.
+//
+// Dot colour is the Quoll-owned --quoll-bullet-marker token (styles.css): the
+// existing accent green on dark, a brighter green on light (chosen 2026-07-02
+// via Chrome design preview + user pick), re-pointed to the host accent in
+// high-contrast. Exported as a plain object so
+// cm-decoration-bullet-marker-theme.test.ts pins the contract directly
+// (EditorView.theme returns an opaque Extension); real-pixel geometry + per-theme
+// colour are verified in the real editor (happy-dom has no layout).
+export const bulletMarkerThemeSpec = {
+  ".quoll-bullet-marker": {
+    // Hide the raw dash/star/plus glyph WITHOUT removing it from layout — the
+    // char keeps its advance width, so revealing it (caret-on) never shifts the
+    // content column. `position: relative` anchors the ::before dot.
+    color: "transparent",
+    position: "relative",
+  },
+  ".quoll-bullet-marker::before": {
+    content: '""',
+    position: "absolute",
+    // Pin a small disc to the glyph's start column and centre it on the inline
+    // box (top:50% + translateY(-50%)). Size tuned to the approved Variant B.
+    left: "0",
+    top: "50%",
+    width: "0.34em",
+    height: "0.34em",
+    transform: "translateY(-50%)",
+    borderRadius: "50%",
+    backgroundColor: "var(--quoll-bullet-marker, var(--vscode-textLink-foreground))",
+    pointerEvents: "none",
+  },
+};
+
+export const quollBulletMarkerTheme = EditorView.theme(bulletMarkerThemeSpec);
 
 // Copy-code button overlay for fenced code blocks (fenced-code-copy-button.ts).
 // Separate EditorView.theme (not styles.css) for the same reason as
