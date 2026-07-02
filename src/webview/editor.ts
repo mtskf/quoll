@@ -44,6 +44,7 @@ import { detectLineSeparator, splitToCmText } from "./cm/seed.js";
 import { tableBlockField, tableSkeletonField } from "./cm/table/index.js";
 import {
   quollBlockStyleTheme,
+  quollBulletMarkerTheme,
   quollCollapseToggleTheme,
   quollCopyButtonTheme,
   quollHighlighting,
@@ -223,6 +224,10 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
         // decorations). An EditorView.theme (NOT styles.css) so it overrides
         // CM baseTheme's unlayered `.cm-line` padding — see cm/theme.ts.
         quollBlockStyleTheme,
+        // Bullet-list marker dot styling (bullet-marker-reveal.ts marks). An
+        // EditorView.theme like quollBlockStyleTheme so it beats CM's unlayered
+        // baseTheme / syntax-highlight rules on the marked glyph span — see cm/theme.ts.
+        quollBulletMarkerTheme,
         // Copy-code button overlay styling (position anchor + button look). An
         // EditorView.theme like quollBlockStyleTheme so it overrides CM's
         // unlayered `.cm-line` rules — see cm/theme.ts.
