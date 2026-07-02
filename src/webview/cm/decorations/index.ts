@@ -8,6 +8,7 @@ export {
 export type { BuildContext, DecorationProvider } from "./types.js";
 
 import { blockquoteReveal } from "./blockquote-reveal.js";
+import { bulletMarkerReveal } from "./bullet-marker-reveal.js";
 import { fencedCodeReveal } from "./fenced-code-reveal.js";
 import { headingReveal } from "./heading-reveal.js";
 import { inlineMarkReveal } from "./inline-mark-reveal.js";
@@ -20,13 +21,14 @@ import { taskCheckboxReveal } from "./task-checkbox-reveal.js";
  *  priority claim (review fix #4 from C4a — arbitration is by exclusion zone
  *  only, not by layer order); each new provider is appended to keep the diff
  *  minimal (heading/blockquote/inline/link in C4, task-checkbox in C5,
- *  fenced-code last as block-style.ts's fence-mark companion). */
+ *  bullet-marker dot, fenced-code last as block-style.ts's fence-mark companion). */
 export const syntaxRevealProviders = [
   headingReveal,
   blockquoteReveal,
   inlineMarkReveal,
   linkReveal,
   taskCheckboxReveal,
+  bulletMarkerReveal,
   fencedCodeReveal,
 ] as const;
 
