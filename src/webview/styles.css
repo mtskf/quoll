@@ -69,11 +69,6 @@
     --quoll-block-pad-x: 16px;
     --quoll-block-pad-y: 12px;
     --quoll-block-radius: 8px;
-    /* Callout admonition fill strength (block-style.ts callouts). The per-type
-     * accent tints the panel fill this far via color-mix in cm/theme.ts. The HC
-     * escape hatch below flips it to 0% so the fill goes fully transparent and
-     * the accent shows only on the border (matching the depth-class HC handling). */
-    --quoll-callout-tint-strength: 8%;
     /* List soft-wrap hanging-indent: rendered width of a task-list checkbox
      * column (the C5b widget that replaces `[ ]`). The list-hang-indent
      * provider (cm/decorations/list-hang-indent.ts) references this via
@@ -317,7 +312,6 @@
      * SOLID foreground fill: a filled fg square with background-coloured dots is
      * a maximal-contrast ellipsis affordance in both HC kinds. */
     --quoll-fold-fill: var(--vscode-editor-foreground);
-    --quoll-callout-tint-strength: 0%;
     --quoll-bullet-marker: var(--quoll-accent-green);
   }
 }

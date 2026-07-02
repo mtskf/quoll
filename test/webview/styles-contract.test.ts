@@ -213,21 +213,6 @@ describe("styles.css — widgets consume the accent tokens (palette refresh use 
   });
 });
 
-describe("styles.css — callout tint-strength token (HC-sensitive)", () => {
-  const css = readFileSync(new URL("../../src/webview/styles.css", import.meta.url), "utf8");
-
-  it("defines --quoll-callout-tint-strength: 8% at the :root base", () => {
-    const root = css.match(/:root\s*\{([\s\S]*?)\}/)?.[1] ?? "";
-    expect(root).toMatch(/--quoll-callout-tint-strength\s*:\s*8%/);
-  });
-
-  it("zeroes the tint under High Contrast (fill goes fully transparent)", () => {
-    const hc = css.match(/vscode-high-contrast[\s\S]*?\{([\s\S]*?)\}/);
-    expect(hc, "HC reset block not found").not.toBeNull();
-    expect(hc?.[1] ?? "").toMatch(/--quoll-callout-tint-strength\s*:\s*0%/);
-  });
-});
-
 describe("styles.css — bullet-list marker token (HC-sensitive)", () => {
   const css = readFileSync(new URL("../../src/webview/styles.css", import.meta.url), "utf8");
 
