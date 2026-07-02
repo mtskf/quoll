@@ -92,14 +92,7 @@ export class CopyButtonWidget extends WidgetType {
     readonly docFrom: number,
     /** The exact code body copied on click — in eq() so a body edit rebuilds
      *  the DOM (and its handler closure) with the fresh payload. */
-    readonly body: string,
-    /** True when the block has exactly ONE body line, so the panel collapses to
-     *  a single visible row. Adds the `quoll-copy-button-single-line` marker the
-     *  theme uses to vertically CENTRE the button on that lone row (scoped to the
-     *  concealed-fence display state via the parent line's class — see
-     *  cm/theme.ts copyButtonThemeSpec). In eq() so a body edit that crosses the
-     *  one-line boundary rebuilds the DOM with the right marker. */
-    readonly singleLine = false
+    readonly body: string
   ) {
     super();
   }
@@ -108,8 +101,7 @@ export class CopyButtonWidget extends WidgetType {
     return (
       other instanceof CopyButtonWidget &&
       other.docFrom === this.docFrom &&
-      other.body === this.body &&
-      other.singleLine === this.singleLine
+      other.body === this.body
     );
   }
 
@@ -117,9 +109,7 @@ export class CopyButtonWidget extends WidgetType {
     const button = document.createElement("button");
     button.type = "button";
     // Class name matches the theme selector in cm/theme.ts (copyButtonThemeSpec).
-    button.className = this.singleLine
-      ? "quoll-copy-button quoll-copy-button-single-line"
-      : "quoll-copy-button";
+    button.className = "quoll-copy-button";
     button.setAttribute("aria-label", COPY_LABEL);
     setIcon(button, COPY_ICON);
 
