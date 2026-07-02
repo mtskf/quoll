@@ -5,6 +5,15 @@ import {
   handleContextHandoff,
 } from "../../src/extension/handle-context-handoff.js";
 
+/** True if the string carries a C0 control character (U+0000–U+001F) or DEL
+ *  (U+007F) — the bytes that must never reach terminal.sendText / the clipboard.
+ *  Char-code check (not a regex literal) to avoid embedding control chars here. */
+const hasControlChar = (s: string): boolean =>
+  Array.from(s).some((c) => {
+    const code = c.charCodeAt(0);
+    return code <= 0x1f || code === 0x7f;
+  });
+
 describe("buildContextReference", () => {
   it("returns a whole-file reference when there is no selection", () => {
     expect(buildContextReference("docs/a.md", false, 3, 7)).toBe("@docs/a.md");
@@ -14,6 +23,27 @@ describe("buildContextReference", () => {
   });
   it("returns a range reference for a multi-line selection", () => {
     expect(buildContextReference("docs/a.md", true, 2, 7)).toBe("@docs/a.md#L2-7");
+  });
+
+  it("strips C0 control characters and DEL so no embedded newline reaches the reference", () => {
+    // A hostile POSIX filename can embed \n/\r; delivered via terminal.sendText
+    // (which suppresses only the TRAILING newline) an embedded newline lands as
+    // Enter → arbitrary shell exec. Strip C0 (U+0000–U+001F) + DEL (U+007F) at
+    // reference-build time so the reference is a single line with no control bytes.
+    const ref = buildContextReference("evil\nrm -rf ~\r\n.md", false, 1, 1);
+    expect(ref).toBe("@evilrm -rf ~.md");
+    expect(hasControlChar(ref)).toBe(false);
+    expect(ref.split("\n")).toHaveLength(1);
+  });
+
+  it("strips every C0 control character and DEL, keeping the line suffix intact", () => {
+    // U+0000–U+001F (the full C0 block) plus U+007F (DEL) — pins the code !== 0x7f
+    // branch alongside the C0 range so DEL is provably stripped, not just the C0s.
+    const c0 = Array.from({ length: 0x20 }, (_, i) => String.fromCharCode(i)).join("");
+    const controls = `${c0}${String.fromCharCode(0x7f)}`;
+    const ref = buildContextReference(`a${controls}b.md`, true, 3, 3);
+    expect(ref).toBe("@ab.md#L3");
+    expect(hasControlChar(ref)).toBe(false);
   });
 });
 
@@ -237,5 +267,23 @@ describe("handleContextHandoff", () => {
     expect(calls.clipboard).toEqual([]);
     expect(calls.info).toEqual([]); // no false success
     expect(calls.warn.length).toBe(1);
+  });
+
+  it("sanitizes control characters from the reference on BOTH the terminal and clipboard paths", async () => {
+    // A hostile POSIX filename embeds \n so its @-mention would carry an Enter
+    // into terminal.sendText (arbitrary shell exec) and into the clipboard for a
+    // later paste. Both delivery paths consume the single sanitized reference.
+    const terminal = { name: "claude" };
+    const { calls, deps: d } = deps({
+      relativePath: "evil\nrm -rf ~\n.md",
+      findClaudeTerminal: () => terminal,
+    });
+    await handleContextHandoff({ hasSelection: false, startLine: 1, endLine: 1 }, d);
+    const reference = "@evilrm -rf ~.md";
+    expect(calls.terminalText).toEqual([reference]);
+    expect(calls.clipboard).toEqual([reference]);
+    for (const sent of [...calls.terminalText, ...calls.clipboard]) {
+      expect(hasControlChar(sent)).toBe(false);
+    }
   });
 });

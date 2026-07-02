@@ -81,24 +81,46 @@ export type HandleContextHandoffDeps<T> = {
   showTerminal: (terminal: T) => void;
 };
 
+/** Strip C0 control characters (U+0000–U+001F) and DEL (U+007F) from a path.
+ *  A hostile POSIX filename can embed \n/\r; delivered via
+ *  `terminal.sendText(text, false)` — which suppresses only the TRAILING
+ *  newline — an embedded newline lands as Enter, so `@evil` ⏎ `rm -rf ~` ⏎
+ *  would auto-execute (the clipboard tier carries the same poisoned bytes for a
+ *  later paste). Stripping at reference-build time keeps neither delivery path
+ *  able to carry an executable byte. Char-code filter (not a regex literal) so
+ *  no control character is ever embedded in this source. Line numbers are
+ *  numeric-clamped upstream, so `relativePath` is the only injection vector;
+ *  codex-context-handoff passes a Uri, not text — unaffected. */
+function stripControlChars(path: string): string {
+  let out = "";
+  for (const ch of path) {
+    const code = ch.charCodeAt(0);
+    if (code > 0x1f && code !== 0x7f) {
+      out += ch;
+    }
+  }
+  return out;
+}
+
 /** Build the `@`-mention reference. Matches the @-mention format Claude Code
  *  currently accepts (cross-checked against insertAtMention in extension.js
  *  v2.1.193):
  *    no selection      → `@${rel}`
  *    single line       → `@${rel}#L${line}`
- *    multi-line range  → `@${rel}#L${start}-${end}`. */
+ *    multi-line range  → `@${rel}#L${start}-${end}`.
+ *  The path is stripped of C0/DEL control characters first — see
+ *  stripControlChars for the terminal-injection rationale. */
 export function buildContextReference(
   relativePath: string,
   hasSelection: boolean,
   startLine: number,
   endLine: number
 ): string {
+  const rel = stripControlChars(relativePath);
   if (!hasSelection) {
-    return `@${relativePath}`;
+    return `@${rel}`;
   }
-  return startLine === endLine
-    ? `@${relativePath}#L${startLine}`
-    : `@${relativePath}#L${startLine}-${endLine}`;
+  return startLine === endLine ? `@${rel}#L${startLine}` : `@${rel}#L${startLine}-${endLine}`;
 }
 
 function clampLine(line: number, lineCount: number): number {
