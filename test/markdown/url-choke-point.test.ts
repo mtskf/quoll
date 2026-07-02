@@ -36,7 +36,7 @@
 //     properties, never via setAttribute.
 // `new URL(` is now a live choke point (relative-image read path): two files
 // are allowlisted — url-allowlist.ts (the URL-safety source of truth) and
-// image-field.ts (resolves relative refs before handing them to the gate).
+// resource-base.ts (resolves relative refs before handing them to the gate).
 // The lists below are reconciled to the real tree.
 //
 // SCOPE / KNOWN GAPS (so this guard does not oversell):
@@ -108,7 +108,7 @@ const RENDER_ENDPOINTS = [
 //     parses base + resolves relative refs with `new URL`, then enforces a
 //     protocol+host equality check before minting an `AllowlistedUrl` — the
 //     parse IS the gate.
-//   - image-field.ts: `resolveAgainstBase` calls `new URL(url)` only to
+//   - resource-base.ts: `resolveAgainstBase` calls `new URL(url)` only to
 //     classify an already-`renderSafeUrl`-gated destination as absolute-vs-
 //     relative; relative refs then go through `resolveTrustedResourceUrl`.
 //     It parses nothing it hasn't already gated.
@@ -117,7 +117,7 @@ const RENDER_ENDPOINTS = [
 // primitive.
 const URL_PARSE_ENDPOINTS = [
   "src/markdown/url-allowlist.ts",
-  "src/webview/cm/image/image-field.ts",
+  "src/webview/cm/image/resource-base.ts",
 ] as const;
 
 const CHOKE_POINTS: readonly ChokePoint[] = [
