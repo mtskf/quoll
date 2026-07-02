@@ -28,16 +28,36 @@ export type SwitchEditorHost = { postMessage(message: WebviewToHost): void };
  *  with the `ctrl+alt+e` / `cmd+alt+e` reverse entry in package.json. */
 export const SWITCH_EDITOR_KEY = "Mod-Alt-e";
 
-/** Lucide `file-pen-line` (MIT). Inlined (not a runtime dependency) —
- *  stroke=currentColor tracks --vscode-icon-foreground via the button's `color`. */
-const FILE_PEN_LINE_SVG =
-  '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" ' +
-  'fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" ' +
-  'stroke-linejoin="round" aria-hidden="true">' +
-  '<path d="M14.364 13.634a2 2 0 0 0-.506.854l-.837 2.87a.5.5 0 0 0 .62.62l2.87-.837a2 2 0 0 0 .854-.506l4.013-4.009a1 1 0 0 0-3.004-3.004z"/>' +
-  '<path d="M14.487 7.858A1 1 0 0 1 14 7V2"/>' +
-  '<path d="M20 19.645V20a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h8a2.4 2.4 0 0 1 1.704.706l2.516 2.516"/>' +
-  '<path d="M8 18h1"/></svg>';
+const SVG_NS = "http://www.w3.org/2000/svg";
+
+/** Build the Lucide `file-pen-line` (MIT) icon as an SVG DOM subtree —
+ *  createElementNS, never innerHTML (the src/** no-innerHTML invariant, enforced
+ *  by test/markdown/url-choke-point.test.ts). stroke=currentColor tracks
+ *  --vscode-icon-foreground via the button's `color`. */
+function createFilePenLineIcon(): SVGSVGElement {
+  const svg = document.createElementNS(SVG_NS, "svg");
+  svg.setAttribute("width", "16");
+  svg.setAttribute("height", "16");
+  svg.setAttribute("viewBox", "0 0 24 24");
+  svg.setAttribute("fill", "none");
+  svg.setAttribute("stroke", "currentColor");
+  svg.setAttribute("stroke-width", "2");
+  svg.setAttribute("stroke-linecap", "round");
+  svg.setAttribute("stroke-linejoin", "round");
+  svg.setAttribute("aria-hidden", "true");
+  const paths = [
+    "M14.364 13.634a2 2 0 0 0-.506.854l-.837 2.87a.5.5 0 0 0 .62.62l2.87-.837a2 2 0 0 0 .854-.506l4.013-4.009a1 1 0 0 0-3.004-3.004z",
+    "M14.487 7.858A1 1 0 0 1 14 7V2",
+    "M20 19.645V20a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h8a2.4 2.4 0 0 1 1.704.706l2.516 2.516",
+    "M8 18h1",
+  ];
+  for (const d of paths) {
+    const path = document.createElementNS(SVG_NS, "path");
+    path.setAttribute("d", d);
+    svg.appendChild(path);
+  }
+  return svg;
+}
 
 /** Post `switch-to-text`, logging (never throwing) on transport failure — a
  *  throw out of a click handler / keymap command would unwind the caller. */
@@ -82,12 +102,7 @@ class SwitchEditorButton implements PluginValue {
     this.buttonEl.className = "quoll-switch-editor-toggle";
     this.buttonEl.title = "Open in text editor (Ctrl/Cmd+Alt+E)";
     this.buttonEl.setAttribute("aria-label", "Open in text editor");
-    // Security: FILE_PEN_LINE_SVG is a compile-time string literal defined in
-    // this module — never derived from user input or external sources — so XSS
-    // is not applicable. This is the same pattern used for all inlined icon SVGs
-    // in the webview (outline toggle, fenced-code copy button, etc.).
-    // eslint-disable-next-line no-unsanitized/property
-    this.buttonEl.innerHTML = FILE_PEN_LINE_SVG;
+    this.buttonEl.appendChild(createFilePenLineIcon());
     // preventDefault on mousedown so clicking does not blur/move the selection
     // before we act (mirrors the outline toggle).
     this.buttonEl.addEventListener("mousedown", (e) => e.preventDefault());
