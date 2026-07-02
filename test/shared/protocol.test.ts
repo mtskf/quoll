@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  buildSwitchToTextMessage,
   isHostToWebview,
   isWebviewToHost,
   MAX_CONTENT_LENGTH,
@@ -845,5 +846,31 @@ describe("isWebviewToHost: codex-context-handoff", () => {
   });
   it("still rejects an unknown message type", () => {
     expect(isWebviewToHost({ protocol: PROTOCOL_VERSION, type: "codex-nope" })).toBe(false);
+  });
+});
+
+describe("isWebviewToHost: switch-to-text", () => {
+  it("accepts a switch-to-text envelope (no payload fields)", () => {
+    expect(isWebviewToHost({ protocol: PROTOCOL_VERSION, type: "switch-to-text" })).toBe(true);
+  });
+  it("rejects a wrong protocol version", () => {
+    expect(isWebviewToHost({ protocol: PROTOCOL_VERSION + 1, type: "switch-to-text" })).toBe(false);
+  });
+  it("ignores unknown extra fields (forward-compat)", () => {
+    expect(isWebviewToHost({ protocol: PROTOCOL_VERSION, type: "switch-to-text", x: 1 })).toBe(
+      true
+    );
+  });
+});
+
+describe("buildSwitchToTextMessage", () => {
+  it("produces the envelope-only shape", () => {
+    expect(buildSwitchToTextMessage()).toEqual({
+      protocol: PROTOCOL_VERSION,
+      type: "switch-to-text",
+    });
+  });
+  it("produces a message that passes isWebviewToHost", () => {
+    expect(isWebviewToHost(buildSwitchToTextMessage())).toBe(true);
   });
 });

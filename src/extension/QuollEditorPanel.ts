@@ -65,6 +65,7 @@ import {
   buildImageWriteResultMessage,
   buildThemeMessage,
 } from "./document-message.js";
+import { takeSwitchCaret } from "./editor-switch-caret.js";
 import { pickClaudeTerminal } from "./find-claude-terminal.js";
 import { getNonce } from "./getNonce.js";
 import { handleCodexContextHandoff } from "./handle-codex-context-handoff.js";
@@ -80,6 +81,7 @@ import { handleImageWrite } from "./image-write-service.js";
 import { toLintDiagnostics } from "./lint-diagnostics.js";
 import { LintMirror } from "./lint-mirror.js";
 import { minimalEditSpan } from "./minimal-edit.js";
+import { openInTextEditor } from "./reopen-text-editor.js";
 import type { PanelControls, TestHarness } from "./test-harness.js";
 import {
   buildLocalResourceRoots,
@@ -183,6 +185,14 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
         console.error("[quoll] showErrorMessage rejected", err);
       });
     };
+
+    // Reverse editor-switch caret restore (one-shot). A text-editor→Quoll switch
+    // (quoll.toggleEditor) stashed the caret under this uri just before creating
+    // THIS panel; take it (clearing the store — consumed regardless of whether
+    // construction below succeeds) and apply it once at `ready`, after the seed
+    // Document. null when this panel was not opened via a switch.
+    const switchCaret = takeSwitchCaret(document.uri.toString());
+    let switchCaretApplied = false;
 
     try {
       // Test seam: buildWebviewHtmlOverride (when set) lets the E2E suite
@@ -816,6 +826,17 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
         case "ready":
           dispatch({ type: "ready" });
           postEditorConfig();
+          // Reverse switch caret restore. A REVERSE-created panel is fresh (no
+          // pending edit, no write-lock), so the ready dispatch posts the seed
+          // Document synchronously and this selection-only caret-apply lands
+          // AFTER it (FIFO). (The write-lock path that can drop a ready-driven
+          // Document only arises on an already-live panel's resync, never on a
+          // just-constructed reverse-switch panel.) Pure side channel (no
+          // reducer/write-lock). One-shot so a webview reload does not re-fire.
+          if (switchCaret !== null && !switchCaretApplied) {
+            switchCaretApplied = true;
+            post(buildCaretApplyMessage(switchCaret));
+          }
           return;
         case "edit":
           // Snapshot the live VS Code inputs the core needs to decide the
@@ -924,6 +945,47 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
           // coordinates; they are re-clamped at apply time.
           lastKnownCaret = { line: raw.line, character: raw.character };
           return;
+        case "switch-to-text": {
+          // Pure side channel: reopen THIS document in the built-in text editor.
+          // Never enters the host-session core (no write lock, no document
+          // mutation). The panel owns document.uri, so no path crosses the wire.
+          //
+          // Caret handoff: vscode.openWith disposes THIS panel as part of the
+          // swap, unsubscribing the window.onDidChangeActiveTextEditor caret
+          // listener BEFORE the text editor activates — so we cannot rely on it.
+          // Capture lastKnownCaret now and apply it directly once openWith
+          // resolves. applyCaretToTextEditor + document.uri are closure locals,
+          // safe to call post-dispose (they touch a TextEditor, not the webview).
+          const caret = lastKnownCaret;
+          void openInTextEditor(document.uri).then(
+            () => {
+              if (caret === null) {
+                return;
+              }
+              const editor = window.visibleTextEditors.find(
+                (e) => e.document.uri.toString() === document.uri.toString()
+              );
+              if (editor) {
+                applyCaretToTextEditor(editor, caret);
+              }
+            },
+            (err: unknown) => {
+              // Symmetric with quoll.toggleEditor's forward error toast (a
+              // silent console-only failure would make the button look dead).
+              console.error("[quoll] switch-to-text openWith rejected", err);
+              void window
+                .showErrorMessage(
+                  `Quoll: could not open the text editor: ${
+                    err instanceof Error ? err.message : String(err)
+                  }`
+                )
+                .then(undefined, (e: unknown) =>
+                  console.error("[quoll] showErrorMessage rejected", e)
+                );
+            }
+          );
+          return;
+        }
         default: {
           // Exhaustiveness guard — when a new WebviewToHost variant is
           // added without a case here, TS flags the assignment as

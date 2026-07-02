@@ -2,6 +2,10 @@
 
 All notable changes to Quoll are documented here.
 
+## 0.1.x
+
+- Add a top-right button and an `Ctrl/Cmd+Alt+E` keybinding to switch the current `.md` between Quoll and VS Code's built-in text editor; the caret position is preserved across the switch (via the button and the chord; the reverse text→Quoll direction preserves it too).
+
 ## 0.1.0 — Initial public release
 
 Quoll opens Markdown files in a Notion- and Obsidian-style WYSIWYG editor,
