@@ -25,8 +25,18 @@
 // from drifting. Blocked URLs render as inert text identical to the source
 // slice (no live `<a>`, no `<img>`). The URL-safety verdict is computed in the
 // tokenizer and carried in the IR leaf; renderReadonly only reads it.
+//
+// Image srcs take ONE extra render-time step: a relative destination is
+// resolved against the document's resource base and directory-contained via
+// the SHARED resolveAgainstBase (image/resource-base.ts) — the same gate the
+// block-image widget uses — so a `../` (or `..%2f`) table-cell image renders
+// inert instead of escaping the document folder. Links/autolinks need no
+// resolve: a relative <a href> never auto-fetches and the click guard blocks
+// non-absolute navigation.
 
+import type { AllowlistedUrl } from "../../../markdown/url-allowlist.js";
 import { renderSafeMarkdownDestination } from "../../../markdown/render-safe-markdown-destination.js";
+import { resolveAgainstBase } from "../image/resource-base.js";
 import { type Resolved, resolveInline, type Segment, type Span } from "./inline-emphasis.js";
 
 // Per-construct IR leaf type. Each leaf carries source-position spans for
@@ -43,7 +53,7 @@ export type CellLeaf =
       openParen: Span;
       dest: Span;
       closeParen: Span;
-      safeUrl: string | null;
+      safeUrl: AllowlistedUrl | null;
     }
   | {
       kind: "image";
@@ -54,14 +64,14 @@ export type CellLeaf =
       openParen: Span;
       dest: Span;
       closeParen: Span;
-      safeUrl: string | null;
+      safeUrl: AllowlistedUrl | null;
     }
   | {
       kind: "autolink";
       openAngle: Span;
       content: Span;
       closeAngle: Span;
-      safeUrl: string | null;
+      safeUrl: AllowlistedUrl | null;
     };
 
 // Exhaustiveness guard for the `CellLeaf` discriminated union: if a future
@@ -116,7 +126,7 @@ function attachLinkClickGuard(a: HTMLAnchorElement): void {
 // from the block-image render-gate (image/image-field.ts): the same decode
 // (so `javascript&#58;…` / `javascript\:…` resolve to `javascript:…`) and the
 // same allowlist gate. Returns the safe URL string or null when not allowed.
-function resolveDest(rawDest: string): string | null {
+function resolveDest(rawDest: string): AllowlistedUrl | null {
   const safe = renderSafeMarkdownDestination(rawDest);
   return safe.kind === "safe" ? safe.url : null;
 }
@@ -404,7 +414,11 @@ export function parseCellInline(raw: string): Resolved<CellLeaf>[] {
 // values, escape unescaped chars, and inert-construct source slices into a
 // single Text node (preserving the single-text-node topology that the
 // renderReadonly topology tests pin). Flushed before every element node.
-export function renderReadonly(ir: Resolved<CellLeaf>[], raw: string): Node[] {
+export function renderReadonly(
+  ir: Resolved<CellLeaf>[],
+  raw: string,
+  resourceBase = ""
+): Node[] {
   const out: Node[] = [];
   let pendingText = "";
 
@@ -448,17 +462,26 @@ export function renderReadonly(ir: Resolved<CellLeaf>[], raw: string): Node[] {
               pendingText += raw.slice(node.span.from, node.span.to);
             }
             break;
-          case "image":
-            if (leaf.safeUrl !== null) {
+          case "image": {
+            // Allowlist verdict (leaf.safeUrl) is computed in the tokenizer;
+            // the base resolve happens HERE because the resource base is a
+            // render-time input, not a property of the cell source. Relative
+            // srcs resolve against the document base and must stay inside its
+            // directory (resolveAgainstBase → resolveTrustedResourceUrl),
+            // matching the block-image widget. Fail-closed: no base / escape
+            // / resolve failure → inert source text.
+            const src = leaf.safeUrl !== null ? resolveAgainstBase(leaf.safeUrl, resourceBase) : null;
+            if (src !== null) {
               flushPending();
               const el = document.createElement("img");
-              el.src = leaf.safeUrl;
+              el.src = src;
               el.alt = commonMarkAltText(raw.slice(leaf.alt.from, leaf.alt.to));
               out.push(el);
             } else {
               pendingText += raw.slice(node.span.from, node.span.to);
             }
             break;
+          }
           case "autolink":
             if (leaf.safeUrl !== null) {
               flushPending();
@@ -480,7 +503,7 @@ export function renderReadonly(ir: Resolved<CellLeaf>[], raw: string): Node[] {
       case "emphasis": {
         flushPending();
         const el = document.createElement(node.tag);
-        for (const child of renderReadonly(node.children, raw)) {
+        for (const child of renderReadonly(node.children, raw, resourceBase)) {
           el.appendChild(child);
         }
         out.push(el);
@@ -494,8 +517,8 @@ export function renderReadonly(ir: Resolved<CellLeaf>[], raw: string): Node[] {
   return out;
 }
 
-export function renderCellInline(raw: string): Node[] {
-  return renderReadonly(parseCellInline(raw), raw);
+export function renderCellInline(raw: string, resourceBase = ""): Node[] {
+  return renderReadonly(parseCellInline(raw), raw, resourceBase);
 }
 
 interface ParsedLink {
