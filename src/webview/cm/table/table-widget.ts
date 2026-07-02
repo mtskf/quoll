@@ -20,6 +20,7 @@
 import { type EditorView, WidgetType } from "@codemirror/view";
 
 import { type Align, type Cell, type Table, tableAlign } from "../../../markdown/table/index.js";
+import { quollResourceBaseUri } from "../image/resource-base.js";
 import { renderCellInline } from "./cell-render.js";
 
 export class TableBlockWidget extends WidgetType {
@@ -62,14 +63,18 @@ export class TableBlockWidget extends WidgetType {
     // (updateDOM) reflects the CURRENT docFrom, not a stale toDOM-time closure.
     root.dataset.docFrom = String(this.docFrom);
 
+    // Resource base for relative in-cell image srcs. Static per editor
+    // (resource-base.ts), so it is NOT part of eq() — reading it at
+    // toDOM/updateDOM time is always current.
+    const resourceBase = view.state.facet(quollResourceBaseUri);
     const align = tableAlign(this.table);
     const table = document.createElement("table");
     const thead = document.createElement("thead");
-    thead.appendChild(this.buildRow("th", this.table.header.cells, align, "header"));
+    thead.appendChild(this.buildRow("th", this.table.header.cells, align, "header", resourceBase));
     table.appendChild(thead);
     const tbody = document.createElement("tbody");
     for (const row of this.table.rows) {
-      tbody.appendChild(this.buildRow("td", row.cells, align, "body"));
+      tbody.appendChild(this.buildRow("td", row.cells, align, "body", resourceBase));
     }
     table.appendChild(tbody);
     root.appendChild(table);
@@ -110,7 +115,8 @@ export class TableBlockWidget extends WidgetType {
     // `undefined` included so the ragged-row OOB-index path narrows correctly
     // under `noUncheckedIndexedAccess: false` (see markdown/table/model.ts).
     align: readonly (Align | undefined)[],
-    kind: "header" | "body"
+    kind: "header" | "body",
+    resourceBase: string
   ): HTMLTableRowElement {
     const tr = document.createElement("tr");
     for (let col = 0; col < cells.length; col++) {
@@ -123,7 +129,7 @@ export class TableBlockWidget extends WidgetType {
       el.style.textAlign = a !== null && a !== undefined ? a : "";
       // LF-internal absolute source offset of this cell's content start.
       el.dataset.cellFrom = String(this.nodeFrom + cell.from);
-      for (const node of renderCellInline(cell.raw.trim())) {
+      for (const node of renderCellInline(cell.raw.trim(), resourceBase)) {
         el.appendChild(node);
       }
       tr.appendChild(el);
@@ -131,7 +137,7 @@ export class TableBlockWidget extends WidgetType {
     return tr;
   }
 
-  updateDOM(dom: HTMLElement, _view: EditorView): boolean {
+  updateDOM(dom: HTMLElement, view: EditorView): boolean {
     // CM calls updateDOM only when eq() returned false. Validate the grid shape;
     // any structural change → return false so CM does a full toDOM rebuild.
     if (!dom.classList.contains("quoll-table-block")) {
@@ -160,10 +166,16 @@ export class TableBlockWidget extends WidgetType {
     // Re-stamp the margin fallback so a reused element tracks the new docFrom
     // after a distant edit shifted this table without changing its bytes.
     dom.dataset.docFrom = String(this.docFrom);
+    const resourceBase = view.state.facet(quollResourceBaseUri);
     const align = tableAlign(this.table);
-    this.patchRow(headerRows[0], this.table.header.cells, align);
+    this.patchRow(headerRows[0], this.table.header.cells, align, resourceBase);
     for (let rowIdx = 0; rowIdx < this.table.rows.length; rowIdx++) {
-      this.patchRow(bodyRows[rowIdx] as Element, this.table.rows[rowIdx].cells, align);
+      this.patchRow(
+        bodyRows[rowIdx] as Element,
+        this.table.rows[rowIdx].cells,
+        align,
+        resourceBase
+      );
     }
     return true;
   }
@@ -171,7 +183,8 @@ export class TableBlockWidget extends WidgetType {
   private patchRow(
     tr: Element,
     cells: readonly Cell[],
-    align: readonly (Align | undefined)[]
+    align: readonly (Align | undefined)[],
+    resourceBase: string
   ): void {
     const domCells = tr.querySelectorAll("th, td");
     for (let col = 0; col < cells.length; col++) {
@@ -184,7 +197,7 @@ export class TableBlockWidget extends WidgetType {
       el.style.textAlign = a !== null && a !== undefined ? a : "";
       el.dataset.cellFrom = String(this.nodeFrom + cell.from);
       el.textContent = "";
-      for (const node of renderCellInline(cell.raw.trim())) {
+      for (const node of renderCellInline(cell.raw.trim(), resourceBase)) {
         el.appendChild(node);
       }
     }

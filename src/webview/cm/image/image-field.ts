@@ -70,12 +70,12 @@ import {
 } from "@codemirror/state";
 import { Decoration, type DecorationSet, EditorView } from "@codemirror/view";
 import { renderSafeMarkdownDestination } from "../../../markdown/render-safe-markdown-destination.js";
-import { type AllowlistedUrl, resolveTrustedResourceUrl } from "../../../markdown/url-allowlist.js";
+import type { AllowlistedUrl } from "../../../markdown/url-allowlist.js";
 import { quollBlockReplaceZones } from "../decorations/orchestrator.js";
 import { leadingFrontmatterEnd } from "../frontmatter/detect.js";
 import { commonMarkAltText } from "../table/cell-render.js";
 import { ImageBlockWidget } from "./image-widget.js";
-import { quollResourceBaseUri } from "./resource-base.js";
+import { quollResourceBaseUri, resolveAgainstBase } from "./resource-base.js";
 
 interface BuiltWidget {
   from: number;
@@ -111,52 +111,6 @@ function makeWidget(
 ): BuiltWidget {
   const widget = new ImageBlockWidget(alt, safeUrl, imgText, from);
   return { from, to, widget, deco: Decoration.replace({ widget, block: true }) };
-}
-
-// Diagnostic latch: a relative-resolution failure (a present base plus a
-// relative path that won't resolve/trust) is logged ONCE per webview session.
-// Without a latch a malformed base would spam a warning for every relative
-// image on every document change; one line is enough to triage. The reachable
-// case in normal operation is a `../` destination escaping the document
-// directory (resolveTrustedResourceUrl's containment check rejects it); the
-// breadcrumb tells the author why the 🚫 placeholder rendered.
-let warnedUnresolvableImage = false;
-
-/** Resolve a gated image URL against the document's base URI for rendering.
- *  - Absolute URLs (parse standalone — http(s)/mailto) pass through unchanged;
- *    remote http(s) stay CSP-blocked at render (the caller's concern).
- *  - A relative URL is resolved + scheme/authority/containment-checked +
- *    branded by resolveTrustedResourceUrl (scheme-agnostic; survives a VS Code
- *    resource-scheme change — see url-allowlist.ts). We deliberately do NOT
- *    re-run renderSafeUrl on the resolved value (its http/https/mailto
- *    allowlist would reject a non-https resource scheme).
- *  Returns null (→ inert placeholder) for: no base (non-file doc), a
- *  fragment-/query-only destination (resolves to the document FILE itself,
- *  never an image), a `../` destination escaping the document directory, or a
- *  resolve/authority-check failure (logged once). */
-function resolveAgainstBase(url: AllowlistedUrl, base: string): AllowlistedUrl | null {
-  let isAbsolute = false;
-  try {
-    new URL(url);
-    isAbsolute = true;
-  } catch {
-    isAbsolute = false;
-  }
-  if (isAbsolute) {
-    return url;
-  }
-  if (base === "") {
-    return null; // non-file document: no folder to resolve against (expected)
-  }
-  if (url.startsWith("#") || url.startsWith("?")) {
-    return null; // fragment-/query-only → the document file, not an image
-  }
-  const resolved = resolveTrustedResourceUrl(url, base);
-  if (resolved === null && !warnedUnresolvableImage) {
-    warnedUnresolvableImage = true;
-    console.warn("[quoll] relative image could not be resolved against the document base", { url });
-  }
-  return resolved;
 }
 
 /** Build every standalone-image widget whose node OVERLAPS [rangeFrom, rangeTo].

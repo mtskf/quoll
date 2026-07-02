@@ -4,6 +4,7 @@
 // contract of every interactive widget surface (checkbox, table grid, image,
 // frontmatter metadata block) so "no surface is missed". Per-widget tests
 // keep their own detailed coverage; this pins the cross-cutting contract.
+import { EditorState } from "@codemirror/state";
 import type { EditorView } from "@codemirror/view";
 import { describe, expect, it } from "vitest";
 
@@ -15,9 +16,10 @@ import { ImageBlockWidget } from "../../src/webview/cm/image/image-widget.js";
 import { TableBlockWidget } from "../../src/webview/cm/table/table-widget.js";
 
 const url = (s: string): AllowlistedUrl => s as AllowlistedUrl;
-// Render-only stub: toDOM never reads view state during render,
-// so {dispatch} suffices for structure assertions.
-const mockView = { dispatch: () => {} } as unknown as EditorView;
+// Render-only stub: a no-op dispatch plus a real (empty) EditorState —
+// TableBlockWidget.toDOM reads the quollResourceBaseUri facet from
+// view.state (no facet value → "" → relative images inert).
+const mockView = { state: EditorState.create({}), dispatch: () => {} } as unknown as EditorView;
 
 describe("C8 a11y roll-up — task checkbox (C5)", () => {
   it("exposes role=checkbox + aria-checked + accessible name + tabindex", () => {

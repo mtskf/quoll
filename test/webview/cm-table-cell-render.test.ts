@@ -477,6 +477,51 @@ describe("renderCellInline", () => {
     const [a] = renderCellInline("<https://example.com>") as HTMLAnchorElement[];
     expect(a.title).toMatch(/(Cmd|Ctrl)\+click to open/);
   });
+
+  // ── Relative-image containment (resolveAgainstBase parity with the block-
+  // image widget) ─────────────────────────────────────────────────────────────
+  // A schemeless relative destination passes the scheme allowlist, but the
+  // <img src> must NOT ship raw: it resolves against the document's resource
+  // base and passes resolveTrustedResourceUrl's directory containment, exactly
+  // like image/image-field.ts. Without a base (default ""), fail closed.
+  describe("relative image containment", () => {
+    const BASE = "https://csp/ws/notes/a.md";
+
+    it("resolves a sibling ./img.png against the resource base", () => {
+      const nodes = renderCellInline("![x](./img.png)", BASE);
+      expect(html(nodes)).toBe('<img src="https://csp/ws/notes/img.png" alt="x">');
+    });
+
+    it("renders ../secret.png as inert text (directory escape)", () => {
+      const nodes = renderCellInline("![x](../secret.png)", BASE);
+      expect(html(nodes)).toBe("![x](../secret.png)");
+    });
+
+    it("renders ..%2fsecret.png as inert text (encoded dot-segment smuggle)", () => {
+      const nodes = renderCellInline("![x](..%2fsecret.png)", BASE);
+      expect(html(nodes)).toBe("![x](..%2fsecret.png)");
+    });
+
+    it("renders a relative image as inert text when no base is provided", () => {
+      const nodes = renderCellInline("![x](./img.png)");
+      expect(html(nodes)).toBe("![x](./img.png)");
+    });
+
+    it("passes an absolute https image through unchanged (base present)", () => {
+      const nodes = renderCellInline("![x](https://x.test/a.png)", BASE);
+      expect(html(nodes)).toBe('<img src="https://x.test/a.png" alt="x">');
+    });
+
+    it("renders a fragment-only image destination as inert text", () => {
+      const nodes = renderCellInline("![x](#frag)", BASE);
+      expect(html(nodes)).toBe("![x](#frag)");
+    });
+
+    it("threads the base through emphasis recursion (*![x](./img.png)*)", () => {
+      const nodes = renderCellInline("*![x](./img.png)*", BASE);
+      expect(html(nodes)).toBe('<em><img src="https://csp/ws/notes/img.png" alt="x"></em>');
+    });
+  });
 });
 
 // ── parseCellInline losslessness ─────────────────────────────────────────────
