@@ -65,13 +65,12 @@ import {
   buildImageWriteResultMessage,
   buildThemeMessage,
 } from "./document-message.js";
+import { takeSwitchCaret } from "./editor-switch-caret.js";
 import { pickClaudeTerminal } from "./find-claude-terminal.js";
 import { getNonce } from "./getNonce.js";
 import { handleCodexContextHandoff } from "./handle-codex-context-handoff.js";
 import { handleContextHandoff } from "./handle-context-handoff.js";
 import { handleOpenExternal } from "./handle-open-external.js";
-import { openInTextEditor } from "./reopen-text-editor.js";
-import { takeSwitchCaret } from "./editor-switch-caret.js";
 import {
   createDrainingDispatcher,
   createHostSessionCore,
@@ -82,6 +81,7 @@ import { handleImageWrite } from "./image-write-service.js";
 import { toLintDiagnostics } from "./lint-diagnostics.js";
 import { LintMirror } from "./lint-mirror.js";
 import { minimalEditSpan } from "./minimal-edit.js";
+import { openInTextEditor } from "./reopen-text-editor.js";
 import type { PanelControls, TestHarness } from "./test-harness.js";
 import {
   buildLocalResourceRoots,
@@ -979,7 +979,9 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
                     err instanceof Error ? err.message : String(err)
                   }`
                 )
-                .then(undefined, (e: unknown) => console.error("[quoll] showErrorMessage rejected", e));
+                .then(undefined, (e: unknown) =>
+                  console.error("[quoll] showErrorMessage rejected", e)
+                );
             }
           );
           return;

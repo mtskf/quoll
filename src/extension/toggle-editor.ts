@@ -21,8 +21,8 @@
 import { commands, TabInputCustom, window, workspace } from "vscode";
 import { canEditWith } from "./canEditWith.js";
 import { stashSwitchCaret, takeSwitchCaret } from "./editor-switch-caret.js";
-import { openInTextEditor } from "./reopen-text-editor.js";
 import { QuollEditorPanel } from "./QuollEditorPanel.js";
+import { openInTextEditor } from "./reopen-text-editor.js";
 
 export type SwitchTarget = "to-text" | "to-quoll" | "none";
 
@@ -80,7 +80,9 @@ export function registerToggleEditor(): { dispose(): void } {
         }
         const uri = input.uri;
         // Observability for the documented caret non-preservation on this path.
-        console.info("[quoll] palette forward: caret not preserved (use the button or Ctrl/Cmd+Alt+E)");
+        console.info(
+          "[quoll] palette forward: caret not preserved (use the button or Ctrl/Cmd+Alt+E)"
+        );
         try {
           await openInTextEditor(uri);
         } catch (err) {
@@ -101,7 +103,9 @@ export function registerToggleEditor(): { dispose(): void } {
         if (!decision.ok) {
           void window
             .showWarningMessage(decision.reason)
-            .then(undefined, (e: unknown) => console.error("[quoll] showWarningMessage rejected", e));
+            .then(undefined, (e: unknown) =>
+              console.error("[quoll] showWarningMessage rejected", e)
+            );
           return;
         }
         const key = editor.document.uri.toString();
@@ -128,7 +132,9 @@ export function registerToggleEditor(): { dispose(): void } {
           .showInformationMessage(
             "Quoll: open a Markdown file to toggle between the rich and text editors."
           )
-          .then(undefined, (e: unknown) => console.error("[quoll] showInformationMessage rejected", e));
+          .then(undefined, (e: unknown) =>
+            console.error("[quoll] showInformationMessage rejected", e)
+          );
         return;
       default: {
         // Exhaustiveness guard — a new SwitchTarget without a case reds tsc,

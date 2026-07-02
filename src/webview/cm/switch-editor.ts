@@ -17,7 +17,13 @@
 // code.
 
 import { type Extension, Prec } from "@codemirror/state";
-import { type Command, type EditorView, keymap, type PluginValue, ViewPlugin } from "@codemirror/view";
+import {
+  type Command,
+  type EditorView,
+  keymap,
+  type PluginValue,
+  ViewPlugin,
+} from "@codemirror/view";
 
 import { buildSwitchToTextMessage, type WebviewToHost } from "../../shared/protocol.js";
 

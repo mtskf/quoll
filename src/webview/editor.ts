@@ -40,8 +40,8 @@ import { quollLintGutter } from "./cm/lint/gutter.js";
 import { quollLint } from "./cm/lint/index.js";
 import { quollMarkdownLanguage } from "./cm/markdown.js";
 import { quollOutline } from "./cm/outline/index.js";
-import { quollSwitchEditor } from "./cm/switch-editor.js";
 import { detectLineSeparator, splitToCmText } from "./cm/seed.js";
+import { quollSwitchEditor } from "./cm/switch-editor.js";
 import { tableBlockField, tableSkeletonField } from "./cm/table/index.js";
 import {
   quollBlockStyleTheme,

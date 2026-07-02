@@ -857,13 +857,18 @@ describe("isWebviewToHost: switch-to-text", () => {
     expect(isWebviewToHost({ protocol: PROTOCOL_VERSION + 1, type: "switch-to-text" })).toBe(false);
   });
   it("ignores unknown extra fields (forward-compat)", () => {
-    expect(isWebviewToHost({ protocol: PROTOCOL_VERSION, type: "switch-to-text", x: 1 })).toBe(true);
+    expect(isWebviewToHost({ protocol: PROTOCOL_VERSION, type: "switch-to-text", x: 1 })).toBe(
+      true
+    );
   });
 });
 
 describe("buildSwitchToTextMessage", () => {
   it("produces the envelope-only shape", () => {
-    expect(buildSwitchToTextMessage()).toEqual({ protocol: PROTOCOL_VERSION, type: "switch-to-text" });
+    expect(buildSwitchToTextMessage()).toEqual({
+      protocol: PROTOCOL_VERSION,
+      type: "switch-to-text",
+    });
   });
   it("produces a message that passes isWebviewToHost", () => {
     expect(isWebviewToHost(buildSwitchToTextMessage())).toBe(true);
