@@ -237,6 +237,12 @@
     --quoll-surface-header: #233156;
     --quoll-surface-border: #33415f;
     --quoll-on-accent: #0e1f17;
+    /* Fold-placeholder marker fill (the collapsed-region ellipsis square). A
+     * subtle neutral overlay tuned per theme so the marker reads WITHOUT a
+     * border; its knocked-out dots are painted in --vscode-editor-background at
+     * the use site (cm/fold/index.ts). HC gets a solid foreground fill below so
+     * the borderless marker stays visible where the surface tints collapse. */
+    --quoll-fold-fill: rgba(255, 255, 255, 0.15);
     /* Selection tint: DARKEN the host dark-theme selection by ~18% rather than
      * hardcoding a hex, so the highlight still TRACKS whatever dark theme the
      * user runs (Dark+, a 3rd-party dark, …) while reading a touch calmer on
@@ -252,6 +258,10 @@
     --quoll-surface-header: #e4ebf8;
     --quoll-surface-border: #ccd6ec;
     --quoll-on-accent: #ffffff;
+    /* Light-theme fold-placeholder fill: a symmetric ~15% black overlay (the
+     * chosen L1 tone) so the marker reads on a light canvas; dots knock out to
+     * the white page background. */
+    --quoll-fold-fill: rgba(0, 0, 0, 0.15);
     /* Light selection stays the plain host colour (user kept the current light
      * tint). Both HC kinds map to .light-theme, so HC selection is the plain
      * host colour too — maximal contrast, no HC override needed. */
@@ -280,6 +290,10 @@
     --quoll-surface-border: var(--vscode-contrastBorder,
       var(--vscode-editorWidget-border, var(--vscode-panel-border, #888)));
     --quoll-on-accent: var(--vscode-editor-background);
+    /* HC has no surface tint and the marker carries no border, so give it a
+     * SOLID foreground fill: a filled fg square with background-coloured dots is
+     * a maximal-contrast ellipsis affordance in both HC kinds. */
+    --quoll-fold-fill: var(--vscode-editor-foreground);
     --quoll-callout-tint-strength: 0%;
   }
 }
