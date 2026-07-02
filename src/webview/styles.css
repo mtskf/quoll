@@ -69,11 +69,6 @@
     --quoll-block-pad-x: 16px;
     --quoll-block-pad-y: 12px;
     --quoll-block-radius: 8px;
-    /* Callout admonition fill strength (block-style.ts callouts). The per-type
-     * accent tints the panel fill this far via color-mix in cm/theme.ts. The HC
-     * escape hatch below flips it to 0% so the fill goes fully transparent and
-     * the accent shows only on the border (matching the depth-class HC handling). */
-    --quoll-callout-tint-strength: 8%;
     /* List soft-wrap hanging-indent: rendered width of a task-list checkbox
      * column (the C5b widget that replaces `[ ]`). The list-hang-indent
      * provider (cm/decorations/list-hang-indent.ts) references this via
@@ -89,6 +84,15 @@
      * value on the editor root; this `1ch` default keeps monospace exact and
      * covers the pre-measurement frame. */
     --quoll-prose-space: 1ch;
+    /* Vertical breathing room ABOVE each list-item marker line, so sibling
+     * bullet / ordered / task items are not packed tight against each other.
+     * Delivered as `padding-top` on `.cm-line.quoll-list-hang` in cm/theme.ts
+     * (an EditorView.theme, so it beats CodeMirror's unlayered baseTheme
+     * `.cm-line` padding). Vertical only — it never touches the horizontal
+     * hang-indent (text-indent / padding-inline-start), so nested alignment is
+     * unaffected. Display-only: the underlying Markdown bytes are untouched.
+     * `em` so the gap tracks the body font size. */
+    --quoll-list-item-gap: 0.6em;
     /* Vertical breathing room around a block-table widget. Delivered as
      * PADDING on the wrapper (never margin) — see the widget layer. */
     --quoll-table-block-pad: 0.75em;
@@ -252,6 +256,10 @@
      * the use site (cm/fold/index.ts). HC gets a solid foreground fill below so
      * the borderless marker stays visible where the surface tints collapse. */
     --quoll-fold-fill: rgba(255, 255, 255, 0.15);
+    /* Bullet-list marker dot colour (bullet-marker-reveal.ts + cm/theme.ts's
+     * .quoll-bullet-marker::before). Dark = the accent green; light brightens it;
+     * HC re-points to the host accent. */
+    --quoll-bullet-marker: var(--quoll-accent-green);
     /* Selection tint: DARKEN the host dark-theme selection by ~18% rather than
      * hardcoding a hex, so the highlight still TRACKS whatever dark theme the
      * user runs (Dark+, a 3rd-party dark, …) while reading a touch calmer on
@@ -271,6 +279,7 @@
      * chosen L1 tone) so the marker reads on a light canvas; dots knock out to
      * the white page background. */
     --quoll-fold-fill: rgba(0, 0, 0, 0.15);
+    --quoll-bullet-marker: #23b06f;
     /* Light selection stays the plain host colour (user kept the current light
      * tint). Both HC kinds map to .light-theme, so HC selection is the plain
      * host colour too — maximal contrast, no HC override needed. */
@@ -303,7 +312,7 @@
      * SOLID foreground fill: a filled fg square with background-coloured dots is
      * a maximal-contrast ellipsis affordance in both HC kinds. */
     --quoll-fold-fill: var(--vscode-editor-foreground);
-    --quoll-callout-tint-strength: 0%;
+    --quoll-bullet-marker: var(--quoll-accent-green);
   }
 }
 

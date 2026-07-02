@@ -1024,12 +1024,13 @@ describe("block-style — callout admonition classes", () => {
 describe("theme.ts — callout admonition per-type rules", () => {
   const spec = blockStyleThemeSpec as Record<string, Record<string, string>>;
 
-  it("the base .quoll-callout rule paints the accent border + a tint-strength color-mix", () => {
+  it("the base .quoll-callout rule paints a thin 2px inset accent bar and inherits the blockquote fill", () => {
     const base = spec[".cm-line.quoll-callout"];
-    expect(base?.borderLeftColor).toBe("var(--quoll-callout-accent)");
-    expect(base?.backgroundColor).toMatch(
-      /color-mix.*--quoll-surface-fill.*--quoll-callout-accent.*--quoll-callout-tint-strength/
-    );
+    // A 2px inset box-shadow bar (inside the reading column), NOT the 6px
+    // alignment border; the fill + alignment are inherited from .quoll-blockquote.
+    expect(base?.boxShadow).toBe("inset 2px 0 0 0 var(--quoll-callout-accent)");
+    expect(base?.borderLeftColor).toBeUndefined();
+    expect(base?.backgroundColor).toBeUndefined();
   });
 
   it("each type sets its own accent colour + icon custom property", () => {
@@ -1038,7 +1039,7 @@ describe("theme.ts — callout admonition per-type rules", () => {
       ["tip", "charts-green", "💡"],
       ["important", "charts-purple", "❗"],
       ["warning", "editorWarning-foreground", "⚠️"],
-      ["caution", "editorError-foreground", "🛑"],
+      ["caution", "editorError-foreground", "🚨"],
     ] as const) {
       const rule = spec[`.cm-line.quoll-callout-${type}`];
       expect(rule?.["--quoll-callout-accent"]).toContain(accent);

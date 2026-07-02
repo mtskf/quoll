@@ -18,7 +18,7 @@ function bigMarkHeavyDoc(targetBytes: number): string {
   // block's own ``` lines close before the next repetition's `# h`, so each
   // repeat parses as one self-contained FencedCode.
   const line =
-    "# h\n> q\n**bold** *italic* `code` ~~strike~~ [t](https://x)\n- [ ] t\n```js\nc\n```\n";
+    "# h\n> q\n**bold** *italic* `code` ~~strike~~ [t](https://x)\n- [ ] t\n- b\n```js\nc\n```\n";
   return line.repeat(Math.ceil(targetBytes / line.length));
 }
 
