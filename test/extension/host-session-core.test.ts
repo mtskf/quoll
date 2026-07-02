@@ -162,11 +162,15 @@ describe("host-session-core: edit", () => {
       { type: "showError", message: `Cannot save: ${unsafe.message}` },
     ]);
   });
-  it("accept → acquires lock + sets inFlightContent + applyEdit effect, rejection unchanged", () => {
+  it("accept → acquires lock + sets inFlightContent + applyEdit effect, clears pending rejection", () => {
     const s = base({ rejection: { kind: "pending", id: 1, content: "d", error: unsafe } });
     const r = core.transition(s, edit({ content: "good", currentContent: "cur" }));
     expect(r.state.pendingApplyBaseVersion).toBe(1);
     expect(r.state.inFlightContent).toBe("good");
+    // The accepted edit supersedes the rejected draft — the rejection must not
+    // survive into the lock (a delayed delivery-failure matching it would post
+    // a Document mid-lock; the delivery-failure arm has no lock deferral).
+    expect(r.state.rejection).toEqual({ kind: "none" });
     expect(r.effects).toEqual([{ type: "applyEdit", content: "good", baseDocVersion: 1 }]);
   });
 });
@@ -538,6 +542,38 @@ describe("host-session-core: traces", () => {
     const r = core.transition(s, { type: "editRejectedDeliveryFailed", id: idA });
     expect(r.state.rejection).toMatchObject({ kind: "pending", content: "secondBAD" });
     expect(r.effects).toEqual([]);
+  });
+
+  it("rejection A → valid edit acquires the write lock (A's banner superseded) → A's late delivery-failure lands MID-LOCK: NO Document post while the lock is held", () => {
+    // The delivery-failure arm has no lock deferral (unlike documentChanged /
+    // viewStateVisible), so the lock-held invariant must hold structurally:
+    // a rejection may never still be pending once the accept arm takes the
+    // lock. If it survived the accept, a delayed delivery-failure would match
+    // and post a pre-apply-version Document mid-lock — an unsolicited reseed
+    // that clears the webview's editInFlight and can transiently wipe the
+    // accepted edit's content.
+    let s = base({ lastAppliedDocVersion: 1 });
+    // (1) Edit E1 fails to parse → rejection A pending, postEditRejected(A)
+    //     delivery in flight (its failure has not landed yet).
+    s = core.transition(
+      s,
+      edit({ content: "firstBAD", currentContent: "cur", baseDocVersion: 1, documentVersion: 1 })
+    ).state;
+    const idA = (s.rejection as { id: number }).id;
+    // (2) The webview posts a valid edit E2 superseding the rejected draft →
+    //     the accept arm acquires the write lock. E2 supersedes A's banner,
+    //     so the rejection must clear here (every other inbound-edit arm and
+    //     every settlement path already clears it).
+    s = core.transition(
+      s,
+      edit({ content: "good", currentContent: "cur", baseDocVersion: 1, documentVersion: 1 })
+    ).state;
+    expect(s.pendingApplyBaseVersion).toBe(1);
+    // (3) A's delayed delivery-failure lands while the lock is held → it must
+    //     NOT emit a Document (nor any other effect) mid-lock.
+    const r = core.transition(s, { type: "editRejectedDeliveryFailed", id: idA });
+    expect(r.effects).toEqual([]);
+    expect(r.state.pendingApplyBaseVersion).toBe(1);
   });
 
   it("rejection A → A's delivery-failure issued (attempt 1 in-flight) → ready replay re-delivers A → attempt-1's failure lands: A's replayed banner SURVIVES (Codex N6 — per-delivery identity)", () => {
