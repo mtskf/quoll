@@ -233,10 +233,15 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
         quollCollapseToggleTheme,
         quollSyntaxReveal(),
         // Fold gutter (PURE UI activation: codeFolding + foldGutter +
-        // foldKeymap). ALL fold ranges come from lang-markdown — headings via
-        // its headerIndent foldService, and every Block (list items,
-        // blockquotes, fenced code, GFM tables) via foldNodeProp — dormant until
-        // codeFolding mounts. No custom foldService. Auto-unfold on caret/edit is
+        // foldKeymap). Fold ranges come from two places: heading sections via
+        // Quoll's own re-implementation of lang-markdown's headerIndent
+        // foldService (in cm/markdown.ts — re-implemented to avoid the markdown()
+        // wrapper's HTML language stack), and list items + GFM tables via
+        // lang-markdown's foldNodeProp on markdownLanguage.parser, MINUS the
+        // Blockquote/Paragraph/code-block subtraction (nonFoldableBlocks, also in
+        // cm/markdown.ts) so those show no chevron — both dormant until codeFolding
+        // mounts.
+        // Auto-unfold on caret/edit is
         // native (foldState clears folds under the selection head). View-layer
         // only — folds are foldState decorations, byte-identical round-trip.
         // Chevron placed beside the centred reading column by cm/theme.ts's

@@ -28,10 +28,17 @@
 // lang-markdown's PUBLIC API but depends on its 6.5.0 fold *behaviour*;
 // cm-fold-blockquote.test.ts detects a future upgrade that re-enables a
 // subtracted chevron (it is NOT immunity).
-import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
-import type { LanguageSupport } from "@codemirror/language";
-import { foldNodeProp } from "@codemirror/language";
-import type { MarkdownExtension } from "@lezer/markdown";
+import { markdownKeymap, markdownLanguage, pasteURLAsLink } from "@codemirror/lang-markdown";
+import {
+  foldNodeProp,
+  foldService,
+  Language,
+  LanguageSupport,
+  syntaxTree,
+} from "@codemirror/language";
+import { Prec } from "@codemirror/state";
+import { keymap } from "@codemirror/view";
+import type { MarkdownExtension, MarkdownParser } from "@lezer/markdown";
 
 export const nonFoldableBlocks: MarkdownExtension = {
   props: [
@@ -44,10 +51,89 @@ export const nonFoldableBlocks: MarkdownExtension = {
   ],
 };
 
-/** The editor's Markdown LanguageSupport: lang-markdown's GFM base minus the
- *  Blockquote / Paragraph / code-block fold subtraction (headings, lists, and
- *  tables stay foldable). Mounted by editor.ts; pinned by
- *  cm-fold-blockquote.test.ts. */
+// SyntaxNode without a direct @lezer/common import (transitive-only, un-hoisted
+// pnpm dep — supply-chain default-deny). Derive it from syntaxTree's return type,
+// the established webview idiom (see decorations/block-style.ts).
+type SyntaxNode = ReturnType<typeof syntaxTree>["topNode"];
+
+// lang-markdown's heading-section foldService is NOT exported and reads a PRIVATE
+// `headingProp` NodeProp we cannot reach. Re-implement it by node NAME (ATX/Setext
+// heading level): the fold runs from the end of a heading's line to the end of its
+// section (the line before the next same-or-higher heading). This is the ONLY
+// source of heading folds — the base commonmark `foldNodeProp` deliberately
+// returns `undefined` for headings, so without this service a heading shows no
+// chevron. Pinned by cm-markdown-language.test.ts (byte-identical to upstream),
+// cm-fold-delegation.test.ts, and cm-fold-blockquote.test.ts (heading-in-blockquote).
+function headingLevel(node: SyntaxNode): number | null {
+  const match = /^(?:ATX|Setext)Heading(\d)$/.exec(node.type.name);
+  return match ? Number(match[1]) : null;
+}
+
+function sectionEnd(headerNode: SyntaxNode, level: number): number {
+  let last = headerNode;
+  for (;;) {
+    const next: SyntaxNode | null = last.nextSibling;
+    if (!next) {
+      break;
+    }
+    const nextLevel = headingLevel(next);
+    if (nextLevel !== null && nextLevel <= level) {
+      break;
+    }
+    last = next;
+  }
+  return last.to;
+}
+
+const headerIndent = foldService.of((state, start, end) => {
+  for (
+    let node: SyntaxNode | null = syntaxTree(state).resolveInner(end, -1);
+    node;
+    node = node.parent
+  ) {
+    if (node.from < start) {
+      break;
+    }
+    const level = headingLevel(node);
+    if (level === null) {
+      continue;
+    }
+    const upto = sectionEnd(node, level);
+    if (upto > end) {
+      return { from: end, to: upto };
+    }
+  }
+  return null;
+});
+
+/** The editor's Markdown LanguageSupport, built DIRECTLY from `markdownLanguage`
+ *  (GFM base) instead of via `markdown()`, whose runtime-default `htmlTagLanguage`
+ *  unconditionally drags @codemirror/lang-html → @lezer/javascript/html/css +
+ *  lang-css/lang-javascript + @codemirror/autocomplete (~148 KB of the shipped
+ *  bundle) into the webview. Quoll treats raw HTML as opaque/inert source, so that
+ *  stack only bought nested HTML-tag highlighting + tag autocompletion inside
+ *  Markdown — a deliberate product loss (recorded in the PR). We reproduce exactly
+ *  what `markdown()` builds MINUS that stack:
+ *    - parser: markdownLanguage.parser + nonFoldableBlocks (our fold subtraction),
+ *      with NO parseCode wrapper (no nested HTML/code sub-parser referenced).
+ *    - data: markdownLanguage.data REUSED — markdownKeymap's commands and
+ *      pasteURLAsLink call markdownLanguage.isActiveAt(), which compares the
+ *      languageDataProp facet identity, so the editor language MUST carry the
+ *      same `data` facet to be recognised as active (mkLang does the same).
+ *    - support: headerIndent (heading folds), pasteURLAsLink, and markdownKeymap
+ *      at Prec.high — the three support extensions `markdown()` adds that we keep.
+ *  Mounted by editor.ts; the fold + keymap + paste contracts are pinned by
+ *  cm-markdown-language / cm-fold-blockquote / cm-fold-delegation. */
 export function quollMarkdownLanguage(): LanguageSupport {
-  return markdown({ base: markdownLanguage, extensions: nonFoldableBlocks });
+  // markdownLanguage.parser is statically typed as the abstract @lezer/common
+  // Parser (via Language.parser); the runtime instance is a MarkdownParser, which
+  // is the only thing exposing `.configure`. Narrow to it (same package already
+  // imported for MarkdownExtension) — no cast to a fresh dependency.
+  const parser = (markdownLanguage.parser as MarkdownParser).configure(nonFoldableBlocks);
+  const language = new Language(markdownLanguage.data, parser, [], "markdown");
+  return new LanguageSupport(language, [
+    headerIndent,
+    pasteURLAsLink,
+    Prec.high(keymap.of(markdownKeymap)),
+  ]);
 }
