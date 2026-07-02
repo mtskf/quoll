@@ -29,7 +29,13 @@
 // cm-fold-blockquote.test.ts detects a future upgrade that re-enables a
 // subtracted chevron (it is NOT immunity).
 import { markdownKeymap, markdownLanguage, pasteURLAsLink } from "@codemirror/lang-markdown";
-import { foldNodeProp, foldService, Language, LanguageSupport, syntaxTree } from "@codemirror/language";
+import {
+  foldNodeProp,
+  foldService,
+  Language,
+  LanguageSupport,
+  syntaxTree,
+} from "@codemirror/language";
 import { Prec } from "@codemirror/state";
 import { keymap } from "@codemirror/view";
 import type { MarkdownExtension, MarkdownParser } from "@lezer/markdown";
@@ -67,21 +73,35 @@ function sectionEnd(headerNode: SyntaxNode, level: number): number {
   let last = headerNode;
   for (;;) {
     const next: SyntaxNode | null = last.nextSibling;
-    if (!next) break;
+    if (!next) {
+      break;
+    }
     const nextLevel = headingLevel(next);
-    if (nextLevel != null && nextLevel <= level) break;
+    if (nextLevel !== null && nextLevel <= level) {
+      break;
+    }
     last = next;
   }
   return last.to;
 }
 
 const headerIndent = foldService.of((state, start, end) => {
-  for (let node: SyntaxNode | null = syntaxTree(state).resolveInner(end, -1); node; node = node.parent) {
-    if (node.from < start) break;
+  for (
+    let node: SyntaxNode | null = syntaxTree(state).resolveInner(end, -1);
+    node;
+    node = node.parent
+  ) {
+    if (node.from < start) {
+      break;
+    }
     const level = headingLevel(node);
-    if (level == null) continue;
+    if (level === null) {
+      continue;
+    }
     const upto = sectionEnd(node, level);
-    if (upto > end) return { from: end, to: upto };
+    if (upto > end) {
+      return { from: end, to: upto };
+    }
   }
   return null;
 });

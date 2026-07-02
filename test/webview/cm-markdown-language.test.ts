@@ -62,7 +62,11 @@ describe("quollMarkdownLanguage wires the active markdownKeymap", () => {
 
   it("Backspace after a list marker deletes it (deleteMarkupBackward via the keymap)", () => {
     const v = mount("- alpha", 2); // caret right after "- "
-    const handled = runScopeHandlers(v, new KeyboardEvent("keydown", { key: "Backspace" }), "editor");
+    const handled = runScopeHandlers(
+      v,
+      new KeyboardEvent("keydown", { key: "Backspace" }),
+      "editor"
+    );
     expect(handled).toBe(true);
     // Upstream deleteMarkupBackward removes the bullet marker; assert the "- "
     // prefix is gone (exact remainder pinned so a broken keymap reds this).
