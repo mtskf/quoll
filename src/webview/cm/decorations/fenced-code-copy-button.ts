@@ -19,7 +19,6 @@ import {
   ViewPlugin,
   type ViewUpdate,
 } from "@codemirror/view";
-import { fencedCodeBodyLineSpan } from "./fenced-code-body.js";
 import { CopyButtonWidget } from "./fenced-code-copy-button-widget.js";
 import type { BuildContext } from "./types.js";
 
@@ -184,18 +183,7 @@ export function buildCopyButtons(ctx: BuildContext): DecorationSet {
           return;
         }
         seen.add(openFrom);
-        // A single-body-line block collapses to one visible panel row (its
-        // concealed open/close fences are zero-height); flag it so the widget
-        // carries the marker the theme uses to vertically centre the button on
-        // that lone row. Body geometry comes from the single-sourced CodeMark
-        // walk (fenced-code-body.ts), the same source block-style.ts reads.
-        const bodySpan = fencedCodeBodyLineSpan(doc, node.node);
-        const singleLine = bodySpan !== null && bodySpan.startLine === bodySpan.endLine;
-        const widget = new CopyButtonWidget(
-          openFrom,
-          fencedCodeBody(ctx.state, node.node),
-          singleLine
-        );
+        const widget = new CopyButtonWidget(openFrom, fencedCodeBody(ctx.state, node.node));
         out.push({ from: openFrom, deco: Decoration.widget({ widget, side: -1 }) });
       },
     });
