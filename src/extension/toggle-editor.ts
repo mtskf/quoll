@@ -64,15 +64,21 @@ export function registerToggleEditor(): { dispose(): void } {
         ? activeEditor.document.uri.toString()
         : null;
 
-    switch (decideSwitchTarget({ onQuollTab, activeMarkdownUriKey })) {
+    const target = decideSwitchTarget({ onQuollTab, activeMarkdownUriKey });
+    switch (target) {
       case "to-text": {
-        // `onQuollTab` narrows `input` to TabInputCustom. This is the
-        // Command-Palette forward path (Quoll active, no live activeTextEditor
-        // caret to read here); it does NOT restore the caret — the caret-
-        // preserving forward affordances are the top-right button + the
-        // Mod-Alt-e chord, which post `switch-to-text` to the panel (which owns
-        // lastKnownCaret and re-applies it — Task 5). A rare, acceptable gap.
-        const uri = (input as TabInputCustom).uri;
+        // Re-narrow for the type system (decideSwitchTarget's boolean hides the
+        // instanceof from TS) — and a cheap guard should a future refactor ever
+        // decouple `onQuollTab` from this check. This is the Command-Palette
+        // forward path (Quoll active, no live activeTextEditor caret to read
+        // here); it does NOT restore the caret — the caret-preserving forward
+        // affordances are the top-right button + the Mod-Alt-e chord, which post
+        // `switch-to-text` to the panel (which owns lastKnownCaret and re-applies
+        // it — Task 5). A rare, acceptable gap.
+        if (!(input instanceof TabInputCustom)) {
+          return;
+        }
+        const uri = input.uri;
         // Observability for the documented caret non-preservation on this path.
         console.info("[quoll] palette forward: caret not preserved (use the button or Ctrl/Cmd+Alt+E)");
         try {
@@ -117,13 +123,21 @@ export function registerToggleEditor(): { dispose(): void } {
         }
         return;
       }
-      default:
+      case "none":
         void window
           .showInformationMessage(
             "Quoll: open a Markdown file to toggle between the rich and text editors."
           )
           .then(undefined, (e: unknown) => console.error("[quoll] showInformationMessage rejected", e));
         return;
+      default: {
+        // Exhaustiveness guard — a new SwitchTarget without a case reds tsc,
+        // mirroring the closed-union guards in QuollEditorPanel.handleInbound
+        // and shell.ts rather than silently falling through to a notification.
+        const _exhaustive: never = target;
+        void _exhaustive;
+        return;
+      }
     }
   });
 }
