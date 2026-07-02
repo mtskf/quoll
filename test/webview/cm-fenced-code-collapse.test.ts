@@ -658,7 +658,7 @@ describe("quollCollapseToggleTheme", () => {
   it("rounds + pads the collapsed bar's bottom to match .quoll-fenced-code-close (panel footer)", () => {
     // The collapsed bar is the panel's visible bottom, so it carries the same
     // bottom radius + bottom padding as the closing fence line — BOTH drawn from the
-    // shared --quoll-block-radius / --quoll-block-pad :root tokens, so a retuned
+    // shared --quoll-block-radius / --quoll-block-pad-y :root tokens, so a retuned
     // panel keeps its footer in lockstep. The radii are ELLIPTICAL
     // (`radius + 6px` / `radius + 2px` border-box horizontal) to compensate for
     // `background-clip: padding-box`: the border eats into the corner, so the outer
@@ -673,7 +673,7 @@ describe("quollCollapseToggleTheme", () => {
     expect(footer.borderBottomRightRadius).toBe(
       "calc(var(--quoll-block-radius, 8px) + 2px) var(--quoll-block-radius, 8px)"
     );
-    expect(footer.paddingBottom).toBe("var(--quoll-block-pad, 16px)");
+    expect(footer.paddingBottom).toBe("var(--quoll-block-pad-y, 12px)");
   });
 
   it("rounds the EXPANDED bar into the footer unless a revealed closing fence sits below it", () => {

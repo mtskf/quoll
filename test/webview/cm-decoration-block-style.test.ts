@@ -652,7 +652,7 @@ describe("block-style — theme spec contract", () => {
     expect(open.borderTopRightRadius).toBe(
       "calc(var(--quoll-block-radius, 8px) + 2px) var(--quoll-block-radius, 8px)"
     );
-    expect(open.paddingTop).toBe("var(--quoll-block-pad, 16px)");
+    expect(open.paddingTop).toBe("var(--quoll-block-pad-y, 12px)");
     const close = blockStyleThemeSpec[".cm-line.quoll-fenced-code-close"];
     expect(close.borderBottomLeftRadius).toBe(
       "calc(var(--quoll-block-radius, 8px) + 6px) var(--quoll-block-radius, 8px)"
@@ -660,7 +660,7 @@ describe("block-style — theme spec contract", () => {
     expect(close.borderBottomRightRadius).toBe(
       "calc(var(--quoll-block-radius, 8px) + 2px) var(--quoll-block-radius, 8px)"
     );
-    expect(close.paddingBottom).toBe("var(--quoll-block-pad, 16px)");
+    expect(close.paddingBottom).toBe("var(--quoll-block-pad-y, 12px)");
   });
 
   it("blockquote corners: token elliptical radius (background-clip compensation) + shared vertical padding on open/close only", () => {
@@ -681,7 +681,7 @@ describe("block-style — theme spec contract", () => {
     expect(open.borderTopRightRadius).toBe(
       "calc(var(--quoll-block-radius, 8px) + 2px) var(--quoll-block-radius, 8px)"
     );
-    expect(open.paddingTop).toBe("var(--quoll-block-pad, 16px)");
+    expect(open.paddingTop).toBe("var(--quoll-block-pad-y, 12px)");
     const close = blockStyleThemeSpec[".cm-line.quoll-blockquote-close"];
     expect(close.borderBottomLeftRadius).toBe(
       "calc(var(--quoll-block-radius, 8px) + 6px) var(--quoll-block-radius, 8px)"
@@ -689,19 +689,22 @@ describe("block-style — theme spec contract", () => {
     expect(close.borderBottomRightRadius).toBe(
       "calc(var(--quoll-block-radius, 8px) + 2px) var(--quoll-block-radius, 8px)"
     );
-    expect(close.paddingBottom).toBe("var(--quoll-block-pad, 16px)");
+    expect(close.paddingBottom).toBe("var(--quoll-block-pad-y, 12px)");
   });
 
-  it("both panels source horizontal padding from ONE shared --quoll-block-pad token (unification contract)", () => {
+  it("both panels source horizontal padding from ONE shared --quoll-block-pad-x token (unification contract)", () => {
     // The whole point of the token: the fenced-code panel and the blockquote must
     // draw their interior inset from the SAME :root token so they can never drift
     // in unit OR amount again (before this, fenced-code used `1em` and blockquote
-    // `8px`). Pin that both sides are the identical token string. REVERT-CHECK:
-    // hardcoding either back to `1em`/`8px` (or giving them different values) turns
-    // this red. Real-pixel 16px inset is confirmed in the browser harness.
+    // `8px`). Horizontal padding is --quoll-block-pad-x (16px); the vertical inset
+    // is the separate, tighter --quoll-block-pad-y (12px), pinned on the -open/-close
+    // corner tests above. Pin that both sides are the identical horizontal token
+    // string. REVERT-CHECK: hardcoding either back to `1em`/`8px` (or giving them
+    // different values) turns this red. Real-pixel 16px inset is confirmed in the
+    // browser harness.
     const fenced = blockStyleThemeSpec[".cm-line.quoll-fenced-code"] as Record<string, unknown>;
     const quote = blockStyleThemeSpec[".cm-line.quoll-blockquote"] as Record<string, unknown>;
-    const pad = "var(--quoll-block-pad, 16px)";
+    const pad = "var(--quoll-block-pad-x, 16px)";
     expect(fenced.paddingLeft).toBe(pad);
     expect(fenced.paddingRight).toBe(pad);
     expect(quote.paddingLeft).toBe(pad);

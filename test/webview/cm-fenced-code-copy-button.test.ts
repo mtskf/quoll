@@ -478,12 +478,12 @@ describe("quollCopyButtonTheme", () => {
     // row's vertical centre (overriding the default top-right `top: 0.3em`).
     expect(rule.transform).toBe("translateY(-50%)");
     // `top` = the -open top padding + half the line box. The padding term is the
-    // SHARED --quoll-block-pad token (the same one the visible body row's -open
-    // paddingTop uses), so this centring tracks a retuned block pad instead of
+    // SHARED --quoll-block-pad-y token (the same VERTICAL one the visible body row's
+    // -open paddingTop uses), so this centring tracks a retuned block pad instead of
     // drifting to a stale hardcoded offset. REVERT-CHECK: hardcoding the padding
-    // term back to `8px` (while -open uses the 16px token) mis-centres the button
+    // term back to `8px` (while -open uses the 12px token) mis-centres the button
     // and turns this red. The button's OWN geometry stays `em` (0.9em font).
-    expect(rule.top).toContain("var(--quoll-block-pad");
+    expect(rule.top).toContain("var(--quoll-block-pad-y, 12px)");
     expect(rule.top).toContain("var(--quoll-line-height");
   });
 });
