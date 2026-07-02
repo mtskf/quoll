@@ -113,26 +113,27 @@ function makeWidget(
   return { from, to, widget, deco: Decoration.replace({ widget, block: true }) };
 }
 
-// Diagnostic latch: an unexpected relative-resolution failure (a present base
-// plus a normal relative path that still won't resolve/trust) is logged ONCE
-// per webview session. Without a latch a malformed base would spam a warning
-// for every relative image on every document change; one line is enough to
-// triage. error-handler confirmed this path is unreachable in normal operation
-// (buildResourceBaseUri returns a VS Code API URL), so the latch never fires
-// in practice — it exists purely so the silent 🚫 placeholder has a breadcrumb.
+// Diagnostic latch: a relative-resolution failure (a present base plus a
+// relative path that won't resolve/trust) is logged ONCE per webview session.
+// Without a latch a malformed base would spam a warning for every relative
+// image on every document change; one line is enough to triage. The reachable
+// case in normal operation is a `../` destination escaping the document
+// directory (resolveTrustedResourceUrl's containment check rejects it); the
+// breadcrumb tells the author why the 🚫 placeholder rendered.
 let warnedUnresolvableImage = false;
 
 /** Resolve a gated image URL against the document's base URI for rendering.
  *  - Absolute URLs (parse standalone — http(s)/mailto) pass through unchanged;
  *    remote http(s) stay CSP-blocked at render (the caller's concern).
- *  - A relative URL is resolved + scheme/authority-checked + branded by
- *    resolveTrustedResourceUrl (scheme-agnostic; survives a VS Code resource-
- *    scheme change — see url-allowlist.ts). We deliberately do NOT re-run
- *    renderSafeUrl on the resolved value (its http/https/mailto allowlist would
- *    reject a non-https resource scheme).
+ *  - A relative URL is resolved + scheme/authority/containment-checked +
+ *    branded by resolveTrustedResourceUrl (scheme-agnostic; survives a VS Code
+ *    resource-scheme change — see url-allowlist.ts). We deliberately do NOT
+ *    re-run renderSafeUrl on the resolved value (its http/https/mailto
+ *    allowlist would reject a non-https resource scheme).
  *  Returns null (→ inert placeholder) for: no base (non-file doc), a
  *  fragment-/query-only destination (resolves to the document FILE itself,
- *  never an image), or a resolve/authority-check failure (logged once). */
+ *  never an image), a `../` destination escaping the document directory, or a
+ *  resolve/authority-check failure (logged once). */
 function resolveAgainstBase(url: AllowlistedUrl, base: string): AllowlistedUrl | null {
   let isAbsolute = false;
   try {

@@ -112,6 +112,14 @@ export function buildWebviewHtml(input: BuildWebviewHtmlInput): string {
   //   font-src ${cspSource}      — webview-bundled fonts only.
   //   connect-src 'none'         — no fetch/XHR/WebSocket; the webview talks
   //     to the host via postMessage exclusively.
+  //   base-uri 'none'            — no <base> element may re-point relative URL
+  //     resolution (base-uri does NOT fall back to default-src, so it must be
+  //     declared explicitly). Defense in depth: script injection is already
+  //     nonce-gated, but an injected <base> would silently redirect every
+  //     relative fetch the document makes.
+  //   form-action 'none'         — no form submission targets (also exempt
+  //     from the default-src fallback). The webview renders no forms; a
+  //     smuggled <form action> could otherwise exfiltrate without script.
   const csp = [
     "default-src 'none'",
     `style-src ${cspSource} 'nonce-${nonce}'`,
@@ -119,6 +127,8 @@ export function buildWebviewHtml(input: BuildWebviewHtmlInput): string {
     `img-src ${cspSource}`,
     `font-src ${cspSource}`,
     "connect-src 'none'",
+    "base-uri 'none'",
+    "form-action 'none'",
   ].join("; ");
   return `<!DOCTYPE html>
 <html lang="en">

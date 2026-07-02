@@ -94,8 +94,30 @@ export function renderSafeUrl(raw: unknown): RenderSafeUrl {
  * opaque origins as equal ("null" === "null"). `protocol` + `host` is
  * meaningful for both special (https) and opaque (vscode-resource) schemes:
  * `host` = hostname + port, and protocol-relative / cross-host escapes change
- * `host` (or `protocol`) and are rejected. Returns null when `base` does not
- * parse, the join fails, or scheme/authority escapes. This helper owns the SOLE
+ * `host` (or `protocol`) and are rejected.
+ *
+ * Beyond scheme + authority, the resolved path must stay INSIDE the document's
+ * directory (defense in depth alongside VS Code's localResourceRoots
+ * containment — TODO 2026-07-02 Codex cross-review):
+ * 1. Directory-prefix check on the parser-normalized pathname. The WHATWG
+ *    parser pops `../` — including its encoding-aware dot-segment spellings
+ *    `%2e%2e` / `.%2e` / `%2e.` — during resolution, so any traversal it
+ *    understands has already landed OUTSIDE the base directory by the time we
+ *    compare. The prefix includes the trailing `/` so a sibling directory
+ *    (`/ws/notes2/` vs `/ws/notes/`) cannot pass on a string-prefix
+ *    technicality.
+ * 2. Decoded-segment check for what the parser deliberately does NOT
+ *    normalize: `..%2f` / `..%5c` / `%2e%2e%2f` are single opaque segments to
+ *    the parser (the dot-segment match is per-whole-buffer), so they survive
+ *    into the pathname still encoded — but VS Code's resource server
+ *    percent-decodes when mapping to a file path, re-creating the traversal
+ *    AFTER a naive prefix check. Decode each segment once (matching the
+ *    server's single decode) and reject any that yields a `.` / `..` path
+ *    component; an undecodable segment (malformed %-escape) is rejected
+ *    outright (fail-closed).
+ *
+ * Returns null when `base` does not parse, the join fails, or
+ * scheme/authority/directory-containment escapes. This helper owns the SOLE
  * `as AllowlistedUrl` cast for resolved values.
  */
 export function resolveTrustedResourceUrl(relative: string, base: string): AllowlistedUrl | null {
@@ -113,6 +135,28 @@ export function resolveTrustedResourceUrl(relative: string, base: string): Allow
   }
   if (resolved.protocol !== baseUrl.protocol || resolved.host !== baseUrl.host) {
     return null;
+  }
+  // (1) Directory containment. `base` is always a document FILE URI, so the
+  // directory is everything up to and including the last `/`. An opaque-path
+  // base with no `/` at all cannot resolve a relative ref in the first place
+  // (`new URL(relative, base)` throws above), so `lastIndexOf` always hits.
+  const baseDir = baseUrl.pathname.slice(0, baseUrl.pathname.lastIndexOf("/") + 1);
+  if (!resolved.pathname.startsWith(baseDir)) {
+    return null;
+  }
+  // (2) No smuggled dot segments past the parser's normalization.
+  for (const segment of resolved.pathname.split("/")) {
+    let decoded: string;
+    try {
+      decoded = decodeURIComponent(segment);
+    } catch {
+      return null;
+    }
+    for (const part of decoded.split(/[/\\]/)) {
+      if (part === "." || part === "..") {
+        return null;
+      }
+    }
   }
   return resolved.href as AllowlistedUrl;
 }
