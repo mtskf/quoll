@@ -21,7 +21,9 @@
 //   - foldGutter({ markerDOM }) — the clickable chevron (a MOUSE affordance; the
 //                                 gutter is aria-hidden by CM, so keyboard a11y
 //                                 is foldKeymap below, not the marker's ARIA).
-//   - keymap.of(foldKeymap)     — Ctrl-Shift-[ / ] (Cmd-Alt-[ / ] on mac) etc.
+//   - keymap.of(quollFoldKeymap)  — the four fold commands (foldCode / unfoldCode /
+//                                 foldAll / unfoldAll). Explicit Quoll-owned table —
+//                                 see quollFoldKeymap below.
 //   - gutterLineClass           — tags H1–H3 gutter lines so the theme can cap the
 //                                 chevron at the right (taller) row height; see
 //                                 headingFoldGutterLineClass + the theme note.
@@ -40,7 +42,15 @@
 // View-layer only: nothing here dispatches a `changes` transaction or posts an
 // `edit` — folds are display-only, byte-identical round-trip.
 
-import { codeFolding, foldGutter, foldKeymap, syntaxTree } from "@codemirror/language";
+import {
+  codeFolding,
+  foldAll,
+  foldCode,
+  foldGutter,
+  syntaxTree,
+  unfoldAll,
+  unfoldCode,
+} from "@codemirror/language";
 import {
   type EditorState,
   type Extension,
@@ -48,7 +58,13 @@ import {
   RangeSetBuilder,
   StateField,
 } from "@codemirror/state";
-import { EditorView, GutterMarker, gutterLineClass, keymap } from "@codemirror/view";
+import {
+  EditorView,
+  GutterMarker,
+  gutterLineClass,
+  type KeyBinding,
+  keymap,
+} from "@codemirror/view";
 
 const SVG_NS = "http://www.w3.org/2000/svg";
 
@@ -64,7 +80,7 @@ export const CHEVRON_DOWN_PATH = "m6 9 6 6 6-6";
  *  `.cm-gutters` aria-hidden, so a role/aria-label here would never reach
  *  assistive tech — `title` gives a hover tooltip for sighted mouse users
  *  instead, and the SVG is aria-hidden. Keyboard + screen-reader users fold via
- *  foldKeymap (Ctrl-Shift-[ / ]), the real a11y path. CM wires the click→toggle
+ *  quollFoldKeymap (Ctrl-Shift-[ / ]), the real a11y path. CM wires the click→toggle
  *  handler on the gutter element itself, so markerDOM only supplies the glyph.
  *  Exported for the DOM-contract unit test. */
 export function markerDOM(open: boolean): HTMLElement {
@@ -338,6 +354,36 @@ const quollFoldTheme = EditorView.theme({
   },
 });
 
+/** Quoll's fold key bindings — an EXPLICIT, Quoll-owned copy of
+ *  @codemirror/language's default `foldKeymap` (same keys, same commands). The point
+ *  is to OWN a STABLE shortcut contract, not to track upstream: a copy deliberately
+ *  does NOT follow a future CM change to its defaults, so Quoll's users keep these
+ *  four shortcuts regardless, and any accidental in-repo removal turns a unit test
+ *  red. (If the goal were the opposite — detect upstream drift — the right shape
+ *  would be `= foldKeymap` + a `toEqual` drift guard; it is not.) Bindings (mirror
+ *  the module header):
+ *    - Ctrl-Shift-[ (Cmd-Alt-[ on macOS) -> foldCode   (fold the section at the caret)
+ *    - Ctrl-Shift-] (Cmd-Alt-] on macOS) -> unfoldCode (unfold it)
+ *    - Ctrl-Alt-[                         -> foldAll    (fold every section)
+ *    - Ctrl-Alt-]                         -> unfoldAll  (unfold every section)
+ *  All four are single-stroke combos that reach the focused webview iframe; we keep
+ *  CM's proven bindings rather than VS Code's Ctrl-K-led fold-all chord, which the
+ *  workbench swallows before the webview sees it (Command-Palette / package.json
+ *  discoverability is a separate host-side follow-up). Display-only: each command
+ *  mutates only foldState, never the document — byte-identical round-trip. Exported
+ *  for the keymap-wiring unit tests. */
+export const quollFoldKeymap: readonly KeyBinding[] = [
+  { key: "Ctrl-Shift-[", mac: "Cmd-Alt-[", run: foldCode },
+  { key: "Ctrl-Shift-]", mac: "Cmd-Alt-]", run: unfoldCode },
+  { key: "Ctrl-Alt-[", run: foldAll },
+  { key: "Ctrl-Alt-]", run: unfoldAll },
+];
+
+/** The mounted keymap extension. `quollFolding()` includes THIS exact value so a
+ *  test can assert by reference that the keymap is actually wired (not merely that
+ *  the table exists). */
+export const quollFoldKeymapExtension: Extension = keymap.of(quollFoldKeymap);
+
 /** The Quoll fold extension. Always on (no setting) — chevrons appear only on
  *  foldable lines. `headingFoldGutterLineClass` tags H1–H3 gutter lines so the
  *  theme can cap their chevron at the correct (taller) row height. */
@@ -346,7 +392,7 @@ export function quollFolding(): Extension {
     codeFolding({ placeholderDOM: foldPlaceholderDOM }),
     headingFoldGutterLineClass,
     foldGutter({ markerDOM }),
-    keymap.of(foldKeymap),
+    quollFoldKeymapExtension,
     quollFoldTheme,
   ];
 }

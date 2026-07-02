@@ -233,7 +233,7 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
         quollCollapseToggleTheme,
         quollSyntaxReveal(),
         // Fold gutter (PURE UI activation: codeFolding + foldGutter +
-        // foldKeymap). Fold ranges come from two places: heading sections via
+        // quollFoldKeymap). Fold ranges come from two places: heading sections via
         // Quoll's own re-implementation of lang-markdown's headerIndent
         // foldService (in cm/markdown.ts — re-implemented to avoid the markdown()
         // wrapper's HTML language stack), and list items + GFM tables via
