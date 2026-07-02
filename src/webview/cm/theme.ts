@@ -398,6 +398,17 @@ export const quollBlockStyleTheme = EditorView.theme(blockStyleThemeSpec);
 // invariance of the open fence line (accounting for CM's inline `.cm-widgetBuffer`)
 // is confirmed by the real-browser smoke. Exported as a plain spec so
 // cm-fenced-code-copy-button.test.ts can pin the contract.
+// Shared FG + hover-BG for the two fenced-code panel controls — the copy button
+// (copyButtonThemeSpec) and the "Show N more lines" collapse toggle
+// (collapseToggleThemeSpec) — so the pair reads as a set. Single source of truth:
+// retune here and both controls move together (never duplicate the literals). The
+// foreground is the neutral token both specs already fell back to; the hover tint
+// is the toolbar-control background the collapse bar already used. Correct in both
+// light and dark.
+const fencedControlForeground = "var(--vscode-foreground)";
+const fencedControlHoverBackground =
+  "var(--vscode-toolbar-hoverBackground, rgba(255, 255, 255, 0.1))";
+
 export const copyButtonThemeSpec = {
   // The open fence line is the panel's top row; making it the positioning
   // context lets the absolutely-positioned button pin to the panel top-right.
@@ -430,60 +441,23 @@ export const copyButtonThemeSpec = {
     display: "inline-flex",
     alignItems: "center",
     justifyContent: "center",
-    padding: "0.25em",
-    color: "var(--vscode-button-secondaryForeground, var(--vscode-foreground))",
+    padding: "0.2em",
+    color: fencedControlForeground,
     backgroundColor: "var(--vscode-button-secondaryBackground, rgba(255, 255, 255, 0.08))",
-    border: "1px solid var(--vscode-widget-border, transparent)",
     borderRadius: "4px",
     cursor: "pointer",
     opacity: "0.6",
     transition: "opacity 0.1s ease-in-out",
     userSelect: "none",
   },
-  // A SINGLE-body-line fenced block collapses to ONE visible panel row (its
-  // concealed open/close fences are zero-height). The button is anchored to the
-  // zero-height concealed open-fence row that sits at the panel's TOP, so the
-  // default `top: 0.3em` pins it slightly ABOVE that lone row's vertical centre
-  // (2026-07-01 report). Centre it on the row instead. SCOPED to the concealed
-  // display state via the ancestor `.quoll-fenced-code-fence-hidden`: only while
-  // the fences are collapsed is the panel a single row. When the caret enters
-  // the block the open fence REVEALS (its row becomes `.quoll-fenced-code-open`,
-  // a 3-row panel) and this selector stops matching, so the button reverts to
-  // the default top-right anchor above — multi-line blocks lack the
-  // `-single-line` marker entirely and are byte-identical either way.
-  //
-  // Under block-scoped fence reveal (fenced-code-body.ts fencedCodeBlockRevealed) both
-  // fences share ONE reveal state, so the former "open hidden + close revealed" case —
-  // where this centred anchor could sit on a two-visible-row panel — can no longer
-  // occur: a caret anywhere in the block reveals BOTH fences (the open row becomes
-  // `.quoll-fenced-code-open`, this selector stops matching, button reverts to the
-  // default top-right anchor), and a caret outside conceals BOTH (single visible row,
-  // centred). The selector therefore matches exactly the one-visible-row state it was
-  // written for.
-  //
-  // `top` targets the row's vertical centre measured from the anchor (which sits
-  // at the row's box top): the `-open` top padding (--quoll-block-pad, the SAME
-  // token the visible body row's -open paddingTop uses, so this centring tracks a
-  // retuned pad instead of drifting) plus HALF the line box (`--quoll-line-height`
-  // unitless × 0.5em, so it tracks a retuned token — the button font is 0.9em,
-  // matching the body line, so 1em here === one body-line em). translateY(-50%)
-  // then recentres the button's OWN height generically, so no button dimension is
-  // hardcoded. NOTE: this is the ONE copy-button value coupled to the block-pad
-  // token — the button's own em geometry (top/right/padding/svg) is deliberately
-  // left in `em` to track the 0.9em code font. Real-pixel centring is confirmed in
-  // the browser harness (happy-dom has no layout — the fenced-collapse precedent).
-  ".cm-line.quoll-fenced-code-fence-hidden .quoll-copy-button.quoll-copy-button-single-line": {
-    top: "calc(var(--quoll-block-pad, 16px) + var(--quoll-line-height, 1.7) * 0.5em)",
-    transform: "translateY(-50%)",
-  },
   ".quoll-copy-button svg": {
     display: "block",
-    width: "1.1em",
-    height: "1.1em",
+    width: "1em",
+    height: "1em",
   },
   ".quoll-copy-button:hover, .quoll-copy-button:focus-visible": {
     opacity: "1",
-    backgroundColor: "var(--vscode-button-secondaryHoverBackground, rgba(255, 255, 255, 0.16))",
+    backgroundColor: fencedControlHoverBackground,
   },
   ".quoll-copy-button.is-copied": {
     opacity: "1",
@@ -597,7 +571,7 @@ export const collapseToggleThemeSpec = {
     margin: "0.1em 0",
     fontSize: "0.85em",
     fontFamily: "var(--vscode-font-family, sans-serif)",
-    color: "var(--vscode-textLink-foreground, var(--vscode-foreground))",
+    color: fencedControlForeground,
     background: "none",
     border: "none",
     borderRadius: "4px",
@@ -606,7 +580,7 @@ export const collapseToggleThemeSpec = {
   },
   ".quoll-fenced-collapse-toggle:hover, .quoll-fenced-collapse-toggle:focus-visible": {
     opacity: "1",
-    backgroundColor: "var(--vscode-toolbar-hoverBackground, rgba(255, 255, 255, 0.1))",
+    backgroundColor: fencedControlHoverBackground,
   },
   ".quoll-fenced-collapse-toggle svg": {
     display: "block",
