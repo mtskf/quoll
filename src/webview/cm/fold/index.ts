@@ -99,11 +99,12 @@ export function markerDOM(open: boolean): HTMLElement {
  *  innerHTML). Exported so the fold-placeholder test can assert the dot geometry. */
 export const ELLIPSIS_DOT_CX = [5, 12, 19] as const;
 
-/** The INLINE fold placeholder — the pill CM shows IN PLACE of a collapsed region
- *  (distinct from the gutter chevron `markerDOM` above). Replaces CM's default
- *  bordered-grey `.cm-foldPlaceholder` "…" box with a small circle filled with the
- *  blockquote surface tint, holding a knocked-out Lucide ellipsis (the dots are
- *  painted in the page background so they read as holes punched out of the pill).
+/** The INLINE fold placeholder — the marker CM shows IN PLACE of a collapsed
+ *  region (distinct from the gutter chevron `markerDOM` above). Replaces CM's
+ *  default bordered-grey `.cm-foldPlaceholder` "…" box with a filled rounded-square
+ *  (16×12, r=4px) holding a knocked-out Lucide ellipsis (the dots are painted in
+ *  the page background so they read as holes punched out of the fill; hover tints
+ *  the square the shared fold-green).
  *  CM calls this as `placeholderDOM(view, onclick, prepared)`; we wire the supplied
  *  `onclick` for click-to-unfold and keep the default's `title` + `aria-label`
  *  (via `state.phrase`, mirroring widgetToDOM in @codemirror/language). We
@@ -294,44 +295,46 @@ const quollFoldTheme = EditorView.theme({
   ".cm-foldGutter .quoll-fold-marker--folded:hover": {
     color: "var(--vscode-gitDecoration-addedResourceForeground, var(--vscode-charts-green))",
   },
-  // Inline fold placeholder (the collapsed-region pill; NOT the gutter chevron).
-  // A small circle filled with the blockquote surface tint, holding a knocked-out
-  // Lucide ellipsis — the dots are painted in the PAGE background (currentColor
-  // below) so they read as holes punched out of the pill. Kept deliberately subtle
-  // (the user pulled back from a green treatment). All three surfaces are
-  // theme-following tokens so the pill tracks dark / light / HC automatically
-  // (memory quoll-hc-theme-maps-to-light-theme-class):
-  //   - fill = --quoll-surface-fill (the EXACT blockquote fill token; theme.ts's
-  //     .quoll-blockquote uses the same var) with the shared textCodeBlock
-  //     fallback so a pre-theme-class frame still shows a fill;
-  //   - a 1px --quoll-surface-border edge (the surface family's border token):
-  //     near-invisible against the fill in dark/light, but the visible
-  //     contrastBorder in HC — where --quoll-surface-fill collapses to transparent
-  //     (styles.css HC block) — so the pill stays a visible circle affordance in
-  //     every theme;
-  //   - dots = --vscode-editor-background (the page fill) via currentColor.
-  // box-sizing:border-box keeps the 1px edge inside the 0.8em circle; a ~4px
-  // inline-start margin lifts the pill off the fold's first-line text.
+  // Inline fold placeholder (the collapsed-region marker; NOT the gutter chevron).
+  // A filled rounded-square (16×12, r=4px, NO border) holding a knocked-out Lucide
+  // ellipsis — the dots are painted in the PAGE background (currentColor below) so
+  // they read as holes punched out of the fill. Colours are theme-following so the
+  // marker tracks dark / light / HC automatically (memory
+  // quoll-hc-theme-maps-to-light-theme-class):
+  //   - fill = --quoll-fold-fill (styles.css per-theme token): a subtle neutral
+  //     overlay in dark (rgba(255,255,255,.15)) / light (rgba(0,0,0,.15)) and a
+  //     SOLID foreground square in HC, so the borderless marker stays visible in
+  //     every theme (the fallback keeps a fill on a pre-theme-class frame);
+  //   - dots = --vscode-editor-background (the page fill) via currentColor;
+  //   - :hover tints the fill the shared fold-green (the SAME git-added / charts-
+  //     green token the folded chevron uses) so the marker reads as an unfold
+  //     affordance; the transition eases that colour flip (the element persists,
+  //     unlike the chevron which CM rebuilds per fold).
+  // A ~6px inline-start margin lifts the marker off the fold's first-line text.
   ".quoll-fold-placeholder": {
     display: "inline-flex",
     alignItems: "center",
     justifyContent: "center",
     boxSizing: "border-box",
-    width: "0.8em",
-    height: "0.8em",
-    borderRadius: "50%",
-    marginInlineStart: "4px",
+    width: "16px",
+    height: "12px",
+    borderRadius: "4px",
+    border: "none",
+    marginInlineStart: "6px",
     verticalAlign: "middle",
     cursor: "pointer",
-    background:
-      "var(--quoll-surface-fill, var(--vscode-textCodeBlock-background, rgba(255, 255, 255, 0.05)))",
-    border: "1px solid var(--quoll-surface-border, transparent)",
+    transition: "background-color 100ms ease",
+    backgroundColor: "var(--quoll-fold-fill, rgba(255, 255, 255, 0.15))",
     color: "var(--vscode-editor-background)",
+  },
+  ".quoll-fold-placeholder:hover": {
+    backgroundColor:
+      "var(--vscode-gitDecoration-addedResourceForeground, var(--vscode-charts-green))",
   },
   ".quoll-fold-placeholder svg": {
     display: "block",
-    width: "0.6em",
-    height: "0.6em",
+    width: "14px",
+    height: "14px",
   },
 });
 
