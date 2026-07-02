@@ -89,6 +89,15 @@
      * value on the editor root; this `1ch` default keeps monospace exact and
      * covers the pre-measurement frame. */
     --quoll-prose-space: 1ch;
+    /* Vertical breathing room ABOVE each list-item marker line, so sibling
+     * bullet / ordered / task items are not packed tight against each other.
+     * Delivered as `padding-top` on `.cm-line.quoll-list-hang` in cm/theme.ts
+     * (an EditorView.theme, so it beats CodeMirror's unlayered baseTheme
+     * `.cm-line` padding). Vertical only — it never touches the horizontal
+     * hang-indent (text-indent / padding-inline-start), so nested alignment is
+     * unaffected. Display-only: the underlying Markdown bytes are untouched.
+     * `em` so the gap tracks the body font size. */
+    --quoll-list-item-gap: 0.6em;
     /* Vertical breathing room around a block-table widget. Delivered as
      * PADDING on the wrapper (never margin) — see the widget layer. */
     --quoll-table-block-pad: 0.75em;

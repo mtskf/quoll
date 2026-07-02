@@ -72,6 +72,21 @@ export const quollTheme = EditorView.theme({
   ".cm-gutters.cm-gutters-after": {
     borderLeftWidth: "0",
   },
+  // Inter-list-item vertical breathing room. list-hang-indent.ts marks every
+  // list-item MARKER line (the item's first line) with `.quoll-list-hang`, so a
+  // top inset here separates consecutive bullet / ordered / task items without
+  // touching intra-item continuation lines. Lives in this EditorView.theme (not
+  // styles.css) for the same reason as blockStyleThemeSpec: only an unlayered,
+  // editor-scoped CM theme beats CM's baseTheme `.cm-line { padding: 0 2px 0 6px }`
+  // — and the two-class `.cm-line.quoll-list-hang` selector outranks that base
+  // `.cm-line` on specificity. `padding-top` (not margin) keeps the gap INSIDE
+  // the line box CodeMirror measures, so click→caret geometry stays accurate.
+  // It is orthogonal to the decoration's INLINE `text-indent` / `padding-inline-start`
+  // (horizontal hang), so nested-list alignment is untouched. Token retunes it
+  // from :root (styles.css); display-only — the Markdown bytes never change.
+  ".cm-line.quoll-list-hang": {
+    paddingTop: "var(--quoll-list-item-gap, 0.6em)",
+  },
   ".cm-cursor, .cm-dropCursor": {
     borderLeftColor: "var(--vscode-editorCursor-foreground)",
   },
