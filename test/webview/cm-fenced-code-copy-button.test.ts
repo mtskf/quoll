@@ -470,6 +470,23 @@ describe("quollCopyButtonTheme", () => {
     expect(rule.border).toBeUndefined();
   });
 
+  it("neutralises the resting background to transparent (icon-only at rest; the box only appears on hover/focus)", () => {
+    // The resting `backgroundColor` used to be a filled secondary-button fill that read
+    // as an ugly bordered box. It is now `transparent` — set EXPLICITLY, not omitted,
+    // because this is a real `<button>` and the VS Code webview injects a default
+    // `button { background: var(--vscode-button-background) }`; omitting would let that
+    // primary fill paint at rest. Pinning `transparent` (not `undefined`) guards that
+    // neutralisation: revert to an omitted or coloured resting background and this fails.
+    expect(copyButtonThemeSpec[".quoll-copy-button"].backgroundColor).toBe("transparent");
+    // The hover/focus affordance is untouched — the box still appears on interaction,
+    // and it is a real colour token (not transparent), so hover stays visible.
+    const hoverBg =
+      copyButtonThemeSpec[".quoll-copy-button:hover, .quoll-copy-button:focus-visible"]
+        .backgroundColor;
+    expect(hoverBg).toBeDefined();
+    expect(hoverBg).not.toBe("transparent");
+  });
+
   it("shares ONE foreground + hover-background token with the collapse toggle (single source)", () => {
     // entry: unify copy-button + collapse-bar colours. Both specs reference the
     // SAME shared value (not duplicated literals) so retuning one moves both.
