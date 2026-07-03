@@ -12,19 +12,22 @@ import {
   unfoldCode,
   unfoldEffect,
 } from "@codemirror/language";
-import { EditorSelection, EditorState } from "@codemirror/state";
+import { EditorSelection, EditorState, StateEffect, StateField } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import { afterEach, describe, expect, it } from "vitest";
+import { quollSyntaxExclusionZones } from "../../src/webview/cm/decorations/orchestrator.js";
 import {
   CHEVRON_DOWN_PATH,
   ELLIPSIS_DOT_CX,
   foldPlaceholderDOM,
   headingFoldGutterLineClass,
+  listFoldGutterLineClass,
   markerDOM,
   quollFolding,
   quollFoldKeymap,
   quollFoldKeymapExtension,
 } from "../../src/webview/cm/fold/index.js";
+import { frontmatterBlockField } from "../../src/webview/cm/frontmatter/index.js";
 
 let view: EditorView | null = null;
 afterEach(() => {
@@ -235,6 +238,132 @@ describe("headingFoldGutterLineClass — per-level gutter tag for the first-row 
     const byLine = taggedClassByLine("Title line\n===\n\nbody\n");
     expect(byLine.get(1)).toBe("quoll-fold-heading-1");
     expect(byLine.size).toBe(1);
+  });
+});
+
+describe("listFoldGutterLineClass — gutter tag for the list-item vertical-gap offset", () => {
+  // Pins the LIST-MARKER-DETECTION contract that drives the gutter `padding-top`
+  // offset matching the list line's own `--quoll-list-item-gap` breathing room
+  // (PR #13). The PIXEL alignment itself is real-browser-only — happy-dom has no
+  // layout — so this asserts ONLY that every list-item marker line (and no other)
+  // carries the `quoll-fold-list-marker` gutter tag, in lock-step with the
+  // `.cm-line.quoll-list-hang` padding it compensates for.
+  function taggedLines(doc: string, extra: readonly unknown[] = []): Map<number, string> {
+    view = mountDoc(doc, extra);
+    const set = view.state.field(listFoldGutterLineClass);
+    const byLine = new Map<number, string>();
+    const cursor = set.iter();
+    while (cursor.value) {
+      // gutterLineClass markers are point ranges at the line start.
+      expect(cursor.from).toBe(cursor.to);
+      const line = view.state.doc.lineAt(cursor.from);
+      expect(cursor.from).toBe(line.from);
+      byLine.set(line.number, (cursor.value as { elementClass: string }).elementClass);
+      cursor.next();
+    }
+    return byLine;
+  }
+
+  it("tags each bullet / ordered / task list-item marker line and nothing else", () => {
+    // 1 bullet parent, 2 nested bullet child, 3 child continuation (no marker),
+    // 5 ordered item, 7 task item, 9 plain paragraph, 11 heading. Blank lines
+    // (4/6/8/10) keep each construct unambiguous (no lazy-continuation merges).
+    const byLine = taggedLines(
+      "- parent\n  - child\n    wrapped\n\n1. ordered\n\n- [ ] task\n\nplain\n\n# heading\n"
+    );
+    expect(byLine.get(1)).toBe("quoll-fold-list-marker");
+    expect(byLine.get(2)).toBe("quoll-fold-list-marker");
+    expect(byLine.get(5)).toBe("quoll-fold-list-marker");
+    expect(byLine.get(7)).toBe("quoll-fold-list-marker");
+    // Continuation line, plain paragraph, and heading are untagged by THIS field.
+    expect(byLine.has(3)).toBe(false);
+    expect(byLine.has(9)).toBe(false);
+    expect(byLine.has(11)).toBe(false);
+    expect(byLine.size).toBe(4);
+  });
+
+  it("does NOT tag a list-item line inside a quollSyntaxExclusionZones span", () => {
+    // A frontmatter YAML list parses as markdown ListItems but gets no
+    // `.quoll-list-hang` padding (list-hang-indent.ts skips exclusion zones), so
+    // the gutter tag must skip it too or a REVEALED frontmatter list would drop
+    // the chevron by the gap. Simulate the frontmatter span with a facet value
+    // covering lines 1-2; line 4 (outside the zone) stays tagged.
+    const doc = "- inside one\n- inside two\n\n- outside\n";
+    const zoneEnd = doc.indexOf("\n\n"); // end of "- inside two"
+    const byLine = taggedLines(doc, [quollSyntaxExclusionZones.of([{ from: 0, to: zoneEnd }])]);
+    expect(byLine.has(1)).toBe(false);
+    expect(byLine.has(2)).toBe(false);
+    expect(byLine.get(4)).toBe("quoll-fold-list-marker");
+    expect(byLine.size).toBe(1);
+  });
+
+  it("does NOT tag an empty list item (resolveListItemHang === null)", () => {
+    // An empty `- ` item has no content token, so resolveListItemHang returns
+    // null and list-hang-indent.ts emits no padding — the gutter tag must skip it
+    // in lock-step. The following non-empty item stays tagged.
+    const byLine = taggedLines("-\n- has content\n");
+    expect(byLine.has(1)).toBe(false);
+    expect(byLine.get(2)).toBe("quoll-fold-list-marker");
+    expect(byLine.size).toBe(1);
+  });
+
+  it("skips a real frontmatter YAML list via the live frontmatterBlockField facet", () => {
+    // Integration guard for the facet WIRING (not just a synthetic zone): mount
+    // the real frontmatterBlockField in the SAME extension order as editor.ts
+    // (quollFolding BEFORE frontmatterBlockField) so a create-time facet-order
+    // regression would surface here. A YAML list inside `---` fences parses as
+    // markdown ListItems but sits in the frontmatter exclusion span, so it must
+    // NOT be tagged; the body list item below the fence must be.
+    view = mountDoc("---\ntags:\n  - alpha\n  - beta\n---\n\n- body item\n", [
+      frontmatterBlockField,
+    ]);
+    const set = view.state.field(listFoldGutterLineClass);
+    const tagged = new Set<number>();
+    const cursor = set.iter();
+    while (cursor.value) {
+      tagged.add(view.state.doc.lineAt(cursor.from).number);
+      cursor.next();
+    }
+    // Lines 3-4 are the YAML list inside the frontmatter span → excluded.
+    expect(tagged.has(3)).toBe(false);
+    expect(tagged.has(4)).toBe(false);
+    // Line 7 (`- body item`) is below the fence → tagged.
+    expect(tagged.has(7)).toBe(true);
+    expect(tagged.size).toBe(1);
+  });
+
+  it("recomputes the tag set when the exclusion-zone facet flips with no doc change", () => {
+    // Pins the facet-change update trigger (the `startState.facet !== state.facet`
+    // clause): a zone contributor that flips on a selection-only transaction (no
+    // doc edit, no tree change) must still update the gutter tags. Drive the zone
+    // via a StateEffect so the flip carries neither docChanged nor a tree change.
+    const setZones = StateEffect.define<readonly { from: number; to: number }[]>();
+    const zoneField = StateField.define<readonly { from: number; to: number }[]>({
+      create: () => [],
+      update(value, tr) {
+        for (const e of tr.effects) {
+          if (e.is(setZones)) {
+            return e.value;
+          }
+        }
+        return value;
+      },
+      provide: (f) => quollSyntaxExclusionZones.from(f),
+    });
+    view = mountDoc("- alpha\n- beta\n", [zoneField]);
+    const tagged = (): Set<number> => {
+      const s = new Set<number>();
+      const c = (view as EditorView).state.field(listFoldGutterLineClass).iter();
+      while (c.value) {
+        s.add((view as EditorView).state.doc.lineAt(c.from).number);
+        c.next();
+      }
+      return s;
+    };
+    expect(tagged()).toEqual(new Set([1, 2])); // no zones → both tagged
+    // Flip a zone over line 1 with NO doc change; the tag set must drop line 1.
+    view.dispatch({ effects: setZones.of([{ from: 0, to: view.state.doc.line(1).to }]) });
+    expect(tagged()).toEqual(new Set([2]));
   });
 });
 
