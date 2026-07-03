@@ -229,6 +229,11 @@ describe("styles.css — widgets consume the accent tokens (palette refresh use 
       /\.quoll-task-checkbox\s*\{[^}]*border\s*:\s*[\d.]+px\s+solid\s+var\(--quoll-todo-ring/s
     );
   });
+  it("task-checkbox box rounds at 5px (the tick's own 0.5px radius is separate)", () => {
+    // Pin the BOX corner only — the checkmark tick (`::after`) keeps its own
+    // 0.5px radius. Non-vacuous: against the prior 6px this assertion reds.
+    expect(css).toMatch(/\.quoll-task-checkbox\s*\{[^}]*border-radius\s*:\s*5px/s);
+  });
   it("table links (incl. hover) and table code consume the accent/surface tokens (F3)", () => {
     expect(css).toMatch(/\.quoll-table-block a\s*\{[^}]*color\s*:\s*var\(--quoll-accent-green/s);
     expect(css).toMatch(/\.quoll-table-block a:hover\s*\{[^}]*var\(--quoll-accent-green/s);
