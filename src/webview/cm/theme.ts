@@ -470,9 +470,13 @@ export const bulletMarkerThemeSpec = {
   ".quoll-bullet-marker::before": {
     content: '""',
     position: "absolute",
-    // Pin a small disc to the glyph's start column and centre it on the inline
+    // Pin a small disc near the glyph's start column and centre it on the inline
     // box (top:50% + translateY(-50%)). Size tuned to the approved Variant B.
-    left: "0",
+    // Nudged 3px LEFT of the glyph box start (user-approved 2026-07-03) to widen
+    // the dot→text gap a touch. Purely visual: the disc is position:absolute, so
+    // this shifts nothing in layout — the raw `-` glyph keeps its advance and the
+    // caret-on reveal / list-hang content column are unchanged.
+    left: "-3px",
     top: "50%",
     width: "0.34em",
     height: "0.34em",
