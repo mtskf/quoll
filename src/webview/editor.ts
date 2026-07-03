@@ -19,6 +19,7 @@ import { applyCaret, type Caret, selectionToCaret } from "./cm/caret.js";
 import { quollContextHandoffKeymap } from "./cm/context-handoff.js";
 import { blockStyle } from "./cm/decorations/block-style.js";
 import { blockZoneArrowKeymap } from "./cm/decorations/block-zone-arrow-keymap.js";
+import { calloutMarkerConcealField } from "./cm/decorations/callout-marker-conceal.js";
 import { fencedCodeCollapseField } from "./cm/decorations/fenced-code-collapse.js";
 import { fencedCodeCopyButton } from "./cm/decorations/fenced-code-copy-button.js";
 import { fencedCodeEnterKeymap } from "./cm/decorations/fenced-code-enter-keymap.js";
@@ -302,6 +303,11 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
         // (no-boundary-fence) case. Both emit Decoration.line; CodeMirror unions
         // their classes on a shared `> ```…` ` line. Styled by quollBlockStyleTheme above.
         blockStyle,
+        // Caret-outside conceal of the [!TYPE] marker row; publishes its span to
+        // quollSyntaxExclusionZones (block-style then migrates the -open corner +
+        // badge onto the first visible body line, and the orchestrator drops inline
+        // marks on the row). Block widgets MUST come from a StateField.
+        calloutMarkerConcealField,
         // Copy-code button: a selection-independent ViewPlugin emitting one
         // inline point widget at each top-level fenced block's open line; the
         // button copies the code body via navigator.clipboard. Display-only

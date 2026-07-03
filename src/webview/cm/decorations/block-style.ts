@@ -71,11 +71,17 @@
 // An OUTERMOST blockquote whose FIRST line is a `[!TYPE]` admonition marker
 // (GitHub/Obsidian: NOTE/TIP/IMPORTANT/WARNING/CAUTION, with an optional
 // Obsidian `-`/`+` fold suffix) additionally carries `quoll-callout` +
-// `quoll-callout-{type}` on every line and `quoll-callout-marker` on the first,
-// so cm/theme.ts can paint a per-type accent border + tint + icon. Scoped to the
-// outermost quote (hasBlockquoteAncestor) so a nested `> >` inner marker never
-// double-emits a second type class — the container type wins. The `[!TYPE]`
-// marker stays literal editable text (decoration-only, byte-identical
+// `quoll-callout-{type}` on every line, so cm/theme.ts can paint a per-type accent
+// bar + tint + a top-right emoji badge (the badge rides `.quoll-callout` on the
+// `-open` line). The classification is single-sourced in callout.ts (block-style +
+// the callout-marker-conceal StateField both import it). Scoped to the outermost
+// quote (calloutTypeForOutermost) so a nested `> >` inner marker never double-emits
+// a second type class — the container type wins. When the caret is INSIDE the block
+// the `[!TYPE]` marker row is REVEALED and gets `quoll-callout-marker` (header
+// weight); when OUTSIDE, the marker StateField conceals the whole row and this
+// module migrates the rounded `-open` corner (and thus the badge) onto the first
+// VISIBLE body line via the same-source `calloutMarkerConceal` predicate. The
+// `[!TYPE]` marker stays literal editable text (decoration-only, byte-identical
 // round-trip); an unrecognised token (`[!FOO]`) matches nothing → generic panel.
 //
 // We paint EVERY line of the Blockquote node span — including CommonMark
@@ -129,6 +135,13 @@ import {
   type ViewUpdate,
 } from "@codemirror/view";
 
+import {
+  CALLOUT_CLASS,
+  CALLOUT_MARKER_CLASS,
+  calloutClassForType,
+  calloutMarkerConceal,
+  calloutTypeForOutermost,
+} from "./callout.js";
 import { fencedCodeBlockRevealed, fencedCodeFenceLandmarks } from "./fenced-code-body.js";
 import { quollSyntaxExclusionZones } from "./orchestrator.js";
 import { pointInExclusionZone } from "./shared.js";
@@ -175,63 +188,6 @@ export function blockquoteDepthClass(count: number): string | null {
     return null;
   }
   return `quoll-blockquote-depth-${Math.min(count, BLOCKQUOTE_MAX_DEPTH)}`;
-}
-
-/** Base class on EVERY line of a recognised callout blockquote (a Blockquote
- *  whose first line is a `[!TYPE]` admonition marker). It is the theme hook for
- *  the shared accent border + tint (cm/theme.ts `.cm-line.quoll-callout`), paired
- *  with the per-type `calloutClassForType` class that supplies the accent value. */
-export const CALLOUT_CLASS = "quoll-callout";
-
-/** Class on the FIRST line of a callout (the `[!TYPE]` marker line). Drives the
- *  per-type icon `::before` + the header font-weight in cm/theme.ts. */
-export const CALLOUT_MARKER_CLASS = "quoll-callout-marker";
-
-/** The five GitHub/Obsidian admonition types. A `[!TYPE]` first line inside a
- *  blockquote selects a per-type accent colour + icon; any other bracket token
- *  is NOT a callout and the block stays the generic Phase-1 panel. */
-export type CalloutType = "note" | "tip" | "important" | "warning" | "caution";
-
-/** Per-type theme hook class (`quoll-callout-note` … `-caution`). */
-export function calloutClassForType(type: CalloutType): string {
-  return `${CALLOUT_CLASS}-${type}`;
-}
-
-/** Admonition marker matcher. Strips the CommonMark quote prefix — up to 3
- *  leading spaces (`^ {0,3}`; 4+ is an indented code block), one-or-more `>`
- *  levels each with an optional single marker space (`(?:> ?)+`), then up to 3
- *  content-indent spaces (` {0,3}`) — and matches `[!TYPE]` case-insensitively,
- *  allowing an OPTIONAL Obsidian fold suffix (`-`/`+`) and requiring the closing
- *  token to be followed by whitespace or end-of-line. So bare `[!NOTE]` (GitHub),
- *  `[!NOTE] title` and `[!NOTE]-` (Obsidian) all match while `[!NOTEX]` /
- *  `[!FOO]` / `[!NOTE]x` do not. The whitespace is CAPPED (not the earlier greedy
- *  `\s*`) so a `>     [!NOTE]` — where 4+ spaces after the `>` marker make the
- *  content an indented CODE BLOCK in CommonMark (verified against Lezer:
- *  Blockquote > CodeBlock at ≥5 spaces after a single `>`) — is NOT mistaken for a
- *  callout. A Blockquote's first line always carries a leading `>`, so the prefix
- *  strip always fires. Pure — the sole input is the first line's text. */
-const CALLOUT_MARKER_RE =
-  /^ {0,3}(?:> ?)+ {0,3}\[!(note|tip|important|warning|caution)\](?:[-+])?(?=\s|$)/i;
-
-/** The callout type of a blockquote first line, or null when the line is not a
- *  recognised `[!TYPE]` marker (→ generic Phase-1 panel; the structural
- *  unknown-`[!FOO]` fallback). */
-export function calloutTypeForLine(lineText: string): CalloutType | null {
-  const m = CALLOUT_MARKER_RE.exec(lineText);
-  return m === null ? null : (m[1].toLowerCase() as CalloutType);
-}
-
-/** True when `node` sits inside another Blockquote (a nested `> >` inner node).
- *  Callout classification is scoped to the OUTERMOST quote so a line never
- *  receives two conflicting `quoll-callout-{type}` classes — the container's
- *  type wins by construction, not by CSS source-order accident. */
-function hasBlockquoteAncestor(node: SyntaxNode): boolean {
-  for (let p = node.parent; p !== null; p = p.parent) {
-    if (p.name === "Blockquote") {
-      return true;
-    }
-  }
-  return false;
 }
 
 /** Per-FencedCode-node geometry the line-class helper needs. Line numbers are
@@ -500,21 +456,37 @@ function buildBlockquoteRuleWithBoundaryInfo(
     if (concealable.has(nodeFirstLine) || concealable.has(nodeLastLine)) {
       hasConcealableBoundaryFence = true;
     }
-    // Migrate the rounded edge off a concealed boundary fence onto the adjacent
-    // visible line. A concealed leading fence (always an OPEN fence — a
-    // blockquote cannot start on a close fence) collapses to zero height, so the
-    // visible top edge is the next line (the first body line, inside this same
-    // blockquote). Symmetric for a concealed trailing CLOSE fence.
-    const openLine = isConcealed(nodeFirstLine) ? nodeFirstLine + 1 : nodeFirstLine;
-    const closeLine = isConcealed(nodeLastLine) ? nodeLastLine - 1 : nodeLastLine;
     // Callout admonition: an OUTERMOST blockquote whose `[!TYPE]` first line selects
     // a per-type accent + icon. Scoped to the outermost quote (a nested `> >` inner
-    // node returns via hasBlockquoteAncestor) so a line never gets two conflicting
-    // type classes — the container's type wins by construction. null (unknown /
-    // plain / nested-inner) → no callout class → the generic Phase-1 panel.
-    const calloutType = hasBlockquoteAncestor(node.node)
-      ? null
-      : calloutTypeForLine(doc.line(nodeFirstLine).text);
+    // node returns null via calloutTypeForOutermost) so a line never gets two
+    // conflicting type classes — the container's type wins by construction. null
+    // (unknown / plain / nested-inner) → no callout class → the generic Phase-1 panel.
+    const calloutType = calloutTypeForOutermost(doc, node.node);
+    // When the caret is OUTSIDE the callout, the marker StateField conceals the
+    // `[!TYPE]` row (collapsed to zero height, whole line published to the exclusion
+    // facet). `markerConcealed` is derived from the SAME single-source predicate the
+    // StateField uses, on the SAME state, so the two can never disagree.
+    const markerConcealed = calloutMarkerConceal(doc, ctx.selection, node.node) !== null;
+    // Migrate the rounded edge off a concealed boundary fence OR a concealed callout
+    // marker onto the adjacent visible line. Start one line inward when the marker
+    // is concealed (it collapses to zero height), then walk past any remaining
+    // concealed rows — a concealed LEADING fence collapses too (the callout body
+    // starts with a fenced block; caret outside the callout ⇒ outside the fence), so
+    // the visible top edge is the first non-concealed body line. This subsumes the
+    // fence-only single step: for a non-callout with a concealed open fence
+    // `markerConcealed` is false → start at nodeFirstLine, then the loop steps once
+    // (identical to the previous single check). closeLine is UNCHANGED.
+    //
+    // No `hasConcealableMarker` gate is added on blockquoteRule for this: the callout
+    // conceal is FACET-PUBLISHED, so blockquoteRule's `structural` trigger already
+    // rebuilds on the exclusion-facet identity change that a conceal↔reveal flip
+    // produces (R2). Contrast the fence case, whose conceal is NOT facet-published →
+    // it genuinely needs the explicit `hasBoundaryFence` selectionSet gate.
+    let openLine = markerConcealed ? nodeFirstLine + 1 : nodeFirstLine;
+    while (openLine < nodeLastLine && isConcealed(openLine)) {
+      openLine += 1;
+    }
+    const closeLine = isConcealed(nodeLastLine) ? nodeLastLine - 1 : nodeLastLine;
     return {
       from: node.from,
       to: node.to,
@@ -532,7 +504,10 @@ function buildBlockquoteRuleWithBoundaryInfo(
         }
         if (calloutType !== null) {
           out.push(CALLOUT_CLASS, calloutClassForType(calloutType));
-          if (n === nodeFirstLine) {
+          // The concealed marker line is skipped by buildBlockLineDecorations
+          // (facet-excluded), so this only fires on a REVEALED marker row — the
+          // `!markerConcealed` guard keeps the header class off the migrated row.
+          if (n === nodeFirstLine && !markerConcealed) {
             out.push(CALLOUT_MARKER_CLASS);
           }
         }

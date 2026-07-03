@@ -12,12 +12,14 @@ import {
   blockStyle,
   buildBlockquoteRule,
   buildFencedCodePanel,
+  fencedCodePanel,
+} from "../../src/webview/cm/decorations/block-style.js";
+import {
   CALLOUT_CLASS,
   CALLOUT_MARKER_CLASS,
   calloutClassForType,
   calloutTypeForLine,
-  fencedCodePanel,
-} from "../../src/webview/cm/decorations/block-style.js";
+} from "../../src/webview/cm/decorations/callout.js";
 import type { BuildContext } from "../../src/webview/cm/decorations/types.js";
 import { blockStyleThemeSpec, quollHighlightSpec } from "../../src/webview/cm/theme.js";
 import { fullTree } from "./helpers/full-tree.js";
@@ -1021,6 +1023,61 @@ describe("block-style — callout admonition classes", () => {
   });
 });
 
+describe("block-style — callout marker conceal migrates -open + badge (caret outside)", () => {
+  // Caret OUTSIDE the callout (in the trailing paragraph): the marker StateField
+  // conceals the `[!TYPE]` row and publishes its span to the exclusion facet, so
+  // buildBlockquoteRule (given that zone) SKIPS line 0 entirely and migrates the
+  // rounded -open corner (and thus the top-right badge, which rides `.quoll-callout
+  // .quoll-blockquote-open`) onto the first VISIBLE body line.
+  it("caret outside: line 0 (marker) is skipped and -open rides the first body line", () => {
+    const doc = "> [!NOTE]\n> body\n\npara";
+    const ctxOutside = ctxCaret(doc, doc.indexOf("para") + 1);
+    const markerLine = ctxOutside.state.doc.line(1); // `> [!NOTE]`
+    const out = lines(
+      buildBlockquoteRule(ctxOutside, [{ from: markerLine.from, to: markerLine.to }])
+    );
+    // No decoration on the concealed marker line.
+    expect(out.find((l) => l.from === 0)).toBeUndefined();
+    // -open + callout classes ride the first body line (line 2, `> body`).
+    const bodyLine = ctxOutside.state.doc.line(2);
+    const body = out.find((l) => l.from === bodyLine.from);
+    expect(body?.cls).toContain("quoll-blockquote-open");
+    expect(body?.cls).toContain("quoll-callout");
+    expect(body?.cls).toContain("quoll-callout-note");
+    // The marker header class appears NOWHERE (the row is concealed).
+    expect(out.every((l) => !l.cls.includes("quoll-callout-marker"))).toBe(true);
+  });
+
+  it("caret inside: -open + the marker header class both stay on line 0", () => {
+    const doc = "> [!NOTE]\n> body\n\npara";
+    const out = lines(buildBlockquoteRule(ctxCaret(doc, 3))); // caret in `[!NOTE]`
+    expect(out[0]?.from).toBe(0);
+    expect(out[0]?.cls).toContain("quoll-blockquote-open");
+    expect(out[0]?.cls).toContain("quoll-callout-marker");
+    expect(out[0]?.cls).toContain("quoll-callout-note");
+  });
+
+  // R3: the callout body STARTS with a fenced block. Caret outside ⇒ the marker row
+  // AND the leading fence are both concealed, so -open must migrate PAST the
+  // zero-height fence row onto the fence's first body line.
+  it("caret outside, body starts with a fenced block: -open migrates past the concealed fence (R3)", () => {
+    // L1 `> [!TIP]` L2 `> ```` L3 `> code` L4 `> ```` then blank + para.
+    const doc = "> [!TIP]\n> ```\n> code\n> ```\n\npara";
+    const ctxOutside = ctxCaret(doc, doc.indexOf("para") + 1);
+    const markerLine = ctxOutside.state.doc.line(1);
+    const out = lines(
+      buildBlockquoteRule(ctxOutside, [{ from: markerLine.from, to: markerLine.to }])
+    );
+    // Line 0 skipped (concealed marker); -open lands on the fence BODY line
+    // (line 3, `> code`) — past the concealed marker AND the concealed open fence.
+    expect(out.find((l) => l.from === 0)).toBeUndefined();
+    const codeLine = ctxOutside.state.doc.line(3); // `> code`
+    const code = out.find((l) => l.from === codeLine.from);
+    expect(code?.cls).toContain("quoll-blockquote-open");
+    expect(code?.cls).toContain("quoll-callout-tip");
+  });
+});
+
 describe("theme.ts — callout admonition per-type rules", () => {
   const spec = blockStyleThemeSpec as Record<string, Record<string, string>>;
 
@@ -1047,11 +1104,34 @@ describe("theme.ts — callout admonition per-type rules", () => {
     }
   });
 
-  it("the marker ::before consumes the per-type icon (absolutely positioned)", () => {
-    const before = spec[".cm-line.quoll-callout-marker::before"];
-    expect(before?.content).toContain("var(--quoll-callout-icon");
-    expect(before?.position).toBe("absolute");
-    // The marker line reads as a header.
+  it("a top-right ::after badge consumes the per-type icon (absolutely positioned, on the -open line)", () => {
+    // The badge rides `.quoll-callout.quoll-blockquote-open` (the marker row when
+    // revealed, the first body line when concealed) so ONE selector covers both
+    // states; the old per-marker ::before is gone.
+    const badge = spec[".cm-line.quoll-callout.quoll-blockquote-open::after"];
+    expect(badge?.content).toContain("var(--quoll-callout-icon");
+    expect(badge?.position).toBe("absolute");
+    expect(badge?.right).toBeTruthy();
+    // The -open line is a positioning context and reserves inline space for the
+    // absolutely-positioned badge (so a long title never paints under the emoji).
+    const openLine = spec[".cm-line.quoll-callout.quoll-blockquote-open"];
+    expect(openLine?.position).toBe("relative");
+    expect(openLine?.paddingRight).toBe("calc(var(--quoll-block-pad-x, 16px) + 1.5em)");
+    // The old marker ::before rule is GONE; the marker line keeps only the header weight.
+    expect(spec[".cm-line.quoll-callout-marker::before"]).toBeUndefined();
     expect(spec[".cm-line.quoll-callout-marker"]?.fontWeight).toBe("600");
+    // A concealed marker row collapses to zero height (the 5-prop copy of the
+    // fenced-hidden rule).
+    const hidden = spec[".cm-line.quoll-callout-marker-hidden"];
+    expect(hidden?.height).toBe("0");
+    expect(hidden?.minHeight).toBe("0");
+    expect(hidden?.paddingTop).toBe("0");
+    expect(hidden?.paddingBottom).toBe("0");
+    expect(hidden?.lineHeight).toBe("0");
+    // The trailing space is dropped from every icon value (the badge supplies its
+    // own inline gutter via the reserved right pad).
+    for (const type of ["note", "tip", "important", "warning", "caution"] as const) {
+      expect(spec[`.cm-line.quoll-callout-${type}`]?.["--quoll-callout-icon"]).not.toMatch(/ "$/);
+    }
   });
 });
