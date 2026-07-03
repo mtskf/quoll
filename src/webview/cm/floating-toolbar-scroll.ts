@@ -21,6 +21,9 @@
 // Guarding against programmatic scroll would couple this module to the
 // caret/outline modules — deliberately avoided.
 
+import type { Extension } from "@codemirror/state";
+import { type EditorView, type PluginValue, ViewPlugin } from "@codemirror/view";
+
 /** Whether the floating chrome is on-screen or slid off the top edge. */
 export type ToolbarVisibility = "shown" | "hidden";
 
@@ -68,4 +71,60 @@ export function nextToolbarScrollState(
     return { visibility: "shown", anchor: scrollTop };
   }
   return prev;
+}
+
+/** The scroll-direction observer. ONE `scroll` listener on `view.scrollDOM`
+ *  drives the `.quoll-editor` host class through the pure mapping above. */
+class FloatingToolbarScroll implements PluginValue {
+  private readonly hostEl: HTMLElement;
+  private readonly scroller: HTMLElement;
+  private state: ToolbarScrollState;
+  private readonly onScroll = (): void => this.handleScroll();
+
+  constructor(view: EditorView) {
+    // Mounted inside the `.quoll-editor` host (the positioned overlay ancestor
+    // the two toggles attach to). Fail fast rather than stamping the class onto
+    // CodeMirror's own managed DOM — same contract as quollOutline /
+    // quollSwitchEditor.
+    const hostEl = view.dom.closest(".quoll-editor");
+    if (!(hostEl instanceof HTMLElement)) {
+      throw new Error(
+        "quollFloatingToolbarScroll: EditorView must be mounted inside a .quoll-editor host"
+      );
+    }
+    this.hostEl = hostEl;
+    this.scroller = view.scrollDOM;
+    this.state = { visibility: "shown", anchor: this.scroller.scrollTop };
+    // passive: the handler never preventDefaults — it only reads scrollTop and
+    // toggles a class, so the browser can keep scrolling smoothly.
+    this.scroller.addEventListener("scroll", this.onScroll, { passive: true });
+  }
+
+  private handleScroll(): void {
+    const next = nextToolbarScrollState(this.state, this.scroller.scrollTop);
+    const changed = next.visibility !== this.state.visibility;
+    // Commit the new state (incl. the possibly-advanced anchor) every tick, but
+    // keep the classList.toggle OFF the hot path: the DOM mutation fires ONLY at
+    // a visibility transition, never per scroll tick. Do NOT move the toggle
+    // above this guard (design-review: avoids per-event style recalc / jank).
+    this.state = next;
+    if (!changed) {
+      return;
+    }
+    this.hostEl.classList.toggle(CHROME_HIDDEN_CLASS, next.visibility === "hidden");
+  }
+
+  destroy(): void {
+    this.scroller.removeEventListener("scroll", this.onScroll);
+    // Clear the class so a re-mount (or a lingering host node in a test) never
+    // inherits a stale hidden state. Order matters: remove the listener first so
+    // no post-destroy scroll event can re-add the class after this line.
+    this.hostEl.classList.remove(CHROME_HIDDEN_CLASS);
+  }
+}
+
+/** The floating-toolbar scroll-hide extension: a single ViewPlugin that hides
+ *  the chrome on scroll-down and reveals it on scroll-up / at the top. */
+export function quollFloatingToolbarScroll(): Extension {
+  return ViewPlugin.define((view) => new FloatingToolbarScroll(view));
 }

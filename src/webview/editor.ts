@@ -28,6 +28,7 @@ import { listHangIndent } from "./cm/decorations/list-hang-indent.js";
 import { listIndentKeymap } from "./cm/decorations/list-indent-keymap.js";
 import { proseSpaceMetric } from "./cm/decorations/prose-space-metric.js";
 import { createEditSync } from "./cm/edit-sync.js";
+import { quollFloatingToolbarScroll } from "./cm/floating-toolbar-scroll.js";
 import { quollFolding } from "./cm/fold/index.js";
 import {
   frontmatterBlockField,
@@ -399,6 +400,12 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
         // built-in text editor and re-applies the caret. Present in read-only
         // mode too (navigation).
         quollSwitchEditor(getHost(), () => sync.flush()),
+        // Floating-toolbar scroll-hide: one shared scroll-direction observer on
+        // view.scrollDOM stamps `.quoll-chrome-hidden` on the .quoll-editor host
+        // so BOTH toggles above + the outline panel slide off the top edge on
+        // scroll-down and return on scroll-up / at the top. Display-only chrome
+        // (no CM change, no write-lock); the two toggle ViewPlugins are untouched.
+        quollFloatingToolbarScroll(),
         // Paste/drop image ingestion: capture image files, post image-write, and
         // insert the relative link at a position-mapped anchor on the host's
         // reply. canWrite mirrors edit-sync's readonly hard-drop; the host is the
