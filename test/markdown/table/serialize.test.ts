@@ -86,3 +86,18 @@ describe("serializeTable with edited cells", () => {
     expect(serializeTable(t)).toBe("| A |\n| - |\n| a\\\\\\|b |");
   });
 });
+
+describe("serializeTable — indented continuation round-trip", () => {
+  it.each([
+    ["list/2-space", "| A | B |\n  |---|---|\n  | 1 | 2 |"],
+    ["tab", "| A | B |\n\t|---|---|\n\t| 1 | 2 |"],
+    ["top-level 3-space", "| A | B |\n   |---|---|\n   | 1 | 2 |"],
+    ["CRLF list-nested", "| A | B |\r\n  |---|---|\r\n  | 1 | 2 |"],
+  ])("round-trips a %s indented table byte-for-byte", (_label, slice) => {
+    const t = parseTable(slice, 0, slice.length);
+    if (!t) {
+      throw new Error("expected a table");
+    }
+    expect(serializeTable(t)).toBe(slice);
+  });
+});

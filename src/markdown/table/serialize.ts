@@ -18,7 +18,7 @@ export function serializeTable(table: Table): string {
 }
 
 function serializeRow(row: Row): string {
-  let out = row.leadingPipe ? "|" : "";
+  let out = row.leadingIndent + (row.leadingPipe ? "|" : "");
   for (let i = 0; i < row.cells.length; i++) {
     const c = row.cells[i];
     if (i > 0) {
@@ -34,7 +34,7 @@ function serializeRow(row: Row): string {
 }
 
 function serializeDelimiterRow(row: DelimiterRow): string {
-  let out = row.leadingPipe ? "|" : "";
+  let out = row.leadingIndent + (row.leadingPipe ? "|" : "");
   for (let i = 0; i < row.cells.length; i++) {
     if (i > 0) {
       out += "|";
