@@ -1,5 +1,8 @@
 # Quoll
 
+[![VS Code Marketplace](https://img.shields.io/visual-studio-marketplace/v/mtskf.quoll?label=VS%20Code%20Marketplace)](https://marketplace.visualstudio.com/items?itemName=mtskf.quoll)
+[![Installs](https://img.shields.io/visual-studio-marketplace/i/mtskf.quoll)](https://marketplace.visualstudio.com/items?itemName=mtskf.quoll)
+
 Edit Markdown in VS Code with a Notion- and Obsidian-style WYSIWYG editor, right inside your editor tabs.
 
 Quoll registers an opt-in custom editor for `.md` files. Instead of plain text, your Markdown renders as rich text — headings, lists, tables, and formatting — while the file on disk stays the source of truth.
@@ -28,7 +31,7 @@ Quoll registers an opt-in custom editor for `.md` files. Instead of plain text, 
 
 ## Install
 
-Install from the VS Code Marketplace:
+Install from the [VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=mtskf.quoll):
 
 - **Extensions view:** open the Extensions view (`Ctrl/Cmd+Shift+X`), search for **Quoll**, and click **Install**.
 - **Quick Open:** press `Ctrl/Cmd+P` and run `ext install mtskf.quoll`.
