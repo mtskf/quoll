@@ -129,6 +129,22 @@ describe("styles.css — navy+green accent token set (palette refresh)", () => {
     }
   });
 
+  it("defines --quoll-completed-fill/--quoll-completed-ink under BOTH themes and re-points fill to host fg under HC", () => {
+    const dark = css.match(/\.dark-theme\s*\{([^}]*)\}/)?.[1] ?? "";
+    const light = css.match(/\.light-theme\s*\{([^}]*)\}/)?.[1] ?? "";
+    for (const token of ["--quoll-completed-fill", "--quoll-completed-ink", "--quoll-todo-ring"]) {
+      expect(dark, `${token} missing from .dark-theme`).toContain(token);
+      expect(light, `${token} missing from .light-theme`).toContain(token);
+    }
+    // Light brightens the todo ring to a dedicated green, independent of the link accent.
+    expect(light).toMatch(/--quoll-todo-ring\s*:\s*#23b06f/);
+    // HC keeps maximal contrast: a solid foreground box (fold-fill precedent) AND full
+    // foreground ink (no muting — de-emphasis must not cost HC legibility).
+    const hc = css.match(/vscode-high-contrast[\s\S]*?\{([\s\S]*?)\}/)?.[1] ?? "";
+    expect(hc).toMatch(/--quoll-completed-fill\s*:\s*var\(--vscode-editor-foreground/);
+    expect(hc).toMatch(/--quoll-completed-ink\s*:\s*var\(--vscode-editor-foreground/);
+  });
+
   it("darkens the DARK selection tint but keeps LIGHT selection the plain host colour", () => {
     const dark = css.match(/\.dark-theme\s*\{([^}]*)\}/)?.[1] ?? "";
     const light = css.match(/\.light-theme\s*\{([^}]*)\}/)?.[1] ?? "";
@@ -195,14 +211,23 @@ describe("styles.css — widgets consume the accent tokens (palette refresh use 
   it("table border colour resolves through --quoll-surface-border", () => {
     expect(css).toMatch(/--quoll-table-border\s*:[^;]*--quoll-surface-border/s);
   });
-  it("checked task-checkbox fills with --quoll-accent-green", () => {
+  it("checked task-checkbox fills AND borders with the muted --quoll-completed-fill (NOT accent green — done recedes)", () => {
     expect(css).toMatch(
-      /\.quoll-task-checkbox\[data-checked="true"\]\s*\{[^}]*background-color\s*:\s*var\(--quoll-accent-green/s
+      /\.quoll-task-checkbox\[data-checked="true"\]\s*\{[^}]*background-color\s*:\s*var\(--quoll-completed-fill/s
+    );
+    // border-color pin too (a grep for the selector cannot catch a border-color regression).
+    expect(css).toMatch(
+      /\.quoll-task-checkbox\[data-checked="true"\]\s*\{[^}]*border-color\s*:\s*var\(--quoll-completed-fill/s
     );
   });
-  it("checked task-checkbox tick uses --quoll-on-accent", () => {
+  it("checked task-checkbox tick is an editor-background cutout", () => {
     const after = css.match(/\.quoll-task-checkbox\[data-checked="true"\]::after\s*\{([^}]*)\}/);
-    expect(after?.[1]).toMatch(/--quoll-on-accent/);
+    expect(after?.[1]).toMatch(/border\s*:\s*solid\s+var\(--vscode-editor-background/);
+  });
+  it("unchecked task-checkbox leads with the todo-ring green (incomplete dominates)", () => {
+    expect(css).toMatch(
+      /\.quoll-task-checkbox\s*\{[^}]*border\s*:\s*[\d.]+px\s+solid\s+var\(--quoll-todo-ring/s
+    );
   });
   it("table links (incl. hover) and table code consume the accent/surface tokens (F3)", () => {
     expect(css).toMatch(/\.quoll-table-block a\s*\{[^}]*color\s*:\s*var\(--quoll-accent-green/s);

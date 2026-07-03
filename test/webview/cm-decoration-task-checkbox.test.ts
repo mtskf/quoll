@@ -23,11 +23,30 @@ function ctx(doc: string, caret: number): BuildContext {
   };
 }
 
+// Widget-replace ranges only (spec.widget present). The content-mute marks
+// Task 3 adds carry a `class` and no `widget`; contentMarkRanges() below
+// collects those separately so each contract is pinned in isolation.
 function ranges(set: DecorationSet): Array<{ from: number; to: number }> {
   const out: Array<{ from: number; to: number }> = [];
   const iter = set.iter();
   while (iter.value !== null) {
-    out.push({ from: iter.from, to: iter.to });
+    if ((iter.value.spec as { widget?: unknown }).widget) {
+      out.push({ from: iter.from, to: iter.to });
+    }
+    iter.next();
+  }
+  return out;
+}
+
+// Content-mute mark ranges (the checked-task recede). Filters to the class the
+// reveal emits so a stray widget range can never masquerade as a content mark.
+function contentMarkRanges(set: DecorationSet): Array<{ from: number; to: number }> {
+  const out: Array<{ from: number; to: number }> = [];
+  const iter = set.iter();
+  while (iter.value !== null) {
+    if ((iter.value.spec as { class?: string }).class === "quoll-task-completed-content") {
+      out.push({ from: iter.from, to: iter.to });
+    }
     iter.next();
   }
   return out;
@@ -287,5 +306,47 @@ describe("taskCheckboxReveal — provider", () => {
       { from: 3, to: 6 },
       { from: 18, to: 21 },
     ]);
+  });
+
+  it("emits a content-mute mark over a CHECKED task's content span when the caret is off the line", () => {
+    // `- [ ] alpha\n- [x] beta\n\nparagraph`: line 2 `- [x] beta` → TaskMarker.to = 17,
+    // line.to = 22 (the `\n` sits AT 22, NOT included), so the completed content span
+    // is [17, 22) = " beta". The unchecked line 1 gets none.
+    const doc = "- [ ] alpha\n- [x] beta\n\nparagraph";
+    const caret = doc.indexOf("paragraph") + 3;
+    const set = taskCheckboxReveal.build(ctx(doc, caret));
+    expect(contentMarkRanges(set)).toEqual([{ from: 17, to: 22 }]);
+  });
+
+  it("emits NO content-mute mark for an UNCHECKED task", () => {
+    const doc = "- [ ] alpha\n\nparagraph";
+    const caret = doc.indexOf("paragraph") + 3;
+    const set = taskCheckboxReveal.build(ctx(doc, caret));
+    expect(contentMarkRanges(set)).toEqual([]);
+  });
+
+  it("suppresses the content-mute mark when the caret is ON the completed line (rides the widget reveal-trigger)", () => {
+    // Caret on line 2 (the `- [x] beta` line) → both the widget AND the content mute drop,
+    // exposing raw `[x] beta` at full strength for editing.
+    const doc = "- [ ] alpha\n- [x] beta\n\nparagraph";
+    const caret = doc.indexOf("beta"); // inside line 2
+    const set = taskCheckboxReveal.build(ctx(doc, caret));
+    expect(contentMarkRanges(set)).toEqual([]);
+  });
+
+  it("the content-mute mark carries the quoll-task-completed-content class (pins the class contract, not pixels)", () => {
+    const doc = "- [x] done item\n\nparagraph";
+    const caret = doc.indexOf("paragraph") + 3;
+    const set = taskCheckboxReveal.build(ctx(doc, caret));
+    const classes: string[] = [];
+    const iter = set.iter();
+    while (iter.value !== null) {
+      const cls = (iter.value.spec as { class?: string }).class;
+      if (cls) {
+        classes.push(cls);
+      }
+      iter.next();
+    }
+    expect(classes).toContain("quoll-task-completed-content");
   });
 });

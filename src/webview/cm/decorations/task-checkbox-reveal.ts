@@ -23,6 +23,11 @@ import type { DecorationProvider } from "./types.js";
 // Re-exported so the marker-resolution unit test keeps its import site.
 export { findTaskMarker };
 
+// Immutable content-mute decoration for a COMPLETED task's content span. A module
+// constant (bulletMarkerReveal precedent) — the spec never varies, so build it once.
+// Styled by cm/theme.ts taskCompletedContentThemeSpec (`.quoll-task-completed-content`).
+const completedContentDeco = Decoration.mark({ class: "quoll-task-completed-content" });
+
 export const taskCheckboxReveal: DecorationProvider = {
   build(ctx): DecorationSet {
     const out: Array<{ from: number; to: number; deco: Decoration }> = [];
@@ -65,6 +70,18 @@ export const taskCheckboxReveal: DecorationProvider = {
               widget: new CheckboxWidget(geom.checked, geom.taskMarkerFrom, labelBody),
             }),
           });
+          // Completed-item recede: mute the checked task's CONTENT text. Same
+          // reveal-trigger as the widget (emitted here → suppressed when the caret
+          // is on the line, since the selection guard above already returned). The
+          // guard `taskMarkerTo < line.to` skips an empty task (`- [x]`) so no
+          // zero-width mark is built. This mark's `from` (taskMarkerTo) is always
+          // GREATER than the widget replace's `from` (replaceFrom = ListMark.from /
+          // TaskMarker.from < taskMarkerTo), and across tasks the ranges are on
+          // disjoint lines — so the `out` sort by `from` never produces an equal-`from`
+          // pair and RangeSetBuilder's from+startSide contract holds without a tiebreak.
+          if (geom.checked && geom.taskMarkerTo < line.to) {
+            out.push({ from: geom.taskMarkerTo, to: line.to, deco: completedContentDeco });
+          }
         },
       });
     }
