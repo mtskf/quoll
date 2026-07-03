@@ -24,9 +24,12 @@
 //   - keymap.of(quollFoldKeymap)  — the four fold commands (foldCode / unfoldCode /
 //                                 foldAll / unfoldAll). Explicit Quoll-owned table —
 //                                 see quollFoldKeymap below.
-//   - gutterLineClass           — tags H1–H3 gutter lines so the theme can cap the
-//                                 chevron at the right (taller) row height; see
-//                                 headingFoldGutterLineClass + the theme note.
+//   - gutterLineClass           — tags H1–H3 gutter lines (headingFoldGutterLineClass)
+//                                 so the theme can cap the chevron at the right
+//                                 (taller) row height, AND tags list-item marker
+//                                 lines (listFoldGutterLineClass) so the theme can
+//                                 inset their chevron past the item's top-padding
+//                                 gap; see both fields + the theme note.
 //   - chevron theme             — glyph colour/size + the chevron's own placement
 //                                 (horizontal nudge into the reading-column gap and
 //                                 vertical centring on each foldable line's FIRST
@@ -65,6 +68,16 @@ import {
   type KeyBinding,
   keymap,
 } from "@codemirror/view";
+
+// The list-fold gutter offset must stay in lock-step with the `.quoll-list-hang`
+// content-line padding it compensates for, so it reuses the SAME eligibility
+// predicates as list-hang-indent.ts: `resolveListItemHang === null` (empty /
+// malformed / invalid-marker item) and `pointInExclusionZone` (frontmatter, whose
+// YAML lists parse as markdown ListItems but receive no hang). See
+// buildListFoldGutterClasses.
+import { resolveListItemHang } from "../decorations/list-geometry.js";
+import { quollSyntaxExclusionZones } from "../decorations/orchestrator.js";
+import { pointInExclusionZone } from "../decorations/shared.js";
 
 const SVG_NS = "http://www.w3.org/2000/svg";
 
@@ -240,7 +253,10 @@ class ListFoldGutterMarker extends GutterMarker {
 }
 const LIST_FOLD_GUTTER_MARKER = new ListFoldGutterMarker();
 
-function buildListFoldGutterClasses(state: EditorState): RangeSet<GutterMarker> {
+function buildListFoldGutterClasses(
+  state: EditorState,
+  zones: readonly { from: number; to: number }[]
+): RangeSet<GutterMarker> {
   const builder = new RangeSetBuilder<GutterMarker>();
   let lastLineFrom = -1;
   syntaxTree(state).iterate({
@@ -249,6 +265,20 @@ function buildListFoldGutterClasses(state: EditorState): RangeSet<GutterMarker> 
         return;
       }
       const lineFrom = state.doc.lineAt(node.from).from;
+      // Emit ONLY for lines that actually receive `.quoll-list-hang` padding, so
+      // the gutter offset stays in lock-step with the content-line gap it
+      // compensates for. buildListHangIndent (list-hang-indent.ts) skips two
+      // cases and this MUST match them, else the chevron shifts without a matching
+      // gap: (1) an exclusion zone — a frontmatter YAML list parses as markdown
+      // ListItems but gets no hang, so a REVEALED frontmatter list would drop the
+      // chevron ~0.6em; (2) `resolveListItemHang === null` — an empty / malformed
+      // item, or an invalid-marker Task on a one-update-behind tree.
+      if (pointInExclusionZone(lineFrom, zones)) {
+        return;
+      }
+      if (resolveListItemHang(state, node.node) === null) {
+        return;
+      }
       // ListItems are visited in document order, but a nested item shares its
       // parent's marker line only for pathological same-line nesting (`- - a`);
       // guard against double-adding (RangeSetBuilder requires strictly
@@ -265,16 +295,23 @@ function buildListFoldGutterClasses(state: EditorState): RangeSet<GutterMarker> 
 
 /** Tags every list-item MARKER line with `quoll-fold-list-marker` on its gutter
  *  element via `gutterLineClass`, in lock-step with the `.cm-line.quoll-list-hang`
- *  padding it compensates for. Recomputed when the doc OR the parse tree changes
- *  (lang-markdown parses asynchronously) — same pattern as
- *  headingFoldGutterLineClass. Exported for the marker-detection contract test. */
+ *  padding it compensates for (same two-predicate eligibility gate — see
+ *  buildListFoldGutterClasses). Recomputed when the doc, the parse tree
+ *  (lang-markdown parses asynchronously), OR the exclusion-zone facet changes
+ *  (frontmatter reveal/conceal flips the facet on a selection change with no doc
+ *  edit) — the same triggers as listHangNeedsRebuild. Exported for the
+ *  marker-detection contract test. */
 export const listFoldGutterLineClass = StateField.define<RangeSet<GutterMarker>>({
-  create: buildListFoldGutterClasses,
+  create: (state) => buildListFoldGutterClasses(state, state.facet(quollSyntaxExclusionZones)),
   update(value, tr) {
-    if (!tr.docChanged && syntaxTree(tr.startState) === syntaxTree(tr.state)) {
+    if (
+      !tr.docChanged &&
+      syntaxTree(tr.startState) === syntaxTree(tr.state) &&
+      tr.startState.facet(quollSyntaxExclusionZones) === tr.state.facet(quollSyntaxExclusionZones)
+    ) {
       return value;
     }
-    return buildListFoldGutterClasses(tr.state);
+    return buildListFoldGutterClasses(tr.state, tr.state.facet(quollSyntaxExclusionZones));
   },
   provide: (field) => gutterLineClass.from(field),
 });
@@ -342,9 +379,13 @@ const quollFoldTheme = EditorView.theme({
   // keeps the element's total height unchanged (no cumulative drift), the marker's
   // `min(100%, oneRow)` now resolves 100% against the padding-reduced content box,
   // and it re-centres on the first text row. Referencing the SAME token keeps the
-  // offset in lock-step if the gap is ever retuned. Headings inflate via font-size
-  // (not padding) and are handled by the row-scale cap above, so they are untagged
-  // here and stay centred. A line is never both a heading and a list marker.
+  // offset in lock-step if the gap is ever retuned. A plain heading (not in a
+  // list) inflates via font-size (not padding) and is handled by the row-scale
+  // cap above, so it is untagged here and stays centred. A heading nested in a
+  // list item (`- # H`) DOES receive both classes, and they compound correctly:
+  // that content line is a list item, so it carries `.quoll-list-hang` padding
+  // (matched by this padding-top) AND renders at heading size (matched by the
+  // row-scale cap) — the chevron centres on the padded heading row.
   ".cm-foldGutter .cm-gutterElement.quoll-fold-list-marker": {
     paddingTop: "var(--quoll-list-item-gap, 0.6em)",
   },

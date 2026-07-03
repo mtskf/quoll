@@ -15,6 +15,8 @@ import {
 import { EditorSelection, EditorState } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import { afterEach, describe, expect, it } from "vitest";
+import { quollSyntaxExclusionZones } from "../../src/webview/cm/decorations/orchestrator.js";
+import { frontmatterBlockField } from "../../src/webview/cm/frontmatter/index.js";
 import {
   CHEVRON_DOWN_PATH,
   ELLIPSIS_DOT_CX,
@@ -246,8 +248,8 @@ describe("listFoldGutterLineClass — gutter tag for the list-item vertical-gap 
   // layout — so this asserts ONLY that every list-item marker line (and no other)
   // carries the `quoll-fold-list-marker` gutter tag, in lock-step with the
   // `.cm-line.quoll-list-hang` padding it compensates for.
-  function taggedLines(doc: string): Map<number, string> {
-    view = mountDoc(doc);
+  function taggedLines(doc: string, extra: readonly unknown[] = []): Map<number, string> {
+    view = mountDoc(doc, extra);
     const set = view.state.field(listFoldGutterLineClass);
     const byLine = new Map<number, string>();
     const cursor = set.iter();
@@ -278,6 +280,57 @@ describe("listFoldGutterLineClass — gutter tag for the list-item vertical-gap 
     expect(byLine.has(9)).toBe(false);
     expect(byLine.has(11)).toBe(false);
     expect(byLine.size).toBe(4);
+  });
+
+  it("does NOT tag a list-item line inside a quollSyntaxExclusionZones span", () => {
+    // A frontmatter YAML list parses as markdown ListItems but gets no
+    // `.quoll-list-hang` padding (list-hang-indent.ts skips exclusion zones), so
+    // the gutter tag must skip it too or a REVEALED frontmatter list would drop
+    // the chevron by the gap. Simulate the frontmatter span with a facet value
+    // covering lines 1-2; line 4 (outside the zone) stays tagged.
+    const doc = "- inside one\n- inside two\n\n- outside\n";
+    const zoneEnd = doc.indexOf("\n\n"); // end of "- inside two"
+    const byLine = taggedLines(doc, [quollSyntaxExclusionZones.of([{ from: 0, to: zoneEnd }])]);
+    expect(byLine.has(1)).toBe(false);
+    expect(byLine.has(2)).toBe(false);
+    expect(byLine.get(4)).toBe("quoll-fold-list-marker");
+    expect(byLine.size).toBe(1);
+  });
+
+  it("does NOT tag an empty list item (resolveListItemHang === null)", () => {
+    // An empty `- ` item has no content token, so resolveListItemHang returns
+    // null and list-hang-indent.ts emits no padding — the gutter tag must skip it
+    // in lock-step. The following non-empty item stays tagged.
+    const byLine = taggedLines("-\n- has content\n");
+    expect(byLine.has(1)).toBe(false);
+    expect(byLine.get(2)).toBe("quoll-fold-list-marker");
+    expect(byLine.size).toBe(1);
+  });
+
+  it("skips a real frontmatter YAML list via the live frontmatterBlockField facet", () => {
+    // Integration guard for the facet WIRING (not just a synthetic zone): mount
+    // the real frontmatterBlockField in the SAME extension order as editor.ts
+    // (quollFolding BEFORE frontmatterBlockField) so a create-time facet-order
+    // regression would surface here. A YAML list inside `---` fences parses as
+    // markdown ListItems but sits in the frontmatter exclusion span, so it must
+    // NOT be tagged; the body list item below the fence must be.
+    view = mountDoc(
+      "---\ntags:\n  - alpha\n  - beta\n---\n\n- body item\n",
+      [frontmatterBlockField]
+    );
+    const set = view.state.field(listFoldGutterLineClass);
+    const tagged = new Set<number>();
+    const cursor = set.iter();
+    while (cursor.value) {
+      tagged.add(view.state.doc.lineAt(cursor.from).number);
+      cursor.next();
+    }
+    // Lines 3-4 are the YAML list inside the frontmatter span → excluded.
+    expect(tagged.has(3)).toBe(false);
+    expect(tagged.has(4)).toBe(false);
+    // Line 7 (`- body item`) is below the fence → tagged.
+    expect(tagged.has(7)).toBe(true);
+    expect(tagged.size).toBe(1);
   });
 });
 
