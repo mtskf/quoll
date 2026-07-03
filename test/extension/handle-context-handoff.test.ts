@@ -99,19 +99,74 @@ function deps(overrides: Partial<Parameters<typeof handleContextHandoff<FakeTerm
     showTerminal: vi.fn((t: FakeTerminal) => {
       calls.shown.push(t);
     }),
+    // Default: no Claude Code panel visible / open → the terminal tier runs and
+    // the tier-2 fallback spawns nothing. Override to exercise the panel paths.
+    isClaudePanelVisible: vi.fn(() => false),
+    isClaudePanelOpen: vi.fn(() => false),
   };
   return { calls, deps: { ...base, ...overrides } };
 }
 
 describe("handleContextHandoff", () => {
-  it("copies a range reference and opens+focuses Claude Code", async () => {
+  it("copies a range reference and runs NO surface command when no Claude panel is open", async () => {
     const { calls, deps: d } = deps();
     await handleContextHandoff({ hasSelection: true, startLine: 2, endLine: 5 }, d);
     expect(calls.clipboard).toEqual(["@notes/x.md#L2-5"]);
-    expect(calls.commands).toEqual(["claude-vscode.editor.open", "claude-vscode.focus"]);
+    // No panel open → Quoll never spawns one (the old editor.open behaviour that
+    // popped a rogue panel + threw "Webview is disposed" is gone).
+    expect(calls.commands).toEqual([]);
     expect(calls.info).toEqual([expect.stringContaining("@notes/x.md#L2-5")]);
     expect(calls.warn).toEqual([]);
     expect(calls.error).toEqual([]);
+  });
+
+  it("focuses an already-open Claude panel (focus only — never opens a new one)", async () => {
+    const { calls, deps: d } = deps({ isClaudePanelOpen: () => true });
+    await handleContextHandoff({ hasSelection: true, startLine: 2, endLine: 5 }, d);
+    expect(calls.clipboard).toEqual(["@notes/x.md#L2-5"]);
+    // Exactly the focus command — NOT editor.open (which would create a panel).
+    expect(calls.commands).toEqual(["claude-vscode.focus"]);
+    expect(calls.info).toEqual([expect.stringContaining("@notes/x.md#L2-5")]);
+    expect(calls.warn).toEqual([]);
+    expect(calls.error).toEqual([]);
+  });
+
+  it("a VISIBLE Claude panel takes precedence over a terminal (hands to the panel, not the terminal)", async () => {
+    // The regression the user hit: a background CLI terminal always matched and
+    // stole the handoff even while the user was looking at the panel. When the
+    // panel is the active/visible tab it now wins, and the terminal is never
+    // even consulted.
+    const findClaudeTerminal = vi.fn(() => ({ name: "zsh" }));
+    const { calls, deps: d } = deps({
+      isClaudePanelVisible: () => true,
+      isClaudePanelOpen: () => true,
+      findClaudeTerminal,
+    });
+    await handleContextHandoff({ hasSelection: true, startLine: 2, endLine: 5 }, d);
+    // Panel path: clipboard + focus, NO terminal insertion.
+    expect(calls.terminalText).toEqual([]);
+    expect(calls.sentTo).toEqual([]);
+    expect(calls.clipboard).toEqual(["@notes/x.md#L2-5"]);
+    expect(calls.commands).toEqual(["claude-vscode.focus"]);
+    expect(calls.info).toEqual([expect.stringContaining("@notes/x.md#L2-5")]);
+    // The visible panel short-circuits ABOVE the terminal search.
+    expect(findClaudeTerminal).not.toHaveBeenCalled();
+  });
+
+  it("an open-but-HIDDEN panel does NOT steal the handoff from the terminal", async () => {
+    // Panel parked in a background tab (open, not visible) + a terminal present
+    // → the terminal still wins (direct insert), no panel focus, no toast.
+    const terminal = { name: "zsh" };
+    const { calls, deps: d } = deps({
+      isClaudePanelVisible: () => false,
+      isClaudePanelOpen: () => true,
+      findClaudeTerminal: () => terminal,
+    });
+    await handleContextHandoff({ hasSelection: true, startLine: 2, endLine: 5 }, d);
+    expect(calls.terminalText).toEqual(["@notes/x.md#L2-5"]);
+    expect(calls.sentTo).toEqual([terminal]);
+    expect(calls.commands).toEqual([]); // terminal path — no panel focus
+    expect(calls.info).toEqual([]); // no toast on the terminal path
   });
 
   it("saves a dirty buffer before building the reference", async () => {
@@ -163,11 +218,11 @@ describe("handleContextHandoff", () => {
     expect(calls.clipboard).toEqual(["@notes/x.md#L2-4"]);
   });
 
-  it("still copies + succeeds when Claude Code open commands reject (best-effort)", async () => {
+  it("still copies + succeeds when the panel focus command rejects (best-effort)", async () => {
     const executeCommand = vi.fn(async () => {
-      throw new Error("command 'claude-vscode.editor.open' not found");
+      throw new Error("command 'claude-vscode.focus' not found");
     });
-    const { calls, deps: d } = deps({ executeCommand });
+    const { calls, deps: d } = deps({ isClaudePanelOpen: () => true, executeCommand });
     await handleContextHandoff({ hasSelection: true, startLine: 1, endLine: 2 }, d);
     expect(calls.clipboard).toEqual(["@notes/x.md#L1-2"]);
     expect(calls.info.length).toBe(1);
@@ -207,19 +262,33 @@ describe("handleContextHandoff", () => {
   });
 
   it("falls back to clipboard (no terminal insertion) when findClaudeTerminal returns undefined", async () => {
-    // Contract pin for the LOW finding: a name miss → undefined → clipboard
-    // path. Nothing is ever sent to a terminal (no activeTerminal misfire).
+    // Contract pin: a match miss → undefined → clipboard path. Nothing is ever
+    // sent to a terminal (no activeTerminal misfire).
     const { calls, deps: d } = deps({ findClaudeTerminal: () => undefined });
     await handleContextHandoff({ hasSelection: true, startLine: 2, endLine: 5 }, d);
     expect(calls.terminalText).toEqual([]); // no insertion
     expect(calls.sentTo).toEqual([]);
     expect(calls.shown).toEqual([]);
-    // Clipboard + open/focus + paste toast — the v1 fallback contract.
+    // Clipboard + paste toast. No surface command: with no panel open Quoll does
+    // NOT spawn one (the regression fix — a rogue panel used to pop here).
     expect(calls.clipboard).toEqual(["@notes/x.md#L2-5"]);
-    expect(calls.commands).toEqual(["claude-vscode.editor.open", "claude-vscode.focus"]);
+    expect(calls.commands).toEqual([]);
     expect(calls.info).toEqual([expect.stringContaining("paste")]);
     expect(calls.warn).toEqual([]);
     expect(calls.error).toEqual([]);
+  });
+
+  it("awaits an async findClaudeTerminal (process-scan path) and inserts into the resolved terminal", async () => {
+    // The process-based finder returns a Promise; the handler must await it.
+    const terminal = { name: "zsh" }; // a plain shell terminal (name does NOT match /claude/i)
+    const { calls, deps: d } = deps({
+      findClaudeTerminal: () => Promise.resolve(terminal),
+    });
+    await handleContextHandoff({ hasSelection: true, startLine: 2, endLine: 5 }, d);
+    expect(calls.terminalText).toEqual(["@notes/x.md#L2-5"]);
+    expect(calls.sentTo).toEqual([terminal]);
+    expect(calls.shown).toEqual([terminal]);
+    expect(calls.commands).toEqual([]); // terminal path skips the panel focus
   });
 
   it("inserts into the Claude terminal and skips the open commands when a terminal is found", async () => {

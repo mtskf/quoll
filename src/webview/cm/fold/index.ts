@@ -3,15 +3,15 @@
 // Heading folds come from Quoll's re-implementation of lang-markdown's headerIndent
 // foldService (in cm/markdown.ts — re-implemented to avoid the markdown() wrapper's
 // HTML stack); every other Block fold comes from lang-markdown's foldNodeProp on
-// markdownLanguage.parser, MINUS a Blockquote/Paragraph/code-block subtraction that
-// also lives in cm/markdown.ts (`nonFoldableBlocks`), NOT here. (lang-markdown folds headings via its
+// markdownLanguage.parser, MINUS a Blockquote/Paragraph/code-block/Table subtraction
+// that also lives in cm/markdown.ts (`nonFoldableBlocks`), NOT here. (lang-markdown folds headings via its
 // headerIndent foldService AND every non-Document, non-heading Block — ListItem,
 // Paragraph, Blockquote, fenced/indented code, GFM tables — via foldNodeProp. We
-// override foldNodeProp for Blockquote + Paragraph + code blocks to null so prose
-// blockquotes, standalone multi-line paragraphs, and code blocks show no chevron,
-// while headings/lists/tables still fold. A foldService cannot subtract
-// foldNodeProp — see cm/markdown.ts + docs/LEARNING.md.) This module only mounts
-// the machinery:
+// override foldNodeProp for Blockquote + Paragraph + code blocks + tables to null so
+// prose blockquotes, standalone multi-line paragraphs, code blocks, and the
+// display-only table block widget show no chevron, while headings/lists still fold.
+// A foldService cannot subtract foldNodeProp — see cm/markdown.ts + docs/LEARNING.md.)
+// This module only mounts the machinery:
 //   - codeFolding({ placeholderDOM }) — foldState field + the INLINE placeholder
 //                                 builder (foldPlaceholderDOM: the collapsed-region
 //                                 pill, replacing CM's default grey box). foldGutter()

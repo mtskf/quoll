@@ -1,5 +1,5 @@
 // Folding subtracts Blockquote + the inner Paragraph + code blocks (FencedCode /
-// indented CodeBlock) from lang-markdown's broad Block folds (see
+// indented CodeBlock) + GFM Table from lang-markdown's broad Block folds (see
 // src/webview/cm/markdown.ts). State-only — no view mounted, so no happy-dom
 // pragma. Uses quollMarkdownLanguage() — the SAME language object editor.ts
 // mounts — so this pins the delivered contract, and also DETECTS a lang-markdown
@@ -18,7 +18,7 @@ function foldableAt(doc: string, at: number): { from: number; to: number } | nul
   return foldable(state, line.from, line.to);
 }
 
-describe("fold ranges subtract Blockquote, Paragraph, and code blocks", () => {
+describe("fold ranges subtract Blockquote, Paragraph, code blocks, and tables", () => {
   it("a blockquote line yields NO foldable range", () => {
     expect(foldableAt("> line1\n> line2\n> line3\n", 0)).toBeNull();
   });
@@ -50,24 +50,34 @@ describe("fold ranges subtract Blockquote, Paragraph, and code blocks", () => {
     expect(foldableAt(doc, 0)).not.toBeNull();
   });
 
-  it("a GFM table line STILL folds", () => {
-    expect(foldableAt("| a | b |\n| - | - |\n| 1 | 2 |\n| 3 | 4 |\n", 0)).not.toBeNull();
+  it("a GFM table line yields NO foldable range (table blocks offer no chevron)", () => {
+    expect(foldableAt("| a | b |\n| - | - |\n| 1 | 2 |\n| 3 | 4 |\n", 0)).toBeNull();
+  });
+
+  it("a list-nested table row yields NO foldable range, but its list item STILL folds", () => {
+    // A table nested in a list item: subtracting Table removes the chevron from
+    // the table's own rows, while the ListItem fold (the genuine list affordance,
+    // anchored on the item's marker line) is untouched — so the only chevron sits
+    // on the list line, never on a table row.
+    const doc = "- intro:\n\n  | a | b |\n  | - | - |\n  | 1 | 2 |\n";
+    expect(foldableAt(doc, 0)).not.toBeNull(); // list item line — list fold intact
+    expect(foldableAt(doc, doc.indexOf("| a | b |"))).toBeNull(); // table row — no chevron
   });
 });
 
-// Defined-contract pins: the subtraction targets the Blockquote/Paragraph/code
-// NODES, so a blockquote that WRAPS a STILL-foldable structure (list, table,
-// heading) keeps the INNER fold — consistent with "keep lists/tables/headings
-// foldable". A blockquote wrapping only a code block (subtracted) shows no
-// chevron. Pinning current behaviour so a future change here is a deliberate,
-// reviewed decision — not a silent drift.
+// Defined-contract pins: the subtraction targets the Blockquote/Paragraph/code/
+// Table NODES, so a blockquote that WRAPS a STILL-foldable structure (list,
+// heading) keeps the INNER fold — consistent with "keep lists/headings
+// foldable". A blockquote wrapping only a code block or only a table (both
+// subtracted) shows no chevron. Pinning current behaviour so a future change here
+// is a deliberate, reviewed decision — not a silent drift.
 describe("foldable content nested in a blockquote stays foldable (contract)", () => {
   it("a blockquote wrapping a nested list STILL yields a fold (inner ListItem)", () => {
     expect(foldableAt("> - a\n>   - b\n>   - c\n", 0)).not.toBeNull();
   });
 
-  it("a blockquote wrapping a GFM table STILL yields a fold (inner Table)", () => {
-    expect(foldableAt("> | a | b |\n> | - | - |\n> | 1 | 2 |\n", 0)).not.toBeNull();
+  it("a blockquote wrapping ONLY a GFM table yields NO fold (inner Table subtracted)", () => {
+    expect(foldableAt("> | a | b |\n> | - | - |\n> | 1 | 2 |\n", 0)).toBeNull();
   });
 
   it("a blockquote wrapping an ATX heading STILL yields a fold (headerIndent foldService)", () => {

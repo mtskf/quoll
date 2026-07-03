@@ -5,12 +5,15 @@ All notable changes to Quoll are documented here.
 ## 0.1.x
 
 - Align the soft-wrapped continuation lines of bullet and ordered list items under the first line's text — they previously hung a few pixels to its left because the marker was approximated as a single space. The marker glyph column is now sized to its real rendered width, so wrapped lines land on the content column (task items were already aligned and are unchanged). The bullet dot also gains a slightly wider gap before the text.
+- Fix the `Cmd+Option+K` / `Ctrl+Alt+K` "hand selection to Claude Code" chord. It now routes to whichever Claude Code you're using: if the Claude Code webview panel is the visible tab, the reference is copied and that panel is focused; otherwise it inserts straight into a Claude Code CLI terminal — found even when the terminal isn't named "claude" (e.g. `claude` + `/ide`), by locating a `claude` process in the terminal's process tree. When no terminal is found and no panel is visible, it focuses an already-open panel rather than spawning a new one (which previously popped an unwanted panel and logged "Webview is disposed" errors).
+- Fix a stray fold/unfold chevron appearing on GFM table rows. A table renders as a display-only block widget, not a foldable construct, so it now offers no fold affordance — top-level or nested inside a list item. Heading folds and genuine list folds are unaffected.
 - Render thematic breaks (`---`, `***`, `___`) as a horizontal rule; move the caret onto the line to edit the raw source. Frontmatter fences and setext heading underlines are left untouched, and the bytes round-trip unchanged.
 - Callouts now carry the per-type emoji as a small badge in the top-right corner, and the `[!TYPE]` marker line is tucked away whenever your caret is outside the callout — the block reads as a clean titled panel, and the editable `> [!TYPE]` source reappears the moment you move into it.
 - Fix GFM tables nested inside a list item so they render as the editable grid instead of raw `| … |` source. A table indented as list-continuation content is now recognised (the same fix also covers top-level tables indented 1–3 spaces and tab-indented tables), and it still round-trips byte-for-byte.
 - Make the fenced-code copy button icon-only at rest: drop the resting boxed background so it reads as a bare icon; the boxed hover/focus affordance and the copied/failed states are unchanged.
 - Restyle task-list checkboxes so open work leads the eye: incomplete items now show a green rounded ring, while completed items recede — a muted-grey filled box with a cut-out checkmark, and their text is dimmed (no strikethrough). The checkmark is re-centred, and in the light theme the todo ring uses a brighter green.
 - Add a top-right button and an `Ctrl/Cmd+Alt+E` keybinding to switch the current `.md` between Quoll and VS Code's built-in text editor; the caret position is preserved across the switch (via the button and the chord; the reverse text→Quoll direction preserves it too).
+- Tighten the task-list checkbox corner radius from 6px to 5px for a slightly crisper box.
 
 ## 0.1.0 — Initial public release
 
