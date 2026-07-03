@@ -321,3 +321,79 @@ describe("findTableRanges offset + 1-col body contract", () => {
     expect(tables[0].to).toBe(source.indexOf("Alice") + "Alice".length);
   });
 });
+
+describe("parseTable — list-nested (Lezer-shaped indented continuation)", () => {
+  // Exactly what Lezer's GFM parser hands us for a table nested under a list
+  // item: the header line's indent is stripped (node starts at the `|`), but
+  // the delimiter and body lines retain their 2-space continuation indent.
+  const slice = "| A | B |\n  |---|---|\n  | 1 | 2 |";
+
+  it("parses to a valid 2-column table", () => {
+    const t = parseTable(slice, 0, slice.length);
+    expect(t).not.toBeNull();
+    if (!t) {
+      return;
+    }
+    expect(t.header.cells).toHaveLength(2);
+    expect(t.delimiter.cells).toHaveLength(2);
+    expect(t.rows).toHaveLength(1);
+    expect(t.rows[0].cells).toHaveLength(2);
+  });
+
+  it("captures the per-row leading indent (header clean, continuations indented)", () => {
+    const t = parseTable(slice, 0, slice.length);
+    if (!t) {
+      throw new Error("expected a table");
+    }
+    expect(t.header.leadingIndent).toBe("");
+    expect(t.delimiter.leadingIndent).toBe("  ");
+    expect(t.rows[0].leadingIndent).toBe("  ");
+  });
+
+  it("keeps cell content offsets aligned to the slice", () => {
+    const t = parseTable(slice, 0, slice.length);
+    if (!t) {
+      throw new Error("expected a table");
+    }
+    // Body cell "1" sits at slice index 26 ("  | 1 …" → the `1`).
+    expect(slice.slice(t.rows[0].cells[0].from, t.rows[0].cells[0].to)).toBe("1");
+    // Header cell "A" at slice index 2.
+    expect(slice.slice(t.header.cells[0].from, t.header.cells[0].to)).toBe("A");
+  });
+
+  it("captures a tab continuation indent (Lezer keeps `\\t` in the slice)", () => {
+    // Probe-confirmed shape for a tab-indented list continuation.
+    const tab = "| A | B |\n\t|---|---|\n\t| 1 | 2 |";
+    const t = parseTable(tab, 0, tab.length);
+    expect(t).not.toBeNull();
+    if (!t) {
+      return;
+    }
+    expect(t.delimiter.leadingIndent).toBe("\t");
+    expect(t.rows[0].leadingIndent).toBe("\t");
+    expect(t.rows[0].cells).toHaveLength(2);
+  });
+
+  it("captures a top-level 3-space-indented table (same header-stripped shape)", () => {
+    // Probe-confirmed: a top-level 1-3-space-indented table has its header
+    // indent stripped by Lezer too, so the slice is header-clean, continuations
+    // indented — identical handling to the list-nested case.
+    const top = "| A | B |\n   |---|---|\n   | 1 | 2 |";
+    const t = parseTable(top, 0, top.length);
+    expect(t).not.toBeNull();
+    if (!t) {
+      return;
+    }
+    expect(t.header.leadingIndent).toBe("");
+    expect(t.delimiter.leadingIndent).toBe("   ");
+    expect(t.rows[0].leadingIndent).toBe("   ");
+  });
+
+  it("does NOT accept a blockquote-marker continuation (stays out of scope)", () => {
+    // Probe-confirmed: a blockquote-nested table's continuation lines carry
+    // `> ` markers (not whitespace); the indent scan leaves them, so this is
+    // still a non-table. Pins the scope boundary.
+    const bq = "| A | B |\n> |---|---|\n> | 1 | 2 |";
+    expect(parseTable(bq, 0, bq.length)).toBeNull();
+  });
+});

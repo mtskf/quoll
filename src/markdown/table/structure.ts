@@ -50,6 +50,10 @@ function makeEmptyRow(colCount: number, table: Table, lineEnding: LineEnding): R
     cells: Array.from({ length: colCount }, emptyCell),
     leadingPipe: table.header.leadingPipe,
     trailingPipe: table.header.trailingPipe,
+    // Inherit the table's continuation indent from the delimiter (the header's
+    // indent is stripped by Lezer for nested/indented tables). Structure ops are
+    // not wired to the widget yet, but this keeps a future insert correct.
+    leadingIndent: table.delimiter.leadingIndent,
     trailingLineSpace: "",
     lineEnding,
     from: 0,

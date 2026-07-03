@@ -6,9 +6,10 @@
 // `tableBlockField`'s `buildAll` reads THIS field instead of re-walking the tree
 // AND re-parsing every table per keystroke (~5 ms/MB whole-tree materialisation
 // + O(tables) `parseTable` — see PERF.md). The list includes NON-emitting `Table`
-// nodes (blockquote/list/indented "tables" that `parseTable` rejects → `table:
-// null`) so that `tableBlockField` can derive a stable, document-ordered index
-// over all Table nodes via the array's index + length.
+// nodes (blockquote-nested tables whose continuation lines carry `>` markers,
+// and cell-count-mismatch / malformed slices, that `parseTable` rejects →
+// `table: null`) so that `tableBlockField` can derive a stable, document-ordered
+// index over all Table nodes via the array's index + length.
 //
 // Bounded update mirrors imageBlockField's proven shape (PERF.md): reuse models
 // OUTSIDE an `extendedSpan` (their node range + block range mapped through
@@ -42,9 +43,12 @@ export interface TableModel {
    *  carry an embedded `\r` the DOM textNode would render as stray whitespace).
    *  The widget's eq() key; the input the cached `table` was parsed from. */
   slice: string;
-  /** Cached parse, or `null` for a non-emitting `Table` node (blockquote/list/
-   *  indented "table" that `parseTable` rejects). Still occupies an ordinal slot
-   *  in the document-order array for stable index accounting. */
+  /** Cached parse, or `null` for a `Table` node `parseTable` rejects — a
+   *  blockquote-nested table (continuation lines bear `>` markers, not
+   *  whitespace) or a malformed slice (cell-count mismatch). List- and
+   *  space/tab-indented tables now parse, so they are NOT in this set. Still
+   *  occupies an ordinal slot in the document-order array for stable index
+   *  accounting. */
   table: Table | null;
 }
 

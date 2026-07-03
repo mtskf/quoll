@@ -50,6 +50,11 @@ export interface Row {
   cells: Cell[];
   leadingPipe: boolean;
   trailingPipe: boolean;
+  /** Verbatim leading whitespace before the row's first pipe/content. Non-empty
+   *  only for indented rows — e.g. a table nested in a list item, where Lezer
+   *  keeps the continuation lines' indent in the Table node slice. Serialized
+   *  verbatim so the row round-trips byte-for-byte. */
+  leadingIndent: string;
   /** Verbatim whitespace from the row body end to the line's terminator. Preserves trailing spaces after a final `|`. */
   trailingLineSpace: string;
   /** The line terminator that followed this row in source: "\n", "\r\n", or "" for the table's last row. CRLF MUST round-trip verbatim. */
@@ -66,6 +71,8 @@ export interface DelimiterRow {
   cells: DelimiterCell[];
   leadingPipe: boolean;
   trailingPipe: boolean;
+  /** See {@link Row.leadingIndent}. */
+  leadingIndent: string;
   trailingLineSpace: string;
   lineEnding: LineEnding;
   from: number;
