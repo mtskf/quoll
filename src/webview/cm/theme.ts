@@ -523,6 +523,14 @@ export const copyButtonThemeSpec = {
   // resting state is the dimmed icon alone (opacity 0.6); the boxed affordance
   // (borderRadius fill) appears only on hover/focus, so at rest the button reads as
   // an icon, not a bordered box.
+  //
+  // `backgroundColor: transparent` is set EXPLICITLY, not merely omitted: this is a
+  // real `<button>`, and the VS Code webview injects a default `button { background:
+  // var(--vscode-button-background) }` rule. Omitting the property here would let
+  // that default paint the primary-button fill at rest — so the icon-only look
+  // requires actively neutralising it, exactly as the sibling webview buttons
+  // (.quoll-outline-toggle / .quoll-switch-editor-toggle) each set their own
+  // explicit `background`.
   ".quoll-copy-button": {
     position: "absolute",
     top: "0.3em",
@@ -533,6 +541,7 @@ export const copyButtonThemeSpec = {
     justifyContent: "center",
     padding: "0.2em",
     color: fencedControlForeground,
+    backgroundColor: "transparent",
     borderRadius: "4px",
     cursor: "pointer",
     opacity: "0.6",
