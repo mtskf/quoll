@@ -1,6 +1,6 @@
 # Quoll
 
-Edit Markdown in VS Code with a Notion- and Obsidian-style WYSIWYG editor, right inside your editor tabs.
+Edit Markdown in VS Code with a Notion/Obsidian-style WYSIWYG editor, right inside your editor tabs.
 
 Quoll registers an opt-in custom editor for `.md` files. Instead of plain text, your Markdown renders as rich text — headings, lists, tables, and formatting — while the file on disk stays the source of truth.
 
@@ -16,6 +16,8 @@ Quoll registers an opt-in custom editor for `.md` files. Instead of plain text, 
 - **Editable GFM tables** — render and edit tables from the Markdown source.
 - **Frontmatter panel** — YAML frontmatter renders as a metadata block.
 - **Fenced-code tools** — one-click copy; long blocks collapse behind a "Show more" bar.
+- **Document outline** — a toggle-able overlay lists the document's headings; click one to jump straight to it. Open it with the top-right button or `Ctrl/Cmd+Alt+O`.
+- **Switch to the text editor** — flip the active Markdown file to VS Code's built-in text editor (and back) with a top-right button or `Ctrl/Cmd+Alt+E`; your caret position carries across.
 - **Image paste & drop** — pasted or dropped images save under `./assets/` and insert a relative link (writable file-scheme documents).
 - **Markdown lint** — advisory findings as inline underlines, with an optional gutter dot and an optional **Problems**-panel mirror.
 - **Live editing** — edits sync to the document as you type; VS Code owns the file and saves as usual.
@@ -56,9 +58,16 @@ Reload the VS Code window after installing.
 
 ### Commands and keybindings
 
-| Command          | Title           | Notes                                          |
-| ---------------- | --------------- | ---------------------------------------------- |
-| `quoll.editWith` | Edit with Quoll | Opens the active file in the Quoll editor.     |
+| Command              | Title                                      | Keybinding       | Notes                                      |
+| -------------------- | ------------------------------------------ | ---------------- | ------------------------------------------ |
+| `quoll.editWith`     | Edit with Quoll                            | —                | Opens the active file in the Quoll editor. |
+| `quoll.toggleEditor` | Quoll: Toggle Between Rich and Text Editor | `Ctrl/Cmd+Alt+E` | Swaps between Quoll and the text editor.   |
+
+Two overlay affordances sit in the editor's top-right corner: a button to
+toggle the **document outline** (`Ctrl/Cmd+Alt+O`) and a button to **switch to
+the text editor** (`Ctrl/Cmd+Alt+E`). Like the live-reveal below, the outline
+toggle is editor-internal behavior rather than a VS Code command, so it does not
+appear in the keybindings UI.
 
 Inline formatting is plain Markdown — type `**bold**`, `*italic*`, or
 `` `code` `` and the editor live-renders it. Move the caret into a
@@ -92,7 +101,7 @@ Quoll is early software. Be aware of the following before relying on it:
   - Images outside the document folder (`../sibling/img.png`) and remote (`https://…`) images are not loaded (`localResourceRoots` scope + CSP); a remote-image opt-in is tracked for a follow-up.
   - *URL allowlist:* link/image/autolink destinations pass only when schemeless (relative or `#fragment`) or `http:` / `https:` / `mailto:`. Everything else (`javascript:`, `data:`, `file:`, protocol-relative `//host`, control chars) renders an inert placeholder and blocks the save until fixed. The check is by scheme name and covers Markdown destinations only — URLs inside raw HTML aren't checked.
 - **MDX (`.mdx`) is not supported** — only `.md` files open with the rich editor.
-- **Not implemented:** slash/block-insert menu (no UI to insert tables / lists / headings from scratch), column resizing for tables, table of contents, diff/git views, and collaborative editing. Single file, single editor only.
+- **Not implemented:** slash/block-insert menu (no UI to insert tables / lists / headings from scratch), column resizing for tables, diff/git views, and collaborative editing. Single file, single editor only.
 - **Visual rendering is verified by manual smoke.** Automated tests cover the CodeMirror decoration/widget behavior, GFM table round-trips, the host write-gate, the message protocol, and host-side message flows (a `@vscode/test-electron` E2E suite); in-webview visual rendering is not asserted by CI and is checked by manual smoke.
 
 ## Contributing
