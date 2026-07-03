@@ -12,7 +12,7 @@ import {
   unfoldCode,
   unfoldEffect,
 } from "@codemirror/language";
-import { EditorSelection, EditorState } from "@codemirror/state";
+import { EditorSelection, EditorState, StateEffect, StateField } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import { afterEach, describe, expect, it } from "vitest";
 import { quollSyntaxExclusionZones } from "../../src/webview/cm/decorations/orchestrator.js";
@@ -331,6 +331,40 @@ describe("listFoldGutterLineClass — gutter tag for the list-item vertical-gap 
     // Line 7 (`- body item`) is below the fence → tagged.
     expect(tagged.has(7)).toBe(true);
     expect(tagged.size).toBe(1);
+  });
+
+  it("recomputes the tag set when the exclusion-zone facet flips with no doc change", () => {
+    // Pins the facet-change update trigger (the `startState.facet !== state.facet`
+    // clause): a zone contributor that flips on a selection-only transaction (no
+    // doc edit, no tree change) must still update the gutter tags. Drive the zone
+    // via a StateEffect so the flip carries neither docChanged nor a tree change.
+    const setZones = StateEffect.define<readonly { from: number; to: number }[]>();
+    const zoneField = StateField.define<readonly { from: number; to: number }[]>({
+      create: () => [],
+      update(value, tr) {
+        for (const e of tr.effects) {
+          if (e.is(setZones)) {
+            return e.value;
+          }
+        }
+        return value;
+      },
+      provide: (f) => quollSyntaxExclusionZones.from(f),
+    });
+    view = mountDoc("- alpha\n- beta\n", [zoneField]);
+    const tagged = (): Set<number> => {
+      const s = new Set<number>();
+      const c = (view as EditorView).state.field(listFoldGutterLineClass).iter();
+      while (c.value) {
+        s.add((view as EditorView).state.doc.lineAt(c.from).number);
+        c.next();
+      }
+      return s;
+    };
+    expect(tagged()).toEqual(new Set([1, 2])); // no zones → both tagged
+    // Flip a zone over line 1 with NO doc change; the tag set must drop line 1.
+    view.dispatch({ effects: setZones.of([{ from: 0, to: view.state.doc.line(1).to }]) });
+    expect(tagged()).toEqual(new Set([2]));
   });
 });
 

@@ -297,9 +297,13 @@ function buildListFoldGutterClasses(
  *  element via `gutterLineClass`, in lock-step with the `.cm-line.quoll-list-hang`
  *  padding it compensates for (same two-predicate eligibility gate — see
  *  buildListFoldGutterClasses). Recomputed when the doc, the parse tree
- *  (lang-markdown parses asynchronously), OR the exclusion-zone facet changes
- *  (frontmatter reveal/conceal flips the facet on a selection change with no doc
- *  edit) — the same triggers as listHangNeedsRebuild. Exported for the
+ *  (lang-markdown parses asynchronously), OR the `quollSyntaxExclusionZones`
+ *  facet changes — the same doc/tree/facet triggers as listHangNeedsRebuild (its
+ *  viewportChanged / selectionSet triggers do NOT apply here: this is a whole-doc
+ *  StateField whose emitted set is selection-independent). The facet clause is
+ *  parity/future-proofing — today no reachable transaction changes a zone's
+ *  CONTENTS without also changing the doc — so it keeps the tag in lock-step if a
+ *  future zone contributor flips on a selection-only edit. Exported for the
  *  marker-detection contract test. */
 export const listFoldGutterLineClass = StateField.define<RangeSet<GutterMarker>>({
   create: (state) => buildListFoldGutterClasses(state, state.facet(quollSyntaxExclusionZones)),
