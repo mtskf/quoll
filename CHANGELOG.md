@@ -4,6 +4,7 @@ All notable changes to Quoll are documented here.
 
 ## 0.1.x
 
+- Fix GFM tables nested inside a list item so they render as the editable grid instead of raw `| … |` source. A table indented as list-continuation content is now recognised (the same fix also covers top-level tables indented 1–3 spaces and tab-indented tables), and it still round-trips byte-for-byte.
 - Make the fenced-code copy button icon-only at rest: drop the resting boxed background so it reads as a bare icon; the boxed hover/focus affordance and the copied/failed states are unchanged.
 - Restyle task-list checkboxes so open work leads the eye: incomplete items now show a green rounded ring, while completed items recede — a muted-grey filled box with a cut-out checkmark, and their text is dimmed (no strikethrough). The checkmark is re-centred, and in the light theme the todo ring uses a brighter green.
 - Add a top-right button and an `Ctrl/Cmd+Alt+E` keybinding to switch the current `.md` between Quoll and VS Code's built-in text editor; the caret position is preserved across the switch (via the button and the chord; the reverse text→Quoll direction preserves it too).
