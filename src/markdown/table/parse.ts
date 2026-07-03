@@ -24,6 +24,13 @@ import { alignFromRaw, makeTable } from "./model.js";
  * Body rows are NOT padded or truncated — they reflect the source's
  * actual cell count, which may differ from `delimiter.cells.length`
  * (GFM/Lezer does not reconcile body rows either).
+ *
+ * Leading whitespace (spaces/tabs) before a row's first pipe/content is
+ * captured per-row as `leadingIndent` and skipped, so an indented continuation
+ * row (a list-nested or 1-3-space-indented table — Lezer keeps that indent in
+ * the node slice) parses as a table. NOTE: called directly this makes the
+ * recognizer accept a 4-space (code-block-shaped) indent too; in production
+ * Lezer gates table-hood at the tree level and never passes such a slice here.
  */
 export function parseTable(source: string, from: number, to: number): Table | null {
   const slice = source.slice(from, to);
@@ -129,16 +136,32 @@ function parseContentRow(line: LineRange): Row {
   const cells: Cell[] = [];
   let leadingPipe = false;
   let trailingPipe = false;
-  let i = 0;
 
-  if (text.charCodeAt(0) === 124 /* | */) {
+  // Capture leading indentation (spaces/tabs) before the row's first pipe or
+  // content. Non-empty for a list-nested table's continuation rows, where Lezer
+  // retains the indent in the Table node slice. Skipping it here (rather than
+  // letting it bleed into cell[0]) keeps the leading-pipe row from spawning a
+  // phantom empty first cell; it is re-emitted verbatim by serializeRow.
+  let indentEnd = 0;
+  while (indentEnd < lineBodyEnd) {
+    const ch = text.charCodeAt(indentEnd);
+    if (ch === 32 || ch === 9) {
+      indentEnd++;
+    } else {
+      break;
+    }
+  }
+  const leadingIndent = text.slice(0, indentEnd);
+
+  let i = indentEnd;
+  if (text.charCodeAt(i) === 124 /* | */) {
     leadingPipe = true;
-    i = 1;
+    i++;
   }
 
   let cellStart = -1;
   let cellEnd = -1;
-  let paddingStart = i; // index just after the most recent `|` (or row start)
+  let paddingStart = i; // index just after the leading indent + optional `|`
   let esc = false;
 
   const pushCell = (sepIndex: number) => {
@@ -194,6 +217,7 @@ function parseContentRow(line: LineRange): Row {
     cells,
     leadingPipe,
     trailingPipe,
+    leadingIndent,
     trailingLineSpace,
     lineEnding: line.lineEnding,
     from: line.from,
@@ -218,10 +242,25 @@ function parseDelimiterRow(line: LineRange): DelimiterRow | null {
 
   let leadingPipe = false;
   let trailingPipe = false;
-  let i = 0;
-  if (text.charCodeAt(0) === 124) {
+
+  // See parseContentRow: capture and skip leading indentation so an indented
+  // delimiter line (`  |---|---|`, a list-nested continuation) is not misread
+  // as a first cell whose raw is the whitespace prefix.
+  let indentEnd = 0;
+  while (indentEnd < lineBodyEnd) {
+    const ch = text.charCodeAt(indentEnd);
+    if (ch === 32 || ch === 9) {
+      indentEnd++;
+    } else {
+      break;
+    }
+  }
+  const leadingIndent = text.slice(0, indentEnd);
+
+  let i = indentEnd;
+  if (text.charCodeAt(i) === 124) {
     leadingPipe = true;
-    i = 1;
+    i++;
   }
 
   const cells: DelimiterCell[] = [];
@@ -262,6 +301,7 @@ function parseDelimiterRow(line: LineRange): DelimiterRow | null {
     cells,
     leadingPipe,
     trailingPipe,
+    leadingIndent,
     trailingLineSpace,
     lineEnding: line.lineEnding,
     from,

@@ -229,6 +229,11 @@ describe("styles.css — widgets consume the accent tokens (palette refresh use 
       /\.quoll-task-checkbox\s*\{[^}]*border\s*:\s*[\d.]+px\s+solid\s+var\(--quoll-todo-ring/s
     );
   });
+  it("task-checkbox box rounds at 5px (the tick's own 0.5px radius is separate)", () => {
+    // Pin the BOX corner only — the checkmark tick (`::after`) keeps its own
+    // 0.5px radius. Non-vacuous: against the prior 6px this assertion reds.
+    expect(css).toMatch(/\.quoll-task-checkbox\s*\{[^}]*border-radius\s*:\s*5px/s);
+  });
   it("table links (incl. hover) and table code consume the accent/surface tokens (F3)", () => {
     expect(css).toMatch(/\.quoll-table-block a\s*\{[^}]*color\s*:\s*var\(--quoll-accent-green/s);
     expect(css).toMatch(/\.quoll-table-block a:hover\s*\{[^}]*var\(--quoll-accent-green/s);
@@ -260,5 +265,22 @@ describe("styles.css — bullet-list marker token (HC-sensitive)", () => {
     const hc = css.match(/vscode-high-contrast[\s\S]*?\{([\s\S]*?)\}/);
     expect(hc, "HC reset block not found").not.toBeNull();
     expect(hc?.[1] ?? "").toMatch(/--quoll-bullet-marker\s*:\s*var\(--quoll-accent-green/);
+  });
+});
+
+describe("styles.css — thematic break rule", () => {
+  const css = readFileSync(new URL("../../src/webview/styles.css", import.meta.url), "utf8");
+
+  it("declares .quoll-thematic-break as a full-width border rule", () => {
+    // Matches the rule block and asserts it carries a border-top + width:100%.
+    const block = css.match(/\.quoll-thematic-break\s*\{[^}]*\}/);
+    expect(block).not.toBeNull();
+    expect(block?.[0]).toMatch(/border-top\s*:/);
+    expect(block?.[0]).toMatch(/width\s*:\s*100%/);
+  });
+
+  it("does NOT set display:none (the rule must be visible)", () => {
+    const block = css.match(/\.quoll-thematic-break\s*\{[^}]*\}/);
+    expect(block?.[0]).not.toMatch(/display\s*:\s*none/);
   });
 });

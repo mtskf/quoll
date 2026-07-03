@@ -3,26 +3,30 @@
 // contract test imports the same). Parser policy lives here, not in the
 // fold-UI module (cm/fold/index.ts only mounts the gutter).
 //
-// `nonFoldableBlocks` SUBTRACTS Blockquote, Paragraph, and code blocks
-// (FencedCode + indented CodeBlock) from lang-markdown's broad Block folds.
-// lang-markdown's `foldNodeProp` folds EVERY non-Document/non-heading/
-// non-list-container `Block`, so a blockquote — and the multi-line `Paragraph`
-// inside it, which yields the SAME range — both get a chevron, as do code
-// blocks. A `null`-returning `foldService` cannot subtract that: CM's
-// `foldable()` falls through to `syntaxFolding`/`foldNodeProp` when every
-// service returns null. The only seam that makes `foldable()` return null on
-// these lines is overriding the node's own `foldNodeProp` to return null.
+// `nonFoldableBlocks` SUBTRACTS Blockquote, Paragraph, code blocks
+// (FencedCode + indented CodeBlock), and GFM Table from lang-markdown's broad
+// Block folds. lang-markdown's `foldNodeProp` folds EVERY non-Document/
+// non-heading/non-list-container `Block`, so a blockquote — and the multi-line
+// `Paragraph` inside it, which yields the SAME range — both get a chevron, as
+// do code blocks and tables. A `null`-returning `foldService` cannot subtract
+// that: CM's `foldable()` falls through to `syntaxFolding`/`foldNodeProp` when
+// every service returns null. The only seam that makes `foldable()` return null
+// on these lines is overriding the node's own `foldNodeProp` to return null.
 // Overriding `Paragraph` too is REQUIRED (the inner paragraph re-folds the
 // blockquote) and intended (a standalone multi-line paragraph is not in the
 // keep-foldable set). Code blocks are excluded by request — a code block does
-// not need a fold affordance. The keep-foldable set is therefore headings,
-// lists, and tables; everything else is subtracted here.
+// not need a fold affordance. A GFM table renders as a display-only block widget
+// (cm/table/), which is not a foldable construct, so a chevron on its rows is
+// meaningless — `Table` is subtracted too. The keep-foldable set is therefore
+// headings and lists; everything else is subtracted here.
 //
 // This is a NODE-TYPE override. A blockquote that wraps a still-foldable
-// structure (a nested list, a table, a heading) keeps that inner fold — the
-// inner node owns it, consistent with "keep lists/tables/headings foldable"
-// (pinned in cm-fold-blockquote.test.ts). A blockquote wrapping ONLY a code
-// block shows no chevron (the fenced block is subtracted too). The fn returns
+// structure (a nested list, a heading) keeps that inner fold — the inner node
+// owns it, consistent with "keep lists/headings foldable" (pinned in
+// cm-fold-blockquote.test.ts). A blockquote wrapping ONLY a code block or ONLY a
+// table shows no chevron (both are subtracted too). A table nested in a list
+// item leaves the ListItem fold intact (the chevron sits on the list's marker
+// line, never on a table row). The fn returns
 // `null`, not `undefined`: foldNodeProp's value type is `(node, state) =>
 // {from,to} | null`, so `undefined` fails strict type-check. This rides
 // lang-markdown's PUBLIC API but depends on its 6.5.0 fold *behaviour*;
@@ -47,6 +51,7 @@ export const nonFoldableBlocks: MarkdownExtension = {
       Paragraph: () => null,
       FencedCode: () => null,
       CodeBlock: () => null,
+      Table: () => null,
     }),
   ],
 };

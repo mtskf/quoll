@@ -1,10 +1,12 @@
 // These state-only tests pin the DELIVERED fold contract via foldable() against
 // upstream markdown({ base }) as a REFERENCE ORACLE. Heading folds are produced by
 // Quoll's re-implementation of lang-markdown's headerIndent foldService (see
-// cm/markdown.ts); list/table/block folds still come from lang-markdown's
-// foldNodeProp. These tests assert the upstream contract our language must match; the
-// direct-build parity is pinned in cm-markdown-language.test.ts. No view
-// is mounted, so no happy-dom pragma is needed.
+// cm/markdown.ts); list/block folds still come from lang-markdown's foldNodeProp.
+// These tests assert the upstream contract our language must match for headings and
+// lists; the direct-build parity is pinned in cm-markdown-language.test.ts. (Tables
+// fold in this upstream oracle but NOT in quollMarkdownLanguage — nonFoldableBlocks
+// subtracts the Table node so table blocks show no chevron; that divergence is pinned
+// in cm-fold-blockquote.test.ts.) No view is mounted, so no happy-dom pragma is needed.
 
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
 import {

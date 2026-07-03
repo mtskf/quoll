@@ -368,6 +368,23 @@
     margin: 0;
   }
 
+  /* Thematic break (`---`/`***`/`___`) rendered rule. The inline replace
+   * widget (thematic-break-widget.ts) replaces the whole source line, so this
+   * span IS the visible horizontal rule. inline-block + vertical-align:middle +
+   * height:0 draws a hairline centred in the line box (no margin — margins on
+   * a replaced-inline widget would desync CM's line measurement); width:100%
+   * fills the centred reading column. Colour reuses the shared surface-border
+   * token (same as the table-cell border) so the rule tracks the theme. */
+  .quoll-thematic-break {
+    display: inline-block;
+    width: 100%;
+    height: 0;
+    vertical-align: middle;
+    border-top: 1px solid
+      var(--quoll-surface-border,
+        var(--vscode-editorWidget-border, var(--vscode-panel-border, #888)));
+  }
+
   /* C6b: readonly GFM table widget. Root is
    * `<div class="quoll-block quoll-table-block">`; the inner `<table>` is
    * fully self-styled here. The PM-era `.quoll-editor table/th,td/a/code`
@@ -521,7 +538,7 @@
      * eye to incomplete work. The done box (below) recedes to muted grey. */
     border: 2px solid
       var(--quoll-todo-ring, var(--quoll-accent-green, var(--vscode-textLink-foreground, var(--vscode-editor-foreground))));
-    border-radius: 6px;
+    border-radius: 5px;
     cursor: pointer;
     background-color: transparent;
     box-sizing: border-box;

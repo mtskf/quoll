@@ -313,9 +313,10 @@ export const blockStyleThemeSpec = {
     backgroundColor:
       "color-mix(in srgb, var(--quoll-surface-fill, transparent), var(--vscode-editor-foreground) 14%)",
   },
-  // Callout admonitions (block-style.ts calloutTypeForLine). An OUTERMOST
+  // Callout admonitions (classification in decorations/callout.ts). An OUTERMOST
   // blockquote whose first line is `[!TYPE]` carries `quoll-callout
-  // quoll-callout-{type}` on every line (+ `quoll-callout-marker` on the first).
+  // quoll-callout-{type}` on every line (+ `quoll-callout-marker` on the REVEALED
+  // marker row; the row is concealed when the caret is outside the block).
   // The callout reuses the blockquote panel WHOLESALE — the plain shared
   // --quoll-surface-fill background and the body-column alignment (the transparent
   // 6px/2px border + `background-clip: padding-box`, both inherited from
@@ -339,49 +340,75 @@ export const blockStyleThemeSpec = {
   ".cm-line.quoll-callout-note": {
     "--quoll-callout-accent":
       "var(--vscode-editorInfo-foreground, var(--vscode-charts-blue, #3794ff))",
-    "--quoll-callout-icon": '"ℹ️ "',
+    "--quoll-callout-icon": '"ℹ️"',
   },
   ".cm-line.quoll-callout-tip": {
     "--quoll-callout-accent":
       "var(--vscode-charts-green, var(--vscode-terminal-ansiGreen, #3fb950))",
-    "--quoll-callout-icon": '"💡 "',
+    "--quoll-callout-icon": '"💡"',
   },
   ".cm-line.quoll-callout-important": {
     "--quoll-callout-accent": "var(--vscode-charts-purple, #a371f7)",
-    "--quoll-callout-icon": '"❗ "',
+    "--quoll-callout-icon": '"❗"',
   },
   ".cm-line.quoll-callout-warning": {
     "--quoll-callout-accent":
       "var(--vscode-editorWarning-foreground, var(--vscode-charts-yellow, #d29922))",
-    "--quoll-callout-icon": '"⚠️ "',
+    "--quoll-callout-icon": '"⚠️"',
   },
   ".cm-line.quoll-callout-caution": {
     "--quoll-callout-accent":
       "var(--vscode-editorError-foreground, var(--vscode-charts-red, #f85149))",
-    "--quoll-callout-icon": '"🚨 "',
+    "--quoll-callout-icon": '"🚨"',
   },
-  // The marker line (the `[!TYPE]` line) reads as a header and shows the per-type
-  // icon in a reserved left gutter. The icon is a display-only, ABSOLUTELY
-  // positioned ::before (out of inline flow) so the marker text keeps a
-  // deterministic x-position regardless of the emoji's rendered width — CM caret
-  // geometry / posAtCoords stay glyph-accurate (no inline-content perturbation).
-  // pointer-events:none keeps the pseudo-icon out of hit-testing. content reads
-  // the per-type --quoll-callout-icon set on the same line (custom properties
-  // inherit into the pseudo-element). The `[!TYPE]` bytes stay literal, editable,
-  // and round-trip identically. DELIBERATE tradeoff: colour emoji do not tint to
-  // the accent / re-colour in HC — the accent affordance is the border + tint;
-  // the emoji is a supplementary cue (a monochrome SVG-mask icon was rejected to
-  // avoid widening the default-deny CSP for a cosmetic glyph).
-  ".cm-line.quoll-callout-marker": {
+  // The per-type emoji is a SMALL persistent badge in the callout's top-right
+  // corner, shown in BOTH reveal states. It rides the `-open` line — which is the
+  // `[!TYPE]` marker row when revealed and the first VISIBLE body line when the
+  // marker is concealed (block-style migrates the `-open` corner + this badge
+  // together), and `--quoll-callout-icon` is present on every callout line — so ONE
+  // selector covers both. The badge is a display-only, ABSOLUTELY positioned
+  // ::after (out of inline flow, pointer-events:none out of hit-testing), so CM
+  // caret geometry / posAtCoords stay glyph-accurate. Because an absolute ::after
+  // reserves NO inline space, the `-open` line also reserves a right pad
+  // (`--quoll-block-pad-x` + 1.5em) so a long revealed title / first body line never
+  // paints UNDER the emoji. DELIBERATE tradeoff: colour emoji do not tint to the
+  // accent / re-colour in HC — the accent affordance is the bar + tint; the emoji
+  // is a supplementary cue (a monochrome SVG-mask icon was rejected to avoid
+  // widening the default-deny CSP for a cosmetic glyph).
+  ".cm-line.quoll-callout.quoll-blockquote-open": {
     position: "relative",
-    paddingLeft: "calc(var(--quoll-block-pad-x, 16px) + 1.5em)",
+    paddingRight: "calc(var(--quoll-block-pad-x, 16px) + 1.5em)",
+  },
+  ".cm-line.quoll-callout.quoll-blockquote-open::after": {
+    content: "var(--quoll-callout-icon)",
+    position: "absolute",
+    // Symmetric corner inset: equal top + right gap tucks the badge into the
+    // rounded top-right corner (user pick 2026-07-03 via the Chrome preview).
+    top: "6px",
+    right: "6px",
+    fontSize: "0.8em",
+    pointerEvents: "none",
+  },
+  // The REVEALED marker line (the `[!TYPE]` line, caret inside the block) reads as
+  // a header. The badge now lives on the `-open` line above (not this row's
+  // ::before), so this rule only carries the header weight.
+  ".cm-line.quoll-callout-marker": {
     fontWeight: "600",
   },
-  ".cm-line.quoll-callout-marker::before": {
-    content: 'var(--quoll-callout-icon, "")',
-    position: "absolute",
-    left: "var(--quoll-block-pad-x, 16px)",
-    pointerEvents: "none",
+  // A CONCEALED marker line (caret OUTSIDE the callout): the callout-marker-conceal
+  // StateField replaces the whole `[!TYPE]` row and tags it with this class.
+  // Collapse it to zero height so no blank padded row remains — the `-open` corner
+  // + badge ride the first visible body line instead. Copies the five zero-height
+  // props of `.quoll-fenced-code-fence-hidden` below. Placed NEXT to that rule but
+  // BEFORE it so the fence-hidden rule stays the LAST spec key (its defensive
+  // source-order guard); no specificity conflict exists — a concealed marker line
+  // is facet-excluded from block-style, so it never co-carries `-open`/padding.
+  ".cm-line.quoll-callout-marker-hidden": {
+    height: "0",
+    minHeight: "0",
+    paddingTop: "0",
+    paddingBottom: "0",
+    lineHeight: "0",
   },
   // A CONCEALED fence row (its ``` content is replaced by fenced-code-reveal, so
   // the line is empty). Collapse it to zero height so no blank padded row remains;
@@ -518,8 +545,19 @@ export const copyButtonThemeSpec = {
     position: "relative",
     fontSize: "0.9em",
   },
-  // Icon-only button: a small square holding the Lucide glyph. inline-flex
-  // centres the SVG; the glyph is sized in em so it tracks the panel font.
+  // Icon-only button: the bare Lucide glyph with NO resting background — inline-flex
+  // centres the SVG; the glyph is sized in em so it tracks the panel font. The
+  // resting state is the dimmed icon alone (opacity 0.6); the boxed affordance
+  // (borderRadius fill) appears only on hover/focus, so at rest the button reads as
+  // an icon, not a bordered box.
+  //
+  // `backgroundColor: transparent` is set EXPLICITLY, not merely omitted: this is a
+  // real `<button>`, and the VS Code webview injects a default `button { background:
+  // var(--vscode-button-background) }` rule. Omitting the property here would let
+  // that default paint the primary-button fill at rest — so the icon-only look
+  // requires actively neutralising it, exactly as the sibling webview buttons
+  // (.quoll-outline-toggle / .quoll-switch-editor-toggle) each set their own
+  // explicit `background`.
   ".quoll-copy-button": {
     position: "absolute",
     top: "0.3em",
@@ -530,7 +568,7 @@ export const copyButtonThemeSpec = {
     justifyContent: "center",
     padding: "0.2em",
     color: fencedControlForeground,
-    backgroundColor: "var(--vscode-button-secondaryBackground, rgba(255, 255, 255, 0.08))",
+    backgroundColor: "transparent",
     borderRadius: "4px",
     cursor: "pointer",
     opacity: "0.6",

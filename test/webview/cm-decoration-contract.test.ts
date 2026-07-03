@@ -37,6 +37,8 @@ const SAMPLE_DOC = [
   "const x = 1;",
   "```",
   "",
+  "---",
+  "",
   "- plain bullet item",
   "- [ ] todo item",
   "- [x] done item",
