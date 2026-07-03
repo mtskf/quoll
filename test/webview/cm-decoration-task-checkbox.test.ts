@@ -342,7 +342,9 @@ describe("taskCheckboxReveal — provider", () => {
     const iter = set.iter();
     while (iter.value !== null) {
       const cls = (iter.value.spec as { class?: string }).class;
-      if (cls) classes.push(cls);
+      if (cls) {
+        classes.push(cls);
+      }
       iter.next();
     }
     expect(classes).toContain("quoll-task-completed-content");
