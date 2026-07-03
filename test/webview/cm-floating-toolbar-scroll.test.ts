@@ -1,0 +1,66 @@
+// @vitest-environment happy-dom
+import { describe, expect, it } from "vitest";
+
+import {
+  CHROME_HIDDEN_CLASS,
+  nextToolbarScrollState,
+  type ToolbarScrollState,
+} from "../../src/webview/cm/floating-toolbar-scroll.js";
+
+describe("nextToolbarScrollState — direction→visibility mapping", () => {
+  it("hides on scroll DOWN past the hysteresis dead-zone (re-anchors)", () => {
+    expect(nextToolbarScrollState({ visibility: "shown", anchor: 100 }, 200)).toEqual({
+      visibility: "hidden",
+      anchor: 200,
+    });
+  });
+
+  it("shows on scroll UP past the dead-zone (re-anchors)", () => {
+    expect(nextToolbarScrollState({ visibility: "hidden", anchor: 200 }, 100)).toEqual({
+      visibility: "shown",
+      anchor: 100,
+    });
+  });
+
+  it("ALWAYS shows near the very top and re-anchors there, whatever the prior state", () => {
+    expect(nextToolbarScrollState({ visibility: "hidden", anchor: 300 }, 0)).toEqual({
+      visibility: "shown",
+      anchor: 0,
+    });
+    expect(nextToolbarScrollState({ visibility: "hidden", anchor: 300 }, 5)).toEqual({
+      visibility: "shown",
+      anchor: 5,
+    });
+  });
+
+  it("holds state AND anchor inside the dead-zone (jitter immunity)", () => {
+    const prev: ToolbarScrollState = { visibility: "shown", anchor: 100 };
+    expect(nextToolbarScrollState(prev, 102)).toEqual(prev); // +2px < 4px hysteresis
+    expect(nextToolbarScrollState(prev, 98)).toEqual(prev); // -2px
+  });
+
+  it("accumulates slow drift because the anchor is NOT reset in the dead-zone", () => {
+    // Two sub-threshold ticks that together exceed the hysteresis must still flip.
+    const prev: ToolbarScrollState = { visibility: "shown", anchor: 100 };
+    const afterFirst = nextToolbarScrollState(prev, 103); // +3px < 4px → held, anchor stays 100
+    expect(afterFirst).toEqual(prev);
+    const afterSecond = nextToolbarScrollState(afterFirst, 106); // 106-100 = 6px > 4px → flip
+    expect(afterSecond).toEqual({ visibility: "hidden", anchor: 106 });
+  });
+
+  it("honours custom thresholds", () => {
+    expect(
+      nextToolbarScrollState({ visibility: "shown", anchor: 100 }, 300, { hysteresis: 50 }).visibility
+    ).toBe("hidden");
+    expect(
+      nextToolbarScrollState({ visibility: "shown", anchor: 100 }, 130, { hysteresis: 50 }).visibility
+    ).toBe("shown"); // 30px < 50px → held (still shown)
+    expect(
+      nextToolbarScrollState({ visibility: "hidden", anchor: 0 }, 40, { topThreshold: 50 }).visibility
+    ).toBe("shown"); // within the widened top band
+  });
+
+  it("exports the shared host class name", () => {
+    expect(CHROME_HIDDEN_CLASS).toBe("quoll-chrome-hidden");
+  });
+});
