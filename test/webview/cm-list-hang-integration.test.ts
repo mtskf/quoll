@@ -101,9 +101,11 @@ describe("list hang-indent — ViewPlugin wired into a real editor (F3/F5 integr
       expect(styles[1]).toContain(
         "calc(6px + (2 * var(--quoll-prose-space, 1ch) + 2 * var(--quoll-task-marker-width)))"
       );
-      // line 2 — plain leaf two task levels deep (two shifts + two steps)
+      // line 2 — plain leaf two task levels deep (two shifts + two steps), and
+      // its OWN plain `-` marker splits into 1 glyph col + 1 space col (the glyph
+      // blend), so the 6 whitespace cols become 5 * space + 1 * glyph.
       expect(styles[2]).toContain(
-        "calc(6px + (6 * var(--quoll-prose-space, 1ch) + 2 * var(--quoll-task-marker-width)))"
+        "calc(6px + (5 * var(--quoll-prose-space, 1ch) + 1 * calc((1ch + var(--quoll-prose-space, 1ch)) / 2) + 2 * var(--quoll-task-marker-width)))"
       );
     } finally {
       view.destroy();
