@@ -49,6 +49,7 @@ import {
   quollCollapseToggleTheme,
   quollCopyButtonTheme,
   quollHighlighting,
+  quollTaskCompletedContentTheme,
   quollTheme,
 } from "./cm/theme.js";
 import { getHost } from "./host.js";
@@ -229,6 +230,11 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
         // EditorView.theme like quollBlockStyleTheme so it beats CM's unlayered
         // baseTheme / syntax-highlight rules on the marked glyph span — see cm/theme.ts.
         quollBulletMarkerTheme,
+        // Completed-task content mute (task-checkbox-reveal.ts mark). An
+        // EditorView.theme like quollBulletMarkerTheme so it is pinnable as an
+        // exported spec; it overrides the inherited content foreground on the
+        // marked span (coloured syntax tokens keep their colour) — see cm/theme.ts.
+        quollTaskCompletedContentTheme,
         // Copy-code button overlay styling (position anchor + button look). An
         // EditorView.theme like quollBlockStyleTheme so it overrides CM's
         // unlayered `.cm-line` rules — see cm/theme.ts.

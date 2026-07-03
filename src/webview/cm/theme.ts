@@ -458,6 +458,24 @@ export const bulletMarkerThemeSpec = {
 
 export const quollBulletMarkerTheme = EditorView.theme(bulletMarkerThemeSpec);
 
+// Completed-task CONTENT mute (checkbox-completed-tint feature). task-checkbox-reveal.ts
+// emits a Decoration.mark carrying `.quoll-task-completed-content` over a checked task's
+// content span (marker line, caret off it). This recedes the text to a muted ink so
+// incomplete items dominate. An EditorView.theme (NOT styles.css) so it is pinnable as an
+// exported spec object (bulletMarkerThemeSpec precedent). It overrides the INHERITED
+// content foreground for plain text; coloured syntax tokens inside a completed item (e.g. a
+// link) keep their own token colour — plain body text is the dominant case and this mutes
+// it. DELIBERATELY colour-only — NO line-through: the approved design mutes, it does not
+// strike. Ink is the Quoll-owned --quoll-completed-ink token (styles.css theme blocks; HC
+// keeps full foreground).
+export const taskCompletedContentThemeSpec = {
+  ".quoll-task-completed-content": {
+    color: "var(--quoll-completed-ink, var(--vscode-descriptionForeground, inherit))",
+  },
+};
+
+export const quollTaskCompletedContentTheme = EditorView.theme(taskCompletedContentThemeSpec);
+
 // Copy-code button overlay for fenced code blocks (fenced-code-copy-button.ts).
 // Separate EditorView.theme (not styles.css) for the same reason as
 // blockStyleThemeSpec: it must beat CodeMirror's UNLAYERED baseTheme `.cm-line`
