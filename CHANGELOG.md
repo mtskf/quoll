@@ -4,6 +4,7 @@ All notable changes to Quoll are documented here.
 
 ## 0.1.x
 
+- Fix the `Cmd+Option+K` / `Ctrl+Alt+K` "hand selection to Claude Code" chord. It now routes to whichever Claude Code you're using: if the Claude Code webview panel is the visible tab, the reference is copied and that panel is focused; otherwise it inserts straight into a Claude Code CLI terminal — found even when the terminal isn't named "claude" (e.g. `claude` + `/ide`), by locating a `claude` process in the terminal's process tree. When no terminal is found and no panel is visible, it focuses an already-open panel rather than spawning a new one (which previously popped an unwanted panel and logged "Webview is disposed" errors).
 - Fix a stray fold/unfold chevron appearing on GFM table rows. A table renders as a display-only block widget, not a foldable construct, so it now offers no fold affordance — top-level or nested inside a list item. Heading folds and genuine list folds are unaffected.
 - Render thematic breaks (`---`, `***`, `___`) as a horizontal rule; move the caret onto the line to edit the raw source. Frontmatter fences and setext heading underlines are left untouched, and the bytes round-trip unchanged.
 - Callouts now carry the per-type emoji as a small badge in the top-right corner, and the `[!TYPE]` marker line is tucked away whenever your caret is outside the callout — the block reads as a clean titled panel, and the editable `> [!TYPE]` source reappears the moment you move into it.

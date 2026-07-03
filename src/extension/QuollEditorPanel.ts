@@ -29,6 +29,7 @@ import type {
   CancellationToken,
   CustomTextEditorProvider,
   ExtensionContext,
+  Tab,
   Terminal,
   TextDocument,
   TextEditor,
@@ -44,6 +45,7 @@ import {
   Position,
   Range,
   Selection,
+  TabInputWebview,
   Uri,
   WorkspaceEdit,
   window,
@@ -66,10 +68,10 @@ import {
   buildThemeMessage,
 } from "./document-message.js";
 import { takeSwitchCaret } from "./editor-switch-caret.js";
-import { pickClaudeTerminal } from "./find-claude-terminal.js";
+import { pickClaudeTerminalByProcess } from "./find-claude-terminal.js";
 import { getNonce } from "./getNonce.js";
 import { handleCodexContextHandoff } from "./handle-codex-context-handoff.js";
-import { handleContextHandoff } from "./handle-context-handoff.js";
+import { CLAUDE_PANEL_VIEW_TYPE, handleContextHandoff } from "./handle-context-handoff.js";
 import { handleOpenExternal } from "./handle-open-external.js";
 import {
   createDrainingDispatcher,
@@ -81,6 +83,7 @@ import { handleImageWrite } from "./image-write-service.js";
 import { toLintDiagnostics } from "./lint-diagnostics.js";
 import { LintMirror } from "./lint-mirror.js";
 import { minimalEditSpan } from "./minimal-edit.js";
+import { readProcessTable } from "./process-scan.js";
 import { openInTextEditor } from "./reopen-text-editor.js";
 import type { PanelControls, TestHarness } from "./test-harness.js";
 import {
@@ -103,6 +106,15 @@ const LINT_GUTTER_CONFIG_KEY = "quoll.lint.gutter.enabled";
 
 function readLintGutterEnabled(): boolean {
   return workspace.getConfiguration().get<boolean>(LINT_GUTTER_CONFIG_KEY, false);
+}
+
+// True when a tab hosts the Claude Code editor-area webview panel. VS Code
+// prefixes panel viewTypes ("mainThreadWebview-…"), so match by substring — the
+// same check Claude Code itself uses internally on `TabInputWebview.viewType`.
+function isClaudePanelTab(tab: Tab): boolean {
+  return (
+    tab.input instanceof TabInputWebview && tab.input.viewType.includes(CLAUDE_PANEL_VIEW_TYPE)
+  );
 }
 
 export class QuollEditorPanel implements CustomTextEditorProvider {
@@ -884,15 +896,34 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
               showInfo: (message) => window.showInformationMessage(message),
               showWarn: (message) => window.showWarningMessage(message),
               showError: (message) => window.showErrorMessage(message),
-              // Name-match ONLY (first terminal named like "claude"), else
-              // undefined → clipboard fallback. No activeTerminal fallback: see
-              // pickClaudeTerminal — sending to an unrelated shell would misfire
-              // and be mis-reported as success. This name heuristic is the only
-              // Claude Code coupling on the host side.
-              findClaudeTerminal: () => pickClaudeTerminal(window.terminals),
+              // Proven-match ONLY: a terminal named like "claude" (the
+              // extension's own "Claude Code" terminal), else the first terminal
+              // whose shell-process subtree contains a `claude` executable — the
+              // CLI `/ide` case, which runs in a plain shell terminal Claude Code
+              // neither names nor retitles. No bare activeTerminal guess (misfire
+              // safety); the active terminal is only prioritised AMONG process-
+              // proven matches. See find-claude-terminal.ts.
+              findClaudeTerminal: () =>
+                pickClaudeTerminalByProcess(
+                  window.terminals,
+                  window.activeTerminal,
+                  readProcessTable
+                ),
               // false = no trailing newline: the user reviews then presses Enter.
               sendTerminalText: (t, text) => t.sendText(text, false),
               showTerminal: (t) => t.show(),
+              // The user is LOOKING at the panel when it is the ACTIVE tab of
+              // some group (at chord time the Quoll editor owns the active
+              // group, so activeTab-of-any-group is the right "visible" signal).
+              // A visible panel wins the handoff over a background CLI terminal.
+              isClaudePanelVisible: () =>
+                window.tabGroups.all.some(
+                  (group) => group.activeTab !== undefined && isClaudePanelTab(group.activeTab)
+                ),
+              // The panel exists in ANY tab (active or parked) — gates the tier-2
+              // focus so Quoll focuses an existing panel instead of opening one.
+              isClaudePanelOpen: () =>
+                window.tabGroups.all.some((group) => group.tabs.some(isClaudePanelTab)),
             }
           );
           return;
