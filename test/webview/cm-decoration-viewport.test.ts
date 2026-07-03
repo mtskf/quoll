@@ -16,9 +16,11 @@ function bigMarkHeavyDoc(targetBytes: number): string {
   // without their construct in the fixture each would emit zero decorations in
   // BOTH the tiny and whole viewports, and `0 < 0 / 10` is false. The fenced
   // block's own ``` lines close before the next repetition's `# h`, so each
-  // repeat parses as one self-contained FencedCode.
+  // repeat parses as one self-contained FencedCode. The trailing `---` gives
+  // thematicBreakReveal one HorizontalRule per repetition so its ratio
+  // assertion stays non-vacuous.
   const line =
-    "# h\n> q\n**bold** *italic* `code` ~~strike~~ [t](https://x)\n- [ ] t\n- b\n```js\nc\n```\n";
+    "# h\n> q\n**bold** *italic* `code` ~~strike~~ [t](https://x)\n- [ ] t\n- b\n```js\nc\n```\n---\n";
   return line.repeat(Math.ceil(targetBytes / line.length));
 }
 

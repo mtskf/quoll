@@ -1,12 +1,19 @@
 // @vitest-environment happy-dom
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
 import { EditorSelection, EditorState } from "@codemirror/state";
-import type { DecorationSet } from "@codemirror/view";
-import { describe, expect, it } from "vitest";
+import { type DecorationSet, EditorView } from "@codemirror/view";
+import { describe, expect, it, vi } from "vitest";
+import { quollSyntaxReveal } from "../../src/webview/cm/decorations/index.js";
 import { thematicBreakReveal } from "../../src/webview/cm/decorations/thematic-break-reveal.js";
 import { ThematicBreakWidget } from "../../src/webview/cm/decorations/thematic-break-widget.js";
 import type { BuildContext } from "../../src/webview/cm/decorations/types.js";
+import { frontmatterBlockField } from "../../src/webview/cm/frontmatter/frontmatter-field.js";
 import { fullTree } from "./helpers/full-tree.js";
+
+vi.mock("../../src/webview/host.js", () => ({
+  getHost: () => ({ postMessage: vi.fn(), setMetadata: vi.fn() }),
+  subscribeToHost: () => () => {},
+}));
 
 describe("ThematicBreakWidget", () => {
   it("renders a separator span with the quoll-thematic-break class", () => {
@@ -156,5 +163,52 @@ describe("thematic break reveal provider", () => {
     const before = c.state.doc.toString();
     thematicBreakReveal.build(c);
     expect(c.state.doc.toString()).toBe(before);
+  });
+});
+
+function mountWithFrontmatter(doc: string): EditorView {
+  const parent = document.createElement("div");
+  document.body.appendChild(parent);
+  const state = EditorState.create({
+    doc,
+    selection: EditorSelection.single(doc.length), // caret at very end, off every HR line
+    extensions: [markdown({ base: markdownLanguage }), quollSyntaxReveal(), frontmatterBlockField],
+  });
+  return new EditorView({ state, parent });
+}
+
+describe("thematic break — orchestrator integration", () => {
+  it("registered in syntaxRevealProviders (length 8, includes thematicBreakReveal)", async () => {
+    const { syntaxRevealProviders } = await import("../../src/webview/cm/decorations/index.js");
+    expect(syntaxRevealProviders).toHaveLength(8);
+    expect(syntaxRevealProviders).toContain(thematicBreakReveal);
+  });
+
+  it("renders a real thematic break as a rule widget (caret off the line)", () => {
+    const view = mountWithFrontmatter("intro\n\n***\n\noutro");
+    try {
+      const rules = view.dom.querySelectorAll(".quoll-thematic-break");
+      expect(rules.length).toBe(1);
+      expect(rules[0]?.getAttribute("role")).toBe("separator");
+      // Bytes untouched.
+      expect(view.state.sliceDoc()).toBe("intro\n\n***\n\noutro");
+    } finally {
+      view.destroy();
+    }
+  });
+
+  it("does NOT render the frontmatter opener `---` as a rule (exclusion zone)", () => {
+    // Opener parses as HorizontalRule [0,3] but the frontmatter span is an
+    // exclusion zone → arbitrate drops the opener decoration. The real HR
+    // below the frontmatter DOES render.
+    const view = mountWithFrontmatter("---\ntitle: x\n---\n\nbody\n\n---\n\nmore");
+    try {
+      const rules = view.dom.querySelectorAll(".quoll-thematic-break");
+      expect(rules.length).toBe(1); // only the real HR, NOT the frontmatter opener
+      // Frontmatter source bytes intact.
+      expect(view.state.sliceDoc().startsWith("---\ntitle: x\n---")).toBe(true);
+    } finally {
+      view.destroy();
+    }
   });
 });
