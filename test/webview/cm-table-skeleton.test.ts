@@ -166,3 +166,38 @@ describe("tableSkeletonField bounded ≡ fullWalk", () => {
     }
   });
 });
+
+describe("list-nested table detection (real Lezer language)", () => {
+  it("emits an emitting TableModel (table !== null) for a table nested in a list item", () => {
+    const doc = "- item intro:\n\n  | A | B |\n  |---|---|\n  | 1 | 2 |\n";
+    const models = freshOracle(doc);
+    expect(models).toHaveLength(1);
+    const m = models[0];
+    expect(m.table).not.toBeNull();
+    if (!m.table) { return; }
+    expect(m.table.header.cells).toHaveLength(2);
+    // The block range covers whole lines including the header line's own indent.
+    expect(doc.slice(m.blockFrom, m.blockTo)).toBe("  | A | B |\n  |---|---|\n  | 1 | 2 |");
+    // Full-doc caret offset (what table-widget uses: nodeFrom + cell.from = m.from
+    // + cell.from). Pins the header-indent-outside-node / body-indent-inside-node
+    // asymmetry end-to-end, so click-to-reveal lands the caret on the right byte.
+    expect(m.from + m.table.header.cells[0].from).toBe(doc.indexOf("A"));
+    expect(m.from + m.table.rows[0].cells[0].from).toBe(doc.indexOf("1"));
+  });
+
+  it("emits for a top-level 1-3-space-indented table too (same shape)", () => {
+    const doc = "   | A | B |\n   |---|---|\n   | 1 | 2 |\n";
+    const models = freshOracle(doc);
+    expect(models).toHaveLength(1);
+    expect(models[0].table).not.toBeNull();
+    expect(models[0].table?.header.cells).toHaveLength(2);
+  });
+
+  it("stays non-emitting for a blockquote-nested table (out of scope)", () => {
+    const doc = "> | A | B |\n> |---|---|\n> | 1 | 2 |\n";
+    const models = freshOracle(doc);
+    expect(models).toHaveLength(1);
+    // Continuation lines carry `>` markers, not whitespace → still not a table.
+    expect(models[0].table).toBeNull();
+  });
+});
