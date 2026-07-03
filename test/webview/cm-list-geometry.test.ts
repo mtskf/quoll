@@ -113,8 +113,9 @@ describe("resolveListItemHang — recursive geometry (F1 + NEST_STEP)", () => {
     // step accrues once per task-fold level: 2 levels → +4ch (2ch in the 6ch
     // ch-term is c's own marker, 4ch is the two steps).
     expect(hangOf("- [ ] a\n  - [ ] b\n    - c", 2)).toEqual({
-      indent: "6 * var(--quoll-prose-space, 1ch)",
-      pad: "6 * var(--quoll-prose-space, 1ch) + 2 * var(--quoll-task-marker-width)",
+      indent:
+        "5 * var(--quoll-prose-space, 1ch) + 1 * calc((1ch + var(--quoll-prose-space, 1ch)) / 2)",
+      pad: "5 * var(--quoll-prose-space, 1ch) + 1 * calc((1ch + var(--quoll-prose-space, 1ch)) / 2) + 2 * var(--quoll-task-marker-width)",
     });
   });
 
@@ -123,20 +124,49 @@ describe("resolveListItemHang — recursive geometry (F1 + NEST_STEP)", () => {
     // under plain b so it carries b's shift (incl. the step) WITHOUT a second
     // step (plain parent → source indent shows that level's nesting).
     expect(hangOf("- [ ] a\n  - b\n    - c", 2)).toEqual({
-      indent: "6 * var(--quoll-prose-space, 1ch)",
-      pad: "6 * var(--quoll-prose-space, 1ch) + var(--quoll-task-marker-width)",
+      indent:
+        "5 * var(--quoll-prose-space, 1ch) + 1 * calc((1ch + var(--quoll-prose-space, 1ch)) / 2)",
+      pad: "5 * var(--quoll-prose-space, 1ch) + 1 * calc((1ch + var(--quoll-prose-space, 1ch)) / 2) + var(--quoll-task-marker-width)",
     });
   });
 
   it("plain-only chain is NOT re-based — no step, tab over-indent preserved", () => {
     expect(hangOf("- outer\n\t- inner", 1)).toEqual({
-      indent: "6 * var(--quoll-prose-space, 1ch)",
-      pad: "6 * var(--quoll-prose-space, 1ch)",
+      indent:
+        "5 * var(--quoll-prose-space, 1ch) + 1 * calc((1ch + var(--quoll-prose-space, 1ch)) / 2)",
+      pad: "5 * var(--quoll-prose-space, 1ch) + 1 * calc((1ch + var(--quoll-prose-space, 1ch)) / 2)",
     });
   });
 
   it("empty item yields null (no content to hang)", () => {
     expect(hangOf("- ", 0)).toBeNull();
+  });
+
+  it("plain bullet splits its `-` glyph column from the trailing space", () => {
+    // `- item`: 1 glyph col (the `-`) + 1 space col → the glyph col is sized in
+    // the GLYPH blend so the wrapped line hangs under the text, not left of it.
+    expect(hangOf("- item", 0)).toEqual({
+      indent:
+        "1 * var(--quoll-prose-space, 1ch) + 1 * calc((1ch + var(--quoll-prose-space, 1ch)) / 2)",
+      pad: "1 * var(--quoll-prose-space, 1ch) + 1 * calc((1ch + var(--quoll-prose-space, 1ch)) / 2)",
+    });
+  });
+
+  it("ordered `10.` counts three glyph columns (`1`,`0`,`.`)", () => {
+    expect(hangOf("10. item", 0)).toEqual({
+      indent:
+        "1 * var(--quoll-prose-space, 1ch) + 3 * calc((1ch + var(--quoll-prose-space, 1ch)) / 2)",
+      pad: "1 * var(--quoll-prose-space, 1ch) + 3 * calc((1ch + var(--quoll-prose-space, 1ch)) / 2)",
+    });
+  });
+
+  it("ordered `)` form (`1) item`) splits the same as `.` (ListMark span)", () => {
+    // Guards Lezer's `)`-delimited ordered ListMark: `1)` is 2 glyph cols.
+    expect(hangOf("1) item", 0)).toEqual({
+      indent:
+        "1 * var(--quoll-prose-space, 1ch) + 2 * calc((1ch + var(--quoll-prose-space, 1ch)) / 2)",
+      pad: "1 * var(--quoll-prose-space, 1ch) + 2 * calc((1ch + var(--quoll-prose-space, 1ch)) / 2)",
+    });
   });
 });
 
@@ -153,8 +183,9 @@ describe("resolveListItemHang — hiddenPrefixCols subtracts the blockquote pref
       },
     });
     expect(hang).toEqual({
-      indent: "2 * var(--quoll-prose-space, 1ch)",
-      pad: "2 * var(--quoll-prose-space, 1ch)",
+      indent:
+        "1 * var(--quoll-prose-space, 1ch) + 1 * calc((1ch + var(--quoll-prose-space, 1ch)) / 2)",
+      pad: "1 * var(--quoll-prose-space, 1ch) + 1 * calc((1ch + var(--quoll-prose-space, 1ch)) / 2)",
     });
   });
 });

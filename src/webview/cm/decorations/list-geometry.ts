@@ -114,15 +114,27 @@ export function resolveTaskMarkerGeometry(
   };
 }
 
-/** A list-geometry column: `ch·1ch + markers·var(--quoll-task-marker-width)`.
- *  `ch` may be negative in intermediate render-shift arithmetic; `markers` is
- *  >= 0 for every value that reaches serialize() — renderShift only subtracts
- *  the markers:0 sourceMarkColumn, so a marker term added by a task ancestor is
+/** A list-geometry column: `ch·COLUMN + glyph·GLYPH + markers·MARKER`. `ch`
+ *  counts whitespace columns (source indentation + trailing space, × the
+ *  measured `--quoll-prose-space`); `glyph` counts marker-glyph columns
+ *  (`-`/`*`/`+`, digits, `.`/`)`) sized in the inline `GLYPH` blend (a glyph
+ *  renders wider than a space); `markers` counts task checkboxes. `ch`/`glyph`
+ *  may be negative in intermediate render-shift arithmetic; `markers` is >= 0
+ *  for every value that reaches serialize() — renderShift only subtracts the
+ *  markers:0 sourceMarkColumn, so a marker term added by a task ancestor is
  *  never subtracted away. The final serialized INDENT/PAD are non-negative. */
-type Col = { ch: number; markers: number };
+type Col = { ch: number; glyph: number; markers: number };
 
-const add = (a: Col, b: Col): Col => ({ ch: a.ch + b.ch, markers: a.markers + b.markers });
-const subtract = (a: Col, b: Col): Col => ({ ch: a.ch - b.ch, markers: a.markers - b.markers });
+const add = (a: Col, b: Col): Col => ({
+  ch: a.ch + b.ch,
+  glyph: a.glyph + b.glyph,
+  markers: a.markers + b.markers,
+});
+const subtract = (a: Col, b: Col): Col => ({
+  ch: a.ch - b.ch,
+  glyph: a.glyph - b.glyph,
+  markers: a.markers - b.markers,
+});
 
 /** One outline step added when a child is re-based across a TASK parent's fold.
  *  PR1 placed task-nested children FLUSH at the parent content column (Codex
@@ -132,7 +144,7 @@ const subtract = (a: Col, b: Col): Col => ({ ch: a.ch - b.ch, markers: a.markers
  *  NEST_STEP (2 source cols) right makes the nesting visible. Plain parents
  *  (thin `-` marker) keep flush — the source indent already shows nesting.
  *  Value adjustable; pinned by the hang tests. */
-const NEST_STEP: Col = { ch: 2, markers: 0 };
+const NEST_STEP: Col = { ch: 2, glyph: 0, markers: 0 };
 
 /** The CSS token for one source-indentation column. A list line renders in the
  *  proportional prose font (`var(--vscode-font-family)`), where a source
@@ -144,22 +156,46 @@ const NEST_STEP: Col = { ch: 2, markers: 0 };
  *  measurement runs / when styles are absent (tests). */
 const COLUMN = "var(--quoll-prose-space, 1ch)";
 
+/** The CSS token for one MARKER-GLYPH column (`-`/`*`/`+`, a digit, `.`/`)`). A
+ *  marker glyph renders WIDER than a space in the proportional prose font (`-`
+ *  ≈ 1.7× a space; digits ≈ a `0`), so the glyph run is sized at the midpoint
+ *  between the `0` advance (`1ch`) and a space rather than --quoll-prose-space
+ *  (which under-pulled and left wrapped lines hanging a few px left of the
+ *  first-line text; measured in the browser harness 2026-07-03).
+ *
+ *  Emitted INLINE (not via a custom property): a `var(--quoll-prose-space)`
+ *  inside a `:root`/element custom-property value is substituted at the
+ *  declaring element, baking to the static `1ch` fallback instead of the
+ *  measured advance proseSpaceMetric publishes on `.cm-editor`. Inlining it in
+ *  the per-line decoration style resolves `var(--quoll-prose-space)` and `1ch`
+ *  against `.cm-line` (measured / prose font) at the use site.
+ *
+ *  Font-ADAPTIVE, not font-proof — glyph advance ratios differ per font (the
+ *  `1.` +2px outlier shows the limit); it degrades gracefully (monospace → the
+ *  `1ch` fallback == a space == `0`, exact). */
+const GLYPH = "calc((1ch + var(--quoll-prose-space, 1ch)) / 2)";
+
 /** Serialize a column count as `N * COLUMN` (the proportional-font-correct
- *  width of N source columns). */
+ *  width of N whitespace columns). */
 const columns = (ch: number): string => `${ch} * ${COLUMN}`;
 
+/** Serialize a marker-glyph count as `N * GLYPH` (the inline glyph blend). */
+const glyphs = (g: number): string => `${g} * ${GLYPH}`;
+
 function serialize(c: Col): string {
-  // `=== 0` (not `<= 0`): markers is non-negative by construction (see Col),
-  // so a hypothetical negative coefficient is NOT silently coerced to a
-  // marker-less expression — it would fall through to the `N * var(...)` form
-  // and surface as a visibly wrong string in a test rather than vanish.
-  if (c.markers === 0) {
-    return columns(c.ch);
+  // Always emit the `ch` term (preserves the `0 * …` task form pinned by the
+  // suite). `markers` is non-negative by construction (see Col); a glyph term
+  // is emitted only when non-zero so task items (glyph:0) stay byte-identical.
+  let out = columns(c.ch);
+  if (c.glyph !== 0) {
+    out += ` + ${glyphs(c.glyph)}`;
   }
   if (c.markers === 1) {
-    return `${columns(c.ch)} + ${MARKER}`;
+    out += ` + ${MARKER}`;
+  } else if (c.markers !== 0) {
+    out += ` + ${c.markers} * ${MARKER}`;
   }
-  return `${columns(c.ch)} + ${c.markers} * ${MARKER}`;
+  return out;
 }
 
 /** Visual column of `pos` within its own line (tabs expanded to tabSize).
@@ -224,9 +260,21 @@ function ownMarkerWidth(state: EditorState, listItem: SyntaxNode): Col | null {
     if (geom === null) {
       return null; // task-shaped but invalid marker → no hang (F7 fail-closed)
     }
-    return { ch: columnAt(state, geom.foldFrom) - markCol, markers: 1 };
+    // Task branch stays all-prose-space (glyph:0): bullet tasks fold `- [ ]`
+    // into the checkbox (0 visible prefix, already aligned), and the ordered
+    // task's visible `N. ` glyph split is a deliberately-deferred follow-up
+    // (Task 6 TODO) to keep the invariant-sensitive fold branch untouched.
+    return { ch: columnAt(state, geom.foldFrom) - markCol, glyph: 0, markers: 1 };
   }
-  return { ch: columnAt(state, content.from) - markCol, markers: 0 };
+  // Split the plain marker prefix: the ListMark glyph run (`-`/`*`/`+`, `N.`,
+  // `N)`) renders wider than a space, so it is sized in the GLYPH blend; the
+  // trailing whitespace up to the content stays in --quoll-prose-space.
+  const listMarkTo = columnAt(state, listMark.to);
+  return {
+    ch: columnAt(state, content.from) - listMarkTo,
+    glyph: listMarkTo - markCol,
+    markers: 0,
+  };
 }
 
 /** The item's source ListMark column as a `Col` (markers: 0). The model's
@@ -235,7 +283,7 @@ function sourceMarkColumn(state: EditorState, listItem: SyntaxNode): Col {
   const listMark = listItem.firstChild;
   const col =
     listMark !== null && listMark.name === "ListMark" ? columnAt(state, listMark.from) : 0;
-  return { ch: col, markers: 0 };
+  return { ch: col, glyph: 0, markers: 0 };
 }
 
 /** Column where the item's MARKER actually renders (recursive across the
@@ -279,7 +327,7 @@ function renderedMarkCol(state: EditorState, listItem: SyntaxNode): Col {
  *  Only called on items with a valid ownMarkerWidth (the item itself, already
  *  validated, or a task parent whose marker is valid). */
 function renderedContentCol(state: EditorState, listItem: SyntaxNode): Col {
-  const own = ownMarkerWidth(state, listItem) ?? { ch: 0, markers: 0 };
+  const own = ownMarkerWidth(state, listItem) ?? { ch: 0, glyph: 0, markers: 0 };
   return add(renderedMarkCol(state, listItem), own);
 }
 
@@ -308,7 +356,7 @@ export function resolveListItemHang(
   // first-line pull (indent) and the rendered continuation hang (pad) shift left
   // by the same hidden width. 0 for non-blockquoted lines and caret-on (the
   // provider passes 0), leaving the original physical-column geometry intact.
-  const shift: Col = { ch: hiddenPrefixCols, markers: 0 };
+  const shift: Col = { ch: hiddenPrefixCols, glyph: 0, markers: 0 };
   const indent = subtract(add(sourceMarkColumn(state, listItem), own), shift);
   const pad = subtract(add(renderedMarkCol(state, listItem), own), shift);
   return { indent: serialize(indent), pad: serialize(pad) };

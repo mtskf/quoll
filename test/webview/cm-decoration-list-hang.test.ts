@@ -53,7 +53,7 @@ describe("list hang-indent provider — plain bullet/ordered", () => {
       {
         from: 0,
         style:
-          "text-indent:calc(-1 * (2 * var(--quoll-prose-space, 1ch)));padding-inline-start:calc(6px + (2 * var(--quoll-prose-space, 1ch)))",
+          "text-indent:calc(-1 * (1 * var(--quoll-prose-space, 1ch) + 1 * calc((1ch + var(--quoll-prose-space, 1ch)) / 2)));padding-inline-start:calc(6px + (1 * var(--quoll-prose-space, 1ch) + 1 * calc((1ch + var(--quoll-prose-space, 1ch)) / 2)))",
       },
     ]);
   });
@@ -61,19 +61,19 @@ describe("list hang-indent provider — plain bullet/ordered", () => {
   it("ordered item: hang = 3ch", () => {
     const set = buildListHangIndent(ctx("1. alpha bravo"));
     expect(lines(set)[0]?.style).toBe(
-      "text-indent:calc(-1 * (3 * var(--quoll-prose-space, 1ch)));padding-inline-start:calc(6px + (3 * var(--quoll-prose-space, 1ch)))"
+      "text-indent:calc(-1 * (1 * var(--quoll-prose-space, 1ch) + 2 * calc((1ch + var(--quoll-prose-space, 1ch)) / 2)));padding-inline-start:calc(6px + (1 * var(--quoll-prose-space, 1ch) + 2 * calc((1ch + var(--quoll-prose-space, 1ch)) / 2)))"
     );
   });
 
   it("two-digit ordered item: hang = 4ch", () => {
     expect(lines(buildListHangIndent(ctx("10. alpha")))[0]?.style).toBe(
-      "text-indent:calc(-1 * (4 * var(--quoll-prose-space, 1ch)));padding-inline-start:calc(6px + (4 * var(--quoll-prose-space, 1ch)))"
+      "text-indent:calc(-1 * (1 * var(--quoll-prose-space, 1ch) + 3 * calc((1ch + var(--quoll-prose-space, 1ch)) / 2)));padding-inline-start:calc(6px + (1 * var(--quoll-prose-space, 1ch) + 3 * calc((1ch + var(--quoll-prose-space, 1ch)) / 2)))"
     );
   });
 
   it("top-level 2-space-indented bullet: hang = 4ch", () => {
     expect(lines(buildListHangIndent(ctx("  - alpha")))[0]?.style).toBe(
-      "text-indent:calc(-1 * (4 * var(--quoll-prose-space, 1ch)));padding-inline-start:calc(6px + (4 * var(--quoll-prose-space, 1ch)))"
+      "text-indent:calc(-1 * (3 * var(--quoll-prose-space, 1ch) + 1 * calc((1ch + var(--quoll-prose-space, 1ch)) / 2)));padding-inline-start:calc(6px + (3 * var(--quoll-prose-space, 1ch) + 1 * calc((1ch + var(--quoll-prose-space, 1ch)) / 2)))"
     );
   });
 
@@ -82,7 +82,7 @@ describe("list hang-indent provider — plain bullet/ordered", () => {
     // 4 (tab → 4) + 2 = 6. countColumn expands the tab; raw offset would be 3.
     const got = lines(buildListHangIndent(ctx("- outer\n\t- inner")));
     expect(got[1]?.style).toBe(
-      "text-indent:calc(-1 * (6 * var(--quoll-prose-space, 1ch)));padding-inline-start:calc(6px + (6 * var(--quoll-prose-space, 1ch)))"
+      "text-indent:calc(-1 * (5 * var(--quoll-prose-space, 1ch) + 1 * calc((1ch + var(--quoll-prose-space, 1ch)) / 2)));padding-inline-start:calc(6px + (5 * var(--quoll-prose-space, 1ch) + 1 * calc((1ch + var(--quoll-prose-space, 1ch)) / 2)))"
     );
   });
 
@@ -101,12 +101,12 @@ describe("list hang-indent provider — plain bullet/ordered", () => {
       {
         from: 0,
         style:
-          "text-indent:calc(-1 * (2 * var(--quoll-prose-space, 1ch)));padding-inline-start:calc(6px + (2 * var(--quoll-prose-space, 1ch)))",
+          "text-indent:calc(-1 * (1 * var(--quoll-prose-space, 1ch) + 1 * calc((1ch + var(--quoll-prose-space, 1ch)) / 2)));padding-inline-start:calc(6px + (1 * var(--quoll-prose-space, 1ch) + 1 * calc((1ch + var(--quoll-prose-space, 1ch)) / 2)))",
       },
       {
         from: 8,
         style:
-          "text-indent:calc(-1 * (4 * var(--quoll-prose-space, 1ch)));padding-inline-start:calc(6px + (4 * var(--quoll-prose-space, 1ch)))",
+          "text-indent:calc(-1 * (3 * var(--quoll-prose-space, 1ch) + 1 * calc((1ch + var(--quoll-prose-space, 1ch)) / 2)));padding-inline-start:calc(6px + (3 * var(--quoll-prose-space, 1ch) + 1 * calc((1ch + var(--quoll-prose-space, 1ch)) / 2)))",
       },
     ]);
   });
@@ -146,28 +146,28 @@ describe("list hang-indent provider — plain child nested under a task item", (
   it("2-space bullet child: re-based one step past the parent task content column", () => {
     const set = buildListHangIndent(ctx("- [ ] task\n  - nested bullet"));
     expect(lines(set)[1]?.style).toBe(
-      "text-indent:calc(-1 * (4 * var(--quoll-prose-space, 1ch)));padding-inline-start:calc(6px + (4 * var(--quoll-prose-space, 1ch) + var(--quoll-task-marker-width)))"
+      "text-indent:calc(-1 * (3 * var(--quoll-prose-space, 1ch) + 1 * calc((1ch + var(--quoll-prose-space, 1ch)) / 2)));padding-inline-start:calc(6px + (3 * var(--quoll-prose-space, 1ch) + 1 * calc((1ch + var(--quoll-prose-space, 1ch)) / 2) + var(--quoll-task-marker-width)))"
     );
   });
 
   it("tab-indented bullet child: text-indent uses tab-expanded col, hang re-bases +step", () => {
     const set = buildListHangIndent(ctx("- [ ] task\n\t- nested"));
     expect(lines(set)[1]?.style).toBe(
-      "text-indent:calc(-1 * (6 * var(--quoll-prose-space, 1ch)));padding-inline-start:calc(6px + (4 * var(--quoll-prose-space, 1ch) + var(--quoll-task-marker-width)))"
+      "text-indent:calc(-1 * (5 * var(--quoll-prose-space, 1ch) + 1 * calc((1ch + var(--quoll-prose-space, 1ch)) / 2)));padding-inline-start:calc(6px + (3 * var(--quoll-prose-space, 1ch) + 1 * calc((1ch + var(--quoll-prose-space, 1ch)) / 2) + var(--quoll-task-marker-width)))"
     );
   });
 
   it("ordered child under bullet task: child marker width is `N. ` (3ch), +step", () => {
     const set = buildListHangIndent(ctx("- [ ] task\n  1. item here"));
     expect(lines(set)[1]?.style).toBe(
-      "text-indent:calc(-1 * (5 * var(--quoll-prose-space, 1ch)));padding-inline-start:calc(6px + (5 * var(--quoll-prose-space, 1ch) + var(--quoll-task-marker-width)))"
+      "text-indent:calc(-1 * (3 * var(--quoll-prose-space, 1ch) + 2 * calc((1ch + var(--quoll-prose-space, 1ch)) / 2)));padding-inline-start:calc(6px + (3 * var(--quoll-prose-space, 1ch) + 2 * calc((1ch + var(--quoll-prose-space, 1ch)) / 2) + var(--quoll-task-marker-width)))"
     );
   });
 
   it("bullet child under ORDERED task: parent prefix keeps `1. ` visible (3ch), +step", () => {
     const set = buildListHangIndent(ctx("1. [ ] task\n   - child here"));
     expect(lines(set)[1]?.style).toBe(
-      "text-indent:calc(-1 * (5 * var(--quoll-prose-space, 1ch)));padding-inline-start:calc(6px + (7 * var(--quoll-prose-space, 1ch) + var(--quoll-task-marker-width)))"
+      "text-indent:calc(-1 * (4 * var(--quoll-prose-space, 1ch) + 1 * calc((1ch + var(--quoll-prose-space, 1ch)) / 2)));padding-inline-start:calc(6px + (6 * var(--quoll-prose-space, 1ch) + 1 * calc((1ch + var(--quoll-prose-space, 1ch)) / 2) + var(--quoll-task-marker-width)))"
     );
   });
 });
@@ -177,7 +177,7 @@ describe("list hang-indent provider — task compensation does NOT leak", () => 
     // Regression guard for the working control: `- outer\n  - inner`.
     const set = buildListHangIndent(ctx("- outer\n  - inner"));
     expect(lines(set)[1]?.style).toBe(
-      "text-indent:calc(-1 * (4 * var(--quoll-prose-space, 1ch)));padding-inline-start:calc(6px + (4 * var(--quoll-prose-space, 1ch)))"
+      "text-indent:calc(-1 * (3 * var(--quoll-prose-space, 1ch) + 1 * calc((1ch + var(--quoll-prose-space, 1ch)) / 2)));padding-inline-start:calc(6px + (3 * var(--quoll-prose-space, 1ch) + 1 * calc((1ch + var(--quoll-prose-space, 1ch)) / 2)))"
     );
   });
 
@@ -204,16 +204,16 @@ describe("list hang-indent provider — multi-level task nesting (F1 + NEST_STEP
   it("task → task → plain: the plain leaf inherits TWO checkbox shifts + TWO steps", () => {
     const set = buildListHangIndent(ctx("- [ ] a\n  - [ ] b\n    - c"));
     expect(lines(set)[2]?.style).toBe(
-      "text-indent:calc(-1 * (6 * var(--quoll-prose-space, 1ch)));" +
-        "padding-inline-start:calc(6px + (6 * var(--quoll-prose-space, 1ch) + 2 * var(--quoll-task-marker-width)))"
+      "text-indent:calc(-1 * (5 * var(--quoll-prose-space, 1ch) + 1 * calc((1ch + var(--quoll-prose-space, 1ch)) / 2)));" +
+        "padding-inline-start:calc(6px + (5 * var(--quoll-prose-space, 1ch) + 1 * calc((1ch + var(--quoll-prose-space, 1ch)) / 2) + 2 * var(--quoll-task-marker-width)))"
     );
   });
 
   it("task → plain → plain: a plain intermediate carries the ancestor task shift+step (no 2nd step)", () => {
     const set = buildListHangIndent(ctx("- [ ] a\n  - b\n    - c"));
     expect(lines(set)[2]?.style).toBe(
-      "text-indent:calc(-1 * (6 * var(--quoll-prose-space, 1ch)));" +
-        "padding-inline-start:calc(6px + (6 * var(--quoll-prose-space, 1ch) + var(--quoll-task-marker-width)))"
+      "text-indent:calc(-1 * (5 * var(--quoll-prose-space, 1ch) + 1 * calc((1ch + var(--quoll-prose-space, 1ch)) / 2)));" +
+        "padding-inline-start:calc(6px + (5 * var(--quoll-prose-space, 1ch) + 1 * calc((1ch + var(--quoll-prose-space, 1ch)) / 2) + var(--quoll-task-marker-width)))"
     );
   });
 });
@@ -354,14 +354,14 @@ describe("list hang-indent provider — blockquoted lists (selection-aware)", ()
   it("caret-off `> - item`: hang reduces to the plain `- item` hang (2ch)", () => {
     const set = buildListHangIndent(ctxWithSelection(twoItems, line2From + 3));
     expect(lines(set)[0]?.style).toBe(
-      "text-indent:calc(-1 * (2 * var(--quoll-prose-space, 1ch)));padding-inline-start:calc(6px + (2 * var(--quoll-prose-space, 1ch)))"
+      "text-indent:calc(-1 * (1 * var(--quoll-prose-space, 1ch) + 1 * calc((1ch + var(--quoll-prose-space, 1ch)) / 2)));padding-inline-start:calc(6px + (1 * var(--quoll-prose-space, 1ch) + 1 * calc((1ch + var(--quoll-prose-space, 1ch)) / 2)))"
     );
   });
 
   it("caret-on `> - item`: full hang keeps the revealed `> ` (4ch)", () => {
     const set = buildListHangIndent(ctxWithSelection(twoItems, line2From + 3));
     expect(lines(set)[1]?.style).toBe(
-      "text-indent:calc(-1 * (4 * var(--quoll-prose-space, 1ch)));padding-inline-start:calc(6px + (4 * var(--quoll-prose-space, 1ch)))"
+      "text-indent:calc(-1 * (3 * var(--quoll-prose-space, 1ch) + 1 * calc((1ch + var(--quoll-prose-space, 1ch)) / 2)));padding-inline-start:calc(6px + (3 * var(--quoll-prose-space, 1ch) + 1 * calc((1ch + var(--quoll-prose-space, 1ch)) / 2)))"
     );
   });
 
@@ -369,7 +369,7 @@ describe("list hang-indent provider — blockquoted lists (selection-aware)", ()
     const d = "> 1. alpha\nx";
     const set = buildListHangIndent(ctxWithSelection(d, d.length)); // caret on line 2
     expect(lines(set)[0]?.style).toBe(
-      "text-indent:calc(-1 * (3 * var(--quoll-prose-space, 1ch)));padding-inline-start:calc(6px + (3 * var(--quoll-prose-space, 1ch)))"
+      "text-indent:calc(-1 * (1 * var(--quoll-prose-space, 1ch) + 2 * calc((1ch + var(--quoll-prose-space, 1ch)) / 2)));padding-inline-start:calc(6px + (1 * var(--quoll-prose-space, 1ch) + 2 * calc((1ch + var(--quoll-prose-space, 1ch)) / 2)))"
     );
   });
 
@@ -377,7 +377,7 @@ describe("list hang-indent provider — blockquoted lists (selection-aware)", ()
     const d = "> > - alpha\nx";
     const set = buildListHangIndent(ctxWithSelection(d, d.length));
     expect(lines(set)[0]?.style).toBe(
-      "text-indent:calc(-1 * (2 * var(--quoll-prose-space, 1ch)));padding-inline-start:calc(6px + (2 * var(--quoll-prose-space, 1ch)))"
+      "text-indent:calc(-1 * (1 * var(--quoll-prose-space, 1ch) + 1 * calc((1ch + var(--quoll-prose-space, 1ch)) / 2)));padding-inline-start:calc(6px + (1 * var(--quoll-prose-space, 1ch) + 1 * calc((1ch + var(--quoll-prose-space, 1ch)) / 2)))"
     );
   });
 
@@ -385,7 +385,7 @@ describe("list hang-indent provider — blockquoted lists (selection-aware)", ()
     const d = "  > - alpha\nx";
     const set = buildListHangIndent(ctxWithSelection(d, d.length));
     expect(lines(set)[0]?.style).toBe(
-      "text-indent:calc(-1 * (4 * var(--quoll-prose-space, 1ch)));padding-inline-start:calc(6px + (4 * var(--quoll-prose-space, 1ch)))"
+      "text-indent:calc(-1 * (3 * var(--quoll-prose-space, 1ch) + 1 * calc((1ch + var(--quoll-prose-space, 1ch)) / 2)));padding-inline-start:calc(6px + (3 * var(--quoll-prose-space, 1ch) + 1 * calc((1ch + var(--quoll-prose-space, 1ch)) / 2)))"
     );
   });
 
@@ -393,7 +393,7 @@ describe("list hang-indent provider — blockquoted lists (selection-aware)", ()
     const d = ">   - alpha\nx";
     const set = buildListHangIndent(ctxWithSelection(d, d.length));
     expect(lines(set)[0]?.style).toBe(
-      "text-indent:calc(-1 * (2 * var(--quoll-prose-space, 1ch)));padding-inline-start:calc(6px + (2 * var(--quoll-prose-space, 1ch)))"
+      "text-indent:calc(-1 * (1 * var(--quoll-prose-space, 1ch) + 1 * calc((1ch + var(--quoll-prose-space, 1ch)) / 2)));padding-inline-start:calc(6px + (1 * var(--quoll-prose-space, 1ch) + 1 * calc((1ch + var(--quoll-prose-space, 1ch)) / 2)))"
     );
   });
 
@@ -401,7 +401,7 @@ describe("list hang-indent provider — blockquoted lists (selection-aware)", ()
     const d = ">\t- alpha\nx";
     const set = buildListHangIndent(ctxWithSelection(d, d.length));
     expect(lines(set)[0]?.style).toBe(
-      "text-indent:calc(-1 * (2 * var(--quoll-prose-space, 1ch)));padding-inline-start:calc(6px + (2 * var(--quoll-prose-space, 1ch)))"
+      "text-indent:calc(-1 * (1 * var(--quoll-prose-space, 1ch) + 1 * calc((1ch + var(--quoll-prose-space, 1ch)) / 2)));padding-inline-start:calc(6px + (1 * var(--quoll-prose-space, 1ch) + 1 * calc((1ch + var(--quoll-prose-space, 1ch)) / 2)))"
     );
   });
 
@@ -410,7 +410,7 @@ describe("list hang-indent provider — blockquoted lists (selection-aware)", ()
     const set = buildListHangIndent(ctxWithSelection(d, d.length)); // caret on the trailing `x`
     // inner is the 2nd hang line (index 1).
     expect(lines(set)[1]?.style).toBe(
-      "text-indent:calc(-1 * (2 * var(--quoll-prose-space, 1ch)));padding-inline-start:calc(6px + (2 * var(--quoll-prose-space, 1ch)))"
+      "text-indent:calc(-1 * (1 * var(--quoll-prose-space, 1ch) + 1 * calc((1ch + var(--quoll-prose-space, 1ch)) / 2)));padding-inline-start:calc(6px + (1 * var(--quoll-prose-space, 1ch) + 1 * calc((1ch + var(--quoll-prose-space, 1ch)) / 2)))"
     );
   });
 
@@ -418,7 +418,7 @@ describe("list hang-indent provider — blockquoted lists (selection-aware)", ()
     const d = "- alpha\nx";
     const set = buildListHangIndent(ctxWithSelection(d, d.length));
     expect(lines(set)[0]?.style).toBe(
-      "text-indent:calc(-1 * (2 * var(--quoll-prose-space, 1ch)));padding-inline-start:calc(6px + (2 * var(--quoll-prose-space, 1ch)))"
+      "text-indent:calc(-1 * (1 * var(--quoll-prose-space, 1ch) + 1 * calc((1ch + var(--quoll-prose-space, 1ch)) / 2)));padding-inline-start:calc(6px + (1 * var(--quoll-prose-space, 1ch) + 1 * calc((1ch + var(--quoll-prose-space, 1ch)) / 2)))"
     );
   });
 
@@ -430,7 +430,7 @@ describe("list hang-indent provider — blockquoted lists (selection-aware)", ()
     const d = "- > quote\nx";
     const set = buildListHangIndent(ctxWithSelection(d, d.length)); // caret on line 2
     expect(lines(set)[0]?.style).toBe(
-      "text-indent:calc(-1 * (2 * var(--quoll-prose-space, 1ch)));padding-inline-start:calc(6px + (2 * var(--quoll-prose-space, 1ch)))"
+      "text-indent:calc(-1 * (1 * var(--quoll-prose-space, 1ch) + 1 * calc((1ch + var(--quoll-prose-space, 1ch)) / 2)));padding-inline-start:calc(6px + (1 * var(--quoll-prose-space, 1ch) + 1 * calc((1ch + var(--quoll-prose-space, 1ch)) / 2)))"
     );
   });
 });
