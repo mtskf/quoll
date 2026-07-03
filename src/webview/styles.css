@@ -262,7 +262,8 @@
     --quoll-bullet-marker: var(--quoll-accent-green);
     /* Completed-task tint (checkbox-completed-tint feature). `fill` is the muted
      * grey the DONE box is filled with (border matches) — deliberately NOT the
-     * bright accent green (the emphasis inversion: today checked = accent green).
+     * bright accent green (the emphasis inversion: the pre-redesign checked box
+     * used accent green; this recedes it to muted grey).
      * `ink` mutes the completed item's CONTENT text (task-checkbox-reveal.ts mark
      * → cm/theme.ts taskCompletedContentThemeSpec). Dark values sit legibly on the
      * near-black editor bg; the tick is knocked out in --vscode-editor-background. */
@@ -563,7 +564,7 @@
     bottom: auto;
     width: 0.26em;
     height: 0.46em;
-    transform: translate(-50%, -70%) rotate(45deg);
+    transform: translate(-50%, -64%) rotate(45deg);
     /* Editor-BACKGROUND ink so the tick reads as a cutout in the muted fill. */
     border: solid var(--vscode-editor-background);
     border-width: 0 0.14em 0.14em 0;
