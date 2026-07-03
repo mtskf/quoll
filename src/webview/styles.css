@@ -260,6 +260,14 @@
      * .quoll-bullet-marker::before). Dark = the accent green; light brightens it;
      * HC re-points to the host accent. */
     --quoll-bullet-marker: var(--quoll-accent-green);
+    /* Completed-task tint (checkbox-completed-tint feature). `fill` is the muted
+     * grey the DONE box is filled with (border matches) — deliberately NOT the
+     * bright accent green (the emphasis inversion: today checked = accent green).
+     * `ink` mutes the completed item's CONTENT text (task-checkbox-reveal.ts mark
+     * → cm/theme.ts taskCompletedContentThemeSpec). Dark values sit legibly on the
+     * near-black editor bg; the tick is knocked out in --vscode-editor-background. */
+    --quoll-completed-fill: #474d57;
+    --quoll-completed-ink: var(--vscode-descriptionForeground, #7d838d);
     /* Selection tint: DARKEN the host dark-theme selection by ~18% rather than
      * hardcoding a hex, so the highlight still TRACKS whatever dark theme the
      * user runs (Dark+, a 3rd-party dark, …) while reading a touch calmer on
@@ -280,6 +288,8 @@
      * the white page background. */
     --quoll-fold-fill: rgba(0, 0, 0, 0.15);
     --quoll-bullet-marker: #23b06f;
+    --quoll-completed-fill: #aeb4bd;
+    --quoll-completed-ink: var(--vscode-descriptionForeground, #8b909a);
     /* Light selection stays the plain host colour (user kept the current light
      * tint). Both HC kinds map to .light-theme, so HC selection is the plain
      * host colour too — maximal contrast, no HC override needed. */
@@ -313,6 +323,11 @@
      * a maximal-contrast ellipsis affordance in both HC kinds. */
     --quoll-fold-fill: var(--vscode-editor-foreground);
     --quoll-bullet-marker: var(--quoll-accent-green);
+    /* HC keeps maximal contrast: a SOLID foreground box (fold-fill precedent) with
+     * the tick knocked out in the editor bg, and NO content-text muting (ink stays
+     * full foreground — de-emphasis must not cost HC legibility). */
+    --quoll-completed-fill: var(--vscode-editor-foreground);
+    --quoll-completed-ink: var(--vscode-editor-foreground);
   }
 }
 
@@ -491,8 +506,11 @@
     height: 1em;
     margin-right: 0.25em;
     vertical-align: -0.15em;
-    border: 1px solid var(--vscode-editor-foreground);
-    border-radius: 2px;
+    /* Todo (unchecked) is the DOMINANT element: a green rounded ring draws the
+     * eye to incomplete work. The done box (below) recedes to muted grey. */
+    border: 1.6px solid
+      var(--quoll-accent-green, var(--vscode-textLink-foreground, var(--vscode-editor-foreground)));
+    border-radius: 6px;
     cursor: pointer;
     background-color: transparent;
     box-sizing: border-box;
@@ -502,13 +520,14 @@
     line-height: 1;
   }
 
-  /* Checked: an accent-filled box (VS Code's button accent, the same colour
-   * native checkboxes/primary buttons use) so "done" reads at a glance.
-   * Falls back to --vscode-editor-foreground on the rare theme without a
-   * button palette (the pre-redesign look). */
+  /* Checked: a muted-grey RECEDING box (the emphasis inversion — done work
+   * steps back so the green todo ring dominates). Filled + bordered in the
+   * --quoll-completed-fill token; the tick is knocked out in the editor bg
+   * (a cutout, below). Falls back through --vscode-descriptionForeground to
+   * --vscode-editor-foreground on a theme without a description palette. */
   .quoll-task-checkbox[data-checked="true"] {
-    background-color: var(--quoll-accent-green, var(--vscode-button-background, var(--vscode-editor-foreground)));
-    border-color: var(--quoll-accent-green, var(--vscode-button-background, var(--vscode-editor-foreground)));
+    background-color: var(--quoll-completed-fill, var(--vscode-descriptionForeground, var(--vscode-editor-foreground)));
+    border-color: var(--quoll-completed-fill, var(--vscode-descriptionForeground, var(--vscode-editor-foreground)));
     position: relative;
   }
 
@@ -522,9 +541,9 @@
    * onto the editor background where it was invisible (the filled box then
    * read as "checked but blank"). `right`/`bottom: auto` override the base
    * box's geometry so the tick sizes by width/height; the slight upward
-   * `translateY` optically centres the asymmetric ✓. Colour is
-   * --vscode-button-foreground so it contrasts the accent fill on every
-   * theme. */
+   * `translateY` optically centres the asymmetric ✓. Colour is now the
+   * editor BACKGROUND so the tick reads as a clean cutout in the muted-grey
+   * fill (was a --vscode-button-foreground glyph on the old accent fill). */
   .quoll-task-checkbox[data-checked="true"]::after {
     content: "";
     position: absolute;
@@ -534,8 +553,9 @@
     bottom: auto;
     width: 0.26em;
     height: 0.46em;
-    transform: translate(-50%, -64%) rotate(45deg);
-    border: solid var(--quoll-on-accent, var(--vscode-button-foreground, var(--vscode-editor-background)));
+    transform: translate(-50%, -58%) rotate(45deg);
+    /* Editor-BACKGROUND ink so the tick reads as a cutout in the muted fill. */
+    border: solid var(--vscode-editor-background);
     border-width: 0 0.14em 0.14em 0;
     border-radius: 0.5px;
   }
