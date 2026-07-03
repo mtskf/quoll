@@ -4,6 +4,7 @@ All notable changes to Quoll are documented here.
 
 ## 0.1.x
 
+- Fix the `Cmd+Option+K` / `Ctrl+Alt+K` "hand selection to Claude Code" chord. It now routes to whichever Claude Code you're using: if the Claude Code webview panel is the visible tab, the reference is copied and that panel is focused; otherwise it inserts straight into a Claude Code CLI terminal — found even when the terminal isn't named "claude" (e.g. `claude` + `/ide`), by locating a `claude` process in the terminal's process tree. When no terminal is found and no panel is visible, it focuses an already-open panel rather than spawning a new one (which previously popped an unwanted panel and logged "Webview is disposed" errors).
 - Restyle task-list checkboxes so open work leads the eye: incomplete items now show a green rounded ring, while completed items recede — a muted-grey filled box with a cut-out checkmark, and their text is dimmed (no strikethrough). The checkmark is re-centred, and in the light theme the todo ring uses a brighter green.
 - Add a top-right button and an `Ctrl/Cmd+Alt+E` keybinding to switch the current `.md` between Quoll and VS Code's built-in text editor; the caret position is preserved across the switch (via the button and the chord; the reverse text→Quoll direction preserves it too).
 
