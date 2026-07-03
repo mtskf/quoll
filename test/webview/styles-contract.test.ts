@@ -262,3 +262,20 @@ describe("styles.css — bullet-list marker token (HC-sensitive)", () => {
     expect(hc?.[1] ?? "").toMatch(/--quoll-bullet-marker\s*:\s*var\(--quoll-accent-green/);
   });
 });
+
+describe("styles.css — thematic break rule", () => {
+  const css = readFileSync(new URL("../../src/webview/styles.css", import.meta.url), "utf8");
+
+  it("declares .quoll-thematic-break as a full-width border rule", () => {
+    // Matches the rule block and asserts it carries a border-top + width:100%.
+    const block = css.match(/\.quoll-thematic-break\s*\{[^}]*\}/);
+    expect(block).not.toBeNull();
+    expect(block?.[0]).toMatch(/border-top\s*:/);
+    expect(block?.[0]).toMatch(/width\s*:\s*100%/);
+  });
+
+  it("does NOT set display:none (the rule must be visible)", () => {
+    const block = css.match(/\.quoll-thematic-break\s*\{[^}]*\}/);
+    expect(block?.[0]).not.toMatch(/display\s*:\s*none/);
+  });
+});
