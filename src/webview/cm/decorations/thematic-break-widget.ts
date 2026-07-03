@@ -29,7 +29,14 @@ export class ThematicBreakWidget extends WidgetType {
   }
 
   ignoreEvent(): boolean {
-    // Display-only, non-interactive: never swallow editor events.
-    return true;
+    // Let mouse events fall THROUGH to CodeMirror so a click on the rendered
+    // rule places the caret on the HR line and reveals the raw source. This
+    // widget is NOT atomic (no atomicRanges), so CM's native pointer→position
+    // mapping is the click-to-reveal path — returning `true` would make CM
+    // ignore clicks on the rule (eventBelongsToEditor short-circuits on a
+    // widget whose ignoreEvent is true), breaking click-to-reveal. Contrast the
+    // image / frontmatter block widgets, which ARE atomic and therefore dispatch
+    // their own click→reveal instead.
+    return false;
   }
 }

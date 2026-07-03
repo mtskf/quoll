@@ -51,7 +51,15 @@ export const thematicBreakReveal: DecorationProvider = {
             return;
           }
           if (intersectsAnySelection(ctx.selection, line.from, line.to)) {
-            builder.add(node.from, node.to, REVEAL_MARK);
+            // Reveal: dim the raw glyphs at the NODE span. Guard the node range
+            // (not just the line) against the window — an indented `   ---` has
+            // its node start AFTER the indent, so a viewport edge falling between
+            // line.from and node.from would otherwise emit this mark entirely
+            // outside the window. Parity with heading-reveal, which guards the
+            // exact decorated range, not merely the reveal-trigger line.
+            if (node.from < range.to && range.from < node.to) {
+              builder.add(node.from, node.to, REVEAL_MARK);
+            }
           } else {
             builder.add(
               line.from,

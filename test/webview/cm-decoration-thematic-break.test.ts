@@ -27,8 +27,11 @@ describe("ThematicBreakWidget", () => {
     expect(new ThematicBreakWidget().eq(new ThematicBreakWidget())).toBe(true);
   });
 
-  it("ignores events (non-interactive, display-only)", () => {
-    expect(new ThematicBreakWidget().ignoreEvent()).toBe(true);
+  it("does NOT ignore events — clicks fall through to CM so click-to-reveal works", () => {
+    // The rule is display-only but NOT atomic; returning false lets a click on
+    // the rendered rule place the caret on the HR line (→ reveal). Returning true
+    // would make CM ignore the click (eventBelongsToEditor short-circuits).
+    expect(new ThematicBreakWidget().ignoreEvent()).toBe(false);
   });
 });
 
@@ -140,8 +143,8 @@ describe("thematic break reveal provider", () => {
   it("per-caret reveal across multiple rules", () => {
     // Three HRs; caret only on the middle one.
     const doc = "a\n\n---\n\nb\n\n---\n\nc\n\n---\n\nd";
-    // Offsets: HR1 [3,6] line[3,6]; HR2 [10,13]; HR3 [17,20].
-    const set = thematicBreakReveal.build(ctx(doc, EditorSelection.single(11))); // inside HR2
+    // HR node/line spans: HR1 [3,6]; HR2 [11,14]; HR3 [19,22].
+    const set = thematicBreakReveal.build(ctx(doc, EditorSelection.single(11))); // at HR2 line.from
     const r = spec(set);
     expect(r.length).toBe(3);
     expect(r[0]?.kind).toBe("replace"); // HR1 hidden
@@ -155,6 +158,17 @@ describe("thematic break reveal provider", () => {
     const set = thematicBreakReveal.build(ctx(doc, EditorSelection.single(8), { from: 0, to: 6 }));
     expect(set.size).toBe(1);
     expect(set.iter().from).toBe(3);
+  });
+
+  it("REVEAL branch: no mark emitted outside the window when an indented HR straddles the edge", () => {
+    // "   ---\nnext": line [0,6], HorizontalRule node [3,6] (starts AFTER the
+    // 3-space indent). tree.iterate({0,3}) still visits the node (Lezer touch
+    // semantics) and the line overlaps [0,3], so with the caret ON the line the
+    // reveal branch WOULD add a mark at the node span [3,6] — entirely outside
+    // the window — unless the node range is guarded against the window.
+    const doc = "   ---\nnext";
+    const set = thematicBreakReveal.build(ctx(doc, EditorSelection.single(1), { from: 0, to: 3 }));
+    expect(set.size).toBe(0);
   });
 
   it("identity round-trip: build() never mutates ctx.state.doc", () => {
