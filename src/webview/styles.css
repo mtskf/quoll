@@ -268,6 +268,12 @@
      * near-black editor bg; the tick is knocked out in --vscode-editor-background. */
     --quoll-completed-fill: #474d57;
     --quoll-completed-ink: var(--vscode-descriptionForeground, #7d838d);
+    /* Unchecked (todo) ring colour. A DEDICATED token (not --quoll-accent-green
+     * directly) so the ring can be brightened per-theme WITHOUT re-tinting links,
+     * which also consume the accent green. Dark reuses the accent green; light
+     * brightens it (matching the bullet-dot green); HC re-points through the host
+     * accent. */
+    --quoll-todo-ring: var(--quoll-accent-green);
     /* Selection tint: DARKEN the host dark-theme selection by ~18% rather than
      * hardcoding a hex, so the highlight still TRACKS whatever dark theme the
      * user runs (Dark+, a 3rd-party dark, …) while reading a touch calmer on
@@ -290,6 +296,9 @@
     --quoll-bullet-marker: #23b06f;
     --quoll-completed-fill: #aeb4bd;
     --quoll-completed-ink: var(--vscode-descriptionForeground, #8b909a);
+    /* Light brightens the todo ring to the bullet-dot green so incomplete items
+     * lead the eye more than the darker #1a7050 link accent would. */
+    --quoll-todo-ring: #23b06f;
     /* Light selection stays the plain host colour (user kept the current light
      * tint). Both HC kinds map to .light-theme, so HC selection is the plain
      * host colour too — maximal contrast, no HC override needed. */
@@ -328,6 +337,7 @@
      * full foreground — de-emphasis must not cost HC legibility). */
     --quoll-completed-fill: var(--vscode-editor-foreground);
     --quoll-completed-ink: var(--vscode-editor-foreground);
+    --quoll-todo-ring: var(--quoll-accent-green);
   }
 }
 
@@ -508,8 +518,8 @@
     vertical-align: -0.15em;
     /* Todo (unchecked) is the DOMINANT element: a green rounded ring draws the
      * eye to incomplete work. The done box (below) recedes to muted grey. */
-    border: 1.6px solid
-      var(--quoll-accent-green, var(--vscode-textLink-foreground, var(--vscode-editor-foreground)));
+    border: 2px solid
+      var(--quoll-todo-ring, var(--quoll-accent-green, var(--vscode-textLink-foreground, var(--vscode-editor-foreground))));
     border-radius: 6px;
     cursor: pointer;
     background-color: transparent;
@@ -553,7 +563,7 @@
     bottom: auto;
     width: 0.26em;
     height: 0.46em;
-    transform: translate(-50%, -58%) rotate(45deg);
+    transform: translate(-50%, -70%) rotate(45deg);
     /* Editor-BACKGROUND ink so the tick reads as a cutout in the muted fill. */
     border: solid var(--vscode-editor-background);
     border-width: 0 0.14em 0.14em 0;
