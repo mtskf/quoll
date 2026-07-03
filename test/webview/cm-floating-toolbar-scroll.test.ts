@@ -53,13 +53,16 @@ describe("nextToolbarScrollState — direction→visibility mapping", () => {
 
   it("honours custom thresholds", () => {
     expect(
-      nextToolbarScrollState({ visibility: "shown", anchor: 100 }, 300, { hysteresis: 50 }).visibility
+      nextToolbarScrollState({ visibility: "shown", anchor: 100 }, 300, { hysteresis: 50 })
+        .visibility
     ).toBe("hidden");
     expect(
-      nextToolbarScrollState({ visibility: "shown", anchor: 100 }, 130, { hysteresis: 50 }).visibility
+      nextToolbarScrollState({ visibility: "shown", anchor: 100 }, 130, { hysteresis: 50 })
+        .visibility
     ).toBe("shown"); // 30px < 50px → held (still shown)
     expect(
-      nextToolbarScrollState({ visibility: "hidden", anchor: 0 }, 40, { topThreshold: 50 }).visibility
+      nextToolbarScrollState({ visibility: "hidden", anchor: 0 }, 40, { topThreshold: 50 })
+        .visibility
     ).toBe("shown"); // within the widened top band
   });
 
