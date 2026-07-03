@@ -470,6 +470,21 @@ describe("quollCopyButtonTheme", () => {
     expect(rule.border).toBeUndefined();
   });
 
+  it("has NO resting background (icon-only at rest; the box only appears on hover/focus)", () => {
+    // The resting `backgroundColor` (a filled secondary-button fill) read as an ugly
+    // bordered box. It was dropped so the resting state is the dimmed icon alone; the
+    // hover/focus rule still supplies the boxed affordance. Cast to widen off the exact
+    // literal type: if a resting background is re-added, `.backgroundColor` becomes
+    // defined and this fails.
+    const rule = copyButtonThemeSpec[".quoll-copy-button"] as Record<string, string | undefined>;
+    expect(rule.backgroundColor).toBeUndefined();
+    // The hover/focus affordance is untouched — the box still appears on interaction.
+    expect(
+      copyButtonThemeSpec[".quoll-copy-button:hover, .quoll-copy-button:focus-visible"]
+        .backgroundColor
+    ).toBeDefined();
+  });
+
   it("shares ONE foreground + hover-background token with the collapse toggle (single source)", () => {
     // entry: unify copy-button + collapse-bar colours. Both specs reference the
     // SAME shared value (not duplicated literals) so retuning one moves both.

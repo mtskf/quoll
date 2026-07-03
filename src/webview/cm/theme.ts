@@ -518,8 +518,11 @@ export const copyButtonThemeSpec = {
     position: "relative",
     fontSize: "0.9em",
   },
-  // Icon-only button: a small square holding the Lucide glyph. inline-flex
-  // centres the SVG; the glyph is sized in em so it tracks the panel font.
+  // Icon-only button: the bare Lucide glyph with NO resting background — inline-flex
+  // centres the SVG; the glyph is sized in em so it tracks the panel font. The
+  // resting state is the dimmed icon alone (opacity 0.6); the boxed affordance
+  // (borderRadius fill) appears only on hover/focus, so at rest the button reads as
+  // an icon, not a bordered box.
   ".quoll-copy-button": {
     position: "absolute",
     top: "0.3em",
@@ -530,7 +533,6 @@ export const copyButtonThemeSpec = {
     justifyContent: "center",
     padding: "0.2em",
     color: fencedControlForeground,
-    backgroundColor: "var(--vscode-button-secondaryBackground, rgba(255, 255, 255, 0.08))",
     borderRadius: "4px",
     cursor: "pointer",
     opacity: "0.6",
