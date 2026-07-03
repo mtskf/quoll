@@ -284,3 +284,49 @@ describe("styles.css — thematic break rule", () => {
     expect(block?.[0]).not.toMatch(/display\s*:\s*none/);
   });
 });
+
+describe("styles.css — floating-toolbar scroll-hide", () => {
+  const css = readFileSync(new URL("../../src/webview/styles.css", import.meta.url), "utf8");
+
+  it("transitions transform on BOTH toggles (so the slide animates, not snaps)", () => {
+    expect(css).toMatch(/\.quoll-outline-toggle\s*\{[^}]*transition\s*:[^;]*transform/s);
+    expect(css).toMatch(/\.quoll-switch-editor-toggle\s*\{[^}]*transition\s*:[^;]*transform/s);
+  });
+
+  it("hides BOTH toggles a11y-safely when the host carries quoll-chrome-hidden", () => {
+    // Both toggles share one rule; switch-editor-toggle is the last selector in
+    // the list, so match up to its opening brace, then assert the body.
+    const body =
+      css.match(/\.quoll-chrome-hidden[^{]*\.quoll-switch-editor-toggle\s*\{([^}]*)\}/s)?.[1] ?? "";
+    expect(css).toMatch(/\.quoll-chrome-hidden\s+\.quoll-outline-toggle/); // outline toggle is in the selector list
+    expect(body).toMatch(/transform\s*:\s*translateY\(-/);
+    expect(body).toMatch(/opacity\s*:\s*0/);
+    expect(body).toMatch(/visibility\s*:\s*hidden/);
+    expect(body).toMatch(/pointer-events\s*:\s*none/);
+  });
+
+  it("hides the outline panel with the chrome (no detached / focusable panel left floating)", () => {
+    const rule =
+      css.match(/\.quoll-chrome-hidden\s+\.quoll-outline-panel\s*\{([^}]*)\}/s)?.[1] ?? "";
+    expect(rule).toMatch(/transform\s*:\s*translateY\(-/);
+    expect(rule).toMatch(/opacity\s*:\s*0/);
+    expect(rule).toMatch(/visibility\s*:\s*hidden/);
+    expect(rule).toMatch(/pointer-events\s*:\s*none/);
+  });
+
+  it("disables the slide under prefers-reduced-motion for BOTH base AND hidden (2-class) selectors", () => {
+    const mq =
+      css.match(/@media\s*\(prefers-reduced-motion:\s*reduce\)\s*\{([\s\S]*?)\}\s*\}/)?.[1] ?? "";
+    expect(mq).toMatch(/transition\s*:\s*none/);
+    // base (1-class) selectors
+    expect(mq).toMatch(/\.quoll-outline-toggle/);
+    expect(mq).toMatch(/\.quoll-switch-editor-toggle/);
+    expect(mq).toMatch(/\.quoll-outline-panel/);
+    // hidden (2-class, higher-specificity) selectors MUST also be present, else
+    // the MQ can't override the hidden rules and the hide direction still
+    // animates (Codex re-review specificity bug).
+    expect(mq).toMatch(/\.quoll-chrome-hidden\s+\.quoll-outline-toggle/);
+    expect(mq).toMatch(/\.quoll-chrome-hidden\s+\.quoll-switch-editor-toggle/);
+    expect(mq).toMatch(/\.quoll-chrome-hidden\s+\.quoll-outline-panel/);
+  });
+});
