@@ -174,7 +174,9 @@ describe("list-nested table detection (real Lezer language)", () => {
     expect(models).toHaveLength(1);
     const m = models[0];
     expect(m.table).not.toBeNull();
-    if (!m.table) { return; }
+    if (!m.table) {
+      return;
+    }
     expect(m.table.header.cells).toHaveLength(2);
     // The block range covers whole lines including the header line's own indent.
     expect(doc.slice(m.blockFrom, m.blockTo)).toBe("  | A | B |\n  |---|---|\n  | 1 | 2 |");
