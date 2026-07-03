@@ -277,6 +277,18 @@ function ownMarkerWidth(state: EditorState, listItem: SyntaxNode): Col | null {
   };
 }
 
+/** True iff this ListItem renders a hang — i.e. `resolveListItemHang` (and the
+ *  `.quoll-list-hang` line decoration) would be NON-null for it. Structural
+ *  eligibility only (`ownMarkerWidth !== null`: valid ListMark + non-empty
+ *  content + valid Task marker), WITHOUT `resolveListItemHang`'s O(depth)
+ *  `renderedMarkCol` ancestor-chain walk. In lock-step with `resolveListItemHang`
+ *  by construction — that resolver's SOLE null path is `ownMarkerWidth === null`.
+ *  Lets a whole-document caller (the fold-gutter marker tag) gate in step with the
+ *  hang decoration without paying the geometry cost it does not consume. */
+export function isRenderableListItem(state: EditorState, listItem: SyntaxNode): boolean {
+  return ownMarkerWidth(state, listItem) !== null;
+}
+
 /** The item's source ListMark column as a `Col` (markers: 0). The model's
  *  `sourceMarkColumn(i)`. */
 function sourceMarkColumn(state: EditorState, listItem: SyntaxNode): Col {

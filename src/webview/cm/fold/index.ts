@@ -71,11 +71,12 @@ import {
 
 // The list-fold gutter offset must stay in lock-step with the `.quoll-list-hang`
 // content-line padding it compensates for, so it reuses the SAME eligibility
-// predicates as list-hang-indent.ts: `resolveListItemHang === null` (empty /
-// malformed / invalid-marker item) and `pointInExclusionZone` (frontmatter, whose
-// YAML lists parse as markdown ListItems but receive no hang). See
-// buildListFoldGutterClasses.
-import { resolveListItemHang } from "../decorations/list-geometry.js";
+// predicates as list-hang-indent.ts: `isRenderableListItem` (the O(1) form of
+// `resolveListItemHang === null` — empty / malformed / invalid-marker item — with
+// no O(depth) geometry walk, since a whole-doc gutter walk only needs the
+// null/non-null bit) and `pointInExclusionZone` (frontmatter, whose YAML lists
+// parse as markdown ListItems but receive no hang). See buildListFoldGutterClasses.
+import { isRenderableListItem } from "../decorations/list-geometry.js";
 import { quollSyntaxExclusionZones } from "../decorations/orchestrator.js";
 import { pointInExclusionZone } from "../decorations/shared.js";
 
@@ -271,12 +272,13 @@ function buildListFoldGutterClasses(
       // cases and this MUST match them, else the chevron shifts without a matching
       // gap: (1) an exclusion zone — a frontmatter YAML list parses as markdown
       // ListItems but gets no hang, so a REVEALED frontmatter list would drop the
-      // chevron ~0.6em; (2) `resolveListItemHang === null` — an empty / malformed
-      // item, or an invalid-marker Task on a one-update-behind tree.
+      // chevron ~0.6em; (2) a non-renderable item — empty / malformed, or an
+      // invalid-marker Task on a one-update-behind tree (isRenderableListItem is
+      // the O(1) mirror of buildListHangIndent's `resolveListItemHang === null`).
       if (pointInExclusionZone(lineFrom, zones)) {
         return;
       }
-      if (resolveListItemHang(state, node.node) === null) {
+      if (!isRenderableListItem(state, node.node)) {
         return;
       }
       // ListItems are visited in document order, but a nested item shares its

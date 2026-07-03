@@ -16,7 +16,6 @@ import { EditorSelection, EditorState, StateEffect, StateField } from "@codemirr
 import { EditorView } from "@codemirror/view";
 import { afterEach, describe, expect, it } from "vitest";
 import { quollSyntaxExclusionZones } from "../../src/webview/cm/decorations/orchestrator.js";
-import { frontmatterBlockField } from "../../src/webview/cm/frontmatter/index.js";
 import {
   CHEVRON_DOWN_PATH,
   ELLIPSIS_DOT_CX,
@@ -28,6 +27,7 @@ import {
   quollFoldKeymap,
   quollFoldKeymapExtension,
 } from "../../src/webview/cm/fold/index.js";
+import { frontmatterBlockField } from "../../src/webview/cm/frontmatter/index.js";
 
 let view: EditorView | null = null;
 afterEach(() => {
@@ -314,10 +314,9 @@ describe("listFoldGutterLineClass — gutter tag for the list-item vertical-gap 
     // regression would surface here. A YAML list inside `---` fences parses as
     // markdown ListItems but sits in the frontmatter exclusion span, so it must
     // NOT be tagged; the body list item below the fence must be.
-    view = mountDoc(
-      "---\ntags:\n  - alpha\n  - beta\n---\n\n- body item\n",
-      [frontmatterBlockField]
-    );
+    view = mountDoc("---\ntags:\n  - alpha\n  - beta\n---\n\n- body item\n", [
+      frontmatterBlockField,
+    ]);
     const set = view.state.field(listFoldGutterLineClass);
     const tagged = new Set<number>();
     const cursor = set.iter();
