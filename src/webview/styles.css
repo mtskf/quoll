@@ -538,7 +538,7 @@
      * eye to incomplete work. The done box (below) recedes to muted grey. */
     border: 2px solid
       var(--quoll-todo-ring, var(--quoll-accent-green, var(--vscode-textLink-foreground, var(--vscode-editor-foreground))));
-    border-radius: 6px;
+    border-radius: 5px;
     cursor: pointer;
     background-color: transparent;
     box-sizing: border-box;
