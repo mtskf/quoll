@@ -5,6 +5,7 @@ All notable changes to Quoll are documented here.
 ## 0.1.x
 
 - Callouts now carry the per-type emoji as a small badge in the top-right corner, and the `[!TYPE]` marker line is tucked away whenever your caret is outside the callout — the block reads as a clean titled panel, and the editable `> [!TYPE]` source reappears the moment you move into it.
+- Make the fenced-code copy button icon-only at rest: drop the resting boxed background so it reads as a bare icon; the boxed hover/focus affordance and the copied/failed states are unchanged.
 - Restyle task-list checkboxes so open work leads the eye: incomplete items now show a green rounded ring, while completed items recede — a muted-grey filled box with a cut-out checkmark, and their text is dimmed (no strikethrough). The checkmark is re-centred, and in the light theme the todo ring uses a brighter green.
 - Add a top-right button and an `Ctrl/Cmd+Alt+E` keybinding to switch the current `.md` between Quoll and VS Code's built-in text editor; the caret position is preserved across the switch (via the button and the chord; the reverse text→Quoll direction preserves it too).
 
