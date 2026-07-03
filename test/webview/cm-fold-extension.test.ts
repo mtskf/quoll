@@ -20,6 +20,7 @@ import {
   ELLIPSIS_DOT_CX,
   foldPlaceholderDOM,
   headingFoldGutterLineClass,
+  listFoldGutterLineClass,
   markerDOM,
   quollFolding,
   quollFoldKeymap,
@@ -235,6 +236,48 @@ describe("headingFoldGutterLineClass — per-level gutter tag for the first-row 
     const byLine = taggedClassByLine("Title line\n===\n\nbody\n");
     expect(byLine.get(1)).toBe("quoll-fold-heading-1");
     expect(byLine.size).toBe(1);
+  });
+});
+
+describe("listFoldGutterLineClass — gutter tag for the list-item vertical-gap offset", () => {
+  // Pins the LIST-MARKER-DETECTION contract that drives the gutter `padding-top`
+  // offset matching the list line's own `--quoll-list-item-gap` breathing room
+  // (PR #13). The PIXEL alignment itself is real-browser-only — happy-dom has no
+  // layout — so this asserts ONLY that every list-item marker line (and no other)
+  // carries the `quoll-fold-list-marker` gutter tag, in lock-step with the
+  // `.cm-line.quoll-list-hang` padding it compensates for.
+  function taggedLines(doc: string): Map<number, string> {
+    view = mountDoc(doc);
+    const set = view.state.field(listFoldGutterLineClass);
+    const byLine = new Map<number, string>();
+    const cursor = set.iter();
+    while (cursor.value) {
+      // gutterLineClass markers are point ranges at the line start.
+      expect(cursor.from).toBe(cursor.to);
+      const line = view.state.doc.lineAt(cursor.from);
+      expect(cursor.from).toBe(line.from);
+      byLine.set(line.number, (cursor.value as { elementClass: string }).elementClass);
+      cursor.next();
+    }
+    return byLine;
+  }
+
+  it("tags each bullet / ordered / task list-item marker line and nothing else", () => {
+    // 1 bullet parent, 2 nested bullet child, 3 child continuation (no marker),
+    // 5 ordered item, 7 task item, 9 plain paragraph, 11 heading. Blank lines
+    // (4/6/8/10) keep each construct unambiguous (no lazy-continuation merges).
+    const byLine = taggedLines(
+      "- parent\n  - child\n    wrapped\n\n1. ordered\n\n- [ ] task\n\nplain\n\n# heading\n"
+    );
+    expect(byLine.get(1)).toBe("quoll-fold-list-marker");
+    expect(byLine.get(2)).toBe("quoll-fold-list-marker");
+    expect(byLine.get(5)).toBe("quoll-fold-list-marker");
+    expect(byLine.get(7)).toBe("quoll-fold-list-marker");
+    // Continuation line, plain paragraph, and heading are untagged by THIS field.
+    expect(byLine.has(3)).toBe(false);
+    expect(byLine.has(9)).toBe(false);
+    expect(byLine.has(11)).toBe(false);
+    expect(byLine.size).toBe(4);
   });
 });
 
