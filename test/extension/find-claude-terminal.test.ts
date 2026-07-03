@@ -98,6 +98,17 @@ describe("subtreeHasClaude", () => {
     ];
     expect(subtreeHasClaude(1, p)).toBe(false);
   });
+  it("does NOT match sibling binaries like claude-lsp / claude-helper / claudette (EXACT basename)", () => {
+    // A prefix match would let an unrelated terminal running a `claude-*` helper
+    // pass the process-proven gate and receive a silent misdelivery.
+    const p: ProcInfo[] = [
+      { pid: 1, ppid: 0, comm: "/bin/zsh" },
+      { pid: 2, ppid: 1, comm: "/opt/homebrew/bin/claude-lsp" },
+      { pid: 3, ppid: 1, comm: "/usr/local/bin/claudette" },
+      { pid: 4, ppid: 1, comm: "/opt/claude-helper/bin/claude-helper" },
+    ];
+    expect(subtreeHasClaude(1, p)).toBe(false);
+  });
   it("terminates on a self-referential ppid (no infinite loop)", () => {
     const p: ProcInfo[] = [{ pid: 5, ppid: 5, comm: "/bin/zsh" }];
     expect(subtreeHasClaude(5, p)).toBe(false);

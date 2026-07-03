@@ -56,14 +56,18 @@ export function parseProcessTable(stdout: string): ProcInfo[] {
   return rows;
 }
 
-/** True if `comm`'s basename names the Claude Code CLI. Basename match (not a
- *  substring over the whole path) so a `/Users/claude/…` ancestor directory
- *  never false-matches; startsWith("claude") also accepts a version-suffixed
- *  binary name. */
+/** True if `comm`'s basename is EXACTLY the Claude Code CLI executable. Basename
+ *  match (not a substring over the whole path) so a `/Users/claude/…` ancestor
+ *  directory never false-matches; and EXACT (not `startsWith`) so sibling
+ *  binaries like `claude-lsp` / `claude-helper` / `claudette` do NOT pass the
+ *  process-proven gate — a prefix match there would let an unrelated terminal
+ *  be selected and receive a silent misdelivery. Both the CLI
+ *  (`/opt/homebrew/bin/claude`) and the extension native binary
+ *  (`…/native-binary/claude`) have the exact basename `claude`. */
 function isClaudeExecutable(comm: string): boolean {
   const exe = comm.trim();
   const base = exe.slice(exe.lastIndexOf("/") + 1).toLowerCase();
-  return base.startsWith("claude");
+  return base === "claude";
 }
 
 /** True if the process subtree rooted at `rootPid` contains a `claude`
