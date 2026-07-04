@@ -359,9 +359,11 @@ describe("styles.css — editor height chain (scroll-hide root cause)", () => {
   // against the pre-fix `#root { min-height: 100vh }` with no `main` height,
   // the first two assertions red.
   const block = (re: RegExp): string => css.match(re)?.[0] ?? "";
-  // Match `height:` but NOT `min-height:` / `max-height:` (lookbehind on the
-  // char right before `height`).
-  const DEFINITE_HEIGHT = /(?<![-a-z])height\s*:/;
+  // `(?<![-a-z])height` matches the `height` property but NOT `min-height` /
+  // `max-height` — neither is a definite height for percentage resolution, so a
+  // chain link that used one would silently re-open the bug. The lookbehind is
+  // load-bearing: `height: 100%` is a substring of `min-height: 100%`, so a
+  // plain match would false-pass a regressed rule. EVERY link asserts with it.
 
   it("#root is exactly the viewport tall (a DEFINITE height, not min-height)", () => {
     const root = block(/#root\s*\{[^}]*\}/);
@@ -377,11 +379,11 @@ describe("styles.css — editor height chain (scroll-hide root cause)", () => {
 
   it("keeps the .quoll-editor host and its .cm-editor filling that bounded height", () => {
     // The lower half of the chain (already present pre-fix) — pinned so a
-    // refactor that drops it re-opens the same bug from the other end.
+    // refactor that drops it (or weakens it to min-height) re-opens the same bug
+    // from the other end. Both links carry the definite-height lookbehind guard.
     const host = block(/\.quoll-editor\s*\{[^}]*\}/);
-    expect(host).toMatch(DEFINITE_HEIGHT);
-    expect(host).toMatch(/height\s*:\s*100%/);
+    expect(host).toMatch(/(?<![-a-z])height\s*:\s*100%/);
     const cmEditor = block(/\.quoll-editor\s+\.cm-editor\s*\{[^}]*\}/);
-    expect(cmEditor).toMatch(/height\s*:\s*100%/);
+    expect(cmEditor).toMatch(/(?<![-a-z])height\s*:\s*100%/);
   });
 });
