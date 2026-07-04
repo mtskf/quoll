@@ -10,17 +10,14 @@
 // Handoff mechanism (v2, tiered) — build the `@<path>#L<a>-<b>` reference, then:
 //
 //   1. Direct-insert (preferred): if a Claude Code terminal is found
-//      (deps.findClaudeTerminal — name match OR a `claude` process in the
-//      terminal's subtree, covering the CLI `/ide` case), send the reference
-//      straight into its input WITHOUT a newline (the user reviews then presses
-//      Enter), surface that terminal, and SKIP the panel commands. The clipboard
-//      is still written as a paste safety net, but a failure there is non-fatal
-//      (the terminal already has the text) — warn instead of aborting.
-//   2. Clipboard fallback: if no terminal is found, copy the reference (a
-//      clipboard failure here is fatal — there is nothing to paste). Then, ONLY
-//      if a Claude Code panel is already open (deps.isClaudePanelOpen), focus it
-//      (never OPEN a new one — that popped a rogue panel + threw "Webview is
-//      disposed" for terminal users). Finally toast the user to paste.
+//      (deps.findClaudeTerminal), send the reference straight into its input
+//      WITHOUT a newline (the user reviews then presses Enter), surface that
+//      terminal, and SKIP the new-tab open commands. The clipboard is still
+//      written as a paste safety net, but a failure there is non-fatal (the
+//      terminal already has the text) — warn instead of aborting.
+//   2. Clipboard fallback (unchanged v1): if no terminal is found, copy the
+//      reference (a clipboard failure here is fatal — there is nothing to
+//      paste), best-effort open+focus Claude Code, then toast the user to paste.
 //
 // The terminal path replaces v1's clipboard-then-open-new-tab default: opening a
 // new tab read as "a tab popped up" and still required a manual paste. The
@@ -38,21 +35,10 @@
 // insertAtMention in extension.js v2.1.193), NOT a contract Claude Code
 // publishes — treat the manual smoke + this comment as the canary.
 
-/** Claude Code command that FOCUSES an already-open panel. Run ONLY when a
- *  Claude Code webview panel is present (see `isClaudePanelOpen`) so it focuses
- *  the existing panel instead of creating a new one. The old default also ran
- *  `claude-vscode.editor.open`, which popped an UNWANTED new panel (and threw
- *  "Webview is disposed" when Claude Code held a stale disposed panel) whenever
- *  no terminal was found — dropped in favour of the panel-gated focus below.
- *  Best-effort: a rejection is swallowed, so a missing Claude Code install never
- *  blocks the clipboard handoff. */
-export const CLAUDE_FOCUS_COMMAND = "claude-vscode.focus";
-
-/** The viewType of the Claude Code webview panel (`createWebviewPanel` in
- *  claude-code 2.1.199). QuollEditorPanel checks `window.tabGroups` for an open
- *  tab carrying this viewType before running CLAUDE_FOCUS_COMMAND, so Quoll
- *  never spawns a panel — it only focuses one the user already has open. */
-export const CLAUDE_PANEL_VIEW_TYPE = "claudeVSCodePanel";
+/** Claude Code commands tried, in order, to surface its input for a paste.
+ *  Best-effort: each is executed independently and its rejection swallowed,
+ *  so a missing Claude Code install never blocks the clipboard handoff. */
+export const HANDOFF_OPEN_COMMANDS = ["claude-vscode.editor.open", "claude-vscode.focus"] as const;
 
 export type HandleContextHandoffPayload = {
   hasSelection: boolean;
@@ -81,29 +67,18 @@ export type HandleContextHandoffDeps<T> = {
   showWarn: (message: string) => Thenable<unknown>;
   /** window.showErrorMessage bound — clipboard-failure abort. */
   showError: (message: string) => Thenable<unknown>;
-  /** Locate the Claude Code terminal to insert into. Proven-match ONLY (a
-   *  terminal named like "claude", OR one whose shell-process subtree contains a
-   *  `claude` executable — the CLI `/ide` case); never a bare active-terminal
-   *  guess, which would misfire into an unrelated shell. No match → undefined →
-   *  clipboard fallback (zero misfire). Async because the process pass awaits
-   *  Terminal.processId + a `ps` read; a sync return is still accepted. T is the
-   *  host's Terminal type, kept generic so this module imports no vscode symbol.
-   *  See find-claude-terminal.ts. */
-  findClaudeTerminal: () => T | undefined | PromiseLike<T | undefined>;
+  /** Locate the Claude Code terminal to insert into. Trust a NAME match ONLY
+   *  (host heuristic: a terminal named like "claude"); never the active
+   *  terminal — sending the reference to an unrelated shell would both misfire
+   *  and be mis-reported as success by the tier-1 truthy check below. No match
+   *  → undefined → clipboard fallback (zero misfire). T is the host's Terminal
+   *  type, kept generic so this module imports no vscode symbol. */
+  findClaudeTerminal: () => T | undefined;
   /** terminal.sendText(text, false) bound — insert WITHOUT a trailing newline so
    *  the user reviews the reference before pressing Enter. */
   sendTerminalText: (terminal: T, text: string) => void;
   /** terminal.show() bound — surface the terminal after inserting. */
   showTerminal: (terminal: T) => void;
-  /** True when a Claude Code webview panel (viewType CLAUDE_PANEL_VIEW_TYPE) is
-   *  the ACTIVE (visible) tab of some tab group — the user is looking at it.
-   *  Gates the tier-0 short-circuit so a visible panel wins the handoff over a
-   *  background CLI terminal. */
-  isClaudePanelVisible: () => boolean;
-  /** True when a Claude Code webview panel is open in ANY tab (active or not).
-   *  Gates the tier-2 focus so Quoll focuses an existing panel rather than
-   *  spawning a new one. */
-  isClaudePanelOpen: () => boolean;
 };
 
 /** Strip C0 control characters (U+0000–U+001F) and DEL (U+007F) from a path.
@@ -207,35 +182,19 @@ export async function handleContextHandoff<T>(
     endLine
   );
 
-  // Tier 0 — VISIBLE panel takes PRECEDENCE over the terminal. When the user is
-  // looking at the Claude Code webview PANEL (its tab is the active tab of some
-  // group), hand off to THAT: copy + focus it (there is no API to insert into a
-  // foreign webview, so the user pastes). Without this, a background CLI terminal
-  // — which panel users routinely keep running — would always win the handoff.
-  // "Visible" = active tab of ANY group: the Quoll editor holds focus at chord
-  // time so the panel is never in the *active group*; a panel merely PARKED in a
-  // background tab is not displayed and correctly falls through to the terminal.
-  // LIMITATION: only the editor-area panel is visible to tabGroups — a sidebar-
-  // docked Claude Code (a WebviewView) is undetectable (no public API exposes a
-  // foreign WebviewView's visibility) and also falls through to the terminal.
-  if (deps.isClaudePanelVisible()) {
-    if (!(await copyReferenceOrAbort(deps, reference))) {
-      return;
-    }
-    await focusClaudePanel(deps);
-    await tryShow(deps.showInfo, `Copied ${reference} — paste it into Claude Code.`);
-    return;
-  }
-
-  // Tier 1 — direct insert. If a Claude Code terminal is found (name match OR a
-  // `claude` process in the terminal's subtree — the CLI `/ide` case), drop the
+  // Tier 1 — direct insert. If a Claude Code terminal is found, drop the
   // reference into its input (no newline → the user confirms before Enter),
-  // surface it, and SKIP the panel commands. The clipboard write is only a paste
-  // safety net here: the terminal already holds the text, so a clipboard failure
-  // is non-fatal (warn, don't abort) — unlike the fallback below. findClaudeTerminal
-  // never returns an unproven terminal, so a non-undefined result IS a Claude
-  // terminal, never an arbitrary shell (see find-claude-terminal.ts).
-  const terminal = await deps.findClaudeTerminal();
+  // surface it, and SKIP the new-tab open commands. The clipboard write is now
+  // only a paste safety net: the terminal already holds the text, so a clipboard
+  // failure is non-fatal here (warn, don't abort) — unlike the fallback below.
+  //
+  // Tier-1 success is taken on a TRUTHY terminal, but findClaudeTerminal trusts
+  // a NAME match only (never activeTerminal) — so a non-undefined terminal IS a
+  // name-matched Claude terminal, never an arbitrary shell. The remaining
+  // assumption is the name heuristic itself (a terminal literally named
+  // "claude" might not be Claude Code); we accept that over sendText delivery
+  // confirmation (no such VS Code API). A name miss → undefined → tier 2 below.
+  const terminal = deps.findClaudeTerminal();
   if (terminal !== undefined) {
     deps.sendTerminalText(terminal, reference);
     deps.showTerminal(terminal);
@@ -250,52 +209,34 @@ export async function handleContextHandoff<T>(
     return;
   }
 
-  // Tier 2 — clipboard fallback (no visible panel, no terminal). The clipboard
-  // IS the contract (what the user pastes); if it fails there is nothing to
-  // paste — abort. Then focus an already-open (but not active) panel if one
-  // exists — never OPEN a new one (the old `editor.open` default popped a rogue
-  // panel + threw "Webview is disposed"). Finally toast the user to paste.
-  if (!(await copyReferenceOrAbort(deps, reference))) {
-    return;
-  }
-  if (deps.isClaudePanelOpen()) {
-    await focusClaudePanel(deps);
-  }
-  // Neutral wording — the chord is Cmd+Option+K (mac) / Ctrl+Alt+K (win+linux),
-  // so the paste hint must not hard-code ⌘V.
-  await tryShow(deps.showInfo, `Copied ${reference} — paste it into Claude Code.`);
-}
-
-/** Write the reference to the clipboard. On failure show the error toast and
- *  return false so the caller aborts — a failed clipboard write means there is
- *  nothing for the user to paste. */
-async function copyReferenceOrAbort<T>(
-  deps: HandleContextHandoffDeps<T>,
-  reference: string
-): Promise<boolean> {
+  // Tier 2 — clipboard fallback (no terminal found). The clipboard IS the
+  // contract (what the user pastes). If it fails there is nothing to paste —
+  // abort with an error, and do NOT open/focus Claude Code or claim success.
   try {
     await deps.writeClipboard(reference);
-    return true;
   } catch (err) {
     console.error("[quoll] context-handoff: clipboard write failed", err);
     await tryShow(
       deps.showError,
       "Quoll: couldn't copy the Claude Code reference to the clipboard."
     );
-    return false;
+    return;
   }
-}
 
-/** Best-effort focus of an already-open Claude Code panel. `claude-vscode.focus`
- *  reveals/focuses the existing panel and is a no-op when it is already visible
- *  (it re-opens only when no webview is visible), so it never spawns a rogue
- *  panel. A rejection (missing install) is warned, never fatal. */
-async function focusClaudePanel<T>(deps: HandleContextHandoffDeps<T>): Promise<void> {
-  try {
-    await deps.executeCommand(CLAUDE_FOCUS_COMMAND);
-  } catch (err) {
-    console.warn("[quoll] context-handoff: focus command unavailable", err);
+  // Best-effort surface Claude Code. Each command independently guarded so a
+  // missing install (command-not-found rejection) never blocks the others or
+  // the success toast.
+  for (const id of HANDOFF_OPEN_COMMANDS) {
+    try {
+      await deps.executeCommand(id);
+    } catch (err) {
+      console.warn("[quoll] context-handoff: command unavailable", { id, err });
+    }
   }
+
+  // Neutral wording — the chord is Cmd+Option+K (mac) / Ctrl+Alt+K (win+linux),
+  // so the paste hint must not hard-code ⌘V.
+  await tryShow(deps.showInfo, `Copied ${reference} — paste it into Claude Code.`);
 }
 
 /** Show a toast, swallowing a rejected Thenable (host detached / dispatcher
