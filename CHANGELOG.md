@@ -15,7 +15,7 @@ All notable changes to Quoll are documented here.
 - Restyle task-list checkboxes so open work leads the eye: incomplete items now show a green rounded ring, while completed items recede — a muted-grey filled box with a cut-out checkmark, and their text is dimmed (no strikethrough). The checkmark is re-centred, and in the light theme the todo ring uses a brighter green.
 - Add a top-right button and an `Ctrl/Cmd+Alt+E` keybinding to switch the current `.md` between Quoll and VS Code's built-in text editor; the caret position is preserved across the switch (via the button and the chord; the reverse text→Quoll direction preserves it too).
 - Tighten the task-list checkbox corner radius from 6px to 5px for a slightly crisper box.
-- Make the floating outline and switch-editor buttons behave like a mobile-app toolbar: scrolling down slides them off the top edge, scrolling up brings them back, and they stay visible at the very top of the document. An open outline panel rides along so nothing is left floating, and the slide honours your "reduce motion" setting (it snaps instead).
+- Make the floating outline and switch-editor buttons behave like a mobile-app toolbar: scrolling down slides them off the top edge, scrolling up brings them back, and they stay visible at the very top of the document. An open outline panel rides along so nothing is left floating, and the slide honours your "reduce motion" setting (it snaps instead). While hidden the toolbar is also kept out of the keyboard tab order for the whole slide, so focus can never land on an off-screen button.
 
 ## 0.1.0 — Initial public release
 

@@ -5,10 +5,13 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import {
   CHROME_HIDDEN_CLASS,
+  CHROME_SELECTOR,
   nextToolbarScrollState,
   quollFloatingToolbarScroll,
   type ToolbarScrollState,
 } from "../../src/webview/cm/floating-toolbar-scroll.js";
+import { quollOutline } from "../../src/webview/cm/outline/outline-panel.js";
+import { quollSwitchEditor } from "../../src/webview/cm/switch-editor.js";
 
 describe("nextToolbarScrollState — direction→visibility mapping", () => {
   it("hides on scroll DOWN past the hysteresis dead-zone (re-anchors)", () => {
@@ -121,5 +124,45 @@ describe("quollFloatingToolbarScroll — ViewPlugin (happy-dom)", () => {
     view?.destroy();
     view = null;
     expect(host.classList.contains(CHROME_HIDDEN_CLASS)).toBe(false);
+  });
+
+  it("syncs `inert` on the real floating chrome in lockstep with the hide/show", () => {
+    // Mount the ACTUAL outline + switch-editor plugins so the chrome is built by
+    // production code — this pins that their real class names match
+    // CHROME_SELECTOR (a rename that broke the a11y sync would fail here). The
+    // outline panel is created (closed) at construction, so all three exist.
+    const host = mount([
+      quollFloatingToolbarScroll(),
+      quollOutline(),
+      quollSwitchEditor({ postMessage() {} }, () => {}),
+    ]);
+    const chrome = (): Element[] => Array.from(host.querySelectorAll(CHROME_SELECTOR));
+    expect(chrome()).toHaveLength(3); // outline toggle + switch toggle + panel
+    // shown: nothing inert
+    expect(chrome().some((el) => el.hasAttribute("inert"))).toBe(false);
+    // `inert` is set the INSTANT the hide begins — not delayed like the CSS
+    // visibility — so no offscreen chrome is focusable mid-slide.
+    scrollTo(300);
+    expect(host.classList.contains(CHROME_HIDDEN_CLASS)).toBe(true);
+    expect(chrome().every((el) => el.hasAttribute("inert"))).toBe(true);
+    // show again: inert cleared alongside the class
+    scrollTo(100);
+    expect(host.classList.contains(CHROME_HIDDEN_CLASS)).toBe(false);
+    expect(chrome().some((el) => el.hasAttribute("inert"))).toBe(false);
+  });
+
+  it("clears inert on destroy (no leaked inert on lingering chrome)", () => {
+    const host = mount([quollFloatingToolbarScroll()]);
+    // Chrome not owned by any plugin, so it survives view.destroy() — isolates
+    // the observer's destroy-time inert cleanup (real plugin chrome is removed
+    // on destroy and could not show a leak).
+    const toggle = document.createElement("button");
+    toggle.className = "quoll-outline-toggle";
+    host.appendChild(toggle);
+    scrollTo(300); // hide → observer stamps inert (queried live)
+    expect(toggle.hasAttribute("inert")).toBe(true);
+    view?.destroy();
+    view = null;
+    expect(toggle.hasAttribute("inert")).toBe(false);
   });
 });

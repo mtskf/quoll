@@ -705,12 +705,13 @@
    * tab order / a11y tree, and makes the exact translate distance non-load-
    * bearing (a banner pushing the host down can't leave a ghost toggle).
    *
-   * a11y NOTE (design-review error-handler F1): with motion ENABLED, a11y-tree
-   * membership follows the 0.2s transition window, so the chrome stays keyboard-
-   * reachable DURING the slide (only the SETTLED hidden state is out of the
-   * tree). Accepted for this PR as a niche window; a follow-up TODO tracks a
-   * JS-side `inert` sync if strict WCAG is needed. Under reduced-motion the
-   * window collapses (instant flip). Display-only chrome. */
+   * a11y NOTE (design-review error-handler F1): `visibility:hidden` alone drops
+   * the chrome from the tree only in the SETTLED hidden state — with motion
+   * ENABLED it stays keyboard-reachable DURING the 0.2s slide. To close that
+   * window, cm/floating-toolbar-scroll.ts toggles the `inert` attribute on the
+   * chrome in lockstep with this class (set the instant the hide begins), so the
+   * offscreen toggles / panel leave the focus + a11y tree immediately regardless
+   * of the slide. Display-only chrome. */
   .quoll-chrome-hidden .quoll-outline-toggle,
   .quoll-chrome-hidden .quoll-switch-editor-toggle {
     /* top:8px + border-box 28px ⇒ -48px clears the edge; opacity+visibility make
