@@ -330,3 +330,58 @@ describe("styles.css — floating-toolbar scroll-hide", () => {
     expect(mq).toMatch(/\.quoll-chrome-hidden\s+\.quoll-outline-panel/);
   });
 });
+
+describe("styles.css — editor height chain (scroll-hide root cause)", () => {
+  const css = readFileSync(new URL("../../src/webview/styles.css", import.meta.url), "utf8");
+
+  // Regression guard for the "floating-toolbar scroll-hide has NO visible
+  // effect" bug. The observer (cm/floating-toolbar-scroll.ts) listens for
+  // `scroll` on view.scrollDOM (= .cm-scroller) and only stamps
+  // `.quoll-chrome-hidden` when THAT element scrolls. But .cm-scroller scrolls
+  // internally ONLY if CodeMirror is height-BOUNDED; otherwise .cm-editor grows
+  // to its full content height, the whole webview document scrolls
+  // (documentElement) and .cm-scroller never fires — so the toggles never hide
+  // AND (being absolutely positioned in the now full-height host) they scroll
+  // away instead of staying pinned.
+  //
+  // The bounding is a pure CSS `height:100%` chain: .cm-editor → .quoll-editor
+  // → main → #root. It collapses to `auto` unless EVERY ancestor carries a
+  // DEFINITE height. #root must therefore use `height` (viewport-definite), NOT
+  // `min-height` (which is not a definite height for percentage resolution),
+  // and `main` must forward `height:100%`.
+  //
+  // SOURCE-CONTRACT assertion, not a computed-style one: the happy-dom
+  // ViewPlugin test (cm-floating-toolbar-scroll.test.ts) FORCES a scroll event
+  // on .cm-scroller and stayed GREEN through this bug — happy-dom does no
+  // layout, so it cannot observe that .cm-scroller is not the real scroller.
+  // Behaviourally verified in a real headless-Chrome harness (wheel-down flips
+  // quoll-chrome-hidden only AFTER this chain is definite). Non-vacuous:
+  // against the pre-fix `#root { min-height: 100vh }` with no `main` height,
+  // the first two assertions red.
+  const block = (re: RegExp): string => css.match(re)?.[0] ?? "";
+  // Match `height:` but NOT `min-height:` / `max-height:` (lookbehind on the
+  // char right before `height`).
+  const DEFINITE_HEIGHT = /(?<![-a-z])height\s*:/;
+
+  it("#root is exactly the viewport tall (a DEFINITE height, not min-height)", () => {
+    const root = block(/#root\s*\{[^}]*\}/);
+    expect(root).not.toBe("");
+    expect(root).toMatch(/(?<![-a-z])height\s*:\s*100vh/);
+  });
+
+  it("main forwards a definite height so the flex child can be bounded", () => {
+    const main = block(/\bmain\s*\{[^}]*\}/);
+    expect(main).not.toBe("");
+    expect(main).toMatch(/(?<![-a-z])height\s*:\s*100%/);
+  });
+
+  it("keeps the .quoll-editor host and its .cm-editor filling that bounded height", () => {
+    // The lower half of the chain (already present pre-fix) — pinned so a
+    // refactor that drops it re-opens the same bug from the other end.
+    const host = block(/\.quoll-editor\s*\{[^}]*\}/);
+    expect(host).toMatch(DEFINITE_HEIGHT);
+    expect(host).toMatch(/height\s*:\s*100%/);
+    const cmEditor = block(/\.quoll-editor\s+\.cm-editor\s*\{[^}]*\}/);
+    expect(cmEditor).toMatch(/height\s*:\s*100%/);
+  });
+});

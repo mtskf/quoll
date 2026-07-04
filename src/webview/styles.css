@@ -112,14 +112,23 @@
     font-family: var(--vscode-font-family);
   }
 
+  /* The app shell is exactly the webview viewport tall (a DEFINITE height, not
+   * `min-height`) so the `height:100%` chain below — main → .quoll-editor →
+   * .cm-editor — resolves instead of collapsing to `auto`. Without a definite
+   * height here CodeMirror grows to its full content height, the WHOLE webview
+   * document scrolls (documentElement), and `.cm-scroller` never scrolls — which
+   * silently breaks the floating-toolbar scroll-hide observer (it listens on
+   * view.scrollDOM = .cm-scroller) and lets the absolutely-positioned toggles
+   * scroll away instead of staying pinned. */
   #root {
-    min-height: 100vh;
+    height: 100vh;
     background-color: var(--vscode-editor-background);
     color: var(--vscode-editor-foreground);
   }
 
   main {
     width: 100%;
+    height: 100%;
     display: flex;
     justify-content: center;
   }
