@@ -93,9 +93,11 @@ export type EditorHandle = {
    *  gutter extension is wholly present (on) or absent (off); off restores the
    *  pixel-identical no-gutter layout. Driven by the host's editor-config push. */
   setLintGutter(enabled: boolean): void;
-  /** Apply a host-pushed caret (one-shot editor-switch handoff). Dispatches a
-   *  selection-only transaction (no document mutation) clamped to the live
-   *  doc, suppressing the echo caret-report. */
+  /** Apply a host-pushed caret (one-shot editor-switch handoff). Focuses the
+   *  view — only when this webview already owns focus — so CodeMirror paints the
+   *  cursor, then dispatches a selection-only transaction (no document mutation)
+   *  clamped to the live doc, suppressing the echo caret-report. The dispatch is
+   *  skipped when the caret is already at the target; the focus is not. */
   applyRemoteCaret(caret: Caret): void;
 };
 
@@ -576,12 +578,25 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
         // This is the reverse editor-switch handoff: the host posts caret-apply
         // while the webview iframe owns focus but CM's contenteditable does not,
         // so without an explicit focus the carried caret is set-but-invisible
-        // ("caret not shown after switching to Quoll"). Unconditional — even when
-        // the position is unchanged the caret must still become visible.
+        // ("caret not shown after switching to Quoll"). Focus even when the
+        // position is unchanged, so the caret still becomes visible.
+        //
+        // Gate on document.hasFocus(): the active-edge caret-apply fires whenever
+        // the host panel flips active, which is "active editor of the active
+        // group" — NOT DOM focus. Some reactivations happen while the user's
+        // focus is deliberately elsewhere (the ⌘⌥K reveal-for-mention cleanup
+        // closes its temp text tab and re-activates this panel while focus is on
+        // the Claude composer), and focusing unconditionally would steal
+        // keystrokes into the document. When this webview already owns focus (the
+        // deliberate text→Quoll switch this fix targets) document.hasFocus() is
+        // true, so the caret is painted exactly when it should be.
+        //
         // `focus()` uses preventScroll and posts no transaction, so it neither
         // scrolls nor echoes a caret-report; kept inside the suppression window
         // defensively so any focus-driven selection sync cannot bounce back.
-        view.focus();
+        if (document.hasFocus()) {
+          view.focus();
+        }
         if (!alreadyThere) {
           // Selection-only dispatch (no `changes`) → docChanged is false, so the
           // edit-sync path is never touched and no Edit is posted. scrollIntoView
