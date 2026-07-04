@@ -98,6 +98,23 @@ describe("a list item with a table on its marker line is NOT foldable", () => {
     const doc = "- item line one\n  item line two\n  item line three\n- next\n";
     expect(foldableAt(doc, 0)).not.toBeNull();
   });
+
+  it("a blockquote-nested table on the marker line STILL folds (no widget emitted)", () => {
+    // Codex Conf-84: a blockquote-nested table is a Table on the marker line too,
+    // but its continuation lines carry `>` markers so parseTable rejects the slice
+    // and tableBlockField emits NO widget — it renders as raw source. The inner
+    // list fold must therefore be KEPT (the emit guard in listItemFold), otherwise
+    // the chevron on the visible `> - | a | b |` source line vanishes with nothing
+    // covering it.
+    const doc = "> - | a | b |\n>   | - | - |\n>   | 1 | 2 |\n\nafter\n";
+    expect(foldableAt(doc, doc.indexOf("- | a | b |"))).not.toBeNull();
+  });
+
+  it("an ordinary (indented) tight table still suppresses the fold (widget emitted)", () => {
+    // Companion to the guard above: a 2-space-indented list-continuation table
+    // DOES parse + emit a widget, so the marker-line suppression still fires.
+    expect(foldableAt("- | a | b |\n  | - | - |\n  | 1 | 2 |\n\nafter\n", 0)).toBeNull();
+  });
 });
 
 // Defined-contract pins: the subtraction targets the Blockquote/Paragraph/code/

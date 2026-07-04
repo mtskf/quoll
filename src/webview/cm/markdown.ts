@@ -46,6 +46,7 @@ import {
 import { type EditorState, Prec } from "@codemirror/state";
 import { keymap } from "@codemirror/view";
 import type { MarkdownExtension, MarkdownParser } from "@lezer/markdown";
+import { parseTable } from "../../markdown/table/index.js";
 
 // SyntaxNode without a direct @lezer/common import (transitive-only, un-hoisted
 // pnpm dep — supply-chain default-deny). Derive it from syntaxTree's return type,
@@ -60,23 +61,38 @@ function firstContentChild(node: SyntaxNode): SyntaxNode | null {
   return first?.type.name === "ListMark" ? first.nextSibling : first;
 }
 
+// True when a `Table` node would render as a block widget — the SAME emit
+// condition tableBlockField uses (table-skeleton.ts `buildModel`): the per-node
+// slice, CRLF-normalised, is accepted by `parseTable`. A blockquote-nested table
+// (continuation lines bear `>` markers) and a malformed slice (cell-count
+// mismatch) parse to `null` and emit NO widget — they render as raw source. Fold-
+// suppression must mirror this exactly so it and widget-emission stay in lockstep.
+function tableEmitsBlockWidget(state: EditorState, from: number, to: number): boolean {
+  const slice = state.sliceDoc(from, to).replace(/\r\n?/g, "\n");
+  return parseTable(slice, 0, slice.length) !== null;
+}
+
 // ListItem fold: re-implements lang-markdown's default Block range (from the end
 // of the item's first line to the item end) EXCEPT when the item's first content
-// child is a GFM Table that starts on the marker line. In that tight shape
-// (`- | a | b |\n  | - | - |\n…`) tableBlockField line-snaps its block widget to
-// the marker-line start (blockFrom = lineAt(Table.from).from), so the widget
-// SWALLOWS the `-`/`1.` marker and the ListItem chevron would visually land on the
-// table — a meaningless affordance. Returning null suppresses that lone chevron;
-// every genuine list fold (a table on a continuation line, a plain multi-line
-// body) keeps the default range. lang-markdown folds ListItem via its broad
-// `type => …` Block foldNodeProp, and this object-form `.add` OVERRIDES that per
-// node type (same mechanism as the Table/Paragraph/Blockquote subtractions below).
-// Pinned by cm-fold-blockquote.test.ts.
+// child is a GFM Table that starts on the marker line AND actually emits a block
+// widget. In that tight shape (`- | a | b |\n  | - | - |\n…`) the table's block
+// widget is line-snapped to the marker-line start (table-skeleton.ts snaps
+// blockFrom = lineAt(Table.from).from), so it SWALLOWS the `-`/`1.` marker and the
+// ListItem chevron would visually land on the table — a meaningless affordance.
+// Returning null suppresses that lone chevron. The emit guard is load-bearing: a
+// blockquote-nested table (`> - | a | b |\n…`) is a Table on the marker line too,
+// but renders as raw source with NO widget, so its inner list fold must be kept
+// (Codex Conf-84). Every other genuine list fold (a table on a continuation line,
+// a plain multi-line body) keeps the default range. lang-markdown folds ListItem
+// via its broad `type => …` Block foldNodeProp, and this object-form `.add`
+// OVERRIDES that per node type (same mechanism as the Table/Paragraph/Blockquote
+// subtractions below). Pinned by cm-fold-blockquote.test.ts.
 function listItemFold(node: SyntaxNode, state: EditorState): { from: number; to: number } | null {
   const content = firstContentChild(node);
   if (
     content?.type.name === "Table" &&
-    state.doc.lineAt(content.from).from === state.doc.lineAt(node.from).from
+    state.doc.lineAt(content.from).from === state.doc.lineAt(node.from).from &&
+    tableEmitsBlockWidget(state, content.from, content.to)
   ) {
     return null;
   }
