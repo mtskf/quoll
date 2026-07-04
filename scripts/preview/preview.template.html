@@ -1,0 +1,225 @@
+<!doctype html>
+<!--
+  Quoll webview preview — single instance template.
+
+  Used two ways by scripts/preview/serve.mjs:
+    1. directly at /instance?v=<i> (the faithful full-viewport render), and
+    2. inside an <iframe> in the /  compare grid (one iframe per variation).
+
+  serve.mjs string-substitutes the {{TOKENS}} below per request. Everything
+  here is dev-only tooling: it stubs the VS Code webview runtime just enough
+  to boot the REAL dist/webview bundle in a plain browser. See README.md.
+-->
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Quoll preview — {{LABEL}}</title>
+
+    <!--
+      The webview CSS leans on --vscode-* custom properties that only exist
+      inside a real VS Code webview. Stub every one the bundle references so
+      fonts/colours don't fall back to browser defaults. --vscode-font-* MUST
+      be realistic: the nested-list indent is measured at runtime from the
+      proportional font's space advance (prose-space-metric.ts), so a wrong
+      font misrepresents indent geometry. Values approximate Default Light+;
+      html.dark-theme overrides the ones that differ for Default Dark+.
+    -->
+    <style id="vscode-vars">
+      :root {
+        --vscode-font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Ubuntu", "Droid Sans",
+          sans-serif;
+        --vscode-font-size: 13px;
+        --vscode-editor-font-family: "SF Mono", Menlo, Monaco, Consolas, "Courier New", monospace;
+
+        --vscode-foreground: #616161;
+        --vscode-descriptionForeground: #717171;
+        --vscode-errorForeground: #a1260d;
+        --vscode-focusBorder: #0090f1;
+        --vscode-contrastBorder: transparent;
+        --vscode-widget-border: #d4d4d4;
+        --vscode-panel-border: rgba(128, 128, 128, 0.35);
+        --vscode-icon-foreground: #424242;
+        --vscode-toolbar-hoverBackground: rgba(184, 184, 184, 0.31);
+
+        --vscode-editor-background: #ffffff;
+        --vscode-editor-foreground: #000000;
+        --vscode-editor-selectionBackground: #add6ff;
+        --vscode-editorCursor-foreground: #000000;
+        --vscode-editorError-foreground: #cd3131;
+        --vscode-editorWarning-foreground: #bf8803;
+        --vscode-editorInfo-foreground: #1a85ff;
+        --vscode-editorLineNumber-foreground: #237893;
+        --vscode-editorLineNumber-activeForeground: #0b216f;
+
+        --vscode-editorWidget-background: #f3f3f3;
+        --vscode-editorWidget-foreground: #616161;
+        --vscode-editorWidget-border: #d4d4d4;
+        --vscode-editorHoverWidget-background: #f3f3f3;
+        --vscode-editorHoverWidget-foreground: #616161;
+        --vscode-editorHoverWidget-border: #c8c8c8;
+
+        --vscode-button-background: #007acc;
+        --vscode-button-foreground: #ffffff;
+        --vscode-list-activeSelectionBackground: #0060c0;
+        --vscode-list-activeSelectionForeground: #ffffff;
+        --vscode-list-hoverBackground: #e8e8e8;
+
+        --vscode-textLink-foreground: #006ab1;
+        --vscode-textLink-activeForeground: #006ab1;
+        --vscode-textCodeBlock-background: #e8e8e8;
+
+        --vscode-inputValidation-errorBackground: #f2dede;
+        --vscode-inputValidation-warningBackground: #f6f5d2;
+
+        --vscode-charts-blue: #1a85ff;
+        --vscode-charts-green: #388a34;
+        --vscode-charts-purple: #652d90;
+        --vscode-charts-red: #e51400;
+        --vscode-charts-yellow: #bf8803;
+        --vscode-terminal-ansiGreen: #00bc00;
+        --vscode-testing-iconPassed: #388a34;
+        --vscode-gitDecoration-addedResourceForeground: #587c0c;
+      }
+
+      html.dark-theme {
+        --vscode-foreground: #cccccc;
+        --vscode-descriptionForeground: rgba(204, 204, 204, 0.7);
+        --vscode-errorForeground: #f48771;
+        --vscode-focusBorder: #007fd4;
+        --vscode-widget-border: #303031;
+        --vscode-icon-foreground: #c5c5c5;
+        --vscode-toolbar-hoverBackground: rgba(90, 93, 94, 0.31);
+
+        --vscode-editor-background: #1e1e1e;
+        --vscode-editor-foreground: #d4d4d4;
+        --vscode-editor-selectionBackground: #264f78;
+        --vscode-editorCursor-foreground: #aeafad;
+        --vscode-editorError-foreground: #f14c4c;
+        --vscode-editorWarning-foreground: #cca700;
+        --vscode-editorInfo-foreground: #3794ff;
+        --vscode-editorLineNumber-foreground: #858585;
+        --vscode-editorLineNumber-activeForeground: #c6c6c6;
+
+        --vscode-editorWidget-background: #252526;
+        --vscode-editorWidget-foreground: #cccccc;
+        --vscode-editorWidget-border: #454545;
+        --vscode-editorHoverWidget-background: #252526;
+        --vscode-editorHoverWidget-foreground: #cccccc;
+        --vscode-editorHoverWidget-border: #454545;
+
+        --vscode-button-background: #0e639c;
+        --vscode-list-activeSelectionBackground: #094771;
+        --vscode-list-hoverBackground: #2a2d2e;
+
+        --vscode-textLink-foreground: #3794ff;
+        --vscode-textLink-activeForeground: #3794ff;
+        --vscode-textCodeBlock-background: rgba(255, 255, 255, 0.08);
+
+        --vscode-inputValidation-errorBackground: #5a1d1d;
+        --vscode-inputValidation-warningBackground: #352a05;
+
+        --vscode-charts-blue: #3794ff;
+        --vscode-charts-green: #89d185;
+        --vscode-charts-purple: #b180d7;
+        --vscode-charts-red: #f14c4c;
+        --vscode-charts-yellow: #cca700;
+        --vscode-terminal-ansiGreen: #0dbc79;
+        --vscode-testing-iconPassed: #73c991;
+        --vscode-gitDecoration-addedResourceForeground: #81b88b;
+      }
+    </style>
+
+    <!-- The REAL shipped webview CSS (fresh dist/webview/index.css). -->
+    <link rel="stylesheet" href="/dist/webview/index.css" />
+
+    <!-- Per-variation CSS injected by serve.mjs (edit preview.config.mjs). -->
+    <style id="variation">{{VARIATION_CSS}}</style>
+
+    <!-- Preview chrome: a small label chip so variations are distinguishable. -->
+    <style id="preview-chrome">
+      .quoll-preview-chip {
+        position: fixed;
+        top: 8px;
+        right: 8px;
+        z-index: 2147483647;
+        padding: 2px 8px;
+        border-radius: 4px;
+        font: 11px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        color: #ffffff;
+        background: rgba(0, 0, 0, 0.55);
+        pointer-events: none;
+        user-select: none;
+      }
+    </style>
+
+    <!--
+      Classic (non-module) script: runs BEFORE the module bundle. It MUST
+      define window.acquireVsCodeApi as a function before dist/webview/index.js
+      executes, or the webview paints its init-error banner.
+
+      Seeding uses the REAL protocol handshake: the webview posts
+      { protocol:1, type:"ready" } through this shim's postMessage when it
+      mounts (after its window "message" listener is wired). We detect that
+      and only THEN window.postMessage the document seed, so the listener is
+      guaranteed to be present. Variation JS runs after the seed via rAF.
+    -->
+    <script>
+      (function () {
+        var DOC = {{DOC_JSON}};
+        var DARK = {{DARK}};
+        // Best-effort measurement handle for later getComputedStyle probing.
+        // The EditorView instance is not reachable from the DOM without
+        // importing CodeMirror, so we expose the root element instead.
+        window.__quollPreview = { view: null, root: null };
+
+        function runVariationJs() {
+          try {
+            {{VARIATION_JS}}
+          } catch (err) {
+            console.error("[preview] variation js failed", err);
+          }
+        }
+
+        var api = {
+          postMessage: function (message) {
+            console.log("[webview→host]", message);
+            if (message && message.type === "ready") {
+              window.postMessage(
+                {
+                  protocol: 1,
+                  type: "document",
+                  content: DOC,
+                  docVersion: 1,
+                  isDarkTheme: DARK,
+                  canWrite: true,
+                },
+                "*"
+              );
+              // Two frames: let CodeMirror mount + measure before probing.
+              requestAnimationFrame(function () {
+                requestAnimationFrame(function () {
+                  window.__quollPreview.root = document.getElementById("root");
+                  runVariationJs();
+                });
+              });
+            }
+          },
+          setState: function () {},
+          getState: function () {
+            return undefined;
+          },
+        };
+        window.acquireVsCodeApi = function () {
+          return api;
+        };
+      })();
+    </script>
+  </head>
+  <body>
+    <div class="quoll-preview-chip">{{LABEL}}</div>
+    <div id="root"></div>
+    <!-- The REAL shipped webview bundle (fresh dist/webview/index.js). -->
+    <script type="module" src="/dist/webview/index.js"></script>
+  </body>
+</html>
