@@ -214,6 +214,78 @@ describe("resolveListItemHang — recursive geometry (F1 + NEST_STEP)", () => {
       pad: "0 * var(--quoll-prose-space, 1ch) + var(--quoll-task-marker-width)",
     });
   });
+
+  it("mixed nested siblings align: plain `- b` and task `- [ ] c` share a marker column", () => {
+    // `- a\n  - b\n  - [ ] c`: the step keys on the plain-bullet PARENT a, so BOTH
+    // siblings step (+2). Their marker columns are equal (renderedMarkCol {ch:4})
+    // — pad − indent is 2 cols for each: b (5−3) and c (4−2). A child-keyed gate
+    // would leave c unstepped (pad "2 * … + MARKER") and misalign them ~7px.
+    expect(hangOf("- a\n  - b\n  - [ ] c", 1)).toEqual({
+      indent:
+        "3 * var(--quoll-prose-space, 1ch) + 1 * calc((1ch + var(--quoll-prose-space, 1ch)) / 2)",
+      pad: "5 * var(--quoll-prose-space, 1ch) + 1 * calc((1ch + var(--quoll-prose-space, 1ch)) / 2)",
+    });
+    expect(hangOf("- a\n  - b\n  - [ ] c", 2)).toEqual({
+      indent: "2 * var(--quoll-prose-space, 1ch) + var(--quoll-task-marker-width)",
+      pad: "4 * var(--quoll-prose-space, 1ch) + var(--quoll-task-marker-width)",
+    });
+  });
+
+  it("bullet double-nest steps +2 pad cols per level (`- a` → `  - b` → `    - c`)", () => {
+    // Per-level pad step is 4 cols (2 literal source cols + 2 BULLET_NEST_STEP):
+    // L2 pad 5, L3 pad 9. indent stays source-relative (3 / 5).
+    expect(hangOf("- a\n  - b\n    - c", 1)).toEqual({
+      indent:
+        "3 * var(--quoll-prose-space, 1ch) + 1 * calc((1ch + var(--quoll-prose-space, 1ch)) / 2)",
+      pad: "5 * var(--quoll-prose-space, 1ch) + 1 * calc((1ch + var(--quoll-prose-space, 1ch)) / 2)",
+    });
+    expect(hangOf("- a\n  - b\n    - c", 2)).toEqual({
+      indent:
+        "5 * var(--quoll-prose-space, 1ch) + 1 * calc((1ch + var(--quoll-prose-space, 1ch)) / 2)",
+      pad: "9 * var(--quoll-prose-space, 1ch) + 1 * calc((1ch + var(--quoll-prose-space, 1ch)) / 2)",
+    });
+  });
+
+  it("ordered child under a bullet chain carries the bullet step but does NOT double-step it", () => {
+    // `- a\n  - b\n    1. c`: c is an OrderedList item → the gate's child check
+    // fails, so no OWN step; but it CARRIES b's +2 via the shift (pad − indent =
+    // 2 cols). Guards that the carry works AND an ordered child is not stepped.
+    expect(hangOf("- a\n  - b\n    1. c", 2)).toEqual({
+      indent:
+        "5 * var(--quoll-prose-space, 1ch) + 2 * calc((1ch + var(--quoll-prose-space, 1ch)) / 2)",
+      pad: "7 * var(--quoll-prose-space, 1ch) + 2 * calc((1ch + var(--quoll-prose-space, 1ch)) / 2)",
+    });
+  });
+
+  it("blockquote-nested bullet does NOT gain the step (Blockquote-ancestor exclusion)", () => {
+    // `> - outer\n>   - inner` (raw, hiddenPrefixCols=0): inner nests in outer but
+    // is inside a Blockquote → no step, pad stays source-relative (5), unchanged.
+    expect(hangOf("> - outer\n>   - inner", 1)).toEqual({
+      indent:
+        "5 * var(--quoll-prose-space, 1ch) + 1 * calc((1ch + var(--quoll-prose-space, 1ch)) / 2)",
+      pad: "5 * var(--quoll-prose-space, 1ch) + 1 * calc((1ch + var(--quoll-prose-space, 1ch)) / 2)",
+    });
+  });
+
+  it("ordered child under a plain bullet does NOT gain the step (child not a bullet)", () => {
+    // `- a\n  1. b`: child is an OrderedList item → gate fails, ordered geometry
+    // unchanged (source-relative).
+    expect(hangOf("- a\n  1. b", 1)).toEqual({
+      indent:
+        "3 * var(--quoll-prose-space, 1ch) + 2 * calc((1ch + var(--quoll-prose-space, 1ch)) / 2)",
+      pad: "3 * var(--quoll-prose-space, 1ch) + 2 * calc((1ch + var(--quoll-prose-space, 1ch)) / 2)",
+    });
+  });
+
+  it("bullet under an ordered parent does NOT gain the step (parent not a bullet)", () => {
+    // `1. a\n   - b`: parent is an OrderedList item → gate fails, the bullet
+    // sublist under an ordered item keeps its source-relative hang.
+    expect(hangOf("1. a\n   - b", 1)).toEqual({
+      indent:
+        "4 * var(--quoll-prose-space, 1ch) + 1 * calc((1ch + var(--quoll-prose-space, 1ch)) / 2)",
+      pad: "4 * var(--quoll-prose-space, 1ch) + 1 * calc((1ch + var(--quoll-prose-space, 1ch)) / 2)",
+    });
+  });
 });
 
 describe("resolveListItemHang — hiddenPrefixCols subtracts the blockquote prefix", () => {
