@@ -564,6 +564,13 @@ export const copyButtonThemeSpec = {
   // requires actively neutralising it, exactly as the sibling webview buttons
   // (.quoll-outline-toggle / .quoll-switch-editor-toggle) each set their own
   // explicit `background`.
+  //
+  // `appearance/border/boxShadow: none` neutralise the resting EDGE for the same
+  // reason: a native `<button>` carries a raised-key bevel (native `appearance`) and
+  // the injected default may add a `border`/`box-shadow`. Left un-reset, that edge
+  // highlight gives the bare icon a heavier "raised key" weight at rest. The boxed
+  // affordance is meant to appear only on hover/focus (the tint below), so the
+  // resting button must read as a flat icon — hence explicitly stripping all three.
   ".quoll-copy-button": {
     position: "absolute",
     top: "0.3em",
@@ -574,7 +581,10 @@ export const copyButtonThemeSpec = {
     justifyContent: "center",
     padding: "0.2em",
     color: fencedControlForeground,
+    appearance: "none",
     backgroundColor: "transparent",
+    border: "none",
+    boxShadow: "none",
     borderRadius: "4px",
     cursor: "pointer",
     opacity: "0.6",
