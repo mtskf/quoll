@@ -129,11 +129,15 @@ describe("list hang-indent provider — task lists", () => {
     );
   });
 
-  it("ordered task: prefix includes the visible `N. ` (3ch) + token", () => {
+  it("ordered task: visible `N.` glyph run is split from its trailing space + token", () => {
+    // `1. [x]`: the `1.` is 2 glyph cols (sized in the GLYPH blend, like plain
+    // ordered), the trailing space is 1 prose-space col, then the checkbox
+    // token. Splitting the glyph run fixes the wrapped-continuation under-hang
+    // the all-prose-space form left.
     const set = buildListHangIndent(ctx("1. [x] ordered task body"));
     expect(lines(set)[0]?.style).toBe(
-      "text-indent:calc(-1 * (3 * var(--quoll-prose-space, 1ch) + var(--quoll-task-marker-width)));" +
-        "padding-inline-start:calc(6px + (3 * var(--quoll-prose-space, 1ch) + var(--quoll-task-marker-width)))"
+      "text-indent:calc(-1 * (1 * var(--quoll-prose-space, 1ch) + 2 * calc((1ch + var(--quoll-prose-space, 1ch)) / 2) + var(--quoll-task-marker-width)));" +
+        "padding-inline-start:calc(6px + (1 * var(--quoll-prose-space, 1ch) + 2 * calc((1ch + var(--quoll-prose-space, 1ch)) / 2) + var(--quoll-task-marker-width)))"
     );
   });
 });
@@ -164,10 +168,14 @@ describe("list hang-indent provider — plain child nested under a task item", (
     );
   });
 
-  it("bullet child under ORDERED task: parent prefix keeps `1. ` visible (3ch), +step", () => {
+  it("bullet child under ORDERED task: parent prefix keeps `1.` visible (glyph-split), +step", () => {
+    // The child re-bases through the ordered-task parent's rendered content
+    // column, which now accounts for the `1.` glyph run in the GLYPH blend
+    // (2 glyph cols) instead of 2 prose-space cols. The first-line indent is
+    // unchanged (the child's own `-` marker is plain); only the pad re-bases.
     const set = buildListHangIndent(ctx("1. [ ] task\n   - child here"));
     expect(lines(set)[1]?.style).toBe(
-      "text-indent:calc(-1 * (4 * var(--quoll-prose-space, 1ch) + 1 * calc((1ch + var(--quoll-prose-space, 1ch)) / 2)));padding-inline-start:calc(6px + (6 * var(--quoll-prose-space, 1ch) + 1 * calc((1ch + var(--quoll-prose-space, 1ch)) / 2) + var(--quoll-task-marker-width)))"
+      "text-indent:calc(-1 * (4 * var(--quoll-prose-space, 1ch) + 1 * calc((1ch + var(--quoll-prose-space, 1ch)) / 2)));padding-inline-start:calc(6px + (4 * var(--quoll-prose-space, 1ch) + 3 * calc((1ch + var(--quoll-prose-space, 1ch)) / 2) + var(--quoll-task-marker-width)))"
     );
   });
 });

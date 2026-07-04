@@ -168,6 +168,37 @@ describe("resolveListItemHang — recursive geometry (F1 + NEST_STEP)", () => {
       pad: "1 * var(--quoll-prose-space, 1ch) + 2 * calc((1ch + var(--quoll-prose-space, 1ch)) / 2)",
     });
   });
+
+  it("ordered TASK (`1. [x]`) splits the visible `N.` glyph run from its space + checkbox", () => {
+    // `1. [x] foo`: the `1.` is 2 glyph cols (GLYPH blend, like plain ordered),
+    // 1 trailing prose-space col up to the folded checkbox, + the checkbox
+    // token. The all-prose-space form under-hung the wrapped continuation
+    // (browser-harness ~-2.3px for `1.`, worse multi-digit) — this pins the fix.
+    expect(hangOf("1. [x] foo", 0)).toEqual({
+      indent:
+        "1 * var(--quoll-prose-space, 1ch) + 2 * calc((1ch + var(--quoll-prose-space, 1ch)) / 2) + var(--quoll-task-marker-width)",
+      pad: "1 * var(--quoll-prose-space, 1ch) + 2 * calc((1ch + var(--quoll-prose-space, 1ch)) / 2) + var(--quoll-task-marker-width)",
+    });
+  });
+
+  it("multi-digit ordered TASK (`10. [ ]`) counts three glyph columns (`1`,`0`,`.`)", () => {
+    expect(hangOf("10. [ ] foo", 0)).toEqual({
+      indent:
+        "1 * var(--quoll-prose-space, 1ch) + 3 * calc((1ch + var(--quoll-prose-space, 1ch)) / 2) + var(--quoll-task-marker-width)",
+      pad: "1 * var(--quoll-prose-space, 1ch) + 3 * calc((1ch + var(--quoll-prose-space, 1ch)) / 2) + var(--quoll-task-marker-width)",
+    });
+  });
+
+  it("bullet TASK (`- [x]`) stays glyph:0 — the `- ` folds into the checkbox (regression guard)", () => {
+    // The glyph split is CLAMPED to foldFrom: for a bullet task foldFrom ==
+    // listMarkFrom, so glyph and ch are both 0 — byte-identical with the
+    // pre-split all-prose-space form. Guards against the split perturbing the
+    // invariant-sensitive bullet-task fold.
+    expect(hangOf("- [x] foo", 0)).toEqual({
+      indent: "0 * var(--quoll-prose-space, 1ch) + var(--quoll-task-marker-width)",
+      pad: "0 * var(--quoll-prose-space, 1ch) + var(--quoll-task-marker-width)",
+    });
+  });
 });
 
 describe("resolveListItemHang — hiddenPrefixCols subtracts the blockquote prefix", () => {
