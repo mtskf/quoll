@@ -463,11 +463,17 @@ describe("quollCopyButtonTheme", () => {
     expect(copyButtonThemeSpec[".cm-line.quoll-fenced-code-fence-hidden"].fontSize).toBe("0.9em");
   });
 
-  it("has no border (borderless icon affordance)", () => {
-    // Cast to widen off the exact literal type (the `border` key was dropped from
-    // the spec): if it is ever re-added, `.border` becomes defined and this fails.
+  it("neutralises the resting edge (no native bevel, border, or shadow — bare-icon at rest)", () => {
+    // A native `<button>` carries a raised-key bevel (native `appearance`) and the VS
+    // Code webview default may add a `border`/`box-shadow`. Left un-reset, that resting
+    // edge highlight gives the bare icon a heavier "raised key" weight. All three are
+    // stripped EXPLICITLY (mirroring the `backgroundColor: transparent` neutralisation)
+    // so the resting button reads as a flat icon; the boxed affordance appears only on
+    // hover/focus. Re-adding any resting edge (or dropping a neutraliser) fails here.
     const rule = copyButtonThemeSpec[".quoll-copy-button"] as Record<string, string | undefined>;
-    expect(rule.border).toBeUndefined();
+    expect(rule.appearance).toBe("none");
+    expect(rule.border).toBe("none");
+    expect(rule.boxShadow).toBe("none");
   });
 
   it("neutralises the resting background to transparent (icon-only at rest; the box only appears on hover/focus)", () => {
