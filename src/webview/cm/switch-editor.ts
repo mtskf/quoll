@@ -40,8 +40,10 @@ export type SwitchEditorHost = { postMessage(message: WebviewToHost): void };
  *  mirrors VS Code's reverse `cmd+alt+e` binding (see the module header).
  *  Mod = Cmd (mac) / Ctrl (win+linux) — accept either metaKey or ctrlKey so we
  *  need no platform detection (and stay test-deterministic). Shift excluded to
- *  pin the exact combo. Kept in sync with the `ctrl+alt+e` / `cmd+alt+e` reverse
- *  entry in package.json. */
+ *  pin the exact combo. On Windows this also matches AltGr (= Ctrl+Alt), an
+ *  accepted trade-off: it is identical to VS Code's reverse `ctrl+alt+e` binding,
+ *  so it introduces no behaviour the reverse direction doesn't already have. Kept
+ *  in sync with the `ctrl+alt+e` / `cmd+alt+e` reverse entry in package.json. */
 export function matchesSwitchEditorChord(event: KeyboardEvent): boolean {
   return (
     event.code === "KeyE" && event.altKey && (event.metaKey || event.ctrlKey) && !event.shiftKey
@@ -144,8 +146,8 @@ export function quollSwitchEditor(host: SwitchEditorHost, flushPendingEdit: () =
   // A raw keydown handler (NOT a keymap) so the chord matches on the PHYSICAL
   // `event.code` — see matchesSwitchEditorChord for the macOS Option+E dead-key
   // rationale. Prec.high so it claims ⌘⌥E before lower-precedence handlers;
-  // returning true makes CodeMirror preventDefault() the event (which also
-  // suppresses the stray dead-key accent that would otherwise be composed).
+  // returning true makes CodeMirror preventDefault() the keydown. The panel
+  // switches (disposes) immediately, so any dead-key accent composition is moot.
   const chord = Prec.high(
     EditorView.domEventHandlers({
       keydown(event) {
