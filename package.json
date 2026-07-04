@@ -101,6 +101,7 @@
     "check": "biome check --write",
     "check:todo-markers": "node scripts/check-stale-todo-markers.mjs",
     "gen:perf-fixtures": "node scripts/gen-perf-fixtures.mjs",
+    "preview": "node scripts/preview/serve.mjs",
     "test:unit": "vitest run",
     "test:e2e": "pnpm build && node test/extension/build.mjs && node ./out/test-e2e/launch.js",
     "test": "pnpm test:unit && pnpm test:e2e",
