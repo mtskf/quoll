@@ -19,15 +19,25 @@
 //   localhost MCP WebSocket to the most-recently-connected CLI `/ide` session
 //   (verified against claude-code 2.1.199). Because activeTextEditor only ever
 //   points at a VISIBLE text editor, deps.revealForMention first shows this
-//   document as a text editor (reusing an already-visible one, else opening
-//   ViewColumn.Beside) with preserveFocus + the payload's selection, and
-//   resolves to a cleanup that closes only the tab(s) the reveal opened.
+//   document as a text editor (reusing an already-visible one, else opening a
+//   second tab IN PLACE — ViewColumn.Active, the Quoll tab's own group, no
+//   layout shift) with preserveFocus:false + the payload's selection, and
+//   resolves to a cleanup that closes only the tab(s) the reveal opened
+//   (closing the temp tab re-activates the Quoll tab, so focus returns).
+//   preserveFocus:false is load-bearing: preserveFocus:true never sets
+//   activeTextEditor at all (probe-verified in a real host — see
+//   test/extension/e2e/reveal-for-mention-platform.test.ts), which made the
+//   delegation silently no-op. After the reveal and BEFORE the command,
+//   deps.isDocumentActiveTextEditor gates the delegation — if the reveal did
+//   not actually make this document the activeTextEditor, the handler warns
+//   and drops to the fallback tier instead of firing a command that would
+//   silently do nothing.
 //
 //   An earlier iteration REJECTED exactly this reveal-then-delegate path over
-//   the brief raw-markdown flash of the Beside split; that decision has been
-//   REVERSED by an explicit product decision — auto-insert parity with native
-//   text editors (the mention lands in the composer with zero keystrokes)
-//   outweighs the flash.
+//   the brief raw-markdown flash of the temporary text editor; that decision
+//   has been REVERSED by an explicit product decision — auto-insert parity
+//   with native text editors (the mention lands in the composer with zero
+//   keystrokes) outweighs the flash.
 //
 //   On success the reference is ALSO written to the clipboard as silent
 //   insurance (non-fatal — warn only): Claude Code's routing has a silent-drop
@@ -107,14 +117,24 @@ export type HandleContextHandoffDeps = {
   showWarn: (message: string) => Thenable<unknown>;
   /** window.showErrorMessage bound — fallback clipboard-failure abort. */
   showError: (message: string) => Thenable<unknown>;
-  /** Tier-0 reveal: show THIS document as a visible text editor carrying the
-   *  given selection WITHOUT stealing keyboard focus, so Claude Code's
-   *  zero-arg insert command (which reads window.activeTextEditor) sees the
-   *  right document + range. Resolves to a cleanup that closes only the
-   *  tab(s) the reveal opened (a no-op when an existing tab was reused); may
-   *  reject (→ fallback tier). Implemented by QuollEditorPanel, which owns
-   *  `document` and `window` — this module stays vscode-import-free. */
+  /** Tier-0 reveal: show THIS document as the ACTIVE text editor carrying the
+   *  given selection (focus moves to it for the flash duration and returns
+   *  when the cleanup's tab close re-activates the Quoll tab), so Claude
+   *  Code's zero-arg insert command (which reads window.activeTextEditor)
+   *  sees the right document + range. Resolves to a cleanup that closes only
+   *  the tab(s) the reveal opened (a no-op when an existing tab was reused);
+   *  may reject (→ fallback tier). Implemented by QuollEditorPanel, which
+   *  owns `document` and `window` — this module stays vscode-import-free. */
   revealForMention: (selection: HandoffRevealSelection) => Thenable<() => Thenable<void>>;
+  /** Pre-command guard: true when window.activeTextEditor currently shows
+   *  THIS document. Claude Code's insert command silently no-ops when
+   *  activeTextEditor is absent or points elsewhere — a failure the host
+   *  cannot observe after the fact (the command resolves either way).
+   *  Checking BEFORE the command converts that silent-failure class into a
+   *  detectable one that falls back to the clipboard tier. Probe-verified
+   *  that a preserveFocus:false reveal sets activeTextEditor synchronously by
+   *  reveal resolution, so a sync check here is reliable. */
+  isDocumentActiveTextEditor: () => boolean;
 };
 
 /** Strip C0 control characters (U+0000–U+001F) and DEL (U+007F) from a path.
@@ -180,11 +200,16 @@ async function tryBool(op: () => Thenable<boolean>, label: string): Promise<bool
 
 /** Tier 0 — reveal the document (activeTextEditor choreography) and delegate
  *  to Claude Code's own insert command. Returns true only when the command
- *  resolved (Claude Code accepted the delegation). The cleanup ALWAYS runs
- *  (finally) — including when the command rejects — and its own failure is
- *  swallowed (warn) so it can neither mask a delegation success nor convert
- *  one into a spurious fallback. A reveal rejection or a command rejection
- *  (Claude Code missing / too old) resolves false → fallback tier. */
+ *  resolved (Claude Code accepted the delegation). Between the reveal and the
+ *  command, the activeTextEditor guard verifies the reveal actually took —
+ *  the command silently no-ops on a wrong/absent activeTextEditor, so a
+ *  failed guard resolves false (→ fallback tier) rather than firing a
+ *  command whose failure the host could never observe. The cleanup ALWAYS
+ *  runs (finally) — including when the guard fails or the command rejects —
+ *  and its own failure is swallowed (warn) so it can neither mask a
+ *  delegation success nor convert one into a spurious fallback. A reveal
+ *  rejection or a command rejection (Claude Code missing / too old) resolves
+ *  false → fallback tier. */
 async function tryDelegateToClaudeCode(
   selection: HandoffRevealSelection,
   deps: HandleContextHandoffDeps
@@ -192,6 +217,13 @@ async function tryDelegateToClaudeCode(
   let cleanup: (() => Thenable<void>) | undefined;
   try {
     cleanup = await deps.revealForMention(selection);
+    if (!deps.isDocumentActiveTextEditor()) {
+      console.warn(
+        "[quoll] context-handoff: reveal did not make the document the active text editor; " +
+          "skipping insertAtMentioned and falling back"
+      );
+      return false;
+    }
     await deps.executeCommand(CLAUDE_INSERT_AT_MENTIONED_COMMAND);
     return true;
   } catch (err) {

@@ -109,6 +109,9 @@ function deps(overrides: Partial<Parameters<typeof handleContextHandoff>[1]> = {
         calls.order.push("cleanup");
       };
     }),
+    // Default: the reveal made the doc the activeTextEditor (happy path).
+    // Guard tests override with false / an order-recording spy.
+    isDocumentActiveTextEditor: () => true,
   };
   return { calls, deps: { ...base, ...overrides } };
 }
@@ -227,6 +230,44 @@ describe("handleContextHandoff — tier 0 delegation", () => {
     expect(calls.clipboard).toEqual(["@notes/x.md#L2-5"]);
     expect(calls.info).toEqual([expect.stringContaining("paste")]);
     expect(calls.error).toEqual([]);
+  });
+
+  it("skips the insert command and falls back when the activeTextEditor guard fails", async () => {
+    // The insert command silently no-ops on a wrong/absent activeTextEditor —
+    // host-unobservable after the fact. A false guard must (a) never fire the
+    // command, (b) still run the reveal cleanup (finally), and (c) drop to the
+    // v1 fallback tier (clipboard + open/focus + paste toast).
+    const { calls, deps: d } = deps({ isDocumentActiveTextEditor: () => false });
+    await handleContextHandoff({ hasSelection: true, startLine: 2, endLine: 5 }, d);
+    expect(calls.commands).not.toContain(CLAUDE_INSERT_AT_MENTIONED_COMMAND);
+    expect(calls.cleanups).toBe(1);
+    // Fallback tier ran verbatim: clipboard copy, open/focus commands, toast.
+    expect(calls.commands).toEqual(["claude-vscode.editor.open", "claude-vscode.focus"]);
+    expect(calls.clipboard).toEqual(["@notes/x.md#L2-5"]);
+    expect(calls.info).toEqual([expect.stringContaining("paste")]);
+    expect(calls.error).toEqual([]);
+  });
+
+  it("consults the guard AFTER the reveal and BEFORE the insert command (order pin)", async () => {
+    // The guard's value is only meaningful once the reveal has had its chance
+    // to set activeTextEditor, and it must gate the command — pin the
+    // reveal → guard → command sequence.
+    const { calls, deps: base } = deps();
+    const isDocumentActiveTextEditor = vi.fn(() => {
+      calls.order.push("guard");
+      return true;
+    });
+    await handleContextHandoff(
+      { hasSelection: true, startLine: 2, endLine: 5 },
+      { ...base, isDocumentActiveTextEditor }
+    );
+    expect(calls.order).toEqual([
+      "reveal",
+      "guard",
+      `command:${CLAUDE_INSERT_AT_MENTIONED_COMMAND}`,
+      "cleanup",
+      "clipboard",
+    ]);
   });
 });
 

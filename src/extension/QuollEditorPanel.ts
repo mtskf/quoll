@@ -807,13 +807,27 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
     // `claude-code.insertAtMentioned` reads window.activeTextEditor (verified
     // against claude-code 2.1.199), and activeTextEditor only ever points at a
     // VISIBLE text editor — so this document must be shown as a text editor
-    // first. showTextDocument with preserveFocus:true makes the shown editor
-    // the activeTextEditor via its "input changed most recently" clause
-    // WITHOUT stealing keyboard focus from the Quoll webview.
+    // first. The showTextDocument options are pinned by empirical platform
+    // facts, probed in a real VS Code host and asserted by
+    // test/extension/e2e/reveal-for-mention-platform.test.ts:
+    //   - preserveFocus:true NEVER sets activeTextEditor while a custom-editor
+    //     tab is active (onDidChangeActiveTextEditor does not fire at all), so
+    //     the upstream command silently no-ops — the live bug this replaced.
+    //     preserveFocus:false sets activeTextEditor before showTextDocument
+    //     even resolves. So the reveal MUST take focus: it moves to the temp
+    //     editor for the flash duration and returns when the cleanup's tab
+    //     close re-activates the Quoll custom tab.
+    //   - ViewColumn.Active (the Quoll custom tab's own group) opens the text
+    //     editor as a SECOND tab alongside the custom tab — it does not
+    //     replace it — and closing that tab cleanly re-activates the custom
+    //     tab with the document still open. In-place face-swap: no layout
+    //     shift (the previous ViewColumn.Beside split shifted the layout twice
+    //     — once opening, once closing).
     //   - Reuse an already-visible text editor of THIS doc when one exists (no
-    //     duplicate tab, cleanup is then a no-op); else open ViewColumn.Beside
-    //     (brief split flash — the accepted product cost), preview:true so the
-    //     temporary tab stays as light as VS Code allows.
+    //     duplicate tab, cleanup is then a no-op); else open in place
+    //     (ViewColumn.Active, brief same-pane flash — the accepted product
+    //     cost), preview:true so the temporary tab stays as light as VS Code
+    //     allows.
     //   - Cleanup closes ONLY text tabs of this uri in groups that did NOT
     //     already hold one before the reveal (snapshot below), so the user's
     //     own pre-existing text tabs are never closed.
@@ -855,8 +869,8 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
         : new Position(0, 0);
       const start = selection.hasSelection ? new Position(selection.startLine - 1, 0) : end;
       await window.showTextDocument(document, {
-        viewColumn: visibleColumn ?? ViewColumn.Beside,
-        preserveFocus: true,
+        viewColumn: visibleColumn ?? ViewColumn.Active,
+        preserveFocus: false,
         preview: true,
         selection: new Selection(start, end),
       });
@@ -873,6 +887,12 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
         }
       };
     };
+
+    // Pre-command guard for the tier-0 delegation (see
+    // HandleContextHandoffDeps.isDocumentActiveTextEditor): true when
+    // window.activeTextEditor currently shows THIS document.
+    const isDocumentActiveTextEditor = (): boolean =>
+      window.activeTextEditor?.document.uri.toString() === document.uri.toString();
 
     const handleInbound = (raw: unknown): void => {
       if (disposed) {
@@ -957,8 +977,9 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
               showInfo: (message) => window.showInformationMessage(message),
               showWarn: (message) => window.showWarningMessage(message),
               showError: (message) => window.showErrorMessage(message),
-              // Tier-0 activeTextEditor choreography — hoisted closure above.
+              // Tier-0 activeTextEditor choreography — hoisted closures above.
               revealForMention,
+              isDocumentActiveTextEditor,
             }
           );
           return;

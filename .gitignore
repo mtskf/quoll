@@ -22,8 +22,9 @@ coverage/
 # VSIX package artifacts
 *.vsix
 
-# VS Code extension test runner
-.vscode-test/
+# VS Code extension test runner (no trailing slash: also matches a symlink to
+# a shared download cache, not just a real directory)
+.vscode-test
 
 # Stray tsc emit under test/ (vitest runs .ts directly; a stray tsc compile
 # could otherwise leave .js artifacts in the worktree)
