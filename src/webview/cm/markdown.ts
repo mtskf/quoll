@@ -47,6 +47,7 @@ import { type EditorState, Prec } from "@codemirror/state";
 import { keymap } from "@codemirror/view";
 import type { MarkdownExtension, MarkdownParser } from "@lezer/markdown";
 import { parseTable } from "../../markdown/table/index.js";
+import { leadingFrontmatterEnd } from "./frontmatter/detect.js";
 
 // SyntaxNode without a direct @lezer/common import (transitive-only, un-hoisted
 // pnpm dep — supply-chain default-deny). Derive it from syntaxTree's return type,
@@ -61,13 +62,22 @@ function firstContentChild(node: SyntaxNode): SyntaxNode | null {
   return first?.type.name === "ListMark" ? first.nextSibling : first;
 }
 
-// True when a `Table` node would render as a block widget — the SAME emit
-// condition tableBlockField uses (table-skeleton.ts `buildModel`): the per-node
-// slice, CRLF-normalised, is accepted by `parseTable`. A blockquote-nested table
-// (continuation lines bear `>` markers) and a malformed slice (cell-count
-// mismatch) parse to `null` and emit NO widget — they render as raw source. Fold-
-// suppression must mirror this exactly so it and widget-emission stay in lockstep.
+// True when a `Table` node would render as a block widget — mirroring EVERY
+// non-emission gate tableBlockField applies (table-field.ts `buildAll`), so fold-
+// suppression and widget-emission stay in lockstep:
+//   1. Leading frontmatter — the frontmatter block owns [0, fmEnd] and buildAll
+//      emits no competing table widget inside it (`m.from < fmEnd`). A marker-line
+//      table inside a frontmatter fence parses, but renders as raw source with no
+//      widget (Codex Conf-74).
+//   2. parseTable rejects the CRLF-normalised per-node slice — a blockquote-nested
+//      table (continuation lines bear `>` markers) or a malformed slice (cell-count
+//      mismatch). Both render as raw source (Codex Conf-84).
+// (buildAll's third gate, a degenerate zero-width block range, is unreachable for a
+// ListItem's first-content Table, which always spans at least the marker line.)
 function tableEmitsBlockWidget(state: EditorState, from: number, to: number): boolean {
+  if (from < leadingFrontmatterEnd(state)) {
+    return false;
+  }
   const slice = state.sliceDoc(from, to).replace(/\r\n?/g, "\n");
   return parseTable(slice, 0, slice.length) !== null;
 }

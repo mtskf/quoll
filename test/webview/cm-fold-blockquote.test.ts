@@ -115,6 +115,15 @@ describe("a list item with a table on its marker line is NOT foldable", () => {
     // DOES parse + emit a widget, so the marker-line suppression still fires.
     expect(foldableAt("- | a | b |\n  | - | - |\n  | 1 | 2 |\n\nafter\n", 0)).toBeNull();
   });
+
+  it("a marker-line table inside leading frontmatter STILL folds (widget suppressed by fmEnd)", () => {
+    // Codex Conf-74: Lezer parses the fence body as a ListItem with a marker-line
+    // Table whose slice parses, but tableBlockField skips the widget because the
+    // table sits inside leading frontmatter (m.from < fmEnd) — so the list fold on
+    // the revealed raw source must be KEPT, the same lockstep the emit guard owns.
+    const doc = "---\n- | a | b |\n  | - | - |\n  | 1 | 2 |\n---\n\nafter\n";
+    expect(foldableAt(doc, doc.indexOf("- | a | b |"))).not.toBeNull();
+  });
 });
 
 // Defined-contract pins: the subtraction targets the Blockquote/Paragraph/code/
