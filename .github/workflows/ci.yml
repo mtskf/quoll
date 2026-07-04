@@ -77,7 +77,7 @@ jobs:
       # the actual check — packaging here only produces the .vsix
       # it inspects.
       - name: Package .vsix
-        run: pnpm exec vsce package --no-dependencies -o extension.vsix
+        run: pnpm exec vsce package --no-dependencies --pre-release -o extension.vsix
 
       - name: Audit .vsix contents
         run: node scripts/audit-vsix.mjs extension.vsix
