@@ -975,6 +975,71 @@ describe("caret handoff (applyRemoteCaret + caret-report)", () => {
     expect(view.state.sliceDoc()).toBe(before); // no document mutation
     expect(editPosts()).toHaveLength(0); // existing helper; no Edit posted
   });
+
+  // Regression: the reverse text→Quoll switch. CodeMirror only PAINTS the cursor
+  // while the view is focused (`.cm-focused` — @codemirror/view sets
+  // `.cm-cursor { display: none }` and reveals it only under `&.cm-focused`).
+  // On a text-editor→Quoll switch the host posts caret-apply while the webview
+  // iframe owns focus but CM's contenteditable does not, so applyRemoteCaret MUST
+  // focus the view or the carried caret is set-but-invisible ("caret not shown").
+  it("applyRemoteCaret focuses the view so the carried caret is painted", () => {
+    const { handle, view } = mount();
+    handle.applyDocument("hello\nworld\n!", true, 1);
+    // Precondition (non-vacuity): a freshly seeded view is unfocused — the
+    // webview owns focus, CM's contenteditable does not.
+    expect(view.hasFocus).toBe(false);
+    handle.applyRemoteCaret({ line: 1, character: 2 });
+    expect(view.hasFocus).toBe(true);
+  });
+
+  it("applyRemoteCaret focuses even when the caret is already at the target", () => {
+    const { handle, view } = mount();
+    handle.applyDocument("hello\nworld", true, 1);
+    // Park the caret at the exact target while unfocused (dispatch does not
+    // focus) so the same-position no-op guard fires below.
+    view.dispatch({ selection: { anchor: applyCaret(view.state.doc, { line: 0, character: 3 }) } });
+    expect(view.hasFocus).toBe(false);
+    postMessage.mockReset();
+    handle.applyRemoteCaret({ line: 0, character: 3 });
+    // The dispatch is skipped (position unchanged) but the caret must still be
+    // painted, so the focus is not gated on the no-op guard (happy-dom's
+    // document.hasFocus() is true, so the focus branch runs).
+    expect(view.hasFocus).toBe(true);
+    // Echo-suppression holds on this branch too: focusing must not bounce the
+    // just-applied caret back as a report. Pins the "focus inside the
+    // applyingRemoteCaret window" invariant against a future reorder.
+    expect(caretReports()).toHaveLength(0);
+  });
+
+  it("applyRemoteCaret does NOT steal focus when the webview does not own focus", () => {
+    // The active-edge caret-apply fires whenever the host panel flips active
+    // (active-editor-of-active-group, NOT DOM focus) — e.g. the ⌘⌥K
+    // reveal-for-mention cleanup re-activates this panel while the user's focus
+    // is on the Claude composer. Focusing then would steal keystrokes into the
+    // document, so the focus is gated on document.hasFocus().
+    const hasFocusSpy = vi.spyOn(document, "hasFocus").mockReturnValue(false);
+    try {
+      const { handle, view } = mount();
+      handle.applyDocument("hello\nworld", true, 1);
+      // Sanity: the content DOM does not hold focus before the apply.
+      expect(document.activeElement).not.toBe(view.contentDOM);
+      postMessage.mockReset();
+      handle.applyRemoteCaret({ line: 1, character: 2 });
+      // Focus was NOT stolen — the content DOM never became activeElement.
+      // Assert on activeElement, not view.hasFocus: the mocked document.hasFocus()
+      // forces view.hasFocus false regardless, so it would be vacuous. This is
+      // non-vacuous — without the gate, view.focus() would set activeElement to
+      // contentDOM here (focus() ignores the hasFocus mock).
+      expect(document.activeElement).not.toBe(view.contentDOM);
+      // …but the caret position is still applied (visible once the user later
+      // focuses the webview), and no echo report is posted.
+      const expected = applyCaret(view.state.doc, { line: 1, character: 2 });
+      expect(view.state.selection.main.head).toBe(expected);
+      expect(caretReports()).toHaveLength(0);
+    } finally {
+      hasFocusSpy.mockRestore();
+    }
+  });
 });
 
 // Task 4: the Mod-j Codex context-handoff keymap is actually registered in the
