@@ -119,22 +119,25 @@ describe("resolveListItemHang — recursive geometry (F1 + NEST_STEP)", () => {
     });
   });
 
-  it("plain intermediate carries the ancestor task shift+step (task → plain → plain)", () => {
-    // `- [ ] a\n  - b\n    - c`: b is re-based +step under task a; c is plain
-    // under plain b so it carries b's shift (incl. the step) WITHOUT a second
-    // step (plain parent → source indent shows that level's nesting).
+  it("plain intermediate under a task parent, plus its own bullet-nest step (task → plain → plain)", () => {
+    // `- [ ] a\n  - b\n    - c`: b re-bases +NEST_STEP under task a; c is a bullet
+    // under the plain-bullet b, so it ALSO gains one BULLET_NEST_STEP (+2 cols).
+    // indent (source-relative first-line pull) is unchanged; only pad steps out.
     expect(hangOf("- [ ] a\n  - b\n    - c", 2)).toEqual({
       indent:
         "5 * var(--quoll-prose-space, 1ch) + 1 * calc((1ch + var(--quoll-prose-space, 1ch)) / 2)",
-      pad: "5 * var(--quoll-prose-space, 1ch) + 1 * calc((1ch + var(--quoll-prose-space, 1ch)) / 2) + var(--quoll-task-marker-width)",
+      pad: "7 * var(--quoll-prose-space, 1ch) + 1 * calc((1ch + var(--quoll-prose-space, 1ch)) / 2) + var(--quoll-task-marker-width)",
     });
   });
 
-  it("plain-only chain is NOT re-based — no step, tab over-indent preserved", () => {
+  it("bullet nested under a plain bullet gains one step in pad (tab over-indent preserved)", () => {
+    // `- outer\n\t- inner`: inner is a bullet under the plain-bullet outer, so pad
+    // steps +2 cols (5→7). indent stays source-relative (5). The tab over-indent
+    // residual is orthogonal and preserved.
     expect(hangOf("- outer\n\t- inner", 1)).toEqual({
       indent:
         "5 * var(--quoll-prose-space, 1ch) + 1 * calc((1ch + var(--quoll-prose-space, 1ch)) / 2)",
-      pad: "5 * var(--quoll-prose-space, 1ch) + 1 * calc((1ch + var(--quoll-prose-space, 1ch)) / 2)",
+      pad: "7 * var(--quoll-prose-space, 1ch) + 1 * calc((1ch + var(--quoll-prose-space, 1ch)) / 2)",
     });
   });
 
