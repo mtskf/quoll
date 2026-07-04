@@ -1,8 +1,16 @@
 # Quoll
 
+<p align="center">
+  <a href="https://marketplace.visualstudio.com/items?itemName=mtskf.quoll"><img src="https://img.shields.io/visual-studio-marketplace/v/mtskf.quoll?label=VS%20Code%20Marketplace" alt="VS Code Marketplace version"></a>
+  <a href="https://marketplace.visualstudio.com/items?itemName=mtskf.quoll"><img src="https://img.shields.io/visual-studio-marketplace/i/mtskf.quoll" alt="Marketplace installs"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/github/license/mtskf/quoll" alt="License: MIT"></a>
+</p>
+
 Edit Markdown in VS Code with a Notion/Obsidian-style WYSIWYG editor, right inside your editor tabs.
 
-Quoll registers an opt-in custom editor for `.md` files. Instead of plain text, your Markdown renders as rich text — headings, lists, tables, and formatting — while the file on disk stays the source of truth.
+- **Raw Markdown stays canonical** — the file on disk is always plain `.md`; Quoll renders it live and never rewrites your bytes.
+- **Notion/Obsidian-style live-reveal** — move the caret into a construct to edit its Markdown source, and away to re-render.
+- **Opt-in and non-intrusive** — registers with `priority: option`, so it never hijacks `.md` from your other editors.
 
 <p align="center">
   <img src="images/editor-overview.png" alt="Quoll editing a Markdown file in VS Code: live-rendered headings, a frontmatter panel, a callout, a task list, an editable GFM table, and a fenced code block" width="900">
@@ -10,17 +18,25 @@ Quoll registers an opt-in custom editor for `.md` files. Instead of plain text, 
 
 ## Features
 
+### Editing
+
 - **WYSIWYG Markdown editing** — `.md` files open in a CodeMirror-based live editor. The raw Markdown stays canonical; move the caret into a construct to reveal and edit its source, and away to re-render.
-- **Rich blocks, rendered in place** — headings, lists, blockquotes, callouts (`[!TIP]`, `[!NOTE]`, …), images, and fenced code.
+- **Live editing** — edits sync to the document as you type; VS Code owns the file and saves as usual.
 - **Interactive task lists** — toggle `- [ ]` / `- [x]` checkboxes directly in the rendered view.
 - **Editable GFM tables** — render and edit tables from the Markdown source.
+
+### Blocks & content
+
+- **Rich blocks, rendered in place** — headings, lists, blockquotes, callouts (`[!TIP]`, `[!NOTE]`, …), images, and fenced code.
 - **Frontmatter panel** — YAML frontmatter renders as a metadata block.
 - **Fenced-code tools** — one-click copy; long blocks collapse behind a "Show more" bar.
+- **Image paste & drop** — pasted or dropped images save under `./assets/` and insert a relative link (writable file-scheme documents).
+
+### Navigation, lint & fit
+
 - **Document outline** — a toggle-able overlay lists the document's headings; click one to jump straight to it. Open it with the top-right button or `Ctrl/Cmd+Alt+O`.
 - **Switch to the text editor** — flip the active Markdown file to VS Code's built-in text editor (and back) with a top-right button or `⌘⌥E` (`Ctrl+Alt+E` on Windows/Linux); your caret position carries across.
-- **Image paste & drop** — pasted or dropped images save under `./assets/` and insert a relative link (writable file-scheme documents).
 - **Markdown lint** — advisory findings as inline underlines, with an optional gutter dot and an optional **Problems**-panel mirror.
-- **Live editing** — edits sync to the document as you type; VS Code owns the file and saves as usual.
 - **Theme-aware & opt-in** — follows your light/dark theme, and registers with `priority: option` so it never hijacks `.md` from other extensions.
 
 ## Requirements
@@ -30,7 +46,7 @@ Quoll registers an opt-in custom editor for `.md` files. Instead of plain text, 
 
 ## Install
 
-Install from the VS Code Marketplace:
+Install from the [VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=mtskf.quoll):
 
 - **Extensions view:** open the Extensions view (`Ctrl/Cmd+Shift+X`), search for **Quoll**, and click **Install**.
 - **Quick Open:** press `Ctrl/Cmd+P` and run `ext install mtskf.quoll`.
