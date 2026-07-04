@@ -1,6 +1,7 @@
 // Out-of-process on-disk edit (a genuine fs.writeFile, as a CLI / external tool
-// would do) to a CLEAN document open in a visible Quoll tab must reach the
-// webview as a higher-docVersion reseed Document — WITHOUT a manual reopen.
+// would do) to a CLEAN document open in a visible Quoll tab must produce a
+// higher-docVersion reseed Document posted to the webview — WITHOUT a manual
+// reopen.
 //
 // This is the fs-write → VS Code file watcher → TextDocument auto-revert →
 // workspace.onDidChangeTextDocument → reducer reseed path. It is DISTINCT from
@@ -8,7 +9,17 @@
 // vscode.workspace.applyEdit path: that mutates the in-memory TextDocument
 // directly and never exercises VS Code's watcher/auto-revert layer. The
 // user-reported "stale Quoll tab after a Claude Code CLI edit" bug lived in the
-// gap this test now covers.
+// gap this test now covers — the host never POSTED a reseed Document (the
+// platform never reverted), so the webview had nothing to render.
+//
+// OBSERVATION SCOPE: like external-edit-propagates.test.ts, this asserts on the
+// HOST→webview boundary — the reseed Document `post()` the harness records (the
+// exact signal the bug suppressed) carrying the on-disk content at a higher
+// docVersion. It does NOT assert the webview reducer then re-rendered: the E2E
+// host cannot observe the webview's applied state (memory
+// quoll-webview-focus-untestable-from-e2e-host), and the reducer's
+// non-stale-Document application is already pinned by the webview unit suite
+// (src/webview/state.ts tests). Host post = correct coverage for THIS bug.
 //
 // SCOPE / boundary (see .claude/docs/LEARNING.md "External on-disk edits ..."):
 // VS Code auto-reverts an externally-changed backing TextDocument ONLY when it
@@ -37,6 +48,7 @@ import type { DocumentMessageShape, RecordedEventShape } from "./types";
 describe("external-fs-write-propagates", function () {
   this.timeout(20000);
 
+  let tempDir: string | null = null;
   let tempFile: string | null = null;
 
   before(async () => {
@@ -46,17 +58,20 @@ describe("external-fs-write-propagates", function () {
   afterEach(async () => {
     const harness = await getHarness();
     await cleanupBetweenTests(harness);
-    if (tempFile) {
-      await fs.unlink(tempFile).catch(() => undefined);
-      tempFile = null;
+    // Remove the whole per-test temp dir (not just the file) so mkdtemp does
+    // not leak a directory per run.
+    if (tempDir) {
+      await fs.rm(tempDir, { recursive: true, force: true }).catch(() => undefined);
+      tempDir = null;
     }
+    tempFile = null;
   });
 
   it("propagates an out-of-process fs.writeFile as a higher-docVersion Document", async () => {
-    // Per-test temp file so a mid-test failure does not leave the shared
+    // Per-test temp dir so a mid-test failure does not leave the shared
     // fixture dirty for subsequent tests (mirrors external-edit-propagates).
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "quoll-e2e-fswrite-"));
-    tempFile = path.join(dir, "ext-fs-write.md");
+    tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "quoll-e2e-fswrite-"));
+    tempFile = path.join(tempDir, "ext-fs-write.md");
     await fs.writeFile(tempFile, "# Initial\n\nbody\n");
     const uri = vscode.Uri.file(tempFile);
 
