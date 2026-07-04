@@ -79,14 +79,6 @@ export class TabInputText {
   constructor(public readonly uri: StubUri) {}
 }
 
-// QuollEditorPanel does `import { TabInputWebview }` and uses it (in the
-// context-handoff callback the no-op registerCommand never invokes) to detect an
-// open Claude Code panel. The import binding must resolve at module load; the
-// callback body is never run under vitest, so this can stay a bare stub.
-export class TabInputWebview {
-  constructor(public readonly viewType: string) {}
-}
-
 export const window = {
   get activeTextEditor(): unknown {
     return undefined;
@@ -96,7 +88,6 @@ export const window = {
   showErrorMessage: (_msg: string): Thenable<undefined> => Promise.resolve(undefined),
   tabGroups: {
     activeTabGroup: { activeTab: undefined as unknown },
-    all: [] as unknown[],
   },
 };
 
