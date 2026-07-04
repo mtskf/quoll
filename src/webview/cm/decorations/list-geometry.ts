@@ -260,11 +260,19 @@ function ownMarkerWidth(state: EditorState, listItem: SyntaxNode): Col | null {
     if (geom === null) {
       return null; // task-shaped but invalid marker → no hang (F7 fail-closed)
     }
-    // Task branch stays all-prose-space (glyph:0): bullet tasks fold `- [ ]`
-    // into the checkbox (0 visible prefix, already aligned), and the ordered
-    // task's visible `N. ` glyph split is a deliberately-deferred follow-up
-    // (Task 6 TODO) to keep the invariant-sensitive fold branch untouched.
-    return { ch: columnAt(state, geom.foldFrom) - markCol, glyph: 0, markers: 1 };
+    // Split the VISIBLE marker prefix the same way the plain branch does: the
+    // glyph run up to the fold point (`N.`/`N)` for an ordered task) renders
+    // wider than a space, so it is sized in the GLYPH blend; the trailing
+    // whitespace up to `foldFrom` stays in prose-space. Clamped to `foldFrom`
+    // (`min(listMark.to, foldFrom)`) so a BULLET task — foldFrom == listMarkFrom,
+    // the whole `- ` folds into the checkbox — keeps glyph:0 / ch:0, byte-identical
+    // with the pre-split all-prose-space behaviour.
+    const glyphToCol = columnAt(state, Math.min(listMark.to, geom.foldFrom));
+    return {
+      ch: columnAt(state, geom.foldFrom) - glyphToCol,
+      glyph: glyphToCol - markCol,
+      markers: 1,
+    };
   }
   // Split the plain marker prefix: the ListMark glyph run (`-`/`*`/`+`, `N.`,
   // `N)`) renders wider than a space, so it is sized in the GLYPH blend; the
