@@ -17,6 +17,7 @@ All notable changes to Quoll are documented here.
 - Tighten the task-list checkbox corner radius from 6px to 5px for a slightly crisper box.
 - Make the floating outline and switch-editor buttons behave like a mobile-app toolbar: scrolling down slides them off the top edge, scrolling up brings them back, and they stay visible at the very top of the document. An open outline panel rides along so nothing is left floating, and the slide honours your "reduce motion" setting (it snaps instead). While hidden the toolbar is also kept out of the keyboard tab order for the whole slide, so focus can never land on an off-screen button.
 - Align the soft-wrapped continuation lines of ordered task items (`1. [x] …`) under the first line's text. Their visible `N.` prefix was still sized as plain spaces, so wrapped lines hung a couple of pixels to the left (worse for multi-digit numbers); the number-and-dot glyph run is now sized to its rendered width like plain ordered lists. Bullet tasks (`- [ ]`, whose marker folds into the checkbox) are unchanged.
+- Fix a stray fold/unfold chevron on a list item whose GFM table starts on the same physical line as the list marker (`- | a | b |`). The table renders as a block widget that covers the marker line, leaving the chevron nowhere sensible to sit, so it is now suppressed for that shape only. Genuine list folds — including a table on a later continuation line and plain multi-line items — and heading folds are unaffected.
 
 ## 0.1.0 — Initial public release
 
