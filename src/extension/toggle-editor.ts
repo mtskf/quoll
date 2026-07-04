@@ -91,7 +91,7 @@ export function registerToggleEditor(): { dispose(): void } {
         const uri = input.uri;
         // Observability for the documented caret non-preservation on this path.
         console.info(
-          "[quoll] palette forward: caret not preserved (use the button or Ctrl/Cmd+Alt+E)"
+          "[quoll] palette forward: caret not preserved (use the button or ⌘⌥E / Ctrl+Alt+E)"
         );
         try {
           await openInTextEditor(uri);
