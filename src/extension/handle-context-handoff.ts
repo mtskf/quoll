@@ -7,37 +7,68 @@
 // and re-clamps the webview-supplied line numbers to the live document's line
 // count. The webview sends only selection geometry; it never sends a path.
 //
-// Handoff mechanism (v2, tiered) — build the `@<path>#L<a>-<b>` reference, then:
+// Handoff mechanism (v3, delegation-first) — after the save gate + clamp:
 //
-//   1. Direct-insert (preferred): if a Claude Code terminal is found
-//      (deps.findClaudeTerminal), send the reference straight into its input
-//      WITHOUT a newline (the user reviews then presses Enter), surface that
-//      terminal, and SKIP the new-tab open commands. The clipboard is still
-//      written as a paste safety net, but a failure there is non-fatal (the
-//      terminal already has the text) — warn instead of aborting.
-//   2. Clipboard fallback (unchanged v1): if no terminal is found, copy the
-//      reference (a clipboard failure here is fatal — there is nothing to
-//      paste), best-effort open+focus Claude Code, then toast the user to paste.
+//   Tier 0 — delegate to Claude Code's own `claude-code.insertAtMentioned`
+//   command. The command takes NO arguments: it reads window.activeTextEditor
+//   and builds the @-mention from that editor's document + selection, then
+//   routes it to wherever the user's Claude Code actually lives — a VISIBLE
+//   Claude Code webview (sidebar OR panel) gets the mention inserted straight
+//   into its composer (a panel also gets reveal()); otherwise it is pushed as
+//   `at_mentioned {filePath, lineStart, lineEnd}` over the extension's
+//   localhost MCP WebSocket to the most-recently-connected CLI `/ide` session
+//   (verified against claude-code 2.1.199). Because activeTextEditor only ever
+//   points at a VISIBLE text editor, deps.revealForMention first shows this
+//   document as a text editor (reusing an already-visible one, else opening
+//   ViewColumn.Beside) with preserveFocus + the payload's selection, and
+//   resolves to a cleanup that closes only the tab(s) the reveal opened.
 //
-// The terminal path replaces v1's clipboard-then-open-new-tab default: opening a
-// new tab read as "a tab popped up" and still required a manual paste. The
-// fully-silent insertAtMention path was rejected because it would require
-// mirroring the saved file into a native TextEditor (Claude Code's at-mention
-// commands read window.activeTextEditor and take no args) and restoring webview
-// focus — focus flicker + coupling to Claude Code internals. terminal.sendText
-// and terminal.show are rock-stable VS Code APIs with no Claude Code coupling.
+//   An earlier iteration REJECTED exactly this reveal-then-delegate path over
+//   the brief raw-markdown flash of the Beside split; that decision has been
+//   REVERSED by an explicit product decision — auto-insert parity with native
+//   text editors (the mention lands in the composer with zero keystrokes)
+//   outweighs the flash.
 //
-// COUPLING NOTE (future-proof): the open-command IDs, the reference format, and
-// the terminal-name heuristic (host-side, in QuollEditorPanel) are the ONLY
-// surface coupled to Claude Code. The constants below are isolated here so a
-// future upstream change is a one-file edit. The format is "what Claude Code
-// currently accepts as an @-mention" (cross-checked against the shipped
-// insertAtMention in extension.js v2.1.193), NOT a contract Claude Code
-// publishes — treat the manual smoke + this comment as the canary.
+//   On success the reference is ALSO written to the clipboard as silent
+//   insurance (non-fatal — warn only): Claude Code's routing has a silent-drop
+//   limitation — when NEITHER a visible Claude webview NOR a connected CLI
+//   session exists, the delegated mention is dropped with no surface at all,
+//   and the clipboard is then the only thing that saves the user. No success
+//   toast: when delivery succeeds the mention visibly lands in the composer /
+//   CLI prompt, so a notification would be redundant noise.
+//
+//   Fallback tier (v1, unchanged): if the delegation command is unavailable
+//   (Claude Code missing or too old → executeCommand rejects) or the reveal
+//   itself fails, copy the reference to the clipboard (a failure here IS fatal
+//   — there is nothing to paste), best-effort open+focus Claude Code, then
+//   toast the user to paste.
+//
+// The v2 terminal tier (name-matched terminal.sendText) is REMOVED: the
+// delegation already reaches the CLI via Claude Code's own at_mentioned
+// channel, which targets the actually-connected `/ide` session rather than
+// whatever terminal happens to be named "claude" — strictly more accurate
+// than the name heuristic. Keeping both would double-deliver the reference.
+//
+// COUPLING NOTE (future-proof): the `claude-code.insertAtMentioned` command id
+// below is the coupling surface to Claude Code (plus the best-effort
+// open-command ids). It is an UNDOCUMENTED zero-arg command of a
+// weekly-shipping minified bundle, not a published contract (verified against
+// claude-code 2.1.199); if a future release renames or drops it,
+// executeCommand rejects and the clipboard fallback keeps working — the
+// fallback tier is the safety net, and this comment + the manual smoke are
+// the canary.
 
-/** Claude Code commands tried, in order, to surface its input for a paste.
- *  Best-effort: each is executed independently and its rejection swallowed,
- *  so a missing Claude Code install never blocks the clipboard handoff. */
+/** Claude Code's own zero-arg insert command (tier 0). Reads
+ *  window.activeTextEditor + its selection, builds the @-mention, and routes
+ *  it to the visible Claude Code webview, else to the connected CLI `/ide`
+ *  session (verified against claude-code 2.1.199). Rejection (command not
+ *  found) drives the clipboard fallback tier. */
+export const CLAUDE_INSERT_AT_MENTIONED_COMMAND = "claude-code.insertAtMentioned";
+
+/** Claude Code commands tried, in order, to surface its input for a paste on
+ *  the FALLBACK tier. Best-effort: each is executed independently and its
+ *  rejection swallowed, so a missing Claude Code install never blocks the
+ *  clipboard handoff. */
 export const HANDOFF_OPEN_COMMANDS = ["claude-vscode.editor.open", "claude-vscode.focus"] as const;
 
 export type HandleContextHandoffPayload = {
@@ -46,7 +77,16 @@ export type HandleContextHandoffPayload = {
   endLine: number;
 };
 
-export type HandleContextHandoffDeps<T> = {
+/** Selection geometry handed to deps.revealForMention. Lines are 1-based and
+ *  already clamped to the live document + ordered (startLine <= endLine) by
+ *  handleContextHandoff, so the implementation can index lines directly. */
+export type HandoffRevealSelection = {
+  hasSelection: boolean;
+  startLine: number;
+  endLine: number;
+};
+
+export type HandleContextHandoffDeps = {
   /** workspace.asRelativePath(document.uri) — host-owned path. */
   relativePath: string;
   /** Live document.lineCount getter — read AFTER save() so the clamp bounds the
@@ -61,34 +101,30 @@ export type HandleContextHandoffDeps<T> = {
   writeClipboard: (text: string) => Thenable<void>;
   /** commands.executeCommand bound (single id, no args). */
   executeCommand: (id: string) => Thenable<unknown>;
-  /** window.showInformationMessage bound — success toast. */
+  /** window.showInformationMessage bound — fallback-tier paste toast. */
   showInfo: (message: string) => Thenable<unknown>;
   /** window.showWarningMessage bound — save-failure abort. */
   showWarn: (message: string) => Thenable<unknown>;
-  /** window.showErrorMessage bound — clipboard-failure abort. */
+  /** window.showErrorMessage bound — fallback clipboard-failure abort. */
   showError: (message: string) => Thenable<unknown>;
-  /** Locate the Claude Code terminal to insert into. Trust a NAME match ONLY
-   *  (host heuristic: a terminal named like "claude"); never the active
-   *  terminal — sending the reference to an unrelated shell would both misfire
-   *  and be mis-reported as success by the tier-1 truthy check below. No match
-   *  → undefined → clipboard fallback (zero misfire). T is the host's Terminal
-   *  type, kept generic so this module imports no vscode symbol. */
-  findClaudeTerminal: () => T | undefined;
-  /** terminal.sendText(text, false) bound — insert WITHOUT a trailing newline so
-   *  the user reviews the reference before pressing Enter. */
-  sendTerminalText: (terminal: T, text: string) => void;
-  /** terminal.show() bound — surface the terminal after inserting. */
-  showTerminal: (terminal: T) => void;
+  /** Tier-0 reveal: show THIS document as a visible text editor carrying the
+   *  given selection WITHOUT stealing keyboard focus, so Claude Code's
+   *  zero-arg insert command (which reads window.activeTextEditor) sees the
+   *  right document + range. Resolves to a cleanup that closes only the
+   *  tab(s) the reveal opened (a no-op when an existing tab was reused); may
+   *  reject (→ fallback tier). Implemented by QuollEditorPanel, which owns
+   *  `document` and `window` — this module stays vscode-import-free. */
+  revealForMention: (selection: HandoffRevealSelection) => Thenable<() => Thenable<void>>;
 };
 
 /** Strip C0 control characters (U+0000–U+001F) and DEL (U+007F) from a path.
- *  A hostile POSIX filename can embed \n/\r; delivered via
- *  `terminal.sendText(text, false)` — which suppresses only the TRAILING
- *  newline — an embedded newline lands as Enter, so `@evil` ⏎ `rm -rf ~` ⏎
- *  would auto-execute (the clipboard tier carries the same poisoned bytes for a
- *  later paste). Stripping at reference-build time keeps neither delivery path
- *  able to carry an executable byte. Char-code filter (not a regex literal) so
- *  no control character is ever embedded in this source. Line numbers are
+ *  A hostile POSIX filename can embed \n/\r; the reference reaches the
+ *  clipboard on BOTH tiers (insurance write + fallback copy), and a later
+ *  paste into the Claude Code CLI terminal delivers an embedded newline as
+ *  Enter — so `@evil` ⏎ `rm -rf ~` ⏎ would auto-execute. Stripping at
+ *  reference-build time keeps the delivered reference unable to carry an
+ *  executable byte. Char-code filter (not a regex literal) so no control
+ *  character is ever embedded in this source. Line numbers are
  *  numeric-clamped upstream, so `relativePath` is the only injection vector;
  *  codex-context-handoff passes a Uri, not text — unaffected. */
 function stripControlChars(path: string): string {
@@ -102,14 +138,14 @@ function stripControlChars(path: string): string {
   return out;
 }
 
-/** Build the `@`-mention reference. Matches the @-mention format Claude Code
- *  currently accepts (cross-checked against insertAtMention in extension.js
- *  v2.1.193):
+/** Build the `@`-mention reference for the insurance write + fallback tier.
+ *  Matches the @-mention format Claude Code currently accepts (cross-checked
+ *  against insertAtMentioned in extension.js v2.1.199):
  *    no selection      → `@${rel}`
  *    single line       → `@${rel}#L${line}`
  *    multi-line range  → `@${rel}#L${start}-${end}`.
  *  The path is stripped of C0/DEL control characters first — see
- *  stripControlChars for the terminal-injection rationale. */
+ *  stripControlChars for the paste-injection rationale. */
 export function buildContextReference(
   relativePath: string,
   hasSelection: boolean,
@@ -142,9 +178,39 @@ async function tryBool(op: () => Thenable<boolean>, label: string): Promise<bool
   }
 }
 
-export async function handleContextHandoff<T>(
+/** Tier 0 — reveal the document (activeTextEditor choreography) and delegate
+ *  to Claude Code's own insert command. Returns true only when the command
+ *  resolved (Claude Code accepted the delegation). The cleanup ALWAYS runs
+ *  (finally) — including when the command rejects — and its own failure is
+ *  swallowed (warn) so it can neither mask a delegation success nor convert
+ *  one into a spurious fallback. A reveal rejection or a command rejection
+ *  (Claude Code missing / too old) resolves false → fallback tier. */
+async function tryDelegateToClaudeCode(
+  selection: HandoffRevealSelection,
+  deps: HandleContextHandoffDeps
+): Promise<boolean> {
+  let cleanup: (() => Thenable<void>) | undefined;
+  try {
+    cleanup = await deps.revealForMention(selection);
+    await deps.executeCommand(CLAUDE_INSERT_AT_MENTIONED_COMMAND);
+    return true;
+  } catch (err) {
+    console.warn("[quoll] context-handoff: delegation to Claude Code failed; falling back", err);
+    return false;
+  } finally {
+    if (cleanup !== undefined) {
+      try {
+        await cleanup();
+      } catch (err) {
+        console.warn("[quoll] context-handoff: temporary editor cleanup failed", err);
+      }
+    }
+  }
+}
+
+export async function handleContextHandoff(
   payload: HandleContextHandoffPayload,
-  deps: HandleContextHandoffDeps<T>
+  deps: HandleContextHandoffDeps
 ): Promise<void> {
   // Save first so the on-disk reference matches the lines the webview saw. The
   // @-mention is a disk reference; a dirty buffer would point Claude Code at
@@ -168,7 +234,9 @@ export async function handleContextHandoff<T>(
   // reading lineCount AFTER the save so the bound matches the file the
   // @-mention resolves against (a save participant can change the line count).
   // The webview is the untrusted boundary; the validator already bounded the
-  // numbers, but only the host knows the real line count.
+  // numbers, but only the host knows the real line count. revealForMention
+  // relies on this clamp to index lines directly (no await sits between the
+  // clamp and the reveal call, so the document cannot shrink in between).
   const lineCount = deps.getLineCount();
   const a = clampLine(payload.startLine, lineCount);
   const b = clampLine(payload.endLine, lineCount);
@@ -182,34 +250,26 @@ export async function handleContextHandoff<T>(
     endLine
   );
 
-  // Tier 1 — direct insert. If a Claude Code terminal is found, drop the
-  // reference into its input (no newline → the user confirms before Enter),
-  // surface it, and SKIP the new-tab open commands. The clipboard write is now
-  // only a paste safety net: the terminal already holds the text, so a clipboard
-  // failure is non-fatal here (warn, don't abort) — unlike the fallback below.
-  //
-  // Tier-1 success is taken on a TRUTHY terminal, but findClaudeTerminal trusts
-  // a NAME match only (never activeTerminal) — so a non-undefined terminal IS a
-  // name-matched Claude terminal, never an arbitrary shell. The remaining
-  // assumption is the name heuristic itself (a terminal literally named
-  // "claude" might not be Claude Code); we accept that over sendText delivery
-  // confirmation (no such VS Code API). A name miss → undefined → tier 2 below.
-  const terminal = deps.findClaudeTerminal();
-  if (terminal !== undefined) {
-    deps.sendTerminalText(terminal, reference);
-    deps.showTerminal(terminal);
+  // Tier 0 — delegation. On success Claude Code has already delivered the
+  // mention (visible composer, else connected CLI session), so the clipboard
+  // write is only silent insurance against the silent-drop case (neither
+  // surface exists) — non-fatal, warn only, and NO toast (the mention landing
+  // is its own signal; the drop case has no host-observable failure to key a
+  // toast on).
+  const delegated = await tryDelegateToClaudeCode(
+    { hasSelection: payload.hasSelection, startLine, endLine },
+    deps
+  );
+  if (delegated) {
     try {
       await deps.writeClipboard(reference);
     } catch (err) {
       console.warn("[quoll] context-handoff: clipboard insurance write failed", err);
     }
-    // No success toast here: the reference is now visible in the surfaced
-    // terminal's input line, so a notification would be redundant noise. (The
-    // clipboard fallback path below DOES toast — nothing else signals the copy.)
     return;
   }
 
-  // Tier 2 — clipboard fallback (no terminal found). The clipboard IS the
+  // Fallback tier — clipboard handoff (v1, verbatim). The clipboard IS the
   // contract (what the user pastes). If it fails there is nothing to paste —
   // abort with an error, and do NOT open/focus Claude Code or claim success.
   try {

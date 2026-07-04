@@ -29,7 +29,7 @@ import type {
   CancellationToken,
   CustomTextEditorProvider,
   ExtensionContext,
-  Terminal,
+  Tab,
   TextDocument,
   TextEditor,
   Webview,
@@ -44,7 +44,9 @@ import {
   Position,
   Range,
   Selection,
+  TabInputText,
   Uri,
+  ViewColumn,
   WorkspaceEdit,
   window,
   workspace,
@@ -66,7 +68,6 @@ import {
   buildThemeMessage,
 } from "./document-message.js";
 import { takeSwitchCaret } from "./editor-switch-caret.js";
-import { pickClaudeTerminal } from "./find-claude-terminal.js";
 import { getNonce } from "./getNonce.js";
 import { handleCodexContextHandoff } from "./handle-codex-context-handoff.js";
 import { handleContextHandoff } from "./handle-context-handoff.js";
@@ -801,6 +802,78 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
       disposables
     );
 
+    // Tier-0 reveal for the Claude Code handoff (deps.revealForMention — see
+    // handle-context-handoff.ts's module header). Claude Code's zero-arg
+    // `claude-code.insertAtMentioned` reads window.activeTextEditor (verified
+    // against claude-code 2.1.199), and activeTextEditor only ever points at a
+    // VISIBLE text editor — so this document must be shown as a text editor
+    // first. showTextDocument with preserveFocus:true makes the shown editor
+    // the activeTextEditor via its "input changed most recently" clause
+    // WITHOUT stealing keyboard focus from the Quoll webview.
+    //   - Reuse an already-visible text editor of THIS doc when one exists (no
+    //     duplicate tab, cleanup is then a no-op); else open ViewColumn.Beside
+    //     (brief split flash — the accepted product cost), preview:true so the
+    //     temporary tab stays as light as VS Code allows.
+    //   - Cleanup closes ONLY text tabs of this uri in groups that did NOT
+    //     already hold one before the reveal (snapshot below), so the user's
+    //     own pre-existing text tabs are never closed.
+    // Selection mapping (payload lines are 1-based, clamped + ordered by
+    // handleContextHandoff before this is called, with no await in between —
+    // lineAt cannot go out of range):
+    //   - no selection → empty selection at (0,0) → Claude Code emits the
+    //     whole-file `@rel` form.
+    //   - selection → (start-1, 0) .. (end-1, endLineLength). The end
+    //     character MUST be the end line's text length: Claude Code reads
+    //     end.line regardless of character, but with a 0 end-char a
+    //     single-line handoff (start === end) would collapse to an EMPTY
+    //     selection and wrongly emit the whole-file form. Edge: a single-line
+    //     handoff on an EMPTY line unavoidably degrades to the whole-file
+    //     mention — accepted.
+    const revealForMention = async (selection: {
+      hasSelection: boolean;
+      startLine: number;
+      endLine: number;
+    }): Promise<() => Thenable<void>> => {
+      const uriString = document.uri.toString();
+      const isThisDocTextTab = (tab: Tab): boolean =>
+        tab.input instanceof TabInputText && tab.input.uri.toString() === uriString;
+      // Snapshot the groups that already hold a text tab for this doc, keyed
+      // by viewColumn (Tab object identity is not stable across tab-model
+      // events), so the cleanup can tell a reveal-opened tab from a
+      // pre-existing one.
+      const groupsWithDocBefore = new Set<ViewColumn>();
+      for (const group of window.tabGroups.all) {
+        if (group.tabs.some(isThisDocTextTab)) {
+          groupsWithDocBefore.add(group.viewColumn);
+        }
+      }
+      const visibleColumn = window.visibleTextEditors.find(
+        (e) => e.document.uri.toString() === uriString
+      )?.viewColumn;
+      const end = selection.hasSelection
+        ? new Position(selection.endLine - 1, document.lineAt(selection.endLine - 1).text.length)
+        : new Position(0, 0);
+      const start = selection.hasSelection ? new Position(selection.startLine - 1, 0) : end;
+      await window.showTextDocument(document, {
+        viewColumn: visibleColumn ?? ViewColumn.Beside,
+        preserveFocus: true,
+        preview: true,
+        selection: new Selection(start, end),
+      });
+      return async () => {
+        const opened: Tab[] = [];
+        for (const group of window.tabGroups.all) {
+          if (groupsWithDocBefore.has(group.viewColumn)) {
+            continue;
+          }
+          opened.push(...group.tabs.filter(isThisDocTextTab));
+        }
+        if (opened.length > 0) {
+          await window.tabGroups.close(opened, true);
+        }
+      };
+    };
+
     const handleInbound = (raw: unknown): void => {
       if (disposed) {
         return;
@@ -868,7 +941,7 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
           if (disposed) {
             return;
           }
-          void handleContextHandoff<Terminal>(
+          void handleContextHandoff(
             {
               hasSelection: raw.hasSelection,
               startLine: raw.startLine,
@@ -884,15 +957,8 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
               showInfo: (message) => window.showInformationMessage(message),
               showWarn: (message) => window.showWarningMessage(message),
               showError: (message) => window.showErrorMessage(message),
-              // Name-match ONLY (first terminal named like "claude"), else
-              // undefined → clipboard fallback. No activeTerminal fallback: see
-              // pickClaudeTerminal — sending to an unrelated shell would misfire
-              // and be mis-reported as success. This name heuristic is the only
-              // Claude Code coupling on the host side.
-              findClaudeTerminal: () => pickClaudeTerminal(window.terminals),
-              // false = no trailing newline: the user reviews then presses Enter.
-              sendTerminalText: (t, text) => t.sendText(text, false),
-              showTerminal: (t) => t.show(),
+              // Tier-0 activeTextEditor choreography — hoisted closure above.
+              revealForMention,
             }
           );
           return;
