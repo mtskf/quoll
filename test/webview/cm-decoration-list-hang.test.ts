@@ -82,7 +82,7 @@ describe("list hang-indent provider — plain bullet/ordered", () => {
     // 4 (tab → 4) + 2 = 6. countColumn expands the tab; raw offset would be 3.
     const got = lines(buildListHangIndent(ctx("- outer\n\t- inner")));
     expect(got[1]?.style).toBe(
-      "text-indent:calc(-1 * (5 * var(--quoll-prose-space, 1ch) + 1 * calc((1ch + var(--quoll-prose-space, 1ch)) / 2)));padding-inline-start:calc(6px + (5 * var(--quoll-prose-space, 1ch) + 1 * calc((1ch + var(--quoll-prose-space, 1ch)) / 2)))"
+      "text-indent:calc(-1 * (5 * var(--quoll-prose-space, 1ch) + 1 * calc((1ch + var(--quoll-prose-space, 1ch)) / 2)));padding-inline-start:calc(6px + (7 * var(--quoll-prose-space, 1ch) + 1 * calc((1ch + var(--quoll-prose-space, 1ch)) / 2)))"
     );
   });
 
@@ -106,7 +106,7 @@ describe("list hang-indent provider — plain bullet/ordered", () => {
       {
         from: 8,
         style:
-          "text-indent:calc(-1 * (3 * var(--quoll-prose-space, 1ch) + 1 * calc((1ch + var(--quoll-prose-space, 1ch)) / 2)));padding-inline-start:calc(6px + (3 * var(--quoll-prose-space, 1ch) + 1 * calc((1ch + var(--quoll-prose-space, 1ch)) / 2)))",
+          "text-indent:calc(-1 * (3 * var(--quoll-prose-space, 1ch) + 1 * calc((1ch + var(--quoll-prose-space, 1ch)) / 2)));padding-inline-start:calc(6px + (5 * var(--quoll-prose-space, 1ch) + 1 * calc((1ch + var(--quoll-prose-space, 1ch)) / 2)))",
       },
     ]);
   });
@@ -121,11 +121,13 @@ describe("list hang-indent provider — task lists", () => {
     );
   });
 
-  it("nested bullet task: prefix = leading whitespace cols (2ch) + token", () => {
+  it("nested bullet task under a plain bullet: prefix = whitespace cols + step + token", () => {
+    // `- outer\n  - [ ] nested task`: the child bullet task now gains the
+    // BULLET_NEST_STEP (parent outer is a plain bullet) → pad 2→4; indent stays 2.
     const set = buildListHangIndent(ctx("- outer\n  - [ ] nested task"));
     expect(lines(set)[1]?.style).toBe(
       "text-indent:calc(-1 * (2 * var(--quoll-prose-space, 1ch) + var(--quoll-task-marker-width)));" +
-        "padding-inline-start:calc(6px + (2 * var(--quoll-prose-space, 1ch) + var(--quoll-task-marker-width)))"
+        "padding-inline-start:calc(6px + (4 * var(--quoll-prose-space, 1ch) + var(--quoll-task-marker-width)))"
     );
   });
 
@@ -181,21 +183,24 @@ describe("list hang-indent provider — plain child nested under a task item", (
 });
 
 describe("list hang-indent provider — task compensation does NOT leak", () => {
-  it("plain child under a PLAIN parent is unchanged (no task ancestor)", () => {
-    // Regression guard for the working control: `- outer\n  - inner`.
+  it("plain child under a plain-bullet parent: gains the bullet-nest step, NO task-marker-width leak", () => {
+    // `- outer\n  - inner`: pad now carries one BULLET_NEST_STEP (3→5 cols) but
+    // still has ZERO var(--quoll-task-marker-width) — no task compensation leaks
+    // into a task-free chain.
     const set = buildListHangIndent(ctx("- outer\n  - inner"));
     expect(lines(set)[1]?.style).toBe(
-      "text-indent:calc(-1 * (3 * var(--quoll-prose-space, 1ch) + 1 * calc((1ch + var(--quoll-prose-space, 1ch)) / 2)));padding-inline-start:calc(6px + (3 * var(--quoll-prose-space, 1ch) + 1 * calc((1ch + var(--quoll-prose-space, 1ch)) / 2)))"
+      "text-indent:calc(-1 * (3 * var(--quoll-prose-space, 1ch) + 1 * calc((1ch + var(--quoll-prose-space, 1ch)) / 2)));padding-inline-start:calc(6px + (5 * var(--quoll-prose-space, 1ch) + 1 * calc((1ch + var(--quoll-prose-space, 1ch)) / 2)))"
     );
   });
 
-  it("task child under a PLAIN parent is unchanged (compensation keys on PARENT, not child)", () => {
-    // `- outer\n  - [ ] nested task`: child is a Task; its parent "outer" is
-    // a plain item, so NO compensation — the task branch's own expr stands.
+  it("bullet task child under a plain-bullet parent gains the step (parent-keyed → aligns with plain siblings)", () => {
+    // `- outer\n  - [ ] nested task`: the step keys on the PARENT being a plain
+    // bullet, so a task child gains it too — keeping mixed plain/task siblings
+    // aligned. pad 2→4; the single var(--quoll-task-marker-width) token stands.
     const set = buildListHangIndent(ctx("- outer\n  - [ ] nested task"));
     expect(lines(set)[1]?.style).toBe(
       "text-indent:calc(-1 * (2 * var(--quoll-prose-space, 1ch) + var(--quoll-task-marker-width)));" +
-        "padding-inline-start:calc(6px + (2 * var(--quoll-prose-space, 1ch) + var(--quoll-task-marker-width)))"
+        "padding-inline-start:calc(6px + (4 * var(--quoll-prose-space, 1ch) + var(--quoll-task-marker-width)))"
     );
   });
 });
@@ -217,11 +222,11 @@ describe("list hang-indent provider — multi-level task nesting (F1 + NEST_STEP
     );
   });
 
-  it("task → plain → plain: a plain intermediate carries the ancestor task shift+step (no 2nd step)", () => {
+  it("task → plain → plain: the plain leaf inherits the task shift+step AND its own bullet-nest step", () => {
     const set = buildListHangIndent(ctx("- [ ] a\n  - b\n    - c"));
     expect(lines(set)[2]?.style).toBe(
       "text-indent:calc(-1 * (5 * var(--quoll-prose-space, 1ch) + 1 * calc((1ch + var(--quoll-prose-space, 1ch)) / 2)));" +
-        "padding-inline-start:calc(6px + (5 * var(--quoll-prose-space, 1ch) + 1 * calc((1ch + var(--quoll-prose-space, 1ch)) / 2) + var(--quoll-task-marker-width)))"
+        "padding-inline-start:calc(6px + (7 * var(--quoll-prose-space, 1ch) + 1 * calc((1ch + var(--quoll-prose-space, 1ch)) / 2) + var(--quoll-task-marker-width)))"
     );
   });
 });

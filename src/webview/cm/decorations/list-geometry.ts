@@ -146,6 +146,20 @@ const subtract = (a: Col, b: Col): Col => ({
  *  Value adjustable; pinned by the hang tests. */
 const NEST_STEP: Col = { ch: 2, glyph: 0, markers: 0 };
 
+/** One outline step added when a bullet item nests directly under a PLAIN
+ *  bullet (outside a blockquote). Doubles the rendered per-level indent: the
+ *  literal source-space glyphs already contribute ~2 cols (~7px) per level; this
+ *  fixed 2-col step lands only on renderedMarkCol (→ the continuation `pad` and,
+ *  via `pad − indent`, the first-line offset), summing to ~14px/level — the
+ *  Notion/Obsidian feel. Keyed on the PARENT being a plain bullet (NOT the
+ *  child's kind) so mixed plain/task siblings under one parent stay aligned; the
+ *  child may be a plain bullet or a bullet task. Kept SEPARATE from NEST_STEP
+ *  (task-fold re-basing) so the two can be tuned independently; same 2-col value
+ *  today. The fixed step doubles exactly for the CommonMark-canonical 2-space
+ *  indent (what Quoll's list editing emits); a 4-space source renders 1.5× and a
+ *  tab snaps to its grid — an intentional uniform rhythm, same shape as NEST_STEP. */
+const BULLET_NEST_STEP: Col = { ch: 2, glyph: 0, markers: 0 };
+
 /** The CSS token for one source-indentation column. A list line renders in the
  *  proportional prose font (`var(--vscode-font-family)`), where a source
  *  character is NARROWER than `1ch` (= the `0` glyph). Using bare `ch` made
@@ -234,6 +248,27 @@ function taskOf(state: EditorState, listItem: SyntaxNode): SyntaxNode | null {
   return resolveTaskMarkerGeometry(state, content) === null ? null : content;
 }
 
+/** True when `listItem`'s wrapping list is a `BulletList` (a bullet item — plain
+ *  OR a task). Ordered items (OrderedList wrapper) are excluded. */
+function isBulletItem(listItem: SyntaxNode): boolean {
+  return listItem.parent?.name === "BulletList";
+}
+
+/** True when any ANCESTOR of `node` is a `Blockquote`. Blockquoted lists carry
+ *  their own hidden-prefix geometry (list-hang-indent's blockquotePrefixCols);
+ *  we freeze their nesting width this PR (a product choice — keep quotes' lists
+ *  at the pre-fix step), so they are excluded from BULLET_NEST_STEP. Walks
+ *  PARENTS only, so an item that CONTAINS a blockquote (`- > quote`) — where the
+ *  Blockquote is a child — is unaffected. */
+function hasBlockquoteAncestor(node: SyntaxNode): boolean {
+  for (let p = node.parent; p !== null; p = p.parent) {
+    if (p.name === "Blockquote") {
+      return true;
+    }
+  }
+  return false;
+}
+
 /** Width the item's own marker renders as, relative to its ListMark column, or
  *  null when the item is not a renderable list item.
  *
@@ -309,7 +344,9 @@ function sourceMarkColumn(state: EditorState, listItem: SyntaxNode): Col {
 /** Column where the item's MARKER actually renders (recursive across the
  *  ancestor chain). Re-bases ONE NEST_STEP past a task parent's rendered
  *  content column; carries a plain parent's render shift while preserving the
- *  item's source-relative position.
+ *  item's source-relative position; and, for a bullet nested under a PLAIN
+ *  bullet (non-blockquote), adds one BULLET_NEST_STEP so each plain-bullet level
+ *  renders ~2× its raw source-space indent (parent-keyed — see BULLET_NEST_STEP).
  *
  *  Fail-closed propagation (Codex re-review b): an item that renders NO hang
  *  (`ownMarkerWidth === null` — e.g. an invalid-marker task on a stale tree)
@@ -340,7 +377,17 @@ function renderedMarkCol(state: EditorState, listItem: SyntaxNode): Col {
     return add(renderedContentCol(state, parent), NEST_STEP);
   }
   const shift = subtract(renderedMarkCol(state, parent), sourceMarkColumn(state, parent));
-  return add(sourceMarkColumn(state, listItem), shift);
+  const base = add(sourceMarkColumn(state, listItem), shift);
+  // Bullet nesting under a PLAIN bullet (this branch already guarantees the
+  // parent is non-task): add one BULLET_NEST_STEP so each level renders ~2× the
+  // raw source-space indent. Both parent and child must be BulletList items —
+  // this excludes ordered parents/children (they keep their geometry) while
+  // still stepping a bullet task child (parent-keyed → sibling alignment).
+  // Skipped inside a blockquote (frozen this PR — see hasBlockquoteAncestor).
+  if (!hasBlockquoteAncestor(listItem) && isBulletItem(parent) && isBulletItem(listItem)) {
+    return add(base, BULLET_NEST_STEP);
+  }
+  return base;
 }
 
 /** Column where the item's CONTENT renders = renderedMarkCol + ownMarkerWidth.
