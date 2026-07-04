@@ -16,6 +16,7 @@ All notable changes to Quoll are documented here.
 - Add a top-right button and an `Ctrl/Cmd+Alt+E` keybinding to switch the current `.md` between Quoll and VS Code's built-in text editor; the caret position is preserved across the switch (via the button and the chord; the reverse text→Quoll direction preserves it too).
 - Tighten the task-list checkbox corner radius from 6px to 5px for a slightly crisper box.
 - Make the floating outline and switch-editor buttons behave like a mobile-app toolbar: scrolling down slides them off the top edge, scrolling up brings them back, and they stay visible at the very top of the document. An open outline panel rides along so nothing is left floating, and the slide honours your "reduce motion" setting (it snaps instead).
+- Fix a stray fold/unfold chevron on a list item whose GFM table starts on the same physical line as the list marker (`- | a | b |`). The table renders as a block widget that covers the marker line, leaving the chevron nowhere sensible to sit, so it is now suppressed for that shape only. Genuine list folds — including a table on a later continuation line and plain multi-line items — and heading folds are unaffected.
 
 ## 0.1.0 — Initial public release
 

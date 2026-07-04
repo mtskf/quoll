@@ -26,7 +26,10 @@
 // cm-fold-blockquote.test.ts). A blockquote wrapping ONLY a code block or ONLY a
 // table shows no chevron (both are subtracted too). A table nested in a list
 // item leaves the ListItem fold intact (the chevron sits on the list's marker
-// line, never on a table row). The fn returns
+// line, never on a table row) — EXCEPT the tight shape where the table starts on
+// the marker line itself (`- | a | b |\n…`): there the table's block widget
+// swallows the marker, so a ListItem foldNodeProp override (listItemFold below)
+// suppresses that lone chevron. The fn returns
 // `null`, not `undefined`: foldNodeProp's value type is `(node, state) =>
 // {from,to} | null`, so `undefined` fails strict type-check. This rides
 // lang-markdown's PUBLIC API but depends on its 6.5.0 fold *behaviour*;
@@ -40,9 +43,45 @@ import {
   LanguageSupport,
   syntaxTree,
 } from "@codemirror/language";
-import { Prec } from "@codemirror/state";
+import { type EditorState, Prec } from "@codemirror/state";
 import { keymap } from "@codemirror/view";
 import type { MarkdownExtension, MarkdownParser } from "@lezer/markdown";
+
+// SyntaxNode without a direct @lezer/common import (transitive-only, un-hoisted
+// pnpm dep — supply-chain default-deny). Derive it from syntaxTree's return type,
+// the established webview idiom (see decorations/block-style.ts).
+type SyntaxNode = ReturnType<typeof syntaxTree>["topNode"];
+
+// A ListItem's first content node — the leading ListMark (`-` / `1.`) is skipped
+// so the caller inspects the item's actual body (a Paragraph, a Table, a nested
+// list…), not the marker.
+function firstContentChild(node: SyntaxNode): SyntaxNode | null {
+  const first = node.firstChild;
+  return first?.type.name === "ListMark" ? first.nextSibling : first;
+}
+
+// ListItem fold: re-implements lang-markdown's default Block range (from the end
+// of the item's first line to the item end) EXCEPT when the item's first content
+// child is a GFM Table that starts on the marker line. In that tight shape
+// (`- | a | b |\n  | - | - |\n…`) tableBlockField line-snaps its block widget to
+// the marker-line start (blockFrom = lineAt(Table.from).from), so the widget
+// SWALLOWS the `-`/`1.` marker and the ListItem chevron would visually land on the
+// table — a meaningless affordance. Returning null suppresses that lone chevron;
+// every genuine list fold (a table on a continuation line, a plain multi-line
+// body) keeps the default range. lang-markdown folds ListItem via its broad
+// `type => …` Block foldNodeProp, and this object-form `.add` OVERRIDES that per
+// node type (same mechanism as the Table/Paragraph/Blockquote subtractions below).
+// Pinned by cm-fold-blockquote.test.ts.
+function listItemFold(node: SyntaxNode, state: EditorState): { from: number; to: number } | null {
+  const content = firstContentChild(node);
+  if (
+    content?.type.name === "Table" &&
+    state.doc.lineAt(content.from).from === state.doc.lineAt(node.from).from
+  ) {
+    return null;
+  }
+  return { from: state.doc.lineAt(node.from).to, to: node.to };
+}
 
 export const nonFoldableBlocks: MarkdownExtension = {
   props: [
@@ -52,14 +91,10 @@ export const nonFoldableBlocks: MarkdownExtension = {
       FencedCode: () => null,
       CodeBlock: () => null,
       Table: () => null,
+      ListItem: listItemFold,
     }),
   ],
 };
-
-// SyntaxNode without a direct @lezer/common import (transitive-only, un-hoisted
-// pnpm dep — supply-chain default-deny). Derive it from syntaxTree's return type,
-// the established webview idiom (see decorations/block-style.ts).
-type SyntaxNode = ReturnType<typeof syntaxTree>["topNode"];
 
 // lang-markdown's heading-section foldService is NOT exported and reads a PRIVATE
 // `headingProp` NodeProp we cannot reach. Re-implement it by node NAME (ATX/Setext
