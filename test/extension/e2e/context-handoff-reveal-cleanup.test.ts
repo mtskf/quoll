@@ -177,4 +177,132 @@ describe("context-handoff reveal cleanup (pre-existing text tab reuse)", functio
       `the user's pre-existing text tab must NOT be closed by the cleanup — ${inventory()}`
     );
   });
+
+  // Finding 2 (cross-group): the SAME doc is already visible as a text editor
+  // in a SEPARATE group while the Quoll custom tab is the active tab of the
+  // ACTIVE group. The reveal's showTextDocument targets that other group's
+  // visibleColumn, focusing the raw text editor and making its group active.
+  // The delta close finds nothing (the text tab pre-existed), and the OLD
+  // invariant returned ok merely because the custom tab was active WITHIN its
+  // (now inactive) group — leaving the user in the text editor of the other
+  // group. The strengthened invariant requires the custom tab's group to be
+  // the ACTIVE group, so it enforces a re-reveal that re-focuses Quoll.
+  it("re-activates the Quoll group after a handoff that focused a pre-existing text editor in another group", async () => {
+    const uri = await openFixtureWithQuoll("sample.md");
+    const harness = await getHarness();
+    await harness.waitForEvent(isDocumentEvent, 8000);
+    await tick(300); // quiesce the seed/ready handshake
+
+    const isThisDocCustomTab = (tab: vscode.Tab): boolean =>
+      tab.input instanceof vscode.TabInputCustom &&
+      tab.input.viewType === VIEW_TYPE &&
+      tab.input.uri.toString() === uri.toString();
+    const isThisDocTextTab = (tab: vscode.Tab): boolean =>
+      tab.input instanceof vscode.TabInputText && tab.input.uri.toString() === uri.toString();
+
+    const inventory = (): string =>
+      JSON.stringify({
+        activeViewColumn: vscode.window.tabGroups.activeTabGroup.viewColumn,
+        groups: vscode.window.tabGroups.all.map((g) => ({
+          viewColumn: g.viewColumn,
+          isActive: g.isActive,
+          tabs: g.tabs.map((t) => ({
+            label: t.label,
+            isActive: t.isActive,
+            kind:
+              t.input instanceof vscode.TabInputCustom
+                ? `custom:${t.input.viewType}`
+                : t.input instanceof vscode.TabInputText
+                  ? "text"
+                  : "other",
+          })),
+        })),
+      });
+
+    // Arrange: a text editor of THIS doc visible in a SECOND group (Beside),
+    // then re-focus the first group so the Quoll custom tab is the active tab
+    // of the ACTIVE group at handoff time (the user hits ⌘⌥K from Quoll).
+    const doc = await vscode.workspace.openTextDocument(uri);
+    await vscode.window.showTextDocument(doc, {
+      viewColumn: vscode.ViewColumn.Beside,
+      preserveFocus: false,
+      preview: false,
+    });
+    await tick(200);
+    await vscode.commands.executeCommand("workbench.action.focusFirstEditorGroup");
+    await tick(300); // let the active-group flip settle
+
+    // Precondition — the Quoll custom tab is active in the ACTIVE group, and a
+    // separate group holds a (still-visible) text editor for the same doc.
+    const activeBefore = vscode.window.tabGroups.activeTabGroup;
+    const customBefore = activeBefore.tabs.find(isThisDocCustomTab);
+    assert.ok(
+      customBefore?.isActive,
+      `precondition: the Quoll custom tab must be active in the active group — ${inventory()}`
+    );
+    const textGroupBefore = vscode.window.tabGroups.all.find(
+      (g) => g.viewColumn !== activeBefore.viewColumn && g.tabs.some(isThisDocTextTab)
+    );
+    assert.ok(
+      textGroupBefore !== undefined,
+      `precondition: a SEPARATE group must hold a text editor for the doc — ${inventory()}`
+    );
+    assert.ok(
+      vscode.window.visibleTextEditors.some((e) => e.document.uri.toString() === uri.toString()),
+      `precondition: the doc's text editor must be visible (so the reveal targets its group) — ${inventory()}`
+    );
+
+    // Act — drive the real handoff. Same settlement signal as the sibling test:
+    // no Claude Code in the host, so the delegation rejects and the fallback
+    // clipboard write lands strictly AFTER the cleanup's `finally`.
+    const sentinel = "quoll-e2e-clipboard-sentinel-crossgroup";
+    await vscode.env.clipboard.writeText(sentinel);
+    const panel = harness.activePanel;
+    assert.ok(panel, "no active panel after openFixtureWithQuoll");
+    panel.simulateInbound({
+      protocol: PROTOCOL_VERSION,
+      type: "context-handoff",
+      hasSelection: false,
+      startLine: 1,
+      endLine: 1,
+    });
+
+    const settleDeadline = Date.now() + 8000;
+    while (Date.now() < settleDeadline) {
+      if ((await vscode.env.clipboard.readText()) !== sentinel) {
+        break;
+      }
+      await tick(50);
+    }
+    assert.notStrictEqual(
+      await vscode.env.clipboard.readText(),
+      sentinel,
+      "the handoff never settled (no fallback clipboard write observed)"
+    );
+
+    // The enforcement (vscode.openWith) may need one more tab-model beat.
+    const activeGroupHasActiveCustom = (): boolean =>
+      vscode.window.tabGroups.activeTabGroup.tabs.some((t) => isThisDocCustomTab(t) && t.isActive);
+    const contractDeadline = Date.now() + 2500;
+    while (Date.now() < contractDeadline) {
+      if (activeGroupHasActiveCustom()) {
+        break;
+      }
+      await tick(100);
+    }
+
+    // Contract: after cleanup the Quoll custom tab's group is the ACTIVE group.
+    assert.ok(
+      activeGroupHasActiveCustom(),
+      `cleanup contract: the Quoll custom tab's group must be the ACTIVE group after the handoff — ${inventory()}`
+    );
+    // The user's text editor in the OTHER group must NOT be closed.
+    const textAfter = vscode.window.tabGroups.all
+      .flatMap((g) => g.tabs)
+      .find((t) => isThisDocTextTab(t));
+    assert.ok(
+      textAfter !== undefined,
+      `the user's pre-existing text editor in the other group must NOT be closed — ${inventory()}`
+    );
+  });
 });

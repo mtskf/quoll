@@ -31,6 +31,13 @@
  *  planner's output can be handed straight to `tabGroups.close`. */
 export type RevealCleanupGroup<T> = {
   viewColumn: number;
+  /** Whether THIS group is the ACTIVE tab group (vscode.TabGroup.isActive).
+   *  Load-bearing for the contract: a custom tab that is active WITHIN its
+   *  group does not satisfy the contract when a DIFFERENT group holds focus
+   *  (e.g. a pre-existing text editor of the same doc in a separate group —
+   *  the reveal focuses that group, but the custom tab's own in-group isActive
+   *  flag stays true). Only the active-group check catches that case. */
+  isActiveGroup: boolean;
   /** Text tabs (TabInputText) for THIS document in this group. */
   docTextTabs: readonly T[];
   /** The Quoll custom tab (TabInputCustom, quoll.editMarkdown) for THIS
@@ -61,19 +68,25 @@ export function planRevealTabClose<T>(
 
 /** Phase (b) verdict over a post-close inventory. */
 export type RevealInvariantDecision =
-  /** The contract holds — the custom tab is the active tab of its group. */
+  /** The contract holds — the custom tab is the active tab of the ACTIVE
+   *  group. */
   | { kind: "ok" }
-  /** The custom tab exists but is NOT active in its group (reuse case, close
-   *  failure, …) — enforce by re-revealing it in `viewColumn`. */
+  /** The custom tab exists but is NOT the active tab of the active group
+   *  (reuse case, close failure, or focus left on another group) — enforce by
+   *  re-revealing it in `viewColumn`, which re-focuses that group too. */
   | { kind: "enforce"; viewColumn: number }
   /** No custom tab exists anywhere (e.g. the user closed the Quoll tab while
    *  the handoff was in flight) — nothing to enforce. */
   | { kind: "no-custom-tab" };
 
-/** Phase (b): decide whether the cleanup contract holds. Defensive about a
- *  duplicate custom tab (should be impossible): ANY active custom tab
- *  satisfies the contract; otherwise the first one found is the enforcement
- *  target. */
+/** Phase (b): decide whether the cleanup contract holds. The contract needs
+ *  BOTH that the custom tab is active WITHIN its group AND that its group is
+ *  the ACTIVE group — an in-group-active custom tab whose group does NOT hold
+ *  focus (the reveal landed on a same-doc text editor in another group) leaves
+ *  the user in the raw text editor, so it must enforce. Defensive about a
+ *  duplicate custom tab (should be impossible): ANY custom tab satisfying both
+ *  conditions is ok; otherwise the first custom tab found is the enforcement
+ *  target (re-revealing it re-focuses Quoll's group). */
 export function decideRevealInvariant(
   groups: readonly RevealCleanupGroup<unknown>[]
 ): RevealInvariantDecision {
@@ -82,7 +95,7 @@ export function decideRevealInvariant(
     if (group.docCustomTab === null) {
       continue;
     }
-    if (group.docCustomTab.isActive) {
+    if (group.docCustomTab.isActive && group.isActiveGroup) {
       return { kind: "ok" };
     }
     if (enforceColumn === null) {

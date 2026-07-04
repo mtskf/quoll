@@ -880,6 +880,10 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
           const customTab = group.tabs.find(isThisDocCustomTab);
           return {
             viewColumn: group.viewColumn,
+            // The active-group flag lets decideRevealInvariant reject a custom
+            // tab that is active WITHIN its group while focus sits on another
+            // group (a same-doc text editor revealed in a separate group).
+            isActiveGroup: group.isActive,
             docTextTabs: group.tabs.filter(isThisDocTextTab),
             docCustomTab: customTab === undefined ? null : { isActive: customTab.isActive },
           };

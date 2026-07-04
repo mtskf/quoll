@@ -248,6 +248,28 @@ describe("handleContextHandoff — tier 0 delegation", () => {
     expect(calls.error).toEqual([]);
   });
 
+  it("SKIPS delegation entirely when the relativePath carries a control char (sanitizer-bypass guard)", async () => {
+    // Claude Code's zero-arg insertAtMentioned rebuilds the @-mention from the
+    // RAW window.activeTextEditor document path, bypassing stripControlChars —
+    // so a hostile POSIX filename with an embedded newline would reach Claude
+    // Code un-sanitized on the primary (delegation) path. The handler must
+    // detect the control char up front and skip the reveal + insert command
+    // altogether, handing off ONLY the stripped reference via the fallback tier.
+    const { calls, deps: d } = deps({ relativePath: "evil\nrm -rf ~.md" });
+    await handleContextHandoff({ hasSelection: false, startLine: 1, endLine: 1 }, d);
+    // Delegation NEVER attempted: no reveal, no insert command.
+    expect(calls.reveals).toEqual([]);
+    expect(calls.commands).not.toContain(CLAUDE_INSERT_AT_MENTIONED_COMMAND);
+    // Fallback tier ran verbatim: sanitized clipboard copy, open/focus, toast.
+    expect(calls.commands).toEqual(["claude-vscode.editor.open", "claude-vscode.focus"]);
+    expect(calls.clipboard).toEqual(["@evilrm -rf ~.md"]);
+    for (const sent of calls.clipboard) {
+      expect(hasControlChar(sent)).toBe(false);
+    }
+    expect(calls.info).toEqual([expect.stringContaining("paste")]);
+    expect(calls.error).toEqual([]);
+  });
+
   it("consults the guard AFTER the reveal and BEFORE the insert command (order pin)", async () => {
     // The guard's value is only meaningful once the reveal has had its chance
     // to set activeTextEditor, and it must gate the command — pin the

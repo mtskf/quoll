@@ -158,6 +158,22 @@ function stripControlChars(path: string): string {
   return out;
 }
 
+/** True when the path carries a C0 control character (U+0000–U+001F) or DEL
+ *  (U+007F) — the same predicate stripControlChars filters on, mirroring its
+ *  char-code loop (no regex literal, so no control character is embedded in
+ *  this source). Used to skip tier-0 delegation for a hostile path: Claude
+ *  Code's zero-arg insertAtMentioned would otherwise rebuild the @-mention
+ *  from the RAW window.activeTextEditor path, bypassing stripControlChars. */
+function hasControlChar(path: string): boolean {
+  for (const ch of path) {
+    const code = ch.charCodeAt(0);
+    if (code <= 0x1f || code === 0x7f) {
+      return true;
+    }
+  }
+  return false;
+}
+
 /** Build the `@`-mention reference for the insurance write + fallback tier.
  *  Matches the @-mention format Claude Code currently accepts (cross-checked
  *  against insertAtMentioned in extension.js v2.1.199):
@@ -288,10 +304,22 @@ export async function handleContextHandoff(
   // surface exists) — non-fatal, warn only, and NO toast (the mention landing
   // is its own signal; the drop case has no host-observable failure to key a
   // toast on).
-  const delegated = await tryDelegateToClaudeCode(
-    { hasSelection: payload.hasSelection, startLine, endLine },
-    deps
-  );
+  //
+  // Control-char guard (defense in depth): SKIP delegation entirely when the
+  // host-owned relativePath carries a C0/DEL byte. Claude Code's zero-arg
+  // insertAtMentioned rebuilds the @-mention from the RAW window.activeTextEditor
+  // document path, which bypasses stripControlChars — so a hostile POSIX
+  // filename (e.g. an embedded newline) would reach Claude Code un-sanitized on
+  // the primary path. Dropping straight to the fallback tier surfaces ONLY the
+  // already-stripped `reference`, keeping the sanitizer invariant intact. (&&
+  // short-circuits, so tryDelegateToClaudeCode never runs when the path is
+  // hostile.)
+  const delegated =
+    !hasControlChar(deps.relativePath) &&
+    (await tryDelegateToClaudeCode(
+      { hasSelection: payload.hasSelection, startLine, endLine },
+      deps
+    ));
   if (delegated) {
     try {
       await deps.writeClipboard(reference);
