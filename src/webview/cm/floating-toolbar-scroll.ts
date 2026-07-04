@@ -6,7 +6,10 @@
 // The observer owns ONE `scroll` listener on `view.scrollDOM` (the .cm-scroller)
 // and drives BOTH buttons through a single class on the `.quoll-editor` host —
 // so there is one direction source, and the two button-owning ViewPlugins
-// (cm/outline, cm/switch-editor) are NOT touched. Pure view chrome: no document
+// (cm/outline, cm/switch-editor) are NOT touched. Alongside the class it toggles
+// the `inert` attribute on the chrome so hidden toggles / panel leave the focus
+// + a11y tree IMMEDIATELY (the CSS `visibility:hidden` is delayed until the
+// slide finishes — see setChromeHidden). Pure view chrome: no document
 // mutation, no CodeMirror change, no write-lock, no protocol message.
 //
 // The direction→visibility decision is the pure `nextToolbarScrollState` below,
@@ -36,6 +39,17 @@ export type ToolbarScrollState = { visibility: ToolbarVisibility; anchor: number
 /** The single class the observer stamps on the `.quoll-editor` host. CSS
  *  (styles.css) slides both toggles + the outline panel when it is present. */
 export const CHROME_HIDDEN_CLASS = "quoll-chrome-hidden";
+
+/** The floating chrome the observer removes from the focus / a11y tree while
+ *  hidden. Kept in lockstep with the `.quoll-chrome-hidden …` CSS selectors.
+ *  The CSS `visibility:hidden` is DELAYED until the 0.2s slide finishes
+ *  (`visibility 0s 0.2s`), so on its own it would leave the offscreen toggles /
+ *  panel keyboard-focusable for that window; toggling `inert` from JS in sync
+ *  with the class closes it IMMEDIATELY (set on hide, cleared on show). Queried
+ *  at each transition (never cached) so plugin construction order and the
+ *  lazily-shown outline panel are handled uniformly. */
+export const CHROME_SELECTOR =
+  ".quoll-outline-toggle, .quoll-switch-editor-toggle, .quoll-outline-panel";
 
 /** Default jitter dead-zone (px). Movement within this of the anchor does NOT
  *  flip visibility, so the chrome never flickers on a trackpad wiggle. */
@@ -95,8 +109,9 @@ class FloatingToolbarScroll implements PluginValue {
     this.hostEl = hostEl;
     this.scroller = view.scrollDOM;
     this.state = { visibility: "shown", anchor: this.scroller.scrollTop };
-    // passive: the handler never preventDefaults — it only reads scrollTop and
-    // toggles a class, so the browser can keep scrolling smoothly.
+    // passive: the handler never preventDefaults — it only reads scrollTop and,
+    // at a visibility transition, toggles the host class + the chrome `inert`
+    // attribute, so the browser can keep scrolling smoothly.
     this.scroller.addEventListener("scroll", this.onScroll, { passive: true });
   }
 
@@ -104,22 +119,34 @@ class FloatingToolbarScroll implements PluginValue {
     const next = nextToolbarScrollState(this.state, this.scroller.scrollTop);
     const changed = next.visibility !== this.state.visibility;
     // Commit the new state (incl. the possibly-advanced anchor) every tick, but
-    // keep the classList.toggle OFF the hot path: the DOM mutation fires ONLY at
-    // a visibility transition, never per scroll tick. Do NOT move the toggle
-    // above this guard (design-review: avoids per-event style recalc / jank).
+    // keep the DOM mutation OFF the hot path: it fires ONLY at a visibility
+    // transition, never per scroll tick. Do NOT move it above this guard
+    // (design-review: avoids per-event style recalc / jank).
     this.state = next;
     if (!changed) {
       return;
     }
-    this.hostEl.classList.toggle(CHROME_HIDDEN_CLASS, next.visibility === "hidden");
+    this.setChromeHidden(next.visibility === "hidden");
+  }
+
+  /** Drive the host class AND the chrome `inert` attribute together. `inert`
+   *  removes the offscreen toggles / panel from the focus + a11y tree the
+   *  instant the hide begins, ahead of the CSS `visibility:hidden` that is
+   *  delayed until the slide finishes. Queried per transition (off the hot
+   *  path) so the lazily-mounted outline panel is covered whenever it exists. */
+  private setChromeHidden(hidden: boolean): void {
+    this.hostEl.classList.toggle(CHROME_HIDDEN_CLASS, hidden);
+    for (const el of this.hostEl.querySelectorAll(CHROME_SELECTOR)) {
+      el.toggleAttribute("inert", hidden);
+    }
   }
 
   destroy(): void {
     this.scroller.removeEventListener("scroll", this.onScroll);
-    // Clear the class so a re-mount (or a lingering host node in a test) never
-    // inherits a stale hidden state. Order matters: remove the listener first so
-    // no post-destroy scroll event can re-add the class after this line.
-    this.hostEl.classList.remove(CHROME_HIDDEN_CLASS);
+    // Clear the class AND inert so a re-mount (or a lingering host node in a
+    // test) never inherits a stale hidden state. Order matters: remove the
+    // listener first so no post-destroy scroll event can re-hide after this.
+    this.setChromeHidden(false);
   }
 }
 
