@@ -566,16 +566,29 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
       const anchor = applyCaret(view.state.doc, caret);
       // Same-position no-op guard: if the caret is already there, skip the
       // dispatch (avoids a redundant scroll + a suppressed-but-pointless cycle).
-      if (view.state.selection.main.empty && view.state.selection.main.head === anchor) {
-        return;
-      }
+      // Focus is NOT gated on this — see below.
+      const alreadyThere =
+        view.state.selection.main.empty && view.state.selection.main.head === anchor;
       applyingRemoteCaret = true;
       try {
-        // Selection-only dispatch (no `changes`) → docChanged is false, so the
-        // edit-sync path is never touched and no Edit is posted. scrollIntoView
-        // brings the carried caret into view, matching the text-editor side's
-        // revealRange. Pattern mirrors block-zone-arrow-keymap's caret dispatch.
-        view.dispatch({ selection: { anchor }, scrollIntoView: true });
+        // Paint the caret. CodeMirror only draws the cursor while the view is
+        // focused (`.cm-focused`; @codemirror/view hides `.cm-cursor` otherwise).
+        // This is the reverse editor-switch handoff: the host posts caret-apply
+        // while the webview iframe owns focus but CM's contenteditable does not,
+        // so without an explicit focus the carried caret is set-but-invisible
+        // ("caret not shown after switching to Quoll"). Unconditional — even when
+        // the position is unchanged the caret must still become visible.
+        // `focus()` uses preventScroll and posts no transaction, so it neither
+        // scrolls nor echoes a caret-report; kept inside the suppression window
+        // defensively so any focus-driven selection sync cannot bounce back.
+        view.focus();
+        if (!alreadyThere) {
+          // Selection-only dispatch (no `changes`) → docChanged is false, so the
+          // edit-sync path is never touched and no Edit is posted. scrollIntoView
+          // brings the carried caret into view, matching the text-editor side's
+          // revealRange. Pattern mirrors block-zone-arrow-keymap's caret dispatch.
+          view.dispatch({ selection: { anchor }, scrollIntoView: true });
+        }
       } finally {
         // try/finally so a throw cannot leave the flag stuck true (which would
         // permanently suppress caret-report) — same discipline as `seeding`.
