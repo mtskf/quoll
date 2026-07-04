@@ -35,7 +35,7 @@ Edit Markdown in VS Code with a Notion/Obsidian-style WYSIWYG editor, right insi
 ### Navigation, lint & fit
 
 - **Document outline** — a toggle-able overlay lists the document's headings; click one to jump straight to it. Open it with the top-right button or `Ctrl/Cmd+Alt+O`.
-- **Switch to the text editor** — flip the active Markdown file to VS Code's built-in text editor (and back) with a top-right button or `Ctrl/Cmd+Alt+E`; your caret position carries across.
+- **Switch to the text editor** — flip the active Markdown file to VS Code's built-in text editor (and back) with a top-right button or `⌘⌥E` (`Ctrl+Alt+E` on Windows/Linux); your caret position carries across.
 - **Markdown lint** — advisory findings as inline underlines, with an optional gutter dot and an optional **Problems**-panel mirror.
 - **Theme-aware & opt-in** — follows your light/dark theme, and registers with `priority: option` so it never hijacks `.md` from other extensions.
 
@@ -77,11 +77,11 @@ Reload the VS Code window after installing.
 | Command              | Title                                      | Keybinding       | Notes                                      |
 | -------------------- | ------------------------------------------ | ---------------- | ------------------------------------------ |
 | `quoll.editWith`     | Edit with Quoll                            | —                | Opens the active file in the Quoll editor. |
-| `quoll.toggleEditor` | Quoll: Toggle Between Rich and Text Editor | `Ctrl/Cmd+Alt+E` | Swaps between Quoll and the text editor.   |
+| `quoll.toggleEditor` | Quoll: Toggle Between Rich and Text Editor | `⌘⌥E` / `Ctrl+Alt+E` | Swaps between Quoll and the text editor.   |
 
 Two overlay affordances sit in the editor's top-right corner: a button to
 toggle the **document outline** (`Ctrl/Cmd+Alt+O`) and a button to **switch to
-the text editor** (`Ctrl/Cmd+Alt+E`). Like the live-reveal below, the outline
+the text editor** (`⌘⌥E` / `Ctrl+Alt+E`). Like the live-reveal below, the outline
 toggle is editor-internal behavior rather than a VS Code command, so it does not
 appear in the keybindings UI.
 

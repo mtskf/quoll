@@ -1,38 +1,54 @@
 // Quoll → plain text editor switch. A webview-native affordance mirroring the
-// document-outline overlay: a top-RIGHT overlay button + a Prec.high CM keymap,
-// both posting the envelope-only `switch-to-text` side-channel message. The host
-// reopens the document in VS Code's built-in text editor (vscode.openWith …
-// "default") and re-applies the caret.
+// document-outline overlay: a top-RIGHT overlay button + a Prec.high keydown
+// handler, both posting the envelope-only `switch-to-text` side-channel message.
+// The host reopens the document in VS Code's built-in text editor (vscode.openWith
+// … "default") and re-applies the caret.
 //
-// The chord lives HERE (a CodeMirror keymap), not in package.json
+// The chord lives HERE (a CodeMirror keydown handler), not in package.json
 // contributes.keybindings, so it fires reliably while the Quoll webview holds
 // focus — same rationale as the context-handoff / outline chords (a focused
-// webview iframe captures keydown; a CM keymap is the reliable in-focus path).
-// package.json binds the SAME chord to `quoll.toggleEditor` ONLY in the
+// webview iframe captures keydown; an in-webview handler is the reliable in-focus
+// path). package.json binds the SAME chord to `quoll.toggleEditor` ONLY in the
 // text-editor context (the reverse direction) — deliberately NOT in the
-// custom-editor context, which would double-fire with this keymap and bounce.
+// custom-editor context, which would double-fire with this handler and bounce.
+//
+// Why a raw keydown handler keyed on `event.code`, NOT a `Mod-Alt-e` CM keymap:
+// on macOS, Option+E is the acute-accent DEAD KEY, so a ⌘⌥E keydown arrives with
+// `event.key === "Dead"` (or "´") and `event.keyCode === 229`. A CodeMirror
+// keymap matches via `event.key`/`event.keyCode` (w3c-keyname), which can NEVER
+// match those dead-key values — that was the Quoll→text regression (the reverse
+// direction and the button were unaffected). `event.code` is the layout-
+// independent PHYSICAL key ("KeyE") and is exactly what VS Code's reverse
+// `cmd+alt+e` binding matches, so both directions stay symmetric. See
+// matchesSwitchEditorChord.
 //
 // Pure side channel: NEVER dispatches a CodeMirror change, NEVER enters the host
 // write-lock. The caret survives via the host handler; this module adds no caret
 // code.
 
 import { type Extension, Prec } from "@codemirror/state";
-import {
-  type Command,
-  type EditorView,
-  keymap,
-  type PluginValue,
-  ViewPlugin,
-} from "@codemirror/view";
+import { EditorView, type PluginValue, ViewPlugin } from "@codemirror/view";
 
 import { buildSwitchToTextMessage, type WebviewToHost } from "../../shared/protocol.js";
 
 export type SwitchEditorHost = { postMessage(message: WebviewToHost): void };
 
-/** The chord string. Single source of truth for the CM keymap; pinned by a unit
- *  test. Mod = Cmd (mac) / Ctrl (win+linux); Alt = Option (mac). Kept in sync
- *  with the `ctrl+alt+e` / `cmd+alt+e` reverse entry in package.json. */
-export const SWITCH_EDITOR_KEY = "Mod-Alt-e";
+/** Match the Quoll→text switch chord: Ctrl/Cmd + Alt + E, keyed on the PHYSICAL
+ *  `event.code` ("KeyE") — NOT `event.key`. On macOS Option+E is the acute-accent
+ *  dead key, so a ⌘⌥E keydown arrives with `event.key === "Dead"`/"´" and
+ *  `event.keyCode === 229`; matching `event.code` sidesteps that entirely and
+ *  mirrors VS Code's reverse `cmd+alt+e` binding (see the module header).
+ *  Mod = Cmd (mac) / Ctrl (win+linux) — accept either metaKey or ctrlKey so we
+ *  need no platform detection (and stay test-deterministic). Shift excluded to
+ *  pin the exact combo. On Windows this also matches AltGr (= Ctrl+Alt), an
+ *  accepted trade-off: it is identical to VS Code's reverse `ctrl+alt+e` binding,
+ *  so it introduces no behaviour the reverse direction doesn't already have. Kept
+ *  in sync with the `ctrl+alt+e` / `cmd+alt+e` reverse entry in package.json. */
+export function matchesSwitchEditorChord(event: KeyboardEvent): boolean {
+  return (
+    event.code === "KeyE" && event.altKey && (event.metaKey || event.ctrlKey) && !event.shiftKey
+  );
+}
 
 const SVG_NS = "http://www.w3.org/2000/svg";
 
@@ -84,17 +100,6 @@ function postSwitchToText(host: SwitchEditorHost, flushPendingEdit: () => void):
   }
 }
 
-/** The chord command. Exported so the keymap test can invoke it directly on a
- *  real EditorView (avoids a platform-flaky synthetic key event — see
- *  [[quoll-cm-keymap-test-runscopehandlers-platform-flaky]]). */
-export function switchToTextCommand(host: SwitchEditorHost, flushPendingEdit: () => void): Command {
-  return () => {
-    postSwitchToText(host, flushPendingEdit);
-    // Claim the chord regardless so CodeMirror preventDefaults it.
-    return true;
-  };
-}
-
 class SwitchEditorButton implements PluginValue {
   private readonly hostEl: HTMLElement;
   private readonly buttonEl: HTMLButtonElement;
@@ -116,7 +121,7 @@ class SwitchEditorButton implements PluginValue {
     this.buttonEl = document.createElement("button");
     this.buttonEl.type = "button";
     this.buttonEl.className = "quoll-switch-editor-toggle";
-    this.buttonEl.title = "Open in text editor (Ctrl/Cmd+Alt+E)";
+    this.buttonEl.title = "Open in text editor (⌘⌥E / Ctrl+Alt+E)";
     this.buttonEl.setAttribute("aria-label", "Open in text editor");
     this.buttonEl.appendChild(createFilePenLineIcon());
     // preventDefault on mousedown so clicking does not blur/move the selection
@@ -134,12 +139,25 @@ class SwitchEditorButton implements PluginValue {
   }
 }
 
-/** The switch-editor extension: the top-right overlay button + the chord keymap,
- *  both posting `switch-to-text`. */
+/** The switch-editor extension: the top-right overlay button + the chord keydown
+ *  handler, both posting `switch-to-text`. */
 export function quollSwitchEditor(host: SwitchEditorHost, flushPendingEdit: () => void): Extension {
   const plugin = ViewPlugin.define((view) => new SwitchEditorButton(view, host, flushPendingEdit));
-  const km = Prec.high(
-    keymap.of([{ key: SWITCH_EDITOR_KEY, run: switchToTextCommand(host, flushPendingEdit) }])
+  // A raw keydown handler (NOT a keymap) so the chord matches on the PHYSICAL
+  // `event.code` — see matchesSwitchEditorChord for the macOS Option+E dead-key
+  // rationale. Prec.high so it claims ⌘⌥E before lower-precedence handlers;
+  // returning true makes CodeMirror preventDefault() the keydown. The panel
+  // switches (disposes) immediately, so any dead-key accent composition is moot.
+  const chord = Prec.high(
+    EditorView.domEventHandlers({
+      keydown(event) {
+        if (!matchesSwitchEditorChord(event)) {
+          return false;
+        }
+        postSwitchToText(host, flushPendingEdit);
+        return true;
+      },
+    })
   );
-  return [plugin, km];
+  return [plugin, chord];
 }

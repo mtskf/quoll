@@ -12,11 +12,12 @@
 // Not a "No-dual-editor" violation: forward drives VS Code's NATIVE text editor
 // (vscode.openWith … "default"); a convenience affordance, not a second runtime.
 //
-// NOTE (keybindings): the Quoll→text chord is the `Mod-Alt-e` CM keymap
-// (src/webview/cm/switch-editor.ts), NOT a package.json keybinding — a forward
-// workbench keybinding scoped to `activeCustomEditorId` would double-fire with
-// the CM keymap and can bounce the switch. package.json binds the chord to this
-// command ONLY in the text-editor (reverse) context.
+// NOTE (keybindings): the Quoll→text chord (⌘⌥E / Ctrl+Alt+E) is a raw keydown
+// handler in src/webview/cm/switch-editor.ts, matched on the physical
+// `event.code` — NOT a package.json keybinding. A forward workbench keybinding
+// scoped to `activeCustomEditorId` would double-fire with that handler and can
+// bounce the switch. package.json binds the chord to this command ONLY in the
+// text-editor (reverse) context.
 
 import { commands, TabInputCustom, TabInputText, window, workspace } from "vscode";
 import { canEditWith } from "./canEditWith.js";
@@ -82,8 +83,8 @@ export function registerToggleEditor(): { dispose(): void } {
         // decouple `onQuollTab` from this check. This is the Command-Palette
         // forward path (Quoll active, no live activeTextEditor caret to read
         // here); it does NOT restore the caret — the caret-preserving forward
-        // affordances are the top-right button + the Mod-Alt-e chord, which post
-        // `switch-to-text` to the panel (which owns lastKnownCaret and re-applies
+        // affordances are the top-right button + the ⌘⌥E / Ctrl+Alt+E chord,
+        // which post `switch-to-text` to the panel (owns lastKnownCaret, re-applies
         // it — Task 5). A rare, acceptable gap.
         if (!(input instanceof TabInputCustom)) {
           return;
@@ -91,7 +92,7 @@ export function registerToggleEditor(): { dispose(): void } {
         const uri = input.uri;
         // Observability for the documented caret non-preservation on this path.
         console.info(
-          "[quoll] palette forward: caret not preserved (use the button or Ctrl/Cmd+Alt+E)"
+          "[quoll] palette forward: caret not preserved (use the button or ⌘⌥E / Ctrl+Alt+E)"
         );
         try {
           await openInTextEditor(uri);

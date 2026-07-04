@@ -395,7 +395,7 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
         // mode too (navigation, not editing).
         quollOutline(),
         // Quoll → text-editor switch: a top-right overlay button + the
-        // Mod-Alt-e chord, both posting `switch-to-text`. Pure side channel
+        // ⌘⌥E / Ctrl+Alt+E chord, both posting `switch-to-text`. Pure side channel
         // (no CM change, no write-lock); the host reopens the document in the
         // built-in text editor and re-applies the caret. Present in read-only
         // mode too (navigation).
