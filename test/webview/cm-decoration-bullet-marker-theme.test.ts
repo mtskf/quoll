@@ -21,4 +21,12 @@ describe("bulletMarkerThemeSpec — style contract", () => {
     // Out of hit-testing — decorative only.
     expect(dot.pointerEvents).toBe("none");
   });
+
+  it("anchors the dot at the column edge (left: 0), not past it", () => {
+    // left:-3px bled the disc 3px past the text-column left; left:0 is the
+    // maximum-gap position that is still contained. The raw glyph keeps its
+    // advance (color:transparent), so no caret-on/off column jump. Real-pixel
+    // containment is verified in the browser harness.
+    expect(bulletMarkerThemeSpec[".quoll-bullet-marker::before"].left).toBe("0");
+  });
 });
