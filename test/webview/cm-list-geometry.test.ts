@@ -189,6 +189,18 @@ describe("resolveListItemHang — recursive geometry (F1 + NEST_STEP)", () => {
     });
   });
 
+  it("ordered `)` TASK (`1) [x]`) splits the same as `.` — Lezer delimiter guard", () => {
+    // Mirrors the plain `1) item` guard: pins that a `)`-delimited item is an
+    // OrderedList (isBullet=false, keeps `1)` visible) — not a BulletList — so
+    // the glyph split runs and matches `1. [x]` (the delimiter doesn't change
+    // the 2 glyph cols / 1 space / checkbox counts).
+    expect(hangOf("1) [x] foo", 0)).toEqual({
+      indent:
+        "1 * var(--quoll-prose-space, 1ch) + 2 * calc((1ch + var(--quoll-prose-space, 1ch)) / 2) + var(--quoll-task-marker-width)",
+      pad: "1 * var(--quoll-prose-space, 1ch) + 2 * calc((1ch + var(--quoll-prose-space, 1ch)) / 2) + var(--quoll-task-marker-width)",
+    });
+  });
+
   it("bullet TASK (`- [x]`) stays glyph:0 — the `- ` folds into the checkbox (regression guard)", () => {
     // The glyph split is CLAMPED to foldFrom: for a bullet task foldFrom ==
     // listMarkFrom, so glyph and ch are both 0 — byte-identical with the
