@@ -27,14 +27,37 @@ describe("styles.css — block-widget margin invariant (CL)", () => {
   // The `quoll-block` marker class is the DOM hook (pinned in
   // cm-table-widget.test.ts); this pins the CSS half — the load-bearing
   // `margin: 0` rule itself. CodeMirror measures block-widget height via
-  // getBoundingClientRect() (which excludes margin), so any margin on a
+  // getBoundingClientRect() (which excludes margin), so any VERTICAL margin on a
   // quoll-block root reintroduces a click→caret offset for every line
   // below it. A refactor that dropped this rule would leave the DOM marker
   // test green while silently regressing the invariant — this assertion
   // reds instead. (`.quoll-block` is matched literally, so it never hits
-  // `.quoll-table-block`.)
+  // `.quoll-table-block`.) HORIZONTAL margin is exempt — the frontmatter card
+  // uses it for its text-column inset (compound `.quoll-block.quoll-frontmatter-block`),
+  // which this literal `.quoll-block {` match deliberately never touches.
   it("declares .quoll-block { margin: 0 } (block-widget zero-margin measurement invariant)", () => {
     expect(css).toMatch(/\.quoll-block\s*\{[^}]*margin\s*:\s*0[^}]*\}/);
+  });
+});
+
+describe("styles.css — block-widget roots inset to the paragraph text column", () => {
+  const css = readFileSync(new URL("../../src/webview/styles.css", import.meta.url), "utf8");
+
+  // CM's base `.cm-line { padding: 0 2px 0 6px }` insets paragraph text 6px/2px.
+  // A block widget fills .cm-content's full content box, so without this reserved
+  // inset its box bleeds 6/2 px past the text column. Same transparent-border
+  // idiom the blockquote/fenced-code lines use (cm/theme.ts). Pins the fix so a
+  // refactor that drops it reds here (real-pixel proof is the browser harness).
+  it("gives .quoll-table-block a transparent 6px/2px left/right border", () => {
+    const rule = css.match(/\.quoll-table-block\s*\{([^}]*)\}/)?.[1] ?? "";
+    expect(rule).toMatch(/border-left\s*:\s*6px solid transparent/);
+    expect(rule).toMatch(/border-right\s*:\s*2px solid transparent/);
+  });
+
+  it("gives .quoll-image-block a transparent 6px/2px left/right border", () => {
+    const rule = css.match(/\.quoll-image-block\s*\{([^}]*)\}/)?.[1] ?? "";
+    expect(rule).toMatch(/border-left\s*:\s*6px solid transparent/);
+    expect(rule).toMatch(/border-right\s*:\s*2px solid transparent/);
   });
 });
 
@@ -105,6 +128,18 @@ describe("styles.css — frontmatter metadata block (C8a)", () => {
 
   it("declares the two-column .quoll-frontmatter-list grid", () => {
     expect(css).toMatch(/\.quoll-frontmatter-list\s*\{[^}]*grid-template-columns/s);
+  });
+
+  it("insets .quoll-frontmatter-block with an order-proof horizontal margin (vertical stays 0)", () => {
+    // Own-border card can't reuse the transparent-border spacer; inset via a
+    // horizontal margin on the COMPOUND selector so it beats `.quoll-block { margin:0 }`
+    // by SPECIFICITY (0,2,0), not source order. Vertical margin stays 0 → invariant held.
+    const rule = css.match(/\.quoll-block\.quoll-frontmatter-block\s*\{([^}]*)\}/)?.[1] ?? "";
+    expect(rule).toMatch(/margin-left\s*:\s*6px/);
+    expect(rule).toMatch(/margin-right\s*:\s*2px/);
+    expect(rule).not.toMatch(/margin-top/);
+    expect(rule).not.toMatch(/margin-bottom/);
+    expect(rule).not.toMatch(/margin\s*:/); // no shorthand that could set vertical
   });
 });
 

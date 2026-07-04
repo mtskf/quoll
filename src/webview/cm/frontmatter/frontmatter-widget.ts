@@ -85,7 +85,10 @@ export class FrontmatterBlockWidget extends WidgetType {
 
   toDOM(view?: EditorView): HTMLElement {
     // Root carries the `quoll-block` marker (margin:0 measurement invariant);
-    // breathing room is padding, never margin.
+    // vertical breathing room is padding, never vertical margin. (The horizontal
+    // text-column inset IS a margin — the compound `.quoll-block.quoll-frontmatter-block`
+    // rule in styles.css — safe because horizontal margin never touches CM's
+    // vertical height map.)
     const root = document.createElement("div");
     root.className = "quoll-block quoll-frontmatter-block";
     root.setAttribute("role", "region");

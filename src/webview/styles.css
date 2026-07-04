@@ -355,13 +355,16 @@
 @layer widget {
   /* Block-widget invariant (load-bearing for click→caret accuracy).
    * Every block-widget ROOT carries the `quoll-block` marker class and
-   * MUST have zero margin: CodeMirror measures block-widget height via
+   * MUST have zero VERTICAL margin: CodeMirror measures block-widget height via
    * getBoundingClientRect(), which INCLUDES padding but EXCLUDES margin.
-   * Any margin on the root shifts the widget visually without updating
-   * CM's internal line-position map, accumulating a click→caret offset for
-   * every line below it. Breathing room therefore goes on PADDING (inside
-   * the measured box), never margin. Future block widgets get this for
-   * free by adding `quoll-block` to their root.
+   * Any VERTICAL margin on the root shifts the widget vertically without
+   * updating CM's internal line-position map, accumulating a click→caret offset
+   * for every line below it. Vertical breathing room therefore goes on PADDING
+   * (inside the measured box), never vertical margin. Future block widgets get
+   * this for free by adding `quoll-block` to their root. (HORIZONTAL margin is
+   * safe — it shifts left/right without touching the vertical height map — and
+   * the frontmatter card uses it for its text-column inset: see the compound
+   * `.quoll-block.quoll-frontmatter-block` rule below.)
    *
    * Scope of the guarantee: this rule beats every other LAYERED rule
    * (widget is the top layer). It does NOT beat unlayered rules —
@@ -403,6 +406,16 @@
    * below — there is no external bleed-through left to override. */
   .quoll-table-block {
     padding: var(--quoll-table-block-pad) 0;
+    /* Body-text-column alignment. This widget fills .cm-content's full content
+     * box, but CM's base `.cm-line` padding (0 2px 0 6px) insets paragraph text
+     * 6px left / 2px right — so without this reserved inset the table box juts
+     * 6/2 px past the text column. Reserve it with a transparent left/right
+     * border (a pure SPACER: the paint lands inside it), the same idiom the
+     * blockquote/fenced-code surfaces use (cm/theme.ts). The inner <table>
+     * (width:100%) then resolves against the now-inset content box → flush with
+     * the text column. No `background-clip` needed: the root paints no fill. */
+    border-left: 6px solid transparent;
+    border-right: 2px solid transparent;
   }
 
   .quoll-table-block table {
@@ -454,6 +467,15 @@
    * block-height measurement stays in lockstep with the DOM. */
   .quoll-image-block {
     padding: 0.5em 0;
+    /* Body-text-column alignment (same idiom as .quoll-table-block above): CM's
+     * base `.cm-line` padding (0 2px 0 6px) insets paragraph text 6px/2px, so
+     * this full-content-box widget needs a transparent left/right border to
+     * reserve that inset — otherwise the image box juts 6/2 px past the text
+     * column. Pure SPACER (paint lands inside it), mirroring blockquote/fenced
+     * (cm/theme.ts); the inner <img> (max-width:100%) resolves against the
+     * inset content box. No `background-clip` needed: the root paints no fill. */
+    border-left: 6px solid transparent;
+    border-right: 2px solid transparent;
   }
 
   .quoll-image-block img {
@@ -475,7 +497,9 @@
   }
 
   /* C8a: read-only frontmatter metadata block. Root carries `quoll-block`
-   * (margin:0 invariant); breathing room via padding, never margin. Clean
+   * (margin:0 invariant); vertical breathing room via padding, never vertical
+   * margin — the HORIZONTAL text-column inset is the compound
+   * `.quoll-block.quoll-frontmatter-block` margin below. Clean
    * top-level frontmatter renders as a two-column <dl> (key | value); complex
    * YAML falls back to a <pre>. role="region" + aria-label live on the root
    * (set in frontmatter-widget.ts) for the C8 a11y roll-up. */
@@ -495,6 +519,29 @@
     font-size: 0.85em;
     line-height: 1.5;
     cursor: text; /* C8b: click-to-edit reveals the raw YAML source */
+  }
+
+  /* Body-text-column alignment. UNLIKE the table/image roots, this card paints
+   * its OWN 1px frame + bg + radius, so the transparent-border spacer idiom
+   * can't be reused (that border IS the frame). Inset the whole card with a
+   * HORIZONTAL margin instead — safe because the block-widget margin invariant
+   * is about VERTICAL height (getBoundingClientRect excludes margin) and this is
+   * an ATOMIC widget, so a left/right margin never perturbs CM's line/height map
+   * or posAtCoords; vertical margin stays 0 (from .quoll-block) so the invariant
+   * holds. 6px/2px matches the table/image transparent-border inset so all three
+   * block widgets align to one column. COMPOUND selector (0,2,0) so the margin
+   * beats the bare `.quoll-block` margin-zero rule by specificity, NOT source
+   * order (a section reorder must not silently drop it). (The margin-zero rule is
+   * named without braces here on purpose: the block-widget margin-invariant guard
+   * in styles-contract.test.ts greps the whole stylesheet TEXT for the braced
+   * `.quoll-block` margin-zero rule, so writing that rule in brace form inside any
+   * comment would satisfy the grep and vacuate the guard.) TRADEOFF: the 6px/2px strip sits outside
+   * the card's border-box, so a click there lands on .cm-content (caret at the
+   * widget boundary) rather than the root's click-to-reveal — consistent with
+   * clicking a paragraph's padding strip. */
+  .quoll-block.quoll-frontmatter-block {
+    margin-left: 6px;
+    margin-right: 2px;
   }
 
   .quoll-frontmatter-list {
