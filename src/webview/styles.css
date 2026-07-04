@@ -530,8 +530,12 @@
    * or posAtCoords; vertical margin stays 0 (from .quoll-block) so the invariant
    * holds. 6px/2px matches the table/image transparent-border inset so all three
    * block widgets align to one column. COMPOUND selector (0,2,0) so the margin
-   * beats `.quoll-block { margin: 0 }` by specificity, NOT source order (a section
-   * reorder must not silently drop it). TRADEOFF: the 6px/2px strip sits outside
+   * beats the bare `.quoll-block` margin-zero rule by specificity, NOT source
+   * order (a section reorder must not silently drop it). (The margin-zero rule is
+   * named without braces here on purpose: the block-widget margin-invariant guard
+   * in styles-contract.test.ts greps the whole stylesheet TEXT for the braced
+   * `.quoll-block` margin-zero rule, so writing that rule in brace form inside any
+   * comment would satisfy the grep and vacuate the guard.) TRADEOFF: the 6px/2px strip sits outside
    * the card's border-box, so a click there lands on .cm-content (caret at the
    * widget boundary) rather than the root's click-to-reveal — consistent with
    * clicking a paragraph's padding strip. */
