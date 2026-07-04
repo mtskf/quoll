@@ -126,6 +126,24 @@ describe("quollFloatingToolbarScroll — ViewPlugin (happy-dom)", () => {
     expect(host.classList.contains(CHROME_HIDDEN_CLASS)).toBe(false);
   });
 
+  it("removes the scroll listener on destroy (a later scroll can't hide)", () => {
+    // Pins the destroy() ordering invariant ("remove the listener first"): a
+    // scroll delivered after destroy must NOT stamp the hidden class. Destroy
+    // from the SHOWN state (no prior hide) so the post-destroy scroll-down is a
+    // real shown→hidden transition — a leaked listener would toggle the class,
+    // whereas from an already-hidden state the tick is a no-op and hides the
+    // leak. Capture the scroller BEFORE destroy — CodeMirror detaches its DOM on
+    // destroy, so querying it afterwards would yield null (vacuous test).
+    const host = mount([quollFloatingToolbarScroll()]);
+    const scroller = (view as EditorView).scrollDOM;
+    expect(host.classList.contains(CHROME_HIDDEN_CLASS)).toBe(false);
+    view?.destroy();
+    view = null;
+    scroller.scrollTop = 300;
+    scroller.dispatchEvent(new Event("scroll"));
+    expect(host.classList.contains(CHROME_HIDDEN_CLASS)).toBe(false);
+  });
+
   it("syncs `inert` on the real floating chrome in lockstep with the hide/show", () => {
     // Mount the ACTUAL outline + switch-editor plugins so the chrome is built by
     // production code — this pins that their real class names match

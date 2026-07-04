@@ -109,8 +109,9 @@ class FloatingToolbarScroll implements PluginValue {
     this.hostEl = hostEl;
     this.scroller = view.scrollDOM;
     this.state = { visibility: "shown", anchor: this.scroller.scrollTop };
-    // passive: the handler never preventDefaults — it only reads scrollTop and
-    // toggles a class, so the browser can keep scrolling smoothly.
+    // passive: the handler never preventDefaults — it only reads scrollTop and,
+    // at a visibility transition, toggles the host class + the chrome `inert`
+    // attribute, so the browser can keep scrolling smoothly.
     this.scroller.addEventListener("scroll", this.onScroll, { passive: true });
   }
 
