@@ -44,6 +44,7 @@ import {
   Position,
   Range,
   Selection,
+  TabInputCustom,
   TabInputText,
   Uri,
   ViewColumn,
@@ -83,6 +84,11 @@ import { toLintDiagnostics } from "./lint-diagnostics.js";
 import { LintMirror } from "./lint-mirror.js";
 import { minimalEditSpan } from "./minimal-edit.js";
 import { openInTextEditor } from "./reopen-text-editor.js";
+import {
+  decideRevealInvariant,
+  planRevealTabClose,
+  type RevealCleanupGroup,
+} from "./reveal-for-mention-cleanup.js";
 import type { PanelControls, TestHarness } from "./test-harness.js";
 import {
   buildLocalResourceRoots,
@@ -828,9 +834,20 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
     //     (ViewColumn.Active, brief same-pane flash — the accepted product
     //     cost), preview:true so the temporary tab stays as light as VS Code
     //     allows.
-    //   - Cleanup closes ONLY text tabs of this uri in groups that did NOT
-    //     already hold one before the reveal (snapshot below), so the user's
-    //     own pre-existing text tabs are never closed.
+    //   - Cleanup CONTRACT: after cleanup, the Quoll custom tab for this uri
+    //     is the ACTIVE tab of its group again. Two phases (the pure planner
+    //     lives in reveal-for-mention-cleanup.ts):
+    //       (a) close the DELTA text tabs — tabs of this uri in groups that
+    //           did NOT already hold one before the reveal (snapshot below),
+    //           so the user's own pre-existing text tabs are never closed;
+    //       (b) verify the contract and, ONLY when it failed, enforce it via
+    //           vscode.openWith. The class phase (a) alone cannot cover: a
+    //           background text tab of this doc already in the Quoll group is
+    //           not in visibleTextEditors, so the reveal targets
+    //           ViewColumn.Active and VS Code REUSES/activates that existing
+    //           tab — no delta, nothing to close, and without (b) the pane
+    //           stays switched to the raw text editor (the live ⌘⌥K bug
+    //           pinned by e2e context-handoff-reveal-cleanup.test.ts).
     // Selection mapping (payload lines are 1-based, clamped + ordered by
     // handleContextHandoff before this is called, with no await in between —
     // lineAt cannot go out of range):
@@ -851,6 +868,22 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
       const uriString = document.uri.toString();
       const isThisDocTextTab = (tab: Tab): boolean =>
         tab.input instanceof TabInputText && tab.input.uri.toString() === uriString;
+      const isThisDocCustomTab = (tab: Tab): boolean =>
+        tab.input instanceof TabInputCustom &&
+        tab.input.viewType === QuollEditorPanel.viewType &&
+        tab.input.uri.toString() === uriString;
+      // Live tab inventory in the pure planner's shape — see
+      // reveal-for-mention-cleanup.ts. Re-taken at each decision point
+      // (Tab object identity is not stable across tab-model events).
+      const takeTabInventory = (): RevealCleanupGroup<Tab>[] =>
+        window.tabGroups.all.map((group) => {
+          const customTab = group.tabs.find(isThisDocCustomTab);
+          return {
+            viewColumn: group.viewColumn,
+            docTextTabs: group.tabs.filter(isThisDocTextTab),
+            docCustomTab: customTab === undefined ? null : { isActive: customTab.isActive },
+          };
+        });
       // Snapshot the groups that already hold a text tab for this doc, keyed
       // by viewColumn (Tab object identity is not stable across tab-model
       // events), so the cleanup can tell a reveal-opened tab from a
@@ -875,15 +908,52 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
         selection: new Selection(start, end),
       });
       return async () => {
-        const opened: Tab[] = [];
-        for (const group of window.tabGroups.all) {
-          if (groupsWithDocBefore.has(group.viewColumn)) {
-            continue;
-          }
-          opened.push(...group.tabs.filter(isThisDocTextTab));
+        // Phase (a): close the DELTA text tabs (reveal-opened only). When the
+        // reveal reused a pre-existing tab there is no delta — the user's own
+        // tab is never closed.
+        const toClose = planRevealTabClose(groupsWithDocBefore, takeTabInventory());
+        if (toClose.length > 0) {
+          await window.tabGroups.close(toClose, true);
+          console.info("[quoll] context-handoff cleanup: closed reveal-opened text tab(s)", {
+            count: toClose.length,
+          });
+        } else {
+          console.info(
+            "[quoll] context-handoff cleanup: no reveal-opened text tab to close (pre-existing tab reused or already gone)"
+          );
         }
-        if (opened.length > 0) {
-          await window.tabGroups.close(opened, true);
+        // Phase (b): verify the cleanup contract — the Quoll custom tab for
+        // this uri is the active tab of its group again — and enforce it only
+        // when it provably failed. Enforcement is CONDITIONAL so the common
+        // path (the delta close re-activates the custom tab) never runs
+        // openWith and cannot fight Claude Code's own panel reveal for focus.
+        // The tab model can lag tabGroups.close resolution, so poll briefly
+        // before concluding failure (avoids spurious enforcement); a genuine
+        // failure is corrected after the ~200 ms budget — imperceptible.
+        let decision = decideRevealInvariant(takeTabInventory());
+        for (let waited = 0; decision.kind === "enforce" && waited < 200; waited += 40) {
+          await new Promise((resolve) => setTimeout(resolve, 40));
+          decision = decideRevealInvariant(takeTabInventory());
+        }
+        if (decision.kind === "enforce") {
+          // supportsMultipleEditorsPerDocument:false → openWith re-reveals
+          // the EXISTING custom editor (no second instance), and the user's
+          // background text tab survives in place — both pinned by the
+          // context-handoff-reveal-cleanup e2e.
+          console.warn(
+            "[quoll] context-handoff cleanup: custom tab not active after cleanup; enforcing via vscode.openWith",
+            { viewColumn: decision.viewColumn }
+          );
+          await commands.executeCommand(
+            "vscode.openWith",
+            document.uri,
+            QuollEditorPanel.viewType,
+            decision.viewColumn
+          );
+        } else if (decision.kind === "no-custom-tab") {
+          console.warn(
+            "[quoll] context-handoff cleanup: no Quoll custom tab for this document; enforcement skipped"
+          );
         }
       };
     };
