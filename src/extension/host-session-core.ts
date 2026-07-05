@@ -74,6 +74,15 @@ export interface HostSessionState {
   readonly inFlightContent: string | null;
 }
 
+/** True while the host write lock is held — i.e. a flushed edit's
+ *  `workspace.applyEdit` is in flight. Exported so wiring (the side-channel
+ *  edit-settled barrier) can read the lock WITHOUT depending on the concrete
+ *  `pendingApplyBaseVersion` field name — the write-lock predicate stays a
+ *  single source of truth here in the reducer module. */
+export function isWriteLockHeld(state: HostSessionState): boolean {
+  return state.pendingApplyBaseVersion !== null;
+}
+
 export type ApplyEditOutcome =
   | { readonly kind: "ok"; readonly documentVersion: number }
   | { readonly kind: "refused" }

@@ -6,6 +6,7 @@ import {
   createHostSessionCore,
   type HostSessionEvent,
   type HostSessionState,
+  isWriteLockHeld,
 } from "../../src/extension/host-session-core.js";
 import type { MarkdownError } from "../../src/markdown/errors.js";
 import type { ValidateForWriteResult } from "../../src/markdown/validate-for-write.js";
@@ -678,5 +679,26 @@ describe("createDrainingDispatcher", () => {
     dispatch("one");
     dispatch("two");
     expect(seen).toEqual(["one", "two"]);
+  });
+});
+
+describe("isWriteLockHeld", () => {
+  it("is false on the initial state (no apply in flight)", () => {
+    const { initialState } = createHostSessionCore({ uriString: "u", fsPath: "/u" });
+    expect(isWriteLockHeld(initialState(1))).toBe(false);
+  });
+
+  it("is true after an accepted edit acquires the lock", () => {
+    const core = createHostSessionCore({ uriString: "u", fsPath: "/u" });
+    const seeded = core.transition(core.initialState(1), { type: "seed" }).state;
+    const afterEdit = core.transition(seeded, {
+      type: "edit",
+      baseDocVersion: 1,
+      content: "new content\n",
+      documentVersion: 1,
+      canWrite: true,
+      currentContent: "old content\n",
+    }).state;
+    expect(isWriteLockHeld(afterEdit)).toBe(true);
   });
 });
