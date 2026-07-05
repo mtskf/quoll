@@ -17,8 +17,10 @@
 // live links). An image widget has no links, so the guard is unnecessary; the
 // "no <a>" invariant is pinned by a structural test.
 //
-// eq() is keyed on (docFrom, slice): same source bytes at the same document
-// offset reuse the DOM; any byte change or a move rebuilds. `alt`/`safeUrl`
+// eq() is keyed on (docFrom, slice): a byte change OR a pure positional move
+// (same slice, different docFrom) both return false, triggering updateDOM.
+// updateDOM re-stamps docFrom and reuses the DOM when only the position moved
+// (slice unchanged); a byte change forces a full toDOM rebuild. `alt`/`safeUrl`
 // are pure functions of `slice`, so they need not participate in eq().
 
 import { type EditorView, WidgetType } from "@codemirror/view";

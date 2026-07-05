@@ -282,13 +282,44 @@ describe("ImageBlockWidget.updateDOM", () => {
       0
     );
     const dom = a.toDOM(view);
+    // Give the new widget BOTH a different slice AND a different docFrom so a
+    // vacuous implementation that only checks the class and re-stamps would still
+    // be caught: if updateDOM incorrectly accepted this call, docFrom would
+    // advance to 99.
     const b = new ImageBlockWidget(
       "other",
       url("https://x.test/b.png"),
       "![other](https://x.test/b.png)",
-      0
+      99
     );
     expect(b.updateDOM(dom, view, a)).toBe(false);
+    // Prove updateDOM rejected BEFORE re-stamping — docFrom must stay at "0".
+    expect(dom.dataset.docFrom).toBe("0");
+  });
+
+  it("reuses a blocked placeholder and re-stamps docFrom on a pure positional shift", () => {
+    const dispatched: number[] = [];
+    const view = {
+      dispatch: (t: { selection: { anchor: number } }) => dispatched.push(t.selection.anchor),
+    } as unknown as EditorView;
+    // Blocked image (safeUrl = null): renders a <span class="quoll-image-blocked"> placeholder.
+    const slice = "![blocked](javascript:alert(1))";
+    const a = new ImageBlockWidget("blocked", null, slice, 0);
+    const dom = a.toDOM(view);
+    const placeholder = dom.querySelector(".quoll-image-blocked");
+    expect(placeholder).not.toBeNull();
+
+    const b = new ImageBlockWidget("blocked", null, slice, 20);
+    const reused = b.updateDOM(dom, view, a);
+
+    expect(reused).toBe(true);
+    // The same placeholder element must be preserved — not recreated.
+    expect(dom.querySelector(".quoll-image-blocked")).toBe(placeholder);
+    // docFrom was re-stamped to the new offset.
+    expect(dom.dataset.docFrom).toBe("20");
+    // A click now dispatches the caret to the NEW docFrom.
+    dom.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    expect(dispatched).toEqual([20]);
   });
 });
 

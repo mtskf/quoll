@@ -357,7 +357,13 @@ describe("CheckboxWidget — toggle dispatch", () => {
     try {
       const a = new CheckboxWidget(false, 2, "alpha");
       const el = a.toDOM(view);
-      expect(new CheckboxWidget(true, 2, "alpha").updateDOM(el, view, a)).toBe(false);
+      // Give the new widget BOTH a flipped checked state AND a different from
+      // so that a vacuous implementation that only guarded the class and then
+      // re-stamped would be caught: if updateDOM incorrectly accepted this call,
+      // dataset.from would advance to "99".
+      expect(new CheckboxWidget(true, 99, "alpha").updateDOM(el, view, a)).toBe(false);
+      // Prove updateDOM rejected BEFORE re-stamping — from must stay at "2".
+      expect(el.dataset.from).toBe("2");
     } finally {
       view.destroy();
     }
