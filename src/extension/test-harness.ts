@@ -128,6 +128,14 @@ interface TestOverrides {
    *  through this instead of the real FS, so the image-write E2E can assert
    *  whether a write was attempted without touching disk. */
   writeImageFile: ((uri: Uri, content: Uint8Array) => Thenable<void>) | null;
+  /** When non-null, the panel routes its dirty-doc on-disk conflict prompt
+   *  through this instead of `window.showWarningMessage`. Lets the e2e observe
+   *  that the prompt fired (a divergence was detected) AND inject the user's
+   *  choice ("Reload from disk" / "Keep my edits" / undefined = dismissed)
+   *  without a real modal the headless host cannot click. */
+  diskConflictPrompt:
+    | ((message: string, ...actions: string[]) => Thenable<string | undefined>)
+    | null;
 }
 
 /** Fresh all-null override registry — the single source of truth for
@@ -140,6 +148,7 @@ function createOverrides(): TestOverrides {
     openExternal: null,
     buildWebviewHtml: null,
     writeImageFile: null,
+    diskConflictPrompt: null,
   };
 }
 
@@ -226,6 +235,20 @@ export class TestHarness {
 
   set writeImageFileOverride(override: ((uri: Uri, content: Uint8Array) => Thenable<void>) | null) {
     this._overrides.writeImageFile = override;
+  }
+
+  /** Read by the panel's dirty-doc conflict watcher to route the warning
+   *  prompt through a test override — see `TestOverrides.diskConflictPrompt`. */
+  get diskConflictPromptOverride():
+    | ((message: string, ...actions: string[]) => Thenable<string | undefined>)
+    | null {
+    return this._overrides.diskConflictPrompt;
+  }
+
+  set diskConflictPromptOverride(override:
+    | ((message: string, ...actions: string[]) => Thenable<string | undefined>)
+    | null) {
+    this._overrides.diskConflictPrompt = override;
   }
 
   /** Read-only view of the last `showError` argument — see `_lastError`
