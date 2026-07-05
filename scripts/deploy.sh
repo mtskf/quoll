@@ -14,7 +14,7 @@ echo "==> Building (webview + extension + esbuild bundle)..."
 pnpm build
 
 echo "==> Packaging .vsix..."
-pnpm exec vsce package --no-dependencies --pre-release
+pnpm exec vsce package --no-dependencies
 
 echo "==> Auditing .vsix contents..."
 # Resolve the freshly-built .vsix (quoll-<version>.vsix in repo root)
@@ -25,7 +25,7 @@ node scripts/audit-vsix.mjs "$VSIX_FILE"
 
 if [[ "${1:-}" == "--publish" ]]; then
   echo "==> Publishing to VS Code Marketplace..."
-  pnpm exec vsce publish --no-dependencies --pre-release --packagePath "$VSIX_FILE"
+  pnpm exec vsce publish --no-dependencies --packagePath "$VSIX_FILE"
 else
   echo ""
   echo "Done. .vsix file created in repo root."
