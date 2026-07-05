@@ -148,6 +148,21 @@ export function buildHeadingRhythm(
           return;
         }
         const line = ctx.state.doc.lineAt(node.from);
+        // Half-open viewport-overlap guard (mirrors heading-reveal.ts's
+        // `markFrom < range.to && range.from < markTo`). Lezer's
+        // tree.iterate({from,to}) uses TOUCH semantics, so a heading whose line
+        // starts EXACTLY at range.to — the first offset PAST the drawn range —
+        // is still entered. Emitting a layout-changing line decoration for a
+        // line outside the drawn viewport violates the viewport-scoped
+        // contract. The `range.from < line.to` half deliberately KEEPS a line
+        // whose start precedes a mid-line range boundary (CM can begin a
+        // visibleRange mid-line when a line-gap splits a long wrapped line),
+        // consistent with the "do NOT gate on line.from >= range.from" note
+        // above — so soft-wrap continuations of a heading that straddles the
+        // range start are not dropped.
+        if (!(line.from < range.to && range.from < line.to)) {
+          return;
+        }
         if (emitted.has(line.from)) {
           return;
         }

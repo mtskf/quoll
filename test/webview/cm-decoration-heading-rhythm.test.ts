@@ -144,6 +144,32 @@ describe("heading-rhythm provider — per-range TOUCH de-dup", () => {
   });
 });
 
+describe("heading-rhythm provider — half-open viewport-overlap guard", () => {
+  it("a heading whose line starts EXACTLY at range.to is NOT emitted (closing edge)", () => {
+    // "x\n# A\n# B": `# B` line starts at offset 6. A SINGLE visible range that
+    // ends exactly at 6 must not emit `# B`: Lezer's TOUCH semantics still enter
+    // the node (node.from 6 <= range.to 6), but the line sits at the first offset
+    // PAST the drawn range, so a layout-changing line decoration there would
+    // violate the viewport-scoped contract. Revert-check: dropping the
+    // `line.from < range.to` half of the guard reds this — it comes back as [2, 6].
+    const doc = "x\n# A\n# B";
+    const set = buildHeadingRhythm(ctxWithRanges(doc, [{ from: 0, to: 6 }]));
+    expect(lines(set).map((l) => l.from)).toEqual([2]);
+  });
+
+  it("a heading whose line starts BEFORE a mid-line range start is still emitted", () => {
+    // The `range.from < line.to` half deliberately KEEPS a heading line that
+    // begins before a visibleRange whose start falls mid-line (CM can begin a
+    // range mid-line when a line-gap splits a long wrapped line). "intro\n# Heading":
+    // the heading line is [6, 15); a range starting at 8 sits inside it.
+    // Revert-check: narrowing the guard to gate on `line.from >= range.from` reds
+    // this (6 >= 8 is false → the heading would be dropped, losing its rhythm).
+    const doc = "intro\n# Heading";
+    const set = buildHeadingRhythm(ctxWithRanges(doc, [{ from: 8, to: doc.length }]));
+    expect(lines(set).map((l) => l.from)).toEqual([6]);
+  });
+});
+
 describe("headingRhythmNeedsRebuild — selection-INDEPENDENT rebuild trigger (revert-check)", () => {
   it("rebuilds on docChanged but NOT on a selection-only update", () => {
     const st = EditorState.create({
