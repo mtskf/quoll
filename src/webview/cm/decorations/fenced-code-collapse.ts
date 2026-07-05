@@ -238,26 +238,35 @@ function touchesStructural(tr: Transaction): boolean {
   return hit;
 }
 
+const BLANK_LINE = /^[ \t]*$/;
+
 /** A blank-line boundary MOVED by a TOP-LEVEL edit — the one non-locality STRUCTURAL
- *  cannot see (a blank line carries no shape). Deleting the blank line that terminates a
- *  type-6/7 HTML block extends the block over a following top-level fence, and that edit
- *  touches only blank/prose text. Fires for a newline inserted/deleted, or a within-line
- *  deletion that leaves a now-blank line — but ONLY when the edit is NOT fully inside a
- *  reused block's [blockFrom, blockTo] (an in-body edit is contained: its own block
- *  rebuilds via touchesRange, and its fence un-closing is caught by STRUCTURAL). A pure
- *  non-newline insertion never moves a blank boundary → the plain-typing hot path stays
- *  bounded. Over-triggering (a top-level prose newline that changes nothing) is safe. */
+ *  cannot see (a blank line carries no shape). A type-6/7 HTML block (and a paragraph /
+ *  loose list) is TERMINATED by a blank line, so moving the blank line that ends an HTML
+ *  block extends/contracts the block over a following top-level fence WITHOUT touching a
+ *  tag/marker line. A blank boundary moves iff the edit changes the LINE COUNT (a newline
+ *  inserted or deleted) OR flips a changed line's blankness in EITHER direction — deleting
+ *  a line's content down to blank, OR typing into the blank line that ends the block
+ *  (Codex cycle-2 + cycle-3, both parser-verified). Any within-line edit that keeps the
+ *  line's blankness AND adds/removes no newline cannot move a blank boundary, so plain
+ *  typing (in code, prose, or even inside an existing blank run) stays on the bounded hot
+ *  path. Fires ONLY when the edit is NOT fully inside a reused block's [blockFrom, blockTo]
+ *  — an in-body edit is contained (its own block rebuilds via touchesRange, and un-closing
+ *  its fence is caught by STRUCTURAL's fence alt), so in-body newlines stay bounded.
+ *  Over-triggering (a top-level newline that reshapes nothing) is safe. */
 function topLevelBlankRisk(tr: Transaction, prevBlocks: readonly FencedBlockRecord[]): boolean {
   let risk = false;
   tr.changes.iterChangedRanges((fromA, toA, fromB, toB) => {
     if (risk) {
       return;
     }
-    const insertedNewline = tr.state.doc.sliceString(fromB, toB).includes("\n");
-    const deletedNewline = tr.startState.doc.sliceString(fromA, toA).includes("\n");
-    const blankedLine = toA > fromA && /^[ \t]*$/.test(tr.state.doc.lineAt(fromB).text);
-    if (!insertedNewline && !deletedNewline && !blankedLine) {
-      return; // blank-inert (e.g. plain character insertion) — safe to reuse
+    const newlineDelta =
+      tr.state.doc.sliceString(fromB, toB).includes("\n") ||
+      tr.startState.doc.sliceString(fromA, toA).includes("\n");
+    const oldBlank = BLANK_LINE.test(tr.startState.doc.lineAt(fromA).text);
+    const newBlank = BLANK_LINE.test(tr.state.doc.lineAt(fromB).text);
+    if (!newlineDelta && oldBlank === newBlank) {
+      return; // blank-inert: no line added/removed AND no blankness flip — safe to reuse
     }
     const insideBlock = prevBlocks.some((b) => fromA >= b.blockFrom && toA <= b.blockTo);
     if (!insideBlock) {

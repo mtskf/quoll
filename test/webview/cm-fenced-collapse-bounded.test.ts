@@ -204,6 +204,23 @@ describe("fencedCodeCollapseField bounded ≡ full", () => {
         },
       ],
     },
+    // The mirror of the case above: TYPING a char into the blank line that terminates the
+    // HTML block makes it non-blank → the boundary disappears the same way, swallowing the
+    // DISTANT fence. No newline delta and no deletion — only a blankness flip (blank→non-
+    // blank), which topLevelBlankRisk detects via oldBlank !== newBlank. Drop that flip
+    // check (leave only the newline delta) and this goes RED (Codex cycle-3).
+    {
+      name: "GF blank-line: typing into the blank that ends an HTML block swallows a DISTANT fence",
+      initial: `<div>\nhtml text\n\n${Array.from({ length: 20 }, (_, i) => `prose ${i}`).join(
+        "\n"
+      )}\n${fence(15)}\n`,
+      edits: [
+        {
+          // insert "x" INTO the blank line right after "html text" (blank → non-blank)
+          changes: { from: "<div>\nhtml text\n".length, insert: "x" },
+        },
+      ],
+    },
     // fence(10) has exactly 10 body lines = COLLAPSE_THRESHOLD → NOT collapsible. The
     // insert is plain prose/code (no STRUCTURAL match) → bounded path. After the insert
     // the block has 11 body lines > threshold → collapsible. computeBounded discovers it
