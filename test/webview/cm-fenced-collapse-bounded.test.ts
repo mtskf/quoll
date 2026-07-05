@@ -183,6 +183,27 @@ describe("fencedCodeCollapseField bounded ≡ full", () => {
         },
       ], // delete the </script> line incl its newline
     },
+    // topLevelBlankRisk: a type-6/7 HTML block (`<div>`) is TERMINATED by a blank line, so
+    // deleting the blank line that ends it extends the block over everything up to the next
+    // blank — here 20 prose lines AND the following top-level fence — WITHOUT touching any
+    // tag/marker line, so STRUCTURAL is blind to it. The fence sits FAR below the deleted
+    // blank (outside the ±1-line span AND untouched), so computeBounded would reuse its stale
+    // record; the post-edit tree is fully available (verified: syntaxTreeAvailable === true)
+    // so G2 does NOT mask this. The blank deletion is a top-level newline delete →
+    // topLevelBlankRisk fires → full recompute. Drop topLevelBlankRisk from the GF condition
+    // and this goes RED (bounded keeps the swallowed fence's stale record; oracle has none).
+    {
+      name: "GF blank-line: deleting the blank that ends an HTML block swallows a DISTANT fence",
+      initial: `<div>\nhtml text\n\n${Array.from({ length: 20 }, (_, i) => `prose ${i}`).join(
+        "\n"
+      )}\n${fence(15)}\n`,
+      edits: [
+        {
+          // delete the blank line right after "html text" (a bare \n)
+          changes: { from: "<div>\nhtml text\n".length, to: "<div>\nhtml text\n\n".length },
+        },
+      ],
+    },
     // fence(10) has exactly 10 body lines = COLLAPSE_THRESHOLD → NOT collapsible. The
     // insert is plain prose/code (no STRUCTURAL match) → bounded path. After the insert
     // the block has 11 body lines > threshold → collapsible. computeBounded discovers it

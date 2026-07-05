@@ -201,18 +201,20 @@ interface Interval {
  *  under-triggering is unsound). The hot path stays bounded only for edits whose
  *  changed lines carry none of those shapes (plain code body or plain prose — which the
  *  fenced-heavy perf case is).
- *  WHY blank-line edits need NOT be caught (verified, do NOT re-add a blank-line rule):
- *  a fence's top-level eligibility is pinned by its OWN opener-line indentation plus the
- *  container-marker lines above it — NOT by blank-line grouping. A parser probe confirmed
- *  that no blank-line-only edit flips containment: an INDENTED fence stays nested and a
- *  COLUMN-0 fence stays top-level across blank insert/delete (deleting the blank between a
- *  list and a following column-0 fence keeps it top-level — column-0 cannot lazy-continue
- *  a list item; adding a second blank before a nested fence keeps it nested). Flipping
- *  requires editing the MARKER line or the fence's own INDENTATION — both land on a
- *  STRUCTURAL-matching line (marker alt, or the fence delimiter alt which allows ≤3
- *  leading spaces). This is the crucial difference from imageBlockField: a *paragraph* IS
- *  regrouped by adjacent blank lines (hence image G1's ±1), but a *fence* is not. G2 +
- *  the background-parse self-heal remain as defense-in-depth for anything exotic. */
+ *  BLANK-LINE boundaries are the one non-locality STRUCTURAL cannot see (a blank line
+ *  carries no shape): a type-6/7 HTML block (and a paragraph / loose list) is TERMINATED
+ *  by a blank line, so deleting the blank line that ends an HTML block extends it to
+ *  swallow a following top-level fence WITHOUT touching any tag/marker line (Codex cycle-2
+ *  finding — verified against the parser). `topLevelBlankRisk` covers this: any TOP-LEVEL
+ *  edit that MOVES a blank-line boundary (a newline inserted/deleted, or a within-line
+ *  deletion that leaves a now-blank line) full-recomputes. Fences/lists themselves are
+ *  indentation-pinned and do NOT re-group on blank-line edits (parser-probed), but HTML
+ *  blocks do, so the guard is scoped to blank-boundary MOVEMENT rather than every fence.
+ *  "Top-level" (not inside a reused block's [blockFrom, blockTo]) keeps IN-BODY newlines
+ *  bounded — an in-body edit is contained (its own block rebuilds via touchesRange, and
+ *  un-closing its fence is caught by STRUCTURAL's fence alt), so writing code stays fast;
+ *  and a pure non-newline insertion never moves a blank boundary, so plain typing stays
+ *  bounded. G2 + the background-parse self-heal remain as defense-in-depth. */
 const STRUCTURAL =
   /(?:^|\n)[ \t]{0,3}(?:`{3,}|~{3,})|(?:^|\n)[ \t]*(?:[-*+]|\d{1,9}[.)]|>)|(?:^|\n)[ \t]{0,3}<[/!?A-Za-z]|-->|\?>|\]\]>/;
 function touchesStructural(tr: Transaction): boolean {
@@ -234,6 +236,35 @@ function touchesStructural(tr: Transaction): boolean {
     }
   });
   return hit;
+}
+
+/** A blank-line boundary MOVED by a TOP-LEVEL edit — the one non-locality STRUCTURAL
+ *  cannot see (a blank line carries no shape). Deleting the blank line that terminates a
+ *  type-6/7 HTML block extends the block over a following top-level fence, and that edit
+ *  touches only blank/prose text. Fires for a newline inserted/deleted, or a within-line
+ *  deletion that leaves a now-blank line — but ONLY when the edit is NOT fully inside a
+ *  reused block's [blockFrom, blockTo] (an in-body edit is contained: its own block
+ *  rebuilds via touchesRange, and its fence un-closing is caught by STRUCTURAL). A pure
+ *  non-newline insertion never moves a blank boundary → the plain-typing hot path stays
+ *  bounded. Over-triggering (a top-level prose newline that changes nothing) is safe. */
+function topLevelBlankRisk(tr: Transaction, prevBlocks: readonly FencedBlockRecord[]): boolean {
+  let risk = false;
+  tr.changes.iterChangedRanges((fromA, toA, fromB, toB) => {
+    if (risk) {
+      return;
+    }
+    const insertedNewline = tr.state.doc.sliceString(fromB, toB).includes("\n");
+    const deletedNewline = tr.startState.doc.sliceString(fromA, toA).includes("\n");
+    const blankedLine = toA > fromA && /^[ \t]*$/.test(tr.state.doc.lineAt(fromB).text);
+    if (!insertedNewline && !deletedNewline && !blankedLine) {
+      return; // blank-inert (e.g. plain character insertion) — safe to reuse
+    }
+    const insideBlock = prevBlocks.some((b) => fromA >= b.blockFrom && toA <= b.blockTo);
+    if (!insideBlock) {
+      risk = true;
+    }
+  });
+  return risk;
 }
 
 function lineExpand(state: EditorState, from: number, to: number): Interval {
@@ -394,8 +425,12 @@ function defineField(mode: BuildMode): StateField<CollapseState> {
         }
       }
       // 3. Effect toggle (rare user gesture — a toggled block can be anywhere) → full.
-      //    GF structural edit (fence-delimiter / container-marker) → full (non-local).
-      if (effectTouched || (tr.docChanged && touchesStructural(tr))) {
+      //    GF structural edit (fence-delimiter / container-marker / HTML-tag on a changed
+      //    line) OR a top-level blank-line boundary move (HTML-block termination) → full.
+      if (
+        effectTouched ||
+        (tr.docChanged && (touchesStructural(tr) || topLevelBlankRisk(tr, prev.blocks)))
+      ) {
         return buildFullState(tr.state, working);
       }
       // 4. Hot path: a plain docChanged rebuilds changed-range-bounded, with the G2
