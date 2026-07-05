@@ -107,6 +107,20 @@
      * unaffected. Display-only: the underlying Markdown bytes are untouched.
      * `em` so the gap tracks the body font size. */
     --quoll-list-item-gap: 0.6em;
+    /* Vertical breathing room ABOVE each heading line (Notion-style), per
+     * heading level. Delivered as `padding-top` on `.cm-line.quoll-heading-rhythm-{n}`
+     * in cm/theme.ts (an EditorView.theme, so it beats CodeMirror's unlayered
+     * baseTheme `.cm-line` padding). heading-rhythm.ts tags only top-level,
+     * non-first-line, non-frontmatter headings. Vertical only — never touches
+     * horizontal geometry, so click→caret stays accurate. Display-only: the
+     * underlying Markdown bytes are untouched. `em` so the gap tracks the body
+     * font size (the value resolves against the BODY em, not the heading size —
+     * heading font-size lives on the token spans, not `.cm-line`). Four tokens,
+     * grouping h4-h6 like quollHighlightSpec's heading font-sizes do. */
+    --quoll-heading-space-1: 1.2em;
+    --quoll-heading-space-2: 1em;
+    --quoll-heading-space-3: 0.75em;
+    --quoll-heading-space-4: 0.5em; /* covers h4 / h5 / h6 */
     /* Vertical breathing room around a block-table widget. Delivered as
      * PADDING on the wrapper (never margin) — see the widget layer. */
     --quoll-table-block-pad: 0.75em;
