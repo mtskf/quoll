@@ -365,7 +365,7 @@ export const blockStyleThemeSpec = {
   // A CONCEALED marker line (caret OUTSIDE the callout): the callout-marker-conceal
   // StateField replaces the whole `[!TYPE]` row and tags it with this class.
   // Collapse it to zero height so no blank padded row remains — the `-open` corner
-  // + badge ride the first visible body line instead. Copies the five zero-height
+  // rides the first visible body line instead. Copies the five zero-height
   // props of `.quoll-fenced-code-fence-hidden` below. Placed NEXT to that rule but
   // BEFORE it so the fence-hidden rule stays the LAST spec key (its defensive
   // source-order guard); no specificity conflict exists — a concealed marker line

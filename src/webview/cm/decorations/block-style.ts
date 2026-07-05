@@ -72,14 +72,13 @@
 // (GitHub/Obsidian: NOTE/TIP/IMPORTANT/WARNING/CAUTION, with an optional
 // Obsidian `-`/`+` fold suffix) additionally carries `quoll-callout` +
 // `quoll-callout-{type}` on every line, so cm/theme.ts can paint a per-type accent
-// bar + tint + a top-right emoji badge (the badge rides `.quoll-callout` on the
-// `-open` line). The classification is single-sourced in callout.ts (block-style +
+// bar + tint. The classification is single-sourced in callout.ts (block-style +
 // the callout-marker-conceal StateField both import it). Scoped to the outermost
 // quote (calloutTypeForOutermost) so a nested `> >` inner marker never double-emits
 // a second type class — the container type wins. When the caret is INSIDE the block
 // the `[!TYPE]` marker row is REVEALED and gets `quoll-callout-marker` (header
 // weight); when OUTSIDE, the marker StateField conceals the whole row and this
-// module migrates the rounded `-open` corner (and thus the badge) onto the first
+// module migrates the rounded `-open` corner onto the first
 // VISIBLE body line via the same-source `calloutMarkerConceal` predicate. The
 // `[!TYPE]` marker stays literal editable text (decoration-only, byte-identical
 // round-trip); an unrecognised token (`[!FOO]`) matches nothing → generic panel.

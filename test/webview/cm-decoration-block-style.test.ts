@@ -1023,12 +1023,11 @@ describe("block-style — callout admonition classes", () => {
   });
 });
 
-describe("block-style — callout marker conceal migrates -open + badge (caret outside)", () => {
+describe("block-style — callout marker conceal migrates -open (caret outside)", () => {
   // Caret OUTSIDE the callout (in the trailing paragraph): the marker StateField
   // conceals the `[!TYPE]` row and publishes its span to the exclusion facet, so
   // buildBlockquoteRule (given that zone) SKIPS line 0 entirely and migrates the
-  // rounded -open corner (and thus the top-right badge, which rides `.quoll-callout
-  // .quoll-blockquote-open`) onto the first VISIBLE body line.
+  // rounded -open corner onto the first VISIBLE body line.
   it("caret outside: line 0 (marker) is skipped and -open rides the first body line", () => {
     const doc = "> [!NOTE]\n> body\n\npara";
     const ctxOutside = ctxCaret(doc, doc.indexOf("para") + 1);
@@ -1112,8 +1111,10 @@ describe("theme.ts — callout admonition per-type rules", () => {
     // relative positioning / reserved right pad that anchored it.
     expect(spec[".cm-line.quoll-callout.quoll-blockquote-open::after"]).toBeUndefined();
     expect(spec[".cm-line.quoll-callout.quoll-blockquote-open"]).toBeUndefined();
-    // The old marker ::before rule is GONE too; the marker line keeps only the header weight.
+    // The old marker ::before rule is GONE too; the marker line keeps ONLY the
+    // header weight — no stale badge-anchor layout props (e.g. position/padding).
     expect(spec[".cm-line.quoll-callout-marker::before"]).toBeUndefined();
+    expect(Object.keys(spec[".cm-line.quoll-callout-marker"] ?? {})).toEqual(["fontWeight"]);
     expect(spec[".cm-line.quoll-callout-marker"]?.fontWeight).toBe("600");
     // A concealed marker row collapses to zero height (the 5-prop copy of the
     // fenced-hidden rule).

@@ -307,8 +307,8 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
         // their classes on a shared `> ```…` ` line. Styled by quollBlockStyleTheme above.
         blockStyle,
         // Caret-outside conceal of the [!TYPE] marker row; publishes its span to
-        // quollSyntaxExclusionZones (block-style then migrates the -open corner +
-        // badge onto the first visible body line, and the orchestrator drops inline
+        // quollSyntaxExclusionZones (block-style then migrates the -open corner
+        // onto the first visible body line, and the orchestrator drops inline
         // marks on the row). Block widgets MUST come from a StateField.
         calloutMarkerConcealField,
         // Copy-code button: a selection-independent ViewPlugin emitting one
