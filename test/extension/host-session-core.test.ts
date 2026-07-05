@@ -391,6 +391,21 @@ describe("host-session-core: misc transitions", () => {
     expect(r.state.pendingApplyBaseVersion).toBe(1);
     expect(r.state.rejection).toEqual({ kind: "none" });
   });
+  // A dirty-state-only change event (save/autosave) fires with an UNCHANGED
+  // version and empty contentChanges. The autosave-after-rejection sequence:
+  // edit E1 applies (doc dirty) → edit E2 gets parse-failed → edit-rejected
+  // (webview keeps typed bytes) → autosave fires. Re-posting the same-version
+  // Document would clear the reject banner in the webview and destroy the
+  // rejected draft, breaking the "preserves the user's typed bytes" invariant.
+  // A version-identical event must no-op: rejection preserved, no post.
+  it("documentChanged same version (autosave after rejection) → no-op, preserves pending rejection, NO post", () => {
+    const rejection = { kind: "pending", id: 1, content: "hasBAD", error: unsafe } as const;
+    const s = base({ lastAppliedDocVersion: 5, rejection });
+    const r = core.transition(s, { type: "documentChanged", documentVersion: 5 });
+    expect(r.state).toEqual(s);
+    expect(r.state.rejection).toEqual(rejection);
+    expect(r.effects).toEqual([]);
+  });
   it("themeChanged → postTheme", () => {
     expect(core.transition(base(), { type: "themeChanged", isDarkTheme: true }).effects).toEqual([
       { type: "postTheme", isDarkTheme: true },
