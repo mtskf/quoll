@@ -191,11 +191,16 @@ interface Interval {
  *  2. a line gaining/losing a LIST or BLOCKQUOTE marker changes whether a fence is
  *     container-nested (skipped) or top-level (collapsible) — WITHOUT touching the
  *     fence's own bytes (Codex finding 1).
- *  A line's delimiter/marker status is purely its own content, so full-recompute
- *  whenever any changed line — OLD or NEW content — is/was a fence delimiter or a
- *  container marker. Over-triggering is safe (slower); under-triggering is unsound.
- *  Editing inside a code BODY or plain prose never hits this (body fence lines already
- *  close the block; prose lines carry no marker), so the hot path stays bounded.
+ *  3. a line that opens or closes an HTML block (e.g. `<script>`, `<!--`, `</script>`,
+ *     `-->`) can swallow a following top-level fence WITHOUT touching the fence's bytes:
+ *     an unclosed <script>/<!--/<?/<![CDATA[ block, or a type-6/7 tag block, absorbs the
+ *     fence into the HTMLBlock node, making it invisible to the top-level tree walk.
+ *  STRUCTURAL is a purely SYNTACTIC over-approximation on changed-line text: it
+ *  deliberately over-triggers on any fence-shaped, container-marker-shaped, or
+ *  HTML-tag-shaped changed line (safe — a false full-recompute only costs speed;
+ *  under-triggering is unsound). The hot path stays bounded only for edits whose
+ *  changed lines carry none of those shapes (plain code body or plain prose — which the
+ *  fenced-heavy perf case is).
  *  WHY blank-line edits need NOT be caught (verified, do NOT re-add a blank-line rule):
  *  a fence's top-level eligibility is pinned by its OWN opener-line indentation plus the
  *  container-marker lines above it — NOT by blank-line grouping. A parser probe confirmed
@@ -208,7 +213,8 @@ interface Interval {
  *  leading spaces). This is the crucial difference from imageBlockField: a *paragraph* IS
  *  regrouped by adjacent blank lines (hence image G1's ±1), but a *fence* is not. G2 +
  *  the background-parse self-heal remain as defense-in-depth for anything exotic. */
-const STRUCTURAL = /(?:^|\n)[ \t]{0,3}(?:`{3,}|~{3,})|(?:^|\n)[ \t]*(?:[-*+]|\d{1,9}[.)]|>)/;
+const STRUCTURAL =
+  /(?:^|\n)[ \t]{0,3}(?:`{3,}|~{3,})|(?:^|\n)[ \t]*(?:[-*+]|\d{1,9}[.)]|>)|(?:^|\n)[ \t]{0,3}<[/!?A-Za-z]|-->|\?>|\]\]>/;
 function touchesStructural(tr: Transaction): boolean {
   let hit = false;
   tr.changes.iterChangedRanges((fromA, toA, fromB, toB) => {

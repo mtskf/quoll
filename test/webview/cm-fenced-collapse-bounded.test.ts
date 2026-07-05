@@ -159,6 +159,42 @@ describe("fencedCodeCollapseField bounded ≡ full", () => {
       initial: `- item\n\n  ${fence(12).split("\n").join("\n  ")}\n\ntail`,
       edits: [{ changes: { from: 0, to: 2 } }], // delete "- "
     },
+    // Pins that the fence arm of STRUCTURAL is load-bearing: deleting block A's closing
+    // ``` leaves it unclosed, so the parser re-pairs with block B's opener — block B (a
+    // DISTANT node outside the edit span) vanishes. Without the fence arm, the bounded
+    // path reuses a stale prevBlocks record for B and diverges from the oracle.
+    {
+      name: "GF non-local: delete block A's closing fence re-pairs a DISTANT block B",
+      initial: `${fence(15)}\n\nprose between the two blocks\n\n${fence(15)}\n`,
+      edits: [{ changes: { from: fence(15).length - 3, to: fence(15).length } }], // delete block A's closing ```
+    },
+    // Pins the HTML arm of STRUCTURAL: deleting </script> collapses the whole doc into
+    // one HTMLBlock, swallowing the distant fence(15) — it vanishes from the top-level
+    // tree. Without the HTML arm, bounded reuses a stale record for the fence.
+    {
+      name: "GF HTML: delete a </script> before a distant fence (HTMLBlock swallows it)",
+      initial: `<script>\nvar x = 1;\n</script>\n\nprose\n\n${fence(15)}\n`,
+      edits: [
+        {
+          changes: {
+            from: "<script>\nvar x = 1;\n".length,
+            to: "<script>\nvar x = 1;\n</script>\n".length,
+          },
+        },
+      ], // delete the </script> line incl its newline
+    },
+    // fence(10) has exactly 10 body lines = COLLAPSE_THRESHOLD → NOT collapsible. The
+    // insert is plain prose/code (no STRUCTURAL match) → bounded path. After the insert
+    // the block has 11 body lines > threshold → collapsible. computeBounded discovers it
+    // via the span overlap (FencedCode at pos 0 overlaps the changed-line span) even
+    // though it was absent from prevBlocks.
+    {
+      name: "threshold cross-UP: a 10-line block grows past the threshold via a bounded body edit",
+      initial: `${fence(10)}\n\ntail prose\n`,
+      edits: [
+        { changes: { from: `${fence(10)}`.indexOf("code line 9"), insert: "grown line\ncode " } },
+      ],
+    },
     // Pins the empirical finding (parser-probed): a blank-line-only edit does NOT flip a
     // fence's containment, so the bounded path (no STRUCTURAL match) stays correct. If a
     // future parser change ever makes blank lines regroup a fence's container, THIS goes
@@ -175,10 +211,15 @@ describe("fencedCodeCollapseField bounded ≡ full", () => {
         },
       ],
     },
+    // Pins CONTAINMENT-CORRECTNESS through the GF full-recompute path: the edit at
+    // position 6 removes the list-item line's own trailing \n, touching the "- item"
+    // line → STRUCTURAL fires (list marker arm) → GF full recompute → containment stays
+    // correct. Does NOT exercise the bounded path (see the nested-fence blank-line case
+    // above and the verbatim-reuse .toBe identity test for bounded-path coverage).
     {
-      name: "blank-line-only edit between a list and a top-level fence keeps it top-level",
+      name: "blank edit touching list marker → GF full recompute → fence stays top-level",
       initial: `- item\n\n${F}\n`,
-      edits: [{ changes: { from: 6, to: 7 } }], // delete one of the blank-separating newlines
+      edits: [{ changes: { from: 6, to: 7 } }], // removes list-item's trailing \n → STRUCTURAL fires
     },
     {
       name: "expanded block, then edit far below → point-widget reuse",
