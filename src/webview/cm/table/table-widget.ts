@@ -184,7 +184,12 @@ export class TableBlockWidget extends WidgetType {
     const align = tableAlign(this.table);
     this.patchRow(headerRows[0], this.table.header.cells, align, resourceBase);
     for (let rowIdx = 0; rowIdx < this.table.rows.length; rowIdx++) {
-      this.patchRow(bodyRows[rowIdx] as Element, this.table.rows[rowIdx].cells, align, resourceBase);
+      this.patchRow(
+        bodyRows[rowIdx] as Element,
+        this.table.rows[rowIdx].cells,
+        align,
+        resourceBase
+      );
     }
     return true;
   }

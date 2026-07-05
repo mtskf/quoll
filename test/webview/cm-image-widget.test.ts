@@ -275,9 +275,19 @@ describe("ImageBlockWidget.updateDOM", () => {
 
   it("returns false (forcing a rebuild) when the slice changes", () => {
     const view = { dispatch: () => {} } as unknown as EditorView;
-    const a = new ImageBlockWidget("logo", url("https://x.test/a.png"), "![logo](https://x.test/a.png)", 0);
+    const a = new ImageBlockWidget(
+      "logo",
+      url("https://x.test/a.png"),
+      "![logo](https://x.test/a.png)",
+      0
+    );
     const dom = a.toDOM(view);
-    const b = new ImageBlockWidget("other", url("https://x.test/b.png"), "![other](https://x.test/b.png)", 0);
+    const b = new ImageBlockWidget(
+      "other",
+      url("https://x.test/b.png"),
+      "![other](https://x.test/b.png)",
+      0
+    );
     expect(b.updateDOM(dom, view, a)).toBe(false);
   });
 });

@@ -281,7 +281,11 @@ describe("TableBlockWidget.toDOM", () => {
     const stub = stubView(dispatched);
     const original = new TableBlockWidget(table, src, 0, 0);
     const dom = original.toDOM(stub);
-    const reused = new TableBlockWidget(table, src, 5, 5).updateDOM(dom, stub as EditorViewType, original);
+    const reused = new TableBlockWidget(table, src, 5, 5).updateDOM(
+      dom,
+      stub as EditorViewType,
+      original
+    );
     expect(reused).toBe(true);
     dom.click(); // margin fallback now points at the NEW docFrom
     expect(dispatched).toEqual([{ selection: { anchor: 5 } }]);
@@ -462,7 +466,9 @@ describe("updateDOM", () => {
     expect(cellChild).not.toBeNull();
 
     const table = parseTable(src, 0, src.length);
-    if (table === null) { throw new Error("fixture must parse"); }
+    if (table === null) {
+      throw new Error("fixture must parse");
+    }
     const shifted = new TableBlockWidget(table, src, 5, 5); // shifted docFrom + nodeFrom, same bytes
     const reused = shifted.updateDOM(domA, mockView, a);
 
