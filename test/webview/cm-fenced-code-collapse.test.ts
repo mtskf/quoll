@@ -646,8 +646,8 @@ describe("quollCollapseToggleTheme", () => {
     // CHECK: dropping the border/clip here turns these red. Real-pixel alignment is
     // verified in the browser harness (happy-dom has no layout).
     const bar = collapseToggleThemeSpec[".quoll-fenced-collapse-bar"] as Record<string, unknown>;
-    expect(bar.borderLeft).toBe("6px solid transparent");
-    expect(bar.borderRight).toBe("2px solid transparent");
+    expect(bar.borderLeft).toBe("var(--quoll-column-inset-left, 6px) solid transparent");
+    expect(bar.borderRight).toBe("var(--quoll-column-inset-right, 2px) solid transparent");
     expect(bar.backgroundClip).toBe("padding-box");
     // Inset via border, never margin (which would move the widget's layout box).
     for (const forbidden of ["margin", "marginLeft", "marginRight", "width"]) {
@@ -668,10 +668,10 @@ describe("quollCollapseToggleTheme", () => {
     const footer = collapseToggleThemeSpec[".quoll-fenced-collapse-bar-collapsed"];
     expect(footer).toBeDefined();
     expect(footer.borderBottomLeftRadius).toBe(
-      "calc(var(--quoll-block-radius, 8px) + 6px) var(--quoll-block-radius, 8px)"
+      "calc(var(--quoll-block-radius, 8px) + var(--quoll-column-inset-left, 6px)) var(--quoll-block-radius, 8px)"
     );
     expect(footer.borderBottomRightRadius).toBe(
-      "calc(var(--quoll-block-radius, 8px) + 2px) var(--quoll-block-radius, 8px)"
+      "calc(var(--quoll-block-radius, 8px) + var(--quoll-column-inset-right, 2px)) var(--quoll-block-radius, 8px)"
     );
     expect(footer.paddingBottom).toBe("var(--quoll-block-pad-y, 12px)");
   });

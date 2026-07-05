@@ -196,8 +196,8 @@ export const blockStyleThemeSpec = {
     // (a SHARED token with the blockquote below so the two surfaces never drift). The
     // vertical inset is the separate --quoll-block-pad-y (tighter than the horizontal),
     // applied on the -open/-close edge lines only.
-    borderLeft: "6px solid transparent",
-    borderRight: "2px solid transparent",
+    borderLeft: "var(--quoll-column-inset-left, 6px) solid transparent",
+    borderRight: "var(--quoll-column-inset-right, 2px) solid transparent",
     backgroundClip: "padding-box",
     paddingLeft: "var(--quoll-block-pad-x, 16px)",
     paddingRight: "var(--quoll-block-pad-x, 16px)",
@@ -215,17 +215,17 @@ export const blockStyleThemeSpec = {
   // collapse-bar corners below — retuning :root moves all three surfaces together.
   ".cm-line.quoll-fenced-code-open": {
     borderTopLeftRadius:
-      "calc(var(--quoll-block-radius, 8px) + 6px) var(--quoll-block-radius, 8px)",
+      "calc(var(--quoll-block-radius, 8px) + var(--quoll-column-inset-left, 6px)) var(--quoll-block-radius, 8px)",
     borderTopRightRadius:
-      "calc(var(--quoll-block-radius, 8px) + 2px) var(--quoll-block-radius, 8px)",
+      "calc(var(--quoll-block-radius, 8px) + var(--quoll-column-inset-right, 2px)) var(--quoll-block-radius, 8px)",
     paddingTop: "var(--quoll-block-pad-y, 12px)",
   },
   // Round the bottom + bottom breathing room only on the closing fence line.
   ".cm-line.quoll-fenced-code-close": {
     borderBottomLeftRadius:
-      "calc(var(--quoll-block-radius, 8px) + 6px) var(--quoll-block-radius, 8px)",
+      "calc(var(--quoll-block-radius, 8px) + var(--quoll-column-inset-left, 6px)) var(--quoll-block-radius, 8px)",
     borderBottomRightRadius:
-      "calc(var(--quoll-block-radius, 8px) + 2px) var(--quoll-block-radius, 8px)",
+      "calc(var(--quoll-block-radius, 8px) + var(--quoll-column-inset-right, 2px)) var(--quoll-block-radius, 8px)",
     paddingBottom: "var(--quoll-block-pad-y, 12px)",
   },
   // Blockquote: subtle navy fill + muted text. The fill lands on every quote
@@ -263,8 +263,8 @@ export const blockStyleThemeSpec = {
     // accuracy are verified in the browser harness (happy-dom has no layout —
     // fenced-collapse precedent).
     boxSizing: "border-box",
-    borderLeft: "6px solid transparent",
-    borderRight: "2px solid transparent",
+    borderLeft: "var(--quoll-column-inset-left, 6px) solid transparent",
+    borderRight: "var(--quoll-column-inset-right, 2px) solid transparent",
     backgroundClip: "padding-box",
     paddingLeft: "var(--quoll-block-pad-x, 16px)",
     paddingRight: "var(--quoll-block-pad-x, 16px)",
@@ -279,17 +279,17 @@ export const blockStyleThemeSpec = {
   // precedent).
   ".cm-line.quoll-blockquote-open": {
     borderTopLeftRadius:
-      "calc(var(--quoll-block-radius, 8px) + 6px) var(--quoll-block-radius, 8px)",
+      "calc(var(--quoll-block-radius, 8px) + var(--quoll-column-inset-left, 6px)) var(--quoll-block-radius, 8px)",
     borderTopRightRadius:
-      "calc(var(--quoll-block-radius, 8px) + 2px) var(--quoll-block-radius, 8px)",
+      "calc(var(--quoll-block-radius, 8px) + var(--quoll-column-inset-right, 2px)) var(--quoll-block-radius, 8px)",
     paddingTop: "var(--quoll-block-pad-y, 12px)",
   },
   // Round the bottom corners on the closing quote line (same treatment as -open).
   ".cm-line.quoll-blockquote-close": {
     borderBottomLeftRadius:
-      "calc(var(--quoll-block-radius, 8px) + 6px) var(--quoll-block-radius, 8px)",
+      "calc(var(--quoll-block-radius, 8px) + var(--quoll-column-inset-left, 6px)) var(--quoll-block-radius, 8px)",
     borderBottomRightRadius:
-      "calc(var(--quoll-block-radius, 8px) + 2px) var(--quoll-block-radius, 8px)",
+      "calc(var(--quoll-block-radius, 8px) + var(--quoll-column-inset-right, 2px)) var(--quoll-block-radius, 8px)",
     paddingBottom: "var(--quoll-block-pad-y, 12px)",
   },
   // Nested-quote deeper tint (block-style.ts blockquoteDepthClass). A `> >` /
@@ -632,9 +632,9 @@ export const quollCopyButtonTheme = EditorView.theme(copyButtonThemeSpec);
 // painted round.
 const collapseBarFooterCorner = {
   borderBottomLeftRadius:
-    "calc(var(--quoll-block-radius, 8px) + 6px) var(--quoll-block-radius, 8px)",
+    "calc(var(--quoll-block-radius, 8px) + var(--quoll-column-inset-left, 6px)) var(--quoll-block-radius, 8px)",
   borderBottomRightRadius:
-    "calc(var(--quoll-block-radius, 8px) + 2px) var(--quoll-block-radius, 8px)",
+    "calc(var(--quoll-block-radius, 8px) + var(--quoll-column-inset-right, 2px)) var(--quoll-block-radius, 8px)",
   paddingBottom: "var(--quoll-block-pad-y, 12px)",
 };
 
@@ -650,8 +650,8 @@ export const collapseToggleThemeSpec = {
     // getBoundingClientRect HEIGHT (left/right borders add no vertical height; the
     // `margin:0` block-widget invariant is about VERTICAL height). See the shared
     // rationale on .quoll-blockquote.
-    borderLeft: "6px solid transparent",
-    borderRight: "2px solid transparent",
+    borderLeft: "var(--quoll-column-inset-left, 6px) solid transparent",
+    borderRight: "var(--quoll-column-inset-right, 2px) solid transparent",
     backgroundClip: "padding-box",
     paddingLeft: "var(--quoll-block-pad-x, 16px)",
     paddingRight: "var(--quoll-block-pad-x, 16px)",
