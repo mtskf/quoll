@@ -256,6 +256,19 @@ function buildHeadingFoldGutterClasses(state: EditorState): RangeSet<GutterMarke
   return builder.finish();
 }
 
+/** A Markdown blank line — the block separator the up/down walk stops at — is one
+ *  containing ONLY ASCII spaces / tabs (CommonMark), the set the Lezer parser
+ *  treats as insignificant at a block boundary (verified: a space-only line splits
+ *  `foo` / `bar\n===` into a Paragraph + a SetextHeading). It deliberately EXCLUDES
+ *  U+000B / U+000C / NBSP and every other Unicode space, which the parser keeps as
+ *  significant paragraph content (mirrors image-field.ts's `trimAsciiWs`): a line
+ *  whose only char is one of those is NOT a boundary, and stopping the walk there
+ *  would drop the marker line of a Setext block that spans it → under-recompute.
+ *  The common case is a truly-empty line (`""`). */
+function isBlankLine(text: string): boolean {
+  return /^[ \t]*$/.test(text);
+}
+
 /** Expand [from,to] to the enclosing blank-line-delimited block: line-align, then
  *  walk out through contiguous non-blank lines in BOTH directions. A heading's
  *  gutter tag rides the FIRST line of its (possibly multi-line Setext) block, and
@@ -264,16 +277,20 @@ function buildHeadingFoldGutterClasses(state: EditorState): RangeSet<GutterMarke
  *  bearing: a Setext underline (`===` / `---`) typed several lines BELOW its title
  *  turns the whole paragraph into a heading whose marker sits on the FIRST line, a
  *  case a naive ±1-line window (image-field.ts's single-line-image G1) would miss.
- *  Reads post-edit `state`, so a merged/split block is measured at its new extent
- *  (a deleted blank line makes two former blocks one contiguous run the walk
- *  spans). */
-function expandToEnclosingBlock(state: EditorState, from: number, to: number): Interval {
+ *  The stop predicate is `isBlankLine` (ASCII space/tab only), matching the parser's
+ *  block boundaries exactly: a whitespace-CONTAMINATED blank line still stops the
+ *  walk, so a keystroke never over-expands across such a separator into unrelated
+ *  blocks (which would resurrect the whole-doc cost this bounding removes). Reads
+ *  post-edit `state`, so a merged/split block is measured at its new extent (a
+ *  deleted blank line makes two former blocks one contiguous run the walk spans).
+ *  Exported for the block-boundary contract test. */
+export function expandToEnclosingBlock(state: EditorState, from: number, to: number): Interval {
   const doc = state.doc;
   const len = doc.length;
   let top = doc.lineAt(Math.max(0, Math.min(from, len)));
   while (top.from > 0) {
     const prev = doc.lineAt(top.from - 1);
-    if (prev.length === 0) {
+    if (isBlankLine(prev.text)) {
       break;
     }
     top = prev;
@@ -281,7 +298,7 @@ function expandToEnclosingBlock(state: EditorState, from: number, to: number): I
   let bottom = doc.lineAt(Math.max(0, Math.min(to, len)));
   while (bottom.to < len) {
     const next = doc.lineAt(bottom.to + 1);
-    if (next.length === 0) {
+    if (isBlankLine(next.text)) {
       break;
     }
     bottom = next;

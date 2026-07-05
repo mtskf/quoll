@@ -20,6 +20,7 @@ import { quollSyntaxExclusionZones } from "../../src/webview/cm/decorations/orch
 import {
   CHEVRON_DOWN_PATH,
   ELLIPSIS_DOT_CX,
+  expandToEnclosingBlock,
   foldPlaceholderDOM,
   headingFoldGutterLineClass,
   listFoldGutterLineClass,
@@ -323,11 +324,69 @@ describe("headingFoldGutterLineClass — per-level gutter tag for the first-row 
       // Delete the "===\n" underline → foo/bar/baz reverts to a plain paragraph.
       const und = view.state.doc.toString().indexOf("===");
       view.dispatch({ changes: { from: und, to: und + 4, insert: "" } });
+      // Confirm the bounded path ran (not the incomplete-frontier full-rebuild
+      // fallback) so the Setext-deletion up-walk is actually exercised — the
+      // symmetric guard the insertion test carries.
+      expect(syntaxTreeAvailable(view.state, view.state.doc.length)).toBe(true);
       const byLine = fieldClassesByLine(view);
       expect(byLine.get(1)).toBe("quoll-fold-heading-1"); // ATX heading retained
       expect(byLine.has(3)).toBe(false); // Setext gone
       expect(byLine.size).toBe(1);
       expectEqualByLine(byLine, fullRebuildByLine(view.state.doc.toString()));
+    });
+
+    it("recomputes both blocks of a multi-range (multi-cursor) transaction", () => {
+      // Two disjoint changed ranges in one transaction drive mergeIntervals down
+      // its real (length > 1) merge path and the update loop over >1 interval —
+      // every other test dispatches a single range and skips both.
+      view = mountDoc("## a\n\nbody\n\n### b\n");
+      const bFrom = view.state.doc.toString().indexOf("### b");
+      // Delete one "#" off each heading in ONE change-set: "## a" → "# a" (H1) and
+      // "### b" → "## b" (H2), in separate blank-line-delimited blocks.
+      view.dispatch({
+        changes: [
+          { from: 0, to: 1, insert: "" },
+          { from: bFrom, to: bFrom + 1, insert: "" },
+        ],
+      });
+      expect(syntaxTreeAvailable(view.state, view.state.doc.length)).toBe(true);
+      const byLine = fieldClassesByLine(view);
+      expect(byLine.get(1)).toBe("quoll-fold-heading-1");
+      expect(byLine.get(5)).toBe("quoll-fold-heading-2");
+      expect(byLine.size).toBe(2);
+      expectEqualByLine(byLine, fullRebuildByLine(view.state.doc.toString()));
+    });
+  });
+
+  // expandToEnclosingBlock draws the bounded recompute window. Its stop predicate
+  // must match the parser's block boundaries: a whitespace-CONTAMINATED blank line
+  // is still a Markdown blank line (a boundary), so the walk must not cross it into
+  // unrelated blocks (which would resurrect the whole-doc cost the bounding removes).
+  describe("expandToEnclosingBlock — Markdown blank-line block boundary", () => {
+    function intervalForLine(doc: string, lineNo: number): { from: number; to: number } {
+      const state = EditorState.create({ doc });
+      const line = state.doc.line(lineNo);
+      return expandToEnclosingBlock(state, line.from, line.from + 1);
+    }
+
+    it("stops at a truly-empty separator line", () => {
+      // "# a" (L1) / "" (L2) / "para" (L3). A change on L3 must not reach the heading.
+      const iv = intervalForLine("# a\n\npara\n", 3);
+      expect(iv.from).toBe(5); // L3 start — did NOT cross the empty L2 up into L1
+    });
+
+    it("stops at a SPACE-only separator (still a Markdown blank line)", () => {
+      // "# a" (L1) / " " (L2, one space) / "para" (L3). The space-only line is a
+      // Markdown blank line, so the block walk must stop there, not span into L1.
+      const iv = intervalForLine("# a\n \npara\n", 3);
+      expect(iv.from).toBe(6); // L3 start — space-only L2 is a boundary, not crossed
+    });
+
+    it("spans a non-blank run with no interior blank line", () => {
+      // No blank separators: a change anywhere in the contiguous run expands to the
+      // whole run (this is the multi-line Setext up-walk the bounding relies on).
+      const iv = intervalForLine("foo\nbar\nbaz\n", 3);
+      expect(iv.from).toBe(0); // walked up across bar/foo (no blank line to stop at)
     });
   });
 });
