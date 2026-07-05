@@ -568,8 +568,9 @@
      * CHROME, and the neutral widget background is the affordance that keeps it
      * reading as chrome, never content. (--quoll-surface-header only resolves to
      * editorWidget-background under HC/base :root; under .dark-theme/.light-theme
-     * it is a navy tint, so adopting it would fold the card into the content
-     * family under normal themes — the exact divergence we keep on purpose. Pure
+     * it is a themed surface tint (navy on dark, pale periwinkle on light), so
+     * adopting it would fold the card into the content family under normal
+     * themes — the exact divergence we keep on purpose. Pure
      * VS Code colour passthroughs also stay --vscode-* at the use site here per
      * the file's :root convention.) */
     background: var(--vscode-editorWidget-background, transparent);
