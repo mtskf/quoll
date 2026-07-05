@@ -12,6 +12,7 @@ import { EditorView, keymap } from "@codemirror/view";
 import { perfNow, perfRecord } from "../shared/perf.js";
 import {
   type LintDiagnosticWire,
+  MAX_CONTENT_LENGTH,
   PROTOCOL_VERSION,
   type WebviewToHost,
 } from "../shared/protocol.js";
@@ -108,6 +109,26 @@ export type EditorHandle = {
  *  throw), `false` otherwise — edit-sync consumes the boolean to decide
  *  whether to retain the buffer. */
 function postEditMessage(dispatch: Dispatch, content: string, baseDocVersion: number): boolean {
+  if (content.length > MAX_CONTENT_LENGTH) {
+    // The host boundary validator (isBoundedContent, shared/protocol.ts) drops
+    // an over-limit `edit` with only a console.warn — no `edit-rejected`, no
+    // ack Document. Without this pre-check editInFlight would latch forever,
+    // every later keystroke's replay would be suppressed, and the user would
+    // get NO signal that nothing is reaching disk. Route to the serialize-error
+    // banner (the same surface the host reject path uses) and return false —
+    // edit-sync's callers keep the buffer and never latch editInFlight. Each
+    // subsequent keystroke clears the gate (local-edit-attempt) and re-attempts
+    // the post, which lands back here and re-arms the banner while the doc stays
+    // over-limit, so no oversized edit ever reaches the host.
+    dispatch({
+      type: "serialize-error",
+      error: {
+        code: "internal_error",
+        message: `document is too large to save (over ${MAX_CONTENT_LENGTH.toLocaleString()} characters)`,
+      },
+    });
+    return false;
+  }
   dispatch({ type: "post-edit" });
   const message: WebviewToHost = {
     protocol: PROTOCOL_VERSION,
