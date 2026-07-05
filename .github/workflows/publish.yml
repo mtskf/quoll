@@ -74,7 +74,7 @@ jobs:
         run: pnpm build
 
       - name: Package .vsix
-        run: pnpm exec vsce package --no-dependencies --pre-release -o extension.vsix
+        run: pnpm exec vsce package --no-dependencies -o extension.vsix
 
       # Release gate. Inspects the just-packaged .vsix against an
       # allowlist (mirrors .vscodeignore) and fails the publish if
@@ -88,10 +88,10 @@ jobs:
       - name: Publish to VS Code Marketplace
         env:
           VSCE_PAT: ${{ secrets.VSCODE_PAT }}
-        run: pnpm exec vsce publish --no-dependencies --pre-release --packagePath extension.vsix -p "$VSCE_PAT"
+        run: pnpm exec vsce publish --no-dependencies --packagePath extension.vsix -p "$VSCE_PAT"
 
       - name: Publish to Open VSX
         env:
           OVSX_PAT: ${{ secrets.OPENVSX_PAT }}
         if: ${{ env.OVSX_PAT != '' }}
-        run: pnpm exec ovsx publish --pre-release extension.vsix -p "$OVSX_PAT"
+        run: pnpm exec ovsx publish extension.vsix -p "$OVSX_PAT"
