@@ -177,6 +177,9 @@ export interface TestHarnessShape {
   openExternalOverride: ((url: string) => Thenable<boolean>) | null;
   buildWebviewHtmlOverride: (() => string) | null;
   writeImageFileOverride: ((uri: Uri, content: Uint8Array) => Thenable<void>) | null;
+  diskConflictPromptOverride:
+    | ((message: string, ...actions: string[]) => Thenable<string | undefined>)
+    | null;
   // Read-only: the host writes `lastError` (via recordError); tests only
   // observe it. Mirrors the getter-only surface on the real TestHarness so
   // a test that tries `harness.lastError = null` (which would corrupt the
