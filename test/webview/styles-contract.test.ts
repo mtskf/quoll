@@ -467,3 +467,32 @@ describe("styles.css — editor height chain (scroll-hide root cause)", () => {
     expect(cmEditor).toMatch(/(?<![-a-z])height\s*:\s*100%/);
   });
 });
+
+describe("styles.css — shared floating-control resting tokens", () => {
+  const css = readFileSync(new URL("../../src/webview/styles.css", import.meta.url), "utf8");
+  // Strip comments so a token-shaped literal inside a CSS comment can't vacuously
+  // satisfy the ":root declares…" match (styles-contract grep vacuation guard).
+  const live = css.replace(/\/\*[\s\S]*?\*\//g, "");
+
+  it(":root declares both control tokens (rest opacity + fade)", () => {
+    const root = live.match(/:root\s*\{([^}]*)\}/)?.[1] ?? "";
+    expect(root).toMatch(/--quoll-control-rest-opacity\s*:\s*[0-9.]+\s*;/);
+    expect(root).toMatch(/--quoll-control-transition\s*:\s*opacity\b[^;]*;/);
+  });
+
+  it("both corner toggles reference the tokens, not per-control opacity literals", () => {
+    for (const sel of [
+      /\.quoll-outline-toggle\s*\{[^}]*\}/,
+      /\.quoll-switch-editor-toggle\s*\{[^}]*\}/,
+    ]) {
+      const rule = live.match(sel)?.[0] ?? "";
+      expect(rule).not.toBe("");
+      expect(rule).toMatch(/opacity\s*:\s*var\(--quoll-control-rest-opacity\)/);
+      expect(rule).toMatch(/transition\s*:\s*var\(--quoll-control-transition\)/);
+      // The scroll-hide slide leg stays literal alongside the shared opacity leg.
+      expect(rule).toMatch(/transition\s*:[^;]*transform/);
+      // No bare resting-opacity literal survives on the control itself.
+      expect(rule).not.toMatch(/opacity\s*:\s*0\.\d/);
+    }
+  });
+});

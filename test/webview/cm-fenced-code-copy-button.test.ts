@@ -451,6 +451,12 @@ describe("quollCopyButtonTheme", () => {
     expect(btn.right).toBeDefined();
   });
 
+  it("draws its resting dim + fade from the shared floating-control tokens (no per-control literal)", () => {
+    const btn = copyButtonThemeSpec[".quoll-copy-button"];
+    expect(btn.opacity).toMatch(/^var\(--quoll-control-rest-opacity/);
+    expect(btn.transition).toMatch(/^var\(--quoll-control-transition/);
+  });
+
   it("collapsed open-fence row keeps position:relative in the COPY theme so the button still anchors", () => {
     expect(copyButtonThemeSpec[".cm-line.quoll-fenced-code-fence-hidden"].position).toBe(
       "relative"
