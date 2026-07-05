@@ -1,12 +1,12 @@
 import { describe, expect, it } from "vitest";
-import type { DelimiterRow, Row } from "../../../src/markdown/table/model.js";
-import { makeTable, toCellRaw } from "../../../src/markdown/table/model.js";
+import type { CellRaw, DelimiterRow, Row } from "../../../src/markdown/table/model.js";
+import { makeTable } from "../../../src/markdown/table/model.js";
 
 /** A content row with `cellCount` single-space-padded cells. */
 function row(cellCount: number): Row {
   return {
     cells: Array.from({ length: cellCount }, () => ({
-      raw: toCellRaw("x"),
+      raw: "x" as CellRaw,
       leadingSpace: " ",
       trailingSpace: " ",
       from: 0,
@@ -35,24 +35,6 @@ function delimiterRow(cellCount: number): DelimiterRow {
     to: 0,
   };
 }
-
-describe("toCellRaw", () => {
-  it("escapes a bare pipe", () => {
-    expect(toCellRaw("a|b")).toBe("a\\|b");
-  });
-  it("escapes a bare backslash", () => {
-    expect(toCellRaw("a\\b")).toBe("a\\\\b");
-  });
-  it("escapes backslash THEN pipe (order load-bearing): `a\\|b` -> `a\\\\\\|b`", () => {
-    expect(toCellRaw("a\\|b")).toBe("a\\\\\\|b");
-  });
-  it("returns plain text unchanged when no `\\` or `|` present", () => {
-    expect(toCellRaw("hello")).toBe("hello");
-  });
-  it("escapes every pipe", () => {
-    expect(toCellRaw("x|y|z")).toBe("x\\|y\\|z");
-  });
-});
 
 describe("makeTable", () => {
   it("throws when the header has more cells than the delimiter", () => {
