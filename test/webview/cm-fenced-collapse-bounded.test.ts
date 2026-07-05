@@ -183,14 +183,14 @@ describe("fencedCodeCollapseField bounded ≡ full", () => {
         },
       ], // delete the </script> line incl its newline
     },
-    // topLevelBlankRisk: a type-6/7 HTML block (`<div>`) is TERMINATED by a blank line, so
+    // topLevelBoundaryRisk: a type-6/7 HTML block (`<div>`) is TERMINATED by a blank line, so
     // deleting the blank line that ends it extends the block over everything up to the next
     // blank — here 20 prose lines AND the following top-level fence — WITHOUT touching any
     // tag/marker line, so STRUCTURAL is blind to it. The fence sits FAR below the deleted
     // blank (outside the ±1-line span AND untouched), so computeBounded would reuse its stale
     // record; the post-edit tree is fully available (verified: syntaxTreeAvailable === true)
     // so G2 does NOT mask this. The blank deletion is a top-level newline delete →
-    // topLevelBlankRisk fires → full recompute. Drop topLevelBlankRisk from the GF condition
+    // topLevelBoundaryRisk fires → full recompute. Drop topLevelBoundaryRisk from the GF condition
     // and this goes RED (bounded keeps the swallowed fence's stale record; oracle has none).
     {
       name: "GF blank-line: deleting the blank that ends an HTML block swallows a DISTANT fence",
@@ -207,7 +207,7 @@ describe("fencedCodeCollapseField bounded ≡ full", () => {
     // The mirror of the case above: TYPING a char into the blank line that terminates the
     // HTML block makes it non-blank → the boundary disappears the same way, swallowing the
     // DISTANT fence. No newline delta and no deletion — only a blankness flip (blank→non-
-    // blank), which topLevelBlankRisk detects via oldBlank !== newBlank. Drop that flip
+    // blank), which topLevelBoundaryRisk detects via oldBlank !== newBlank. Drop that flip
     // check (leave only the newline delta) and this goes RED (Codex cycle-3).
     {
       name: "GF blank-line: typing into the blank that ends an HTML block swallows a DISTANT fence",
@@ -222,7 +222,7 @@ describe("fencedCodeCollapseField bounded ≡ full", () => {
       ],
     },
     // Isolates the STRUCTURAL HTML arm (the `</script>` case above deletes a newline, so
-    // topLevelBlankRisk's newlineDelta masks the HTML arm). Typing `<!--` IN PLACE at a
+    // topLevelBoundaryRisk's newlineDelta masks the HTML arm). Typing `<!--` IN PLACE at a
     // non-blank line start opens a type-2 HTML block that swallows the DISTANT fence with
     // NO newline delta and NO blankness flip — only the HTML arm catches it. Drop the HTML
     // arm and this goes RED (test-analyzer finding 1).
@@ -249,7 +249,7 @@ describe("fencedCodeCollapseField bounded ≡ full", () => {
         },
       ],
     },
-    // Isolates topLevelBlankRisk's newlineDelta arm (the delete-blank case is masked by the
+    // Isolates topLevelBoundaryRisk's newlineDelta arm (the delete-blank case is masked by the
     // blankness flip). A MULTI-LINE deletion removes an interior blank boundary while BOTH
     // the changed-range start and end lines stay non-blank (so oldBlank === newBlank and the
     // flip is blind); only newlineDelta catches it. The extended <div> swallows the DISTANT
@@ -260,6 +260,23 @@ describe("fencedCodeCollapseField bounded ≡ full", () => {
         "\n"
       )}\n${fence(15)}\n`,
       edits: [{ changes: { from: "<div>\nhtml ".length, to: "<div>\nhtml text\n\npr".length } }],
+    },
+    // Isolates topLevelBoundaryRisk's `>`-delta arm: a type-4 declaration `<!FOO … >` ends
+    // at its bare `>`. Deleting that `>` un-closes the declaration → its HTMLBlock extends
+    // over the DISTANT fence. The changed line is not line-start HTML, carries no newline
+    // and no blankness flip, and a bare `>` is deliberately NOT in STRUCTURAL — only the
+    // `>`-delta catches it. Drop the gtDelta arm and this goes RED (Codex cycle-5).
+    {
+      name: "GF HTML type-4: deleting the `>` that ends a declaration swallows a DISTANT fence",
+      initial: `<!FOO\nmetadata > tail\n\n${Array.from({ length: 20 }, (_, i) => `prose ${i}`).join(
+        "\n"
+      )}\n${fence(15)}\n`,
+      edits: [
+        {
+          // delete the bare `>` in "metadata > tail" (the declaration's terminator)
+          changes: { from: "<!FOO\nmetadata ".length, to: "<!FOO\nmetadata >".length },
+        },
+      ],
     },
     // fence(10) has exactly 10 body lines = COLLAPSE_THRESHOLD → NOT collapsible. The
     // insert is plain prose/code (no STRUCTURAL match) → bounded path. After the insert

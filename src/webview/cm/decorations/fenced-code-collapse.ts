@@ -197,10 +197,10 @@ interface Interval {
  *     fence into the HTMLBlock node, making it invisible to the top-level tree walk.
  *     HTML START conditions are line-anchored (the `<[/!?A-Za-z]` alt); the multi-char
  *     ENDS can appear MID-LINE, so `</script|pre|style|textarea>` (type 1, case-insensitive)
- *     and `-->` / `?>` / `]]>` (types 2/3/5) are UNanchored. RESIDUAL: the type-4 bare `>`
- *     end (`<!DOCTYPE …>`) is NOT matched — a bare `>` cannot be caught without massive
- *     over-triggering, and a multi-line `<!…>` declaration before a fenced block is
- *     vanishingly rare; it leans on G2 + self-heal (display-only, byte-identical round-trip).
+ *     and `-->` / `?>` / `]]>` (types 2/3/5) are UNanchored. The type-4 bare `>` end
+ *     (`<!DOCTYPE …>`) is NOT put here (a bare `>` would match nearly every line); it is
+ *     instead handled by `topLevelBoundaryRisk`'s `>`-delta check (fires only when the edit
+ *     ADDS/REMOVES a `>` at top level), so every HTML-block terminator is now covered.
  *  STRUCTURAL is a purely SYNTACTIC over-approximation on changed-line text: it
  *  deliberately over-triggers on any fence-shaped, container-marker-shaped, or
  *  HTML-tag-shaped changed line (safe — a false full-recompute only costs speed;
@@ -211,7 +211,7 @@ interface Interval {
  *  carries no shape): a type-6/7 HTML block (and a paragraph / loose list) is TERMINATED
  *  by a blank line, so MOVING the blank line that ends an HTML block extends/contracts it
  *  over a following top-level fence WITHOUT touching any tag/marker line (Codex cycle-2/3,
- *  both parser-verified). `topLevelBlankRisk` covers this: any TOP-LEVEL edit that moves a
+ *  both parser-verified). `topLevelBoundaryRisk` covers this: any TOP-LEVEL edit that moves a
  *  blank-line boundary — a newline inserted/deleted, OR a changed line's blankness flipped
  *  in EITHER direction (deleting a line's content down to blank, OR typing into the blank
  *  line that ends the block) — full-recomputes. Fences/lists themselves are
@@ -247,35 +247,39 @@ function touchesStructural(tr: Transaction): boolean {
 
 const BLANK_LINE = /^[ \t]*$/;
 
-/** A blank-line boundary MOVED by a TOP-LEVEL edit — the one non-locality STRUCTURAL
- *  cannot see (a blank line carries no shape). A type-6/7 HTML block (and a paragraph /
- *  loose list) is TERMINATED by a blank line, so moving the blank line that ends an HTML
- *  block extends/contracts the block over a following top-level fence WITHOUT touching a
- *  tag/marker line. The guard conservatively fires when the edit changes the LINE COUNT (a
- *  newline inserted or deleted) OR flips a changed line's blankness in EITHER direction —
- *  deleting a line's content down to blank, OR typing into the blank line that ends the
- *  block (Codex cycle-2 + cycle-3, both parser-verified). This is a superset of the true
- *  blank-boundary moves (a newline splitting non-blank prose trips the line-count arm but
- *  moves no blank line — a safe over-trigger). Any within-line edit that keeps the
- *  line's blankness AND adds/removes no newline cannot move a blank boundary, so plain
- *  typing (in code, prose, or even inside an existing blank run) stays on the bounded hot
- *  path. Fires ONLY when the edit is NOT fully inside a reused block's [blockFrom, blockTo]
- *  — an in-body edit is contained (its own block rebuilds via touchesRange, and un-closing
- *  its fence is caught by STRUCTURAL's fence alt), so in-body newlines stay bounded.
- *  Over-triggering (a top-level newline that reshapes nothing) is safe. */
-function topLevelBlankRisk(tr: Transaction, prevBlocks: readonly FencedBlockRecord[]): boolean {
+/** A block boundary MOVED by a TOP-LEVEL edit in a way STRUCTURAL's per-line-SHAPE check
+ *  cannot see. Two shapeless HTML-block terminators drive this:
+ *   - a BLANK line ends a type-6/7 block (and a paragraph / loose list): moving the blank
+ *     that ends an HTML block extends/contracts it over a following top-level fence WITHOUT
+ *     touching a tag/marker line (Codex cycle-2 + cycle-3, parser-verified).
+ *   - a bare `>` ends a type-4 declaration (`<!DOCTYPE …>`): adding/removing that `>` mid-
+ *     line likewise re-extends the block (Codex cycle-5, parser-verified). A bare `>` cannot
+ *     go in STRUCTURAL (it would match nearly every HTML/prose line — massive over-trigger),
+ *     but keying on the `>` being ADDED/REMOVED by the edit — not merely present on the line
+ *     — is narrow: it fires only when the user actually types or deletes a `>`.
+ *  Fires when the edit changes the LINE COUNT (a newline inserted/deleted), OR flips a
+ *  changed line's blankness in EITHER direction (delete-to-blank, or type-into-the-blank),
+ *  OR adds/removes a `>`. All three are conservative supersets (e.g. a newline splitting
+ *  non-blank prose, or a `>` typed in plain prose, reshapes nothing — a safe over-trigger).
+ *  Any within-line edit that keeps the line's blankness, adds/removes no newline, and
+ *  touches no `>` cannot move a boundary, so plain typing stays on the bounded hot path.
+ *  Fires ONLY when the edit is NOT fully inside a reused block's [blockFrom, blockTo] — an
+ *  in-body edit is contained (its own block rebuilds via touchesRange, and un-closing its
+ *  fence is caught by STRUCTURAL's fence alt), so in-body edits stay bounded. */
+function topLevelBoundaryRisk(tr: Transaction, prevBlocks: readonly FencedBlockRecord[]): boolean {
   let risk = false;
   tr.changes.iterChangedRanges((fromA, toA, fromB, toB) => {
     if (risk) {
       return;
     }
-    const newlineDelta =
-      tr.state.doc.sliceString(fromB, toB).includes("\n") ||
-      tr.startState.doc.sliceString(fromA, toA).includes("\n");
+    const insertedText = tr.state.doc.sliceString(fromB, toB);
+    const deletedText = tr.startState.doc.sliceString(fromA, toA);
+    const newlineDelta = insertedText.includes("\n") || deletedText.includes("\n");
+    const gtDelta = insertedText.includes(">") || deletedText.includes(">");
     const oldBlank = BLANK_LINE.test(tr.startState.doc.lineAt(fromA).text);
     const newBlank = BLANK_LINE.test(tr.state.doc.lineAt(fromB).text);
-    if (!newlineDelta && oldBlank === newBlank) {
-      return; // blank-inert: no line added/removed AND no blankness flip — safe to reuse
+    if (!newlineDelta && !gtDelta && oldBlank === newBlank) {
+      return; // boundary-inert: no line count change, no blankness flip, no `>` delta
     }
     const insideBlock = prevBlocks.some((b) => fromA >= b.blockFrom && toA <= b.blockTo);
     if (!insideBlock) {
@@ -447,7 +451,7 @@ function defineField(mode: BuildMode): StateField<CollapseState> {
       //    line) OR a top-level blank-line boundary move (HTML-block termination) → full.
       if (
         effectTouched ||
-        (tr.docChanged && (touchesStructural(tr) || topLevelBlankRisk(tr, prev.blocks)))
+        (tr.docChanged && (touchesStructural(tr) || topLevelBoundaryRisk(tr, prev.blocks)))
       ) {
         return buildFullState(tr.state, working);
       }
