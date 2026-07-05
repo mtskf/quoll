@@ -4,6 +4,7 @@ import { EditorState, Text } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { LintDiagnosticWire } from "../../src/shared/protocol.js";
+import { lintMarkdown } from "../../src/webview/cm/lint/engine.js";
 import {
   buildLintDecorations,
   diagnosticsAt,
@@ -243,6 +244,29 @@ describe("quollLint debounced recompute (view-level)", () => {
       expect(headingFindings()).toHaveLength(1);
       // ...via an effect only: the document is byte-identical to the user edit.
       expect(view.state.sliceDoc()).toBe(docAfterEdit);
+    } finally {
+      view.destroy();
+    }
+  });
+
+  it("debounced incremental compute stays byte-identical to a full lintMarkdown", () => {
+    // Drives the plugin's per-view incremental linter through a multi-line edit
+    // and asserts the published field deep-equals a full-parse lintMarkdown of the
+    // same text. A finding-COUNT check would miss an incremental/full divergence in
+    // a finding's range or message; this pins the whole diagnostic set.
+    const view = new EditorView({
+      doc: "# A\n\n## B\n\npara text\n",
+      parent: document.body,
+      extensions: [markdown({ base: markdownLanguage }), quollLint()],
+    });
+    try {
+      vi.advanceTimersByTime(300); // warm the incremental linter's prevTree
+      // A structural, multi-line edit: skipped heading + trailing spaces + a blank run.
+      view.dispatch({
+        changes: { from: view.state.doc.length, insert: "#### D  \n\n\n\nmore   \n" },
+      });
+      vi.advanceTimersByTime(300);
+      expect(view.state.field(lintField)).toEqual(lintMarkdown(view.state.doc.toString()));
     } finally {
       view.destroy();
     }
