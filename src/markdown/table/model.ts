@@ -12,31 +12,18 @@ export type LineEnding = "" | "\n" | "\r\n";
 
 /**
  * The escaped-Markdown brand for a content cell's `raw`. A `CellRaw` is a
- * `string` whose `|` and `\` are guaranteed escaped, so the serializer can
- * write it between pipes without corrupting column structure. The brand makes
- * that a COMPILE-TIME invariant: the only ways to obtain one are
- * {@link toCellRaw} (which escapes arbitrary user text) or an `as CellRaw`
- * cast — used by parse sites for an already-escaped verbatim source slice
- * and by structure helpers for the empty-string literal (`"" as CellRaw`).
+ * `string` whose `|` and `\` are guaranteed escaped, so a downstream consumer
+ * can write it between pipes without corrupting column structure. The brand
+ * makes that a COMPILE-TIME invariant: a `CellRaw` is obtained only via an
+ * `as CellRaw` cast — used by parse sites for an already-escaped verbatim
+ * source slice (the [cellStart, cellEnd) scan never encloses an unescaped `|`).
  */
 export type CellRaw = string & { readonly __cellRaw: unique symbol };
 
 /**
- * Escape arbitrary user text into a {@link CellRaw}: backslashes FIRST, then
- * pipes. Order is load-bearing — escaping `\` first means a pre-existing `\|`
- * becomes a literal backslash + escaped pipe (`\\\|`), not a double-escaped
- * pipe. This is the ONLY non-cast way to mint a `CellRaw`, so every edit path
- * that writes user text into a cell routes through here and cannot smuggle an
- * unescaped `|` into the serializer.
- */
-export function toCellRaw(userText: string): CellRaw {
-  return userText.replace(/\\/g, "\\\\").replace(/\|/g, "\\|") as CellRaw;
-}
-
-/**
  * A content cell. `raw` is verbatim escaped Markdown (escaped pipes stay as
  * `\|`), branded {@link CellRaw} so an unescaped `|` cannot be written into it
- * without an explicit cast — edit paths must mint through {@link toCellRaw}.
+ * without an explicit cast.
  */
 export interface Cell {
   readonly raw: CellRaw;
@@ -139,7 +126,7 @@ const ALIGN_MARKER = /^(:?)-+(:?)$/;
  * This is the ONE place a marker is interpreted: `parseTable`'s validity check
  * and `tableAlign`'s projection both route through it, so a delimiter cell's
  * `raw` is the single source of truth for alignment — there is no separate
- * stored `align` that could drift from the marker `serializeTable` emits.
+ * stored `align` that could drift from the verbatim marker.
  */
 export function alignFromRaw(raw: string): Align | undefined {
   const m = ALIGN_MARKER.exec(raw.trim());
@@ -153,9 +140,9 @@ export function alignFromRaw(raw: string): Align | undefined {
 
 /**
  * Column alignments, projected on demand from each delimiter cell's `raw`
- * marker via {@link alignFromRaw}. `serializeTable` emits that same `raw`
- * verbatim (`serializeDelimiterRow`), so this projection can never disagree
- * with the serialized markers — and there is no cached array to fall stale.
+ * marker via {@link alignFromRaw}. The projection reads the verbatim `raw`, so
+ * it can never disagree with the source markers — and there is no cached array
+ * to fall stale.
  *
  * A cell whose `raw` is not a valid marker yields `undefined`, NOT a coerced
  * `null`: collapsing it would let an invalid marker masquerade as the explicit

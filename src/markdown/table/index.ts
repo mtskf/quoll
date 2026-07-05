@@ -12,7 +12,5 @@ export type {
   Row,
   Table,
 } from "./model.js";
-export { tableAlign, toCellRaw } from "./model.js";
+export { tableAlign } from "./model.js";
 export { parseTable } from "./parse.js";
-export { serializeTable } from "./serialize.js";
-export { deleteColumn, deleteRow, insertColumn, insertRow } from "./structure.js";

@@ -202,8 +202,13 @@ function parseContentRow(line: LineRange): Row {
   }
 
   // Tail: did the row body end with an unescaped `|`?
+  // The position guard (`lineBodyEnd - 1 !== indentEnd`) stops a lone `|` body
+  // row — whose sole pipe sits at `indentEnd` and was already consumed as the
+  // leading pipe — from being double-counted as a trailing pipe too. Without
+  // it, `|` would parse as leadingPipe AND trailingPipe with zero cells; with
+  // it, that row is correctly leading-pipe-only.
   if (
-    lineBodyEnd > 0 &&
+    lineBodyEnd - 1 !== indentEnd &&
     text.charCodeAt(lineBodyEnd - 1) === 124 &&
     !escapeAt(text, lineBodyEnd - 1)
   ) {

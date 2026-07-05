@@ -22,20 +22,18 @@
 //    TableCell nodes are emitted. table-trailing-line-ws is therefore also
 //    excluded from this corpus.
 //
-//    Both caveat-2 and caveat-3 fixtures are covered by:
-//      (a) dedicated parser/serializer unit tests in parse.test.ts and
-//          serialize.test.ts (trailingLineSpace / CRLF describe blocks),
-//      (b) the round-trip fixture corpus in round-trip.test.ts, which uses
-//          C6a's own findTableRanges + parseTable — NOT Lezer.
-//    The hand-rolled splitter + serializer is parity-gated on clean LF
-//    inputs; CRLF and trailing-space handling are strict supersets of that
-//    behavior, so coverage stays complete.
+//    Both caveat-2 and caveat-3 fixtures are covered by dedicated parser unit
+//    tests in parse.test.ts (trailingLineSpace / CRLF describe blocks), which
+//    use C6a's own findTableRanges + parseTable — NOT Lezer.
+//    The hand-rolled splitter is parity-gated on clean LF inputs; CRLF and
+//    trailing-space handling are strict supersets of that behavior, so
+//    coverage stays complete.
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
 import { describe, expect, it } from "vitest";
 import { parseAllTables } from "../../../src/markdown/table/parse.js";
 import { loadFixtures } from "../load-fixtures.js";
 
-// 8 fixtures — same as round-trip.test.ts MINUS gfm-table-crlf (caveat 2)
+// 8 fixtures — the table-bearing fixture corpus MINUS gfm-table-crlf (caveat 2)
 // and MINUS table-trailing-line-ws (caveat 3).
 const LEZER_PARITY_FIXTURES = [
   "gfm-table",

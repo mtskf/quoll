@@ -2,6 +2,7 @@
 import { describe, expect, it } from "vitest";
 import { tableAlign } from "../../../src/markdown/table/model.js";
 import { parseAllTables, parseTable } from "../../../src/markdown/table/parse.js";
+import { loadFixtures } from "../load-fixtures.js";
 
 describe("parseTable", () => {
   it("parses a 2-column header + 2 body rows with default alignment", () => {
@@ -78,6 +79,23 @@ describe("parseTable column alignment", () => {
   });
 });
 
+describe("parseTable lone-pipe body row", () => {
+  it("treats a lone `|` body row as leading-pipe-only, not double-counted as trailing", () => {
+    // The sole `|` sits at indentEnd and is consumed as the leading pipe; the
+    // trailing-pipe tail check must NOT re-count it. Zero cells, no trailing.
+    const source = "| A |\n| - |\n|\n";
+    const t = parseTable(source, 0, source.length - 1);
+    expect(t).not.toBeNull();
+    if (!t) {
+      return;
+    }
+    expect(t.rows).toHaveLength(1);
+    expect(t.rows[0].leadingPipe).toBe(true);
+    expect(t.rows[0].trailingPipe).toBe(false);
+    expect(t.rows[0].cells).toEqual([]);
+  });
+});
+
 describe("parseTable escaping", () => {
   it("treats `\\|` as part of the cell, not a separator", () => {
     const source = "| Pattern | Meaning |\n| ------- | ------- |\n| `a\\|b` | a or b |\n";
@@ -112,6 +130,27 @@ describe("parseTable escaping", () => {
     const t = parseTable(source, 0, source.length - 1);
     expect(t?.rows[0].trailingPipe).toBe(true);
     expect(t?.rows[0].cells[1].raw).toBe("y\\\\");
+  });
+});
+
+describe("table-alignment.md column align byte-preservation", () => {
+  const fixtures = loadFixtures();
+  const fixture = fixtures.find((f) => f.name === "table-alignment");
+
+  it("preserves the exact delimiter cells incl. :--- / :---: / ---:", () => {
+    expect(fixture).toBeDefined();
+    if (!fixture) {
+      return;
+    }
+    const tables = parseAllTables(fixture.source);
+    // First table: header is "Default | Left | Center | Right".
+    expect(tableAlign(tables[0])).toEqual([null, "left", "center", "right"]);
+    expect(tables[0].delimiter.cells.map((c) => c.raw)).toEqual([
+      " ------- ",
+      " :---- ",
+      " :----: ",
+      " ----: ",
+    ]);
   });
 });
 
