@@ -245,11 +245,9 @@ export class TestHarness {
     return this._overrides.diskConflictPrompt;
   }
 
-  set diskConflictPromptOverride(
-    override:
-      | ((message: string, ...actions: string[]) => Thenable<string | undefined>)
-      | null
-  ) {
+  set diskConflictPromptOverride(override:
+    | ((message: string, ...actions: string[]) => Thenable<string | undefined>)
+    | null) {
     this._overrides.diskConflictPrompt = override;
   }
 
