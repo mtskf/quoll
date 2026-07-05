@@ -195,6 +195,12 @@ interface Interval {
  *     `-->`) can swallow a following top-level fence WITHOUT touching the fence's bytes:
  *     an unclosed <script>/<!--/<?/<![CDATA[ block, or a type-6/7 tag block, absorbs the
  *     fence into the HTMLBlock node, making it invisible to the top-level tree walk.
+ *     HTML START conditions are line-anchored (the `<[/!?A-Za-z]` alt); the multi-char
+ *     ENDS can appear MID-LINE, so `</script|pre|style|textarea>` (type 1, case-insensitive)
+ *     and `-->` / `?>` / `]]>` (types 2/3/5) are UNanchored. RESIDUAL: the type-4 bare `>`
+ *     end (`<!DOCTYPE …>`) is NOT matched — a bare `>` cannot be caught without massive
+ *     over-triggering, and a multi-line `<!…>` declaration before a fenced block is
+ *     vanishingly rare; it leans on G2 + self-heal (display-only, byte-identical round-trip).
  *  STRUCTURAL is a purely SYNTACTIC over-approximation on changed-line text: it
  *  deliberately over-triggers on any fence-shaped, container-marker-shaped, or
  *  HTML-tag-shaped changed line (safe — a false full-recompute only costs speed;
@@ -203,11 +209,12 @@ interface Interval {
  *  fenced-heavy perf case is).
  *  BLANK-LINE boundaries are the one non-locality STRUCTURAL cannot see (a blank line
  *  carries no shape): a type-6/7 HTML block (and a paragraph / loose list) is TERMINATED
- *  by a blank line, so deleting the blank line that ends an HTML block extends it to
- *  swallow a following top-level fence WITHOUT touching any tag/marker line (Codex cycle-2
- *  finding — verified against the parser). `topLevelBlankRisk` covers this: any TOP-LEVEL
- *  edit that MOVES a blank-line boundary (a newline inserted/deleted, or a within-line
- *  deletion that leaves a now-blank line) full-recomputes. Fences/lists themselves are
+ *  by a blank line, so MOVING the blank line that ends an HTML block extends/contracts it
+ *  over a following top-level fence WITHOUT touching any tag/marker line (Codex cycle-2/3,
+ *  both parser-verified). `topLevelBlankRisk` covers this: any TOP-LEVEL edit that moves a
+ *  blank-line boundary — a newline inserted/deleted, OR a changed line's blankness flipped
+ *  in EITHER direction (deleting a line's content down to blank, OR typing into the blank
+ *  line that ends the block) — full-recomputes. Fences/lists themselves are
  *  indentation-pinned and do NOT re-group on blank-line edits (parser-probed), but HTML
  *  blocks do, so the guard is scoped to blank-boundary MOVEMENT rather than every fence.
  *  "Top-level" (not inside a reused block's [blockFrom, blockTo]) keeps IN-BODY newlines
@@ -216,7 +223,7 @@ interface Interval {
  *  and a pure non-newline insertion never moves a blank boundary, so plain typing stays
  *  bounded. G2 + the background-parse self-heal remain as defense-in-depth. */
 const STRUCTURAL =
-  /(?:^|\n)[ \t]{0,3}(?:`{3,}|~{3,})|(?:^|\n)[ \t]*(?:[-*+]|\d{1,9}[.)]|>)|(?:^|\n)[ \t]{0,3}<[/!?A-Za-z]|-->|\?>|\]\]>/;
+  /(?:^|\n)[ \t]{0,3}(?:`{3,}|~{3,})|(?:^|\n)[ \t]*(?:[-*+]|\d{1,9}[.)]|>)|(?:^|\n)[ \t]{0,3}<[/!?A-Za-z]|<\/(?:script|pre|style|textarea)>|-->|\?>|\]\]>/i;
 function touchesStructural(tr: Transaction): boolean {
   let hit = false;
   tr.changes.iterChangedRanges((fromA, toA, fromB, toB) => {
@@ -244,10 +251,12 @@ const BLANK_LINE = /^[ \t]*$/;
  *  cannot see (a blank line carries no shape). A type-6/7 HTML block (and a paragraph /
  *  loose list) is TERMINATED by a blank line, so moving the blank line that ends an HTML
  *  block extends/contracts the block over a following top-level fence WITHOUT touching a
- *  tag/marker line. A blank boundary moves iff the edit changes the LINE COUNT (a newline
- *  inserted or deleted) OR flips a changed line's blankness in EITHER direction — deleting
- *  a line's content down to blank, OR typing into the blank line that ends the block
- *  (Codex cycle-2 + cycle-3, both parser-verified). Any within-line edit that keeps the
+ *  tag/marker line. The guard conservatively fires when the edit changes the LINE COUNT (a
+ *  newline inserted or deleted) OR flips a changed line's blankness in EITHER direction —
+ *  deleting a line's content down to blank, OR typing into the blank line that ends the
+ *  block (Codex cycle-2 + cycle-3, both parser-verified). This is a superset of the true
+ *  blank-boundary moves (a newline splitting non-blank prose trips the line-count arm but
+ *  moves no blank line — a safe over-trigger). Any within-line edit that keeps the
  *  line's blankness AND adds/removes no newline cannot move a blank boundary, so plain
  *  typing (in code, prose, or even inside an existing blank run) stays on the bounded hot
  *  path. Fires ONLY when the edit is NOT fully inside a reused block's [blockFrom, blockTo]

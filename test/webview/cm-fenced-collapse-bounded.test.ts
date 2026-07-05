@@ -221,6 +221,46 @@ describe("fencedCodeCollapseField bounded ≡ full", () => {
         },
       ],
     },
+    // Isolates the STRUCTURAL HTML arm (the `</script>` case above deletes a newline, so
+    // topLevelBlankRisk's newlineDelta masks the HTML arm). Typing `<!--` IN PLACE at a
+    // non-blank line start opens a type-2 HTML block that swallows the DISTANT fence with
+    // NO newline delta and NO blankness flip — only the HTML arm catches it. Drop the HTML
+    // arm and this goes RED (test-analyzer finding 1).
+    {
+      name: "GF HTML in-place: typing `<!--` at a non-blank line start swallows a DISTANT fence",
+      initial: `prose here\n\n${fence(15)}\n`,
+      edits: [{ changes: { from: 0, insert: "<!--" } }],
+    },
+    // Isolates the UNanchored type-1 close-tag arm (`</script|pre|style|textarea>`): a
+    // CLOSED <script> block whose `</script>` sits MID-LINE. Breaking the mid-line close
+    // tag un-closes the block → it swallows the DISTANT fence. The changed line is not
+    // line-start `<`, no newline, no blank flip — only the unanchored close-tag arm (via the
+    // OLD slice still containing `</script>`) catches it. Drop that arm and this goes RED
+    // (code-quality mid-line finding).
+    {
+      name: "GF HTML mid-line: breaking a mid-line </script> swallows a DISTANT fence",
+      initial: `<script>\nvar x = 1; </script> tail\n\n${Array.from({ length: 20 }, (_, i) =>
+        `prose ${i}`
+      ).join("\n")}\n${fence(15)}\n`,
+      edits: [
+        {
+          // insert a space inside `</script>` → `</scr ipt>`, no longer a valid close tag
+          changes: { from: "<script>\nvar x = 1; </scr".length, insert: " " },
+        },
+      ],
+    },
+    // Isolates topLevelBlankRisk's newlineDelta arm (the delete-blank case is masked by the
+    // blankness flip). A MULTI-LINE deletion removes an interior blank boundary while BOTH
+    // the changed-range start and end lines stay non-blank (so oldBlank === newBlank and the
+    // flip is blind); only newlineDelta catches it. The extended <div> swallows the DISTANT
+    // fence. Force newlineDelta false and this goes RED (test-analyzer finding 2).
+    {
+      name: "GF blank-line: multi-line delete removes an interior blank boundary (no flip), DISTANT fence",
+      initial: `<div>\nhtml text\n\n${Array.from({ length: 20 }, (_, i) => `prose ${i}`).join(
+        "\n"
+      )}\n${fence(15)}\n`,
+      edits: [{ changes: { from: "<div>\nhtml ".length, to: "<div>\nhtml text\n\npr".length } }],
+    },
     // fence(10) has exactly 10 body lines = COLLAPSE_THRESHOLD → NOT collapsible. The
     // insert is plain prose/code (no STRUCTURAL match) → bounded path. After the insert
     // the block has 11 body lines > threshold → collapsible. computeBounded discovers it
