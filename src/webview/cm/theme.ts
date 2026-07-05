@@ -574,7 +574,7 @@ export const copyButtonThemeSpec = {
   },
   // Icon-only button: the bare Lucide glyph with NO resting background — inline-flex
   // centres the SVG; the glyph is sized in em so it tracks the panel font. The
-  // resting state is the dimmed icon alone (opacity 0.6); the boxed affordance
+  // resting state is the dimmed icon alone (--quoll-control-rest-opacity); the boxed affordance
   // (borderRadius fill) appears only on hover/focus, so at rest the button reads as
   // an icon, not a bordered box.
   //
@@ -608,8 +608,10 @@ export const copyButtonThemeSpec = {
     boxShadow: "none",
     borderRadius: "4px",
     cursor: "pointer",
-    opacity: "0.6",
-    transition: "opacity 0.1s ease-in-out",
+    // Shared floating-control resting dim + fade (styles.css :root). Fallback
+    // mirrors the token default for the pre-stylesheet frame.
+    opacity: "var(--quoll-control-rest-opacity, 0.6)",
+    transition: "var(--quoll-control-transition, opacity 0.12s ease)",
     userSelect: "none",
   },
   ".quoll-copy-button svg": {
@@ -736,7 +738,10 @@ export const collapseToggleThemeSpec = {
     border: "none",
     borderRadius: "4px",
     cursor: "pointer",
-    opacity: "0.85",
+    // Shared floating-control resting dim + fade (styles.css :root); the collapse
+    // toggle previously had no transition, so it now fades on hover like the rest.
+    opacity: "var(--quoll-control-rest-opacity, 0.6)",
+    transition: "var(--quoll-control-transition, opacity 0.12s ease)",
   },
   ".quoll-fenced-collapse-toggle:hover, .quoll-fenced-collapse-toggle:focus-visible": {
     opacity: "1",

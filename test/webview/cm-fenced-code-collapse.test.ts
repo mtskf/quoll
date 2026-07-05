@@ -712,4 +712,12 @@ describe("quollCollapseToggleTheme", () => {
     expect(unround.borderBottomRightRadius).toBe("0");
     expect(unround.paddingBottom).toBe("0");
   });
+
+  it("toggle draws its resting dim + fade from the shared floating-control tokens", () => {
+    // Unified with the copy button + corner toggles (styles.css :root). Previously
+    // opacity 0.85 with no transition; now the shared token pair, so it fades on hover.
+    const toggle = collapseToggleThemeSpec[".quoll-fenced-collapse-toggle"];
+    expect(toggle.opacity).toMatch(/^var\(--quoll-control-rest-opacity/);
+    expect(toggle.transition).toMatch(/^var\(--quoll-control-transition/);
+  });
 });
