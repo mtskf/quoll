@@ -101,7 +101,7 @@ describe("contextHandoffCommand", () => {
     document.body.appendChild(parent);
     const view = new EditorView({ state: stateWith(6, 20), parent });
     try {
-      const handled = contextHandoffCommand({ postMessage })(view);
+      const handled = contextHandoffCommand({ postMessage }, () => {})(view);
       expect(handled).toBe(true);
       expect(postMessage).toHaveBeenCalledWith({
         protocol: PROTOCOL_VERSION,
@@ -115,6 +115,26 @@ describe("contextHandoffCommand", () => {
     }
   });
 
+  it("flushes pending edits before posting (no stale line refs on type-then-handoff)", () => {
+    // Reproduces the stale-line-reference bug: edit-sync debounces outbound
+    // Edits by 300 ms, so a handoff fired mid-window would reference host
+    // content that lacks the latest keystrokes unless we flush first. Mirrors
+    // the switch-editor precedent — pin the flush→post order (FIFO: the flushed
+    // Edit reaches the host before the handoff geometry).
+    const calls: string[] = [];
+    const flush = vi.fn(() => calls.push("flush"));
+    const postMessage = vi.fn(() => calls.push("post"));
+    const parent = document.createElement("div");
+    document.body.appendChild(parent);
+    const view = new EditorView({ state: stateWith(6, 20), parent });
+    try {
+      contextHandoffCommand({ postMessage }, flush)(view);
+      expect(calls).toEqual(["flush", "post"]);
+    } finally {
+      view.destroy();
+    }
+  });
+
   it("returns true even when postMessage throws (chord is claimed)", () => {
     const postMessage = vi.fn(() => {
       throw new Error("transport gone");
@@ -123,7 +143,25 @@ describe("contextHandoffCommand", () => {
     document.body.appendChild(parent);
     const view = new EditorView({ state: stateWith(0, 0), parent });
     try {
-      expect(contextHandoffCommand({ postMessage })(view)).toBe(true);
+      expect(contextHandoffCommand({ postMessage }, () => {})(view)).toBe(true);
+    } finally {
+      view.destroy();
+    }
+  });
+
+  it("does not throw out of the command when flushPendingEdit throws", () => {
+    // The flush precedes the post; a throw from flush must not unwind the
+    // keymap command (mirrors the postMessage-throws posture).
+    const postMessage = vi.fn();
+    const flush = vi.fn(() => {
+      throw new Error("flush gone");
+    });
+    const parent = document.createElement("div");
+    document.body.appendChild(parent);
+    const view = new EditorView({ state: stateWith(0, 0), parent });
+    try {
+      expect(contextHandoffCommand({ postMessage }, flush)(view)).toBe(true);
+      expect(postMessage).toHaveBeenCalled();
     } finally {
       view.destroy();
     }
@@ -153,12 +191,30 @@ describe("codexContextHandoffCommand", () => {
     // Selection present — must NOT leak into the Codex message (whole-file).
     const view = new EditorView({ state: stateWith(6, 20), parent });
     try {
-      const handled = codexContextHandoffCommand({ postMessage })(view);
+      const handled = codexContextHandoffCommand({ postMessage }, () => {})(view);
       expect(handled).toBe(true);
       expect(postMessage).toHaveBeenCalledWith({
         protocol: PROTOCOL_VERSION,
         type: "codex-context-handoff",
       });
+    } finally {
+      view.destroy();
+    }
+  });
+
+  it("flushes pending edits before posting (whole-file handoff sees latest keystrokes)", () => {
+    // Codex adds the WHOLE file via addFileToThread; without a flush the host
+    // saves stale bytes (isDirty only covers already-dirty docs, not
+    // webview-only edits). Pin flush→post, same barrier as the Claude path.
+    const calls: string[] = [];
+    const flush = vi.fn(() => calls.push("flush"));
+    const postMessage = vi.fn(() => calls.push("post"));
+    const parent = document.createElement("div");
+    document.body.appendChild(parent);
+    const view = new EditorView({ state: stateWith(6, 20), parent });
+    try {
+      codexContextHandoffCommand({ postMessage }, flush)(view);
+      expect(calls).toEqual(["flush", "post"]);
     } finally {
       view.destroy();
     }
@@ -172,7 +228,23 @@ describe("codexContextHandoffCommand", () => {
     document.body.appendChild(parent);
     const view = new EditorView({ state: stateWith(0, 0), parent });
     try {
-      expect(codexContextHandoffCommand({ postMessage })(view)).toBe(true);
+      expect(codexContextHandoffCommand({ postMessage }, () => {})(view)).toBe(true);
+    } finally {
+      view.destroy();
+    }
+  });
+
+  it("does not throw out of the command when flushPendingEdit throws", () => {
+    const postMessage = vi.fn();
+    const flush = vi.fn(() => {
+      throw new Error("flush gone");
+    });
+    const parent = document.createElement("div");
+    document.body.appendChild(parent);
+    const view = new EditorView({ state: stateWith(0, 0), parent });
+    try {
+      expect(codexContextHandoffCommand({ postMessage }, flush)(view)).toBe(true);
+      expect(postMessage).toHaveBeenCalled();
     } finally {
       view.destroy();
     }

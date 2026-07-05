@@ -402,7 +402,9 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
         // package.json keybinding. Cmd+Option+K never collides with Claude's
         // editorTextFocus binding; Cmd+J is claimed here before the workbench
         // togglePanel (verified in smoke; fallback stopPropagation → Mod-Alt-j).
-        quollContextHandoffKeymap(getHost()),
+        // Flushes the pending debounced Edit before posting (same barrier as
+        // quollSwitchEditor) so the handoff never ships pre-keystroke line refs.
+        quollContextHandoffKeymap(getHost(), () => sync.flush()),
         // Document outline navigator: a webview-native overlay panel (toggle
         // button + Mod-Alt-o) listing the doc's ATX headings; clicking one
         // dispatches a selection-only jump (byte-preserving) and focuses the
