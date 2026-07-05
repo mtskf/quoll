@@ -113,11 +113,13 @@ function postEditMessage(dispatch: Dispatch, content: string, baseDocVersion: nu
     // The host boundary validator (isBoundedContent, shared/protocol.ts) drops
     // an over-limit `edit` with only a console.warn — no `edit-rejected`, no
     // ack Document. Without this pre-check editInFlight would latch forever,
-    // every later keystroke would replay-drop, and the user would get NO signal
-    // that nothing is reaching disk. Route to the serialize-error banner (the
-    // same surface the host reject path uses) and return false — edit-sync's
-    // callers keep the buffer and never latch editInFlight, and the closed
-    // serialize-error gate blocks a replay until the user shrinks the doc.
+    // every later keystroke's replay would be suppressed, and the user would
+    // get NO signal that nothing is reaching disk. Route to the serialize-error
+    // banner (the same surface the host reject path uses) and return false —
+    // edit-sync's callers keep the buffer and never latch editInFlight. Each
+    // subsequent keystroke clears the gate (local-edit-attempt) and re-attempts
+    // the post, which lands back here and re-arms the banner while the doc stays
+    // over-limit, so no oversized edit ever reaches the host.
     dispatch({
       type: "serialize-error",
       error: {
