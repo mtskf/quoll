@@ -557,7 +557,21 @@
   .quoll-frontmatter-block {
     padding: 0.5em 0.75em;
     border: 1px solid var(--vscode-panel-border, var(--vscode-editorWidget-border, #454545));
-    border-radius: 4px;
+    /* Corner round adopts the shared block-geometry token so the card no longer
+     * one-offs 4px against the fenced-code / blockquote panels (which paint
+     * --quoll-block-radius via cm/theme.ts) — one radius family across all block
+     * surfaces. Pure geometry, so unifying it carries no semantic conflict. */
+    border-radius: var(--quoll-block-radius, 8px);
+    /* Fill DELIBERATELY stays the neutral editorWidget passthrough — NOT the
+     * navy --quoll-surface-* family (table thead / fenced-code / blockquote).
+     * That family is the CONTENT surface; the frontmatter card is quiet metadata
+     * CHROME, and the neutral widget background is the affordance that keeps it
+     * reading as chrome, never content. (--quoll-surface-header only resolves to
+     * editorWidget-background under HC/base :root; under .dark-theme/.light-theme
+     * it is a navy tint, so adopting it would fold the card into the content
+     * family under normal themes — the exact divergence we keep on purpose. Pure
+     * VS Code colour passthroughs also stay --vscode-* at the use site here per
+     * the file's :root convention.) */
     background: var(--vscode-editorWidget-background, transparent);
     /* De-emphasise the whole block so a file-leading frontmatter fence reads as
      * quiet metadata, never a heading: smaller than body prose, the muted
