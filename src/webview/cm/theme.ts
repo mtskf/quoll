@@ -143,11 +143,29 @@ export const quollHighlightSpec: TagStyle[] = [
   // inline token shifts CM's coordsAtPos and would skew click→caret; bg +
   // border-radius are paint-only and geometry-safe. Text colour is left as the
   // line foreground so multi-line fenced code stays fully legible.
+  //
+  // The box-shadow gives the pill ~2px of visual inset around the glyphs
+  // WITHOUT layout impact: a spread-only shadow (0 offset, 0 blur, 2px spread)
+  // in the same surface-fill paints a ring that extends the fill outward, so
+  // glyphs no longer sit flush against the fill edge. It paints outside layout
+  // (unlike padding) so coordsAtPos / click→caret metrics stay untouched.
+  // Inside a fenced block the ring colour matches the line background, so it
+  // stays seamless there too.
+  //
+  // Accepted trade-off: painting the fill OUTSIDE layout is the whole point
+  // (padding would shift coordsAtPos), so the opaque ring necessarily bleeds
+  // ~2px over anything directly abutting the token — the trailing glyph of a
+  // no-space neighbour (`word`code`word`) or a selection highlight under the
+  // pill. In practice the 2px lands mostly in inter-glyph whitespace so text
+  // stays legible, and inline code is near-always space-delimited; any
+  // horizontal-inset approach that avoids this would have to move layout,
+  // which is exactly the geometry desync we are avoiding.
   {
     tag: [t.monospace],
     fontFamily: "var(--vscode-editor-font-family, monospace)",
     backgroundColor: "var(--quoll-surface-fill, transparent)",
     borderRadius: "3px",
+    boxShadow: "0 0 0 2px var(--quoll-surface-fill, transparent)",
   },
   // Links: green content/action accent (clickability affordance is the cursor +
   // underline supplied elsewhere; colour is the accent).
