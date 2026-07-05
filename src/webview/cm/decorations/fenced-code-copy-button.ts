@@ -183,7 +183,7 @@ export function buildCopyButtons(ctx: BuildContext): DecorationSet {
           return;
         }
         seen.add(openFrom);
-        const widget = new CopyButtonWidget(openFrom, fencedCodeBody(ctx.state, node.node));
+        const widget = new CopyButtonWidget(fencedCodeBody(ctx.state, node.node));
         out.push({ from: openFrom, deco: Decoration.widget({ widget, side: -1 }) });
       },
     });

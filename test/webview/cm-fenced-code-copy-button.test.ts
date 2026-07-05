@@ -155,7 +155,7 @@ function pathDs(el: HTMLElement): string[] {
 
 describe("CopyButtonWidget", () => {
   it("renders a Lucide copy icon button with an accessible name (no text label)", () => {
-    const dom = new CopyButtonWidget(0, "x").toDOM({} as EditorView) as HTMLButtonElement;
+    const dom = new CopyButtonWidget("x").toDOM({} as EditorView) as HTMLButtonElement;
     expect(dom.tagName).toBe("BUTTON");
     expect(dom.getAttribute("aria-label")).toBe("Copy code");
     expect(pathDs(dom)).toContain(COPY_ICON_PATH);
@@ -165,7 +165,7 @@ describe("CopyButtonWidget", () => {
     const writeText = vi.fn().mockResolvedValue(undefined);
     vi.stubGlobal("navigator", { clipboard: { writeText } });
     try {
-      const dom = new CopyButtonWidget(0, "const x = 1;\nfoo();").toDOM(
+      const dom = new CopyButtonWidget("const x = 1;\nfoo();").toDOM(
         {} as EditorView
       ) as HTMLButtonElement;
       dom.dispatchEvent(new MouseEvent("click", { bubbles: true }));
@@ -186,7 +186,7 @@ describe("CopyButtonWidget", () => {
     const writeText = vi.fn().mockRejectedValue(new Error("NotAllowedError"));
     vi.stubGlobal("navigator", { clipboard: { writeText } });
     try {
-      const dom = new CopyButtonWidget(0, "x").toDOM({} as EditorView) as HTMLButtonElement;
+      const dom = new CopyButtonWidget("x").toDOM({} as EditorView) as HTMLButtonElement;
       dom.dispatchEvent(new MouseEvent("click", { bubbles: true }));
       await Promise.resolve();
       await Promise.resolve();
@@ -198,15 +198,14 @@ describe("CopyButtonWidget", () => {
     }
   });
 
-  it("eq() is keyed on (docFrom, body)", () => {
-    const a = new CopyButtonWidget(0, "x");
-    expect(a.eq(new CopyButtonWidget(0, "x"))).toBe(true);
-    expect(a.eq(new CopyButtonWidget(0, "y"))).toBe(false);
-    expect(a.eq(new CopyButtonWidget(1, "x"))).toBe(false);
+  it("eq() is keyed on body alone (a positional shift reuses the DOM)", () => {
+    const a = new CopyButtonWidget("x");
+    expect(a.eq(new CopyButtonWidget("x"))).toBe(true); // same body → reuse on shift
+    expect(a.eq(new CopyButtonWidget("y"))).toBe(false); // body edit → rebuild
   });
 
   it("always carries the base copy-button class (no single-line variant)", () => {
-    const btn = new CopyButtonWidget(0, "x").toDOM({} as EditorView) as HTMLButtonElement;
+    const btn = new CopyButtonWidget("x").toDOM({} as EditorView) as HTMLButtonElement;
     expect(btn.classList.contains("quoll-copy-button")).toBe(true);
     expect(btn.classList.contains("quoll-copy-button-single-line")).toBe(false);
   });
@@ -216,7 +215,7 @@ describe("CopyButtonWidget", () => {
     const writeText = vi.fn().mockResolvedValue(undefined);
     vi.stubGlobal("navigator", { clipboard: { writeText } });
     try {
-      const dom = new CopyButtonWidget(0, "x").toDOM({} as EditorView) as HTMLButtonElement;
+      const dom = new CopyButtonWidget("x").toDOM({} as EditorView) as HTMLButtonElement;
       // First click resolves → "Copied" and schedules a 1500ms revert.
       dom.dispatchEvent(new MouseEvent("click", { bubbles: true }));
       await vi.advanceTimersByTimeAsync(0);

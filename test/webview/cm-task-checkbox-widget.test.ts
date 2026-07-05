@@ -332,6 +332,43 @@ describe("CheckboxWidget — toggle dispatch", () => {
     }
   });
 
+  it("updateDOM re-stamps `from` and toggles the NEW marker after a shift", () => {
+    const view = mountWithDoc("- [ ] alpha\n- [ ] beta");
+    try {
+      // "alpha" marker `[` at 2; shift to the "beta" marker `[` at 14.
+      const a = new CheckboxWidget(false, 2, "alpha");
+      const el = a.toDOM(view);
+      const reused = new CheckboxWidget(false, 14, "beta").updateDOM(el, view, a);
+
+      expect(reused).toBe(true);
+      expect(el.dataset.from).toBe("14");
+      expect(el.getAttribute("aria-label")).toBe("Task: beta");
+
+      // mousedown toggles the marker at the STAMPED from (14+1=15), not stale 2.
+      el.dispatchEvent(new MouseEvent("mousedown", { button: 0, bubbles: true, cancelable: true }));
+      expect(view.state.sliceDoc(15, 16)).toBe("x");
+    } finally {
+      view.destroy();
+    }
+  });
+
+  it("updateDOM returns false (forcing a rebuild) on a checked-state change", () => {
+    const view = mountWithDoc("- [ ] alpha");
+    try {
+      const a = new CheckboxWidget(false, 2, "alpha");
+      const el = a.toDOM(view);
+      // Give the new widget BOTH a flipped checked state AND a different from
+      // so that a vacuous implementation that only guarded the class and then
+      // re-stamped would be caught: if updateDOM incorrectly accepted this call,
+      // dataset.from would advance to "99".
+      expect(new CheckboxWidget(true, 99, "alpha").updateDOM(el, view, a)).toBe(false);
+      // Prove updateDOM rejected BEFORE re-stamping — from must stay at "2".
+      expect(el.dataset.from).toBe("2");
+    } finally {
+      view.destroy();
+    }
+  });
+
   it("Space/Enter on the focused widget returns focus to the editor after toggle (round-3 #23 — keyboard UX)", () => {
     // The keydown handler explicitly calls view.focus() after a
     // successful toggle so the keyboard user can keep typing without

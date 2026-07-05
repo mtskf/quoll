@@ -88,21 +88,17 @@ async function copyToClipboard(text: string): Promise<boolean> {
 
 export class CopyButtonWidget extends WidgetType {
   constructor(
-    /** Absolute doc offset of the widget anchor (the open fence line.from). */
-    readonly docFrom: number,
-    /** The exact code body copied on click — in eq() so a body edit rebuilds
-     *  the DOM (and its handler closure) with the fresh payload. */
+    /** The exact code body copied on click — the sole eq() key, so a body edit
+     *  rebuilds the DOM (and its handler closure) with the fresh payload while a
+     *  pure positional shift reuses it (docFrom is not needed: CM tracks the
+     *  widget's position via the decoration range). */
     readonly body: string
   ) {
     super();
   }
 
   eq(other: WidgetType): boolean {
-    return (
-      other instanceof CopyButtonWidget &&
-      other.docFrom === this.docFrom &&
-      other.body === this.body
-    );
+    return other instanceof CopyButtonWidget && other.body === this.body;
   }
 
   toDOM(_view: EditorView): HTMLElement {
