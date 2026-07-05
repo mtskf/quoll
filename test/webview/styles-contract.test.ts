@@ -276,6 +276,21 @@ describe("styles.css — widgets consume the accent tokens (palette refresh use 
   it("table border colour resolves through --quoll-surface-border", () => {
     expect(css).toMatch(/--quoll-table-border\s*:[^;]*--quoll-surface-border/s);
   });
+  it("table cells draw horizontal rules only (border-bottom, no four-edge grid)", () => {
+    // Scope each match to the rule block (selector … `{ … }`) so a matching
+    // literal inside a CSS comment cannot vacuate the guard.
+    const cellBlock = css.match(/\.quoll-table-block th,\s*\.quoll-table-block td\s*\{([^}]*)\}/);
+    expect(cellBlock).not.toBeNull();
+    const cellBody = cellBlock?.[1] ?? "";
+    // Row rule present …
+    expect(cellBody).toMatch(/border-bottom\s*:\s*var\(--quoll-table-border\)/);
+    // … and the old four-edge `border:` shorthand is gone (border-bottom/-width
+    // survive: `border` is not followed by `:` in those).
+    expect(cellBody).not.toMatch(/\bborder\s*:/);
+  });
+  it("header row carries a stronger 2px rule (Notion-style spine)", () => {
+    expect(css).toMatch(/\.quoll-table-block thead th\s*\{[^}]*border-bottom-width\s*:\s*2px/s);
+  });
   it("checked task-checkbox fills AND borders with the muted --quoll-completed-fill (NOT accent green — done recedes)", () => {
     expect(css).toMatch(
       /\.quoll-task-checkbox\[data-checked="true"\]\s*\{[^}]*background-color\s*:\s*var\(--quoll-completed-fill/s

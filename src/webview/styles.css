@@ -124,7 +124,7 @@
     /* Vertical breathing room around a block-table widget. Delivered as
      * PADDING on the wrapper (never margin) — see the widget layer. */
     --quoll-table-block-pad: 0.75em;
-    /* Block-table cell border + inner padding. The border COLOUR resolves
+    /* Block-table row rule + inner cell padding. The rule COLOUR resolves
      * (lazily, at the cell use site) to the navy-tinted --quoll-surface-border
      * accent, falling back to the host editorWidget/panel border pre-theme-class. */
     --quoll-table-border: 1px solid
@@ -454,9 +454,15 @@
     font-variant-numeric: tabular-nums;
   }
 
+  /* Horizontal rules only (Notion-style): a full four-edge grid reads heavy, so
+   * each row carries a single `border-bottom` hairline and no vertical/column
+   * edges. `border-collapse` on the table then leaves a rule between rows plus
+   * a closing rule under the last one. The token stays `--quoll-table-border`
+   * (1px solid, resolving to --quoll-surface-border) — same colour as before,
+   * just applied to one edge. */
   .quoll-table-block th,
   .quoll-table-block td {
-    border: var(--quoll-table-border);
+    border-bottom: var(--quoll-table-border);
     padding: var(--quoll-table-cell-pad);
     vertical-align: top;
     text-align: left;
@@ -465,6 +471,9 @@
   .quoll-table-block thead th {
     background: var(--quoll-surface-header, var(--vscode-editorWidget-background, transparent));
     font-weight: 600;
+    /* Stronger rule under the header row — doubles the hairline so the header
+     * reads as the table's spine (Notion convention). */
+    border-bottom-width: 2px;
   }
 
   .quoll-table-block a {
