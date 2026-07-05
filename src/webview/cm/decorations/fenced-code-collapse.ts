@@ -180,56 +180,250 @@ function selectionEntersCollapsed(prev: DecorationSet, selection: EditorSelectio
   return false;
 }
 
-export const fencedCodeCollapseField = StateField.define<CollapseState>({
-  create: (state) => buildFullState(state, new Set()),
-  update: (prev, tr) => {
-    // DD3: a host-snapshot reseed (full 0..len replace) rebuilds from EMPTY —
-    // mapping keys through a whole-document replace is meaningless and would let a
-    // new doc's first fence inherit expansion. Matches native fold (external edits
-    // clear folds); the restored caret then auto-expands its own block via build.
-    if (tr.annotation(hostDocumentReseed) === true && tr.docChanged) {
-      return buildFullState(tr.state, new Set());
+interface Interval {
+  from: number;
+  to: number;
+}
+
+/** GF — fence pairing AND top-level eligibility are non-local:
+ *  1. a line becoming/ceasing to be a fence delimiter (```/~~~, ≤3 leading spaces/tabs)
+ *     re-pairs fences arbitrarily far away;
+ *  2. a line gaining/losing a LIST or BLOCKQUOTE marker changes whether a fence is
+ *     container-nested (skipped) or top-level (collapsible) — WITHOUT touching the
+ *     fence's own bytes (Codex finding 1).
+ *  A line's delimiter/marker status is purely its own content, so full-recompute
+ *  whenever any changed line — OLD or NEW content — is/was a fence delimiter or a
+ *  container marker. Over-triggering is safe (slower); under-triggering is unsound.
+ *  Editing inside a code BODY or plain prose never hits this (body fence lines already
+ *  close the block; prose lines carry no marker), so the hot path stays bounded.
+ *  WHY blank-line edits need NOT be caught (verified, do NOT re-add a blank-line rule):
+ *  a fence's top-level eligibility is pinned by its OWN opener-line indentation plus the
+ *  container-marker lines above it — NOT by blank-line grouping. A parser probe confirmed
+ *  that no blank-line-only edit flips containment: an INDENTED fence stays nested and a
+ *  COLUMN-0 fence stays top-level across blank insert/delete (deleting the blank between a
+ *  list and a following column-0 fence keeps it top-level — column-0 cannot lazy-continue
+ *  a list item; adding a second blank before a nested fence keeps it nested). Flipping
+ *  requires editing the MARKER line or the fence's own INDENTATION — both land on a
+ *  STRUCTURAL-matching line (marker alt, or the fence delimiter alt which allows ≤3
+ *  leading spaces). This is the crucial difference from imageBlockField: a *paragraph* IS
+ *  regrouped by adjacent blank lines (hence image G1's ±1), but a *fence* is not. G2 +
+ *  the background-parse self-heal remain as defense-in-depth for anything exotic. */
+const STRUCTURAL = /(?:^|\n)[ \t]{0,3}(?:`{3,}|~{3,})|(?:^|\n)[ \t]*(?:[-*+]|\d{1,9}[.)]|>)/;
+function touchesStructural(tr: Transaction): boolean {
+  let hit = false;
+  tr.changes.iterChangedRanges((fromA, toA, fromB, toB) => {
+    if (hit) {
+      return;
     }
-    // 1. Map expanded keys through any document change. DD5: mapPos(key, 1) is the
-    //    best-effort identity carry — an insert at EXACTLY a fence's line.from
-    //    shifts the key off the new line.from and that block re-collapses (rare,
-    //    lossless, pinned by a test). The build re-reconciles liveExpanded against
-    //    real blocks afterwards, so a drifted key simply drops.
-    let working: ReadonlySet<number> = prev.expanded;
-    if (tr.docChanged) {
-      const mapped = new Set<number>();
-      for (const k of prev.expanded) {
-        mapped.add(tr.changes.mapPos(k, 1));
+    const oldSlice = tr.startState.doc.sliceString(
+      tr.startState.doc.lineAt(fromA).from,
+      tr.startState.doc.lineAt(toA).to
+    );
+    const newSlice = tr.state.doc.sliceString(
+      tr.state.doc.lineAt(fromB).from,
+      tr.state.doc.lineAt(toB).to
+    );
+    if (STRUCTURAL.test(oldSlice) || STRUCTURAL.test(newSlice)) {
+      hit = true;
+    }
+  });
+  return hit;
+}
+
+function lineExpand(state: EditorState, from: number, to: number): Interval {
+  const len = state.doc.length;
+  const lo = state.doc.lineAt(Math.max(0, Math.min(from, len)));
+  const hi = state.doc.lineAt(Math.max(0, Math.min(to, len)));
+  // ±1 line neighbour (belt-and-suspenders parity with imageBlockField G1).
+  const prevFrom = lo.from > 0 ? state.doc.lineAt(lo.from - 1).from : lo.from;
+  const nextTo = hi.to < len ? state.doc.lineAt(hi.to + 1).to : hi.to;
+  return { from: prevFrom, to: nextTo };
+}
+
+function mergeIntervals(intervals: Interval[]): Interval[] {
+  if (intervals.length === 0) {
+    return [];
+  }
+  const sorted = [...intervals].sort((a, b) => a.from - b.from);
+  const out: Interval[] = [{ ...sorted[0] }];
+  for (let i = 1; i < sorted.length; i++) {
+    const last = out[out.length - 1];
+    const cur = sorted[i];
+    if (cur.from <= last.to) {
+      last.to = Math.max(last.to, cur.to);
+    } else {
+      out.push({ ...cur });
+    }
+  }
+  return out;
+}
+
+/** Changed range(s) ∪ old/new selection ranges, each line-expanded (±1). Selection
+ *  ranges are included so a block whose auto-expand status flips (a head entering/
+ *  leaving its concealed region) is inside the span and rebuilt. */
+function computeExtendedSpan(tr: Transaction): Interval[] {
+  const state = tr.state;
+  const raw: Interval[] = [];
+  if (tr.docChanged) {
+    tr.changes.iterChangedRanges((_fa, _ta, fromB, toB) => raw.push(lineExpand(state, fromB, toB)));
+  }
+  for (const r of tr.startState.selection.ranges) {
+    const a = tr.changes.mapPos(r.from, 1);
+    const b = tr.changes.mapPos(r.to, -1);
+    raw.push(lineExpand(state, Math.min(a, b), Math.max(a, b)));
+  }
+  for (const r of tr.state.selection.ranges) {
+    raw.push(lineExpand(state, r.from, r.to));
+  }
+  return mergeIntervals(raw);
+}
+
+function intersectsAny(intervals: Interval[], from: number, to: number): boolean {
+  for (const iv of intervals) {
+    if (from <= iv.to && iv.from <= to) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/** Reconstruct a reused record at shifted positions (bytes unchanged → geometry shifts
+ *  rigidly; only the widget key needs remapping so the toggle command still resolves
+ *  the block). Returns `b` VERBATIM when nothing shifted — the reference-identity the
+ *  non-vacuity test asserts. */
+function shiftRecord(b: FencedBlockRecord, tr: Transaction): FencedBlockRecord {
+  const key = tr.changes.mapPos(b.key, 1);
+  const blockFrom = tr.changes.mapPos(b.blockFrom, 1);
+  const blockTo = tr.changes.mapPos(b.blockTo, -1);
+  const decoFrom = tr.changes.mapPos(b.decoFrom, 1);
+  const decoTo = b.expanded ? decoFrom : tr.changes.mapPos(b.decoTo, -1);
+  if (
+    key === b.key &&
+    blockFrom === b.blockFrom &&
+    blockTo === b.blockTo &&
+    decoFrom === b.decoFrom &&
+    decoTo === b.decoTo
+  ) {
+    return b;
+  }
+  const widget = new FencedCollapseToggleWidget(key, b.expanded, b.hiddenCount);
+  const deco = b.expanded
+    ? Decoration.widget({ widget, block: true, side: 1 })
+    : Decoration.replace({ widget, block: true });
+  return {
+    key,
+    blockFrom,
+    blockTo,
+    expanded: b.expanded,
+    hiddenCount: b.hiddenCount,
+    decoFrom,
+    decoTo,
+    deco,
+  };
+}
+
+/** Reuse prev records whose FULL extent [blockFrom, blockTo] is untouched AND outside
+ *  the span; re-walk the tree only inside the span. Full-extent liveness — NOT the
+ *  decoration range, which covers only the concealed tail. */
+function computeBounded(
+  prevBlocks: readonly FencedBlockRecord[],
+  tr: Transaction,
+  intervals: Interval[],
+  working: ReadonlySet<number>
+): CollapseState {
+  const byFrom = new Map<number, FencedBlockRecord>();
+  for (const b of prevBlocks) {
+    const touched = tr.changes.touchesRange(b.blockFrom, b.blockTo) !== false;
+    const newFrom = tr.changes.mapPos(b.blockFrom, 1);
+    const newTo = tr.changes.mapPos(b.blockTo, -1);
+    if (!touched && !intersectsAny(intervals, newFrom, newTo)) {
+      const r = shiftRecord(b, tr);
+      byFrom.set(r.blockFrom, r);
+    }
+  }
+  for (const iv of intervals) {
+    for (const r of buildFencedRange(tr.state, working, iv.from, iv.to)) {
+      byFrom.set(r.blockFrom, r); // fresh wins (a block spanning two intervals de-dupes)
+    }
+  }
+  return assemble([...byFrom.values()]);
+}
+
+type BuildMode = "bounded" | "full";
+
+/** One reducer, two configs. `bounded` (production) takes the changed-range path on a
+ *  plain docChanged; `full` (test-only oracle) always full-recomputes there. Both share
+ *  every other branch (reseed / effect / GF / background-parse / selection), so the full
+ *  variant threads the SAME sticky `expanded` state — which a fresh EditorState.create
+ *  cannot model — making bounded≡full a true replay equivalence. The oracle omits
+ *  `provide` so two block-decoration fields never collide in one view. */
+function defineField(mode: BuildMode): StateField<CollapseState> {
+  return StateField.define<CollapseState>({
+    create: (state) => buildFullState(state, new Set()),
+    update: (prev, tr) => {
+      // 1. DD3 host-snapshot reseed → rebuild from EMPTY.
+      if (tr.annotation(hostDocumentReseed) === true && tr.docChanged) {
+        return buildFullState(tr.state, new Set());
       }
-      working = mapped;
-    }
-    // 2. Apply toggle effects.
-    let effectTouched = false;
-    for (const e of tr.effects) {
-      if (e.is(setFencedCollapseEffect)) {
-        effectTouched = true;
-        const next = new Set(working);
-        if (e.value.expanded) {
-          next.add(e.value.key);
-        } else {
-          next.delete(e.value.key);
+      // 2. Map expanded keys through the change; apply toggle effects (DD5).
+      let working: ReadonlySet<number> = prev.expanded;
+      if (tr.docChanged) {
+        const mapped = new Set<number>();
+        for (const k of prev.expanded) {
+          mapped.add(tr.changes.mapPos(k, 1));
         }
-        working = next;
+        working = mapped;
       }
-    }
-    const treeChanged = syntaxTree(tr.startState) !== syntaxTree(tr.state);
-    // 3. Doc / effect / async-parse changes always rebuild.
-    if (tr.docChanged || effectTouched || treeChanged) {
-      return buildFullState(tr.state, working);
-    }
-    // 4. DD2 fast-path: a selection-only transaction rebuilds ONLY when a head
-    //    enters a collapsed region (→ auto-expand). Otherwise decorations are
-    //    unchanged — return `prev` verbatim (no walk, no new DecorationSet).
-    const selectionMoved = !tr.startState.selection.eq(tr.state.selection);
-    if (selectionMoved && selectionEntersCollapsed(prev.decorations, tr.state.selection)) {
-      return buildFullState(tr.state, working);
-    }
-    return prev;
-  },
-  provide: (f) => EditorView.decorations.from(f, (s) => s.decorations),
-});
+      let effectTouched = false;
+      for (const e of tr.effects) {
+        if (e.is(setFencedCollapseEffect)) {
+          effectTouched = true;
+          const next = new Set(working);
+          if (e.value.expanded) {
+            next.add(e.value.key);
+          } else {
+            next.delete(e.value.key);
+          }
+          working = next;
+        }
+      }
+      // 3. Effect toggle (rare user gesture — a toggled block can be anywhere) → full.
+      //    GF structural edit (fence-delimiter / container-marker) → full (non-local).
+      if (effectTouched || (tr.docChanged && touchesStructural(tr))) {
+        return buildFullState(tr.state, working);
+      }
+      // 4. Hot path: a plain docChanged rebuilds changed-range-bounded, with the G2
+      //    frontier fallback (an incomplete parse can reveal nodes outside the span).
+      if (tr.docChanged) {
+        if (mode === "full" || !syntaxTreeAvailable(tr.state, tr.state.doc.length)) {
+          return buildFullState(tr.state, working);
+        }
+        return computeBounded(prev.blocks, tr, computeExtendedSpan(tr), working);
+      }
+      // 5. Background-parse publication (tree identity changed, no doc change) → full
+      //    to self-heal any node the earlier bounded walk could not see.
+      if (syntaxTree(tr.startState) !== syntaxTree(tr.state)) {
+        return buildFullState(tr.state, working);
+      }
+      // 6. Selection-only: rebuild ONLY when a head enters a currently-collapsed region
+      //    (auto-expand). Otherwise decorations are unchanged — return `prev` verbatim.
+      const selectionMoved = !tr.startState.selection.eq(tr.state.selection);
+      if (selectionMoved && selectionEntersCollapsed(prev.decorations, tr.state.selection)) {
+        return buildFullState(tr.state, working);
+      }
+      return prev;
+    },
+    ...(mode === "bounded"
+      ? {
+          provide: (f: StateField<CollapseState>) =>
+            EditorView.decorations.from(f, (s) => s.decorations),
+        }
+      : {}),
+  });
+}
+
+export const fencedCodeCollapseField = defineField("bounded");
+// Test-only oracle — identical reducer, always full-recompute on docChanged, NO
+// `provide` (never wired into editor.ts). Used by cm-fenced-collapse-bounded.test.ts
+// as the bounded≡full oracle; it carries the same sticky expanded state.
+export const fencedCodeCollapseFieldFullRecompute = defineField("full");
