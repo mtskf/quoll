@@ -30,70 +30,117 @@ import { type EditorState, StateField } from "@codemirror/state";
 import { Decoration, type DecorationSet, EditorView } from "@codemirror/view";
 
 import { hostDocumentReseed } from "../frontmatter/reveal-state.js";
-import {
-  CALLOUT_MARKER_HIDDEN_CLASS,
-  calloutMarkerConceal,
-  calloutTypeForOutermost,
-} from "./callout.js";
+import { CALLOUT_MARKER_HIDDEN_CLASS, calloutTypeForOutermost } from "./callout.js";
 import { quollSyntaxExclusionZones } from "./orchestrator.js";
+import { intersectsAnySelection } from "./shared.js";
 
 type Zone = { from: number; to: number };
 
-interface ConcealState {
-  /** Concealed marker-line spans (one per outermost callout with a hidden marker),
-   *  in document order. Compared on a selection-only move to decide whether to keep
-   *  `prev` verbatim (F3). */
-  markers: readonly Zone[];
-  decorations: DecorationSet;
-  /** The published exclusion zones — identical content to `markers`, held as a
-   *  distinct field so the facet provider (`s => s.zones`) returns a stable
-   *  reference whenever `update` keeps `prev` verbatim (F3). */
-  zones: readonly Zone[];
-  /** Selection-INDEPENDENT: does ANY outermost callout have ≥1 body line (i.e. a
-   *  concealable marker)? Gates the selection-only rebuild (mirrors block-style's
-   *  hasBoundaryFence caret-hot-path gate) — a doc with no concealable callout stays
-   *  off the caret-move rebuild path. */
-  hasConcealable: boolean;
+/** Selection-INDEPENDENT facts about one outermost callout that HAS a body (a
+ *  marker-only callout is never a record — it never conceals). `markerFrom` is
+ *  both the block's first-line start AND the concealed marker span's start;
+ *  `blockTo` is the block's last CONTENT line end (`doc.lineAt(node.to - 1).to`,
+ *  robust to a Lezer `to` overshoot per [[quoll-lezer-table-to-overshoots-trailing-line]]).
+ *  The selection-dependent conceal decision is applied later in `deriveMarkers`. */
+interface CalloutRecord {
+  markerFrom: number;
+  markerTo: number;
+  blockTo: number;
 }
 
-/** Walk every Blockquote and collect the marker spans to conceal for the current
- *  selection. `hasConcealable` is computed selection-INDEPENDENTLY (an outermost
- *  callout with a body is concealable regardless of where the caret is now). */
-function build(state: EditorState): ConcealState {
+interface ConcealState {
+  /** Selection-independent, doc-ordered by `markerFrom`. The changed-range bounded
+   *  recompute (Task 2) reuses/rebuilds THIS; markers/decorations/zones derive from it. */
+  records: readonly CalloutRecord[];
+  /** Concealed marker-line spans for the CURRENT selection, doc-ordered. Compared on
+   *  a selection-only move to keep `prev` verbatim (F3). */
+  markers: readonly Zone[];
+  decorations: DecorationSet;
+  /** Published exclusion zones — same content as `markers`, a distinct field so the
+   *  facet provider returns a stable reference whenever `update` keeps `prev` (F3). */
+  zones: readonly Zone[];
+}
+
+/** Collect every outermost callout WITH a body whose Blockquote node OVERLAPS
+ *  [rangeFrom, rangeTo]. Called with [0, doc.length] for a full (re)build and with
+ *  each bounded interval on the keystroke path (Task 2). A bounded `{from,to}`
+ *  iterate materialises only the touched subtree — the whole point of the bounding
+ *  (PERF.md: the cost is whole-tree materialisation, NOT node descent, so this is
+ *  the changed-range shape, NOT a prune-descent). Doc order → already sorted by
+ *  `markerFrom`. Selection-INDEPENDENT: the caret does not affect record membership.
+ *  `calloutTypeForOutermost` already excludes nested (`> >` inner) AND list-nested
+ *  (`- > [!NOTE]`) blockquotes (the marker regex anchors at `^ {0,3}>`), so no
+ *  container-descent special-casing is needed — a top-level callout is the only shape
+ *  that yields a record. A bounded `{from,to}` walk still ENTERS a Blockquote whose
+ *  node starts ABOVE `rangeFrom` when it overlaps the range, so an interior edit deep
+ *  in a large callout re-emits that callout's record with its true (far-above) marker
+ *  line — the property that makes interior-edit reuse-skip sound. */
+function buildRange(state: EditorState, rangeFrom: number, rangeTo: number): CalloutRecord[] {
   const doc = state.doc;
-  const markers: Zone[] = [];
-  let hasConcealable = false;
+  const out: CalloutRecord[] = [];
   syntaxTree(state).iterate({
+    from: rangeFrom,
+    to: rangeTo,
     enter: (node) => {
       if (node.name !== "Blockquote" || calloutTypeForOutermost(doc, node.node) === null) {
         return;
       }
-      // Outermost callout. It is CONCEALABLE (independent of the caret) iff it has
-      // a body line — a marker-only callout never conceals (see calloutMarkerConceal).
-      if (doc.lineAt(node.to - 1).number > doc.lineAt(node.from).number) {
-        hasConcealable = true;
+      const firstLine = doc.lineAt(node.from);
+      const lastLine = doc.lineAt(node.to - 1);
+      if (lastLine.number === firstLine.number) {
+        return; // marker-only callout: never a record (never conceals)
       }
-      const span = calloutMarkerConceal(doc, state.selection, node.node);
-      if (span !== null) {
-        markers.push(span);
-      }
+      out.push({ markerFrom: firstLine.from, markerTo: firstLine.to, blockTo: lastLine.to });
     },
   });
-  // F2 (load-bearing): the per-marker line-deco and replace share the SAME
-  // line.from; a RangeSetBuilder REJECTS a replace added before a line decoration
-  // at the same pos (line decos have a lower startSide). Decoration.set(_, true)
-  // sorts them so CM accepts the pair.
+  return out;
+}
+
+function buildFull(state: EditorState): CalloutRecord[] {
+  return buildRange(state, 0, state.doc.length);
+}
+
+/** Apply the SELECTION-dependent conceal decision to a record list. A callout's
+ *  marker row conceals iff no selection range intersects its full block span
+ *  [markerFrom, blockTo] — identical to `calloutBlockRevealed` / `calloutMarkerConceal`
+ *  in callout.ts (the marker-only + not-a-callout cases are already excluded at
+ *  record-build time). Records are doc-ordered, so markers come out doc-ordered. */
+function deriveMarkers(records: readonly CalloutRecord[], state: EditorState): Zone[] {
+  const markers: Zone[] = [];
+  for (const rec of records) {
+    if (!intersectsAnySelection(state.selection, rec.markerFrom, rec.blockTo)) {
+      markers.push({ from: rec.markerFrom, to: rec.markerTo });
+    }
+  }
+  return markers;
+}
+
+/** The per-marker line-deco + replace share the SAME line.from; a RangeSetBuilder
+ *  REJECTS a replace added before a line decoration at the same pos (line decos have
+ *  a lower startSide). `Decoration.set(_, true)` sorts them so CM accepts the pair. */
+function buildDecorations(markers: readonly Zone[]): DecorationSet {
   const ranges = markers.flatMap((m) => [
     Decoration.line({ class: CALLOUT_MARKER_HIDDEN_CLASS }).range(m.from),
     Decoration.replace({}).range(m.from, m.to),
   ]);
-  const decorations = Decoration.set(ranges, true);
-  const zones: Zone[] = markers.map((m) => ({ from: m.from, to: m.to }));
-  return { markers, decorations, zones, hasConcealable };
+  return Decoration.set(ranges, true);
+}
+
+function assemble(records: readonly CalloutRecord[], markers: readonly Zone[]): ConcealState {
+  return {
+    records,
+    markers,
+    decorations: buildDecorations(markers),
+    zones: markers.map((m) => ({ from: m.from, to: m.to })),
+  };
+}
+
+function deriveState(records: readonly CalloutRecord[], state: EditorState): ConcealState {
+  return assemble(records, deriveMarkers(records, state));
 }
 
 /** Content-equality of two marker-span lists (same length, same from/to pairwise).
- *  Marker lists are always doc-ordered, so a positional compare is exact. */
+ *  Both are always doc-ordered, so a positional compare is exact. */
 function markersEqual(a: readonly Zone[], b: readonly Zone[]): boolean {
   if (a.length !== b.length) {
     return false;
@@ -107,29 +154,31 @@ function markersEqual(a: readonly Zone[], b: readonly Zone[]): boolean {
 }
 
 export const calloutMarkerConcealField = StateField.define<ConcealState>({
-  create: (state) => build(state),
+  create: (state) => deriveState(buildFull(state), state),
   update: (prev, tr) => {
-    // A host-snapshot reseed (full 0..len replace) rebuilds from the reseeded
-    // state — mapping marker spans through a whole-document replace is meaningless
-    // (parity with fencedCodeCollapseField's reseed branch).
+    // A host-snapshot reseed (full 0..len replace) rebuilds from the reseeded state —
+    // mapping records through a whole-document replace is meaningless (parity with
+    // the sibling block fields' reseed branch).
     if (tr.annotation(hostDocumentReseed) === true && tr.docChanged) {
-      return build(tr.state);
+      return deriveState(buildFull(tr.state), tr.state);
     }
-    const treeChanged = syntaxTree(tr.startState) !== syntaxTree(tr.state);
-    // Doc / async-parse changes always rebuild (positions + tree moved).
-    if (tr.docChanged || treeChanged) {
-      return build(tr.state);
+    // Doc change: rebuild records (Task 2 bounds this; for now, full).
+    if (tr.docChanged) {
+      return deriveState(buildFull(tr.state), tr.state);
     }
-    // Selection-only move. Rebuild ONLY when a callout is concealable (cached,
-    // selection-independent gate). Then return `prev` VERBATIM when the rebuilt
-    // markers are content-equal — CM only re-runs the facet combiner when this
-    // field returns a NEW object identity, so a fresh equal-content value would
-    // churn quollSyntaxExclusionZones and make block-style rebuild noisily. This is
-    // the exact condition under which "no gate on block-style" (R2) holds (F3).
-    const selectionMoved = !tr.startState.selection.eq(tr.state.selection);
-    if (selectionMoved && prev.hasConcealable) {
-      const next = build(tr.state);
-      return markersEqual(next.markers, prev.markers) ? prev : next;
+    // Async background-parse publication (tree identity changed, no doc change):
+    // real Blockquote nodes may have just landed → full rebuild to self-heal.
+    if (syntaxTree(tr.startState) !== syntaxTree(tr.state)) {
+      return deriveState(buildFull(tr.state), tr.state);
+    }
+    // Selection-only move. Records are selection-INDEPENDENT and the doc did not
+    // change, so REUSE prev.records; only the concealed set can differ. Return `prev`
+    // VERBATIM when the concealed markers are content-equal — CM re-runs the facet
+    // combiner only on a NEW field identity, so a fresh equal-content value would
+    // churn quollSyntaxExclusionZones and make block-style rebuild noisily (F3).
+    if (!tr.startState.selection.eq(tr.state.selection)) {
+      const nextMarkers = deriveMarkers(prev.records, tr.state);
+      return markersEqual(nextMarkers, prev.markers) ? prev : assemble(prev.records, nextMarkers);
     }
     return prev;
   },
