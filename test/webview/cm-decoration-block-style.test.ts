@@ -49,6 +49,12 @@ describe("theme.ts — quollHighlightSpec navy+green token contract (palette ref
     expect(String(mono?.backgroundColor)).toMatch(/--quoll-surface-fill/);
     // Geometry-safety rationale: no padding on the inline token (would skew coordsAtPos).
     expect(mono && "padding" in mono).toBe(false);
+    // The pill inset is painted as a spread-only box-shadow ring in the SAME
+    // surface-fill (not padding) so it adds no layout and stays seamless in
+    // fenced code — the "seamless" claim depends on ring-var == background-var,
+    // so pin both use the same token.
+    expect(String(mono?.boxShadow)).toBe("0 0 0 2px var(--quoll-surface-fill, transparent)");
+    expect(String(mono?.boxShadow)).toContain("--quoll-surface-fill");
   });
 
   it("nested-quote depth-2/-3 rules deepen ONLY the fill (color-mix over the base)", () => {
