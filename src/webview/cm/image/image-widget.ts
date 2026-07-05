@@ -64,6 +64,10 @@ export class ImageBlockWidget extends WidgetType {
     // with the visible DOM; breathing room comes from padding on the wrapper.
     const root = document.createElement("div");
     root.className = "quoll-block quoll-image-block";
+    // Caret target stored on the DOM so a reused element (updateDOM) reflects
+    // the CURRENT docFrom, not a stale toDOM-time closure (mirrors the table
+    // widget's data-doc-from margin fallback).
+    root.dataset.docFrom = String(this.docFrom);
 
     if (this.safeUrl !== null) {
       const src = this.safeUrl;
@@ -123,10 +127,32 @@ export class ImageBlockWidget extends WidgetType {
     // widget, so (unlike the table widget) there is no modifier-click
     // navigation exception to guard.
     root.addEventListener("click", () => {
-      view.dispatch({ selection: { anchor: this.docFrom } });
+      const stamped = root.dataset.docFrom;
+      view.dispatch({
+        selection: { anchor: stamped !== undefined ? Number(stamped) : this.docFrom },
+      });
     });
 
     return root;
+  }
+
+  updateDOM(dom: HTMLElement, _view: EditorView, from: ImageBlockWidget): boolean {
+    // CM calls updateDOM only when eq() returned false, passing the prior
+    // same-class widget as `from`. eq() keys on (docFrom, slice); alt/safeUrl
+    // are pure functions of the slice (and the static resource-base facet). So
+    // from.slice === this.slice means only docFrom shifted — re-stamp the caret
+    // target and reuse the <img> (avoids per-keystroke <img> recreation + reflow
+    // when typing above the image). A changed slice returns false so CM does a
+    // full toDOM rebuild, which re-gates the URL via the freshly-passed
+    // safeUrl — updateDOM NEVER re-gates or mutates src itself.
+    if (!dom.classList.contains("quoll-image-block")) {
+      return false;
+    }
+    if (from.slice !== this.slice) {
+      return false;
+    }
+    dom.dataset.docFrom = String(this.docFrom);
+    return true;
   }
 
   ignoreEvent(): boolean {
