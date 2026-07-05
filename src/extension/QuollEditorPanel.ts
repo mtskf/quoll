@@ -68,6 +68,7 @@ import {
   buildImageWriteResultMessage,
   buildThemeMessage,
 } from "./document-message.js";
+import { createEditSettledBarrier } from "./edit-settled-barrier.js";
 import { takeSwitchCaret } from "./editor-switch-caret.js";
 import { getNonce } from "./getNonce.js";
 import { handleCodexContextHandoff } from "./handle-codex-context-handoff.js";
@@ -78,6 +79,7 @@ import {
   createHostSessionCore,
   type HostSessionEffect,
   type HostSessionEvent,
+  isWriteLockHeld,
 } from "./host-session-core.js";
 import { handleImageWrite } from "./image-write-service.js";
 import { toLintDiagnostics } from "./lint-diagnostics.js";
@@ -261,6 +263,20 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
     });
     let state = core.initialState(document.version);
 
+    // Edit-applied barrier for the document side channels (context-handoff /
+    // codex-context-handoff / switch-to-text). It DEFERS a side-channel thunk
+    // while the host write lock is held (a flushed edit is still applying —
+    // PR #54 flush-before-post + VS Code's non-serialised async handlers) and
+    // drains it once a SUCCESSFUL settlement releases the lock, so the handoff
+    // reads the APPLIED document rather than the pre-edit snapshot. On a FAILED
+    // apply the deferred thunk is dropped (no valid post-edit state). Reads the
+    // reducer's published lock state ONLY (isWriteLockHeld); the side channels
+    // never enter the reducer.
+    const editSettledBarrier = createEditSettledBarrier({
+      isLocked: () => isWriteLockHeld(state),
+      isDisposed: () => disposed,
+    });
+
     // Queued, non-recursive dispatch. `step` runs one transition + its
     // effects + the state mutation; the unit-tested createDrainingDispatcher
     // owns the queue + draining guard, so a re-entrant feedback dispatch (an
@@ -274,6 +290,18 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
       const result = core.transition(state, event);
       state = result.state;
       runEffects(result.effects);
+      // Drain any side channel deferred behind the write lock once a SUCCESSFUL
+      // settlement has released it. `applied` is false only for a FAILED apply
+      // settlement — then the deferred thunk is dropped (the edit never landed,
+      // so it would read pre-edit state). Placed AFTER runEffects so a
+      // settlement that re-acquires the lock via the stash drain (its
+      // `applyEdit` effect ran above, re-setting the lock in `state`) keeps the
+      // barrier deferred. Side channels are async (`void handle…` /
+      // `void openInTextEditor…`) and do not synchronously re-enter dispatch, so
+      // this cannot recurse into the active drain loop; the barrier also
+      // isolates any synchronous thunk throw via onError.
+      const editApplied = !(event.type === "applyEditSettled" && event.outcome.kind !== "ok");
+      editSettledBarrier.settle(editApplied);
     };
     dispatch = createDrainingDispatcher<HostSessionEvent>(step);
 
@@ -1035,27 +1063,36 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
           if (disposed) {
             return;
           }
-          void handleContextHandoff(
-            {
-              hasSelection: raw.hasSelection,
-              startLine: raw.startLine,
-              endLine: raw.endLine,
-            },
-            {
-              relativePath: workspace.asRelativePath(document.uri),
-              getLineCount: () => document.lineCount,
-              isDirty: document.isDirty,
-              save: () => document.save(),
-              writeClipboard: (text) => env.clipboard.writeText(text),
-              executeCommand: (id) => commands.executeCommand(id),
-              showInfo: (message) => window.showInformationMessage(message),
-              showWarn: (message) => window.showWarningMessage(message),
-              showError: (message) => window.showErrorMessage(message),
-              // Tier-0 activeTextEditor choreography — hoisted closures above.
-              revealForMention,
-              isDocumentActiveTextEditor,
-            }
-          );
+          // Edit-applied barrier: if a flushed edit is still applying (write
+          // lock held), DEFER the handoff so its save/clamp/delegation read the
+          // applied document, not the pre-edit snapshot. Runs immediately when
+          // the lock is free (the common path). `raw` is a const binding to the
+          // inbound message object — stable across the deferral window (the
+          // object is not mutated and cannot be reassigned), so the deferred
+          // reads of raw.hasSelection/startLine/endLine are safe.
+          editSettledBarrier.run(() => {
+            void handleContextHandoff(
+              {
+                hasSelection: raw.hasSelection,
+                startLine: raw.startLine,
+                endLine: raw.endLine,
+              },
+              {
+                relativePath: workspace.asRelativePath(document.uri),
+                getLineCount: () => document.lineCount,
+                isDirty: document.isDirty,
+                save: () => document.save(),
+                writeClipboard: (text) => env.clipboard.writeText(text),
+                executeCommand: (id) => commands.executeCommand(id),
+                showInfo: (message) => window.showInformationMessage(message),
+                showWarn: (message) => window.showWarningMessage(message),
+                showError: (message) => window.showErrorMessage(message),
+                // Tier-0 activeTextEditor choreography — hoisted closures above.
+                revealForMention,
+                isDocumentActiveTextEditor,
+              }
+            );
+          });
           return;
         }
         case "codex-context-handoff": {
@@ -1072,16 +1109,27 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
           if (codexHandoffInFlight) {
             return;
           }
+          // Set the single-flight guard at RECEIPT so a rapid ⌘J repeat during
+          // the barrier-deferral window is dropped (not queued twice). Cleared
+          // in the handler's .finally below. NOTE: if the deferred thunk is
+          // dropped on dispose its .finally never runs and this flag stays true,
+          // but the flag lives in the disposed panel's closure and is never read
+          // again — safe.
           codexHandoffInFlight = true;
-          void handleCodexContextHandoff({
-            documentUri: document.uri,
-            isDirty: document.isDirty,
-            save: () => document.save(),
-            executeCommand: (id, arg) => commands.executeCommand(id, arg),
-            showInfo: (message) => window.showInformationMessage(message),
-            showWarn: (message) => window.showWarningMessage(message),
-          }).finally(() => {
-            codexHandoffInFlight = false;
+          // Edit-applied barrier: defer the whole-file add behind an in-flight
+          // apply so Codex reads the APPLIED file (addFileToThread reads disk
+          // after our save()), not the pre-edit snapshot.
+          editSettledBarrier.run(() => {
+            void handleCodexContextHandoff({
+              documentUri: document.uri,
+              isDirty: document.isDirty,
+              save: () => document.save(),
+              executeCommand: (id, arg) => commands.executeCommand(id, arg),
+              showInfo: (message) => window.showInformationMessage(message),
+              showWarn: (message) => window.showWarningMessage(message),
+            }).finally(() => {
+              codexHandoffInFlight = false;
+            });
           });
           return;
         }
@@ -1111,40 +1159,48 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
           // Never enters the host-session core (no write lock, no document
           // mutation). The panel owns document.uri, so no path crosses the wire.
           //
+          // Edit-applied barrier: if a flushed edit is still applying, DEFER the
+          // switch so the reopened text editor shows the applied content (and
+          // the caret handoff clamps against the applied document). Runs
+          // immediately when the lock is free.
+          //
           // Caret handoff: vscode.openWith disposes THIS panel as part of the
           // swap, unsubscribing the window.onDidChangeActiveTextEditor caret
           // listener BEFORE the text editor activates — so we cannot rely on it.
-          // Capture lastKnownCaret now and apply it directly once openWith
-          // resolves. applyCaretToTextEditor + document.uri are closure locals,
-          // safe to call post-dispose (they touch a TextEditor, not the webview).
-          const caret = lastKnownCaret;
-          void openInTextEditor(document.uri).then(
-            () => {
-              if (caret === null) {
-                return;
-              }
-              const editor = window.visibleTextEditors.find(
-                (e) => e.document.uri.toString() === document.uri.toString()
-              );
-              if (editor) {
-                applyCaretToTextEditor(editor, caret);
-              }
-            },
-            (err: unknown) => {
-              // Symmetric with quoll.toggleEditor's forward error toast (a
-              // silent console-only failure would make the button look dead).
-              console.error("[quoll] switch-to-text openWith rejected", err);
-              void window
-                .showErrorMessage(
-                  `Quoll: could not open the text editor: ${
-                    err instanceof Error ? err.message : String(err)
-                  }`
-                )
-                .then(undefined, (e: unknown) =>
-                  console.error("[quoll] showErrorMessage rejected", e)
+          // Capture lastKnownCaret at run time and apply it directly once
+          // openWith resolves. applyCaretToTextEditor + document.uri are closure
+          // locals, safe to call post-dispose (they touch a TextEditor, not the
+          // webview).
+          editSettledBarrier.run(() => {
+            const caret = lastKnownCaret;
+            void openInTextEditor(document.uri).then(
+              () => {
+                if (caret === null) {
+                  return;
+                }
+                const editor = window.visibleTextEditors.find(
+                  (e) => e.document.uri.toString() === document.uri.toString()
                 );
-            }
-          );
+                if (editor) {
+                  applyCaretToTextEditor(editor, caret);
+                }
+              },
+              (err: unknown) => {
+                // Symmetric with quoll.toggleEditor's forward error toast (a
+                // silent console-only failure would make the button look dead).
+                console.error("[quoll] switch-to-text openWith rejected", err);
+                void window
+                  .showErrorMessage(
+                    `Quoll: could not open the text editor: ${
+                      err instanceof Error ? err.message : String(err)
+                    }`
+                  )
+                  .then(undefined, (e: unknown) =>
+                    console.error("[quoll] showErrorMessage rejected", e)
+                  );
+              }
+            );
+          });
           return;
         }
         default: {
