@@ -1090,34 +1090,29 @@ describe("theme.ts — callout admonition per-type rules", () => {
     expect(base?.backgroundColor).toBeUndefined();
   });
 
-  it("each type sets its own accent colour + icon custom property", () => {
-    for (const [type, accent, icon] of [
-      ["note", "editorInfo-foreground", "ℹ️"],
-      ["tip", "charts-green", "💡"],
-      ["important", "charts-purple", "❗"],
-      ["warning", "editorWarning-foreground", "⚠️"],
-      ["caution", "editorError-foreground", "🚨"],
+  it("each type sets its own accent colour custom property (no emoji icon)", () => {
+    for (const [type, accent] of [
+      ["note", "editorInfo-foreground"],
+      ["tip", "charts-green"],
+      ["important", "charts-purple"],
+      ["warning", "editorWarning-foreground"],
+      ["caution", "editorError-foreground"],
     ] as const) {
       const rule = spec[`.cm-line.quoll-callout-${type}`];
       expect(rule?.["--quoll-callout-accent"]).toContain(accent);
-      expect(rule?.["--quoll-callout-icon"]).toContain(icon);
+      // The per-type emoji badge was dropped — accent bar + marker weight carry
+      // the callout type. No icon custom property remains on any type.
+      expect(rule?.["--quoll-callout-icon"]).toBeUndefined();
     }
   });
 
-  it("a top-right ::after badge consumes the per-type icon (absolutely positioned, on the -open line)", () => {
-    // The badge rides `.quoll-callout.quoll-blockquote-open` (the marker row when
-    // revealed, the first body line when concealed) so ONE selector covers both
-    // states; the old per-marker ::before is gone.
-    const badge = spec[".cm-line.quoll-callout.quoll-blockquote-open::after"];
-    expect(badge?.content).toContain("var(--quoll-callout-icon");
-    expect(badge?.position).toBe("absolute");
-    expect(badge?.right).toBeTruthy();
-    // The -open line is a positioning context and reserves inline space for the
-    // absolutely-positioned badge (so a long title never paints under the emoji).
-    const openLine = spec[".cm-line.quoll-callout.quoll-blockquote-open"];
-    expect(openLine?.position).toBe("relative");
-    expect(openLine?.paddingRight).toBe("calc(var(--quoll-block-pad-x, 16px) + 1.5em)");
-    // The old marker ::before rule is GONE; the marker line keeps only the header weight.
+  it("no emoji badge is painted — the marker line keeps only the header weight", () => {
+    // The old per-type badge (a `.quoll-callout.quoll-blockquote-open::after`
+    // consuming `--quoll-callout-icon`) is GONE, along with the -open line's
+    // relative positioning / reserved right pad that anchored it.
+    expect(spec[".cm-line.quoll-callout.quoll-blockquote-open::after"]).toBeUndefined();
+    expect(spec[".cm-line.quoll-callout.quoll-blockquote-open"]).toBeUndefined();
+    // The old marker ::before rule is GONE too; the marker line keeps only the header weight.
     expect(spec[".cm-line.quoll-callout-marker::before"]).toBeUndefined();
     expect(spec[".cm-line.quoll-callout-marker"]?.fontWeight).toBe("600");
     // A concealed marker row collapses to zero height (the 5-prop copy of the
@@ -1128,10 +1123,5 @@ describe("theme.ts — callout admonition per-type rules", () => {
     expect(hidden?.paddingTop).toBe("0");
     expect(hidden?.paddingBottom).toBe("0");
     expect(hidden?.lineHeight).toBe("0");
-    // The trailing space is dropped from every icon value (the badge supplies its
-    // own inline gutter via the reserved right pad).
-    for (const type of ["note", "tip", "important", "warning", "caution"] as const) {
-      expect(spec[`.cm-line.quoll-callout-${type}`]?.["--quoll-callout-icon"]).not.toMatch(/ "$/);
-    }
   });
 });
