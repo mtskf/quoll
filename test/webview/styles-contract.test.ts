@@ -46,18 +46,48 @@ describe("styles.css — block-widget roots inset to the paragraph text column",
   // CM's base `.cm-line { padding: 0 2px 0 6px }` insets paragraph text 6px/2px.
   // A block widget fills .cm-content's full content box, so without this reserved
   // inset its box bleeds 6/2 px past the text column. Same transparent-border
-  // idiom the blockquote/fenced-code lines use (cm/theme.ts). Pins the fix so a
-  // refactor that drops it reds here (real-pixel proof is the browser harness).
-  it("gives .quoll-table-block a transparent 6px/2px left/right border", () => {
+  // idiom the blockquote/fenced-code lines use (cm/theme.ts). The 6px/2px is
+  // tokenised as --quoll-column-inset-left/-right (:root); pin that the spacer
+  // reads the TOKEN so a refactor that drops it (or hardcodes a raw literal back)
+  // reds here (real-pixel proof is the browser harness). The token's actual 6px/2px
+  // value is pinned by the --quoll-column-inset test below.
+  it("gives .quoll-table-block a transparent left/right border from the column-inset token", () => {
     const rule = css.match(/\.quoll-table-block\s*\{([^}]*)\}/)?.[1] ?? "";
-    expect(rule).toMatch(/border-left\s*:\s*6px solid transparent/);
-    expect(rule).toMatch(/border-right\s*:\s*2px solid transparent/);
+    expect(rule).toMatch(
+      /border-left\s*:\s*var\(--quoll-column-inset-left, 6px\) solid transparent/
+    );
+    expect(rule).toMatch(
+      /border-right\s*:\s*var\(--quoll-column-inset-right, 2px\) solid transparent/
+    );
   });
 
-  it("gives .quoll-image-block a transparent 6px/2px left/right border", () => {
+  it("gives .quoll-image-block a transparent left/right border from the column-inset token", () => {
     const rule = css.match(/\.quoll-image-block\s*\{([^}]*)\}/)?.[1] ?? "";
-    expect(rule).toMatch(/border-left\s*:\s*6px solid transparent/);
-    expect(rule).toMatch(/border-right\s*:\s*2px solid transparent/);
+    expect(rule).toMatch(
+      /border-left\s*:\s*var\(--quoll-column-inset-left, 6px\) solid transparent/
+    );
+    expect(rule).toMatch(
+      /border-right\s*:\s*var\(--quoll-column-inset-right, 2px\) solid transparent/
+    );
+  });
+});
+
+describe("styles.css — column-inset tokens (mirror of CM's base .cm-line padding)", () => {
+  const css = readFileSync(new URL("../../src/webview/styles.css", import.meta.url), "utf8");
+
+  // The single source of truth for the 6px/2px column inset that CM's base
+  // `.cm-line { padding: 0 2px 0 6px }` imposes. Every mirror (table/image
+  // transparent-border spacers + frontmatter margin here, blockquote/fenced/
+  // collapse-bar transparent borders + their elliptical radius compensation in
+  // cm/theme.ts) references these tokens instead of a raw literal, so a change to
+  // CM's base padding is a one-line retune. This pins the ACTUAL 6px/2px values so
+  // the token-reference guards elsewhere stay non-vacuous. The :root declaration is
+  // matched inside its own rule body (NOT a whole-file grep) so a comment literal
+  // can never satisfy it. Non-vacuous: changing either value here reds.
+  it("declares --quoll-column-inset-left: 6px / --quoll-column-inset-right: 2px on :root", () => {
+    const root = css.match(/:root\s*\{([\s\S]*?)\}/)?.[1] ?? "";
+    expect(root).toMatch(/--quoll-column-inset-left\s*:\s*6px\s*;/);
+    expect(root).toMatch(/--quoll-column-inset-right\s*:\s*2px\s*;/);
   });
 });
 
@@ -135,8 +165,8 @@ describe("styles.css — frontmatter metadata block (C8a)", () => {
     // horizontal margin on the COMPOUND selector so it beats `.quoll-block { margin:0 }`
     // by SPECIFICITY (0,2,0), not source order. Vertical margin stays 0 → invariant held.
     const rule = css.match(/\.quoll-block\.quoll-frontmatter-block\s*\{([^}]*)\}/)?.[1] ?? "";
-    expect(rule).toMatch(/margin-left\s*:\s*6px/);
-    expect(rule).toMatch(/margin-right\s*:\s*2px/);
+    expect(rule).toMatch(/margin-left\s*:\s*var\(--quoll-column-inset-left, 6px\)/);
+    expect(rule).toMatch(/margin-right\s*:\s*var\(--quoll-column-inset-right, 2px\)/);
     expect(rule).not.toMatch(/margin-top/);
     expect(rule).not.toMatch(/margin-bottom/);
     expect(rule).not.toMatch(/margin\s*:/); // no shorthand that could set vertical

@@ -69,6 +69,20 @@
     --quoll-block-pad-x: 16px;
     --quoll-block-pad-y: 12px;
     --quoll-block-radius: 8px;
+    /* Column inset — mirrors CodeMirror's base `.cm-line` padding (0 2px 0 6px, a
+     * CM baseTheme implementation detail). Every block-widget / block-line surface
+     * that must sit flush with the paragraph text column reserves this inset — the
+     * table/image transparent-border spacers + frontmatter margin below, and the
+     * blockquote / fenced-code / collapse-bar transparent borders (+ their
+     * elliptical `radius + inset` corner compensation) in cm/theme.ts. Tokenised so
+     * that if CM ever changes that base padding, one edit here retunes every mirror
+     * instead of 6+ silently-drifting literals. Left ≠ right because CM's base
+     * padding is asymmetric (6px left / 2px right). NB: this comment deliberately
+     * contains no curly braces — the :root rule-body grep in styles-contract.test.ts
+     * captures up to the first closing brace, so a brace literal here would truncate
+     * its capture before these token declarations. */
+    --quoll-column-inset-left: 6px;
+    --quoll-column-inset-right: 2px;
     /* List soft-wrap hanging-indent: rendered width of a task-list checkbox
      * column (the C5b widget that replaces `[ ]`). The list-hang-indent
      * provider (cm/decorations/list-hang-indent.ts) references this via
@@ -428,8 +442,8 @@
      * blockquote/fenced-code surfaces use (cm/theme.ts). The inner <table>
      * (width:100%) then resolves against the now-inset content box → flush with
      * the text column. No `background-clip` needed: the root paints no fill. */
-    border-left: 6px solid transparent;
-    border-right: 2px solid transparent;
+    border-left: var(--quoll-column-inset-left, 6px) solid transparent;
+    border-right: var(--quoll-column-inset-right, 2px) solid transparent;
   }
 
   .quoll-table-block table {
@@ -488,8 +502,8 @@
      * column. Pure SPACER (paint lands inside it), mirroring blockquote/fenced
      * (cm/theme.ts); the inner <img> (max-width:100%) resolves against the
      * inset content box. No `background-clip` needed: the root paints no fill. */
-    border-left: 6px solid transparent;
-    border-right: 2px solid transparent;
+    border-left: var(--quoll-column-inset-left, 6px) solid transparent;
+    border-right: var(--quoll-column-inset-right, 2px) solid transparent;
   }
 
   .quoll-image-block img {
@@ -554,8 +568,8 @@
    * widget boundary) rather than the root's click-to-reveal — consistent with
    * clicking a paragraph's padding strip. */
   .quoll-block.quoll-frontmatter-block {
-    margin-left: 6px;
-    margin-right: 2px;
+    margin-left: var(--quoll-column-inset-left, 6px);
+    margin-right: var(--quoll-column-inset-right, 2px);
   }
 
   .quoll-frontmatter-list {

@@ -649,18 +649,18 @@ describe("block-style — theme spec contract", () => {
     // `+ 6px`/`+ 2px` border compensation) turns these red.
     const open = blockStyleThemeSpec[".cm-line.quoll-fenced-code-open"];
     expect(open.borderTopLeftRadius).toBe(
-      "calc(var(--quoll-block-radius, 8px) + 6px) var(--quoll-block-radius, 8px)"
+      "calc(var(--quoll-block-radius, 8px) + var(--quoll-column-inset-left, 6px)) var(--quoll-block-radius, 8px)"
     );
     expect(open.borderTopRightRadius).toBe(
-      "calc(var(--quoll-block-radius, 8px) + 2px) var(--quoll-block-radius, 8px)"
+      "calc(var(--quoll-block-radius, 8px) + var(--quoll-column-inset-right, 2px)) var(--quoll-block-radius, 8px)"
     );
     expect(open.paddingTop).toBe("var(--quoll-block-pad-y, 12px)");
     const close = blockStyleThemeSpec[".cm-line.quoll-fenced-code-close"];
     expect(close.borderBottomLeftRadius).toBe(
-      "calc(var(--quoll-block-radius, 8px) + 6px) var(--quoll-block-radius, 8px)"
+      "calc(var(--quoll-block-radius, 8px) + var(--quoll-column-inset-left, 6px)) var(--quoll-block-radius, 8px)"
     );
     expect(close.borderBottomRightRadius).toBe(
-      "calc(var(--quoll-block-radius, 8px) + 2px) var(--quoll-block-radius, 8px)"
+      "calc(var(--quoll-block-radius, 8px) + var(--quoll-column-inset-right, 2px)) var(--quoll-block-radius, 8px)"
     );
     expect(close.paddingBottom).toBe("var(--quoll-block-pad-y, 12px)");
   });
@@ -678,18 +678,18 @@ describe("block-style — theme spec contract", () => {
     // curve is left to the browser harness.
     const open = blockStyleThemeSpec[".cm-line.quoll-blockquote-open"];
     expect(open.borderTopLeftRadius).toBe(
-      "calc(var(--quoll-block-radius, 8px) + 6px) var(--quoll-block-radius, 8px)"
+      "calc(var(--quoll-block-radius, 8px) + var(--quoll-column-inset-left, 6px)) var(--quoll-block-radius, 8px)"
     );
     expect(open.borderTopRightRadius).toBe(
-      "calc(var(--quoll-block-radius, 8px) + 2px) var(--quoll-block-radius, 8px)"
+      "calc(var(--quoll-block-radius, 8px) + var(--quoll-column-inset-right, 2px)) var(--quoll-block-radius, 8px)"
     );
     expect(open.paddingTop).toBe("var(--quoll-block-pad-y, 12px)");
     const close = blockStyleThemeSpec[".cm-line.quoll-blockquote-close"];
     expect(close.borderBottomLeftRadius).toBe(
-      "calc(var(--quoll-block-radius, 8px) + 6px) var(--quoll-block-radius, 8px)"
+      "calc(var(--quoll-block-radius, 8px) + var(--quoll-column-inset-left, 6px)) var(--quoll-block-radius, 8px)"
     );
     expect(close.borderBottomRightRadius).toBe(
-      "calc(var(--quoll-block-radius, 8px) + 2px) var(--quoll-block-radius, 8px)"
+      "calc(var(--quoll-block-radius, 8px) + var(--quoll-column-inset-right, 2px)) var(--quoll-block-radius, 8px)"
     );
     expect(close.paddingBottom).toBe("var(--quoll-block-pad-y, 12px)");
   });
@@ -722,7 +722,7 @@ describe("block-style — theme spec contract", () => {
     // TRANSPARENT column-inset border (background-clip mechanism — see the inset
     // test below), NOT a coloured rule. REVERT-CHECK: giving borderLeft a visible
     // colour (re-adding the rule) turns this assertion red.
-    expect(bq.borderLeft).toBe("6px solid transparent");
+    expect(bq.borderLeft).toBe("var(--quoll-column-inset-left, 6px) solid transparent");
     expect(bq.backgroundColor).toMatch(/--quoll-surface-fill/);
     expect(bq.color).toMatch(/--vscode-descriptionForeground/);
   });
@@ -752,8 +752,8 @@ describe("block-style — theme spec contract", () => {
     // to a border-box-clipped full-width fill) turns these assertions red.
     for (const sel of [".cm-line.quoll-blockquote", ".cm-line.quoll-fenced-code"] as const) {
       const spec = blockStyleThemeSpec[sel] as Record<string, unknown>;
-      expect(spec.borderLeft).toBe("6px solid transparent");
-      expect(spec.borderRight).toBe("2px solid transparent");
+      expect(spec.borderLeft).toBe("var(--quoll-column-inset-left, 6px) solid transparent");
+      expect(spec.borderRight).toBe("var(--quoll-column-inset-right, 2px) solid transparent");
       expect(spec.backgroundClip).toBe("padding-box");
       expect(spec.boxSizing).toBe("border-box");
       for (const forbidden of [
