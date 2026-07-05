@@ -265,7 +265,14 @@ const BLANK_LINE = /^[ \t]*$/;
  *  touches no `>` cannot move a boundary, so plain typing stays on the bounded hot path.
  *  Fires ONLY when the edit is NOT fully inside a reused block's [blockFrom, blockTo] — an
  *  in-body edit is contained (its own block rebuilds via touchesRange, and un-closing its
- *  fence is caught by STRUCTURAL's fence alt), so in-body edits stay bounded. */
+ *  fence is caught by STRUCTURAL's fence alt), so in-body edits stay bounded.
+ *  ACCEPTED over-trigger (Codex cycle-6): the `>`-delta also fires when a top-level prose
+ *  edit merely types/deletes a `>` (`a > b`) with no declaration in play. This is a SAFE
+ *  full-recompute and shares the exact top-level gate as the newline/blank arms, so it
+ *  NEVER fires on the fenced-heavy hot path (in-fence editing) and is strictly rarer than
+ *  the top-level-newline full-recompute already accepted above — worth full soundness. A
+ *  precise gate (scan back for an unterminated `<![A-Z]` declaration) was rejected as
+ *  disproportionate for a construct that is essentially absent from real Markdown. */
 function topLevelBoundaryRisk(tr: Transaction, prevBlocks: readonly FencedBlockRecord[]): boolean {
   let risk = false;
   tr.changes.iterChangedRanges((fromA, toA, fromB, toB) => {
