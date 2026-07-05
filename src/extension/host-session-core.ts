@@ -525,6 +525,18 @@ export function createHostSessionCore(context: HostSessionContext, deps: HostSes
       }
 
       case "documentChanged": {
+        // `workspace.onDidChangeTextDocument` also fires with empty
+        // contentChanges and an UNCHANGED version on dirty-state transitions
+        // (every save; near-continuous under autosave `afterDelay`). Such a
+        // version-identical event carries no new bytes, so re-posting the
+        // Document would destroy a pending rejected draft (the webview clears
+        // the reject banner on a non-stale Document) and needlessly re-seed —
+        // breaking the "preserves the user's typed bytes" invariant. No-op it:
+        // the rejection is preserved and nothing is posted. Version-advancing
+        // external edits fall through to the resync below.
+        if (event.documentVersion === state.lastAppliedDocVersion) {
+          return { state, effects: [] };
+        }
         // Source-of-truth resync ALWAYS (lock held or not), mirroring the
         // `edit` arm's resync-first shape: the live document version is the
         // single source of truth even for a post we defer.

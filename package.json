@@ -106,7 +106,7 @@
     "test:e2e": "pnpm build && node test/extension/build.mjs && node ./out/test-e2e/launch.js",
     "test": "pnpm test:unit && pnpm test:e2e",
     "test:watch": "vitest",
-    "package": "pnpm vsce package --no-dependencies --pre-release"
+    "package": "pnpm vsce package --no-dependencies"
   },
   "dependencies": {
     "@codemirror/commands": "^6.10.3",
