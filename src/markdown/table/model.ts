@@ -1,5 +1,5 @@
 // src/markdown/table/model.ts
-// Source-span-mapped GFM table model consumed by parse.ts / serialize.ts.
+// Source-span-mapped GFM table model produced by parse.ts.
 // Spans are absolute document offsets (UTF-16 code units — same units
 // as JavaScript string.length and CodeMirror dispatch({from,to})) so a
 // downstream consumer (C6c editable cells) can splice a single cell

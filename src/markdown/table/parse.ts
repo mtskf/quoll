@@ -76,9 +76,9 @@ interface LineRange {
 }
 
 // Splits on `\n` AND on `\r\n`. The `\r` is never included in `text` —
-// the row splitter would otherwise treat it as cell content and the
-// serializer would silently normalize CRLF to LF, breaking Quoll's
-// existing CRLF disk-byte-identity contract.
+// the row splitter would otherwise treat it as cell content, polluting the
+// cell `raw`. The terminator is captured separately as `lineEnding` so CRLF
+// round-trips verbatim (Quoll's CRLF disk-byte-identity contract).
 function splitLines(slice: string, baseOffset: number): LineRange[] {
   const out: LineRange[] = [];
   let lineStart = 0;
@@ -141,7 +141,7 @@ function parseContentRow(line: LineRange): Row {
   // content. Non-empty for a list-nested table's continuation rows, where Lezer
   // retains the indent in the Table node slice. Skipping it here (rather than
   // letting it bleed into cell[0]) keeps the leading-pipe row from spawning a
-  // phantom empty first cell; it is re-emitted verbatim by serializeRow.
+  // phantom empty first cell; it is preserved verbatim as `leadingIndent`.
   let indentEnd = 0;
   while (indentEnd < lineBodyEnd) {
     const ch = text.charCodeAt(indentEnd);
