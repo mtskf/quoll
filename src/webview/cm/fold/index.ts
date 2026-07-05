@@ -76,6 +76,7 @@ import {
 // no O(depth) geometry walk, since a whole-doc gutter walk only needs the
 // null/non-null bit) and `pointInExclusionZone` (frontmatter, whose YAML lists
 // parse as markdown ListItems but receive no hang). See buildListFoldGutterClasses.
+import { headingRhythmLevel } from "../decorations/heading-rhythm.js";
 import { isRenderableListItem } from "../decorations/list-geometry.js";
 import { quollSyntaxExclusionZones } from "../decorations/orchestrator.js";
 import { pointInExclusionZone } from "../decorations/shared.js";
@@ -322,6 +323,95 @@ export const listFoldGutterLineClass = StateField.define<RangeSet<GutterMarker>>
   provide: (field) => gutterLineClass.from(field),
 });
 
+// Heading levels 1-6, all rhythm-eligible (unlike the H1-3-only row-scale cap
+// above — the rhythm padding applies at every level).
+type HeadingRhythmLevel = 1 | 2 | 3 | 4 | 5 | 6;
+
+/** A gutter-line marker tagging a heading MARKER line's fold-gutter element so
+ *  the theme can inset its chevron by the same `--quoll-heading-space-{bucket}`
+ *  that heading-rhythm.ts adds as `padding-top` to the `.cm-line`. Per-level
+ *  (like HeadingFoldGutterMarker) so the theme can look up the matching token;
+ *  `eq` compares level so a level change re-tags. Distinct from the H1-3
+ *  row-scale marker: this compensates the vertical RHYTHM padding, and applies to
+ *  all six levels (a plain H4 gets rhythm padding but no row-scale cap). */
+class HeadingRhythmFoldGutterMarker extends GutterMarker {
+  override elementClass: string;
+  constructor(readonly level: HeadingRhythmLevel) {
+    super();
+    this.elementClass = `quoll-fold-heading-rhythm-${level}`;
+  }
+  override eq(other: HeadingRhythmFoldGutterMarker): boolean {
+    return other.level === this.level;
+  }
+}
+const HEADING_RHYTHM_GUTTER_MARKER: Record<HeadingRhythmLevel, HeadingRhythmFoldGutterMarker> = {
+  1: new HeadingRhythmFoldGutterMarker(1),
+  2: new HeadingRhythmFoldGutterMarker(2),
+  3: new HeadingRhythmFoldGutterMarker(3),
+  4: new HeadingRhythmFoldGutterMarker(4),
+  5: new HeadingRhythmFoldGutterMarker(5),
+  6: new HeadingRhythmFoldGutterMarker(6),
+};
+
+function buildHeadingRhythmFoldGutterClasses(
+  state: EditorState,
+  zones: readonly { from: number; to: number }[]
+): RangeSet<GutterMarker> {
+  const builder = new RangeSetBuilder<GutterMarker>();
+  const tree = syntaxTree(state);
+  let lastLineFrom = -1;
+  tree.iterate({
+    enter: (node) => {
+      // Reuse the SAME eligibility predicate as the content half (heading-rhythm.ts)
+      // so the gutter offset stays in lock-step with the `.cm-line` rhythm padding
+      // it compensates for — top-level only, not line 1, not in an exclusion zone.
+      // Without lock-step, a padded heading's chevron would float down by the gap
+      // (the bug the list precedent already fixed for `.quoll-fold-list-marker`).
+      const level = headingRhythmLevel(state, tree, node, zones);
+      if (level === null) {
+        return;
+      }
+      const lineFrom = state.doc.lineAt(node.from).from;
+      // A heading rides one line; guard against double-adding if the tree ever
+      // surfaces nested heading-tagged nodes on the same line (RangeSetBuilder
+      // requires strictly non-decreasing, de-duplicated positions), mirroring the
+      // heading / list builders above.
+      if (lineFrom === lastLineFrom) {
+        return;
+      }
+      lastLineFrom = lineFrom;
+      builder.add(lineFrom, lineFrom, HEADING_RHYTHM_GUTTER_MARKER[level as HeadingRhythmLevel]);
+    },
+  });
+  return builder.finish();
+}
+
+/** Tags every rhythm-eligible heading MARKER line with
+ *  `quoll-fold-heading-rhythm-{level}` on its gutter element via `gutterLineClass`,
+ *  in lock-step with the `.cm-line.quoll-heading-rhythm-{level}` padding it
+ *  compensates for (SAME eligibility gate — headingRhythmLevel). Recomputed when
+ *  the doc, the parse tree (lang-markdown parses asynchronously), OR the
+ *  `quollSyntaxExclusionZones` facet changes — the same doc/tree/facet triggers as
+ *  headingRhythmNeedsRebuild MINUS its viewportChanged trigger (this is a
+ *  whole-doc StateField whose emitted set is selection- AND viewport-independent),
+ *  exactly like listFoldGutterLineClass. Exported for the heading-detection
+ *  contract test. */
+export const headingRhythmFoldGutterLineClass = StateField.define<RangeSet<GutterMarker>>({
+  create: (state) =>
+    buildHeadingRhythmFoldGutterClasses(state, state.facet(quollSyntaxExclusionZones)),
+  update(value, tr) {
+    if (
+      !tr.docChanged &&
+      syntaxTree(tr.startState) === syntaxTree(tr.state) &&
+      tr.startState.facet(quollSyntaxExclusionZones) === tr.state.facet(quollSyntaxExclusionZones)
+    ) {
+      return value;
+    }
+    return buildHeadingRhythmFoldGutterClasses(tr.state, tr.state.facet(quollSyntaxExclusionZones));
+  },
+  provide: (field) => gutterLineClass.from(field),
+});
+
 /** Chevron styling + placement. The reading-column GROUP centring lives in
  *  cm/theme.ts; here we (a) horizontally slide the chevron toward the text (see
  *  `.cm-foldGutter` `left` below — unchanged from #198) and (b) vertically centre
@@ -395,6 +485,35 @@ const quollFoldTheme = EditorView.theme({
   ".cm-foldGutter .cm-gutterElement.quoll-fold-list-marker": {
     paddingTop: "var(--quoll-list-item-gap, 0.6em)",
   },
+  // Heading lines carry a `padding-top` of `--quoll-heading-space-{bucket}` INSIDE
+  // their `.cm-line` box (heading-rhythm.ts's `.quoll-heading-rhythm-{level}` +
+  // cm/theme.ts). CM sizes the matching `.cm-gutterElement` to that FULL padded
+  // height (border-box, inline px), so the top-anchored marker would otherwise
+  // float that gap ABOVE the heading's text row — the same compounding the
+  // list-marker rule above fixes. Mirror the SAME top inset on the gutter element
+  // (set by headingRhythmFoldGutterLineClass): border-box keeps the element's
+  // total height unchanged (no cumulative drift), the marker's `min(100%, oneRow)`
+  // now resolves 100% against the padding-reduced content box, and it re-centres
+  // on the heading's text row. Referencing the SAME tokens keeps the offset in
+  // lock-step if a gap is ever retuned. For H1-3 this COMPOSES with the row-scale
+  // cap above (a rhythm heading is both taller — larger font — AND padded, and the
+  // two classes co-occur on the same gutter element): the row-scale cap centres
+  // the chevron on the taller row while this padding-top pushes the whole capped
+  // marker down past the rhythm gap. Levels 4/5/6 share --quoll-heading-space-4
+  // (they render at body size, so no row-scale cap — this padding alone).
+  ".cm-foldGutter .cm-gutterElement.quoll-fold-heading-rhythm-1": {
+    paddingTop: "var(--quoll-heading-space-1, 1.2em)",
+  },
+  ".cm-foldGutter .cm-gutterElement.quoll-fold-heading-rhythm-2": {
+    paddingTop: "var(--quoll-heading-space-2, 1em)",
+  },
+  ".cm-foldGutter .cm-gutterElement.quoll-fold-heading-rhythm-3": {
+    paddingTop: "var(--quoll-heading-space-3, 0.75em)",
+  },
+  ".cm-foldGutter .cm-gutterElement.quoll-fold-heading-rhythm-4, .cm-foldGutter .cm-gutterElement.quoll-fold-heading-rhythm-5, .cm-foldGutter .cm-gutterElement.quoll-fold-heading-rhythm-6":
+    {
+      paddingTop: "var(--quoll-heading-space-4, 0.5em)",
+    },
   // Folded = the same chevron-down rotated to point right, PLUS a theme-following
   // green tint so a collapsed region reads at a glance. Static (no transition): CM
   // rebuilds the marker DOM on every fold flip (FoldMarker.eq compares `open`), so
@@ -502,12 +621,19 @@ export const quollFoldKeymapExtension: Extension = keymap.of(quollFoldKeymap);
  *  foldable lines. `headingFoldGutterLineClass` tags H1–H3 gutter lines so the
  *  theme can cap their chevron at the correct (taller) row height;
  *  `listFoldGutterLineClass` tags list-item marker lines so the theme can inset
- *  their chevron past the item's `--quoll-list-item-gap` top padding (PR #13). */
+ *  their chevron past the item's `--quoll-list-item-gap` top padding (PR #13);
+ *  `headingRhythmFoldGutterLineClass` likewise insets a heading's chevron past
+ *  the `--quoll-heading-space-*` rhythm padding heading-rhythm.ts adds. */
 export function quollFolding(): Extension {
   return [
     codeFolding({ placeholderDOM: foldPlaceholderDOM }),
     headingFoldGutterLineClass,
     listFoldGutterLineClass,
+    // Insets a rhythm heading's chevron past the `--quoll-heading-space-*`
+    // top padding heading-rhythm.ts adds to the `.cm-line`, so the chevron stays
+    // centred on the heading row instead of floating down by the gap. Same
+    // lock-step contract as listFoldGutterLineClass (PR #13).
+    headingRhythmFoldGutterLineClass,
     foldGutter({ markerDOM }),
     quollFoldKeymapExtension,
     quollFoldTheme,
