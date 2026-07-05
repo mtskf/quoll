@@ -2,7 +2,7 @@
 import { ensureSyntaxTree, foldable } from "@codemirror/language";
 import { EditorView } from "@codemirror/view";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-
+import { MAX_CONTENT_LENGTH } from "../../src/shared/protocol.js";
 import { applyCaret } from "../../src/webview/cm/caret.js";
 import {
   blockquoteRule,
@@ -335,6 +335,49 @@ describe("editor — postEditMessage debounce-path throw surface (V-M13(a))", ()
     );
     expect(quollLogs.length).toBe(1);
     consoleSpy.mockRestore();
+  });
+});
+
+// Oversized doc: an edit whose content exceeds MAX_CONTENT_LENGTH would be
+// silently dropped by the host boundary validator (isBoundedContent →
+// console.warn, no edit-rejected), so the webview MUST intercept it on the
+// post path and route it to the serialize-error banner. Without the gate the
+// over-limit `edit` posts, editInFlight latches on the ack that never comes,
+// and every later keystroke replay-drops with NO user-visible signal.
+describe("editor — oversized edit is gated to the serialize-error banner (oversized-doc)", () => {
+  it("an over-limit doc posts NO edit, dispatches serialize-error, and never latches post-edit", () => {
+    vi.useFakeTimers();
+    const dispatchSpy = vi.fn();
+    const { handle, view } = mount({ onDispatch: dispatchSpy });
+    handle.applyDocument("seed", true, 1);
+    // Replace the whole doc with an over-limit body (one code unit past the cap).
+    const oversized = "a".repeat(MAX_CONTENT_LENGTH + 1);
+    view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: oversized } });
+    vi.advanceTimersByTime(300);
+    // The over-limit edit is intercepted on the post path — nothing reaches the host.
+    expect(editPosts()).toHaveLength(0);
+    const types = dispatchSpy.mock.calls.map(([a]) => (a as { type: string }).type);
+    // serialize-error surfaces the banner; post-edit is NEVER dispatched, so the
+    // reducer's editInFlight cannot latch.
+    expect(types).toContain("serialize-error");
+    expect(types).not.toContain("post-edit");
+    const errAction = dispatchSpy.mock.calls.find(
+      ([a]) => (a as { type: string }).type === "serialize-error"
+    )?.[0] as { error: { message: string } };
+    expect(errAction.error.message).toMatch(/too large/i);
+  });
+
+  it("an at-limit doc (exactly MAX_CONTENT_LENGTH) still posts a normal edit", () => {
+    vi.useFakeTimers();
+    const { handle, view } = mount();
+    handle.applyDocument("", true, 1);
+    // Exactly the cap is BOUNDED (isBoundedContent uses `<=`), so it must post.
+    const atLimit = "a".repeat(MAX_CONTENT_LENGTH);
+    view.dispatch({ changes: { from: 0, insert: atLimit } });
+    vi.advanceTimersByTime(300);
+    expect(editPosts()).toHaveLength(1);
+    const call = editPosts()[0] as { content: string };
+    expect(call.content.length).toBe(MAX_CONTENT_LENGTH);
   });
 });
 
