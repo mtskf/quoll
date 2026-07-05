@@ -458,6 +458,42 @@ export const bulletMarkerThemeSpec = {
 
 export const quollBulletMarkerTheme = EditorView.theme(bulletMarkerThemeSpec);
 
+// Heading vertical rhythm (heading-rhythm.ts). The ViewPlugin marks every
+// rhythm-eligible heading line (top-level, not line 1, not in a frontmatter
+// zone) with `.quoll-heading-rhythm-{level}`, so a per-LEVEL top inset adds
+// Notion-style breathing room ABOVE the heading. Lives in this EditorView.theme
+// (NOT styles.css) for the SAME reason as .quoll-list-hang: only an unlayered,
+// editor-scoped CM theme beats CM's baseTheme `.cm-line { padding: 0 2px 0 6px }`,
+// and the two-class `.cm-line.quoll-heading-rhythm-*` selector outranks that base
+// `.cm-line` on specificity. `padding-top` (not margin) keeps the gap INSIDE the
+// line box CodeMirror measures, so click→caret geometry stays accurate. The `em`
+// tokens resolve against the BODY font (heading font-size lives on the token
+// spans via HighlightStyle, not on `.cm-line`). Per-level values are tokenised on
+// :root (styles.css), grouping h4-h6 like quollHighlightSpec; the inline fallback
+// keeps the declaration valid if the token is ever absent. Display-only — the
+// Markdown bytes never change. Exported as a plain spec so
+// cm-decoration-heading-rhythm.test.ts pins the contract (EditorView.theme
+// returns an opaque Extension), like bulletMarkerThemeSpec.
+export const headingRhythmThemeSpec = {
+  ".cm-line.quoll-heading-rhythm-1": {
+    paddingTop: "var(--quoll-heading-space-1, 1.2em)",
+  },
+  ".cm-line.quoll-heading-rhythm-2": {
+    paddingTop: "var(--quoll-heading-space-2, 1em)",
+  },
+  ".cm-line.quoll-heading-rhythm-3": {
+    paddingTop: "var(--quoll-heading-space-3, 0.75em)",
+  },
+  // h4/h5/h6 share one tighter token — they render at body font-size, so a single
+  // smaller inset reads consistently (mirrors quollHighlightSpec grouping them).
+  ".cm-line.quoll-heading-rhythm-4, .cm-line.quoll-heading-rhythm-5, .cm-line.quoll-heading-rhythm-6":
+    {
+      paddingTop: "var(--quoll-heading-space-4, 0.5em)",
+    },
+};
+
+export const quollHeadingRhythmTheme = EditorView.theme(headingRhythmThemeSpec);
+
 // Completed-task CONTENT mute (checkbox-completed-tint feature). task-checkbox-reveal.ts
 // emits a Decoration.mark carrying `.quoll-task-completed-content` over a checked task's
 // content span (marker line, caret off it). This recedes the text to a muted ink so
