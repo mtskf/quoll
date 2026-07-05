@@ -15,16 +15,34 @@
 // zone is non-atomic, and reachability is the auto-expand's job — not the generic
 // blockZoneArrowKeymap's.
 
-import { syntaxTree } from "@codemirror/language";
-import { type EditorSelection, type EditorState, StateField } from "@codemirror/state";
+import { syntaxTree, syntaxTreeAvailable } from "@codemirror/language";
+import {
+  type EditorSelection,
+  type EditorState,
+  StateField,
+  type Transaction,
+} from "@codemirror/state";
 import { Decoration, type DecorationSet, EditorView } from "@codemirror/view";
 import { hostDocumentReseed } from "../frontmatter/reveal-state.js";
 import { fencedBlockGeometry, setFencedCollapseEffect } from "./fenced-code-collapse-state.js";
 import { FencedCollapseToggleWidget } from "./fenced-code-collapse-widget.js";
 
+interface FencedBlockRecord {
+  key: number;
+  blockFrom: number;
+  blockTo: number;
+  expanded: boolean;
+  hiddenCount: number;
+  decoFrom: number;
+  decoTo: number;
+  deco: Decoration;
+}
+
 interface CollapseState {
   /** Keys (open-fence offsets) of explicitly- or auto-expanded blocks. */
   expanded: ReadonlySet<number>;
+  /** Document-ordered reuse records — one per collapsible block. */
+  blocks: FencedBlockRecord[];
   decorations: DecorationSet;
 }
 
@@ -41,20 +59,62 @@ function anyHeadInside(selection: EditorSelection, from: number, to: number): bo
   return false;
 }
 
-/** Walk every TOP-LEVEL collapsible FencedCode and emit its decoration. A block is
- *  expanded iff its key is in `expanded` OR a selection head sits inside its
- *  concealed region (auto-expand, DD4). Returns the reconciled live expanded-key
- *  set (dead keys dropped; auto-expanded keys added so expansion is sticky). */
-export function buildFencedCollapse(
+/** Build the record for one collapsible block. Collapsed → a block replace over
+ *  [concealFrom, collapseTo]; expanded → a side:1 point widget at concealTo. `blockTo`
+ *  is the LIVENESS extent (closed → collapseTo; unclosed → docLength), distinct from
+ *  the decoration range. */
+function recordFor(
+  g: { key: number; concealFrom: number; concealTo: number; collapseTo: number; closed: boolean },
+  isExpanded: boolean,
+  hiddenCount: number,
+  docLength: number
+): FencedBlockRecord {
+  const blockTo = g.closed ? g.collapseTo : docLength;
+  if (isExpanded) {
+    return {
+      key: g.key,
+      blockFrom: g.key,
+      blockTo,
+      expanded: true,
+      hiddenCount,
+      decoFrom: g.concealTo,
+      decoTo: g.concealTo,
+      deco: Decoration.widget({
+        widget: new FencedCollapseToggleWidget(g.key, true, hiddenCount),
+        block: true,
+        side: 1,
+      }),
+    };
+  }
+  return {
+    key: g.key,
+    blockFrom: g.key,
+    blockTo,
+    expanded: false,
+    hiddenCount,
+    decoFrom: g.concealFrom,
+    decoTo: g.collapseTo,
+    deco: Decoration.replace({
+      widget: new FencedCollapseToggleWidget(g.key, false, hiddenCount),
+      block: true,
+    }),
+  };
+}
+
+/** Walk every TOP-LEVEL collapsible FencedCode whose FULL extent overlaps
+ *  [rangeFrom, rangeTo] and emit its record. Expanded iff key ∈ `expanded` OR a
+ *  selection head sits inside its concealed region (auto-expand, DD4). */
+function buildFencedRange(
   state: EditorState,
-  expanded: ReadonlySet<number>
-): { decorations: DecorationSet; liveExpanded: Set<number> } {
-  const built: Array<{ from: number; to: number; deco: Decoration }> = [];
-  const liveExpanded = new Set<number>();
-  // DD2: top-level-only walk. Process each Document-child FencedCode and skip its
-  // body; skip descending into every other node (a top-level fence is never nested
-  // inside a Paragraph/List/Blockquote). O(top-level block count).
+  expanded: ReadonlySet<number>,
+  rangeFrom: number,
+  rangeTo: number
+): FencedBlockRecord[] {
+  const out: FencedBlockRecord[] = [];
+  const docLength = state.doc.length;
   syntaxTree(state).iterate({
+    from: rangeFrom,
+    to: rangeTo,
     enter: (node) => {
       if (node.name === "FencedCode") {
         const g = fencedBlockGeometry(state, node.node);
@@ -63,32 +123,7 @@ export function buildFencedCollapse(
             expanded.has(g.key) || anyHeadInside(state.selection, g.concealFrom, g.collapseTo);
           const hiddenCount =
             state.doc.lineAt(g.concealTo).number - state.doc.lineAt(g.concealFrom).number + 1;
-          if (isExpanded) {
-            liveExpanded.add(g.key);
-            // Show-less bar: a block point widget after the last body line (side:1),
-            // so it sits between the body and the closing-fence footer line.
-            built.push({
-              from: g.concealTo,
-              to: g.concealTo,
-              deco: Decoration.widget({
-                widget: new FencedCollapseToggleWidget(g.key, true, hiddenCount),
-                block: true,
-                side: 1,
-              }),
-            });
-          } else {
-            // Show-more bar: a block replace over body lines 11..N PLUS the closing
-            // fence (collapseTo), so the bar is the sole footer — a caret parked on the
-            // ``` auto-expands (isExpanded above) rather than double-rounding the footer.
-            built.push({
-              from: g.concealFrom,
-              to: g.collapseTo,
-              deco: Decoration.replace({
-                widget: new FencedCollapseToggleWidget(g.key, false, hiddenCount),
-                block: true,
-              }),
-            });
-          }
+          out.push(recordFor(g, isExpanded, hiddenCount, docLength));
         }
         return false; // never descend into a code body
       }
@@ -96,12 +131,37 @@ export function buildFencedCollapse(
       return node.name === "Document" ? undefined : false;
     },
   });
-  built.sort((a, b) => a.from - b.from || a.to - b.to);
+  return out;
+}
+
+/** Assemble the field state from a record list (dedupes + orders by blockFrom). */
+function assemble(blocks: FencedBlockRecord[]): CollapseState {
+  const sorted = [...blocks].sort((a, b) => a.blockFrom - b.blockFrom);
+  const liveExpanded = new Set<number>();
+  for (const b of sorted) {
+    if (b.expanded) {
+      liveExpanded.add(b.key);
+    }
+  }
   const decorations = Decoration.set(
-    built.map((b) => b.deco.range(b.from, b.to)),
+    sorted.map((b) => b.deco.range(b.decoFrom, b.decoTo)),
     true
   );
-  return { decorations, liveExpanded };
+  return { expanded: liveExpanded, blocks: sorted, decorations };
+}
+
+function buildFullState(state: EditorState, expanded: ReadonlySet<number>): CollapseState {
+  return assemble(buildFencedRange(state, expanded, 0, state.doc.length));
+}
+
+/** Public helper kept for the existing unit tests — a thin projection of the full
+ *  state (decorations + a fresh copy of the reconciled live expanded-key set). */
+export function buildFencedCollapse(
+  state: EditorState,
+  expanded: ReadonlySet<number>
+): { decorations: DecorationSet; liveExpanded: Set<number> } {
+  const s = buildFullState(state, expanded);
+  return { decorations: s.decorations, liveExpanded: new Set(s.expanded) };
 }
 
 /** DD2 fast-path: does any selection head sit inside a CURRENTLY-collapsed region
@@ -121,18 +181,14 @@ function selectionEntersCollapsed(prev: DecorationSet, selection: EditorSelectio
 }
 
 export const fencedCodeCollapseField = StateField.define<CollapseState>({
-  create: (state) => {
-    const { decorations, liveExpanded } = buildFencedCollapse(state, new Set());
-    return { expanded: liveExpanded, decorations };
-  },
+  create: (state) => buildFullState(state, new Set()),
   update: (prev, tr) => {
     // DD3: a host-snapshot reseed (full 0..len replace) rebuilds from EMPTY —
     // mapping keys through a whole-document replace is meaningless and would let a
     // new doc's first fence inherit expansion. Matches native fold (external edits
     // clear folds); the restored caret then auto-expands its own block via build.
     if (tr.annotation(hostDocumentReseed) === true && tr.docChanged) {
-      const { decorations, liveExpanded } = buildFencedCollapse(tr.state, new Set());
-      return { expanded: liveExpanded, decorations };
+      return buildFullState(tr.state, new Set());
     }
     // 1. Map expanded keys through any document change. DD5: mapPos(key, 1) is the
     //    best-effort identity carry — an insert at EXACTLY a fence's line.from
@@ -164,16 +220,14 @@ export const fencedCodeCollapseField = StateField.define<CollapseState>({
     const treeChanged = syntaxTree(tr.startState) !== syntaxTree(tr.state);
     // 3. Doc / effect / async-parse changes always rebuild.
     if (tr.docChanged || effectTouched || treeChanged) {
-      const { decorations, liveExpanded } = buildFencedCollapse(tr.state, working);
-      return { expanded: liveExpanded, decorations };
+      return buildFullState(tr.state, working);
     }
     // 4. DD2 fast-path: a selection-only transaction rebuilds ONLY when a head
     //    enters a collapsed region (→ auto-expand). Otherwise decorations are
     //    unchanged — return `prev` verbatim (no walk, no new DecorationSet).
     const selectionMoved = !tr.startState.selection.eq(tr.state.selection);
     if (selectionMoved && selectionEntersCollapsed(prev.decorations, tr.state.selection)) {
-      const { decorations, liveExpanded } = buildFencedCollapse(tr.state, working);
-      return { expanded: liveExpanded, decorations };
+      return buildFullState(tr.state, working);
     }
     return prev;
   },

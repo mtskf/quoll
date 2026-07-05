@@ -43,6 +43,10 @@ export interface FencedBlockGeometry {
   safeCaret: number;
   /** Document line number (1-based) of the last body line — the Show-less anchor. */
   lastBodyLine: number;
+  /** True when the block has a closing fence; false for an unclosed block (runs to
+   *  EOF). The bounded field uses this to pick the liveness extent — an unclosed
+   *  block owns everything to doc end, so its record's blockTo is doc.length. */
+  closed: boolean;
 }
 
 /** Geometry for `node` iff it is a TOP-LEVEL FencedCode whose body exceeds the
@@ -75,7 +79,15 @@ export function fencedBlockGeometry(
   // on it auto-expands instead of revealing a second rounded footer under the bar.
   const collapseTo = closeFenceLine !== null ? doc.line(closeFenceLine).to : concealTo;
   const safeCaret = doc.line(firstHiddenLine - 1).to; // end of the 10th visible body line
-  return { key, concealFrom, concealTo, collapseTo, safeCaret, lastBodyLine: bodyEndLine };
+  return {
+    key,
+    concealFrom,
+    concealTo,
+    collapseTo,
+    safeCaret,
+    lastBodyLine: bodyEndLine,
+    closed: closeFenceLine !== null,
+  };
 }
 
 /** Resolve the collapsible FencedCode whose open line.from === `key`. Used by the
