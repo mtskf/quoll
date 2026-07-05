@@ -51,6 +51,7 @@ import {
   foldCode,
   foldGutter,
   syntaxTree,
+  syntaxTreeAvailable,
   unfoldAll,
   unfoldCode,
 } from "@codemirror/language";
@@ -60,6 +61,7 @@ import {
   type RangeSet,
   RangeSetBuilder,
   StateField,
+  type Transaction,
 } from "@codemirror/state";
 import {
   EditorView,
@@ -202,42 +204,159 @@ const HEADING_GUTTER_MARKER: Record<HeadingLevel, HeadingFoldGutterMarker> = {
   3: new HeadingFoldGutterMarker(3),
 };
 
-function buildHeadingFoldGutterClasses(state: EditorState): RangeSet<GutterMarker> {
-  const builder = new RangeSetBuilder<GutterMarker>();
+interface Interval {
+  from: number;
+  to: number;
+}
+
+/** Collect every H1–H3 heading marker whose node OVERLAPS [rangeFrom, rangeTo].
+ *  Called with [0, doc.length] for a full (re)build and with each bounded block
+ *  interval on the keystroke path (recomputeBoundedHeadingClasses). A bounded
+ *  `{from,to}` iterate materialises only the touched subtree, sidestepping the
+ *  whole-tree-materialisation cost a full `iterate()` pays on every keystroke
+ *  (PERF.md measured ~5 ms/MB — the cost is materialisation, not node descent, so
+ *  this mirrors image-field.ts's changed-range `buildRange`, NOT a prune-descent
+ *  shortcut). Doc order → the returned marks are already sorted by `from`. */
+function collectHeadingMarks(
+  state: EditorState,
+  rangeFrom: number,
+  rangeTo: number
+): { from: number; marker: HeadingFoldGutterMarker }[] {
+  const out: { from: number; marker: HeadingFoldGutterMarker }[] = [];
   let lastLineFrom = -1;
   syntaxTree(state).iterate({
+    from: rangeFrom,
+    to: rangeTo,
     enter: (node) => {
       const match = HEADING_NODE.exec(node.name);
       if (!match) {
         return;
       }
+      // The marker rides a heading's FIRST line (the sole line for ATX, the title
+      // line for a multi-line Setext).
       const lineFrom = state.doc.lineAt(node.from).from;
-      // A heading is a single line; guard against double-adding if the tree ever
-      // surfaces nested heading-tagged nodes on the same line (RangeSetBuilder
-      // requires strictly non-decreasing, de-duplicated positions).
+      // Guard against double-adding if the tree ever surfaces nested
+      // heading-tagged nodes on the same line (RangeSet requires strictly
+      // non-decreasing, de-duplicated positions).
       if (lineFrom === lastLineFrom) {
         return;
       }
       lastLineFrom = lineFrom;
-      builder.add(lineFrom, lineFrom, HEADING_GUTTER_MARKER[Number(match[1]) as HeadingLevel]);
+      out.push({ from: lineFrom, marker: HEADING_GUTTER_MARKER[Number(match[1]) as HeadingLevel] });
     },
   });
+  return out;
+}
+
+function buildHeadingFoldGutterClasses(state: EditorState): RangeSet<GutterMarker> {
+  const builder = new RangeSetBuilder<GutterMarker>();
+  for (const m of collectHeadingMarks(state, 0, state.doc.length)) {
+    builder.add(m.from, m.from, m.marker);
+  }
   return builder.finish();
 }
 
+/** Expand [from,to] to the enclosing blank-line-delimited block: line-align, then
+ *  walk out through contiguous non-blank lines in BOTH directions. A heading's
+ *  gutter tag rides the FIRST line of its (possibly multi-line Setext) block, and
+ *  a block's heading-ness can only change from WITHIN that same non-blank run — so
+ *  the whole run is exactly the region a change can flip. The up-walk is load-
+ *  bearing: a Setext underline (`===` / `---`) typed several lines BELOW its title
+ *  turns the whole paragraph into a heading whose marker sits on the FIRST line, a
+ *  case a naive ±1-line window (image-field.ts's single-line-image G1) would miss.
+ *  Reads post-edit `state`, so a merged/split block is measured at its new extent
+ *  (a deleted blank line makes two former blocks one contiguous run the walk
+ *  spans). */
+function expandToEnclosingBlock(state: EditorState, from: number, to: number): Interval {
+  const doc = state.doc;
+  const len = doc.length;
+  let top = doc.lineAt(Math.max(0, Math.min(from, len)));
+  while (top.from > 0) {
+    const prev = doc.lineAt(top.from - 1);
+    if (prev.length === 0) {
+      break;
+    }
+    top = prev;
+  }
+  let bottom = doc.lineAt(Math.max(0, Math.min(to, len)));
+  while (bottom.to < len) {
+    const next = doc.lineAt(bottom.to + 1);
+    if (next.length === 0) {
+      break;
+    }
+    bottom = next;
+  }
+  return { from: top.from, to: bottom.to };
+}
+
+/** Merge overlapping/touching intervals into a sorted, disjoint list so the
+ *  bounded update's per-interval filter windows never overlap (multi-cursor edits
+ *  contribute one changed range each). */
+function mergeIntervals(intervals: Interval[]): Interval[] {
+  if (intervals.length <= 1) {
+    return intervals;
+  }
+  const sorted = [...intervals].sort((a, b) => a.from - b.from);
+  const out: Interval[] = [{ ...sorted[0] }];
+  for (let i = 1; i < sorted.length; i++) {
+    const last = out[out.length - 1];
+    const cur = sorted[i];
+    if (cur.from <= last.to) {
+      last.to = Math.max(last.to, cur.to);
+    } else {
+      out.push({ ...cur });
+    }
+  }
+  return out;
+}
+
+/** Changed-range bounded recompute for the keystroke path: map the prior marker
+ *  set through the change, then re-walk ONLY the enclosing block of each changed
+ *  range and splice the fresh marks back in. Soundness: every heading node
+ *  overlapping a block interval has its first line (its marker) inside that
+ *  interval (the up-walk guarantees it), so `filter: () => false` drops exactly
+ *  the stale marks the fresh walk replaces — no duplicate, no orphan. Markers
+ *  outside every interval are position-mapped and retained untouched. */
+function recomputeBoundedHeadingClasses(
+  prev: RangeSet<GutterMarker>,
+  tr: Transaction
+): RangeSet<GutterMarker> {
+  const state = tr.state;
+  const raw: Interval[] = [];
+  tr.changes.iterChangedRanges((_fromA, _toA, fromB, toB) => {
+    raw.push(expandToEnclosingBlock(state, fromB, toB));
+  });
+  let result = prev.map(tr.changes);
+  for (const iv of mergeIntervals(raw)) {
+    const add = collectHeadingMarks(state, iv.from, iv.to).map((m) => m.marker.range(m.from));
+    result = result.update({ filterFrom: iv.from, filterTo: iv.to, filter: () => false, add });
+  }
+  return result;
+}
+
 /** Tags H1–H3 lines with `quoll-fold-heading-{level}` on their gutter element via
- *  the `gutterLineClass` facet. Recomputed when the doc OR the parse tree changes
- *  — lang-markdown parses asynchronously, so the tree the field sees at `create`
- *  is often incomplete; keying `update` on the tree identity (not just
- *  `docChanged`) re-tags once the real heading nodes land. Exported for the
- *  heading-detection contract test. */
+ *  the `gutterLineClass` facet. On the keystroke path (docChanged, parse frontier
+ *  reached) it recomputes ONLY the changed blocks (recomputeBoundedHeadingClasses)
+ *  instead of re-walking the whole syntax tree, mirroring image-field.ts. Two
+ *  full-rebuild fallbacks preserve correctness: (a) a docChanged whose post-edit
+ *  frontier is incomplete (`!syntaxTreeAvailable`) can reveal nodes outside the
+ *  changed range, and (b) lang-markdown parses asynchronously, so a later
+ *  background-parse publication arrives as a NON-docChanged transaction whose tree
+ *  identity differs — re-tagging once the real heading nodes land. Exported for
+ *  the heading-detection contract test. */
 export const headingFoldGutterLineClass = StateField.define<RangeSet<GutterMarker>>({
   create: buildHeadingFoldGutterClasses,
   update(value, tr) {
-    if (!tr.docChanged && syntaxTree(tr.startState) === syntaxTree(tr.state)) {
-      return value;
+    if (tr.docChanged) {
+      if (!syntaxTreeAvailable(tr.state, tr.state.doc.length)) {
+        return buildHeadingFoldGutterClasses(tr.state);
+      }
+      return recomputeBoundedHeadingClasses(value, tr);
     }
-    return buildHeadingFoldGutterClasses(tr.state);
+    if (syntaxTree(tr.startState) !== syntaxTree(tr.state)) {
+      return buildHeadingFoldGutterClasses(tr.state);
+    }
+    return value;
   },
   provide: (field) => gutterLineClass.from(field),
 });

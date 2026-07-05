@@ -8,6 +8,7 @@ import {
   foldCode,
   foldEffect,
   foldedRanges,
+  syntaxTreeAvailable,
   unfoldAll,
   unfoldCode,
   unfoldEffect,
@@ -238,6 +239,96 @@ describe("headingFoldGutterLineClass — per-level gutter tag for the first-row 
     const byLine = taggedClassByLine("Title line\n===\n\nbody\n");
     expect(byLine.get(1)).toBe("quoll-fold-heading-1");
     expect(byLine.size).toBe(1);
+  });
+
+  // The keystroke path recomputes ONLY the changed block (bounded), not the whole
+  // syntax tree. These pin that the bounded result stays byte-identical to a full
+  // rebuild across heading insert / remove / edit — including the multi-line Setext
+  // boundary a naive ±1-line window would miss.
+  describe("bounded recompute (keystroke path) — stays equal to a full rebuild", () => {
+    function fieldClassesByLine(v: EditorView): Map<number, string> {
+      const set = v.state.field(headingFoldGutterLineClass);
+      const byLine = new Map<number, string>();
+      const cursor = set.iter();
+      while (cursor.value) {
+        expect(cursor.from).toBe(cursor.to); // point ranges at line starts
+        const line = v.state.doc.lineAt(cursor.from);
+        expect(cursor.from).toBe(line.from);
+        byLine.set(line.number, (cursor.value as { elementClass: string }).elementClass);
+        cursor.next();
+      }
+      return byLine;
+    }
+
+    // The full-rebuild oracle: the field freshly created over `doc` (field.create →
+    // whole-tree walk). The bounded update must reproduce it.
+    function fullRebuildByLine(doc: string): Map<number, string> {
+      const fresh = mountDoc(doc);
+      const byLine = fieldClassesByLine(fresh);
+      fresh.destroy();
+      return byLine;
+    }
+
+    function expectEqualByLine(a: Map<number, string>, b: Map<number, string>): void {
+      expect(Object.fromEntries(a)).toEqual(Object.fromEntries(b));
+    }
+
+    it("re-tags a line whose heading level is edited in place (# → ###)", () => {
+      view = mountDoc("# One\nbody\n");
+      expect(fieldClassesByLine(view).get(1)).toBe("quoll-fold-heading-1");
+      // Insert "##" after the first "#" so "# One" becomes "### One".
+      view.dispatch({ changes: { from: 1, insert: "##" } });
+      const byLine = fieldClassesByLine(view);
+      expect(byLine.get(1)).toBe("quoll-fold-heading-3");
+      expectEqualByLine(byLine, fullRebuildByLine(view.state.doc.toString()));
+    });
+
+    it("tags a newly inserted heading line and drops one deleted mid-doc", () => {
+      view = mountDoc("# Keep\n\npara\n\n## Gone\n");
+      // Turn "para" into a heading, and delete the "## " off "## Gone".
+      view.dispatch({ changes: { from: 8, insert: "### " } }); // "para" → "### para"
+      let byLine = fieldClassesByLine(view);
+      expect(byLine.get(3)).toBe("quoll-fold-heading-3");
+      expectEqualByLine(byLine, fullRebuildByLine(view.state.doc.toString()));
+
+      // Remove the "## " marker from the last heading → it becomes body text.
+      const gone = view.state.doc.toString().indexOf("## Gone");
+      view.dispatch({ changes: { from: gone, to: gone + 3, insert: "" } });
+      byLine = fieldClassesByLine(view);
+      const goneLine = view.state.doc.lineAt(view.state.doc.toString().indexOf("Gone")).number;
+      expect(byLine.has(goneLine)).toBe(false);
+      expectEqualByLine(byLine, fullRebuildByLine(view.state.doc.toString()));
+    });
+
+    it("tags the FIRST line when a Setext underline is typed lines below it", () => {
+      // The recompute boundary: the change (the `===` line) is three lines BELOW
+      // the marker line, so a ±1-line window would miss it. An existing H1 above a
+      // blank line must stay retained (it is outside the changed block).
+      view = mountDoc("# top\n\nfoo\nbar\nbaz\n");
+      // Append a "===\n" underline right after "baz\n" (pos 19) → foo/bar/baz H1.
+      view.dispatch({ changes: { from: 19, insert: "===\n" } });
+      // Confirm the fast (bounded) path actually ran, not the incomplete-frontier
+      // full-rebuild fallback — otherwise this would not exercise the bounding.
+      expect(syntaxTreeAvailable(view.state, view.state.doc.length)).toBe(true);
+      const byLine = fieldClassesByLine(view);
+      expect(byLine.get(1)).toBe("quoll-fold-heading-1"); // retained ATX heading
+      expect(byLine.get(3)).toBe("quoll-fold-heading-1"); // new Setext title line
+      expect(byLine.size).toBe(2);
+      expectEqualByLine(byLine, fullRebuildByLine(view.state.doc.toString()));
+    });
+
+    it("untags a multi-line Setext title when its underline is deleted", () => {
+      view = mountDoc("# top\n\nfoo\nbar\nbaz\n===\n");
+      expect(fieldClassesByLine(view).get(3)).toBe("quoll-fold-heading-1");
+      // Delete the "===\n" underline → foo/bar/baz reverts to a plain paragraph.
+      const und = view.state.doc.toString().indexOf("===");
+      view.dispatch({ changes: { from: und, to: und + 4, insert: "" } });
+      const byLine = fieldClassesByLine(view);
+      expect(byLine.get(1)).toBe("quoll-fold-heading-1"); // ATX heading retained
+      expect(byLine.has(3)).toBe(false); // Setext gone
+      expect(byLine.size).toBe(1);
+      expectEqualByLine(byLine, fullRebuildByLine(view.state.doc.toString()));
+    });
   });
 });
 
