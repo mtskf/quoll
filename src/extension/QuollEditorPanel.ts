@@ -1110,27 +1110,34 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
             return;
           }
           // Set the single-flight guard at RECEIPT so a rapid ⌘J repeat during
-          // the barrier-deferral window is dropped (not queued twice). Cleared
-          // in the handler's .finally below. NOTE: if the deferred thunk is
-          // dropped on dispose its .finally never runs and this flag stays true,
-          // but the flag lives in the disposed panel's closure and is never read
-          // again — safe.
+          // the barrier-deferral window is dropped (not queued twice). It is
+          // released two ways, exactly one of which fires: the handler's
+          // `.finally` when the thunk RUNS, or the barrier's `onDrop` when the
+          // thunk is DROPPED (a failed-apply `settle(false)` or a dispose) and
+          // never runs. Without the onDrop release, a failed-apply drop while
+          // the panel stays ALIVE would strand the guard true and silence every
+          // later Codex handoff.
           codexHandoffInFlight = true;
           // Edit-applied barrier: defer the whole-file add behind an in-flight
           // apply so Codex reads the APPLIED file (addFileToThread reads disk
           // after our save()), not the pre-edit snapshot.
-          editSettledBarrier.run(() => {
-            void handleCodexContextHandoff({
-              documentUri: document.uri,
-              isDirty: document.isDirty,
-              save: () => document.save(),
-              executeCommand: (id, arg) => commands.executeCommand(id, arg),
-              showInfo: (message) => window.showInformationMessage(message),
-              showWarn: (message) => window.showWarningMessage(message),
-            }).finally(() => {
+          editSettledBarrier.run(
+            () => {
+              void handleCodexContextHandoff({
+                documentUri: document.uri,
+                isDirty: document.isDirty,
+                save: () => document.save(),
+                executeCommand: (id, arg) => commands.executeCommand(id, arg),
+                showInfo: (message) => window.showInformationMessage(message),
+                showWarn: (message) => window.showWarningMessage(message),
+              }).finally(() => {
+                codexHandoffInFlight = false;
+              });
+            },
+            () => {
               codexHandoffInFlight = false;
-            });
-          });
+            }
+          );
           return;
         }
         case "lint-diagnostics":

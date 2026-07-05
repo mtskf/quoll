@@ -42,39 +42,68 @@ export interface EditSettledBarrier {
   /** Run `sideChannel` now if the write lock is free (today's behaviour), else
    *  DEFER it behind the lock so it observes the applied document after a
    *  successful settlement. A no-op post-dispose. A synchronous throw is
-   *  isolated via `onError`. */
-  run(sideChannel: () => void): void;
+   *  isolated via `onError`.
+   *
+   *  `onDrop` (optional) fires exactly when the thunk is DROPPED without ever
+   *  running — a failed-apply `settle(false)` or a dispose. Callers that set an
+   *  at-receipt guard (e.g. the Codex single-flight `codexHandoffInFlight`)
+   *  MUST use it to release that guard, else a dropped deferred thunk leaks the
+   *  guard forever (its own `.finally` never runs). It never fires when the
+   *  thunk runs (the thunk owns its own completion) and is isolated via
+   *  `onError` so a throwing `onDrop` cannot abort a drop loop. */
+  run(sideChannel: () => void, onDrop?: () => void): void;
   /** Call after every reducer step. `applied` is true unless this step was a
    *  FAILED apply settlement. Drains the deferred side channels (FIFO) only
    *  when the write lock is now FULLY released AND `applied` is true AND the
-   *  panel is alive; otherwise DROPS them (dispose or failed apply) or waits
-   *  (still locked — a stash-drain re-apply). Cheap no-op when nothing waits. */
+   *  panel is alive; otherwise DROPS them (dispose or failed apply — firing each
+   *  entry's `onDrop`) or waits (still locked — a stash-drain re-apply). Cheap
+   *  no-op when nothing waits. */
   settle(applied: boolean): void;
+}
+
+interface DeferredEntry {
+  readonly run: () => void;
+  readonly onDrop?: () => void;
 }
 
 export function createEditSettledBarrier(deps: EditSettledBarrierDeps): EditSettledBarrier {
   const onError =
     deps.onError ?? ((err: unknown) => console.error("[quoll] deferred side channel threw", err));
-  const deferred: Array<() => void> = [];
+  const deferred: DeferredEntry[] = [];
 
-  const runIsolated = (sideChannel: () => void): void => {
+  const isolate = (fn: () => void): void => {
     try {
-      sideChannel();
+      fn();
     } catch (err) {
       onError(err);
     }
   };
 
+  const dropAll = (): void => {
+    // Fire each entry's onDrop (guard release) before clearing. Splice-first so a
+    // re-entrant enqueue lands in a fresh queue, not this drop batch.
+    const dropped = deferred.splice(0);
+    for (const entry of dropped) {
+      if (entry.onDrop) {
+        isolate(entry.onDrop);
+      }
+    }
+  };
+
   return {
-    run(sideChannel: () => void): void {
+    run(sideChannel: () => void, onDrop?: () => void): void {
       if (deps.isDisposed()) {
+        // The thunk will never run — release any at-receipt guard.
+        if (onDrop) {
+          isolate(onDrop);
+        }
         return;
       }
       if (deps.isLocked()) {
-        deferred.push(sideChannel);
+        deferred.push({ run: sideChannel, onDrop });
         return;
       }
-      runIsolated(sideChannel);
+      isolate(sideChannel);
     },
     settle(applied: boolean): void {
       if (deferred.length === 0) {
@@ -82,9 +111,10 @@ export function createEditSettledBarrier(deps: EditSettledBarrierDeps): EditSett
       }
       // Drop (never run) when disposed OR the releasing settlement failed to
       // apply the edit — the edit did not land, so a deferred handoff would
-      // read the un-applied (pre-edit) document.
+      // read the un-applied (pre-edit) document. Fire each onDrop so at-receipt
+      // guards are released.
       if (deps.isDisposed() || !applied) {
-        deferred.length = 0;
+        dropAll();
         return;
       }
       // Still locked (a stash-drain re-apply re-acquired the lock) → wait for
@@ -95,8 +125,8 @@ export function createEditSettledBarrier(deps: EditSettledBarrierDeps): EditSett
       // Splice-then-run so a side channel that (indirectly) enqueues another is
       // not drained inside this loop — it waits for the next settle.
       const runs = deferred.splice(0);
-      for (const run of runs) {
-        runIsolated(run);
+      for (const entry of runs) {
+        isolate(entry.run);
       }
     },
   };

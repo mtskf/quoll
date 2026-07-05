@@ -127,4 +127,80 @@ describe("createEditSettledBarrier", () => {
     expect(() => barrier.settle(true)).not.toThrow();
     expect(() => barrier.settle(false)).not.toThrow();
   });
+
+  it("fires onDrop (not the thunk) when a deferred thunk is dropped by a FAILED apply", () => {
+    let locked = true;
+    const barrier = createEditSettledBarrier({ isLocked: () => locked, isDisposed: () => false });
+    const calls: string[] = [];
+    const onDrop = vi.fn();
+    barrier.run(() => calls.push("a"), onDrop);
+
+    locked = false;
+    barrier.settle(false); // failed apply → drop
+    expect(calls).toEqual([]); // thunk never ran
+    expect(onDrop).toHaveBeenCalledOnce(); // guard released
+  });
+
+  it("fires onDrop when a deferred thunk is dropped on dispose", () => {
+    let locked = true;
+    let disposed = false;
+    const barrier = createEditSettledBarrier({
+      isLocked: () => locked,
+      isDisposed: () => disposed,
+    });
+    const calls: string[] = [];
+    const onDrop = vi.fn();
+    barrier.run(() => calls.push("a"), onDrop);
+
+    disposed = true;
+    locked = false;
+    barrier.settle(true);
+    expect(calls).toEqual([]);
+    expect(onDrop).toHaveBeenCalledOnce();
+  });
+
+  it("does NOT fire onDrop when the deferred thunk actually runs", () => {
+    let locked = true;
+    const barrier = createEditSettledBarrier({ isLocked: () => locked, isDisposed: () => false });
+    const calls: string[] = [];
+    const onDrop = vi.fn();
+    barrier.run(() => calls.push("a"), onDrop);
+
+    locked = false;
+    barrier.settle(true); // successful settle → run, not drop
+    expect(calls).toEqual(["a"]);
+    expect(onDrop).not.toHaveBeenCalled();
+  });
+
+  it("fires onDrop immediately when run() is called after dispose", () => {
+    const onDrop = vi.fn();
+    const barrier = createEditSettledBarrier({ isLocked: () => false, isDisposed: () => true });
+    const calls: string[] = [];
+    barrier.run(() => calls.push("a"), onDrop);
+    expect(calls).toEqual([]);
+    expect(onDrop).toHaveBeenCalledOnce();
+  });
+
+  it("isolates a throwing onDrop so sibling drops still fire", () => {
+    let locked = true;
+    const onError = vi.fn();
+    const barrier = createEditSettledBarrier({
+      isLocked: () => locked,
+      isDisposed: () => false,
+      onError,
+    });
+    const secondDrop = vi.fn();
+    barrier.run(
+      () => undefined,
+      () => {
+        throw new Error("drop boom");
+      }
+    );
+    barrier.run(() => undefined, secondDrop);
+
+    locked = false;
+    barrier.settle(false); // drop both
+    expect(secondDrop).toHaveBeenCalledOnce(); // throwing onDrop did not abort the loop
+    expect(onError).toHaveBeenCalledOnce();
+  });
 });
