@@ -239,8 +239,9 @@ describe("fencedCodeCollapseField bounded ≡ full", () => {
     // (code-quality mid-line finding).
     {
       name: "GF HTML mid-line: breaking a mid-line </script> swallows a DISTANT fence",
-      initial: `<script>\nvar x = 1; </script> tail\n\n${Array.from({ length: 20 }, (_, i) =>
-        `prose ${i}`
+      initial: `<script>\nvar x = 1; </script> tail\n\n${Array.from(
+        { length: 20 },
+        (_, i) => `prose ${i}`
       ).join("\n")}\n${fence(15)}\n`,
       edits: [
         {
