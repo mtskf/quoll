@@ -25,8 +25,8 @@
 // (no quollBlockReplaceZones contribution → no atomic skip; a zero-height line may
 // be visually skipped by Arrow keys, which is correct UX — no caret trap exists).
 
-import { syntaxTree } from "@codemirror/language";
-import { type EditorState, StateField } from "@codemirror/state";
+import { syntaxTree, syntaxTreeAvailable } from "@codemirror/language";
+import { type EditorState, StateField, type Transaction } from "@codemirror/state";
 import { Decoration, type DecorationSet, EditorView } from "@codemirror/view";
 
 import { hostDocumentReseed } from "../frontmatter/reveal-state.js";
@@ -100,6 +100,108 @@ function buildFull(state: EditorState): CalloutRecord[] {
   return buildRange(state, 0, state.doc.length);
 }
 
+interface Interval {
+  from: number;
+  to: number;
+}
+
+/** Line-expand [from,to] AND pull in one neighbour line on each side. G1: a
+ *  blank-line toggle ADJACENT to a callout merges/splits blockquotes and changes
+ *  the callout's block extent (or its body-ness) WITHOUT touching the marker bytes —
+ *  the same ±1 grouping locality imageBlockField relies on. A blockquote's extent is
+ *  a run of `>`-prefixed (+ lazy-continuation) lines bounded by a blank line, so a
+ *  change can only flip a callout's record from WITHIN its block or from an
+ *  immediately-adjacent line; ±1 covers the adjacency, the changed range itself
+ *  covers the interior. */
+function lineExpandWithNeighbours(state: EditorState, from: number, to: number): Interval {
+  const len = state.doc.length;
+  const lo = state.doc.lineAt(Math.max(0, Math.min(from, len)));
+  const hi = state.doc.lineAt(Math.max(0, Math.min(to, len)));
+  const prevFrom = lo.from > 0 ? state.doc.lineAt(lo.from - 1).from : lo.from;
+  const nextTo = hi.to < len ? state.doc.lineAt(hi.to + 1).to : hi.to;
+  return { from: prevFrom, to: nextTo };
+}
+
+function mergeIntervals(intervals: Interval[]): Interval[] {
+  if (intervals.length <= 1) {
+    return intervals;
+  }
+  const sorted = [...intervals].sort((a, b) => a.from - b.from);
+  const out: Interval[] = [{ ...sorted[0] }];
+  for (let i = 1; i < sorted.length; i++) {
+    const last = out[out.length - 1];
+    const cur = sorted[i];
+    if (cur.from <= last.to) {
+      last.to = Math.max(last.to, cur.to);
+    } else {
+      out.push({ ...cur });
+    }
+  }
+  return out;
+}
+
+/** The changed regions, each line-expanded ±1 (G1), merged disjoint. Records are
+ *  selection-INDEPENDENT, so — unlike imageBlockField — the span does NOT include
+ *  selection ranges; a caret move never changes record membership. */
+function computeExtendedSpan(tr: Transaction): Interval[] {
+  const state = tr.state;
+  const raw: Interval[] = [];
+  tr.changes.iterChangedRanges((_fromA, _toA, fromB, toB) => {
+    raw.push(lineExpandWithNeighbours(state, fromB, toB));
+  });
+  return mergeIntervals(raw);
+}
+
+function intersectsAny(intervals: readonly Interval[], from: number, to: number): boolean {
+  for (const iv of intervals) {
+    if (from <= iv.to && iv.from <= to) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/** Changed-range bounded record recompute: reuse every prior record whose FULL block
+ *  extent [markerFrom, blockTo] is neither TOUCHED by the change nor intersecting the
+ *  extendedSpan (position-mapped through `tr.changes`), and re-walk the tree only
+ *  INSIDE each span interval. Soundness: a callout's record can change only from
+ *  within its block (interior change → touched → re-walked, and the overlapping
+ *  Blockquote node — even one starting far above the span — is re-entered by the
+ *  bounded `iterate` and re-emitted with its true marker line) or from an adjacent
+ *  line (G1 ±1 → intersects span → re-walked). De-dup by `markerFrom` (unique per
+ *  callout): a fresh walk over a span always wins over a reused mapping. */
+function computeBoundedRecords(
+  prev: readonly CalloutRecord[],
+  tr: Transaction,
+  intervals: Interval[]
+): CalloutRecord[] {
+  const byMarker = new Map<number, CalloutRecord>();
+  for (const rec of prev) {
+    const touched = tr.changes.touchesRange(rec.markerFrom, rec.blockTo) !== false;
+    const newFrom = tr.changes.mapPos(rec.markerFrom, 1);
+    const newTo = tr.changes.mapPos(rec.blockTo, -1);
+    if (!touched && !intersectsAny(intervals, newFrom, newTo)) {
+      const markerTo = tr.changes.mapPos(rec.markerTo, -1);
+      if (newFrom === rec.markerFrom && markerTo === rec.markerTo && newTo === rec.blockTo) {
+        // Zero-shift reuse: return the SAME object (block structure unchanged AND
+        // positions unmoved — an edit strictly BELOW the record). Object identity is
+        // the non-vacuity anchor the reuse test asserts (mirrors imageBlockField
+        // reusing the exact deco on a no-shift).
+        byMarker.set(rec.markerFrom, rec);
+      } else {
+        // Position shift only: block structure unchanged (untouched + outside span).
+        byMarker.set(newFrom, { markerFrom: newFrom, markerTo, blockTo: newTo });
+      }
+    }
+  }
+  for (const iv of intervals) {
+    for (const rec of buildRange(tr.state, iv.from, iv.to)) {
+      byMarker.set(rec.markerFrom, rec); // fresh wins (a callout spanning two intervals de-dupes)
+    }
+  }
+  return [...byMarker.values()].sort((a, b) => a.markerFrom - b.markerFrom);
+}
+
 /** Apply the SELECTION-dependent conceal decision to a record list. A callout's
  *  marker row conceals iff no selection range intersects its full block span
  *  [markerFrom, blockTo] — identical to `calloutBlockRevealed` / `calloutMarkerConceal`
@@ -162,9 +264,21 @@ export const calloutMarkerConcealField = StateField.define<ConcealState>({
     if (tr.annotation(hostDocumentReseed) === true && tr.docChanged) {
       return deriveState(buildFull(tr.state), tr.state);
     }
-    // Doc change: rebuild records (Task 2 bounds this; for now, full).
+    // Doc change: recompute records changed-range-bounded, NOT a whole-tree walk.
     if (tr.docChanged) {
-      return deriveState(buildFull(tr.state), tr.state);
+      // G2: if the post-edit parser frontier is incomplete, a docChanged transaction
+      // can reveal Blockquote nodes OUTSIDE the changed range, so the bounded reuse is
+      // unsound → walk the CURRENTLY-AVAILABLE tree over the whole doc instead (this is
+      // NOT a guaranteed-complete parse — it is the same self-heal contract the sibling
+      // block fields use: the later background-parse publication arrives as a
+      // !docChanged tree-identity change and re-walks to converge). buildFull over an
+      // incomplete frontier is still a superset-safe fallback: it never bounds away a
+      // node the bounded path would have missed.
+      if (!syntaxTreeAvailable(tr.state, tr.state.doc.length)) {
+        return deriveState(buildFull(tr.state), tr.state);
+      }
+      const records = computeBoundedRecords(prev.records, tr, computeExtendedSpan(tr));
+      return deriveState(records, tr.state);
     }
     // Async background-parse publication (tree identity changed, no doc change):
     // real Blockquote nodes may have just landed → full rebuild to self-heal.
