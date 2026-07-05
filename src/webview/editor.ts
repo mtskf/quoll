@@ -23,6 +23,7 @@ import { calloutMarkerConcealField } from "./cm/decorations/callout-marker-conce
 import { fencedCodeCollapseField } from "./cm/decorations/fenced-code-collapse.js";
 import { fencedCodeCopyButton } from "./cm/decorations/fenced-code-copy-button.js";
 import { fencedCodeEnterKeymap } from "./cm/decorations/fenced-code-enter-keymap.js";
+import { headingRhythm } from "./cm/decorations/heading-rhythm.js";
 import { quollSyntaxReveal } from "./cm/decorations/index.js";
 import { listHangIndent } from "./cm/decorations/list-hang-indent.js";
 import { listIndentKeymap } from "./cm/decorations/list-indent-keymap.js";
@@ -50,6 +51,7 @@ import {
   quollBulletMarkerTheme,
   quollCollapseToggleTheme,
   quollCopyButtonTheme,
+  quollHeadingRhythmTheme,
   quollHighlighting,
   quollTaskCompletedContentTheme,
   quollTheme,
@@ -234,6 +236,11 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
         // EditorView.theme like quollBlockStyleTheme so it beats CM's unlayered
         // baseTheme / syntax-highlight rules on the marked glyph span — see cm/theme.ts.
         quollBulletMarkerTheme,
+        // Heading vertical rhythm styling (heading-rhythm.ts line decorations). An
+        // EditorView.theme like quollBulletMarkerTheme so the two-class
+        // `.cm-line.quoll-heading-rhythm-*` selector beats CM's unlayered baseTheme
+        // `.cm-line` padding — see cm/theme.ts.
+        quollHeadingRhythmTheme,
         // Completed-task content mute (task-checkbox-reveal.ts mark). An
         // EditorView.theme like quollBulletMarkerTheme so it is pinnable as an
         // exported spec; it overrides the inherited content foreground on the
@@ -297,6 +304,13 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
         // quollSyntaxReveal, which arbitrates INLINE reveals vs block zones;
         // this is line-only and selection-independent).
         listHangIndent,
+        // Heading vertical rhythm: a line decoration adding per-level `padding-top`
+        // ABOVE top-level headings (Notion-style breathing room). Standalone like
+        // listHangIndent (line-only), but SELECTION-INDEPENDENT — the space stays
+        // regardless of the caret. The matching fold-gutter offset ships in
+        // cm/fold/index.ts (headingRhythmFoldGutterLineClass) so the chevron stays
+        // aligned; both halves share heading-rhythm.ts's headingRhythmLevel predicate.
+        headingRhythm,
         // Block line decorations. `blockStyle` bundles two ViewPlugins:
         // blockquoteRule (selection-INDEPENDENT EXCEPT that a caret move re-walks
         // it too when a blockquote has a concealable fence at a boundary — the

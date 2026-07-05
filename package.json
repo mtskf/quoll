@@ -16,7 +16,7 @@
     "obsidian",
     "rich-text"
   ],
-  "version": "0.1.12",
+  "version": "0.1.13",
   "publisher": "mtskf",
   "type": "module",
   "engines": {
