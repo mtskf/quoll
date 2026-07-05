@@ -24,12 +24,14 @@
 //   - keymap.of(quollFoldKeymap)  — the four fold commands (foldCode / unfoldCode /
 //                                 foldAll / unfoldAll). Explicit Quoll-owned table —
 //                                 see quollFoldKeymap below.
-//   - gutterLineClass           — tags H1–H3 gutter lines (headingFoldGutterLineClass)
-//                                 so the theme can cap the chevron at the right
-//                                 (taller) row height, AND tags list-item marker
-//                                 lines (listFoldGutterLineClass) so the theme can
-//                                 inset their chevron past the item's top-padding
-//                                 gap; see both fields + the theme note.
+//   - gutterLineClass           — three fields tag gutter lines for theme use:
+//                                 headingFoldGutterLineClass (H1–H3: caps the
+//                                 chevron at the taller row height),
+//                                 listFoldGutterLineClass (list-item marker lines:
+//                                 insets chevron past the item's top-padding gap),
+//                                 headingRhythmFoldGutterLineClass (H2–H3 rhythm-
+//                                 padded lines: compensates the extra top padding);
+//                                 see all three fields + the theme note.
 //   - chevron theme             — glyph colour/size + the chevron's own placement
 //                                 (horizontal nudge into the reading-column gap and
 //                                 vertical centring on each foldable line's FIRST
