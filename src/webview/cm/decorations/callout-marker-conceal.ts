@@ -9,7 +9,7 @@
 //     line (the leading `>`, inline marks, links) → exactly ONE replace covers the
 //     row, with no overlapping-replace crash surface (v2 Finding 2); and
 //   - block-style.ts skips the concealed marker line (buildBlockLineDecorations
-//     point-excludes it) and migrates the rounded `-open` corner + top-right badge
+//     point-excludes it) and migrates the rounded `-open` corner
 //     onto the first visible body line.
 //
 // A StateField (NOT an inline reveal provider) because a marker line can carry

@@ -1,6 +1,6 @@
 // Pure callout knowledge — the `[!TYPE]` admonition grammar PLUS the marker-row
 // conceal geometry, with NO @codemirror/view imports (mirrors fenced-code-body.ts).
-// Both block-style.ts (per-line classes + the `-open`/badge migration) and
+// Both block-style.ts (per-line classes + the `-open` corner migration) and
 // callout-marker-conceal.ts (the StateField that conceals the marker row) import
 // from here; leaving the classification in block-style.ts would force a circular
 // import once block-style depends on the conceal predicate — so this is the single
@@ -111,7 +111,7 @@ export function calloutBlockRevealed(
  *  concealing it would vanish the whole block, since the marker is the sole row);
  *  OR the block is revealed (a selection intersects it). Otherwise the first line's
  *  span. The SINGLE source of truth both block-style.ts and the StateField call so
- *  the `-open`/badge migration and the conceal can never disagree. */
+ *  the `-open` corner migration and the conceal can never disagree. */
 export function calloutMarkerConceal(
   doc: Text,
   selection: EditorSelection,
