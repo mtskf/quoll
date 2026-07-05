@@ -279,8 +279,9 @@ describe("TableBlockWidget.toDOM", () => {
     }
     const dispatched: unknown[] = [];
     const stub = stubView(dispatched);
-    const dom = new TableBlockWidget(table, src, 0, 0).toDOM(stub);
-    const reused = new TableBlockWidget(table, src, 5, 5).updateDOM(dom, stub as EditorViewType);
+    const original = new TableBlockWidget(table, src, 0, 0);
+    const dom = original.toDOM(stub);
+    const reused = new TableBlockWidget(table, src, 5, 5).updateDOM(dom, stub as EditorViewType, original);
     expect(reused).toBe(true);
     dom.click(); // margin fallback now points at the NEW docFrom
     expect(dispatched).toEqual([{ selection: { anchor: 5 } }]);
@@ -407,9 +408,10 @@ describe("updateDOM", () => {
   function buildAndUpdate(srcA: string, srcB: string, docFrom = 0) {
     const dispatched: unknown[] = [];
     const view = stubView(dispatched);
-    const domA = makeWidget(srcA, docFrom).toDOM(view);
+    const widgetA = makeWidget(srcA, docFrom);
+    const domA = widgetA.toDOM(view);
     const widgetB = makeWidget(srcB, docFrom);
-    const result = widgetB.updateDOM(domA, view);
+    const result = widgetB.updateDOM(domA, view, widgetA);
     return { dom: domA, result, dispatched, view };
   }
 
@@ -450,6 +452,25 @@ describe("updateDOM", () => {
     expect(th.style.textAlign).toBe("");
     expect(td.style.textAlign).toBe("");
   });
+
+  it("re-stamps offsets WITHOUT re-tokenizing cells when the slice is unchanged", () => {
+    const src = "| a | b |\n| - | - |\n| c | d |\n";
+    const a = makeWidget(src, 0);
+    const domA = a.toDOM(mockView);
+    const th0 = domA.querySelectorAll("thead th")[0] as HTMLElement;
+    const cellChild = th0.firstChild; // renderCellInline output node — identity we must preserve
+    expect(cellChild).not.toBeNull();
+
+    const table = parseTable(src, 0, src.length);
+    if (table === null) { throw new Error("fixture must parse"); }
+    const shifted = new TableBlockWidget(table, src, 5, 5); // shifted docFrom + nodeFrom, same bytes
+    const reused = shifted.updateDOM(domA, mockView, a);
+
+    expect(reused).toBe(true);
+    expect(th0.firstChild).toBe(cellChild); // same node — no textContent="" + re-render
+    expect((domA as HTMLElement).dataset.docFrom).toBe("5");
+    expect(th0.dataset.cellFrom).toBe("7"); // nodeFrom 5 + 'a' at 2
+  });
 });
 
 describe("resource-base threading (relative in-cell images)", () => {
@@ -480,8 +501,9 @@ describe("resource-base threading (relative in-cell images)", () => {
     const srcA = "| a |\n| - |\n| plain |";
     const srcB = "| a |\n| - |\n| ![p](./img.png) |";
     const view = stubView(undefined, BASE);
-    const dom = makeWidget(srcA).toDOM(view);
-    expect(makeWidget(srcB).updateDOM(dom, view)).toBe(true);
+    const widgetA = makeWidget(srcA);
+    const dom = widgetA.toDOM(view);
+    expect(makeWidget(srcB).updateDOM(dom, view, widgetA)).toBe(true);
     const img = dom.querySelector<HTMLImageElement>("td img");
     expect(img?.getAttribute("src")).toBe("https://csp/ws/notes/img.png");
   });

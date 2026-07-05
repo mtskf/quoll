@@ -137,7 +137,7 @@ export class TableBlockWidget extends WidgetType {
     return tr;
   }
 
-  updateDOM(dom: HTMLElement, view: EditorView): boolean {
+  updateDOM(dom: HTMLElement, view: EditorView, from: TableBlockWidget): boolean {
     // CM calls updateDOM only when eq() returned false. Validate the grid shape;
     // any structural change → return false so CM does a full toDOM rebuild.
     if (!dom.classList.contains("quoll-table-block")) {
@@ -166,18 +166,41 @@ export class TableBlockWidget extends WidgetType {
     // Re-stamp the margin fallback so a reused element tracks the new docFrom
     // after a distant edit shifted this table without changing its bytes.
     dom.dataset.docFrom = String(this.docFrom);
+    // Pure positional shift: the bytes are identical (from.slice === this.slice)
+    // and only the absolute offsets moved. Re-stamp data-cell-from on each cell
+    // and reuse the rendered inline children verbatim — skip patchRow's
+    // textContent="" + renderCellInline re-tokenize (its own design comment,
+    // :16-18). This is the hot path when typing in a paragraph ABOVE the table.
+    if (from.slice === this.slice) {
+      this.stampRow(headerRows[0], this.table.header.cells);
+      for (let rowIdx = 0; rowIdx < this.table.rows.length; rowIdx++) {
+        this.stampRow(bodyRows[rowIdx] as Element, this.table.rows[rowIdx].cells);
+      }
+      return true;
+    }
+    // Content edit (slice changed): full re-render. patchRow re-stamps cellFrom
+    // itself (:198), so offsets stay correct on this path too.
     const resourceBase = view.state.facet(quollResourceBaseUri);
     const align = tableAlign(this.table);
     this.patchRow(headerRows[0], this.table.header.cells, align, resourceBase);
     for (let rowIdx = 0; rowIdx < this.table.rows.length; rowIdx++) {
-      this.patchRow(
-        bodyRows[rowIdx] as Element,
-        this.table.rows[rowIdx].cells,
-        align,
-        resourceBase
-      );
+      this.patchRow(bodyRows[rowIdx] as Element, this.table.rows[rowIdx].cells, align, resourceBase);
     }
     return true;
+  }
+
+  /** Re-stamp absolute cell offsets on a reused row WITHOUT touching content.
+   *  Safe only when the slice is unchanged: the DOM grid then matches this.table
+   *  1:1 (same cell.from values; only nodeFrom shifted). Alignment is unchanged
+   *  too, so textAlign is left as-is. */
+  private stampRow(tr: Element, cells: readonly Cell[]): void {
+    const domCells = tr.querySelectorAll("th, td");
+    for (let col = 0; col < cells.length; col++) {
+      const el = domCells[col] as HTMLElement | undefined;
+      if (el) {
+        el.dataset.cellFrom = String(this.nodeFrom + cells[col].from);
+      }
+    }
   }
 
   private patchRow(
