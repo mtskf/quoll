@@ -151,6 +151,15 @@ export const quollHighlightSpec: TagStyle[] = [
   // (unlike padding) so coordsAtPos / click→caret metrics stay untouched.
   // Inside a fenced block the ring colour matches the line background, so it
   // stays seamless there too.
+  //
+  // Accepted trade-off: painting the fill OUTSIDE layout is the whole point
+  // (padding would shift coordsAtPos), so the opaque ring necessarily bleeds
+  // ~2px over anything directly abutting the token — the trailing glyph of a
+  // no-space neighbour (`word`code`word`) or a selection highlight under the
+  // pill. In practice the 2px lands mostly in inter-glyph whitespace so text
+  // stays legible, and inline code is near-always space-delimited; any
+  // horizontal-inset approach that avoids this would have to move layout,
+  // which is exactly the geometry desync we are avoiding.
   {
     tag: [t.monospace],
     fontFamily: "var(--vscode-editor-font-family, monospace)",
