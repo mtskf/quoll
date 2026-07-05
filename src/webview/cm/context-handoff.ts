@@ -10,6 +10,12 @@
 // The selection→line mapping is 1:1: Quoll is text-canonical, so the CM doc
 // IS the file's raw Markdown and a CM line number equals the file line
 // number. The webview sends only geometry; the host owns the path.
+//
+// Both handoff commands flush the pending debounced Edit BEFORE posting (see
+// flushBeforeHandoff), using a single-flight-respecting flush (flushIfIdle; the
+// editor-switch uses the teardown flush because it disposes the panel) — otherwise
+// a handoff fired inside edit-sync's 300 ms debounce window would reference host
+// content that lacks the user's latest keystrokes.
 
 import { type EditorState, type Extension, Prec } from "@codemirror/state";
 import { type Command, keymap } from "@codemirror/view";
@@ -17,6 +23,23 @@ import { type Command, keymap } from "@codemirror/view";
 import { PROTOCOL_VERSION, type WebviewToHost } from "../../shared/protocol.js";
 
 export type HandoffHost = { postMessage(message: WebviewToHost): void };
+
+/** Flush any pending debounced Edit BEFORE posting a handoff. edit-sync
+ *  debounces outbound Edits by 300 ms, so a handoff fired mid-window would hand
+ *  Claude / Codex host/TextDocument content that lacks the user's latest
+ *  keystrokes (the host only auto-saves when already dirty — webview-only edits
+ *  are not covered). Flushing first makes the just-typed bytes reach the host
+ *  BEFORE the handoff (FIFO). Wired to edit-sync's flushIfIdle
+ *  (single-flight-respecting) — NOT switch-editor's teardown flush — because the
+ *  handoff leaves the panel alive. Logs, never throws — a throw would unwind
+ *  CodeMirror's key dispatch. */
+function flushBeforeHandoff(flushPendingEdit: () => void): void {
+  try {
+    flushPendingEdit();
+  } catch (err) {
+    console.error("[quoll] flushPendingEdit before handoff failed", err);
+  }
+}
 
 /** The chord string. Single source of truth — used by the keymap and pinned
  *  by a unit test. Mod = Cmd (mac) / Ctrl (win+linux); Alt = Option (mac). */
@@ -52,8 +75,12 @@ export function selectionToHandoff(state: EditorState): {
 /** The handoff Command. Exported so the keymap test can invoke it directly on
  *  a real EditorView (black-box) rather than introspecting the Extension graph
  *  or firing a platform-dependent synthetic key event. */
-export function contextHandoffCommand(host: HandoffHost): Command {
+export function contextHandoffCommand(host: HandoffHost, flushPendingEdit: () => void): Command {
   return (view) => {
+    // Flush the pending debounced Edit FIRST so the handoff references the
+    // just-typed content, not the pre-keystroke host snapshot (see
+    // flushBeforeHandoff).
+    flushBeforeHandoff(flushPendingEdit);
     const { hasSelection, startLine, endLine } = selectionToHandoff(view.state);
     const message: WebviewToHost = {
       protocol: PROTOCOL_VERSION,
@@ -79,8 +106,14 @@ export function contextHandoffCommand(host: HandoffHost): Command {
 /** The Codex handoff Command. Posts an envelope-only `codex-context-handoff`
  *  (Codex adds the WHOLE file via addFileToThread — no selection geometry).
  *  Exported so the keymap test can invoke it directly on a real EditorView. */
-export function codexContextHandoffCommand(host: HandoffHost): Command {
+export function codexContextHandoffCommand(
+  host: HandoffHost,
+  flushPendingEdit: () => void
+): Command {
   return () => {
+    // Flush FIRST: Codex hands off the WHOLE file, so a stale host save would
+    // ship pre-keystroke bytes (see flushBeforeHandoff).
+    flushBeforeHandoff(flushPendingEdit);
     const message: WebviewToHost = {
       protocol: PROTOCOL_VERSION,
       type: "codex-context-handoff",
@@ -101,11 +134,14 @@ export function codexContextHandoffCommand(host: HandoffHost): Command {
  *  Code, CODEX_CONTEXT_HANDOFF_KEY → Codex. Prec.high so they run before
  *  defaultKeymap and (for Mod-j) claim the chord before it could reach the
  *  workbench togglePanel binding. */
-export function quollContextHandoffKeymap(host: HandoffHost): Extension {
+export function quollContextHandoffKeymap(
+  host: HandoffHost,
+  flushPendingEdit: () => void
+): Extension {
   return Prec.high(
     keymap.of([
-      { key: CONTEXT_HANDOFF_KEY, run: contextHandoffCommand(host) },
-      { key: CODEX_CONTEXT_HANDOFF_KEY, run: codexContextHandoffCommand(host) },
+      { key: CONTEXT_HANDOFF_KEY, run: contextHandoffCommand(host, flushPendingEdit) },
+      { key: CODEX_CONTEXT_HANDOFF_KEY, run: codexContextHandoffCommand(host, flushPendingEdit) },
     ])
   );
 }

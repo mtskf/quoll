@@ -594,3 +594,86 @@ describe("cm edit-sync — flush (teardown)", () => {
     }
   });
 });
+
+describe("cm edit-sync — flushIfIdle", () => {
+  it("posts the in-window keystroke when idle", () => {
+    vi.useFakeTimers();
+    try {
+      let doc = "seed";
+      const posted: Array<{ content: string; baseDocVersion: number }> = [];
+      const sync = createEditSync({
+        getDoc: () => doc,
+        post: (content, baseDocVersion) => {
+          posted.push({ content, baseDocVersion });
+          return true;
+        },
+        // No scheduleFlush override → real setTimeout path so the timer stays
+        // pending until we call flushIfIdle.
+      });
+      sync.onHostSnapshot(1, true);
+      doc = "seed+typed";
+      sync.onLocalChange(); // schedules the 300ms timer (pending, not fired)
+      expect(posted.length).toBe(0); // debounce window — not posted yet
+      sync.flushIfIdle(); // mid-session flush: timer pending, idle (no in-flight)
+      expect(posted).toEqual([{ content: "seed+typed", baseDocVersion: 1 }]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("buffers (does NOT double-post) when an Edit is already in flight", () => {
+    vi.useFakeTimers();
+    try {
+      let doc = "seed";
+      const posted: Array<{ content: string; baseDocVersion: number }> = [];
+      const sync = createEditSync({
+        getDoc: () => doc,
+        post: (content, baseDocVersion) => {
+          posted.push({ content, baseDocVersion });
+          return true;
+        },
+      });
+      sync.onHostSnapshot(1, true);
+      // First edit: let the timer fire so the Edit is in flight.
+      doc = "a";
+      sync.onLocalChange();
+      vi.advanceTimersByTime(300); // fires trySend → posts, editInFlight = true
+      expect(posted.length).toBe(1);
+      // Second keystroke inside the debounce window (timer pending, in flight).
+      doc = "ab";
+      sync.onLocalChange(); // schedules a new timer while in flight
+      // flushIfIdle: timer is pending → clears it and calls trySend, but
+      // trySend RESPECTS single-flight → buffers "ab", does NOT post again.
+      sync.flushIfIdle();
+      expect(posted.length).toBe(1); // no second post at the same version
+      // Deliver the ack: the buffered content must replay (no data loss).
+      sync.onHostSnapshot(2, true);
+      sync.onReducerCommit(false); // ack clears in-flight + drains
+      expect(posted.length).toBe(2);
+      expect(posted[1]).toEqual({ content: "ab", baseDocVersion: 2 });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("is a no-op when nothing was typed in the debounce window", () => {
+    vi.useFakeTimers();
+    try {
+      const doc = "seed";
+      const posted: Array<{ content: string; baseDocVersion: number }> = [];
+      const sync = createEditSync({
+        getDoc: () => doc,
+        post: (content, baseDocVersion) => {
+          posted.push({ content, baseDocVersion });
+          return true;
+        },
+      });
+      sync.onHostSnapshot(1, true);
+      // No onLocalChange call → no pending timer.
+      sync.flushIfIdle(); // nothing pending → must be a no-op
+      expect(posted).toEqual([]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});

@@ -128,6 +128,19 @@ export type EditSync = {
    *  itself fails. NOT a mid-session call — for a reseed always use
    *  `cancelPendingFlush` (capture-preserving), never `flush`. */
   flush: () => void;
+  /** Mid-session flush barrier (context-handoff): clear the debounce timer and,
+   *  if a keystroke was typed inside the window, post it NOW — but RESPECT
+   *  single-flight (buffer for replay when an Edit is already in flight) rather
+   *  than force-posting like `flush`. Use this for barriers where the panel
+   *  STAYS ALIVE afterward (a handoff): `flush` nulls the buffer after a
+   *  force-post that the host can drop as stale (the ack-in-transit window),
+   *  leaving nothing to replay when the subsequent reseed clobbers the unsent
+   *  bytes; `flushIfIdle` never does — trySend buffers the in-flight case, so
+   *  the normal ack→replay path preserves the keystrokes. Reserve `flush` for
+   *  TEARDOWN paths (visibilitychange / pagehide / switch-to-text) where the
+   *  panel disposes and the host queue is the last authority. No-op when nothing
+   *  was typed in the debounce window. */
+  flushIfIdle: () => void;
 };
 
 export function createEditSync(opts: EditSyncOptions): EditSync {
@@ -334,6 +347,18 @@ export function createEditSync(opts: EditSyncOptions): EditSync {
         buffered = null;
       } else {
         buffered = content; // post failed: keep for the next ack
+      }
+    },
+    flushIfIdle: () => {
+      // Only act when a keystroke is pending in the debounce window; otherwise
+      // the latest bytes are already posted / in-flight / buffered-for-replay,
+      // so there is nothing to force (matches flush's no-op-when-nothing-typed).
+      // trySend RESPECTS single-flight: posts when idle, buffers when an Edit is
+      // in flight — never the force-post-then-null that flush does.
+      const hadTimer = timer !== null;
+      clearTimer();
+      if (hadTimer) {
+        trySend();
       }
     },
   };
