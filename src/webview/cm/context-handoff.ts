@@ -12,9 +12,10 @@
 // number. The webview sends only geometry; the host owns the path.
 //
 // Both handoff commands flush the pending debounced Edit BEFORE posting (see
-// flushBeforeHandoff), mirroring the editor-switch barrier — otherwise a handoff
-// fired inside edit-sync's 300 ms debounce window would reference host content
-// that lacks the user's latest keystrokes.
+// flushBeforeHandoff), using a single-flight-respecting flush (flushIfIdle; the
+// editor-switch uses the teardown flush because it disposes the panel) — otherwise
+// a handoff fired inside edit-sync's 300 ms debounce window would reference host
+// content that lacks the user's latest keystrokes.
 
 import { type EditorState, type Extension, Prec } from "@codemirror/state";
 import { type Command, keymap } from "@codemirror/view";
@@ -28,9 +29,10 @@ export type HandoffHost = { postMessage(message: WebviewToHost): void };
  *  Claude / Codex host/TextDocument content that lacks the user's latest
  *  keystrokes (the host only auto-saves when already dirty — webview-only edits
  *  are not covered). Flushing first makes the just-typed bytes reach the host
- *  BEFORE the handoff (FIFO). Same barrier as the editor-switch path
- *  (postSwitchToText). Logs, never throws — a throw would unwind CodeMirror's
- *  key dispatch. */
+ *  BEFORE the handoff (FIFO). Wired to edit-sync's flushIfIdle
+ *  (single-flight-respecting) — NOT switch-editor's teardown flush — because the
+ *  handoff leaves the panel alive. Logs, never throws — a throw would unwind
+ *  CodeMirror's key dispatch. */
 function flushBeforeHandoff(flushPendingEdit: () => void): void {
   try {
     flushPendingEdit();
