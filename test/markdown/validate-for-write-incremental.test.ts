@@ -84,7 +84,7 @@ describe("createIncrementalUnsafeUrlFinder matches findUnsafeUrl", () => {
     let freshCalls = 0;
     const flakyParse = (
       content: string,
-      fragments?: readonly unknown[]
+      fragments?: readonly TreeFragment[]
     ): ReturnType<typeof parseMarkdown> => {
       if (fragments) {
         incrementalCalls += 1;
@@ -95,7 +95,10 @@ describe("createIncrementalUnsafeUrlFinder matches findUnsafeUrl", () => {
     };
     // Silence + observe the expected fallback log (the catch console.error).
     const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
-    const inc = createIncrementalUnsafeUrlFinder(flakyParse as never);
+    // No cast: `flakyParse` is assignable to `ParseFn` by parameter
+    // contravariance, so the injected shim stays compile-time checked against
+    // the production seam (a stale shim would fail tsc, not pass silently).
+    const inc = createIncrementalUnsafeUrlFinder(flakyParse);
 
     const safe = "[ok](https://example.com)";
     const unsafe = "[bad](javascript:alert(1))";
