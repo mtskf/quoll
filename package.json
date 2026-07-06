@@ -95,7 +95,6 @@
     "compile:webview": "tsc -p ./src/webview",
     "build": "pnpm compile && pnpm compile:webview && node esbuild.config.mjs --production",
     "watch": "node esbuild.config.mjs --watch",
-    "vscode:prepublish": "pnpm build",
     "lint": "biome check",
     "format": "biome format --write",
     "check": "biome check --write",
@@ -103,7 +102,8 @@
     "gen:perf-fixtures": "node scripts/gen-perf-fixtures.mjs",
     "preview": "node scripts/preview/serve.mjs",
     "test:unit": "vitest run",
-    "test:e2e": "pnpm build && node test/extension/build.mjs && node ./out/test-e2e/launch.js",
+    "test:e2e": "pnpm build && pnpm test:e2e:run",
+    "test:e2e:run": "node test/extension/build.mjs && node ./out/test-e2e/launch.js",
     "test": "pnpm test:unit && pnpm test:e2e",
     "test:watch": "vitest",
     "package": "pnpm vsce package --no-dependencies"
