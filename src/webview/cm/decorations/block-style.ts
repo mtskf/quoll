@@ -141,7 +141,7 @@ import {
   calloutMarkerConceal,
   calloutTypeForOutermost,
 } from "./callout.js";
-import { fencedCodeBlockRevealed, fencedCodeFenceLandmarks } from "./fenced-code-body.js";
+import { fencedCodeBlockRevealed, fencedCodeFenceLandmarks } from "../fenced-code/fenced-code-body.js";
 import { quollSyntaxExclusionZones } from "./orchestrator.js";
 import { pointInExclusionZone } from "./shared.js";
 import type { BuildContext } from "./types.js";

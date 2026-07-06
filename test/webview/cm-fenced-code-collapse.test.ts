@@ -3,7 +3,7 @@
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
 import { EditorState } from "@codemirror/state";
 import { describe, expect, it } from "vitest";
-import { fencedCodeBodyLineSpan } from "../../src/webview/cm/decorations/fenced-code-body.js";
+import { fencedCodeBodyLineSpan } from "../../src/webview/cm/fenced-code/fenced-code-body.js";
 import { fullTree } from "./helpers/full-tree.js";
 
 type SyntaxNode = ReturnType<typeof fullTree>["topNode"];
@@ -56,7 +56,7 @@ import {
   fencedBlockGeometry,
   findCollapsibleFencedBlockAt,
   parkSelectionOutsideConceal,
-} from "../../src/webview/cm/decorations/fenced-code-collapse-state.js";
+} from "../../src/webview/cm/fenced-code/fenced-code-collapse-state.js";
 
 // Build a doc whose first fenced block has `bodyLines` body lines (closed).
 function fencedDoc(bodyLines: number, prefix = ""): string {
@@ -191,7 +191,7 @@ import {
   CHEVRON_DOWN_PATH,
   CHEVRON_UP_PATH,
   FencedCollapseToggleWidget,
-} from "../../src/webview/cm/decorations/fenced-code-collapse-widget.js";
+} from "../../src/webview/cm/fenced-code/fenced-code-collapse-widget.js";
 
 function pathDs(el: HTMLElement): string[] {
   return [...el.querySelectorAll("path")].map((p) => p.getAttribute("d") ?? "");
@@ -258,8 +258,8 @@ import type { DecorationSet } from "@codemirror/view";
 import {
   buildFencedCollapse,
   fencedCodeCollapseField,
-} from "../../src/webview/cm/decorations/fenced-code-collapse.js";
-import { setFencedCollapseEffect } from "../../src/webview/cm/decorations/fenced-code-collapse-state.js";
+} from "../../src/webview/cm/fenced-code/fenced-code-collapse.js";
+import { setFencedCollapseEffect } from "../../src/webview/cm/fenced-code/fenced-code-collapse-state.js";
 import { hostDocumentReseed } from "../../src/webview/cm/frontmatter/reveal-state.js";
 
 interface DecoDump {

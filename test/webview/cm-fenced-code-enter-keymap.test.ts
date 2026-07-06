@@ -9,7 +9,7 @@ import { describe, expect, it } from "vitest";
 import {
   autoCloseFenceOnEnter,
   fencedCodeEnterKeymap,
-} from "../../src/webview/cm/decorations/fenced-code-enter-keymap.js";
+} from "../../src/webview/cm/fenced-code/fenced-code-enter-keymap.js";
 import { quollMarkdownLanguage } from "../../src/webview/cm/markdown.js";
 
 function forceParse(view: EditorView): EditorView {
@@ -243,7 +243,7 @@ describe("autoCloseFenceOnEnter — history + keymap wiring", () => {
   });
 
   it("exports exactly the command + the keymap factory", async () => {
-    const mod = await import("../../src/webview/cm/decorations/fenced-code-enter-keymap.js");
+    const mod = await import("../../src/webview/cm/fenced-code/fenced-code-enter-keymap.js");
     expect(Object.keys(mod).sort()).toEqual(["autoCloseFenceOnEnter", "fencedCodeEnterKeymap"]);
   });
 });

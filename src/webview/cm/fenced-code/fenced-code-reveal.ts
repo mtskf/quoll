@@ -35,8 +35,8 @@ import { RangeSetBuilder } from "@codemirror/state";
 import type { Decoration, DecorationSet } from "@codemirror/view";
 
 import { fencedCodeBlockRevealed } from "./fenced-code-body.js";
-import { HIDE, REVEAL_MARK } from "./shared.js";
-import type { DecorationProvider } from "./types.js";
+import { HIDE, REVEAL_MARK } from "../decorations/shared.js";
+import type { DecorationProvider } from "../decorations/types.js";
 
 export const fencedCodeReveal: DecorationProvider = {
   build(ctx): DecorationSet {

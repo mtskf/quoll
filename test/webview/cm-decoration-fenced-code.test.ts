@@ -2,7 +2,7 @@ import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
 import { EditorSelection, EditorState } from "@codemirror/state";
 import type { DecorationSet } from "@codemirror/view";
 import { describe, expect, it } from "vitest";
-import { fencedCodeReveal } from "../../src/webview/cm/decorations/fenced-code-reveal.js";
+import { fencedCodeReveal } from "../../src/webview/cm/fenced-code/fenced-code-reveal.js";
 import { syntaxRevealProviders } from "../../src/webview/cm/decorations/index.js";
 import type { BuildContext } from "../../src/webview/cm/decorations/types.js";
 import { fullTree } from "./helpers/full-tree.js";

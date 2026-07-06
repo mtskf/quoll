@@ -6,7 +6,7 @@ import { describe, expect, it } from "vitest";
 import {
   fencedCodeBlockRevealed,
   fencedCodeFenceLandmarks,
-} from "../../src/webview/cm/decorations/fenced-code-body.js";
+} from "../../src/webview/cm/fenced-code/fenced-code-body.js";
 import { fullTree } from "./helpers/full-tree.js";
 
 type SyntaxNode = ReturnType<typeof fullTree>["topNode"];

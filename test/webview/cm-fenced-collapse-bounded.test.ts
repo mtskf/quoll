@@ -12,8 +12,8 @@ import { describe, expect, it } from "vitest";
 import {
   fencedCodeCollapseField,
   fencedCodeCollapseFieldFullRecompute,
-} from "../../src/webview/cm/decorations/fenced-code-collapse.js";
-import { setFencedCollapseEffect } from "../../src/webview/cm/decorations/fenced-code-collapse-state.js";
+} from "../../src/webview/cm/fenced-code/fenced-code-collapse.js";
+import { setFencedCollapseEffect } from "../../src/webview/cm/fenced-code/fenced-code-collapse-state.js";
 
 const exts = (): Extension[] => [
   EditorState.allowMultipleSelections.of(true),

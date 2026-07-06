@@ -11,12 +11,12 @@ import {
   buildCopyButtons,
   fencedCodeBody,
   fencedCodeCopyButton,
-} from "../../src/webview/cm/decorations/fenced-code-copy-button.js";
+} from "../../src/webview/cm/fenced-code/fenced-code-copy-button.js";
 import {
   CHECK_ICON_PATH,
   COPY_ICON_PATH,
   CopyButtonWidget,
-} from "../../src/webview/cm/decorations/fenced-code-copy-button-widget.js";
+} from "../../src/webview/cm/fenced-code/fenced-code-copy-button-widget.js";
 import { quollSyntaxReveal } from "../../src/webview/cm/decorations/index.js";
 import type { BuildContext } from "../../src/webview/cm/decorations/types.js";
 import { collapseToggleThemeSpec, copyButtonThemeSpec } from "../../src/webview/cm/theme.js";

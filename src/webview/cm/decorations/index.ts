@@ -9,7 +9,7 @@ export type { BuildContext, DecorationProvider } from "./types.js";
 
 import { blockquoteReveal } from "./blockquote-reveal.js";
 import { bulletMarkerReveal } from "./bullet-marker-reveal.js";
-import { fencedCodeReveal } from "./fenced-code-reveal.js";
+import { fencedCodeReveal } from "../fenced-code/fenced-code-reveal.js";
 import { headingReveal } from "./heading-reveal.js";
 import { inlineMarkReveal } from "./inline-mark-reveal.js";
 import { linkReveal } from "./link-reveal.js";

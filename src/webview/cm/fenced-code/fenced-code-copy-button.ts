@@ -20,7 +20,7 @@ import {
   type ViewUpdate,
 } from "@codemirror/view";
 import { CopyButtonWidget } from "./fenced-code-copy-button-widget.js";
-import type { BuildContext } from "./types.js";
+import type { BuildContext } from "../decorations/types.js";
 
 // `@lezer/common` is a transitive-only dep pnpm does not hoist (supply-chain
 // default-deny) — derive SyntaxNode from syntaxTree's return type. Same strategy
