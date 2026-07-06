@@ -573,20 +573,28 @@ const HEADING_RHYTHM_GUTTER_MARKER: Record<HeadingRhythmLevel, HeadingRhythmFold
   6: new HeadingRhythmFoldGutterMarker(6),
 };
 
-function buildHeadingRhythmFoldGutterClasses(
+/** Collect every rhythm-eligible heading MARKER whose node OVERLAPS [rangeFrom,
+ *  rangeTo] — same eligibility gate as the full build (headingRhythmLevel: level
+ *  match + top-level + not physical line 1 + not in an exclusion zone). Called with
+ *  [0, doc.length] for a full (re)build and with each bounded block interval on the
+ *  keystroke path. A bounded {from,to} iterate materialises only the touched subtree
+ *  (PERF.md: the cost is whole-tree materialisation, not descent). No straddle clamp
+ *  (unlike collectListMarks): a heading never spans a blank line — ATX is one line,
+ *  Setext is a contiguous title+underline run — so expandToEnclosingBlock's up-walk
+ *  always puts the marker line at/after rangeFrom. Doc order → sorted by from. */
+function collectHeadingRhythmMarks(
   state: EditorState,
-  zones: readonly { from: number; to: number }[]
-): RangeSet<GutterMarker> {
-  const builder = new RangeSetBuilder<GutterMarker>();
+  zones: readonly { from: number; to: number }[],
+  rangeFrom: number,
+  rangeTo: number
+): { from: number; marker: GutterMarker }[] {
+  const out: { from: number; marker: GutterMarker }[] = [];
   const tree = syntaxTree(state);
   let lastLineFrom = -1;
   tree.iterate({
+    from: rangeFrom,
+    to: rangeTo,
     enter: (node) => {
-      // Reuse the SAME eligibility predicate as the content half (heading-rhythm.ts)
-      // so the gutter offset stays in lock-step with the `.cm-line` rhythm padding
-      // it compensates for — top-level only, not line 1, not in an exclusion zone.
-      // Without lock-step, a padded heading's chevron would float down by the gap
-      // (the bug the list precedent already fixed for `.quoll-fold-list-marker`).
       const level = headingRhythmLevel(state, tree, node, zones);
       if (level === null) {
         return;
@@ -594,40 +602,94 @@ function buildHeadingRhythmFoldGutterClasses(
       const lineFrom = state.doc.lineAt(node.from).from;
       // A heading rides one line; guard against double-adding if the tree ever
       // surfaces nested heading-tagged nodes on the same line (RangeSetBuilder
-      // requires strictly non-decreasing, de-duplicated positions), mirroring the
-      // heading / list builders above.
+      // requires strictly non-decreasing, de-duplicated positions).
       if (lineFrom === lastLineFrom) {
         return;
       }
       lastLineFrom = lineFrom;
-      builder.add(lineFrom, lineFrom, HEADING_RHYTHM_GUTTER_MARKER[level as HeadingRhythmLevel]);
+      out.push({
+        from: lineFrom,
+        marker: HEADING_RHYTHM_GUTTER_MARKER[level as HeadingRhythmLevel],
+      });
     },
   });
+  return out;
+}
+
+function buildHeadingRhythmFoldGutterClasses(
+  state: EditorState,
+  zones: readonly { from: number; to: number }[]
+): RangeSet<GutterMarker> {
+  const builder = new RangeSetBuilder<GutterMarker>();
+  for (const m of collectHeadingRhythmMarks(state, zones, 0, state.doc.length)) {
+    builder.add(m.from, m.from, m.marker);
+  }
   return builder.finish();
+}
+
+/** Changed-range bounded recompute for the keystroke path — mirrors
+ *  recomputeBoundedHeadingClasses / recomputeBoundedListClasses. Soundness: every
+ *  rhythm-eligible heading overlapping a block interval has its marker line inside
+ *  that interval (the up-walk captures a Setext title; the physical-line-1 flip only
+ *  affects the topmost block, whose interval starts at line 1), so filter+add
+ *  replaces exactly the stale marks. Threads `zones` (a plain docChanged never
+ *  changes them — a facet flip forces a full rebuild in update, below). */
+function recomputeBoundedHeadingRhythmClasses(
+  prev: RangeSet<GutterMarker>,
+  tr: Transaction,
+  zones: readonly { from: number; to: number }[]
+): RangeSet<GutterMarker> {
+  const state = tr.state;
+  const raw: Interval[] = [];
+  tr.changes.iterChangedRanges((_fromA, _toA, fromB, toB) => {
+    raw.push(expandToEnclosingBlock(state, fromB, toB));
+  });
+  let result = prev.map(tr.changes);
+  for (const iv of mergeIntervals(raw)) {
+    const add = collectHeadingRhythmMarks(state, zones, iv.from, iv.to).map((m) =>
+      m.marker.range(m.from)
+    );
+    result = result.update({ filterFrom: iv.from, filterTo: iv.to, filter: () => false, add });
+  }
+  return result;
 }
 
 /** Tags every rhythm-eligible heading MARKER line with
  *  `quoll-fold-heading-rhythm-{level}` on its gutter element via `gutterLineClass`,
  *  in lock-step with the `.cm-line.quoll-heading-rhythm-{level}` padding it
- *  compensates for (SAME eligibility gate — headingRhythmLevel). Recomputed when
- *  the doc, the parse tree (lang-markdown parses asynchronously), OR the
- *  `quollSyntaxExclusionZones` facet changes — the same doc/tree/facet triggers as
- *  headingRhythmNeedsRebuild MINUS its viewportChanged trigger (this is a
- *  whole-doc StateField whose emitted set is selection- AND viewport-independent),
- *  exactly like listFoldGutterLineClass. Exported for the heading-detection
- *  contract test. */
+ *  compensates for (SAME eligibility gate — headingRhythmLevel). On the keystroke
+ *  path (docChanged, parse frontier reached, no facet flip) it recomputes ONLY the
+ *  changed blocks (recomputeBoundedHeadingRhythmClasses) instead of re-walking the
+ *  whole syntax tree, mirroring headingFoldGutterLineClass and listFoldGutterLineClass.
+ *  Two full-rebuild fallbacks preserve correctness: (a) a docChanged whose post-edit
+ *  frontier is incomplete (`!syntaxTreeAvailable`) can reveal nodes outside the changed
+ *  range, and (b) lang-markdown parses asynchronously, so a later background-parse
+ *  publication arrives as a NON-docChanged transaction whose tree identity differs —
+ *  re-tagging once the real heading nodes land. A third fallback: a docChanged that
+ *  ALSO flips the `quollSyntaxExclusionZones` facet takes the full-rebuild path because
+ *  a zone boundary shift can re-include / exclude headings outside the changed range.
+ *  The non-docChanged facet-flip path still full-rebuilds for the same reason. The
+ *  emitted set is selection- AND viewport-independent. Exported for the heading-
+ *  detection contract test. */
 export const headingRhythmFoldGutterLineClass = StateField.define<RangeSet<GutterMarker>>({
   create: (state) =>
     buildHeadingRhythmFoldGutterClasses(state, state.facet(quollSyntaxExclusionZones)),
   update(value, tr) {
-    if (
-      !tr.docChanged &&
-      syntaxTree(tr.startState) === syntaxTree(tr.state) &&
-      tr.startState.facet(quollSyntaxExclusionZones) === tr.state.facet(quollSyntaxExclusionZones)
-    ) {
-      return value;
+    const zones = tr.state.facet(quollSyntaxExclusionZones);
+    const facetChanged = tr.startState.facet(quollSyntaxExclusionZones) !== zones;
+    if (tr.docChanged) {
+      // A facet flip can change eligibility OUTSIDE the changed range, and an
+      // incomplete post-edit parse frontier can reveal nodes outside it — both need a
+      // full rebuild. Otherwise bound the walk to the changed blocks.
+      if (facetChanged || !syntaxTreeAvailable(tr.state, tr.state.doc.length)) {
+        return buildHeadingRhythmFoldGutterClasses(tr.state, zones);
+      }
+      return recomputeBoundedHeadingRhythmClasses(value, tr, zones);
     }
-    return buildHeadingRhythmFoldGutterClasses(tr.state, tr.state.facet(quollSyntaxExclusionZones));
+    if (syntaxTree(tr.startState) !== syntaxTree(tr.state) || facetChanged) {
+      return buildHeadingRhythmFoldGutterClasses(tr.state, zones);
+    }
+    return value;
   },
   provide: (field) => gutterLineClass.from(field),
 });

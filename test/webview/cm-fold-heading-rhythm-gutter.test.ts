@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
-import { ensureSyntaxTree } from "@codemirror/language";
+import { ensureSyntaxTree, syntaxTreeAvailable } from "@codemirror/language";
 import { EditorSelection, EditorState, StateEffect, StateField } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import { afterEach, describe, expect, it } from "vitest";
@@ -136,5 +136,137 @@ describe("headingRhythmFoldGutterLineClass — per-level gutter tag for the rhyt
     // Flip a zone over line 2 with NO doc change; the tag set must drop line 2.
     view.dispatch({ effects: setZones.of([{ from: 0, to: view.state.doc.line(2).to }]) });
     expect(tagged()).toEqual(new Set([3]));
+  });
+
+  describe("bounded recompute (keystroke path) — stays equal to a full rebuild", () => {
+    // Serialize the whole RangeSet ({from,to,cls}) and compare arrays vs the oracle
+    // (Codex #2 — a by-line Map hides duplicate/order/extra ranges a double-add adds).
+    function serializeField(v: EditorView): { from: number; to: number; cls: string }[] {
+      const out: { from: number; to: number; cls: string }[] = [];
+      const cursor = v.state.field(headingRhythmFoldGutterLineClass).iter();
+      while (cursor.value) {
+        out.push({
+          from: cursor.from,
+          to: cursor.to,
+          cls: (cursor.value as { elementClass: string }).elementClass,
+        });
+        cursor.next();
+      }
+      return out;
+    }
+    function oracle(doc: string): { from: number; to: number; cls: string }[] {
+      const fresh = mountDoc(doc);
+      const ser = serializeField(fresh);
+      fresh.destroy();
+      return ser;
+    }
+    function classAtLine(v: EditorView, lineNo: number): string | undefined {
+      return serializeField(v).find((r) => v.state.doc.lineAt(r.from).number === lineNo)?.cls;
+    }
+    function expectBoundedEqualsFull(): void {
+      expect(syntaxTreeAvailable(view!.state, view!.state.doc.length)).toBe(true);
+      expect(serializeField(view!)).toEqual(oracle(view!.state.doc.toString()));
+    }
+
+    it("re-tags a heading whose level is edited in place (## → ####)", () => {
+      view = mountDoc("intro\n## Two\n");
+      expect(classAtLine(view, 2)).toBe("quoll-fold-heading-rhythm-2");
+      const pos = view.state.doc.toString().indexOf("## Two") + 1;
+      view.dispatch({ changes: { from: pos, insert: "##" } }); // "## Two" → "#### Two"
+      expect(classAtLine(view, 2)).toBe("quoll-fold-heading-rhythm-4");
+      expectBoundedEqualsFull();
+    });
+
+    it("tags a newly typed heading and drops one whose marker is deleted", () => {
+      view = mountDoc("intro\n\npara\n\n## gone\n");
+      const para = view.state.doc.toString().indexOf("para");
+      view.dispatch({ changes: { from: para, insert: "### " } }); // "para" → "### para"
+      const paraLine = view.state.doc.lineAt(view.state.doc.toString().indexOf("para")).number;
+      expect(classAtLine(view, paraLine)).toBe("quoll-fold-heading-rhythm-3");
+      expectBoundedEqualsFull();
+      const gone = view.state.doc.toString().indexOf("## gone");
+      view.dispatch({ changes: { from: gone, to: gone + 3, insert: "" } }); // strip "## "
+      const goneLine = view.state.doc.lineAt(view.state.doc.toString().indexOf("gone")).number;
+      expect(classAtLine(view, goneLine)).toBeUndefined();
+      expectBoundedEqualsFull();
+    });
+
+    it("tags a Setext heading whose === underline is typed lines below (up-walk)", () => {
+      // rhythm covers Setext (level ≤ 2). The change (the `===` line) sits BELOW the
+      // title line the marker rides, so a naive ±1 window would miss it.
+      view = mountDoc("intro\n\nfoo\nbar\nbaz\n");
+      const end = view.state.doc.length;
+      view.dispatch({ changes: { from: end, insert: "===\n" } }); // foo/bar/baz → Setext H1
+      expect(classAtLine(view, 3)).toBe("quoll-fold-heading-rhythm-1"); // title line (foo)
+      expectBoundedEqualsFull();
+    });
+
+    it("flips first-physical-line suppression when a blank line is inserted above / deleted (topmost heading)", () => {
+      view = mountDoc("# Top\n\nbody\n");
+      expect(serializeField(view)).toEqual([]); // line-1 heading suppressed
+      view.dispatch({ changes: { from: 0, insert: "\n" } }); // "# Top" now line 2
+      expect(classAtLine(view, 2)).toBe("quoll-fold-heading-rhythm-1");
+      expectBoundedEqualsFull();
+      view.dispatch({ changes: { from: 0, to: 1, insert: "" } }); // back to line 1
+      expect(serializeField(view)).toEqual([]);
+      expectBoundedEqualsFull();
+    });
+
+    it("suppresses a heading pushed to physical line 1 by deleting the line above (Codex #4)", () => {
+      // The deletion path (fromB === toB): "intro\n# H" — "# H" is line 2 (eligible).
+      // Delete the whole "intro\n" first line so "# H" becomes physical line 1 →
+      // suppressed. The changed range starts at offset 0 (a collapsing deletion), so
+      // the bounded window's up-walk begins at the new line 1.
+      view = mountDoc("intro\n# H\n\nbody\n");
+      expect(classAtLine(view, 2)).toBe("quoll-fold-heading-rhythm-1");
+      view.dispatch({ changes: { from: 0, to: "intro\n".length, insert: "" } }); // drop line 1
+      expect(serializeField(view)).toEqual([]); // "# H" now line 1 → suppressed
+      expectBoundedEqualsFull();
+    });
+
+    it("recomputes both blocks of a multi-range (multi-cursor) transaction", () => {
+      view = mountDoc("intro\n## a\n\nbody\n\n### b\n");
+      const aFrom = view.state.doc.toString().indexOf("## a");
+      const bFrom = view.state.doc.toString().indexOf("### b");
+      view.dispatch({
+        changes: [
+          { from: aFrom, to: aFrom + 1, insert: "" }, // "## a" → "# a"
+          { from: bFrom, to: bFrom + 1, insert: "" }, // "### b" → "## b"
+        ],
+      });
+      expect(classAtLine(view, 2)).toBe("quoll-fold-heading-rhythm-1");
+      expect(classAtLine(view, 6)).toBe("quoll-fold-heading-rhythm-2");
+      expectBoundedEqualsFull();
+    });
+
+    it("recomputes a far heading when the exclusion-zone facet flips IN THE SAME docChanged (Codex #3)", () => {
+      // A docChanged that ALSO flips the facet must full-rebuild (the `facetChanged`
+      // guard), because a zone flip changes eligibility OUTSIDE the changed range.
+      const setZones = StateEffect.define<readonly { from: number; to: number }[]>();
+      const zoneField = StateField.define<readonly { from: number; to: number }[]>({
+        create: () => [],
+        update(value, tr) {
+          for (const e of tr.effects) {
+            if (e.is(setZones)) {
+              return e.value;
+            }
+          }
+          return value;
+        },
+        provide: (f) => quollSyntaxExclusionZones.from(f),
+      });
+      view = mountDoc("intro\n## far\n\n## near\n", [zoneField]);
+      expect(serializeField(view).length).toBe(2); // both headings tagged, no zones
+      const near = view.state.doc.toString().indexOf("near");
+      view.dispatch({
+        changes: { from: near, insert: "X" }, // edit the bottom block
+        effects: setZones.of([{ from: 0, to: view.state.doc.line(2).to }]), // zone over "## far"
+      });
+      // "## far" is zoned out despite the edit being far from it — the facetChanged
+      // full-rebuild must catch it (a bounded-only path would strand its marker).
+      const lines = new Set(serializeField(view).map((r) => view!.state.doc.lineAt(r.from).number));
+      const nearLine = view.state.doc.lineAt(view.state.doc.toString().indexOf("near")).number;
+      expect(lines).toEqual(new Set([nearLine]));
+    });
   });
 });
