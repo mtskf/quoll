@@ -63,12 +63,15 @@ jobs:
       - name: Build (host + webview via esbuild)
         run: pnpm build
 
-      # E2E suite needs dist/ on disk and a display. Build must run
-      # first (the test host loads dist/extension.cjs via the
-      # extensionDevelopmentPath). xvfb-run gives headless Ubuntu a
-      # virtual display so VS Code's Electron can render.
+      # E2E suite needs dist/ on disk and a display. The Build step
+      # above already produced dist/ (the test host loads
+      # dist/extension.cjs via the extensionDevelopmentPath), so we
+      # run `test:e2e:run` (tsc-emit + launch, no rebuild) instead of
+      # `test:e2e` (which prepends its own `pnpm build`) — one build
+      # per job. xvfb-run gives headless Ubuntu a virtual display so
+      # VS Code's Electron can render.
       - name: E2E tests (xvfb-run)
-        run: xvfb-run -a pnpm test:e2e
+        run: xvfb-run -a pnpm test:e2e:run
 
       # PR/main packaging gate. We package on every PR (not just
       # release tags) so .vscodeignore regressions surface during
