@@ -29,6 +29,7 @@ import { syntaxTree, syntaxTreeAvailable } from "@codemirror/language";
 import { type EditorState, StateField, type Transaction } from "@codemirror/state";
 import { Decoration, type DecorationSet, EditorView } from "@codemirror/view";
 
+import { touchesStructuralReparse } from "../fold/index.js";
 import { hostDocumentReseed } from "../frontmatter/reveal-state.js";
 import { CALLOUT_MARKER_HIDDEN_CLASS, calloutTypeForOutermost } from "./callout.js";
 import { quollSyntaxExclusionZones } from "./orchestrator.js";
@@ -292,15 +293,20 @@ export const calloutMarkerConcealField = StateField.define<ConcealState>({
     }
     // Doc change: recompute records changed-range-bounded, NOT a whole-tree walk.
     if (tr.docChanged) {
-      // G2: if the post-edit parser frontier is incomplete, a docChanged transaction
-      // can reveal Blockquote nodes OUTSIDE the changed range, so the bounded reuse is
-      // unsound → walk the CURRENTLY-AVAILABLE tree over the whole doc instead (this is
-      // NOT a guaranteed-complete parse — it is the same self-heal contract the sibling
-      // block fields use: the later background-parse publication arrives as a
+      // A STRUCTURAL reparse (touchesStructuralReparse — an unclosed fence / HTML block
+      // swallowing the callout below it, a `<!DOCTYPE …>` terminator, an un-list /
+      // heading-interrupt re-context, etc.) re-shapes block boundaries OUTSIDE the
+      // changed run, so a callout's Blockquote-ness can flip WITHOUT any edit inside its
+      // block — the changed-range bounded window would strand the stale record. G2: if
+      // the post-edit parser frontier is incomplete, a docChanged transaction can also
+      // reveal Blockquote nodes OUTSIDE the changed range, so the bounded reuse is
+      // unsound. Either → walk the CURRENTLY-AVAILABLE tree over the whole doc instead
+      // (NOT a guaranteed-complete parse — the same self-heal contract the sibling block
+      // + fold-gutter fields use: a later background-parse publication arrives as a
       // !docChanged tree-identity change and re-walks to converge). buildFull over an
       // incomplete frontier is still a superset-safe fallback: it never bounds away a
       // node the bounded path would have missed.
-      if (!syntaxTreeAvailable(tr.state, tr.state.doc.length)) {
+      if (touchesStructuralReparse(tr) || !syntaxTreeAvailable(tr.state, tr.state.doc.length)) {
         return deriveState(buildFull(tr.state), tr.state);
       }
       const records = computeBoundedRecords(prev.records, tr, computeExtendedSpan(tr));
