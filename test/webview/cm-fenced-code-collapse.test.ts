@@ -448,6 +448,17 @@ describe("fencedCodeCollapseField reducer", () => {
     state = state.update({ changes: { from: 0, insert: " " } }).state;
     expect([...state.field(fencedCodeCollapseField).expanded]).toEqual([]);
   });
+
+  it("carries a document-ordered blocks record with full-extent liveness bounds", () => {
+    const state = stateWithField(fencedDoc(11)); // one collapsible CLOSED block
+    const { blocks } = state.field(fencedCodeCollapseField);
+    expect(blocks).toHaveLength(1);
+    const b = blocks[0];
+    expect(b.key).toBe(state.doc.line(1).from); // open-fence line.from
+    expect(b.blockFrom).toBe(b.key);
+    expect(b.blockTo).toBe(state.doc.line(13).to); // closed → end of closing-fence line
+    expect(b.expanded).toBe(false); // collapsed by default
+  });
 });
 
 import { blockStyle } from "../../src/webview/cm/decorations/block-style.js";
