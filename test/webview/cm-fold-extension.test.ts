@@ -13,8 +13,14 @@ import {
   unfoldCode,
   unfoldEffect,
 } from "@codemirror/language";
-import { EditorSelection, EditorState, StateEffect, StateField } from "@codemirror/state";
-import { EditorView } from "@codemirror/view";
+import {
+  EditorSelection,
+  EditorState,
+  type RangeSet,
+  StateEffect,
+  StateField,
+} from "@codemirror/state";
+import { EditorView, type GutterMarker } from "@codemirror/view";
 import { afterEach, describe, expect, it } from "vitest";
 import { quollSyntaxExclusionZones } from "../../src/webview/cm/decorations/orchestrator.js";
 import {
@@ -28,6 +34,7 @@ import {
   quollFolding,
   quollFoldKeymap,
   quollFoldKeymapExtension,
+  touchesStructuralReparse,
 } from "../../src/webview/cm/fold/index.js";
 import { frontmatterBlockField } from "../../src/webview/cm/frontmatter/index.js";
 
@@ -690,6 +697,248 @@ describe("listFoldGutterLineClass — gutter tag for the list-item vertical-gap 
       const nearLine = view.state.doc.lineAt(view.state.doc.toString().indexOf("near")).number;
       expect(lines).toEqual(new Set([nearLine]));
     });
+  });
+});
+
+// The bounded keystroke recompute (expandToEnclosingBlock) assumes a block's
+// identity can only change from WITHIN its own blank-line-delimited run. Markdown
+// block boundaries are NOT stable under edits, so a STRUCTURAL reparse can strand /
+// miss a fold chevron. `touchesStructuralReparse` routes those edits to a FULL
+// rebuild. Each positive case below is bounded==oracle AND is RED against the
+// guard-less field (bounded strands a marker); the negative assertions call the
+// exported guard directly to pin the perf contract (plain typing stays bounded).
+//
+// Serialize the WHOLE RangeSet as {from,to,cls}[] (Codex #5/#6 — a by-line Map hides
+// duplicate / same-line markers a bad recompute would introduce). The oracle is a
+// fresh mount (VALID: all three fold fields are record-less — value is a pure
+// function of doc+zones). Both live view and oracle assert syntaxTreeAvailable so the
+// bounded branch actually ran (else the comparison is a vacuous full≡full).
+function serializeGutter(
+  v: EditorView,
+  field: StateField<RangeSet<GutterMarker>>
+): { from: number; to: number; cls: string }[] {
+  const out: { from: number; to: number; cls: string }[] = [];
+  const cursor = v.state.field(field).iter();
+  while (cursor.value) {
+    out.push({
+      from: cursor.from,
+      to: cursor.to,
+      cls: (cursor.value as { elementClass: string }).elementClass,
+    });
+    cursor.next();
+  }
+  return out;
+}
+
+describe("headingFoldGutterLineClass — bounded ≡ full-rebuild under structural reparse", () => {
+  function oracle(doc: string): { from: number; to: number; cls: string }[] {
+    const fresh = mountDoc(doc);
+    expect(syntaxTreeAvailable(fresh.state, fresh.state.doc.length)).toBe(true);
+    const ser = serializeGutter(fresh, headingFoldGutterLineClass);
+    fresh.destroy();
+    return ser;
+  }
+  function expectBoundedEqualsFull(): void {
+    expect(syntaxTreeAvailable(view!.state, view!.state.doc.length)).toBe(true);
+    expect(serializeGutter(view!, headingFoldGutterLineClass)).toEqual(
+      oracle(view!.state.doc.toString())
+    );
+  }
+
+  // The affected heading sits AFTER a blank line, so it is OUTSIDE the changed run's
+  // bounded window (expandToEnclosingBlock stops at the blank): a guard-less bounded
+  // recompute strands its marker even though the reparse swallowed it.
+  it("B1: an unclosed fence inserted above a far heading swallows it (SHAPE fence)", () => {
+    view = mountDoc("intro\n\n# h\n");
+    expect(serializeGutter(view, headingFoldGutterLineClass).length).toBe(1); // heading tagged
+    view.dispatch({ changes: { from: 0, insert: "```\n" } }); // fence now swallows # h
+    expect(serializeGutter(view, headingFoldGutterLineClass)).toEqual([]); // heading gone
+    expectBoundedEqualsFull();
+  });
+
+  it("an unclosed <script> inserted above a far heading swallows it (SHAPE HTML alt)", () => {
+    // A type-1 (<script>) block runs to the closing tag across blank lines, so a far
+    // heading below a blank is still swallowed (unlike a blank-terminated type-6 block).
+    view = mountDoc("intro\n\n# h\n");
+    view.dispatch({ changes: { from: 0, insert: "<script>\n" } });
+    expect(serializeGutter(view, headingFoldGutterLineClass)).toEqual([]);
+    expectBoundedEqualsFull();
+  });
+
+  it("typing the closing > of a type-4 <!DOCTYPE> re-reveals a far heading (GT-DELTA only)", () => {
+    // The `>` terminator is typed on a PLAIN line (`foo` → `foo>`), so SHAPE /
+    // NEWLINE-DELTA / BLANK-FLIP / INDENT-DELTA all miss it — ONLY GT-DELTA fires.
+    view = mountDoc("<!DOCTYPE html\nfoo\n\n# h\n"); // unclosed type-4 swallows # h
+    expect(serializeGutter(view, headingFoldGutterLineClass)).toEqual([]);
+    const fooEnd = view.state.doc.line(2).to; // end of "foo"
+    view.dispatch({ changes: { from: fooEnd, insert: ">" } }); // "foo" → "foo>" closes the block
+    expect(serializeGutter(view, headingFoldGutterLineClass).length).toBe(1); // # h revealed
+    expectBoundedEqualsFull();
+  });
+});
+
+describe("listFoldGutterLineClass — bounded ≡ full-rebuild under structural reparse", () => {
+  function oracle(doc: string): { from: number; to: number; cls: string }[] {
+    const fresh = mountDoc(doc);
+    expect(syntaxTreeAvailable(fresh.state, fresh.state.doc.length)).toBe(true);
+    const ser = serializeGutter(fresh, listFoldGutterLineClass);
+    fresh.destroy();
+    return ser;
+  }
+  function expectBoundedEqualsFull(): void {
+    expect(syntaxTreeAvailable(view!.state, view!.state.doc.length)).toBe(true);
+    expect(serializeGutter(view!, listFoldGutterLineClass)).toEqual(
+      oracle(view!.state.doc.toString())
+    );
+  }
+
+  // The list sits AFTER a blank line so its markers are OUTSIDE the changed run's
+  // bounded window — a guard-less bounded recompute strands them post-reparse.
+  it("an unclosed fence inserted above a far list swallows its markers (SHAPE fence)", () => {
+    view = mountDoc("intro\n\n- one\n- two\n");
+    expect(serializeGutter(view, listFoldGutterLineClass).length).toBe(2);
+    view.dispatch({ changes: { from: 0, insert: "```\n" } });
+    expect(serializeGutter(view, listFoldGutterLineClass)).toEqual([]);
+    expectBoundedEqualsFull();
+  });
+
+  it("an unclosed <script> inserted above a far list swallows its markers (SHAPE HTML alt)", () => {
+    view = mountDoc("intro\n\n- one\n- two\n");
+    view.dispatch({ changes: { from: 0, insert: "<script>\n" } });
+    expect(serializeGutter(view, listFoldGutterLineClass)).toEqual([]);
+    expectBoundedEqualsFull();
+  });
+});
+
+describe("touchesStructuralReparse — arm falsifiability + perf contract (direct calls)", () => {
+  // Construct a real Transaction via state.update({changes}) and call the exported
+  // guard directly. Each `=== true` pins one arm (remove that arm → the assertion
+  // flips); the `=== false` cases pin that plain typing stays on the bounded hot path
+  // (guarding the e5e65ed silent-no-op class).
+  function tx(doc: string, changes: { from: number; to?: number; insert?: string }) {
+    const state = EditorState.create({ doc, extensions: [markdown({ base: markdownLanguage })] });
+    return state.update({ changes });
+  }
+
+  it("SHAPE (ATX alt): single-line x q → # q fires (no newline/blank/indent/gt)", () => {
+    // A bare in-place `x`→`#` — the ATX-heading alt is the ONLY arm that can catch it.
+    expect(touchesStructuralReparse(tx("x q\n", { from: 0, to: 1, insert: "#" }))).toBe(true);
+  });
+
+  it("SHAPE (underscore alt): typing ___ thematic break fires", () => {
+    expect(touchesStructuralReparse(tx("abc\n", { from: 0, to: 3, insert: "___" }))).toBe(true);
+  });
+
+  it("SHAPE (HTML alt): typing <div> at line start fires", () => {
+    expect(touchesStructuralReparse(tx("abc\n", { from: 0, to: 3, insert: "<div>" }))).toBe(true);
+  });
+
+  it("SHAPE (fence alt): typing ``` at line start fires", () => {
+    expect(touchesStructuralReparse(tx("abc\n", { from: 0, to: 3, insert: "```" }))).toBe(true);
+  });
+
+  it("GT-DELTA: typing a bare > on a plain line fires (type-4 terminator)", () => {
+    // No shape, no newline, no blank/indent flip — only the `>` delta catches it.
+    expect(touchesStructuralReparse(tx("foo\n", { from: 3, insert: ">" }))).toBe(true);
+  });
+
+  it("INDENT-DELTA: unindenting a plain line (  x → x) fires", () => {
+    expect(touchesStructuralReparse(tx("  x\n", { from: 0, to: 2, insert: "" }))).toBe(true);
+  });
+
+  it("BLANK-FLIP: typing into a blank line fires", () => {
+    expect(touchesStructuralReparse(tx("a\n\nb\n", { from: 2, insert: "z" }))).toBe(true);
+  });
+
+  it("NEWLINE-DELTA: pressing Enter inside a fenced-code body fires (no in-block exemption)", () => {
+    // Record-less fields have NO insideBlock gate: a newline inside a fence still
+    // full-rebuilds (an unclosed fence could re-group), unlike the fenced field.
+    const doc = "```\ncode\n```\n";
+    const codePos = doc.indexOf("code") + 2; // mid "code"
+    expect(touchesStructuralReparse(tx(doc, { from: codePos, insert: "\n" }))).toBe(true);
+  });
+
+  it("=== false for plain mid-line prose typing (stays bounded)", () => {
+    expect(touchesStructuralReparse(tx("hello world\n", { from: 5, insert: "x" }))).toBe(false);
+  });
+
+  it("=== false for a same-line non-structural char edit inside a fenced-code body", () => {
+    // Codex Conf 92: the "inside a fence" caveat holds ONLY for a same-line char edit
+    // (no newline, no `>`, no shape, no blank/indent flip) — NOT typing generally.
+    const doc = "```\ncodeline\n```\n";
+    const codePos = doc.indexOf("codeline") + 3;
+    expect(touchesStructuralReparse(tx(doc, { from: codePos, insert: "x" }))).toBe(false);
+  });
+
+  it("=== true when only ONE of two multi-cursor ranges trips the guard", () => {
+    // One range inserts a plain letter (inert); the other inserts `- ` (a list
+    // marker) — the guard must short-circuit true on ANY tripping range.
+    const state = EditorState.create({
+      doc: "alpha\nbravo\n",
+      extensions: [markdown({ base: markdownLanguage })],
+    });
+    const tr = state.update({
+      changes: [
+        { from: 2, insert: "x" }, // inside "alpha" — inert
+        { from: 6, insert: "- " }, // start of "bravo" — list marker
+      ],
+    });
+    expect(touchesStructuralReparse(tr)).toBe(true);
+  });
+
+  it("=== false on a non-docChanged (selection-only) transaction", () => {
+    const state = EditorState.create({
+      doc: "hello\n",
+      extensions: [markdown({ base: markdownLanguage })],
+    });
+    expect(touchesStructuralReparse(state.update({ selection: EditorSelection.cursor(1) }))).toBe(
+      false
+    );
+  });
+});
+
+describe("structural guard under Quoll's production language (quollMarkdownLanguage)", () => {
+  // Codex #7: the default `markdown({ base: markdownLanguage })` mount is not what
+  // ships. Re-run the HTML-swallow and fence cases under the PRODUCTION language so a
+  // parser-config divergence (Quoll's re-implemented HTML stack) would surface.
+  async function mountProd(doc: string): Promise<EditorView> {
+    const { quollMarkdownLanguage } = await import("../../src/webview/cm/markdown.js");
+    const parent = document.createElement("div");
+    document.body.appendChild(parent);
+    const v = new EditorView({
+      parent,
+      state: EditorState.create({ doc, extensions: [quollMarkdownLanguage(), quollFolding()] }),
+    });
+    ensureSyntaxTree(v.state, v.state.doc.length, 5000);
+    return v;
+  }
+  async function prodOracle(
+    doc: string,
+    field: StateField<RangeSet<GutterMarker>>
+  ): Promise<{ from: number; to: number; cls: string }[]> {
+    const fresh = await mountProd(doc);
+    expect(syntaxTreeAvailable(fresh.state, fresh.state.doc.length)).toBe(true);
+    const ser = serializeGutter(fresh, field);
+    fresh.destroy();
+    return ser;
+  }
+
+  it("<script> swallow above a far heading: bounded ≡ full (prod language)", async () => {
+    view = await mountProd("intro\n\n# h\n");
+    view.dispatch({ changes: { from: 0, insert: "<script>\n" } });
+    expect(syntaxTreeAvailable(view.state, view.state.doc.length)).toBe(true);
+    expect(serializeGutter(view, headingFoldGutterLineClass)).toEqual(
+      await prodOracle(view.state.doc.toString(), headingFoldGutterLineClass)
+    );
+  });
+
+  it("unclosed fence above a far list: bounded ≡ full (prod language)", async () => {
+    view = await mountProd("intro\n\n- one\n- two\n");
+    view.dispatch({ changes: { from: 0, insert: "```\n" } });
+    expect(syntaxTreeAvailable(view.state, view.state.doc.length)).toBe(true);
+    expect(serializeGutter(view, listFoldGutterLineClass)).toEqual(
+      await prodOracle(view.state.doc.toString(), listFoldGutterLineClass)
+    );
   });
 });
 
