@@ -36,6 +36,26 @@ function parseIncremental(prev: string, next: string): ReturnType<typeof PARSER.
   return PARSER.parse(next, fragments);
 }
 
+// Collect every Lezer node OBJECT (Tree / TreeBuffer, recursively via `.children`)
+// reachable from a tree, by reference identity. Incremental parsing reuses unchanged
+// subtrees from the previous tree BY REFERENCE, so a genuine incremental parse shares
+// most of its node objects with `prevTree`; a full re-parse builds entirely fresh
+// objects and shares (almost) none. This lets a test PROVE reuse deterministically,
+// without timing — the one thing tree-shape parity and the timing bound cannot catch
+// (both pass trivially if the incremental path silently degenerates to a full parse).
+function collectNodeRefs(node: unknown, acc: Set<unknown>): void {
+  if (node === null || typeof node !== "object") {
+    return;
+  }
+  acc.add(node);
+  const children = (node as { children?: unknown }).children;
+  if (Array.isArray(children)) {
+    for (const child of children) {
+      collectNodeRefs(child, acc);
+    }
+  }
+}
+
 describe("diffRange", () => {
   it("returns an empty range for identical text", () => {
     const r = diffRange("hello", "hello");
@@ -183,10 +203,34 @@ describe("PERF: parse cost on a ~1 MB prose doc", () => {
 
     // Parity at scale: the incremental tree equals a full parse.
     expect(treeShape(incTree)).toEqual(treeShape(fullTree));
+
+    // DETERMINISTIC reuse guard (non-timing) — this is what actually pins the
+    // PR's objective. A one-char edit in a 1 MB doc reuses almost every node, so
+    // the incremental tree must SHARE the overwhelming majority of its node
+    // objects (by reference) with prevTree. A regression that silently degrades
+    // to a full parse — e.g. dropping the `fragments` arg, or a `diffRange` bug
+    // returning a whole-document range — shares (almost) none, so this fails hard
+    // where tree-shape parity (full == full) and the timing bound both pass
+    // trivially. A full re-parse (`fullTree`) shares essentially nothing with
+    // prevTree, which the lower assertion pins as the negative control.
+    const prevRefs = new Set<unknown>();
+    collectNodeRefs(prevTree, prevRefs);
+    const incRefs = new Set<unknown>();
+    collectNodeRefs(incTree, incRefs);
+    const fullRefs = new Set<unknown>();
+    collectNodeRefs(fullTree, fullRefs);
+    const sharedInc = [...incRefs].filter((r) => prevRefs.has(r)).length;
+    const sharedFull = [...fullRefs].filter((r) => prevRefs.has(r)).length;
+    // Incremental reuses the vast majority of prevTree's nodes...
+    expect(sharedInc).toBeGreaterThan(incRefs.size * 0.5);
+    // ...whereas an independent full re-parse of the same text reuses almost none
+    // (only interned singletons like Tree.empty), proving the guard is not vacuous.
+    expect(sharedFull).toBeLessThan(incRefs.size * 0.1);
+
     // Report for PERF.md (single-run, noisy — order of magnitude only).
     console.log(`[bench] parse @~1MB: full=${full.toFixed(2)}ms incremental=${incMs.toFixed(2)}ms`);
-    // Non-vacuity: incremental must be at least as fast as a full parse (loose
-    // bound to avoid CI flakiness; the real signal is the logged ratio).
+    // Loose timing sanity (the deterministic guard above is the real signal; the
+    // logged ratio is the recorded evidence).
     expect(incMs).toBeLessThan(full * 1.5 + 5);
   });
 });
