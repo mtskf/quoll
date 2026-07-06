@@ -7,7 +7,8 @@
 // guards inside edit-sync.ts handle re-entry.
 
 import { defaultKeymap, history, historyKeymap } from "@codemirror/commands";
-import { Compartment, EditorState, Transaction } from "@codemirror/state";
+import { highlightSelectionMatches, search, searchKeymap } from "@codemirror/search";
+import { Compartment, EditorState, Prec, Transaction } from "@codemirror/state";
 import { EditorView, keymap } from "@codemirror/view";
 import { perfNow, perfRecord } from "../shared/perf.js";
 import {
@@ -54,6 +55,7 @@ import {
   quollCopyButtonTheme,
   quollHeadingRhythmTheme,
   quollHighlighting,
+  quollSearchPanelTheme,
   quollTaskCompletedContentTheme,
   quollTheme,
 } from "./cm/theme.js";
@@ -246,6 +248,33 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
         EditorState.allowMultipleSelections.of(true),
         history(),
         keymap.of([...defaultKeymap, ...historyKeymap]),
+        // In-editor find & replace over the raw-Markdown text canonical
+        // (@codemirror/search core module). `search({ top: true })` mounts the
+        // panel at the top (VS Code-like). A replace is an ordinary transaction,
+        // so it rides the normal updateListener → edit-sync → host write-lock →
+        // validate-for-write pipeline (no raw write path); a gate-rejecting
+        // replacement surfaces edit-rejected like any other edit. In read-only
+        // mode CM's replace commands return false and the panel omits its replace
+        // UI (both guard on EditorState.readOnly, set when canWrite=false), so
+        // there is no UI/host divergence. highlightSelectionMatches underlines
+        // other occurrences of the current selection. The panel's runtime <style>
+        // is nonce-covered by EditorView.cspNonce above, so CSP is unchanged.
+        //
+        // searchKeymap accepted chords (documented so a future upstream addition
+        // is a conscious review point, per plan review): Mod-f open panel;
+        // F3 / Mod-g next (Shift → previous); Escape close (panel-scoped);
+        // Mod-Shift-l select all matches; Mod-Alt-g go-to-line; Mod-d select next
+        // occurrence. None collide with Quoll's existing chords. Enter / Shift-Enter
+        // cycling is the panel field's own handler, not this keymap. Prec.high
+        // matches the house convention for focus-scoped editor chords
+        // (apply-fix / context-handoff / list-indent keymaps) and defends Mod-f
+        // against any future defaultKeymap addition. Styled by quollSearchPanelTheme
+        // below (an EditorView.theme — the CM search panel base styles are injected
+        // UNLAYERED, which styles.css's @layer rules cannot beat; see cm/theme.ts).
+        search({ top: true }),
+        Prec.high(keymap.of(searchKeymap)),
+        highlightSelectionMatches(),
+        quollSearchPanelTheme,
         quollMarkdownLanguage(),
         quollTheme,
         quollHighlighting,
