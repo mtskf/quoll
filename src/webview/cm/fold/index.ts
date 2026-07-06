@@ -308,6 +308,42 @@ export function expandToEnclosingBlock(state: EditorState, from: number, to: num
   return { from: top.from, to: bottom.to };
 }
 
+/** Content-equality of two exclusion-zone lists UNDER the transaction's change
+ *  map: true iff same length AND each prior zone, MAPPED through tr.changes,
+ *  coincides with the corresponding new zone. `quollSyntaxExclusionZones` combines
+ *  via `sources.flat()` (no comparator) and its always-mounted contributors
+ *  (calloutMarkerConcealField, the frontmatter field) emit a FRESH array on every
+ *  docChanged — so the facet VALUE churns its reference every keystroke even when
+ *  the zones are unchanged. A reference check (`start.facet !== state.facet`) would
+ *  therefore be true on every keystroke and force the full-rebuild fallback
+ *  unconditionally, defeating the bounding in production (verified 2026-07-06).
+ *  Comparing CONTENT under the change map instead bounds on ordinary keystrokes
+ *  (zones only shift with the edit → mapped-equal) and full-rebuilds only when a
+ *  zone genuinely appears / disappears / resizes. Soundness: mapped-equal zones ⟹
+ *  no item OUTSIDE the changed block flips its exclusion-zone membership (every zone
+ *  occupies the same text span it did before, and out-of-block items did not move
+ *  relative to it). On a non-docChanged transaction tr.changes is empty, so mapPos
+ *  is identity and this is a plain content compare. Zone order is stable (fixed
+ *  contributor order, each doc-ordered), so the positional compare is exact. */
+function exclusionZonesUnchanged(
+  tr: Transaction,
+  prev: readonly { from: number; to: number }[],
+  next: readonly { from: number; to: number }[]
+): boolean {
+  if (prev.length !== next.length) {
+    return false;
+  }
+  for (let i = 0; i < prev.length; i++) {
+    if (tr.changes.mapPos(prev[i].from) !== next[i].from) {
+      return false;
+    }
+    if (tr.changes.mapPos(prev[i].to) !== next[i].to) {
+      return false;
+    }
+  }
+  return true;
+}
+
 /** Merge overlapping/touching intervals into a sorted, disjoint list so the
  *  bounded update's per-interval filter windows never overlap (multi-cursor edits
  *  contribute one changed range each). */
@@ -514,14 +550,21 @@ function recomputeBoundedListClasses(
  *  `quollSyntaxExclusionZones` facet takes the full-rebuild path because a zone
  *  boundary shift can re-include / exclude list items outside the changed range. The
  *  non-docChanged facet-flip path (zone contributor that fires on a selection-only
- *  transaction) still full-rebuilds for the same reason. Lock-step / two-predicate
- *  paragraphs: see the buildListFoldGutterClasses → collectListMarks chain. Exported
- *  for the marker-detection contract test. */
+ *  transaction) still full-rebuilds for the same reason. The facet guard compares zone
+ *  CONTENT under the change map (exclusionZonesUnchanged), not reference — always-
+ *  mounted contributors (calloutMarkerConcealField, frontmatter) emit a fresh array on
+ *  every docChanged, so a reference check would defeat bounding on every keystroke.
+ *  Lock-step / two-predicate paragraphs: see the buildListFoldGutterClasses →
+ *  collectListMarks chain. Exported for the marker-detection contract test. */
 export const listFoldGutterLineClass = StateField.define<RangeSet<GutterMarker>>({
   create: (state) => buildListFoldGutterClasses(state, state.facet(quollSyntaxExclusionZones)),
   update(value, tr) {
     const zones = tr.state.facet(quollSyntaxExclusionZones);
-    const facetChanged = tr.startState.facet(quollSyntaxExclusionZones) !== zones;
+    const facetChanged = !exclusionZonesUnchanged(
+      tr,
+      tr.startState.facet(quollSyntaxExclusionZones),
+      zones
+    );
     if (tr.docChanged) {
       // A facet flip can change eligibility OUTSIDE the changed range (a zone
       // boundary shift re-includes / excludes list items far from the edit), and an
@@ -670,14 +713,21 @@ function recomputeBoundedHeadingRhythmClasses(
  *  ALSO flips the `quollSyntaxExclusionZones` facet takes the full-rebuild path because
  *  a zone boundary shift can re-include / exclude headings outside the changed range.
  *  The non-docChanged facet-flip path still full-rebuilds for the same reason. The
- *  emitted set is selection- AND viewport-independent. Exported for the heading-
- *  detection contract test. */
+ *  facet guard compares zone CONTENT under the change map (exclusionZonesUnchanged),
+ *  not reference — always-mounted contributors (calloutMarkerConcealField, frontmatter)
+ *  emit a fresh array on every docChanged, so a reference check would defeat bounding
+ *  on every keystroke. The emitted set is selection- AND viewport-independent. Exported
+ *  for the heading-detection contract test. */
 export const headingRhythmFoldGutterLineClass = StateField.define<RangeSet<GutterMarker>>({
   create: (state) =>
     buildHeadingRhythmFoldGutterClasses(state, state.facet(quollSyntaxExclusionZones)),
   update(value, tr) {
     const zones = tr.state.facet(quollSyntaxExclusionZones);
-    const facetChanged = tr.startState.facet(quollSyntaxExclusionZones) !== zones;
+    const facetChanged = !exclusionZonesUnchanged(
+      tr,
+      tr.startState.facet(quollSyntaxExclusionZones),
+      zones
+    );
     if (tr.docChanged) {
       // A facet flip can change eligibility OUTSIDE the changed range, and an
       // incomplete post-edit parse frontier can reveal nodes outside it — both need a

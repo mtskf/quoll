@@ -28,6 +28,17 @@ function mountDoc(doc: string, extra: readonly unknown[] = []): EditorView {
   return v;
 }
 
+// A contributor that churns the facet reference every transaction (mimics
+// calloutMarkerConcealField, which returns a fresh zones array each docChanged),
+// while keeping the CONTENT fixed to `content`.
+function churningZoneField(content: readonly { from: number; to: number }[]) {
+  return StateField.define<readonly { from: number; to: number }[]>({
+    create: () => content.map((z) => ({ ...z })),
+    update: () => content.map((z) => ({ ...z })), // fresh array + fresh objects every tx
+    provide: (f) => quollSyntaxExclusionZones.from(f),
+  });
+}
+
 describe("headingRhythmFoldGutterLineClass — per-level gutter tag for the rhythm offset", () => {
   // Pins the HEADING-DETECTION contract that drives the gutter `padding-top` offset
   // matching the heading line's own `--quoll-heading-space-*` rhythm padding. The
@@ -102,6 +113,14 @@ describe("headingRhythmFoldGutterLineClass — per-level gutter tag for the rhyt
     view.dispatch({ selection: EditorSelection.cursor(view.state.doc.length) });
     const after = view.state.field(headingRhythmFoldGutterLineClass);
     expect(after).toBe(before);
+  });
+
+  it("keeps the field value by reference on a selection-only tx even when the zone facet churns its reference (content unchanged)", () => {
+    view = mountDoc("intro\n## a\n\npara\n\n## gone\n", [churningZoneField([])]);
+    const before = view.state.field(headingRhythmFoldGutterLineClass);
+    view.dispatch({ selection: EditorSelection.cursor(view.state.doc.length) });
+    const after = view.state.field(headingRhythmFoldGutterLineClass);
+    expect(after).toBe(before); // fix: content-equal churn → return value; bug: rebuilt (new ref)
   });
 
   it("recomputes the tag set when the exclusion-zone facet flips with no doc change", () => {
@@ -237,6 +256,30 @@ describe("headingRhythmFoldGutterLineClass — per-level gutter tag for the rhyt
       expect(classAtLine(view, 2)).toBe("quoll-fold-heading-rhythm-1");
       expect(classAtLine(view, 6)).toBe("quoll-fold-heading-rhythm-2");
       expectBoundedEqualsFull();
+    });
+
+    it("stays correct on a docChanged while the zone facet churns its reference (bounded path exercised in production-like churn)", () => {
+      view = mountDoc("intro\n## a\n\npara\n\n## gone\n", [churningZoneField([])]);
+      const para = view.state.doc.toString().indexOf("para");
+      view.dispatch({ changes: { from: para, insert: "### " } }); // "para" → "### para"
+      expect(syntaxTreeAvailable(view.state, view.state.doc.length)).toBe(true);
+      // Serialize this field, compare to a fresh full build over the same doc + empty zones.
+      const ser = (v: EditorView) => {
+        const out: { from: number; to: number; cls: string }[] = [];
+        const c = v.state.field(headingRhythmFoldGutterLineClass).iter();
+        while (c.value) {
+          out.push({
+            from: c.from,
+            to: c.to,
+            cls: (c.value as { elementClass: string }).elementClass,
+          });
+          c.next();
+        }
+        return out;
+      };
+      const fresh = mountDoc(view.state.doc.toString());
+      expect(ser(view)).toEqual(ser(fresh));
+      fresh.destroy();
     });
 
     it("recomputes a far heading when the exclusion-zone facet flips IN THE SAME docChanged (Codex #3)", () => {
