@@ -577,8 +577,9 @@ const HEADING_RHYTHM_GUTTER_MARKER: Record<HeadingRhythmLevel, HeadingRhythmFold
  *  rangeTo] — same eligibility gate as the full build (headingRhythmLevel: level
  *  match + top-level + not physical line 1 + not in an exclusion zone). Called with
  *  [0, doc.length] for a full (re)build and with each bounded block interval on the
- *  keystroke path. A bounded {from,to} iterate materialises only the touched subtree
- *  (PERF.md: the cost is whole-tree materialisation, not descent). No straddle clamp
+ *  keystroke path. A bounded {from,to} iterate materialises only the touched subtree,
+ *  sidestepping the whole-tree materialisation cost a full iterate pays on every
+ *  keystroke (PERF.md: that cost is materialisation, not node descent). No straddle clamp
  *  (unlike collectListMarks): a heading never spans a blank line — ATX is one line,
  *  Setext is a contiguous title+underline run — so expandToEnclosingBlock's up-walk
  *  always puts the marker line at/after rangeFrom. Doc order → sorted by from. */
