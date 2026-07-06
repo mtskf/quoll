@@ -755,3 +755,62 @@ export const collapseToggleThemeSpec = {
 };
 
 export const quollCollapseToggleTheme = EditorView.theme(collapseToggleThemeSpec);
+
+// Find & replace panel (@codemirror/search) styling. An EditorView.theme (NOT
+// styles.css) BY NECESSITY: @codemirror/search injects its panel baseTheme
+// UNLAYERED, and styles.css is fully @layer-scoped — a layered rule can never
+// beat an unlayered baseTheme declaration regardless of specificity (see
+// styles.css cascade note). EditorView.theme is also unlayered AND beats
+// baseTheme in CM's cascade, so this reliably retints the panel to the VS Code
+// look while keeping every colour a --vscode-* passthrough (no hard-coded
+// palette). Selectors target the search panel's stable CM class names.
+export const searchPanelThemeSpec = {
+  ".cm-panel.cm-search": {
+    padding: "6px 8px",
+    backgroundColor: "var(--vscode-editorWidget-background, var(--vscode-editor-background))",
+    color: "var(--vscode-editorWidget-foreground, var(--vscode-editor-foreground))",
+    borderBottom: "1px solid var(--vscode-editorWidget-border, var(--vscode-panel-border, #888))",
+    fontFamily: "var(--vscode-font-family)",
+  },
+  ".cm-panel.cm-search .cm-textfield": {
+    fontSize: "var(--vscode-font-size)",
+    color: "var(--vscode-input-foreground, inherit)",
+    backgroundColor: "var(--vscode-input-background, transparent)",
+    border: "1px solid var(--vscode-input-border, var(--vscode-editorWidget-border, #888))",
+    borderRadius: "2px",
+    padding: "2px 4px",
+  },
+  ".cm-panel.cm-search .cm-textfield:focus-visible": {
+    outline: "1px solid var(--vscode-focusBorder)",
+    outlineOffset: "-1px",
+  },
+  ".cm-panel.cm-search .cm-button": {
+    fontSize: "var(--vscode-font-size)",
+    color: "var(--vscode-button-secondaryForeground, var(--vscode-button-foreground))",
+    backgroundColor: "var(--vscode-button-secondaryBackground, var(--vscode-button-background))",
+    backgroundImage: "none",
+    border: "1px solid transparent",
+    borderRadius: "2px",
+    padding: "2px 8px",
+  },
+  ".cm-panel.cm-search .cm-button:hover": {
+    backgroundColor:
+      "var(--vscode-button-secondaryHoverBackground, var(--vscode-button-hoverBackground))",
+  },
+  ".cm-panel.cm-search label": {
+    fontSize: "var(--vscode-font-size)",
+    color: "var(--vscode-editorWidget-foreground, var(--vscode-editor-foreground))",
+  },
+  ".cm-panel.cm-search [name=close]": {
+    color: "var(--vscode-icon-foreground, var(--vscode-editor-foreground))",
+    cursor: "pointer",
+  },
+  ".cm-searchMatch": {
+    backgroundColor: "var(--vscode-editor-findMatchHighlightBackground, rgba(234, 92, 0, 0.33))",
+  },
+  ".cm-searchMatch-selected": {
+    backgroundColor: "var(--vscode-editor-findMatchBackground, rgba(234, 92, 0, 0.66))",
+  },
+};
+
+export const quollSearchPanelTheme = EditorView.theme(searchPanelThemeSpec);
