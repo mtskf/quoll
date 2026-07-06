@@ -9,7 +9,7 @@
 import { perfNow, perfRecord } from "../shared/perf.js";
 import type { MarkdownError } from "./errors.js";
 import { FENCE_LINE, validateFrontmatter } from "./frontmatter.js";
-import { findUnsafeUrl } from "./lezer-url-walker.js";
+import { createIncrementalUnsafeUrlFinder, findUnsafeUrl } from "./lezer-url-walker.js";
 
 export type ValidateForWriteResult = { ok: true } | { ok: false; error: MarkdownError };
 
@@ -25,13 +25,36 @@ const OPENER = /^---[ \t]*\r?\n/;
 const INTERNAL_ERR_MESSAGE_CAP = 200;
 
 export function validateMarkdownForWrite(content: string): ValidateForWriteResult {
+  return runValidation(content, findUnsafeUrl);
+}
+
+// A per-instance write validator that reuses the previous parse via Lezer
+// TreeFragment incremental parsing (see createIncrementalUnsafeUrlFinder). The
+// verdict is identical to validateMarkdownForWrite for every input; only the
+// URL walk's parse is reused. One per panel — the cache lives in the finder's
+// closure, reclaimed once the panel closure is no longer held. Frontmatter
+// detection stays a pure text scan (no tree), unchanged.
+export function createIncrementalWriteValidator(): (content: string) => ValidateForWriteResult {
+  const findUnsafe = createIncrementalUnsafeUrlFinder();
+  return (content: string): ValidateForWriteResult => runValidation(content, findUnsafe);
+}
+
+// The shared frontmatter + URL-gate + fail-closed try/catch + perf wrapper.
+// `findUnsafe` is the ONLY thing that varies between the stateless
+// (findUnsafeUrl) and incremental (createIncrementalUnsafeUrlFinder) gates —
+// everything else, including the internal_error sanitization, is identical, so
+// both paths share ONE code path and cannot drift.
+function runValidation(
+  content: string,
+  findUnsafe: (content: string) => MarkdownError | null
+): ValidateForWriteResult {
   const validateStart = QUOLL_PERF ? perfNow() : 0;
   try {
     const fmError = checkFrontmatter(content);
     if (fmError) {
       return { ok: false, error: fmError };
     }
-    const urlError = findUnsafeUrl(content);
+    const urlError = findUnsafe(content);
     if (urlError) {
       return { ok: false, error: urlError };
     }
