@@ -55,6 +55,7 @@ import {
 } from "vscode";
 
 import type { MarkdownError } from "../markdown/errors.js";
+import { createIncrementalWriteValidator } from "../markdown/validate-for-write.js";
 import { perfNow, perfRecord, perfReport } from "../shared/perf.js";
 import type { HostToWebview } from "../shared/protocol.js";
 import { isWebviewToHost } from "../shared/protocol.js";
@@ -67,6 +68,7 @@ import {
   shouldPromptDiskConflict,
 } from "./disk-conflict.js";
 import { buildDocumentMessageFromDocument, canonicalDocumentText } from "./document-canonical.js";
+import { createTrailingDebounce } from "./document-change-debounce.js";
 import {
   buildCaretApplyMessage,
   buildDocumentMessage,
@@ -125,6 +127,14 @@ function readLintGutterEnabled(): boolean {
 // write a file in several fs operations (truncate + write, or temp + rename);
 // coalesce the burst into one divergence check + at most one prompt.
 const CONFLICT_DEBOUNCE_MS = 300;
+
+/** Trailing-debounce window for coalescing LOCK-FREE external-edit
+ *  `documentChanged` dispatches. ~100 ms: long enough to collapse the sub-ms
+ *  bursts that dominate the cost (formatter, git checkout, an AI tool writing
+ *  the open file) into one Document repost, short enough that a lone external
+ *  edit still propagates promptly. Normal split-editor typing (~150 ms/char)
+ *  exceeds this window, so each keystroke propagates on its pause. */
+const DOC_CHANGE_DEBOUNCE_MS = 100;
 
 export class QuollEditorPanel implements CustomTextEditorProvider {
   public static register(context: ExtensionContext, harness?: TestHarness): Disposable {
@@ -269,10 +279,18 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
     // ordering, rejected-draft barrier, resync rules, settlement). This
     // file snapshots live VS Code inputs into EVENTS and runs the returned
     // EFFECTS; see host-session-core.ts for the transition table.
-    const core = createHostSessionCore({
-      uriString: document.uri.toString(),
-      fsPath: document.uri.fsPath,
-    });
+    const core = createHostSessionCore(
+      {
+        uriString: document.uri.toString(),
+        fsPath: document.uri.fsPath,
+      },
+      // Per-panel incremental write validator: reuses the previous parse via
+      // Lezer TreeFragment so a debounced flush re-parses only the changed
+      // span. Verdict-identical to the stateless default (pinned by a fuzz
+      // battery); the cache lives in this closure, reclaimed once the panel
+      // closure is no longer held (past dispose by at most one async settlement).
+      { validateForWrite: createIncrementalWriteValidator() }
+    );
     let state = core.initialState(document.version);
 
     // Edit-applied barrier for the document side channels (context-handoff /
@@ -721,6 +739,45 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
       editor.revealRange(new Range(pos, pos));
     };
 
+    // Coalesce a burst of LOCK-FREE external-edit events (formatter, git
+    // checkout, an AI tool writing the open file, typing in a split text editor
+    // on the same doc) into ONE trailing `documentChanged` dispatch. Each
+    // dispatch reposts the full Document, which forces a wholesale webview
+    // re-parse + block-field recompute + re-lint; without this, that runs once
+    // PER change event.
+    //
+    // The fire thunk reads `document.version` LIVE (latest-wins): staleness
+    // detection is unaffected because the `edit` arm snapshots the live version
+    // itself, and the reducer's version-identical no-op guard + write-lock
+    // deferral both hold at the (possibly settled) fire-time version. A trailing
+    // fire that lands after a superseding immediate dispatch / settlement reads
+    // an already-synced version and the reducer no-ops it; a trailing fire that
+    // lands WHILE the lock is still held is deferred by the reducer
+    // (pendingApplyBaseVersion), and the settlement then reposts the
+    // authoritative version (ok overrides lastAppliedDocVersion, refused reposts
+    // the fire-thunk-synced version) — both harmless.
+    //
+    // TRADE-OFF (recorded): this widens the window in which the webview still
+    // holds the pre-edit baseDocVersion by up to DOC_CHANGE_DEBOUNCE_MS. A
+    // webview edit typed in that window is judged stale by the `edit` arm's live
+    // resync and reseeded to the external content (external wins — intended
+    // conflict semantics; at most one local edit BURST — every keystroke typed
+    // within the window, already coalesced by the webview's own edit-sync
+    // debounce — is lost, then the reseed lands). No pure trailing debounce
+    // `maxWait`: sustained sub-100ms same-doc typing in a split editor defers
+    // the Quoll update until a pause (follow-up, not this PR).
+    //
+    // Hidden-panel suppression is DECLINED for this PR (1 PR = 1 purpose): with
+    // `retainContextWhenHidden` this still reposts to a hidden panel, redundant
+    // with the visible-edge resync, but suppressing it would let the host→
+    // Problems lint mirror go stale while hidden — a separate freshness-contract
+    // change with its own tests. Possible follow-up.
+    const scheduleDocumentChanged = createTrailingDebounce(DOC_CHANGE_DEBOUNCE_MS, () => {
+      if (disposed) {
+        return;
+      }
+      dispatch({ type: "documentChanged", documentVersion: document.version });
+    });
     workspace.onDidChangeTextDocument(
       (e) => {
         if (disposed) {
@@ -729,7 +786,23 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
         if (e.document.uri.toString() !== document.uri.toString()) {
           return;
         }
-        dispatch({ type: "documentChanged", documentVersion: e.document.version });
+        // Lock-held change events go to the reducer IMMEDIATELY, unchanged: the
+        // host's OWN in-flight apply fires its change event under the lock, and
+        // an external edit racing the apply→settle window also arrives locked.
+        // The reducer owns the write-lock deferral + non-OK settlement ordering
+        // contract and must see these in order (a refused settlement keeps the
+        // prior lastAppliedDocVersion, so a delayed racing-edit resync would
+        // post stale-versioned content). Only lock-FREE external bursts coalesce.
+        if (isWriteLockHeld(state)) {
+          // Supersede any pending coalesced timer: the immediate dispatch
+          // carries an equal-or-higher version, so a later trailing fire would
+          // only no-op. Cancelling makes "at most one pending documentChanged
+          // path" an invariant rather than leaning on the fire-time no-op.
+          scheduleDocumentChanged.cancel();
+          dispatch({ type: "documentChanged", documentVersion: e.document.version });
+          return;
+        }
+        scheduleDocumentChanged.schedule();
       },
       undefined,
       disposables
@@ -1423,6 +1496,10 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
       // then drive the core's `disposed` transition (clears the write lock
       // so any late settlement is a no-op), then tear down.
       disposed = true;
+      // Drop any pending coalesced documentChanged — the panel is gone; the
+      // trailing dispatch would be a no-op anyway (the thunk's `disposed`
+      // guard), but cancelling releases the timer + closure promptly.
+      scheduleDocumentChanged.cancel();
       dispatch({ type: "disposed" });
       // Clear THIS document's lint diagnostics when its editor closes. The
       // collection itself outlives the panel (disposed via context.subscriptions
