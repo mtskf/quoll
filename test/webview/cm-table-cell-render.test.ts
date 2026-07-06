@@ -1,8 +1,9 @@
 // @vitest-environment happy-dom
 import { describe, expect, it } from "vitest";
-import type { CellLeaf } from "../../src/webview/cm/table/cell-render.js";
-import { parseCellInline, renderCellInline } from "../../src/webview/cm/table/cell-render.js";
-import type { Resolved, Span } from "../../src/webview/cm/table/inline-emphasis.js";
+import type { Resolved, Span } from "../../src/webview/cm/inline/inline-emphasis.js";
+import type { CellLeaf } from "../../src/webview/cm/inline/inline-ir.js";
+import { parseCellInline } from "../../src/webview/cm/inline/inline-ir.js";
+import { renderCellInline } from "../../src/webview/cm/table/cell-render.js";
 
 function html(nodes: Node[]): string {
   const root = document.createElement("div");

@@ -199,7 +199,7 @@ function decodeCharacterReferences(s: string): string {
       // Object.prototype member name surviving the `.toLowerCase()` fold)
       // to the inherited native function — coercing its source string into
       // the URL and bypassing the NUL substitute. Mirrors the own-property
-      // guard in cell-render.ts's decodeAltEntities.
+      // guard in inline-ir.ts's decodeAltEntities.
       const key = (name as string).toLowerCase();
       return Object.hasOwn(NAMED_ENTITIES, key)
         ? NAMED_ENTITIES[key as NamedEntityKey]

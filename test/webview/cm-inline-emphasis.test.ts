@@ -4,7 +4,7 @@ import {
   type Resolved,
   resolveInline,
   type Segment,
-} from "../../src/webview/cm/table/inline-emphasis.js";
+} from "../../src/webview/cm/inline/inline-emphasis.js";
 
 // Build segments with running spans so assertions can check offsets.
 type S = Segment<string>;

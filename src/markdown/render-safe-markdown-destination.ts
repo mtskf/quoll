@@ -4,8 +4,8 @@
 // `renderSafeUrl` (the URL-scheme allowlist gate; src/markdown/url-allowlist.ts)
 // — so BOTH render callers route through one function and CANNOT drift apart:
 //   - the block-image widget  (src/webview/cm/image/image-field.ts)
-//   - the table-cell renderer (src/webview/cm/table/cell-render.ts), for
-//     inline links / images / autolinks.
+//   - the neutral inline tokenizer (src/webview/cm/inline/inline-ir.ts) that the
+//     table-cell renderer drives, for inline links / images / autolinks.
 //
 // Kept in its own module (rather than folded into url-decode.ts) so each layer
 // keeps a single responsibility: url-decode = pure decode, url-allowlist = pure
