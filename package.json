@@ -106,7 +106,7 @@
     "test:e2e:run": "node test/extension/build.mjs && node ./out/test-e2e/launch.js",
     "test": "pnpm test:unit && pnpm test:e2e",
     "test:watch": "vitest",
-    "package": "pnpm vsce package --no-dependencies"
+    "package": "pnpm vsce package --no-dependencies && node scripts/audit-vsix.mjs quoll-$(node -p \"require('./package.json').version\").vsix"
   },
   "dependencies": {
     "@codemirror/commands": "^6.10.3",

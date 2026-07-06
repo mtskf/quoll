@@ -22,7 +22,7 @@
 // build.
 
 import esbuild from "esbuild";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { resolve, dirname } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
@@ -150,6 +150,15 @@ async function run() {
   const { hostConfig, webviewConfig, testHarnessConfig } = createBuildConfigs({
     production: isProduction,
   });
+
+  // Clean dist/ before every build so a rebuild never inherits stale
+  // artifacts from a prior watch/dev build. Dev builds emit sourcemaps
+  // (`sourcemap: !production`) that a production rebuild does NOT delete;
+  // left behind, those `dist/**/*.map` files ship through .vscodeignore's
+  // `!dist/**` re-include — exactly what the audit-vsix allowlist
+  // (`.(cjs|js|css|json)` only) exists to refuse. The package-script audit
+  // gate is the backstop; this removes the artifacts at the source.
+  rmSync(resolve(__dirname, "dist"), { recursive: true, force: true });
 
   if (isWatch) {
     let hostCtx, webviewCtx, testHarnessCtx;
