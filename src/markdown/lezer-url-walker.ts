@@ -54,6 +54,8 @@
 // ordering is what test/markdown/validate-for-write.test.ts uses.
 
 import { Emoji, GFM, parser, Subscript, Superscript } from "@lezer/markdown";
+import { TreeFragment } from "@lezer/common";
+import type { ChangedRange } from "@lezer/common";
 
 import type { MarkdownError } from "./errors.js";
 import { isAllowedUrl } from "./url-allowlist.js";
@@ -68,16 +70,53 @@ export { decodeMarkdownDestination };
 
 const PARSER = parser.configure([GFM, Subscript, Superscript, Emoji]);
 
-// SyntaxNode is the cursor node shape from @lezer/common. We derive it
-// indirectly via the parser's tree to avoid an explicit `@lezer/common`
-// import — that package is a transitive (not direct) dependency and
-// the host tsconfig's node-mode module resolution doesn't walk into a
-// sibling package's nested `node_modules/`. Adding `@lezer/common` to
-// package.json would solve it but violates the project's supply-chain
-// default-deny (see root CLAUDE.md). Inferring the type from the
-// parser's own API surface is locally-resolvable and survives upstream
-// churn: if the parser's tree shape changes, this alias breaks at the
-// call site, which is the change-detection signal we want.
+// The parse-tree type taken from the parser's own return type, so the
+// incremental cache + tests stay honest if the parser's tree shape changes.
+type ParseTree = ReturnType<typeof PARSER.parse>;
+
+// Parse `content` with the GFM-configured Markdown parser, optionally reusing
+// unchanged subtrees from a previous parse via `fragments`. `.parse` is
+// synchronous and returns a COMPLETE tree (no CodeMirror time budget), so a
+// fragment-reused parse yields the same node structure as a fresh parse — the
+// invariant the incremental write-gate rests on. Exported for the incremental
+// finder and the parity/reuse-guard tests.
+export function parseMarkdown(content: string, fragments?: readonly TreeFragment[]): ParseTree {
+  return PARSER.parse(content, fragments);
+}
+
+// One conservative changed range bracketing where two strings differ: the
+// common-prefix length as the start, the common-suffix (bounded so it never
+// overlaps the prefix in either string) as the tail. UTF-16 code units, the
+// unit Lezer/CodeMirror positions use. A superset of the real edit is enough
+// for `TreeFragment.applyChanges` to know which fragments to drop; a
+// slightly-wide range only reduces reuse, never correctness. Identical strings
+// yield an empty range (full reuse). Mirrors the webview lint engine's
+// `diffRange` (src/webview/cm/lint/engine.ts) — duplicated deliberately across
+// the host/webview bundle boundary rather than coupling the two bundles.
+export function diffRange(a: string, b: string): ChangedRange {
+  const max = Math.min(a.length, b.length);
+  let prefix = 0;
+  while (prefix < max && a.charCodeAt(prefix) === b.charCodeAt(prefix)) {
+    prefix += 1;
+  }
+  let suffix = 0;
+  const maxSuffix = Math.min(a.length - prefix, b.length - prefix);
+  while (
+    suffix < maxSuffix &&
+    a.charCodeAt(a.length - 1 - suffix) === b.charCodeAt(b.length - 1 - suffix)
+  ) {
+    suffix += 1;
+  }
+  return { fromA: prefix, toA: a.length - suffix, fromB: prefix, toB: b.length - suffix };
+}
+
+// SyntaxNode is the cursor node shape from @lezer/common. `@lezer/common` is a
+// direct dependency (added for the lint incremental parser in #66), so
+// `TreeFragment` is imported directly above. We still derive `SyntaxNode` from
+// `ReturnType<typeof PARSER.parse>["topNode"]` (rather than importing a
+// `SyntaxNode` type name) so change-detection stays at the call site if the
+// parser's tree shape churns upstream: if the parser's tree shape changes, this
+// alias breaks at the call site, which is the change-detection signal we want.
 type SyntaxNode = ReturnType<typeof PARSER.parse>["topNode"];
 
 /**
@@ -87,7 +126,13 @@ type SyntaxNode = ReturnType<typeof PARSER.parse>["topNode"];
  * message), NOT "the first by document position."
  */
 export function findUnsafeUrl(content: string): MarkdownError | null {
-  const tree = PARSER.parse(content);
+  return walkTreeForUnsafeUrl(parseMarkdown(content), content);
+}
+
+// The pure tree walk, split out of findUnsafeUrl so the incremental finder can
+// feed a fragment-reused tree through the IDENTICAL gating logic. Given the
+// same (tree, content) it returns the same verdict as a fresh walk.
+export function walkTreeForUnsafeUrl(tree: ParseTree, content: string): MarkdownError | null {
   let firstError: MarkdownError | null = null;
   const cursor = tree.cursor();
   do {

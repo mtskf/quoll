@@ -127,7 +127,17 @@ describe("C2 write-gate has no ProseMirror runtime imports declared in its own f
     // Lezer parser into the webview bundle. lezer-url-walker.ts
     // re-imports + re-exports decodeMarkdownDestination to keep the
     // historic import path green.
-    const ALLOW = new Set(["@lezer/markdown", "./url-allowlist.js", "./url-decode.js"]);
+    // @lezer/common was added when the write-gate gained incremental
+    // re-parse: `TreeFragment` (value) + `ChangedRange` (type) drive the
+    // per-panel incremental unsafe-URL finder. It is a direct dependency
+    // (added for the lint incremental parser in #66) and drags in no
+    // framework — the gate stays PM-free.
+    const ALLOW = new Set([
+      "@lezer/markdown",
+      "@lezer/common",
+      "./url-allowlist.js",
+      "./url-decode.js",
+    ]);
     const imports = listImports(readSource("src/markdown/lezer-url-walker.ts"));
     for (const { module, isType } of imports) {
       if (isType) {
