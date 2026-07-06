@@ -88,9 +88,19 @@ describe("external-edit-propagates", function () {
     const beforeBurst = Date.now();
     // Fire N separate external edits back-to-back (each its own change event,
     // hence its own documentChanged) with NO webview edit in flight → the
-    // panel's write lock is free → every event is debounced. Awaited so all
-    // change events fire before we wait out the window; in-memory edits are
-    // sub-ms each, so the burst lands well inside DOC_CHANGE_DEBOUNCE_MS.
+    // panel's write lock is free → every event is debounced. They MUST be
+    // awaited sequentially: VS Code rejects concurrent `applyEdit` calls to the
+    // same document (verified — submitting all N synchronously lands only 1),
+    // so a tight non-awaited burst is not an option here. In-memory edits are
+    // sub-ms each, so the whole burst still lands well inside the 100 ms window.
+    //
+    // Timing note (review finding): a per-edit await inserts a full applyEdit
+    // round-trip between events, so in principle a slow host could straddle the
+    // window and let a timer fire before the next `schedule()` re-arms. The
+    // `< N` bound (not `=== 1`) absorbs that: the assertion only reds if the
+    // debounce coalesced NOTHING — i.e. every one of the N sub-ms edits was
+    // paced > 100 ms apart, a pathological host. Partial straddles (2–4 posts)
+    // still pass, so the residual flake risk is negligible.
     const N = 5;
     for (let i = 0; i < N; i++) {
       const edit = new vscode.WorkspaceEdit();
@@ -105,20 +115,21 @@ describe("external-edit-propagates", function () {
     const posts = harness.events.filter(
       (e) => isDocumentEvent(e) && e.message.docVersion > baseVersion && e.timestamp >= beforeBurst
     );
-    // Discriminating: without the debounce this is exactly N (one post per
-    // change event); with it the lock-free burst coalesces to a single trailing
-    // post. `< N` is robust to a window-straddle producing 2 while still going
-    // red on the un-debounced N.
+    // Discriminating: without the debounce this is N (one post per change
+    // event); with it the lock-free burst coalesces to a single trailing post.
+    // `< N` (not `=== 1`) is robust to a window-straddle producing 2 while still
+    // going red on the un-debounced N.
     assert.ok(
       posts.length >= 1 && posts.length < N,
       `expected 1..${N - 1} coalesced Document posts, got ${posts.length}`
     );
-    // Latest wins end-to-end: the final post carries the last burst edit and the
-    // highest docVersion observed.
+    // Latest wins end-to-end: the final post carries the last burst edit
+    // (sequential awaits guarantee FIFO order, so `## Burst 4` — inserted last
+    // at position (0,0) — sits on top) and the highest docVersion observed.
     const last = posts[posts.length - 1];
     assert.ok(isDocumentEvent(last));
     assert.ok(
-      last.message.content.startsWith("## Burst 4"),
+      last.message.content.startsWith(`## Burst ${N - 1}`),
       `expected latest content to win, got: ${last.message.content.slice(0, 24)}`
     );
     const maxVersion = Math.max(
