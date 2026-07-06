@@ -811,6 +811,18 @@ export const searchPanelThemeSpec = {
   ".cm-searchMatch-selected": {
     backgroundColor: "var(--vscode-editor-findMatchBackground, rgba(234, 92, 0, 0.66))",
   },
+  // highlightSelectionMatches() injects a hardcoded baseTheme with
+  // `.cm-selectionMatch { backgroundColor: "#99ff7780" }` (fixed green).
+  // Override it here with the VS Code selection-highlight token so the colour
+  // stays on-theme in dark/light/High Contrast modes.
+  ".cm-selectionMatch": {
+    backgroundColor: "var(--vscode-editor-selectionHighlightBackground, rgba(173, 214, 255, 0.15))",
+  },
+  // When a selectionMatch sits inside a searchMatch the base already provides
+  // `transparent`; repeat it here so this theme wins regardless of load order.
+  ".cm-searchMatch .cm-selectionMatch": {
+    backgroundColor: "transparent",
+  },
 };
 
 export const quollSearchPanelTheme = EditorView.theme(searchPanelThemeSpec);
