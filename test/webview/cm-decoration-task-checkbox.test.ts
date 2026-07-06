@@ -2,11 +2,11 @@ import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
 import { EditorSelection, EditorState } from "@codemirror/state";
 import type { DecorationSet } from "@codemirror/view";
 import { describe, expect, it } from "vitest";
+import type { BuildContext } from "../../src/webview/cm/decorations/types.js";
 import {
   findTaskMarker,
   taskCheckboxReveal,
 } from "../../src/webview/cm/task-checkbox/task-checkbox-reveal.js";
-import type { BuildContext } from "../../src/webview/cm/decorations/types.js";
 import { fullTree } from "./helpers/full-tree.js";
 
 function ctx(doc: string, caret: number): BuildContext {

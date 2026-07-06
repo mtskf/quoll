@@ -135,13 +135,16 @@ import {
 } from "@codemirror/view";
 
 import {
+  fencedCodeBlockRevealed,
+  fencedCodeFenceLandmarks,
+} from "../fenced-code/fenced-code-body.js";
+import {
   CALLOUT_CLASS,
   CALLOUT_MARKER_CLASS,
   calloutClassForType,
   calloutMarkerConceal,
   calloutTypeForOutermost,
 } from "./callout.js";
-import { fencedCodeBlockRevealed, fencedCodeFenceLandmarks } from "../fenced-code/fenced-code-body.js";
 import { quollSyntaxExclusionZones } from "./orchestrator.js";
 import { pointInExclusionZone } from "./shared.js";
 import type { BuildContext } from "./types.js";

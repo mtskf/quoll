@@ -14,11 +14,10 @@
 
 import { RangeSetBuilder } from "@codemirror/state";
 import { Decoration, type DecorationSet } from "@codemirror/view";
-
-import { findTaskMarker, resolveTaskMarkerGeometry } from "../list/list-geometry.js";
 import { intersectsAnySelection } from "../decorations/shared.js";
-import { CheckboxWidget } from "./task-checkbox-widget.js";
 import type { DecorationProvider } from "../decorations/types.js";
+import { findTaskMarker, resolveTaskMarkerGeometry } from "../list/list-geometry.js";
+import { CheckboxWidget } from "./task-checkbox-widget.js";
 
 // Re-exported so the marker-resolution unit test keeps its import site.
 export { findTaskMarker };

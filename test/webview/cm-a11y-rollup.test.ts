@@ -10,10 +10,10 @@ import { describe, expect, it } from "vitest";
 
 import { parseTable } from "../../src/markdown/table/index.js"; // match cm-table-widget.test.ts import
 import type { AllowlistedUrl } from "../../src/markdown/url-allowlist.js";
-import { CheckboxWidget } from "../../src/webview/cm/task-checkbox/task-checkbox-widget.js";
 import { FrontmatterBlockWidget } from "../../src/webview/cm/frontmatter/frontmatter-widget.js";
 import { ImageBlockWidget } from "../../src/webview/cm/image/image-widget.js";
 import { TableBlockWidget } from "../../src/webview/cm/table/table-widget.js";
+import { CheckboxWidget } from "../../src/webview/cm/task-checkbox/task-checkbox-widget.js";
 
 const url = (s: string): AllowlistedUrl => s as AllowlistedUrl;
 // Render-only stub: a no-op dispatch plus a real (empty) EditorState —

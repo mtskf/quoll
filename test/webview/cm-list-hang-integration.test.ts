@@ -6,10 +6,7 @@ import { EditorState } from "@codemirror/state";
 import type { DecorationSet } from "@codemirror/view";
 import { EditorView } from "@codemirror/view";
 import { describe, expect, it, vi } from "vitest";
-import {
-  buildListHangIndent,
-  listHangIndent,
-} from "../../src/webview/cm/list/list-hang-indent.js";
+import { buildListHangIndent, listHangIndent } from "../../src/webview/cm/list/list-hang-indent.js";
 import { fullTree } from "./helpers/full-tree.js";
 
 // Integration: mount a REAL EditorView with the listHangIndent ViewPlugin over

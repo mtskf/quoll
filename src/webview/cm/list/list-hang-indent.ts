@@ -84,8 +84,6 @@ import {
   ViewPlugin,
   type ViewUpdate,
 } from "@codemirror/view";
-
-import { columnAt, resolveListItemHang } from "./list-geometry.js";
 import { quollSyntaxExclusionZones } from "../decorations/orchestrator.js";
 import {
   absorbStructuralWhitespace,
@@ -93,6 +91,7 @@ import {
   pointInExclusionZone,
 } from "../decorations/shared.js";
 import type { BuildContext } from "../decorations/types.js";
+import { columnAt, resolveListItemHang } from "./list-geometry.js";
 
 const CM_LINE_PAD_START = "6px";
 

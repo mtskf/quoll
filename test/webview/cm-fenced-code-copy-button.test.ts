@@ -7,6 +7,8 @@ import { EditorSelection, EditorState } from "@codemirror/state";
 import { Decoration, type DecorationSet, EditorView } from "@codemirror/view";
 import { describe, expect, it, vi } from "vitest";
 import { blockStyle } from "../../src/webview/cm/decorations/block-style.js";
+import { quollSyntaxReveal } from "../../src/webview/cm/decorations/index.js";
+import type { BuildContext } from "../../src/webview/cm/decorations/types.js";
 import {
   buildCopyButtons,
   fencedCodeBody,
@@ -17,8 +19,6 @@ import {
   COPY_ICON_PATH,
   CopyButtonWidget,
 } from "../../src/webview/cm/fenced-code/fenced-code-copy-button-widget.js";
-import { quollSyntaxReveal } from "../../src/webview/cm/decorations/index.js";
-import type { BuildContext } from "../../src/webview/cm/decorations/types.js";
 import { collapseToggleThemeSpec, copyButtonThemeSpec } from "../../src/webview/cm/theme.js";
 import { fullTree } from "./helpers/full-tree.js";
 
