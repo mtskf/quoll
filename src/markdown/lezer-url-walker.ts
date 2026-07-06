@@ -144,6 +144,84 @@ export function walkTreeForUnsafeUrl(tree: ParseTree, content: string): Markdown
   return firstError;
 }
 
+type ParseFn = (content: string, fragments?: readonly TreeFragment[]) => ParseTree;
+
+/**
+ * A STATEFUL unsafe-URL finder that reuses the previous call's parse tree via
+ * Lezer `TreeFragment` incremental parsing, so a debounced write-gate flush
+ * re-parses only the changed span. It caches the previous content + its
+ * COMPLETE tree; on the next call it diffs old-vs-new into one `ChangedRange`,
+ * adjusts the previous tree's fragments, and re-parses reusing the unchanged
+ * subtrees. The verdict is IDENTICAL to `findUnsafeUrl` for the same input —
+ * the cached tree is always complete (synchronous parse, no time budget), so a
+ * fragment-reused parse yields the same node structure as a fresh parse.
+ *
+ * FAIL-CLOSED: a throw on the INCREMENTAL branch degrades to a fresh full
+ * parse — the authoritative parse the stateless gate uses — so an incremental
+ * fault can never weaken the verdict. The first (fresh) parse is NOT inside the
+ * try: if it throws, that is the genuine parser failure, and it propagates to
+ * `runValidation`'s try/catch → `internal_error` verdict → write rejected. The
+ * incremental fallback intentionally does NOT swallow the fresh-parse throw.
+ *
+ * `prevContent` may DRIFT from the live document — an external edit reseeds the
+ * webview without going through the validator, so `prevContent` can be an older
+ * state. This is safe: `diffRange(prevContent, content)` always brackets the
+ * FULL difference between exactly those two strings, so only positions provably
+ * identical between `prevContent` and `content` are marked reusable, and
+ * `prevTree` is always a complete parse of `prevContent`. The intermediate live
+ * document never enters the diff. So a stale `prevContent` only reduces reuse
+ * (a wider diff), never changes the verdict — no cache-invalidation-on-external-
+ * edit is needed or wanted.
+ *
+ * One instance per panel (see QuollEditorPanel); the cache is a closure
+ * reclaimed once the panel closure is no longer held (past dispose by at most
+ * one async settlement). `parse` is injectable for the fail-closed test and
+ * defaults to `parseMarkdown` in production.
+ *
+ * Pinned by verdict-equivalence + a property/fuzz battery + a tree-shape parity
+ * / reuse guard, not taken on faith — the security invariant demands it.
+ */
+export function createIncrementalUnsafeUrlFinder(
+  parse: ParseFn = parseMarkdown
+): (content: string) => MarkdownError | null {
+  let prevContent: string | null = null;
+  let prevTree: ParseTree | null = null;
+  return (content: string): MarkdownError | null => {
+    let tree: ParseTree;
+    if (prevContent === null || prevTree === null) {
+      // Fresh parse: NOT wrapped — a throw here is a genuine parser failure and
+      // must reach runValidation's internal_error backstop, not be retried.
+      tree = parse(content);
+    } else {
+      try {
+        const fragments = TreeFragment.applyChanges(TreeFragment.addTree(prevTree), [
+          diffRange(prevContent, content),
+        ]);
+        tree = parse(content, fragments);
+      } catch (err) {
+        // Fail-closed: the incremental path faulted (e.g. a fragment/diff edge
+        // case). Fall back to a fresh full parse — the authoritative verdict.
+        // Log so a persistently-dying incremental path is VISIBLE rather than a
+        // silent perf regression (mirrors runValidation's outer catch). If this
+        // fresh parse throws too, it propagates to runValidation → internal_error.
+        console.error(
+          "[quoll] incremental write-gate parse failed, falling back to fresh parse:",
+          err
+        );
+        tree = parse(content);
+      }
+    }
+    // Record the completed PARSE (not walk success): the parse above SUCCEEDED,
+    // so `tree` is a complete valid parse of `content` and a sound incremental
+    // base for the next diff — regardless of whether the walk below throws. A
+    // walk throw is a downstream READ failure (surfaced as internal_error), not
+    // a parse failure, so it does NOT taint this cache. Order is deliberate.
+    prevContent = content;
+    prevTree = tree;
+    return walkTreeForUnsafeUrl(tree, content);
+  };
+}
+
 function checkNode(node: SyntaxNode, content: string): MarkdownError | null {
   // The three URL-emitting node arms - Autolink, inline Link/Image with
   // a URL child, and LinkReference definition. Reference use-sites
