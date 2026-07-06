@@ -63,6 +63,35 @@ jobs:
       - name: Build (host + webview via esbuild)
         run: pnpm build
 
+      # @vscode/test-electron downloads a ~150 MB VS Code build into
+      # `.vscode-test/` on first run and skips the download when the
+      # versioned install already exists (download.js keys the on-disk
+      # dir on the requested version). Cache that dir keyed on the pinned
+      # VS_CODE_VERSION so warm runs restore it and skip the download.
+      # The version lives in test/extension/launch.ts (single source of
+      # truth); extract it here rather than duplicating "1.94.0" in YAML,
+      # so a version bump there invalidates the cache automatically.
+      - name: Resolve pinned VS Code version
+        id: vscode-version
+        # Standalone assignment (not `echo "$(grep …)"`) so bash errexit
+        # aborts on grep's exit 1 — a renamed constant / changed literal
+        # fails the step loudly instead of masking it as an empty version
+        # (which would degrade the key to `vscode-test-<os>-` and silently
+        # break the "version bump invalidates the cache" invariant).
+        run: |
+          version=$(grep -oP 'VS_CODE_VERSION = "\K[^"]+' test/extension/launch.ts)
+          if [ -z "$version" ]; then
+            echo "::error::Could not extract VS_CODE_VERSION from test/extension/launch.ts — was the constant renamed?" >&2
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Cache E2E VS Code download
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .vscode-test
+          key: vscode-test-${{ runner.os }}-${{ steps.vscode-version.outputs.version }}
+
       # E2E suite needs dist/ on disk and a display. The Build step
       # above already produced dist/ (the test host loads
       # dist/extension.cjs via the extensionDevelopmentPath), so we
