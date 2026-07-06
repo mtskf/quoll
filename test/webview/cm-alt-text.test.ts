@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 import { describe, expect, it } from "vitest";
-import { commonMarkAltText } from "../../src/webview/cm/table/cell-render.js";
+import { commonMarkAltText } from "../../src/webview/cm/inline/inline-ir.js";
 
 describe("commonMarkAltText", () => {
   it("passes plain text through unchanged", () => {

@@ -10,9 +10,10 @@
 // it so they cannot drift:
 //   - the block-image widget  (image/image-field.ts)
 //   - the table-cell renderer (table/cell-render.ts)
-// It lives here (not in image-field.ts) because image-field.ts imports from
-// cell-render.ts (commonMarkAltText), so cell-render.ts importing the resolver
-// from image-field.ts would create an import cycle.
+// It lives here (not in image-field.ts) so its single responsibility — the
+// document resource base + the resolve/containment policy keyed off it — stays
+// in one module both image and table consume, independent of the block-image
+// widget's own rendering.
 
 import { Facet } from "@codemirror/state";
 import { type AllowlistedUrl, resolveTrustedResourceUrl } from "../../../markdown/url-allowlist.js";

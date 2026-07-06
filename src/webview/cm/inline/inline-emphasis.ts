@@ -1,5 +1,5 @@
-// CommonMark §6.2/§6.4 emphasis resolver for table-cell inline content. The
-// cell tokenizer (cell-render.ts) emits a flat `Segment<L>[]` — literal text,
+// CommonMark §6.2/§6.4 emphasis resolver for inline content. The neutral
+// inline tokenizer (inline-ir.ts) emits a flat `Segment<L>[]` — literal text,
 // opaque leaves (links / images / autolinks / code spans / escapes carrying
 // their boundary spans), and emphasis delimiter runs with their left/right-
 // flanking flags precomputed from the surrounding source characters. This

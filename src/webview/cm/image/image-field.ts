@@ -24,8 +24,9 @@
 // Render-gate (fail-closed): the URL is the Lezer `URL` child — the SAME node
 // lezer-url-walker (the write-gate) gates — decoded + allowlist-gated via the
 // SHARED `renderSafeMarkdownDestination` (the one render-side decode→gate choke
-// point, also used by the table-cell renderer cm/table/cell-render.ts, so the
-// two render gates cannot drift). Passing a raw slice straight to the allowlist
+// point, also used by the neutral inline tokenizer cm/inline/inline-ir.ts that
+// the table-cell renderer drives, so the two render gates cannot drift).
+// Passing a raw slice straight to the allowlist
 // would fail open on angle-bracket / backslash / char-ref forms. Any throw in
 // decode/gate is caught and treated as blocked (safeUrl = null), mirroring the
 // defense-in-depth catch in validate-for-write.ts. The verdict (AllowlistedUrl
@@ -73,7 +74,7 @@ import { renderSafeMarkdownDestination } from "../../../markdown/render-safe-mar
 import type { AllowlistedUrl } from "../../../markdown/url-allowlist.js";
 import { quollBlockReplaceZones } from "../decorations/orchestrator.js";
 import { leadingFrontmatterEnd } from "../frontmatter/detect.js";
-import { commonMarkAltText } from "../table/cell-render.js";
+import { commonMarkAltText } from "../inline/inline-ir.js";
 import { ImageBlockWidget } from "./image-widget.js";
 import { quollResourceBaseUri, resolveAgainstBase } from "./resource-base.js";
 
