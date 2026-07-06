@@ -279,6 +279,17 @@ describe("calloutMarkerConcealField — bounded recompute ≡ full recompute", (
     checkEquivalence(CALLOUT, [{ changes: { from: 9, insert: "\n" } }]);
   });
 
+  // G1 lazy-from-ABOVE (Codex review 2026-07-06): an edit on the first line of a
+  // contiguous non-blank run flips whether a `[!TYPE]` line SEVERAL lines below
+  // starts a new callout blockquote or merely continues the blockquote above it — a
+  // ±1 window misses it. Deleting the leading `>` of line 1 promotes the later
+  // `> [!NOTE]` block to a top-level callout. RED against the old ±1 bound.
+  it("G1 lazy from above: deleting a leading > several lines up flips a later callout", () => {
+    checkEquivalence("> body\nbody\n> [!NOTE]\n> more\n> more\nbody\nbody", [
+      { changes: { from: 0, to: 1, insert: "" } },
+    ]);
+  });
+
   // G1 lazy-continuation (Codex Conf 90): deleting the blank line below the block
   // makes a following plain paragraph LAZILY continue the blockquote — the block
   // grows DOWNWARD across a line the edit does not touch. This is the case ±1 exists

@@ -105,21 +105,46 @@ interface Interval {
   to: number;
 }
 
-/** Line-expand [from,to] AND pull in one neighbour line on each side. G1: a
- *  blank-line toggle ADJACENT to a callout merges/splits blockquotes and changes
- *  the callout's block extent (or its body-ness) WITHOUT touching the marker bytes —
- *  the same ±1 grouping locality imageBlockField relies on. A blockquote's extent is
- *  a run of `>`-prefixed (+ lazy-continuation) lines bounded by a blank line, so a
- *  change can only flip a callout's record from WITHIN its block or from an
- *  immediately-adjacent line; ±1 covers the adjacency, the changed range itself
- *  covers the interior. */
-function lineExpandWithNeighbours(state: EditorState, from: number, to: number): Interval {
-  const len = state.doc.length;
-  const lo = state.doc.lineAt(Math.max(0, Math.min(from, len)));
-  const hi = state.doc.lineAt(Math.max(0, Math.min(to, len)));
-  const prevFrom = lo.from > 0 ? state.doc.lineAt(lo.from - 1).from : lo.from;
-  const nextTo = hi.to < len ? state.doc.lineAt(hi.to + 1).to : hi.to;
-  return { from: prevFrom, to: nextTo };
+/** A Markdown blank line — the blockquote boundary — contains ONLY ASCII spaces /
+ *  tabs (CommonMark). It EXCLUDES U+000B/U+000C/NBSP and other Unicode spaces, which
+ *  the parser keeps as significant paragraph content (mirrors #62's fold isBlankLine
+ *  + image-field's trimAsciiWs); treating one of those as blank would stop the walk
+ *  early and under-expand. The common case is a truly-empty line. */
+function isBlankLine(text: string): boolean {
+  return /^[ \t]*$/.test(text);
+}
+
+/** Expand [from,to] to the enclosing blank-line-delimited block: line-align, then
+ *  walk out through contiguous non-blank lines in BOTH directions to the blank-line
+ *  boundaries. A blockquote (with its lazy-continuation lines) is bounded by blank
+ *  lines, and a `>`-line's blockquote membership — hence whether a `[!TYPE]` line
+ *  starts a NEW callout or merely CONTINUES the blockquote above it — depends on the
+ *  ENTIRE contiguous non-blank run it sits in, not just its ±1 neighbours. So an edit
+ *  anywhere in the run (e.g. deleting the leading `>` of the run's first line) can
+ *  flip a callout several lines BELOW without touching or being adjacent to it; the
+ *  whole run is exactly the region a change can flip. Mirrors #62's
+ *  expandToEnclosingBlock (fold/index.ts) — a ±1 window is UNSOUND for blockquotes
+ *  (Codex review 2026-07-06: the lazy-continuation-from-above counterexample). */
+function expandToEnclosingBlock(state: EditorState, from: number, to: number): Interval {
+  const doc = state.doc;
+  const len = doc.length;
+  let top = doc.lineAt(Math.max(0, Math.min(from, len)));
+  while (top.from > 0) {
+    const prev = doc.lineAt(top.from - 1);
+    if (isBlankLine(prev.text)) {
+      break;
+    }
+    top = prev;
+  }
+  let bottom = doc.lineAt(Math.max(0, Math.min(to, len)));
+  while (bottom.to < len) {
+    const next = doc.lineAt(bottom.to + 1);
+    if (isBlankLine(next.text)) {
+      break;
+    }
+    bottom = next;
+  }
+  return { from: top.from, to: bottom.to };
 }
 
 function mergeIntervals(intervals: Interval[]): Interval[] {
@@ -140,14 +165,15 @@ function mergeIntervals(intervals: Interval[]): Interval[] {
   return out;
 }
 
-/** The changed regions, each line-expanded ±1 (G1), merged disjoint. Records are
- *  selection-INDEPENDENT, so — unlike imageBlockField — the span does NOT include
- *  selection ranges; a caret move never changes record membership. */
+/** The changed regions, each expanded to its enclosing blank-line-delimited block
+ *  (G1 — a ±1 window is unsound for blockquote lazy continuation), merged disjoint.
+ *  Records are selection-INDEPENDENT, so — unlike imageBlockField — the span does NOT
+ *  include selection ranges; a caret move never changes record membership. */
 function computeExtendedSpan(tr: Transaction): Interval[] {
   const state = tr.state;
   const raw: Interval[] = [];
   tr.changes.iterChangedRanges((_fromA, _toA, fromB, toB) => {
-    raw.push(lineExpandWithNeighbours(state, fromB, toB));
+    raw.push(expandToEnclosingBlock(state, fromB, toB));
   });
   return mergeIntervals(raw);
 }
