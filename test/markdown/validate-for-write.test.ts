@@ -31,7 +31,14 @@ describe("validateMarkdownForWrite", () => {
     // import after doMock then re-binds against the mock. Reversed
     // ordering would leave the cached (real) binding live.
     vi.resetModules();
-    vi.doMock("../../src/markdown/lezer-url-walker.js", () => ({
+    // Spread the real module and override ONLY findUnsafeUrl: validate-for-write
+    // also statically imports createIncrementalUnsafeUrlFinder, so a partial
+    // factory would bind that export to undefined — a latent trap the moment a
+    // future test drives the incremental validator under this mock.
+    vi.doMock("../../src/markdown/lezer-url-walker.js", async () => ({
+      ...(await vi.importActual<typeof import("../../src/markdown/lezer-url-walker.js")>(
+        "../../src/markdown/lezer-url-walker.js"
+      )),
       findUnsafeUrl: () => {
         throw new Error("boom");
       },
@@ -61,7 +68,10 @@ describe("validateMarkdownForWrite", () => {
   it("caps the internal_error message at exactly PREFIX + 200 chars so adversarial inputs cannot bloat the toast", async () => {
     vi.resetModules();
     const longTail = "X".repeat(500);
-    vi.doMock("../../src/markdown/lezer-url-walker.js", () => ({
+    vi.doMock("../../src/markdown/lezer-url-walker.js", async () => ({
+      ...(await vi.importActual<typeof import("../../src/markdown/lezer-url-walker.js")>(
+        "../../src/markdown/lezer-url-walker.js"
+      )),
       findUnsafeUrl: () => {
         throw new Error(longTail);
       },

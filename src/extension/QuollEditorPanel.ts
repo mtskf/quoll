@@ -55,6 +55,7 @@ import {
 } from "vscode";
 
 import type { MarkdownError } from "../markdown/errors.js";
+import { createIncrementalWriteValidator } from "../markdown/validate-for-write.js";
 import { perfNow, perfRecord, perfReport } from "../shared/perf.js";
 import type { HostToWebview } from "../shared/protocol.js";
 import { isWebviewToHost } from "../shared/protocol.js";
@@ -269,10 +270,18 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
     // ordering, rejected-draft barrier, resync rules, settlement). This
     // file snapshots live VS Code inputs into EVENTS and runs the returned
     // EFFECTS; see host-session-core.ts for the transition table.
-    const core = createHostSessionCore({
-      uriString: document.uri.toString(),
-      fsPath: document.uri.fsPath,
-    });
+    const core = createHostSessionCore(
+      {
+        uriString: document.uri.toString(),
+        fsPath: document.uri.fsPath,
+      },
+      // Per-panel incremental write validator: reuses the previous parse via
+      // Lezer TreeFragment so a debounced flush re-parses only the changed
+      // span. Verdict-identical to the stateless default (pinned by a fuzz
+      // battery); the cache lives in this closure, reclaimed once the panel
+      // closure is no longer held (past dispose by at most one async settlement).
+      { validateForWrite: createIncrementalWriteValidator() }
+    );
     let state = core.initialState(document.version);
 
     // Edit-applied barrier for the document side channels (context-handoff /
