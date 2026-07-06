@@ -271,6 +271,104 @@ function isBlankLine(text: string): boolean {
   return /^[ \t]*$/.test(text);
 }
 
+/** SHAPE over-approximation for a structural reparse — the fenced field's proven
+ *  `STRUCTURAL` regex (`fenced-code-collapse.ts`, the #63 precedent: fence delimiters,
+ *  list/blockquote container markers, HTML block openers + the unanchored type-1/2/3/5
+ *  terminators) PLUS two alternations the fenced field deliberately omits because they
+ *  cannot affect FENCE grouping but DO re-shape the fold fields' blocks:
+ *   - ATX-heading alt `#{1,6}(?:[ \t]|$)`: an in-place single-line edit `x q`→`# q` makes
+ *     a heading interrupt a lazy continuation, closing a list and flipping a far `  # h`
+ *     from ListItem to Document (Fable parser-verified, Conf 95). NEWLINE-DELTA below does
+ *     NOT cover this single-line case, so the alt is a soundness requirement here.
+ *   - underscore thematic-break alt `(?:_[ \t]*){3,}`: `___` opens a thematic break that
+ *     terminates a preceding paragraph/list run. The `-`/`*` thematic forms are already
+ *     caught by the container-marker alt, so only `_` needs adding.
+ *  Purely syntactic: a false match only costs a full rebuild (speed), never correctness. */
+const STRUCTURAL_FOLD =
+  /(?:^|\n)[ \t]{0,3}(?:`{3,}|~{3,})|(?:^|\n)[ \t]*(?:[-*+]|\d{1,9}[.)]|>)|(?:^|\n)[ \t]{0,3}<[/!?A-Za-z]|<\/(?:script|pre|style|textarea)>|-->|\?>|\]\]>|(?:^|\n)[ \t]{0,3}#{1,6}(?:[ \t]|$)|(?:^|\n)[ \t]{0,3}(?:_[ \t]*){3,}/i;
+
+/** SOUND syntactic over-approximation of "this edit could trigger a STRUCTURAL REPARSE
+ *  that re-shapes a block boundary OUTSIDE the changed run". The three fold-gutter fields
+ *  bound their keystroke recompute to the changed blank-line-delimited run
+ *  (`expandToEnclosingBlock`), which assumes a block's identity can only change from WITHIN
+ *  its own run. Markdown block boundaries are NOT stable under edits, so that assumption
+ *  can strand/miss a fold chevron: an unclosed ``` fence swallows the blocks below it; a
+ *  `<!DOCTYPE …>` type-4 HTML declaration swallows until its `>`; un-listing (`- a`→`a`)
+ *  re-contexts a nested `  # h` to top-level; etc. When this fires, the field falls back to
+ *  a FULL rebuild so a structural edit never leaves a stranded/missing chevron.
+ *
+ *  Mirrors the fenced field's guard (`touchesStructural` dual old/new line-expanded slice
+ *  scan + `topLevelBoundaryRisk`'s newline/`>`/blank arms), FOLDED into one pass and with
+ *  NO `insideBlock` gate: the fold fields are record-less (no reused per-block record to
+ *  scope an in-body edit against), so ANY top-level structural trigger ⇒ full rebuild.
+ *  Fires when, for ANY changed range, ANY arm matches:
+ *   - SHAPE — STRUCTURAL_FOLD matches the OLD or NEW line-expanded slice.
+ *   - NEWLINE-DELTA — the edit inserts or deletes a `\n`. A multi-line interior edit can
+ *     promote/demote a FAR heading or terminate an enclosing list while its endpoints stay
+ *     shapeless (endpoint-only SHAPE/blank/indent checks miss it). Cost is Enter/paste/
+ *     line-delete only — single-char prose typing never trips it.
+ *   - GT-DELTA — the edit adds or removes a `>`. A bare `>` terminates a type-4
+ *     `<!DOCTYPE …>` declaration (a same-line, non-newline, non-shape edit that SHAPE and
+ *     the other arms all miss); keying on the `>` being ADDED/REMOVED (not merely present)
+ *     keeps it narrow (mirrors the fenced field's cycle-5 type-4 rationale).
+ *   - BLANK-FLIP — the changed line's blankness flips old↔new (single-line, since
+ *     NEWLINE-DELTA already caught every multi-line edit). A blank line terminates a
+ *     paragraph / loose list / type-6/7 HTML block between a far heading and its context.
+ *   - INDENT-DELTA — the changed line's leading-whitespace prefix differs old↔new
+ *     (single-line). `  x`→`x` flips whether an intervening run continues an enclosing
+ *     loose list item, flipping a far `  # h` between list-content and top-level.
+ *  On a non-docChanged transaction `iterChangedRanges` yields nothing → returns false.
+ *
+ *  SOUND over-approximation: false full-rebuilds only cost speed; UNDER-triggering would be
+ *  unsound (a stranded chevron). ACCEPTED over-approximation (perf, not soundness): SHAPE is
+ *  presence-based, so editing the BODY of a line that already starts with a marker
+ *  (`- item`→`- itemx`) trips a full rebuild even though structure is unchanged — a strict
+ *  improvement over the pre-PR always-full-rebuild baseline; a delta-based refinement is
+ *  deferred to a perf follow-up. Exported so the negative-assertion tests can call it
+ *  directly (pinning that plain prose typing stays on the bounded hot path). */
+export function touchesStructuralReparse(tr: Transaction): boolean {
+  let hit = false;
+  tr.changes.iterChangedRanges((fromA, toA, fromB, toB) => {
+    if (hit) {
+      return;
+    }
+    const oldSlice = tr.startState.doc.sliceString(
+      tr.startState.doc.lineAt(fromA).from,
+      tr.startState.doc.lineAt(toA).to
+    );
+    const newSlice = tr.state.doc.sliceString(
+      tr.state.doc.lineAt(fromB).from,
+      tr.state.doc.lineAt(toB).to
+    );
+    if (STRUCTURAL_FOLD.test(oldSlice) || STRUCTURAL_FOLD.test(newSlice)) {
+      hit = true;
+      return;
+    }
+    const insertedText = tr.state.doc.sliceString(fromB, toB);
+    const deletedText = tr.startState.doc.sliceString(fromA, toA);
+    if (insertedText.includes("\n") || deletedText.includes("\n")) {
+      hit = true;
+      return;
+    }
+    if (insertedText.includes(">") || deletedText.includes(">")) {
+      hit = true;
+      return;
+    }
+    const oldLine = tr.startState.doc.lineAt(fromA);
+    const newLine = tr.state.doc.lineAt(fromB);
+    if (isBlankLine(oldLine.text) !== isBlankLine(newLine.text)) {
+      hit = true;
+      return;
+    }
+    const oldIndent = /^[ \t]*/.exec(oldLine.text)?.[0] ?? "";
+    const newIndent = /^[ \t]*/.exec(newLine.text)?.[0] ?? "";
+    if (oldIndent !== newIndent) {
+      hit = true;
+    }
+  });
+  return hit;
+}
+
 /** Expand [from,to] to the enclosing blank-line-delimited block: line-align, then
  *  walk out through contiguous non-blank lines in BOTH directions. A heading's
  *  gutter tag rides the FIRST line of its (possibly multi-line Setext) block, and
@@ -397,13 +495,17 @@ function recomputeBoundedHeadingClasses(
  *  frontier is incomplete (`!syntaxTreeAvailable`) can reveal nodes outside the
  *  changed range, and (b) lang-markdown parses asynchronously, so a later
  *  background-parse publication arrives as a NON-docChanged transaction whose tree
- *  identity differs — re-tagging once the real heading nodes land. Exported for
- *  the heading-detection contract test. */
+ *  identity differs — re-tagging once the real heading nodes land. A third full-rebuild
+ *  fallback (touchesStructuralReparse) catches a STRUCTURAL reparse that re-shapes a
+ *  block boundary OUTSIDE the changed run — an unclosed fence / `<script>` swallowing a
+ *  far heading, a `<!DOCTYPE …>` terminator, a `#`-ATX interrupt (see the guard's doc):
+ *  the bounded window would strand such a heading's marker. Exported for the
+ *  heading-detection contract test. */
 export const headingFoldGutterLineClass = StateField.define<RangeSet<GutterMarker>>({
   create: buildHeadingFoldGutterClasses,
   update(value, tr) {
     if (tr.docChanged) {
-      if (!syntaxTreeAvailable(tr.state, tr.state.doc.length)) {
+      if (touchesStructuralReparse(tr) || !syntaxTreeAvailable(tr.state, tr.state.doc.length)) {
         return buildHeadingFoldGutterClasses(tr.state);
       }
       return recomputeBoundedHeadingClasses(value, tr);
@@ -567,10 +669,17 @@ export const listFoldGutterLineClass = StateField.define<RangeSet<GutterMarker>>
     );
     if (tr.docChanged) {
       // A facet flip can change eligibility OUTSIDE the changed range (a zone
-      // boundary shift re-includes / excludes list items far from the edit), and an
-      // incomplete post-edit parse frontier can reveal nodes outside it — both need a
-      // full rebuild. Otherwise bound the walk to the changed blocks.
-      if (facetChanged || !syntaxTreeAvailable(tr.state, tr.state.doc.length)) {
+      // boundary shift re-includes / excludes list items far from the edit); a
+      // STRUCTURAL reparse (touchesStructuralReparse — an unclosed fence / HTML block
+      // swallowing a far list, an un-list re-context, etc.) likewise re-shapes block
+      // boundaries beyond the changed run; and an incomplete post-edit parse frontier
+      // can reveal nodes outside it — all three need a full rebuild. Otherwise bound
+      // the walk to the changed blocks.
+      if (
+        facetChanged ||
+        touchesStructuralReparse(tr) ||
+        !syntaxTreeAvailable(tr.state, tr.state.doc.length)
+      ) {
         return buildListFoldGutterClasses(tr.state, zones);
       }
       return recomputeBoundedListClasses(value, tr, zones);
@@ -729,10 +838,18 @@ export const headingRhythmFoldGutterLineClass = StateField.define<RangeSet<Gutte
       zones
     );
     if (tr.docChanged) {
-      // A facet flip can change eligibility OUTSIDE the changed range, and an
-      // incomplete post-edit parse frontier can reveal nodes outside it — both need a
-      // full rebuild. Otherwise bound the walk to the changed blocks.
-      if (facetChanged || !syntaxTreeAvailable(tr.state, tr.state.doc.length)) {
+      // A facet flip can change eligibility OUTSIDE the changed range; a STRUCTURAL
+      // reparse (touchesStructuralReparse — un-listing promotes a nested heading to
+      // top-level, an unclosed fence swallows a far heading, a multi-line interior
+      // edit promotes a far heading, etc.) re-shapes block boundaries beyond the
+      // changed run; and an incomplete post-edit parse frontier can reveal nodes
+      // outside it — all three need a full rebuild. Otherwise bound the walk to the
+      // changed blocks.
+      if (
+        facetChanged ||
+        touchesStructuralReparse(tr) ||
+        !syntaxTreeAvailable(tr.state, tr.state.doc.length)
+      ) {
         return buildHeadingRhythmFoldGutterClasses(tr.state, zones);
       }
       return recomputeBoundedHeadingRhythmClasses(value, tr, zones);

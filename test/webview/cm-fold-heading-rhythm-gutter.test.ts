@@ -312,4 +312,83 @@ describe("headingRhythmFoldGutterLineClass — per-level gutter tag for the rhyt
       expect(lines).toEqual(new Set([nearLine]));
     });
   });
+
+  // The bounded recompute (expandToEnclosingBlock) assumes a heading's rhythm-
+  // eligibility (top-level + off physical line 1 + not in a zone) can only change from
+  // WITHIN its own run. A STRUCTURAL reparse breaks that: un-listing re-contexts a
+  // nested heading to top-level; an unclosed fence swallows it; a multi-line interior
+  // edit promotes a far heading. `touchesStructuralReparse` routes those to a FULL
+  // rebuild. Each case is bounded==oracle AND RED against the guard-less field.
+  describe("bounded ≡ full-rebuild under structural reparse", () => {
+    function serializeGutter(v: EditorView): { from: number; to: number; cls: string }[] {
+      const out: { from: number; to: number; cls: string }[] = [];
+      const cursor = v.state.field(headingRhythmFoldGutterLineClass).iter();
+      while (cursor.value) {
+        out.push({
+          from: cursor.from,
+          to: cursor.to,
+          cls: (cursor.value as { elementClass: string }).elementClass,
+        });
+        cursor.next();
+      }
+      return out;
+    }
+    function oracle(doc: string): { from: number; to: number; cls: string }[] {
+      const fresh = mountDoc(doc);
+      expect(syntaxTreeAvailable(fresh.state, fresh.state.doc.length)).toBe(true);
+      const ser = serializeGutter(fresh);
+      fresh.destroy();
+      return ser;
+    }
+    function expectBoundedEqualsFull(): void {
+      expect(syntaxTreeAvailable(view!.state, view!.state.doc.length)).toBe(true);
+      expect(serializeGutter(view!)).toEqual(oracle(view!.state.doc.toString()));
+    }
+
+    it("an unclosed fence inserted above a heading swallows it (SHAPE fence)", () => {
+      view = mountDoc("intro\n\n# h\n");
+      expect(serializeGutter(view).length).toBe(1); // # h (line 3) tagged
+      view.dispatch({ changes: { from: 0, insert: "```\n" } });
+      expect(serializeGutter(view)).toEqual([]);
+      expectBoundedEqualsFull();
+    });
+
+    it("B3: un-listing a parent promotes a nested heading to top-level (SHAPE list marker)", () => {
+      // `  # h` nested in the list item `- a` is NOT rhythm-eligible (not top-level).
+      // Deleting the `- ` marker re-contexts it to a top-level ATX heading → eligible.
+      // The edit is far from `# h` (bounded would strand it); SHAPE catches old `- a`.
+      view = mountDoc("- a\n\n  # h\n");
+      expect(serializeGutter(view)).toEqual([]); // nested heading not eligible
+      view.dispatch({ changes: { from: 0, to: 2, insert: "" } }); // "- a" → "a"
+      expect(serializeGutter(view).length).toBe(1); // "  # h" now top-level → eligible
+      expectBoundedEqualsFull();
+    });
+
+    it("B: a multi-line interior insert promotes a far heading (NEWLINE-DELTA only)", () => {
+      // The insertion point is the END of the non-blank "  midX" line, so BOTH endpoint
+      // lines stay "  midX" (non-blank, indent "  ") and the new-slice carries no marker
+      // shape — SHAPE / BLANK-FLIP / INDENT-DELTA all miss it. Only the inserted "\n\n"
+      // (NEWLINE-DELTA) catches it. Inserting a blank line + a col-0 line ("BBB") after
+      // "  midX" TERMINATES the loose list item, so the far "  # h" re-contexts from a
+      // ListItem-nested heading (not rhythm-eligible) to a top-level ATX heading
+      // (eligible) — a flip the bounded window (which stops at the interior blank) misses.
+      view = mountDoc("- item\n\n  midX\n\n  # h\n");
+      expect(serializeGutter(view)).toEqual([]); // # h nested → not eligible
+      const midEnd = view.state.doc.toString().indexOf("  midX") + "  midX".length;
+      view.dispatch({ changes: { from: midEnd, insert: "\n\nBBB" } }); // terminate the list
+      expect(serializeGutter(view).length).toBe(1); // "  # h" promoted → eligible
+      expectBoundedEqualsFull();
+    });
+
+    it("C: an interior blank + col-0 line terminates a list, flipping a far heading (NEWLINE-DELTA)", () => {
+      // `  aXb` → `  a\n\nx\n  b` inserts an interior blank + a col-0 line inside the
+      // list item, terminating it so the following `  # h` promotes to top-level.
+      view = mountDoc("- item\n\n  aXb\n\n  # h\n");
+      expect(serializeGutter(view)).toEqual([]);
+      const x = view.state.doc.toString().indexOf("aXb") + 1; // the "X"
+      view.dispatch({ changes: { from: x, to: x + 1, insert: "\n\nx\n  " } }); // "  aXb" → "  a\n\nx\n  b"
+      expect(serializeGutter(view).length).toBe(1);
+      expectBoundedEqualsFull();
+    });
+  });
 });
