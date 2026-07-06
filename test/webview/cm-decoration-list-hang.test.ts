@@ -6,7 +6,7 @@ import {
   blockquotePrefixCols,
   buildListHangIndent,
   listHangNeedsRebuild,
-} from "../../src/webview/cm/decorations/list-hang-indent.js";
+} from "../../src/webview/cm/list/list-hang-indent.js";
 import { pointInExclusionZone } from "../../src/webview/cm/decorations/shared.js";
 import type { BuildContext } from "../../src/webview/cm/decorations/types.js";
 import { fullTree } from "./helpers/full-tree.js";

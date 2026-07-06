@@ -86,13 +86,13 @@ import {
 } from "@codemirror/view";
 
 import { columnAt, resolveListItemHang } from "./list-geometry.js";
-import { quollSyntaxExclusionZones } from "./orchestrator.js";
+import { quollSyntaxExclusionZones } from "../decorations/orchestrator.js";
 import {
   absorbStructuralWhitespace,
   intersectsAnySelection,
   pointInExclusionZone,
-} from "./shared.js";
-import type { BuildContext } from "./types.js";
+} from "../decorations/shared.js";
+import type { BuildContext } from "../decorations/types.js";
 
 const CM_LINE_PAD_START = "6px";
 

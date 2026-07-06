@@ -10,7 +10,7 @@ import {
   indentListItem,
   listIndentKeymap,
   outdentListItem,
-} from "../../src/webview/cm/decorations/list-indent-keymap.js";
+} from "../../src/webview/cm/list/list-indent-keymap.js";
 
 function forceParse(view: EditorView): EditorView {
   forceParsing(view, view.state.doc.length, 5_000);
@@ -296,7 +296,7 @@ describe("listIndentKeymap — registration + precedence", () => {
   });
 
   it("exports exactly the two commands + the keymap factory", async () => {
-    const mod = await import("../../src/webview/cm/decorations/list-indent-keymap.js");
+    const mod = await import("../../src/webview/cm/list/list-indent-keymap.js");
     expect(Object.keys(mod).sort()).toEqual(
       ["indentListItem", "listIndentKeymap", "outdentListItem"].sort()
     );

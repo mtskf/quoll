@@ -24,7 +24,7 @@
 import { RangeSetBuilder } from "@codemirror/state";
 import { Decoration, type DecorationSet } from "@codemirror/view";
 
-import { resolveTaskMarkerGeometry } from "./list-geometry.js";
+import { resolveTaskMarkerGeometry } from "../list/list-geometry.js";
 import { intersectsAnySelection } from "./shared.js";
 import type { DecorationProvider } from "./types.js";
 

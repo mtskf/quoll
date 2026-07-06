@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 import {
   resolveListItemHang,
   resolveTaskMarkerGeometry,
-} from "../../src/webview/cm/decorations/list-geometry.js";
+} from "../../src/webview/cm/list/list-geometry.js";
 import { fullTree } from "./helpers/full-tree.js";
 
 function state(doc: string): EditorState {

@@ -26,8 +26,8 @@ import { fencedCodeCopyButton } from "./cm/decorations/fenced-code-copy-button.j
 import { fencedCodeEnterKeymap } from "./cm/decorations/fenced-code-enter-keymap.js";
 import { headingRhythm } from "./cm/decorations/heading-rhythm.js";
 import { quollSyntaxReveal } from "./cm/decorations/index.js";
-import { listHangIndent } from "./cm/decorations/list-hang-indent.js";
-import { listIndentKeymap } from "./cm/decorations/list-indent-keymap.js";
+import { listHangIndent } from "./cm/list/list-hang-indent.js";
+import { listIndentKeymap } from "./cm/list/list-indent-keymap.js";
 import { proseSpaceMetric } from "./cm/decorations/prose-space-metric.js";
 import { createEditSync } from "./cm/edit-sync.js";
 import { quollFloatingToolbarScroll } from "./cm/floating-toolbar-scroll.js";

@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest";
 import {
   findTaskMarker,
   taskCheckboxReveal,
-} from "../../src/webview/cm/decorations/task-checkbox-reveal.js";
+} from "../../src/webview/cm/task-checkbox/task-checkbox-reveal.js";
 import type { BuildContext } from "../../src/webview/cm/decorations/types.js";
 import { fullTree } from "./helpers/full-tree.js";
 

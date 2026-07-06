@@ -14,7 +14,7 @@ import { headingReveal } from "./heading-reveal.js";
 import { inlineMarkReveal } from "./inline-mark-reveal.js";
 import { linkReveal } from "./link-reveal.js";
 import { createSyntaxReveal } from "./orchestrator.js";
-import { taskCheckboxReveal } from "./task-checkbox-reveal.js";
+import { taskCheckboxReveal } from "../task-checkbox/task-checkbox-reveal.js";
 import { thematicBreakReveal } from "./thematic-break-reveal.js";
 
 /** Module-level stable array — captured once by createSyntaxReveal() so the
