@@ -287,3 +287,56 @@ describe("createIncrementalWriteValidator matches validateMarkdownForWrite", () 
     }
   });
 });
+
+function bigProseDoc(): string {
+  const PARA = "The quick brown fox jumps over the lazy dog. ".repeat(4);
+  let big = "# Performance fixture\n\n";
+  let i = 0;
+  while (big.length < 1024 * 1024) {
+    big += `## Section ${i}\n\n${PARA}\n\n[link ${i}](https://example.com/${i})\n\n`;
+    i += 1;
+  }
+  return big;
+}
+
+describe("PERF: write-gate parse cost on a ~1 MB doc", () => {
+  it("incremental parse reuses the previous tree instead of a full re-parse", () => {
+    const big = bigProseDoc();
+    const at = Math.floor(big.length / 2);
+    const edited = big.slice(0, at) + "x" + big.slice(at); // one-char mid-doc edit
+
+    // Build the cached prevTree OUTSIDE the timed region (production already has
+    // it from the prior flush; timing its build would fold a full parse into the
+    // "incremental" number and hide the win).
+    const prevTree = parseMarkdown(big);
+
+    const t0 = performance.now();
+    const fullTree = parseMarkdown(edited);
+    const full = performance.now() - t0;
+
+    const t1 = performance.now();
+    const fragments = TreeFragment.applyChanges(TreeFragment.addTree(prevTree), [
+      diffRange(big, edited),
+    ]);
+    const incTree = parseMarkdown(edited, fragments);
+    const incMs = performance.now() - t1;
+
+    expect(treeShape(incTree)).toEqual(treeShape(fullTree)); // parity at scale
+
+    const prevRefs = new Set<unknown>();
+    collectNodeRefs(prevTree, prevRefs);
+    const incRefs = new Set<unknown>();
+    collectNodeRefs(incTree, incRefs);
+    const fullRefs = new Set<unknown>();
+    collectNodeRefs(fullTree, fullRefs);
+    const sharedInc = [...incRefs].filter((r) => prevRefs.has(r)).length;
+    const sharedFull = [...fullRefs].filter((r) => prevRefs.has(r)).length;
+    expect(sharedInc).toBeGreaterThan(incRefs.size * 0.5); // incremental reuses the majority...
+    expect(sharedFull).toBeLessThan(incRefs.size * 0.1); // ...full re-parse reuses ~none (negative control)
+
+    console.log(
+      `[bench] write-gate parse @~1MB: full=${full.toFixed(2)}ms incremental=${incMs.toFixed(2)}ms`
+    );
+    expect(incMs).toBeLessThan(full * 1.5 + 5); // loose sanity; the reuse guard is the real signal
+  });
+});

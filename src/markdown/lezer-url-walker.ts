@@ -53,9 +53,9 @@
 // vi.doMock() so the singleton's cached export is invalidated; this
 // ordering is what test/markdown/validate-for-write.test.ts uses.
 
-import { Emoji, GFM, parser, Subscript, Superscript } from "@lezer/markdown";
-import { TreeFragment } from "@lezer/common";
 import type { ChangedRange } from "@lezer/common";
+import { TreeFragment } from "@lezer/common";
+import { Emoji, GFM, parser, Subscript, Superscript } from "@lezer/markdown";
 
 import type { MarkdownError } from "./errors.js";
 import { isAllowedUrl } from "./url-allowlist.js";
