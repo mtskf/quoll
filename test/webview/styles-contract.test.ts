@@ -104,7 +104,7 @@ describe("styles.css — task-checkbox checkmark is a text-indent-immune border 
 
   // Regression guard for the "checked box renders filled but with NO visible
   // checkmark" bug. A task line renders as `.cm-line.quoll-list-hang`, which
-  // carries a NEGATIVE `text-indent` (cm/decorations/list-hang-indent.ts) to
+  // carries a NEGATIVE `text-indent` (cm/list/list-hang-indent.ts) to
   // pull the marker into the bullet column. That `text-indent` INHERITS into
   // the inline-block `.quoll-task-checkbox` widget. The ORIGINAL checkmark was
   // a `::after { content: "✓" }` GLYPH — text content, so the inherited indent

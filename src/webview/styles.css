@@ -85,13 +85,13 @@
     --quoll-column-inset-right: 2px;
     /* List soft-wrap hanging-indent: rendered width of a task-list checkbox
      * column (the C5b widget that replaces `[ ]`). The list-hang-indent
-     * provider (cm/decorations/list-hang-indent.ts) references this via
+     * provider (cm/list/list-hang-indent.ts) references this via
      * var() so a task line's continuation hangs under the TEXT, not the
      * checkbox. Keep in sync with .quoll-task-checkbox (width 1em +
      * margin-right 0.25em) plus the trailing source space. */
     --quoll-task-marker-width: 1.5em;
     /* Rendered width of ONE space in the proportional body font. The list-hang
-     * geometry (cm/decorations/list-geometry.ts) expresses source-indentation
+     * geometry (cm/list/list-geometry.ts) expresses source-indentation
      * columns in this unit instead of `ch` (which, being the `0` glyph, is ~2×
      * a space in a proportional font and made wrapped nested-list lines
      * over-indent). prose-space-metric.ts overrides this with the measured

@@ -81,9 +81,9 @@ import {
 // null/non-null bit) and `pointInExclusionZone` (frontmatter, whose YAML lists
 // parse as markdown ListItems but receive no hang). See buildListFoldGutterClasses.
 import { headingRhythmLevel } from "../decorations/heading-rhythm.js";
-import { isRenderableListItem } from "../decorations/list-geometry.js";
 import { quollSyntaxExclusionZones } from "../decorations/orchestrator.js";
 import { pointInExclusionZone } from "../decorations/shared.js";
+import { isRenderableListItem } from "../list/list-geometry.js";
 
 const SVG_NS = "http://www.w3.org/2000/svg";
 

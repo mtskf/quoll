@@ -31,7 +31,7 @@
 import type { syntaxTree } from "@codemirror/language";
 import { countColumn, type EditorState } from "@codemirror/state";
 
-import { TASK_MARKER_RE } from "./task-checkbox-command.js";
+import { TASK_MARKER_RE } from "../task-checkbox/task-checkbox-command.js";
 
 // `@lezer/common` is a transitive-only dep pnpm does not hoist (supply-chain
 // default-deny) — derive SyntaxNode from syntaxTree's return type. Same

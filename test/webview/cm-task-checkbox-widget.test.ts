@@ -6,7 +6,7 @@ import { EditorState } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import { describe, expect, it } from "vitest";
 
-import { CheckboxWidget } from "../../src/webview/cm/decorations/task-checkbox-widget.js";
+import { CheckboxWidget } from "../../src/webview/cm/task-checkbox/task-checkbox-widget.js";
 
 function mountView(doc: string): EditorView {
   const parent = document.createElement("div");

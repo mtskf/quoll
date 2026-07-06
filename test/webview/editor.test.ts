@@ -9,10 +9,7 @@ import {
   buildBlockquoteRule,
   fencedCodePanel,
 } from "../../src/webview/cm/decorations/block-style.js";
-import {
-  buildListHangIndent,
-  listHangIndent,
-} from "../../src/webview/cm/decorations/list-hang-indent.js";
+import { buildListHangIndent, listHangIndent } from "../../src/webview/cm/list/list-hang-indent.js";
 import { type EditorHandle, mountEditor } from "../../src/webview/editor.js";
 import { type Action, initialState, type WebviewState } from "../../src/webview/state.js";
 import { fullTree } from "./helpers/full-tree.js";

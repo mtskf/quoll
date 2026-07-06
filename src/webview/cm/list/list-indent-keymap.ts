@@ -30,23 +30,19 @@
 // innermost construct. The tree comes from ensureSyntaxTree so a freshly-seeded
 // long doc whose caret region is not yet lazily parsed still classifies.
 //
-// Self-contained: does NOT import list-geometry.ts (its helpers carry task-fold
-// fail-closed semantics irrelevant here).
+// Imports only the pure column-math helper columnAt from list-geometry.ts;
+// the task-fold helpers there (fail-closed semantics) are still not used here.
 
 import { ensureSyntaxTree, syntaxTree } from "@codemirror/language";
-import { type ChangeSpec, countColumn, type EditorState, Prec } from "@codemirror/state";
+import { type ChangeSpec, type EditorState, Prec } from "@codemirror/state";
 import { type Command, type EditorView, keymap } from "@codemirror/view";
+
+import { columnAt } from "./list-geometry.js";
 
 // Derive SyntaxNode from syntaxTree's return type (same strategy as
 // list-geometry.ts — @lezer/common is transitive-only, not hoisted).
 type Tree = ReturnType<typeof syntaxTree>;
 type SyntaxNode = Tree["topNode"];
-
-/** Visual column of `pos` within its own line (tabs expanded to tabSize). */
-function columnAt(state: EditorState, pos: number): number {
-  const line = state.doc.lineAt(pos);
-  return countColumn(line.text, state.tabSize, pos - line.from);
-}
 
 /** The innermost `ListItem` for the line containing `head`, or null when that
  *  line is not in a list item OR the probe sits inside a `FencedCode` /

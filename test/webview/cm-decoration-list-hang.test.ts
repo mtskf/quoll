@@ -2,13 +2,13 @@ import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
 import { EditorSelection, EditorState } from "@codemirror/state";
 import type { DecorationSet, ViewUpdate } from "@codemirror/view";
 import { describe, expect, it } from "vitest";
+import { pointInExclusionZone } from "../../src/webview/cm/decorations/shared.js";
+import type { BuildContext } from "../../src/webview/cm/decorations/types.js";
 import {
   blockquotePrefixCols,
   buildListHangIndent,
   listHangNeedsRebuild,
-} from "../../src/webview/cm/decorations/list-hang-indent.js";
-import { pointInExclusionZone } from "../../src/webview/cm/decorations/shared.js";
-import type { BuildContext } from "../../src/webview/cm/decorations/types.js";
+} from "../../src/webview/cm/list/list-hang-indent.js";
 import { fullTree } from "./helpers/full-tree.js";
 
 function ctx(doc: string): BuildContext {

@@ -7,14 +7,14 @@ export {
 } from "./orchestrator.js";
 export type { BuildContext, DecorationProvider } from "./types.js";
 
+import { fencedCodeReveal } from "../fenced-code/fenced-code-reveal.js";
+import { taskCheckboxReveal } from "../task-checkbox/task-checkbox-reveal.js";
 import { blockquoteReveal } from "./blockquote-reveal.js";
 import { bulletMarkerReveal } from "./bullet-marker-reveal.js";
-import { fencedCodeReveal } from "./fenced-code-reveal.js";
 import { headingReveal } from "./heading-reveal.js";
 import { inlineMarkReveal } from "./inline-mark-reveal.js";
 import { linkReveal } from "./link-reveal.js";
 import { createSyntaxReveal } from "./orchestrator.js";
-import { taskCheckboxReveal } from "./task-checkbox-reveal.js";
 import { thematicBreakReveal } from "./thematic-break-reveal.js";
 
 /** Module-level stable array — captured once by createSyntaxReveal() so the

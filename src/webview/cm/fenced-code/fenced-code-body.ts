@@ -13,7 +13,7 @@
 import type { syntaxTree } from "@codemirror/language";
 import type { EditorSelection, Text } from "@codemirror/state";
 
-import { intersectsAnySelection } from "./shared.js";
+import { intersectsAnySelection } from "../decorations/shared.js";
 
 // `@lezer/common` is a transitive-only dep pnpm does not hoist (supply-chain
 // default-deny) — derive SyntaxNode from syntaxTree's return type, the same
