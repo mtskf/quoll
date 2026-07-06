@@ -8,17 +8,22 @@ import {
   type ViewUpdate,
 } from "@codemirror/view";
 import type { LintDiagnosticWire } from "../../../shared/protocol.js";
-import { lintMarkdown } from "./engine.js";
+import { createIncrementalLinter, lintMarkdown } from "./engine.js";
 import type { LintDiagnostic, LintSeverity } from "./types.js";
 
 // Fail-open wrapper: lint is advisory, so a parser/rule throw must degrade to
 // "no diagnostics" + a logged error rather than break the editor transaction.
 // (The host write-gate has the same defense; here a throw merely drops a squiggle.)
-function safeLintMarkdown(text: string): readonly LintDiagnostic[] {
+// Generic over the linter fn so both the one-shot full parse (`lintMarkdown`)
+// and the per-view incremental linter share one guard.
+function safeLint(
+  lint: (raw: string) => readonly LintDiagnostic[],
+  text: string
+): readonly LintDiagnostic[] {
   try {
-    return lintMarkdown(text);
+    return lint(text);
   } catch (err) {
-    console.error("[quoll] lintMarkdown threw; surfacing no diagnostics", err);
+    console.error("[quoll] lint threw; surfacing no diagnostics", err);
     return [];
   }
 }
@@ -34,7 +39,7 @@ export const setLintDiagnostics = StateEffect.define<readonly LintDiagnostic[]>(
 // at field creation so a document present at creation lints immediately.
 export const lintField = StateField.define<readonly LintDiagnostic[]>({
   create(state) {
-    return safeLintMarkdown(state.doc.toString());
+    return safeLint(lintMarkdown, state.doc.toString());
   },
   update(value, tr) {
     for (const effect of tr.effects) {
@@ -93,6 +98,13 @@ const LINT_DEBOUNCE_MS = 250;
 const lintComputePlugin = ViewPlugin.fromClass(
   class {
     private timer: ReturnType<typeof setTimeout> | undefined;
+    // One incremental linter per view: it caches the previous parse tree and
+    // reuses it via TreeFragment, so a typing pause re-parses only the changed
+    // region instead of the whole document. Not primed at construction — the
+    // view mounts with doc:"" and the real content arrives via the applyDocument
+    // reseed, whose own docChanged schedules the first (unavoidable) full parse
+    // that warms prevTree. Every subsequent typing pause reuses it.
+    private readonly lint = createIncrementalLinter();
 
     update(update: ViewUpdate): void {
       if (update.docChanged) {
@@ -107,7 +119,7 @@ const lintComputePlugin = ViewPlugin.fromClass(
       this.timer = setTimeout(() => {
         this.timer = undefined;
         view.dispatch({
-          effects: setLintDiagnostics.of(safeLintMarkdown(view.state.doc.toString())),
+          effects: setLintDiagnostics.of(safeLint(this.lint, view.state.doc.toString())),
         });
       }, LINT_DEBOUNCE_MS);
     }

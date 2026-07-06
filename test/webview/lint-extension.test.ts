@@ -4,6 +4,7 @@ import { EditorState, Text } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { LintDiagnosticWire } from "../../src/shared/protocol.js";
+import { lintMarkdown } from "../../src/webview/cm/lint/engine.js";
 import {
   buildLintDecorations,
   diagnosticsAt,
@@ -243,6 +244,42 @@ describe("quollLint debounced recompute (view-level)", () => {
       expect(headingFindings()).toHaveLength(1);
       // ...via an effect only: the document is byte-identical to the user edit.
       expect(view.state.sliceDoc()).toBe(docAfterEdit);
+    } finally {
+      view.destroy();
+    }
+  });
+
+  it("debounced incremental compute stays byte-identical to a full lintMarkdown", () => {
+    // Drives the plugin's per-view incremental linter and asserts the published
+    // field deep-equals a full-parse lintMarkdown of the same text. A finding-COUNT
+    // check would miss an incremental/full divergence in a finding's range or
+    // message; this pins the whole diagnostic set.
+    //
+    // TWO debounce cycles are required to actually exercise the incremental path:
+    // at mount CM calls the plugin's constructor but NOT update(ViewUpdate), so no
+    // timer is scheduled and prevBody stays null. The FIRST edit+advance fires a
+    // pass with prevBody === null → the full-parse branch (this seeds prevTree).
+    // Only the SECOND edit+advance runs with prevBody set → the incremental branch.
+    // A single cycle would test only the full-parse fallback.
+    const view = new EditorView({
+      doc: "# A\n\n## B\n\npara text\n",
+      parent: document.body,
+      extensions: [markdown({ base: markdownLanguage }), quollLint()],
+    });
+    try {
+      // Cycle 1 — seeds prevTree via the full-parse branch.
+      view.dispatch({ changes: { from: view.state.doc.length, insert: "### C\n" } });
+      vi.advanceTimersByTime(300);
+      expect(view.state.field(lintField)).toEqual(lintMarkdown(view.state.doc.toString()));
+
+      // Cycle 2 — prevBody/prevTree are now set, so this pass takes the INCREMENTAL
+      // branch. A structural, multi-line edit: skipped heading + trailing spaces +
+      // a blank run, so a divergence would surface across several rules.
+      view.dispatch({
+        changes: { from: view.state.doc.length, insert: "#### D  \n\n\n\nmore   \n" },
+      });
+      vi.advanceTimersByTime(300);
+      expect(view.state.field(lintField)).toEqual(lintMarkdown(view.state.doc.toString()));
     } finally {
       view.destroy();
     }
