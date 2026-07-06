@@ -318,6 +318,18 @@ describe("calloutMarkerConcealField — bounded recompute ≡ full recompute", (
     checkEquivalence("- > [!NOTE]\n- item", [{ changes: { from: 0, insert: "x" } }]);
   });
 
+  // Structural reparse from OUTSIDE the callout's block (the #67 guard): opening an
+  // unclosed ``` fence in a paragraph ABOVE the callout turns the whole remainder of
+  // the document into a code block, so the callout below is no longer a Blockquote —
+  // its record must VANISH. The edit is confined to the intro paragraph, so the
+  // changed-range bounded window never reaches the callout; without the
+  // touchesStructuralReparse full-rebuild fallback the field would strand the stale
+  // record (RED against the unguarded field, GREEN once the guard forces a full
+  // rebuild — the fence insert matches STRUCTURAL_FOLD, so the guard fires).
+  it("fence-above-callout: an unclosed fence in a paragraph above the callout drops the record", () => {
+    checkEquivalence(`intro\n\n${CALLOUT}`, [{ changes: { from: 0, insert: "```\n" } }]);
+  });
+
   it("multi-range (multi-cursor) transaction touching two callouts", () => {
     const doc = `${CALLOUT}\n\nmid\n\n> [!TIP]\n> t`;
     const tipMarker = doc.indexOf("[!TIP]");
