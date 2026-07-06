@@ -51,6 +51,17 @@ function mountDoc(doc: string, extra: readonly unknown[] = []): EditorView {
   return v;
 }
 
+// A contributor that churns the facet reference every transaction (mimics
+// calloutMarkerConcealField, which returns a fresh zones array each docChanged),
+// while keeping the CONTENT fixed to `content`.
+function churningZoneField(content: readonly { from: number; to: number }[]) {
+  return StateField.define<readonly { from: number; to: number }[]>({
+    create: () => content.map((z) => ({ ...z })),
+    update: () => content.map((z) => ({ ...z })), // fresh array + fresh objects every tx
+    provide: (f) => quollSyntaxExclusionZones.from(f),
+  });
+}
+
 describe("quollFolding — list folding (delegated to lang-markdown)", () => {
   it("a nested-list parent line is foldable via foldCode (range from lang-markdown)", () => {
     view = mountDoc("- a\n  - b\n  - c\n- d\n");
@@ -514,6 +525,171 @@ describe("listFoldGutterLineClass — gutter tag for the list-item vertical-gap 
     // Flip a zone over line 1 with NO doc change; the tag set must drop line 1.
     view.dispatch({ effects: setZones.of([{ from: 0, to: view.state.doc.line(1).to }]) });
     expect(tagged()).toEqual(new Set([2]));
+  });
+
+  it("keeps the field value by reference on a selection-only tx even when the zone facet churns its reference (content unchanged)", () => {
+    view = mountDoc("- a\n- b\n", [churningZoneField([])]); // empty zones, but fresh [] each tx
+    const before = view.state.field(listFoldGutterLineClass);
+    view.dispatch({ selection: EditorSelection.cursor(view.state.doc.length) });
+    const after = view.state.field(listFoldGutterLineClass);
+    expect(after).toBe(before); // fix: content-equal churn → return value; bug: rebuilt (new ref)
+  });
+
+  describe("bounded recompute (keystroke path) — stays equal to a full rebuild", () => {
+    // Codex #2: serialize the ENTIRE RangeSet ({from,to,cls}) and compare arrays —
+    // NOT a by-line Map (which collapses duplicate/add-order/extra point ranges a
+    // double-add would introduce). This subsumes both `.size` and by-line checks.
+    function serializeField(v: EditorView): { from: number; to: number; cls: string }[] {
+      const out: { from: number; to: number; cls: string }[] = [];
+      const cursor = v.state.field(listFoldGutterLineClass).iter();
+      while (cursor.value) {
+        out.push({
+          from: cursor.from,
+          to: cursor.to,
+          cls: (cursor.value as { elementClass: string }).elementClass,
+        });
+        cursor.next();
+      }
+      return out;
+    }
+    // Full-rebuild oracle: the field freshly created over `doc` (field.create →
+    // whole-tree walk over the default, empty exclusion-zone facet). Valid because
+    // the field holds NO sticky path-dependent state — its value is a pure function
+    // of (doc, zones).
+    function oracle(doc: string): { from: number; to: number; cls: string }[] {
+      const fresh = mountDoc(doc);
+      const ser = serializeField(fresh);
+      fresh.destroy();
+      return ser;
+    }
+    // Assert the bounded field equals the oracle AND that the bounded branch actually
+    // ran (syntaxTreeAvailable true — not the incomplete-frontier full-rebuild
+    // fallback, which would make the comparison vacuous full≡full).
+    function expectBoundedEqualsFull(): void {
+      expect(syntaxTreeAvailable(view!.state, view!.state.doc.length)).toBe(true);
+      expect(serializeField(view!)).toEqual(oracle(view!.state.doc.toString()));
+    }
+
+    it("tags a newly typed list item and drops one whose marker is deleted", () => {
+      view = mountDoc("- keep\n\npara\n\n- gone\n");
+      const para = view.state.doc.toString().indexOf("para");
+      view.dispatch({ changes: { from: para, insert: "- " } }); // "para" → "- para"
+      expectBoundedEqualsFull();
+      const gone = view.state.doc.toString().indexOf("- gone");
+      view.dispatch({ changes: { from: gone, to: gone + 2, insert: "" } }); // "- gone" → "gone"
+      expectBoundedEqualsFull();
+    });
+
+    it("recomputes both blocks of a multi-range (multi-cursor) transaction", () => {
+      view = mountDoc("- a\n\nbody\n\n- b\n");
+      const bFrom = view.state.doc.toString().indexOf("- b");
+      view.dispatch({
+        changes: [
+          { from: 0, to: 2, insert: "" }, // "- a" → "a"
+          { from: bFrom, to: bFrom + 2, insert: "" }, // "- b" → "b"
+        ],
+      });
+      expect(serializeField(view)).toEqual([]); // both markers gone
+      expectBoundedEqualsFull();
+    });
+
+    // Adversarial LOOSE-list battery (a loose item spans its interior blank line as
+    // ONE ListItem — `- a\n\n  cont` → ListItem[0,11], ListMark on line 1, continuation
+    // on line 3, verified against @lezer/markdown). These are the cases the straddle
+    // clamp in collectListMarks guards: an edit confined below the interior blank
+    // makes expandToEnclosingBlock start BELOW the marker line, yet iterate({from})
+    // still ENTERS the straddling item via Lezer TOUCH. Each was verified to FAIL
+    // without the clamp (double-add) and PASS with it (2026-07-06 soundness probe).
+    it.each([
+      [
+        "edit a straddling item's continuation",
+        "- a\n\n  cont\n",
+        (d: string) => [{ from: d.indexOf("cont"), insert: "X" }],
+      ],
+      [
+        "insert a blank between an empty marker and its continuation",
+        "-\n  cont\n",
+        (d: string) => [{ from: d.indexOf("  cont"), insert: "\n" }],
+      ],
+      [
+        "edit the deep child of a nested loose list",
+        "- a\n\n  - b\n\n    c\n",
+        (d: string) => [{ from: d.lastIndexOf("c"), insert: "Z" }],
+      ],
+      [
+        "turn a straddling continuation into a nested list item",
+        "- a\n\n  cont\n",
+        (d: string) => [{ from: d.indexOf("cont"), insert: "- " }],
+      ],
+      [
+        "edit the second body of two loose items",
+        "- a\n\n- b\n\n  more\n",
+        (d: string) => [{ from: d.indexOf("more"), insert: "!" }],
+      ],
+    ])("loose-list soundness: %s", (_name, doc, mkChanges) => {
+      view = mountDoc(doc);
+      view.dispatch({ changes: mkChanges(view.state.doc.toString()) });
+      expectBoundedEqualsFull();
+    });
+
+    it("stays correct on a docChanged while the zone facet churns its reference (bounded path exercised in production-like churn)", () => {
+      view = mountDoc("- keep\n\npara\n\n- gone\n", [churningZoneField([])]);
+      const para = view.state.doc.toString().indexOf("para");
+      view.dispatch({ changes: { from: para, insert: "- " } }); // "para" → "- para"
+      expect(syntaxTreeAvailable(view.state, view.state.doc.length)).toBe(true);
+      // Serialize this field, compare to a fresh full build over the same doc + empty zones.
+      const ser = (v: EditorView) => {
+        const out: { from: number; to: number; cls: string }[] = [];
+        const c = v.state.field(listFoldGutterLineClass).iter();
+        while (c.value) {
+          out.push({
+            from: c.from,
+            to: c.to,
+            cls: (c.value as { elementClass: string }).elementClass,
+          });
+          c.next();
+        }
+        return out;
+      };
+      const fresh = mountDoc(view.state.doc.toString());
+      expect(ser(view)).toEqual(ser(fresh));
+      fresh.destroy();
+    });
+
+    it("recomputes a far list item when the exclusion-zone facet flips IN THE SAME docChanged (Codex #3)", () => {
+      // A zone flip changes eligibility OUTSIDE the changed range, so a docChanged that
+      // ALSO flips the facet must full-rebuild (the `facetChanged` guard in the
+      // docChanged branch), not take the bounded path. Drive the zone via a StateEffect
+      // so it rides the SAME transaction as a small, far-away doc edit.
+      const setZones = StateEffect.define<readonly { from: number; to: number }[]>();
+      const zoneField = StateField.define<readonly { from: number; to: number }[]>({
+        create: () => [],
+        update(value, tr) {
+          for (const e of tr.effects) {
+            if (e.is(setZones)) {
+              return e.value;
+            }
+          }
+          return value;
+        },
+        provide: (f) => quollSyntaxExclusionZones.from(f),
+      });
+      view = mountDoc("- far\n\n- near\n", [zoneField]);
+      expect(serializeField(view).length).toBe(2); // both tagged, no zones
+      // In ONE transaction: edit "near" (bottom block) AND flip a zone over "- far".
+      const near = view.state.doc.toString().indexOf("near");
+      view.dispatch({
+        changes: { from: near, insert: "X" },
+        effects: setZones.of([{ from: 0, to: view.state.doc.line(1).to }]),
+      });
+      // "- far" is now zoned out → its marker must be GONE even though the edit was far
+      // from it. A bounded-only path (missing the facetChanged guard) would strand it.
+      // (Can't use the default-facet `oracle` helper here — it mounts without the zone —
+      // so assert the tagged line set directly: line 1 dropped, "- near" line retained.)
+      const lines = new Set(serializeField(view).map((r) => view!.state.doc.lineAt(r.from).number));
+      const nearLine = view.state.doc.lineAt(view.state.doc.toString().indexOf("near")).number;
+      expect(lines).toEqual(new Set([nearLine]));
+    });
   });
 });
 

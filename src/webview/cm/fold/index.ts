@@ -308,6 +308,42 @@ export function expandToEnclosingBlock(state: EditorState, from: number, to: num
   return { from: top.from, to: bottom.to };
 }
 
+/** Content-equality of two exclusion-zone lists UNDER the transaction's change
+ *  map: true iff same length AND each prior zone, MAPPED through tr.changes,
+ *  coincides with the corresponding new zone. `quollSyntaxExclusionZones` combines
+ *  via `sources.flat()` (no comparator) and its always-mounted contributors
+ *  (calloutMarkerConcealField, the frontmatter field) emit a FRESH array on every
+ *  docChanged — so the facet VALUE churns its reference every keystroke even when
+ *  the zones are unchanged. A reference check (`start.facet !== state.facet`) would
+ *  therefore be true on every keystroke and force the full-rebuild fallback
+ *  unconditionally, defeating the bounding in production (verified 2026-07-06).
+ *  Comparing CONTENT under the change map instead bounds on ordinary keystrokes
+ *  (zones only shift with the edit → mapped-equal) and full-rebuilds only when a
+ *  zone genuinely appears / disappears / resizes. Soundness: mapped-equal zones ⟹
+ *  no item OUTSIDE the changed block flips its exclusion-zone membership (every zone
+ *  occupies the same text span it did before, and out-of-block items did not move
+ *  relative to it). On a non-docChanged transaction tr.changes is empty, so mapPos
+ *  is identity and this is a plain content compare. Zone order is stable (fixed
+ *  contributor order, each doc-ordered), so the positional compare is exact. */
+function exclusionZonesUnchanged(
+  tr: Transaction,
+  prev: readonly { from: number; to: number }[],
+  next: readonly { from: number; to: number }[]
+): boolean {
+  if (prev.length !== next.length) {
+    return false;
+  }
+  for (let i = 0; i < prev.length; i++) {
+    if (tr.changes.mapPos(prev[i].from) !== next[i].from) {
+      return false;
+    }
+    if (tr.changes.mapPos(prev[i].to) !== next[i].to) {
+      return false;
+    }
+  }
+  return true;
+}
+
 /** Merge overlapping/touching intervals into a sorted, disjoint list so the
  *  bounded update's per-interval filter windows never overlap (multi-cursor edits
  *  contribute one changed range each). */
@@ -393,27 +429,57 @@ class ListFoldGutterMarker extends GutterMarker {
 }
 const LIST_FOLD_GUTTER_MARKER = new ListFoldGutterMarker();
 
-function buildListFoldGutterClasses(
+/** Collect every eligible list-item MARKER whose node OVERLAPS [rangeFrom, rangeTo]
+ *  — same eligibility gate as the full build (exclusion zone + isRenderableListItem).
+ *  Called with [0, doc.length] for a full (re)build and with each bounded block
+ *  interval on the keystroke path (recomputeBoundedListClasses). A bounded {from,to}
+ *  iterate materialises only the touched subtree, sidestepping the whole-tree
+ *  materialisation cost a full iterate pays on every keystroke (PERF.md: the cost is
+ *  materialisation, not node descent).
+ *
+ *  CLAMP (the sole shape difference vs collectHeadingMarks): drop any mark whose
+ *  line starts BEFORE rangeFrom. A LOOSE list item spans its interior blank line as
+ *  ONE ListItem (verified: `- a\n\n  cont` → ListItem[0,11], ListMark on line 1,
+ *  continuation on line 3, verified against @lezer/markdown). A keystroke confined to
+ *  the continuation expands only to [contLine, …] (expandToEnclosingBlock stops at
+ *  the interior blank line), yet iterate({from}) still ENTERS the straddling ListItem
+ *  via Lezer TOUCH and would emit a mark at its far-above ListMark line — OUTSIDE the
+ *  recompute window, which recomputeBoundedListClasses would then double-add on top of
+ *  the retained (position-mapped) prior mark. The clamp is SOUND: such an edit cannot
+ *  flip that item's eligibility (isRenderableListItem reads only its OWN ListMark +
+ *  first content node, never a later continuation), so its prior mark is already
+ *  correct and stays untouched. Headings never straddle a blank line (ATX is one line;
+ *  Setext is a contiguous title+underline run), so collectHeadingMarks needs no clamp.
+ *  In the full build (rangeFrom = 0) the clamp never fires. Doc order → sorted by
+ *  from. */
+function collectListMarks(
   state: EditorState,
-  zones: readonly { from: number; to: number }[]
-): RangeSet<GutterMarker> {
-  const builder = new RangeSetBuilder<GutterMarker>();
+  zones: readonly { from: number; to: number }[],
+  rangeFrom: number,
+  rangeTo: number
+): { from: number; marker: GutterMarker }[] {
+  const out: { from: number; marker: GutterMarker }[] = [];
   let lastLineFrom = -1;
   syntaxTree(state).iterate({
+    from: rangeFrom,
+    to: rangeTo,
     enter: (node) => {
       if (node.name !== "ListItem") {
         return;
       }
       const lineFrom = state.doc.lineAt(node.from).from;
-      // Emit ONLY for lines that actually receive `.quoll-list-hang` padding, so
-      // the gutter offset stays in lock-step with the content-line gap it
-      // compensates for. buildListHangIndent (list-hang-indent.ts) skips two
-      // cases and this MUST match them, else the chevron shifts without a matching
-      // gap: (1) an exclusion zone — a frontmatter YAML list parses as markdown
-      // ListItems but gets no hang, so a REVEALED frontmatter list would drop the
-      // chevron ~0.6em; (2) a non-renderable item — empty / malformed, or an
-      // invalid-marker Task on a one-update-behind tree (isRenderableListItem is
-      // the O(1) mirror of buildListHangIndent's `resolveListItemHang === null`).
+      // Straddle clamp — see the doc comment. A loose ListItem entered via TOUCH
+      // may start above the window; its marker is outside [rangeFrom,…] and its
+      // eligibility is unaffected by an in-window continuation edit.
+      if (lineFrom < rangeFrom) {
+        return;
+      }
+      // Emit ONLY for lines that actually receive `.quoll-list-hang` padding, so the
+      // gutter offset stays in lock-step with the content-line gap it compensates
+      // for (see the field doc): (1) an exclusion zone — a frontmatter YAML list
+      // parses as markdown ListItems but gets no hang; (2) a non-renderable item —
+      // empty / malformed, or an invalid-marker Task on a one-update-behind tree
+      // (isRenderableListItem is the O(1) mirror of resolveListItemHang === null).
       if (pointInExclusionZone(lineFrom, zones)) {
         return;
       }
@@ -428,35 +494,94 @@ function buildListFoldGutterClasses(
         return;
       }
       lastLineFrom = lineFrom;
-      builder.add(lineFrom, lineFrom, LIST_FOLD_GUTTER_MARKER);
+      out.push({ from: lineFrom, marker: LIST_FOLD_GUTTER_MARKER });
     },
   });
+  return out;
+}
+
+function buildListFoldGutterClasses(
+  state: EditorState,
+  zones: readonly { from: number; to: number }[]
+): RangeSet<GutterMarker> {
+  const builder = new RangeSetBuilder<GutterMarker>();
+  for (const m of collectListMarks(state, zones, 0, state.doc.length)) {
+    builder.add(m.from, m.from, m.marker);
+  }
   return builder.finish();
+}
+
+/** Changed-range bounded recompute for the keystroke path: map the prior marker set
+ *  through the change, then re-walk ONLY the enclosing block of each changed range
+ *  and splice the fresh marks back in. Mirrors recomputeBoundedHeadingClasses; the
+ *  collectListMarks clamp keeps a straddling loose item's out-of-window mark from
+ *  being double-added. Threads the exclusion-zone `zones` (a plain docChanged never
+ *  changes them — a facet flip forces a full rebuild in update, below). */
+function recomputeBoundedListClasses(
+  prev: RangeSet<GutterMarker>,
+  tr: Transaction,
+  zones: readonly { from: number; to: number }[]
+): RangeSet<GutterMarker> {
+  const state = tr.state;
+  const raw: Interval[] = [];
+  tr.changes.iterChangedRanges((_fromA, _toA, fromB, toB) => {
+    raw.push(expandToEnclosingBlock(state, fromB, toB));
+  });
+  let result = prev.map(tr.changes);
+  for (const iv of mergeIntervals(raw)) {
+    const add = collectListMarks(state, zones, iv.from, iv.to).map((m) => m.marker.range(m.from));
+    result = result.update({ filterFrom: iv.from, filterTo: iv.to, filter: () => false, add });
+  }
+  return result;
 }
 
 /** Tags every list-item MARKER line with `quoll-fold-list-marker` on its gutter
  *  element via `gutterLineClass`, in lock-step with the `.cm-line.quoll-list-hang`
- *  padding it compensates for (same two-predicate eligibility gate — see
- *  buildListFoldGutterClasses). Recomputed when the doc, the parse tree
- *  (lang-markdown parses asynchronously), OR the `quollSyntaxExclusionZones`
- *  facet changes — the same doc/tree/facet triggers as listHangNeedsRebuild (its
- *  viewportChanged / selectionSet triggers do NOT apply here: this is a whole-doc
- *  StateField whose emitted set is selection-independent). The facet clause is
- *  parity/future-proofing — today no reachable transaction changes a zone's
- *  CONTENTS without also changing the doc — so it keeps the tag in lock-step if a
- *  future zone contributor flips on a selection-only edit. Exported for the
- *  marker-detection contract test. */
+ *  padding it compensates for (same two-predicate eligibility gate — exclusion zone
+ *  + isRenderableListItem; see collectListMarks). On the keystroke path (docChanged,
+ *  parse frontier reached, no facet flip) it recomputes ONLY the changed blocks
+ *  (recomputeBoundedListClasses) instead of re-walking the whole syntax tree,
+ *  mirroring headingFoldGutterLineClass. Two full-rebuild fallbacks preserve
+ *  correctness: (a) a docChanged whose post-edit frontier is incomplete
+ *  (`!syntaxTreeAvailable`) can reveal nodes outside the changed range, and (b)
+ *  lang-markdown parses asynchronously, so a later background-parse publication
+ *  arrives as a NON-docChanged transaction whose tree identity differs — re-tagging
+ *  once the real list nodes land. A third fallback: a docChanged that ALSO flips the
+ *  `quollSyntaxExclusionZones` facet takes the full-rebuild path because a zone
+ *  boundary shift can re-include / exclude list items outside the changed range. The
+ *  non-docChanged facet-flip path (zone contributor that fires on a selection-only
+ *  transaction) still full-rebuilds for the same reason. The facet guard compares zone
+ *  CONTENT under the change map (exclusionZonesUnchanged), not reference — always-
+ *  mounted contributors (calloutMarkerConcealField, frontmatter) emit a fresh array on
+ *  every docChanged, so a reference check would defeat bounding on every keystroke.
+ *  Lock-step / two-predicate paragraphs: see the buildListFoldGutterClasses →
+ *  collectListMarks chain. Exported for the marker-detection contract test. */
 export const listFoldGutterLineClass = StateField.define<RangeSet<GutterMarker>>({
   create: (state) => buildListFoldGutterClasses(state, state.facet(quollSyntaxExclusionZones)),
   update(value, tr) {
-    if (
-      !tr.docChanged &&
-      syntaxTree(tr.startState) === syntaxTree(tr.state) &&
-      tr.startState.facet(quollSyntaxExclusionZones) === tr.state.facet(quollSyntaxExclusionZones)
-    ) {
-      return value;
+    const zones = tr.state.facet(quollSyntaxExclusionZones);
+    const facetChanged = !exclusionZonesUnchanged(
+      tr,
+      tr.startState.facet(quollSyntaxExclusionZones),
+      zones
+    );
+    if (tr.docChanged) {
+      // A facet flip can change eligibility OUTSIDE the changed range (a zone
+      // boundary shift re-includes / excludes list items far from the edit), and an
+      // incomplete post-edit parse frontier can reveal nodes outside it — both need a
+      // full rebuild. Otherwise bound the walk to the changed blocks.
+      if (facetChanged || !syntaxTreeAvailable(tr.state, tr.state.doc.length)) {
+        return buildListFoldGutterClasses(tr.state, zones);
+      }
+      return recomputeBoundedListClasses(value, tr, zones);
     }
-    return buildListFoldGutterClasses(tr.state, tr.state.facet(quollSyntaxExclusionZones));
+    // Non-docChanged: lang-markdown's async background parse arrives as a tree-identity
+    // change, and a zone contributor can flip on a selection-only transaction — either
+    // re-tags via a full rebuild. Otherwise the set is unchanged (selection-independent).
+    if (syntaxTree(tr.startState) !== syntaxTree(tr.state) || facetChanged) {
+      return buildListFoldGutterClasses(tr.state, zones);
+    }
+    return value;
   },
   provide: (field) => gutterLineClass.from(field),
 });
@@ -491,20 +616,29 @@ const HEADING_RHYTHM_GUTTER_MARKER: Record<HeadingRhythmLevel, HeadingRhythmFold
   6: new HeadingRhythmFoldGutterMarker(6),
 };
 
-function buildHeadingRhythmFoldGutterClasses(
+/** Collect every rhythm-eligible heading MARKER whose node OVERLAPS [rangeFrom,
+ *  rangeTo] — same eligibility gate as the full build (headingRhythmLevel: level
+ *  match + top-level + not physical line 1 + not in an exclusion zone). Called with
+ *  [0, doc.length] for a full (re)build and with each bounded block interval on the
+ *  keystroke path. A bounded {from,to} iterate materialises only the touched subtree,
+ *  sidestepping the whole-tree materialisation cost a full iterate pays on every
+ *  keystroke (PERF.md: that cost is materialisation, not node descent). No straddle clamp
+ *  (unlike collectListMarks): a heading never spans a blank line — ATX is one line,
+ *  Setext is a contiguous title+underline run — so expandToEnclosingBlock's up-walk
+ *  always puts the marker line at/after rangeFrom. Doc order → sorted by from. */
+function collectHeadingRhythmMarks(
   state: EditorState,
-  zones: readonly { from: number; to: number }[]
-): RangeSet<GutterMarker> {
-  const builder = new RangeSetBuilder<GutterMarker>();
+  zones: readonly { from: number; to: number }[],
+  rangeFrom: number,
+  rangeTo: number
+): { from: number; marker: GutterMarker }[] {
+  const out: { from: number; marker: GutterMarker }[] = [];
   const tree = syntaxTree(state);
   let lastLineFrom = -1;
   tree.iterate({
+    from: rangeFrom,
+    to: rangeTo,
     enter: (node) => {
-      // Reuse the SAME eligibility predicate as the content half (heading-rhythm.ts)
-      // so the gutter offset stays in lock-step with the `.cm-line` rhythm padding
-      // it compensates for — top-level only, not line 1, not in an exclusion zone.
-      // Without lock-step, a padded heading's chevron would float down by the gap
-      // (the bug the list precedent already fixed for `.quoll-fold-list-marker`).
       const level = headingRhythmLevel(state, tree, node, zones);
       if (level === null) {
         return;
@@ -512,40 +646,101 @@ function buildHeadingRhythmFoldGutterClasses(
       const lineFrom = state.doc.lineAt(node.from).from;
       // A heading rides one line; guard against double-adding if the tree ever
       // surfaces nested heading-tagged nodes on the same line (RangeSetBuilder
-      // requires strictly non-decreasing, de-duplicated positions), mirroring the
-      // heading / list builders above.
+      // requires strictly non-decreasing, de-duplicated positions).
       if (lineFrom === lastLineFrom) {
         return;
       }
       lastLineFrom = lineFrom;
-      builder.add(lineFrom, lineFrom, HEADING_RHYTHM_GUTTER_MARKER[level as HeadingRhythmLevel]);
+      out.push({
+        from: lineFrom,
+        marker: HEADING_RHYTHM_GUTTER_MARKER[level as HeadingRhythmLevel],
+      });
     },
   });
+  return out;
+}
+
+function buildHeadingRhythmFoldGutterClasses(
+  state: EditorState,
+  zones: readonly { from: number; to: number }[]
+): RangeSet<GutterMarker> {
+  const builder = new RangeSetBuilder<GutterMarker>();
+  for (const m of collectHeadingRhythmMarks(state, zones, 0, state.doc.length)) {
+    builder.add(m.from, m.from, m.marker);
+  }
   return builder.finish();
+}
+
+/** Changed-range bounded recompute for the keystroke path — mirrors
+ *  recomputeBoundedHeadingClasses / recomputeBoundedListClasses. Soundness: every
+ *  rhythm-eligible heading overlapping a block interval has its marker line inside
+ *  that interval (the up-walk captures a Setext title; the physical-line-1 flip only
+ *  affects the topmost block, whose interval starts at line 1), so filter+add
+ *  replaces exactly the stale marks. Threads `zones` (a plain docChanged never
+ *  changes them — a facet flip forces a full rebuild in update, below). */
+function recomputeBoundedHeadingRhythmClasses(
+  prev: RangeSet<GutterMarker>,
+  tr: Transaction,
+  zones: readonly { from: number; to: number }[]
+): RangeSet<GutterMarker> {
+  const state = tr.state;
+  const raw: Interval[] = [];
+  tr.changes.iterChangedRanges((_fromA, _toA, fromB, toB) => {
+    raw.push(expandToEnclosingBlock(state, fromB, toB));
+  });
+  let result = prev.map(tr.changes);
+  for (const iv of mergeIntervals(raw)) {
+    const add = collectHeadingRhythmMarks(state, zones, iv.from, iv.to).map((m) =>
+      m.marker.range(m.from)
+    );
+    result = result.update({ filterFrom: iv.from, filterTo: iv.to, filter: () => false, add });
+  }
+  return result;
 }
 
 /** Tags every rhythm-eligible heading MARKER line with
  *  `quoll-fold-heading-rhythm-{level}` on its gutter element via `gutterLineClass`,
  *  in lock-step with the `.cm-line.quoll-heading-rhythm-{level}` padding it
- *  compensates for (SAME eligibility gate — headingRhythmLevel). Recomputed when
- *  the doc, the parse tree (lang-markdown parses asynchronously), OR the
- *  `quollSyntaxExclusionZones` facet changes — the same doc/tree/facet triggers as
- *  headingRhythmNeedsRebuild MINUS its viewportChanged trigger (this is a
- *  whole-doc StateField whose emitted set is selection- AND viewport-independent),
- *  exactly like listFoldGutterLineClass. Exported for the heading-detection
- *  contract test. */
+ *  compensates for (SAME eligibility gate — headingRhythmLevel). On the keystroke
+ *  path (docChanged, parse frontier reached, no facet flip) it recomputes ONLY the
+ *  changed blocks (recomputeBoundedHeadingRhythmClasses) instead of re-walking the
+ *  whole syntax tree, mirroring headingFoldGutterLineClass and listFoldGutterLineClass.
+ *  Two full-rebuild fallbacks preserve correctness: (a) a docChanged whose post-edit
+ *  frontier is incomplete (`!syntaxTreeAvailable`) can reveal nodes outside the changed
+ *  range, and (b) lang-markdown parses asynchronously, so a later background-parse
+ *  publication arrives as a NON-docChanged transaction whose tree identity differs —
+ *  re-tagging once the real heading nodes land. A third fallback: a docChanged that
+ *  ALSO flips the `quollSyntaxExclusionZones` facet takes the full-rebuild path because
+ *  a zone boundary shift can re-include / exclude headings outside the changed range.
+ *  The non-docChanged facet-flip path still full-rebuilds for the same reason. The
+ *  facet guard compares zone CONTENT under the change map (exclusionZonesUnchanged),
+ *  not reference — always-mounted contributors (calloutMarkerConcealField, frontmatter)
+ *  emit a fresh array on every docChanged, so a reference check would defeat bounding
+ *  on every keystroke. The emitted set is selection- AND viewport-independent. Exported
+ *  for the heading-detection contract test. */
 export const headingRhythmFoldGutterLineClass = StateField.define<RangeSet<GutterMarker>>({
   create: (state) =>
     buildHeadingRhythmFoldGutterClasses(state, state.facet(quollSyntaxExclusionZones)),
   update(value, tr) {
-    if (
-      !tr.docChanged &&
-      syntaxTree(tr.startState) === syntaxTree(tr.state) &&
-      tr.startState.facet(quollSyntaxExclusionZones) === tr.state.facet(quollSyntaxExclusionZones)
-    ) {
-      return value;
+    const zones = tr.state.facet(quollSyntaxExclusionZones);
+    const facetChanged = !exclusionZonesUnchanged(
+      tr,
+      tr.startState.facet(quollSyntaxExclusionZones),
+      zones
+    );
+    if (tr.docChanged) {
+      // A facet flip can change eligibility OUTSIDE the changed range, and an
+      // incomplete post-edit parse frontier can reveal nodes outside it — both need a
+      // full rebuild. Otherwise bound the walk to the changed blocks.
+      if (facetChanged || !syntaxTreeAvailable(tr.state, tr.state.doc.length)) {
+        return buildHeadingRhythmFoldGutterClasses(tr.state, zones);
+      }
+      return recomputeBoundedHeadingRhythmClasses(value, tr, zones);
     }
-    return buildHeadingRhythmFoldGutterClasses(tr.state, tr.state.facet(quollSyntaxExclusionZones));
+    if (syntaxTree(tr.startState) !== syntaxTree(tr.state) || facetChanged) {
+      return buildHeadingRhythmFoldGutterClasses(tr.state, zones);
+    }
+    return value;
   },
   provide: (field) => gutterLineClass.from(field),
 });
