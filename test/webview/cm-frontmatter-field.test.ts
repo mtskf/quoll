@@ -166,6 +166,70 @@ describe("frontmatterBlockField — read-only (mutation guard, not just atomic)"
     }
   });
 
+  it("select-all + type replaces the whole document (frontmatter overwritten, no silent no-op)", () => {
+    // Cmd+A puts a non-empty selection over [0, doc.length] — spanning the
+    // collapsed frontmatter AND the body. Typing then replaces that range. The
+    // read-only veto must NOT drop this transaction (a bulk replace cleanly
+    // overwrites the block, it never leaves a half-corrupt fence), otherwise the
+    // keystroke is a silent no-op.
+    const len = mount(FM).state.doc.length;
+    const view = mount(FM, EditorSelection.range(0, len));
+    try {
+      view.dispatch({
+        changes: { from: 0, to: view.state.doc.length, insert: "x" },
+        selection: EditorSelection.cursor(1),
+      });
+      expect(view.state.sliceDoc()).toBe("x"); // body replaced, not a no-op
+      expect(view.state.field(frontmatterBlockField).kind).toBe("absent");
+    } finally {
+      view.destroy();
+    }
+  });
+
+  it("select-all + Delete clears the document (frontmatter included)", () => {
+    const len = mount(FM).state.doc.length;
+    const view = mount(FM, EditorSelection.range(0, len));
+    try {
+      view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: "" } });
+      expect(view.state.sliceDoc()).toBe(""); // cleared, not a no-op
+      expect(view.state.field(frontmatterBlockField).kind).toBe("absent");
+    } finally {
+      view.destroy();
+    }
+  });
+
+  it("select-all + type on a frontmatter-only doc still replaces (no body past the span)", () => {
+    // A doc that is ONLY frontmatter: span.to === doc.length, so the covering
+    // change ends AT span.to (not past it). The non-empty covering selection is
+    // what authorises the replace — geometry alone (change extends past span.to)
+    // would miss this.
+    const only = "---\ntitle: x\n---";
+    const view = mount(only, EditorSelection.range(0, only.length));
+    try {
+      view.dispatch({
+        changes: { from: 0, to: view.state.doc.length, insert: "z" },
+        selection: EditorSelection.cursor(1),
+      });
+      expect(view.state.sliceDoc()).toBe("z");
+      expect(view.state.field(frontmatterBlockField).kind).toBe("absent");
+    } finally {
+      view.destroy();
+    }
+  });
+
+  it("a partial selection covering only the fence interior is still vetoed (corruption guard)", () => {
+    // Selecting [0, 6] (into the fence, NOT past span.to) and typing would corrupt
+    // the block — this must stay blocked even though the selection is non-empty.
+    const view = mount(FM, EditorSelection.range(0, 6));
+    try {
+      view.dispatch({ changes: { from: 0, to: 6, insert: "z" } });
+      expect(view.state.sliceDoc()).toBe(FM); // unchanged — not a whole-span replace
+      expect(view.state.field(frontmatterBlockField).kind).toBe("collapsed");
+    } finally {
+      view.destroy();
+    }
+  });
+
   it("still lets a host reseed replace the whole document", () => {
     const view = mount(FM);
     try {

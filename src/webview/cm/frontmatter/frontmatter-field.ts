@@ -55,7 +55,19 @@ function collapsedSet(rs: RevealState): DecorationSet {
  *  boundary insertion at 0 or at span.to (which a `changeFilter` range-array
  *  would admit through its OPEN boundaries) is dropped. The reveal dispatch
  *  (effect + selection, no doc change) has empty changes → passes. When
- *  revealed/absent, allow. */
+ *  revealed/absent, allow.
+ *
+ *  EXCEPTION — bulk replace (select-all → type/Delete): when a NON-EMPTY
+ *  selection range fully spans the block AND the change rewrites the whole span
+ *  [span.from, span.to], the transaction is allowed. The collapsed frontmatter is
+ *  overwritten together with the body in one clean edit — it is never left
+ *  half-corrupt (re-detection then collapses whatever valid frontmatter remains,
+ *  or goes absent). Without this the veto would drop the whole transaction and the
+ *  keystroke would be a SILENT no-op (even the body would not change). The signal
+ *  is the covering *selection*, not change geometry: a Backspace at the boundary
+ *  (empty cursor, atomicRanges expands the delete to [0, span.to]) has NO covering
+ *  range selection → stays vetoed; a frontmatter-only doc (change ends AT span.to,
+ *  not past it) is still caught because the selection covers the span. */
 function transactionFilterFor(rs: RevealState): (tr: Transaction) => Transaction | readonly [] {
   return (tr) => {
     if (tr.annotation(hostDocumentReseed) === true) {
@@ -64,13 +76,25 @@ function transactionFilterFor(rs: RevealState): (tr: Transaction) => Transaction
     if (rs.kind !== "collapsed") {
       return tr;
     }
-    let unsafe = false;
-    tr.changes.iterChanges((fromA) => {
-      if (fromA <= rs.span.to) {
-        unsafe = true;
+    const { span } = rs;
+    const selectionCoversSpan = tr.startState.selection.ranges.some(
+      (r) => !r.empty && r.from <= span.from && r.to >= span.to
+    );
+
+    let touchesSpan = false;
+    let changeCoversSpan = false;
+    tr.changes.iterChanges((fromA, toA) => {
+      if (fromA <= span.to) {
+        touchesSpan = true;
+      }
+      if (fromA <= span.from && toA >= span.to) {
+        changeCoversSpan = true;
       }
     });
-    return unsafe ? [] : tr;
+    if (selectionCoversSpan && changeCoversSpan) {
+      return tr;
+    }
+    return touchesSpan ? [] : tr;
   };
 }
 
