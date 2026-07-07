@@ -1269,14 +1269,17 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
           // verdict (document.version for the source-of-truth resync,
           // canWriteNow() for the readonly gate, canonical text for the
           // no-op comparison) — the transition is then a pure function of
-          // these.
+          // these. When the write lock is held the edit is STASHED (core
+          // `edit` arm reads content/baseDocVersion only, never
+          // currentContent), so skip the O(n) canonicalisation — the drain
+          // re-snapshots at settlement. Mirrors the lazy `drainSnapshot`.
           dispatch({
             type: "edit",
             baseDocVersion: raw.baseDocVersion,
             content: raw.content,
             documentVersion: document.version,
             canWrite: canWriteNow(),
-            currentContent: canonicalDocumentText(document),
+            currentContent: isWriteLockHeld(state) ? "" : canonicalDocumentText(document),
           });
           return;
         case "open-external":
