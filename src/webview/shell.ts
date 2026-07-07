@@ -153,7 +153,7 @@ export function mountShell(root: HTMLElement, opts: ShellOptions): ShellHandle {
     const next = reducer(prev, action);
     if (next === prev) {
       // No-op transition (a guard arm short-circuited). No render, no
-      // drain, no persistence — the reducer is the spec.
+      // drain — the reducer is the spec.
       if (QUOLL_PERF) {
         perfRecord("webview:dispatch", perfNow() - dispatchStart);
       }
