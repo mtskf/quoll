@@ -1,5 +1,5 @@
 import { FENCE_LINE } from "../../../markdown/frontmatter.js";
-import { scanLines } from "./line-scan.js";
+import { type ScannedLine, scanLines } from "./line-scan.js";
 
 // Offset where body content begins after a file-leading YAML frontmatter block,
 // or 0 when the document has none. The lint engine slices this prefix off before
@@ -32,4 +32,23 @@ export function leadingFrontmatterBodyStart(raw: string): number {
     }
   }
   return 0; // no closer → not frontmatter
+}
+
+// The content lines of a file-leading YAML frontmatter block: the lines STRICTLY
+// BETWEEN the opener (line 0) and the first subsequent `---` fence line. `block`
+// is the sliced leading frontmatter (`raw.slice(0, leadingFrontmatterBodyStart)`)
+// and starts at document offset 0, so each returned line's `from` is already an
+// absolute document offset. Returns `[]` when the block has no closer or no
+// content between the fences. This confines all fence (`FENCE_LINE`) knowledge to
+// this module so the frontmatter lint RULE stays free of any `src/markdown/`
+// import — it receives only content lines to classify.
+export function frontmatterContentLines(block: string): ScannedLine[] {
+  const lines = scanLines(block);
+  for (let n = 1; n < lines.length; n++) {
+    const line = lines[n];
+    if (line !== undefined && FENCE_LINE.test(line.content)) {
+      return lines.slice(1, n); // strictly between opener (0) and closer (n)
+    }
+  }
+  return []; // no closer in the block
 }
