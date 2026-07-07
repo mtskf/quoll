@@ -303,8 +303,13 @@ describe("autoCloseFenceOnEnter — lazy parse (no EOF parse on non-triggers)", 
     }
   });
 
-  it("a caret in the BODY of an unclosed fence does not force a parse to EOF", () => {
-    // Body caret is a non-trigger (openerLine guard), so it must stay bounded too.
+  it("a caret in the BODY of an unclosed fence never REQUESTS an EOF parse", () => {
+    // A body caret is a non-trigger (rejected by the opener-line guard). This pins
+    // that the command bounds its OWN ensureSyntaxTree request to the caret line —
+    // it is not the thing forcing an EOF parse. (Note: for an UNCLOSED fence the
+    // parser must scan to EOF regardless to resolve the block's extent, so no
+    // bounded-parse perf win exists for this rare transient state; the contract
+    // here is only "the command doesn't request doc.length", not "no EOF scan".)
     const spy = vi.mocked(ensureSyntaxTree);
     const body = Array.from({ length: 6000 }, (_, i) => `text ${i}\n`).join("\n");
     const view = mountUnparsed(`\`\`\`\nfirst body line\n\n${body}`, 0);
@@ -316,6 +321,27 @@ describe("autoCloseFenceOnEnter — lazy parse (no EOF parse on non-triggers)", 
       expect(autoCloseFenceOnEnter(view)).toBe(false);
       const toArgs = spy.mock.calls.map((c) => c[1]);
       expect(toArgs).not.toContain(docLength);
+    } finally {
+      view.destroy();
+    }
+  });
+
+  it("does NOT misfire on an already-closed opener with a distant closer (fresh doc)", () => {
+    // The load-bearing correctness claim under the bounded parse: a FencedCode node
+    // is only emitted once its extent is resolved, so its CodeMark children are
+    // complete even on a fresh, un-force-parsed doc. Here the closer sits thousands
+    // of lines below the opener; the already-closed guard (marks.length >= 2) must
+    // still see BOTH marks and refuse — no duplicate closer inserted. (The other
+    // already-closed test force-parses via mount(); this one deliberately does not,
+    // exercising the lazy path the fix relies on.)
+    const bigBody = Array.from({ length: 4000 }, (_, i) => `code ${i}`).join("\n");
+    const trailing = Array.from({ length: 4000 }, (_, i) => `after ${i}`).join("\n");
+    const doc = `\`\`\`ruby\n${bigBody}\n\`\`\`\n${trailing}`;
+    const view = mountUnparsed(doc, 0);
+    view.dispatch({ selection: EditorSelection.cursor(view.state.doc.line(1).to) }); // opener line
+    try {
+      expect(autoCloseFenceOnEnter(view)).toBe(false);
+      expect(view.state.doc.toString()).toBe(doc); // unchanged — no duplicate closer
     } finally {
       view.destroy();
     }
