@@ -247,7 +247,9 @@ function createPreviewServer(opts) {
       if (pathname === "/instance") {
         const cfg = await loadConfig(opts);
         const raw = Number(url.searchParams.get("v"));
-        const index = Number.isInteger(raw) ? Math.min(Math.max(raw, 0), cfg.variations.length - 1) : 0;
+        const index = Number.isInteger(raw)
+          ? Math.min(Math.max(raw, 0), cfg.variations.length - 1)
+          : 0;
         res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
         res.end(await renderInstance(cfg, index));
         return;
@@ -288,7 +290,9 @@ async function main() {
     const { webviewConfig } = createBuildConfigs({ production: false });
     await esbuild.build(webviewConfig);
   } else if (!existsSync(resolve(distWebview, "index.js"))) {
-    console.error("[preview] --no-build set but dist/webview/index.js is missing; build once first.");
+    console.error(
+      "[preview] --no-build set but dist/webview/index.js is missing; build once first."
+    );
     process.exit(1);
   }
 

@@ -12,8 +12,8 @@
 
 import { execFileSync } from "node:child_process";
 import { mkdirSync, rmSync, writeFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(__dirname, "../..");
@@ -33,7 +33,7 @@ execFileSync("pnpm", ["exec", "tsc", "-p", "test/extension"], {
 mkdirSync(outDir, { recursive: true });
 writeFileSync(
   resolve(outDir, "package.json"),
-  JSON.stringify({ type: "commonjs" }, null, 2) + "\n"
+  `${JSON.stringify({ type: "commonjs" }, null, 2)}\n`
 );
 
 console.log("[test:e2e] built out/test-e2e/ (CJS marker written)");

@@ -21,10 +21,10 @@
 // this file is executed as a CLI entry — importing the module never triggers a
 // build.
 
-import esbuild from "esbuild";
 import { mkdirSync, rmSync, writeFileSync } from "node:fs";
-import { resolve, dirname } from "node:path";
+import { dirname, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import esbuild from "esbuild";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -140,7 +140,10 @@ export function createBuildConfigs({ production }) {
 function writeDistCjsMarker() {
   const distDir = resolve(__dirname, "dist");
   mkdirSync(distDir, { recursive: true });
-  writeFileSync(resolve(distDir, "package.json"), JSON.stringify({ type: "commonjs" }, null, 2) + "\n");
+  writeFileSync(
+    resolve(distDir, "package.json"),
+    `${JSON.stringify({ type: "commonjs" }, null, 2)}\n`
+  );
 }
 
 async function run() {

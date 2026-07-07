@@ -57,8 +57,7 @@ function parseEntry(line) {
     line.match(/\(branch:\s*([^)]+?)\s*\)/)?.[1] ??
     line.match(/<!--\s*branch:\s*(.+?)\s*-->/)?.[1] ??
     null;
-  const pr =
-    line.match(/\(PR #(\d+)\)/)?.[1] ?? line.match(/\(#(\d+)\)/)?.[1] ?? null;
+  const pr = line.match(/\(PR #(\d+)\)/)?.[1] ?? line.match(/\(#(\d+)\)/)?.[1] ?? null;
   // A short label for the report: the first **bold** title, else a slice.
   const title = line.match(/\*\*(.+?)\*\*/)?.[1] ?? line.slice(0, 80).trim();
   return { branch, pr, title };
@@ -104,12 +103,16 @@ function resolveMerged({ branch, pr }) {
       "5",
     ]);
     const merged = prs.find((p) => p.state === "MERGED");
-    if (merged) return { number: merged.number, title: merged.title };
+    if (merged) {
+      return { number: merged.number, title: merged.title };
+    }
     return null;
   }
   if (pr) {
     const view = gh(["pr", "view", pr, "--json", "state,title,mergedAt"]);
-    if (view.state === "MERGED") return { number: Number(pr), title: view.title };
+    if (view.state === "MERGED") {
+      return { number: Number(pr), title: view.title };
+    }
     return null;
   }
   return null;
@@ -119,14 +122,18 @@ const stale = [];
 try {
   for (const line of inflight) {
     const entry = parseEntry(line);
-    if (!entry.branch && !entry.pr) continue; // nothing to resolve against
+    if (!entry.branch && !entry.pr) {
+      continue; // nothing to resolve against
+    }
     const merged = resolveMerged(entry);
-    if (merged) stale.push({ entry, merged });
+    if (merged) {
+      stale.push({ entry, merged });
+    }
   }
 } catch (err) {
   if (err instanceof GhUnavailable) {
     console.warn(
-      `check-stale-todo-markers: gh unavailable/unauthenticated — skipping check.\n  (${err.message})`,
+      `check-stale-todo-markers: gh unavailable/unauthenticated — skipping check.\n  (${err.message})`
     );
     process.exit(0);
   }
@@ -137,7 +144,7 @@ if (stale.length === 0) {
   console.log(
     `check-stale-todo-markers: ${inflight.length} 🚧 in-flight ${
       inflight.length === 1 ? "entry" : "entries"
-    } checked, none stale — OK`,
+    } checked, none stale — OK`
   );
   process.exit(0);
 }
@@ -152,6 +159,6 @@ console.error(
   "\nRemediation: the PR(s) above merged outside /merge-pr, so the 🚧 entry was\n" +
     "never archived. Move each stale entry from the TODO file into TODO-archive.md\n" +
     "(collapse to a one-line ✅ entry), then re-run this check. Going forward, merge\n" +
-    "through /merge-pr so its post-merge sync handles this automatically.",
+    "through /merge-pr so its post-merge sync handles this automatically."
 );
 process.exit(1);

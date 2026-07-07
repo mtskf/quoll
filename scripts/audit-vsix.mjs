@@ -40,8 +40,12 @@ try {
   // on the code so the spawn/exit classifier below doesn't mislabel this
   // as a corrupt archive — the .vsix is fine, the output just didn't fit.
   if (err.code === "ENOBUFS") {
-    console.error(`audit-vsix: \`unzip -Z1\` output exceeded Node's default buffer limit for ${vsixPath}.`);
-    console.error("The .vsix itself is likely fine — re-run with a larger maxBuffer or inspect the archive manually.");
+    console.error(
+      `audit-vsix: \`unzip -Z1\` output exceeded Node's default buffer limit for ${vsixPath}.`
+    );
+    console.error(
+      "The .vsix itself is likely fine — re-run with a larger maxBuffer or inspect the archive manually."
+    );
     process.exit(2);
   }
   // Distinguish spawn-level failures (process never started — install or
@@ -54,11 +58,17 @@ try {
   const spawnFailed = err.status == null && err.signal == null;
   if (spawnFailed) {
     if (err.code === "ENOENT") {
-      console.error("audit-vsix: `unzip` not found on PATH. Install via `apt-get install unzip` / `brew install unzip`.");
+      console.error(
+        "audit-vsix: `unzip` not found on PATH. Install via `apt-get install unzip` / `brew install unzip`."
+      );
     } else if (err.code === "EACCES") {
-      console.error("audit-vsix: `unzip` on PATH is not executable (EACCES). Check file permissions.");
+      console.error(
+        "audit-vsix: `unzip` on PATH is not executable (EACCES). Check file permissions."
+      );
     } else {
-      console.error(`audit-vsix: failed to spawn \`unzip\` (${err.code ?? "unknown error"}): ${err.message}`);
+      console.error(
+        `audit-vsix: failed to spawn \`unzip\` (${err.code ?? "unknown error"}): ${err.message}`
+      );
     }
     process.exit(2);
   }
@@ -72,7 +82,9 @@ try {
   }
   const exitDesc = err.signal ? `killed by signal ${err.signal}` : `exit ${err.status}`;
   console.error(`audit-vsix: \`unzip\` failed to inspect ${vsixPath} (${exitDesc}):`);
-  if (err.stderr) console.error(err.stderr.toString().trimEnd());
+  if (err.stderr) {
+    console.error(err.stderr.toString().trimEnd());
+  }
   console.error("The .vsix may be corrupt or not a valid zip archive.");
   process.exit(2);
 }
@@ -125,7 +137,9 @@ const payloadSet = new Set();
 const violations = [];
 
 for (const entry of entries) {
-  if (ALLOWED_ROOT.has(entry)) continue;
+  if (ALLOWED_ROOT.has(entry)) {
+    continue;
+  }
   if (!entry.startsWith("extension/")) {
     violations.push(`${entry} (unexpected file outside extension/ payload)`);
     continue;
@@ -151,17 +165,27 @@ const missing = REQUIRED_PAYLOAD.filter((r) => !payloadSet.has(r));
 if (missing.length > 0 || violations.length > 0) {
   if (missing.length > 0) {
     console.error(`audit-vsix: required files missing from ${vsixPath}:`);
-    for (const m of missing) console.error(`  extension/${m}`);
+    for (const m of missing) {
+      console.error(`  extension/${m}`);
+    }
     console.error("");
-    console.error("Re-run `pnpm build && pnpm package` — most regressions here are stale or skipped builds. If files are still missing afterwards, check `.vscodeignore` did not over-exclude `dist/`.");
+    console.error(
+      "Re-run `pnpm build && pnpm package` — most regressions here are stale or skipped builds. If files are still missing afterwards, check `.vscodeignore` did not over-exclude `dist/`."
+    );
     console.error("");
   }
   if (violations.length > 0) {
     console.error(`audit-vsix: disallowed files in ${vsixPath}:`);
-    for (const v of violations) console.error(`  ${v}`);
+    for (const v of violations) {
+      console.error(`  ${v}`);
+    }
     console.error("");
-    console.error("Check `.vscodeignore` for a missing exclusion (most regressions are mis-ignored paths) and re-run `pnpm build && pnpm package`.");
-    console.error("If a disallowed file is intentional, extend the allowlist in scripts/audit-vsix.mjs instead.");
+    console.error(
+      "Check `.vscodeignore` for a missing exclusion (most regressions are mis-ignored paths) and re-run `pnpm build && pnpm package`."
+    );
+    console.error(
+      "If a disallowed file is intentional, extend the allowlist in scripts/audit-vsix.mjs instead."
+    );
   }
   process.exit(1);
 }
