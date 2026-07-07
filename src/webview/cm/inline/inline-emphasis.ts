@@ -312,32 +312,52 @@ function removeDelimitersBetween<L>(opener: Delimiter<L>, closer: Delimiter<L>):
   }
 }
 
-// Walk the resolved linked list and emit `Resolved<L>[]`. Text nodes with an
-// empty value (fully consumed delimiter runs) are dropped — they'd produce
-// empty-value text leaves in the output, violating the partition invariant.
+// Walk the resolved linked list and emit `Resolved<L>[]`. Iterative (explicit
+// heap stack) rather than recursive so a pathologically deep emphasis nest —
+// depth O(input length) for a crafted `*…a…*` — cannot overflow the JS call
+// stack during the tree build (the seed-time crash vector). Output is
+// byte-identical to a recursive DFS pre-order walk: each `wrap` pushes its
+// `emphasis` node (with an already-linked-in `children` array) BEFORE the child
+// frame that fills it, and each frame advances its own cursor before descending.
+// Text nodes with an empty value (fully consumed delimiter runs) are dropped —
+// they'd produce empty-value text leaves in the output, violating the partition
+// invariant.
 function toResolved<L>(head: Inline<L> | null): Resolved<L>[] {
-  const out: Resolved<L>[] = [];
-  for (let cur = head; cur !== null; cur = cur.next) {
+  const root: Resolved<L>[] = [];
+  // Each frame is a cursor over one sibling list, appending into `out`.
+  const stack: Array<{ cur: Inline<L> | null; out: Resolved<L>[] }> = [{ cur: head, out: root }];
+  while (stack.length > 0) {
+    const frame = stack[stack.length - 1];
+    const cur = frame.cur;
+    if (cur === null) {
+      stack.pop();
+      continue;
+    }
+    frame.cur = cur.next; // advance this frame's cursor before descending
     switch (cur.kind) {
       case "text":
         if (cur.value !== "") {
-          out.push({ kind: "text", value: cur.value, span: cur.span });
+          frame.out.push({ kind: "text", value: cur.value, span: cur.span });
         }
         break;
       case "node":
-        out.push({ kind: "leaf", leaf: cur.leaf, span: cur.span });
+        frame.out.push({ kind: "leaf", leaf: cur.leaf, span: cur.span });
         break;
-      case "wrap":
-        out.push({
+      case "wrap": {
+        const children: Resolved<L>[] = [];
+        frame.out.push({
           kind: "emphasis",
           tag: cur.tag,
           openDelim: cur.openDelim,
           closeDelim: cur.closeDelim,
           span: cur.span,
-          children: toResolved(cur.childHead),
+          children,
         });
+        // Descend: the child frame fills `children` (already linked into out).
+        stack.push({ cur: cur.childHead, out: children });
         break;
+      }
     }
   }
-  return out;
+  return root;
 }
