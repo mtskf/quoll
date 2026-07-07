@@ -5,14 +5,12 @@ on:
     tags:
       - 'v*'
 
-# NOTE: This workflow is dormant until the extension is set up for the Marketplace.
-# Prerequisites:
-#   1. Remove `"private": true` from package.json.
-#   2. Add secrets to the repo: VSCODE_PAT (required) and OPENVSX_PAT (optional, drop the
-#      Open VSX step if you skip it).
-# Publisher ID has been registered (`mtskf`, PR #84) and `package.json.publisher` already
-# matches. Tag pushes trigger a live publish, so do not push a `v*` tag until both
-# prerequisites above are done.
+# NOTE: This workflow is ACTIVE. On a pushed `v*` tag it packages one .vsix and publishes
+# it to the VS Code Marketplace (VSCODE_PAT secret, required) and Open VSX (OPENVSX_PAT
+# secret, optional — the Open VSX step is skipped when it is unset). Both secrets are
+# configured, and the publisher ID (`mtskf`) matches `package.json.publisher`. Tag pushes
+# trigger a LIVE publish (v0.1.0 shipped 2026-07-02), so never push a `v*` tag until you
+# intend to release that version to users.
 
 # Least-privilege GITHUB_TOKEN: publishing uses VSCODE_PAT / OPENVSX_PAT secrets,
 # not the workflow token. Only repo read access (checkout + install + verify-tag +
