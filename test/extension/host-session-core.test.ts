@@ -131,6 +131,33 @@ describe("host-session-core: edit", () => {
     expect(r.effects).toHaveLength(1);
     expect(r.effects[0]).toMatchObject({ type: "logWarn" });
   });
+  // Pins the lazy-snapshot optimisation: while the lock is held the stash arm
+  // reads content/baseDocVersion only — NEVER currentContent — so the executor
+  // may pass "" instead of canonicalising the whole doc (QuollEditorPanel edit
+  // dispatch). A regression that starts reading currentContent in this arm
+  // reddens here. Same stash + same effects with "" as with real content.
+  it("lock held → stash ignores currentContent (lazy '' snapshot is safe)", () => {
+    const empty = core.transition(
+      base({ pendingApplyBaseVersion: 9 }),
+      edit({
+        documentVersion: 3,
+        content: "typed-while-locked",
+        baseDocVersion: 3,
+        currentContent: "",
+      })
+    );
+    const full = core.transition(
+      base({ pendingApplyBaseVersion: 9 }),
+      edit({
+        documentVersion: 3,
+        content: "typed-while-locked",
+        baseDocVersion: 3,
+        currentContent: "the whole canonical document text",
+      })
+    );
+    expect(empty.state).toEqual(full.state);
+    expect(empty.effects).toEqual(full.effects);
+  });
   // The readonly/stale/no-op arms also clear a pending rejection (rejection: NONE)
   // — start each from a pending-rejection state so the clear is pinned non-vacuously
   // (a regression dropping the clear reddens state.rejection, not just effects).
