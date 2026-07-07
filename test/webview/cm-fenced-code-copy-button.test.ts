@@ -156,7 +156,7 @@ function pathDs(el: HTMLElement): string[] {
 
 describe("CopyButtonWidget", () => {
   it("renders a Lucide copy icon button with an accessible name (no text label)", () => {
-    const dom = new CopyButtonWidget("x").toDOM({} as EditorView) as HTMLButtonElement;
+    const dom = new CopyButtonWidget(0, () => "x").toDOM({} as EditorView) as HTMLButtonElement;
     expect(dom.tagName).toBe("BUTTON");
     expect(dom.getAttribute("aria-label")).toBe("Copy code");
     expect(pathDs(dom)).toContain(COPY_ICON_PATH);
@@ -166,7 +166,9 @@ describe("CopyButtonWidget", () => {
     const writeText = vi.fn().mockResolvedValue(undefined);
     vi.stubGlobal("navigator", { clipboard: { writeText } });
     try {
-      const dom = new CopyButtonWidget("const x = 1;\nfoo();").toDOM(
+      // The body is resolved lazily at click; a stub resolver stands in for the
+      // live tree walk (fencedCodeBodyAt is covered by the DOM-integration suite).
+      const dom = new CopyButtonWidget(0, () => "const x = 1;\nfoo();").toDOM(
         {} as EditorView
       ) as HTMLButtonElement;
       dom.dispatchEvent(new MouseEvent("click", { bubbles: true }));
@@ -187,7 +189,7 @@ describe("CopyButtonWidget", () => {
     const writeText = vi.fn().mockRejectedValue(new Error("NotAllowedError"));
     vi.stubGlobal("navigator", { clipboard: { writeText } });
     try {
-      const dom = new CopyButtonWidget("x").toDOM({} as EditorView) as HTMLButtonElement;
+      const dom = new CopyButtonWidget(0, () => "x").toDOM({} as EditorView) as HTMLButtonElement;
       dom.dispatchEvent(new MouseEvent("click", { bubbles: true }));
       await Promise.resolve();
       await Promise.resolve();
@@ -199,14 +201,20 @@ describe("CopyButtonWidget", () => {
     }
   });
 
-  it("eq() is keyed on body alone (a positional shift reuses the DOM)", () => {
-    const a = new CopyButtonWidget("x");
-    expect(a.eq(new CopyButtonWidget("x"))).toBe(true); // same body → reuse on shift
-    expect(a.eq(new CopyButtonWidget("y"))).toBe(false); // body edit → rebuild
+  it("eq() is keyed on openFrom alone (a body edit reuses the DOM; a shift rebuilds)", () => {
+    const resolve = () => "x";
+    const a = new CopyButtonWidget(5, resolve);
+    // Same open-line offset → reuse the DOM even though the body changed underneath
+    // (the body is resolved lazily at click, never stored). This is the perf pin:
+    // typing INSIDE the block must not rebuild the widget or re-materialise its body.
+    expect(a.eq(new CopyButtonWidget(5, () => "different body"))).toBe(true);
+    // A positional shift (an edit ABOVE the block) → rebuild so the reused click
+    // handler never resolves the block at a stale offset.
+    expect(a.eq(new CopyButtonWidget(9, resolve))).toBe(false);
   });
 
   it("always carries the base copy-button class (no single-line variant)", () => {
-    const btn = new CopyButtonWidget("x").toDOM({} as EditorView) as HTMLButtonElement;
+    const btn = new CopyButtonWidget(0, () => "x").toDOM({} as EditorView) as HTMLButtonElement;
     expect(btn.classList.contains("quoll-copy-button")).toBe(true);
     expect(btn.classList.contains("quoll-copy-button-single-line")).toBe(false);
   });
@@ -216,7 +224,7 @@ describe("CopyButtonWidget", () => {
     const writeText = vi.fn().mockResolvedValue(undefined);
     vi.stubGlobal("navigator", { clipboard: { writeText } });
     try {
-      const dom = new CopyButtonWidget("x").toDOM({} as EditorView) as HTMLButtonElement;
+      const dom = new CopyButtonWidget(0, () => "x").toDOM({} as EditorView) as HTMLButtonElement;
       // First click resolves → "Copied" and schedules a 1500ms revert.
       dom.dispatchEvent(new MouseEvent("click", { bubbles: true }));
       await vi.advanceTimersByTimeAsync(0);
@@ -356,6 +364,32 @@ describe("fencedCodeCopyButton DOM integration", () => {
       expect(view.state.selection.main.head).toBe(selBefore);
     } finally {
       view.destroy();
+    }
+  });
+
+  it("copies the CURRENT body after an in-place body edit (lazy resolution, not a stale payload)", async () => {
+    // The widget stores no body — it resolves fencedCodeBodyAt(view.state, openFrom)
+    // at click. Editing the body keeps openFrom fixed, so the DOM is REUSED (perf
+    // win); the click must still copy the edited body, proving the resolve reads the
+    // live tree, not a build-time snapshot.
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    vi.stubGlobal("navigator", { clipboard: { writeText } });
+    const doc = "```js\nconst x = 1;\n```\n\npara";
+    const view = mountFenced(doc, doc.indexOf("para") + 1);
+    try {
+      const from = doc.indexOf("const x = 1;");
+      view.dispatch({
+        changes: { from, to: from + "const x = 1;".length, insert: "const y = 2;" },
+      });
+      const btn = view.dom.querySelector<HTMLButtonElement>(".quoll-copy-button");
+      expect(btn).not.toBeNull();
+      btn?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(writeText).toHaveBeenCalledWith("const y = 2;");
+    } finally {
+      view.destroy();
+      vi.unstubAllGlobals();
     }
   });
 
