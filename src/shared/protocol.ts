@@ -212,9 +212,7 @@ export type EditRejectedMessage = Envelope & {
 export type ImageWriteResultMessage = Envelope & {
   type: "image-write-result";
   requestId: string;
-  ok: boolean;
-  relativePath?: string;
-};
+} & ({ ok: true; relativePath: string } | { ok: false; relativePath?: undefined });
 
 export type HostToWebview =
   | DocumentMessage
@@ -463,11 +461,14 @@ export function isHostToWebview(value: unknown): value is HostToWebview {
       );
     }
     case "image-write-result":
-      return (
-        typeof v.requestId === "string" &&
-        typeof v.ok === "boolean" &&
-        (v.relativePath === undefined || typeof v.relativePath === "string")
-      );
+      // Discriminate on `ok`: a success MUST carry a string path; a failure
+      // MUST NOT carry one. Distrust the peer even though the host builder is
+      // already discriminated — an incoherent `{ok:true}` (no path) or
+      // `{ok:false, relativePath:…}` is rejected at the boundary.
+      if (typeof v.requestId !== "string" || typeof v.ok !== "boolean") {
+        return false;
+      }
+      return v.ok ? typeof v.relativePath === "string" : v.relativePath === undefined;
     case "editor-config":
       return typeof v.lintGutter === "boolean";
     case "caret-apply":
