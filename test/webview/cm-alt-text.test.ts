@@ -74,4 +74,25 @@ describe("commonMarkAltText", () => {
     expect(commonMarkAltText("a&constructor;b")).toBe("a&constructor;b");
     expect(commonMarkAltText("a&toString;b")).toBe("a&toString;b");
   });
+
+  it("does not overflow on pathologically deep emphasis (image-alt DoS vector)", () => {
+    // `![*a *b …](x)` style: ~N/2-deep emphasis inside an image alt. The
+    // flatten walker must fall back to inert literal source past the cap.
+    const N = 40000;
+    const deep = `${"*".repeat(N)}a${"*".repeat(N)}`;
+    let alt = "";
+    expect(() => {
+      alt = commonMarkAltText(deep);
+    }).not.toThrow();
+    // Content survives (the literal `a`); the inert-source fallback fired, so
+    // literal `*` delimiters leak into the flattened text.
+    expect(alt).toContain("a");
+    expect(alt).toContain("*");
+    // Non-vacuity vs the defense-in-depth try/catch: the WALKER cap emits only
+    // the emphasis span at depth 100 (the outer ~2×cap delimiters are unwrapped
+    // first), so the result is strictly shorter than the raw input. The
+    // try/catch fallback would instead return the FULL raw string — this pins
+    // that the cap path ran, not that an overflow was silently caught.
+    expect(alt.length).toBeLessThan(deep.length);
+  });
 });

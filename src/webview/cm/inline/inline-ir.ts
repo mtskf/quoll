@@ -80,6 +80,17 @@ export function assertNever(x: never): never {
   throw new Error(`Unhandled CellLeaf kind: ${JSON.stringify(x)}`);
 }
 
+// Maximum emphasis-nesting depth the display walkers (renderReadonly in
+// cell-render.ts, flattenInlineText below) descend before falling back to inert
+// literal source text. Generous headroom over any real Markdown (real nesting
+// is ≤ ~3) yet far below the ~10k JS call-stack limit, so a crafted deep nest
+// (`*…a…*`, depth O(input length)) renders literal instead of overflowing the
+// stack. `toResolved` (inline-emphasis.ts) is iterative and needs no cap; this
+// bounds only the recursive DOM/string walkers that consume its tree. Lives
+// here (not the generic engine) because the cap is a display-walker policy, and
+// cell-render.ts already imports from this module.
+export const MAX_INLINE_NESTING_DEPTH = 100;
+
 // Single chokepoint for the decode → gate pipeline. Every link / image /
 // autolink destination passes through here, which routes to the SHARED
 // renderSafeMarkdownDestination so the table-cell render-gate cannot drift
@@ -506,7 +517,7 @@ function decodeAltEntities(s: string): string {
 // entity decode, per CommonMark); emphasis contributes its children flattened;
 // nested links/images contribute their label/alt flattened recursively;
 // autolinks contribute their literal URL text.
-function flattenInlineText(ir: Resolved<CellLeaf>[], raw: string): string {
+function flattenInlineText(ir: Resolved<CellLeaf>[], raw: string, depth = 0): string {
   let out = "";
   for (const node of ir) {
     switch (node.kind) {
@@ -514,7 +525,13 @@ function flattenInlineText(ir: Resolved<CellLeaf>[], raw: string): string {
         out += decodeAltEntities(node.value);
         break;
       case "emphasis":
-        out += flattenInlineText(node.children, raw);
+        // Past the nesting cap, emit the inert literal source of the whole
+        // emphasis span (node.span covers openDelim..closeDelim) instead of
+        // recursing — bounds this walker's recursion depth.
+        out +=
+          depth >= MAX_INLINE_NESTING_DEPTH
+            ? raw.slice(node.span.from, node.span.to)
+            : flattenInlineText(node.children, raw, depth + 1);
         break;
       case "leaf": {
         const leaf = node.leaf;
@@ -550,5 +567,22 @@ export function commonMarkAltText(raw: string): string {
   if (raw === "") {
     return "";
   }
-  return flattenInlineText(parseCellInline(raw), raw);
+  // The `flattenInlineText` link/image arms re-enter here on a nested label/alt
+  // slice. That re-entry is depth ≤ 1 by construction, so it needs NO depth
+  // budget of its own: `tryParseLink` captures a label up to the FIRST `]`
+  // (`indexOf("]")`), so a label/alt slice contains no `]`; a link/image
+  // REQUIRES a `]`, so a re-parsed label can never yield another link/image
+  // leaf. Combined with the per-parse emphasis cap (MAX_INLINE_NESTING_DEPTH),
+  // total stack depth is bounded. NOTE: a future CommonMark-compliant
+  // nested-label parser would break this invariant — thread a shared depth
+  // budget through this re-entry then.
+  //
+  // Defense in depth: the parser is bounded (iterative build + capped walker),
+  // but ANY unforeseen throw must not blank the widget on seed — fall back to
+  // the inert raw source, matching the module's fail-closed pattern.
+  try {
+    return flattenInlineText(parseCellInline(raw), raw);
+  } catch {
+    return raw;
+  }
 }

@@ -14,6 +14,20 @@ it("returns [] for no segments", () => {
   expect(resolveInline<string>([])).toEqual([]);
 });
 
+it("does not overflow the stack building a deeply nested emphasis tree", () => {
+  // A single long `*` run on each side nests ~N/2 deep (each strong match
+  // consumes 2 delimiters from each run). This is the seed-time crash vector:
+  // `toResolved` used to recurse once per nesting level. Iterative build must
+  // not blow the JS call stack.
+  const N = 40000;
+  const segs: S[] = [
+    { kind: "delim", ch: "*", span: sp(0, N), canOpen: true, canClose: false },
+    { kind: "leaf", leaf: "a", span: sp(N, N + 1) },
+    { kind: "delim", ch: "*", span: sp(N + 1, 2 * N + 1), canOpen: false, canClose: true },
+  ];
+  expect(() => resolveInline(segs)).not.toThrow();
+});
+
 it("passes text segments through unchanged (no merging in the engine)", () => {
   // The engine no longer merges adjacent text — that's the renderer's job.
   const out = resolveInline<string>([

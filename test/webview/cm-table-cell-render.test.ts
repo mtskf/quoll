@@ -716,4 +716,28 @@ describe("renderReadonly text-node topology (merging is not vacuous)", () => {
     expect(nodes[0].childNodes).toHaveLength(1);
     expect(nodes[0].textContent).toBe("a|b");
   });
+
+  it("renders a pathologically deep-emphasis cell without crashing", () => {
+    // ~N/2-deep emphasis nesting — the seed-time stack-overflow vector. The
+    // walker must fall back to inert literal source past the nesting cap
+    // instead of overflowing while walking the (bounded-build) tree.
+    const N = 40000;
+    const deep = `${"*".repeat(N)}a${"*".repeat(N)}`;
+    let nodes: Node[] = [];
+    expect(() => {
+      nodes = renderCellInline(deep);
+    }).not.toThrow();
+    const text = nodes.map((n) => n.textContent ?? "").join("");
+    // Content survives (the literal `a` is preserved past the cap)...
+    expect(text).toContain("a");
+    // ...and the inert-source fallback actually fired: literal `*` delimiters
+    // leak into the text (a vacuous always-empty render would not contain them).
+    expect(text).toContain("*");
+    // Non-vacuity vs the defense-in-depth try/catch: the WALKER cap emits only
+    // the emphasis span at depth 100 (the outer ~2×cap delimiters are unwrapped
+    // first), so the text is strictly shorter than the raw input. The try/catch
+    // fallback would instead return the FULL raw string as one text node — this
+    // pins that the cap path ran, not that an overflow was silently caught.
+    expect(text.length).toBeLessThan(deep.length);
+  });
 });
