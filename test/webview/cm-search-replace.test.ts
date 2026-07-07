@@ -10,7 +10,7 @@ import { initialState, type WebviewState } from "../../src/webview/state.js";
 // (and that a read-only replace posts nothing).
 const posted: unknown[] = [];
 vi.mock("../../src/webview/host.js", () => ({
-  getHost: () => ({ postMessage: (m: unknown) => posted.push(m), setMetadata: vi.fn() }),
+  getHost: () => ({ postMessage: (m: unknown) => posted.push(m) }),
   subscribeToHost: () => () => {},
 }));
 

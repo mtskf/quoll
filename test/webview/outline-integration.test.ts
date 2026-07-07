@@ -10,7 +10,7 @@ const postsOfType = (type: string) =>
   postMessage.mock.calls.map((c) => c[0]).filter((m) => (m as { type?: string })?.type === type);
 
 vi.mock("../../src/webview/host.js", () => ({
-  getHost: () => ({ postMessage, setMetadata: vi.fn() }),
+  getHost: () => ({ postMessage }),
   subscribeToHost: () => () => {},
 }));
 

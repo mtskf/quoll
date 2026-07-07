@@ -17,20 +17,9 @@ import {
   PROTOCOL_VERSION,
   type WebviewToHost,
 } from "../shared/protocol.js";
-import type { WebviewState } from "./state.js";
-
-/** Small UI/protocol metadata persisted across reloads via vscode.setState.
- *  Defined as a Pick<> of WebviewState so the persisted-shape stays a
- *  type-checked subset of reducer state — a future widening of `theme` or
- *  rename of `canWrite` propagates here automatically, and adding a field
- *  to this list without adding it to WebviewState fails to compile.
- *  Never includes `content`: full document text lives in CodeMirror's
- *  EditorState and is reseeded by the next host Document on reload. */
-export type PersistedMetadata = Pick<WebviewState, "ready" | "docVersion" | "canWrite" | "theme">;
 
 export type Host = {
   postMessage(message: WebviewToHost): void;
-  setMetadata(metadata: PersistedMetadata): void;
 };
 
 let memo: Host | null = null;
@@ -54,13 +43,10 @@ export function getHost(): Host {
     throw acquireFailed;
   }
   try {
-    const api: WebviewApi<PersistedMetadata> = acquireVsCodeApi();
+    const api: WebviewApi<unknown> = acquireVsCodeApi();
     memo = {
       postMessage: (message) => {
         api.postMessage(message);
-      },
-      setMetadata: (metadata) => {
-        api.setState(metadata);
       },
     };
     return memo;

@@ -35,8 +35,7 @@ afterEach(() => {
 describe("getHost — once-per-frame singleton", () => {
   it("memoizes the acquired API and never re-acquires", async () => {
     const postMessage = vi.fn();
-    const setState = vi.fn();
-    const acquire = vi.fn(() => ({ postMessage, setState, getState: () => undefined }));
+    const acquire = vi.fn(() => ({ postMessage }));
     globalAny.acquireVsCodeApi = acquire;
 
     const { getHost } = await freshHost();
@@ -51,13 +50,6 @@ describe("getHost — once-per-frame singleton", () => {
     // The wrapper delegates to the raw API.
     a.postMessage({ protocol: PROTOCOL_VERSION, type: "ready" });
     expect(postMessage).toHaveBeenCalledWith({ protocol: PROTOCOL_VERSION, type: "ready" });
-    a.setMetadata({ ready: true, docVersion: 3, canWrite: true, theme: "dark" });
-    expect(setState).toHaveBeenCalledWith({
-      ready: true,
-      docVersion: 3,
-      canWrite: true,
-      theme: "dark",
-    });
   });
 
   it("throws a stable error when acquireVsCodeApi is absent and caches it", async () => {
