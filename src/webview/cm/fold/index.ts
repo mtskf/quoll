@@ -87,11 +87,6 @@ import { pointInExclusionZone } from "../decorations/shared.js";
 import { isRenderableListItem } from "../list/list-geometry.js";
 import { expandToEnclosingBlock, touchesStructuralReparse } from "../structural-guard.js";
 
-// Re-exported from ../structural-guard.js so existing importers of these two
-// symbols from the fold module keep resolving; the canonical home is the guard
-// module. The fold gutter is their primary consumer.
-export { expandToEnclosingBlock, touchesStructuralReparse } from "../structural-guard.js";
-
 const SVG_NS = "http://www.w3.org/2000/svg";
 
 /** Lucide (https://lucide.dev, MIT) `chevron-down` glyph path. ONE icon for both
