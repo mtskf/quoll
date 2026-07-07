@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { frontmatterContentLines } from "../../src/webview/cm/lint/frontmatter-range.js";
 import { scanLines } from "../../src/webview/cm/lint/line-scan.js";
+import { createIncrementalLinter, lintMarkdown } from "../../src/webview/cm/lint/engine.js";
 import { frontmatterStructure } from "../../src/webview/cm/lint/rules/frontmatter-structure.js";
 
 describe("frontmatterContentLines", () => {
@@ -114,5 +115,73 @@ describe("frontmatter-structure rule is independent of the host frontmatter mode
     for (const m of src.matchAll(/^\s*import\s[^;]*?["']([^"']+)["']/gm)) {
       expect(m[1]).not.toMatch(/markdown/);
     }
+  });
+});
+
+describe("lint engine: frontmatter-structure integration", () => {
+  const fmCodes = (doc: string) =>
+    lintMarkdown(doc)
+      .filter((d) => d.code.startsWith("frontmatter-"))
+      .map((d) => d.code);
+
+  it("raises a duplicate-key diagnostic on the offending line at absolute position", () => {
+    const doc = "---\ntitle: a\ntitle: b\n---\n# Body\n";
+    const diags = lintMarkdown(doc).filter((d) => d.code === "frontmatter-duplicate-key");
+    expect(diags).toHaveLength(1);
+    expect(doc.slice(diags[0]!.from, diags[0]!.to)).toBe("title: b");
+  });
+
+  it("raises a malformed-line diagnostic on the offending line", () => {
+    const doc = "---\ntitle: a\nnope\n---\n# Body\n";
+    const diags = lintMarkdown(doc).filter((d) => d.code === "frontmatter-malformed-line");
+    expect(diags).toHaveLength(1);
+    expect(doc.slice(diags[0]!.from, diags[0]!.to)).toBe("nope");
+  });
+
+  it("raises none for a well-formed frontmatter block", () => {
+    expect(fmCodes("---\ntitle: a\ntags:\n  - x\n---\n# Body\n")).toEqual([]);
+  });
+
+  it("raises none for a document with no frontmatter", () => {
+    expect(fmCodes("# Body\n\ntitle: a\ntitle: a\n")).toEqual([]);
+  });
+
+  it("does not fire on a `---`-leading doc with no closing fence (not frontmatter)", () => {
+    // No closer -> CommonMark treats leading `---` as a thematic break + prose,
+    // so bodyStart is 0 and the frontmatter pass is skipped.
+    expect(fmCodes("---\ntitle: a\ntitle: b\n")).toEqual([]);
+  });
+
+  it("keeps body findings intact alongside a frontmatter finding", () => {
+    // Duplicate frontmatter key AND an h1->h3 body skip: both must surface.
+    const doc = "---\ntitle: a\ntitle: b\n---\n# A\n\n### C\n";
+    const codes = lintMarkdown(doc).map((d) => d.code);
+    expect(codes).toContain("frontmatter-duplicate-key");
+    expect(codes).toContain("heading-increment");
+  });
+
+  it("reports a CRLF frontmatter duplicate at the correct absolute span", () => {
+    const doc = "---\r\ntitle: a\r\ntitle: b\r\n---\r\n# Body\r\n";
+    const diags = lintMarkdown(doc).filter((d) => d.code === "frontmatter-duplicate-key");
+    expect(diags).toHaveLength(1);
+    expect(doc.slice(diags[0]!.from, diags[0]!.to)).toBe("title: b");
+  });
+});
+
+describe("createIncrementalLinter parity for frontmatter findings", () => {
+  it("matches full lintMarkdown across edits that toggle a frontmatter defect", () => {
+    const inc = createIncrementalLinter();
+    // Seed with a duplicate key + a malformed line.
+    let doc = "---\ntitle: a\ntitle: b\nnope\n---\n# A\n\n### C\n";
+    expect(inc(doc)).toEqual(lintMarkdown(doc));
+    // Fix the duplicate (rename the second key) — finding count drops.
+    doc = doc.replace("title: b", "author: b");
+    expect(inc(doc)).toEqual(lintMarkdown(doc));
+    // Fix the malformed line — another finding drops.
+    doc = doc.replace("nope", "date: c");
+    expect(inc(doc)).toEqual(lintMarkdown(doc));
+    // Remove the frontmatter entirely (bodyStart -> 0): body offsets re-frame.
+    doc = doc.replace("---\ntitle: a\nauthor: b\ndate: c\n---\n", "");
+    expect(inc(doc)).toEqual(lintMarkdown(doc));
   });
 });

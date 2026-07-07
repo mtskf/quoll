@@ -1,8 +1,8 @@
 import { markdownLanguage } from "@codemirror/lang-markdown";
 import type { ChangedRange } from "@lezer/common";
 import { TreeFragment } from "@lezer/common";
-import { leadingFrontmatterBodyStart } from "./frontmatter-range.js";
-import { RULES } from "./rules/index.js";
+import { frontmatterContentLines, leadingFrontmatterBodyStart } from "./frontmatter-range.js";
+import { FRONTMATTER_RULES, RULES } from "./rules/index.js";
 import type { LintDiagnostic } from "./types.js";
 
 // The GFM-configured Markdown parser, matching what the editor renders. Point
@@ -21,15 +21,42 @@ const PARSER = markdownLanguage.parser;
 // field stays honest if the parser's tree shape ever changes upstream.
 type ParseTree = ReturnType<typeof PARSER.parse>;
 
-// Run every first-party lint rule over an already-parsed body and return the
-// findings sorted by position, re-offset back into whole-document coordinates by
-// the sliced-off frontmatter length. Shared by the full-parse and incremental
-// entry points so BOTH produce identical output for a given (text, tree).
+// Run every body lint rule over an already-parsed body and return the findings
+// re-offset back into whole-document coordinates by the sliced-off frontmatter
+// length. UNSORTED — `combine` merges these with the frontmatter findings and
+// sorts the union once.
 function lintBody(text: string, tree: ParseTree, bodyStart: number): LintDiagnostic[] {
   const ctx = { text, tree };
-  const diagnostics = RULES.flatMap((rule) => rule(ctx)).map((d) =>
+  return RULES.flatMap((rule) => rule(ctx)).map((d) =>
     bodyStart > 0 ? shiftDiagnostic(d, bodyStart) : d
   );
+}
+
+// Run the frontmatter lint pass over the sliced-off leading block. `bodyStart` is
+// that block's length (0 when the document has no frontmatter). The block starts
+// at document offset 0, so its content-line offsets are already absolute and are
+// merged WITHOUT the body-rule shift.
+function lintFrontmatter(raw: string, bodyStart: number): LintDiagnostic[] {
+  if (bodyStart === 0) {
+    return []; // no leading frontmatter block at all
+  }
+  // A block exists (bodyStart>0 => sliceBody found a closer). Run the rules even
+  // when the block has no content lines, so a future FRONTMATTER_RULE that flags
+  // an EMPTY block (e.g. required-key-missing) still fires; today's rule simply
+  // returns [] on an empty content set.
+  const contentLines = frontmatterContentLines(raw.slice(0, bodyStart));
+  return FRONTMATTER_RULES.flatMap((rule) => rule({ contentLines }));
+}
+
+// Merge the frontmatter-pass findings (absolute) with the body findings (shifted
+// to absolute) and sort by position (from, then to). Shared by BOTH entry points
+// so they produce identical output for a given (raw, tree).
+function combine(
+  raw: string,
+  bodyDiagnostics: LintDiagnostic[],
+  bodyStart: number
+): LintDiagnostic[] {
+  const diagnostics = [...lintFrontmatter(raw, bodyStart), ...bodyDiagnostics];
   diagnostics.sort((a, b) => a.from - b.from || a.to - b.to);
   return diagnostics;
 }
@@ -57,7 +84,7 @@ function sliceBody(raw: string): [text: string, bodyStart: number] {
 // editor wrap it in `safeLint` (extension.ts) for fail-open behaviour.
 export function lintMarkdown(raw: string): LintDiagnostic[] {
   const [text, bodyStart] = sliceBody(raw);
-  return lintBody(text, PARSER.parse(text), bodyStart);
+  return combine(raw, lintBody(text, PARSER.parse(text), bodyStart), bodyStart);
 }
 
 // A single conservative changed range bracketing where two strings differ:
@@ -116,7 +143,7 @@ export function createIncrementalLinter(): (raw: string) => LintDiagnostic[] {
     // is deliberate — do NOT move these below `lintBody` "to be safe".
     prevBody = text;
     prevTree = tree;
-    return lintBody(text, tree, bodyStart);
+    return combine(raw, lintBody(text, tree, bodyStart), bodyStart);
   };
 }
 
