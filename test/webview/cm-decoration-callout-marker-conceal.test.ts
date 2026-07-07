@@ -325,7 +325,7 @@ describe("calloutMarkerConcealField — bounded recompute ≡ full recompute", (
   // changed-range bounded window never reaches the callout; without the
   // touchesStructuralReparse full-rebuild fallback the field would strand the stale
   // record (RED against the unguarded field, GREEN once the guard forces a full
-  // rebuild — the fence insert matches STRUCTURAL_FOLD, so the guard fires).
+  // rebuild — the fence insert matches the shared STRUCTURAL regex, so the guard fires).
   it("fence-above-callout: an unclosed fence in a paragraph above the callout drops the record", () => {
     checkEquivalence(`intro\n\n${CALLOUT}`, [{ changes: { from: 0, insert: "```\n" } }]);
   });
