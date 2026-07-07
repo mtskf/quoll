@@ -61,11 +61,17 @@ export function buildWebviewHtml(input: BuildWebviewHtmlInput): string {
   ) {
     throw new Error("buildWebviewHtml: cspSource contains disallowed character or is empty");
   }
+  // scriptUri / stylesUri are interpolated into the `src` / `href` attribute
+  // values of the <script> and <link> tags, so they get the same breakout gate
+  // as resourceBaseUri and the cspSource per-token regex — INCLUDING `&`, an
+  // HTML entity-injection vector in an attribute value (`&#34` decodes to `"`
+  // even without the trailing `;`). asWebviewUri percent-encodes its path, so
+  // `&` never appears legitimately → fail-closed with no loss.
   for (const [key, value] of [
     ["scriptUri", scriptUri],
     ["stylesUri", stylesUri],
   ] as const) {
-    if (!value || /[;"'<>\s]/.test(value)) {
+    if (!value || /[;"'<>&\s]/.test(value)) {
       throw new Error(`buildWebviewHtml: ${key} contains disallowed character or is empty`);
     }
   }
