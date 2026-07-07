@@ -12,6 +12,7 @@ import type { BuildContext } from "../../src/webview/cm/decorations/types.js";
 import {
   buildCopyButtons,
   fencedCodeBody,
+  fencedCodeBodyAt,
   fencedCodeCopyButton,
 } from "../../src/webview/cm/fenced-code/fenced-code-copy-button.js";
 import {
@@ -147,6 +148,50 @@ describe("fencedCodeBody", () => {
     // line pins the fence indent at 3 regardless.
     const { state, node } = firstFencedCode(">    ```js\n>\n>    code();\n>    ```\n");
     expect(fencedCodeBody(state, node)).toBe("\ncode();");
+  });
+});
+
+describe("fencedCodeBodyAt", () => {
+  function makeState(doc: string): ReturnType<typeof EditorState.create> {
+    return EditorState.create({
+      doc,
+      extensions: [markdown({ base: markdownLanguage })],
+    });
+  }
+
+  it("returns null for openFrom < 0 (out-of-bounds low)", () => {
+    const state = makeState("```js\nconst x = 1;\n```\n");
+    expect(fencedCodeBodyAt(state, -1)).toBeNull();
+  });
+
+  it("returns null for openFrom > doc.length (out-of-bounds high)", () => {
+    const state = makeState("```js\nconst x = 1;\n```\n");
+    expect(fencedCodeBodyAt(state, state.doc.length + 1)).toBeNull();
+  });
+
+  it("returns null when no FencedCode starts on the given line (plain paragraph)", () => {
+    const state = makeState("just a paragraph\n\n```js\nconst x = 1;\n```\n");
+    // openFrom points at the start of the paragraph line, not a fenced block
+    expect(fencedCodeBodyAt(state, 0)).toBeNull();
+  });
+
+  it("resolves the body of a top-level fence (openFrom = open line start)", () => {
+    const doc = "```js\nconst x = 1;\n```\n";
+    const state = makeState(doc);
+    expect(fencedCodeBodyAt(state, 0)).toBe("const x = 1;");
+  });
+
+  it("resolves the body of a blockquote-nested fence", () => {
+    const doc = "> ```js\n> const x = 1;\n> foo();\n> ```\n";
+    const state = makeState(doc);
+    // The open line starts at offset 0 (the `> ` prefix is on the same line)
+    expect(fencedCodeBodyAt(state, 0)).toBe("const x = 1;\nfoo();");
+  });
+
+  it("resolves the body of a list-nested fence", () => {
+    const doc = "- ```js\n  const x = 1;\n  foo();\n  ```\n";
+    const state = makeState(doc);
+    expect(fencedCodeBodyAt(state, 0)).toBe("const x = 1;\nfoo();");
   });
 });
 
@@ -377,13 +422,21 @@ describe("fencedCodeCopyButton DOM integration", () => {
     const doc = "```js\nconst x = 1;\n```\n\npara";
     const view = mountFenced(doc, doc.indexOf("para") + 1);
     try {
+      // Capture BEFORE the body edit so DOM reuse is observable.
+      const btnBefore = view.dom.querySelector<HTMLButtonElement>(".quoll-copy-button");
+      expect(btnBefore).not.toBeNull();
+
       const from = doc.indexOf("const x = 1;");
       view.dispatch({
         changes: { from, to: from + "const x = 1;".length, insert: "const y = 2;" },
       });
-      const btn = view.dom.querySelector<HTMLButtonElement>(".quoll-copy-button");
-      expect(btn).not.toBeNull();
-      btn?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+
+      // Must be the SAME node: eq() returned true (openFrom unchanged) → DOM reused.
+      // A regression to eager materialisation produces a NEW node here → assertion red.
+      const btnAfter = view.dom.querySelector<HTMLButtonElement>(".quoll-copy-button");
+      expect(btnAfter).toBe(btnBefore);
+
+      btnAfter?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
       await Promise.resolve();
       await Promise.resolve();
       expect(writeText).toHaveBeenCalledWith("const y = 2;");
