@@ -58,16 +58,24 @@ describe("selectionToHandoff", () => {
     });
   });
 
-  it("includes the trailing line when the selection ends at its start (native parity)", () => {
-    // Select "line1\nline2\n" → to = 12 (start of line 3). CM `to` is
-    // EXCLUSIVE, and lineAt(to).number = 3. This deliberately matches Claude
-    // Code's native end.line+1 (which over-counts the same way), so the
-    // reference resolves identically to the native at-mention. NOT a bug —
-    // pinned so a future "subtract one" refactor that breaks parity reds CI.
+  it("does not over-report when a selection ends exactly at a line start", () => {
+    // Select "line1\nline2\n" → to = 12 (start of line 3). CM `to` is EXCLUSIVE,
+    // so line 3 has no selected character. Anchoring the end to `to - 1` reports
+    // line 2 (the last line actually touched), not the empty line after it.
     expect(selectionToHandoff(stateWith(0, 12))).toEqual({
       hasSelection: true,
       startLine: 1,
-      endLine: 3,
+      endLine: 2,
+    });
+  });
+
+  it("keeps the end line when a selection ends mid-line (no under-report)", () => {
+    // Select "line1\nli" → to = 8 (inside line 2). The end offset stays on
+    // line 2, so `to - 1` must not pull the range back to line 1.
+    expect(selectionToHandoff(stateWith(0, 8))).toEqual({
+      hasSelection: true,
+      startLine: 1,
+      endLine: 2,
     });
   });
 
@@ -78,9 +86,8 @@ describe("selectionToHandoff", () => {
       doc,
       selection: EditorSelection.create(
         // Second range spans line 4 (offset 18) into line 5 (offset 26, inside
-        // "line5") — head must reach past line 4's boundary (offset 23) for
-        // lineAt(to) to resolve to line 5 under the native-parity `lineAt(to)`
-        // rule pinned above.
+        // "line5"); the end offset (to - 1 = 25) stays inside line 5, so the
+        // main range resolves to lines 4..5.
         [EditorSelection.range(0, 3), EditorSelection.range(18, 26)],
         1 // mainIndex → second range
       ),

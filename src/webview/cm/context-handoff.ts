@@ -68,7 +68,15 @@ export function selectionToHandoff(state: EditorState): {
 } {
   const { from, to, empty } = state.selection.main;
   const startLine = state.doc.lineAt(from).number;
-  const endLine = state.doc.lineAt(to).number;
+  // CM selection ranges are half-open [from, to): when a selection ends exactly
+  // at a line start (e.g. it swallows the trailing newline), `to` sits on the
+  // NEXT line, which has no selected character. Anchor the end line to the last
+  // selected offset (to - 1) so the reported range covers only lines the user
+  // actually touched. `from < to` holds for every non-empty range, so to - 1
+  // never precedes `from`. Empty carets keep `to` (== from) so they stay on the
+  // caret line.
+  const endOffset = empty ? to : to - 1;
+  const endLine = state.doc.lineAt(endOffset).number;
   return { hasSelection: !empty, startLine, endLine };
 }
 
