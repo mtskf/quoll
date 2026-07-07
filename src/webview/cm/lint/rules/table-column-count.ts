@@ -3,9 +3,11 @@ import { collectTableRanges } from "../../table/table-ranges.js";
 import type { LintContext, LintDiagnostic, LintRule } from "../types.js";
 
 // Flag a GFM table BODY row whose cell count differs from the delimiter row's.
-// The table block widget renders a normalised grid (padding short rows, dropping
-// overflow), so a row with too few / too many pipes looks fine rendered but is
-// ragged in source — this lint catches what the widget hides.
+// The table block widget renders each row's cells as-is: a short row leaves its
+// trailing column(s) blank (so it looks plausibly correct), while an overflow row
+// extends the grid with extra columns. Either way the row is ragged in source —
+// this lint surfaces each mismatched row in the Problems panel, where a short
+// row's defect is otherwise invisible in the rendered grid.
 //
 // Table detection reuses `collectTableRanges` (the ONE Lezer `Table`-node walk the
 // block widget consumes) and `parseTable` (the same pure GFM model the widget
