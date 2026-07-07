@@ -1,4 +1,5 @@
 import type { syntaxTree } from "@codemirror/language";
+import type { ScannedLine } from "./line-scan.js";
 
 // The Lezer tree type, derived from syntaxTree's return type rather than
 // imported from @lezer/common: that package is a transitive-only, un-hoisted
@@ -58,3 +59,20 @@ export type LintContext = {
 
 // A lint rule: a pure function from context to zero or more diagnostics.
 export type LintRule = (ctx: LintContext) => LintDiagnostic[];
+
+// Input a frontmatter rule sees: the content lines of a file-leading YAML
+// frontmatter block — the lines STRICTLY BETWEEN the opener/closer `---` fences,
+// each carrying its absolute `from` offset. Distinct from LintContext: the lint
+// engine slices the frontmatter OFF before body rules run (frontmatter is not
+// Markdown — see engine.ts), so a frontmatter rule can never be a body RULES
+// member, and it needs no Lezer tree — the block is scanned by line, not parsed.
+// Fence detection is done upstream (frontmatter-range.ts); the rule receives
+// only content lines and classifies them. Because the block starts at document
+// offset 0, the offsets a rule emits are ALREADY absolute and the engine merges
+// them WITHOUT the body-rule bodyStart shift.
+export type FrontmatterLintContext = {
+  readonly contentLines: readonly ScannedLine[];
+};
+
+// A frontmatter lint rule: a pure function from content lines to diagnostics.
+export type FrontmatterLintRule = (ctx: FrontmatterLintContext) => LintDiagnostic[];
