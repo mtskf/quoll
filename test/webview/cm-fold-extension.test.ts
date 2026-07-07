@@ -26,7 +26,6 @@ import { quollSyntaxExclusionZones } from "../../src/webview/cm/decorations/orch
 import {
   CHEVRON_DOWN_PATH,
   ELLIPSIS_DOT_CX,
-  expandToEnclosingBlock,
   foldPlaceholderDOM,
   headingFoldGutterLineClass,
   listFoldGutterLineClass,
@@ -34,8 +33,11 @@ import {
   quollFolding,
   quollFoldKeymap,
   quollFoldKeymapExtension,
-  touchesStructuralReparse,
 } from "../../src/webview/cm/fold/index.js";
+import {
+  expandToEnclosingBlock,
+  touchesStructuralReparse,
+} from "../../src/webview/cm/structural-guard.js";
 import { frontmatterBlockField } from "../../src/webview/cm/frontmatter/index.js";
 
 let view: EditorView | null = null;
