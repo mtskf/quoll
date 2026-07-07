@@ -11,10 +11,9 @@
 //
 // `Tree` is derived from `syntaxTree`'s return type rather than imported
 // from `@lezer/common` directly (review fix #12). `@lezer/common` is a
-// transitive-only dep that pnpm does not hoist (verified: `find
-// node_modules/@lezer/common` empty; `.npmrc` `public-hoist-pattern`
-// covers `@types/*` only); declaring it as a direct dep would violate
-// the repo's supply-chain default-deny. The C2 `lezer-url-walker.ts`
+// direct dep as of PR #66 (added for the lint incremental parser's
+// `TreeFragment`); this type is derived rather than imported to avoid
+// widening the direct-dep import surface. The C2 `lezer-url-walker.ts`
 // chose the same alias strategy for the same reason.
 
 import type { syntaxTree } from "@codemirror/language";

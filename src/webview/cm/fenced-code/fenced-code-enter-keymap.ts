@@ -33,8 +33,8 @@ import { EditorSelection, Prec } from "@codemirror/state";
 import { type Command, keymap } from "@codemirror/view";
 
 // Derive SyntaxNode from syntaxTree's return type (same strategy as
-// fenced-code-body.ts / list-indent-keymap.ts — @lezer/common is transitive-only
-// and pnpm does not hoist it).
+// fenced-code-body.ts / list-indent-keymap.ts — @lezer/common is a direct dep as
+// of PR #66, derived rather than imported to keep the direct-dep surface narrow).
 type Tree = ReturnType<typeof syntaxTree>;
 type SyntaxNode = Tree["topNode"];
 

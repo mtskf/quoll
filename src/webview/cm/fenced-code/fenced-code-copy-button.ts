@@ -22,8 +22,9 @@ import {
 import type { BuildContext } from "../decorations/types.js";
 import { CopyButtonWidget } from "./fenced-code-copy-button-widget.js";
 
-// `@lezer/common` is a transitive-only dep pnpm does not hoist (supply-chain
-// default-deny) — derive SyntaxNode from syntaxTree's return type. Same strategy
+// `@lezer/common` is a direct dep as of PR #66 (for the lint incremental
+// parser's `TreeFragment`); derive SyntaxNode from syntaxTree's return type
+// rather than importing it to keep the direct-dep surface narrow. Same strategy
 // as decorations/types.ts / list-geometry.ts. syntaxTree is a VALUE import (the
 // build below calls it at runtime) but still backs these type aliases.
 type Tree = ReturnType<typeof syntaxTree>;
