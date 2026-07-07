@@ -14,7 +14,7 @@
       "*.json",
       "vitest.config.ts",
       "esbuild.config.mjs",
-      "scripts/*.mjs",
+      "scripts/**/*.mjs",
       "test/extension/build.mjs"
     ],
     "ignoreUnknown": true
