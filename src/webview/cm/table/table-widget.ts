@@ -21,6 +21,7 @@ import { type EditorView, WidgetType } from "@codemirror/view";
 
 import { type Align, type Cell, type Table, tableAlign } from "../../../markdown/table/index.js";
 import { quollResourceBaseUri } from "../image/resource-base.js";
+import { quollOpenExternalSink } from "../open-external.js";
 import { renderCellInline } from "./cell-render.js";
 
 export class TableBlockWidget extends WidgetType {
@@ -85,12 +86,18 @@ export class TableBlockWidget extends WidgetType {
     // falls back to the block start via `root.dataset.docFrom`.
     //
     // Modifier-click on a live `<a>` (external nav — cell-render left it
-    // un-preventDefault'd) is the exception: moving the caret would fight the
-    // browser navigation. `closest("a")` (not `event.target instanceof HTMLAnchorElement`)
-    // so wrapped inline link children resolve; `instanceof HTMLAnchorElement` on the
-    // `closest()` result is correct — it narrows the already-resolved ancestor.
-    // `!event.defaultPrevented` mirrors cell-render's
-    // single-source-of-truth decision on whether the href opens externally.
+    // un-preventDefault'd because the href is absolute AND within
+    // MAX_HREF_LENGTH) is the exception: rather than dispatch a caret, route
+    // the open through the host `open-external` choke point
+    // (quollOpenExternalSink) so the host re-validates the URL before opening,
+    // matching link-handlers.ts. The browser's native anchor handler would
+    // skip that host re-check. `closest("a")` (not `event.target instanceof
+    // HTMLAnchorElement`) so wrapped inline link children resolve;
+    // `instanceof HTMLAnchorElement` on the `closest()` result narrows the
+    // already-resolved ancestor. `!event.defaultPrevented` mirrors
+    // cell-render's single-source-of-truth decision on whether the href opens
+    // externally (relative / fragment / oversize hrefs are preventDefault'd
+    // there and fall through to caret dispatch below).
     root.addEventListener("click", (event) => {
       const anchor = (event.target as Element | null)?.closest?.("a");
       if (
@@ -98,6 +105,13 @@ export class TableBlockWidget extends WidgetType {
         (event.metaKey || event.ctrlKey) &&
         !event.defaultPrevented
       ) {
+        // Suppress the native anchor handler (it would open WITHOUT the host
+        // re-validation) and route through the sink. A transport throw (panel
+        // dispose mid-click) yields a dead-click by design — native nav is
+        // NEVER the fallback. The href is guaranteed absolute + within-cap by
+        // cell-render, so no empty/oversize guard is needed here.
+        event.preventDefault();
+        view.state.facet(quollOpenExternalSink)(anchor.getAttribute("href") ?? "");
         return;
       }
       const cell = (event.target as Element | null)?.closest?.("th, td") as HTMLElement | null;
