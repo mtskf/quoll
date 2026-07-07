@@ -864,6 +864,33 @@ describe("touchesStructuralReparse — arm falsifiability + perf contract (direc
     expect(touchesStructuralReparse(tx("hello world\n", { from: 5, insert: "x" }))).toBe(false);
   });
 
+  // SHAPE is DELTA-based, not presence-based: editing the BODY of a line that already
+  // starts with a structural marker keeps the marker signature identical old↔new, so the
+  // block shape is unchanged and the edit stays on the bounded hot path. RED against the
+  // old presence-based SHAPE (which fired on ANY marker-touching slice).
+  it("=== false for a list-marker BODY edit (- item → - itemx)", () => {
+    expect(touchesStructuralReparse(tx("- item\n", { from: 6, insert: "x" }))).toBe(false);
+  });
+
+  it("=== false for an ATX-heading BODY edit (# head → # heads)", () => {
+    expect(touchesStructuralReparse(tx("# head\n", { from: 6, insert: "s" }))).toBe(false);
+  });
+
+  it("=== false for a blockquote BODY edit (> quote → > quotes)", () => {
+    expect(touchesStructuralReparse(tx("> quote\n", { from: 7, insert: "s" }))).toBe(false);
+  });
+
+  it("=== false for a fenced info-string edit (```js → ```ts, same fence)", () => {
+    // The fence delimiter (``` ) is unchanged; only the info string differs — the fence
+    // still opens the same block, so the signature matches and it stays bounded.
+    expect(touchesStructuralReparse(tx("```js\n", { from: 3, to: 5, insert: "ts" }))).toBe(false);
+  });
+
+  it("=== true when a marker-line body edit ALSO changes the marker (# h → ## h)", () => {
+    // Adding a `#` changes the ATX marker shape (H1→H2), so the signature differs → fires.
+    expect(touchesStructuralReparse(tx("# h\n", { from: 1, insert: "#" }))).toBe(true);
+  });
+
   it("=== false for a same-line non-structural char edit inside a fenced-code body", () => {
     // Codex Conf 92: the "inside a fence" caveat holds ONLY for a same-line char edit
     // (no newline, no `>`, no shape, no blank/indent flip) — NOT typing generally.

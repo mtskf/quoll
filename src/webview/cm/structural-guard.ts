@@ -40,6 +40,22 @@ import type { Interval } from "./bounded-recompute.js";
 const STRUCTURAL =
   /(?:^|\n)[ \t]{0,3}(?:`{3,}|~{3,})|(?:^|\n)[ \t]*(?:[-*+]|\d{1,9}[.)]|>)|(?:^|\n)[ \t]{0,3}<[/!?A-Za-z]|<\/(?:script|pre|style|textarea)>|-->|\?>|\]\]>|(?:^|\n)[ \t]{0,3}#{1,6}(?:[ \t]|$)|(?:^|\n)[ \t]{0,3}(?:_[ \t]*){3,}/i;
 
+/** Global-flag twin of STRUCTURAL (same source — single source of truth) for the
+ *  DELTA scan: `String.prototype.match` with a `g`-flagged regex returns every
+ *  match substring and is stateless (no `lastIndex` carry-over between calls,
+ *  unlike `.test`/`.exec`). Non-capturing groups ⇒ the array holds full matches. */
+const STRUCTURAL_GLOBAL = new RegExp(STRUCTURAL.source, "gi");
+
+/** The ordered structural-marker SIGNATURE of a line-expanded slice: the sequence of
+ *  STRUCTURAL matches (fence/container/HTML markers + inline terminators). Two slices
+ *  with the SAME signature carry the same block-shaping markers in the same order, so an
+ *  edit between them cannot open/close/re-delimit a container that reaches OUTSIDE the
+ *  changed run. Comparing old↔new signatures (rather than mere presence) is what lets a
+ *  marker-BODY edit (`- item`→`- itemx`) stay bounded. */
+function structuralSignature(slice: string): string {
+  return (slice.match(STRUCTURAL_GLOBAL) ?? []).join("\n");
+}
+
 /** A Markdown blank line — the block separator the up/down walk stops at — is one
  *  containing ONLY ASCII spaces / tabs (CommonMark), the set the Lezer parser
  *  treats as insignificant at a block boundary (verified: a space-only line splits
@@ -68,7 +84,11 @@ export function isBlankLine(text: string): boolean {
  *  NO `insideBlock` gate: the fold fields are record-less (no reused per-block record to
  *  scope an in-body edit against), so ANY top-level structural trigger ⇒ full rebuild.
  *  Fires when, for ANY changed range, ANY arm matches:
- *   - SHAPE — STRUCTURAL matches the OLD or NEW line-expanded slice.
+ *   - SHAPE — the STRUCTURAL marker SIGNATURE (ordered match sequence) of the OLD line-
+ *     expanded slice DIFFERS from the NEW one. A marker appearing, vanishing, or changing
+ *     shape (`x q`→`# q`, `- a`→`a`, ``` ``` ```→``` ````` ```) re-delimits a container that
+ *     can reach outside the changed run. Delta-based, NOT presence-based: a marker-BODY edit
+ *     (`- item`→`- itemx`) leaves the signature intact and stays bounded.
  *   - NEWLINE-DELTA — the edit inserts or deletes a `\n`. A multi-line interior edit can
  *     promote/demote a FAR heading or terminate an enclosing list while its endpoints stay
  *     shapeless (endpoint-only SHAPE/blank/indent checks miss it). Cost is Enter/paste/
@@ -86,12 +106,15 @@ export function isBlankLine(text: string): boolean {
  *  On a non-docChanged transaction `iterChangedRanges` yields nothing → returns false.
  *
  *  SOUND over-approximation: false full-rebuilds only cost speed; UNDER-triggering would be
- *  unsound (a stranded chevron). ACCEPTED over-approximation (perf, not soundness): SHAPE is
- *  presence-based, so editing the BODY of a line that already starts with a marker
- *  (`- item`→`- itemx`) trips a full rebuild even though structure is unchanged — a strict
- *  improvement over the pre-PR always-full-rebuild baseline; a delta-based refinement is
- *  deferred to a perf follow-up. Exported so the negative-assertion tests can call it
- *  directly (pinning that plain prose typing stays on the bounded hot path).
+ *  unsound (a stranded chevron). SHAPE is DELTA-based (old↔new marker-signature diff), so a
+ *  marker-BODY edit (`- item`→`- itemx`) that leaves the block-shaping markers intact stays
+ *  on the bounded hot path; it still fires whenever a marker appears, vanishes, or changes
+ *  shape. (NOTE — a further, field-SPECIFIC refinement is deferred: the record-carrying
+ *  `calloutMarkerConcealField` could keep a NEWLINE/GT/INDENT-DELTA edit contained within an
+ *  existing callout record on its bounded path, but that needs a record-aware guard local to
+ *  that field, NOT a change to this field-agnostic, record-less shared over-approximation.)
+ *  Exported so the negative-assertion tests can call it directly (pinning that plain prose
+ *  typing AND marker-body edits stay on the bounded hot path).
  *  Memoised per Transaction so the four fold/callout fields share one dual-slice scan per
  *  dispatch (one scan per dispatch under CM 6.6.x). */
 const structuralMemo = new WeakMap<Transaction, boolean>();
@@ -113,7 +136,7 @@ export function touchesStructuralReparse(tr: Transaction): boolean {
       tr.state.doc.lineAt(fromB).from,
       tr.state.doc.lineAt(toB).to
     );
-    if (STRUCTURAL.test(oldSlice) || STRUCTURAL.test(newSlice)) {
+    if (structuralSignature(oldSlice) !== structuralSignature(newSlice)) {
       hit = true;
       return;
     }
