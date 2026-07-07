@@ -1,8 +1,8 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
+import { createIncrementalLinter, lintMarkdown } from "../../src/webview/cm/lint/engine.js";
 import { frontmatterContentLines } from "../../src/webview/cm/lint/frontmatter-range.js";
 import { scanLines } from "../../src/webview/cm/lint/line-scan.js";
-import { createIncrementalLinter, lintMarkdown } from "../../src/webview/cm/lint/engine.js";
 import { frontmatterStructure } from "../../src/webview/cm/lint/rules/frontmatter-structure.js";
 
 describe("frontmatterContentLines", () => {
