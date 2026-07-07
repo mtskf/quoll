@@ -122,24 +122,37 @@ function runCheck() {
   const warnings = [];
 
   if (localTagExists(tag)) {
-    problems.push(`tag ${tag} already exists locally — bump the patch version first (node scripts/release.mjs bump).`);
+    problems.push(
+      `tag ${tag} already exists locally — bump the patch version first (node scripts/release.mjs bump).`
+    );
   }
   const remote = remoteTagExists(tag);
   if (remote === true) {
-    problems.push(`tag ${tag} already exists on origin — this version was already released; bump the patch version.`);
+    problems.push(
+      `tag ${tag} already exists on origin — this version was already released; bump the patch version.`
+    );
   } else if (remote === null) {
-    warnings.push(`could not reach origin to check for a remote ${tag} (offline or SSH agent refusal) — a push would still fail fast on a real collision.`);
+    warnings.push(
+      `could not reach origin to check for a remote ${tag} (offline or SSH agent refusal) — a push would still fail fast on a real collision.`
+    );
   }
 
   const cl = checkChangelog(version);
-  if (!cl.ok) problems.push(cl.message);
-  else if (cl.warning) warnings.push(cl.warning);
+  if (!cl.ok) {
+    problems.push(cl.message);
+  } else if (cl.warning) {
+    warnings.push(cl.warning);
+  }
 
-  for (const w of warnings) console.warn(`release check: warning: ${w}`);
+  for (const w of warnings) {
+    console.warn(`release check: warning: ${w}`);
+  }
 
   if (problems.length > 0) {
     console.error(`release check: NOT ready to release ${tag}:`);
-    for (const p of problems) console.error(`  - ${p}`);
+    for (const p of problems) {
+      console.error(`  - ${p}`);
+    }
     return false;
   }
   console.log(`release check: ready to release ${tag}.`);
