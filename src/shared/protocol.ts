@@ -224,7 +224,7 @@ export type HostToWebview =
 
 // ---------- Webview → Host ----------
 
-/** Webview→host signal that the webview has mounted (`src/webview/App.tsx`
+/** Webview→host signal that the webview has mounted (`src/webview/shell.ts`
  *  posts this immediately after the host-message subscription is wired).
  *  The host (`QuollEditorPanel.ts`, `case "ready":`) replies by posting
  *  the current authoritative `DocumentMessage` — there is no separate
@@ -348,7 +348,8 @@ export type CaretReportMessage = Envelope & {
  *      range without re-deriving it from its (possibly transiently-stale) copy
  *      of the text, so a mid-edit set self-heals once the document converges.
  *  The reserved `fix` field of the webview's `LintDiagnostic` is intentionally
- *  NOT carried (no autofix path exists). `severity` is advisory only — "error"
+ *  NOT carried: autofix is applied locally in the webview (`Mod-.` via
+ *  `cm/lint/apply-fix.ts`) and requires no host round-trip. `severity` is advisory only — "error"
  *  is structurally impossible here, mirroring the lint layer's policy that
  *  write-blocking failures belong to the host write-gate, not lint. */
 export type LintDiagnosticWire = {

@@ -429,17 +429,30 @@ export function createHostSessionCore(context: HostSessionContext, deps: HostSes
           // not less. A clean `ok` settle has no showError → []; a failure →
           // [showError]; an ok-but-mismatch (external won) is a valid
           // resolution, not a failure → also []. Alive: full effects.
+          const baseEffects = settlementEffects(event.outcome, settled, heldBase, state.context);
+          const extraEffects: HostSessionEffect[] =
+            stash !== null && event.outcome.kind === "ok" && event.currentContent !== inFlight
+              ? [
+                  {
+                    type: "logWarn",
+                    message:
+                      "[quoll] ok-but-mismatch on settle: external edit won the race, pending stash dropped",
+                    detail: {
+                      stashBase: stash.baseDocVersion,
+                      settledDocVersion: settled.lastAppliedDocVersion,
+                    },
+                  },
+                ]
+              : [];
           if (state.disposed) {
             return {
               state: settled,
-              effects: settlementEffects(event.outcome, settled, heldBase, state.context).filter(
-                (e) => e.type === "showError"
-              ),
+              effects: [...extraEffects, ...baseEffects.filter((e) => e.type === "showError")],
             };
           }
           return {
             state: settled,
-            effects: settlementEffects(event.outcome, settled, heldBase, state.context),
+            effects: [...extraEffects, ...baseEffects],
           };
         }
 

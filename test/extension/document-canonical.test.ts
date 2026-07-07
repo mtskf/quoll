@@ -4,8 +4,8 @@ import { EndOfLine, type TextDocument } from "vscode";
 import {
   buildDocumentMessageFromDocument,
   canonicalDocumentText,
-  decideEditForDocument,
 } from "../../src/extension/document-canonical.js";
+import { decideEdit } from "../../src/extension/edit-decision.js";
 
 function fakeDoc(eol: EndOfLine, text: string): Pick<TextDocument, "eol" | "getText"> {
   return { eol, getText: () => text } as Pick<TextDocument, "eol" | "getText">;
@@ -53,24 +53,28 @@ describe("buildDocumentMessageFromDocument", () => {
   });
 });
 
-describe("decideEditForDocument", () => {
+describe("decideEdit + canonicalDocumentText wiring", () => {
   const base = { baseDocVersion: 1, lastAppliedDocVersion: 1, canWrite: true };
 
-  it("returns no-op when the inbound (canonical) content matches the canonicalized document (pins the wiring)", () => {
+  it("returns no-op when the inbound (canonical) content matches the canonicalized document (pins the EOL-adapter wiring)", () => {
     // getText() is MIXED; the webview echoes the CANONICAL form. Comparing
     // against canonicalDocumentText (not raw getText) yields no-op. Reverting
-    // the adapter to raw getText() makes this `accept` → test fails.
-    const verdict = decideEditForDocument(fakeDoc(EndOfLine.CRLF, "a\r\nb\nc"), {
+    // canonicalDocumentText to raw getText() makes this `accept` → test fails.
+    const doc = fakeDoc(EndOfLine.CRLF, "a\r\nb\nc");
+    const verdict = decideEdit({
       ...base,
       content: "a\r\nb\r\nc",
+      currentContent: canonicalDocumentText(doc),
     });
     expect(verdict.kind).toBe("no-op");
   });
 
   it("returns accept for a genuine edit (content differs from the canonical document)", () => {
-    const verdict = decideEditForDocument(fakeDoc(EndOfLine.CRLF, "a\r\nb\nc"), {
+    const doc = fakeDoc(EndOfLine.CRLF, "a\r\nb\nc");
+    const verdict = decideEdit({
       ...base,
       content: "a\r\nCHANGED\r\nc",
+      currentContent: canonicalDocumentText(doc),
       markdownValidator: () => ({ ok: true }),
     });
     expect(verdict.kind).toBe("accept");

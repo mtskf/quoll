@@ -1510,9 +1510,9 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
       if (panelControls) {
         this.harness?.setActivePanel(null, panelControls);
       }
-      // Disposable.from continues even if one dispose() throws. A
-      // hand-rolled while-pop bails on the first throw, leaking the
-      // remaining listeners silently.
+      // VS Code's Disposable.from is a plain loop with no per-item
+      // try/catch: a throwing dispose() aborts the rest, leaking the
+      // remaining items. The outer try/catch at least surfaces the error.
       try {
         Disposable.from(...disposables).dispose();
       } catch (err) {

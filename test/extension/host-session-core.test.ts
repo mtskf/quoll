@@ -244,14 +244,22 @@ describe("host-session-core: applyEditSettled drain", () => {
     expect(r.effects).toEqual([{ type: "applyEdit", content: "edit1plus", baseDocVersion: 2 }]);
   });
 
-  it("EXTERNAL edit raced (currentContent !== inFlightContent) → NO drain, repost authoritative Document (external wins)", () => {
+  it("EXTERNAL edit raced (currentContent !== inFlightContent) → NO drain, logWarn + repost authoritative Document (external wins)", () => {
     const r = core.transition(
       lockedWithStash("edit1", "edit1plus"),
       settled({ outcome: { kind: "ok", documentVersion: 5 }, currentContent: "external-content" })
     );
     expect(r.state.pendingEdit).toBeNull();
     expect(r.state.pendingApplyBaseVersion).toBeNull();
-    expect(r.effects).toEqual([{ type: "postDocument", docVersion: 5 }]);
+    expect(r.effects).toEqual([
+      {
+        type: "logWarn",
+        message:
+          "[quoll] ok-but-mismatch on settle: external edit won the race, pending stash dropped",
+        detail: { stashBase: 1, settledDocVersion: 5 },
+      },
+      { type: "postDocument", docVersion: 5 },
+    ]);
   });
 
   it("non-ok outcome with a stash → NO drain, normal failure handling (stash dropped)", () => {
@@ -322,12 +330,19 @@ describe("host-session-core: applyEditSettled drain", () => {
     expect(r.effects).toEqual([{ type: "showError", message: "Failed to save: boom" }]);
   });
 
-  it("POST-DISPOSE ok but external-mismatch WITH a stash → strict silent (external won, no toast)", () => {
+  it("POST-DISPOSE ok but external-mismatch WITH a stash → logWarn only, no toast (external won, webview-bound effects suppressed)", () => {
     const r = core.transition(
       lockedWithStash("edit1", "edit1plus", { disposed: true }),
       settled({ outcome: { kind: "ok", documentVersion: 2 }, currentContent: "external" })
     );
-    expect(r.effects).toEqual([]);
+    expect(r.effects).toEqual([
+      {
+        type: "logWarn",
+        message:
+          "[quoll] ok-but-mismatch on settle: external edit won the race, pending stash dropped",
+        detail: { stashBase: 1, settledDocVersion: 2 },
+      },
+    ]);
   });
 
   it("POST-DISPOSE settle with NO stash → strict no-op, state unchanged", () => {

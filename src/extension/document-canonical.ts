@@ -16,7 +16,6 @@ import { EndOfLine, type TextDocument } from "vscode";
 // it internally but does NOT re-export it, so import the type from the source.
 import type { DocumentMessage } from "../shared/protocol.js";
 import { buildDocumentMessage } from "./document-message.js";
-import { type DecideEditInput, decideEdit, type EditVerdict } from "./edit-decision.js";
 
 export function canonicalDocumentText(document: Pick<TextDocument, "eol" | "getText">): string {
   const separator = document.eol === EndOfLine.CRLF ? "\r\n" : "\n";
@@ -28,11 +27,4 @@ export function buildDocumentMessageFromDocument(
   metadata: { docVersion: number; isDarkTheme: boolean; canWrite: boolean }
 ): DocumentMessage {
   return buildDocumentMessage({ content: canonicalDocumentText(document), ...metadata });
-}
-
-export function decideEditForDocument(
-  document: Pick<TextDocument, "eol" | "getText">,
-  input: Omit<DecideEditInput, "currentContent">
-): EditVerdict {
-  return decideEdit({ ...input, currentContent: canonicalDocumentText(document) });
 }
