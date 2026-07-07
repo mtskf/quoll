@@ -193,6 +193,14 @@ describe("fencedCodeBodyAt", () => {
     const state = makeState(doc);
     expect(fencedCodeBodyAt(state, 0)).toBe("const x = 1;\nfoo();");
   });
+
+  it("returns null when openFrom points to a body line (not the open fence line)", () => {
+    const doc = "```js\nconst x = 1;\n```\n";
+    const state = makeState(doc);
+    // offset 6 = start of body line "const x = 1;"; FencedCode overlaps walk
+    // range but its open line is at 0 — the guard must reject this.
+    expect(fencedCodeBodyAt(state, 6)).toBeNull();
+  });
 });
 
 function pathDs(el: HTMLElement): string[] {
@@ -431,8 +439,9 @@ describe("fencedCodeCopyButton DOM integration", () => {
         changes: { from, to: from + "const x = 1;".length, insert: "const y = 2;" },
       });
 
-      // Must be the SAME node: eq() returned true (openFrom unchanged) → DOM reused.
-      // A regression to eager materialisation produces a NEW node here → assertion red.
+      // Must be the SAME node: eq() returns true (openFrom unchanged after a body
+      // edit) → CM reuses the existing DOM node rather than rebuilding it. This is
+      // the perf contract: typing INSIDE the block must not rebuild the widget.
       const btnAfter = view.dom.querySelector<HTMLButtonElement>(".quoll-copy-button");
       expect(btnAfter).toBe(btnBefore);
 
