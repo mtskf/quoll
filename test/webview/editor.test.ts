@@ -2,7 +2,7 @@
 import { ensureSyntaxTree, foldable } from "@codemirror/language";
 import { EditorView } from "@codemirror/view";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { MAX_CONTENT_LENGTH } from "../../src/shared/protocol.js";
+import { MAX_CONTENT_LENGTH, PROTOCOL_VERSION } from "../../src/shared/protocol.js";
 import { applyCaret } from "../../src/webview/cm/caret.js";
 import {
   blockquoteRule,
@@ -10,6 +10,7 @@ import {
   fencedCodePanel,
 } from "../../src/webview/cm/decorations/block-style.js";
 import { buildListHangIndent, listHangIndent } from "../../src/webview/cm/list/list-hang-indent.js";
+import { quollOpenExternalSink } from "../../src/webview/cm/open-external.js";
 import { type EditorHandle, mountEditor } from "../../src/webview/editor.js";
 import { type Action, initialState, type WebviewState } from "../../src/webview/state.js";
 import { fullTree } from "./helpers/full-tree.js";
@@ -1104,5 +1105,22 @@ describe("editor — Codex context-handoff keymap is registered", () => {
       .filter((m) => !!m && (m as { type?: unknown }).type === "codex-context-handoff");
     expect(codexHandoffs).toHaveLength(1);
     expect(codexHandoffs[0]).toMatchObject({ type: "codex-context-handoff" });
+  });
+});
+
+describe("editor — quollOpenExternalSink wiring", () => {
+  it("wires quollOpenExternalSink to the host — table-cell link opens route through open-external", () => {
+    const { view } = mount();
+    postMessage.mockClear();
+    // Invoke the wired facet directly: pins that editor.ts provided the real
+    // openExternalSinkFor(getHost()), not the facet's no-op default. (The widget
+    // block-DOM does not render reliably under happy-dom, so exercise the facet
+    // value rather than a synthesized widget click.)
+    view.state.facet(quollOpenExternalSink)("https://example.com");
+    expect(postMessage).toHaveBeenCalledWith({
+      protocol: PROTOCOL_VERSION,
+      type: "open-external",
+      href: "https://example.com",
+    });
   });
 });
