@@ -20,6 +20,7 @@
 // read-only gate lives in the builder (no widget is emitted at all when
 // state.readOnly), so this DOM only ever exists on a writable surface.
 
+import type { EditorState } from "@codemirror/state";
 import { type EditorView, WidgetType } from "@codemirror/view";
 
 const COPY_LABEL = "Copy code";
@@ -88,20 +89,28 @@ async function copyToClipboard(text: string): Promise<boolean> {
 
 export class CopyButtonWidget extends WidgetType {
   constructor(
-    /** The exact code body copied on click — the sole eq() key, so a body edit
-     *  rebuilds the DOM (and its handler closure) with the fresh payload while a
-     *  pure positional shift reuses it (docFrom is not needed: CM tracks the
-     *  widget's position via the decoration range). */
-    readonly body: string
+    /** Open-line offset of the fenced block — the sole eq() key. The button DOM is
+     *  body- AND content-independent (a bare icon), so identity is purely
+     *  positional: a body edit leaves openFrom fixed → the DOM (and its click
+     *  handler) is REUSED with no per-keystroke body allocation; an edit above the
+     *  block shifts openFrom → the DOM is rebuilt so the click resolves the block
+     *  at its new offset. buildCopyButtons recomputes openFrom on every rebuild, so
+     *  a reused handler's openFrom is always the live offset. */
+    readonly openFrom: number,
+    /** Lazy click-time body resolver — a stable module-level fn (fencedCodeBodyAt)
+     *  injected by the builder to avoid a widget↔builder import cycle. Called with
+     *  the LIVE state on click, so it returns the CURRENT body of the block at
+     *  openFrom (or null if the block is gone), never a stale build-time payload. */
+    readonly getBody: (state: EditorState, openFrom: number) => string | null
   ) {
     super();
   }
 
   eq(other: WidgetType): boolean {
-    return other instanceof CopyButtonWidget && other.body === this.body;
+    return other instanceof CopyButtonWidget && other.openFrom === this.openFrom;
   }
 
-  toDOM(_view: EditorView): HTMLElement {
+  toDOM(view: EditorView): HTMLElement {
     const button = document.createElement("button");
     button.type = "button";
     // Class name matches the theme selector in cm/theme.ts (copyButtonThemeSpec).
@@ -128,6 +137,14 @@ export class CopyButtonWidget extends WidgetType {
     button.addEventListener("click", (event) => {
       event.preventDefault();
       event.stopPropagation();
+      // Resolve the CURRENT body at click time from the live state (view.state is
+      // a getter — always current, even for a DOM reused across edits). null → the
+      // block was deleted/reshaped since the last rebuild; nothing to copy, and we
+      // leave the button's feedback state untouched (no attempt bump, no timer).
+      const text = this.getBody(view.state, this.openFrom);
+      if (text === null) {
+        return;
+      }
       const myAttempt = ++attempt;
       // Cancel a pending revert from a PRIOR click immediately, so it cannot
       // fire and flash the button back to the default "Copy code" state while
@@ -137,7 +154,7 @@ export class CopyButtonWidget extends WidgetType {
         clearTimeout(revertTimer);
         revertTimer = undefined;
       }
-      void copyToClipboard(this.body).then((ok) => {
+      void copyToClipboard(text).then((ok) => {
         // Drop a superseded (out-of-order) settle so the newest click wins.
         if (myAttempt !== attempt) {
           return;

@@ -143,6 +143,42 @@ export function fencedCodeBody(state: EditorState, node: SyntaxNode): string {
     .join("\n");
 }
 
+/** The current copy payload of the fenced block whose OPEN line begins at
+ *  `openFrom`, or null when no such block exists there (it was deleted / reshaped
+ *  since the widget was built). This is the LAZY, click-time resolution: the body
+ *  is a tree-walk of the LIVE state rather than a string materialised into the
+ *  widget on every rebuild — so typing inside a large block no longer allocates
+ *  its (multi-hundred-KB) body per keystroke, yet the button still copies the
+ *  CURRENT body because the walk reads the live tree. `openFrom` is the widget's
+ *  eq key, recomputed on every rebuild ({@link buildCopyButtons}), so it is always
+ *  the live open-line offset: a body edit leaves it fixed (DOM reused), an edit
+ *  above the block shifts it (DOM rebuilt). Scopes the walk to the single open
+ *  line, matching {@link buildCopyButtons}'s own anchor rule
+ *  (`doc.lineAt(node.from).from`) so a blockquote-/list-nested fence still resolves. */
+export function fencedCodeBodyAt(state: EditorState, openFrom: number): string | null {
+  const doc = state.doc;
+  if (openFrom < 0 || openFrom > doc.length) {
+    return null;
+  }
+  const openLine = doc.lineAt(openFrom);
+  let body: string | null = null;
+  syntaxTree(state).iterate({
+    from: openLine.from,
+    to: openLine.to,
+    enter: (node) => {
+      if (body !== null) {
+        return false;
+      }
+      if (node.name === "FencedCode" && doc.lineAt(node.from).from === openLine.from) {
+        body = fencedCodeBody(state, node.node);
+        return false;
+      }
+      return undefined;
+    },
+  });
+  return body;
+}
+
 /** Emit one copy button per fenced code block whose open line is in a visible
  *  range — top-level AND blockquote-/list-NESTED. Read-only surfaces get nothing
  *  (the affordance is interactive, and the read-only editor is a dimmed,
@@ -184,7 +220,11 @@ export function buildCopyButtons(ctx: BuildContext): DecorationSet {
           return;
         }
         seen.add(openFrom);
-        const widget = new CopyButtonWidget(fencedCodeBody(ctx.state, node.node));
+        // Inject the click-time body resolver (a stable module-level fn) + the
+        // open-line offset key rather than the materialised body: the body is
+        // resolved LAZILY at click against the live state (see fencedCodeBodyAt),
+        // so a per-keystroke edit inside a large block allocates no body here.
+        const widget = new CopyButtonWidget(openFrom, fencedCodeBodyAt);
         out.push({ from: openFrom, deco: Decoration.widget({ widget, side: -1 }) });
       },
     });

@@ -12,6 +12,7 @@ import type { BuildContext } from "../../src/webview/cm/decorations/types.js";
 import {
   buildCopyButtons,
   fencedCodeBody,
+  fencedCodeBodyAt,
   fencedCodeCopyButton,
 } from "../../src/webview/cm/fenced-code/fenced-code-copy-button.js";
 import {
@@ -150,13 +151,65 @@ describe("fencedCodeBody", () => {
   });
 });
 
+describe("fencedCodeBodyAt", () => {
+  function makeState(doc: string): EditorState {
+    return EditorState.create({
+      doc,
+      extensions: [markdown({ base: markdownLanguage })],
+    });
+  }
+
+  it("returns null for openFrom < 0 (out-of-bounds low)", () => {
+    const state = makeState("```js\nconst x = 1;\n```\n");
+    expect(fencedCodeBodyAt(state, -1)).toBeNull();
+  });
+
+  it("returns null for openFrom > doc.length (out-of-bounds high)", () => {
+    const state = makeState("```js\nconst x = 1;\n```\n");
+    expect(fencedCodeBodyAt(state, state.doc.length + 1)).toBeNull();
+  });
+
+  it("returns null when no FencedCode starts on the given line (plain paragraph)", () => {
+    const state = makeState("just a paragraph\n\n```js\nconst x = 1;\n```\n");
+    // openFrom points at the start of the paragraph line, not a fenced block
+    expect(fencedCodeBodyAt(state, 0)).toBeNull();
+  });
+
+  it("resolves the body of a top-level fence (openFrom = open line start)", () => {
+    const doc = "```js\nconst x = 1;\n```\n";
+    const state = makeState(doc);
+    expect(fencedCodeBodyAt(state, 0)).toBe("const x = 1;");
+  });
+
+  it("resolves the body of a blockquote-nested fence", () => {
+    const doc = "> ```js\n> const x = 1;\n> foo();\n> ```\n";
+    const state = makeState(doc);
+    // The open line starts at offset 0 (the `> ` prefix is on the same line)
+    expect(fencedCodeBodyAt(state, 0)).toBe("const x = 1;\nfoo();");
+  });
+
+  it("resolves the body of a list-nested fence", () => {
+    const doc = "- ```js\n  const x = 1;\n  foo();\n  ```\n";
+    const state = makeState(doc);
+    expect(fencedCodeBodyAt(state, 0)).toBe("const x = 1;\nfoo();");
+  });
+
+  it("returns null when openFrom points to a body line (not the open fence line)", () => {
+    const doc = "```js\nconst x = 1;\n```\n";
+    const state = makeState(doc);
+    // offset 6 = start of body line "const x = 1;"; FencedCode overlaps walk
+    // range but its open line is at 0 — the guard must reject this.
+    expect(fencedCodeBodyAt(state, 6)).toBeNull();
+  });
+});
+
 function pathDs(el: HTMLElement): string[] {
   return [...el.querySelectorAll("path")].map((p) => p.getAttribute("d") ?? "");
 }
 
 describe("CopyButtonWidget", () => {
   it("renders a Lucide copy icon button with an accessible name (no text label)", () => {
-    const dom = new CopyButtonWidget("x").toDOM({} as EditorView) as HTMLButtonElement;
+    const dom = new CopyButtonWidget(0, () => "x").toDOM({} as EditorView) as HTMLButtonElement;
     expect(dom.tagName).toBe("BUTTON");
     expect(dom.getAttribute("aria-label")).toBe("Copy code");
     expect(pathDs(dom)).toContain(COPY_ICON_PATH);
@@ -166,7 +219,9 @@ describe("CopyButtonWidget", () => {
     const writeText = vi.fn().mockResolvedValue(undefined);
     vi.stubGlobal("navigator", { clipboard: { writeText } });
     try {
-      const dom = new CopyButtonWidget("const x = 1;\nfoo();").toDOM(
+      // The body is resolved lazily at click; a stub resolver stands in for the
+      // live tree walk (fencedCodeBodyAt is covered by the DOM-integration suite).
+      const dom = new CopyButtonWidget(0, () => "const x = 1;\nfoo();").toDOM(
         {} as EditorView
       ) as HTMLButtonElement;
       dom.dispatchEvent(new MouseEvent("click", { bubbles: true }));
@@ -187,7 +242,7 @@ describe("CopyButtonWidget", () => {
     const writeText = vi.fn().mockRejectedValue(new Error("NotAllowedError"));
     vi.stubGlobal("navigator", { clipboard: { writeText } });
     try {
-      const dom = new CopyButtonWidget("x").toDOM({} as EditorView) as HTMLButtonElement;
+      const dom = new CopyButtonWidget(0, () => "x").toDOM({} as EditorView) as HTMLButtonElement;
       dom.dispatchEvent(new MouseEvent("click", { bubbles: true }));
       await Promise.resolve();
       await Promise.resolve();
@@ -199,14 +254,20 @@ describe("CopyButtonWidget", () => {
     }
   });
 
-  it("eq() is keyed on body alone (a positional shift reuses the DOM)", () => {
-    const a = new CopyButtonWidget("x");
-    expect(a.eq(new CopyButtonWidget("x"))).toBe(true); // same body → reuse on shift
-    expect(a.eq(new CopyButtonWidget("y"))).toBe(false); // body edit → rebuild
+  it("eq() is keyed on openFrom alone (a body edit reuses the DOM; a shift rebuilds)", () => {
+    const resolve = () => "x";
+    const a = new CopyButtonWidget(5, resolve);
+    // Same open-line offset → reuse the DOM even though the body changed underneath
+    // (the body is resolved lazily at click, never stored). This is the perf pin:
+    // typing INSIDE the block must not rebuild the widget or re-materialise its body.
+    expect(a.eq(new CopyButtonWidget(5, () => "different body"))).toBe(true);
+    // A positional shift (an edit ABOVE the block) → rebuild so the reused click
+    // handler never resolves the block at a stale offset.
+    expect(a.eq(new CopyButtonWidget(9, resolve))).toBe(false);
   });
 
   it("always carries the base copy-button class (no single-line variant)", () => {
-    const btn = new CopyButtonWidget("x").toDOM({} as EditorView) as HTMLButtonElement;
+    const btn = new CopyButtonWidget(0, () => "x").toDOM({} as EditorView) as HTMLButtonElement;
     expect(btn.classList.contains("quoll-copy-button")).toBe(true);
     expect(btn.classList.contains("quoll-copy-button-single-line")).toBe(false);
   });
@@ -216,7 +277,7 @@ describe("CopyButtonWidget", () => {
     const writeText = vi.fn().mockResolvedValue(undefined);
     vi.stubGlobal("navigator", { clipboard: { writeText } });
     try {
-      const dom = new CopyButtonWidget("x").toDOM({} as EditorView) as HTMLButtonElement;
+      const dom = new CopyButtonWidget(0, () => "x").toDOM({} as EditorView) as HTMLButtonElement;
       // First click resolves → "Copied" and schedules a 1500ms revert.
       dom.dispatchEvent(new MouseEvent("click", { bubbles: true }));
       await vi.advanceTimersByTimeAsync(0);
@@ -356,6 +417,41 @@ describe("fencedCodeCopyButton DOM integration", () => {
       expect(view.state.selection.main.head).toBe(selBefore);
     } finally {
       view.destroy();
+    }
+  });
+
+  it("copies the CURRENT body after an in-place body edit (lazy resolution, not a stale payload)", async () => {
+    // The widget stores no body — it resolves fencedCodeBodyAt(view.state, openFrom)
+    // at click. Editing the body keeps openFrom fixed, so the DOM is REUSED (perf
+    // win); the click must still copy the edited body, proving the resolve reads the
+    // live tree, not a build-time snapshot.
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    vi.stubGlobal("navigator", { clipboard: { writeText } });
+    const doc = "```js\nconst x = 1;\n```\n\npara";
+    const view = mountFenced(doc, doc.indexOf("para") + 1);
+    try {
+      // Capture BEFORE the body edit so DOM reuse is observable.
+      const btnBefore = view.dom.querySelector<HTMLButtonElement>(".quoll-copy-button");
+      expect(btnBefore).not.toBeNull();
+
+      const from = doc.indexOf("const x = 1;");
+      view.dispatch({
+        changes: { from, to: from + "const x = 1;".length, insert: "const y = 2;" },
+      });
+
+      // Must be the SAME node: eq() returns true (openFrom unchanged after a body
+      // edit) → CM reuses the existing DOM node rather than rebuilding it. This is
+      // the perf contract: typing INSIDE the block must not rebuild the widget.
+      const btnAfter = view.dom.querySelector<HTMLButtonElement>(".quoll-copy-button");
+      expect(btnAfter).toBe(btnBefore);
+
+      btnAfter?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(writeText).toHaveBeenCalledWith("const y = 2;");
+    } finally {
+      view.destroy();
+      vi.unstubAllGlobals();
     }
   });
 
