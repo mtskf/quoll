@@ -68,7 +68,7 @@ export function isBlankLine(text: string): boolean {
  *  NO `insideBlock` gate: the fold fields are record-less (no reused per-block record to
  *  scope an in-body edit against), so ANY top-level structural trigger ⇒ full rebuild.
  *  Fires when, for ANY changed range, ANY arm matches:
- *   - SHAPE — STRUCTURAL_FOLD matches the OLD or NEW line-expanded slice.
+ *   - SHAPE — STRUCTURAL matches the OLD or NEW line-expanded slice.
  *   - NEWLINE-DELTA — the edit inserts or deletes a `\n`. A multi-line interior edit can
  *     promote/demote a FAR heading or terminate an enclosing list while its endpoints stay
  *     shapeless (endpoint-only SHAPE/blank/indent checks miss it). Cost is Enter/paste/
