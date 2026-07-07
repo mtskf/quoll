@@ -36,6 +36,15 @@ import { isAllowedUrl } from "../markdown/url-allowlist.js";
 
 const OPENABLE_SCHEMES = new Set(["http", "https", "mailto"]);
 
+/** User-facing toast shown when a gated, launchable URL still fails to open.
+ *  Covers all three post-gate failure modes symmetrically — a fulfilled
+ *  `false` (the OS has no handler for the scheme), an async rejection
+ *  (system browser missing, OS denial), and a synchronous throw (Uri.parse
+ *  on malformed input). The specific cause goes to the host log; the toast
+ *  just tells the user the click did something. */
+const OPEN_EXTERNAL_FAILURE_MESSAGE =
+  "Quoll: couldn't open the link. See the extension host log for details.";
+
 /** Returns the lowercase scheme of `url`, or null if `url` has no scheme. */
 function schemeOf(url: string): string | null {
   // Lowercase first so the regex is case-insensitive without a /i flag —
@@ -60,6 +69,12 @@ export type HandleOpenExternalDeps = {
    *  synchronously on malformed input that isAllowedUrl missed (review
    *  fix #6) — handleOpenExternal absorbs that throw. */
   openExternal: (url: string) => Thenable<boolean>;
+  /** Host showError (a window.showErrorMessage wrapper). Surfaces a
+   *  user-visible toast when a launch fails so a failed link click is not
+   *  silently dropped — see OPEN_EXTERNAL_FAILURE_MESSAGE for the three
+   *  failure modes it covers. Required (not optional) so a future caller
+   *  cannot re-introduce the silent-failure bug by forgetting to wire it. */
+  showError: (message: string) => void;
 };
 
 /** Gate-and-dispatch an "open-external" request. Caller is
@@ -98,15 +113,26 @@ export function handleOpenExternal(href: string, deps: HandleOpenExternalDeps): 
   // inbound-message handling.
   //
   // openExternal returns a Thenable<boolean>; the boolean is the platform
-  // delivery signal (false = "no handler registered for this scheme") and
-  // is currently ignored — surfacing it as a toast is C8 polish, see
-  // Risks entry 11. The .then handles asynchronous rejection (system
-  // browser missing, OS denial) symmetrically with the sync throw arm.
+  // delivery signal (false = "no handler registered for this scheme"). All
+  // three failure modes — a fulfilled `false`, an asynchronous rejection
+  // (system browser missing, OS denial), and the synchronous throw arm —
+  // surface a user-visible toast via deps.showError so a failed link click
+  // is not silently dropped; the specific cause still goes to the host log.
   try {
-    void Promise.resolve(deps.openExternal(href)).then(undefined, (err: unknown) => {
-      console.error("[quoll] env.openExternal rejected", err);
-    });
+    void Promise.resolve(deps.openExternal(href)).then(
+      (delivered: boolean) => {
+        if (!delivered) {
+          console.warn("[quoll] env.openExternal reported no handler for the URL scheme");
+          deps.showError(OPEN_EXTERNAL_FAILURE_MESSAGE);
+        }
+      },
+      (err: unknown) => {
+        console.error("[quoll] env.openExternal rejected", err);
+        deps.showError(OPEN_EXTERNAL_FAILURE_MESSAGE);
+      }
+    );
   } catch (err) {
     console.error("[quoll] env.openExternal threw synchronously", err);
+    deps.showError(OPEN_EXTERNAL_FAILURE_MESSAGE);
   }
 }
