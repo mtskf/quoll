@@ -30,6 +30,7 @@ import {
   assertNever,
   type CellLeaf,
   commonMarkAltText,
+  MAX_INLINE_NESTING_DEPTH,
   parseCellInline,
 } from "../inline/inline-ir.js";
 
@@ -75,7 +76,12 @@ function attachLinkClickGuard(a: HTMLAnchorElement): void {
 // values, escape unescaped chars, and inert-construct source slices into a
 // single Text node (preserving the single-text-node topology that the
 // renderReadonly topology tests pin). Flushed before every element node.
-export function renderReadonly(ir: Resolved<CellLeaf>[], raw: string, resourceBase = ""): Node[] {
+export function renderReadonly(
+  ir: Resolved<CellLeaf>[],
+  raw: string,
+  resourceBase = "",
+  depth = 0
+): Node[] {
   const out: Node[] = [];
   let pendingText = "";
 
@@ -159,9 +165,18 @@ export function renderReadonly(ir: Resolved<CellLeaf>[], raw: string, resourceBa
         break;
       }
       case "emphasis": {
+        // Past the nesting cap, merge the inert literal source of the whole
+        // emphasis span (node.span covers openDelim..closeDelim) into the
+        // pending-text buffer instead of recursing — bounds this walker's
+        // recursion depth. No flushPending(): we emit no element, so the slice
+        // merges naturally with adjacent text (same topology as inert links).
+        if (depth >= MAX_INLINE_NESTING_DEPTH) {
+          pendingText += raw.slice(node.span.from, node.span.to);
+          break;
+        }
         flushPending();
         const el = document.createElement(node.tag);
-        for (const child of renderReadonly(node.children, raw, resourceBase)) {
+        for (const child of renderReadonly(node.children, raw, resourceBase, depth + 1)) {
           el.appendChild(child);
         }
         out.push(el);
@@ -176,5 +191,12 @@ export function renderReadonly(ir: Resolved<CellLeaf>[], raw: string, resourceBa
 }
 
 export function renderCellInline(raw: string, resourceBase = ""): Node[] {
-  return renderReadonly(parseCellInline(raw), raw, resourceBase);
+  // Defense in depth: the parser is bounded (iterative build + capped walker),
+  // but ANY unforeseen throw must not blank the table widget on seed — fall
+  // back to a single inert source-text node, matching the fail-closed pattern.
+  try {
+    return renderReadonly(parseCellInline(raw), raw, resourceBase);
+  } catch {
+    return [document.createTextNode(raw)];
+  }
 }
