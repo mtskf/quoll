@@ -45,6 +45,7 @@ import {
 } from "@codemirror/state";
 import { Decoration, type DecorationSet, EditorView } from "@codemirror/view";
 
+import { extractRanges, selectionLineSpansEqual } from "../bounded-recompute.js";
 import { quollBlockReplaceZones } from "../decorations/orchestrator.js";
 import { leadingFrontmatterEnd } from "../frontmatter/detect.js";
 import { type TableModel, tableModels, tableSkeletonField } from "./table-skeleton.js";
@@ -120,25 +121,6 @@ function computeFresh(state: EditorState): DecorationSet {
   return Decoration.set(visible.map((b) => b.deco.range(b.from, b.to)));
 }
 
-function selectionLineSpansEqual(prevState: EditorState, newState: EditorState): boolean {
-  const prev = prevState.selection;
-  const curr = newState.selection;
-  if (prev.ranges.length !== curr.ranges.length) {
-    return false;
-  }
-  for (let i = 0; i < curr.ranges.length; i++) {
-    const a = prev.ranges[i];
-    const b = curr.ranges[i];
-    if (
-      prevState.doc.lineAt(a.from).from !== newState.doc.lineAt(b.from).from ||
-      prevState.doc.lineAt(a.to).to !== newState.doc.lineAt(b.to).to
-    ) {
-      return false;
-    }
-  }
-  return true;
-}
-
 function updateForTransaction(prev: DecorationSet, tr: Transaction): DecorationSet {
   if (tr.docChanged || syntaxTree(tr.startState) !== syntaxTree(tr.state)) {
     return computeFresh(tr.state);
@@ -156,16 +138,6 @@ function updateForTransaction(prev: DecorationSet, tr: Transaction): DecorationS
     return computeFresh(tr.state);
   }
   return prev;
-}
-
-function extractRanges(set: DecorationSet): Array<{ from: number; to: number }> {
-  const out: Array<{ from: number; to: number }> = [];
-  const iter = set.iter();
-  while (iter.value !== null) {
-    out.push({ from: iter.from, to: iter.to });
-    iter.next();
-  }
-  return out;
 }
 
 export const tableBlockField = StateField.define<DecorationSet>({

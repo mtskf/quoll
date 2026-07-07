@@ -27,6 +27,12 @@
 import { syntaxTree, syntaxTreeAvailable } from "@codemirror/language";
 import { type EditorState, StateField, type Transaction } from "@codemirror/state";
 import { parseTable, type Table } from "../../../markdown/table/index.js";
+import {
+  type Interval,
+  intersects,
+  lineExpandWithNeighbours,
+  mergeIntervals,
+} from "../bounded-recompute.js";
 import { collectTableRanges } from "./table-ranges.js";
 
 export interface TableModel {
@@ -50,11 +56,6 @@ export interface TableModel {
    *  occupies an ordinal slot in the document-order array for stable index
    *  accounting. */
   table: Table | null;
-}
-
-interface Interval {
-  from: number;
-  to: number;
 }
 
 /** Build one model from a `Table` node range: per-node slice (CRLF→LF) + parse +
@@ -87,49 +88,12 @@ export function tableModels(state: EditorState): TableModel[] {
   return collectTableRanges(syntaxTree(state)).map((r) => buildModel(state, r.from, r.to));
 }
 
-/** Line-expand [from,to] AND pull in one neighbour line on each side (G1). */
-function lineExpandWithNeighbours(state: EditorState, from: number, to: number): Interval {
-  const len = state.doc.length;
-  const lo = state.doc.lineAt(Math.max(0, Math.min(from, len)));
-  const hi = state.doc.lineAt(Math.max(0, Math.min(to, len)));
-  const prevFrom = lo.from > 0 ? state.doc.lineAt(lo.from - 1).from : lo.from;
-  const nextTo = hi.to < len ? state.doc.lineAt(hi.to + 1).to : hi.to;
-  return { from: prevFrom, to: nextTo };
-}
-
-function mergeIntervals(intervals: Interval[]): Interval[] {
-  if (intervals.length === 0) {
-    return [];
-  }
-  const sorted = [...intervals].sort((a, b) => a.from - b.from);
-  const out: Interval[] = [{ ...sorted[0] }];
-  for (let i = 1; i < sorted.length; i++) {
-    const last = out[out.length - 1];
-    const cur = sorted[i];
-    if (cur.from <= last.to) {
-      last.to = Math.max(last.to, cur.to);
-    } else {
-      out.push({ ...cur });
-    }
-  }
-  return out;
-}
-
 function extendedSpan(tr: Transaction): Interval[] {
   const raw: Interval[] = [];
   tr.changes.iterChangedRanges((_fa, _ta, fromB, toB) => {
     raw.push(lineExpandWithNeighbours(tr.state, fromB, toB)); // G1
   });
   return mergeIntervals(raw);
-}
-
-function intersects(span: Interval[], from: number, to: number): boolean {
-  for (const s of span) {
-    if (from <= s.to && s.from <= to) {
-      return true;
-    }
-  }
-  return false;
 }
 
 function boundedUpdate(
