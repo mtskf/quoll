@@ -286,10 +286,7 @@ export function mountShell(root: HTMLElement, opts: ShellOptions): ShellHandle {
         });
         return;
       case "image-write-result":
-        editor?.resolveImageWrite(
-          message.requestId,
-          message.ok ? (message.relativePath ?? null) : null
-        );
+        editor?.resolveImageWrite(message.requestId, message.ok ? message.relativePath : null);
         return;
       case "editor-config":
         editor?.setLintGutter(message.lintGutter);
