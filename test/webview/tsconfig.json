@@ -20,7 +20,13 @@
     "module": "esnext",
     "moduleResolution": "bundler",
     "lib": ["es2022", "dom", "dom.iterable"],
-    "types": ["vscode-webview"],
+    // The webview SOURCE is browser-only (node types are excluded from
+    // src/webview/tsconfig.json), but a few test files here read source from
+    // disk via `node:fs`/`node:path`/`node:url` for contract checks, so this
+    // test-only program needs the node ambient module declarations. Declared
+    // explicitly rather than relying on the test runner's type chain to pull
+    // them in transitively (which vitest 4 no longer does).
+    "types": ["vscode-webview", "node"],
     "rootDir": "../.."
   },
   "include": [
