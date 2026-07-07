@@ -89,9 +89,7 @@ export type CaretApplyMessageShape = EnvelopeShape & {
 export type ImageWriteResultMessageShape = EnvelopeShape & {
   type: "image-write-result";
   requestId: string;
-  ok: boolean;
-  relativePath?: string;
-};
+} & ({ ok: true; relativePath: string } | { ok: false; relativePath?: undefined });
 
 export type ImageWriteMessageShape = EnvelopeShape & {
   type: "image-write";

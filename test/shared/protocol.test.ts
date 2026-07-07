@@ -626,6 +626,29 @@ describe("image-write protocol", () => {
       })
     ).toBe(false);
   });
+
+  it("rejects an incoherent ok:true with a missing relativePath", () => {
+    expect(
+      isHostToWebview({
+        protocol: PROTOCOL_VERSION,
+        type: "image-write-result",
+        requestId: "1",
+        ok: true,
+      })
+    ).toBe(false);
+  });
+
+  it("rejects an incoherent ok:false that carries a relativePath", () => {
+    expect(
+      isHostToWebview({
+        protocol: PROTOCOL_VERSION,
+        type: "image-write-result",
+        requestId: "1",
+        ok: false,
+        relativePath: "./assets/abc.png",
+      })
+    ).toBe(false);
+  });
 });
 
 // ---------- isHostToWebview / editor-config ----------
