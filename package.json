@@ -1,10 +1,15 @@
 {
   "name": "quoll",
   "icon": "icon.png",
+  "galleryBanner": {
+    "color": "#f6f5f0",
+    "theme": "light"
+  },
   "displayName": "Quoll",
   "description": "Notion- and Obsidian-style Markdown editor, right inside VS Code.",
   "license": "MIT",
   "categories": [
+    "Programming Languages",
     "Other"
   ],
   "keywords": [
@@ -14,7 +19,12 @@
     "codemirror",
     "notion",
     "obsidian",
-    "rich-text"
+    "rich-text",
+    "typora",
+    "markdown-editor",
+    "live-preview",
+    "note-taking",
+    "gfm"
   ],
   "version": "0.1.15",
   "publisher": "mtskf",
