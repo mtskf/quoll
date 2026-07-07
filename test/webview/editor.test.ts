@@ -35,7 +35,7 @@ const editPosts = () =>
   postMessage.mock.calls.map((c) => c[0]).filter((m) => (m as { type?: string })?.type === "edit");
 
 vi.mock("../../src/webview/host.js", () => ({
-  getHost: () => ({ postMessage, setMetadata: vi.fn() }),
+  getHost: () => ({ postMessage }),
   subscribeToHost: () => () => {},
 }));
 

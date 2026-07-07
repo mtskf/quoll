@@ -114,9 +114,8 @@ export function insertLink(href: string): StateCommand {
 // a third file in the C9b deletion footprint).
 
 /** Subset of the Host singleton's surface used by tryOpenLinkAt. Pinned
- *  as a structural type so tests can pass a thin spy without depending on
- *  the full Host shape (which carries persistence concerns irrelevant to
- *  the click path). */
+ *  as a structural type so tests can pass a thin spy without importing the
+ *  full host module. */
 export type LinkOpenHost = {
   postMessage(message: WebviewToHost): void;
 };

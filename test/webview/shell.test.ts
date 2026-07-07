@@ -14,7 +14,6 @@ const postMessage = vi.fn((m: unknown) => {
   const tagged = m as { type?: string };
   sequence.push(`post:${tagged.type ?? "unknown"}`);
 });
-const setMetadata = vi.fn();
 const subscribeImpl = vi.fn((handler: (message: HostToWebview) => void) => {
   sequence.push("subscribe");
   subscribers.push(handler);
@@ -27,7 +26,7 @@ const subscribeImpl = vi.fn((handler: (message: HostToWebview) => void) => {
 });
 
 vi.mock("../../src/webview/host.js", () => ({
-  getHost: () => ({ postMessage, setMetadata }),
+  getHost: () => ({ postMessage }),
   subscribeToHost: (handler: (message: HostToWebview) => void) => subscribeImpl(handler),
 }));
 
@@ -38,7 +37,6 @@ beforeEach(() => {
   subscribers.length = 0;
   sequence.length = 0;
   postMessage.mockReset();
-  setMetadata.mockReset();
   subscribeImpl.mockClear();
   subscribeImpl.mockImplementation((h: (message: HostToWebview) => void) => {
     sequence.push("subscribe");
@@ -184,163 +182,6 @@ describe("shell — raw HTML seeds inert (parse-warning coupling retired)", () =
     //     applyDocument were dropped). Read the mounted CM doc directly.
     const view = EditorView.findFromDOM(container?.querySelector(".quoll-editor") as HTMLElement);
     expect(view?.state.sliceDoc()).toBe(RAW);
-  });
-});
-
-describe("shell — setMetadata payload contract", () => {
-  it("does not call setMetadata before the first Document (ready === false)", async () => {
-    await mount();
-    expect(setMetadata).not.toHaveBeenCalled();
-  });
-
-  it("writes exactly {ready, docVersion, canWrite, theme} on the first non-stale Document", async () => {
-    await mount();
-    deliver(buildDocument({ docVersion: 7, canWrite: true, isDarkTheme: false }));
-    expect(setMetadata).toHaveBeenCalled();
-    const lastCall = setMetadata.mock.calls.at(-1);
-    if (!lastCall) {
-      throw new Error("setMetadata never called");
-    }
-    const payload = lastCall[0] as Record<string, unknown>;
-    expect(Object.keys(payload).sort()).toEqual(
-      ["canWrite", "docVersion", "ready", "theme"].sort()
-    );
-    expect(payload).toEqual({ ready: true, docVersion: 7, canWrite: true, theme: "light" });
-  });
-
-  it("never includes a `content` key on subsequent persistence writes", async () => {
-    await mount();
-    deliver(buildDocument({ docVersion: 1, content: "# hello" }));
-    deliver(buildDocument({ docVersion: 2, content: "# hello\n\nmore" }));
-    for (const [payload] of setMetadata.mock.calls) {
-      expect(Object.keys(payload as object)).not.toContain("content");
-    }
-  });
-});
-
-describe("shell — setMetadata failure surfaces a self-clearing banner", () => {
-  it("retries each changed payload, logs once per episode, and shows a persistence notice", async () => {
-    const consoleSpy = vi.spyOn(console, "error").mockImplementation(() => {});
-    setMetadata.mockImplementation(() => {
-      throw new Error("structuredClone failed");
-    });
-    await mount();
-    deliver(buildDocument({ docVersion: 1 }));
-    deliver(buildDocument({ docVersion: 2 }));
-
-    // No skip-forever latch: every changed payload is re-attempted.
-    expect(setMetadata.mock.calls.length).toBe(2);
-    // The episode transition logs exactly once.
-    const quollLogs = consoleSpy.mock.calls.filter(
-      (args) => typeof args[0] === "string" && args[0].includes("[quoll] setMetadata failed")
-    );
-    expect(quollLogs.length).toBe(1);
-    // The user-visible banner is present (role=status, polite).
-    const banner = container?.querySelector('[data-kind="persistence-degraded"]');
-    expect(banner).not.toBeNull();
-    expect(banner?.getAttribute("role")).toBe("status");
-    expect(container?.querySelector("main")).not.toBeNull();
-    consoleSpy.mockRestore();
-  });
-
-  it("clears the banner on the next successful write", async () => {
-    const consoleSpy = vi.spyOn(console, "error").mockImplementation(() => {});
-    let throwNext = true;
-    setMetadata.mockImplementation(() => {
-      if (throwNext) {
-        throw new Error("transient");
-      }
-    });
-    await mount();
-    deliver(buildDocument({ docVersion: 1 }));
-    expect(container?.querySelector('[data-kind="persistence-degraded"]')).not.toBeNull();
-
-    // Next Document advances docVersion → fresh setMetadata attempt; succeeds.
-    throwNext = false;
-    deliver(buildDocument({ docVersion: 2 }));
-    expect(container?.querySelector('[data-kind="persistence-degraded"]')).toBeNull();
-    consoleSpy.mockRestore();
-  });
-
-  it("re-degrade after recovery logs a SECOND episode and re-shows the banner", async () => {
-    const consoleSpy = vi.spyOn(console, "error").mockImplementation(() => {});
-    let throwNext = true;
-    setMetadata.mockImplementation(() => {
-      if (throwNext) {
-        throw new Error("oscillating");
-      }
-    });
-    await mount();
-    deliver(buildDocument({ docVersion: 1 })); // episode 1: degrade (log #1)
-    throwNext = false;
-    deliver(buildDocument({ docVersion: 2 })); // recover (banner cleared)
-    expect(container?.querySelector('[data-kind="persistence-degraded"]')).toBeNull();
-    throwNext = true;
-    deliver(buildDocument({ docVersion: 3 })); // episode 2: re-degrade (log #2)
-
-    const quollLogs = consoleSpy.mock.calls.filter(
-      (args) => typeof args[0] === "string" && args[0].includes("[quoll] setMetadata failed")
-    );
-    expect(quollLogs.length).toBe(2); // per-episode logging (intentional)
-    expect(container?.querySelector('[data-kind="persistence-degraded"]')).not.toBeNull();
-    consoleSpy.mockRestore();
-  });
-});
-
-describe("shell — setMetadata equality guard (new in C3)", () => {
-  // The equality guard is only exercised when editInFlight flips without
-  // moving ready/docVersion/canWrite/theme — which happens exactly on a
-  // post-edit action triggered by a CM edit. Drive a real CM transaction
-  // so the guard short-circuits and setMetadata stays at its post-Document
-  // count.
-  it("does NOT call setMetadata when post-edit flips editInFlight but persisted fields are unchanged", async () => {
-    vi.useFakeTimers();
-    try {
-      await mount();
-      // First Document: ready flips, docVersion advances → one setMetadata call.
-      deliver(buildDocument({ docVersion: 1, canWrite: true, isDarkTheme: false }));
-      expect(setMetadata).toHaveBeenCalledTimes(1);
-      // Drive a CM edit. This produces an onLocalChange in edit-sync,
-      // which after the debounce fires post → dispatch("post-edit") →
-      // reducer flips editInFlight true. None of ready/docVersion/canWrite/
-      // theme change.
-      const editorMount = container?.querySelector(".quoll-editor") as HTMLElement;
-      const { EditorView } = await import("@codemirror/view");
-      const view = EditorView.findFromDOM(editorMount);
-      if (!view) {
-        throw new Error("EditorView not found");
-      }
-      view.dispatch({ changes: { from: 0, insert: "x" } });
-      vi.advanceTimersByTime(300);
-      // post-edit dispatch happened (we can verify via postMessage trail).
-      expect(sequence.filter((s) => s === "post:edit").length).toBe(1);
-      // Critical assertion: setMetadata call count is still 1, NOT 2. The
-      // equality guard short-circuited the persistence write because
-      // {ready, docVersion, canWrite, theme} did not move.
-      expect(setMetadata).toHaveBeenCalledTimes(1);
-    } finally {
-      // Timer cleanup in finally so a mid-test throw does not leak fake
-      // timers into the next test.
-      vi.useRealTimers();
-    }
-  });
-
-  it("DOES call setMetadata when a persisted field does change (docVersion advance)", async () => {
-    await mount();
-    deliver(buildDocument({ docVersion: 1, canWrite: true, isDarkTheme: false }));
-    expect(setMetadata).toHaveBeenCalledTimes(1);
-    deliver(buildDocument({ docVersion: 2, canWrite: true, isDarkTheme: false }));
-    expect(setMetadata).toHaveBeenCalledTimes(2);
-  });
-
-  it("does NOT render or persist on a same-theme theme message (next === prev short-circuit)", async () => {
-    await mount();
-    deliver(buildDocument({ docVersion: 1, canWrite: true, isDarkTheme: false }));
-    expect(setMetadata).toHaveBeenCalledTimes(1);
-    // Theme message matching current theme — reducer returns prev state;
-    // dispatch short-circuits before render/persist/drain.
-    deliver({ protocol: PROTOCOL_VERSION, type: "theme", isDarkTheme: false });
-    expect(setMetadata).toHaveBeenCalledTimes(1);
   });
 });
 

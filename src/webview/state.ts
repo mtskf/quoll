@@ -10,8 +10,7 @@
 // body inside the webview (the CM EditorView mounted by editor.ts).
 // Mirroring it in reducer state would require a sync invariant that
 // fights for authority with EditorState. The reducer instead carries
-// the small UI/protocol metadata that survives a vscode.setState
-// round-trip and feeds the render.
+// the small UI/protocol metadata that feeds the render.
 
 import type { MarkdownError } from "../markdown/errors.js";
 

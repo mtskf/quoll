@@ -14,9 +14,10 @@
 // Design notes:
 //  - No new dependencies: it shells out to the `gh` CLI (already a dev tool)
 //    via execFileSync (argv array, no shell — no injection surface).
-//  - Fail-soft locally: if gh is missing or unauthenticated it warns and
-//    exits 0, so a contributor without gh isn't blocked. CI provides
-//    GH_TOKEN, so the guard is authoritative there.
+//  - Fail-soft: if gh is missing or unauthenticated it warns and exits 0,
+//    so a contributor without gh isn't blocked. There is no CI equivalent —
+//    the TODO file lives under .claude/ (gitignored, not checked in), so
+//    this script is intentionally local-only (see CLAUDE.md).
 //
 // Usage:
 //   node scripts/check-stale-todo-markers.mjs [path-to-todo.md]

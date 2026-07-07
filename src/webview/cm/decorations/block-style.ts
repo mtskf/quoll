@@ -104,11 +104,15 @@
 // Exclusion: reads only `quollSyntaxExclusionZones` (parity with
 // list-hang-indent), not `quollBlockReplaceZones`. Fenced-code / blockquote
 // constructs are never themselves widgetised (tables / images / frontmatter
-// are), so the block-replace facet cannot intersect them; the frontmatter
-// span (the sole syntax-exclusion contributor) is `---`-fenced and never
-// parses as FencedCode / Blockquote, so this gate is cheap insurance. A
-// shared union helper (Codex Conf 86) is deferred — it would also touch
-// list-hang-indent, out of this PR's 1-purpose scope.
+// are), so the block-replace facet cannot intersect them. Two modules
+// contribute to quollSyntaxExclusionZones: frontmatter-field (its span is
+// `---`-fenced, so it never parses as FencedCode / Blockquote — this gate is
+// indeed cheap insurance for it) and callout-marker-conceal (concealed `[!TYPE]`
+// rows ARE Blockquote syntax — the point-exclusion here is load-bearing: it skips
+// the concealed row and migrates the rounded `-open` corner to the first visible
+// body line; see callout-marker-conceal.ts:7-13). A shared union helper
+// (Codex Conf 86) is deferred — it would also touch list-hang-indent, out of
+// this PR's 1-purpose scope.
 //
 // Known limitation (deferred — rare, and the fix is out of this module's scope):
 //   - Blockquote-nested list (`> - item`): list-hang-indent's INLINE
