@@ -502,6 +502,7 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
             handleOpenExternal(effect.href, {
               openExternal:
                 this.harness?.openExternalOverride ?? ((url) => env.openExternal(Uri.parse(url))),
+              showError,
             });
             break;
           default: {
