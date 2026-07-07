@@ -40,7 +40,8 @@ import { type Command, type EditorView, keymap } from "@codemirror/view";
 import { columnAt } from "./list-geometry.js";
 
 // Derive SyntaxNode from syntaxTree's return type (same strategy as
-// list-geometry.ts — @lezer/common is transitive-only, not hoisted).
+// list-geometry.ts — @lezer/common is a direct dep as of PR #66, derived rather
+// than imported to keep the direct-dep surface narrow).
 type Tree = ReturnType<typeof syntaxTree>;
 type SyntaxNode = Tree["topNode"];
 

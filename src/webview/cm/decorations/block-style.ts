@@ -154,7 +154,8 @@ import { pointInExclusionZone } from "./shared.js";
 import type { BuildContext } from "./types.js";
 
 /** Persistent Lezer node type — the `.node` of an iterate cursor. Derived from
- *  syntaxTree's return type so @lezer/common stays transitive-only (parity with
+ *  syntaxTree's return type rather than imported so the direct-dep surface stays
+ *  narrow (@lezer/common is a direct dep as of PR #66; parity with
  *  fenced-code-body.ts / types.ts). */
 type SyntaxNode = ReturnType<typeof syntaxTree>["topNode"];
 
@@ -268,9 +269,9 @@ export function fencedCodeLineClasses(n: number, L: FencedLandmarks): string[] {
 }
 
 /** The node ref passed to `tree.iterate`'s `enter`, derived from the shared
- *  `BuildContext["tree"]` type so `@lezer/common` stays transitive-only (the
- *  repo never imports it directly — see types.ts) and the node type tracks the
- *  exact tree the helper iterates. */
+ *  `BuildContext["tree"]` type so the direct-dep import surface stays narrow
+ *  (@lezer/common is a direct dep as of PR #66, derived rather than imported —
+ *  see types.ts) and the node type tracks the exact tree the helper iterates. */
 type IterateNode = Parameters<
   NonNullable<Parameters<BuildContext["tree"]["iterate"]>[0]["enter"]>
 >[0];

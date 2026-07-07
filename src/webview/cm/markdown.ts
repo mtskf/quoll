@@ -49,9 +49,10 @@ import type { MarkdownExtension, MarkdownParser } from "@lezer/markdown";
 import { parseTable } from "../../markdown/table/index.js";
 import { leadingFrontmatterEnd } from "./frontmatter/detect.js";
 
-// SyntaxNode without a direct @lezer/common import (transitive-only, un-hoisted
-// pnpm dep — supply-chain default-deny). Derive it from syntaxTree's return type,
-// the established webview idiom (see decorations/block-style.ts).
+// SyntaxNode without a direct @lezer/common import (a direct dep as of PR #66;
+// derived rather than imported to avoid widening the direct-dep import surface).
+// Derive it from syntaxTree's return type, the established webview idiom (see
+// decorations/block-style.ts).
 type SyntaxNode = ReturnType<typeof syntaxTree>["topNode"];
 
 // A ListItem's first content node — the leading ListMark (`-` / `1.`) is skipped
