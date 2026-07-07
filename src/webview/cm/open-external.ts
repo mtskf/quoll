@@ -29,10 +29,7 @@ export type OpenExternalHost = {
  *  it) simply does not open. `combine` returns the last provider to match
  *  `quollResourceBaseUri`'s established style (one provider in production; both
  *  first- and last-wins are equivalent for a single provider). */
-export const quollOpenExternalSink = Facet.define<
-  (href: string) => void,
-  (href: string) => void
->({
+export const quollOpenExternalSink = Facet.define<(href: string) => void, (href: string) => void>({
   combine: (values) => (values.length > 0 ? values[values.length - 1] : () => {}),
 });
 

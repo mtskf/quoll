@@ -20,9 +20,15 @@ function makeWidget(src: string, docFrom = 0): TableBlockWidget {
 /** Minimal view stub — display-only toDOM reads `view.dispatch` and
  *  `view.state.facet(quollResourceBaseUri)` (a real EditorState so facet
  *  reads work; no doc/extensions beyond the optional resource base). */
-function stubView(dispatched?: unknown[], resourceBase?: string, opened?: string[]): EditorViewType {
+function stubView(
+  dispatched?: unknown[],
+  resourceBase?: string,
+  opened?: string[]
+): EditorViewType {
   const extensions = [];
-  if (resourceBase !== undefined) { extensions.push(quollResourceBaseUri.of(resourceBase)); }
+  if (resourceBase !== undefined) {
+    extensions.push(quollResourceBaseUri.of(resourceBase));
+  }
   if (opened !== undefined) {
     extensions.push(quollOpenExternalSink.of((href: string) => opened.push(href)));
   }
@@ -443,7 +449,9 @@ describe("TableBlockWidget.toDOM", () => {
     const view = new EditorView({
       parent,
       state: EditorState.create({
-        extensions: [quollOpenExternalSink.of(openExternalSinkFor({ postMessage: (m) => posted.push(m) }))],
+        extensions: [
+          quollOpenExternalSink.of(openExternalSinkFor({ postMessage: (m) => posted.push(m) })),
+        ],
       }),
     });
     try {
