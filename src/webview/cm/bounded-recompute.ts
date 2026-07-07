@@ -11,10 +11,14 @@
 // (the list block widget). See the recorded decision in
 // .claude/docs/TODO-archive.md. Do NOT grow this module into that factory.
 //
-// Other cm modules (decorations/callout-marker-conceal.ts, fold/index.ts,
-// fenced-code/fenced-code-collapse.ts) carry their own interval-merge/intersect
-// copies too; migrating those is a separate follow-up, intentionally out of
-// scope here.
+// The three fold-gutter fields (fold/index.ts), the callout marker-conceal field
+// (decorations/callout-marker-conceal.ts), and fenced-code collapse
+// (fenced-code/fenced-code-collapse.ts) now reuse the interval helpers here
+// (fenced-code keeps its own narrower structural guard local — see
+// structural-guard.ts). The Markdown-structural reparse guard
+// (`touchesStructuralReparse`) + its block-boundary helpers (`isBlankLine`,
+// `expandToEnclosingBlock`) live in the sibling structural-guard.ts, which imports
+// `Interval` from here.
 
 import type { EditorState } from "@codemirror/state";
 import type { DecorationSet } from "@codemirror/view";

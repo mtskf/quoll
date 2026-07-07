@@ -23,6 +23,12 @@ import {
   type Transaction,
 } from "@codemirror/state";
 import { Decoration, type DecorationSet, EditorView } from "@codemirror/view";
+import {
+  type Interval,
+  intersects,
+  lineExpandWithNeighbours,
+  mergeIntervals,
+} from "../bounded-recompute.js";
 import { hostDocumentReseed } from "../frontmatter/reveal-state.js";
 import { fencedBlockGeometry, setFencedCollapseEffect } from "./fenced-code-collapse-state.js";
 import { FencedCollapseToggleWidget } from "./fenced-code-collapse-widget.js";
@@ -180,11 +186,6 @@ function selectionEntersCollapsed(prev: DecorationSet, selection: EditorSelectio
   return false;
 }
 
-interface Interval {
-  from: number;
-  to: number;
-}
-
 /** GF — fence pairing AND top-level eligibility are non-local:
  *  1. a line becoming/ceasing to be a fence delimiter (```/~~~, ≤3 leading spaces/tabs)
  *     re-pairs fences arbitrarily far away;
@@ -296,34 +297,6 @@ function topLevelBoundaryRisk(tr: Transaction, prevBlocks: readonly FencedBlockR
   return risk;
 }
 
-function lineExpand(state: EditorState, from: number, to: number): Interval {
-  const len = state.doc.length;
-  const lo = state.doc.lineAt(Math.max(0, Math.min(from, len)));
-  const hi = state.doc.lineAt(Math.max(0, Math.min(to, len)));
-  // ±1 line neighbour (belt-and-suspenders parity with imageBlockField G1).
-  const prevFrom = lo.from > 0 ? state.doc.lineAt(lo.from - 1).from : lo.from;
-  const nextTo = hi.to < len ? state.doc.lineAt(hi.to + 1).to : hi.to;
-  return { from: prevFrom, to: nextTo };
-}
-
-function mergeIntervals(intervals: Interval[]): Interval[] {
-  if (intervals.length === 0) {
-    return [];
-  }
-  const sorted = [...intervals].sort((a, b) => a.from - b.from);
-  const out: Interval[] = [{ ...sorted[0] }];
-  for (let i = 1; i < sorted.length; i++) {
-    const last = out[out.length - 1];
-    const cur = sorted[i];
-    if (cur.from <= last.to) {
-      last.to = Math.max(last.to, cur.to);
-    } else {
-      out.push({ ...cur });
-    }
-  }
-  return out;
-}
-
 /** Changed range(s) ∪ old/new selection ranges, each line-expanded (±1). Selection
  *  ranges are included so a block whose auto-expand status flips (a head entering/
  *  leaving its concealed region) is inside the span and rebuilt. */
@@ -331,26 +304,19 @@ function computeExtendedSpan(tr: Transaction): Interval[] {
   const state = tr.state;
   const raw: Interval[] = [];
   if (tr.docChanged) {
-    tr.changes.iterChangedRanges((_fa, _ta, fromB, toB) => raw.push(lineExpand(state, fromB, toB)));
+    tr.changes.iterChangedRanges((_fa, _ta, fromB, toB) =>
+      raw.push(lineExpandWithNeighbours(state, fromB, toB))
+    );
   }
   for (const r of tr.startState.selection.ranges) {
     const a = tr.changes.mapPos(r.from, 1);
     const b = tr.changes.mapPos(r.to, -1);
-    raw.push(lineExpand(state, Math.min(a, b), Math.max(a, b)));
+    raw.push(lineExpandWithNeighbours(state, Math.min(a, b), Math.max(a, b)));
   }
   for (const r of tr.state.selection.ranges) {
-    raw.push(lineExpand(state, r.from, r.to));
+    raw.push(lineExpandWithNeighbours(state, r.from, r.to));
   }
   return mergeIntervals(raw);
-}
-
-function intersectsAny(intervals: Interval[], from: number, to: number): boolean {
-  for (const iv of intervals) {
-    if (from <= iv.to && iv.from <= to) {
-      return true;
-    }
-  }
-  return false;
 }
 
 /** Reconstruct a reused record at shifted positions (bytes unchanged → geometry shifts
@@ -402,7 +368,7 @@ function computeBounded(
     const touched = tr.changes.touchesRange(b.blockFrom, b.blockTo) !== false;
     const newFrom = tr.changes.mapPos(b.blockFrom, 1);
     const newTo = tr.changes.mapPos(b.blockTo, -1);
-    if (!touched && !intersectsAny(intervals, newFrom, newTo)) {
+    if (!touched && !intersects(intervals, newFrom, newTo)) {
       const r = shiftRecord(b, tr);
       byFrom.set(r.blockFrom, r);
     }
