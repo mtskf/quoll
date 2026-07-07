@@ -3,7 +3,7 @@
 # Usage:
 #   ./scripts/deploy.sh                # build + package -> .vsix in repo root
 #   ./scripts/deploy.sh --publish      # also runs `vsce publish` (needs VSCE_PAT + publisher set up)
-set -e
+set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
