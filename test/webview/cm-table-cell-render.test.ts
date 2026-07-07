@@ -1,5 +1,6 @@
 // @vitest-environment happy-dom
 import { describe, expect, it } from "vitest";
+import { MAX_HREF_LENGTH } from "../../src/shared/protocol.js";
 import type { Resolved, Span } from "../../src/webview/cm/inline/inline-emphasis.js";
 import type { CellLeaf } from "../../src/webview/cm/inline/inline-ir.js";
 import { parseCellInline } from "../../src/webview/cm/inline/inline-ir.js";
@@ -395,7 +396,7 @@ describe("renderCellInline", () => {
     expect(event.defaultPrevented).toBe(true);
   });
 
-  it("inline-link Cmd/Ctrl-click falls through to default navigation (no preventDefault)", () => {
+  it("inline-link Cmd/Ctrl-click falls through to default navigation (falls through to the widget root handler, which routes through the host open-external gate)", () => {
     const [a] = renderCellInline("[docs](https://example.com)") as HTMLAnchorElement[];
     for (const modifier of [{ metaKey: true }, { ctrlKey: true }]) {
       const event = new MouseEvent("click", { bubbles: true, cancelable: true, ...modifier });
@@ -435,7 +436,7 @@ describe("renderCellInline", () => {
   // too far in a future refactor — mailto: must keep the external escape
   // hatch alongside https / http. Iterate both modifiers so a regression
   // that tightens the guard to `metaKey only` (or `ctrlKey only`) trips.
-  it("mailto: modifier-click falls through to default navigation (absolute scheme — external open)", () => {
+  it("mailto: modifier-click falls through to default navigation (falls through to the widget root handler, which routes through the host open-external gate)", () => {
     const [a] = renderCellInline("[mail](mailto:a@b.test)") as HTMLAnchorElement[];
     expect(a).toBeInstanceOf(HTMLAnchorElement);
     for (const modifier of [{ metaKey: true }, { ctrlKey: true }]) {
@@ -443,6 +444,39 @@ describe("renderCellInline", () => {
       a.dispatchEvent(event);
       expect(event.defaultPrevented).toBe(false);
     }
+  });
+
+  it("oversize absolute href modifier-click is preventDefault'd (host would drop it → avoid dead-click)", () => {
+    const longUrl = `https://example.com/${"a".repeat(9000)}`; // > MAX_HREF_LENGTH (8192)
+    const [a] = renderCellInline(`[x](${longUrl})`) as HTMLAnchorElement[];
+    expect(a).toBeInstanceOf(HTMLAnchorElement); // scheme-safe → live <a>, just long
+    for (const modifier of [{ metaKey: true }, { ctrlKey: true }]) {
+      const event = new MouseEvent("click", { bubbles: true, cancelable: true, ...modifier });
+      a.dispatchEvent(event);
+      expect(event.defaultPrevented).toBe(true);
+    }
+  });
+
+  it("absolute href at exactly MAX_HREF_LENGTH modifier-click is NOT preventDefault'd (at-cap boundary)", () => {
+    const prefix = "https://x.example.com/";
+    const atCap = `${prefix}${"a".repeat(MAX_HREF_LENGTH - prefix.length)}`;
+    expect(atCap.length).toBe(MAX_HREF_LENGTH); // guard against miscalc
+    const [a] = renderCellInline(`[x](${atCap})`) as HTMLAnchorElement[];
+    expect(a).toBeInstanceOf(HTMLAnchorElement);
+    const event = new MouseEvent("click", { bubbles: true, cancelable: true, metaKey: true });
+    a.dispatchEvent(event);
+    expect(event.defaultPrevented).toBe(false); // within cap → routes via root handler
+  });
+
+  it("absolute href one over MAX_HREF_LENGTH modifier-click is preventDefault'd (just-over-cap boundary)", () => {
+    const prefix = "https://x.example.com/";
+    const overCap = `${prefix}${"a".repeat(MAX_HREF_LENGTH - prefix.length + 1)}`;
+    expect(overCap.length).toBe(MAX_HREF_LENGTH + 1);
+    const [a] = renderCellInline(`[x](${overCap})`) as HTMLAnchorElement[];
+    expect(a).toBeInstanceOf(HTMLAnchorElement); // isAllowedUrl has no length cap → live <a>
+    const event = new MouseEvent("click", { bubbles: true, cancelable: true, metaKey: true });
+    a.dispatchEvent(event);
+    expect(event.defaultPrevented).toBe(true); // over cap → caret reveal
   });
 
   it("autolink plain click is preventDefault'd (same gate as inline links)", () => {
