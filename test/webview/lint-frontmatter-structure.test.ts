@@ -101,6 +101,16 @@ describe("lint rule: frontmatter-structure", () => {
   it("accepts a top-level list item line (`- item`)", () => {
     expect(malformed("- one\n- two\n")).toHaveLength(0);
   });
+
+  it("accepts a colon-containing key (namespaced / Open-Graph frontmatter)", () => {
+    // The separator is the first colon followed by space/EOL, so `og:title` is the
+    // key — NOT a malformed line. Guards against the first-colon-split false positive.
+    expect(malformed("og:title: a\ntwitter:card: b\n")).toHaveLength(0);
+  });
+
+  it("detects a duplicate of a colon-containing key", () => {
+    expect(dup("og:title: a\nog:title: b\n")).toHaveLength(1);
+  });
 });
 
 // Pins the TODO's explicit layer constraint: the RULE must not reach into the

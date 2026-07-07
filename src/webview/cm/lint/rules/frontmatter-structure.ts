@@ -6,20 +6,29 @@ const BLANK = /^[ \t]*$/; // empty / whitespace-only: ignore
 const COMMENT = /^[ \t]*#/; // YAML comment: ignore
 const INDENTED = /^[ \t]/; // nested / multi-line-value continuation: accept (see plan scope note)
 const LIST_ITEM = /^-(?:[ \t].*)?$/; // top-level sequence item `-` / `- value`: accept
-// A top-level mapping key at column 0: some non-colon key text, a colon, then
-// whitespace-and-value OR end-of-line. Requiring the space/EOL after the colon is
-// deliberate — `key:value` is a YAML plain scalar, not a mapping entry, so it is
-// left to the malformed branch. Capture group 1 is the key name (for de-dup).
-const TOP_LEVEL_KEY = /^([^:]+):(?:[ \t].*)?$/;
+// A top-level mapping key at column 0. YAML's key/value separator is the FIRST
+// colon followed by whitespace or end-of-line, so the key itself MAY contain
+// colons (`og:title:`, `twitter:card:` — common in frontmatter). Capture group 1
+// is the key text up to that separator: lazy `.+?` stops at the earliest colon
+// whose lookahead is a space/EOL. A colon NOT followed by space/EOL is part of the
+// key, so a line with no space-or-EOL after ANY colon (`key:value`) never matches —
+// it is a YAML plain scalar, not a mapping entry, and falls through to malformed by
+// design. LIST_ITEM is tested first, so a `- a: b` item never reaches this.
+const TOP_LEVEL_KEY = /^(.+?):(?=[ \t]|$)/;
 
 // SCOPE: a line-level advisory, NOT a YAML validator. Any `text: value` (or
 // `text:`) at column 0 is treated as a key — including quoted/dotted keys that the
 // reveal widget's stricter CLEAN_PAIR (frontmatter-widget.ts) renders raw. It
 // deliberately does NOT validate YAML indicator characters or unify quoted vs
 // unquoted keys (that needs a parser, which the TODO forbids). Consequences: keys
-// are de-duplicated by LITERAL text (`"title"` != `title`), and a genuinely
-// YAML-invalid indicator-led line (e.g. `@x: 1`) is accepted rather than flagged —
-// an acceptable false-negative for an advisory lint.
+// are de-duplicated by LITERAL text (`"title"` != `title`), a genuinely
+// YAML-invalid indicator-led line (e.g. `@x: 1`) is accepted rather than flagged,
+// and INDENTED lines are always treated as nested continuations — so a duplicate
+// inside a uniformly space-indented root mapping, or a YAML-invalid tab-indented
+// line, is not flagged either (detecting those needs an indent model the TODO rules
+// out). All are acceptable false-NEGATIVES for an advisory lint; what the rule must
+// never do — flag a valid top-level `key: value` / `- item` / nested line — it does
+// not (e.g. colon-containing keys like `og:title:` are matched, not mis-flagged).
 
 // Advisory structural lint for a file-leading YAML frontmatter block. The block
 // is concealed / reveal-gated in the editor, so a duplicated key or a malformed
