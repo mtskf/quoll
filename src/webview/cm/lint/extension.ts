@@ -84,7 +84,32 @@ export const lintField = StateField.define<readonly LintDiagnostic[]>({
     }
     return value;
   },
-  provide: (field) => EditorView.decorations.from(field, buildLintDecorations),
+});
+
+// The rendered underline DecorationSet, held as a MAPPED RangeSet rather than
+// rebuilt from lintField on every keystroke. On a fresh lint publish the set is
+// built once from the new diagnostics; between publishes (inside the debounce
+// window) each doc change MAPS the existing set through tr.changes (O(changes)),
+// matching @codemirror/lint's own shape and avoiding an O(D) range-creation +
+// Decoration.set(sorted) rebuild per keystroke. lintField still owns the raw
+// diagnostics array (hover / gutter / Problems wire read it); this field is
+// display-only and is derived solely from that same published array on each fresh
+// publish, so the inline marks in the two structures never diverge (both drop a
+// range the edit collapses under the same from-side/to-side mapping).
+const lintDecorationsField = StateField.define<DecorationSet>({
+  create(state) {
+    const diagnostics = state.field(lintField, false);
+    return diagnostics ? buildLintDecorations(diagnostics) : Decoration.none;
+  },
+  update(value, tr) {
+    for (const effect of tr.effects) {
+      if (effect.is(setLintDiagnostics)) {
+        return buildLintDecorations(effect.value);
+      }
+    }
+    return tr.docChanged ? value.map(tr.changes) : value;
+  },
+  provide: (field) => EditorView.decorations.from(field),
 });
 
 const LINT_DEBOUNCE_MS = 250;
@@ -306,6 +331,12 @@ const quollLintTheme = EditorView.theme({
 // backward-compatible — existing callers and tests that pass no argument are
 // unaffected.
 export function quollLint(sink?: (diagnostics: readonly LintDiagnosticWire[]) => void): Extension {
-  const base = [lintField, lintComputePlugin, lintHoverTooltip, quollLintTheme];
+  const base = [
+    lintField,
+    lintDecorationsField,
+    lintComputePlugin,
+    lintHoverTooltip,
+    quollLintTheme,
+  ];
   return sink ? [...base, lintDiagnosticsPublisher(sink)] : base;
 }
