@@ -172,8 +172,7 @@ describe("frontmatterBlockField — read-only (mutation guard, not just atomic)"
     // read-only veto must NOT drop this transaction (a bulk replace cleanly
     // overwrites the block, it never leaves a half-corrupt fence), otherwise the
     // keystroke is a silent no-op.
-    const len = mount(FM).state.doc.length;
-    const view = mount(FM, EditorSelection.range(0, len));
+    const view = mount(FM, EditorSelection.range(0, FM.length));
     try {
       view.dispatch({
         changes: { from: 0, to: view.state.doc.length, insert: "x" },
@@ -187,12 +186,44 @@ describe("frontmatterBlockField — read-only (mutation guard, not just atomic)"
   });
 
   it("select-all + Delete clears the document (frontmatter included)", () => {
-    const len = mount(FM).state.doc.length;
-    const view = mount(FM, EditorSelection.range(0, len));
+    const view = mount(FM, EditorSelection.range(0, FM.length));
     try {
       view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: "" } });
       expect(view.state.sliceDoc()).toBe(""); // cleared, not a no-op
       expect(view.state.field(frontmatterBlockField).kind).toBe("absent");
+    } finally {
+      view.destroy();
+    }
+  });
+
+  it("a selection covering the block AND part of the body (not to doc end) still replaces", () => {
+    // Selecting from doc start through the middle of the body — covers the whole
+    // block and extends past span.to but stops short of the document end. This is
+    // still a bulk replace; the allow-condition must NOT require reaching doc end.
+    const view = mount(FM, EditorSelection.range(0, SPAN_TO + 3));
+    try {
+      view.dispatch({
+        changes: { from: 0, to: SPAN_TO + 3, insert: "q" },
+        selection: EditorSelection.cursor(1),
+      });
+      expect(view.state.sliceDoc()).toBe(`q${FM.slice(SPAN_TO + 3)}`); // replaced, not a no-op
+      expect(view.state.field(frontmatterBlockField).kind).toBe("absent");
+    } finally {
+      view.destroy();
+    }
+  });
+
+  it("a block-ONLY selection [0, span.to] in a doc with body is still vetoed (not a bulk replace)", () => {
+    // A non-empty selection of EXACTLY the collapsed block, in a document that
+    // still has body past span.to, is reachable via the keyboard (pos 0 →
+    // Shift+Right skips the atomic block to span.to). It must NOT be treated as a
+    // select-all — allowing it would silently delete the metadata card while the
+    // body survives.
+    const view = mount(FM, EditorSelection.range(0, SPAN_TO));
+    try {
+      view.dispatch({ changes: { from: 0, to: SPAN_TO, insert: "" } });
+      expect(view.state.sliceDoc()).toBe(FM); // unchanged — block-only selection is not bulk
+      expect(view.state.field(frontmatterBlockField).kind).toBe("collapsed");
     } finally {
       view.destroy();
     }

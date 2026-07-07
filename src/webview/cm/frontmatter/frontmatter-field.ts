@@ -6,7 +6,9 @@
 //   - atomicRanges: the same span ONLY when collapsed (caret skips the opaque
 //     block); revealed source is freely navigable.
 //   - transactionFilter: read-only (veto any change touching the CLOSED interval
-//     [0, span.to]) ONLY when collapsed. A `changeFilter` range-array is NOT
+//     [0, span.to]) ONLY when collapsed — EXCEPT a whole-block-covering bulk
+//     replace (select-all → type/Delete; see the `transactionFilterFor` JSDoc).
+//     A `changeFilter` range-array is NOT
 //     enough — its boundaries are OPEN, so a zero-width insertion at 0 or at
 //     span.to is admitted, and atomicRanges' caret-skip only fires on the strict
 //     interior, letting a keystroke corrupt the `---` opener/closer. Host
@@ -58,16 +60,22 @@ function collapsedSet(rs: RevealState): DecorationSet {
  *  revealed/absent, allow.
  *
  *  EXCEPTION — bulk replace (select-all → type/Delete): when a NON-EMPTY
- *  selection range fully spans the block AND the change rewrites the whole span
+ *  selection that spans the WHOLE document (or the whole frontmatter block AND on
+ *  into the body) is being rewritten by a change that covers the whole span
  *  [span.from, span.to], the transaction is allowed. The collapsed frontmatter is
  *  overwritten together with the body in one clean edit — it is never left
  *  half-corrupt (re-detection then collapses whatever valid frontmatter remains,
  *  or goes absent). Without this the veto would drop the whole transaction and the
  *  keystroke would be a SILENT no-op (even the body would not change). The signal
- *  is the covering *selection*, not change geometry: a Backspace at the boundary
- *  (empty cursor, atomicRanges expands the delete to [0, span.to]) has NO covering
- *  range selection → stays vetoed; a frontmatter-only doc (change ends AT span.to,
- *  not past it) is still caught because the selection covers the span. */
+ *  is the covering *selection*, not change geometry:
+ *    - a Backspace at the boundary (empty cursor, atomicRanges expands the delete
+ *      to [0, span.to]) has NO covering RANGE selection → stays vetoed;
+ *    - a selection of EXACTLY [0, span.to] in a document that still has body past
+ *      the block is a block-ONLY selection, not a bulk replace → stays vetoed (it
+ *      must NOT silently delete the metadata card while the body survives);
+ *    - a frontmatter-only doc (span.to === doc length) IS the whole document, so
+ *      a whole-doc selection is allowed even though it ends AT span.to.
+ *  Hence the selection must reach past span.to into the body OR reach doc end. */
 function transactionFilterFor(rs: RevealState): (tr: Transaction) => Transaction | readonly [] {
   return (tr) => {
     if (tr.annotation(hostDocumentReseed) === true) {
@@ -77,8 +85,9 @@ function transactionFilterFor(rs: RevealState): (tr: Transaction) => Transaction
       return tr;
     }
     const { span } = rs;
+    const docLength = tr.startState.doc.length;
     const selectionCoversSpan = tr.startState.selection.ranges.some(
-      (r) => !r.empty && r.from <= span.from && r.to >= span.to
+      (r) => !r.empty && r.from <= span.from && (r.to > span.to || r.to >= docLength)
     );
 
     let touchesSpan = false;
