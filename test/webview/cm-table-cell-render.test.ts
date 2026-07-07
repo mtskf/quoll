@@ -733,5 +733,11 @@ describe("renderReadonly text-node topology (merging is not vacuous)", () => {
     // ...and the inert-source fallback actually fired: literal `*` delimiters
     // leak into the text (a vacuous always-empty render would not contain them).
     expect(text).toContain("*");
+    // Non-vacuity vs the defense-in-depth try/catch: the WALKER cap emits only
+    // the emphasis span at depth 100 (the outer ~2×cap delimiters are unwrapped
+    // first), so the text is strictly shorter than the raw input. The try/catch
+    // fallback would instead return the FULL raw string as one text node — this
+    // pins that the cap path ran, not that an overflow was silently caught.
+    expect(text.length).toBeLessThan(deep.length);
   });
 });

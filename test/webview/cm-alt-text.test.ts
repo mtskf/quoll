@@ -88,5 +88,11 @@ describe("commonMarkAltText", () => {
     // literal `*` delimiters leak into the flattened text.
     expect(alt).toContain("a");
     expect(alt).toContain("*");
+    // Non-vacuity vs the defense-in-depth try/catch: the WALKER cap emits only
+    // the emphasis span at depth 100 (the outer ~2×cap delimiters are unwrapped
+    // first), so the result is strictly shorter than the raw input. The
+    // try/catch fallback would instead return the FULL raw string — this pins
+    // that the cap path ran, not that an overflow was silently caught.
+    expect(alt.length).toBeLessThan(deep.length);
   });
 });
