@@ -57,10 +57,13 @@
 //   G3 — a change to `leadingFrontmatterEnd` flips the `from < fmEnd` gate for
 //        images near the top → full recompute.
 // A reused widget whose document position SHIFTED is reconstructed with the new
-// docFrom (cheap: same alt/safeUrl/slice, NO re-parse). DRY-via-factory with
-// tableBlockField (the `defineBlockWidgetField` rule-of-three home) is the
-// table follow-up's job — the table field's global ordinal makes bounding it
-// harder; see TODO.
+// docFrom (cheap: same alt/safeUrl/slice, NO re-parse). The small pure leaf
+// helpers (mergeIntervals / lineExpandWithNeighbours / intersects /
+// selectionLineSpansEqual / extractRanges) are shared with the table fields via
+// ../bounded-recompute.js. A full `defineBlockWidgetField` FACTORY over
+// `buildAll` was deliberately REJECTED as leaky (the table field's global
+// ordinal makes bounding it genuinely different) — see the recorded decision in
+// .claude/docs/TODO-archive.md, gated on a future third consumer.
 
 import { syntaxTree, syntaxTreeAvailable } from "@codemirror/language";
 import {
@@ -72,6 +75,14 @@ import {
 import { Decoration, type DecorationSet, EditorView } from "@codemirror/view";
 import { renderSafeMarkdownDestination } from "../../../markdown/render-safe-markdown-destination.js";
 import type { AllowlistedUrl } from "../../../markdown/url-allowlist.js";
+import {
+  extractRanges,
+  type Interval,
+  intersects,
+  lineExpandWithNeighbours,
+  mergeIntervals,
+  selectionLineSpansEqual,
+} from "../bounded-recompute.js";
 import { quollBlockReplaceZones } from "../decorations/orchestrator.js";
 import { leadingFrontmatterEnd } from "../frontmatter/detect.js";
 import { commonMarkAltText } from "../inline/inline-ir.js";
@@ -83,11 +94,6 @@ interface BuiltWidget {
   to: number;
   widget: ImageBlockWidget;
   deco: Decoration;
-}
-
-interface Interval {
-  from: number;
-  to: number;
 }
 
 // Trim only ASCII *structural* whitespace: space, tab, LF, CR — the set the
@@ -199,33 +205,6 @@ function lineExpand(state: EditorState, from: number, to: number): Interval {
   return { from: lo.from, to: hi.to };
 }
 
-/** Line-expand AND pull in one neighbour line on each side (G1: a blank-line
- *  toggle adjacent to an image flips its standalone eligibility). */
-function lineExpandWithNeighbours(state: EditorState, from: number, to: number): Interval {
-  const inner = lineExpand(state, from, to);
-  const prevFrom = inner.from > 0 ? state.doc.lineAt(inner.from - 1).from : inner.from;
-  const nextTo = inner.to < state.doc.length ? state.doc.lineAt(inner.to + 1).to : inner.to;
-  return { from: prevFrom, to: nextTo };
-}
-
-function mergeIntervals(intervals: Interval[]): Interval[] {
-  if (intervals.length === 0) {
-    return [];
-  }
-  const sorted = [...intervals].sort((a, b) => a.from - b.from);
-  const out: Interval[] = [{ ...sorted[0] }];
-  for (let i = 1; i < sorted.length; i++) {
-    const last = out[out.length - 1];
-    const cur = sorted[i];
-    if (cur.from <= last.to) {
-      last.to = Math.max(last.to, cur.to);
-    } else {
-      out.push({ ...cur });
-    }
-  }
-  return out;
-}
-
 function computeExtendedSpan(tr: Transaction): Interval[] {
   const state = tr.state;
   const raw: Interval[] = [];
@@ -243,34 +222,6 @@ function computeExtendedSpan(tr: Transaction): Interval[] {
     raw.push(lineExpand(state, r.from, r.to));
   }
   return mergeIntervals(raw);
-}
-
-function intersectsAny(intervals: Interval[], from: number, to: number): boolean {
-  for (const iv of intervals) {
-    if (from <= iv.to && iv.from <= to) {
-      return true;
-    }
-  }
-  return false;
-}
-
-function selectionLineSpansEqual(prevState: EditorState, newState: EditorState): boolean {
-  const prev = prevState.selection;
-  const curr = newState.selection;
-  if (prev.ranges.length !== curr.ranges.length) {
-    return false;
-  }
-  for (let i = 0; i < curr.ranges.length; i++) {
-    const a = prev.ranges[i];
-    const b = curr.ranges[i];
-    if (
-      prevState.doc.lineAt(a.from).from !== newState.doc.lineAt(b.from).from ||
-      prevState.doc.lineAt(a.to).to !== newState.doc.lineAt(b.to).to
-    ) {
-      return false;
-    }
-  }
-  return true;
 }
 
 function toSet(all: BuiltWidget[], state: EditorState): DecorationSet {
@@ -300,7 +251,7 @@ function computeBounded(
     const touched = tr.changes.touchesRange(iter.from, iter.to) !== false;
     const newFrom = tr.changes.mapPos(iter.from, 1);
     const newTo = tr.changes.mapPos(iter.to, -1);
-    if (!touched && !intersectsAny(intervals, newFrom, newTo)) {
+    if (!touched && !intersects(intervals, newFrom, newTo)) {
       if (newFrom === iter.from && newTo === iter.to) {
         byFrom.set(iter.from, {
           from: iter.from,
@@ -323,16 +274,6 @@ function computeBounded(
   }
   const all = [...byFrom.values()].sort((a, b) => a.from - b.from);
   return toSet(all, state);
-}
-
-function extractRanges(set: DecorationSet): Array<{ from: number; to: number }> {
-  const out: Array<{ from: number; to: number }> = [];
-  const iter = set.iter();
-  while (iter.value !== null) {
-    out.push({ from: iter.from, to: iter.to });
-    iter.next();
-  }
-  return out;
 }
 
 export const imageBlockField = StateField.define<DecorationSet>({

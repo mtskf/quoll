@@ -40,10 +40,11 @@ import { pointInExclusionZone } from "./shared.js";
 import type { BuildContext } from "./types.js";
 
 // A Lezer node reference as handed to `tree.iterate`'s enter callback, derived
-// from the iterate signature rather than imported from @lezer/common (a
-// transitive-only dep pnpm does not hoist — the same alias strategy types.ts
-// uses for `Tree`). `.node` yields the full SyntaxNode (for `.parent`), and
-// `.name` / `.from` are read directly.
+// from the iterate signature rather than imported from @lezer/common (a direct
+// dep as of PR #66, derived rather than imported to avoid widening the
+// direct-dep import surface — the same alias strategy types.ts uses for
+// `Tree`). `.node` yields the full SyntaxNode (for `.parent`), and `.name` /
+// `.from` are read directly.
 type Tree = BuildContext["tree"];
 type NodeRef = Parameters<NonNullable<Parameters<Tree["iterate"]>[0]["enter"]>>[0];
 

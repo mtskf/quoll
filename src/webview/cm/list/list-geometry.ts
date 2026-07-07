@@ -33,8 +33,9 @@ import { countColumn, type EditorState } from "@codemirror/state";
 
 import { TASK_MARKER_RE } from "../task-checkbox/task-checkbox-command.js";
 
-// `@lezer/common` is a transitive-only dep pnpm does not hoist (supply-chain
-// default-deny) — derive SyntaxNode from syntaxTree's return type. Same
+// `@lezer/common` is a direct dep as of PR #66 (for the lint incremental
+// parser's `TreeFragment`); derive SyntaxNode from syntaxTree's return type
+// rather than importing it to keep the direct-dep surface narrow. Same
 // strategy as types.ts / task-checkbox-reveal.ts.
 type Tree = ReturnType<typeof syntaxTree>;
 type SyntaxNode = Tree["topNode"];

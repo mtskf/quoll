@@ -15,8 +15,9 @@ import type { EditorSelection, Text } from "@codemirror/state";
 
 import { intersectsAnySelection } from "../decorations/shared.js";
 
-// `@lezer/common` is a transitive-only dep pnpm does not hoist (supply-chain
-// default-deny) — derive SyntaxNode from syntaxTree's return type, the same
+// `@lezer/common` is a direct dep as of PR #66 (for the lint incremental
+// parser's `TreeFragment`); derive SyntaxNode from syntaxTree's return type
+// rather than importing it to keep the direct-dep surface narrow — the same
 // strategy as decorations/types.ts and fenced-code-copy-button.ts.
 type Tree = ReturnType<typeof syntaxTree>;
 type SyntaxNode = Tree["topNode"];

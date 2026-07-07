@@ -33,8 +33,8 @@ import { EditorSelection, Prec } from "@codemirror/state";
 import { type Command, keymap } from "@codemirror/view";
 
 // Derive SyntaxNode from syntaxTree's return type (same strategy as
-// fenced-code-body.ts / list-indent-keymap.ts — @lezer/common is transitive-only
-// and pnpm does not hoist it).
+// fenced-code-body.ts / list-indent-keymap.ts — @lezer/common is a direct dep as
+// of PR #66, derived rather than imported to keep the direct-dep surface narrow).
 type Tree = ReturnType<typeof syntaxTree>;
 type SyntaxNode = Tree["topNode"];
 
@@ -77,13 +77,20 @@ export const autoCloseFenceOnEnter: Command = (view) => {
   }
   const head = sel.head;
   const caretLine = state.doc.lineAt(head);
-  // Parse to END OF DOCUMENT, not just the caret line: the already-closed guard
-  // below reads the closing CodeMark, which sits BELOW the caret. A parse that
-  // stopped at the opener line would omit the closer, misread an already-closed
-  // fence as unclosed, and false-trigger a duplicate closer. (The sibling
-  // list-indent-keymap parses only to line.to because it walks UP to a ListItem
-  // ancestor — always above the caret; this guard needs a node below it.)
-  const tree = ensureSyntaxTree(state, state.doc.length, 50) ?? syntaxTree(state);
+  // Parse only to the CARET LINE, never to end-of-document. This command runs on
+  // EVERY Enter (a `.md` opens un-force-parsed), so an eager EOF parse would stall
+  // each keystroke up to the timeout right after opening a large doc — even mid-
+  // paragraph, before any fence check. Bounding to the caret line makes the common
+  // case cheap: a plain paragraph resolves at the caret and the parser stops there.
+  //
+  // The already-closed guard below still works because a `FencedCode` node is only
+  // emitted once its extent is resolved — the parser MUST scan forward to the closer
+  // (or EOF) to close the block, so a returned node always carries its FULL set of
+  // CodeMark children. On an OPENER caret that forward scan is exactly the work we
+  // want, and for an already-closed fence it stops at the closer, not EOF. Every
+  // non-trigger caret (plain text, a body/closer line) is rejected by the guards
+  // below off this same caret-line-bounded parse — none of them requests EOF.
+  const tree = ensureSyntaxTree(state, caretLine.to, 50) ?? syntaxTree(state);
   // Probe the END of the caret's line so a caret ANYWHERE on the opener line —
   // including at line start or on a leading `> ` / list prefix, which resolve to
   // the wrapping Blockquote / ListItem rather than the FencedCode — still lands
