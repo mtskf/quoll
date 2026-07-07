@@ -996,15 +996,88 @@ describe("caret handoff (applyRemoteCaret + caret-report)", () => {
     expect(caretReports()).toHaveLength(0);
   });
 
-  it("a user selection change posts a caret-report with 0-based line/character", () => {
+  it("a user selection change posts a caret-report (debounced) with 0-based line/character", () => {
+    vi.useFakeTimers();
     const { handle, view } = mount();
     handle.applyDocument("hello\nworld", true, 1);
     postMessage.mockReset();
     // Stand in for a user caret move (selection-only dispatch; not seeding, not remote).
     view.dispatch({ selection: { anchor: 3 } });
+    // Debounced: nothing posts synchronously (bounds the per-selectionSet flood).
+    expect(caretReports()).toHaveLength(0);
+    vi.advanceTimersByTime(100);
     const reports = caretReports();
     expect(reports).toHaveLength(1);
     expect(reports[0]).toMatchObject({ type: "caret-report", line: 0, character: 3 });
+  });
+
+  it("coalesces a burst of selection changes into ONE trailing caret-report", () => {
+    vi.useFakeTimers();
+    const { handle, view } = mount();
+    handle.applyDocument("hello\nworld", true, 1);
+    postMessage.mockReset();
+    // A drag-selection / rapid caret walk fires selectionSet many times inside
+    // the debounce window; only the LAST survives as a single post.
+    view.dispatch({ selection: { anchor: 1 } });
+    view.dispatch({ selection: { anchor: 2 } });
+    view.dispatch({ selection: { anchor: 5 } });
+    expect(caretReports()).toHaveLength(0); // all still debounced — bounded traffic
+    vi.advanceTimersByTime(100);
+    const reports = caretReports();
+    expect(reports).toHaveLength(1);
+    expect(reports[0]).toMatchObject({ type: "caret-report", line: 0, character: 5 });
+  });
+
+  // The "Done when" pin: the pre-switch flush. Moving the caret then switching
+  // editors INSIDE the debounce window must still deliver the final caret —
+  // and BEFORE switch-to-text (FIFO), so the host applies the just-moved caret
+  // to the reopened text editor rather than a stale one.
+  it("flushes the pending caret-report BEFORE switch-to-text on the editor switch", () => {
+    vi.useFakeTimers();
+    const { handle, view } = mount();
+    handle.applyDocument("hello\nworld", true, 1);
+    postMessage.mockReset();
+    view.dispatch({ selection: { anchor: 4 } });
+    expect(caretReports()).toHaveLength(0); // still debounced
+    const button = container?.querySelector<HTMLButtonElement>(".quoll-switch-editor-toggle");
+    expect(button).not.toBeNull();
+    button?.click();
+    // FIFO: the force-posted caret-report lands before switch-to-text.
+    const order = postMessage.mock.calls
+      .map((c) => (c[0] as { type?: string })?.type)
+      .filter((t) => t === "caret-report" || t === "switch-to-text");
+    expect(order).toEqual(["caret-report", "switch-to-text"]);
+    expect(caretReports()[0]).toMatchObject({ type: "caret-report", line: 0, character: 4 });
+    // The flush cancelled the trailing timer → no duplicate post follows.
+    vi.advanceTimersByTime(100);
+    expect(caretReports()).toHaveLength(1);
+  });
+
+  it("flushPending() force-posts the pending caret-report (teardown/hide)", () => {
+    vi.useFakeTimers();
+    const { handle, view } = mount();
+    handle.applyDocument("hello\nworld", true, 1);
+    postMessage.mockReset();
+    view.dispatch({ selection: { anchor: 2 } });
+    expect(caretReports()).toHaveLength(0); // debounced
+    handle.flushPending();
+    const reports = caretReports();
+    expect(reports).toHaveLength(1);
+    expect(reports[0]).toMatchObject({ type: "caret-report", line: 0, character: 2 });
+    // Timer was cancelled — no duplicate trailing post.
+    vi.advanceTimersByTime(100);
+    expect(caretReports()).toHaveLength(1);
+  });
+
+  it("dispose() cancels a pending caret-report (no stray post through the destroyed view)", () => {
+    vi.useFakeTimers();
+    const { handle, view } = mount();
+    handle.applyDocument("hello\nworld", true, 1);
+    postMessage.mockReset();
+    view.dispatch({ selection: { anchor: 2 } });
+    handle.dispose();
+    vi.advanceTimersByTime(100);
+    expect(caretReports()).toHaveLength(0);
   });
 
   it("applyRemoteCaret posts no `edit` (selection-only, document untouched)", () => {

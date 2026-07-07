@@ -294,12 +294,14 @@ export function mountShell(root: HTMLElement, opts: ShellOptions): ShellHandle {
   });
 
   // Teardown flush: a real tab close destroys the iframe WITHOUT calling
-  // shell.dispose()/editor.dispose() (those are test-only), so the 300 ms
-  // debounce buffer would die un-posted → silent data loss. Push the latest
-  // bytes to the host on every teardown-precursor signal while the host is
-  // still alive. flushPendingEdit() force-posts the latest bytes even while an
+  // shell.dispose()/editor.dispose() (those are test-only), so the 300 ms edit
+  // debounce buffer (and the 100 ms caret-report debounce) would die un-posted
+  // → silent data loss / a stranded final caret. Push the latest bytes to the
+  // host on every teardown-precursor signal while the host is
+  // still alive. flushPending() force-posts the latest Edit bytes even while an
   // Edit is in flight (the host stashes + drains that in-flight arrival on
-  // settlement; it keeps single-flight intact on an alive hide→show) and is a
+  // settlement; it keeps single-flight intact on an alive hide→show) plus the
+  // debounced caret, and is a
   // no-op when nothing is pending, so these are cheap: visibilitychange:hidden fires when
   // the panel hides (incl. on close, retainContextWhenHidden keeps us alive to
   // deliver it, and on switch-away); pagehide on iframe teardown; blur when
@@ -307,7 +309,7 @@ export function mountShell(root: HTMLElement, opts: ShellOptions): ShellHandle {
   // below — only AFTER the ready post succeeds — so an init failure (the catch
   // nulls editor + rethrows) never leaks a listener on the dead init-error
   // page; dispose() removes all three symmetrically.
-  const flushPending = (): void => editor?.flushPendingEdit();
+  const flushPending = (): void => editor?.flushPending();
   const onVisibilityChange = (): void => {
     if (document.visibilityState === "hidden") {
       flushPending();

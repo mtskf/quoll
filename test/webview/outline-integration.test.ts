@@ -28,16 +28,20 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  // Dispose BEFORE useRealTimers so the caret-report debounce timer is
+  // cancelled in the same (fake) timer context it was scheduled in.
   for (const handle of mounted.splice(0)) {
     handle.dispose();
   }
   container?.remove();
   container = null;
+  vi.useRealTimers();
   vi.restoreAllMocks();
 });
 
 describe("outline navigation integration", () => {
   it("posts a caret-report but never an Edit when a heading is clicked", () => {
+    vi.useFakeTimers();
     const state = makeState();
     const handle = mountEditor({
       parent: container as HTMLElement,
@@ -55,6 +59,7 @@ describe("outline navigation integration", () => {
     postMessage.mockClear(); // ignore any seed-time traffic
     const items = mountEl.querySelectorAll<HTMLButtonElement>(".quoll-outline-item");
     items[1].click(); // "Beta"
+    vi.advanceTimersByTime(100); // caret-report is debounced (~100ms trailing)
 
     expect(postsOfType("edit")).toEqual([]); // byte-preserving: no write
     expect(postsOfType("caret-report").length).toBeGreaterThan(0); // selection moved
