@@ -14,7 +14,8 @@
 // direct dep as of PR #66 (added for the lint incremental parser's
 // `TreeFragment`); this type is derived rather than imported to avoid
 // widening the direct-dep import surface. The C2 `lezer-url-walker.ts`
-// chose the same alias strategy for the same reason.
+// uses the same `ReturnType<…>` alias strategy (there for change-detection
+// at the call site — a related but distinct motivation).
 
 import type { syntaxTree } from "@codemirror/language";
 import type { EditorSelection, EditorState } from "@codemirror/state";
