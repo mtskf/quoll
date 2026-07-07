@@ -2,8 +2,9 @@ import type { syntaxTree } from "@codemirror/language";
 import type { ScannedLine } from "./line-scan.js";
 
 // The Lezer tree type, derived from syntaxTree's return type rather than
-// imported from @lezer/common: that package is a transitive-only, un-hoisted
-// dep, and a direct import would violate the repo's supply-chain default-deny.
+// imported from @lezer/common: `@lezer/common` is a direct dep (added in PR #66
+// for the lint incremental parser's `TreeFragment`), but this type is derived
+// rather than imported to avoid widening the direct-dep import surface.
 // Mirrors src/webview/cm/decorations/types.ts and src/markdown/lezer-url-walker.ts.
 export type LezerTree = ReturnType<typeof syntaxTree>;
 

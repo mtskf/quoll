@@ -3,8 +3,9 @@
 // range semantics live in exactly one place so they can never drift.
 // Pure: a lazy reader of the passed tree, no field/state dependency, so nothing in
 // the table dir forms an import cycle around it. Typed via
-// `ReturnType<typeof syntaxTree>` to avoid a direct `@lezer/common` dependency
-// (the repo only depends on @lezer/highlight + @lezer/markdown).
+// `ReturnType<typeof syntaxTree>` to avoid a direct `@lezer/common` import
+// (it is a direct dep as of PR #66, but deriving the type keeps the direct-dep
+// import surface narrow).
 import type { syntaxTree } from "@codemirror/language";
 
 /** Every `Table` node range overlapping [from,to] (whole tree when from/to

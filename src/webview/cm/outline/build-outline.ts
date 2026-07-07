@@ -15,9 +15,10 @@
 import type { syntaxTree } from "@codemirror/language";
 import type { EditorState } from "@codemirror/state";
 
-// `@lezer/common` is a transitive-only, un-hoisted pnpm dep; derive the tree
-// type from syntaxTree's return type instead of importing it (repo convention —
-// see src/webview/cm/decorations/types.ts).
+// `@lezer/common` is a direct dep as of PR #66 (for the lint incremental
+// parser's `TreeFragment`); derive the tree type from syntaxTree's return type
+// instead of importing it to avoid widening the direct-dep import surface (repo
+// convention — see src/webview/cm/decorations/types.ts).
 type Tree = ReturnType<typeof syntaxTree>;
 
 /** One ATX heading, in document order. Identity is positional (`from`), never a

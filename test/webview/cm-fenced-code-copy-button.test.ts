@@ -23,7 +23,8 @@ import { collapseToggleThemeSpec, copyButtonThemeSpec } from "../../src/webview/
 import { fullTree } from "./helpers/full-tree.js";
 
 // Derive SyntaxNode from fullTree's return (a lezer Tree) — same reason as the
-// source: `@lezer/common` is an un-hoisted transitive dep we never import.
+// source: `@lezer/common` is a direct dep as of PR #66, but we derive rather
+// than import it to keep the direct-dep import surface narrow.
 type SyntaxNode = ReturnType<typeof fullTree>["topNode"];
 
 function firstFencedCode(doc: string): { state: EditorState; node: SyntaxNode } {
