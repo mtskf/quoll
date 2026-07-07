@@ -17,6 +17,7 @@ const LINT_SOURCE_FILES = [
   "src/webview/cm/lint/rules/no-trailing-spaces.ts",
   "src/webview/cm/lint/rules/no-multiple-blanks.ts",
   "src/webview/cm/lint/rules/duplicate-heading-text.ts",
+  "src/webview/cm/lint/rules/table-column-count.ts",
   "src/webview/cm/lint/rules/frontmatter-structure.ts",
   "src/webview/cm/lint/extension.ts",
   "src/webview/cm/lint/index.ts",
