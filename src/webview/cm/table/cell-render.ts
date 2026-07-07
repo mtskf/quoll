@@ -24,6 +24,7 @@
 // resolve: a relative <a href> never auto-fetches and the click guard blocks
 // non-absolute navigation.
 
+import { MAX_HREF_LENGTH } from "../../../shared/protocol.js";
 import { resolveAgainstBase } from "../image/resource-base.js";
 import type { Resolved } from "../inline/inline-emphasis.js";
 import {
@@ -56,6 +57,12 @@ const LINK_TOOLTIP = `${IS_MAC ? "Cmd" : "Ctrl"}+click to open`;
 // changes). Use `getAttribute("href")` (NOT `a.href`) so we read what
 // the renderer wrote; `a.href` is normalised by the browser to an
 // absolute URL even for relative input, which would defeat the check.
+//
+// This guard is the single source of truth for "opens externally": an href
+// that passes (ABSOLUTE_HREF_RE + length cap) is left un-preventDefault'd
+// and bubbles to the widget root handler, which routes it through the host
+// `open-external` choke point. Centralising the length cap HERE keeps the
+// root handler a dumb router with no length logic of its own.
 const ABSOLUTE_HREF_RE = /^(?:https?:|mailto:)/i;
 
 function attachLinkClickGuard(a: HTMLAnchorElement): void {
@@ -63,7 +70,14 @@ function attachLinkClickGuard(a: HTMLAnchorElement): void {
   a.addEventListener("click", (event) => {
     if (event.metaKey || event.ctrlKey) {
       const href = a.getAttribute("href") ?? "";
-      if (ABSOLUTE_HREF_RE.test(href)) {
+      // Absolute AND within the host's inbound cap: leave un-preventDefault'd
+      // so the widget root handler routes it through the host open-external
+      // gate. An oversize absolute href would be dropped by the host protocol
+      // validator (MAX_HREF_LENGTH), which — because the root handler
+      // preventDefaults before posting — would leave a dead-click. Cap it HERE
+      // so it falls through to preventDefault → caret reveal, exactly like a
+      // relative href.
+      if (ABSOLUTE_HREF_RE.test(href) && href.length <= MAX_HREF_LENGTH) {
         return;
       }
     }

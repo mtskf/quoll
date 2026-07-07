@@ -44,6 +44,7 @@ import { quollLint } from "./cm/lint/index.js";
 import { listHangIndent } from "./cm/list/list-hang-indent.js";
 import { listIndentKeymap } from "./cm/list/list-indent-keymap.js";
 import { quollMarkdownLanguage } from "./cm/markdown.js";
+import { openExternalSinkFor, quollOpenExternalSink } from "./cm/open-external.js";
 import { quollOutline } from "./cm/outline/index.js";
 import { detectLineSeparator, splitToCmText } from "./cm/seed.js";
 import { quollSwitchEditor } from "./cm/switch-editor.js";
@@ -447,6 +448,14 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
         // reads syntaxTree to resolve the position to a Link node and
         // benefits from any decorations the reveal already arbitrated.
         quollLinkClickHandler(getHost()),
+        // Provide the open-external sink read by the readonly table widget's
+        // modifier-click path (cm/table/table-widget.ts). Same host choke
+        // point as quollLinkClickHandler above — the widget is built inside a
+        // StateField and cannot be dependency-injected at construction, so it
+        // reads this facet at click time. Forgetting this `.of(...)` makes the
+        // facet fall back to its no-op default → table links silently stop
+        // opening on modifier-click (caught by the manual smoke below).
+        quollOpenExternalSink.of(openExternalSinkFor(getHost())),
         // Cmd+Option+K → Claude Code handoff; Cmd+J → Codex handoff. One
         // Prec.high keymap (see cm/context-handoff.ts) scoped to CM focus — no
         // package.json keybinding. Cmd+Option+K never collides with Claude's

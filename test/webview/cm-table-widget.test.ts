@@ -1,10 +1,12 @@
 // @vitest-environment happy-dom
 import { EditorState } from "@codemirror/state";
-import { type EditorView as EditorViewType, WidgetType } from "@codemirror/view";
+import { EditorView, type EditorView as EditorViewType, WidgetType } from "@codemirror/view";
 import { describe, expect, it } from "vitest";
 
 import { parseTable } from "../../src/markdown/table/index.js";
+import { PROTOCOL_VERSION } from "../../src/shared/protocol.js";
 import { quollResourceBaseUri } from "../../src/webview/cm/image/resource-base.js";
+import { openExternalSinkFor, quollOpenExternalSink } from "../../src/webview/cm/open-external.js";
 import { TableBlockWidget } from "../../src/webview/cm/table/table-widget.js";
 
 function makeWidget(src: string, docFrom = 0): TableBlockWidget {
@@ -18,11 +20,20 @@ function makeWidget(src: string, docFrom = 0): TableBlockWidget {
 /** Minimal view stub — display-only toDOM reads `view.dispatch` and
  *  `view.state.facet(quollResourceBaseUri)` (a real EditorState so facet
  *  reads work; no doc/extensions beyond the optional resource base). */
-function stubView(dispatched?: unknown[], resourceBase?: string): EditorViewType {
+function stubView(
+  dispatched?: unknown[],
+  resourceBase?: string,
+  opened?: string[]
+): EditorViewType {
+  const extensions = [];
+  if (resourceBase !== undefined) {
+    extensions.push(quollResourceBaseUri.of(resourceBase));
+  }
+  if (opened !== undefined) {
+    extensions.push(quollOpenExternalSink.of((href: string) => opened.push(href)));
+  }
   return {
-    state: EditorState.create({
-      extensions: resourceBase === undefined ? [] : [quollResourceBaseUri.of(resourceBase)],
-    }),
+    state: EditorState.create({ extensions }),
     dispatch: (tr: unknown) => dispatched?.push(tr),
   } as unknown as EditorViewType;
 }
@@ -323,18 +334,36 @@ describe("TableBlockWidget.toDOM", () => {
     expect(sel).toEqual({ anchor: expected });
   });
 
-  it("Cmd/Ctrl-click on an <a> inside the widget does NOT dispatch caret (browser navigates externally)", () => {
+  it("Cmd/Ctrl-click on an absolute https <a> routes through the sink (no caret dispatch)", () => {
     const src = "| Link |\n| - |\n| [docs](https://example.com) |";
     const dispatched: unknown[] = [];
-    const stub = stubView(dispatched);
+    const opened: string[] = [];
+    const stub = stubView(dispatched, undefined, opened);
     const dom = makeWidget(src).toDOM(stub);
     const a = dom.querySelector("a");
     expect(a).not.toBeNull();
     for (const modifier of [{ metaKey: true }, { ctrlKey: true }]) {
+      opened.length = 0;
       const event = new MouseEvent("click", { bubbles: true, cancelable: true, ...modifier });
       a?.dispatchEvent(event);
-      expect(event.defaultPrevented).toBe(false);
+      expect(event.defaultPrevented).toBe(true); // native nav suppressed
+      expect(opened).toEqual(["https://example.com"]); // routed through the host gate
     }
+    expect(dispatched).toEqual([]);
+  });
+
+  it("Cmd/Ctrl-click on an absolute mailto <a> routes through the sink", () => {
+    const src = "| Link |\n| - |\n| [mail](mailto:a@b.test) |";
+    const dispatched: unknown[] = [];
+    const opened: string[] = [];
+    const stub = stubView(dispatched, undefined, opened);
+    const dom = makeWidget(src).toDOM(stub);
+    const a = dom.querySelector("a");
+    expect(a?.getAttribute("href")).toBe("mailto:a@b.test");
+    const event = new MouseEvent("click", { bubbles: true, cancelable: true, metaKey: true });
+    a?.dispatchEvent(event);
+    expect(event.defaultPrevented).toBe(true);
+    expect(opened).toEqual(["mailto:a@b.test"]);
     expect(dispatched).toEqual([]);
   });
 
@@ -362,10 +391,11 @@ describe("TableBlockWidget.toDOM", () => {
   });
 
   // Widget-level pin parallel to the inline-link Cmd/Ctrl test above.
-  it("Cmd/Ctrl-click on a CHILD element inside an autolink <a> does NOT dispatch caret", () => {
+  it("Cmd/Ctrl-click on a CHILD element inside an autolink <a> routes through the sink (closest('a'))", () => {
     const src = "| Link |\n| - |\n| <https://example.com> |";
     const dispatched: unknown[] = [];
-    const stub = stubView(dispatched);
+    const opened: string[] = [];
+    const stub = stubView(dispatched, undefined, opened);
     const dom = makeWidget(src).toDOM(stub);
     const a = dom.querySelector("a");
     if (a === null) {
@@ -377,18 +407,21 @@ describe("TableBlockWidget.toDOM", () => {
     a.textContent = "";
     a.appendChild(child);
     for (const modifier of [{ metaKey: true }, { ctrlKey: true }]) {
+      opened.length = 0;
       const event = new MouseEvent("click", { bubbles: true, cancelable: true, ...modifier });
       child.dispatchEvent(event);
-      expect(event.defaultPrevented).toBe(false);
+      expect(event.defaultPrevented).toBe(true);
+      expect(opened).toEqual(["https://example.com"]);
     }
     expect(dispatched).toEqual([]);
   });
 
   // Descendant-safe modifier-click guard.
-  it("Cmd/Ctrl-click on a CHILD element inside <a> still suppresses caret dispatch (closest('a') guard)", () => {
+  it("Cmd/Ctrl-click on a CHILD element inside <a> routes through the sink (closest('a') guard)", () => {
     const src = "| Link |\n| - |\n| [docs](https://example.com) |";
     const dispatched: unknown[] = [];
-    const stub = stubView(dispatched);
+    const opened: string[] = [];
+    const stub = stubView(dispatched, undefined, opened);
     const dom = makeWidget(src).toDOM(stub);
     const a = dom.querySelector("a");
     if (a === null) {
@@ -399,11 +432,41 @@ describe("TableBlockWidget.toDOM", () => {
     a.textContent = "";
     a.appendChild(child);
     for (const modifier of [{ metaKey: true }, { ctrlKey: true }]) {
+      opened.length = 0;
       const event = new MouseEvent("click", { bubbles: true, cancelable: true, ...modifier });
       child.dispatchEvent(event);
-      expect(event.defaultPrevented).toBe(false);
+      expect(event.defaultPrevented).toBe(true);
+      expect(opened).toEqual(["https://example.com"]);
     }
     expect(dispatched).toEqual([]);
+  });
+
+  it("integration: a mounted view wired with openExternalSinkFor posts the open-external envelope on modifier-click", () => {
+    const src = "| Link |\n| - |\n| [docs](https://example.com) |";
+    const posted: unknown[] = [];
+    const parent = document.createElement("div");
+    document.body.appendChild(parent);
+    const view = new EditorView({
+      parent,
+      state: EditorState.create({
+        extensions: [
+          quollOpenExternalSink.of(openExternalSinkFor({ postMessage: (m) => posted.push(m) })),
+        ],
+      }),
+    });
+    try {
+      const dom = makeWidget(src).toDOM(view);
+      const a = dom.querySelector("a");
+      expect(a).not.toBeNull();
+      const event = new MouseEvent("click", { bubbles: true, cancelable: true, metaKey: true });
+      a?.dispatchEvent(event);
+      expect(event.defaultPrevented).toBe(true);
+      expect(posted).toEqual([
+        { protocol: PROTOCOL_VERSION, type: "open-external", href: "https://example.com" },
+      ]);
+    } finally {
+      view.destroy();
+    }
   });
 });
 
