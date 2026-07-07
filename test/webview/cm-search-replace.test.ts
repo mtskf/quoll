@@ -91,7 +91,7 @@ describe("in-editor find & replace", () => {
     // when canWrite=false), so it returns false and mutates nothing.
     expect(replaceAll(view)).toBe(false);
     expect(view.state.sliceDoc()).toBe("foo foo");
-    handle.flushPendingEdit();
+    handle.flushPending();
     expect(posted.filter(isEdit)).toHaveLength(0);
   });
 });

@@ -65,6 +65,15 @@ import { type Action, canPostEdit, type WebviewState } from "./state.js";
 
 type Dispatch = (action: Action) => void;
 
+// Trailing-debounce window for `caret-report`. `selectionSet` fires on every
+// keystroke and every drag-selection tick; the host keeps only the latest
+// (`lastKnownCaret`), so coalescing to one trailing post per settle bounds the
+// traffic without changing what the host ultimately reads. Shorter than
+// edit-sync's DEBOUNCE_MS (300 ms) because a caret is a single {line,character}
+// and the pre-switch / teardown flush is the real correctness guarantee — this
+// window only trims the mid-move flood.
+const CARET_REPORT_DEBOUNCE_MS = 100;
+
 export type EditorOptions = {
   parent: HTMLElement;
   nonce: string;
@@ -83,11 +92,12 @@ export type EditorHandle = {
   /** Fired by the shell after every state-changing dispatch — the SOLE
    *  drain entry point. */
   onReducerCommit(editInFlight: boolean): void;
-  /** Teardown flush: push any pending (typed-but-undebounced) content to the
-   *  host immediately. Wired by the shell to visibilitychange:hidden / pagehide
-   *  / blur so a close cannot silently drop the last keystrokes. Single-flight-
-   *  safe (delegates to edit-sync's flush → trySend). */
-  flushPendingEdit(): void;
+  /** Teardown/hide flush: push any pending (typed-but-undebounced) Edit AND the
+   *  debounced caret-report to the host immediately. Wired by the shell to
+   *  visibilitychange:hidden / pagehide / blur so a close cannot silently drop
+   *  the last keystrokes OR strand the final caret inside its debounce window.
+   *  Single-flight-safe (delegates to edit-sync's flush → trySend). */
+  flushPending(): void;
   /** Teardown: cancel any pending flush, destroy the EditorView, remove
    *  the mount node. */
   dispose(): void;
@@ -231,6 +241,54 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
     } catch (err) {
       console.error("[quoll] postMessage(caret-report) failed", err);
     }
+  };
+
+  // caret-report trailing debounce. The updateListener schedules the latest
+  // caret rather than posting each `selectionSet`; the timer coalesces a burst
+  // (typing, drag-selection) into one post CARET_REPORT_DEBOUNCE_MS after it
+  // settles. flushCaretReport posts the pending caret NOW at the pre-switch and
+  // teardown/hide boundaries — mirroring edit-sync's flush — so the caret the
+  // host applies on the Quoll→text switch is the final one, never a report
+  // stranded inside the debounce window. (A mid-window report the user overtypes
+  // is dropped by design, within the documented tolerance: a slightly older
+  // caret on the next switch, never data loss — see postCaretReport above.)
+  let pendingCaret: Caret | null = null;
+  let caretTimer: ReturnType<typeof setTimeout> | null = null;
+  const clearCaretTimer = (): void => {
+    if (caretTimer !== null) {
+      clearTimeout(caretTimer);
+      caretTimer = null;
+    }
+  };
+  const emitPendingCaret = (): void => {
+    if (pendingCaret !== null) {
+      const caret = pendingCaret;
+      pendingCaret = null;
+      postCaretReport(caret);
+    }
+  };
+  const scheduleCaretReport = (caret: Caret): void => {
+    pendingCaret = caret; // latest-wins; the burst collapses to one post
+    clearCaretTimer();
+    caretTimer = setTimeout(() => {
+      caretTimer = null;
+      emitPendingCaret();
+    }, CARET_REPORT_DEBOUNCE_MS);
+  };
+  // Post the pending caret immediately and cancel the trailing timer (so no
+  // duplicate post follows). Fired by the switch button/chord flush callback
+  // and by the teardown/hide flush (flushPending).
+  const flushCaretReport = (): void => {
+    clearCaretTimer();
+    emitPendingCaret();
+  };
+  // Drop a pending caret WITHOUT posting — dispose only. The teardown-signal
+  // flushes (visibilitychange:hidden / pagehide / blur → flushPending) already
+  // delivered the final caret while the transport was live; this just prevents a
+  // stray post from a timer that would otherwise outlive the destroyed view.
+  const cancelCaretReport = (): void => {
+    clearCaretTimer();
+    pendingCaret = null;
   };
 
   const viewCreateStart = QUOLL_PERF ? perfNow() : 0;
@@ -478,7 +536,15 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
         // (no CM change, no write-lock); the host reopens the document in the
         // built-in text editor and re-applies the caret. Present in read-only
         // mode too (navigation).
-        quollSwitchEditor(getHost(), () => sync.flush()),
+        quollSwitchEditor(getHost(), () => {
+          // Pre-switch flush: push the latest pending Edit AND the debounced
+          // caret-report to the host BEFORE switch-to-text, so the reopened
+          // text editor shows the just-typed content with its caret at the
+          // just-moved position (the host applies lastKnownCaret on the switch).
+          // postSwitchToText posts switch-to-text AFTER this callback → FIFO.
+          sync.flush();
+          flushCaretReport();
+        }),
         // Floating-toolbar scroll-hide: one shared scroll-direction observer on
         // view.scrollDOM stamps `.quoll-chrome-hidden` on the .quoll-editor host
         // so BOTH toggles above + the outline panel slide off the top edge on
@@ -521,13 +587,14 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
             }
             sync.onLocalChange();
           }
-          // Caret handoff: report the caret on any selection change. Suppressed
-          // during host seeds (`seeding` — the reseed restores a selection, not
-          // a user move) and during applyRemoteCaret (`applyingRemoteCaret` —
-          // the just-applied caret must not echo back). `selectionSet` covers
-          // both pure caret moves and typing (a doc change moves the caret too).
+          // Caret handoff: report the caret on any selection change (debounced —
+          // see scheduleCaretReport). Suppressed during host seeds (`seeding` —
+          // the reseed restores a selection, not a user move) and during
+          // applyRemoteCaret (`applyingRemoteCaret` — the just-applied caret must
+          // not echo back). `selectionSet` covers both pure caret moves and
+          // typing (a doc change moves the caret too).
           if (u.selectionSet && !seeding && !applyingRemoteCaret) {
-            postCaretReport(selectionToCaret(u.state));
+            scheduleCaretReport(selectionToCaret(u.state));
           }
           if (QUOLL_PERF) {
             perfRecord("webview:update-listener", perfNow() - updateStart);
@@ -690,8 +757,9 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
     onReducerCommit(editInFlight) {
       sync.onReducerCommit(editInFlight);
     },
-    flushPendingEdit() {
+    flushPending() {
       sync.flush();
+      flushCaretReport();
     },
     dispose() {
       // Cancel the pending debounced flush BEFORE tearing the view down.
@@ -699,6 +767,10 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
       // destroyed view; the empty-string Edit it would post must never
       // ship.
       sync.cancelPendingFlush();
+      // Drop a pending caret post too — the teardown-signal flush already
+      // delivered the final caret while the transport was live; canceling
+      // prevents a stray post from a timer outliving the destroyed view.
+      cancelCaretReport();
       // try/finally so mount.remove() runs even if view.destroy() throws.
       // Without this, a destroy-time throw would leak the
       // <div class="quoll-editor"> in the DOM and the next mountEditor in
