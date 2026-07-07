@@ -22,6 +22,24 @@ function stateFor(doc: string): EditorState {
   });
 }
 
+// Collect the lint underline marks the view currently contributes (via the mapped
+// lintDecorationsField → EditorView.decorations facet), as {from,to,cls} tuples.
+function lintMarkRanges(view: EditorView): { from: number; to: number; cls?: string }[] {
+  const out: { from: number; to: number; cls?: string }[] = [];
+  for (const source of view.state.facet(EditorView.decorations)) {
+    const set = typeof source === "function" ? source(view) : source;
+    const iter = set.iter();
+    while (iter.value !== null) {
+      const cls = (iter.value.spec as { class?: string }).class;
+      if (cls?.startsWith("quoll-lint-mark-")) {
+        out.push({ from: iter.from, to: iter.to, cls });
+      }
+      iter.next();
+    }
+  }
+  return out;
+}
+
 describe("quollLint extension (state-level)", () => {
   it("computes initial diagnostics at field creation", () => {
     const diags = stateFor("# Title\n\n### Skip\n").field(lintField);
@@ -310,6 +328,32 @@ describe("quollLint debounced recompute (view-level)", () => {
         ]),
       });
       expect(view.state.field(lintField).some((d) => d.wholeLine)).toBe(true);
+    } finally {
+      view.destroy();
+    }
+  });
+
+  it("maps the underline DecorationSet through a doc change instead of leaving it stale or rebuilding", () => {
+    // Pin lintDecorationsField's per-keystroke mapping: an inline mark published by a
+    // fresh lint must FOLLOW an edit made inside the debounce window (no re-lint) —
+    // the set is mapped through tr.changes, not left at its stale offset. If the
+    // docChanged branch returned the set unmapped, the underline would stay at [6,11)
+    // over the shifted text and this assertion would go red.
+    const view = new EditorView({
+      doc: "hello world\n",
+      parent: document.body,
+      extensions: [markdown({ base: markdownLanguage }), quollLint()],
+    });
+    try {
+      view.dispatch({
+        effects: setLintDiagnostics.of([
+          { from: 6, to: 11, severity: "warning", code: "x", message: "m" },
+        ]),
+      });
+      expect(lintMarkRanges(view)).toEqual([{ from: 6, to: 11, cls: "quoll-lint-mark-warning" }]);
+      // Insert 3 chars at the very start — no timer advance, so no debounced re-lint.
+      view.dispatch({ changes: { from: 0, insert: "xxx" } });
+      expect(lintMarkRanges(view)).toEqual([{ from: 9, to: 14, cls: "quoll-lint-mark-warning" }]);
     } finally {
       view.destroy();
     }
