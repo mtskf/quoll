@@ -2,8 +2,7 @@
 //
 // Owns the reducer state, the single host-message subscription, and the
 // editor mount. Theme is applied via class toggle on <html> so VS Code
-// CSS variables reach every descendant; persisted metadata is written
-// through the host wrapper, equality-guarded against the previous state.
+// CSS variables reach every descendant.
 //
 // The shell does NOT parse content (C8): only the rawText
 // (DocumentMessage.content) is seeded into the editor — the editor seam is
@@ -14,10 +13,7 @@
 // no "cannot display" state. The host write-gate (validateMarkdownForWrite) is
 // the authoritative validation surface, and the host's `edit-rejected` →
 // serializeError banner is the only surviving, HOST-sourced error surface —
-// both untouched by this module. The webview also renders a second,
-// shell-sourced banner — the self-clearing persistence-degraded notice — in
-// the same banner area when `setMetadata` fails (see persistIfChanged below);
-// it is driven by a shell-local flag, not reducer/host state.
+// both untouched by this module.
 
 import type { MarkdownErrorCode } from "../markdown/errors.js";
 import { perfNow, perfRecord, perfReport } from "../shared/perf.js";
@@ -71,17 +67,6 @@ export function narrowMarkdownErrorCode(code: string): MarkdownErrorCode {
     : "internal_error";
 }
 
-type PersistedFields = Pick<WebviewState, "ready" | "docVersion" | "canWrite" | "theme">;
-
-function persistedFieldsEqual(a: PersistedFields, b: PersistedFields): boolean {
-  return (
-    a.ready === b.ready &&
-    a.docVersion === b.docVersion &&
-    a.canWrite === b.canWrite &&
-    a.theme === b.theme
-  );
-}
-
 export type ShellHandle = {
   /** Test-only teardown: unsubscribe from the host, destroy the editor,
    *  remove the inserted <main> from the container. Not invoked at
@@ -108,7 +93,6 @@ export function mountShell(root: HTMLElement, opts: ShellOptions): ShellHandle {
   root.appendChild(main);
 
   let state: WebviewState = initialState;
-  let persistenceDegraded = false;
   let editor: EditorHandle | null = null;
   const mountStart = QUOLL_PERF ? perfNow() : 0;
   let mountReported = false;
@@ -139,49 +123,6 @@ export function mountShell(root: HTMLElement, opts: ShellOptions): ShellHandle {
   // not currently possible but defensive) must not crash; editor is
   // assigned before the first message can arrive (subscribe is wired
   // synchronously after the editor mounts).
-
-  function persistIfChanged(prev: WebviewState, next: WebviewState): void {
-    if (!next.ready) {
-      return;
-    }
-    const prevFields: PersistedFields = {
-      ready: prev.ready,
-      docVersion: prev.docVersion,
-      canWrite: prev.canWrite,
-      theme: prev.theme,
-    };
-    const nextFields: PersistedFields = {
-      ready: next.ready,
-      docVersion: next.docVersion,
-      canWrite: next.canWrite,
-      theme: next.theme,
-    };
-    if (persistedFieldsEqual(prevFields, nextFields)) {
-      return;
-    }
-    try {
-      getHost().setMetadata(nextFields);
-      // A changed payload wrote successfully — clear a prior degraded episode.
-      // Re-render directly (the banner is a pure function of reducer state ⊕
-      // this shell-local flag); NO dispatch, so the single-drain re-entry
-      // invariant and onReducerCommit are untouched.
-      if (persistenceDegraded) {
-        persistenceDegraded = false;
-        renderBanners(bannerHost, next, persistenceDegraded);
-      }
-    } catch (err) {
-      // First failure of an episode: log once + surface the banner. The latch
-      // no longer skips-forever — subsequent throws while still degraded are
-      // silent (no re-log, no re-render). Recovery is driven by the next
-      // changed payload that writes successfully (the success arm above), so a
-      // structural failure stays degraded while a transient one self-clears.
-      if (!persistenceDegraded) {
-        persistenceDegraded = true;
-        console.error("[quoll] setMetadata failed; persistence degraded", err);
-        renderBanners(bannerHost, next, persistenceDegraded);
-      }
-    }
-  }
 
   function syncTheme(prev: WebviewState, next: WebviewState): void {
     if (prev.theme === next.theme) {
@@ -220,8 +161,7 @@ export function mountShell(root: HTMLElement, opts: ShellOptions): ShellHandle {
     }
     state = next;
     syncTheme(prev, next);
-    renderBanners(bannerHost, next, persistenceDegraded);
-    persistIfChanged(prev, next);
+    renderBanners(bannerHost, next);
     // SINGLE drain entry, fired AFTER state + DOM update so canPost()
     // (inside edit-sync) reads the fresh reducer gate.
     //

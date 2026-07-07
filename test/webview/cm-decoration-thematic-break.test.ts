@@ -11,7 +11,7 @@ import { frontmatterBlockField } from "../../src/webview/cm/frontmatter/frontmat
 import { fullTree } from "./helpers/full-tree.js";
 
 vi.mock("../../src/webview/host.js", () => ({
-  getHost: () => ({ postMessage: vi.fn(), setMetadata: vi.fn() }),
+  getHost: () => ({ postMessage: vi.fn() }),
   subscribeToHost: () => () => {},
 }));
 

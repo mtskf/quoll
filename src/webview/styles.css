@@ -232,15 +232,6 @@
     background-color: var(--vscode-inputValidation-errorBackground, transparent);
   }
 
-  /* Persistence-degraded notice (setMetadata failure). Milder than .error:
-   * a subtle left border + muted foreground, no strong background — it
-   * reports lost cross-session UI metadata, not document data loss. */
-  .quoll-banner.notice {
-    border-left-color: var(--vscode-editorInfo-foreground, var(--vscode-focusBorder));
-    background-color: transparent;
-    color: var(--vscode-descriptionForeground, var(--vscode-editor-foreground));
-  }
-
   /* Decoration syntax reveal (C4a). Caret-on-token rendering — the syntax
    * marks (#, >, **, *, `, ~~) remain in the document but render dim so the
    * user can read AND edit them. Caret-off renders via Decoration.replace
