@@ -463,9 +463,11 @@ describe("renderCellInline", () => {
     expect(atCap.length).toBe(MAX_HREF_LENGTH); // guard against miscalc
     const [a] = renderCellInline(`[x](${atCap})`) as HTMLAnchorElement[];
     expect(a).toBeInstanceOf(HTMLAnchorElement);
-    const event = new MouseEvent("click", { bubbles: true, cancelable: true, metaKey: true });
-    a.dispatchEvent(event);
-    expect(event.defaultPrevented).toBe(false); // within cap → routes via root handler
+    for (const modifier of [{ metaKey: true }, { ctrlKey: true }]) {
+      const event = new MouseEvent("click", { bubbles: true, cancelable: true, ...modifier });
+      a.dispatchEvent(event);
+      expect(event.defaultPrevented).toBe(false); // within cap → routes via root handler
+    }
   });
 
   it("absolute href one over MAX_HREF_LENGTH modifier-click is preventDefault'd (just-over-cap boundary)", () => {
@@ -474,9 +476,11 @@ describe("renderCellInline", () => {
     expect(overCap.length).toBe(MAX_HREF_LENGTH + 1);
     const [a] = renderCellInline(`[x](${overCap})`) as HTMLAnchorElement[];
     expect(a).toBeInstanceOf(HTMLAnchorElement); // isAllowedUrl has no length cap → live <a>
-    const event = new MouseEvent("click", { bubbles: true, cancelable: true, metaKey: true });
-    a.dispatchEvent(event);
-    expect(event.defaultPrevented).toBe(true); // over cap → caret reveal
+    for (const modifier of [{ metaKey: true }, { ctrlKey: true }]) {
+      const event = new MouseEvent("click", { bubbles: true, cancelable: true, ...modifier });
+      a.dispatchEvent(event);
+      expect(event.defaultPrevented).toBe(true); // over cap → caret reveal
+    }
   });
 
   it("autolink plain click is preventDefault'd (same gate as inline links)", () => {
