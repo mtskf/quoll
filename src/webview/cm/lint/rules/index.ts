@@ -4,6 +4,7 @@ import { frontmatterStructure } from "./frontmatter-structure.js";
 import { headingIncrement } from "./heading-increment.js";
 import { noMultipleBlanks } from "./no-multiple-blanks.js";
 import { noTrailingSpaces } from "./no-trailing-spaces.js";
+import { tableColumnCount } from "./table-column-count.js";
 
 // The active first-party lint rule set. New rules are appended here; the engine
 // runs them in array order and sorts the combined output by position.
@@ -12,6 +13,7 @@ export const RULES: readonly LintRule[] = [
   noTrailingSpaces,
   noMultipleBlanks,
   duplicateHeadingText,
+  tableColumnCount,
 ];
 
 // Rules that lint the file-leading YAML frontmatter block, which the engine
