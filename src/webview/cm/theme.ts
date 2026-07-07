@@ -178,6 +178,36 @@ const quollHighlight = HighlightStyle.define(quollHighlightSpec);
 
 export const quollHighlighting = syntaxHighlighting(quollHighlight);
 
+// Shared elliptical corner radii + vertical breathing room for every rounded block
+// EDGE — the fenced-code / blockquote OPEN (top) and CLOSE (bottom) fence lines, plus
+// the collapse-bar footer (collapseBarFooterCorner below). Radii are ELLIPTICAL to
+// compensate for `background-clip: padding-box` (see .quoll-fenced-code): the visible
+// fill is the PADDING box, whose corner radius is the border-box radius MINUS the
+// transparent alignment border. --quoll-block-radius is the wanted PAINTED round, so the
+// border-box HORIZONTAL radius is bumped by that border width (`radius + 6px` left,
+// `radius + 2px` right); the vertical borders are 0, so the vertical radius passes
+// through as the token value. The vertical breathing room is --quoll-block-pad-y. All
+// tokens are SHARED across the surfaces — retuning :root moves them together. Kept as a
+// top/bottom factory (NOT a bottom-edge const reused directly) because the -open rules
+// are the TOP-edge mirror. The 6px/2px inset literals live ONCE here; each edge variant
+// is pinned by cm-decoration-block-style.test.ts / cm-fenced-code-collapse.test.ts.
+const blockEdgeLeftRadius =
+  "calc(var(--quoll-block-radius, 8px) + var(--quoll-column-inset-left, 6px)) var(--quoll-block-radius, 8px)";
+const blockEdgeRightRadius =
+  "calc(var(--quoll-block-radius, 8px) + var(--quoll-column-inset-right, 2px)) var(--quoll-block-radius, 8px)";
+const blockEdgeCorner = (edge: "top" | "bottom"): Record<string, string> =>
+  edge === "top"
+    ? {
+        borderTopLeftRadius: blockEdgeLeftRadius,
+        borderTopRightRadius: blockEdgeRightRadius,
+        paddingTop: "var(--quoll-block-pad-y, 12px)",
+      }
+    : {
+        borderBottomLeftRadius: blockEdgeLeftRadius,
+        borderBottomRightRadius: blockEdgeRightRadius,
+        paddingBottom: "var(--quoll-block-pad-y, 12px)",
+      };
+
 // Fenced-code panel + blockquote rule styling for the block-style.ts line
 // decorations. Lives HERE (an EditorView.theme), NOT styles.css: CM's base
 // theme sets `.cm-line { padding: 0 2px 0 6px }` UNLAYERED, which beats
@@ -220,32 +250,13 @@ export const blockStyleThemeSpec = {
     paddingLeft: "var(--quoll-block-pad-x, 16px)",
     paddingRight: "var(--quoll-block-pad-x, 16px)",
   },
-  // Round the top + add top breathing room only on the opening fence line. Radii
-  // are ELLIPTICAL to compensate for `background-clip: padding-box` (see
-  // .quoll-fenced-code): the visible fill is the PADDING box, whose corner radius
-  // is the border-box radius MINUS the border width. --quoll-block-radius is the
-  // wanted PAINTED round, so the border-box HORIZONTAL radius is bumped by the
-  // transparent-border width (`radius + 6px` left, `radius + 2px` right); the
-  // vertical borders are 0, so the vertical radius passes through as the token
-  // value (the vertical --quoll-block-pad-y split is orthogonal to this — it does
-  // not change any border width). The top breathing room is --quoll-block-pad-y;
-  // radius is --quoll-block-radius. Both are SHARED tokens with the blockquote /
-  // collapse-bar corners below — retuning :root moves all three surfaces together.
-  ".cm-line.quoll-fenced-code-open": {
-    borderTopLeftRadius:
-      "calc(var(--quoll-block-radius, 8px) + var(--quoll-column-inset-left, 6px)) var(--quoll-block-radius, 8px)",
-    borderTopRightRadius:
-      "calc(var(--quoll-block-radius, 8px) + var(--quoll-column-inset-right, 2px)) var(--quoll-block-radius, 8px)",
-    paddingTop: "var(--quoll-block-pad-y, 12px)",
-  },
-  // Round the bottom + bottom breathing room only on the closing fence line.
-  ".cm-line.quoll-fenced-code-close": {
-    borderBottomLeftRadius:
-      "calc(var(--quoll-block-radius, 8px) + var(--quoll-column-inset-left, 6px)) var(--quoll-block-radius, 8px)",
-    borderBottomRightRadius:
-      "calc(var(--quoll-block-radius, 8px) + var(--quoll-column-inset-right, 2px)) var(--quoll-block-radius, 8px)",
-    paddingBottom: "var(--quoll-block-pad-y, 12px)",
-  },
+  // Round the top + add top breathing room only on the opening fence line — the shared
+  // elliptical corner spec (blockEdgeCorner; its doc comment explains the padding-box
+  // radius compensation and the SHARED --quoll-block-* tokens).
+  ".cm-line.quoll-fenced-code-open": blockEdgeCorner("top"),
+  // Round the bottom + bottom breathing room only on the closing fence line
+  // (blockEdgeCorner's bottom mirror).
+  ".cm-line.quoll-fenced-code-close": blockEdgeCorner("bottom"),
   // Blockquote: subtle navy fill + muted text. The fill lands on every quote
   // line so the panel is continuous; horizontal padding insets the text from
   // the fill's edges.
@@ -288,28 +299,12 @@ export const blockStyleThemeSpec = {
     paddingRight: "var(--quoll-block-pad-x, 16px)",
     color: "var(--vscode-descriptionForeground, var(--vscode-editor-foreground))",
   },
-  // Round the top corners on the opening quote line, mirroring the fenced-code
-  // panel. Elliptical radii compensate for `background-clip: padding-box` (see
-  // .quoll-fenced-code-open) so the PAINTED fill corner is a true --quoll-block-radius
-  // round (`radius + 6px` left, `radius + 2px` right border-box horizontal). Same
-  // shared padding + radius tokens as the fenced-code corners. Real-pixel geometry
-  // is checked in the browser harness (happy-dom has no layout — fenced-collapse
-  // precedent).
-  ".cm-line.quoll-blockquote-open": {
-    borderTopLeftRadius:
-      "calc(var(--quoll-block-radius, 8px) + var(--quoll-column-inset-left, 6px)) var(--quoll-block-radius, 8px)",
-    borderTopRightRadius:
-      "calc(var(--quoll-block-radius, 8px) + var(--quoll-column-inset-right, 2px)) var(--quoll-block-radius, 8px)",
-    paddingTop: "var(--quoll-block-pad-y, 12px)",
-  },
-  // Round the bottom corners on the closing quote line (same treatment as -open).
-  ".cm-line.quoll-blockquote-close": {
-    borderBottomLeftRadius:
-      "calc(var(--quoll-block-radius, 8px) + var(--quoll-column-inset-left, 6px)) var(--quoll-block-radius, 8px)",
-    borderBottomRightRadius:
-      "calc(var(--quoll-block-radius, 8px) + var(--quoll-column-inset-right, 2px)) var(--quoll-block-radius, 8px)",
-    paddingBottom: "var(--quoll-block-pad-y, 12px)",
-  },
+  // Round the top corners on the opening quote line, mirroring the fenced-code panel
+  // — same shared elliptical corner spec (blockEdgeCorner). Real-pixel geometry is
+  // checked in the browser harness (happy-dom has no layout — fenced-collapse precedent).
+  ".cm-line.quoll-blockquote-open": blockEdgeCorner("top"),
+  // Round the bottom corners on the closing quote line (blockEdgeCorner's bottom mirror).
+  ".cm-line.quoll-blockquote-close": blockEdgeCorner("bottom"),
   // Nested-quote deeper tint (block-style.ts blockquoteDepthClass). A `> >` /
   // `> > >` line carries `quoll-blockquote-depth-{2,3}` ON TOP of the base
   // .quoll-blockquote class; these override ONLY the fill, deepening it per level
@@ -645,21 +640,11 @@ export const quollCopyButtonTheme = EditorView.theme(copyButtonThemeSpec);
 // spec so cm-fenced-code-collapse.test.ts can pin the contract. Height/placement
 // are verified in the real-browser harness (not assertable in happy-dom).
 // The rounded, padded footer edge shared by the collapse bar's TWO footer states —
-// the collapsed "Show more" bar AND the expanded "Show less" bar when it is the
-// panel's visible bottom. Both draw the same bottom radius + bottom padding as
-// .cm-line.quoll-fenced-code-close (SHARED --quoll-block-radius / --quoll-block-pad-y
-// tokens), so the three footers can never drift. Elliptical radii compensate for the
-// bar's `background-clip: padding-box` (see .quoll-fenced-code-open): the transparent
-// border eats into the corner, so the border-box radius is bumped by the border width
-// (`radius + 6px` left, `radius + 2px` right) to leave a true --quoll-block-radius
-// painted round.
-const collapseBarFooterCorner = {
-  borderBottomLeftRadius:
-    "calc(var(--quoll-block-radius, 8px) + var(--quoll-column-inset-left, 6px)) var(--quoll-block-radius, 8px)",
-  borderBottomRightRadius:
-    "calc(var(--quoll-block-radius, 8px) + var(--quoll-column-inset-right, 2px)) var(--quoll-block-radius, 8px)",
-  paddingBottom: "var(--quoll-block-pad-y, 12px)",
-};
+// the collapsed "Show more" bar AND the expanded "Show less" bar when it is the panel's
+// visible bottom. Both draw the same bottom edge as .cm-line.quoll-fenced-code-close via
+// the shared blockEdgeCorner spec (see its doc comment), so the three footers can never
+// drift.
+const collapseBarFooterCorner = blockEdgeCorner("bottom");
 
 export const collapseToggleThemeSpec = {
   ".quoll-fenced-collapse-bar": {
