@@ -152,7 +152,7 @@ describe("fencedCodeBody", () => {
 });
 
 describe("fencedCodeBodyAt", () => {
-  function makeState(doc: string): ReturnType<typeof EditorState.create> {
+  function makeState(doc: string): EditorState {
     return EditorState.create({
       doc,
       extensions: [markdown({ base: markdownLanguage })],
