@@ -72,9 +72,10 @@ export function selectionToHandoff(state: EditorState): {
   // at a line start (e.g. it swallows the trailing newline), `to` sits on the
   // NEXT line, which has no selected character. Anchor the end line to the last
   // selected offset (to - 1) so the reported range covers only lines the user
-  // actually touched. Empty carets keep `to` (== from) so they stay on the caret
-  // line. Math.max guards against underflow at doc start.
-  const endOffset = empty ? to : Math.max(from, to - 1);
+  // actually touched. `from < to` holds for every non-empty range, so to - 1
+  // never precedes `from`. Empty carets keep `to` (== from) so they stay on the
+  // caret line.
+  const endOffset = empty ? to : to - 1;
   const endLine = state.doc.lineAt(endOffset).number;
   return { hasSelection: !empty, startLine, endLine };
 }
