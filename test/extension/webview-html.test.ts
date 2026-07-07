@@ -271,6 +271,24 @@ describe("buildWebviewHtml", () => {
     );
   });
 
+  it("throws when scriptUri contains an ampersand (HTML entity injection vector)", () => {
+    // scriptUri is interpolated into the <script src="..."> attribute value.
+    // A raw `&` could begin a numeric character reference (e.g. `&#34` → `"`)
+    // that the HTML parser decodes before the attribute boundary, breaking out
+    // of the attribute. asWebviewUri percent-encodes its path (no raw `&`), so
+    // rejecting `&` is fail-closed with no legitimate loss — symmetric with the
+    // resourceBaseUri and cspSource per-token gates.
+    expect(() =>
+      buildWebviewHtml({ ...fixture, scriptUri: "https://x&#34/dist/webview/index.js" })
+    ).toThrow(/buildWebviewHtml: scriptUri contains disallowed character/);
+  });
+
+  it("throws when stylesUri contains an ampersand (HTML entity injection vector)", () => {
+    expect(() =>
+      buildWebviewHtml({ ...fixture, stylesUri: "https://x&#34/dist/webview/index.css" })
+    ).toThrow(/buildWebviewHtml: stylesUri contains disallowed character/);
+  });
+
   it("omits data-resource-base-uri on #root when resourceBaseUri is empty (non-file document)", () => {
     expect(buildWebviewHtml(fixture)).not.toMatch(/data-resource-base-uri/);
   });
