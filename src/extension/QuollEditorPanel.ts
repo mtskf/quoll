@@ -54,10 +54,8 @@ import {
   workspace,
 } from "vscode";
 
-import type { MarkdownError } from "../markdown/errors.js";
 import { createIncrementalWriteValidator } from "../markdown/validate-for-write.js";
-import { perfNow, perfRecord, perfReport } from "../shared/perf.js";
-import type { HostToWebview } from "../shared/protocol.js";
+import { perfReport } from "../shared/perf.js";
 import { isWebviewToHost } from "../shared/protocol.js";
 import { canHostWrite } from "./canHostWrite.js";
 import { type Caret, clampCaret } from "./caret-handoff.js";
@@ -79,6 +77,7 @@ import {
 } from "./document-message.js";
 import { createEditSettledBarrier } from "./edit-settled-barrier.js";
 import { takeSwitchCaret } from "./editor-switch-caret.js";
+import { createEffectExecutor } from "./effect-executor.js";
 import { getNonce } from "./getNonce.js";
 import { handleCodexContextHandoff } from "./handle-codex-context-handoff.js";
 import { handleContextHandoff } from "./handle-context-handoff.js";
@@ -86,14 +85,12 @@ import { handleOpenExternal } from "./handle-open-external.js";
 import {
   createDrainingDispatcher,
   createHostSessionCore,
-  type HostSessionEffect,
   type HostSessionEvent,
   isWriteLockHeld,
 } from "./host-session-core.js";
 import { handleImageWrite } from "./image-write-service.js";
 import { toLintDiagnostics } from "./lint-diagnostics.js";
 import { LintMirror } from "./lint-mirror.js";
-import { minimalEditSpan } from "./minimal-edit.js";
 import { openInTextEditor } from "./reopen-text-editor.js";
 import {
   decideRevealInvariant,
@@ -255,7 +252,6 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
     // authority; this local short-circuits effect delivery (kept in
     // lockstep by onDidDispose, which sets it before dispatching).
     let disposed = false;
-    let hostMountReported = false;
 
     // Single-flight guard for the Codex handoff. A rapid ⌘+J repeat within the
     // async window would add a DUPLICATE, persistent context chip to the Codex
@@ -342,70 +338,84 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
     const canWriteNow = (): boolean =>
       canHostWrite(document.uri.scheme, (scheme) => workspace.fs.isWritableFileSystem(scheme));
 
-    // Host-side outbound. postMessage settles three ways:
-    //   - resolves true  → VS Code runtime accepted/queued the message
-    //                      (the only path that calls harness.recordEvent).
-    //   - resolves false → runtime cannot route right now: disposed,
-    //                      hidden with retainContextWhenHidden=false,
-    //                      or mid-reload. Normal route, not an edge
-    //                      case. Logged at console.warn so production
-    //                      triage can spot delivery gaps; intentionally
-    //                      NOT recorded as a delivered event.
-    //   - rejects        → host/webview transport detached. Logged at
-    //                      console.error; also NOT recorded.
-    // The webview-side outbound handler does not expose an equivalent
-    // delivery signal, so the host log is the only place this gap is
-    // observable.
-    const post = (message: HostToWebview): void => {
-      if (disposed) {
-        return;
-      }
-      // Route postMessage through the harness override when present so
-      // tests can exercise the non-acceptance arms (ok=false / reject).
-      // Production builds construct no harness, so
-      // `harness?.webviewPostMessageOverride` is undefined and the real
-      // webview surface is used directly.
-      const send: (m: HostToWebview) => Thenable<boolean> =
-        this.harness?.webviewPostMessageOverride ?? ((m) => webviewPanel.webview.postMessage(m));
-      // A SYNCHRONOUS throw from send() escapes the `.then(...)` arms below:
-      // the throw happens while EVALUATING `send(message)`, before the
-      // Promise exists, so the reject arm never sees it. postMessage does not
-      // throw synchronously in practice, but the harness seam / a future
-      // transport could — and an unguarded throw here would unwind the
-      // dispatch drain (and the VS Code event callback that drove this post).
-      // Mirror runApplyEdit's sync-throw shape: catch + log, same triage
-      // signal as the reject arm (Codex N5).
-      let pending: Thenable<boolean>;
-      const sendStart = QUOLL_PERF ? perfNow() : 0;
-      try {
-        pending = send(message);
-      } catch (err) {
-        console.error("[quoll] host→webview postMessage threw synchronously", err, {
-          type: message.type,
-        });
-        return;
-      }
-      if (QUOLL_PERF) {
-        perfRecord("host:postMessage", perfNow() - sendStart);
-      }
-      void pending.then(
-        (ok) => {
-          if (ok) {
-            if (disposed) {
-              return;
-            }
-            this.harness?.recordEvent(message);
-            return;
-          }
-          console.warn("[quoll] host→webview postMessage resolved false", {
-            type: message.type,
-          });
+    // Effect executor — owns `post`, `sendEditRejected`, `runApplyEdit`, and
+    // `runEffects` (extracted to src/extension/effect-executor.ts so the
+    // dispose / lifecycle branches get direct unit tests). It stays vscode-free:
+    // every VS Code touch (postMessage surface, WorkspaceEdit build/apply,
+    // document text/version, theme/canWrite reads, handleOpenExternal, the
+    // message builders) is injected here. The builders are closures that read
+    // live theme/canWrite at CALL time, preserving the freshness contract.
+    const { post, runEffects } = createEffectExecutor({
+      isDisposed: () => disposed,
+      getState: () => state,
+      uriString: () => document.uri.toString(),
+      dispatch: (event) => dispatch(event),
+      // Route postMessage through the harness override when present so tests can
+      // exercise the non-acceptance arms (ok=false / reject). Production builds
+      // construct no harness, so the override is undefined and the real webview
+      // surface is used directly. LAZY: `this.harness?.webviewPostMessageOverride`
+      // is re-read on every send — the E2E harness swaps the override PER TEST
+      // (after this panel is constructed), so an eagerly-captured surface would
+      // pin the construction-time binding and ignore the swap (pinned by the
+      // edit-rejected / resync-fallback e2e).
+      send: (m) =>
+        (
+          this.harness?.webviewPostMessageOverride ?? ((mm) => webviewPanel.webview.postMessage(mm))
+        )(m),
+      recordEvent: (m) => this.harness?.recordEvent(m),
+      showError,
+      canWrite: canWriteNow,
+      buildSeedDocument: (docVersion) =>
+        buildDocumentMessageFromDocument(document, {
+          docVersion,
+          isDarkTheme: window.activeColorTheme.kind === ColorThemeKind.Dark,
+          canWrite: canWriteNow(),
+        }),
+      buildRejectedDraft: (content, docVersion) =>
+        buildDocumentMessage({
+          content,
+          docVersion,
+          isDarkTheme: window.activeColorTheme.kind === ColorThemeKind.Dark,
+          canWrite: canWriteNow(),
+        }),
+      buildTheme: (isDarkTheme) => buildThemeMessage(isDarkTheme),
+      buildEditRejected: (error) => buildEditRejectedMessage(error),
+      applyEditSeam: {
+        // OLD text = the live buffer (applyEdit has not run yet, and the write
+        // lock — set by the accept transition — blocks any other inbound edit on
+        // the synchronous dispatch chain).
+        readText: () => document.getText(),
+        readVersion: () => document.version,
+        readCanonical: () => canonicalDocumentText(document),
+        build: (span) => {
+          // positionAt clamps out-of-range offsets (never throws) and
+          // minimalEditSpan is pure — so a build throw stays unreachable in
+          // practice; the seam's constructThrew arm is preserved for parity.
+          const edit = new WorkspaceEdit();
+          edit.replace(
+            document.uri,
+            new Range(document.positionAt(span.from), document.positionAt(span.to)),
+            span.insert
+          );
+          return edit;
         },
-        (err: unknown) => {
-          console.error("[quoll] host→webview postMessage rejected", err);
-        }
-      );
-    };
+        apply: (edit) =>
+          this.harness?.applyEditOverride
+            ? this.harness.applyEditOverride(edit as WorkspaceEdit)
+            : workspace.applyEdit(edit as WorkspaceEdit),
+      },
+      // `openExternalOverride` (when set) bypasses Uri.parse so the open-external
+      // E2E test can pin the delegation contract without depending on the real
+      // `env` binding — the test process cannot spy on `env.openExternal` through
+      // the vscode module namespace. The override sees the gated href as a plain
+      // string; same surface as the production closure.
+      openExternal: (href) =>
+        handleOpenExternal(href, {
+          openExternal:
+            this.harness?.openExternalOverride ?? ((url) => env.openExternal(Uri.parse(url))),
+          showError,
+        }),
+    });
 
     // Editor-surface config push (side channel, NOT through the host-session
     // core — the gutter flag is independent of document/edit lifecycle). Sent
@@ -414,279 +424,6 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
     // harmless no-op compartment reconfigure webview-side.
     const postEditorConfig = (): void => {
       post(buildEditorConfigMessage(readLintGutterEnabled()));
-    };
-
-    // Effect executor — turns each core EFFECT into the real side effect.
-    // `postDocument` / `postRejectedDraft` stamp the wire docVersion from the
-    // EFFECT (self-contained: the version a Document carries is a core
-    // decision) and read only the live document text / theme / FS-writability
-    // (those are not core state).
-    const runEffects = (effects: readonly HostSessionEffect[]): void => {
-      for (const effect of effects) {
-        switch (effect.type) {
-          case "postDocument": {
-            const buildStart = QUOLL_PERF ? perfNow() : 0;
-            const documentMessage = buildDocumentMessageFromDocument(document, {
-              docVersion: effect.docVersion,
-              isDarkTheme: window.activeColorTheme.kind === ColorThemeKind.Dark,
-              canWrite: canWriteNow(),
-            });
-            if (QUOLL_PERF) {
-              perfRecord("host:doc-build", perfNow() - buildStart);
-            }
-            post(documentMessage);
-            // First postDocument is the seed; report once it (and its
-            // host:postMessage) is recorded so host:mount carries both stages.
-            if (QUOLL_PERF && !hostMountReported) {
-              hostMountReported = true;
-              perfReport("host:mount");
-            }
-            break;
-          }
-          case "postRejectedDraft":
-            // docVersion is the core-managed value (NOT a fresh
-            // document.version read) — the rejected draft never ran
-            // applyEdit, so the version is unchanged and the webview's next
-            // Edit keeps a matching base. ORDER IS LOAD-BEARING: the webview
-            // reducer's `document` arm clears `serializeError`, so the
-            // Document MUST precede the `edit-rejected` (reversing it would
-            // wipe the banner the user needs).
-            post(
-              buildDocumentMessage({
-                content: effect.content,
-                docVersion: effect.docVersion,
-                isDarkTheme: window.activeColorTheme.kind === ColorThemeKind.Dark,
-                canWrite: canWriteNow(),
-              })
-            );
-            // The replay banner is FAILURE-AWARE: route it through
-            // `sendEditRejected` (with the core-stamped fresh delivery id),
-            // NOT a bare `post`. A `ready`/`seed` replay can fail to deliver
-            // (the webview detaches mid-reload — a documented-normal `post`
-            // outcome); a bare post would drop that failure silently and the
-            // rejection would stay stuck pending forever (the re-stamp already
-            // invalidated the pre-replay `postEditRejected` failure that used
-            // to recover it, and visible-edge resync is suppressed while a
-            // rejection is pending). Routing through `sendEditRejected`
-            // dispatches `editRejectedDeliveryFailed(id)` on failure, so the
-            // core clears the rejection and reseeds a Document — recovery
-            // instead of a deadlock (Codex N6).
-            sendEditRejected(effect.error, effect.id);
-            break;
-          case "postEditRejected":
-            sendEditRejected(effect.error, effect.id);
-            break;
-          case "postTheme":
-            post(buildThemeMessage(effect.isDarkTheme));
-            break;
-          case "applyEdit":
-            runApplyEdit(effect.content);
-            break;
-          case "showError":
-            showError(effect.message);
-            break;
-          case "logWarn":
-            console.warn(effect.message, effect.detail);
-            break;
-          case "openExternal":
-            // No additional logging here — isAllowedUrl rejection +
-            // openExternal reject / sync-throw are all logged inside
-            // handleOpenExternal.
-            //
-            // `openExternalOverride` (when set) bypasses Uri.parse so the
-            // open-external E2E test can pin the delegation contract without
-            // depending on the real `env` binding — the test process cannot
-            // spy on `env.openExternal` through the vscode module namespace.
-            // The override sees the gated href as a plain string; same
-            // surface as the production closure.
-            handleOpenExternal(effect.href, {
-              openExternal:
-                this.harness?.openExternalOverride ?? ((url) => env.openExternal(Uri.parse(url))),
-              showError,
-            });
-            break;
-          default: {
-            // Exhaustiveness guard — a new HostSessionEffect variant without
-            // a case here is flagged as `never` at compile time.
-            const _exhaustive: never = effect;
-            throw new Error(
-              `[quoll] unhandled HostSessionEffect: ${(_exhaustive as { type: string }).type}`
-            );
-          }
-        }
-      }
-    };
-
-    // Edit-rejected delivery with a resync fallback re-entering the core,
-    // carrying the per-delivery `id` (Codex N2/N6). If the webview refuses,
-    // detaches, or `send()` throws, dispatching `editRejectedDeliveryFailed(id)`
-    // clears the rejection and reseeds a normal Document so the panel does not
-    // deadlock — but ONLY when that `id` still matches the pending rejection.
-    // A stale failure (a newer rejection B is pending, the rejection was already
-    // cleared by a resync/settlement, or a `ready`/`seed` replay re-stamped the
-    // id) is a no-op in the `editRejectedDeliveryFailed` arm, so it can neither
-    // clobber the live banner nor force an unsolicited reseed. When the clear
-    // DOES fire, the user's typed content is overwritten — same "external wins"
-    // semantics as for an `onDidChangeTextDocument` race.
-    const sendEditRejected = (error: MarkdownError, id: number): void => {
-      if (disposed) {
-        return;
-      }
-      const message = buildEditRejectedMessage(error);
-      const send: (m: HostToWebview) => Thenable<boolean> =
-        this.harness?.webviewPostMessageOverride ?? ((m) => webviewPanel.webview.postMessage(m));
-      // A SYNCHRONOUS throw from send() escapes the `.then(...)` arms below
-      // (it happens before `Promise.resolve(...)` can assimilate it), so the
-      // resync fallback would never run and the rejection would stay stuck
-      // pending — the webview keeps a banner it can never resolve. Treat it
-      // exactly like the reject arm: log + dispatch `editRejectedDeliveryFailed`
-      // so the core clears the rejection and reseeds a Document (Codex N5).
-      let pending: Thenable<boolean>;
-      try {
-        pending = send(message);
-      } catch (err) {
-        console.error("[quoll] edit-rejected delivery threw synchronously; resync fallback", err);
-        dispatch({ type: "editRejectedDeliveryFailed", id });
-        return;
-      }
-      // Promise.resolve(...) assimilation: a non-standard Thenable can no
-      // longer resolve SYNCHRONOUSLY and re-enter the active drain — the
-      // `editRejectedDeliveryFailed` feedback always lands in a fresh drain,
-      // so it can never be stranded behind a throwing `.then` mid-drain.
-      void Promise.resolve(pending).then(
-        (ok) => {
-          if (disposed) {
-            return;
-          }
-          if (ok) {
-            this.harness?.recordEvent(message);
-            return;
-          }
-          console.warn("[quoll] edit-rejected delivery refused; resync fallback", {
-            uri: document.uri.toString(),
-            docVersion: state.lastAppliedDocVersion,
-          });
-          dispatch({ type: "editRejectedDeliveryFailed", id });
-        },
-        (err: unknown) => {
-          if (disposed) {
-            return;
-          }
-          console.error("[quoll] edit-rejected delivery rejected; resync fallback", err);
-          dispatch({ type: "editRejectedDeliveryFailed", id });
-        }
-      );
-    };
-
-    // applyEdit executor — the lock is already set by the `accept`
-    // transition; this only constructs the WorkspaceEdit, applies it, and
-    // reports every outcome back via `applyEditSettled`. The construct /
-    // apply SYNC-throw paths dispatch-then-`return` cleanly (the enqueued
-    // outcome is drained by the same loop, clearing the optimistic lock);
-    // the async settlement is funnelled through `Promise.resolve(...).then`
-    // so it lands in a fresh drain.
-    const runApplyEdit = (content: string): void => {
-      // OLD text = the live buffer (applyEdit has not run yet, and the write
-      // lock — set by the accept transition — blocks any other inbound edit on
-      // the synchronous dispatch chain). Diff against the inbound NEW content to
-      // the smallest single span. Resulting buffer is byte-identical to a
-      // whole-document replace (measured ~90ms@1MB whole-doc vs flat ~0.5ms
-      // minimal; see PERF.md § Write-path applyEdit baseline).
-      const oldText = document.getText();
-      // Snapshot the drain inputs the core needs at settlement. currentContent is
-      // only consulted when a stash is waiting, so skip the O(n) canonicalisation
-      // otherwise (Codex #6). Reads the closure `state`, as sendEditRejected
-      // already does.
-      const drainSnapshot = () => ({
-        canWrite: canWriteNow(),
-        currentContent: state.pendingEdit !== null ? canonicalDocumentText(document) : "",
-      });
-      const span = minimalEditSpan(oldText, content);
-      if (span.from === span.to && span.insert.length === 0) {
-        // No-op short-circuit (defensive — the core already gates no-ops via the
-        // canonical currentContent compare; only a mixed-EOL literal-buffer
-        // match could reach here). Settle ok with the UNCHANGED version so the
-        // write lock releases + resync proceeds, WITHOUT submitting an empty
-        // WorkspaceEdit.
-        dispatch({
-          type: "applyEditSettled",
-          outcome: { kind: "ok", documentVersion: document.version },
-          ...drainSnapshot(),
-        });
-        return;
-      }
-      let edit: WorkspaceEdit;
-      try {
-        // positionAt clamps out-of-range offsets (never throws) and
-        // minimalEditSpan is pure — so constructThrew stays unreachable in
-        // practice; the arm is preserved for parity with the prior path.
-        edit = new WorkspaceEdit();
-        edit.replace(
-          document.uri,
-          new Range(document.positionAt(span.from), document.positionAt(span.to)),
-          span.insert
-        );
-      } catch (err) {
-        dispatch({
-          type: "applyEditSettled",
-          outcome: {
-            kind: "constructThrew",
-            message: err instanceof Error ? err.message : String(err),
-          },
-          ...drainSnapshot(),
-        });
-        return;
-      }
-      let pending: Thenable<boolean>;
-      const applyStart = QUOLL_PERF ? perfNow() : 0;
-      try {
-        pending = this.harness?.applyEditOverride
-          ? this.harness.applyEditOverride(edit)
-          : workspace.applyEdit(edit);
-      } catch (err) {
-        // Synchronous apply throw: immediate failure, not a latency sample —
-        // intentionally not recorded under host:applyEdit.
-        dispatch({
-          type: "applyEditSettled",
-          outcome: {
-            kind: "applyThrew",
-            message: err instanceof Error ? err.message : String(err),
-          },
-          ...drainSnapshot(),
-        });
-        return;
-      }
-      Promise.resolve(pending).then(
-        (ok) => {
-          if (QUOLL_PERF) {
-            perfRecord("host:applyEdit", perfNow() - applyStart);
-          }
-          // Dispatch EVEN post-dispose: a stashed pending edit (typed
-          // one-more-char then closed within the same ms while this apply held
-          // the lock) can only drain on settlement, which fires AFTER
-          // onDidDispose. The core stays a strict no-op post-dispose unless a
-          // stash is waiting (host-session-core applyEditSettled). Webview-bound
-          // posts self-suppress via post()'s disposed guard.
-          dispatch({
-            type: "applyEditSettled",
-            outcome: ok ? { kind: "ok", documentVersion: document.version } : { kind: "refused" },
-            ...drainSnapshot(),
-          });
-        },
-        (err: unknown) => {
-          if (QUOLL_PERF) {
-            perfRecord("host:applyEdit", perfNow() - applyStart);
-          }
-          dispatch({
-            type: "applyEditSettled",
-            outcome: {
-              kind: "rejected",
-              message: err instanceof Error ? err.message : String(err),
-            },
-            ...drainSnapshot(),
-          });
-        }
-      );
     };
 
     // Image-write executor. Orthogonal to the document-text write lock (it writes

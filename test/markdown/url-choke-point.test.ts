@@ -149,7 +149,17 @@ const CHOKE_POINTS: readonly ChokePoint[] = [
   {
     name: "host env.openExternal()",
     pattern: /\.openExternal\s*\(/,
-    allow: new Set(["src/extension/handle-open-external.ts", "src/extension/QuollEditorPanel.ts"]),
+    // handle-open-external.ts is the host gate; QuollEditorPanel.ts holds the
+    // real `env.openExternal` binding. effect-executor.ts only CALLS the
+    // injected `deps.openExternal` closure (whose production impl is the panel's
+    // gated `handleOpenExternal(...)`), so it never touches the raw binding — but
+    // the textual scanner matches `.openExternal(` regardless, so the delegation
+    // call site is allowlisted here per the choke-point workflow.
+    allow: new Set([
+      "src/extension/handle-open-external.ts",
+      "src/extension/QuollEditorPanel.ts",
+      "src/extension/effect-executor.ts",
+    ]),
   },
   {
     // Live-DOM-from-string promotion. Quoll builds ALL DOM via
