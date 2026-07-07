@@ -171,6 +171,44 @@ describe("thematic break reveal provider", () => {
     expect(set.size).toBe(0);
   });
 
+  it("HIDE: preserves a blockquote container prefix (`> ---`) — replace starts after `> `", () => {
+    // `> ---` parses as Blockquote > QuoteMark [3,4] + HorizontalRule [5,8]; the
+    // node covers only `---`, but the line is the whole `> ---`. Replacing the
+    // whole line would swallow the `> ` quote marker and drop the rule out of
+    // its blockquote — so the replace must start at the node (prefix preserved).
+    const doc = "a\n\n> ---\n\nb"; // QuoteMark [3,4], HorizontalRule [5,8]
+    const set = thematicBreakReveal.build(ctx(doc, EditorSelection.single(10))); // caret on "b"
+    const r = spec(set);
+    expect(r.length).toBe(1);
+    expect(r[0]?.kind).toBe("replace");
+    expect(r[0]?.hasWidget).toBe(true);
+    expect(r[0]?.from).toBe(5); // node.from — the `> ` container prefix is kept
+    expect(r[0]?.to).toBe(8);
+  });
+
+  it("HIDE: `- ---` is a real thematic break (dashes+spaces), NOT a list — whole line replaced", () => {
+    // `- ---` parses as a single top-level HorizontalRule [3,8]: the leading `-`
+    // is a rule glyph, not a bullet, so there is NO container prefix to preserve
+    // and the whole line is correctly concealed behind the rule widget.
+    const doc = "a\n\n- ---\n\nb"; // HorizontalRule [3,8], line [3,8]
+    const set = thematicBreakReveal.build(ctx(doc, EditorSelection.single(10))); // caret on "b"
+    const r = spec(set);
+    expect(r.length).toBe(1);
+    expect(r[0]?.kind).toBe("replace");
+    expect(r[0]?.from).toBe(3); // whole `- ---` concealed
+    expect(r[0]?.to).toBe(8);
+  });
+
+  it("REVEAL: `> ---` dims only the `---` glyphs, never the `> ` prefix", () => {
+    const doc = "a\n\n> ---\n\nb";
+    const set = thematicBreakReveal.build(ctx(doc, EditorSelection.single(6))); // caret in "---"
+    const r = spec(set);
+    expect(r.length).toBe(1);
+    expect(r[0]?.kind).toBe("mark");
+    expect(r[0]?.from).toBe(5);
+    expect(r[0]?.to).toBe(8);
+  });
+
   it("identity round-trip: build() never mutates ctx.state.doc", () => {
     const doc = "a\n\n---\n\nb";
     const c = ctx(doc, EditorSelection.single(8));

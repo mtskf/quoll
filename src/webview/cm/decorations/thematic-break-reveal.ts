@@ -3,9 +3,12 @@
 // whether a selection range intersects the node's LINE (the reveal trigger,
 // mirroring heading-/blockquote-reveal):
 //   - caret OFF the line  → Decoration.replace({ widget: ThematicBreakWidget })
-//     over the WHOLE line [line.from, line.to] — hides the raw `---`/`***`/`___`
-//     (and any leading indent, since a thematic break may be indented up to 3
-//     spaces and Lezer's node starts AFTER the indent) and renders a rule.
+//     over [replaceFrom, line.to] — hides the raw `---`/`***`/`___` and renders
+//     a rule. replaceFrom absorbs a leading INDENT (a break may be indented up
+//     to 3 spaces and Lezer's node starts AFTER the indent) but PRESERVES a
+//     container prefix (`> ---`): a pure-whitespace gap before the node is
+//     indent → start at line.from; a non-whitespace gap is a quote marker →
+//     start at node.from so the blockquote prefix survives.
 //   - caret ON the line   → Decoration.mark (REVEAL_MARK, `quoll-syntax-reveal`)
 //     over the node span [node.from, node.to] — dims the raw glyphs in place so
 //     they stay editable, exactly like the other reveals.
@@ -61,11 +64,20 @@ export const thematicBreakReveal: DecorationProvider = {
               builder.add(node.from, node.to, REVEAL_MARK);
             }
           } else {
-            builder.add(
-              line.from,
-              line.to,
-              Decoration.replace({ widget: new ThematicBreakWidget() })
-            );
+            // Absorb a leading INDENT into the replace (a thematic break may be
+            // indented up to 3 spaces, and the widget renders the whole visual
+            // line as one rule). But when the break sits inside a CONTAINER
+            // (`> ---`), the gap between line.from and node.from is the quote
+            // marker, not indent — replacing it would conceal the `> ` prefix
+            // and lift the rule out of its blockquote. Start the replace at
+            // node.from there so blockquote-reveal / block-style still render
+            // the container. Distinguish the two by the gap's content: pure
+            // whitespace → indent (absorb from line.from); anything else →
+            // structural prefix (preserve, start at node.from). `- ---` is a
+            // real HR whose `-` is a rule glyph, so its gap is empty → absorbed.
+            const prefix = ctx.state.doc.sliceString(line.from, node.from);
+            const from = /^\s*$/.test(prefix) ? line.from : node.from;
+            builder.add(from, line.to, Decoration.replace({ widget: new ThematicBreakWidget() }));
           }
         },
       });
