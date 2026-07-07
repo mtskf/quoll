@@ -80,12 +80,12 @@ import {
 // no O(depth) geometry walk, since a whole-doc gutter walk only needs the
 // null/non-null bit) and `pointInExclusionZone` (frontmatter, whose YAML lists
 // parse as markdown ListItems but receive no hang). See buildListFoldGutterClasses.
-import { mergeIntervals, type Interval } from "../bounded-recompute.js";
-import { expandToEnclosingBlock, touchesStructuralReparse } from "../structural-guard.js";
+import { type Interval, mergeIntervals } from "../bounded-recompute.js";
 import { headingRhythmLevel } from "../decorations/heading-rhythm.js";
 import { quollSyntaxExclusionZones } from "../decorations/orchestrator.js";
 import { pointInExclusionZone } from "../decorations/shared.js";
 import { isRenderableListItem } from "../list/list-geometry.js";
+import { expandToEnclosingBlock, touchesStructuralReparse } from "../structural-guard.js";
 
 // Re-exported from ../structural-guard.js so existing importers of these two
 // symbols from the fold module keep resolving; the canonical home is the guard

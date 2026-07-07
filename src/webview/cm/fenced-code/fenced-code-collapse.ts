@@ -304,7 +304,9 @@ function computeExtendedSpan(tr: Transaction): Interval[] {
   const state = tr.state;
   const raw: Interval[] = [];
   if (tr.docChanged) {
-    tr.changes.iterChangedRanges((_fa, _ta, fromB, toB) => raw.push(lineExpandWithNeighbours(state, fromB, toB)));
+    tr.changes.iterChangedRanges((_fa, _ta, fromB, toB) =>
+      raw.push(lineExpandWithNeighbours(state, fromB, toB))
+    );
   }
   for (const r of tr.startState.selection.ranges) {
     const a = tr.changes.mapPos(r.from, 1);

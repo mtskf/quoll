@@ -34,11 +34,11 @@ import {
   quollFoldKeymap,
   quollFoldKeymapExtension,
 } from "../../src/webview/cm/fold/index.js";
+import { frontmatterBlockField } from "../../src/webview/cm/frontmatter/index.js";
 import {
   expandToEnclosingBlock,
   touchesStructuralReparse,
 } from "../../src/webview/cm/structural-guard.js";
-import { frontmatterBlockField } from "../../src/webview/cm/frontmatter/index.js";
 
 let view: EditorView | null = null;
 afterEach(() => {
