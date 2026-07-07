@@ -29,7 +29,8 @@ import { syntaxTree, syntaxTreeAvailable } from "@codemirror/language";
 import { type EditorState, StateField, type Transaction } from "@codemirror/state";
 import { Decoration, type DecorationSet, EditorView } from "@codemirror/view";
 
-import { touchesStructuralReparse } from "../fold/index.js";
+import { type Interval, intersects, mergeIntervals } from "../bounded-recompute.js";
+import { expandToEnclosingBlock, touchesStructuralReparse } from "../structural-guard.js";
 import { hostDocumentReseed } from "../frontmatter/reveal-state.js";
 import { CALLOUT_MARKER_HIDDEN_CLASS, calloutTypeForOutermost } from "./callout.js";
 import { quollSyntaxExclusionZones } from "./orchestrator.js";
@@ -101,71 +102,6 @@ function buildFull(state: EditorState): CalloutRecord[] {
   return buildRange(state, 0, state.doc.length);
 }
 
-interface Interval {
-  from: number;
-  to: number;
-}
-
-/** A Markdown blank line — the blockquote boundary — contains ONLY ASCII spaces /
- *  tabs (CommonMark). It EXCLUDES U+000B/U+000C/NBSP and other Unicode spaces, which
- *  the parser keeps as significant paragraph content (mirrors #62's fold isBlankLine
- *  + image-field's trimAsciiWs); treating one of those as blank would stop the walk
- *  early and under-expand. The common case is a truly-empty line. */
-function isBlankLine(text: string): boolean {
-  return /^[ \t]*$/.test(text);
-}
-
-/** Expand [from,to] to the enclosing blank-line-delimited block: line-align, then
- *  walk out through contiguous non-blank lines in BOTH directions to the blank-line
- *  boundaries. A blockquote (with its lazy-continuation lines) is bounded by blank
- *  lines, and a `>`-line's blockquote membership — hence whether a `[!TYPE]` line
- *  starts a NEW callout or merely CONTINUES the blockquote above it — depends on the
- *  ENTIRE contiguous non-blank run it sits in, not just its ±1 neighbours. So an edit
- *  anywhere in the run (e.g. deleting the leading `>` of the run's first line) can
- *  flip a callout several lines BELOW without touching or being adjacent to it; the
- *  whole run is exactly the region a change can flip. Mirrors #62's
- *  expandToEnclosingBlock (fold/index.ts) — a ±1 window is UNSOUND for blockquotes
- *  (Codex review 2026-07-06: the lazy-continuation-from-above counterexample). */
-function expandToEnclosingBlock(state: EditorState, from: number, to: number): Interval {
-  const doc = state.doc;
-  const len = doc.length;
-  let top = doc.lineAt(Math.max(0, Math.min(from, len)));
-  while (top.from > 0) {
-    const prev = doc.lineAt(top.from - 1);
-    if (isBlankLine(prev.text)) {
-      break;
-    }
-    top = prev;
-  }
-  let bottom = doc.lineAt(Math.max(0, Math.min(to, len)));
-  while (bottom.to < len) {
-    const next = doc.lineAt(bottom.to + 1);
-    if (isBlankLine(next.text)) {
-      break;
-    }
-    bottom = next;
-  }
-  return { from: top.from, to: bottom.to };
-}
-
-function mergeIntervals(intervals: Interval[]): Interval[] {
-  if (intervals.length <= 1) {
-    return intervals;
-  }
-  const sorted = [...intervals].sort((a, b) => a.from - b.from);
-  const out: Interval[] = [{ ...sorted[0] }];
-  for (let i = 1; i < sorted.length; i++) {
-    const last = out[out.length - 1];
-    const cur = sorted[i];
-    if (cur.from <= last.to) {
-      last.to = Math.max(last.to, cur.to);
-    } else {
-      out.push({ ...cur });
-    }
-  }
-  return out;
-}
-
 /** The changed regions, each expanded to its enclosing blank-line-delimited block
  *  (G1 — a ±1 window is unsound for blockquote lazy continuation), merged disjoint.
  *  Records are selection-INDEPENDENT, so — unlike imageBlockField — the span does NOT
@@ -177,15 +113,6 @@ function computeExtendedSpan(tr: Transaction): Interval[] {
     raw.push(expandToEnclosingBlock(state, fromB, toB));
   });
   return mergeIntervals(raw);
-}
-
-function intersectsAny(intervals: readonly Interval[], from: number, to: number): boolean {
-  for (const iv of intervals) {
-    if (from <= iv.to && iv.from <= to) {
-      return true;
-    }
-  }
-  return false;
 }
 
 /** Changed-range bounded record recompute: reuse every prior record whose FULL block
@@ -207,7 +134,7 @@ function computeBoundedRecords(
     const touched = tr.changes.touchesRange(rec.markerFrom, rec.blockTo) !== false;
     const newFrom = tr.changes.mapPos(rec.markerFrom, 1);
     const newTo = tr.changes.mapPos(rec.blockTo, -1);
-    if (!touched && !intersectsAny(intervals, newFrom, newTo)) {
+    if (!touched && !intersects(intervals, newFrom, newTo)) {
       const markerTo = tr.changes.mapPos(rec.markerTo, -1);
       if (newFrom === rec.markerFrom && markerTo === rec.markerTo && newTo === rec.blockTo) {
         // Zero-shift reuse: return the SAME object (block structure unchanged AND
