@@ -6,11 +6,11 @@ on:
       - 'v*'
 
 # NOTE: This workflow is ACTIVE. On a pushed `v*` tag it packages one .vsix and publishes
-# it to the VS Code Marketplace (VSCODE_PAT secret, required) and Open VSX (OPENVSX_PAT
-# secret, optional — the Open VSX step is skipped when it is unset). Both secrets are
-# configured, and the publisher ID (`mtskf`) matches `package.json.publisher`. Tag pushes
-# trigger a LIVE publish (v0.1.0 shipped 2026-07-02), so never push a `v*` tag until you
-# intend to release that version to users.
+# it to the VS Code Marketplace (VSCODE_PAT secret, required — configured). The Open VSX
+# step (OPENVSX_PAT secret, optional) is skipped while that secret is unset, so releases
+# currently go to the Marketplace only. The publisher ID (`mtskf`) matches
+# `package.json.publisher`. Tag pushes trigger a LIVE publish (v0.1.0 shipped 2026-07-02),
+# so never push a `v*` tag until you intend to release that version to users.
 
 # Least-privilege GITHUB_TOKEN: publishing uses VSCODE_PAT / OPENVSX_PAT secrets,
 # not the workflow token. Only repo read access (checkout + install + verify-tag +
