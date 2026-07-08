@@ -31,10 +31,7 @@
 import type { syntaxTree } from "@codemirror/language";
 import { countColumn, type EditorState } from "@codemirror/state";
 
-import {
-  isContentlessTaskParagraph,
-  TASK_MARKER_RE,
-} from "../task-checkbox/task-marker-shape.js";
+import { isContentlessTaskParagraph, TASK_MARKER_RE } from "../task-checkbox/task-marker-shape.js";
 
 // `@lezer/common` is a direct dep as of PR #66 (for the lint incremental
 // parser's `TreeFragment`); derive SyntaxNode from syntaxTree's return type

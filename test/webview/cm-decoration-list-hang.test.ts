@@ -94,7 +94,9 @@ describe("list hang-indent provider — plain bullet/ordered", () => {
     // Was `.toEqual([])` before content-less/empty items were made renderable
     // (the intentional flip — empty items now get `.quoll-list-hang` so they align
     // and gap with siblings). The style matches a canonical `- item` sibling.
-    expect(lines(buildListHangIndent(ctx("- ")))).toEqual(lines(buildListHangIndent(ctx("- item"))));
+    expect(lines(buildListHangIndent(ctx("- ")))).toEqual(
+      lines(buildListHangIndent(ctx("- item")))
+    );
   });
 
   it("empty nested bullet gets the SAME hang style as a content-bearing sibling (form b)", () => {
