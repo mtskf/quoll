@@ -90,6 +90,17 @@ describe("calloutMarkerConceal — pure predicate", () => {
     const node = blockquotes(state)[0];
     expect(calloutMarkerConceal(state.doc, state.selection, node)).toBeNull();
   });
+
+  it("a TAB-separated `>\\t[!NOTE]` marker conceals like the space form when caret-outside", () => {
+    const doc = ">\t[!NOTE]\n> body\n\npara";
+    const state = stateFor(doc, doc.indexOf("para") + 1);
+    const node = blockquotes(state)[0];
+    const marker = state.doc.line(1);
+    expect(calloutMarkerConceal(state.doc, state.selection, node)).toEqual({
+      from: marker.from,
+      to: marker.to,
+    });
+  });
 });
 
 describe("calloutMarkerConcealField — StateField", () => {

@@ -58,15 +58,46 @@ export function calloutClassForType(type: CalloutType): string {
  *  content an indented CODE BLOCK in CommonMark (verified against Lezer:
  *  Blockquote > CodeBlock at ≥5 spaces after a single `>`) — is NOT mistaken for a
  *  callout. A Blockquote's first line always carries a leading `>`, so the prefix
- *  strip always fires. Pure — the sole input is the first line's text. */
+ *  strip always fires. The matcher is SPACE-only by design; TAB indentation is
+ *  normalised to spaces by `expandTabs` before matching (see below). Pure — the
+ *  sole input is the (tab-expanded) first line's text. */
 const CALLOUT_MARKER_RE =
   /^ {0,3}(?:> ?)+ {0,3}\[!(note|tip|important|warning|caution)\](?:[-+])?(?=\s|$)/i;
 
+/** Expand tabs to spaces on CommonMark's 4-column tab stops (a tab advances to
+ *  the next multiple-of-4 column). In block-structure contexts CommonMark treats
+ *  a tab as if replaced by that many spaces, so a lone `>\t` yields a 2-column
+ *  content indent (below the 4-column indented-code boundary → a Paragraph, hence
+ *  a callout) while `>\t\t` yields 6 (an indented CodeBlock → NOT a callout).
+ *  Normalising first lets the space-only CALLOUT_MARKER_RE reason about the tab
+ *  form with the SAME column math Lezer uses — no column arithmetic baked into
+ *  the pattern, so render (Lezer's parse) and classification stay in lockstep.
+ *  The common tab-free line is returned verbatim (no allocation). Pure. */
+function expandTabs(lineText: string): string {
+  if (!lineText.includes("\t")) {
+    return lineText;
+  }
+  let out = "";
+  let col = 0;
+  for (const ch of lineText) {
+    if (ch === "\t") {
+      const advance = 4 - (col % 4);
+      out += " ".repeat(advance);
+      col += advance;
+    } else {
+      out += ch;
+      col += 1;
+    }
+  }
+  return out;
+}
+
 /** The callout type of a blockquote first line, or null when the line is not a
  *  recognised `[!TYPE]` marker (→ generic Phase-1 panel; the structural
- *  unknown-`[!FOO]` fallback). */
+ *  unknown-`[!FOO]` fallback). Tabs are expanded to spaces first so a
+ *  TAB-separated marker (`>\t[!NOTE]`) classifies identically to the space form. */
 export function calloutTypeForLine(lineText: string): CalloutType | null {
-  const m = CALLOUT_MARKER_RE.exec(lineText);
+  const m = CALLOUT_MARKER_RE.exec(expandTabs(lineText));
   return m === null ? null : (m[1].toLowerCase() as CalloutType);
 }
 
