@@ -273,6 +273,53 @@ function enclosingListItem(listItem: SyntaxNode): SyntaxNode | null {
   return parent;
 }
 
+/** The outermost enclosing `BulletList` / `OrderedList` of `node`, or null when
+ *  `node` has no list ancestor. Walks all parents and keeps the topmost list so
+ *  a nested item's tightness is judged against the whole list subtree. */
+function outermostList(node: SyntaxNode): SyntaxNode | null {
+  let list: SyntaxNode | null = null;
+  for (let p = node.parent; p !== null; p = p.parent) {
+    if (p.name === "BulletList" || p.name === "OrderedList") {
+      list = p;
+    }
+  }
+  return list;
+}
+
+/** True when this ListItem's MARKER line should receive the inter-item vertical
+ *  gap (`--quoll-list-item-gap`, delivered via `.quoll-list-hang`). The gap
+ *  separates a list from surrounding prose and spaces LOOSE list items; it is
+ *  DROPPED between consecutive TIGHT siblings (and continuation lines) so a
+ *  tight list renders packed. Display-only; the bytes never change.
+ *
+ *  Looseness is judged PER BOUNDARY (from the immediately-previous line), a
+ *  DELIBERATE divergence from CommonMark's whole-list looseness: `- a\n- b\n\n- c`
+ *  renders a·b tight + c spaced, not all-spaced. This is bounded-recompute-friendly
+ *  (see fold/index.ts) and matches Notion/Obsidian editing surfaces.
+ *
+ *  MUST stay the single source of truth for BOTH the content-line padding
+ *  (list-hang-indent.ts) AND the fold-gutter offset (fold/index.ts), or the
+ *  fold chevron drifts out of lock-step. */
+export function listItemGetsVerticalGap(state: EditorState, listItem: SyntaxNode): boolean {
+  const markerLine = state.doc.lineAt(listItem.from);
+  if (markerLine.number === 1) {
+    return true; // nothing above — keep current top-of-doc behaviour
+  }
+  const prevLine = state.doc.line(markerLine.number - 1);
+  if (prevLine.text.trim() === "") {
+    return true; // loose separation (blank line) keeps the gap
+  }
+  const list = outermostList(listItem);
+  // LINE-NUMBER comparison, not byte offset: `list.from` is the byte of the
+  // first marker glyph, which is mid-line for an indented / blockquoted list
+  // (`  - a`, `> - a`). If the previous line is at or below the list's first
+  // line, it is a tight sibling / continuation of the same list → no gap.
+  if (list !== null && state.doc.lineAt(list.from).number <= prevLine.number) {
+    return false;
+  }
+  return true; // previous line is non-list prose → keep the list-from-prose gap
+}
+
 /** True when a ListItem renders a checkbox — a `Task` content node with a valid
  *  marker, OR a content-less bare-marker Paragraph. Used by renderedMarkCol to
  *  re-base a child one NEST_STEP past the (wide-checkbox) parent's content
