@@ -260,7 +260,7 @@ import {
   fencedCodeCollapseField,
 } from "../../src/webview/cm/fenced-code/fenced-code-collapse.js";
 import { setFencedCollapseEffect } from "../../src/webview/cm/fenced-code/fenced-code-collapse-state.js";
-import { hostDocumentReseed } from "../../src/webview/cm/frontmatter/reveal-state.js";
+import { hostDocumentReseed } from "../../src/webview/cm/host-reseed.js";
 
 interface DecoDump {
   from: number;

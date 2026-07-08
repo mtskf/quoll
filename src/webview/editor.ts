@@ -31,11 +31,8 @@ import { fencedCodeCopyButton } from "./cm/fenced-code/fenced-code-copy-button.j
 import { fencedCodeEnterKeymap } from "./cm/fenced-code/fenced-code-enter-keymap.js";
 import { quollFloatingToolbarScroll } from "./cm/floating-toolbar-scroll.js";
 import { quollFolding } from "./cm/fold/index.js";
-import {
-  frontmatterBlockField,
-  frontmatterRevealKeymap,
-  hostDocumentReseed,
-} from "./cm/frontmatter/index.js";
+import { frontmatterBlockField, frontmatterRevealKeymap } from "./cm/frontmatter/index.js";
+import { hostDocumentReseed } from "./cm/host-reseed.js";
 import { createImagePasteDrop, imageBlockField, quollResourceBaseUri } from "./cm/image/index.js";
 import { quollLinkClickHandler } from "./cm/link-handlers.js";
 import { quollLintFixKeymap } from "./cm/lint/apply-fix.js";

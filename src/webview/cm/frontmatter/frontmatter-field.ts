@@ -28,13 +28,9 @@ import { EditorState, StateField, type Transaction } from "@codemirror/state";
 import { Decoration, type DecorationSet, EditorView } from "@codemirror/view";
 
 import { quollSyntaxExclusionZones } from "../decorations/orchestrator.js";
+import { hostDocumentReseed } from "../host-reseed.js";
 import { FrontmatterBlockWidget } from "./frontmatter-widget.js";
-import {
-  hostDocumentReseed,
-  initialRevealState,
-  nextRevealState,
-  type RevealState,
-} from "./reveal-state.js";
+import { initialRevealState, nextRevealState, type RevealState } from "./reveal-state.js";
 
 /** The collapsed block-replace + atomic range set (empty in every other
  *  state). Shared by the decorations and atomicRanges providers. */

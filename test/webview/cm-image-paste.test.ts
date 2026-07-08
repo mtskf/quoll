@@ -3,7 +3,7 @@ import { EditorState } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import { describe, expect, it, vi } from "vitest";
 
-import { hostDocumentReseed } from "../../src/webview/cm/frontmatter/index.js";
+import { hostDocumentReseed } from "../../src/webview/cm/host-reseed.js";
 import {
   addPendingAnchor,
   createImagePasteDrop,

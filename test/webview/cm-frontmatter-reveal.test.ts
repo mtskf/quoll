@@ -9,15 +9,14 @@ import {
 } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import { describe, expect, it } from "vitest";
-
 import {
-  hostDocumentReseed,
   initialRevealState,
   nextRevealState,
   type RevealState,
   revealFrontmatterAt,
   revealFrontmatterEffect,
 } from "../../src/webview/cm/frontmatter/reveal-state.js";
+import { hostDocumentReseed } from "../../src/webview/cm/host-reseed.js";
 
 const FM = "---\ntitle: x\n---\n\n# Body\n";
 const TO = "---\ntitle: x\n---".length; // 16

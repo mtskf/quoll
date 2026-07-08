@@ -12,7 +12,7 @@ import {
   PROTOCOL_VERSION,
   type WebviewToHost,
 } from "../../../shared/protocol.js";
-import { hostDocumentReseed } from "../frontmatter/index.js";
+import { hostDocumentReseed } from "../host-reseed.js";
 
 const MAX_IMAGES_PER_EVENT = 16;
 // Aggregate byte ceiling per paste/drop so a multi-file drop cannot queue an
