@@ -185,6 +185,28 @@ describe("shell — raw HTML seeds inert (parse-warning coupling retired)", () =
   });
 });
 
+describe("shell — banner host is the editor's preceding sibling (renders above, not beside)", () => {
+  // The save-policy banner must occupy TOP chrome, not a left-hand row item.
+  // `main` is a `flex-direction: column` stack (styles.css), so DOM order IS
+  // visual order: the banner host must precede the .quoll-editor mount inside
+  // <main>. This pins the shell.ts append order (bannerHost before mountEditor)
+  // that the column CSS relies on. Real-pixel "above vs beside" is a browser
+  // smoke (happy-dom does no layout); this pins the structural half.
+  it("appends .quoll-banner-host before .quoll-editor within <main>", async () => {
+    await mount();
+    const main = container?.querySelector("main") as HTMLElement;
+    const bannerHost = main.querySelector(".quoll-banner-host") as HTMLElement;
+    const editor = main.querySelector(".quoll-editor") as HTMLElement;
+    expect(bannerHost).not.toBeNull();
+    expect(editor).not.toBeNull();
+    // Both are direct children of <main> and the banner precedes the editor.
+    expect(bannerHost.parentElement).toBe(main);
+    expect(editor.parentElement).toBe(main);
+    const children = Array.from(main.children);
+    expect(children.indexOf(bannerHost)).toBeLessThan(children.indexOf(editor));
+  });
+});
+
 // NOTE: the init-error surface test (vanilla ErrorBoundary replacement)
 // lives in test/webview/index-error.test.ts. It is in a separate file
 // so its host mock (getHost throws) does not collide with shell.test.ts's

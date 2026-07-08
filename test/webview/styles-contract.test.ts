@@ -424,11 +424,15 @@ describe("styles.css — editor height chain (scroll-hide root cause)", () => {
   // AND (being absolutely positioned in the now full-height host) they scroll
   // away instead of staying pinned.
   //
-  // The bounding is a pure CSS `height:100%` chain: .cm-editor → .quoll-editor
-  // → main → #root. It collapses to `auto` unless EVERY ancestor carries a
-  // DEFINITE height. #root must therefore use `height` (viewport-definite), NOT
+  // The bounding is a CSS height chain: .cm-editor → .quoll-editor → main →
+  // #root. It collapses to `auto` unless EVERY ancestor carries a DEFINITE
+  // height. #root must therefore use `height` (viewport-definite), NOT
   // `min-height` (which is not a definite height for percentage resolution),
-  // and `main` must forward `height:100%`.
+  // and `main` must forward `height:100%`. `main` is a `flex-direction: column`
+  // stack (banner strip on top, editor below), so the editor host bounds via
+  // `flex: 1 1 auto` + `min-height: 0` — a flex-resolved height is definite, so
+  // `.cm-editor { height: 100% }` still resolves against it. (Were `main` the
+  // default flex ROW, the banner would sit BESIDE the editor, not above it.)
   //
   // SOURCE-CONTRACT assertion, not a computed-style one: the happy-dom
   // ViewPlugin test (cm-floating-toolbar-scroll.test.ts) FORCES a scroll event
@@ -438,7 +442,12 @@ describe("styles.css — editor height chain (scroll-hide root cause)", () => {
   // quoll-chrome-hidden only AFTER this chain is definite). Non-vacuous:
   // against the pre-fix `#root { min-height: 100vh }` with no `main` height,
   // the first two assertions red.
-  const block = (re: RegExp): string => css.match(re)?.[0] ?? "";
+  // Strip CSS comments first: the rule comments here reference sibling links
+  // like `.cm-editor { height: 100% }` in prose, and the `[^}]*` block matcher
+  // would both truncate at a comment `}` AND leak a commented `height: 100%`
+  // into the match (vacuating the `not.toMatch` guards below). Match live CSS.
+  const live = css.replace(/\/\*[\s\S]*?\*\//g, "");
+  const block = (re: RegExp): string => live.match(re)?.[0] ?? "";
   // `(?<![-a-z])height` matches the `height` property but NOT `min-height` /
   // `max-height` — neither is a definite height for percentage resolution, so a
   // chain link that used one would silently re-open the bug. The lookbehind is
@@ -451,18 +460,27 @@ describe("styles.css — editor height chain (scroll-hide root cause)", () => {
     expect(root).toMatch(/(?<![-a-z])height\s*:\s*100vh/);
   });
 
-  it("main forwards a definite height so the flex child can be bounded", () => {
+  it("main forwards a definite height AND stacks as a column (banner above, not beside)", () => {
     const main = block(/\bmain\s*\{[^}]*\}/);
     expect(main).not.toBe("");
     expect(main).toMatch(/(?<![-a-z])height\s*:\s*100%/);
+    // `flex-direction: column` is what puts the banner strip ABOVE the editor.
+    // Against the pre-fix default (row) this reds — the banner rendered as a
+    // left-hand sibling beside the width:100% editor (the reported bug).
+    expect(main).toMatch(/flex-direction\s*:\s*column/);
   });
 
-  it("keeps the .quoll-editor host and its .cm-editor filling that bounded height", () => {
-    // The lower half of the chain (already present pre-fix) — pinned so a
-    // refactor that drops it (or weakens it to min-height) re-opens the same bug
-    // from the other end. Both links carry the definite-height lookbehind guard.
+  it("bounds the .quoll-editor host via flex-fill and keeps .cm-editor at height:100%", () => {
+    // In the column stack the host can't use `height:100%` (that would make it
+    // as tall as `main`, pushing the editor below the banner and re-opening
+    // document scroll). It bounds via `flex: 1 1 auto` + `min-height: 0` — a
+    // flex-resolved height is definite, so the `.cm-editor { height: 100% }`
+    // link below still resolves and `.cm-scroller` stays the internal scroller.
     const host = block(/\.quoll-editor\s*\{[^}]*\}/);
-    expect(host).toMatch(/(?<![-a-z])height\s*:\s*100%/);
+    expect(host).toMatch(/flex\s*:\s*1\s+1\s+auto/);
+    expect(host).toMatch(/min-height\s*:\s*0/);
+    // The host must NOT carry a percentage height in the column layout.
+    expect(host).not.toMatch(/(?<![-a-z])height\s*:\s*100%/);
     const cmEditor = block(/\.quoll-editor\s+\.cm-editor\s*\{[^}]*\}/);
     expect(cmEditor).toMatch(/(?<![-a-z])height\s*:\s*100%/);
   });
