@@ -945,6 +945,29 @@ describe("calloutTypeForLine — [!TYPE] admonition marker grammar", () => {
     // …but 1–4 spaces after `>` stay a paragraph (Lezer), so still a callout:
     expect(calloutTypeForLine(">    [!NOTE]")).toBe("note"); // > + 4 spaces → Paragraph
   });
+  it("recognises a TAB-separated marker with CommonMark tab-stop semantics", () => {
+    // A tab expands to the next 4-column tab stop. After `>` (column 0) a single
+    // tab reaches column 4 — one column is the quote's delimiter space, leaving a
+    // 2-column content indent (< 4), so `>\t[!NOTE]` is a Paragraph → a callout
+    // (Lezer agrees: Blockquote > Paragraph). Two tabs reach column 8 → a 6-column
+    // content indent → an indented CodeBlock, so it is NOT a callout.
+    expect(calloutTypeForLine(">\t[!NOTE]")).toBe("note"); // 1 tab → Paragraph
+    expect(calloutTypeForLine(">\t[!warning]")).toBe("warning"); // case-insensitive still
+    expect(calloutTypeForLine("> \t[!TIP]")).toBe("tip"); // space+tab → col 4 → Paragraph
+    expect(calloutTypeForLine(">\t\t[!NOTE]")).toBeNull(); // 2 tabs → CodeBlock, not a callout
+    // A tab is content indent, never the quote's delimiter space (unlike a
+    // literal space) — so with 3 leading spaces the `>`-tab reaches column 4,
+    // a 4-column indent → an indented CodeBlock, not a callout. This is the case
+    // a naive "expand tabs to spaces then reuse the space regex" gets wrong
+    // (it would grant the tab a bogus delimiter space and return "note").
+    expect(calloutTypeForLine("   >\t[!NOTE]")).toBeNull(); // 3 spaces + >\t → col 4 → CodeBlock
+    expect(calloutTypeForLine("  >\t[!NOTE]")).toBe("note"); // 2 spaces + >\t → col 3 → Paragraph
+    // A tab BETWEEN quote markers still opens a nested blockquote (Lezer parses
+    // `  >\t> [!NOTE]` as Blockquote > Blockquote > Paragraph), so the outermost
+    // node is a nested callout — the tab is delimiter-ish here, not code indent.
+    expect(calloutTypeForLine("  >\t> [!NOTE]")).toBe("note"); // tab between markers → nested callout
+    expect(calloutTypeForLine(">\t> [!TIP]")).toBe("tip"); // same, no leading indent
+  });
   it("calloutClassForType returns the per-type theme hook", () => {
     expect(calloutClassForType("warning")).toBe("quoll-callout-warning");
     expect(CALLOUT_CLASS).toBe("quoll-callout");
@@ -998,6 +1021,16 @@ describe("block-style — callout admonition classes", () => {
   it("a plain quote is unchanged (no callout class)", () => {
     const out = lines(buildBlockquoteRule(ctx("> just a quote")));
     expect(out[0]?.cls).toBe("quoll-blockquote quoll-blockquote-open quoll-blockquote-close");
+  });
+
+  it("a TAB-separated `>\\t[!NOTE]` marker gets the callout + per-type + marker classes", () => {
+    const doc = ">\t[!NOTE]\n> body";
+    const out = lines(buildBlockquoteRule(ctxCaret(doc, doc.length)));
+    expect(out[0]?.cls).toContain("quoll-callout");
+    expect(out[0]?.cls).toContain("quoll-callout-note");
+    expect(out[0]?.cls).toContain("quoll-callout-marker");
+    expect(out[1]?.cls).toContain("quoll-callout-note");
+    expect(out[1]?.cls).not.toContain("quoll-callout-marker");
   });
 
   it("nested callout: the outer container type wins; the inner emits no type class", () => {

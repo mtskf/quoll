@@ -46,27 +46,70 @@ export function calloutClassForType(type: CalloutType): string {
   return `${CALLOUT_CLASS}-${type}`;
 }
 
-/** Admonition marker matcher. Strips the CommonMark quote prefix — up to 3
- *  leading spaces (`^ {0,3}`; 4+ is an indented code block), one-or-more `>`
- *  levels each with an optional single marker space (`(?:> ?)+`), then up to 3
- *  content-indent spaces (` {0,3}`) — and matches `[!TYPE]` case-insensitively,
- *  allowing an OPTIONAL Obsidian fold suffix (`-`/`+`) and requiring the closing
- *  token to be followed by whitespace or end-of-line. So bare `[!NOTE]` (GitHub),
- *  `[!NOTE] title` and `[!NOTE]-` (Obsidian) all match while `[!NOTEX]` /
- *  `[!FOO]` / `[!NOTE]x` do not. The whitespace is CAPPED (not the earlier greedy
- *  `\s*`) so a `>     [!NOTE]` — where 4+ spaces after the `>` marker make the
- *  content an indented CODE BLOCK in CommonMark (verified against Lezer:
- *  Blockquote > CodeBlock at ≥5 spaces after a single `>`) — is NOT mistaken for a
- *  callout. A Blockquote's first line always carries a leading `>`, so the prefix
- *  strip always fires. Pure — the sole input is the first line's text. */
-const CALLOUT_MARKER_RE =
-  /^ {0,3}(?:> ?)+ {0,3}\[!(note|tip|important|warning|caution)\](?:[-+])?(?=\s|$)/i;
+/** The `[!TYPE]` admonition token itself (case-insensitive), matched AFTER the
+ *  CommonMark quote prefix and content indent have been stripped by
+ *  `calloutTypeForLine`. Allows an OPTIONAL Obsidian fold suffix (`-`/`+`) and
+ *  requires the closing `]` to be followed by whitespace or end-of-line — so bare
+ *  `[!NOTE]` (GitHub), `[!NOTE] title` and `[!NOTE]-` (Obsidian) all match while
+ *  `[!NOTEX]` / `[!FOO]` / `[!NOTE]x` do not. */
+const CALLOUT_MARKER_RE = /^\[!(note|tip|important|warning|caution)\](?:[-+])?(?=\s|$)/i;
 
 /** The callout type of a blockquote first line, or null when the line is not a
  *  recognised `[!TYPE]` marker (→ generic Phase-1 panel; the structural
- *  unknown-`[!FOO]` fallback). */
+ *  unknown-`[!FOO]` fallback).
+ *
+ *  Strips the CommonMark quote prefix the way Lezer parses it — walking the line
+ *  left to right in COLUMNS so tab handling matches the syntax tree exactly, and
+ *  classification can never disagree with the rendered blocks:
+ *   - up to 3 spaces of initial indent (a 4th space is a top-level indented code
+ *     block, never a blockquote);
+ *   - one or more `>` markers. Each consumes at most ONE *literal* space as its
+ *     delimiter (a TAB is never the delimiter — Lezer counts a tab wholly as
+ *     content indent). A further `>` reached while the running indent is still
+ *     below the 4-column code threshold opens a NESTED blockquote;
+ *   - the remaining content indent, in columns with tabs advanced to the next
+ *     4-column tab stop. 4+ columns is an indented code block, so the `[!TYPE]`
+ *     inside it is code, not a marker.
+ *
+ *  Column-accurate tab handling is why `>\t[!NOTE]` is a callout (a 3-column
+ *  indent → a Paragraph) while `>\t\t…` (6 columns) and `   >\t…` (a tab from
+ *  column 4 → 8 = 4 columns) are indented CodeBlocks and are NOT, and why a tab
+ *  BETWEEN markers (`  >\t> [!NOTE]`) still opens a nested callout — each verified
+ *  against Lezer across a broad prefix battery. Pure — the sole input is the
+ *  first line's text. */
 export function calloutTypeForLine(lineText: string): CalloutType | null {
-  const m = CALLOUT_MARKER_RE.exec(lineText);
+  let i = 0;
+  let column = 0;
+  // Up to 3 spaces of initial indent (spaces only; a leading tab reaches column 4
+  // → indented code, and the `>` guard below rejects it).
+  for (; i < lineText.length && lineText[i] === " " && column < 3; i++) {
+    column += 1;
+  }
+  if (lineText[i] !== ">") {
+    return null;
+  }
+  let contentIndent = 0;
+  for (;;) {
+    i += 1; // consume the `>` marker
+    column += 1;
+    if (lineText[i] === " ") {
+      i += 1; // one optional literal-space delimiter (a tab is content indent)
+      column += 1;
+    }
+    const indentStart = column;
+    for (; i < lineText.length && (lineText[i] === " " || lineText[i] === "\t"); i++) {
+      column += lineText[i] === "\t" ? 4 - (column % 4) : 1;
+    }
+    contentIndent = column - indentStart;
+    if (lineText[i] === ">" && contentIndent < 4) {
+      continue; // a nested `>` reached before the code threshold
+    }
+    break;
+  }
+  if (contentIndent >= 4) {
+    return null; // indented code block, not a marker
+  }
+  const m = CALLOUT_MARKER_RE.exec(lineText.slice(i));
   return m === null ? null : (m[1].toLowerCase() as CalloutType);
 }
 
