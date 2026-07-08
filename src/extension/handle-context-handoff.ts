@@ -17,7 +17,8 @@
 //   into its composer (a panel also gets reveal()); otherwise it is pushed as
 //   `at_mentioned {filePath, lineStart, lineEnd}` over the extension's
 //   localhost MCP WebSocket to the most-recently-connected CLI `/ide` session
-//   (verified against claude-code 2.1.199). Because activeTextEditor only ever
+//   (verified against claude-code 2.1.199, re-verified through 2.1.204).
+//   Because activeTextEditor only ever
 //   points at a VISIBLE text editor, deps.revealForMention first shows this
 //   document as a text editor (reusing an already-visible one, else opening a
 //   second tab IN PLACE — ViewColumn.Active, the Quoll tab's own group, no
@@ -63,16 +64,22 @@
 // below is the coupling surface to Claude Code (plus the best-effort
 // open-command ids). It is an UNDOCUMENTED zero-arg command of a
 // weekly-shipping minified bundle, not a published contract (verified against
-// claude-code 2.1.199); if a future release renames or drops it,
-// executeCommand rejects and the clipboard fallback keeps working — the
-// fallback tier is the safety net, and this comment + the manual smoke are
-// the canary.
+// claude-code 2.1.199, re-verified through 2.1.204); if a future release
+// renames or drops it, executeCommand rejects and the clipboard fallback keeps
+// working — the fallback tier is the safety net, and this comment + the manual
+// smoke are the canary.
+//   NOTE (2.1.204): a sibling command `claude-vscode.insertAtMention` now also
+//   exists, but it is the SAME shape — zero-arg, reads window.activeTextEditor
+//   (it emits `@rel#a-b` rather than `#La-b`, but takes no uri/range argument),
+//   so it offers no way to drop the reveal. An argument-accepting at-mention
+//   command (or an `extension.exports` API — activate() still returns undefined)
+//   is the trigger to revisit the raw-text-flash follow-up; neither exists yet.
 
 /** Claude Code's own zero-arg insert command (tier 0). Reads
  *  window.activeTextEditor + its selection, builds the @-mention, and routes
  *  it to the visible Claude Code webview, else to the connected CLI `/ide`
- *  session (verified against claude-code 2.1.199). Rejection (command not
- *  found) drives the clipboard fallback tier. */
+ *  session (verified against claude-code 2.1.199, re-verified through 2.1.204).
+ *  Rejection (command not found) drives the clipboard fallback tier. */
 export const CLAUDE_INSERT_AT_MENTIONED_COMMAND = "claude-code.insertAtMentioned";
 
 /** Claude Code commands tried, in order, to surface its input for a paste on
@@ -176,7 +183,7 @@ function hasControlChar(path: string): boolean {
 
 /** Build the `@`-mention reference for the insurance write + fallback tier.
  *  Matches the @-mention format Claude Code currently accepts (cross-checked
- *  against insertAtMentioned in extension.js v2.1.199):
+ *  against insertAtMentioned in extension.js v2.1.199, re-verified v2.1.204):
  *    no selection      → `@${rel}`
  *    single line       → `@${rel}#L${line}`
  *    multi-line range  → `@${rel}#L${start}-${end}`.

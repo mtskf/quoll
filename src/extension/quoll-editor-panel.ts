@@ -807,7 +807,9 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
     // Tier-0 reveal for the Claude Code handoff (deps.revealForMention — see
     // handle-context-handoff.ts's module header). Claude Code's zero-arg
     // `claude-code.insertAtMentioned` reads window.activeTextEditor (verified
-    // against claude-code 2.1.199), and activeTextEditor only ever points at a
+    // against claude-code 2.1.199, re-verified through 2.1.204 — the 2.1.204
+    // sibling `claude-vscode.insertAtMention` is the same zero-arg shape), and
+    // activeTextEditor only ever points at a
     // VISIBLE text editor — so this document must be shown as a text editor
     // first. The showTextDocument options are pinned by empirical platform
     // facts, probed in a real VS Code host and asserted by
