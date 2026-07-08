@@ -10,9 +10,12 @@
 //   2. bounds + regex on the 3-byte slice — cheapest stale-from guard
 //      (Codex round-1 #7 / EH round-1 #1).
 //   3. Lezer syntaxTree cross-check — resolve the node at markerFrom
-//      and assert it is a TaskMarker that starts EXACTLY at markerFrom.
-//      Catches the insert-above race where the captured `from` now
-//      points at a DIFFERENT (still-valid) marker (EH round-2 #21).
+//      and assert it is a TaskMarker that starts EXACTLY at markerFrom,
+//      OR a content-less bare-marker `Paragraph` (`- [ ]`, which the GFM
+//      parser leaves as a `Paragraph` with no Task/TaskMarker; accepted
+//      only when `isContentlessTaskParagraph` confirms it is the item's
+//      first content). Catches the insert-above race where the captured
+//      `from` now points at a DIFFERENT (still-valid) marker (EH round-2 #21).
 //   4. try/catch on dispatch — destroyed-view race during webview
 //      tear-down (Codex round-1 #9 / EH round-1 #3).
 //
@@ -22,7 +25,7 @@
 import { isolateHistory } from "@codemirror/commands";
 import { syntaxTree } from "@codemirror/language";
 import type { EditorView } from "@codemirror/view";
-import { TASK_MARKER_RE } from "./task-marker-shape.js";
+import { isContentlessTaskParagraph, TASK_MARKER_RE } from "./task-marker-shape.js";
 
 // Single source of truth for the GFM TaskMarker shape — `[ ]`, `[x]`, or `[X]`.
 // The regex + the content-less structural predicate now live in the zero-dep
@@ -68,12 +71,24 @@ export function toggleTaskCheckbox(view: EditorView, markerFrom: number): boolea
   // that case the cross-check accepts the click on the OLD marker
   // position, which is the least-disruptive fallback (dropping ALL
   // clicks during async parses would be far worse).
+  // (3) Lezer syntaxTree cross-check — the bytes at `markerFrom` must belong to a
+  // real `TaskMarker` node that STARTS there, OR to a CONTENT-LESS bare-marker
+  // `Paragraph` (`- [ ]`, which the parser leaves as a `Paragraph` — no
+  // `Task`/`TaskMarker`). `isContentlessTaskParagraph` (the SAME predicate the
+  // reveal/geometry use) requires the Paragraph to be the item's FIRST content,
+  // so a later `[ ]` paragraph (`- first\n\n  [ ]`) is rejected, and an
+  // inline-code `[ ]` (parent is not a `ListItem`) stays rejected.
   const tree = syntaxTree(view.state);
   let node = tree.resolveInner(markerFrom, 1);
-  while (node.parent !== null && node.name !== "TaskMarker") {
+  while (node.parent !== null && node.name !== "TaskMarker" && node.name !== "Paragraph") {
     node = node.parent;
   }
-  if (node.name !== "TaskMarker" || node.from !== markerFrom) {
+  const isTaskMarker = node.name === "TaskMarker" && node.from === markerFrom;
+  const isContentless =
+    node.name === "Paragraph" &&
+    node.from === markerFrom &&
+    isContentlessTaskParagraph(view.state, node);
+  if (!isTaskMarker && !isContentless) {
     return false;
   }
   const middle = slice.charAt(1);

@@ -7,6 +7,7 @@ import { EditorView } from "@codemirror/view";
 import { describe, expect, it, vi } from "vitest";
 
 import { createSyntaxReveal } from "../../src/webview/cm/decorations/orchestrator.js";
+import { toggleTaskCheckbox } from "../../src/webview/cm/task-checkbox/task-checkbox-command.js";
 import { taskCheckboxReveal } from "../../src/webview/cm/task-checkbox/task-checkbox-reveal.js";
 import { CheckboxWidget } from "../../src/webview/cm/task-checkbox/task-checkbox-widget.js";
 
@@ -479,6 +480,38 @@ describe("CheckboxWidget — toggle dispatch", () => {
       el.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true }));
       expect(view.state.sliceDoc()).toBe("- [x] alpha");
       expect(focusSpy).not.toHaveBeenCalled();
+    } finally {
+      view.destroy();
+    }
+  });
+});
+
+describe("toggleTaskCheckbox — content-less checkboxes", () => {
+  it("toggles a content-less `- [ ]` → `- [x]` (no TaskMarker node exists)", () => {
+    const view = mountView("- [ ]");
+    try {
+      expect(toggleTaskCheckbox(view, 2)).toBe(true);
+      expect(view.state.doc.toString()).toBe("- [x]");
+    } finally {
+      view.destroy();
+    }
+  });
+
+  it("toggles a content-less `- [x]` back to `- [ ]`", () => {
+    const view = mountView("- [x]");
+    try {
+      expect(toggleTaskCheckbox(view, 2)).toBe(true);
+      expect(view.state.doc.toString()).toBe("- [ ]");
+    } finally {
+      view.destroy();
+    }
+  });
+
+  it("does NOT toggle a non-first-content `[ ]` paragraph (`- first\\n\\n  [ ]`)", () => {
+    const view = mountView("- first\n\n  [ ]");
+    try {
+      expect(toggleTaskCheckbox(view, 11)).toBe(false); // the trailing `[` is at 11
+      expect(view.state.doc.toString()).toBe("- first\n\n  [ ]");
     } finally {
       view.destroy();
     }
