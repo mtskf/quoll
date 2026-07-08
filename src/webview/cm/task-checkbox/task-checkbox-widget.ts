@@ -109,9 +109,11 @@ export class CheckboxWidget extends WidgetType {
   updateDOM(dom: HTMLElement, _view: EditorView, from: CheckboxWidget): boolean {
     // CM calls updateDOM only when eq() returned false, passing the prior
     // same-class widget as `from`. eq() keys on (checked, from). A checked
-    // change is a TOGGLE: rebuild (return false) so the established focus
-    // behavior (checked change → DOM swap → focus to <body>, round-3 #23) is
-    // unchanged — this optimization targets edits ABOVE the checkbox, not
+    // change is a TOGGLE: rebuild (return false) so the full DOM reconstruction
+    // via toDOM() runs — the DOM swap invalidates the old span's dataset and
+    // event capture, and the keydown handler's unconditional view.focus() (not
+    // this method) is now responsible for restoring focus after a toggle
+    // (round-3 #23). This optimization targets edits ABOVE the checkbox, not
     // toggles. A pure from-shift reuses the span: re-stamp dataset.from (read by
     // the mousedown/keydown handlers) and refresh aria-label per the widget's
     // (checked, from)-change contract.

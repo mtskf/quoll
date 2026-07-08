@@ -421,6 +421,36 @@ describe("CheckboxWidget — toggle dispatch", () => {
     }
   });
 
+  it("Space/Enter returns focus to the editor on a readOnly view (readOnly abort path)", () => {
+    // Complements the stale-from failure-path test: the readOnly guard is the
+    // most production-common abort, and it lives inside toggleTaskCheckbox
+    // rather than the widget. Pin that the keydown handler returns focus to the
+    // editor on this path too, so a future refactor that early-returns on
+    // readOnly before view.focus() can't silently strand focus on read-only
+    // documents.
+    const parent = document.createElement("div");
+    document.body.appendChild(parent);
+    const state = EditorState.create({
+      doc: "- [ ] alpha",
+      extensions: [markdown({ base: markdownLanguage }), history(), EditorState.readOnly.of(true)],
+    });
+    const view = new EditorView({ state, parent });
+    try {
+      const w = new CheckboxWidget(false, 2, "alpha");
+      const el = w.toDOM(view);
+      document.body.appendChild(el);
+      el.focus();
+      const focusSpy = vi.spyOn(view, "focus");
+      el.dispatchEvent(new KeyboardEvent("keydown", { key: " ", bubbles: true, cancelable: true }));
+      // Toggle aborted (readOnly guard) — doc unchanged …
+      expect(view.state.sliceDoc()).toBe("- [ ] alpha");
+      // … yet focus was still returned to the editor.
+      expect(focusSpy).toHaveBeenCalled();
+    } finally {
+      view.destroy();
+    }
+  });
+
   it("Space keydown after view.destroy() does not throw (unconditional focus is dead-view safe)", () => {
     // The keydown focus now runs unconditionally, so a Space/Enter arriving
     // after tear-down would call view.focus() on a destroyed view. That must
