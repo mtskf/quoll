@@ -107,7 +107,7 @@ describe("host-rejects-edit-preserves-webview", function () {
 
   it("ready arrival re-delivers the rejected draft + error (genuine re-init recovery)", async () => {
     // Pairs with the `ready` arm of the rejected-draft barrier in
-    // QuollEditorPanel.ts. `ready` fires on a genuine re-init (Fast
+    // quoll-editor-panel.ts. `ready` fires on a genuine re-init (Fast
     // Refresh / GPU process restart — CodeMirror is EMPTY on the fresh
     // webview) AND on a plain hide → show under `retainContextWhenHidden`
     // (bytes retained). This test simulates the genuine-re-init case by

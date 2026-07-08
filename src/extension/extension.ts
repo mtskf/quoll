@@ -1,6 +1,6 @@
 import { commands, type ExtensionContext, ExtensionMode, window, workspace } from "vscode";
-import { canEditWith } from "./canEditWith.js";
-import { QuollEditorPanel } from "./QuollEditorPanel.js";
+import { canEditWith } from "./can-edit-with.js";
+import { QuollEditorPanel } from "./quoll-editor-panel.js";
 import { registerToggleEditor } from "./toggle-editor.js";
 
 export async function activate(context: ExtensionContext) {

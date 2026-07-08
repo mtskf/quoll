@@ -25,7 +25,7 @@ export type BuildWebviewHtmlInput = {
   scriptUri: string;
   /** Webview-safe URI for dist/webview/index.css as a string. */
   stylesUri: string;
-  /** Per-resolve crypto nonce (src/extension/getNonce.ts). */
+  /** Per-resolve crypto nonce (src/extension/get-nonce.ts). */
   nonce: string;
   /** Webview-resource base URI for resolving relative image paths against the
    *  document's location, or "" for non-file documents (no resolution). Read

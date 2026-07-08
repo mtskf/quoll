@@ -12,7 +12,7 @@ import { cleanupBetweenTests, getHarness, isDocumentEvent, openFixtureWithQuoll 
  * delegate target would be invisible to CI. (The `Uri.parse` wrap
  * inside the production closure is intentionally NOT pinned here —
  * `openExternalOverride` replaces the entire closure, so the override
- * sees the post-allowlist href as a plain string; `QuollEditorPanel.ts`
+ * sees the post-allowlist href as a plain string; `quoll-editor-panel.ts`
  * documents this bypass on the case arm itself, and TypeScript's
  * `env.openExternal: (uri: Uri)` signature would catch a removed wrap
  * at compile time.)

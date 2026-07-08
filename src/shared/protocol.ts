@@ -226,7 +226,7 @@ export type HostToWebview =
 
 /** Webview→host signal that the webview has mounted (`src/webview/shell.ts`
  *  posts this immediately after the host-message subscription is wired).
- *  The host (`QuollEditorPanel.ts`, `case "ready":`) replies by posting
+ *  The host (`quoll-editor-panel.ts`, `case "ready":`) replies by posting
  *  the current authoritative `DocumentMessage` — there is no separate
  *  revive path, and the reply carries no `reason` field (see
  *  `DocumentMessage` JSDoc above). The `ready` arm is the reliable

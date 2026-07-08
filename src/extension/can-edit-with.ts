@@ -12,7 +12,7 @@
 // `SUPPORTED_FILE_SCHEME` and `IsWritableFileSystem` from `./fileSystem`
 // so the command gate and the write gate stay in sync.
 
-import { type IsWritableFileSystem, SUPPORTED_FILE_SCHEME } from "./fileSystem.js";
+import { type IsWritableFileSystem, SUPPORTED_FILE_SCHEME } from "./file-system.js";
 
 export interface EditWithCandidate {
   readonly uri: { readonly scheme: string; readonly path: string };

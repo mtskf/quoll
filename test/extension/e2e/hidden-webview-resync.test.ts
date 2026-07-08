@@ -79,7 +79,7 @@ describe("hidden-webview-resync", function () {
     // hidden panels buffer / receive postMessage calls instead of
     // refusing them, AND the webview is NOT destroyed on hide — it
     // persists in memory. The visible-edge `onDidChangeViewState`
-    // handler in QuollEditorPanel.ts is now the sole resync route
+    // handler in quoll-editor-panel.ts is now the sole resync route
     // (the `ready` re-handshake no longer fires on show because the
     // webview was never torn down). This test still drains any
     // hidden-time Document via the `tick + clearEvents` sequence

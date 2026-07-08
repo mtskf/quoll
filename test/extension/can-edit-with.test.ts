@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
-import { canEditWith, type EditWithCandidate } from "../../src/extension/canEditWith.js";
-import type { IsWritableFileSystem } from "../../src/extension/fileSystem.js";
+import { canEditWith, type EditWithCandidate } from "../../src/extension/can-edit-with.js";
+import type { IsWritableFileSystem } from "../../src/extension/file-system.js";
 
 const writable: IsWritableFileSystem = () => true;
 const readonly: IsWritableFileSystem = () => false;

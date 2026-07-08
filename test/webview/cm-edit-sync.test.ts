@@ -98,7 +98,7 @@ describe("cm edit-sync", () => {
     // returns on !canWrite WITHOUT nulling (the content was editable when
     // typed; contrast #13, which drops NEW typing under readonly in trySend).
     // The host then re-grants write on a SAME-docVersion Document
-    // (visible-edge / ready resync — QuollEditorPanel.ts:187-197/233-255).
+    // (visible-edge / ready resync — quoll-editor-panel.ts:187-197/233-255).
     // onHostSnapshot updates canWrite but docVersion did not move, so the
     // drain effect fires ONLY because state.canWrite is in its deps (review
     // fix #30). Mirror that: snapshot(v, false)→commit holds; snapshot(v,

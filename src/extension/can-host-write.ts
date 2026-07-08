@@ -14,7 +14,7 @@
 // the provider and have its scheme treated as writable just because
 // `workspace.fs.isWritableFileSystem` returned `undefined` for it.
 
-import { type IsWritableFileSystem, SUPPORTED_FILE_SCHEME } from "./fileSystem.js";
+import { type IsWritableFileSystem, SUPPORTED_FILE_SCHEME } from "./file-system.js";
 
 export function canHostWrite(scheme: string, isWritableFileSystem: IsWritableFileSystem): boolean {
   if (scheme !== SUPPORTED_FILE_SCHEME) {
