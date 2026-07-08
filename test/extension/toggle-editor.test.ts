@@ -4,7 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 // loading this test does NOT evaluate the full panel module (and its many vscode
 // surfaces) under the stub — same pattern as extension.activate.test.ts. The
 // pure decideSwitchTarget under test does not touch QuollEditorPanel.
-vi.mock("../../src/extension/QuollEditorPanel.js", () => ({
+vi.mock("../../src/extension/quoll-editor-panel.js", () => ({
   QuollEditorPanel: { viewType: "quoll.editMarkdown" },
 }));
 
