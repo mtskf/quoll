@@ -91,7 +91,7 @@ import {
   pointInExclusionZone,
 } from "../decorations/shared.js";
 import type { BuildContext } from "../decorations/types.js";
-import { columnAt, resolveListItemHang } from "./list-geometry.js";
+import { columnAt, listItemGetsVerticalGap, resolveListItemHang } from "./list-geometry.js";
 
 const CM_LINE_PAD_START = "6px";
 
@@ -210,10 +210,16 @@ export function buildListHangIndent(
           return;
         }
         emitted.add(line.from);
+        const gap = listItemGetsVerticalGap(ctx.state, node.node);
         out.push({
           from: line.from,
           deco: Decoration.line({
-            class: "quoll-list-hang",
+            // `.quoll-list-hang` delivers ONLY the vertical inter-item gap
+            // (cm/theme.ts padding-top). Drop it for tight consecutive siblings
+            // so a tight list renders packed; the horizontal hang below is
+            // ALWAYS applied (soft-wrap indent + widget text-indent). Kept in
+            // lock-step with the fold-gutter offset in cm/fold/index.ts.
+            ...(gap ? { class: "quoll-list-hang" } : {}),
             attributes: {
               style: `text-indent:calc(-1 * (${hang.indent}));padding-inline-start:calc(${CM_LINE_PAD_START} + (${hang.pad}))`,
             },

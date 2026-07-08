@@ -77,3 +77,46 @@ describe("listItemGetsVerticalGap", () => {
     expect(listItemGetsVerticalGap(st, itemAtLine(st, 3))).toBe(false);
   });
 });
+
+import { EditorSelection } from "@codemirror/state";
+import { EditorView } from "@codemirror/view";
+import { quollSyntaxReveal } from "../../src/webview/cm/decorations/index.js";
+import { listHangIndent } from "../../src/webview/cm/list/list-hang-indent.js";
+import { quollTheme } from "../../src/webview/cm/theme.js";
+
+function render(doc: string) {
+  const parent = document.createElement("div");
+  document.body.appendChild(parent);
+  const view = new EditorView({
+    state: EditorState.create({
+      doc,
+      selection: EditorSelection.cursor(0),
+      extensions: [markdown({ base: markdownLanguage }), quollSyntaxReveal(), listHangIndent, quollTheme],
+    }),
+    parent,
+  });
+  forceParsing(view as unknown as never, view.state.doc.length, 5_000);
+  const lines = [...view.dom.querySelectorAll(".cm-line")].map((l) => ({
+    text: l.textContent,
+    hang: l.className.includes("quoll-list-hang"),
+    hasIndentStyle: (l.getAttribute("style") ?? "").includes("padding-inline-start"),
+  }));
+  view.destroy();
+  return lines;
+}
+
+describe("list-hang render — vertical gap gating", () => {
+  it("tight siblings: only the first item carries quoll-list-hang; all keep the horizontal indent", () => {
+    const lines = render("- a\n- b\n- c").filter((l) => l.text !== "");
+    expect(lines.map((l) => l.hang)).toEqual([true, false, false]);
+    expect(lines.every((l) => l.hasIndentStyle)).toBe(true); // horizontal hang preserved
+  });
+  it("checkbox Enter-continuation: second task item is tight (no gap class)", () => {
+    const lines = render("- [ ] test\n- [ ] ddd").filter((l) => l.text !== "");
+    expect(lines[1]?.hang).toBe(false);
+  });
+  it("loose list keeps the gap on the second item", () => {
+    const lines = render("- a\n\n- b").filter((l) => l.text !== "");
+    expect(lines[lines.length - 1]?.hang).toBe(true);
+  });
+});
