@@ -128,4 +128,25 @@ describe("proseSpaceMetric — live prose-font change (ResizeObserver re-measure
       globalThis.ResizeObserver = realResizeObserver;
     }
   });
+
+  it("mounts and tears down cleanly on a host without ResizeObserver (older webview)", () => {
+    // The `typeof ResizeObserver === "undefined"` guard must skip construction
+    // on a layout-free host. Without it, the constructor throws at
+    // `new ResizeObserver(...)` — AFTER the probe is appended — and CodeMirror
+    // catches that throw and drops the plugin, so its `destroy()` never runs and
+    // the probe LEAKS. So the non-vacuous assertion is a clean teardown: the
+    // probe is gone after destroy(). (Removing the guard leaves it behind.)
+    const realResizeObserver = globalThis.ResizeObserver;
+    // @ts-expect-error simulate a host without ResizeObserver
+    delete globalThis.ResizeObserver;
+    try {
+      const view = mount("- alpha\n  - beta");
+      const host = view.dom;
+      expect(host.querySelectorAll(".quoll-prose-probe").length).toBe(1);
+      view.destroy();
+      expect(host.querySelectorAll(".quoll-prose-probe").length).toBe(0);
+    } finally {
+      globalThis.ResizeObserver = realResizeObserver;
+    }
+  });
 });
