@@ -4,7 +4,7 @@ import { history, undo } from "@codemirror/commands";
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
 import { EditorState } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { CheckboxWidget } from "../../src/webview/cm/task-checkbox/task-checkbox-widget.js";
 
@@ -389,6 +389,94 @@ describe("CheckboxWidget — toggle dispatch", () => {
       // happy-dom (DOM swap timing) — but view.hasFocus correctly
       // reflects the view.focus() effect.
       expect(view.hasFocus).toBe(true);
+    } finally {
+      view.destroy();
+    }
+  });
+
+  it("Space/Enter returns focus to the editor even when the toggle ABORTS (stale-from failure path)", () => {
+    // Reproduce-first (round-cycle of PR #61): the keydown handler used to
+    // call view.focus() ONLY inside `if (ok)`. On any of toggleTaskCheckbox's
+    // five false-returning paths (stale-from guards + catch-and-log), Space /
+    // Enter has already preventDefault'd, so focus stayed stranded on the
+    // about-to-be-stale <span> and the user's next keystroke went nowhere.
+    // Focus MUST return to the editor regardless of the toggle outcome.
+    const view = mountWithDoc("- [ ] alpha");
+    try {
+      const w = new CheckboxWidget(false, 2, "alpha");
+      const el = w.toDOM(view);
+      document.body.appendChild(el);
+      el.focus(); // simulate SR-rotor / Tab placement
+      // Reseed so the captured `from` no longer points at a TaskMarker —
+      // toggleTaskCheckbox now returns false (stale-from abort).
+      view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: "paragraph text" } });
+      const focusSpy = vi.spyOn(view, "focus");
+      el.dispatchEvent(new KeyboardEvent("keydown", { key: " ", bubbles: true, cancelable: true }));
+      // The toggle aborted (doc unchanged) …
+      expect(view.state.sliceDoc()).toBe("paragraph text");
+      // … yet focus was still handed back to the editor.
+      expect(focusSpy).toHaveBeenCalled();
+    } finally {
+      view.destroy();
+    }
+  });
+
+  it("Space/Enter returns focus to the editor on a readOnly view (readOnly abort path)", () => {
+    // Complements the stale-from failure-path test: the readOnly guard is the
+    // most production-common abort, and it lives inside toggleTaskCheckbox
+    // rather than the widget. Pin that the keydown handler returns focus to the
+    // editor on this path too, so a future refactor that early-returns on
+    // readOnly before view.focus() can't silently strand focus on read-only
+    // documents.
+    const parent = document.createElement("div");
+    document.body.appendChild(parent);
+    const state = EditorState.create({
+      doc: "- [ ] alpha",
+      extensions: [markdown({ base: markdownLanguage }), history(), EditorState.readOnly.of(true)],
+    });
+    const view = new EditorView({ state, parent });
+    try {
+      const w = new CheckboxWidget(false, 2, "alpha");
+      const el = w.toDOM(view);
+      document.body.appendChild(el);
+      el.focus();
+      const focusSpy = vi.spyOn(view, "focus");
+      el.dispatchEvent(new KeyboardEvent("keydown", { key: " ", bubbles: true, cancelable: true }));
+      // Toggle aborted (readOnly guard) — doc unchanged …
+      expect(view.state.sliceDoc()).toBe("- [ ] alpha");
+      // … yet focus was still returned to the editor.
+      expect(focusSpy).toHaveBeenCalled();
+    } finally {
+      view.destroy();
+    }
+  });
+
+  it("Space keydown after view.destroy() does not throw (unconditional focus is dead-view safe)", () => {
+    // The keydown focus now runs unconditionally, so a Space/Enter arriving
+    // after tear-down would call view.focus() on a destroyed view. That must
+    // stay as harmless as the mousedown destroyed-view case above.
+    const view = mountWithDoc("- [ ] alpha");
+    const w = new CheckboxWidget(false, 2, "alpha");
+    const el = w.toDOM(view);
+    document.body.appendChild(el);
+    view.destroy();
+    expect(() =>
+      el.dispatchEvent(new KeyboardEvent("keydown", { key: " ", bubbles: true, cancelable: true }))
+    ).not.toThrow();
+  });
+
+  it("mousedown does NOT return focus to the editor (mouse users drive the next action)", () => {
+    // Pin the deliberate asymmetry: only the keydown path calls view.focus().
+    // Mousedown intentionally leaves focus alone (round-3 #23) — moving the
+    // keydown focus out of `if (ok)` must not leak into the mouse path.
+    const view = mountWithDoc("- [ ] alpha");
+    try {
+      const w = new CheckboxWidget(false, 2, "alpha");
+      const el = w.toDOM(view);
+      const focusSpy = vi.spyOn(view, "focus");
+      el.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true }));
+      expect(view.state.sliceDoc()).toBe("- [x] alpha");
+      expect(focusSpy).not.toHaveBeenCalled();
     } finally {
       view.destroy();
     }
