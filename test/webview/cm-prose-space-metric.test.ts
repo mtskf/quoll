@@ -32,6 +32,12 @@ describe("nextProseSpacePublish — publish policy (layout-free, non-vacuous)", 
   });
 });
 
+// CM's synchronous measure flush exists at runtime but is not in the public
+// type surface; cast to invoke it deterministically instead of awaiting a frame.
+function flushMeasure(view: EditorView): void {
+  (view as unknown as { measure(): void }).measure();
+}
+
 function mount(doc: string): EditorView {
   const parent = document.createElement("div");
   document.body.appendChild(parent);
@@ -55,5 +61,71 @@ describe("proseSpaceMetric — lifecycle", () => {
     view.destroy();
     expect(host.querySelectorAll(".quoll-prose-probe").length).toBe(0);
     expect(host.style.getPropertyValue("--quoll-prose-space")).toBe("");
+  });
+});
+
+describe("proseSpaceMetric — live prose-font change (ResizeObserver re-measure)", () => {
+  // happy-dom has no layout engine, so real ResizeObserver callbacks never fire.
+  // Stub RO to capture the plugin's callback + observed target, then drive a
+  // font swap by changing the probe's reported width and firing the callback.
+  // This pins the follow-up-TODO fix: a font change that leaves line-height
+  // unchanged (so CM never raises geometryChanged) still re-aligns without a
+  // reload. Reverting the RO wiring makes this test red (no re-publish to 8px).
+  it("re-measures when a font swap changes the probe's space advance", () => {
+    // CM's EditorView also constructs a ResizeObserver on the global, so track
+    // observers per-instance and fire only the one that observed the probe.
+    const observers: { cb: ResizeObserverCallback; targets: Element[] }[] = [];
+    const realResizeObserver = globalThis.ResizeObserver;
+    class StubResizeObserver {
+      private readonly entry: { cb: ResizeObserverCallback; targets: Element[] };
+      constructor(cb: ResizeObserverCallback) {
+        this.entry = { cb, targets: [] };
+        observers.push(this.entry);
+      }
+      observe(el: Element): void {
+        this.entry.targets.push(el);
+      }
+      unobserve(): void {}
+      disconnect(): void {}
+    }
+    // biome-ignore lint/suspicious/noExplicitAny: minimal RO stub for the test
+    globalThis.ResizeObserver = StubResizeObserver as any;
+
+    let spacePx = 5; // rendered advance of ONE space, in CSS px
+    try {
+      const view = mount("- alpha\n  - beta");
+      const host = view.dom;
+      const probe = host.querySelector<HTMLSpanElement>(".quoll-prose-probe");
+      expect(probe).not.toBeNull();
+
+      // The plugin MUST observe its own probe box — find that observer.
+      const probeObserver = observers.find((o) => o.targets.includes(probe as Element));
+      expect(probeObserver).toBeDefined();
+
+      // Simulate a real layout: the probe holds PROBE_SPACES (20) spaces, each
+      // `spacePx` wide. (getBoundingClientRect returns 0 under happy-dom.)
+      (probe as HTMLSpanElement).getBoundingClientRect = (() =>
+        ({ width: spacePx * 20 }) as DOMRect) as HTMLSpanElement["getBoundingClientRect"];
+
+      // Flush the mount measure → first publish at the current font.
+      flushMeasure(view);
+      expect(host.style.getPropertyValue("--quoll-prose-space")).toBe("5px");
+
+      // Live font swap: the space now renders wider. A bare re-flush must NOT
+      // re-publish on its own — the keyed measure already ran and CM raises no
+      // geometryChanged for a line-height-preserving font change.
+      spacePx = 8;
+      flushMeasure(view);
+      expect(host.style.getPropertyValue("--quoll-prose-space")).toBe("5px");
+
+      // The probe ResizeObserver firing is the ONLY thing that re-measures here.
+      probeObserver?.cb([], {} as ResizeObserver);
+      flushMeasure(view);
+      expect(host.style.getPropertyValue("--quoll-prose-space")).toBe("8px");
+
+      view.destroy();
+    } finally {
+      globalThis.ResizeObserver = realResizeObserver;
+    }
   });
 });

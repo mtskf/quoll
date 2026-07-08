@@ -20,18 +20,23 @@
 // new advance with no JS write in `read`.
 //
 // Re-measure trigger = constructor (mount) + `update.geometryChanged &&
-// !docChanged`. This covers what MATTERS for first-correct-paint: initial
-// mount, a hidden→visible transition (a 0-width background-tab editor that later
-// shows — dimensions change → geometryChanged → MUST re-measure or it stays on
-// the 1ch fallback), resize and zoom. The `!docChanged` gate skips the
-// per-keystroke geometryChanged (the probe width is document-independent). It
-// does NOT catch a live font-FAMILY swap that leaves line-height unchanged
-// (Quoll pins line-height: 1.7, and CM only flags geometryChanged on a >0.3px
-// line-height delta or a wrap-mode change — Codex round-4 H), nor a
-// `--vscode-font-family` CSS-var change CM never observes — a DOCUMENTED
-// out-of-scope gap with a follow-up TODO (robust fix: a ResizeObserver on a
-// `display:inline-block` probe). It does not affect the reported open/view bug
-// and self-heals on reload.
+// !docChanged` + a ResizeObserver on the probe. The first two cover
+// first-correct-paint: initial mount, a hidden→visible transition (a 0-width
+// background-tab editor that later shows — dimensions change → geometryChanged →
+// MUST re-measure or it stays on the 1ch fallback), resize and zoom. The
+// `!docChanged` gate skips the per-keystroke geometryChanged (the probe width is
+// document-independent). Those two do NOT catch a live font-FAMILY swap that
+// leaves line-height unchanged (Quoll pins line-height: 1.7, and CM only flags
+// geometryChanged on a >0.3px line-height delta or a wrap-mode change — Codex
+// round-4 H), nor a `--vscode-font-family` CSS-var change CM never observes.
+// The ResizeObserver closes that gap: because the probe mirrors `.cm-content`'s
+// font via the SAME CSS variables, any font change (a `--vscode-font-family`
+// swap, a late-loading webfont with different metrics, or a future configurable
+// prose font) alters the probe's rendered width → RO fires → re-measure, with no
+// reload. The probe is `position:absolute` (blockified, shrink-to-fit width that
+// tracks its text) and `visibility:hidden` (still laid out, so RO observes it —
+// only `display:none` is skipped), so the existing probe box is already
+// observable; a plain inline span would report a 0 content-box.
 //
 // Publishing the var changes padding-inline-start → the line's available width
 // → soft-wrap point → line HEIGHT, but NOT scrollDOM size, so CM's own observers
@@ -77,6 +82,7 @@ export const proseSpaceMetric = ViewPlugin.fromClass(
   class {
     private readonly host: HTMLElement;
     private readonly probe: HTMLSpanElement;
+    private readonly resizeObserver: ResizeObserver | null;
     private lastPublished: string | null = null;
     private resyncQueued = false;
     private disposed = false;
@@ -95,6 +101,22 @@ export const proseSpaceMetric = ViewPlugin.fromClass(
       probe.textContent = " ".repeat(PROBE_SPACES);
       this.host.appendChild(probe);
       this.probe = probe;
+      // Re-measure whenever the probe's rendered box changes — the ONLY signal
+      // for a live font-FAMILY swap that leaves line-height unchanged (CM never
+      // flags geometryChanged) or a `--vscode-font-family` CSS-var change (CM
+      // never observes it). `disposed` guards a callback queued past destroy();
+      // `typeof` guards layout-free hosts (happy-dom / older webviews) where RO
+      // is absent. RO delivers one initial callback on observe(), which just
+      // re-runs the idempotent measure below.
+      this.resizeObserver =
+        typeof ResizeObserver === "undefined"
+          ? null
+          : new ResizeObserver(() => {
+              if (!this.disposed) {
+                this.measure(view);
+              }
+            });
+      this.resizeObserver?.observe(probe);
       this.measure(view); // initial — covers first paint
     }
     update(u: ViewUpdate): void {
@@ -104,14 +126,15 @@ export const proseSpaceMetric = ViewPlugin.fromClass(
       // editor stays on the 1ch fallback), resize, zoom. `geometryChanged` is
       // also set on every docChanged, so the `!docChanged` gate avoids a
       // per-keystroke probe read. (Live font-FAMILY changes that leave
-      // line-height unchanged are NOT caught here — a documented out-of-scope
-      // gap; see the follow-up TODO.)
+      // line-height unchanged are NOT caught here — the constructor's
+      // ResizeObserver on the probe covers those.)
       if (u.geometryChanged && !u.docChanged) {
         this.measure(u.view);
       }
     }
     destroy(): void {
       this.disposed = true;
+      this.resizeObserver?.disconnect();
       // finally: retract our inline override even if remove() throws, so a
       // reused view.dom never keeps a stale value.
       try {
