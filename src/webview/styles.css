@@ -155,11 +155,11 @@
   }
 
   /* The app shell is exactly the webview viewport tall (a DEFINITE height, not
-   * `min-height`) so the `height:100%` chain below — main → .quoll-editor →
-   * .cm-editor — resolves instead of collapsing to `auto`. Without a definite
-   * height here CodeMirror grows to its full content height, the WHOLE webview
-   * document scrolls (documentElement), and `.cm-scroller` never scrolls — which
-   * silently breaks the floating-toolbar scroll-hide observer (it listens on
+   * `min-height`) so the height chain below — main → .quoll-editor → .cm-editor
+   * — resolves instead of collapsing to `auto`. Without a definite height here
+   * CodeMirror grows to its full content height, the WHOLE webview document
+   * scrolls (documentElement), and `.cm-scroller` never scrolls — which silently
+   * breaks the floating-toolbar scroll-hide observer (it listens on
    * view.scrollDOM = .cm-scroller) and lets the absolutely-positioned toggles
    * scroll away instead of staying pinned. */
   #root {
@@ -168,11 +168,22 @@
     color: var(--vscode-editor-foreground);
   }
 
+  /* Column stack: the save-policy banner strip (.quoll-banner-host) is the first
+   * child and takes only its content height; .quoll-editor is the second child
+   * and flexes to fill the rest. `flex-direction: column` (not the default row)
+   * is what puts the banner ABOVE the editor rather than beside it. */
   main {
     width: 100%;
     height: 100%;
     display: flex;
-    justify-content: center;
+    flex-direction: column;
+  }
+
+  /* Top chrome. The banner sits above the editor and takes only its own content
+   * height — never grows, never shrinks (so a long message can't steal the
+   * editor's bounded height and re-open document scroll). Empty ⇒ zero height. */
+  .quoll-banner-host {
+    flex: 0 0 auto;
   }
 
   /* Notion-style reading column. font-size scales off --vscode-font-size
@@ -191,7 +202,15 @@
      * outline overlay (cm/outline). Does not affect the CM fill layout. */
     position: relative;
     width: 100%;
-    height: 100%;
+    /* Fill the height left over after the banner strip. `flex: 1 1 auto` + the
+     * `min-height: 0` override (flex items default to min-height:auto, which
+     * refuses to shrink below content) give the host a DEFINITE resolved height
+     * — so the `.cm-editor { height: 100% }` below still bounds CodeMirror and
+     * `.cm-scroller` stays the internal scroller. Do NOT revert to `height:100%`:
+     * in the column flex that would make the host as tall as `main`, pushing the
+     * editor below the banner and re-opening document scroll. */
+    flex: 1 1 auto;
+    min-height: 0;
     font-size: calc(var(--vscode-font-size) * 1.15);
     outline: none;
   }
