@@ -90,8 +90,22 @@ describe("list hang-indent provider — plain bullet/ordered", () => {
     expect(lines(buildListHangIndent(ctx("just a paragraph")))).toEqual([]);
   });
 
-  it("empty bullet item (no content): no line decoration", () => {
-    expect(lines(buildListHangIndent(ctx("- ")))).toEqual([]);
+  it("empty bullet item now hangs like a canonical `- item` (renderable in lock-step)", () => {
+    // Was `.toEqual([])` before content-less/empty items were made renderable
+    // (the intentional flip — empty items now get `.quoll-list-hang` so they align
+    // and gap with siblings). The style matches a canonical `- item` sibling.
+    expect(lines(buildListHangIndent(ctx("- ")))).toEqual(lines(buildListHangIndent(ctx("- item"))));
+  });
+
+  it("empty nested bullet gets the SAME hang style as a content-bearing sibling (form b)", () => {
+    // `- parent\n  -` vs `- parent\n  - x`: the empty child (line 2) must receive a
+    // `.quoll-list-hang` decoration whose style string is byte-identical to its
+    // content-bearing sibling's — the CommonMark implied single-space indent makes
+    // the two align (assert the expression string, not pixels — happy-dom note).
+    const empty = lines(buildListHangIndent(ctx("- parent\n  -")));
+    const sibling = lines(buildListHangIndent(ctx("- parent\n  - x")));
+    expect(empty[1]).toBeDefined();
+    expect(empty[1]?.style).toBe(sibling[1]?.style);
   });
 
   it("nested sub-list: each ListItem line gets its own hang", () => {
