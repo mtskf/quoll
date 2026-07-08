@@ -88,16 +88,18 @@ export class CheckboxWidget extends WidgetType {
       if (event.key === " " || event.key === "Enter") {
         event.preventDefault();
         event.stopPropagation();
-        const ok = toggleTaskCheckbox(view, Number(span.dataset.from ?? this.from));
-        if (ok) {
-          // Return focus to the editor so the keyboard user can keep
-          // typing — without this, focus stays on the now-replaced
-          // widget DOM and the next keystroke goes nowhere (Codex
-          // round-3 #23 / EH round-3 minor). The mousedown handler
-          // intentionally does NOT do this (mouse users expect their
-          // pointer to drive the next action).
-          view.focus();
-        }
+        toggleTaskCheckbox(view, Number(span.dataset.from ?? this.from));
+        // Return focus to the editor so the keyboard user can keep
+        // typing — without this, focus stays on the now-replaced (or
+        // about-to-be-stale) widget DOM and the next keystroke goes
+        // nowhere (Codex round-3 #23 / EH round-3 minor). This runs
+        // UNCONDITIONALLY, not just on a successful toggle: Space/Enter
+        // has already preventDefault'd, so on any of toggleTaskCheckbox's
+        // false-returning guard paths (stale-from, readOnly, dead-view
+        // catch) focus would otherwise be stranded on the span. The
+        // mousedown handler intentionally does NOT do this (mouse users
+        // expect their pointer to drive the next action).
+        view.focus();
       }
     });
 
