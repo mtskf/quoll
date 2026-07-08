@@ -440,8 +440,8 @@ describe("styles.css — editor height chain (scroll-hide root cause)", () => {
   // layout, so it cannot observe that .cm-scroller is not the real scroller.
   // Behaviourally verified in a real headless-Chrome harness (wheel-down flips
   // quoll-chrome-hidden only AFTER this chain is definite). Non-vacuous:
-  // against the pre-fix `#root { min-height: 100vh }` with no `main` height,
-  // the first two assertions red.
+  // against the pre-fix `#root { min-height: 100vh }` with no `main` height
+  // (and `.quoll-editor { height: 100% }`, no flex), all three tests red.
   // Strip CSS comments first: the rule comments here reference sibling links
   // like `.cm-editor { height: 100% }` in prose, and the `[^}]*` block matcher
   // would both truncate at a comment `}` AND leak a commented `height: 100%`
