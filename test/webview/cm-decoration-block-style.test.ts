@@ -955,6 +955,13 @@ describe("calloutTypeForLine — [!TYPE] admonition marker grammar", () => {
     expect(calloutTypeForLine(">\t[!warning]")).toBe("warning"); // case-insensitive still
     expect(calloutTypeForLine("> \t[!TIP]")).toBe("tip"); // space+tab → col 4 → Paragraph
     expect(calloutTypeForLine(">\t\t[!NOTE]")).toBeNull(); // 2 tabs → CodeBlock, not a callout
+    // A tab is content indent, never the quote's delimiter space (unlike a
+    // literal space) — so with 3 leading spaces the `>`-tab reaches column 4,
+    // a 4-column indent → an indented CodeBlock, not a callout. This is the case
+    // a naive "expand tabs to spaces then reuse the space regex" gets wrong
+    // (it would grant the tab a bogus delimiter space and return "note").
+    expect(calloutTypeForLine("   >\t[!NOTE]")).toBeNull(); // 3 spaces + >\t → col 4 → CodeBlock
+    expect(calloutTypeForLine("  >\t[!NOTE]")).toBe("note"); // 2 spaces + >\t → col 3 → Paragraph
   });
   it("calloutClassForType returns the per-type theme hook", () => {
     expect(calloutClassForType("warning")).toBe("quoll-callout-warning");

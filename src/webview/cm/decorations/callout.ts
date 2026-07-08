@@ -46,58 +46,63 @@ export function calloutClassForType(type: CalloutType): string {
   return `${CALLOUT_CLASS}-${type}`;
 }
 
-/** Admonition marker matcher. Strips the CommonMark quote prefix — up to 3
- *  leading spaces (`^ {0,3}`; 4+ is an indented code block), one-or-more `>`
- *  levels each with an optional single marker space (`(?:> ?)+`), then up to 3
- *  content-indent spaces (` {0,3}`) — and matches `[!TYPE]` case-insensitively,
- *  allowing an OPTIONAL Obsidian fold suffix (`-`/`+`) and requiring the closing
- *  token to be followed by whitespace or end-of-line. So bare `[!NOTE]` (GitHub),
- *  `[!NOTE] title` and `[!NOTE]-` (Obsidian) all match while `[!NOTEX]` /
- *  `[!FOO]` / `[!NOTE]x` do not. The whitespace is CAPPED (not the earlier greedy
- *  `\s*`) so a `>     [!NOTE]` — where 4+ spaces after the `>` marker make the
- *  content an indented CODE BLOCK in CommonMark (verified against Lezer:
- *  Blockquote > CodeBlock at ≥5 spaces after a single `>`) — is NOT mistaken for a
- *  callout. A Blockquote's first line always carries a leading `>`, so the prefix
- *  strip always fires. The matcher is SPACE-only by design; TAB indentation is
- *  normalised to spaces by `expandTabs` before matching (see below). Pure — the
- *  sole input is the (tab-expanded) first line's text. */
-const CALLOUT_MARKER_RE =
-  /^ {0,3}(?:> ?)+ {0,3}\[!(note|tip|important|warning|caution)\](?:[-+])?(?=\s|$)/i;
+/** The `[!TYPE]` admonition token itself (case-insensitive), matched AFTER the
+ *  CommonMark quote prefix and content indent have been stripped by
+ *  `calloutTypeForLine`. Allows an OPTIONAL Obsidian fold suffix (`-`/`+`) and
+ *  requires the closing `]` to be followed by whitespace or end-of-line — so bare
+ *  `[!NOTE]` (GitHub), `[!NOTE] title` and `[!NOTE]-` (Obsidian) all match while
+ *  `[!NOTEX]` / `[!FOO]` / `[!NOTE]x` do not. */
+const CALLOUT_MARKER_RE = /^\[!(note|tip|important|warning|caution)\](?:[-+])?(?=\s|$)/i;
 
-/** Expand tabs to spaces on CommonMark's 4-column tab stops (a tab advances to
- *  the next multiple-of-4 column). In block-structure contexts CommonMark treats
- *  a tab as if replaced by that many spaces, so a lone `>\t` yields a 2-column
- *  content indent (below the 4-column indented-code boundary → a Paragraph, hence
- *  a callout) while `>\t\t` yields 6 (an indented CodeBlock → NOT a callout).
- *  Normalising first lets the space-only CALLOUT_MARKER_RE reason about the tab
- *  form with the SAME column math Lezer uses — no column arithmetic baked into
- *  the pattern, so render (Lezer's parse) and classification stay in lockstep.
- *  The common tab-free line is returned verbatim (no allocation). Pure. */
-function expandTabs(lineText: string): string {
-  if (!lineText.includes("\t")) {
-    return lineText;
-  }
-  let out = "";
-  let col = 0;
-  for (const ch of lineText) {
-    if (ch === "\t") {
-      const advance = 4 - (col % 4);
-      out += " ".repeat(advance);
-      col += advance;
-    } else {
-      out += ch;
-      col += 1;
-    }
-  }
-  return out;
-}
+/** The number of `>` quote levels a line opens with, or 0 when it does not open a
+ *  blockquote. The prefix is up to 3 spaces of initial indent (`^ {0,3}`; 4+ is a
+ *  top-level indented code block, never a blockquote) then one or more `>`, each
+ *  consuming ONE optional *literal* space as its delimiter (`(?:> ?)+`). Returned
+ *  with the matched length so the caller can continue the column count. */
+const CALLOUT_QUOTE_PREFIX_RE = /^ {0,3}(?:> ?)+/;
 
 /** The callout type of a blockquote first line, or null when the line is not a
  *  recognised `[!TYPE]` marker (→ generic Phase-1 panel; the structural
- *  unknown-`[!FOO]` fallback). Tabs are expanded to spaces first so a
- *  TAB-separated marker (`>\t[!NOTE]`) classifies identically to the space form. */
+ *  unknown-`[!FOO]` fallback).
+ *
+ *  Strips the CommonMark quote prefix the way Lezer parses it, so classification
+ *  and the rendered tree can never disagree:
+ *   1. the `>` quote prefix (`CALLOUT_QUOTE_PREFIX_RE`) — a `>` marker consumes at
+ *      most ONE *literal* space as its delimiter; a TAB is never the delimiter;
+ *   2. the remaining content indent, measured in COLUMNS with tabs expanded to
+ *      CommonMark's 4-column tab stops. 4+ columns is an indented code block, so
+ *      the `[!TYPE]` inside it is code, not a marker.
+ *
+ *  Measuring the indent in columns (rather than expanding tabs to spaces first,
+ *  which would let the `>` delimiter eat into a tab it does not own) is why a lone
+ *  `>\t[!NOTE]` is a callout — a 3-column indent → a Paragraph — while `>\t\t…`
+ *  (6 columns) and `   >\t…` (a tab from column 4 → 8 = 4 columns) are indented
+ *  CodeBlocks and are NOT, each verified against Lezer. Pure — the sole input is
+ *  the first line's text. */
 export function calloutTypeForLine(lineText: string): CalloutType | null {
-  const m = CALLOUT_MARKER_RE.exec(expandTabs(lineText));
+  const prefix = CALLOUT_QUOTE_PREFIX_RE.exec(lineText);
+  if (prefix === null) {
+    return null;
+  }
+  // The prefix is spaces and `>` only, so its char length equals its column
+  // width; continue the absolute column count from there across the indent.
+  const indentStart = prefix[0].length;
+  let column = indentStart;
+  let i = indentStart;
+  for (; i < lineText.length; i++) {
+    const ch = lineText[i];
+    if (ch === " ") {
+      column += 1;
+    } else if (ch === "\t") {
+      column += 4 - (column % 4);
+    } else {
+      break;
+    }
+  }
+  if (column - indentStart >= 4) {
+    return null; // indented code block, not a marker
+  }
+  const m = CALLOUT_MARKER_RE.exec(lineText.slice(i));
   return m === null ? null : (m[1].toLowerCase() as CalloutType);
 }
 
