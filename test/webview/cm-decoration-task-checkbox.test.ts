@@ -334,6 +334,47 @@ describe("taskCheckboxReveal — provider", () => {
     expect(contentMarkRanges(set)).toEqual([]);
   });
 
+  it("emits a checkbox widget for a content-less `- [ ]` (no Task node in the parse)", () => {
+    const doc = "- [ ]\n\nparagraph";
+    const set = taskCheckboxReveal.build(ctx(doc, doc.indexOf("paragraph") + 3));
+    expect(ranges(set)).toEqual([{ from: 0, to: 5 }]);
+  });
+
+  it("widget for a content-less `- [ ]` stores TaskMarker.from (=2)", () => {
+    const doc = "- [ ]\n\nparagraph";
+    const set = taskCheckboxReveal.build(ctx(doc, doc.indexOf("paragraph") + 3));
+    const froms: number[] = [];
+    const iter = set.iter();
+    while (iter.value !== null) {
+      const spec = iter.value.spec as { widget?: { from?: number } };
+      if (spec.widget && typeof spec.widget.from === "number") {
+        froms.push(spec.widget.from);
+      }
+      iter.next();
+    }
+    expect(froms).toEqual([2]);
+  });
+
+  it("caret ON a content-less `- [ ]` line reveals raw source (no widget)", () => {
+    const doc = "- [ ]\n\nparagraph";
+    expect(ranges(taskCheckboxReveal.build(ctx(doc, 0)))).toEqual([]);
+  });
+
+  it("content-bearing tasks are NOT double-emitted when the ListItem path is added", () => {
+    const doc = "- [ ] alpha\n- [x] beta\n\nparagraph";
+    const set = taskCheckboxReveal.build(ctx(doc, doc.indexOf("paragraph") + 3));
+    expect(ranges(set)).toEqual([
+      { from: 0, to: 5 },
+      { from: 12, to: 17 },
+    ]);
+  });
+
+  it("content-less `- [x]` emits NO completed-content mute (nothing to mute)", () => {
+    const doc = "- [x]\n\nparagraph";
+    const set = taskCheckboxReveal.build(ctx(doc, doc.indexOf("paragraph") + 3));
+    expect(contentMarkRanges(set)).toEqual([]);
+  });
+
   it("the content-mute mark carries the quoll-task-completed-content class (pins the class contract, not pixels)", () => {
     const doc = "- [x] done item\n\nparagraph";
     const caret = doc.indexOf("paragraph") + 3;
