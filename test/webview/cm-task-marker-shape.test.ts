@@ -44,4 +44,19 @@ describe("task-marker-shape", () => {
     const { state, node } = firstParagraphAt("- foo", 2);
     expect(isContentlessTaskParagraph(state, node)).toBe(false);
   });
+
+  // Continuation-body task: the `[ ]` marker is on line 1 with the body on an
+  // indented continuation line, which parses as ONE `Paragraph("[ ]\n  child")`
+  // (> 3 bytes, no `Task` node). DELIBERATELY rejected — GitHub's cmark-gfm
+  // requires a same-line space after the marker, so it renders literal too.
+  // See the render-decision rationale in task-marker-shape.ts.
+  it("FALSE for a continuation-body task `- [ ]\\n  child` (renders literal, matches GitHub)", () => {
+    const { state, node } = firstParagraphAt("- [ ]\n  child", 2);
+    expect(isContentlessTaskParagraph(state, node)).toBe(false);
+  });
+
+  it("FALSE for a checked continuation-body task `- [x]\\n  done body`", () => {
+    const { state, node } = firstParagraphAt("- [x]\n  done body", 2);
+    expect(isContentlessTaskParagraph(state, node)).toBe(false);
+  });
 });
