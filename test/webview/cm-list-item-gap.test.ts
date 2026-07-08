@@ -5,6 +5,7 @@ import { EditorState } from "@codemirror/state";
 import type { SyntaxNode } from "@lezer/common";
 import { describe, expect, it } from "vitest";
 import { listItemGetsVerticalGap } from "../../src/webview/cm/list/list-geometry.js";
+
 // NOTE: `forceParsing` (view-based) is used by Task 2/3 render helpers appended
 // to this file; `ensureSyntaxTree` drives the state-only parse here.
 
@@ -29,7 +30,9 @@ function itemAtLine(st: EditorState, n: number): SyntaxNode {
       }
     },
   });
-  if (found === null) throw new Error(`no ListItem at line ${n}`);
+  if (found === null) {
+    throw new Error(`no ListItem at line ${n}`);
+  }
   return found;
 }
 
@@ -91,7 +94,12 @@ function render(doc: string) {
     state: EditorState.create({
       doc,
       selection: EditorSelection.cursor(0),
-      extensions: [markdown({ base: markdownLanguage }), quollSyntaxReveal(), listHangIndent, quollTheme],
+      extensions: [
+        markdown({ base: markdownLanguage }),
+        quollSyntaxReveal(),
+        listHangIndent,
+        quollTheme,
+      ],
     }),
     parent,
   });
@@ -151,8 +159,9 @@ function contentVsGutter(view: EditorView) {
   const content = [...view.dom.querySelectorAll(".cm-content .cm-line")]
     .filter((l) => l.textContent !== "")
     .map((l) => l.className.includes("quoll-list-hang"));
-  const gutter = [...view.dom.querySelectorAll(".cm-foldGutter .cm-gutterElement.quoll-fold-list-marker")]
-    .map(() => true); // presence == has-offset; compare COUNT + positions below
+  const gutter = [
+    ...view.dom.querySelectorAll(".cm-foldGutter .cm-gutterElement.quoll-fold-list-marker"),
+  ].map(() => true); // presence == has-offset; compare COUNT + positions below
   return { content, gutterCount: gutter.length };
 }
 
