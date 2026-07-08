@@ -2,6 +2,7 @@ import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
 import { EditorState } from "@codemirror/state";
 import { describe, expect, it } from "vitest";
 import {
+  resolveContentlessTaskMarkerGeometry,
   resolveListItemHang,
   resolveTaskMarkerGeometry,
 } from "../../src/webview/cm/list/list-geometry.js";
@@ -9,6 +10,21 @@ import { fullTree } from "./helpers/full-tree.js";
 
 function state(doc: string): EditorState {
   return EditorState.create({ doc, extensions: [markdown({ base: markdownLanguage })] });
+}
+
+/** Resolve the innermost ListItem containing offset `at`. */
+function listItemAt(doc: string, at: number) {
+  const st = state(doc);
+  const tree = fullTree(st);
+  let item: ReturnType<typeof tree.resolveInner> | null = null;
+  tree.iterate({
+    enter: (n) => {
+      if (n.name === "ListItem" && n.from <= at && at < n.to) {
+        item = n.node;
+      }
+    },
+  });
+  return { state: st, item: item! };
 }
 
 /** Find the first Task node in `doc` and resolve its marker geometry. */
@@ -82,6 +98,42 @@ describe("resolveTaskMarkerGeometry — bullet/ordered fold policy (F7)", () => 
   // findTaskMarker comment. The F7 fail-closed symmetry (Task 1's ownMarkerWidth
   // returns null for a Task whose geometry is null, mirroring reveal emitting no
   // checkbox) is enforced structurally, not by a parse-based test.
+});
+
+describe("resolveContentlessTaskMarkerGeometry", () => {
+  it("resolves a content-less bullet checkbox `- [ ]` (no Task node exists)", () => {
+    const { state, item } = listItemAt("- [ ]", 0);
+    expect(resolveContentlessTaskMarkerGeometry(state, item)).toEqual({
+      listMarkFrom: 0,
+      taskMarkerFrom: 2,
+      taskMarkerTo: 5,
+      checked: false,
+      isBullet: true,
+      foldFrom: 0,
+    });
+  });
+
+  it("resolves a checked content-less `- [x]`", () => {
+    const { state, item } = listItemAt("- [x]", 0);
+    expect(resolveContentlessTaskMarkerGeometry(state, item)?.checked).toBe(true);
+  });
+
+  it("returns null for a real content-bearing task `- [ ] a`", () => {
+    const { state, item } = listItemAt("- [ ] a", 0);
+    expect(resolveContentlessTaskMarkerGeometry(state, item)).toBeNull();
+  });
+
+  it("returns null for a plain empty bullet `-`", () => {
+    const { state, item } = listItemAt("-", 0);
+    expect(resolveContentlessTaskMarkerGeometry(state, item)).toBeNull();
+  });
+
+  it("ordered content-less `1. [ ]` keeps foldFrom at the marker (number stays visible)", () => {
+    const { state, item } = listItemAt("1. [ ]", 0);
+    const g = resolveContentlessTaskMarkerGeometry(state, item);
+    expect(g?.isBullet).toBe(false);
+    expect(g?.foldFrom).toBe(g?.taskMarkerFrom);
+  });
 });
 
 /** Resolve the hang for the Nth (0-based) ListItem in document order. */

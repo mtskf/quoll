@@ -31,7 +31,10 @@
 import type { syntaxTree } from "@codemirror/language";
 import { countColumn, type EditorState } from "@codemirror/state";
 
-import { TASK_MARKER_RE } from "../task-checkbox/task-marker-shape.js";
+import {
+  isContentlessTaskParagraph,
+  TASK_MARKER_RE,
+} from "../task-checkbox/task-marker-shape.js";
 
 // `@lezer/common` is a direct dep as of PR #66 (for the lint incremental
 // parser's `TreeFragment`); derive SyntaxNode from syntaxTree's return type
@@ -112,6 +115,42 @@ export function resolveTaskMarkerGeometry(
     checked: marker.checked,
     isBullet,
     foldFrom: isBullet ? listMarkFrom : marker.from,
+  };
+}
+
+/** Resolve task-marker geometry for a `ListItem` whose first content is a
+ *  CONTENT-LESS bare marker — `- [ ]` parses as `ListItem > ListMark,
+ *  Paragraph("[ ]")` with NO `Task`/`TaskMarker` node. Returns the same
+ *  `TaskMarkerGeometry` shape as `resolveTaskMarkerGeometry` so every consumer
+ *  treats a content-less checkbox identically to a content-bearing one (the F7
+ *  lock-step). Null unless the FIRST content node is a bare marker
+ *  (`isContentlessTaskParagraph` — the shared predicate, which also rejects a
+ *  later `[ ]` paragraph in the same item). A content-BEARING task has a `Task`
+ *  content node, so this returns null for it (that path owns it). */
+export function resolveContentlessTaskMarkerGeometry(
+  state: EditorState,
+  listItem: SyntaxNode
+): TaskMarkerGeometry | null {
+  if (listItem.name !== "ListItem") {
+    return null;
+  }
+  const listMark = listItem.firstChild;
+  if (listMark === null || listMark.name !== "ListMark") {
+    return null;
+  }
+  const content = listMark.nextSibling;
+  if (content === null || !isContentlessTaskParagraph(state, content)) {
+    return null;
+  }
+  const middle = state.doc.sliceString(content.from + 1, content.from + 2);
+  const isBullet = listItem.parent?.name === "BulletList";
+  return {
+    listMarkFrom: listMark.from,
+    taskMarkerFrom: content.from,
+    taskMarkerTo: content.to,
+    checked: middle === "x" || middle === "X",
+    isBullet,
+    foldFrom: isBullet ? listMark.from : content.from,
   };
 }
 
