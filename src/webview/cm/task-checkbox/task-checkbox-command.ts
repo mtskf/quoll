@@ -58,26 +58,24 @@ export function toggleTaskCheckbox(view: EditorView, markerFrom: number): boolea
   if (!TASK_MARKER_RE.test(slice)) {
     return false;
   }
-  // (3) Lezer syntaxTree cross-check — structural guard that the bytes
-  // at `markerFrom` actually belong to a `TaskMarker` Lezer node that
-  // STARTS exactly there. Catches the inline-code false positive (3
-  // bytes literally spelling `[ ]` inside an `InlineCode` span — regex
-  // would pass, structure would not). Does NOT catch the
-  // insert-above-with-exact-position-alignment race (a new TaskMarker
-  // landing at exactly the OLD `markerFrom` byte offset — both checks
-  // pass, wrong task toggles); that residual is bounded in practice by
-  // the provider's docChanged rebuild and is documented in the plan's
-  // Risks §12. The tree may also be mid-incremental-parse and stale; in
-  // that case the cross-check accepts the click on the OLD marker
-  // position, which is the least-disruptive fallback (dropping ALL
-  // clicks during async parses would be far worse).
-  // (3) Lezer syntaxTree cross-check — the bytes at `markerFrom` must belong to a
-  // real `TaskMarker` node that STARTS there, OR to a CONTENT-LESS bare-marker
-  // `Paragraph` (`- [ ]`, which the parser leaves as a `Paragraph` — no
-  // `Task`/`TaskMarker`). `isContentlessTaskParagraph` (the SAME predicate the
-  // reveal/geometry use) requires the Paragraph to be the item's FIRST content,
-  // so a later `[ ]` paragraph (`- first\n\n  [ ]`) is rejected, and an
-  // inline-code `[ ]` (parent is not a `ListItem`) stays rejected.
+  // (3) Lezer syntaxTree cross-check — structural guard that the bytes at
+  // `markerFrom` belong to a real `TaskMarker` node that STARTS exactly there,
+  // OR to a CONTENT-LESS bare-marker `Paragraph` (`- [ ]`, which the parser
+  // leaves as a `Paragraph` with no `Task`/`TaskMarker`). The content-less
+  // arm goes through `isContentlessTaskParagraph` — the SAME predicate the
+  // reveal/geometry use — which requires the Paragraph to be the item's FIRST
+  // content, so a later `[ ]` paragraph (`- first\n\n  [ ]`) is rejected.
+  // Either way this catches the inline-code false positive (3 bytes literally
+  // spelling `[ ]` inside an `InlineCode` span — regex would pass, structure
+  // would not: its enclosing Paragraph does not start at `markerFrom` and its
+  // parent is not a `ListItem`). Does NOT catch the
+  // insert-above-with-exact-position-alignment race (a new TaskMarker landing
+  // at exactly the OLD `markerFrom` byte offset — both checks pass, wrong task
+  // toggles); that residual is bounded in practice by the provider's docChanged
+  // rebuild and is documented in the plan's Risks §12. The tree may also be
+  // mid-incremental-parse and stale; in that case the cross-check accepts the
+  // click on the OLD marker position, which is the least-disruptive fallback
+  // (dropping ALL clicks during async parses would be far worse).
   const tree = syntaxTree(view.state);
   let node = tree.resolveInner(markerFrom, 1);
   while (node.parent !== null && node.name !== "TaskMarker" && node.name !== "Paragraph") {
