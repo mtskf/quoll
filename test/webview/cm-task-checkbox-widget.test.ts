@@ -526,10 +526,10 @@ describe("CheckboxWidget — CM reconcile invocation contract (updateDOM reuse)"
       expect(span1?.dataset.from).toBe("4");
 
       // Real edit ABOVE the marker: prepend a 7-char line. The marker shifts by
-      // +7 and the caret (mapped to offset 7, still on a non-task line) keeps
-      // the widget revealed. The provider rebuilds a CheckboxWidget whose `from`
-      // differs → eq() is false → CM MUST reconcile the existing tile via
-      // updateDOM.
+      // +7 while the caret stays off the task line (the task begins at offset 9),
+      // so the widget stays revealed. The provider rebuilds a CheckboxWidget
+      // whose `from` differs → eq() is false → CM MUST reconcile the existing
+      // tile via updateDOM.
       view.dispatch({ changes: { from: 0, insert: "prefix\n" } });
 
       const span2 = view.dom.querySelector<HTMLElement>(".quoll-task-checkbox");
@@ -537,9 +537,10 @@ describe("CheckboxWidget — CM reconcile invocation contract (updateDOM reuse)"
       // Node reuse: identical DOM node survived the edit (updateDOM returned
       // true). A rebuild via toDOM would hand back a different node → red.
       expect(span2).toBe(span1);
-      // Re-stamped: dataset.from is written ONLY inside updateDOM's reuse body,
-      // so an advanced value on the SAME node proves updateDOM actually ran
-      // (not a coincidental identity match with a stale attribute).
+      // Re-stamped: the identity check above already ruled out toDOM (it would
+      // have built a NEW node), so an advanced dataset.from on the SAME node can
+      // only come from updateDOM's reuse body re-stamping it. A stale attribute
+      // left by the original toDOM would still read "4", not "11".
       expect(span2?.dataset.from).toBe("11");
     } finally {
       view.destroy();
