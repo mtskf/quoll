@@ -22,13 +22,15 @@
 import { isolateHistory } from "@codemirror/commands";
 import { syntaxTree } from "@codemirror/language";
 import type { EditorView } from "@codemirror/view";
+import { TASK_MARKER_RE } from "./task-marker-shape.js";
 
-/** Single source of truth for the GFM TaskMarker shape — `[ ]`, `[x]`,
- *  or `[X]`. Declared in `command` because both `findTaskMarker` (in
- *  reveal) and `toggleTaskCheckbox` need it, and `command` is the
- *  lowest node of the `command → widget → reveal` DAG that broke the
- *  round-1 reveal ↔ widget cycle (Codex round-2 #12). */
-export const TASK_MARKER_RE = /^\[[ xX]\]$/;
+// Single source of truth for the GFM TaskMarker shape — `[ ]`, `[x]`, or `[X]`.
+// The regex + the content-less structural predicate now live in the zero-dep
+// leaf `task-marker-shape.ts` so both the toggle (here) and the geometry / reveal
+// side can share ONE definition without an import cycle (Codex finding #4).
+// Re-exported so `findTaskMarker` (in reveal) and existing import sites are
+// unaffected.
+export { TASK_MARKER_RE };
 
 /** Toggle the GFM task-list checkbox marker that starts at `markerFrom`.
  *  Returns `true` when a dispatch was issued, `false` when any guard
