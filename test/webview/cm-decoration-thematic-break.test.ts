@@ -23,8 +23,27 @@ describe("ThematicBreakWidget", () => {
     expect(dom.getAttribute("role")).toBe("separator");
   });
 
-  it("all instances are eq (stateless widget — CM can reuse DOM)", () => {
+  it("instances with the same indent are eq (CM can reuse DOM)", () => {
     expect(new ThematicBreakWidget().eq(new ThematicBreakWidget())).toBe(true);
+    expect(new ThematicBreakWidget(2).eq(new ThematicBreakWidget(2))).toBe(true);
+  });
+
+  it("instances with a DIFFERENT indent are NOT eq (force a DOM rebuild)", () => {
+    expect(new ThematicBreakWidget(0).eq(new ThematicBreakWidget(2))).toBe(false);
+    expect(new ThematicBreakWidget(2).eq(new ThematicBreakWidget(4))).toBe(false);
+  });
+
+  it("insets the rule by one prose-space per indent column when indentCols > 0", () => {
+    // A list-child break carries its source-indent column count; the widget
+    // insets the hairline (background-clip:content-box, styles.css) to the
+    // item's content column via padding-inline-start.
+    const dom = new ThematicBreakWidget(2).toDOM();
+    expect(dom.style.paddingInlineStart).toBe("calc(2 * var(--quoll-prose-space, 1ch))");
+  });
+
+  it("does NOT set padding for a top-level break (indentCols 0 — byte-identical)", () => {
+    expect(new ThematicBreakWidget().toDOM().style.paddingInlineStart).toBe("");
+    expect(new ThematicBreakWidget(0).toDOM().style.paddingInlineStart).toBe("");
   });
 
   it("does NOT ignore events — clicks fall through to CM so click-to-reveal works", () => {
@@ -53,15 +72,21 @@ function ctx(
   };
 }
 
-function spec(
-  set: DecorationSet
-): Array<{ from: number; to: number; kind: "mark" | "replace"; cls?: string; hasWidget: boolean }> {
+function spec(set: DecorationSet): Array<{
+  from: number;
+  to: number;
+  kind: "mark" | "replace";
+  cls?: string;
+  hasWidget: boolean;
+  indentCols?: number;
+}> {
   const out: Array<{
     from: number;
     to: number;
     kind: "mark" | "replace";
     cls?: string;
     hasWidget: boolean;
+    indentCols?: number;
   }> = [];
   const iter = set.iter();
   while (iter.value !== null) {
@@ -72,6 +97,7 @@ function spec(
       kind: s.class === undefined ? "replace" : "mark",
       cls: s.class,
       hasWidget: s.widget !== undefined,
+      indentCols: s.widget instanceof ThematicBreakWidget ? s.widget.indentCols : undefined,
     });
     iter.next();
   }
@@ -98,6 +124,52 @@ describe("thematic break reveal provider", () => {
     expect(r[0]?.kind).toBe("replace");
     expect(r[0]?.from).toBe(6); // line.from — indent absorbed
     expect(r[0]?.to).toBe(12);
+    expect(r[0]?.indentCols).toBe(0); // top-level indent → flush-left, no inset
+  });
+
+  it("HIDE: a list-item child break insets to the item's content column (`- x\\n\\n  ---`)", () => {
+    // `- item\n\n  ---\n\nb`: BulletList > ListItem > HorizontalRule [10,13]; the
+    // HR line `  ---` is [8,13]. The 2-space gap is LIST-CONTINUATION indent, not
+    // a top-level indent — so the replace still starts at line.from (widget owns
+    // the whole line, no stray whitespace) but the widget carries indentCols=2 so
+    // its hairline insets to the item's content column (matching the sibling
+    // nested paragraph). Distinguishing this from a top-level `   ---` needs the
+    // enclosing ListItem node context, not the gap's characters.
+    const doc = "- item\n\n  ---\n\nb";
+    const set = thematicBreakReveal.build(ctx(doc, EditorSelection.single(15))); // caret on "b"
+    const r = spec(set);
+    expect(r.length).toBe(1);
+    expect(r[0]?.kind).toBe("replace");
+    expect(r[0]?.from).toBe(8); // line.from — whole line replaced
+    expect(r[0]?.to).toBe(13);
+    expect(r[0]?.indentCols).toBe(2); // inset by the 2-column source indent
+  });
+
+  it("HIDE: an ordered-list child break insets by its source-indent columns", () => {
+    // `1. item\n\n   ---\n\nb`: OrderedList > ListItem > HorizontalRule; the HR
+    // line `   ---` is [9,15], node [12,15]. The 3-space continuation indent →
+    // indentCols=3.
+    const doc = "1. item\n\n   ---\n\nb";
+    const set = thematicBreakReveal.build(ctx(doc, EditorSelection.single(16)));
+    const r = spec(set);
+    expect(r.length).toBe(1);
+    expect(r[0]?.kind).toBe("replace");
+    expect(r[0]?.from).toBe(9);
+    expect(r[0]?.indentCols).toBe(3);
+  });
+
+  it("HIDE: a TAB-indented list child expands the tab to its column width (not length 1)", () => {
+    // `- item\n\n\t---\n\nb`: the continuation gap is a single TAB. indentCols is
+    // computed with countColumn(prefix, tabSize), so the tab expands to the
+    // next tab stop (column 4 at the default tabSize 4) — NOT prefix.length (1).
+    // This pins the reason countColumn is used over `.length`; a future swap to
+    // `.length` would under-indent tab-indented list children and turn this red.
+    const doc = "- item\n\n\t---\n\nb";
+    const set = thematicBreakReveal.build(ctx(doc, EditorSelection.single(doc.length - 1)));
+    const r = spec(set);
+    expect(r.length).toBe(1);
+    expect(r[0]?.kind).toBe("replace");
+    expect(r[0]?.indentCols).toBe(4); // tab → column 4, not length 1
   });
 
   it("REVEAL: dim mark over the node glyphs when caret is on the HR line", () => {
@@ -184,6 +256,7 @@ describe("thematic break reveal provider", () => {
     expect(r[0]?.hasWidget).toBe(true);
     expect(r[0]?.from).toBe(5); // node.from — the `> ` container prefix is kept
     expect(r[0]?.to).toBe(8);
+    expect(r[0]?.indentCols).toBe(0); // container prefix ≠ list indent → no inset
   });
 
   it("HIDE: `- ---` is a real thematic break (dashes+spaces), NOT a list — whole line replaced", () => {
@@ -197,6 +270,7 @@ describe("thematic break reveal provider", () => {
     expect(r[0]?.kind).toBe("replace");
     expect(r[0]?.from).toBe(3); // whole `- ---` concealed
     expect(r[0]?.to).toBe(8);
+    expect(r[0]?.indentCols).toBe(0); // a top-level HR, not a list item → no inset
   });
 
   it("REVEAL: `> ---` dims only the `---` glyphs, never the `> ` prefix", () => {

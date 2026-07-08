@@ -8,7 +8,11 @@
 //     to 3 spaces and Lezer's node starts AFTER the indent) but PRESERVES a
 //     container prefix (`> ---`): a pure-whitespace gap before the node is
 //     indent → start at line.from; a non-whitespace gap is a quote marker →
-//     start at node.from so the blockquote prefix survives.
+//     start at node.from so the blockquote prefix survives. When the
+//     whitespace indent is a LIST-ITEM continuation (`- x\n\n  ---`), the
+//     widget is additionally inset one prose-space per source column so the
+//     rule aligns to the item's content column (matching the sibling nested
+//     paragraph) instead of the document margin.
 //   - caret ON the line   → Decoration.mark (REVEAL_MARK, `quoll-syntax-reveal`)
 //     over the node span [node.from, node.to] — dims the raw glyphs in place so
 //     they stay editable, exactly like the other reveals.
@@ -27,7 +31,7 @@
 //
 // Display-only: build() never mutates the document; bytes round-trip.
 
-import { RangeSetBuilder } from "@codemirror/state";
+import { countColumn, RangeSetBuilder } from "@codemirror/state";
 import { Decoration, type DecorationSet } from "@codemirror/view";
 
 import { intersectsAnySelection, REVEAL_MARK } from "./shared.js";
@@ -76,8 +80,32 @@ export const thematicBreakReveal: DecorationProvider = {
             // structural prefix (preserve, start at node.from). `- ---` is a
             // real HR whose `-` is a rule glyph, so its gap is empty → absorbed.
             const prefix = ctx.state.doc.sliceString(line.from, node.from);
-            const from = /^\s*$/.test(prefix) ? line.from : node.from;
-            builder.add(from, line.to, Decoration.replace({ widget: new ThematicBreakWidget() }));
+            const whitespaceGap = /^\s*$/.test(prefix);
+            const from = whitespaceGap ? line.from : node.from;
+            // A whitespace gap that indents the break inside a LIST ITEM
+            // (`- x\n\n  ---`) is continuation indent, not a top-level indent:
+            // render the rule at the item's content column — like the sibling
+            // nested paragraph, which shows its literal leading spaces — by
+            // insetting the widget one prose-space per source column. A
+            // TOP-LEVEL indent (`   ---`) keeps indentCols 0 (absorbed to the
+            // margin, unchanged); a container prefix (`> ---`) already took the
+            // node.from branch above and also keeps indentCols 0. The gap's
+            // characters alone can't tell list-continuation from top-level
+            // indent — that needs the enclosing ListItem node context.
+            let indentCols = 0;
+            if (whitespaceGap) {
+              for (let p = node.node.parent; p; p = p.parent) {
+                if (p.name === "ListItem") {
+                  indentCols = countColumn(prefix, ctx.state.tabSize);
+                  break;
+                }
+              }
+            }
+            builder.add(
+              from,
+              line.to,
+              Decoration.replace({ widget: new ThematicBreakWidget(indentCols) })
+            );
           }
         },
       });
