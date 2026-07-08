@@ -149,6 +149,18 @@ describe("bulletMarkerReveal — provider", () => {
     expect(ranges(set)).toEqual([{ from: 0, to: 1 }]);
   });
 
+  it("emits NO dot for a content-less bullet task `- [ ]` (checkbox owns the ListMark)", () => {
+    const doc = "- [ ]\n\nparagraph";
+    const set = bulletMarkerReveal.build(ctx(doc, doc.indexOf("paragraph") + 3));
+    expect(ranges(set)).toEqual([]);
+  });
+
+  it("still emits a dot for a plain empty bullet `-`", () => {
+    const doc = "-\n\nparagraph";
+    const set = bulletMarkerReveal.build(ctx(doc, doc.indexOf("paragraph") + 3));
+    expect(ranges(set)).toEqual([{ from: 0, to: 1 }]);
+  });
+
   it("drops a ListMark that only TOUCHES the window's closing edge (Lezer touch semantics)", () => {
     // Window [0,8): line-2 ListMark at [8,9) has from === range.to, so touch
     // semantics ENTERS it, but it is not really inside the window. The strict

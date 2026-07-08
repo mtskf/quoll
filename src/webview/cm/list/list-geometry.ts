@@ -31,7 +31,7 @@
 import type { syntaxTree } from "@codemirror/language";
 import { countColumn, type EditorState } from "@codemirror/state";
 
-import { TASK_MARKER_RE } from "../task-checkbox/task-checkbox-command.js";
+import { isContentlessTaskParagraph, TASK_MARKER_RE } from "../task-checkbox/task-marker-shape.js";
 
 // `@lezer/common` is a direct dep as of PR #66 (for the lint incremental
 // parser's `TreeFragment`); derive SyntaxNode from syntaxTree's return type
@@ -112,6 +112,42 @@ export function resolveTaskMarkerGeometry(
     checked: marker.checked,
     isBullet,
     foldFrom: isBullet ? listMarkFrom : marker.from,
+  };
+}
+
+/** Resolve task-marker geometry for a `ListItem` whose first content is a
+ *  CONTENT-LESS bare marker — `- [ ]` parses as `ListItem > ListMark,
+ *  Paragraph("[ ]")` with NO `Task`/`TaskMarker` node. Returns the same
+ *  `TaskMarkerGeometry` shape as `resolveTaskMarkerGeometry` so every consumer
+ *  treats a content-less checkbox identically to a content-bearing one (the F7
+ *  lock-step). Null unless the FIRST content node is a bare marker
+ *  (`isContentlessTaskParagraph` — the shared predicate, which also rejects a
+ *  later `[ ]` paragraph in the same item). A content-BEARING task has a `Task`
+ *  content node, so this returns null for it (that path owns it). */
+export function resolveContentlessTaskMarkerGeometry(
+  state: EditorState,
+  listItem: SyntaxNode
+): TaskMarkerGeometry | null {
+  if (listItem.name !== "ListItem") {
+    return null;
+  }
+  const listMark = listItem.firstChild;
+  if (listMark === null || listMark.name !== "ListMark") {
+    return null;
+  }
+  const content = listMark.nextSibling;
+  if (content === null || !isContentlessTaskParagraph(state, content)) {
+    return null;
+  }
+  const middle = state.doc.sliceString(content.from + 1, content.from + 2);
+  const isBullet = listItem.parent?.name === "BulletList";
+  return {
+    listMarkFrom: listMark.from,
+    taskMarkerFrom: content.from,
+    taskMarkerTo: content.to,
+    checked: middle === "x" || middle === "X",
+    isBullet,
+    foldFrom: isBullet ? listMark.from : content.from,
   };
 }
 
@@ -237,16 +273,19 @@ function enclosingListItem(listItem: SyntaxNode): SyntaxNode | null {
   return parent;
 }
 
-/** The Task content node of a ListItem when it is a RENDERED task (content is a
- *  `Task` node AND its marker geometry resolves), else null. A `Task` whose
- *  marker is invalid (stale tree) is treated as "not a rendered task" so the
- *  re-base / fold decisions stay fail-closed in lock-step with reveal (F7). */
-function taskOf(state: EditorState, listItem: SyntaxNode): SyntaxNode | null {
+/** True when a ListItem renders a checkbox — a `Task` content node with a valid
+ *  marker, OR a content-less bare-marker Paragraph. Used by renderedMarkCol to
+ *  re-base a child one NEST_STEP past the (wide-checkbox) parent's content
+ *  column, identically for content-bearing and content-less task parents. */
+function isTaskItem(state: EditorState, listItem: SyntaxNode): boolean {
   const content = listItem.firstChild?.nextSibling ?? null;
-  if (content === null || content.name !== "Task") {
-    return null;
+  if (content === null) {
+    return false;
   }
-  return resolveTaskMarkerGeometry(state, content) === null ? null : content;
+  if (content.name === "Task") {
+    return resolveTaskMarkerGeometry(state, content) !== null;
+  }
+  return resolveContentlessTaskMarkerGeometry(state, listItem) !== null;
 }
 
 /** True when `listItem`'s wrapping list is a `BulletList` (a bullet item — plain
@@ -287,32 +326,47 @@ function ownMarkerWidth(state: EditorState, listItem: SyntaxNode): Col | null {
     return null;
   }
   const content = listMark.nextSibling;
-  if (content === null || content.from === content.to) {
-    return null; // empty item / grammar drift
+  if (content === null) {
+    return null; // grammar drift — no content node at all
   }
   const markCol = columnAt(state, listMark.from);
-  if (content.name === "Task") {
-    const geom = resolveTaskMarkerGeometry(state, content);
-    if (geom === null) {
-      return null; // task-shaped but invalid marker → no hang (F7 fail-closed)
-    }
-    // Split the VISIBLE marker prefix the same way the plain branch does: the
-    // glyph run up to the fold point (`N.`/`N)` for an ordered task) renders
-    // wider than a space, so it is sized in the GLYPH blend; the trailing
-    // whitespace up to `foldFrom` stays in prose-space. Clamped to `foldFrom`
-    // (`min(listMark.to, foldFrom)`) so a BULLET task — foldFrom == listMarkFrom,
-    // the whole `- ` folds into the checkbox — keeps glyph:0 / ch:0, byte-identical
-    // with the pre-split all-prose-space behaviour.
-    const glyphToCol = columnAt(state, Math.min(listMark.to, geom.foldFrom));
+
+  // Task content: a real `Task` node, OR a content-less bare-marker Paragraph
+  // (`- [ ]`, which the GFM parser leaves as a plain Paragraph). Both render a
+  // checkbox, so both fold the visible prefix into the MARKER column. A
+  // `Task`-named node with an invalid marker returns null (F7 fail-closed).
+  const taskGeom =
+    content.name === "Task"
+      ? resolveTaskMarkerGeometry(state, content)
+      : resolveContentlessTaskMarkerGeometry(state, listItem);
+  if (content.name === "Task" && taskGeom === null) {
+    return null; // task-shaped but invalid marker → no hang (F7 fail-closed)
+  }
+  if (taskGeom !== null) {
+    // Split the visible marker prefix: glyph run up to the fold point (GLYPH
+    // blend), trailing whitespace up to `foldFrom` in prose-space. Clamped to
+    // `foldFrom` so a BULLET task keeps glyph:0 / ch:0, byte-identical.
+    const glyphToCol = columnAt(state, Math.min(listMark.to, taskGeom.foldFrom));
     return {
-      ch: columnAt(state, geom.foldFrom) - glyphToCol,
+      ch: columnAt(state, taskGeom.foldFrom) - glyphToCol,
       glyph: glyphToCol - markCol,
       markers: 1,
     };
   }
-  // Split the plain marker prefix: the ListMark glyph run (`-`/`*`/`+`, `N.`,
-  // `N)`) renders wider than a space, so it is sized in the GLYPH blend; the
-  // trailing whitespace up to the content stays in --quoll-prose-space.
+
+  // Empty plain item (`-` / `  -`): no content to hang, but the item still
+  // renders its marker and must align with content-bearing siblings. Use the
+  // CommonMark implied SINGLE-SPACE content indent (`ch:1`) so the hang is
+  // byte-identical to a canonical `- x` sibling (the marker column is
+  // own-independent — `own` cancels in the first-line offset — but matching the
+  // sibling keeps the geometry a single, testable value). Keeps hang ↔
+  // fold-gutter in lock-step for empty items.
+  if (content.from === content.to) {
+    return { ch: 1, glyph: columnAt(state, listMark.to) - markCol, markers: 0 };
+  }
+
+  // Plain non-empty content: ListMark glyph run in GLYPH blend, trailing
+  // whitespace up to the content in prose-space.
   const listMarkTo = columnAt(state, listMark.to);
   return {
     ch: columnAt(state, content.from) - listMarkTo,
@@ -323,8 +377,10 @@ function ownMarkerWidth(state: EditorState, listItem: SyntaxNode): Col | null {
 
 /** True iff this ListItem renders a hang — i.e. `resolveListItemHang` (and the
  *  `.quoll-list-hang` line decoration) would be NON-null for it. Structural
- *  eligibility only (`ownMarkerWidth !== null`: valid ListMark + non-empty
- *  content + valid Task marker), WITHOUT `resolveListItemHang`'s O(depth)
+ *  eligibility only (`ownMarkerWidth !== null`: valid ListMark + a content node —
+ *  a non-empty item OR an EMPTY item (both now hang: an empty item gets the
+ *  implied-space marker width). A `Task`-shaped content node still requires a
+ *  valid marker (F7 fail-closed)), WITHOUT `resolveListItemHang`'s O(depth)
  *  `renderedMarkCol` ancestor-chain walk. In lock-step with `resolveListItemHang`
  *  by construction — that resolver's SOLE null path is `ownMarkerWidth === null`.
  *  Lets a whole-document caller (the fold-gutter marker tag) gate in step with the
@@ -373,7 +429,7 @@ function renderedMarkCol(state: EditorState, listItem: SyntaxNode): Col {
   if (parent === null) {
     return sourceMarkColumn(state, listItem);
   }
-  if (taskOf(state, parent) !== null) {
+  if (isTaskItem(state, parent)) {
     // Re-base one outline step past the (wide-checkbox) task parent's content.
     return add(renderedContentCol(state, parent), NEST_STEP);
   }
@@ -400,9 +456,10 @@ function renderedContentCol(state: EditorState, listItem: SyntaxNode): Col {
 }
 
 /** Resolve the `{ indent, pad }` CSS column expressions for one ListItem, or
- *  null when the node is not a recognised non-empty list item (grammar drift /
- *  empty item / task with invalid marker). `indent` is the first-line
- *  text-indent magnitude; `pad` is the continuation hang.
+ *  null only on grammar drift (no ListMark / no content node) or a task-shaped
+ *  node with an invalid marker; an empty item now hangs with the implied-space
+ *  marker width. `indent` is the first-line text-indent magnitude; `pad` is the
+ *  continuation hang.
  *
  *  `hiddenPrefixCols` (default 0) is the visual-column width of the blockquote
  *  `> ` prefix that blockquote-reveal HIDES caret-off. Computed by the

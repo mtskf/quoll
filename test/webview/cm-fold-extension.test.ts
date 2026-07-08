@@ -467,14 +467,13 @@ describe("listFoldGutterLineClass — gutter tag for the list-item vertical-gap 
     expect(byLine.size).toBe(1);
   });
 
-  it("does NOT tag an empty list item (resolveListItemHang === null)", () => {
-    // An empty `- ` item has no content token, so resolveListItemHang returns
-    // null and list-hang-indent.ts emits no padding — the gutter tag must skip it
-    // in lock-step. The following non-empty item stays tagged.
+  it("tags an empty list item now that it hangs (renderable in lock-step)", () => {
+    // An empty `-` item now receives `.quoll-list-hang` (implied-space marker
+    // width) so it aligns/gaps with siblings; the gutter tag follows in lock-step.
     const byLine = taggedLines("-\n- has content\n");
-    expect(byLine.has(1)).toBe(false);
+    expect(byLine.get(1)).toBe("quoll-fold-list-marker");
     expect(byLine.get(2)).toBe("quoll-fold-list-marker");
-    expect(byLine.size).toBe(1);
+    expect(byLine.size).toBe(2);
   });
 
   it("skips a real frontmatter YAML list via the live frontmatterBlockField facet", () => {

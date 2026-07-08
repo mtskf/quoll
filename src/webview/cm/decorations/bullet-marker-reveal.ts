@@ -24,7 +24,10 @@
 import { RangeSetBuilder } from "@codemirror/state";
 import { Decoration, type DecorationSet } from "@codemirror/view";
 
-import { resolveTaskMarkerGeometry } from "../list/list-geometry.js";
+import {
+  resolveContentlessTaskMarkerGeometry,
+  resolveTaskMarkerGeometry,
+} from "../list/list-geometry.js";
 import { intersectsAnySelection } from "./shared.js";
 import type { DecorationProvider } from "./types.js";
 
@@ -65,6 +68,13 @@ export const bulletMarkerReveal: DecorationProvider = {
           // legitimately gets its dot.
           const content = node.node.nextSibling;
           if (content?.name === "Task" && resolveTaskMarkerGeometry(ctx.state, content)?.isBullet) {
+            return;
+          }
+          // Content-less bullet task `- [ ]`: no Task node, but the checkbox reveal
+          // still replaces [ListMark.from, TaskMarker.to) — swallowing this `-`. Skip
+          // the dot so it never collides with the checkbox. (Ordered `1. [ ]` is
+          // isBullet:false → not skipped here; ordered lists never dot anyway.)
+          if (resolveContentlessTaskMarkerGeometry(ctx.state, item)?.isBullet) {
             return;
           }
           const line = ctx.state.doc.lineAt(node.from);

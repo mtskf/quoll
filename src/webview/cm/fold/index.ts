@@ -408,7 +408,9 @@ function collectListMarks(
       // gutter offset stays in lock-step with the content-line gap it compensates
       // for (see the field doc): (1) an exclusion zone — a frontmatter YAML list
       // parses as markdown ListItems but gets no hang; (2) a non-renderable item —
-      // empty / malformed, or an invalid-marker Task on a one-update-behind tree
+      // malformed (no ListMark / no content), or an invalid-marker Task on a
+      // one-update-behind tree (an EMPTY item is now renderable and IS tagged, in
+      // lock-step with its new hang)
       // (isRenderableListItem is the O(1) mirror of resolveListItemHang === null).
       if (pointInExclusionZone(lineFrom, zones)) {
         return;
