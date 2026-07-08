@@ -2,8 +2,9 @@
 // `___`) as a horizontal rule. Emitted as an INLINE Decoration.replace by
 // thematic-break-reveal.ts when the caret is OFF the rule's line; the raw
 // source is revealed (dim) when the caret enters, so the bytes round-trip
-// identically. Stateless — every thematic break renders the same rule, so
-// eq() is always true and CodeMirror reuses the DOM across rebuilds.
+// identically. Nearly stateless — the only state is `indentCols` (below), so
+// two rules with the same inset are eq() and CodeMirror reuses the DOM across
+// rebuilds; a different inset forces a rebuild.
 //
 // DOM is built with document.createElement (NOT innerHTML — the src/**
 // choke-point test default-denies innerHTML). The <span> is styled full-width
@@ -44,8 +45,11 @@ export class ThematicBreakWidget extends WidgetType {
       // cascading here) per source-indent column, matching the sibling nested
       // paragraph's literal leading spaces. styles.css confines the hairline to
       // the content box (`background-clip: content-box`), so this padding shifts
-      // the visible rule right. Falls back to `1ch` (monospace-exact) before the
-      // metric is measured.
+      // the visible rule right. Before the metric measures, `--quoll-prose-space`
+      // resolves to styles.css's unconditional `1ch` default (the inline `1ch`
+      // fallback here is belt-and-braces) — monospace-exact, list-hang-indent.ts
+      // shares this fail-open. When the metric IS live it equals the prose-font
+      // space advance, so the rule lands exactly on the sibling paragraph.
       el.style.paddingInlineStart = `calc(${this.indentCols} * var(--quoll-prose-space, 1ch))`;
     }
     return el;

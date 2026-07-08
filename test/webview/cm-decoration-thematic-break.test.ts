@@ -158,6 +158,20 @@ describe("thematic break reveal provider", () => {
     expect(r[0]?.indentCols).toBe(3);
   });
 
+  it("HIDE: a TAB-indented list child expands the tab to its column width (not length 1)", () => {
+    // `- item\n\n\t---\n\nb`: the continuation gap is a single TAB. indentCols is
+    // computed with countColumn(prefix, tabSize), so the tab expands to the
+    // next tab stop (column 4 at the default tabSize 4) — NOT prefix.length (1).
+    // This pins the reason countColumn is used over `.length`; a future swap to
+    // `.length` would under-indent tab-indented list children and turn this red.
+    const doc = "- item\n\n\t---\n\nb";
+    const set = thematicBreakReveal.build(ctx(doc, EditorSelection.single(doc.length - 1)));
+    const r = spec(set);
+    expect(r.length).toBe(1);
+    expect(r[0]?.kind).toBe("replace");
+    expect(r[0]?.indentCols).toBe(4); // tab → column 4, not length 1
+  });
+
   it("REVEAL: dim mark over the node glyphs when caret is on the HR line", () => {
     const doc = "a\n\n---\n\nb";
     const set = thematicBreakReveal.build(ctx(doc, EditorSelection.single(4))); // caret in "---"
