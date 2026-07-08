@@ -128,6 +128,21 @@ describe("resolveContentlessTaskMarkerGeometry", () => {
     expect(resolveContentlessTaskMarkerGeometry(state, item)).toBeNull();
   });
 
+  // Continuation-body task (`- [ ]\n  child`) renders literal, NOT a checkbox:
+  // the marker + indented body parse as one multi-byte Paragraph (no Task node),
+  // matching GitHub's cmark-gfm (same-line space required). See the render
+  // decision documented in task-marker-shape.ts. Widening the predicate to
+  // accept a first-content Paragraph starting with `[ ]` would break these.
+  it("returns null for a continuation-body task `- [ ]\\n  child` (literal, matches GitHub)", () => {
+    const { state, item } = listItemAt("- [ ]\n  child", 0);
+    expect(resolveContentlessTaskMarkerGeometry(state, item)).toBeNull();
+  });
+
+  it("returns null for a checked continuation-body task `- [x]\\n  done body`", () => {
+    const { state, item } = listItemAt("- [x]\n  done body", 0);
+    expect(resolveContentlessTaskMarkerGeometry(state, item)).toBeNull();
+  });
+
   it("ordered content-less `1. [ ]` keeps foldFrom at the marker (number stays visible)", () => {
     const { state, item } = listItemAt("1. [ ]", 0);
     const g = resolveContentlessTaskMarkerGeometry(state, item);
