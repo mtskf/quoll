@@ -28,7 +28,7 @@
 // allowlist incl. "the webview render-gate helper". Reality has no single
 // render-gate helper — the live DOM writes are `.href`/`.src` PROPERTY
 // assignments in two widget files (cell-render.ts, image-widget.ts), the
-// `env.openExternal` binding lives in QuollEditorPanel.ts (plus the host
+// `env.openExternal` binding lives in quoll-editor-panel.ts (plus the host
 // gate handle-open-external.ts), and validate-for-write.ts contains none of
 // these primitives (it gates via isAllowedUrl). One primitive remains
 // unused anywhere in `src/**` and so carries an empty allow set:
@@ -149,13 +149,16 @@ const CHOKE_POINTS: readonly ChokePoint[] = [
   {
     name: "host env.openExternal()",
     pattern: /\.openExternal\s*\(/,
-    // handle-open-external.ts is the host gate; QuollEditorPanel.ts holds the
+    // handle-open-external.ts is the host gate; quoll-editor-panel.ts holds the
     // real `env.openExternal` binding. effect-executor.ts invokes the injected
     // open-external delegate via a local alias (`runOpenExternal`), NOT
     // `deps.openExternal(...)`, so it does not textually match this pattern and
     // is intentionally kept OUT of this allowlist — a future raw
     // `env.openExternal(...)` added there would still be flagged.
-    allow: new Set(["src/extension/handle-open-external.ts", "src/extension/QuollEditorPanel.ts"]),
+    allow: new Set([
+      "src/extension/handle-open-external.ts",
+      "src/extension/quoll-editor-panel.ts",
+    ]),
   },
   {
     // Live-DOM-from-string promotion. Quoll builds ALL DOM via
@@ -414,7 +417,7 @@ describe("URL/security choke-point lint", () => {
     const fixture: SourceFile[] = [
       { rel: "src/webview/cm/image/image-widget.ts", content: "img.src = this.safeUrl;" },
       {
-        rel: "src/extension/QuollEditorPanel.ts",
+        rel: "src/extension/quoll-editor-panel.ts",
         content: "openExternal: (url) => env.openExternal(Uri.parse(url)),",
       },
     ];

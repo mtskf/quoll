@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
-import { canHostWrite } from "../../src/extension/canHostWrite.js";
-import type { IsWritableFileSystem } from "../../src/extension/fileSystem.js";
+import { canHostWrite } from "../../src/extension/can-host-write.js";
+import type { IsWritableFileSystem } from "../../src/extension/file-system.js";
 
 const writable: IsWritableFileSystem = () => true;
 const readonly: IsWritableFileSystem = () => false;

@@ -20,9 +20,9 @@
 // text-editor (reverse) context.
 
 import { commands, TabInputCustom, TabInputText, window, workspace } from "vscode";
-import { canEditWith } from "./canEditWith.js";
+import { canEditWith } from "./can-edit-with.js";
 import { stashSwitchCaret, takeSwitchCaret } from "./editor-switch-caret.js";
-import { QuollEditorPanel } from "./QuollEditorPanel.js";
+import { QuollEditorPanel } from "./quoll-editor-panel.js";
 import { openInTextEditor } from "./reopen-text-editor.js";
 
 export type SwitchTarget = "to-text" | "to-quoll" | "none";

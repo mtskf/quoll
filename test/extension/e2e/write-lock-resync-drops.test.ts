@@ -113,7 +113,7 @@ describe("write-lock-resync-drops", function () {
     // intentionally omitted: a hide→show Document cannot be attributed to the
     // visible-edge handler vs the `ready` re-handshake at the E2E boundary —
     // `ready` can re-issue on hide→show under retainContextWhenHidden (see the
-    // `pendingRejection` rationale in QuollEditorPanel.ts), and its arm
+    // `pendingRejection` rationale in quoll-editor-panel.ts), and its arm
     // also calls postDocument() when the lock is clear, so such a control would
     // be a non-attributable (misleading) canary.
 

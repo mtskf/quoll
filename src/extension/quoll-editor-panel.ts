@@ -57,7 +57,7 @@ import {
 import { createIncrementalWriteValidator } from "../markdown/validate-for-write.js";
 import { perfReport } from "../shared/perf.js";
 import { isWebviewToHost } from "../shared/protocol.js";
-import { canHostWrite } from "./canHostWrite.js";
+import { canHostWrite } from "./can-host-write.js";
 import { type Caret, clampCaret } from "./caret-handoff.js";
 import {
   DISK_CONFLICT_KEEP,
@@ -78,7 +78,7 @@ import {
 import { createEditSettledBarrier } from "./edit-settled-barrier.js";
 import { takeSwitchCaret } from "./editor-switch-caret.js";
 import { createEffectExecutor } from "./effect-executor.js";
-import { getNonce } from "./getNonce.js";
+import { getNonce } from "./get-nonce.js";
 import { handleCodexContextHandoff } from "./handle-codex-context-handoff.js";
 import { handleContextHandoff } from "./handle-context-handoff.js";
 import { handleOpenExternal } from "./handle-open-external.js";
@@ -332,7 +332,7 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
     dispatch = createDrainingDispatcher<HostSessionEvent>(step);
 
     // canWriteNow gates host-side writes to on-disk file: documents only
-    // (see src/extension/canHostWrite.ts). Re-checked at post time so
+    // (see src/extension/can-host-write.ts). Re-checked at post time so
     // a runtime filesystem flip (read-only mount) is reflected on the
     // next Document push.
     const canWriteNow = (): boolean =>
