@@ -351,12 +351,19 @@ describe("styles.css — bullet-list marker token (HC-sensitive)", () => {
 describe("styles.css — thematic break rule", () => {
   const css = readFileSync(new URL("../../src/webview/styles.css", import.meta.url), "utf8");
 
-  it("declares .quoll-thematic-break as a full-width border rule", () => {
-    // Matches the rule block and asserts it carries a border-top + width:100%.
+  it("declares .quoll-thematic-break as a full-width, content-box-clipped rule", () => {
+    // Matches the rule block and asserts it draws a full-width hairline via a
+    // background fill CLIPPED to the content box (not border-top) — so a
+    // list-child break's padding-inline-start inset (thematic-break-widget.ts)
+    // shifts the visible rule to the item's content column.
     const block = css.match(/\.quoll-thematic-break\s*\{[^}]*\}/);
     expect(block).not.toBeNull();
-    expect(block?.[0]).toMatch(/border-top\s*:/);
+    expect(block?.[0]).toMatch(/background-color\s*:/);
+    expect(block?.[0]).toMatch(/background-clip\s*:\s*content-box/);
     expect(block?.[0]).toMatch(/width\s*:\s*100%/);
+    // The old border-top would paint across the full border-box regardless of
+    // padding, defeating the list-child inset — it must be gone.
+    expect(block?.[0]).not.toMatch(/border-top\s*:/);
   });
 
   it("does NOT set display:none (the rule must be visible)", () => {
