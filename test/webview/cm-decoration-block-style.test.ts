@@ -962,6 +962,11 @@ describe("calloutTypeForLine — [!TYPE] admonition marker grammar", () => {
     // (it would grant the tab a bogus delimiter space and return "note").
     expect(calloutTypeForLine("   >\t[!NOTE]")).toBeNull(); // 3 spaces + >\t → col 4 → CodeBlock
     expect(calloutTypeForLine("  >\t[!NOTE]")).toBe("note"); // 2 spaces + >\t → col 3 → Paragraph
+    // A tab BETWEEN quote markers still opens a nested blockquote (Lezer parses
+    // `  >\t> [!NOTE]` as Blockquote > Blockquote > Paragraph), so the outermost
+    // node is a nested callout — the tab is delimiter-ish here, not code indent.
+    expect(calloutTypeForLine("  >\t> [!NOTE]")).toBe("note"); // tab between markers → nested callout
+    expect(calloutTypeForLine(">\t> [!TIP]")).toBe("tip"); // same, no leading indent
   });
   it("calloutClassForType returns the per-type theme hook", () => {
     expect(calloutClassForType("warning")).toBe("quoll-callout-warning");

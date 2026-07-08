@@ -54,52 +54,59 @@ export function calloutClassForType(type: CalloutType): string {
  *  `[!NOTEX]` / `[!FOO]` / `[!NOTE]x` do not. */
 const CALLOUT_MARKER_RE = /^\[!(note|tip|important|warning|caution)\](?:[-+])?(?=\s|$)/i;
 
-/** The number of `>` quote levels a line opens with, or 0 when it does not open a
- *  blockquote. The prefix is up to 3 spaces of initial indent (`^ {0,3}`; 4+ is a
- *  top-level indented code block, never a blockquote) then one or more `>`, each
- *  consuming ONE optional *literal* space as its delimiter (`(?:> ?)+`). Returned
- *  with the matched length so the caller can continue the column count. */
-const CALLOUT_QUOTE_PREFIX_RE = /^ {0,3}(?:> ?)+/;
-
 /** The callout type of a blockquote first line, or null when the line is not a
  *  recognised `[!TYPE]` marker (→ generic Phase-1 panel; the structural
  *  unknown-`[!FOO]` fallback).
  *
- *  Strips the CommonMark quote prefix the way Lezer parses it, so classification
- *  and the rendered tree can never disagree:
- *   1. the `>` quote prefix (`CALLOUT_QUOTE_PREFIX_RE`) — a `>` marker consumes at
- *      most ONE *literal* space as its delimiter; a TAB is never the delimiter;
- *   2. the remaining content indent, measured in COLUMNS with tabs expanded to
- *      CommonMark's 4-column tab stops. 4+ columns is an indented code block, so
- *      the `[!TYPE]` inside it is code, not a marker.
+ *  Strips the CommonMark quote prefix the way Lezer parses it — walking the line
+ *  left to right in COLUMNS so tab handling matches the syntax tree exactly, and
+ *  classification can never disagree with the rendered blocks:
+ *   - up to 3 spaces of initial indent (a 4th space is a top-level indented code
+ *     block, never a blockquote);
+ *   - one or more `>` markers. Each consumes at most ONE *literal* space as its
+ *     delimiter (a TAB is never the delimiter — Lezer counts a tab wholly as
+ *     content indent). A further `>` reached while the running indent is still
+ *     below the 4-column code threshold opens a NESTED blockquote;
+ *   - the remaining content indent, in columns with tabs advanced to the next
+ *     4-column tab stop. 4+ columns is an indented code block, so the `[!TYPE]`
+ *     inside it is code, not a marker.
  *
- *  Measuring the indent in columns (rather than expanding tabs to spaces first,
- *  which would let the `>` delimiter eat into a tab it does not own) is why a lone
- *  `>\t[!NOTE]` is a callout — a 3-column indent → a Paragraph — while `>\t\t…`
- *  (6 columns) and `   >\t…` (a tab from column 4 → 8 = 4 columns) are indented
- *  CodeBlocks and are NOT, each verified against Lezer. Pure — the sole input is
- *  the first line's text. */
+ *  Column-accurate tab handling is why `>\t[!NOTE]` is a callout (a 3-column
+ *  indent → a Paragraph) while `>\t\t…` (6 columns) and `   >\t…` (a tab from
+ *  column 4 → 8 = 4 columns) are indented CodeBlocks and are NOT, and why a tab
+ *  BETWEEN markers (`  >\t> [!NOTE]`) still opens a nested callout — each verified
+ *  against Lezer across a broad prefix battery. Pure — the sole input is the
+ *  first line's text. */
 export function calloutTypeForLine(lineText: string): CalloutType | null {
-  const prefix = CALLOUT_QUOTE_PREFIX_RE.exec(lineText);
-  if (prefix === null) {
+  let i = 0;
+  let column = 0;
+  // Up to 3 spaces of initial indent (spaces only; a leading tab reaches column 4
+  // → indented code, and the `>` guard below rejects it).
+  for (; i < lineText.length && lineText[i] === " " && column < 3; i++) {
+    column += 1;
+  }
+  if (lineText[i] !== ">") {
     return null;
   }
-  // The prefix is spaces and `>` only, so its char length equals its column
-  // width; continue the absolute column count from there across the indent.
-  const indentStart = prefix[0].length;
-  let column = indentStart;
-  let i = indentStart;
-  for (; i < lineText.length; i++) {
-    const ch = lineText[i];
-    if (ch === " ") {
+  let contentIndent = 0;
+  for (;;) {
+    i += 1; // consume the `>` marker
+    column += 1;
+    if (lineText[i] === " ") {
+      i += 1; // one optional literal-space delimiter (a tab is content indent)
       column += 1;
-    } else if (ch === "\t") {
-      column += 4 - (column % 4);
-    } else {
-      break;
     }
+    const indentStart = column;
+    for (; i < lineText.length && (lineText[i] === " " || lineText[i] === "\t"); i++) {
+      column += lineText[i] === "\t" ? 4 - (column % 4) : 1;
+    }
+    contentIndent = column - indentStart;
+    if (lineText[i] === ">" && contentIndent < 4) {
+      continue; // a nested `>` reached before the code threshold
+    }
+    break;
   }
-  if (column - indentStart >= 4) {
+  if (contentIndent >= 4) {
     return null; // indented code block, not a marker
   }
   const m = CALLOUT_MARKER_RE.exec(lineText.slice(i));
