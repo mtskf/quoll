@@ -23,7 +23,10 @@
 // (cm/fold/index.ts's headingRhythmFoldGutterLineClass) tags the SAME lines'
 // gutter elements with the SAME padding so the fold chevron stays aligned. Both
 // halves share ONE eligibility predicate (headingRhythmLevel below) so they can
-// never drift — exactly as `.quoll-list-hang` shipped with `quoll-fold-list-marker`.
+// never drift — exactly as `.quoll-list-hang` ships with `quoll-fold-list-marker`
+// (now a CONDITIONAL pairing: both sides gate on the same listItemGetsVerticalGap
+// predicate, so only gap-worthy list lines carry either class — tight consecutive
+// siblings carry neither — but the two still can never drift out of lock-step).
 
 import { syntaxTree } from "@codemirror/language";
 import { type EditorState, RangeSetBuilder } from "@codemirror/state";

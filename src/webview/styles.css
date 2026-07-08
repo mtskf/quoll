@@ -98,12 +98,17 @@
      * value on the editor root; this `1ch` default keeps monospace exact and
      * covers the pre-measurement frame. */
     --quoll-prose-space: 1ch;
-    /* Vertical breathing room ABOVE each list-item marker line, so sibling
-     * bullet / ordered / task items are not packed tight against each other.
-     * Delivered as `padding-top` on `.cm-line.quoll-list-hang` in cm/theme.ts
-     * (an EditorView.theme, so it beats CodeMirror's unlayered baseTheme
-     * `.cm-line` padding). Vertical only — it never touches the horizontal
-     * hang-indent (text-indent / padding-inline-start), so nested alignment is
+    /* Vertical breathing room ABOVE a list-item marker line that separates it
+     * from what precedes it: the first item of a list, a LOOSE item (blank
+     * line above), or a list's first item after prose. Delivered as
+     * `padding-top` on `.cm-line.quoll-list-hang` in cm/theme.ts (an
+     * EditorView.theme, so it beats CodeMirror's unlayered baseTheme
+     * `.cm-line` padding). The class — and so the gap — is DROPPED between
+     * consecutive TIGHT sibling items (list/list-geometry.ts's
+     * `listItemGetsVerticalGap`), so a tight list renders packed; only
+     * gap-worthy marker lines carry it. Vertical only — it never touches the
+     * horizontal hang-indent (text-indent / padding-inline-start), which is
+     * ALWAYS emitted regardless of gap eligibility, so nested alignment is
      * unaffected. Display-only: the underlying Markdown bytes are untouched.
      * `em` so the gap tracks the body font size. */
     --quoll-list-item-gap: 0.6em;
@@ -702,10 +707,13 @@
    * Two wins over the old U+2713 glyph: it is crisp and geometry-stable
    * across fonts/DPI, AND — being EMPTY (`content: ""`) and absolutely
    * positioned by `left`/`top` — it is IMMUNE to the negative `text-indent`
-   * this widget inherits from its `.cm-line.quoll-list-hang` line. The old
-   * glyph was TEXT, so that inherited indent shifted it left out of the box
-   * onto the editor background where it was invisible (the filled box then
-   * read as "checked but blank"). `right`/`bottom: auto` override the base
+   * this widget inherits from its `.cm-line`'s inline hang style (the
+   * always-emitted text-indent/padding-inline-start pair, list-hang-indent.ts —
+   * NOT the conditional `.quoll-list-hang` class, which only carries the
+   * vertical gap and is absent on a tight item's line). The old glyph was
+   * TEXT, so that inherited indent shifted it left out of the box onto the
+   * editor background where it was invisible (the filled box then read as
+   * "checked but blank"). `right`/`bottom: auto` override the base
    * box's geometry so the tick sizes by width/height; the slight upward
    * `translateY` optically centres the asymmetric ✓. Colour is now the
    * editor BACKGROUND so the tick reads as a clean cutout in the muted-grey

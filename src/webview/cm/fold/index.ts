@@ -84,7 +84,7 @@ import { type Interval, mergeIntervals } from "../bounded-recompute.js";
 import { headingRhythmLevel } from "../decorations/heading-rhythm.js";
 import { quollSyntaxExclusionZones } from "../decorations/orchestrator.js";
 import { pointInExclusionZone } from "../decorations/shared.js";
-import { isRenderableListItem } from "../list/list-geometry.js";
+import { isRenderableListItem, listItemGetsVerticalGap } from "../list/list-geometry.js";
 import { expandToEnclosingBlock, touchesStructuralReparse } from "../structural-guard.js";
 
 const SVG_NS = "http://www.w3.org/2000/svg";
@@ -360,7 +360,8 @@ class ListFoldGutterMarker extends GutterMarker {
 const LIST_FOLD_GUTTER_MARKER = new ListFoldGutterMarker();
 
 /** Collect every eligible list-item MARKER whose node OVERLAPS [rangeFrom, rangeTo]
- *  — same eligibility gate as the full build (exclusion zone + isRenderableListItem).
+ *  — same eligibility gate as the full build (exclusion zone + isRenderableListItem
+ *  + listItemGetsVerticalGap — tight siblings get no gap and no gutter offset).
  *  Called with [0, doc.length] for a full (re)build and with each bounded block
  *  interval on the keystroke path (recomputeBoundedListClasses). A bounded {from,to}
  *  iterate materialises only the touched subtree, sidestepping the whole-tree
@@ -378,7 +379,15 @@ const LIST_FOLD_GUTTER_MARKER = new ListFoldGutterMarker();
  *  the retained (position-mapped) prior mark. The clamp is SOUND: such an edit cannot
  *  flip that item's eligibility (isRenderableListItem reads only its OWN ListMark +
  *  first content node, never a later continuation), so its prior mark is already
- *  correct and stays untouched. Headings never straddle a blank line (ATX is one line;
+ *  correct and stays untouched. `listItemGetsVerticalGap` extends this same
+ *  bounded-soundness argument: it reads only lines AT OR ABOVE the marker (the
+ *  immediately-previous line and, via the tree, the outermost list's start line),
+ *  never a later continuation, so it is unaffected by an in-window continuation
+ *  edit for the same reason. Any edit that COULD flip a far item's verdict either
+ *  trips `touchesStructuralReparse` (a full rebuild — including the TABLE-DELIM
+ *  arm for a GFM table delimiter row completing/breaking outside this window) or
+ *  falls inside the marker's own `expandToEnclosingBlock` run. Headings never
+ *  straddle a blank line (ATX is one line;
  *  Setext is a contiguous title+underline run), so collectHeadingMarks needs no clamp.
  *  In the full build (rangeFrom = 0) the clamp never fires. Doc order → sorted by
  *  from. */
@@ -416,6 +425,12 @@ function collectListMarks(
         return;
       }
       if (!isRenderableListItem(state, node.node)) {
+        return;
+      }
+      // Lock-step with the content line's `.quoll-list-hang` padding: emit a
+      // gutter offset ONLY for items that actually receive the vertical gap
+      // (see list-hang-indent.ts). Tight consecutive siblings get neither.
+      if (!listItemGetsVerticalGap(state, node.node)) {
         return;
       }
       // ListItems are visited in document order, but a nested item shares its
@@ -469,8 +484,9 @@ function recomputeBoundedListClasses(
 
 /** Tags every list-item MARKER line with `quoll-fold-list-marker` on its gutter
  *  element via `gutterLineClass`, in lock-step with the `.cm-line.quoll-list-hang`
- *  padding it compensates for (same two-predicate eligibility gate — exclusion zone
- *  + isRenderableListItem; see collectListMarks). On the keystroke path (docChanged,
+ *  padding it compensates for (same three-predicate eligibility gate — exclusion zone
+ *  + isRenderableListItem + listItemGetsVerticalGap [tight siblings get no gap and no
+ *  gutter offset]; see collectListMarks). On the keystroke path (docChanged,
  *  parse frontier reached, no facet flip) it recomputes ONLY the changed blocks
  *  (recomputeBoundedListClasses) instead of re-walking the whole syntax tree,
  *  mirroring headingFoldGutterLineClass. Two full-rebuild fallbacks preserve

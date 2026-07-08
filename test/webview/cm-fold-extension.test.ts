@@ -434,22 +434,28 @@ describe("listFoldGutterLineClass — gutter tag for the list-item vertical-gap 
     return byLine;
   }
 
-  it("tags each bullet / ordered / task list-item marker line and nothing else", () => {
+  it("tags each bullet / ordered / task list-item marker line that gets the vertical gap, and nothing else", () => {
     // 1 bullet parent, 2 nested bullet child, 3 child continuation (no marker),
     // 5 ordered item, 7 task item, 9 plain paragraph, 11 heading. Blank lines
     // (4/6/8/10) keep each construct unambiguous (no lazy-continuation merges).
+    // Line 2 ("  - child") is now UNTAGGED: it is the sole item of its own
+    // nested list, and its previous line (1, "- parent") falls within that
+    // nested list's outermost-list line span → tight (listItemGetsVerticalGap
+    // contract), so it carries neither `.quoll-list-hang` nor the gutter offset.
     const byLine = taggedLines(
       "- parent\n  - child\n    wrapped\n\n1. ordered\n\n- [ ] task\n\nplain\n\n# heading\n"
     );
     expect(byLine.get(1)).toBe("quoll-fold-list-marker");
-    expect(byLine.get(2)).toBe("quoll-fold-list-marker");
     expect(byLine.get(5)).toBe("quoll-fold-list-marker");
     expect(byLine.get(7)).toBe("quoll-fold-list-marker");
-    // Continuation line, plain paragraph, and heading are untagged by THIS field.
+    // Nested-child line, continuation line, plain paragraph, and heading are
+    // untagged (nested child: tight per the new gap contract; the rest were
+    // never tagged by this field).
+    expect(byLine.has(2)).toBe(false);
     expect(byLine.has(3)).toBe(false);
     expect(byLine.has(9)).toBe(false);
     expect(byLine.has(11)).toBe(false);
-    expect(byLine.size).toBe(4);
+    expect(byLine.size).toBe(3);
   });
 
   it("does NOT tag a list-item line inside a quollSyntaxExclusionZones span", () => {
@@ -469,11 +475,13 @@ describe("listFoldGutterLineClass — gutter tag for the list-item vertical-gap 
 
   it("tags an empty list item now that it hangs (renderable in lock-step)", () => {
     // An empty `-` item now receives `.quoll-list-hang` (implied-space marker
-    // width) so it aligns/gaps with siblings; the gutter tag follows in lock-step.
+    // width) — it is the FIRST item of the list, so it keeps the gap; the
+    // gutter tag follows in lock-step. The second item is a tight sibling
+    // (new gap contract), so it carries neither the class nor the gutter tag.
     const byLine = taggedLines("-\n- has content\n");
     expect(byLine.get(1)).toBe("quoll-fold-list-marker");
-    expect(byLine.get(2)).toBe("quoll-fold-list-marker");
-    expect(byLine.size).toBe(2);
+    expect(byLine.has(2)).toBe(false);
+    expect(byLine.size).toBe(1);
   });
 
   it("skips a real frontmatter YAML list via the live frontmatterBlockField facet", () => {
@@ -529,10 +537,12 @@ describe("listFoldGutterLineClass — gutter tag for the list-item vertical-gap 
       }
       return s;
     };
-    expect(tagged()).toEqual(new Set([1, 2])); // no zones → both tagged
+    // Line 2 ("- beta") is a tight sibling of line 1 (new gap contract) so it
+    // is never tagged regardless of zones; only line 1 (first item) starts tagged.
+    expect(tagged()).toEqual(new Set([1])); // no zones → first item tagged
     // Flip a zone over line 1 with NO doc change; the tag set must drop line 1.
     view.dispatch({ effects: setZones.of([{ from: 0, to: view.state.doc.line(1).to }]) });
-    expect(tagged()).toEqual(new Set([2]));
+    expect(tagged()).toEqual(new Set([]));
   });
 
   it("keeps the field value by reference on a selection-only tx even when the zone facet churns its reference (content unchanged)", () => {
@@ -797,7 +807,9 @@ describe("listFoldGutterLineClass — bounded ≡ full-rebuild under structural 
   // bounded window — a guard-less bounded recompute strands them post-reparse.
   it("an unclosed fence inserted above a far list swallows its markers (SHAPE fence)", () => {
     view = mountDoc("intro\n\n- one\n- two\n");
-    expect(serializeGutter(view, listFoldGutterLineClass).length).toBe(2);
+    // "- two" is a tight sibling of "- one" (new gap contract) → only 1 marker
+    // (the first item), not 2.
+    expect(serializeGutter(view, listFoldGutterLineClass).length).toBe(1);
     view.dispatch({ changes: { from: 0, insert: "```\n" } });
     expect(serializeGutter(view, listFoldGutterLineClass)).toEqual([]);
     expectBoundedEqualsFull();
@@ -841,6 +853,20 @@ describe("touchesStructuralReparse — arm falsifiability + perf contract (direc
   it("GT-DELTA: typing a bare > on a plain line fires (type-4 terminator)", () => {
     // No shape, no newline, no blank/indent flip — only the `>` delta catches it.
     expect(touchesStructuralReparse(tx("foo\n", { from: 3, insert: ">" }))).toBe(true);
+  });
+
+  it("TABLE-DELIM: completing a table delimiter row (|--x| → |---|) fires", () => {
+    // Single-char in-place edit inside a pipe-delimited line — no newline, no `>`,
+    // no blank/indent flip, no SHAPE alt (no marker/heading/fence/HTML at line start).
+    const doc = "|h|\n|--x|\n";
+    const editAt = doc.indexOf("x");
+    expect(touchesStructuralReparse(tx(doc, { from: editAt, to: editAt + 1, insert: "-" }))).toBe(
+      true
+    );
+  });
+
+  it("=== false for a plain-prose single-char edit with no | (TABLE-DELIM guard, hot path)", () => {
+    expect(touchesStructuralReparse(tx("hello world\n", { from: 5, insert: "y" }))).toBe(false);
   });
 
   it("INDENT-DELTA: unindenting a plain line (  x → x) fires", () => {

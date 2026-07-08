@@ -77,6 +77,10 @@ export function isBlankLine(text: string): boolean {
  *     `<!DOCTYPE …>` declaration (a same-line, non-newline, non-shape edit that SHAPE and
  *     the other arms all miss); keying on the `>` being ADDED/REMOVED (not merely present)
  *     keeps it narrow (mirrors the fenced field's cycle-5 type-4 rationale).
+ *   - TABLE-DELIM — a GFM table delimiter row completing/breaking via a single-char edit
+ *     (`|--x|`→`|---|`) can CLOSE an enclosing list, re-shaping a boundary OUTSIDE the
+ *     changed run (a same-line, non-newline, non-shape edit the other arms all miss); fires
+ *     on any `|` present in the changed line's OLD or NEW slice (presence-based, like SHAPE).
  *   - BLANK-FLIP — the changed line's blankness flips old↔new (single-line, since
  *     NEWLINE-DELTA already caught every multi-line edit). A blank line terminates a
  *     paragraph / loose list / type-6/7 HTML block between a far heading and its context.
@@ -124,6 +128,23 @@ export function touchesStructuralReparse(tr: Transaction): boolean {
       return;
     }
     if (insertedText.includes(">") || deletedText.includes(">")) {
+      hit = true;
+      return;
+    }
+    // TABLE-DELIM — a GFM table delimiter row completing / breaking via a
+    // single-char edit (`|--x|`→`|---|`) interrupts a lazy continuation and can
+    // CLOSE an enclosing list, re-shaping a boundary OUTSIDE the changed run —
+    // a same-line, non-newline, non-shape edit that SHAPE and the other arms
+    // all miss (it flips a far ListItem's list membership, which the fold
+    // fields' new listItemGetsVerticalGap eligibility reads). Over-approximate
+    // on any `|` in the changed line (a table cell/delimiter separator); a false
+    // match only costs a full rebuild (speed), never correctness — same contract
+    // as the other arms. Completeness is also guaranteed at the parser level:
+    // @lezer/markdown's `delimiterLine` regex requires a `|` (its `(…\|)+` group)
+    // and a table header needs an unescaped `|` (`hasPipe`), so no pipeless table
+    // row can slip past this arm. SLICE-based (not insert/delete-delta like
+    // GT-DELTA) so a pipe-escape edit `a|b`→`a\|b` still fires (slice keeps `|`).
+    if (oldSlice.includes("|") || newSlice.includes("|")) {
       hit = true;
       return;
     }
