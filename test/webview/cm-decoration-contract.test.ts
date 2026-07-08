@@ -43,6 +43,13 @@ const SAMPLE_DOC = [
   "- [ ] todo item",
   "- [x] done item",
   "",
+  // A lone `-` under a paragraph parses as a SetextHeading2 whose HeaderMark is
+  // a single dash — the nascent-bullet-list shape setextNascentReveal de-styles.
+  // Caret-independent, so it emits at the NEUTRAL caret like the coverage guard
+  // below requires. `--`/`---` would read as a real heading and stay untouched.
+  "nascent setext paragraph",
+  "-",
+  "",
 ].join("\n");
 
 // A caret on the plain first line — intersects no construct for any provider,

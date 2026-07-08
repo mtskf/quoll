@@ -15,6 +15,7 @@ import { headingReveal } from "./heading-reveal.js";
 import { inlineMarkReveal } from "./inline-mark-reveal.js";
 import { linkReveal } from "./link-reveal.js";
 import { createSyntaxReveal } from "./orchestrator.js";
+import { setextNascentReveal } from "./setext-nascent-reveal.js";
 import { thematicBreakReveal } from "./thematic-break-reveal.js";
 
 /** Module-level stable array — captured once by createSyntaxReveal() so the
@@ -35,6 +36,9 @@ export const syntaxRevealProviders = [
   // Thematic break (`---`/`***`/`___`) → rule widget; frontmatter opener +
   // setext underlines are excluded (exclusion zone / node-name match).
   thematicBreakReveal,
+  // Lone `-`/`=` setext underline being typed under a paragraph → de-style the
+  // heading so it reads as a nascent bullet list, not a heading.
+  setextNascentReveal,
 ] as const;
 
 /** The single extension entry `editor.ts` registers. Bundles every

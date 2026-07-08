@@ -953,3 +953,43 @@
     opacity: 0.7;
   }
 }
+
+/* Nascent-setext de-style. A lone `-`/`=` typed on the line under a paragraph
+ * parses as a SetextHeading underline (setext-nascent-reveal.ts), so
+ * quollHighlighting styles the paragraph like a heading. This resets the marked
+ * node — the mark span AND every highlight child span it wraps — back to plain
+ * body text so a nascent bullet marker never reads as a heading.
+ *
+ * DELIBERATELY UNLAYERED (the one top-level rule in this otherwise fully-layered
+ * sheet). quollHighlighting (theme.ts) applies the heading size via
+ * `syntaxHighlighting`, which injects its rules UNLAYERED under auto-generated
+ * class names we cannot target by name. A rule inside @layer would lose to those
+ * unlayered highlight rules for normal declarations, so this override sits
+ * unlayered too — and carries `!important` so it wins over the highlight
+ * regardless of that generated selector's specificity (future-proof against a
+ * CodeMirror change) AND regardless of span nesting order (the descendant `*`
+ * reaches the highlight child spans; the self selector covers the inverse nest).
+ * The heading font-size rides an `em` on a CHILD span, so the descendant reach
+ * IS required in a real browser — a self-only reset would be re-inflated by the
+ * child. That descendant reach is pinned by styles-contract.test.ts's
+ * source-shape regex (the `-render` computed-size test can NOT distinguish it:
+ * happy-dom under-resolves nested `em`, so self-only already reads as body size
+ * there — the regex is the real guard). cm-decoration-setext-nascent-render pins
+ * that the title computes to body size in a mounted editor.
+ *
+ * ACCEPTED TRADE-OFF (deliberate, not a bug): because CodeMirror emits the
+ * heading tag and inline-emphasis tags as COMBINED classes on the SAME span
+ * (e.g. `ͼq ͼt` for bold-inside-heading), no CSS selector can reset the heading
+ * weight/colour while sparing the emphasis. So a formatted paragraph above a
+ * lone dash (`Foo **bar**` then `-`) renders UNIFORMLY plain — bold/link styling
+ * is flattened along with the heading look. This matches the "reveal raw source"
+ * intent (a nascent list is shown as plain text) and is a rare, usually
+ * transient state (typing list content makes it a real list). Preserving inline
+ * emphasis would need a parser/highlight-level demotion instead of a CSS reset —
+ * tracked as a follow-up (docs/TODO.md). */
+.quoll-setext-nascent-raw,
+.quoll-setext-nascent-raw * {
+  font-size: var(--vscode-font-size) !important;
+  font-weight: 400 !important;
+  color: var(--vscode-editor-foreground) !important;
+}
