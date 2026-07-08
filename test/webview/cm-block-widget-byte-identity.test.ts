@@ -8,18 +8,32 @@
 // / cm-frontmatter-widget assert DOM STRUCTURE only, so a widget that silently
 // mutated the bytes it captured would pass them — this file closes that gap.
 //
-// Shape (identical to the image harness): drive an edit-sequence matrix through
-// the live field (the "bounded" value, incrementally maintained across
-// transactions), then diff it against the field computed from scratch on the
-// same final EditorState (the "full" oracle). `WidgetType.eq()` is the identity
-// check — TableBlockWidget.eq pins (docFrom, slice, nodeFrom); FrontmatterBlock-
-// Widget.eq pins slice (body is a pure function of slice) — so any divergence in
-// the bytes a widget captured surfaces as bounded ≢ full.
+// Each fixture is checked TWO ways:
+//
+//   1. Byte anchor (the actual round-trip check — assertTable/FrontmatterByte-
+//      Anchored): every emitted widget's captured slice is compared to the LIVE
+//      document text via `sliceDoc` — an authority INDEPENDENT of the fields. A
+//      systematic mutation in the shared capture path (trim, CRLF-normalise,
+//      rewrite `m.slice`) is caught here even though it would corrupt a
+//      field-vs-field comparison symmetrically. This is what makes the file a
+//      byte-identity oracle rather than only a stale-cache check.
+//   2. Bounded ≡ full (the stale-cache check — assertEquivalent): drive an
+//      edit-sequence matrix through the live field (the "bounded" value,
+//      incrementally maintained across transactions), then diff it against the
+//      field computed from scratch on the same final EditorState (the "full"
+//      oracle). `WidgetType.eq()` pins the widget identity — TableBlockWidget.eq
+//      on (docFrom, slice, nodeFrom); FrontmatterBlockWidget.eq on slice — so an
+//      incremental reuse that goes stale relative to a fresh recompute surfaces
+//      as bounded ≢ full.
+//
+// (The image harness cm-block-widget-bounded.test.ts does only (2); the byte
+// anchor (1) is the strengthening this file adds so a shared-path byte mutation
+// cannot pass symmetrically.)
 //
 // Non-vacuity: the final describe block feeds a deliberately byte-mutating
 // widget (its captured slice differs from source by one byte) through the SAME
-// assertEquivalent the matrices use, and asserts it throws — proving the oracle
-// is not vacuous (it would catch a real byte-mutating regression).
+// assertEquivalent the matrices use, and asserts it throws — proving the eq()
+// comparison is not vacuous.
 
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
 import { forceParsing, syntaxTreeAvailable } from "@codemirror/language";
@@ -71,8 +85,50 @@ function assertEquivalent(actual: Slot[], oracle: Slot[]): void {
   }
 }
 
+// ── independent document-byte anchor (the actual byte-identity check) ───────────
+//
+// assertEquivalent (bounded ≡ full) proves incremental state == fresh recompute,
+// but BOTH sides run the SAME production capture path — so a systematic mutation
+// in that shared path (trimming trailing spaces, normalising line endings,
+// rewriting `m.slice`) would corrupt actual AND oracle identically and still
+// pass. To make this a genuine byte-identity round-trip oracle, anchor every
+// emitted widget's captured slice to the live document text via `sliceDoc` — an
+// authority independent of the fields. All fixtures are LF-only, so the CRLF→LF
+// normalisation in the table capture is a no-op and the byte comparison is exact.
+
+/** A table widget's captured `slice` must equal the document bytes over the
+ *  region the block widget REPLACES — the decoration's own [from, to], an
+ *  authority independent of the widget. Using the decoration's right boundary
+ *  (not `nodeFrom + slice.length`) also catches a trailing truncation, which a
+ *  slice-length-bounded compare would miss by matching only the prefix. All
+ *  fixtures are LF-only + non-indented, so the node range equals the block
+ *  range and the CRLF→LF normalisation is a no-op → an exact byte comparison. */
+function assertTableByteAnchored(state: EditorState): void {
+  for (const s of slots(state.field(tableBlockField))) {
+    const w = s.widget as TableBlockWidget;
+    expect(w.slice).toBe(state.sliceDoc(s.from, s.to));
+  }
+}
+
+/** A frontmatter widget's captured `slice` must equal the document's bytes over
+ *  the collapsed span, and its `body` must be the slice interior (opener/closer
+ *  fence lines dropped) — both anchored to text, not to a second field copy. */
+function assertFrontmatterByteAnchored(state: EditorState): void {
+  const rs = state.field(frontmatterBlockField);
+  if (rs.kind !== "collapsed") {
+    return;
+  }
+  const { span } = rs;
+  expect(span.slice).toBe(state.sliceDoc(span.from, span.to));
+  expect(span.body).toBe(span.slice.split("\n").slice(1, -1).join("\n"));
+}
+
 interface Edit {
   changes?: { from: number; to?: number; insert?: string };
+  // `EditorSelection.cursor()` / `.range()` return a SelectionRange (only
+  // `.create()` returns an EditorSelection); TransactionSpec.selection accepts
+  // both (SelectionRange satisfies its `{ anchor, head? }` arm structurally), so
+  // the union mirrors the exact set of values every case actually passes.
   selection?: SelectionRange | EditorSelection;
   cursorAtEnd?: boolean; // resolve to cursor(doc.length) AFTER the change (avoids RangeError)
   reseed?: boolean; // dispatch with the hostDocumentReseed annotation (bypasses the fm veto)
@@ -126,6 +182,7 @@ function checkTableEquivalence(initial: string, edits: Edit[]): void {
       slots(view.state.field(tableBlockField)),
       tableFullSlots(view.state.doc.toString(), view.state.selection)
     );
+    assertTableByteAnchored(view.state);
     for (const e of edits) {
       view.dispatch({ changes: e.changes, selection: e.selection });
       if (e.cursorAtEnd) {
@@ -135,18 +192,22 @@ function checkTableEquivalence(initial: string, edits: Edit[]): void {
       // Pre-self-heal bounded assertion: when the post-edit tree is already
       // complete, boundedUpdate ran during dispatch — check its output BEFORE
       // forceParsing so a self-heal can't mask a bounded byte bug (Codex R2-2,
-      // cm-table-skeleton.test.ts).
+      // cm-table-skeleton.test.ts). Whether or not the tree is synchronously
+      // available here is harness-dependent, so this stays conditional and the
+      // guaranteed bounded-path pin lives in its own test below.
       if (syntaxTreeAvailable(view.state, len)) {
         assertEquivalent(
           slots(view.state.field(tableBlockField)),
           tableFullSlots(view.state.doc.toString(), view.state.selection)
         );
+        assertTableByteAnchored(view.state);
       }
       forceParsing(view, len, 10_000); // publish → converge (also covers the G2 path)
       assertEquivalent(
         slots(view.state.field(tableBlockField)),
         tableFullSlots(view.state.doc.toString(), view.state.selection)
       );
+      assertTableByteAnchored(view.state);
     }
   } finally {
     view.destroy();
@@ -230,20 +291,59 @@ describe("tableBlockField byte-identity: bounded ≡ full", () => {
   for (const c of cases) {
     it(c.name, () => checkTableEquivalence(c.initial, c.edits));
   }
+
+  // Guaranteed bounded-path pin (mirrors cm-table-skeleton.test.ts's
+  // no-self-heal anchor): a small in-place edit on a complete tree keeps the
+  // frontier at doc end, so boundedUpdate ran during dispatch. Assert the tree
+  // IS available (not conditional) and check the field's output — plus its
+  // byte-anchor — BEFORE any forceParsing, so a broken bounded reuse can't be
+  // masked by a self-heal. This is the case the matrix's conditional guard
+  // cannot guarantee runs.
+  it("exercises the bounded path without self-heal masking (revert-check anchor)", () => {
+    const parent = document.createElement("div");
+    document.body.appendChild(parent);
+    const view = new EditorView({
+      state: EditorState.create({ doc: `${T}\n\nprose\n\n${T}`, extensions: tableExts() }),
+      parent,
+    });
+    try {
+      forceParsing(view, view.state.doc.length, 10_000);
+      view.dispatch({
+        changes: { from: 0, insert: "x" }, // edit OUTSIDE both tables
+        selection: EditorSelection.cursor(1),
+      });
+      expect(syntaxTreeAvailable(view.state, view.state.doc.length)).toBe(true);
+      // boundedUpdate's output, pre-self-heal, must equal the full walk AND stay
+      // anchored to the document bytes.
+      assertEquivalent(
+        slots(view.state.field(tableBlockField)),
+        tableFullSlots(view.state.doc.toString(), view.state.selection)
+      );
+      assertTableByteAnchored(view.state);
+    } finally {
+      view.destroy();
+    }
+  });
 });
 
 // ── FRONTMATTER oracle ─────────────────────────────────────────────────────────
 //
 // frontmatterBlockField holds a RevealState (not a DecorationSet); its collapsed
 // widget is FrontmatterBlockWidget(span.body, span.slice) over [span.from,
-// span.to]. It re-detects the span fresh on every docChanged, so it is byte-safe
-// by construction — the oracle is a regression guard against a future bounded-
-// reuse optimisation going stale. No syntax tree is involved (pure line model),
-// so a bare EditorState + state.update() is enough; state.update applies the
-// field's read-only transactionFilter, so mutation of a COLLAPSED block only
-// lands via a host reseed, a whole-doc bulk replace, or span (de)formation from
-// an absent state. The matrix never reveals the block, so both bounded and full
-// stay collapsed and compare apples-to-apples.
+// span.to]. It re-detects the span fresh on every docChanged, so bounded ≡ full
+// (check 2) is byte-safe by construction — that half is a regression guard
+// against a future bounded-reuse optimisation going stale, and additionally pins
+// the reveal-kind reducer (collapsed/absent transitions across the edit matrix).
+// The load-bearing byte-identity check for frontmatter is therefore the anchor
+// (check 1, assertFrontmatterByteAnchored): span.slice == sliceDoc(from,to) and
+// span.body == the slice interior, both against the document — this is what
+// catches a capture-path mutation that re-detection would reproduce on both
+// sides. No syntax tree is involved (pure line model), so a bare EditorState +
+// state.update() is enough; state.update applies the field's read-only
+// transactionFilter, so mutation of a COLLAPSED block only lands via a host
+// reseed, a whole-doc bulk replace, or span (de)formation from an absent state.
+// The matrix never reveals the block, so both bounded and full stay collapsed
+// and compare apples-to-apples.
 
 const frontmatterExts = (): Extension[] => [
   EditorState.allowMultipleSelections.of(true),
@@ -273,6 +373,7 @@ function checkFrontmatterEquivalence(initial: string, edits: Edit[]): void {
   let state = EditorState.create({ doc: initial, extensions: frontmatterExts() });
   // create() correctness on the initial doc.
   assertEquivalent(frontmatterSlots(state), frontmatterFullSlots(initial, state.selection));
+  assertFrontmatterByteAnchored(state);
   for (const e of edits) {
     state = state.update({
       changes: e.changes,
@@ -286,6 +387,7 @@ function checkFrontmatterEquivalence(initial: string, edits: Edit[]): void {
       frontmatterSlots(state),
       frontmatterFullSlots(state.doc.toString(), state.selection)
     );
+    assertFrontmatterByteAnchored(state);
   }
 }
 
