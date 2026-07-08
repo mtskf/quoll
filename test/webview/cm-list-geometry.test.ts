@@ -151,6 +151,42 @@ function hangOf(doc: string, index: number) {
   return items[index];
 }
 
+/** Hang of the FIRST (top-level) ListItem in `doc`. */
+function hangOfTop(doc: string) {
+  return hangOf(doc, 0);
+}
+
+/** Hang of the innermost nested-child ListItem — the LAST ListItem in document
+ *  order (all fixtures here have a single nested child on the final line). */
+function hangOfNestedChild(doc: string) {
+  const st = state(doc);
+  const tree = fullTree(st);
+  const items: Array<ReturnType<typeof resolveListItemHang>> = [];
+  tree.iterate({
+    enter: (node) => {
+      if (node.name === "ListItem") {
+        items.push(resolveListItemHang(st, node.node));
+      }
+    },
+  });
+  return items[items.length - 1];
+}
+
+/** Renderability of the innermost nested-child ListItem (LAST in doc order). */
+function isRenderableOfNestedChild(doc: string) {
+  const st = state(doc);
+  const tree = fullTree(st);
+  const flags: boolean[] = [];
+  tree.iterate({
+    enter: (node) => {
+      if (node.name === "ListItem") {
+        flags.push(resolveListItemHang(st, node.node) !== null);
+      }
+    },
+  });
+  return flags[flags.length - 1];
+}
+
 describe("resolveListItemHang — recursive geometry (F1 + NEST_STEP)", () => {
   it("task child under a task parent: one checkbox shift + one outline step", () => {
     // `- [ ] a\n  - [ ] b`: b's checkbox renders one NEST_STEP (2ch) past a's
@@ -193,8 +229,9 @@ describe("resolveListItemHang — recursive geometry (F1 + NEST_STEP)", () => {
     });
   });
 
-  it("empty item yields null (no content to hang)", () => {
-    expect(hangOf("- ", 0)).toBeNull();
+  it("empty item hangs like a canonical `- item` (implied single-space indent)", () => {
+    // Was `.toBeNull()` before content-less/empty items were made renderable.
+    expect(hangOf("- ", 0)).toEqual(hangOf("- item", 0));
   });
 
   it("plain bullet splits its `-` glyph column from the trailing space", () => {
@@ -337,6 +374,38 @@ describe("resolveListItemHang — recursive geometry (F1 + NEST_STEP)", () => {
         "4 * var(--quoll-prose-space, 1ch) + 1 * calc((1ch + var(--quoll-prose-space, 1ch)) / 2)",
       pad: "4 * var(--quoll-prose-space, 1ch) + 1 * calc((1ch + var(--quoll-prose-space, 1ch)) / 2)",
     });
+  });
+});
+
+describe("content-less / empty items — hang", () => {
+  // (b) empty nested bullet aligns with a content-bearing sibling at the same
+  // source indent: with the CommonMark implied single-space indent, the empty
+  // item's hang is byte-IDENTICAL to a canonical `  - x` sibling.
+  it("empty nested bullet `  -` hangs identically to `  - x`", () => {
+    expect(hangOfNestedChild("- parent\n  -")).toEqual(hangOfNestedChild("- parent\n  - x"));
+  });
+
+  // Non-vacuity: before the fix the empty child had NO hang (null).
+  it("empty nested bullet is renderable (was null before fix)", () => {
+    expect(isRenderableOfNestedChild("- parent\n  -")).toBe(true);
+  });
+
+  // (a-hang) a content-less checkbox hangs as a TASK (markers:1 → MARKER token),
+  // identical to a content-bearing checkbox — NOT as a plain `-` bullet.
+  it("content-less `- [ ]` hangs identically to `- [ ] a`", () => {
+    expect(hangOfTop("- [ ]")).toEqual(hangOfTop("- [ ] a"));
+    expect(hangOfTop("- [ ]")?.pad).toContain("var(--quoll-task-marker-width)");
+  });
+
+  // (Codex #5) a content-less task PARENT re-bases its child past the checkbox,
+  // identically to a content-bearing task parent.
+  it("child under a content-less task parent hangs like child under a content task parent", () => {
+    expect(hangOfNestedChild("- [ ]\n  - child")).toEqual(hangOfNestedChild("- [ ] a\n  - child"));
+  });
+
+  it("empty top-level bullet `-` still starts at the base column (indent === pad)", () => {
+    const h = hangOfTop("-");
+    expect(h?.indent).toEqual(h?.pad);
   });
 });
 
