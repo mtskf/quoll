@@ -18,9 +18,12 @@ function bigMarkHeavyDoc(targetBytes: number): string {
   // block's own ``` lines close before the next repetition's `# h`, so each
   // repeat parses as one self-contained FencedCode. The trailing `---` gives
   // thematicBreakReveal one HorizontalRule per repetition so its ratio
-  // assertion stays non-vacuous.
+  // assertion stays non-vacuous. The closing `s\n=` is a lone-`=` SetextHeading1
+  // (a nascent-list underline) so setextNascentReveal emits one decoration per
+  // repeat — without it that provider would emit zero in BOTH viewports and
+  // `0 < 0 / 10` is false.
   const line =
-    "# h\n> q\n**bold** *italic* `code` ~~strike~~ [t](https://x)\n- [ ] t\n- b\n```js\nc\n```\n---\n";
+    "# h\n> q\n**bold** *italic* `code` ~~strike~~ [t](https://x)\n- [ ] t\n- b\n```js\nc\n```\n---\ns\n=\n";
   return line.repeat(Math.ceil(targetBytes / line.length));
 }
 

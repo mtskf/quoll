@@ -953,3 +953,29 @@
     opacity: 0.7;
   }
 }
+
+/* Nascent-setext de-style. A lone `-`/`=` typed on the line under a paragraph
+ * parses as a SetextHeading underline (setext-nascent-reveal.ts), so
+ * quollHighlighting styles the paragraph like a heading. This resets the marked
+ * node — the mark span AND every highlight child span it wraps — back to plain
+ * body text so a nascent bullet marker never reads as a heading.
+ *
+ * DELIBERATELY UNLAYERED (the one top-level rule in this otherwise fully-layered
+ * sheet). quollHighlighting (theme.ts) applies the heading size via
+ * `syntaxHighlighting`, which injects its rules UNLAYERED under auto-generated
+ * class names we cannot target by name. A rule inside @layer would lose to those
+ * unlayered highlight rules for normal declarations, so this override sits
+ * unlayered too — and carries `!important` so it wins over the highlight
+ * regardless of that generated selector's specificity (future-proof against a
+ * CodeMirror change) AND regardless of span nesting order (the descendant `*`
+ * reaches the highlight child spans; the self selector covers the inverse nest).
+ * The heading font-size rides an `em` on a CHILD span, so the descendant reach
+ * is required — a self-only reset would be re-inflated by the child. Pinned by
+ * styles-contract.test.ts (source shape) + cm-decoration-setext-nascent-render
+ * (computed size in a mounted editor). */
+.quoll-setext-nascent-raw,
+.quoll-setext-nascent-raw * {
+  font-size: var(--vscode-font-size) !important;
+  font-weight: 400 !important;
+  color: var(--vscode-editor-foreground) !important;
+}
