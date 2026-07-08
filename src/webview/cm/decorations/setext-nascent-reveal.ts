@@ -17,6 +17,18 @@
 // version would flicker — plain while typing the `-`, then ballooning into a
 // heading the instant the caret moves away — which is more jarring than the bug.
 //
+// Two known, deliberate limitations (tracked as follow-ups in docs/TODO.md):
+//   1. The de-style resets FONT only. A nascent setext still gets heading-rhythm
+//      top padding (heading-rhythm.ts) and a fold chevron (markdown.ts's heading
+//      foldService), which key off the SetextHeading node type — so the paragraph
+//      no longer LOOKS like a heading but keeps a heading's spacing/gutter
+//      affordances. A complete demotion needs a shared "lone-setext" predicate in
+//      those consumers too.
+//   2. Inline emphasis inside the paragraph (`Foo **bar**` then `-`) is flattened
+//      to plain along with the heading look — CodeMirror combines the heading and
+//      emphasis tags on one span, so the CSS reset (styles.css) can't spare the
+//      emphasis. See that rule's comment for the trade-off rationale.
+//
 // Scope — deliberately NARROW so genuine headings are untouched:
 //   - MULTI-char underlines (`--`, `---`, `===`) read as an intentional heading
 //     → never matched (the lone-marker gate below). Only a SINGLE `-`/`=` — the

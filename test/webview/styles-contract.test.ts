@@ -30,8 +30,14 @@ describe("styles.css — nascent-setext de-style", () => {
   // quollHighlighting injects UNLAYERED highlight rules under generated class
   // names, and the heading font-size rides an `em` on a child span — only an
   // `!important` declaration reaching both the mark span AND its children beats
-  // that regardless of nesting/layer order. Non-vacuous: dropping either the
-  // `*` descendant leg or `!important` reds. Match the two-selector rule body.
+  // that regardless of nesting/layer order.
+  //
+  // This SOURCE-SHAPE regex is the real guard for the `*` descendant leg: the
+  // mounted `-render` computed-size test can NOT catch its removal (happy-dom
+  // under-resolves nested `em`, so a self-only reset already reads as body size
+  // there). Dropping the `*` leg (or `!important`) reds THIS assertion — the
+  // behavioural size proof lives in `-render`, the descendant-reach proof lives
+  // here. Match the two-selector rule body.
   const rule =
     css.match(
       /\.quoll-setext-nascent-raw\s*,\s*\.quoll-setext-nascent-raw\s*\*\s*\{([^}]*)\}/

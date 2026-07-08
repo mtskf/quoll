@@ -970,9 +970,23 @@
  * CodeMirror change) AND regardless of span nesting order (the descendant `*`
  * reaches the highlight child spans; the self selector covers the inverse nest).
  * The heading font-size rides an `em` on a CHILD span, so the descendant reach
- * is required — a self-only reset would be re-inflated by the child. Pinned by
- * styles-contract.test.ts (source shape) + cm-decoration-setext-nascent-render
- * (computed size in a mounted editor). */
+ * IS required in a real browser — a self-only reset would be re-inflated by the
+ * child. That descendant reach is pinned by styles-contract.test.ts's
+ * source-shape regex (the `-render` computed-size test can NOT distinguish it:
+ * happy-dom under-resolves nested `em`, so self-only already reads as body size
+ * there — the regex is the real guard). cm-decoration-setext-nascent-render pins
+ * that the title computes to body size in a mounted editor.
+ *
+ * ACCEPTED TRADE-OFF (deliberate, not a bug): because CodeMirror emits the
+ * heading tag and inline-emphasis tags as COMBINED classes on the SAME span
+ * (e.g. `ͼq ͼt` for bold-inside-heading), no CSS selector can reset the heading
+ * weight/colour while sparing the emphasis. So a formatted paragraph above a
+ * lone dash (`Foo **bar**` then `-`) renders UNIFORMLY plain — bold/link styling
+ * is flattened along with the heading look. This matches the "reveal raw source"
+ * intent (a nascent list is shown as plain text) and is a rare, usually
+ * transient state (typing list content makes it a real list). Preserving inline
+ * emphasis would need a parser/highlight-level demotion instead of a CSS reset —
+ * tracked as a follow-up (docs/TODO.md). */
 .quoll-setext-nascent-raw,
 .quoll-setext-nascent-raw * {
   font-size: var(--vscode-font-size) !important;
