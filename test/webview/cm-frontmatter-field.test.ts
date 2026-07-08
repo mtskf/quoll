@@ -15,7 +15,7 @@ import {
 } from "../../src/webview/cm/decorations/orchestrator.js";
 import { FrontmatterBlockWidget } from "../../src/webview/cm/frontmatter/frontmatter-widget.js";
 import { frontmatterBlockField } from "../../src/webview/cm/frontmatter/index.js";
-import { hostDocumentReseed } from "../../src/webview/cm/frontmatter/reveal-state.js";
+import { hostDocumentReseed } from "../../src/webview/cm/host-reseed.js";
 
 // Extract the frontmatter block-replace ranges from the field-provided
 // decorations — pure state, no view layout, so it is non-flaky under happy-dom

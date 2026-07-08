@@ -29,7 +29,7 @@ import {
   lineExpandWithNeighbours,
   mergeIntervals,
 } from "../bounded-recompute.js";
-import { hostDocumentReseed } from "../frontmatter/reveal-state.js";
+import { hostDocumentReseed } from "../host-reseed.js";
 import { fencedBlockGeometry, setFencedCollapseEffect } from "./fenced-code-collapse-state.js";
 import { FencedCollapseToggleWidget } from "./fenced-code-collapse-widget.js";
 

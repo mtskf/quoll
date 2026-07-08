@@ -30,7 +30,7 @@ import { type EditorState, StateField, type Transaction } from "@codemirror/stat
 import { Decoration, type DecorationSet, EditorView } from "@codemirror/view";
 
 import { type Interval, intersects, mergeIntervals } from "../bounded-recompute.js";
-import { hostDocumentReseed } from "../frontmatter/reveal-state.js";
+import { hostDocumentReseed } from "../host-reseed.js";
 import { expandToEnclosingBlock, touchesStructuralReparse } from "../structural-guard.js";
 import { CALLOUT_MARKER_HIDDEN_CLASS, calloutTypeForOutermost } from "./callout.js";
 import { quollSyntaxExclusionZones } from "./orchestrator.js";

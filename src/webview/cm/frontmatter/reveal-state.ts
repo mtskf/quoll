@@ -17,11 +17,9 @@
 // update sees both the effect and the new selection and goes collapsed→revealed
 // directly.
 //
-// Why a dedicated reseed annotation (not addToHistory=false): `addToHistory:
-// false` is a generic history flag, not specific to host reseeds. Only
-// applyDocument is a host snapshot reseed, so it marks its transaction with
-// `hostDocumentReseed`; the changeFilter and this reducer key on THAT, never
-// on addToHistory.
+// Why a dedicated reseed annotation (not addToHistory=false): see
+// `hostDocumentReseed` in ../host-reseed.ts. The changeFilter and this reducer
+// key on THAT annotation, never on addToHistory.
 //
 // Why provenance via ChangeSet coverage (not a boolean / mapped range): a
 // select-all+paste maps the old span into the pasted text, so a mapped range
@@ -34,7 +32,6 @@
 // span.)
 
 import {
-  Annotation,
   type ChangeDesc,
   type EditorState,
   StateEffect,
@@ -43,17 +40,13 @@ import {
 import { EditorView } from "@codemirror/view";
 
 import { intersectsAnySelection } from "../decorations/shared.js";
+import { hostDocumentReseed } from "../host-reseed.js";
 import { detectLeadingFrontmatterInState, type FrontmatterSpan } from "./detect.js";
 
 export type RevealState =
   | { kind: "absent" }
   | { kind: "collapsed"; span: FrontmatterSpan }
   | { kind: "revealed"; span: FrontmatterSpan };
-
-/** Marks a host-snapshot reseed transaction (set by editor.ts applyDocument).
- *  The frontmatter transactionFilter + this reducer key on it to distinguish a
- *  reseed from user edits and from other addToHistory=false transactions. */
-export const hostDocumentReseed = Annotation.define<boolean>();
 
 /** Dispatched (with a selection inside the span, same transaction) by the click
  *  handler and the ArrowUp keymap to reveal the block. */
