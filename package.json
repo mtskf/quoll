@@ -109,6 +109,7 @@
     "format": "biome format --write",
     "check": "biome check --write",
     "check:todo-markers": "node scripts/check-stale-todo-markers.mjs",
+    "check:todo-hygiene": "node scripts/check-todo-hygiene.mjs",
     "gen:perf-fixtures": "node scripts/gen-perf-fixtures.mjs",
     "preview": "node scripts/preview/serve.mjs",
     "test:unit": "vitest run",
