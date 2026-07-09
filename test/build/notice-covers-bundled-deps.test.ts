@@ -1,9 +1,12 @@
 // Machine-proves that every third-party package esbuild actually SHIPS into a
-// distributed bundle (dist/extension.cjs + dist/webview/index.js) is named in
-// the root NOTICE. Mirrors bundle-independence-metafile.test.ts: it builds the
-// SAME production configs with metafile:true and reads byte attribution, so a
-// tree-shaken-out package is (correctly) not required in NOTICE, and a newly
-// bundled dependency fails CI until it is attributed.
+// distributed bundle is named in the root NOTICE. It builds EVERY production
+// config createBuildConfigs emits — host (dist/extension.cjs), webview
+// (dist/webview/index.js), AND the test-harness sidecar (dist/test-harness.js),
+// all re-included by .vscodeignore's `dist/**` and shipped in the .vsix — with
+// metafile:true and reads byte attribution. So a tree-shaken-out package is
+// (correctly) not required in NOTICE, and a newly bundled dependency (in any of
+// those outputs) fails CI until it is attributed. Mirrors the metafile pattern
+// of bundle-independence-metafile.test.ts.
 import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -12,6 +15,10 @@ import { beforeAll, describe, expect, it } from "vitest";
 import { createBuildConfigs } from "../../esbuild.config.mjs";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
+
+function escapeRegExp(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
 
 function pkgOf(inputPath: string): string | null {
   const marker = "node_modules/";
@@ -50,12 +57,12 @@ describe("NOTICE covers every bundled third-party package", () => {
   let notice: string;
 
   beforeAll(async () => {
-    const { hostConfig, webviewConfig } = createBuildConfigs({ production: true });
-    const [host, webview] = await Promise.all([
-      shippedPackages(hostConfig),
-      shippedPackages(webviewConfig),
-    ]);
-    bundled = [...new Set([...host, ...webview])].sort();
+    // Every value is a config emitting into the packaged dist/ (host, webview,
+    // test-harness). Union them all so a dependency bundled into ANY shipped
+    // output must be attributed — not just host + webview.
+    const configs = Object.values(createBuildConfigs({ production: true }));
+    const sets = await Promise.all(configs.map(shippedPackages));
+    bundled = [...new Set(sets.flatMap((s) => [...s]))].sort();
     notice = readFileSync(resolve(root, "NOTICE"), "utf8");
   }, 60_000);
 
@@ -66,7 +73,14 @@ describe("NOTICE covers every bundled third-party package", () => {
   });
 
   it("names every shipped package in NOTICE", () => {
-    const missing = bundled.filter((p) => !notice.includes(p));
+    // Word-bounded match, NOT a bare substring: `notice.includes("state")`
+    // false-passes on the "state" inside "@codemirror/state", so a future
+    // package literally named `state` could ship unattributed yet still match.
+    // Require the name delimited by whitespace / line boundaries so only a real
+    // NOTICE entry counts.
+    const missing = bundled.filter(
+      (p) => !new RegExp(String.raw`(^|\s)${escapeRegExp(p)}(\s|$)`, "m").test(notice)
+    );
     expect(missing, `NOTICE is missing bundled package(s): ${missing.join(", ")}`).toEqual([]);
   });
 });
