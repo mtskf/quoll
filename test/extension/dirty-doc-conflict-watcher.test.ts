@@ -164,6 +164,33 @@ describe("createDirtyDocConflictWatcher", () => {
     expect(w.spies.showError.mock.calls[0]?.[0]).toContain("Revert File");
   });
 
+  it("does not reload when disposed while the prompt is open (pins the mid-prompt dispose guard)", async () => {
+    // Dispose races the open prompt: the line-106 `isDisposed()` disjunct must
+    // short-circuit before reloadFromDisk runs against a torn-down panel.
+    const w = makeWatcher();
+    w.spies.promptReload.mockImplementation(async () => {
+      w.setDisposed(true);
+      return RELOAD;
+    });
+    w.emit();
+    await fireDebounce();
+    expect(w.spies.reloadFromDisk).not.toHaveBeenCalled();
+  });
+
+  it("suppresses the still-dirty error toast when disposed during the reload (pins the post-condition dispose guard)", async () => {
+    // reloadFromDisk resolves but leaves the model dirty AND disposes the panel:
+    // the line-116 `!isDisposed()` disjunct must suppress the manual-revert
+    // toast (without it, the still-dirty branch would fire showError).
+    const w = makeWatcher();
+    w.spies.reloadFromDisk.mockImplementation(async () => {
+      w.setDisposed(true);
+    });
+    w.emit();
+    await fireDebounce();
+    expect(w.spies.reloadFromDisk).toHaveBeenCalledTimes(1);
+    expect(w.spies.showError).not.toHaveBeenCalled();
+  });
+
   it("keeps edits (no reload, no error) when the user dismisses the prompt", async () => {
     const w = makeWatcher({ promptReload: vi.fn(async () => "Keep my edits") });
     w.emit();
