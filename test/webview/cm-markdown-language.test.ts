@@ -171,6 +171,28 @@ describe("re-implemented headerIndent folds byte-identically to upstream", () =>
     expect(q).toEqual(foldHeadingRange(upstreamLang, twoChar, twoCharAt));
   });
 
+  it("a nascent lone setext mid-section is walked PAST, not treated as a same-level boundary (regression guard, diverges from upstream)", () => {
+    // A nascent lone `-` sits between a level-2 `## A` section and a level-1 `# B`.
+    // The nascent underline is Lezer-parsed as a SetextHeading2 (level 2). Because
+    // headingLevel() returns null for it (via isNascentLoneSetextHeading), sectionEnd
+    // walks PAST it as non-boundary content and `## A` folds all the way to the line
+    // before `# B`. The level-2 host section is deliberate: it makes the fixture
+    // sensitive to the nascent guard itself. Revert-check: removing the
+    // isNascentLoneSetextHeading guard makes the `-` a real SetextHeading2 (level
+    // 2 <= 2) → an IMMEDIATE same-level boundary → `## A`'s section is empty →
+    // foldHeadingRange returns null → this test reds. That is exactly why UPSTREAM,
+    // which has no nascent notion, returns null here (asserted below as the
+    // divergence). The sectionEnd `<=` boundary operator is pinned separately by the
+    // FIXTURES parity loop + the empty-section/post-heading test above.
+    // Observed via probe: quoll q = {from:4,to:20}; to === doc.indexOf("# B") - 1 (20).
+    const doc = "## A\nbody\nFoo\n-\nmore\n# B\nend\n";
+    const q = foldHeadingRange(quollLang, doc, 0);
+    expect(q).not.toBeNull();
+    expect(q?.to).toBe(doc.indexOf("# B") - 1);
+    // Upstream folds the nascent `-` as a real level-2 heading → `## A` empty → null.
+    expect(foldHeadingRange(upstreamLang, doc, 0)).toBeNull();
+  });
+
   it("empty-section and post-heading body lines fold to null, matching upstream", () => {
     const empty = "# A\n# B\n"; // sectionEnd(A) === A.to === end → no fold
     expect(foldHeadingRange(quollLang, empty, 0)).toBeNull();
