@@ -150,6 +150,27 @@ describe("re-implemented headerIndent folds byte-identically to upstream", () =>
     expect(q).toEqual(foldHeadingRange(upstreamLang, doc, fooAt));
   });
 
+  it("suppresses the chevron for a lone `-` with a trailing space, but KEEPS it for a real `--` (boundary pair)", () => {
+    // The two lengths immediately astride the nascent/real boundary. A lone `-`
+    // with a mid-typing trailing space (`Foo\n- `) is STILL nascent — the
+    // HeaderMark excludes the trailing space, so the mark stays length 1 → no
+    // chevron in Quoll (upstream still folds it). Exactly two dashes (`Foo\n--`)
+    // is the first length that reads as a real heading → chevron stays, byte-
+    // identical to upstream. Revert-check: relaxing `mark.to - mark.from === 1`
+    // to `=== 2` reds the trailing-space null; relaxing to `>= 1` reds the `--`
+    // parity (quollLang would then return null while upstream folds).
+    const trailing = "intro\n\nFoo\n- ";
+    const trailingAt = trailing.indexOf("Foo");
+    expect(foldHeadingRange(quollLang, trailing, trailingAt)).toBeNull();
+    expect(foldHeadingRange(upstreamLang, trailing, trailingAt)).not.toBeNull();
+
+    const twoChar = "intro\n\nFoo\n--";
+    const twoCharAt = twoChar.indexOf("Foo");
+    const q = foldHeadingRange(quollLang, twoChar, twoCharAt);
+    expect(q).not.toBeNull();
+    expect(q).toEqual(foldHeadingRange(upstreamLang, twoChar, twoCharAt));
+  });
+
   it("empty-section and post-heading body lines fold to null, matching upstream", () => {
     const empty = "# A\n# B\n"; // sectionEnd(A) === A.to === end → no fold
     expect(foldHeadingRange(quollLang, empty, 0)).toBeNull();

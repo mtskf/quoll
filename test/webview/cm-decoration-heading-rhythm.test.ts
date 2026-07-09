@@ -126,6 +126,23 @@ describe("heading-rhythm provider — nascent lone setext (no heading affordance
       { from: 7, cls: "quoll-heading-rhythm-2" },
     ]);
   });
+
+  it("KEEPS the suppression for a lone `-` with a mid-typing trailing space (still lone)", () => {
+    // "intro\n\nFoo\n- ": the HeaderMark excludes the trailing space, so the
+    // underline mark is still length 1 → nascent → rhythm suppressed. This is the
+    // BOUNDARY neighbor of the 2-char `--` case below (revert-check: relaxing
+    // `mark.to - mark.from === 1` to `=== 2` reds this — the tag reappears).
+    expect(lines(buildHeadingRhythm(ctx("intro\n\nFoo\n- ")))).toEqual([]);
+  });
+
+  it("KEEPS the tag for a real `--` (two-char) heading — the boundary next to lone", () => {
+    // Exactly two dashes is the FIRST length that reads as an intentional heading;
+    // it is the boundary immediately above lone. Revert-check: relaxing
+    // `mark.to - mark.from === 1` to `>= 1` reds this — the tag is dropped.
+    expect(lines(buildHeadingRhythm(ctx("intro\n\nFoo\n--")))).toEqual([
+      { from: 7, cls: "quoll-heading-rhythm-2" },
+    ]);
+  });
 });
 
 describe("heading-rhythm provider — exclusion zones (frontmatter guard)", () => {
