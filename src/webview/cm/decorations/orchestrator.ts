@@ -1,3 +1,8 @@
+// Provenance: this reveal/widget layer is independently implemented; the
+// live-preview "reveal source under the caret" behaviour was referenced from
+// ixora (Apache-2.0) / Atomic Editor (MIT) for behaviour only — no source is
+// vendored or adapted. See root NOTICE.
+//
 // Arbitration + a ViewPlugin that runs registered providers and exposes the
 // merged DecorationSet.
 //
