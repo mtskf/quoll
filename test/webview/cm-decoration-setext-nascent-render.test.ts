@@ -112,6 +112,9 @@ describe("nascent-setext de-style — computed size against the real highlight",
     expect(titleFontPx(view, "Foo")).toBe(BODY_PX); // heading look still demoted
     const bar = deepestSpan(view, "bar");
     expect(bar && getComputedStyle(bar).fontWeight).toBe("700"); // bold survives
+    // Pin that the strong keep-rule stays scoped to weight — it must not also
+    // re-inflate font-size, which would undo the heading→body demotion above.
+    expect(bar && getComputedStyle(bar).fontSize).toBe(`${BODY_PX}px`);
     view.destroy();
   });
 
@@ -138,6 +141,9 @@ describe("nascent-setext de-style — computed size against the real highlight",
     const view = mount("[x](u)\n-");
     const link = deepestSpan(view, "x");
     expect(link?.classList.contains("quoll-tok-link")).toBe(true);
+    // Pin that the link keep-rule stays scoped to colour — font-size is a plain
+    // cascade value happy-dom DOES resolve, unlike the nested-var colour above.
+    expect(link && getComputedStyle(link).fontSize).toBe(`${BODY_PX}px`);
     view.destroy();
   });
 });

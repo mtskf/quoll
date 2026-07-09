@@ -72,6 +72,16 @@ describe("styles.css — nascent-setext de-style", () => {
       /color\s*:\s*var\(--quoll-accent-green,\s*var\(--vscode-textLink-foreground\)\)\s*!important/
     );
   });
+
+  // Source-level backstop: the PR's contract is "preserve weight/colour ONLY" —
+  // a keep-rule that also touched font-size would re-inflate the heading look
+  // the base reset just demoted. The `-render` computed-size test proves this
+  // behaviourally for the CURRENT rule; this regex proves it for any FUTURE
+  // edit to the rule body, independent of happy-dom's cascade resolution.
+  it("keep-rules never touch font-size (stay scoped to weight/colour only)", () => {
+    expect(strongKeep).not.toMatch(/font-size/);
+    expect(linkKeep).not.toMatch(/font-size/);
+  });
 });
 
 describe("styles.css — block-widget margin invariant (CL)", () => {
