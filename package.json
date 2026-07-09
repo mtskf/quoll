@@ -92,7 +92,7 @@
         "quoll.editor.spellcheck": {
           "type": "boolean",
           "default": true,
-          "markdownDescription": "Enable the editor's native spellchecker (red squiggly underlines) on the Quoll editing surface. On by default. Turning it off removes the `spellcheck` attribute from the editor so no native spell suggestions appear."
+          "markdownDescription": "Enable the editor's native spellchecker (red squiggly underlines) on the Quoll editing surface. On by default. Turning it off sets the `spellcheck` attribute on the editor to `false` so no native spell suggestions appear."
         }
       }
     },
