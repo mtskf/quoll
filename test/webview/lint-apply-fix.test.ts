@@ -172,6 +172,50 @@ describe("applyLintFixAtSelection", () => {
       view.destroy();
     }
   });
+
+  it("collapses a blank-line run to one blank with the caret on the excess line", () => {
+    const doc = "a\n\n\nb\n"; // a@0, ""@2 (allowed), ""@3 (excess, flagged)
+    const view = viewFor(doc, EditorSelection.cursor(3));
+    try {
+      expect(applyLintFixAtSelection(view)).toBe(true);
+      expect(view.state.sliceDoc()).toBe("a\n\nb\n");
+    } finally {
+      view.destroy();
+    }
+  });
+
+  it("collapses a 3-blank run to exactly one blank under a full-run selection", () => {
+    const doc = "a\n\n\n\nb\n"; // a@0, ""@2 (allowed), ""@3 ""@4 (excess, flagged)
+    const view = viewFor(doc, EditorSelection.single(0, doc.length));
+    try {
+      expect(applyLintFixAtSelection(view)).toBe(true);
+      expect(view.state.sliceDoc()).toBe("a\n\nb\n");
+    } finally {
+      view.destroy();
+    }
+  });
+
+  it("returns false on a document with only single blank lines", () => {
+    const doc = "a\n\nb\n\nc\n";
+    const view = viewFor(doc, EditorSelection.single(0, doc.length));
+    try {
+      expect(applyLintFixAtSelection(view)).toBe(false);
+      expect(view.state.sliceDoc()).toBe(doc); // byte-identical
+    } finally {
+      view.destroy();
+    }
+  });
+
+  it("collapses a run whose excess final blank line has no own terminator (EOF)", () => {
+    const doc = "a\n\n   "; // ""@2 (allowed), "   "@3 (excess, no own terminator)
+    const view = viewFor(doc, EditorSelection.cursor(3));
+    try {
+      expect(applyLintFixAtSelection(view)).toBe(true);
+      expect(view.state.sliceDoc()).toBe("a\n\n"); // exactly one blank line survives
+    } finally {
+      view.destroy();
+    }
+  });
 });
 
 describe("no fix runs without the explicit user action", () => {

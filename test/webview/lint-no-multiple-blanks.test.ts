@@ -104,6 +104,13 @@ describe("lint rule: no-multiple-blanks", () => {
       expect(applyBlankFixes(doc)).toBe("a\r\n\r\nb\r\n");
     });
 
+    it("deletes the lone-CR terminator when the run uses lone-CR (no LF)", () => {
+      const doc = "a\r\r\rb\r"; // ""@2 (allowed), ""@3 (excess, flagged)
+      const d = blankDiags(doc)[0]!;
+      expect(d.fix).toEqual({ from: 3, to: 4, insert: "" }); // removes the lone "\r"
+      expect(applyBlankFixes(doc)).toBe("a\r\rb\r");
+    });
+
     it("collapses leading blank lines at BOF", () => {
       expect(applyBlankFixes("\n\na\n")).toBe("\na\n");
     });
