@@ -4,6 +4,21 @@ import { lintMarkdown } from "../../src/webview/cm/lint/engine.js";
 const blankDiags = (doc: string) =>
   lintMarkdown(doc).filter((d) => d.code === "no-multiple-blanks");
 
+// Apply every no-multiple-blanks fix to `doc` as a single delete pass, mirroring
+// what applyLintFixAtSelection dispatches. Fixes are absolute ranges over the
+// original doc, so applying them high-offset-first keeps earlier offsets valid.
+const applyBlankFixes = (doc: string): string => {
+  const fixes = blankDiags(doc)
+    .map((d) => d.fix)
+    .filter((f): f is NonNullable<typeof f> => f !== undefined)
+    .sort((a, b) => b.from - a.from);
+  let out = doc;
+  for (const f of fixes) {
+    out = out.slice(0, f.from) + f.insert + out.slice(f.to);
+  }
+  return out;
+};
+
 describe("lint rule: no-multiple-blanks", () => {
   it("does not flag a single blank line between paragraphs", () => {
     expect(blankDiags("a\n\nb\n")).toHaveLength(0);
@@ -66,5 +81,46 @@ describe("lint rule: no-multiple-blanks", () => {
   it("flags pre-fence blanks but not the in-fence blanks", () => {
     const doc = "a\n\n\n```\n\n\ncode\n```\n";
     expect(blankDiags(doc)).toHaveLength(1);
+  });
+
+  describe("opt-in autofix", () => {
+    it("carries a fix that deletes the excess blank line INCLUDING its terminator", () => {
+      const doc = "a\n\n\nb\n"; // ""@2 (allowed), ""@3 (excess, flagged)
+      const d = blankDiags(doc)[0]!;
+      // The fix range is NOT the diagnostic range: the diagnostic spans zero-length
+      // content @3, but the fix must remove the line PLUS its "\n" terminator.
+      expect(d.fix).toEqual({ from: 3, to: 4, insert: "" });
+      expect(applyBlankFixes(doc)).toBe("a\n\nb\n"); // collapsed to one blank
+    });
+
+    it("collapses a 3-blank run to exactly one blank line", () => {
+      expect(applyBlankFixes("a\n\n\n\nb\n")).toBe("a\n\nb\n");
+    });
+
+    it("deletes the CRLF terminator when the run uses CRLF", () => {
+      const doc = "a\r\n\r\n\r\nb\r\n"; // ""@3 (allowed), ""@5 (excess, flagged)
+      const d = blankDiags(doc)[0]!;
+      expect(d.fix).toEqual({ from: 5, to: 7, insert: "" }); // removes the "\r\n"
+      expect(applyBlankFixes(doc)).toBe("a\r\n\r\nb\r\n");
+    });
+
+    it("collapses leading blank lines at BOF", () => {
+      expect(applyBlankFixes("\n\na\n")).toBe("\na\n");
+    });
+
+    it("deletes content only for a whitespace-only final line with no terminator (EOF)", () => {
+      const doc = "a\n\n   "; // ""@2 (allowed), "   "@3 (excess, no own terminator)
+      const d = blankDiags(doc)[0]!;
+      // No own terminator to delete — remove just the whitespace content; the
+      // preceding "\n" stays as the surviving blank line's terminator.
+      expect(d.fix).toEqual({ from: 3, to: 6, insert: "" });
+      expect(applyBlankFixes(doc)).toBe("a\n\n"); // exactly one blank line
+    });
+
+    it("leaves a single-blank document byte-identical (no fix emitted)", () => {
+      const doc = "a\n\nb\n";
+      expect(blankDiags(doc)).toHaveLength(0);
+      expect(applyBlankFixes(doc)).toBe(doc);
+    });
   });
 });

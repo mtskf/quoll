@@ -46,17 +46,38 @@ export const noMultipleBlanks: LintRule = (ctx: LintContext): LintDiagnostic[] =
     if (BLANK.test(content)) {
       blankRun += 1;
       if (blankRun >= 2 && !inCodeBlock(from)) {
+        const contentEnd = from + content.length;
+        // Opt-in autofix range — DELIBERATELY not the diagnostic range. The
+        // diagnostic spans only the blank line's CONTENT (zero-length for a truly
+        // empty line); collapsing the run means removing the whole excess line,
+        // i.e. its content PLUS its own line terminator. Read the terminator from
+        // the raw text so LF / CRLF / lone-CR are all handled (scanLines strips it
+        // but does not report its length). A final blank line at EOF has NO own
+        // terminator (contentEnd === text length) — then delete content only; the
+        // PRECEDING newline stays and remains the single surviving blank line's
+        // terminator (deleting the preceding terminator instead would over-collapse
+        // to zero blanks). Each of the run's (N-1) excess diagnostics deletes its
+        // own line, leaving exactly one blank regardless of how many the user's
+        // selection covers.
+        const term = ctx.text[contentEnd];
+        const termLen =
+          term === "\r" ? (ctx.text[contentEnd + 1] === "\n" ? 2 : 1) : term === "\n" ? 1 : 0;
         diagnostics.push({
           from,
           // Span the blank line's content (zero-length for a truly empty line,
           // the whitespace run for a whitespace-only line) so the hover hit-test
           // (diagnosticsAt) covers the whole line, not just column 0. The line
           // decoration is anchored at `from` regardless of `to`.
-          to: from + content.length,
+          to: contentEnd,
           severity: "info",
           code: "no-multiple-blanks",
           message: "Multiple consecutive blank lines; collapse to a single blank line.",
           wholeLine: true,
+          // Opt-in autofix: delete this excess blank line (content + terminator).
+          // Applied ONLY by the explicit applyLintFixAtSelection command (Mod-.),
+          // which re-lints fresh before applying — never automatically, so an
+          // un-fixed document still round-trips byte-identically.
+          fix: { from, to: contentEnd + termLen, insert: "" },
         });
       }
     } else {
