@@ -56,14 +56,41 @@ interface BuiltWidget {
   deco: Decoration;
 }
 
+// One-shot latch for the missing-skeleton-field dev warning (see resolveModels).
+// Module-scoped so the warn fires at most once per session, not per keystroke.
+let warnedMissingSkeletonField = false;
+
+// Read the bounded-maintained models (no per-keystroke full walk OR per-table
+// re-parse — PERF.md). Fallback to the unbounded full walk+parse when the field
+// is absent (tests / any state that doesn't register it); `state.field(…, false)`
+// returns `undefined` only when the field is ABSENT, never for an empty `[]` set,
+// so a tableless doc is NOT mistaken for absence.
+//
+// The fallback is a SUPPORTED path — the unit suite mounts `tableBlockField`
+// without the skeleton field — so this warns rather than throws. But the fallback
+// silently breaks PERF.md's bounding invariant (O(doc) full reparse per change),
+// and a future harness/embed that forgot to register the field would only surface
+// it via profiling. So emit a one-shot dev-visible warning. Warn-once (module
+// latch), because `buildAll` runs on every doc/tree change — an unguarded warn
+// would flood the console. Not gated on QUOLL_PERF: production always registers
+// the field, so the latch stays false there (zero noise) while a broken embed
+// still gets its one signal even in a production build.
+function resolveModels(state: EditorState): readonly TableModel[] {
+  const models = state.field(tableSkeletonField, false);
+  if (models !== undefined) {
+    return models;
+  }
+  if (!warnedMissingSkeletonField) {
+    warnedMissingSkeletonField = true;
+    console.warn(
+      "[quoll] tableSkeletonField not registered — tableBlockField is falling back to an unbounded full reparse per change (PERF.md bounding invariant not held). Register tableSkeletonField alongside tableBlockField."
+    );
+  }
+  return tableModels(state);
+}
+
 function buildAll(state: EditorState): BuiltWidget[] {
-  // Read the bounded-maintained models (no per-keystroke full walk OR per-table
-  // re-parse — PERF.md). Fallback to the unbounded full walk+parse when the field
-  // is absent (tests / any state that doesn't register it); `??` fires only on
-  // `undefined` (field absent), never on an empty `[]` set, so a tableless doc is
-  // NOT mistaken for absence.
-  const models: readonly TableModel[] =
-    state.field(tableSkeletonField, false) ?? tableModels(state);
+  const models = resolveModels(state);
   const out: BuiltWidget[] = [];
   // The frontmatter block (frontmatterBlockField) owns the outermost block over
   // [0, fmEnd]; never emit a competing block replace inside it.
