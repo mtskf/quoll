@@ -84,6 +84,7 @@ import {
   ViewPlugin,
   type ViewUpdate,
 } from "@codemirror/view";
+import { toCtx } from "../decorations/build-context.js";
 import { quollSyntaxExclusionZones } from "../decorations/orchestrator.js";
 import {
   absorbStructuralWhitespace,
@@ -234,15 +235,6 @@ export function buildListHangIndent(
     builder.add(entry.from, entry.from, entry.deco);
   }
   return builder.finish();
-}
-
-function toCtx(view: EditorView): BuildContext {
-  return {
-    state: view.state,
-    selection: view.state.selection,
-    visibleRanges: view.visibleRanges,
-    tree: syntaxTree(view.state),
-  };
 }
 
 /** Editor extension: a ViewPlugin holding the list hang-indent line

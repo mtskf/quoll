@@ -142,6 +142,7 @@ import {
   fencedCodeBlockRevealed,
   fencedCodeFenceLandmarks,
 } from "../fenced-code/fenced-code-body.js";
+import { toCtx } from "./build-context.js";
 import {
   CALLOUT_CLASS,
   CALLOUT_MARKER_CLASS,
@@ -577,15 +578,6 @@ export function buildFencedCodePanel(
       classesForLine: (n) => fencedCodeLineClasses(n, landmarks),
     };
   });
-}
-
-function toCtx(view: EditorView): BuildContext {
-  return {
-    state: view.state,
-    selection: view.state.selection,
-    visibleRanges: view.visibleRanges,
-    tree: syntaxTree(view.state),
-  };
 }
 
 /** ViewPlugin for the blockquote rule. Rebuild triggers: the STRUCTURAL set
