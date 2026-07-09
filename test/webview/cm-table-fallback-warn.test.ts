@@ -5,6 +5,13 @@
 // fallback → one warning, second fallback → still one (latch holds). Kept in
 // its own file so the module-scoped warn-once latch starts fresh (vitest
 // isolates module state per test file).
+//
+// Cross-file note: other suites that mount tableBlockField WITHOUT the skeleton
+// field (e.g. cm-table-field.test.ts, which exercises widget/reveal behaviour on
+// the fallback path) also trip this warn once per process. That is intentional —
+// the warn correctly flags an unregistered field — and harmless: the default
+// vitest reporter swallows console output for passing tests and there is no
+// fail-on-console gate. This dedicated file mocks console.warn to assert on it.
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
 import { EditorState } from "@codemirror/state";
 import { describe, expect, it, vi } from "vitest";
@@ -29,12 +36,22 @@ describe("tableBlockField — missing tableSkeletonField fallback warning", () =
       EditorState.create({ doc: TABLE, extensions: [...base, tableSkeletonField] });
       expect(fallbackWarnings(warn)).toBe(0);
 
-      // Field absent → fallback fires → exactly one dev-visible warning.
+      // Field absent → fallback fires (create path) → exactly one dev-visible warning.
+      const live = EditorState.create({ doc: TABLE, extensions: base });
+      expect(fallbackWarnings(warn)).toBe(1);
+
+      // Fallback again (create path) → the module-scoped latch holds; still exactly one.
       EditorState.create({ doc: TABLE, extensions: base });
       expect(fallbackWarnings(warn)).toBe(1);
 
-      // Fallback again → the module-scoped latch holds; still exactly one.
-      EditorState.create({ doc: TABLE, extensions: base });
+      // Update path: dispatch doc-changing transactions on the live no-skeleton
+      // instance. Each runs update → computeFresh → buildAll → resolveModels — the
+      // exact per-keystroke path warn-once guards. The latch must hold it at one
+      // (a per-call regression would flood the count here, not just at create()).
+      let state = live;
+      for (let i = 0; i < 3; i++) {
+        state = state.update({ changes: { from: state.doc.length, insert: "\nx" } }).state;
+      }
       expect(fallbackWarnings(warn)).toBe(1);
     } finally {
       warn.mockRestore();
