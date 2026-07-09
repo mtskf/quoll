@@ -1,7 +1,13 @@
 import { describe, expect, it } from "vitest";
 
 import type { MarkdownError } from "../../src/markdown/errors.js";
-import { canPostEdit, initialState, reducer, type WebviewState } from "../../src/webview/state.js";
+import {
+  type Action,
+  canPostEdit,
+  initialState,
+  reducer,
+  type WebviewState,
+} from "../../src/webview/state.js";
 
 // The reducer is the spec for webview UI/protocol state. Content lives only
 // in CodeMirror's EditorState; the reducer must never carry it. Every test
@@ -36,6 +42,17 @@ describe("reducer — content not in state", () => {
     const seen = reducer(initialState, docAction({ docVersion: 5 }));
     expect(Object.keys(seen)).not.toContain("content");
     expect(Object.keys(initialState)).not.toContain("content");
+  });
+});
+
+describe("reducer — exhaustiveness guard", () => {
+  it("throws on an unknown action type (fail loud, not silent return)", () => {
+    // The default arm is unreachable by type — `Action` is a closed union —
+    // so we cast past the type system to exercise the runtime guard. It must
+    // THROW (shared failure mode with shell.ts's HostToWebview guard), not
+    // silently return the current state or the unknown action object.
+    const unknown = { type: "no-such-action" } as unknown as Action;
+    expect(() => reducer(initialState, unknown)).toThrow(/unhandled Action: no-such-action/);
   });
 });
 

@@ -156,11 +156,20 @@ export function reducer(state: WebviewState, action: Action): WebviewState {
       return { ...state, serializeError: null };
     }
     default: {
-      // Exhaustiveness guard — when a new Action variant is added without a
-      // case here, TS flags the assignment as `never` at compile time. Beats
-      // a silent `return state` fallthrough.
+      // Exhaustiveness guard — a new Action variant added without a case here
+      // makes this assignment fail to compile (`action` is not `never`). The
+      // arm is unreachable at runtime: `Action` is a closed internal union and
+      // every dispatch site is typed. If a refactor ever violates that, THROW
+      // (do not `return`) — this is the same failure mode shell.ts's HostToWebview
+      // guard and every host-side closed-union switch use (quoll-editor-panel,
+      // effect-executor, host-session-core all `throw "[quoll] unhandled …"`),
+      // so the pair fails loud identically. The old `return _exhaustive` was the
+      // lone outlier and, worse, returned the unknown ACTION object as the new
+      // state (corrupting it); failing loud on an impossible state is safer and
+      // consistent. shell.ts's dispatch already treats a reducer throw as a
+      // precondition break it must NOT swallow.
       const _exhaustive: never = action;
-      return _exhaustive;
+      throw new Error(`[quoll] unhandled Action: ${(_exhaustive as { type: string }).type}`);
     }
   }
 }

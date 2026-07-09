@@ -16,6 +16,25 @@ export type LezerTree = ReturnType<typeof syntaxTree>;
 // @codemirror/lint adapter is a pure rename, not a redesign.
 export type LintSeverity = "warning" | "info";
 
+// Closed union of every first-party lint rule id. Each rule stamps its
+// diagnostics with one of these literals (LintDiagnostic.code below), so a
+// typo, a rename, or a collision fails at COMPILE time rather than silently
+// shipping an unrecognised code. This is the single source of truth: adding a
+// rule means adding its id here first, then the rule's `code` literal is
+// checked against it via the diagnostic's return type. NOTE the wire boundary
+// (protocol.ts LintDiagnostic) deliberately keeps `code: string` — it cannot
+// import this webview-internal union (the protocol module keeps zero imports)
+// and re-validates `typeof code === "string"` defensively, mirroring the
+// MarkdownErrorCode narrowing in shell.ts. The union lives here, not on-wire.
+export type LintRuleCode =
+  | "heading-increment"
+  | "no-trailing-spaces"
+  | "no-multiple-blanks"
+  | "duplicate-heading-text"
+  | "table-column-count"
+  | "frontmatter-duplicate-key"
+  | "frontmatter-malformed-line";
+
 // A single advisory finding over the raw Markdown text. Offsets are absolute
 // UTF-16 code-unit positions into the document (CodeMirror's position space),
 // so a diagnostic maps 1:1 onto a CodeMirror range.
@@ -23,8 +42,10 @@ export type LintDiagnostic = {
   readonly from: number;
   readonly to: number;
   readonly severity: LintSeverity;
-  // Stable rule id, e.g. "heading-increment". Shown in the tooltip + asserted by tests.
-  readonly code: string;
+  // Stable rule id, e.g. "heading-increment". Typed against the shared
+  // LintRuleCode union (above) so each rule's literal is compile-checked.
+  // Shown in the tooltip + asserted by tests.
+  readonly code: LintRuleCode;
   readonly message: string;
   // Optional autofix descriptor (a CodeMirror ChangeSpec). Populated by
   // no-trailing-spaces and no-multiple-blanks; applied ONLY by the explicit applyLintFixAtSelection

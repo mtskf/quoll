@@ -57,20 +57,20 @@ describe("quollLint extension (state-level)", () => {
     const state = stateFor("x");
     const next = state.update({
       effects: setLintDiagnostics.of([
-        { from: 0, to: 1, severity: "warning", code: "manual", message: "m" },
+        { from: 0, to: 1, severity: "warning", code: "no-trailing-spaces", message: "m" },
       ]),
     }).state;
     expect(next.field(lintField)).toEqual([
-      { from: 0, to: 1, severity: "warning", code: "manual", message: "m" },
+      { from: 0, to: 1, severity: "warning", code: "no-trailing-spaces", message: "m" },
     ]);
   });
 
   it("buildLintDecorations maps to severity-classed marks and sorts defensively", () => {
     // Deliberately UNSORTED + one zero-length entry that must be dropped.
     const diags: LintDiagnostic[] = [
-      { from: 5, to: 9, severity: "info", code: "y", message: "n" },
-      { from: 7, to: 7, severity: "warning", code: "z", message: "zero" },
-      { from: 0, to: 3, severity: "warning", code: "x", message: "m" },
+      { from: 5, to: 9, severity: "info", code: "no-trailing-spaces", message: "n" },
+      { from: 7, to: 7, severity: "warning", code: "no-trailing-spaces", message: "zero" },
+      { from: 0, to: 3, severity: "warning", code: "no-trailing-spaces", message: "m" },
     ];
     const set = buildLintDecorations(diags);
     const out: { from: number; to: number; cls?: string }[] = [];
@@ -112,8 +112,15 @@ describe("quollLint extension (state-level)", () => {
 
   it("buildLintDecorations suppresses a wholeLine diagnostic but keeps a co-occurring mark", () => {
     const diags: LintDiagnostic[] = [
-      { from: 10, to: 14, severity: "warning", code: "m", message: "mark" },
-      { from: 4, to: 4, severity: "info", code: "b", message: "blank", wholeLine: true },
+      { from: 10, to: 14, severity: "warning", code: "no-trailing-spaces", message: "mark" },
+      {
+        from: 4,
+        to: 4,
+        severity: "info",
+        code: "no-trailing-spaces",
+        message: "blank",
+        wholeLine: true,
+      },
     ];
     const set = buildLintDecorations(diags);
     const out: { from: number; to: number; cls?: string }[] = [];
@@ -131,7 +138,9 @@ describe("quollLint extension (state-level)", () => {
   });
 
   it("diagnosticsAt uses a half-open hit-test [from, to)", () => {
-    const ds: LintDiagnostic[] = [{ from: 3, to: 6, severity: "warning", code: "x", message: "m" }];
+    const ds: LintDiagnostic[] = [
+      { from: 3, to: 6, severity: "warning", code: "no-trailing-spaces", message: "m" },
+    ];
     expect(diagnosticsAt(ds, 2)).toHaveLength(0); // before from
     expect(diagnosticsAt(ds, 3)).toHaveLength(1); // at from -> included
     expect(diagnosticsAt(ds, 5)).toHaveLength(1); // inside
@@ -347,7 +356,7 @@ describe("quollLint debounced recompute (view-level)", () => {
     try {
       view.dispatch({
         effects: setLintDiagnostics.of([
-          { from: 6, to: 11, severity: "warning", code: "x", message: "m" },
+          { from: 6, to: 11, severity: "warning", code: "no-trailing-spaces", message: "m" },
         ]),
       });
       expect(lintMarkRanges(view)).toEqual([{ from: 6, to: 11, cls: "quoll-lint-mark-warning" }]);
@@ -443,7 +452,7 @@ describe("toWireDiagnostics (offset → 0-based line/character)", () => {
         from: 0,
         to: 1,
         severity: "info",
-        code: "x",
+        code: "no-trailing-spaces",
         message: "m",
         fix: { from: 0, to: 1, insert: "" },
       },
@@ -505,7 +514,7 @@ describe("quollLint diagnostics publisher (sink)", () => {
       sink.mockClear();
       view.dispatch({
         effects: setLintDiagnostics.of([
-          { from: 0, to: 1, severity: "warning", code: "manual", message: "m" },
+          { from: 0, to: 1, severity: "warning", code: "no-trailing-spaces", message: "m" },
         ]),
       });
       expect(sink).toHaveBeenCalledTimes(1);
