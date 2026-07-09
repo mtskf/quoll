@@ -105,6 +105,51 @@ describe("heading-rhythm provider — Setext headings", () => {
   });
 });
 
+describe("heading-rhythm provider — nascent lone setext (no heading affordances)", () => {
+  // A lone `-`/`=` typed under a paragraph parses as a SetextHeading but reads as
+  // a bullet list in progress (see setext-nascent-reveal.ts). The font is demoted
+  // there; rhythm padding must be suppressed in lock-step via the shared
+  // isNascentLoneSetextHeading predicate — else the paragraph keeps a heading's
+  // top spacing while looking like plain text.
+  it("does NOT tag a lone `-` underline (nascent SetextHeading2)", () => {
+    // "intro\n\nFoo\n-": SetextHeading2 [7,12], HeaderMark [11,12] "-" (lone).
+    expect(lines(buildHeadingRhythm(ctx("intro\n\nFoo\n-")))).toEqual([]);
+  });
+
+  it("does NOT tag a lone `=` underline (nascent SetextHeading1)", () => {
+    expect(lines(buildHeadingRhythm(ctx("intro\n\nFoo\n=")))).toEqual([]);
+  });
+
+  it("KEEPS the tag for a real multi-char `---` heading (no regression)", () => {
+    // Two-or-more dashes read as an intentional heading → rhythm stays.
+    expect(lines(buildHeadingRhythm(ctx("intro\n\nFoo\n---")))).toEqual([
+      { from: 7, cls: "quoll-heading-rhythm-2" },
+    ]);
+  });
+
+  it("KEEPS the suppression for a lone `-`/`=` with a mid-typing trailing space (still lone)", () => {
+    // "intro\n\nFoo\n- ": the HeaderMark excludes the trailing space, so the
+    // underline mark is still length 1 → nascent → rhythm suppressed. This is the
+    // BOUNDARY neighbor of the 2-char case below (revert-check: relaxing
+    // `mark.to - mark.from === 1` to `=== 2` reds this — the tag reappears). The
+    // predicate's length gate is char-agnostic, so `=` behaves identically to `-`.
+    for (const u of ["-", "="]) {
+      expect(lines(buildHeadingRhythm(ctx(`intro\n\nFoo\n${u} `)))).toEqual([]);
+    }
+  });
+
+  it("KEEPS the tag for a real two-char `--`/`==` heading — the boundary next to lone", () => {
+    // Exactly two markers is the FIRST length that reads as an intentional heading;
+    // it is the boundary immediately above lone. Revert-check: relaxing
+    // `mark.to - mark.from === 1` to `>= 1` reds this — the tag is dropped. `==` is
+    // a SetextHeading1 (level 1), `--` a SetextHeading2 (level 2); both keep the tag.
+    for (const u of ["-", "="]) {
+      const cls = u === "=" ? "quoll-heading-rhythm-1" : "quoll-heading-rhythm-2";
+      expect(lines(buildHeadingRhythm(ctx(`intro\n\nFoo\n${u}${u}`)))).toEqual([{ from: 7, cls }]);
+    }
+  });
+});
+
 describe("heading-rhythm provider — exclusion zones (frontmatter guard)", () => {
   // A YAML frontmatter body line like `title: y` followed by `---` parses under
   // plain Lezer as a SetextHeading2 DIRECTLY under Document. The fixture keeps that

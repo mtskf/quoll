@@ -17,14 +17,15 @@
 // version would flicker — plain while typing the `-`, then ballooning into a
 // heading the instant the caret moves away — which is more jarring than the bug.
 //
-// Two known, deliberate limitations (tracked as follow-ups in docs/TODO.md):
-//   1. The de-style resets FONT only. A nascent setext still gets heading-rhythm
-//      top padding (heading-rhythm.ts) and a fold chevron (markdown.ts's heading
-//      foldService), which key off the SetextHeading node type — so the paragraph
-//      no longer LOOKS like a heading but keeps a heading's spacing/gutter
-//      affordances. A complete demotion needs a shared "lone-setext" predicate in
-//      those consumers too.
-//   2. Inline emphasis inside the paragraph (`Foo **bar**` then `-`) is flattened
+// This provider owns the FONT half of the demotion; the SPACING/gutter/chevron
+// half is now shared. `isNascentLoneSetextHeading` (markdown.ts) is the single
+// predicate this file's gate expresses; heading-rhythm.ts (rhythm padding + fold-
+// gutter row) and markdown.ts's heading foldService (fold chevron) consult the
+// SAME predicate, so a nascent setext loses every heading affordance in lock-step
+// — not just its font. (Resolves the PR #119 follow-up.)
+//
+// One known, deliberate limitation:
+//   - Inline emphasis inside the paragraph (`Foo **bar**` then `-`) is flattened
 //      to plain along with the heading look — CodeMirror combines the heading and
 //      emphasis tags on one span, so the CSS reset (styles.css) can't spare the
 //      emphasis. See that rule's comment for the trade-off rationale.
@@ -45,6 +46,7 @@
 import { RangeSetBuilder } from "@codemirror/state";
 import { Decoration, type DecorationSet } from "@codemirror/view";
 
+import { isNascentLoneSetextHeading } from "../markdown.js";
 import type { DecorationProvider } from "./types.js";
 
 /** CSS class applied to a de-styled nascent-setext heading node. The
@@ -54,8 +56,6 @@ export const SETEXT_NASCENT_CLASS = "quoll-setext-nascent-raw";
 
 const SETEXT_NASCENT_MARK = Decoration.mark({ class: SETEXT_NASCENT_CLASS });
 
-const SETEXT_HEADING = new Set(["SetextHeading1", "SetextHeading2"]);
-
 export const setextNascentReveal: DecorationProvider = {
   build(ctx): DecorationSet {
     const builder = new RangeSetBuilder<Decoration>();
@@ -64,15 +64,11 @@ export const setextNascentReveal: DecorationProvider = {
         from: range.from,
         to: range.to,
         enter: (node) => {
-          if (!SETEXT_HEADING.has(node.name)) {
-            return;
-          }
-          // The underline is the heading's HeaderMark child (setext marks only
-          // the underline, never the title). A lone marker is a SINGLE `-`/`=`
-          // — the trailing space of a mid-typing `- ` is not part of the mark,
-          // so `Foo\n- ` still reads as lone. `--`/`---`/`===` are multi-char.
-          const mark = node.node.lastChild;
-          if (!mark || mark.name !== "HeaderMark" || mark.to - mark.from !== 1) {
+          // A lone-`-`/`=` setext underline (SINGLE marker; `--`/`---`/`===` are
+          // multi-char, and a mid-typing `Foo\n- ` still reads as lone since the
+          // trailing space is not part of the mark) — the shared predicate all
+          // three heading affordances gate on (markdown.ts).
+          if (!isNascentLoneSetextHeading(node.node)) {
             return;
           }
           // Viewport-edge guard (parity with heading-reveal): tree.iterate

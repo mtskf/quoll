@@ -87,6 +87,33 @@ describe("headingRhythmFoldGutterLineClass — per-level gutter tag for the rhyt
     expect(byLine.size).toBe(0);
   });
 
+  it("does NOT tag a nascent lone `-` setext (lock-step with the demoted font)", () => {
+    // "intro\n\nFoo\n-": SetextHeading2 with a lone `-` underline reads as a bullet
+    // list in progress, not a heading — the gutter rhythm tag must be suppressed in
+    // lock-step with the content-half padding and the font de-style.
+    const byLine = taggedClassByLine("intro\n\nFoo\n-");
+    expect(byLine.size).toBe(0);
+    // Control: a real multi-char `---` heading keeps its gutter tag (line 3).
+    const control = taggedClassByLine("intro\n\nFoo\n---");
+    expect(control.get(3)).toBe("quoll-fold-heading-rhythm-2");
+    expect(control.size).toBe(1);
+  });
+
+  it("does NOT tag a lone `-`/`=` with a mid-typing trailing space, but DOES tag a real `--`/`==` (boundary pair)", () => {
+    // "intro\n\nFoo\n- ": the HeaderMark excludes the trailing space, so the
+    // underline is still length 1 → nascent → suppressed (boundary neighbor of
+    // the 2-char case). Revert-check: relaxing `mark.to - mark.from === 1` to
+    // `=== 2` reds the trailing-space case; relaxing to `>= 1` reds the two-char
+    // case. The length gate is char-agnostic; `==` tags level 1, `--` level 2.
+    for (const u of ["-", "="]) {
+      expect(taggedClassByLine(`intro\n\nFoo\n${u} `).size).toBe(0);
+      const twoChar = taggedClassByLine(`intro\n\nFoo\n${u}${u}`);
+      const cls = u === "=" ? "quoll-fold-heading-rhythm-1" : "quoll-fold-heading-rhythm-2";
+      expect(twoChar.get(3)).toBe(cls);
+      expect(twoChar.size).toBe(1);
+    }
+  });
+
   it("does NOT tag a heading line inside a quollSyntaxExclusionZones span", () => {
     // Same fixture as the content-half exclusion test: `title: y\n---` parses as a
     // SetextHeading2 on line 3, off physical line 1. Inside a zone → no tag; the
