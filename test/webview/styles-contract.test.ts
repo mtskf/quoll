@@ -162,6 +162,24 @@ describe("styles.css — list hang-indent token (LH)", () => {
   });
 });
 
+describe("styles.css — list-marker-to-text gap token (list-marker-restyle)", () => {
+  const css = readFileSync(new URL("../../src/webview/styles.css", import.meta.url), "utf8");
+  // Strip comments so a token-shaped literal inside a CSS comment can't
+  // vacuously satisfy the ":root declares…" match (styles-contract grep
+  // vacuation guard — see the earlier column-inset/control-token precedents).
+  const live = css.replace(/\/\*[\s\S]*?\*\//g, "");
+
+  it("defines --quoll-list-marker-gap on :root", () => {
+    const root = live.match(/:root\s*\{([^}]*)\}/)?.[1] ?? "";
+    expect(root).toMatch(/--quoll-list-marker-gap\s*:\s*[^;]+;/);
+  });
+
+  it(".quoll-task-checkbox's margin-right widens by the shared gap token (bullet/checkbox gap parity)", () => {
+    const rule = live.match(/\.quoll-task-checkbox\s*\{([^}]*)\}/)?.[1] ?? "";
+    expect(rule).toMatch(/margin-right\s*:[^;]*var\(--quoll-list-marker-gap/);
+  });
+});
+
 describe("styles.css — task-checkbox checkmark is a text-indent-immune border tick", () => {
   const css = readFileSync(new URL("../../src/webview/styles.css", import.meta.url), "utf8");
 

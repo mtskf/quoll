@@ -324,7 +324,7 @@ export function listItemGetsVerticalGap(state: EditorState, listItem: SyntaxNode
  *  marker, OR a content-less bare-marker Paragraph. Used by renderedMarkCol to
  *  re-base a child one NEST_STEP past the (wide-checkbox) parent's content
  *  column, identically for content-bearing and content-less task parents. */
-function isTaskItem(state: EditorState, listItem: SyntaxNode): boolean {
+export function isTaskItem(state: EditorState, listItem: SyntaxNode): boolean {
   const content = listItem.firstChild?.nextSibling ?? null;
   if (content === null) {
     return false;
@@ -337,7 +337,7 @@ function isTaskItem(state: EditorState, listItem: SyntaxNode): boolean {
 
 /** True when `listItem`'s wrapping list is a `BulletList` (a bullet item — plain
  *  OR a task). Ordered items (OrderedList wrapper) are excluded. */
-function isBulletItem(listItem: SyntaxNode): boolean {
+export function isBulletItem(listItem: SyntaxNode): boolean {
   return listItem.parent?.name === "BulletList";
 }
 

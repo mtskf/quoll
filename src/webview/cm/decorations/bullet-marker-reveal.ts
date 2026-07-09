@@ -29,13 +29,37 @@ import {
   resolveTaskMarkerGeometry,
 } from "../list/list-geometry.js";
 import { intersectsAnySelection } from "./shared.js";
-import type { DecorationProvider } from "./types.js";
+import type { BuildContext, DecorationProvider } from "./types.js";
 
-const bulletMarkerDeco = Decoration.mark({ class: "quoll-bullet-marker" });
+// Lezer SyntaxNode, derived from the build tree (narrow dep surface — same
+// strategy as list-geometry.ts / types.ts).
+type SyntaxNode = BuildContext["tree"]["topNode"];
+
+// Depth-varied marks (list-marker-restyle): index = min(visualDepth, 3) − 1.
+// d1 = filled dot, d2 = hollow dot, d3+ = dash bar (shapes in cm/theme.ts). The
+// shared `quoll-bullet-marker` class carries the hide-glyph + first-line gap.
+const bulletMarkerDecoByDepth = [
+  Decoration.mark({ class: "quoll-bullet-marker quoll-bullet-marker-d1" }),
+  Decoration.mark({ class: "quoll-bullet-marker quoll-bullet-marker-d2" }),
+  Decoration.mark({ class: "quoll-bullet-marker quoll-bullet-marker-d3" }),
+];
+
+// Visual nesting depth = count of BulletList/OrderedList ancestors (top-level
+// bullet = 1). Counting ordered containers too means a bullet nested inside an
+// ordered list reads at its visual indent level — the intended depth cue.
+function listDepth(item: SyntaxNode): number {
+  let depth = 0;
+  for (let p: SyntaxNode | null = item; p !== null; p = p.parent) {
+    if (p.name === "BulletList" || p.name === "OrderedList") {
+      depth++;
+    }
+  }
+  return depth;
+}
 
 export const bulletMarkerReveal: DecorationProvider = {
   build(ctx): DecorationSet {
-    const out: Array<{ from: number; to: number }> = [];
+    const out: Array<{ from: number; to: number; depth: number }> = [];
     for (const range of ctx.visibleRanges) {
       ctx.tree.iterate({
         from: range.from,
@@ -81,7 +105,7 @@ export const bulletMarkerReveal: DecorationProvider = {
           if (intersectsAnySelection(ctx.selection, line.from, line.to)) {
             return;
           }
-          out.push({ from: node.from, to: node.to });
+          out.push({ from: node.from, to: node.to, depth: listDepth(item) });
         },
       });
     }
@@ -91,8 +115,8 @@ export const bulletMarkerReveal: DecorationProvider = {
     // collected once — no de-dup needed.
     out.sort((a, b) => a.from - b.from || a.to - b.to);
     const builder = new RangeSetBuilder<Decoration>();
-    for (const { from, to } of out) {
-      builder.add(from, to, bulletMarkerDeco);
+    for (const { from, to, depth } of out) {
+      builder.add(from, to, bulletMarkerDecoByDepth[Math.min(depth, 3) - 1]);
     }
     return builder.finish();
   },

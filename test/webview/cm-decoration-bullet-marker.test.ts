@@ -30,6 +30,21 @@ function ranges(set: DecorationSet): Array<{ from: number; to: number }> {
   return out;
 }
 
+/** Flatten to `{ from, to, class }` — for depth-class assertions. */
+function classes(set: DecorationSet): Array<{ from: number; to: number; class?: string }> {
+  const out: Array<{ from: number; to: number; class?: string }> = [];
+  const iter = set.iter();
+  while (iter.value !== null) {
+    out.push({
+      from: iter.from,
+      to: iter.to,
+      class: (iter.value.spec as { class?: string }).class,
+    });
+    iter.next();
+  }
+  return out;
+}
+
 describe("bulletMarkerReveal — provider", () => {
   it("emits one mark over each bullet ListMark when the caret is OFF the list lines", () => {
     // "- alpha\n- beta\n\nparagraph": ListMark "-" at [0,1) and [8,9).
@@ -42,7 +57,7 @@ describe("bulletMarkerReveal — provider", () => {
     ]);
   });
 
-  it("emits Decoration.mark carrying class `quoll-bullet-marker` (NOT a replace widget)", () => {
+  it("emits Decoration.mark carrying class `quoll-bullet-marker quoll-bullet-marker-d1` (NOT a replace widget)", () => {
     const doc = "- alpha\n\nparagraph";
     const caret = doc.indexOf("paragraph") + 3;
     const set = bulletMarkerReveal.build(ctx(doc, caret));
@@ -53,7 +68,7 @@ describe("bulletMarkerReveal — provider", () => {
       iter.next();
     }
     expect(specs).toHaveLength(1);
-    expect(specs[0].class).toBe("quoll-bullet-marker");
+    expect(specs[0].class).toBe("quoll-bullet-marker quoll-bullet-marker-d1");
     expect(specs[0].widget).toBeUndefined();
   });
 
@@ -179,5 +194,42 @@ describe("bulletMarkerReveal — provider", () => {
       tree: fullTree(state),
     });
     expect(ranges(set)).toEqual([{ from: 0, to: 1 }]);
+  });
+
+  it("depth-varied classes: d1/d2/d3 for a 3-level nested bullet chain", () => {
+    // "- a\n  - b\n    - c\n\npara": ListMark at [0,1) (d1), [6,7) (d2), [14,15) (d3).
+    const doc = "- a\n  - b\n    - c\n\npara";
+    const caret = doc.indexOf("para") + 2;
+    const set = bulletMarkerReveal.build(ctx(doc, caret));
+    expect(classes(set).map((c) => c.class)).toEqual([
+      "quoll-bullet-marker quoll-bullet-marker-d1",
+      "quoll-bullet-marker quoll-bullet-marker-d2",
+      "quoll-bullet-marker quoll-bullet-marker-d3",
+    ]);
+  });
+
+  it("depth is capped at d3: a 4th nesting level still carries d3 (not d4)", () => {
+    const doc = "- a\n  - b\n    - c\n      - d\n\npara";
+    const caret = doc.indexOf("para") + 2;
+    const set = bulletMarkerReveal.build(ctx(doc, caret));
+    const cls = classes(set).map((c) => c.class);
+    expect(cls).toHaveLength(4);
+    expect(cls[3]).toBe("quoll-bullet-marker quoll-bullet-marker-d3");
+  });
+
+  it("a bullet nested under an ORDERED list carries d2 (visual depth counts OrderedList ancestors too)", () => {
+    // "1. one\n   - b\n\npara": ListMark "-" for the nested bullet is on line 2
+    // ("   - b"), after 3 leading spaces → offset 7 + 3 = 10.
+    const doc = "1. one\n   - b\n\npara";
+    const bulletFrom = doc.indexOf("- b");
+    const caret = doc.indexOf("para") + 2;
+    const set = bulletMarkerReveal.build(ctx(doc, caret));
+    const cls = classes(set);
+    expect(cls).toHaveLength(1);
+    expect(cls[0]).toEqual({
+      from: bulletFrom,
+      to: bulletFrom + 1,
+      class: "quoll-bullet-marker quoll-bullet-marker-d2",
+    });
   });
 });
