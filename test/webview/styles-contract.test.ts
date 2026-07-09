@@ -51,6 +51,27 @@ describe("styles.css — nascent-setext de-style", () => {
     expect(rule).toMatch(/font-weight\s*:\s*400\s*!important/);
     expect(rule).toMatch(/color\s*:\s*var\(--vscode-editor-foreground\)\s*!important/);
   });
+
+  // Inline-emphasis survival keep-rules (theme.ts quollTokenMarkers tags strong /
+  // link spans with these stable classes). Each is ONE class more specific than the
+  // base reset's `.quoll-setext-nascent-raw *` leg, so with `!important` on both the
+  // keep-rule wins the important tie by specificity and re-asserts the token look.
+  // These source-shape guards are the CI proof of the link colour: happy-dom drops
+  // the nested-var value so the `-render` test can only pin the marker class there.
+  const strongKeep =
+    css.match(/\.quoll-setext-nascent-raw\s+\.quoll-tok-strong\s*\{([^}]*)\}/)?.[1] ?? "";
+  const linkKeep =
+    css.match(/\.quoll-setext-nascent-raw\s+\.quoll-tok-link\s*\{([^}]*)\}/)?.[1] ?? "";
+
+  it("re-asserts bold weight on the strong token with !important", () => {
+    expect(strongKeep).toMatch(/font-weight\s*:\s*700\s*!important/);
+  });
+
+  it("re-asserts the accent-green link colour on the link token with !important", () => {
+    expect(linkKeep).toMatch(
+      /color\s*:\s*var\(--quoll-accent-green,\s*var\(--vscode-textLink-foreground\)\)\s*!important/
+    );
+  });
 });
 
 describe("styles.css — block-widget margin invariant (CL)", () => {

@@ -24,11 +24,13 @@
 // SAME predicate, so a nascent setext loses every heading affordance in lock-step
 // — not just its font. (Resolves the PR #119 follow-up.)
 //
-// One known, deliberate limitation:
-//   - Inline emphasis inside the paragraph (`Foo **bar**` then `-`) is flattened
-//      to plain along with the heading look — CodeMirror combines the heading and
-//      emphasis tags on one span, so the CSS reset (styles.css) can't spare the
-//      emphasis. See that rule's comment for the trade-off rationale.
+// Inline emphasis inside the paragraph (`Foo **bar** [x](u)` then `-`) is
+// PRESERVED: CodeMirror combines the heading and emphasis tags on one span, so a
+// plain reset can't spare the emphasis, but quollTokenMarkers (theme.ts) tags the
+// two casualty tokens (strong weight, link colour) with stable
+// `quoll-tok-strong` / `quoll-tok-link` classes and styles.css re-asserts them
+// inside this scope at higher specificity. So the bold/link stay while the
+// heading size/colour drop to body. See that rule's comment for the mechanism.
 //
 // Scope — deliberately NARROW so genuine headings are untouched:
 //   - MULTI-char underlines (`--`, `---`, `===`) read as an intentional heading
