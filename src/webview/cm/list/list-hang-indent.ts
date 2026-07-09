@@ -6,8 +6,12 @@
 // item's rendered content column instead of the left margin.
 //
 // Decoration-only: never mutates the document. CM maps the first line by
-// `paddingLeft + min(0, textIndent)` (= 6px base) and continuation lines by
-// the full padding; the 6px matches CM's baseTheme `.cm-line` left padding.
+// `paddingLeft + min(0, textIndent)` (= the base padding) and continuation lines
+// by the full padding; the base is the EXISTING `--quoll-column-inset-left`
+// token (styles.css :root, default 6px), consumed via the shared
+// `CM_LINE_START_PADDING` JS constant (cm/theme.ts) — the SAME constant the
+// `.cm-line` padding theme uses — so the hang base and the actual line padding
+// can never drift apart.
 // Style is delivered INLINE (CSSOM cssText — CSP-exempt, highest cascade).
 //
 // Geometry (incl. the recursive task-fold re-basing for nested items) lives in
@@ -66,14 +70,18 @@
 //     Caret-on: the `> ` is revealed, so 0 is passed and the full hang is kept.
 //     The task-fold-in-blockquote combination (`> - [ ] a` / `>   - b`) remains
 //     the separate F6 glitch documented above.
-//   - CM private-styling coupling (Codex F-review, pre-existing since PR1): the
-//     `6px` base and the `paddingLeft + min(0, textIndent)` first-line mapping
-//     are CM @codemirror/view dist implementation values, not a public contract,
-//     so a minor CM bump could shift them. Out of this PR's 1-purpose scope; the
-//     proper fix (Quoll owns `.cm-line` start padding as a CSS variable that the
-//     list decoration references, + a computed-padding contract test) needs the
-//     same browser-mode harness as the deferred F3/F5 pixel test and is folded
-//     into that follow-up TODO.
+//   - CM private-styling coupling (Codex F-review): the start-padding base is now
+//     the EXISTING `--quoll-column-inset-left` token (styles.css :root — the
+//     single-source mirror of CM's base `.cm-line` left inset), consumed here via
+//     the SAME shared `CM_LINE_START_PADDING` JS constant (cm/theme.ts) that the
+//     `.cm-line` padding theme (`cmLinePaddingThemeSpec`) also uses — one JS
+//     reference, one CSS token, so the hang base and the actual line padding can
+//     no longer drift apart, and a CM bump to its private baseTheme 6px cannot
+//     shift the base out from under the hang either. The
+//     `paddingLeft + min(0, textIndent)` first-line MAPPING is still a CM
+//     @codemirror/view dist behaviour. A real-computed-padding pixel gate (a
+//     browser-mode layout test that asserts the rendered base equals the token)
+//     is a deferred follow-up — see docs/TODO.md.
 
 import { syntaxTree } from "@codemirror/language";
 import { type EditorState, RangeSetBuilder } from "@codemirror/state";
@@ -92,6 +100,7 @@ import {
   pointInExclusionZone,
 } from "../decorations/shared.js";
 import type { BuildContext } from "../decorations/types.js";
+import { CM_LINE_START_PADDING } from "../theme.js";
 import {
   columnAt,
   isBulletItem,
@@ -99,8 +108,6 @@ import {
   listItemGetsVerticalGap,
   resolveListItemHang,
 } from "./list-geometry.js";
-
-const CM_LINE_PAD_START = "6px";
 
 /** Visual-column width of the blockquote `>`-prefix that blockquote-reveal
  *  HIDES on `line` caret-off. Sums EACH wrapping `QuoteMark`'s hidden width
@@ -241,7 +248,7 @@ export function buildListHangIndent(
             // lock-step with the fold-gutter offset in cm/fold/index.ts.
             ...(gap ? { class: "quoll-list-hang" } : {}),
             attributes: {
-              style: `text-indent:calc(-1 * (${hang.indent}${markerGap}));padding-inline-start:calc(${CM_LINE_PAD_START} + (${hang.pad}${markerGap}))`,
+              style: `text-indent:calc(-1 * (${hang.indent}${markerGap}));padding-inline-start:calc(${CM_LINE_START_PADDING} + (${hang.pad}${markerGap}))`,
             },
           }),
         });
