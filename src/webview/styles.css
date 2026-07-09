@@ -693,7 +693,7 @@
     /* checkbox → text gap: the base 0.25em widened by the shared marker gap so it
      * matches the bullet → text gap (list-marker-restyle). font-size: inherit below
      * keeps this em matched to the provider hang term's em. */
-    margin-right: calc(0.25em + var(--quoll-list-marker-gap));
+    margin-right: calc(0.25em + var(--quoll-list-marker-gap, 0px));
     vertical-align: -0.15em;
     /* Todo (unchecked) is the DOMINANT element: a green rounded ring draws the
      * eye to incomplete work. The done box (below) recedes to muted grey. */

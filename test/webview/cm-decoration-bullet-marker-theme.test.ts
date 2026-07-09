@@ -29,7 +29,7 @@ describe("bulletMarkerThemeSpec — style contract", () => {
     const d1 = bulletMarkerThemeSpec[".quoll-bullet-marker-d1::before"];
     expect(d1.borderRadius).toBe("50%");
     expect(d1.backgroundColor).toContain("--quoll-bullet-marker");
-    // Sized by the token; the fallback pins the larger default (0.42em > old 0.34em).
+    // Sized by the token; the fallback pins the larger default (0.6em > old 0.34em).
     expect(d1.width).toBe("var(--quoll-bullet-dot-size, 0.6em)");
     expect(d1.height).toBe("var(--quoll-bullet-dot-size, 0.6em)");
   });
