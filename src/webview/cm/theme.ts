@@ -468,29 +468,54 @@ export const bulletMarkerThemeSpec = {
   ".quoll-bullet-marker": {
     // Hide the raw dash/star/plus glyph WITHOUT removing it from layout — the
     // char keeps its advance width, so revealing it (caret-on) never shifts the
-    // content column. `position: relative` anchors the ::before dot.
+    // content column. `position: relative` anchors the ::before marker.
     color: "transparent",
     position: "relative",
+    // First-line half of the marker → text gap (list-marker-restyle). The span
+    // exists only caret-off (bulletMarkerReveal emits nothing caret-on), so this is
+    // auto-gated; the continuation half is the list-hang provider's gap term. The
+    // ::before marker is position:absolute, so it does not move with this margin.
+    marginRight: "var(--quoll-list-marker-gap, 0px)",
   },
+  // Shared ::before positioning for every depth. Shape / size / paint live on the
+  // per-depth selectors below so the marker varies by nesting depth (Obsidian-style
+  // cue): d1 = filled dot (larger), d2 = hollow dot, d3+ = a dash bar. `left: 0`
+  // lands the marker's left edge on the text-column edge (contained; a negative
+  // `left` bleeds past it). position:absolute → purely visual, no layout shift, so
+  // the raw glyph's advance and the list-hang content column are unchanged.
   ".quoll-bullet-marker::before": {
     content: '""',
     position: "absolute",
-    // Pin a small disc at the glyph's start column and centre it on the inline
-    // box (top:50% + translateY(-50%)). Size tuned to the approved Variant B.
-    // `left: 0` lands the disc's left edge exactly on the text-column edge — the
-    // maximum-gap position that is still CONTAINED (a negative `left` bleeds the
-    // disc past the column, the overflow this fix removes). Purely visual: the
-    // disc is position:absolute, so this shifts nothing in layout — the raw `-`
-    // glyph keeps its advance (color:transparent), so there is no caret-on/off
-    // column jump and the list-hang content column is unchanged.
     left: "0",
     top: "50%",
-    width: "0.34em",
-    height: "0.34em",
     transform: "translateY(-50%)",
+    pointerEvents: "none",
+  },
+  // Depth 1: a filled disc, slightly larger than the pre-restyle 0.34em. Size is
+  // the --quoll-bullet-dot-size token (styles.css) so it stays tunable in one place.
+  ".quoll-bullet-marker-d1::before": {
+    width: "var(--quoll-bullet-dot-size, 0.6em)",
+    height: "var(--quoll-bullet-dot-size, 0.6em)",
     borderRadius: "50%",
     backgroundColor: "var(--quoll-bullet-marker, var(--vscode-textLink-foreground))",
-    pointerEvents: "none",
+  },
+  // Depth 2: a hollow disc (outline only) — same footprint as d1, no fill.
+  ".quoll-bullet-marker-d2::before": {
+    width: "var(--quoll-bullet-dot-size, 0.6em)",
+    height: "var(--quoll-bullet-dot-size, 0.6em)",
+    borderRadius: "50%",
+    backgroundColor: "transparent",
+    border:
+      "var(--quoll-bullet-hollow-border, 2px) solid var(--quoll-bullet-marker, var(--vscode-textLink-foreground))",
+    boxSizing: "border-box",
+  },
+  // Depth 3 and deeper: a short dash bar (a horizontal rule, not a disc) — a
+  // geometry-stable glyph substitute, same philosophy as the checkbox tick.
+  ".quoll-bullet-marker-d3::before": {
+    width: "var(--quoll-bullet-dash-width, 0.5em)",
+    height: "var(--quoll-bullet-dash-height, 2px)",
+    borderRadius: "1px",
+    backgroundColor: "var(--quoll-bullet-marker, var(--vscode-textLink-foreground))",
   },
 };
 

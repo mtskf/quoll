@@ -92,7 +92,13 @@ import {
   pointInExclusionZone,
 } from "../decorations/shared.js";
 import type { BuildContext } from "../decorations/types.js";
-import { columnAt, listItemGetsVerticalGap, resolveListItemHang } from "./list-geometry.js";
+import {
+  columnAt,
+  isBulletItem,
+  isTaskItem,
+  listItemGetsVerticalGap,
+  resolveListItemHang,
+} from "./list-geometry.js";
 
 const CM_LINE_PAD_START = "6px";
 
@@ -212,6 +218,19 @@ export function buildListHangIndent(
         }
         emitted.add(line.from);
         const gap = listItemGetsVerticalGap(ctx.state, node.node);
+        // Continuation half of the marker → text gap (list-marker-restyle). Added
+        // to BOTH indent and pad so it cancels in the first-line flow origin (the
+        // dot / checkbox does not move) while the soft-wrap continuation shifts right
+        // by the same G that the marker-span / checkbox margin pushes the first-line
+        // text — the two halves stay in lock-step. Gated on caret-OFF (so it matches
+        // the auto-gated CSS margins) AND on rendering a marker gap: plain bullets +
+        // ALL task checkboxes (bullet AND ordered tasks). A plain ORDERED item (no
+        // checkbox) is excluded → pixel-identical. The 0px fallback matches the CSS
+        // side so a token-less environment still yields a valid calc().
+        const markerGap =
+          !revealed && (isBulletItem(node.node) || isTaskItem(ctx.state, node.node))
+            ? " + var(--quoll-list-marker-gap, 0px)"
+            : "";
         out.push({
           from: line.from,
           deco: Decoration.line({
@@ -222,7 +241,7 @@ export function buildListHangIndent(
             // lock-step with the fold-gutter offset in cm/fold/index.ts.
             ...(gap ? { class: "quoll-list-hang" } : {}),
             attributes: {
-              style: `text-indent:calc(-1 * (${hang.indent}));padding-inline-start:calc(${CM_LINE_PAD_START} + (${hang.pad}))`,
+              style: `text-indent:calc(-1 * (${hang.indent}${markerGap}));padding-inline-start:calc(${CM_LINE_PAD_START} + (${hang.pad}${markerGap}))`,
             },
           }),
         });

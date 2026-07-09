@@ -90,6 +90,21 @@
      * checkbox. Keep in sync with .quoll-task-checkbox (width 1em +
      * margin-right 0.25em) plus the trailing source space. */
     --quoll-task-marker-width: 1.5em;
+    /* Extra marker to text gap added to unordered bullets and task checkboxes so the
+     * marker breathes from its text. Display-only: bullets via the marker span
+     * margin-right cm/theme.ts plus a matching provider hang term list-hang-indent.ts;
+     * checkboxes via the widget margin-right below. em so it tracks the body font.
+     * NB brace-free comment — the :root grep in styles-contract.test.ts captures to the
+     * first closing brace, so a brace literal here would truncate the token capture. */
+    --quoll-list-marker-gap: 0.5em;
+    /* Unordered-bullet marker geometry, varied by nesting depth in cm/theme.ts
+     * (bulletMarkerThemeSpec): depth 1 a filled disc, depth 2 a hollow disc, depth
+     * 3+ a dash bar. Tokens so the shapes are themeable and tunable in one place.
+     * The thin dimensions are px (crisp 2px hairlines that do not scale with font). */
+    --quoll-bullet-dot-size: 0.6em;
+    --quoll-bullet-hollow-border: 2px;
+    --quoll-bullet-dash-width: 0.5em;
+    --quoll-bullet-dash-height: 2px;
     /* Rendered width of ONE space in the proportional body font. The list-hang
      * geometry (cm/list/list-geometry.ts) expresses source-indentation
      * columns in this unit instead of `ch` (which, being the `0` glyph, is ~2×
@@ -675,7 +690,10 @@
     display: inline-block;
     width: 1em;
     height: 1em;
-    margin-right: 0.25em;
+    /* checkbox → text gap: the base 0.25em widened by the shared marker gap so it
+     * matches the bullet → text gap (list-marker-restyle). font-size: inherit below
+     * keeps this em matched to the provider hang term's em. */
+    margin-right: calc(0.25em + var(--quoll-list-marker-gap));
     vertical-align: -0.15em;
     /* Todo (unchecked) is the DOMINANT element: a green rounded ring draws the
      * eye to incomplete work. The done box (below) recedes to muted grey. */

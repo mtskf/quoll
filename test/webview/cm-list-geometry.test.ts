@@ -2,6 +2,8 @@ import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
 import { EditorState } from "@codemirror/state";
 import { describe, expect, it } from "vitest";
 import {
+  isBulletItem,
+  isTaskItem,
   resolveContentlessTaskMarkerGeometry,
   resolveListItemHang,
   resolveTaskMarkerGeometry,
@@ -421,6 +423,65 @@ describe("content-less / empty items — hang", () => {
   it("empty top-level bullet `-` still starts at the base column (indent === pad)", () => {
     const h = hangOfTop("-");
     expect(h?.indent).toEqual(h?.pad);
+  });
+});
+
+describe("isBulletItem — structural predicate (BulletList wrapper only)", () => {
+  it("true for `- a`, `* a`, `+ a` (any BulletList marker)", () => {
+    expect(isBulletItem(listItemAt("- a", 0).item)).toBe(true);
+    expect(isBulletItem(listItemAt("* a", 0).item)).toBe(true);
+    expect(isBulletItem(listItemAt("+ a", 0).item)).toBe(true);
+  });
+
+  it("true for an empty bullet `-`", () => {
+    expect(isBulletItem(listItemAt("-", 0).item)).toBe(true);
+  });
+
+  it("true for a nested bullet `  - b`", () => {
+    const doc = "- a\n  - b";
+    expect(isBulletItem(listItemAt(doc, doc.indexOf("b")).item)).toBe(true);
+  });
+
+  it("true for a bullet task `- [ ] a` / `- [x] a`", () => {
+    expect(isBulletItem(listItemAt("- [ ] a", 0).item)).toBe(true);
+    expect(isBulletItem(listItemAt("- [x] a", 0).item)).toBe(true);
+  });
+
+  it("false for an ordered item `1. a` (OrderedList wrapper)", () => {
+    expect(isBulletItem(listItemAt("1. a", 0).item)).toBe(false);
+  });
+
+  it("false for an ordered task `1. [ ] a`", () => {
+    expect(isBulletItem(listItemAt("1. [ ] a", 0).item)).toBe(false);
+  });
+});
+
+describe("isTaskItem — structural predicate (valid checkbox, content-bearing or content-less)", () => {
+  it("true for `- [ ] a` / `- [x] a` (content-bearing bullet task)", () => {
+    const a = listItemAt("- [ ] a", 0);
+    expect(isTaskItem(a.state, a.item)).toBe(true);
+    const b = listItemAt("- [x] a", 0);
+    expect(isTaskItem(b.state, b.item)).toBe(true);
+  });
+
+  it("true for `1. [ ] a` (content-bearing ordered task)", () => {
+    const { state, item } = listItemAt("1. [ ] a", 0);
+    expect(isTaskItem(state, item)).toBe(true);
+  });
+
+  it("true for a content-less bare marker `- [ ]`", () => {
+    const { state, item } = listItemAt("- [ ]", 0);
+    expect(isTaskItem(state, item)).toBe(true);
+  });
+
+  it("false for a plain bullet `- a` (no checkbox)", () => {
+    const { state, item } = listItemAt("- a", 0);
+    expect(isTaskItem(state, item)).toBe(false);
+  });
+
+  it("false for a plain ordered item `1. a` (no checkbox)", () => {
+    const { state, item } = listItemAt("1. a", 0);
+    expect(isTaskItem(state, item)).toBe(false);
   });
 });
 
