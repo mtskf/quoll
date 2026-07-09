@@ -15,17 +15,20 @@ import { type RangeSet, RangeSetBuilder, type RangeValue } from "@codemirror/sta
  * `out.sort((a, b) => a.from - b.from || a.to - b.to)` + fresh-builder loop
  * with a copy of this rationale; this helper owns that idiom once.
  *
- * `project` maps each item to a `[from, to, value]` triple. The sort is stable
- * (ES2019+ `Array.prototype.sort`), by `from` then `to`. `from` is the builder
- * requirement above (every call site uses a single decoration kind, so
- * `startSide` is uniform and the `from` order also satisfies the `startSide`
- * tie-break). The `to` tie-break mirrors what the original call sites sorted by,
- * kept so the pre-`add` order is self-sufficient rather than relying on
- * `RangeSet`'s internal re-sort of equal-`from` ranges — it is not separately
- * observable through the returned set (that re-sort already orders equal-`from`
- * ranges by `to`), so no test pins it in isolation. Stability keeps items with
- * an identical `[from, to]` in input order, so the emitted set is deterministic
- * regardless of how the pass enqueued equal-span ranges.
+ * `project` maps each item to a `[from, to, value]` triple, sorted stably
+ * (ES2019+ `Array.prototype.sort`) by `from` then `to`. This is byte-for-byte
+ * the key each original call site sorted by, so the refactor is
+ * behaviour-preserving: `from` satisfies the builder's primary requirement, and
+ * whatever equal-`from` ordering the pre-refactor inputs relied on to also
+ * satisfy the `startSide` tie-break is reproduced unchanged — the helper does
+ * not re-derive it (note some sites mix decoration kinds, e.g. link-reveal /
+ * inline-mark-reveal feed `Decoration.mark` and `Decoration.replace` together,
+ * so `startSide` is not globally uniform). The `to` tie-break is inherited for a
+ * deterministic pre-`add` order; it is not separately observable through the
+ * returned set — `RangeSet` re-sorts equal-`from` ranges by `to` on read — so no
+ * test pins it in isolation. Stability keeps items with an identical `[from, to]`
+ * in input order, so the emitted set is deterministic regardless of how the pass
+ * enqueued equal-span ranges.
  */
 export function buildSortedRangeSet<T, V extends RangeValue>(
   items: Iterable<T>,
