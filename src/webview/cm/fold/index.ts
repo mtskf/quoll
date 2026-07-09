@@ -61,7 +61,6 @@ import {
   type EditorState,
   type Extension,
   type RangeSet,
-  RangeSetBuilder,
   StateField,
   type Transaction,
 } from "@codemirror/state";
@@ -85,6 +84,7 @@ import { headingRhythmLevel } from "../decorations/heading-rhythm.js";
 import { quollSyntaxExclusionZones } from "../decorations/orchestrator.js";
 import { pointInExclusionZone } from "../decorations/shared.js";
 import { isRenderableListItem, listItemGetsVerticalGap } from "../list/list-geometry.js";
+import { buildSortedRangeSet } from "../sorted-range-set.js";
 import { expandToEnclosingBlock, touchesStructuralReparse } from "../structural-guard.js";
 
 const SVG_NS = "http://www.w3.org/2000/svg";
@@ -337,7 +337,7 @@ type FoldGutterFieldSpec =
  *  Distinct concern from the deliberately-un-factored `defineBlockWidgetField`
  *  (LEARNING.md 2026-06-29): block widgets carry an ORDINAL contract that makes their
  *  two bound mechanisms heterogeneous. Gutter line-class fields have no ordinal — they
- *  are pure RangeSetBuilder + map/update triples, so rule-of-three is satisfied. */
+ *  are pure buildSortedRangeSet + map/update triples, so rule-of-three is satisfied. */
 function defineFoldGutterLineClass(spec: FoldGutterFieldSpec): StateField<RangeSet<GutterMarker>> {
   // Run the per-field eligibility walk over [rangeFrom, rangeTo], threading the
   // exclusion zones a zone-aware field needs and calling the matching arity (the
@@ -353,13 +353,17 @@ function defineFoldGutterLineClass(spec: FoldGutterFieldSpec): StateField<RangeS
       ? spec.collect(state, state.facet(quollSyntaxExclusionZones), rangeFrom, rangeTo)
       : spec.collect(state, rangeFrom, rangeTo);
 
-  const build = (state: EditorState): RangeSet<GutterMarker> => {
-    const builder = new RangeSetBuilder<GutterMarker>();
-    for (const m of collectMarks(state, 0, state.doc.length)) {
-      builder.add(m.from, m.from, m.marker);
-    }
-    return builder.finish();
-  };
+  // Full-doc rebuild. Every `collect*` already emits marks in ascending `from`
+  // order over the whole doc (they walk the tree front-to-back and de-dup by
+  // line — see each collector), so buildSortedRangeSet's sort is a defensive
+  // no-op here; it is used for the shared idiom (and to stay correct if a future
+  // collector ever emits out of order), not because this input is unsorted.
+  const build = (state: EditorState): RangeSet<GutterMarker> =>
+    buildSortedRangeSet(collectMarks(state, 0, state.doc.length), (m) => [
+      m.from,
+      m.from,
+      m.marker,
+    ]);
 
   // Changed-range bounded recompute for the keystroke path: map the prior marker
   // set through the change, then re-walk ONLY the enclosing block of each changed

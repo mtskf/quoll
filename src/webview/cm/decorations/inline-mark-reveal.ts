@@ -20,8 +20,9 @@
 // the content directly. Heading/blockquote are the only constructs where
 // the syntactic prefix has a semantic space.
 
-import { RangeSetBuilder } from "@codemirror/state";
-import type { Decoration, DecorationSet } from "@codemirror/view";
+import type { DecorationSet } from "@codemirror/view";
+
+import { buildSortedRangeSet } from "../sorted-range-set.js";
 
 import { HIDE, intersectsAnySelection, REVEAL_MARK } from "./shared.js";
 import type { DecorationProvider } from "./types.js";
@@ -38,10 +39,10 @@ const SPAN_TO_MARK: ReadonlyMap<string, ReadonlySet<string>> = new Map([
 
 export const inlineMarkReveal: DecorationProvider = {
   build(ctx): DecorationSet {
-    // Collected as a flat array first so we can SORT before adding to the
-    // RangeSetBuilder — Lezer's tree-iterate is pre-order DFS, so nested
-    // child marks are visited between their parent's open and close marks,
-    // which violates RangeSetBuilder's "from must be non-decreasing"
+    // Collected as a flat array first so buildSortedRangeSet can SORT before
+    // adding to the RangeSetBuilder — Lezer's tree-iterate is pre-order DFS, so
+    // nested child marks are visited between their parent's open and close
+    // marks, which violates RangeSetBuilder's "from must be non-decreasing"
     // contract.
     const out: Array<{ from: number; to: number; revealed: boolean }> = [];
     for (const range of ctx.visibleRanges) {
@@ -73,11 +74,10 @@ export const inlineMarkReveal: DecorationProvider = {
         },
       });
     }
-    out.sort((a, b) => a.from - b.from || a.to - b.to);
-    const builder = new RangeSetBuilder<Decoration>();
-    for (const entry of out) {
-      builder.add(entry.from, entry.to, entry.revealed ? REVEAL_MARK : HIDE);
-    }
-    return builder.finish();
+    return buildSortedRangeSet(out, (entry) => [
+      entry.from,
+      entry.to,
+      entry.revealed ? REVEAL_MARK : HIDE,
+    ]);
   },
 };

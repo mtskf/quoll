@@ -129,7 +129,6 @@
 
 import { syntaxTree } from "@codemirror/language";
 import type { Extension } from "@codemirror/state";
-import { RangeSetBuilder } from "@codemirror/state";
 import {
   Decoration,
   type DecorationSet,
@@ -142,6 +141,7 @@ import {
   fencedCodeBlockRevealed,
   fencedCodeFenceLandmarks,
 } from "../fenced-code/fenced-code-body.js";
+import { buildSortedRangeSet } from "../sorted-range-set.js";
 import { toCtx } from "./build-context.js";
 import {
   CALLOUT_CLASS,
@@ -340,11 +340,14 @@ function buildBlockLineDecorations(
       },
     });
   }
-  const builder = new RangeSetBuilder<Decoration>();
-  for (const [from, set] of [...byLine.entries()].sort(([a], [b]) => a - b)) {
-    builder.add(from, from, Decoration.line({ class: [...set].join(" ") }));
-  }
-  return builder.finish();
+  // Map-entries variant: buildSortedRangeSet sorts the per-line entries by
+  // `from` (each line already dedups to one entry) for the builder's
+  // non-decreasing-`from` contract.
+  return buildSortedRangeSet(byLine.entries(), ([from, set]) => [
+    from,
+    from,
+    Decoration.line({ class: [...set].join(" ") }),
+  ]);
 }
 
 /** 1-based fence line → its FencedCode node, for every FencedCode WITH A BODY in
