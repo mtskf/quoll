@@ -18,6 +18,10 @@
 // openai.chatgpt v26.623.70822 out/extension.js), NOT a published contract — treat
 // the manual smoke + this comment as the canary.
 
+import { makeHandoffGuards } from "./handoff-guards.js";
+
+const { tryBool, tryShow } = makeHandoffGuards("codex-context-handoff");
+
 /** The Codex command that adds a whole file (by Uri) to the active Codex thread
  *  and reveals its sidebar. Isolated so an upstream rename is a one-line edit. */
 export const CODEX_ADD_FILE_COMMAND = "chatgpt.addFileToThread";
@@ -39,18 +43,6 @@ export type HandleCodexContextHandoffDeps<U> = {
   /** window.showWarningMessage bound — save-failure / command-missing abort. */
   showWarn: (message: string) => Thenable<unknown>;
 };
-
-/** Swallow-and-report wrapper for a Thenable that resolves false on failure.
- *  Returns true only when the op resolved truthy; logs + returns false on a
- *  throw or a false resolution. (Mirrors handle-context-handoff.ts.) */
-async function tryBool(op: () => Thenable<boolean>, label: string): Promise<boolean> {
-  try {
-    return (await op()) === true;
-  } catch (err) {
-    console.error(`[quoll] codex-context-handoff: ${label} failed`, err);
-    return false;
-  }
-}
 
 export async function handleCodexContextHandoff<U>(
   deps: HandleCodexContextHandoffDeps<U>
@@ -92,14 +84,4 @@ export async function handleCodexContextHandoff<U>(
     deps.showInfo,
     "Added this file to Codex (whole file — Codex doesn't support line-range handoff)."
   );
-}
-
-/** Show a toast, swallowing a rejected Thenable (host detached / dispatcher torn
- *  down) so the handler never throws on a UI surface. */
-async function tryShow(show: (m: string) => Thenable<unknown>, message: string): Promise<void> {
-  try {
-    await show(message);
-  } catch (err) {
-    console.error("[quoll] codex-context-handoff: message surface rejected", err);
-  }
 }

@@ -76,6 +76,9 @@
 //   is the trigger to revisit the raw-text-flash follow-up; neither exists yet.
 
 import { clampInt } from "../shared/clamping.js";
+import { makeHandoffGuards } from "./handoff-guards.js";
+
+const { tryBool, tryShow } = makeHandoffGuards("context-handoff");
 
 /** Claude Code's own zero-arg insert command (tier 0). Reads
  *  window.activeTextEditor + its selection, builds the @-mention, and routes
@@ -206,18 +209,6 @@ export function buildContextReference(
 
 function clampLine(line: number, lineCount: number): number {
   return clampInt(line, 1, Math.max(lineCount, 1));
-}
-
-/** Swallow-and-report wrapper for a Thenable that resolves false on failure.
- *  Returns true only when the op resolved truthy; logs + returns false on a
- *  throw or a false resolution. */
-async function tryBool(op: () => Thenable<boolean>, label: string): Promise<boolean> {
-  try {
-    return (await op()) === true;
-  } catch (err) {
-    console.error(`[quoll] context-handoff: ${label} failed`, err);
-    return false;
-  }
 }
 
 /** Tier 0 — reveal the document (activeTextEditor choreography) and delegate
@@ -363,14 +354,4 @@ export async function handleContextHandoff(
   // Neutral wording — the chord is Cmd+Option+K (mac) / Ctrl+Alt+K (win+linux),
   // so the paste hint must not hard-code ⌘V.
   await tryShow(deps.showInfo, `Copied ${reference} — paste it into Claude Code.`);
-}
-
-/** Show a toast, swallowing a rejected Thenable (host detached / dispatcher
- *  torn down) so the handler never throws on a UI surface. */
-async function tryShow(show: (m: string) => Thenable<unknown>, message: string): Promise<void> {
-  try {
-    await show(message);
-  } catch (err) {
-    console.error("[quoll] context-handoff: message surface rejected", err);
-  }
 }
