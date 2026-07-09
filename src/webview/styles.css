@@ -915,9 +915,9 @@
    * column. The scroller group-centres the foldGutter+content pair (see
    * cm/theme.ts), which CSS centring cannot mirror, so the plugin positions the
    * inner band from .cm-content's measured left+width (authoritative — no CSS
-   * max-width, which would clamp that JS-set width and truncate wide headings);
-   * the margin:auto below is only the pre-measure fallback. Solid editor background
-   * so scrolled
+   * max-width, which would clamp that JS-set width and truncate wide headings).
+   * The bar is [hidden] until that first measure runs, so there is no visible
+   * pre-measure layout to style. Solid editor background so scrolled
    * text does not bleed through; colours track --vscode-* (dark/light/HC follow).
    * Non-interactive (pointer-events:none) — a display-only breadcrumb; z-index:4
    * keeps it under the corner toggles (z-index:5). The plugin measures the
@@ -939,10 +939,9 @@
   }
   .quoll-sticky-heading-inner {
     box-sizing: border-box;
-    /* fallback centring before the first measure; JS then sets the exact
-     * marginLeft + width from .cm-content. No max-width — it would clamp the
-     * JS-set width and truncate wide headings before the reading-column edge. */
-    margin: 0 auto;
+    /* Width + marginLeft are set by JS from .cm-content's measured geometry (the
+     * bar is [hidden] until then). No CSS width/max-width — a max-width would
+     * clamp the JS-set width and truncate wide headings before the column edge. */
     /* 2.5rem mirrors .cm-content's inset; +6px absorbs CM's .cm-line left padding
      * (base theme: 0 2px 0 6px) so the bar text lines up with the prose exactly. */
     padding: 4px calc(2.5rem + 6px);
