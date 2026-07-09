@@ -285,6 +285,9 @@ export function mountShell(root: HTMLElement, opts: ShellOptions): ShellHandle {
         // compile time. The isHostToWebview boundary validator already
         // rejects unknown wire types, so this arm is unreachable under the
         // protocol; it documents the closed-union invariant statically.
+        // Shared failure mode with the reducer's guard (state.ts) and every
+        // host-side closed-union switch: THROW `[quoll] unhandled …` — fail
+        // loud on an impossible state rather than silently dropping/returning.
         const _exhaustive: never = message;
         throw new Error(
           `[quoll] unhandled HostToWebview: ${(_exhaustive as { type: string }).type}`

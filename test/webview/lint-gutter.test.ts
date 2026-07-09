@@ -12,7 +12,7 @@ const doc = Text.of(["line one", "line two", "line three"]);
 // line starts: 0, 9, 18 (each line + "\n")
 
 function diag(from: number, to: number, severity: "warning" | "info"): LintDiagnostic {
-  return { from, to, severity, code: "x", message: "m" };
+  return { from, to, severity, code: "no-trailing-spaces", message: "m" };
 }
 
 describe("lintGutterLineMarks", () => {
@@ -96,7 +96,7 @@ describe("quollLintGutter (view-level toggle via Compartment)", () => {
     // Publish a warning on line 0 via the effect — NO doc change.
     view.dispatch({
       effects: setLintDiagnostics.of([
-        { from: 0, to: 1, severity: "warning", code: "manual", message: "m" },
+        { from: 0, to: 1, severity: "warning", code: "no-trailing-spaces", message: "m" },
       ]),
     });
     expect(view.dom.querySelector(".quoll-lint-gutter-dot-warning")).not.toBeNull();
@@ -105,7 +105,7 @@ describe("quollLintGutter (view-level toggle via Compartment)", () => {
     // Replace with an info finding — the dot severity flips, still no doc change.
     view.dispatch({
       effects: setLintDiagnostics.of([
-        { from: 0, to: 1, severity: "info", code: "manual", message: "m" },
+        { from: 0, to: 1, severity: "info", code: "no-trailing-spaces", message: "m" },
       ]),
     });
     expect(view.dom.querySelector(".quoll-lint-gutter-dot-info")).not.toBeNull();
