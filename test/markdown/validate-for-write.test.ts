@@ -110,6 +110,30 @@ describe("validateMarkdownForWrite", () => {
     expect(result.ok).toBe(true);
   });
 
+  it("accepts an empty document (nothing to gate)", () => {
+    // The write-gate runs on every save, including a freshly-cleared
+    // buffer. An empty string has no frontmatter opener and no URLs, so
+    // it must pass — rejecting it would block the user from saving an
+    // emptied file. Pins the OPENER-miss + empty-URL-walk path returns ok.
+    expect(validateMarkdownForWrite("")).toEqual({ ok: true });
+  });
+
+  it("does not treat a 4-dash `----` line as a frontmatter opener", () => {
+    // OPENER is /^---[ \t]*\r?\n/ — exactly three dashes, then only trailing
+    // spaces/tabs before the newline. A `----` line fails that anchor, so the
+    // doc is plain Markdown and must round-trip (ok) rather than be gated as
+    // — and potentially rejected for — malformed frontmatter. If OPENER were
+    // ever loosened to swallow the extra dash, this flips.
+    expect(validateMarkdownForWrite("----\ntitle: x\n----\n\n# Body\n")).toEqual({ ok: true });
+  });
+
+  it("does not treat a `--- x` opener with trailing garbage as frontmatter", () => {
+    // Trailing non-whitespace after the three dashes also breaks the OPENER
+    // anchor (`[ \t]*` admits only spaces/tabs), so this is plain prose that
+    // round-trips rather than a recognised frontmatter block.
+    expect(validateMarkdownForWrite("--- x\ntitle: y\n---\n\n# Body\n")).toEqual({ ok: true });
+  });
+
   // The mocked-throw tests above pin the WIRING of the `internal_error`
   // catch arm. The two smoke tests below exercise the EFFICACY claim
   // baked into the catch's existence: deeply-nested adversarial input

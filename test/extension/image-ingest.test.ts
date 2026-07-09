@@ -39,6 +39,14 @@ describe("sniffImageKind", () => {
       )
     ).toBeNull();
   });
+
+  it("sniffs by leading magic only — a PNG-magic polyglot with trailing SVG bytes is png", () => {
+    // Sniffing is prefix-based: the first 8 bytes are the PNG signature, so a
+    // polyglot that appends `<svg …>` (or any script payload) AFTER a valid
+    // PNG header is classified png. Trailing bytes never change the verdict.
+    const polyglot = new Uint8Array([...PNG, ...SVG]);
+    expect(sniffImageKind(polyglot)).toBe("png");
+  });
 });
 
 describe("decideImageWrite", () => {
@@ -73,6 +81,27 @@ describe("decideImageWrite", () => {
     expect((decideImageWrite(true, JPEG) as { filename: string }).filename).toMatch(/\.jpg$/);
     expect((decideImageWrite(true, GIF89) as { filename: string }).filename).toMatch(/\.gif$/);
     expect((decideImageWrite(true, WEBP) as { filename: string }).filename).toMatch(/\.webp$/);
+  });
+
+  it("accepts a PNG-magic polyglot and writes the full bytes verbatim (trailing payload included)", () => {
+    // A polyglot (valid PNG header + trailing SVG/script bytes) passes the type
+    // gate on its leading magic. The decision writes the ENTIRE byte sequence —
+    // the trailing payload is NOT stripped — under a content hash of those full
+    // bytes, so it never collides with the plain-PNG name. This pins that
+    // prefix-sniffing is the whole type defense; sanitising embedded trailing
+    // content is out of scope (raster bytes are inert as an <img> src — the
+    // file is served, never executed).
+    const polyglot = new Uint8Array([...PNG, ...SVG]);
+    const d = decideImageWrite(true, polyglot);
+    expect(d.kind).toBe("write");
+    if (d.kind === "write") {
+      expect(d.filename).toMatch(/^[0-9a-f]{64}\.png$/);
+      expect(d.bytes).toBe(polyglot);
+      const plain = decideImageWrite(true, PNG);
+      if (plain.kind === "write") {
+        expect(d.filename).not.toBe(plain.filename);
+      }
+    }
   });
 
   it("is content-addressed: same bytes → same name, different bytes → different name", () => {
