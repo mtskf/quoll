@@ -100,6 +100,31 @@ export const quollTheme = EditorView.theme({
   ".cm-scroller": { overflow: "auto", justifyContent: "safe center" },
 });
 
+// The single JS reference to the `.cm-line` start-padding token. Points at the
+// EXISTING `--quoll-column-inset-left` (styles.css :root — see its comment there:
+// the tokenised single-source mirror of CM's base `.cm-line` 6px left inset,
+// already reserved by the fenced-code / blockquote / collapse-bar panels). The
+// `.cm-line` padding rule below AND the list-hang decoration base (list-hang-indent.ts)
+// both use THIS constant, so the line padding, the panels, and the hang base all
+// derive from ONE source and can never silently drift. 6px fallback keeps
+// token-less environments (unit tests) byte-compatible.
+export const CM_LINE_START_PADDING = "var(--quoll-column-inset-left, 6px)";
+
+// Quoll applies the shared column-inset token to the ACTUAL `.cm-line` left
+// padding. CodeMirror's baseTheme sets `.cm-line { padding: 0 2px 0 6px }` (a
+// private dist value); this closes the loop that styles.css's --quoll-column-inset-left
+// comment describes — the panels already MIRROR that token, and now the line
+// itself uses it too, so retuning the one :root token moves every inset together.
+// An EditorView.theme (not styles.css) so the single-class `.cm-line` rule beats
+// CM's unlayered baseTheme by cascade order (baseTheme is Prec.lowest-wrapped).
+export const cmLinePaddingThemeSpec = {
+  ".cm-line": {
+    paddingLeft: CM_LINE_START_PADDING,
+  },
+};
+
+export const quollCmLinePaddingTheme = EditorView.theme(cmLinePaddingThemeSpec);
+
 // Markdown token styling. Lezer tags → CSS. Heading sizes give the
 // Notion-ish hierarchy without rich nodes; the syntax marks stay
 // visible (no reveal in C1).

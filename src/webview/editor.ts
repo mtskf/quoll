@@ -49,6 +49,7 @@ import { tableBlockField, tableSkeletonField } from "./cm/table/index.js";
 import {
   quollBlockStyleTheme,
   quollBulletMarkerTheme,
+  quollCmLinePaddingTheme,
   quollCollapseToggleTheme,
   quollCopyButtonTheme,
   quollHeadingRhythmTheme,
@@ -350,6 +351,12 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
         quollSearchPanelTheme,
         quollMarkdownLanguage(),
         quollTheme,
+        // Quoll owns the `.cm-line` start padding via --quoll-column-inset-left
+        // (cm/theme.ts). An EditorView.theme so the single-class `.cm-line` rule
+        // beats CM's unlayered baseTheme `.cm-line { padding: 0 2px 0 6px }` by
+        // cascade order — the same token the list-hang decoration reads as its
+        // hang base, so base padding and hang move together. See cm/theme.ts.
+        quollCmLinePaddingTheme,
         quollHighlighting,
         // Style-free marker layer: tags strong/link spans with stable classes so
         // the nascent-setext reset can spare their bold/colour (see cm/theme.ts).

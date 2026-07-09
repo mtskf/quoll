@@ -7,6 +7,11 @@ import type { DecorationSet } from "@codemirror/view";
 import { EditorView } from "@codemirror/view";
 import { describe, expect, it, vi } from "vitest";
 import { buildListHangIndent, listHangIndent } from "../../src/webview/cm/list/list-hang-indent.js";
+import {
+  CM_LINE_START_PADDING,
+  cmLinePaddingThemeSpec,
+  quollCmLinePaddingTheme,
+} from "../../src/webview/cm/theme.js";
 import { fullTree } from "./helpers/full-tree.js";
 
 // Integration: mount a REAL EditorView with the listHangIndent ViewPlugin over
@@ -44,7 +49,10 @@ function mount(doc: string): EditorView {
   return new EditorView({
     state: EditorState.create({
       doc,
-      extensions: [markdown({ base: markdownLanguage }), listHangIndent],
+      // quollCmLinePaddingTheme wires the real editor's `.cm-line` padding — the
+      // finding this closes: mount() previously omitted it, so the test never
+      // reproduced the actual editor wiring the hang decoration relies on.
+      extensions: [markdown({ base: markdownLanguage }), listHangIndent, quollCmLinePaddingTheme],
     }),
     parent,
   });
@@ -92,19 +100,19 @@ describe("list hang-indent — ViewPlugin wired into a real editor (F3/F5 integr
       expect(styles).toHaveLength(3);
       // line 0 — top task (no parent, no step)
       expect(styles[0]).toContain(
-        "calc(6px + (0 * var(--quoll-prose-space, 1ch) + var(--quoll-task-marker-width)))"
+        "calc(var(--quoll-column-inset-left, 6px) + (0 * var(--quoll-prose-space, 1ch) + var(--quoll-task-marker-width)))"
       );
       // line 1 — task under task (one checkbox shift + one NEST_STEP), caret off
       // this line → the marker-to-text gap term is appended (list-marker-restyle).
       expect(styles[1]).toContain(
-        "calc(6px + (2 * var(--quoll-prose-space, 1ch) + 2 * var(--quoll-task-marker-width) + var(--quoll-list-marker-gap, 0px)))"
+        "calc(var(--quoll-column-inset-left, 6px) + (2 * var(--quoll-prose-space, 1ch) + 2 * var(--quoll-task-marker-width) + var(--quoll-list-marker-gap, 0px)))"
       );
       // line 2 — plain leaf two task levels deep (two shifts + two steps), and
       // its OWN plain `-` marker splits into 1 glyph col + 1 space col (the glyph
       // blend), so the 6 whitespace cols become 5 * space + 1 * glyph. Caret off
       // this line too → the gap term is appended.
       expect(styles[2]).toContain(
-        "calc(6px + (5 * var(--quoll-prose-space, 1ch) + 1 * calc((1ch + var(--quoll-prose-space, 1ch)) / 2) + 2 * var(--quoll-task-marker-width) + var(--quoll-list-marker-gap, 0px)))"
+        "calc(var(--quoll-column-inset-left, 6px) + (5 * var(--quoll-prose-space, 1ch) + 1 * calc((1ch + var(--quoll-prose-space, 1ch)) / 2) + 2 * var(--quoll-task-marker-width) + var(--quoll-list-marker-gap, 0px)))"
       );
     } finally {
       view.destroy();
@@ -150,5 +158,16 @@ describe("list hang-indent — ViewPlugin wired into a real editor (F3/F5 integr
     } finally {
       view.destroy();
     }
+  });
+
+  it("the `.cm-line` padding theme and the hang decoration base share one token", () => {
+    // Pins that cmLinePaddingThemeSpec's `.cm-line` left padding and the
+    // list-hang decoration's base (list-hang-indent.ts) both resolve to the
+    // SAME CM_LINE_START_PADDING constant — pointing at the canonical
+    // --quoll-column-inset-left token — so the two can never silently drift
+    // apart, and neither side can regress to a hardcoded literal or a
+    // different token name.
+    expect(cmLinePaddingThemeSpec[".cm-line"].paddingLeft).toBe(CM_LINE_START_PADDING);
+    expect(CM_LINE_START_PADDING).toContain("--quoll-column-inset-left");
   });
 });
