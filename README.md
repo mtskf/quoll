@@ -1,10 +1,8 @@
 # Quoll
 
-<p align="center">
-  <a href="https://marketplace.visualstudio.com/items?itemName=mtskf.quoll"><img src="https://img.shields.io/visual-studio-marketplace/v/mtskf.quoll?label=VS%20Code%20Marketplace" alt="VS Code Marketplace version"></a>
-  <a href="https://marketplace.visualstudio.com/items?itemName=mtskf.quoll"><img src="https://img.shields.io/visual-studio-marketplace/i/mtskf.quoll" alt="Marketplace installs"></a>
-  <a href="LICENSE"><img src="https://img.shields.io/github/license/mtskf/quoll" alt="License: MIT"></a>
-</p>
+[![VS Marketplace version](https://badgen.net/vs-marketplace/v/mtskf.quoll)](https://marketplace.visualstudio.com/items?itemName=mtskf.quoll)
+[![Marketplace installs](https://badgen.net/vs-marketplace/i/mtskf.quoll)](https://marketplace.visualstudio.com/items?itemName=mtskf.quoll)
+[![License: MIT](https://img.shields.io/github/license/mtskf/quoll)](LICENSE)
 
 Edit Markdown in VS Code with a Notion/Obsidian-style WYSIWYG editor, right inside your editor tabs.
 
