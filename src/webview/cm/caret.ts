@@ -7,16 +7,10 @@
 // in the node environment.
 
 import type { EditorState, Text } from "@codemirror/state";
+import { clampInt } from "../../shared/clamping.js";
 
 /** 0-based caret position (VS Code `Position` convention). */
 export type Caret = { line: number; character: number };
-
-function clampInt(value: number, min: number, max: number): number {
-  if (!Number.isFinite(value)) {
-    return min;
-  }
-  return Math.min(Math.max(Math.trunc(value), min), max);
-}
 
 /** Convert the selection's MAIN range head to a 0-based caret. CodeMirror
  *  `Line.number` is 1-based; the wire is 0-based, so subtract one. */

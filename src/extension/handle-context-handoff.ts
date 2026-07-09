@@ -75,6 +75,8 @@
 //   command (or an `extension.exports` API — activate() still returns undefined)
 //   is the trigger to revisit the raw-text-flash follow-up; neither exists yet.
 
+import { clampInt } from "../shared/clamping.js";
+
 /** Claude Code's own zero-arg insert command (tier 0). Reads
  *  window.activeTextEditor + its selection, builds the @-mention, and routes
  *  it to the visible Claude Code webview, else to the connected CLI `/ide`
@@ -203,10 +205,7 @@ export function buildContextReference(
 }
 
 function clampLine(line: number, lineCount: number): number {
-  if (!Number.isFinite(line)) {
-    return 1;
-  }
-  return Math.min(Math.max(Math.trunc(line), 1), Math.max(lineCount, 1));
+  return clampInt(line, 1, Math.max(lineCount, 1));
 }
 
 /** Swallow-and-report wrapper for a Thenable that resolves false on failure.
