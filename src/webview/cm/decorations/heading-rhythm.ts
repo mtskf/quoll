@@ -29,7 +29,7 @@
 // siblings carry neither — but the two still can never drift out of lock-step).
 
 import { syntaxTree } from "@codemirror/language";
-import { type EditorState, RangeSetBuilder } from "@codemirror/state";
+import type { EditorState } from "@codemirror/state";
 import {
   Decoration,
   type DecorationSet,
@@ -37,8 +37,8 @@ import {
   ViewPlugin,
   type ViewUpdate,
 } from "@codemirror/view";
-
 import { isNascentLoneSetextHeading } from "../markdown.js";
+import { buildSortedRangeSet } from "../sorted-range-set.js";
 import { toCtx } from "./build-context.js";
 import { quollSyntaxExclusionZones } from "./orchestrator.js";
 import { pointInExclusionZone } from "./shared.js";
@@ -147,9 +147,9 @@ export function buildHeadingRhythm(
   // We do NOT gate on `line.from >= range.from`: CodeMirror's visibleRanges can
   // begin mid-line when line-gap decorations split a very long wrapped line, so a
   // heading line whose start sits just before the range would be silently
-  // dropped. The final sort is what RangeSetBuilder's non-decreasing-`from`
-  // contract needs: a line touched only by a later range can otherwise surface a
-  // lower `from` after a higher one.
+  // dropped. buildSortedRangeSet's sort is what RangeSetBuilder's
+  // non-decreasing-`from` contract needs: a line touched only by a later range
+  // can otherwise surface a lower `from` after a higher one.
   const emitted = new Set<number>();
   const out: Array<{ from: number; deco: Decoration }> = [];
   for (const range of ctx.visibleRanges) {
@@ -188,12 +188,7 @@ export function buildHeadingRhythm(
       },
     });
   }
-  out.sort((a, b) => a.from - b.from);
-  const builder = new RangeSetBuilder<Decoration>();
-  for (const entry of out) {
-    builder.add(entry.from, entry.from, entry.deco);
-  }
-  return builder.finish();
+  return buildSortedRangeSet(out, (entry) => [entry.from, entry.from, entry.deco]);
 }
 
 /** Editor extension: a ViewPlugin holding the per-level heading padding-top line

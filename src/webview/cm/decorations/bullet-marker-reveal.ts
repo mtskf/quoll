@@ -21,13 +21,12 @@
 // replaces `- [ ]` starting at this same ListMark.from, so it owns the marker
 // column. Ordered lists (`N.`) are out of scope: only BulletList markers dot.
 
-import { RangeSetBuilder } from "@codemirror/state";
 import { Decoration, type DecorationSet } from "@codemirror/view";
-
 import {
   resolveContentlessTaskMarkerGeometry,
   resolveTaskMarkerGeometry,
 } from "../list/list-geometry.js";
+import { buildSortedRangeSet } from "../sorted-range-set.js";
 import { intersectsAnySelection } from "./shared.js";
 import type { BuildContext, DecorationProvider } from "./types.js";
 
@@ -109,15 +108,14 @@ export const bulletMarkerReveal: DecorationProvider = {
         },
       });
     }
-    // Sort so RangeSetBuilder sees a non-decreasing `from` (mirrors
-    // taskCheckboxReveal). The strict overlap guard above means a 1-char
-    // ListMark overlaps at most one of CM's disjoint visibleRanges, so it is
-    // collected once — no de-dup needed.
-    out.sort((a, b) => a.from - b.from || a.to - b.to);
-    const builder = new RangeSetBuilder<Decoration>();
-    for (const { from, to, depth } of out) {
-      builder.add(from, to, bulletMarkerDecoByDepth[Math.min(depth, 3) - 1]);
-    }
-    return builder.finish();
+    // The strict overlap guard above means a 1-char ListMark overlaps at most
+    // one of CM's disjoint visibleRanges, so it is collected once — no de-dup
+    // needed. buildSortedRangeSet owns the non-decreasing-`from` sort (mirrors
+    // taskCheckboxReveal).
+    return buildSortedRangeSet(out, ({ from, to, depth }) => [
+      from,
+      to,
+      bulletMarkerDecoByDepth[Math.min(depth, 3) - 1],
+    ]);
   },
 };

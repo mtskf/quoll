@@ -21,8 +21,9 @@
 // inline-mark-reveal). Click-to-open behaviour is wired separately in
 // src/webview/cm/link-handlers.ts.
 
-import { RangeSetBuilder } from "@codemirror/state";
 import { Decoration, type DecorationSet } from "@codemirror/view";
+
+import { buildSortedRangeSet } from "../sorted-range-set.js";
 
 import { HIDE, intersectsAnySelection, REVEAL_MARK } from "./shared.js";
 import type { DecorationProvider } from "./types.js";
@@ -40,7 +41,8 @@ export const linkReveal: DecorationProvider = {
     // Flat-array-then-sort pattern (review fix #9 from C4a's inline-mark
     // provider): Lezer pre-order DFS visits a Link's children between its
     // own enter/leave, so emitting straight to the builder violates the
-    // "from is non-decreasing" contract. Sort by from→to before insertion.
+    // "from is non-decreasing" contract. buildSortedRangeSet sorts by
+    // from→to before insertion.
     const out: Array<{ from: number; to: number; deco: Decoration }> = [];
     for (const range of ctx.visibleRanges) {
       ctx.tree.iterate({
@@ -115,11 +117,6 @@ export const linkReveal: DecorationProvider = {
         },
       });
     }
-    out.sort((a, b) => a.from - b.from || a.to - b.to);
-    const builder = new RangeSetBuilder<Decoration>();
-    for (const entry of out) {
-      builder.add(entry.from, entry.to, entry.deco);
-    }
-    return builder.finish();
+    return buildSortedRangeSet(out, (entry) => [entry.from, entry.to, entry.deco]);
   },
 };
