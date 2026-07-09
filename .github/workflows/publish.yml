@@ -83,13 +83,16 @@ jobs:
       - name: Audit .vsix contents
         run: node scripts/audit-vsix.mjs extension.vsix
 
+      # Token is read implicitly from the VSCE_PAT env var — never passed as a
+      # `-p <token>` CLI arg, so the secret cannot leak into process arguments.
       - name: Publish to VS Code Marketplace
         env:
           VSCE_PAT: ${{ secrets.VSCODE_PAT }}
-        run: pnpm exec vsce publish --no-dependencies --packagePath extension.vsix -p "$VSCE_PAT"
+        run: pnpm exec vsce publish --no-dependencies --packagePath extension.vsix
 
+      # Token is read implicitly from the OVSX_PAT env var (same rationale as above).
       - name: Publish to Open VSX
         env:
           OVSX_PAT: ${{ secrets.OPENVSX_PAT }}
         if: ${{ env.OVSX_PAT != '' }}
-        run: pnpm exec ovsx publish extension.vsix -p "$OVSX_PAT"
+        run: pnpm exec ovsx publish extension.vsix
