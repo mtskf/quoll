@@ -27,7 +27,7 @@ export type LintDiagnostic = {
   readonly code: string;
   readonly message: string;
   // Optional autofix descriptor (a CodeMirror ChangeSpec). Populated by
-  // no-trailing-spaces; applied ONLY by the explicit applyLintFixAtSelection
+  // no-trailing-spaces and no-multiple-blanks; applied ONLY by the explicit applyLintFixAtSelection
   // command (Mod-.), which re-lints the live doc before applying — NEVER
   // automatically. The display cache (lintField) does not map this field: the
   // apply path re-lints fresh rather than trusting the cached range. Stays
