@@ -8,6 +8,7 @@ import { cleanupBetweenTests, getHarness, isEditorConfigEvent, tick, VIEW_TYPE }
 import type { PanelControlsShape, RecordedEventShape, TestHarnessShape } from "./types";
 
 const GUTTER_KEY = "quoll.lint.gutter.enabled";
+const SPELLCHECK_KEY = "quoll.editor.spellcheck";
 
 // Poll `read()` until it returns >= `n` (or the deadline passes). Used to
 // observe fan-out / handshake events that accumulate one-per-panel: a single
@@ -75,10 +76,12 @@ describe("two-panel-config-caret", function () {
 
   const files: string[] = [];
   let originalGutter: unknown;
+  let originalSpellcheck: unknown;
 
   before(async () => {
     await getHarness();
     originalGutter = vscode.workspace.getConfiguration().inspect(GUTTER_KEY)?.globalValue;
+    originalSpellcheck = vscode.workspace.getConfiguration().inspect(SPELLCHECK_KEY)?.globalValue;
   });
 
   afterEach(async () => {
@@ -86,6 +89,9 @@ describe("two-panel-config-caret", function () {
     await vscode.workspace
       .getConfiguration()
       .update(GUTTER_KEY, originalGutter, vscode.ConfigurationTarget.Global);
+    await vscode.workspace
+      .getConfiguration()
+      .update(SPELLCHECK_KEY, originalSpellcheck, vscode.ConfigurationTarget.Global);
     await cleanupBetweenTests(harness);
     await Promise.all(files.splice(0).map((f) => fs.unlink(f).catch(() => undefined)));
   });
@@ -96,6 +102,14 @@ describe("two-panel-config-caret", function () {
     await vscode.workspace
       .getConfiguration()
       .update(GUTTER_KEY, false, vscode.ConfigurationTarget.Global);
+    // Pin spellcheck to a known value so the fan-out assertions below are
+    // deterministic regardless of any pre-existing global override. It is never
+    // flipped during this test — every editor-config the panels post must carry
+    // this same value, proving the SECOND editor-surface flag fans out alongside
+    // lintGutter (a spellcheck-drop in the fan-out reds the assertions below).
+    await vscode.workspace
+      .getConfiguration()
+      .update(SPELLCHECK_KEY, true, vscode.ConfigurationTarget.Global);
 
     const harness = await getHarness();
 
@@ -103,6 +117,11 @@ describe("two-panel-config-caret", function () {
       isEditorConfigEvent(e) && e.message.lintGutter === true;
     const isGutterOff = (e: RecordedEventShape): boolean =>
       isEditorConfigEvent(e) && e.message.lintGutter === false;
+    // Every editor-config event captured in this test must carry spellcheck:true
+    // (set once at the baseline, never changed). Asserts the flag rides the same
+    // per-panel fan-out as lintGutter rather than being dropped or defaulted.
+    const allCarrySpellcheck = (events: RecordedEventShape[]): boolean =>
+      events.every((e) => isEditorConfigEvent(e) && e.message.spellcheck === true);
 
     // --- (b1) editor-config fan-out proven PER-PANEL by incremental open -----
     // The harness records outbound posts in ONE global stream with no panel
@@ -144,6 +163,10 @@ describe("two-panel-config-caret", function () {
       1,
       "a single open panel must post exactly one editor-config on a gutter change"
     );
+    assert.ok(
+      allCarrySpellcheck(harness.events.filter(isGutterOn)),
+      "panel A's editor-config must carry spellcheck alongside lintGutter"
+    );
 
     // Add panel B → the SAME flip (true→false) now posts exactly TWO, one per
     // panel. The +1 delta proves the fan-out reaches the newly-opened webview,
@@ -171,6 +194,10 @@ describe("two-panel-config-caret", function () {
       harness.events.filter(isGutterOff).length,
       2,
       "two open panels must post exactly two editor-config — one per webview"
+    );
+    assert.ok(
+      allCarrySpellcheck(harness.events.filter(isGutterOff)),
+      "both panels' editor-config must carry spellcheck alongside lintGutter"
     );
 
     // --- (b2) per-panel caret isolation --------------------------------------

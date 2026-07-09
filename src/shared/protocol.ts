@@ -160,12 +160,13 @@ export type ThemeMessage = Envelope & {
  *  lifecycle (it carries no content / version), so it is delivered as its own
  *  message rather than folded into DocumentMessage: a settings change must not
  *  force a full document reseed. Pushed at seed time and on
- *  workspace.onDidChangeConfiguration. Currently carries a single flag — the
- *  opt-in advisory-lint gutter — modelled to grow (add fields, keep the type)
- *  as more editor-surface settings appear. */
+ *  workspace.onDidChangeConfiguration. Carries the editor-surface flags — the
+ *  opt-in advisory-lint gutter and the native-spellcheck toggle — modelled to
+ *  grow (add fields, keep the type) as more editor-surface settings appear. */
 export type EditorConfigMessage = Envelope & {
   type: "editor-config";
   lintGutter: boolean;
+  spellcheck: boolean;
 };
 
 /** Host→webview one-shot caret apply. Posted exactly once on the panel's
@@ -471,7 +472,7 @@ export function isHostToWebview(value: unknown): value is HostToWebview {
       }
       return v.ok ? typeof v.relativePath === "string" : v.relativePath === undefined;
     case "editor-config":
-      return typeof v.lintGutter === "boolean";
+      return typeof v.lintGutter === "boolean" && typeof v.spellcheck === "boolean";
     case "caret-apply":
       return isCaretCoordinate(v.line) && isCaretCoordinate(v.character);
     default:

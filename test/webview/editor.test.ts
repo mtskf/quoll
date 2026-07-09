@@ -1199,6 +1199,51 @@ describe("editor — Codex context-handoff keymap is registered", () => {
   });
 });
 
+// Native-spellcheck toggle: the `spellcheck` attribute on the contenteditable
+// `.cm-content` is driven by the host's editor-config push through
+// setSpellcheck. Defaults ON (matching quoll.editor.spellcheck), flips to
+// "false"/"true" via the compartment reconfigure, and a same-value push is a
+// no-op (no reconfigure dispatch). Whether Electron actually paints the red
+// underlines is host-side and covered by manual smoke, not this test.
+describe("editor — native spellcheck toggle", () => {
+  it("defaults the contenteditable spellcheck attribute to true", () => {
+    const { view } = mount();
+    expect(view.contentDOM.getAttribute("spellcheck")).toBe("true");
+  });
+
+  it("setSpellcheck(false) flips the attribute to false and back to true", () => {
+    const { handle, view } = mount();
+    handle.setSpellcheck(false);
+    expect(view.contentDOM.getAttribute("spellcheck")).toBe("false");
+    handle.setSpellcheck(true);
+    expect(view.contentDOM.getAttribute("spellcheck")).toBe("true");
+  });
+
+  it("a same-value setSpellcheck push is a no-op (no reconfigure dispatch)", () => {
+    const { handle, view } = mount();
+    const dispatchSpy = vi.spyOn(view, "dispatch");
+    // Already true (default) → must not reconfigure the compartment.
+    handle.setSpellcheck(true);
+    expect(dispatchSpy).not.toHaveBeenCalled();
+    // A real change DOES dispatch exactly once…
+    handle.setSpellcheck(false);
+    expect(dispatchSpy).toHaveBeenCalledTimes(1);
+    // …and the redundant repeat is a no-op again.
+    handle.setSpellcheck(false);
+    expect(dispatchSpy).toHaveBeenCalledTimes(1);
+    dispatchSpy.mockRestore();
+  });
+
+  it("toggling spellcheck does not mutate the document", () => {
+    const { handle, view } = mount();
+    handle.applyDocument("hello world", true, 1);
+    const before = view.state.sliceDoc();
+    handle.setSpellcheck(false);
+    expect(view.state.sliceDoc()).toBe(before);
+    expect(editPosts()).toHaveLength(0);
+  });
+});
+
 describe("editor — quollOpenExternalSink wiring", () => {
   it("wires quollOpenExternalSink to the host — table-cell link opens route through open-external", () => {
     const { view } = mount();

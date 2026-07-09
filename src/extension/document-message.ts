@@ -70,8 +70,11 @@ export function buildImageWriteResultMessage(
  *  preferences. Pushed at seed time and on workspace.onDidChangeConfiguration.
  *  Kept separate from DocumentMessage so a settings change does not force a
  *  full document reseed. */
-export function buildEditorConfigMessage(lintGutter: boolean): EditorConfigMessage {
-  return { protocol: PROTOCOL_VERSION, type: "editor-config", lintGutter };
+export function buildEditorConfigMessage(
+  lintGutter: boolean,
+  spellcheck: boolean
+): EditorConfigMessage {
+  return { protocol: PROTOCOL_VERSION, type: "editor-config", lintGutter, spellcheck };
 }
 
 /** Construct a CaretApply message carrying a 0-based caret. Pushed once on the

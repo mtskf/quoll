@@ -107,6 +107,12 @@ export type EditorHandle = {
    *  gutter extension is wholly present (on) or absent (off); off restores the
    *  pixel-identical no-gutter layout. Driven by the host's editor-config push. */
   setLintGutter(enabled: boolean): void;
+  /** Toggle the native (Electron) spellchecker on the contenteditable surface.
+   *  Reconfigures a Compartment holding `EditorView.contentAttributes` so the
+   *  `spellcheck` attribute on `.cm-content` flips true/false. Driven by the
+   *  host's editor-config push; whether the red underlines actually paint is
+   *  the webview host's (VS Code/Electron) call, not ours. */
+  setSpellcheck(enabled: boolean): void;
   /** Apply a host-pushed caret (one-shot editor-switch handoff). Focuses the
    *  view — only when this webview already owns focus — so CodeMirror paints the
    *  cursor, then dispatches a selection-only transaction (no document mutation)
@@ -175,6 +181,12 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
   const lineSepComp = new Compartment();
   const lintGutterCompartment = new Compartment();
   const lintGutterExtension = quollLintGutter();
+  // Native-spellcheck toggle: a Compartment holding EditorView.contentAttributes
+  // so the `spellcheck` attribute on the contenteditable `.cm-content` flips.
+  // Reconfigured by the host's editor-config push (setSpellcheck below).
+  const spellcheckCompartment = new Compartment();
+  const spellcheckAttrs = (enabled: boolean) =>
+    EditorView.contentAttributes.of({ spellcheck: String(enabled) });
   let seeding = false;
   // Echo-suppression for the editor-switch caret handoff. Set true around the
   // selection-only dispatch in applyRemoteCaret so the updateListener below
@@ -186,6 +198,10 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
   // (the eager-seed + ready double-send, or an unrelated config change) is a
   // no-op instead of a churn-inducing reconfigure.
   let lintGutterEnabled = false;
+  // Mirrors the spellcheck compartment's initial state (default ON, matching
+  // the `quoll.editor.spellcheck` default) so a redundant same-value push is a
+  // no-op instead of a churn-inducing reconfigure — same posture as the gutter.
+  let spellcheckEnabled = true;
 
   // edit-sync owns single-flight + debounce + buffer/replay. canPost is
   // the shared save-policy gate (canPostEdit, state.ts) — the SAME
@@ -394,6 +410,12 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
         // via shell.setLintGutter. A read-only view of lintField — no document
         // mutation, no write-gate coupling.
         lintGutterCompartment.of([]),
+        // Native-spellcheck attribute, held in a Compartment so the host's
+        // editor-config push can flip `spellcheck` on the contenteditable
+        // `.cm-content` at runtime. Defaults ON (matching quoll.editor.spellcheck)
+        // so the native red underlines light up out of the box; the host re-pushes
+        // the live setting on seed/ready/change. Display-only — no document mutation.
+        spellcheckCompartment.of(spellcheckAttrs(true)),
         // Opt-in autofix: Mod-. applies the fix descriptor of the lint findings
         // on the current line(s) (currently only no-trailing-spaces). The command
         // re-lints fresh and is the SINGLE byte-changing path — display-only lint
@@ -707,6 +729,19 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
       lintGutterEnabled = enabled;
       view.dispatch({
         effects: lintGutterCompartment.reconfigure(enabled ? lintGutterExtension : []),
+      });
+    },
+    setSpellcheck(enabled) {
+      // Same-value no-op guard, mirroring setLintGutter: the host posts
+      // editor-config at eager-seed AND `ready` (plus every relevant config
+      // change), so a duplicate must not churn the compartment / re-render the
+      // contenteditable attribute. Last-write-wins over the single FIFO channel.
+      if (enabled === spellcheckEnabled) {
+        return;
+      }
+      spellcheckEnabled = enabled;
+      view.dispatch({
+        effects: spellcheckCompartment.reconfigure(spellcheckAttrs(enabled)),
       });
     },
     applyRemoteCaret(caret) {

@@ -230,6 +230,7 @@ export function mountShell(root: HTMLElement, opts: ShellOptions): ShellHandle {
         return;
       case "editor-config":
         editor?.setLintGutter(message.lintGutter);
+        editor?.setSpellcheck(message.spellcheck);
         return;
       case "caret-apply":
         // One-shot caret handoff from the host (panel became active). Pure side
