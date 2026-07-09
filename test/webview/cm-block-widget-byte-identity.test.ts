@@ -52,6 +52,7 @@ import {
   frontmatterBlockField,
 } from "../../src/webview/cm/frontmatter/index.js";
 import { hostDocumentReseed } from "../../src/webview/cm/host-reseed.js";
+import { splitToCmText } from "../../src/webview/cm/seed.js";
 import {
   TableBlockWidget,
   tableBlockField,
@@ -447,6 +448,110 @@ describe("frontmatterBlockField byte-identity: bounded ≡ full", () => {
   for (const c of cases) {
     it(c.name, () => checkFrontmatterEquivalence(c.initial, c.edits));
   }
+});
+
+// ── CRLF-seeded byte-identity (line-ending-aware anchors) ───────────────────────
+//
+// Every fixture above is LF-only, so the CRLF→LF normalisation in the table
+// capture is a no-op and the byte anchors compare exact LF bytes. This block
+// exercises the CR path the LF fixtures cannot: a document seeded through the
+// PRODUCTION seed pair — `splitToCmText` (`Text.of(raw.split(/\r\n?|\n/))`, which
+// strips every `\r` so the CM line model is LF-internal) + a CRLF
+// `EditorState.lineSeparator` facet (which makes `state.sliceDoc` RENDER line
+// breaks back as `\r\n`). This is exactly editor.ts#applyDocument's seed for a
+// CRLF file, so a widget-capture regression that mishandles CR bytes surfaces
+// here where the LF fixtures stay silent.
+//
+// The two fields treat CR OPPOSITELY, and each anchor is written to that reality
+// (this is what "line-ending aware" means here — not a single normalise-both
+// shim, which would be vacuous):
+//
+//   • TABLE — the widget slice is DELIBERATELY LF-normalised at capture
+//     (table-skeleton.ts: `sliceDoc(...).replace(/\r\n?/g, "\n")`, so a cell's
+//     `raw` never carries an embedded `\r` the DOM would render as stray
+//     whitespace). CR is therefore NOT expected to survive into `w.slice`. The
+//     load-bearing round-trip lives at the DOCUMENT level: `sliceDoc` over the
+//     block range must reproduce the exact CRLF source bytes. Anchor BOTH: the
+//     doc slice == the raw CRLF source (CR preserved in the canonical doc), and
+//     `w.slice` == its LF-normalised form (CR correctly stripped in the copy).
+//
+//   • FRONTMATTER — `slice` is `state.sliceDoc(0, to)`, which RESPECTS the
+//     lineSeparator facet, so it carries CRLF verbatim; `body` is
+//     `doc.sliceString(...)` (no separator arg → always LF). Anchor that `slice`
+//     is byte-identical to the raw CRLF source (a regression that LF-normalised
+//     it — mirroring the table — would drop the `\r`) and that `body` is the
+//     LINE-ENDING-AWARE interior (`split(/\r\n?|\n/)`, NOT `split("\n")`, so the
+//     CR never leaks into a body line).
+//
+// Document-level CRLF round-trip is owned end-to-end by the host layer
+// (test/extension/e2e/crlf-roundtrip.test.ts, mixed-eol-roundtrip.test.ts,
+// test/markdown/round-trip.test.ts); this block only pins the widget-capture
+// slices, the one thing those host suites do not observe.
+
+describe("CRLF-seeded byte-identity: line-ending-aware widget anchors", () => {
+  it("table: the canonical doc keeps the CRLF bytes; the widget slice is its LF-normalised copy", () => {
+    const rawTable = "| H | I |\r\n| - | - |\r\n| a | b |";
+    // Prose before the table + default cursor at 0 (in the prose) keeps the
+    // caret off the table lines, so the field EMITS the widget rather than
+    // revealing its source — otherwise the anchor loop below would be vacuous.
+    // A BLANK line separates the table from the trailer so Lezer's Table `.to`
+    // does not overshoot into it ([[quoll-lezer-table-to-overshoots-trailing-line]]).
+    const raw = `intro\r\n\r\n${rawTable}\r\n\r\ntrailer`;
+    const parent = document.createElement("div");
+    document.body.appendChild(parent);
+    const view = new EditorView({
+      state: EditorState.create({
+        doc: splitToCmText(raw),
+        extensions: [EditorState.lineSeparator.of("\r\n"), ...tableExts()],
+      }),
+      parent,
+    });
+    try {
+      forceParsing(view, view.state.doc.length, 10_000);
+      const st = view.state;
+      const emitted = slots(st.field(tableBlockField));
+      expect(emitted.length).toBe(1); // the table renders (guards against vacuity)
+      const s = emitted[0];
+      const w = s.widget as TableBlockWidget;
+      // (1) Document-level byte-identity: sliceDoc renders through the CRLF facet,
+      //     so the canonical doc reproduces the exact CR bytes over the block.
+      expect(st.sliceDoc(s.from, s.to)).toBe(rawTable);
+      // (2) The captured slice is the deliberate LF-normalised view — CR stripped.
+      //     Line-ending aware: the doc slice is CRLF, w.slice is its LF form.
+      expect(w.slice).toBe(rawTable.replace(/\r\n?/g, "\n"));
+      expect(w.slice).toBe(st.sliceDoc(s.from, s.to).replace(/\r\n?/g, "\n"));
+    } finally {
+      view.destroy();
+    }
+  });
+
+  it("frontmatter: the captured slice keeps the CRLF bytes; body is the LF-normalised interior", () => {
+    const rawFm = "---\r\na: 1\r\n---"; // the collapsed span [0, span.to], CRLF
+    const raw = `${rawFm}\r\nbody`;
+    const state = EditorState.create({
+      doc: splitToCmText(raw),
+      extensions: [EditorState.lineSeparator.of("\r\n"), ...frontmatterExts()],
+    });
+    const rs = state.field(frontmatterBlockField);
+    expect(rs.kind).toBe("collapsed"); // the block forms (guards against vacuity)
+    if (rs.kind !== "collapsed") {
+      return;
+    }
+    const { span } = rs;
+    // (1) The frontmatter slice respects the lineSeparator facet, so it is
+    //     byte-identical to the raw CRLF source — CR preserved, not normalised.
+    expect(span.slice).toBe(rawFm);
+    expect(span.slice).toBe(state.sliceDoc(span.from, span.to)); // independent doc anchor
+    // (2) body drops the fences and stays LF — a LINE-ENDING-AWARE split of the
+    //     CRLF slice (split on /\r\n?|\n/, not "\n") so no `\r` leaks into it.
+    expect(span.body).toBe("a: 1");
+    expect(span.body).toBe(
+      span.slice
+        .split(/\r\n?|\n/)
+        .slice(1, -1)
+        .join("\n")
+    );
+  });
 });
 
 // ── non-vacuity ─────────────────────────────────────────────────────────────
