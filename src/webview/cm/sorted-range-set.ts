@@ -11,9 +11,9 @@ import { type RangeSet, RangeSetBuilder, type RangeValue } from "@codemirror/sta
  * that by construction — a Lezer pre-order DFS visits a nested child mark
  * between its parent's open and close marks, a multi-`visibleRange` walk can
  * surface a lower `from` from a later range, and `Map` iteration follows
- * insertion order. Each such call site used to keep its own
- * `out.sort((a, b) => a.from - b.from || a.to - b.to)` + fresh-builder loop
- * with a copy of this rationale; this helper owns that idiom once.
+ * insertion order. Each such call site used to keep its own sort + fresh-builder
+ * loop with a copy of this rationale; this helper owns that idiom once (the exact
+ * sort key each site used is detailed below).
  *
  * `project` maps each item to a `[from, to, value]` triple, sorted stably
  * (ES2019+ `Array.prototype.sort`) by `from` then `to`. Three of the six call
