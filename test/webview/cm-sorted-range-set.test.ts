@@ -36,21 +36,23 @@ describe("buildSortedRangeSet", () => {
     ]);
   });
 
-  it("breaks ties on `to` for an equal `from`", () => {
-    const wide = Decoration.mark({ class: "wide" });
-    const narrow = Decoration.mark({ class: "narrow" });
-    const set = buildSortedRangeSet(
-      [
-        { from: 4, to: 9, deco: wide },
-        { from: 4, to: 6, deco: narrow },
-      ],
-      (m) => [m.from, m.to, m.deco]
-    );
-    expect(entries(set)).toEqual([
-      [4, 6, narrow],
-      [4, 9, wide],
+  it("returns an empty RangeSet for an empty iterable", () => {
+    // Every migrated call site can legitimately collect zero items (no matching
+    // syntax in the visible range), so the zero-item path is a real boundary.
+    const set = buildSortedRangeSet<{ deco: Decoration }, Decoration>([], () => [
+      0,
+      0,
+      Decoration.mark({ class: "unused" }),
     ]);
+    expect(entries(set)).toEqual([]);
   });
+
+  // NOTE: there is deliberately no "breaks ties on `to`" test. The comparator's
+  // `to` tie-break only orders the pre-`add` sequence; RangeSet re-sorts
+  // equal-`from` ranges by `to` on read (verified against @codemirror/state), so
+  // the term has no separately observable effect on the returned set and any
+  // output-level assertion for it would be vacuous. The stable-sort test below
+  // pins the determinism that IS observable.
 
   it("is a stable sort — identical [from,to] items keep input order", () => {
     // A stable tie-break makes the output deterministic regardless of how the

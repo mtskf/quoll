@@ -353,6 +353,11 @@ function defineFoldGutterLineClass(spec: FoldGutterFieldSpec): StateField<RangeS
       ? spec.collect(state, state.facet(quollSyntaxExclusionZones), rangeFrom, rangeTo)
       : spec.collect(state, rangeFrom, rangeTo);
 
+  // Full-doc rebuild. Every `collect*` already emits marks in ascending `from`
+  // order over the whole doc (they walk the tree front-to-back and de-dup by
+  // line — see each collector), so buildSortedRangeSet's sort is a defensive
+  // no-op here; it is used for the shared idiom (and to stay correct if a future
+  // collector ever emits out of order), not because this input is unsorted.
   const build = (state: EditorState): RangeSet<GutterMarker> =>
     buildSortedRangeSet(collectMarks(state, 0, state.doc.length), (m) => [
       m.from,
