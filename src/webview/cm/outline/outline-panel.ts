@@ -20,6 +20,7 @@ import {
   ViewPlugin,
   type ViewUpdate,
 } from "@codemirror/view";
+import { requireQuollEditorHost } from "../editor-host.js";
 import { extractOutline, type OutlineHeading } from "./build-outline.js";
 
 /** Toggle chord. CM-scoped (fires only while the editor has focus), so it never
@@ -59,10 +60,7 @@ class OutlinePanel implements PluginValue {
     // which is the overlay's positioned ancestor (styles.css sets
     // position: relative on it). Fail fast rather than attaching the overlay
     // into CodeMirror's own managed DOM (view.dom) if that host is missing.
-    const host = view.dom.closest(".quoll-editor");
-    if (!(host instanceof HTMLElement)) {
-      throw new Error("quollOutline: EditorView must be mounted inside a .quoll-editor host");
-    }
+    const host = requireQuollEditorHost(view, "quollOutline");
     this.host = host;
 
     this.toggleEl = document.createElement("button");

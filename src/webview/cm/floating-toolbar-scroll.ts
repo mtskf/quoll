@@ -26,6 +26,7 @@
 
 import type { Extension } from "@codemirror/state";
 import { type EditorView, type PluginValue, ViewPlugin } from "@codemirror/view";
+import { requireQuollEditorHost } from "./editor-host.js";
 
 /** Whether the floating chrome is on-screen or slid off the top edge. */
 export type ToolbarVisibility = "shown" | "hidden";
@@ -100,12 +101,7 @@ class FloatingToolbarScroll implements PluginValue {
     // the two toggles attach to). Fail fast rather than stamping the class onto
     // CodeMirror's own managed DOM — same contract as quollOutline /
     // quollSwitchEditor.
-    const hostEl = view.dom.closest(".quoll-editor");
-    if (!(hostEl instanceof HTMLElement)) {
-      throw new Error(
-        "quollFloatingToolbarScroll: EditorView must be mounted inside a .quoll-editor host"
-      );
-    }
+    const hostEl = requireQuollEditorHost(view, "quollFloatingToolbarScroll");
     this.hostEl = hostEl;
     this.scroller = view.scrollDOM;
     this.state = { visibility: "shown", anchor: this.scroller.scrollTop };
