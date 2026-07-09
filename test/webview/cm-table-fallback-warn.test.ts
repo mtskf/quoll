@@ -44,10 +44,13 @@ describe("tableBlockField — missing tableSkeletonField fallback warning", () =
       EditorState.create({ doc: TABLE, extensions: base });
       expect(fallbackWarnings(warn)).toBe(1);
 
-      // Update path: dispatch doc-changing transactions on the live no-skeleton
-      // instance. Each runs update → computeFresh → buildAll → resolveModels — the
-      // exact per-keystroke path warn-once guards. The latch must hold it at one
-      // (a per-call regression would flood the count here, not just at create()).
+      // Update path (defence-in-depth): dispatch doc-changing transactions on the
+      // live no-skeleton instance. Each runs update → computeFresh → buildAll →
+      // resolveModels, the same shared choke point the create path hits — so the
+      // create-path assertions above already catch a per-call latch regression.
+      // This pins that the update/per-keystroke branch re-enters that choke point
+      // without re-warning, guarding a future refactor that split the update path
+      // onto its own resolve/latch.
       let state = live;
       for (let i = 0; i < 3; i++) {
         state = state.update({ changes: { from: state.doc.length, insert: "\nx" } }).state;
