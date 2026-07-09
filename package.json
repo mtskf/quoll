@@ -88,6 +88,11 @@
           "type": "boolean",
           "default": false,
           "markdownDescription": "Show an opt-in gutter dot on each line that has an advisory Markdown lint finding (severity-coloured: warning vs info). Off by default to keep the clean centred reading column; turning it on adds a thin gutter to the left of the text. The in-editor underlines and the **Problems** mirror are unaffected."
+        },
+        "quoll.editor.spellcheck": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "Enable the editor's native spellchecker (red squiggly underlines) on the Quoll editing surface. On by default. Turning it off removes the `spellcheck` attribute from the editor so no native spell suggestions appear."
         }
       }
     },

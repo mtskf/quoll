@@ -120,6 +120,13 @@ function readLintGutterEnabled(): boolean {
   return workspace.getConfiguration().get<boolean>(LINT_GUTTER_CONFIG_KEY, false);
 }
 
+// `affectsConfiguration` matches on this exact key.
+const SPELLCHECK_CONFIG_KEY = "quoll.editor.spellcheck";
+
+function readSpellcheckEnabled(): boolean {
+  return workspace.getConfiguration().get<boolean>(SPELLCHECK_CONFIG_KEY, true);
+}
+
 /** Trailing-debounce window for coalescing LOCK-FREE external-edit
  *  `documentChanged` dispatches. ~100 ms: long enough to collapse the sub-ms
  *  bursts that dominate the cost (formatter, git checkout, an AI tool writing
@@ -418,7 +425,7 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
     // every relevant onDidChangeConfiguration. Idempotent: a duplicate is a
     // harmless no-op compartment reconfigure webview-side.
     const postEditorConfig = (): void => {
-      post(buildEditorConfigMessage(readLintGutterEnabled()));
+      post(buildEditorConfigMessage(readLintGutterEnabled(), readSpellcheckEnabled()));
     };
 
     // Image-write executor. Orthogonal to the document-text write lock (it writes
@@ -608,7 +615,10 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
         if (disposed) {
           return;
         }
-        if (e.affectsConfiguration(LINT_GUTTER_CONFIG_KEY)) {
+        if (
+          e.affectsConfiguration(LINT_GUTTER_CONFIG_KEY) ||
+          e.affectsConfiguration(SPELLCHECK_CONFIG_KEY)
+        ) {
           postEditorConfig();
         }
       },

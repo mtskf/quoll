@@ -68,6 +68,7 @@ export type EditRejectedMessageShape = EnvelopeShape & {
 export type EditorConfigMessageShape = EnvelopeShape & {
   type: "editor-config";
   lintGutter: boolean;
+  spellcheck: boolean;
 };
 
 export type CaretReportMessageShape = EnvelopeShape & {

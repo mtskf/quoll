@@ -658,11 +658,13 @@ describe("isHostToWebview — editor-config", () => {
     protocol: PROTOCOL_VERSION,
     type: "editor-config" as const,
     lintGutter: false,
+    spellcheck: true,
   });
 
   it("accepts a well-formed editor-config", () => {
     expect(isHostToWebview(valid())).toBe(true);
     expect(isHostToWebview({ ...valid(), lintGutter: true })).toBe(true);
+    expect(isHostToWebview({ ...valid(), spellcheck: false })).toBe(true);
   });
 
   it("rejects a non-boolean lintGutter", () => {
@@ -672,6 +674,16 @@ describe("isHostToWebview — editor-config", () => {
 
   it("rejects a missing lintGutter", () => {
     const { lintGutter: _omit, ...rest } = valid();
+    expect(isHostToWebview(rest)).toBe(false);
+  });
+
+  it("rejects a non-boolean spellcheck", () => {
+    expect(isHostToWebview({ ...valid(), spellcheck: "yes" })).toBe(false);
+    expect(isHostToWebview({ ...valid(), spellcheck: 0 })).toBe(false);
+  });
+
+  it("rejects a missing spellcheck", () => {
+    const { spellcheck: _omit, ...rest } = valid();
     expect(isHostToWebview(rest)).toBe(false);
   });
 
