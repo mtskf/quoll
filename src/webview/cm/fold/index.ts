@@ -283,6 +283,34 @@ function exclusionZonesUnchanged(
   return true;
 }
 
+/** One per-line gutter marker at document offset `from`. */
+type FoldGutterMark = { from: number; marker: GutterMarker };
+
+/** Spec for `defineFoldGutterLineClass` — a DISCRIMINATED UNION on `zoneAware` so the
+ *  flag and `collect`'s arity move together: a zone-aware field MUST supply a 4-arg
+ *  `collect(state, zones, from, to)` and a non-zone-aware field a 3-arg
+ *  `collect(state, from, to)`. This makes the dangerous mis-pairing a COMPILE error
+ *  rather than a latent bug ("判断に頼るな、仕組みで防げ"): wiring a zone-dependent walk
+ *  (4-arg) as `zoneAware: false` — which would feed it empty zones AND skip the
+ *  facet-flip rebuild, silently mis-tagging frontmatter YAML list items — no longer
+ *  type-checks (a 4-arg function is not assignable to the 3-arg branch). The harmless
+ *  direction (a zone-agnostic 3-arg walk declared `zoneAware: true`) stays representable
+ *  but is correctness-neutral, since such a walk ignores the threaded zones. */
+type FoldGutterFieldSpec =
+  | {
+      zoneAware: true;
+      collect: (
+        state: EditorState,
+        zones: readonly { from: number; to: number }[],
+        rangeFrom: number,
+        rangeTo: number
+      ) => FoldGutterMark[];
+    }
+  | {
+      zoneAware: false;
+      collect: (state: EditorState, rangeFrom: number, rangeTo: number) => FoldGutterMark[];
+    };
+
 /** The three gutter line-class fields (`headingFoldGutterLineClass`,
  *  `listFoldGutterLineClass`, `headingRhythmFoldGutterLineClass`) share one shape:
  *  a `RangeSet<GutterMarker>` built by a full walk, bounded-recomputed on the
@@ -300,28 +328,31 @@ function exclusionZonesUnchanged(
  *  pre-factory behaviour (it had no facet term at all). This keeps the bounded≡full
  *  invariant intact per field (memory
  *  `[[quoll-fold-bounded-equals-full-tests-flaky-under-load]]`). The `spec.zoneAware &&`
- *  MUST stay first so a non-zone-aware field skips the facet read entirely.
+ *  MUST stay first so a non-zone-aware field skips the facet read entirely. The flag ↔
+ *  `collect`-arity pairing itself is compile-enforced by `FoldGutterFieldSpec` (see there).
  *
  *  Distinct concern from the deliberately-un-factored `defineBlockWidgetField`
  *  (LEARNING.md 2026-06-29): block widgets carry an ORDINAL contract that makes their
  *  two bound mechanisms heterogeneous. Gutter line-class fields have no ordinal — they
  *  are pure RangeSetBuilder + map/update triples, so rule-of-three is satisfied. */
-function defineFoldGutterLineClass(spec: {
-  collect: (
+function defineFoldGutterLineClass(spec: FoldGutterFieldSpec): StateField<RangeSet<GutterMarker>> {
+  // Run the per-field eligibility walk over [rangeFrom, rangeTo], threading the
+  // exclusion zones a zone-aware field needs and calling the matching arity (the
+  // union narrows `spec.collect` on `spec.zoneAware`). A non-zone-aware field never
+  // reads the facet at all — the `spec.zoneAware ?` discriminant short-circuits the
+  // whole `state.facet(...)` read, reproducing its exact pre-factory behaviour.
+  const collectMarks = (
     state: EditorState,
-    zones: readonly { from: number; to: number }[],
     rangeFrom: number,
     rangeTo: number
-  ) => { from: number; marker: GutterMarker }[];
-  zoneAware: boolean;
-}): StateField<RangeSet<GutterMarker>> {
-  const NO_ZONES: readonly { from: number; to: number }[] = [];
-  const zonesOf = (state: EditorState): readonly { from: number; to: number }[] =>
-    spec.zoneAware ? state.facet(quollSyntaxExclusionZones) : NO_ZONES;
+  ): FoldGutterMark[] =>
+    spec.zoneAware
+      ? spec.collect(state, state.facet(quollSyntaxExclusionZones), rangeFrom, rangeTo)
+      : spec.collect(state, rangeFrom, rangeTo);
 
   const build = (state: EditorState): RangeSet<GutterMarker> => {
     const builder = new RangeSetBuilder<GutterMarker>();
-    for (const m of spec.collect(state, zonesOf(state), 0, state.doc.length)) {
+    for (const m of collectMarks(state, 0, state.doc.length)) {
       builder.add(m.from, m.from, m.marker);
     }
     return builder.finish();
@@ -336,14 +367,13 @@ function defineFoldGutterLineClass(spec: {
   // its own interval) is argued at each `collect*` function.
   const recompute = (prev: RangeSet<GutterMarker>, tr: Transaction): RangeSet<GutterMarker> => {
     const state = tr.state;
-    const zones = zonesOf(state);
     const raw: Interval[] = [];
     tr.changes.iterChangedRanges((_fromA, _toA, fromB, toB) => {
       raw.push(expandToEnclosingBlock(state, fromB, toB));
     });
     let result = prev.map(tr.changes);
     for (const iv of mergeIntervals(raw)) {
-      const add = spec.collect(state, zones, iv.from, iv.to).map((m) => m.marker.range(m.from));
+      const add = collectMarks(state, iv.from, iv.to).map((m) => m.marker.range(m.from));
       result = result.update({ filterFrom: iv.from, filterTo: iv.to, filter: () => false, add });
     }
     return result;
@@ -403,8 +433,8 @@ function defineFoldGutterLineClass(spec: {
  *  the bounded window would strand such a heading's marker. Eligibility walk:
  *  collectHeadingMarks. Exported for the heading-detection contract test. */
 export const headingFoldGutterLineClass = defineFoldGutterLineClass({
-  collect: (state, _zones, rangeFrom, rangeTo) => collectHeadingMarks(state, rangeFrom, rangeTo),
   zoneAware: false,
+  collect: collectHeadingMarks,
 });
 
 /** A gutter-line marker tagging a list-item MARKER line's fold-gutter element so
