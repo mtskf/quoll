@@ -178,6 +178,31 @@ const quollHighlight = HighlightStyle.define(quollHighlightSpec);
 
 export const quollHighlighting = syntaxHighlighting(quollHighlight);
 
+// Style-FREE marker highlighter: emits STABLE class names on the two inline
+// tokens whose look would otherwise be flattened by the nascent-setext reset
+// (setext-nascent-reveal.ts + styles.css). Setting `class` makes CM emit NO CSS
+// of its own (it uses `style.class || def(...)` — the generated-CSS branch is
+// skipped), so this layer never affects normal rendering: it only tags spans.
+// It rides the SAME shared treeHighlighter as quollHighlighting, so the class it
+// emits is UNION'd onto the same span (`ͼstrong quoll-tok-strong`) — the seam
+// styles.css's `.quoll-setext-nascent-raw .quoll-tok-*` keep-rules re-assert
+// bold/link-colour against the reset. The two tokens mirror quollHighlightSpec's
+// only weight/colour tokens (t.strong → font-weight; t.link/t.url → colour); the
+// reset leaves font-style/text-decoration/background untouched, so italic /
+// strikethrough / inline-code need no marker. Keyed on the SAME tags the visual
+// spec uses, so "only what is bold/green today is kept" stays structurally in
+// sync (no node-name duplication to drift). Mounted alongside quollHighlighting
+// in editor.ts; pinned by cm-decoration-setext-nascent-render.test.ts.
+export const TOK_STRONG_CLASS = "quoll-tok-strong";
+export const TOK_LINK_CLASS = "quoll-tok-link";
+
+export const quollTokenMarkers = syntaxHighlighting(
+  HighlightStyle.define([
+    { tag: t.strong, class: TOK_STRONG_CLASS },
+    { tag: [t.link, t.url], class: TOK_LINK_CLASS },
+  ])
+);
+
 // Shared elliptical corner radii + vertical breathing room for every rounded block
 // EDGE — the fenced-code / blockquote OPEN (top) and CLOSE (bottom) fence lines, plus
 // the collapse-bar footer (collapseBarFooterCorner below). Radii are ELLIPTICAL to

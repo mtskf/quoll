@@ -985,19 +985,31 @@
  * there — the regex is the real guard). cm-decoration-setext-nascent-render pins
  * that the title computes to body size in a mounted editor.
  *
- * ACCEPTED TRADE-OFF (deliberate, not a bug): because CodeMirror emits the
- * heading tag and inline-emphasis tags as COMBINED classes on the SAME span
- * (e.g. `ͼq ͼt` for bold-inside-heading), no CSS selector can reset the heading
- * weight/colour while sparing the emphasis. So a formatted paragraph above a
- * lone dash (`Foo **bar**` then `-`) renders UNIFORMLY plain — bold/link styling
- * is flattened along with the heading look. This matches the "reveal raw source"
- * intent (a nascent list is shown as plain text) and is a rare, usually
- * transient state (typing list content makes it a real list). Preserving inline
- * emphasis would need a parser/highlight-level demotion instead of a CSS reset —
- * tracked as a follow-up (docs/TODO.md). */
+ * INLINE-EMPHASIS SURVIVAL (the reason the two keep-rules below exist). CodeMirror
+ * emits the heading tag and inline-emphasis tags as COMBINED classes on the SAME
+ * span (e.g. `ͼq ͼt` for bold-inside-heading), so no plain reset selector can lower
+ * the heading weight/colour while sparing the emphasis. The reset above touches
+ * ONLY font-size/font-weight/colour, so italic (font-style), strikethrough
+ * (text-decoration) and inline-code (background) already pass through untouched —
+ * the only casualties are bold (t.strong → weight) and link colour (t.link/t.url).
+ * quollTokenMarkers (theme.ts) tags exactly those two token kinds with the stable
+ * quoll-tok-strong / quoll-tok-link classes (a style-free highlighter union'd onto
+ * the same span), and the two rules below re-assert their property inside the
+ * nascent scope. They win because the descendant selector is one class MORE
+ * specific than the base reset's `.quoll-setext-nascent-raw *` leg while both carry
+ * `!important` (higher specificity breaks the important tie), and the token span is
+ * always a descendant of the mark span (highlight rides Prec.high, so it nests
+ * inside the reveal mark). So a formatted paragraph above a lone dash keeps its
+ * bold/link while the heading size/colour still drop to body. */
 .quoll-setext-nascent-raw,
 .quoll-setext-nascent-raw * {
   font-size: var(--vscode-font-size) !important;
   font-weight: 400 !important;
   color: var(--vscode-editor-foreground) !important;
+}
+.quoll-setext-nascent-raw .quoll-tok-strong {
+  font-weight: 700 !important;
+}
+.quoll-setext-nascent-raw .quoll-tok-link {
+  color: var(--quoll-accent-green, var(--vscode-textLink-foreground)) !important;
 }

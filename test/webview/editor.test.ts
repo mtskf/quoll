@@ -129,6 +129,24 @@ describe("editor — applyDocument seeds the CM doc (a)", () => {
   });
 });
 
+// (a2) quollTokenMarkers is wired into the PRODUCTION editor extension list.
+// The render test (cm-decoration-setext-nascent-render) mounts its own extension
+// list, so it proves the marker+keep-rule MECHANISM but not that editor.ts still
+// mounts the marker layer. This guards that seam: a strong span in the real editor
+// must carry the stable `quoll-tok-strong` class the nascent-setext keep-rule binds
+// to. Non-vacuous: drop `quollTokenMarkers` from editor.ts and this reds.
+describe("editor — nascent-setext token markers wired (production mount)", () => {
+  it("a strong span carries the quoll-tok-strong marker class", () => {
+    const { handle, view } = mount();
+    handle.applyDocument("Foo **bar**", true, 1);
+    const line = view.contentDOM.querySelector(".cm-line");
+    const bar = [...(line?.querySelectorAll("span") ?? [])]
+      .reverse()
+      .find((s) => s.textContent?.includes("bar"));
+    expect(bar?.classList.contains("quoll-tok-strong")).toBe(true);
+  });
+});
+
 // (b) Host reseed of identical bytes posts no Edit (seeding + cancelPendingFlush).
 describe("editor — idempotent reseed posts no Edit (b)", () => {
   it("identical rawText reseed produces no Edit on the post trail", () => {

@@ -56,6 +56,7 @@ import {
   quollSearchPanelTheme,
   quollTaskCompletedContentTheme,
   quollTheme,
+  quollTokenMarkers,
 } from "./cm/theme.js";
 import { getHost } from "./host.js";
 import { type Action, canPostEdit, type WebviewState } from "./state.js";
@@ -334,6 +335,9 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
         quollMarkdownLanguage(),
         quollTheme,
         quollHighlighting,
+        // Style-free marker layer: tags strong/link spans with stable classes so
+        // the nascent-setext reset can spare their bold/colour (see cm/theme.ts).
+        quollTokenMarkers,
         // Fenced-code panel + blockquote rule styling (block-style.ts line
         // decorations). An EditorView.theme (NOT styles.css) so it overrides
         // CM baseTheme's unlayered `.cm-line` padding — see cm/theme.ts.
