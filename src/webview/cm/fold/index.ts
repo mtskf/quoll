@@ -293,9 +293,12 @@ type FoldGutterMark = { from: number; marker: GutterMarker };
  *  rather than a latent bug ("判断に頼るな、仕組みで防げ"): wiring a zone-dependent walk
  *  (4-arg) as `zoneAware: false` — which would feed it empty zones AND skip the
  *  facet-flip rebuild, silently mis-tagging frontmatter YAML list items — no longer
- *  type-checks (a 4-arg function is not assignable to the 3-arg branch). The harmless
- *  direction (a zone-agnostic 3-arg walk declared `zoneAware: true`) stays representable
- *  but is correctness-neutral, since such a walk ignores the threaded zones. */
+ *  type-checks (a 4-arg function is not assignable to the 3-arg branch). The pairing is
+ *  SYMMETRIC: the reverse (a 3-arg walk declared `zoneAware: true`) is rejected too —
+ *  positional parameter matching lands the walk's 2nd param (`rangeFrom: number`) in the
+ *  `zones` slot, and `number` is not assignable from `readonly {from,to}[]`. So each
+ *  `zoneAware` value admits exactly its own `collect` arity, and neither cross-pairing
+ *  compiles. */
 type FoldGutterFieldSpec =
   | {
       zoneAware: true;
