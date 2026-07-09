@@ -110,6 +110,40 @@ describe("validateMarkdownForWrite", () => {
     expect(result.ok).toBe(true);
   });
 
+  it("accepts an empty document (nothing to gate)", () => {
+    // The write-gate runs on every save, including a freshly-cleared
+    // buffer. An empty string has no frontmatter opener and no URLs, so
+    // it must pass — rejecting it would block the user from saving an
+    // emptied file. Pins the OPENER-miss + empty-URL-walk path returns ok.
+    expect(validateMarkdownForWrite("")).toEqual({ ok: true });
+  });
+
+  // A 4-dash `----` line and a `--- x` trailing-garbage line both fail the
+  // OPENER anchor (`/^---[ \t]*\r?\n/` — exactly three dashes, then only
+  // spaces/tabs before the newline), so they are plain Markdown, not a
+  // frontmatter opener. These tests pin the OBSERVABLE contract: the write-gate
+  // ACCEPTS such documents (they round-trip) and must not start rejecting them.
+  //
+  // NOTE — deliberately a characterization test, not a mutation test of OPENER:
+  // the write-gate's ok/error verdict is INVARIANT to whether a leading
+  // `---`-ish line is classified as frontmatter. `checkFrontmatter` returns
+  // null on both the opener-miss and opener-match paths (the URL gate then runs
+  // on the full document either way), and the `invalid_frontmatter` arm is
+  // structurally unreachable under `checkFrontmatter`'s walk (the first
+  // `FENCE_LINE` is always consumed as the closer, so the sliced body can never
+  // contain a bare `---`). Loosening OPENER to swallow the extra dash / trailing
+  // garbage is therefore behaviour-equivalent for these inputs and would NOT
+  // flip these assertions — confirmed empirically (review-cycle 2026-07-09).
+  // The regression this guards is the gate regressing to REJECT malformed-
+  // separator docs, not a change in OPENER's dash-count precision.
+  it("accepts a doc with a leading 4-dash `----` line (round-trips as plain Markdown)", () => {
+    expect(validateMarkdownForWrite("----\ntitle: x\n----\n\n# Body\n")).toEqual({ ok: true });
+  });
+
+  it("accepts a doc with a `--- x` trailing-garbage line (round-trips as plain Markdown)", () => {
+    expect(validateMarkdownForWrite("--- x\ntitle: y\n---\n\n# Body\n")).toEqual({ ok: true });
+  });
+
   // The mocked-throw tests above pin the WIRING of the `internal_error`
   // catch arm. The two smoke tests below exercise the EFFICACY claim
   // baked into the catch's existence: deeply-nested adversarial input
