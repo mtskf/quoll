@@ -105,6 +105,29 @@ describe("heading-rhythm provider — Setext headings", () => {
   });
 });
 
+describe("heading-rhythm provider — nascent lone setext (no heading affordances)", () => {
+  // A lone `-`/`=` typed under a paragraph parses as a SetextHeading but reads as
+  // a bullet list in progress (see setext-nascent-reveal.ts). The font is demoted
+  // there; rhythm padding must be suppressed in lock-step via the shared
+  // isNascentLoneSetextHeading predicate — else the paragraph keeps a heading's
+  // top spacing while looking like plain text.
+  it("does NOT tag a lone `-` underline (nascent SetextHeading2)", () => {
+    // "intro\n\nFoo\n-": SetextHeading2 [7,12], HeaderMark [11,12] "-" (lone).
+    expect(lines(buildHeadingRhythm(ctx("intro\n\nFoo\n-")))).toEqual([]);
+  });
+
+  it("does NOT tag a lone `=` underline (nascent SetextHeading1)", () => {
+    expect(lines(buildHeadingRhythm(ctx("intro\n\nFoo\n=")))).toEqual([]);
+  });
+
+  it("KEEPS the tag for a real multi-char `---` heading (no regression)", () => {
+    // Two-or-more dashes read as an intentional heading → rhythm stays.
+    expect(lines(buildHeadingRhythm(ctx("intro\n\nFoo\n---")))).toEqual([
+      { from: 7, cls: "quoll-heading-rhythm-2" },
+    ]);
+  });
+});
+
 describe("heading-rhythm provider — exclusion zones (frontmatter guard)", () => {
   // A YAML frontmatter body line like `title: y` followed by `---` parses under
   // plain Lezer as a SetextHeading2 DIRECTLY under Document. The fixture keeps that

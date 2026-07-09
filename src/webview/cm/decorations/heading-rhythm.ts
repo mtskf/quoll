@@ -38,6 +38,7 @@ import {
   type ViewUpdate,
 } from "@codemirror/view";
 
+import { isNascentLoneSetextHeading } from "../markdown.js";
 import { quollSyntaxExclusionZones } from "./orchestrator.js";
 import { pointInExclusionZone } from "./shared.js";
 import type { BuildContext } from "./types.js";
@@ -63,6 +64,11 @@ export const HEADING_NODE = /^(?:ATXHeading|SetextHeading)([1-6])$/;
  *  (below) and the fold-gutter StateField (cm/fold/index.ts) so the two halves
  *  cannot drift. Applies the locked design decisions in order:
  *   1. Level match — non-headings (and a malformed level) drop out.
+ *   1b. Nascent lone setext — a lone-`-`/`=` underline reads as a bullet list in
+ *      progress, not a heading (isNascentLoneSetextHeading, markdown.ts). Its
+ *      FONT is already demoted (setext-nascent-reveal.ts); suppress rhythm padding
+ *      + the fold-gutter row in lock-step so the paragraph keeps no heading
+ *      spacing affordance. Multi-char `---`/`===` stay real headings.
  *   2. TOP-LEVEL only — emit only when the heading's parent is the tree's top
  *      (Document) node. NodeType singletons compare stably, so this is more
  *      future-proof than the string "Document" and avoids the on-demand
@@ -96,6 +102,9 @@ export function headingRhythmLevel(
   const m = HEADING_NODE.exec(node.name);
   if (!m) {
     return null;
+  }
+  if (isNascentLoneSetextHeading(node.node)) {
+    return null; // lone-`-`/`=` nascent list — no rhythm padding / fold-gutter row
   }
   const level = Number(m[1]); // 1..6 by the regex
   if (node.node.parent?.type !== tree.topNode.type) {

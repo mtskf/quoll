@@ -127,6 +127,29 @@ describe("re-implemented headerIndent folds byte-identically to upstream", () =>
   // null): an EMPTY section returns null (sectionEnd === end, so `upto > end` is
   // false — this kills a `>=` mutant of that comparison), and a body line PAST
   // line 0 returns null via the `node.from < start` parent-walk break guard.
+  // Quoll-SPECIFIC divergence (NOT a parity oracle): a lone `-`/`=` setext
+  // underline reads as a nascent bullet list, so quollLang suppresses its fold
+  // chevron via the shared isNascentLoneSetextHeading predicate — while upstream,
+  // which has no such notion, still folds it as a heading.
+  it("suppresses the fold chevron for a nascent lone `-`/`=` setext (diverges from upstream)", () => {
+    for (const underline of ["-", "="]) {
+      const doc = `intro\n\nFoo\n${underline}\n\nbody\n`;
+      const fooAt = doc.indexOf("Foo");
+      expect(foldHeadingRange(quollLang, doc, fooAt)).toBeNull(); // no chevron in Quoll
+      expect(foldHeadingRange(upstreamLang, doc, fooAt)).not.toBeNull(); // upstream still folds it
+    }
+  });
+
+  it("KEEPS the fold chevron for a real multi-char setext heading (no regression)", () => {
+    // Two-or-more `-`/`=` read as an intentional heading → chevron stays, parity
+    // with upstream.
+    const doc = "intro\n\nFoo\n---\n\nbody\n";
+    const fooAt = doc.indexOf("Foo");
+    const q = foldHeadingRange(quollLang, doc, fooAt);
+    expect(q).not.toBeNull();
+    expect(q).toEqual(foldHeadingRange(upstreamLang, doc, fooAt));
+  });
+
   it("empty-section and post-heading body lines fold to null, matching upstream", () => {
     const empty = "# A\n# B\n"; // sectionEnd(A) === A.to === end → no fold
     expect(foldHeadingRange(quollLang, empty, 0)).toBeNull();

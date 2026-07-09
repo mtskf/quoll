@@ -132,8 +132,30 @@ export const nonFoldableBlocks: MarkdownExtension = {
 // chevron. Pinned by cm-markdown-language.test.ts (byte-identical to upstream),
 // cm-fold-delegation.test.ts, and cm-fold-blockquote.test.ts (heading-in-blockquote).
 function headingLevel(node: SyntaxNode): number | null {
+  if (isNascentLoneSetextHeading(node)) {
+    return null; // a lone-`-`/`=` nascent list is not a heading → no fold chevron
+  }
   const match = /^(?:ATX|Setext)Heading(\d)$/.exec(node.type.name);
   return match ? Number(match[1]) : null;
+}
+
+/** True when `node` is a "nascent lone setext heading": a SetextHeading1/2 whose
+ *  underline is a SINGLE `-`/`=` — the shape a user types en route to a bullet
+ *  list, NOT an intentional multi-char `---`/`===` heading. This is the ONE
+ *  shared definition consumed by setext-nascent-reveal.ts (font de-style),
+ *  heading-rhythm.ts's `headingRhythmLevel` (rhythm padding + fold-gutter row),
+ *  and this module's `headingLevel` (fold chevron) so all three heading
+ *  affordances demote in lock-step — see setext-nascent-reveal.ts's header for
+ *  the full rationale. Mirrors that file's check: setext marks ONLY the
+ *  underline, so the heading's lastChild is the underline HeaderMark; a lone
+ *  marker is length 1 (the trailing space of a mid-typing `- ` is excluded from
+ *  the mark, so `Foo\n- ` still reads as lone). */
+export function isNascentLoneSetextHeading(node: SyntaxNode): boolean {
+  if (node.type.name !== "SetextHeading1" && node.type.name !== "SetextHeading2") {
+    return false;
+  }
+  const mark = node.lastChild;
+  return mark != null && mark.type.name === "HeaderMark" && mark.to - mark.from === 1;
 }
 
 function sectionEnd(headerNode: SyntaxNode, level: number): number {
