@@ -151,13 +151,34 @@ describe("rule 3 — gated-on reference resolution", () => {
     expect(lintGatedRefs(doc)).toEqual([]);
   });
 
-  it("ignores the phrase inside inline code (the rule's own docs)", () => {
+  it("ignores a matching phrase inside inline code (the rule's own docs)", () => {
+    // The backticked phrase WOULD match the regex (it has the `entry` trigger
+    // and resolves to nothing), so this genuinely exercises stripInlineCode:
+    // backticked → suppressed, un-backticked → a violation (asserted next).
     const doc = `### 🐛 Bugs
 
-- [ ] 🐛 [LOW] **Meta** — enforce that every \`gated on X\` reference resolves.
+- [ ] 🐛 [LOW] **Meta** — enforce that \`gated on the phantom entry\` is inert.
   - Done when: done.
 `;
     expect(lintGatedRefs(doc)).toEqual([]);
+  });
+
+  it("does flag the same phrase once the backticks are removed (non-vacuity control)", () => {
+    const doc = `### 🐛 Bugs
+
+- [ ] 🐛 [LOW] **Meta** — enforce that gated on the phantom entry is inert.
+  - Done when: done.
+`;
+    expect(lintGatedRefs(doc)).toHaveLength(1);
+  });
+
+  it("emits one violation per unresolved reference on a single line", () => {
+    const doc = `### 🐛 Bugs
+
+- [ ] 🐛 [LOW] **Two gates** — gated on the alpha entry and gated on the beta entry.
+  - Done when: done.
+`;
+    expect(lintGatedRefs(doc)).toHaveLength(2);
   });
 });
 
@@ -210,6 +231,22 @@ describe("fenced-code safety", () => {
     // The fenced `- [ ]` lines must not surface as rule-1/rule-2 violations,
     // and the fenced `- ` bullets must not surface as rule-4 violations.
     expect(lintTodoText(doc)).toEqual([]);
+  });
+});
+
+describe("CRLF safety", () => {
+  it("still detects violations when the document uses CRLF line endings", () => {
+    // A stray trailing \r must not silently disable the $-anchored regexes.
+    const doc = [
+      "### 🐛 Bugs",
+      "",
+      "- [ ] 🐛 [MED] **CRLF task with no Done-when**",
+      "  - just prose.",
+      "",
+    ].join("\r\n");
+    const v = lintDoneWhen(doc);
+    expect(v).toHaveLength(1);
+    expect(v[0].rule).toBe(1);
   });
 });
 

@@ -104,7 +104,11 @@ function stripInlineCode(line) {
 // in-fenced-code flag (length-aware so a ```` block wrapping ``` examples is
 // treated as one opaque span), and the top-level entries with their sub-blocks.
 export function analyzeTodo(text) {
-  const lines = text.split("\n");
+  // Split on LF or CRLF — a stray trailing \r defeats the $-anchored heading /
+  // checkbox regexes below (JS `.` and `$` do not span \r without the `m`
+  // flag), which would silently detect zero entries and pass a CRLF-authored
+  // TODO vacuously. Normalizing here keeps every rule CRLF-safe.
+  const lines = text.split(/\r?\n/);
   const meta = []; // { text, heading, inFence } per line, 1-based via idx+1
   const headings = []; // { line, text }
   let currentHeading = "(preamble)";
@@ -161,7 +165,9 @@ export function analyzeTodo(text) {
       break; // column-0 non-blank line → next construct
     }
     const block = meta.slice(start, j).map((m) => m.text);
-    const title = (raw.match(/\*\*(.+?)\*\*/)?.[1] ?? raw.slice(4).trim()).slice(0, 80);
+    // Prefer the **bold** headline; else the checkbox's captured remainder
+    // (cb[2] — the text after `- [ ] `). Used only in violation messages.
+    const title = (raw.match(/\*\*(.+?)\*\*/)?.[1] ?? cb[2].trim()).slice(0, 80);
     entries.push({
       line: start + 1,
       heading,
