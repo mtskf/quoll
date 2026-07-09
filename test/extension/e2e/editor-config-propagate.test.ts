@@ -1,14 +1,25 @@
 import * as assert from "node:assert";
 import * as vscode from "vscode";
+import { PROTOCOL_VERSION } from "./constants";
 import {
   cleanupBetweenTests,
   getHarness,
   isEditorConfigEvent,
   openFixtureWithQuoll,
+  tick,
 } from "./harness";
 
 const KEY = "quoll.lint.gutter.enabled";
 const SPELLCHECK_KEY = "quoll.editor.spellcheck";
+
+// Gate on BOTH type === "ready" AND the protocol envelope: recordInbound fires
+// PRE-validator, so without the protocol check a wire-malformed ready could
+// falsely satisfy the handshake gate. Mirrors the two-panel-config-caret test.
+const isReadyInbound = (r: { raw: unknown }): boolean =>
+  typeof r.raw === "object" &&
+  r.raw !== null &&
+  (r.raw as { type?: unknown }).type === "ready" &&
+  (r.raw as { protocol?: unknown }).protocol === PROTOCOL_VERSION;
 
 // Pins host->webview editor-config delivery: an editor-config is posted at
 // seed time (carrying the current setting), and a fresh one is posted when
@@ -78,8 +89,8 @@ describe("editor-config-propagate", function () {
   // known non-default (false) must arrive on-open, and flipping it back to true
   // must re-push. Non-vacuous against BOTH halves of the wiring — the seed
   // assertion reds if readSpellcheckEnabled() stops being read into the message,
-  // and the change assertion reds if the onDidChangeConfiguration handler stops
-  // matching SPELLCHECK_CONFIG_KEY.
+  // and (given the ready-settle below) the change assertion reds if the
+  // onDidChangeConfiguration handler stops matching SPELLCHECK_CONFIG_KEY.
   it("posts editor-config carrying the spellcheck flag at seed and again when it changes", async () => {
     // spellcheck defaults ON, so set a known non-default (false) before opening
     // — otherwise the seed assertion would pass vacuously against the default.
@@ -97,6 +108,17 @@ describe("editor-config-propagate", function () {
       "on-open editor-config must carry the spellcheck setting"
     );
 
+    // Ready-settle BEFORE clear+flip (mirrors two-panel-config-caret). The webview
+    // posts a SECOND editor-config from its `ready` handler reading the CURRENT
+    // config; `onOpen` resolves on the synchronous seed post, so a `ready`-driven
+    // post can still be in flight. If it landed AFTER the flip it would read the
+    // now-true config and satisfy the spellcheck===true predicate on its own,
+    // making the change-half pass even if onDidChangeConfiguration stopped
+    // matching SPELLCHECK_CONFIG_KEY. Waiting for the ready handshake + a flush
+    // tick ensures that post is captured and drained by clearEvents, so the only
+    // editor-config left to satisfy the predicate is the config-change one.
+    await harness.waitForInbound(isReadyInbound, 8000);
+    await tick(200);
     harness.clearEvents();
 
     // Flip false→true → a fresh editor-config carries the new spellcheck value.
