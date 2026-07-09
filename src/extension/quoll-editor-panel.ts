@@ -59,11 +59,11 @@ import { perfReport } from "../shared/perf.js";
 import { isWebviewToHost } from "../shared/protocol.js";
 import { canHostWrite } from "./can-host-write.js";
 import { type Caret, clampCaret } from "./caret-handoff.js";
+import { createDirtyDocConflictWatcher } from "./dirty-doc-conflict-watcher.js";
 import {
   DISK_CONFLICT_KEEP,
   DISK_CONFLICT_MESSAGE,
   DISK_CONFLICT_RELOAD,
-  shouldPromptDiskConflict,
 } from "./disk-conflict.js";
 import { buildDocumentMessageFromDocument, canonicalDocumentText } from "./document-canonical.js";
 import { createTrailingDebounce } from "./document-change-debounce.js";
@@ -119,11 +119,6 @@ const LINT_GUTTER_CONFIG_KEY = "quoll.lint.gutter.enabled";
 function readLintGutterEnabled(): boolean {
   return workspace.getConfiguration().get<boolean>(LINT_GUTTER_CONFIG_KEY, false);
 }
-
-// Debounce for the dirty-doc on-disk conflict watcher. External tools often
-// write a file in several fs operations (truncate + write, or temp + rename);
-// coalesce the burst into one divergence check + at most one prompt.
-const CONFLICT_DEBOUNCE_MS = 300;
 
 /** Trailing-debounce window for coalescing LOCK-FREE external-edit
  *  `documentChanged` dispatches. ~100 ms: long enough to collapse the sub-ms
@@ -660,16 +655,14 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
     );
 
     // --- Dirty-doc on-disk conflict watcher ---------------------------------
-    // VS Code auto-reverts a CLEAN externally-changed TextDocument (pinned by
-    // external-fs-write-propagates.test.ts) but SKIPS reverting a DIRTY model
-    // to protect unsaved edits — so a Quoll doc with unsaved edits silently
-    // shows stale content while disk has moved on. This per-panel watcher
-    // detects that divergence and surfaces a user-confirmed conflict prompt.
+    // The orchestration (debounce, single-flight, read → prompt → reload flow)
+    // lives in the vscode-free createDirtyDocConflictWatcher factory; this
+    // wires the VS Code touchpoints and hands the disposable to teardown.
     // file-scheme only: createFileSystemWatcher needs a real path, and a
     // non-file doc (untitled / virtual) has no backing disk to diverge from.
     if (document.uri.scheme === "file") {
       // Watch the parent directory with a plain `*` and filter by URI in the
-      // callback, rather than globbing the basename directly: a filename with
+      // factory, rather than globbing the basename directly: a filename with
       // glob metacharacters (e.g. `notes[1].md`, `a{b}.md`) would otherwise
       // miss or mis-match (Codex C88). `*` is non-recursive — direct children
       // only — so this stays scoped to the document's own folder.
@@ -681,127 +674,51 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
       );
       disposables.push(watcher);
 
-      let conflictTimer: ReturnType<typeof setTimeout> | null = null;
-      // Spans the WHOLE user action (prompt open → reload settled/failed) so a
-      // watcher event mid-prompt or mid-reload cannot start a second prompt
-      // (Codex C84).
-      let conflictActionInFlight = false;
-
-      const promptConflict = (): Thenable<string | undefined> =>
-        this.harness?.diskConflictPromptOverride
-          ? this.harness.diskConflictPromptOverride(
-              DISK_CONFLICT_MESSAGE,
-              DISK_CONFLICT_RELOAD,
-              DISK_CONFLICT_KEEP
-            )
-          : window.showWarningMessage(
-              DISK_CONFLICT_MESSAGE,
-              DISK_CONFLICT_RELOAD,
-              DISK_CONFLICT_KEEP
-            );
-
-      // User-confirmed TRUE revert. reveal(...false) makes the panel the active
-      // editor so the text-file revert targets THIS document; the platform
-      // reload then fires onDidChangeTextDocument → the reducer reseeds the
-      // webview with disk content (the same path the clean case rides) AND
-      // clears the dirty flag + refreshes VS Code's etag. Only ever reached on
-      // an explicit "Reload from disk" click.
-      const reloadFromDisk = async (): Promise<void> => {
-        webviewPanel.reveal(webviewPanel.viewColumn, false);
-        await commands.executeCommand("workbench.action.files.revert");
-      };
-
-      const checkConflict = async (): Promise<void> => {
-        if (disposed || conflictActionInFlight) {
-          return;
-        }
-        // Clean docs auto-revert via the platform; our own saves clear dirty.
-        // Cheap synchronous early-exit BEFORE claiming the single-flight flag.
-        if (!document.isDirty) {
-          return;
-        }
-        // Claim the flag BEFORE the async read (Codex C82): a slow readFile must
-        // not let a second debounce-fired checkConflict start a concurrent read
-        // + duplicate prompt. The flag spans the entire action (read → prompt →
-        // reload); `finally` always releases it (return / throw both run it).
-        conflictActionInFlight = true;
-        try {
-          let diskBytes: Uint8Array;
-          try {
-            diskBytes = await workspace.fs.readFile(document.uri);
-          } catch (err) {
-            // Deleted / unreadable between the event and this read — not a
-            // content conflict; the platform owns deleted-file UX. Log for triage.
-            console.warn("[quoll] dirty-doc conflict: disk read failed", err);
-            return;
-          }
-          if (disposed) {
-            return;
-          }
-          // Re-read isDirty / buffer FRESH after the await: a save that landed
-          // during readFile flips isDirty → shouldPromptDiskConflict returns false.
-          const diskText = Buffer.from(diskBytes).toString("utf8");
-          if (
-            !shouldPromptDiskConflict(document.isDirty, diskText, canonicalDocumentText(document))
-          ) {
-            return;
-          }
-          const choice = await promptConflict();
-          if (disposed || choice !== DISK_CONFLICT_RELOAD) {
-            // "Keep my edits" / dismissed → no-op: unsaved edits stay, and the
-            // next save still hits VS Code's native save-conflict guard.
-            return;
-          }
-          await reloadFromDisk();
-          // Post-condition (no silent success): if the revert silently no-oped
-          // (did not target the custom-editor-backed doc), the model is still
-          // dirty. Surface it rather than leaving stale content with no
-          // feedback for an explicit user action (Codex C90 / error-handler B).
-          if (!disposed && document.isDirty) {
-            showError(
-              "Quoll: could not reload the file from disk — use File: Revert File to reload it manually."
-            );
-          }
-        } catch (err) {
-          console.error("[quoll] dirty-doc conflict: reload failed", err);
-          showError(
-            `Quoll: could not reload the file from disk: ${
-              err instanceof Error ? err.message : String(err)
-            }`
-          );
-        } finally {
-          conflictActionInFlight = false;
-        }
-      };
-
-      // Debounced, URI-filtered signal. Coalesces an external tool's multi-op
-      // write burst (truncate+write, or temp+rename) into one check.
-      const onConflictSignal = (changed: Uri): void => {
-        if (disposed || changed.toString() !== document.uri.toString()) {
-          return;
-        }
-        if (conflictTimer !== null) {
-          clearTimeout(conflictTimer);
-        }
-        conflictTimer = setTimeout(() => {
-          conflictTimer = null;
-          void checkConflict();
-        }, CONFLICT_DEBOUNCE_MS);
-      };
-
-      watcher.onDidChange(onConflictSignal, undefined, disposables);
-      watcher.onDidCreate(onConflictSignal, undefined, disposables);
-
-      // Cancel a pending debounce on dispose so a late timer cannot fire
-      // checkConflict after teardown (checkConflict also re-checks `disposed`).
-      disposables.push({
-        dispose: () => {
-          if (conflictTimer !== null) {
-            clearTimeout(conflictTimer);
-            conflictTimer = null;
-          }
+      const conflictWatcher = createDirtyDocConflictWatcher({
+        // onDidChange + onDidCreate are the divergence signals; the factory
+        // filters by URI and debounces. The teardown disposes both listeners.
+        subscribe: (onSignal) => {
+          const subs = [
+            watcher.onDidChange((changed) => onSignal(changed.toString())),
+            watcher.onDidCreate((changed) => onSignal(changed.toString())),
+          ];
+          return () => {
+            for (const sub of subs) {
+              sub.dispose();
+            }
+          };
         },
+        documentUriString: document.uri.toString(),
+        isDisposed: () => disposed,
+        isDirty: () => document.isDirty,
+        readDiskText: async () =>
+          Buffer.from(await workspace.fs.readFile(document.uri)).toString("utf8"),
+        readBufferText: () => canonicalDocumentText(document),
+        promptReload: () =>
+          this.harness?.diskConflictPromptOverride
+            ? this.harness.diskConflictPromptOverride(
+                DISK_CONFLICT_MESSAGE,
+                DISK_CONFLICT_RELOAD,
+                DISK_CONFLICT_KEEP
+              )
+            : window.showWarningMessage(
+                DISK_CONFLICT_MESSAGE,
+                DISK_CONFLICT_RELOAD,
+                DISK_CONFLICT_KEEP
+              ),
+        reloadChoice: DISK_CONFLICT_RELOAD,
+        // User-confirmed TRUE revert. reveal(...false) makes the panel the
+        // active editor so the text-file revert targets THIS document; the
+        // platform reload then fires onDidChangeTextDocument → the reducer
+        // reseeds the webview with disk content (the same path the clean case
+        // rides) AND clears the dirty flag + refreshes VS Code's etag.
+        reloadFromDisk: async () => {
+          webviewPanel.reveal(webviewPanel.viewColumn, false);
+          await commands.executeCommand("workbench.action.files.revert");
+        },
+        showError,
       });
+      disposables.push(conflictWatcher);
     }
 
     // Tier-0 reveal for the Claude Code handoff (deps.revealForMention — see
