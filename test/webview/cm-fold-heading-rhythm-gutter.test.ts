@@ -99,15 +99,19 @@ describe("headingRhythmFoldGutterLineClass — per-level gutter tag for the rhyt
     expect(control.size).toBe(1);
   });
 
-  it("does NOT tag a lone `-` with a mid-typing trailing space, but DOES tag a real `--` (boundary pair)", () => {
+  it("does NOT tag a lone `-`/`=` with a mid-typing trailing space, but DOES tag a real `--`/`==` (boundary pair)", () => {
     // "intro\n\nFoo\n- ": the HeaderMark excludes the trailing space, so the
     // underline is still length 1 → nascent → suppressed (boundary neighbor of
-    // the 2-char `--`). Revert-check: relaxing `mark.to - mark.from === 1` to
-    // `=== 2` reds the trailing-space case; relaxing to `>= 1` reds the `--` case.
-    expect(taggedClassByLine("intro\n\nFoo\n- ").size).toBe(0);
-    const twoChar = taggedClassByLine("intro\n\nFoo\n--");
-    expect(twoChar.get(3)).toBe("quoll-fold-heading-rhythm-2");
-    expect(twoChar.size).toBe(1);
+    // the 2-char case). Revert-check: relaxing `mark.to - mark.from === 1` to
+    // `=== 2` reds the trailing-space case; relaxing to `>= 1` reds the two-char
+    // case. The length gate is char-agnostic; `==` tags level 1, `--` level 2.
+    for (const u of ["-", "="]) {
+      expect(taggedClassByLine(`intro\n\nFoo\n${u} `).size).toBe(0);
+      const twoChar = taggedClassByLine(`intro\n\nFoo\n${u}${u}`);
+      const cls = u === "=" ? "quoll-fold-heading-rhythm-1" : "quoll-fold-heading-rhythm-2";
+      expect(twoChar.get(3)).toBe(cls);
+      expect(twoChar.size).toBe(1);
+    }
   });
 
   it("does NOT tag a heading line inside a quollSyntaxExclusionZones span", () => {

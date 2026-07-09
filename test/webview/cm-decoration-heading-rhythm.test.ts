@@ -127,21 +127,26 @@ describe("heading-rhythm provider — nascent lone setext (no heading affordance
     ]);
   });
 
-  it("KEEPS the suppression for a lone `-` with a mid-typing trailing space (still lone)", () => {
+  it("KEEPS the suppression for a lone `-`/`=` with a mid-typing trailing space (still lone)", () => {
     // "intro\n\nFoo\n- ": the HeaderMark excludes the trailing space, so the
     // underline mark is still length 1 → nascent → rhythm suppressed. This is the
-    // BOUNDARY neighbor of the 2-char `--` case below (revert-check: relaxing
-    // `mark.to - mark.from === 1` to `=== 2` reds this — the tag reappears).
-    expect(lines(buildHeadingRhythm(ctx("intro\n\nFoo\n- ")))).toEqual([]);
+    // BOUNDARY neighbor of the 2-char case below (revert-check: relaxing
+    // `mark.to - mark.from === 1` to `=== 2` reds this — the tag reappears). The
+    // predicate's length gate is char-agnostic, so `=` behaves identically to `-`.
+    for (const u of ["-", "="]) {
+      expect(lines(buildHeadingRhythm(ctx(`intro\n\nFoo\n${u} `)))).toEqual([]);
+    }
   });
 
-  it("KEEPS the tag for a real `--` (two-char) heading — the boundary next to lone", () => {
-    // Exactly two dashes is the FIRST length that reads as an intentional heading;
+  it("KEEPS the tag for a real two-char `--`/`==` heading — the boundary next to lone", () => {
+    // Exactly two markers is the FIRST length that reads as an intentional heading;
     // it is the boundary immediately above lone. Revert-check: relaxing
-    // `mark.to - mark.from === 1` to `>= 1` reds this — the tag is dropped.
-    expect(lines(buildHeadingRhythm(ctx("intro\n\nFoo\n--")))).toEqual([
-      { from: 7, cls: "quoll-heading-rhythm-2" },
-    ]);
+    // `mark.to - mark.from === 1` to `>= 1` reds this — the tag is dropped. `==` is
+    // a SetextHeading1 (level 1), `--` a SetextHeading2 (level 2); both keep the tag.
+    for (const u of ["-", "="]) {
+      const cls = u === "=" ? "quoll-heading-rhythm-1" : "quoll-heading-rhythm-2";
+      expect(lines(buildHeadingRhythm(ctx(`intro\n\nFoo\n${u}${u}`)))).toEqual([{ from: 7, cls }]);
+    }
   });
 });
 
