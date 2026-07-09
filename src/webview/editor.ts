@@ -44,7 +44,6 @@ import { quollMarkdownLanguage } from "./cm/markdown.js";
 import { openExternalSinkFor, quollOpenExternalSink } from "./cm/open-external.js";
 import { quollOutline } from "./cm/outline/index.js";
 import { detectLineSeparator, splitToCmText } from "./cm/seed.js";
-import { quollStickyHeading } from "./cm/sticky-heading/index.js";
 import { quollSwitchEditor } from "./cm/switch-editor.js";
 import { tableBlockField, tableSkeletonField } from "./cm/table/index.js";
 import {
@@ -555,13 +554,6 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
         // debounced so the keystroke path is untouched. Present in read-only
         // mode too (navigation, not editing).
         quollOutline(),
-        // Sticky current-section heading: a webview-native bar pinned to the top
-        // of the .quoll-editor host showing the heading of the section that owns
-        // the viewport top. Driven by the shared extractOutline (syntaxTree walk)
-        // + CM scroll geometry through a coalesced requestMeasure — no DOM
-        // polling. Display-only (no CM change, no write-lock); present in
-        // read-only mode too (navigation aid).
-        quollStickyHeading(),
         // Quoll → text-editor switch: a top-right overlay button + the
         // ⌘⌥E / Ctrl+Alt+E chord, both posting `switch-to-text`. Pure side channel
         // (no CM change, no write-lock); the host reopens the document in the
