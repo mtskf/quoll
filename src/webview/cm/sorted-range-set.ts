@@ -17,9 +17,12 @@ import { type RangeSet, RangeSetBuilder, type RangeValue } from "@codemirror/sta
  *
  * `project` maps each item to a `[from, to, value]` triple, sorted stably
  * (ES2019+ `Array.prototype.sort`) by `from` then `to`. Three of the six call
- * sites sorted by exactly this key; the other three sorted by `from` alone
- * (their `to` always equals `from` at the `add` call, so appending the `to`
- * term is a no-op there). Either way the refactor is behaviour-preserving:
+ * sites (bullet-marker / inline-mark / link-reveal) sorted by exactly this key;
+ * the other three fed input already in `from` order — block-style and
+ * heading-rhythm sorted by `from` alone, and fold's gutter build relied on its
+ * collectors' doc-order — always with `to === from` at the `add` call, so
+ * appending the `to` term is a no-op there. Either way the refactor is
+ * behaviour-preserving:
  * `from` satisfies the builder's primary requirement, and whatever equal-`from`
  * ordering the pre-refactor inputs relied on to also satisfy the `startSide`
  * tie-break is reproduced unchanged — the helper does not re-derive it (note
