@@ -37,15 +37,14 @@
 // which drives click-to-reveal caret placement.
 
 import { syntaxTree } from "@codemirror/language";
-import {
-  type EditorSelection,
-  type EditorState,
-  StateField,
-  type Transaction,
-} from "@codemirror/state";
+import { type EditorState, StateField, type Transaction } from "@codemirror/state";
 import { Decoration, type DecorationSet, EditorView } from "@codemirror/view";
 
-import { extractRanges, selectionLineSpansEqual } from "../bounded-recompute.js";
+import {
+  extractRanges,
+  lineRangeOverlapsSelection,
+  selectionLineSpansEqual,
+} from "../bounded-recompute.js";
 import { quollBlockReplaceZones } from "../decorations/orchestrator.js";
 import { leadingFrontmatterEnd } from "../frontmatter/detect.js";
 import { type TableModel, tableModels, tableSkeletonField } from "./table-skeleton.js";
@@ -97,18 +96,6 @@ function buildAll(state: EditorState): BuiltWidget[] {
   });
   out.sort((a, b) => a.from - b.from);
   return out;
-}
-
-function lineRangeOverlapsSelection(selection: EditorSelection, from: number, to: number): boolean {
-  // Line-level closed-interval overlap (Codex Conf 89). `from`/`to` are
-  // line-aligned by `buildAll`, so [from, to] inclusive catches caret-at-
-  // boundary cases that half-open semantics would miss.
-  for (const r of selection.ranges) {
-    if (r.from <= to && from <= r.to) {
-      return true;
-    }
-  }
-  return false;
 }
 
 function computeFresh(state: EditorState): DecorationSet {
