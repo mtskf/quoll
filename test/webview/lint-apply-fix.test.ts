@@ -216,6 +216,35 @@ describe("applyLintFixAtSelection", () => {
       view.destroy();
     }
   });
+
+  it("does NOT touch consecutive blank lines inside a fenced code block (caret in-fence)", () => {
+    // ```js@0, "let x = 1;"@6, ""@17 (in-fence, would-be-allowed), ""@18
+    // (in-fence, would-be-excess but exempt), "let y = 2;"@19, "```"@30. The rule
+    // never emits a fix for an in-code-block blank, so the real command must be a
+    // byte-identical no-op with the caret sitting on the exempt line.
+    const doc = "```js\nlet x = 1;\n\n\nlet y = 2;\n```\n";
+    const view = viewFor(doc, EditorSelection.cursor(18));
+    try {
+      expect(applyLintFixAtSelection(view)).toBe(false);
+      expect(view.state.sliceDoc()).toBe(doc); // byte-identical
+    } finally {
+      view.destroy();
+    }
+  });
+
+  it("collapses only the pre-fence excess blank, leaving in-fence blanks untouched", () => {
+    // a@0, ""@2 (allowed), ""@3 (pre-fence excess, flagged), ```@4, ""@8
+    // (in-fence, allowed), ""@9 (in-fence, would-be-excess but exempt), code@10,
+    // ```@15. A full-selection fix must collapse only the pre-fence run.
+    const doc = "a\n\n\n```\n\n\ncode\n```\n";
+    const view = viewFor(doc, EditorSelection.single(0, doc.length));
+    try {
+      expect(applyLintFixAtSelection(view)).toBe(true);
+      expect(view.state.sliceDoc()).toBe("a\n\n```\n\n\ncode\n```\n");
+    } finally {
+      view.destroy();
+    }
+  });
 });
 
 describe("no fix runs without the explicit user action", () => {
