@@ -1,100 +1,22 @@
 // Link interaction surface for the CodeMirror editor:
-//   - insertLink(href): a StateCommand that wraps a non-empty selection
-//     in `[text](href)` after gating href with the post-decode allowlist
-//     + a Markdown-structural rejection set. The PM-era equivalent
-//     (src/editor/commands.ts) was removed in C9b; this
-//     module is the CM replacement (and the 5th URL-enforcement site noted in
-//     C2(d)).
 //   - tryOpenLinkAt(state, pos, host): a pure helper that resolves a
 //     position to a Link node and, if the URL is safe and launchable,
 //     posts an OpenExternalMessage to the host.
 //   - handleLinkMouseDown(event, view, host) + quollLinkClickHandler():
 //     extracted mousedown helper + the Extension factory that wires it.
 //
-// Why a single file: the four exports share a small private surface
+// Why a single file: the three exports share a small private surface
 // (the URL-extract + scheme check, the shared OPENABLE_SCHEMES set, the
 // boundary-inclusive selection helper). Splitting would either duplicate
 // the helpers or thread them through a fourth module.
 
 import { syntaxTree } from "@codemirror/language";
-import type { EditorState, StateCommand } from "@codemirror/state";
+import type { EditorState } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 
 import { isAllowedUrl } from "../../markdown/url-allowlist.js";
 import { decodeMarkdownDestination } from "../../markdown/url-decode.js";
 import { MAX_HREF_LENGTH, PROTOCOL_VERSION, type WebviewToHost } from "../../shared/protocol.js";
-
-/** Characters that break the inline-link parse when present in the link
- *  text (review fix #3). `]` closes the bracket prematurely; `[` opens a
- *  nested span; `\` is a CommonMark escape; `\n`/`\r` terminate the
- *  paragraph. */
-const LINK_TEXT_REJECT_RE = /[[\]\\\n\r]/;
-
-/** Characters that break the inline-link parse when present in the
- *  destination (review fix #3). `(`/`)` need balancing or angle-bracket
- *  wrap; whitespace ends the destination; `<`/`>` collide with the
- *  angle-bracket form; `\` is a CommonMark escape; control chars are
- *  fail-closed everywhere. */
-// biome-ignore lint/suspicious/noControlCharactersInRegex: intentional — fail-closed on C0/DEL in URL destinations.
-const HREF_REJECT_RE = /[\s()<>\\\u0000-\u001f\u007f]/;
-
-/** Wrap a non-empty selection in `[text](href)`. Returns false (and does
- *  not dispatch) on ANY of:
- *    - href fails post-decode `isAllowedUrl` (review fix #1: catches
- *      `javascript\\:` / `javascript&#58;` / etc. bypasses that the
- *      raw-form gate would pass).
- *    - href is in encoded-bypass form (`decoded !== href` — caller must
- *      pre-decode; the function does not silently re-encode).
- *    - href contains a Markdown destination structural / control byte
- *      (review fix #3: `(`, `)`, `<`, `>`, whitespace, `\`, C0/DEL).
- *    - selection text contains a Markdown link-text structural byte
- *      (`[`, `]`, `\`, `\n`, `\r`).
- *    - selection is empty.
- *
- *  The PM-era predecessor (removed in C9b) did not need
- *  the encoded-bypass / structural rejections because the PM serializer
- *  re-emitted URLs as PM mark attrs (the disk bytes were authoritative
- *  PM output, not the user's raw input). The CM-era command writes the
- *  href verbatim into source, so the rejection set is the security
- *  contract.
- *
- *  This restrictive set is fine for C4b: the function is unit-tested,
- *  not yet wired to a UI. A future UI slice can pre-escape / percent-
- *  encode user input before calling insertLink. */
-export function insertLink(href: string): StateCommand {
-  return ({ state, dispatch }) => {
-    // Encoded-bypass guard (review fix #1, Codex Conf 100):
-    const decoded = decodeMarkdownDestination(href);
-    if (decoded !== href) {
-      return false;
-    }
-    if (!isAllowedUrl(decoded)) {
-      return false;
-    }
-    if (HREF_REJECT_RE.test(href)) {
-      return false;
-    }
-    const { from, to, empty } = state.selection.main;
-    if (empty) {
-      return false;
-    }
-    const text = state.sliceDoc(from, to);
-    if (LINK_TEXT_REJECT_RE.test(text)) {
-      return false;
-    }
-    const insert = `[${text}](${href})`;
-    if (dispatch) {
-      dispatch(
-        state.update({
-          changes: { from, to, insert },
-          // Place caret AFTER the inserted link so the user can keep typing.
-          selection: { anchor: from + insert.length },
-        })
-      );
-    }
-    return true;
-  };
-}
 
 // --- Click-to-open helper ---
 //

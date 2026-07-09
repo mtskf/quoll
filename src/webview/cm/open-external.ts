@@ -1,6 +1,6 @@
 // The "open external URL" concern for the readonly table-cell widget's
 // modifier-click path. Kept in its own module (not link-handlers.ts, which
-// already owns insertLink / tryOpenLinkAt / the mousedown wiring) so the
+// already owns tryOpenLinkAt / the mousedown wiring) so the
 // facet + sink stay a single, focused responsibility.
 //
 // Defense-in-depth layering for a table-cell link open:
