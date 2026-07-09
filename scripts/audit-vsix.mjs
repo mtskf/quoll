@@ -116,6 +116,7 @@ const ALLOWED_PAYLOAD = [
   /^icon\.png$/i,
   /^readme\.md$/i,
   /^license(\.txt)?$/i,
+  /^notice(\.txt)?$/i,
   /^changelog\.md$/i,
   /^dist\/[\w./-]+\.(cjs|js|css|json)$/,
 ];
