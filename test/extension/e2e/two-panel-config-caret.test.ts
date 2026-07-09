@@ -117,6 +117,12 @@ describe("two-panel-config-caret", function () {
     // in quoll-editor-panel.ts) reading the CURRENT setting; a ready landing after
     // a flip would inflate the count, so wait for the expected number of ready
     // handshakes to settle before clearing and flipping.
+    //
+    // NOTE: harness.clearEvents() drains only the OUTBOUND `events` stream, not
+    // `inboundEvents` (see TestHarness.clearEvents — it clears `_events` alone).
+    // So the ready count is cumulative across the whole test: panel A's ready
+    // survives the clearEvents() below, and after panel B opens the count reaches
+    // 2 (A's retained ready + B's new one) — no per-panel re-handshake is needed.
 
     // Panel A alone → a gutter flip (false→true) posts exactly ONE.
     const a = await openTempQuoll(harness, "a0\na1\na2\n", "doca", null);
