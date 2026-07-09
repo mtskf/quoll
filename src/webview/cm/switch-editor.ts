@@ -30,6 +30,7 @@ import { type Extension, Prec } from "@codemirror/state";
 import { EditorView, type PluginValue, ViewPlugin } from "@codemirror/view";
 
 import { buildSwitchToTextMessage, type WebviewToHost } from "../../shared/protocol.js";
+import { requireQuollEditorHost } from "./editor-host.js";
 
 export type SwitchEditorHost = { postMessage(message: WebviewToHost): void };
 
@@ -112,10 +113,7 @@ class SwitchEditorButton implements PluginValue {
     // Mounted inside the `.quoll-editor` host (position:relative) so the button
     // overlays the surface without reflowing the reading column — identical
     // contract to the outline toggle. Fail fast otherwise.
-    const hostEl = view.dom.closest(".quoll-editor");
-    if (!(hostEl instanceof HTMLElement)) {
-      throw new Error("quollSwitchEditor: EditorView must be mounted inside a .quoll-editor host");
-    }
+    const hostEl = requireQuollEditorHost(view, "quollSwitchEditor");
     this.hostEl = hostEl;
 
     this.buttonEl = document.createElement("button");

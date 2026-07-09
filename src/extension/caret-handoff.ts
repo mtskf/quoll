@@ -6,15 +6,10 @@
 // injected (lineCount + a line-length getter) so the function is pure and
 // unit-tests without a live VS Code TextEditor.
 
+import { clampInt } from "../shared/clamping.js";
+
 /** 0-based caret position (VS Code `Position` convention). */
 export type Caret = { line: number; character: number };
-
-function clampInt(value: number, min: number, max: number): number {
-  if (!Number.isFinite(value)) {
-    return min;
-  }
-  return Math.min(Math.max(Math.trunc(value), min), max);
-}
 
 /** Clamp a 0-based caret to a document's bounds. `line` clamps to
  *  [0, lineCount-1] (and to 0 for an empty document); `character` clamps to

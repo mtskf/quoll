@@ -66,12 +66,7 @@
 // .claude/docs/TODO-archive.md, gated on a future third consumer.
 
 import { syntaxTree, syntaxTreeAvailable } from "@codemirror/language";
-import {
-  type EditorSelection,
-  type EditorState,
-  StateField,
-  type Transaction,
-} from "@codemirror/state";
+import { type EditorState, StateField, type Transaction } from "@codemirror/state";
 import { Decoration, type DecorationSet, EditorView } from "@codemirror/view";
 import { renderSafeMarkdownDestination } from "../../../markdown/render-safe-markdown-destination.js";
 import type { AllowlistedUrl } from "../../../markdown/url-allowlist.js";
@@ -80,6 +75,7 @@ import {
   type Interval,
   intersects,
   lineExpandWithNeighbours,
+  lineRangeOverlapsSelection,
   mergeIntervals,
   selectionLineSpansEqual,
 } from "../bounded-recompute.js";
@@ -187,15 +183,6 @@ function buildRange(state: EditorState, rangeFrom: number, rangeTo: number): Bui
     },
   });
   return out;
-}
-
-function lineRangeOverlapsSelection(s: EditorSelection, from: number, to: number): boolean {
-  for (const r of s.ranges) {
-    if (r.from <= to && from <= r.to) {
-      return true;
-    }
-  }
-  return false;
 }
 
 function lineExpand(state: EditorState, from: number, to: number): Interval {

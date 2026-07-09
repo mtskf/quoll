@@ -14,6 +14,7 @@
 
 import type { syntaxTree } from "@codemirror/language";
 import type { EditorState } from "@codemirror/state";
+import { collectHeadings } from "../headings.js";
 
 // `@lezer/common` is a direct dep as of PR #66 (for the lint incremental
 // parser's `TreeFragment`); derive the tree type from syntaxTree's return type
@@ -39,8 +40,6 @@ export interface OutlineHeading {
   from: number;
 }
 
-const ATX_HEADING = /^ATXHeading([1-6])$/;
-
 /** Strip the ATX opener (`#`..`######` and following spaces/tabs) and an
  *  optional closing `#` run from a heading's node-span text, then trim. */
 function headingText(raw: string): string {
@@ -50,36 +49,28 @@ function headingText(raw: string): string {
     .trim();
 }
 
-/** Walk `tree` for ATX headings in document order. Descends into every block so
- *  headings nested in blockquotes / list items are included; skips a heading's
- *  own inline children (headings never contain headings). */
+/** Build outline entries from `collectHeadings(tree)`'s document-order ATX
+ *  heading list (which descends into every block, so headings nested in
+ *  blockquotes / list items are included). */
 export function extractOutline(state: EditorState, tree: Tree): OutlineHeading[] {
   const headings: OutlineHeading[] = [];
   const ancestors: number[] = []; // levels of open ancestors, strictly increasing
-  tree.iterate({
-    enter: (node) => {
-      const match = ATX_HEADING.exec(node.name);
-      if (!match) {
-        return; // descend — a heading may be nested in this block
-      }
-      const level = Number(match[1]);
-      const docLine = state.doc.lineAt(node.from);
-      while (ancestors.length > 0 && ancestors[ancestors.length - 1] >= level) {
-        ancestors.pop();
-      }
-      const depth = ancestors.length;
-      ancestors.push(level);
-      headings.push({
-        level,
-        depth,
-        // Node span, NOT line.text: a heading nested in a blockquote/list has
-        // its container marks ("> " / "- ") OUTSIDE [node.from, node.to).
-        text: headingText(state.doc.sliceString(node.from, node.to)),
-        line: docLine.number,
-        from: docLine.from,
-      });
-      return false; // headings don't contain headings — skip inline children
-    },
-  });
+  for (const { level, from, to } of collectHeadings(tree)) {
+    const docLine = state.doc.lineAt(from);
+    while (ancestors.length > 0 && ancestors[ancestors.length - 1] >= level) {
+      ancestors.pop();
+    }
+    const depth = ancestors.length;
+    ancestors.push(level);
+    headings.push({
+      level,
+      depth,
+      // Node span, NOT line.text: a heading nested in a blockquote/list has its
+      // container marks ("> " / "- ") OUTSIDE [from, to).
+      text: headingText(state.doc.sliceString(from, to)),
+      line: docLine.number,
+      from: docLine.from,
+    });
+  }
   return headings;
 }

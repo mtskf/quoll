@@ -1,6 +1,5 @@
+import { collectHeadings } from "../../headings.js";
 import type { LintContext, LintDiagnostic, LintRule } from "../types.js";
-
-const ATX_HEADING = /^ATXHeading([1-6])$/;
 
 // Reduce an ATX heading line to its comparable text: drop an optional
 // space-preceded closing `#` sequence FIRST, then the opening `#` marker (and its
@@ -33,27 +32,22 @@ function headingText(raw: string): string {
 export const duplicateHeadingText: LintRule = (ctx: LintContext): LintDiagnostic[] => {
   const seen = new Set<string>();
   const diagnostics: LintDiagnostic[] = [];
-  ctx.tree.iterate({
-    enter: (node) => {
-      if (!ATX_HEADING.test(node.name)) {
-        return;
-      }
-      const text = headingText(ctx.text.slice(node.from, node.to));
-      if (text === "") {
-        return; // empty heading: nothing to compare
-      }
-      if (seen.has(text)) {
-        diagnostics.push({
-          from: node.from,
-          to: node.to,
-          severity: "warning",
-          code: "duplicate-heading-text",
-          message: `Duplicate heading text "${text}"; repeated headings can collide as link anchors.`,
-        });
-      } else {
-        seen.add(text);
-      }
-    },
-  });
+  for (const h of collectHeadings(ctx.tree)) {
+    const text = headingText(ctx.text.slice(h.from, h.to));
+    if (text === "") {
+      continue; // empty heading: nothing to compare
+    }
+    if (seen.has(text)) {
+      diagnostics.push({
+        from: h.from,
+        to: h.to,
+        severity: "warning",
+        code: "duplicate-heading-text",
+        message: `Duplicate heading text "${text}"; repeated headings can collide as link anchors.`,
+      });
+    } else {
+      seen.add(text);
+    }
+  }
   return diagnostics;
 };

@@ -20,7 +20,7 @@
 // `expandToEnclosingBlock`) live in the sibling structural-guard.ts, which imports
 // `Interval` from here.
 
-import type { EditorState } from "@codemirror/state";
+import type { EditorSelection, EditorState } from "@codemirror/state";
 import type { DecorationSet } from "@codemirror/view";
 
 export interface Interval {
@@ -68,6 +68,19 @@ export function intersects(intervals: readonly Interval[], from: number, to: num
     }
   }
   return false;
+}
+
+/** True iff any range in `selection` overlaps the inclusive `[from, to]` line
+ *  interval. `from`/`to` are line-aligned by the block fields' `buildAll`, so
+ *  the closed interval catches caret-at-boundary cases half-open would miss.
+ *  A `SelectionRange` is structurally `{ from, to }`, so this is just
+ *  `intersects` over the selection's ranges. */
+export function lineRangeOverlapsSelection(
+  selection: EditorSelection,
+  from: number,
+  to: number
+): boolean {
+  return intersects(selection.ranges, from, to);
 }
 
 /** Do the two states' selections resolve to the SAME set of line spans? The

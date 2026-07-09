@@ -19,6 +19,7 @@ import {
   ViewPlugin,
   type ViewUpdate,
 } from "@codemirror/view";
+import { toCtx } from "../decorations/build-context.js";
 import type { BuildContext } from "../decorations/types.js";
 import { CopyButtonWidget } from "./fenced-code-copy-button-widget.js";
 
@@ -235,15 +236,6 @@ export function buildCopyButtons(ctx: BuildContext): DecorationSet {
     builder.add(entry.from, entry.from, entry.deco);
   }
   return builder.finish();
-}
-
-function toCtx(view: EditorView): BuildContext {
-  return {
-    state: view.state,
-    selection: view.state.selection,
-    visibleRanges: view.visibleRanges,
-    tree: syntaxTree(view.state),
-  };
 }
 
 /** Selection-INDEPENDENT ViewPlugin holding the copy-button widgets. Parallel to

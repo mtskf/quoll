@@ -39,6 +39,7 @@ import {
 } from "@codemirror/view";
 
 import { isNascentLoneSetextHeading } from "../markdown.js";
+import { toCtx } from "./build-context.js";
 import { quollSyntaxExclusionZones } from "./orchestrator.js";
 import { pointInExclusionZone } from "./shared.js";
 import type { BuildContext } from "./types.js";
@@ -193,15 +194,6 @@ export function buildHeadingRhythm(
     builder.add(entry.from, entry.from, entry.deco);
   }
   return builder.finish();
-}
-
-function toCtx(view: EditorView): BuildContext {
-  return {
-    state: view.state,
-    selection: view.state.selection,
-    visibleRanges: view.visibleRanges,
-    tree: syntaxTree(view.state),
-  };
 }
 
 /** Editor extension: a ViewPlugin holding the per-level heading padding-top line
