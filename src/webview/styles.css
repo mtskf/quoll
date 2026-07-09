@@ -908,6 +908,49 @@
     }
   }
 
+  /* ───────────────── sticky current-section heading ─────────────────
+   * cm/sticky-heading: a bar pinned to the top of the .quoll-editor host
+   * showing the heading of the section that owns the viewport top. Absolutely
+   * positioned so it overlays the scroller WITHOUT reflowing the centred reading
+   * column. The scroller group-centres the foldGutter+content pair (see
+   * cm/theme.ts), which CSS centring cannot mirror, so the plugin positions the
+   * inner band from .cm-content's measured left+width; the margin:auto/max-width
+   * below is only the pre-measure fallback. Solid editor background so scrolled
+   * text does not bleed through; colours track --vscode-* (dark/light/HC follow).
+   * Non-interactive (pointer-events:none) — a display-only breadcrumb; z-index:4
+   * keeps it under the corner toggles (z-index:5). The plugin measures the
+   * active-heading boundary at THIS bar's bottom edge, so it never hides a
+   * heading it is about to show. */
+  .quoll-sticky-heading {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    z-index: 4;
+    pointer-events: none;
+    background: var(--vscode-editor-background);
+    border-bottom: 1px solid
+      var(--vscode-editorWidget-border, var(--vscode-panel-border, transparent));
+  }
+  .quoll-sticky-heading[hidden] {
+    display: none;
+  }
+  .quoll-sticky-heading-inner {
+    box-sizing: border-box;
+    /* fallback centring before the first measure; JS sets exact marginLeft+width */
+    margin: 0 auto;
+    max-width: 60em;
+    /* 2.5rem mirrors .cm-content's inset; +6px absorbs CM's .cm-line left padding
+     * (base theme: 0 2px 0 6px) so the bar text lines up with the prose exactly. */
+    padding: 4px calc(2.5rem + 6px);
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+    font-size: 0.85em;
+    font-weight: 600;
+    color: var(--vscode-descriptionForeground, var(--vscode-editor-foreground));
+  }
+
   .quoll-outline-header {
     display: flex;
     align-items: center;
