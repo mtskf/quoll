@@ -120,17 +120,20 @@ class StickyHeadingPanel implements PluginValue {
     const scrollerRect = view.scrollDOM.getBoundingClientRect();
     const contentRect = view.contentDOM.getBoundingClientRect();
     const barHeight = this.barEl.hidden ? 0 : this.barEl.getBoundingClientRect().height;
-    const height = stickyTopHeight(
-      scrollerRect.top,
-      view.documentTop,
+    const height = stickyTopHeight({
+      scrollerTop: scrollerRect.top,
+      documentTop: view.documentTop,
       barHeight,
-      view.scaleY,
-      view.contentHeight
-    );
+      contentHeight: view.contentHeight,
+    });
+    // getBoundingClientRect() is SCREEN space; the inner band is positioned with
+    // LAYOUT px (marginLeft/width), so divide the screen measurements by scaleX to
+    // convert screen→layout (identity when the editor is not CSS-transformed).
+    const { scaleX } = view;
     return {
       topPos: view.lineBlockAtHeight(height).from,
-      left: contentRect.left - scrollerRect.left,
-      width: contentRect.width,
+      left: (contentRect.left - scrollerRect.left) / scaleX,
+      width: contentRect.width / scaleX,
     };
   }
 

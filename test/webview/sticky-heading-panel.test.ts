@@ -67,6 +67,43 @@ describe("quollStickyHeading bar", () => {
     expect(barText(host)).toBe("Added");
   });
 
+  it("renders (untitled) for a bare-# empty-text heading", () => {
+    const { view: v, host } = mount("# \n\nbody\n"); // "# " → ATX heading, empty text
+    v.plugin(stickyHeadingPlugin)?.applyTop(v.state.doc.length);
+    expect(bar(host)?.hidden).toBe(false);
+    expect(barText(host)).toBe("(untitled)");
+  });
+
+  it("does NOT rewrite the bar when the active heading is unchanged (dedup no-op)", () => {
+    const { view: v, host } = mount("# Alpha\n\nbody\n\ntail\n");
+    const plugin = v.plugin(stickyHeadingPlugin);
+    plugin?.applyTop(v.state.doc.length); // shows "Alpha"
+    const inner = host.querySelector<HTMLElement>(".quoll-sticky-heading-inner");
+    if (!inner) {
+      throw new Error("inner missing");
+    }
+    // Count textContent writes; the renderedKey guard must skip the second apply.
+    let writes = 0;
+    const desc = Object.getOwnPropertyDescriptor(Node.prototype, "textContent");
+    if (!desc?.get || !desc.set) {
+      throw new Error("no textContent descriptor");
+    }
+    const realGet = desc.get;
+    const realSet = desc.set;
+    Object.defineProperty(inner, "textContent", {
+      configurable: true,
+      get() {
+        return realGet.call(this);
+      },
+      set(value) {
+        writes++;
+        realSet.call(this, value);
+      },
+    });
+    plugin?.applyTop(v.state.doc.length); // same heading → early-return, no rewrite
+    expect(writes).toBe(0);
+  });
+
   it("re-renders when a heading's TEXT changes but its position does not (Codex #3)", () => {
     const { view: v, host } = mount("# Alpha\n\nbody\n\ntail\n");
     v.plugin(stickyHeadingPlugin)?.applyTop(v.state.doc.length);
