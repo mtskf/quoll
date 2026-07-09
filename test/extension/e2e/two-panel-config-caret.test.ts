@@ -60,8 +60,15 @@ async function openTempQuoll(
   }
 }
 
+// Gate on BOTH `type === "ready"` AND the protocol envelope: `recordInbound`
+// fires PRE-validator (it records the raw bytes the host may later reject), so
+// without the protocol check a wire-malformed ready could falsely satisfy the
+// handshake gate. Mirrors the editor-resolves.test.ts precedent.
 const isReadyInbound = (r: { raw: unknown }): boolean =>
-  typeof r.raw === "object" && r.raw !== null && (r.raw as { type?: unknown }).type === "ready";
+  typeof r.raw === "object" &&
+  r.raw !== null &&
+  (r.raw as { type?: unknown }).type === "ready" &&
+  (r.raw as { protocol?: unknown }).protocol === PROTOCOL_VERSION;
 
 describe("two-panel-config-caret", function () {
   this.timeout(40000);
@@ -92,44 +99,72 @@ describe("two-panel-config-caret", function () {
 
     const harness = await getHarness();
 
-    // Two DISTINCT documents → two coexisting Quoll panels.
+    const isGutterOn = (e: RecordedEventShape): boolean =>
+      isEditorConfigEvent(e) && e.message.lintGutter === true;
+    const isGutterOff = (e: RecordedEventShape): boolean =>
+      isEditorConfigEvent(e) && e.message.lintGutter === false;
+
+    // --- (b1) editor-config fan-out proven PER-PANEL by incremental open -----
+    // The harness records outbound posts in ONE global stream with no panel
+    // attribution, so a bare "count == 2 with two panels" could be satisfied by
+    // one panel posting twice while the other stays silent. Instead measure the
+    // count as panels are added: one panel must post exactly ONE editor-config,
+    // and adding a second must raise it to exactly TWO. That excludes both "only
+    // the active panel is reached" (would stay 1) and "one panel double-posts"
+    // (single-panel step would already be 2) without panel-tagged events.
+    //
+    // Each panel's real webview also posts a ready-driven editor-config (line 910
+    // in quoll-editor-panel.ts) reading the CURRENT setting; a ready landing after
+    // a flip would inflate the count, so wait for the expected number of ready
+    // handshakes to settle before clearing and flipping.
+
+    // Panel A alone → a gutter flip (false→true) posts exactly ONE.
     const a = await openTempQuoll(harness, "a0\na1\na2\n", "doca", null);
     files.push(a.file);
-    const b = await openTempQuoll(harness, "b0\nb1\nb2\nb3\n", "docb", a.panel);
-    files.push(b.file);
-    assert.notStrictEqual(a.panel, b.panel, "the two panels must be distinct controls");
-
-    // --- (b1) editor-config fan-out to BOTH webviews -------------------------
-    // Each panel's real webview posts a ready-driven editor-config (line 910 in
-    // quoll-editor-panel.ts) that reads the CURRENT setting. If a ready lands
-    // AFTER the flip below it would post lintGutter:true and inflate the count,
-    // so wait for BOTH panels' ready handshakes to settle first, then clear.
     await pollForCount(
       () => harness.inboundEvents.filter(isReadyInbound).length,
-      2,
-      "ready handshakes"
+      1,
+      "panel A ready handshake"
     );
-    await tick(200); // let the ready-driven editor-config posts flush
+    await tick(200); // let panel A's ready-driven editor-config flush
     harness.clearEvents();
-
-    // Flip the gutter setting. Each open panel wires its OWN
-    // onDidChangeConfiguration → postEditorConfig, so a working fan-out posts
-    // exactly once per panel = two events. A fan-out that only reached the
-    // active panel would post one → this goes red.
     await vscode.workspace
       .getConfiguration()
       .update(GUTTER_KEY, true, vscode.ConfigurationTarget.Global);
-
-    const isGutterOn = (e: RecordedEventShape): boolean =>
-      isEditorConfigEvent(e) && e.message.lintGutter === true;
-    await pollForCount(() => harness.events.filter(isGutterOn).length, 2, "editor-config posts");
-    // Let any straggler land, then pin the EXACT fan-out cardinality: one push
-    // per panel, no panel missed and no double-post.
+    await pollForCount(() => harness.events.filter(isGutterOn).length, 1, "editor-config from A");
     await tick(200);
     assert.strictEqual(
       harness.events.filter(isGutterOn).length,
+      1,
+      "a single open panel must post exactly one editor-config on a gutter change"
+    );
+
+    // Add panel B → the SAME flip (true→false) now posts exactly TWO, one per
+    // panel. The +1 delta proves the fan-out reaches the newly-opened webview,
+    // not just the active panel.
+    const b = await openTempQuoll(harness, "b0\nb1\nb2\nb3\n", "docb", a.panel);
+    files.push(b.file);
+    assert.notStrictEqual(a.panel, b.panel, "the two panels must be distinct controls");
+    await pollForCount(
+      () => harness.inboundEvents.filter(isReadyInbound).length,
       2,
-      "editor-config(lintGutter:true) must reach both webviews exactly once each"
+      "both panels' ready handshakes"
+    );
+    await tick(200); // let panel B's ready-driven editor-config flush
+    harness.clearEvents();
+    await vscode.workspace
+      .getConfiguration()
+      .update(GUTTER_KEY, false, vscode.ConfigurationTarget.Global);
+    await pollForCount(
+      () => harness.events.filter(isGutterOff).length,
+      2,
+      "editor-config from both"
+    );
+    await tick(200);
+    assert.strictEqual(
+      harness.events.filter(isGutterOff).length,
+      2,
+      "two open panels must post exactly two editor-config — one per webview"
     );
 
     // --- (b2) per-panel caret isolation --------------------------------------
