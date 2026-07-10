@@ -38,7 +38,8 @@ export type ToolbarVisibility = "shown" | "hidden";
 export type ToolbarScrollState = { visibility: ToolbarVisibility; anchor: number };
 
 /** The single class the observer stamps on the `.quoll-editor` host. CSS
- *  (styles.css) slides both toggles + the outline panel when it is present. */
+ *  (styles.css) slides both floating toggles off the top edge when present.
+ *  The outline SIDEBAR is deliberately NOT chrome (see CHROME_SELECTOR). */
 export const CHROME_HIDDEN_CLASS = "quoll-chrome-hidden";
 
 /** The floating chrome the observer removes from the focus / a11y tree while
@@ -47,11 +48,14 @@ export const CHROME_HIDDEN_CLASS = "quoll-chrome-hidden";
  *  (`visibility 0s 0.2s`), so on its own it would leave the offscreen toggles
  *  keyboard-focusable for that window; toggling `inert` from JS in sync with
  *  the class closes it IMMEDIATELY (set on hide, cleared on show). The outline
- *  SIDEBAR is deliberately NOT chrome: unpinned it is hover-scoped (scrolling
- *  the content means the pointer already left it, so it is closed) and pinned
- *  it is a structural column that must survive scrolling. Queried at each
- *  transition (never cached) so plugin construction order is handled
- *  uniformly. */
+ *  SIDEBAR is deliberately NOT chrome. Unpinned, it is hover-scoped: a
+ *  pointer-driven open closes on pointer-leave, so pointer scrolling never
+ *  competes with an open overlay. A KEYBOARD-driven open (Mod-Alt-o, no
+ *  pointer) instead stays open until an explicit dismiss (jump / Escape /
+ *  Mod-Alt-o) — a deliberate trade-off: it does NOT close on scroll, so the
+ *  overlay must not be inert-hidden here. Pinned, it is a structural column
+ *  that must survive scrolling. Queried at each transition (never cached) so
+ *  plugin construction order is handled uniformly. */
 export const CHROME_SELECTOR = ".quoll-outline-toggle, .quoll-switch-editor-toggle";
 
 /** Default jitter dead-zone (px). Movement within this of the anchor does NOT
@@ -128,10 +132,11 @@ class FloatingToolbarScroll implements PluginValue {
   }
 
   /** Drive the host class AND the chrome `inert` attribute together. `inert`
-   *  removes the offscreen toggles / panel from the focus + a11y tree the
-   *  instant the hide begins, ahead of the CSS `visibility:hidden` that is
-   *  delayed until the slide finishes. Queried per transition (off the hot
-   *  path) so the lazily-mounted outline panel is covered whenever it exists. */
+   *  removes the offscreen toggles from the focus + a11y tree the instant the
+   *  hide begins, ahead of the CSS `visibility:hidden` that is delayed until the
+   *  slide finishes. Queried per transition (off the hot path) so the
+   *  lazily-mounted outline toggle is covered whenever it exists. The outline
+   *  SIDEBAR is intentionally excluded (see CHROME_SELECTOR). */
   private setChromeHidden(hidden: boolean): void {
     this.hostEl.classList.toggle(CHROME_HIDDEN_CLASS, hidden);
     for (const el of this.hostEl.querySelectorAll(CHROME_SELECTOR)) {
