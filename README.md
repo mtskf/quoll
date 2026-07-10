@@ -131,6 +131,8 @@ pnpm test           # run the vitest unit suite
 
 Press `F5` in VS Code to launch an Extension Development Host with Quoll loaded. See [CONTRIBUTING.md](CONTRIBUTING.md) for the full contributor guide.
 
+Found a bug or have a feature request? [Open an issue](https://github.com/mtskf/quoll/issues/new/choose).
+
 ## License
 
 [MIT](LICENSE) — © 2026 Mitsuki Fukunaga and Quoll contributors.
