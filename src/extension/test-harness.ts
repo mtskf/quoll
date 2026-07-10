@@ -218,6 +218,13 @@ export class TestHarness {
   private readonly _errorWaiters: ErrorWaiter[] = [];
   private _activePanel: PanelControls | null = null;
 
+  /** Clears the session surface-memory map that the restore watcher reads.
+   *  INJECTED by extension.ts (Test mode) rather than imported, because
+   *  test-harness.js is a separate esbuild bundle — a direct import would clear a
+   *  second, unrelated copy of the module-level map (see reset()'s note). No-op
+   *  until injected, so a unit test that constructs TestHarness directly is safe. */
+  public surfaceMemoryReset: () => void = () => undefined;
+
   /** Test-installed override hooks — see `TestOverrides`. Held in one
    *  registry so `reset()` clears every override through a single path
    *  (`this._overrides = createOverrides()`); the public getter/setter
@@ -497,6 +504,16 @@ export class TestHarness {
     // setActivePanel(null, panelControls); that call no-ops here
     // because we already null'd _activePanel.
     this._activePanel = null;
+    // Surface memory (surface-restore-watcher) is a module-level, session-lived
+    // map by design. E2E tests share fixture URIs (e.g. fixtureUri("sample.md"))
+    // across cases, so a `quoll` recorded by one case would make the global
+    // restore watcher reopen a later case's fresh text open — closing the tab it
+    // is working with. Clearing it per-test isolates cases. `surfaceMemoryReset`
+    // is INJECTED by extension.ts because test-harness.js is a SEPARATE esbuild
+    // bundle: a direct `import` of surface-memory here would bundle a second copy
+    // of its module-level map and clear the wrong instance (not the one the
+    // watcher in dist/extension.cjs reads). Production never runs this harness.
+    this.surfaceMemoryReset();
   }
 
   /** Subset of reset() — only clears the outbound `_events` stream

@@ -173,6 +173,16 @@ html body {
      *                                 leg. Duration converged (was 0.1s / 0.12s). */
     --quoll-control-rest-opacity: 0.6;
     --quoll-control-transition: opacity 0.12s ease;
+    /* Outline sidebar: fixed column width, a surface lifted slightly toward
+     * white above the editor background, and a hairline right border. One
+     * token trio consumed by BOTH overlay and pinned modes so they can never
+     * drift — retune here only. In light themes the lift is nearly invisible
+     * by construction (white on white); the hairline border carries the
+     * separation there. NOTE: keep these comments free of brace-wrapped rule
+     * literals — the styles-contract greps match raw CSS text. */
+    --quoll-outline-sidebar-width: 260px;
+    --quoll-outline-sidebar-background: color-mix(in srgb, var(--vscode-editor-background) 95%, #fff);
+    --quoll-outline-sidebar-border: color-mix(in srgb, var(--vscode-panel-border, #8888) 60%, transparent);
   }
 
   html {
@@ -428,6 +438,12 @@ html body {
     --quoll-completed-fill: var(--vscode-editor-foreground);
     --quoll-completed-ink: var(--vscode-editor-foreground);
     --quoll-todo-ring: var(--quoll-accent-green);
+    /* Outline sidebar in HC: no derived surface mixing — HC wants authored
+     * colours + strong borders. Plain editor background; the contrast border
+     * carries the separation. */
+    --quoll-outline-sidebar-background: var(--vscode-editor-background);
+    --quoll-outline-sidebar-border: var(--vscode-contrastBorder,
+      var(--vscode-editorWidget-border, var(--vscode-panel-border, #888)));
   }
 }
 
@@ -780,12 +796,14 @@ html body {
     outline-offset: 1px;
   }
 
-  /* ───────────────────── document outline navigator ─────────────────────
-   * A webview-native overlay (cm/outline): a toggle button + floating heading
-   * list. View-only — clicking an item dispatches a selection + scroll, never
-   * an edit. Absolutely positioned inside `.quoll-editor` so it overlays the
-   * CodeMirror surface WITHOUT reflowing the centred reading column. Colours
-   * are --vscode-* so dark / light / high-contrast track automatically. */
+  /* ───────────────────── document outline sidebar ─────────────────────
+   * A webview-native left-edge sidebar (cm/outline). Hovering the top-left
+   * toggle slides it in; the pointer leaving it (or a heading jump) closes it
+   * unless pinned. Two host classes carry ALL geometry: quoll-outline-open
+   * (slide in; overlay above the reading column) and quoll-outline-pinned
+   * (static 2-column flex — the reading column reflows). View-only — clicking
+   * an item dispatches a selection + scroll, never an edit. Colours are
+   * --vscode-* + the --quoll-outline-sidebar-* tokens so themes track. */
   .quoll-outline-toggle {
     position: absolute;
     top: 8px;
@@ -845,44 +863,84 @@ html body {
     height: 16px;
   }
 
-  .quoll-outline-panel {
+  /* While the sidebar is open the toggle is hidden — the sidebar slides over
+   * its corner and the header pin button takes its position. visibility (not
+   * display) avoids layout shift; pointer-events:none makes sure the covered
+   * button can never re-trigger a hover-open mid-slide-out. */
+  .quoll-outline-open .quoll-outline-toggle {
+    visibility: hidden;
+    pointer-events: none;
+  }
+
+  /* The sidebar. Closed = slid off the left edge but still rendered (the slide
+   * needs a live element; the plugin sets `inert` and the delayed visibility
+   * flip keeps it out of the focus / a11y tree). Open = absolute overlay above
+   * the reading column, full editor height. */
+  .quoll-outline-sidebar {
     position: absolute;
-    top: 42px;
-    left: 12px;
-    z-index: 5;
+    top: 0;
+    bottom: 0;
+    left: 0;
+    z-index: 6; /* above the z-index:5 corner toggles it slides over */
     display: flex;
     flex-direction: column;
-    width: 260px;
-    max-width: min(80vw, 260px);
-    max-height: 60vh;
-    border: 1px solid var(--vscode-editorWidget-border, var(--vscode-panel-border, #8888));
-    border-radius: 6px;
-    background: var(--vscode-editorWidget-background, var(--vscode-editor-background));
+    width: var(--quoll-outline-sidebar-width);
+    max-width: 80vw;
+    border-right: 1px solid var(--quoll-outline-sidebar-border);
+    background: var(--quoll-outline-sidebar-background);
     color: var(--vscode-editorWidget-foreground, var(--vscode-foreground));
-    box-shadow: 0 2px 8px rgb(0 0 0 / 28%);
-    overflow: hidden;
-    transition: transform 0.2s ease, opacity 0.2s ease, visibility 0s;
+    transform: translateX(-100%);
+    visibility: hidden;
+    transition: transform 0.15s ease, visibility 0s 0.15s;
   }
-  .quoll-outline-panel[hidden] {
-    display: none;
+  .quoll-outline-open .quoll-outline-sidebar {
+    transform: none;
+    visibility: visible;
+    transition: transform 0.15s ease, visibility 0s;
+  }
+
+  /* Pinned: the overlay becomes a real 2-column layout. The host turns into a
+   * flex row (the sidebar is its FIRST child in DOM order), the sidebar goes
+   * static at its token width, and CodeMirror flexes into the remainder.
+   * min-width:0 lets the editor column actually shrink (flex items default to
+   * min-width:auto); the centred reading column adapts because .cm-content's
+   * measure is flexBasis 60em capped by maxWidth 100% (cm/theme.ts), not a
+   * fixed width. The height chain is untouched: the existing
+   * .quoll-editor .cm-editor height rule matches here too, so .cm-scroller
+   * stays the real scroller (verified in a real browser — Task 4). */
+  .quoll-editor.quoll-outline-pinned {
+    display: flex;
+  }
+  .quoll-editor.quoll-outline-pinned .quoll-outline-sidebar {
+    position: static;
+    flex: 0 0 var(--quoll-outline-sidebar-width);
+    transform: none;
+    visibility: visible;
+    transition: none;
+  }
+  .quoll-editor.quoll-outline-pinned .cm-editor {
+    flex: 1 1 auto;
+    min-width: 0;
   }
 
   /* ───────────────── floating-toolbar scroll-hide ─────────────────
    * The shared scroll-direction observer (cm/floating-toolbar-scroll.ts)
    * stamps `.quoll-chrome-hidden` on the `.quoll-editor` host on scroll-DOWN
    * and clears it on scroll-UP / at the very top. Both floating toggles slide
-   * off the top edge together; the outline panel (if open) rides along and
-   * fades out so no detached panel is left floating. `visibility:hidden`
-   * (delayed until the slide finishes) also drops the offscreen chrome from the
-   * tab order / a11y tree, and makes the exact translate distance non-load-
-   * bearing (a banner pushing the host down can't leave a ghost toggle).
+   * off the top edge together. `visibility:hidden` (delayed until the slide
+   * finishes) also drops the offscreen chrome from the tab order / a11y tree,
+   * and makes the exact translate distance non-load-bearing (a banner pushing
+   * the host down can't leave a ghost toggle). The outline SIDEBAR is
+   * deliberately NOT chrome: unpinned it is hover-scoped (scrolling means the
+   * pointer already left it), pinned it is a structural column that must
+   * survive scrolling.
    *
    * a11y NOTE (design-review error-handler F1): `visibility:hidden` alone drops
    * the chrome from the tree only in the SETTLED hidden state — with motion
    * ENABLED it stays keyboard-reachable DURING the 0.2s slide. To close that
    * window, cm/floating-toolbar-scroll.ts toggles the `inert` attribute on the
    * chrome in lockstep with this class (set the instant the hide begins), so the
-   * offscreen toggles / panel leave the focus + a11y tree immediately regardless
+   * offscreen toggles leave the focus + a11y tree immediately regardless
    * of the slide. Display-only chrome. */
   .quoll-chrome-hidden .quoll-outline-toggle,
   .quoll-chrome-hidden .quoll-switch-editor-toggle {
@@ -894,13 +952,6 @@ html body {
     pointer-events: none;
     transition: opacity 0.12s ease, transform 0.2s ease, visibility 0s 0.2s;
   }
-  .quoll-chrome-hidden .quoll-outline-panel {
-    transform: translateY(-48px);
-    opacity: 0;
-    visibility: hidden;
-    pointer-events: none;
-    transition: transform 0.2s ease, opacity 0.2s ease, visibility 0s 0.2s;
-  }
   /* Respect reduced-motion: snap instead of slide. MUST list the 2-class
    * `.quoll-chrome-hidden …` selectors too — a 1-class rule here loses on
    * specificity to the hidden rules above, so the hide-direction transition
@@ -908,10 +959,10 @@ html body {
   @media (prefers-reduced-motion: reduce) {
     .quoll-outline-toggle,
     .quoll-switch-editor-toggle,
-    .quoll-outline-panel,
+    .quoll-outline-sidebar,
+    .quoll-outline-open .quoll-outline-sidebar,
     .quoll-chrome-hidden .quoll-outline-toggle,
-    .quoll-chrome-hidden .quoll-switch-editor-toggle,
-    .quoll-chrome-hidden .quoll-outline-panel {
+    .quoll-chrome-hidden .quoll-switch-editor-toggle {
       transition: none;
     }
   }
@@ -919,9 +970,41 @@ html body {
   .quoll-outline-header {
     display: flex;
     align-items: center;
-    justify-content: space-between;
-    padding: 6px 10px;
-    border-bottom: 1px solid var(--vscode-editorWidget-border, var(--vscode-panel-border, transparent));
+    gap: 8px;
+    flex: 0 0 auto;
+    /* 8px/12px insets place the pin button exactly where the (now hidden)
+     * corner toggle sits, so opening reads as the toggle morphing into pin. */
+    padding: 8px 12px 4px;
+  }
+  .quoll-outline-pin {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 26px;
+    height: 26px;
+    padding: 0;
+    border: none;
+    border-radius: 5px;
+    background: transparent;
+    color: var(--vscode-icon-foreground, var(--vscode-foreground));
+    cursor: pointer;
+    opacity: var(--quoll-control-rest-opacity);
+    transition: var(--quoll-control-transition);
+  }
+  .quoll-outline-pin:hover,
+  .quoll-outline-pin:focus-visible {
+    opacity: 1;
+  }
+  .quoll-outline-pin:hover {
+    background: var(--vscode-list-hoverBackground, rgb(128 128 128 / 15%));
+  }
+  .quoll-outline-pin.pinned {
+    opacity: 1;
+    color: var(--vscode-errorForeground, #e51400);
+  }
+  .quoll-outline-pin svg {
+    width: 16px;
+    height: 16px;
   }
   .quoll-outline-title {
     font-size: 0.72rem;
@@ -929,19 +1012,6 @@ html body {
     text-transform: uppercase;
     letter-spacing: 0.04em;
     opacity: 0.8;
-  }
-  .quoll-outline-close {
-    padding: 0 2px;
-    border: none;
-    background: transparent;
-    color: inherit;
-    font-size: 15px;
-    line-height: 1;
-    cursor: pointer;
-    opacity: 0.7;
-  }
-  .quoll-outline-close:hover {
-    opacity: 1;
   }
 
   .quoll-outline-list {
@@ -985,6 +1055,34 @@ html body {
     padding: 8px 10px;
     font-style: italic;
     opacity: 0.7;
+  }
+  .quoll-outline-footer {
+    flex: 0 0 auto;
+    padding: 4px 8px 8px;
+    border-top: 1px solid var(--quoll-outline-sidebar-border);
+  }
+  .quoll-outline-settings {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    padding: 6px 8px;
+    border: none;
+    border-radius: 4px;
+    background: transparent;
+    color: inherit;
+    font: inherit;
+    font-size: calc(var(--vscode-font-size) * 0.92);
+    text-align: left;
+    cursor: pointer;
+  }
+  .quoll-outline-settings:hover {
+    background: var(--vscode-list-hoverBackground, rgb(128 128 128 / 15%));
+  }
+  .quoll-outline-settings svg {
+    width: 16px;
+    height: 16px;
+    flex: 0 0 auto;
   }
 }
 

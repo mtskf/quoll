@@ -24,6 +24,7 @@ import { canEditWith } from "./can-edit-with.js";
 import { stashSwitchCaret, takeSwitchCaret } from "./editor-switch-caret.js";
 import { QuollEditorPanel } from "./quoll-editor-panel.js";
 import { openInTextEditor } from "./reopen-text-editor.js";
+import { noteSurface } from "./surface-memory.js";
 import { finalizeSurfaceSwap, findSourceTab } from "./surface-swap.js";
 
 export type SwitchTarget = "to-text" | "to-quoll" | "none";
@@ -98,6 +99,10 @@ export function registerToggleEditor(): { dispose(): void } {
         );
         try {
           await openInTextEditor(uri);
+          // Record intent AFTER the open succeeds and BEFORE the source close,
+          // so the surface-restore watcher adopts "text" instead of bouncing
+          // this deliberate swap (and a failed open records nothing).
+          noteSurface(uri.toString(), "text");
           await finalizeSurfaceSwap(uri, sourceTab);
         } catch (err) {
           surfaceError("could not open the text editor", err);
@@ -139,6 +144,8 @@ export function registerToggleEditor(): { dispose(): void } {
             editor.document.uri,
             QuollEditorPanel.viewType
           );
+          // Record intent AFTER the open succeeds and BEFORE the source close.
+          noteSurface(key, "quoll");
           await finalizeSurfaceSwap(editor.document.uri, sourceTab);
         } catch (err) {
           takeSwitchCaret(key); // clear the stash so it does not apply on a later open

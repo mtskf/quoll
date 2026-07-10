@@ -88,6 +88,10 @@ export const window = {
   showErrorMessage: (_msg: string): Thenable<undefined> => Promise.resolve(undefined),
   tabGroups: {
     activeTabGroup: { activeTab: undefined as unknown },
+    all: [] as unknown[],
+    onDidChangeTabs: (_listener: (e: unknown) => void) => ({
+      dispose: (): void => undefined,
+    }),
   },
 };
 

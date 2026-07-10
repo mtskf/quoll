@@ -199,3 +199,35 @@ export async function finalizeSurfaceSwap(
     console.error("[quoll] finalizeSurfaceSwap failed", err);
   }
 }
+
+/** Close the pre-captured `sourceTab` ONLY if the shared doc is currently clean.
+ *  Unlike finalizeSurfaceSwap this NEVER saves — it is the PASSIVE-restore
+ *  finalizer (surface-restore-watcher.ts): a restore is triggered by merely
+ *  opening a file, so it must not write the user's disk. A dirty doc ⇒ leave the
+ *  tab open (both surfaces remain; a later clean open restores). Re-resolves a
+ *  live tab for the same identity before closing (Tab identity is not stable
+ *  across tab-model events). Best-effort; never throws. `deps` is seamed for
+ *  tests. */
+export async function closeSourceTabIfClean(
+  uri: Uri,
+  sourceTab: Tab | undefined,
+  deps: FinalizeSwapDeps = REAL_SWAP_DEPS
+): Promise<void> {
+  if (sourceTab === undefined) {
+    return;
+  }
+  try {
+    const doc = await deps.openDoc(uri);
+    if (doc.isDirty) {
+      console.warn("[quoll] surface restore: doc is dirty; leaving both surfaces open");
+      return;
+    }
+    const liveSourceTab = deps.reresolveSourceTab(sourceTab);
+    const closed = liveSourceTab ? await deps.closeTab(liveSourceTab) : true;
+    if (!closed) {
+      console.warn("[quoll] surface restore: source tab close was cancelled; both surfaces remain");
+    }
+  } catch (err) {
+    console.error("[quoll] closeSourceTabIfClean failed", err);
+  }
+}
