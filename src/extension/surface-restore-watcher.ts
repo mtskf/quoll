@@ -113,9 +113,7 @@ async function restoreSurface(
 ): Promise<void> {
   try {
     const doc = await workspace.openTextDocument(uri);
-    const canOpenQuoll = canEditWith(doc, (scheme) =>
-      workspace.fs.isWritableFileSystem(scheme)
-    ).ok;
+    const canOpenQuoll = canEditWith(doc, (scheme) => workspace.fs.isWritableFileSystem(scheme)).ok;
     const action = planRestore(target, doc.isDirty, canOpenQuoll);
     if (action === "skip") {
       return;
@@ -160,9 +158,7 @@ export function registerSurfaceRestoreWatcher(quollViewType: string): Disposable
         continue;
       }
       restoring.add(uriKey);
-      void restoreSurface(reopen, uri, tab, quollViewType).finally(() =>
-        restoring.delete(uriKey)
-      );
+      void restoreSurface(reopen, uri, tab, quollViewType).finally(() => restoring.delete(uriKey));
     }
   });
 }

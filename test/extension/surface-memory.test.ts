@@ -12,7 +12,10 @@ beforeEach(() => __clearSurfaceMemoryForTest());
 describe("decideOpenReconcile (pure, asymmetric upgrade-to-Quoll)", () => {
   it("adopts the shown surface when there is no memory", () => {
     expect(decideOpenReconcile(undefined, "text", false)).toEqual({ record: "text", reopen: null });
-    expect(decideOpenReconcile(undefined, "quoll", false)).toEqual({ record: "quoll", reopen: null });
+    expect(decideOpenReconcile(undefined, "quoll", false)).toEqual({
+      record: "quoll",
+      reopen: null,
+    });
   });
 
   it("adopts (records) when the shown surface already matches memory", () => {
