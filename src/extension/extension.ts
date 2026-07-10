@@ -1,6 +1,7 @@
 import { commands, type ExtensionContext, ExtensionMode, window, workspace } from "vscode";
 import { canEditWith } from "./can-edit-with.js";
 import { QuollEditorPanel } from "./quoll-editor-panel.js";
+import { registerSurfaceRestoreWatcher } from "./surface-restore-watcher.js";
 import { registerToggleEditor } from "./toggle-editor.js";
 
 export async function activate(context: ExtensionContext) {
@@ -15,6 +16,7 @@ export async function activate(context: ExtensionContext) {
 
   context.subscriptions.push(QuollEditorPanel.register(context, harness));
   context.subscriptions.push(registerToggleEditor());
+  context.subscriptions.push(registerSurfaceRestoreWatcher(QuollEditorPanel.viewType));
   context.subscriptions.push(
     commands.registerCommand("quoll.editWith", async () => {
       const editor = window.activeTextEditor;
