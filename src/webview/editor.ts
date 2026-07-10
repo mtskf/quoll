@@ -44,7 +44,6 @@ import { quollMarkdownLanguage } from "./cm/markdown.js";
 import { openExternalSinkFor, quollOpenExternalSink } from "./cm/open-external.js";
 import { quollOutline } from "./cm/outline/index.js";
 import { htmlTablePaste } from "./cm/paste/index.js";
-import { quollReadingStats } from "./cm/reading-stats/index.js";
 import { detectLineSeparator, splitToCmText } from "./cm/seed.js";
 import { quollSwitchEditor } from "./cm/switch-editor.js";
 import { tableBlockField, tableSkeletonField } from "./cm/table/index.js";
@@ -577,13 +576,6 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
           sync.flush();
           flushCaretReport();
         }),
-        // Per-document reading stats: a passive ViewPlugin rendering an
-        // unobtrusive words/chars/reading-time readout (bottom-right of the
-        // editor host), refreshed on a debounced timer after edits. View-only
-        // (no CM change, no write-lock, no host round-trip); heading/link
-        // counts reuse the Lezer tree. Absolute-positioned so the centred
-        // reading column is unaffected.
-        quollReadingStats(),
         // Floating-toolbar scroll-hide: one shared scroll-direction observer on
         // view.scrollDOM stamps `.quoll-chrome-hidden` on the .quoll-editor host
         // so BOTH toggles above + the outline panel slide off the top edge on

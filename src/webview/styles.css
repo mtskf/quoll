@@ -986,43 +986,6 @@ html body {
     font-style: italic;
     opacity: 0.7;
   }
-
-  /* ───────────────── per-document reading stats ─────────────────
-   * A passive, non-interactive readout docked bottom-right of the editor host.
-   * Absolute-positioned overlay so the centred reading column is unaffected.
-   * Low-opacity at rest, brightens on hover; pointer-events:none so it never
-   * intercepts editor clicks. Hides with the other floating chrome on
-   * scroll-down (.quoll-chrome-hidden). Colours from --vscode-* so themes track. */
-  .quoll-reading-stats {
-    position: absolute;
-    right: 12px;
-    bottom: 10px;
-    z-index: 5;
-    padding: 2px 8px;
-    border-radius: 6px;
-    font-size: 11px;
-    line-height: 1.4;
-    white-space: nowrap;
-    color: var(--vscode-descriptionForeground);
-    background: var(--vscode-editor-background);
-    opacity: 0.45;
-    pointer-events: none;
-    transition: opacity 120ms ease;
-  }
-
-  .quoll-editor:hover .quoll-reading-stats {
-    opacity: 0.85;
-  }
-
-  .quoll-chrome-hidden .quoll-reading-stats {
-    opacity: 0;
-  }
-
-  @media (prefers-reduced-motion: reduce) {
-    .quoll-reading-stats {
-      transition: none;
-    }
-  }
 }
 
 /* Nascent-setext de-style. A lone `-`/`=` typed on the line under a paragraph
