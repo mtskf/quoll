@@ -28,6 +28,7 @@
 import type {
   CancellationToken,
   CustomTextEditorProvider,
+  Event,
   ExtensionContext,
   Tab,
   TextDocument,
@@ -78,6 +79,7 @@ import {
   buildThemeMessage,
 } from "./document-message.js";
 import { createEditSettledBarrier } from "./edit-settled-barrier.js";
+import { createEditorConfigWiring } from "./editor-config-wiring.js";
 import { takeSwitchCaret } from "./editor-switch-caret.js";
 import { createEffectExecutor } from "./effect-executor.js";
 import { getNonce } from "./get-nonce.js";
@@ -112,6 +114,7 @@ import {
 import { noteSurface } from "./surface-memory.js";
 import { finalizeSurfaceSwap, findSourceTab } from "./surface-swap.js";
 import type { PanelControls, TestHarness } from "./test-harness.js";
+import { createThemeSyncWiring } from "./theme-sync-wiring.js";
 import {
   buildLocalResourceRoots,
   buildResourceBaseUri,
@@ -268,6 +271,19 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
     // authority; this local short-circuits effect delivery (kept in
     // lockstep by onDidDispose, which sets it before dispatching).
     let disposed = false;
+
+    // Register a VS Code Event listener that is skipped once the panel is disposed,
+    // returning the Disposable so the caller controls teardown (a wiring factory's
+    // `subscribe` closure wraps it as a teardown; a still-inline listener pushes it
+    // to `disposables`). Closes over `disposed` once so the
+    // `(e) => { if (disposed) return; … }` guard is written a single time.
+    const subscribeWhileAlive = <T>(event: Event<T>, handler: (e: T) => void): Disposable =>
+      event((e) => {
+        if (disposed) {
+          return;
+        }
+        handler(e);
+      });
 
     // Single-flight guard for the Codex handoff. A rapid ⌘+J repeat within the
     // async window would add a DUPLICATE, persistent context chip to the Codex
@@ -500,15 +516,6 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
         }),
     });
 
-    // Editor-surface config push (side channel, NOT through the host-session
-    // core — the gutter flag is independent of document/edit lifecycle). Sent
-    // at seed + ready (so it lands regardless of which handshake wins) and on
-    // every relevant onDidChangeConfiguration. Idempotent: a duplicate is a
-    // harmless no-op compartment reconfigure webview-side.
-    const postEditorConfig = (): void => {
-      post(buildEditorConfigMessage(readLintGutterEnabled(), readSpellcheckEnabled()));
-    };
-
     // Image-write executor. Orthogonal to the document-text write lock (it writes
     // a SEPARATE binary file, not the TextDocument), so it does NOT enter the
     // host-session core. writeImage creates <docFolder>/assets/ then writes — the
@@ -718,16 +725,20 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
       disposables
     );
 
-    window.onDidChangeActiveColorTheme(
-      (e) => {
-        if (disposed) {
-          return;
-        }
-        dispatch({ type: "themeChanged", isDarkTheme: e.kind === ColorThemeKind.Dark });
+    // Theme sync: forwards a dark/light change as a `themeChanged` core event
+    // (a core SIGNAL — it touches no document / write-lock / caret state). The
+    // panel's `subscribe` closure maps ColorThemeKind → isDarkTheme (keeping the
+    // factory vscode-free); the factory forwards that boolean to dispatch.
+    const themeSync = createThemeSyncWiring({
+      subscribe: (onThemeChange) => {
+        const sub = subscribeWhileAlive(window.onDidChangeActiveColorTheme, (e) =>
+          onThemeChange(e.kind === ColorThemeKind.Dark)
+        );
+        return () => sub.dispose();
       },
-      undefined,
-      disposables
-    );
+      onThemeChange: (isDarkTheme) => dispatch({ type: "themeChanged", isDarkTheme }),
+    });
+    disposables.push(themeSync);
 
     // Track the caret while the DEFAULT text editor for this document is the
     // ACTIVE editor, so a text-editor→Quoll switch carries it. Two guards:
@@ -817,23 +828,28 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
       disposables
     );
 
-    // Per-panel editor-config push on a relevant settings change. Side
-    // channel (does NOT enter the host-session core); disposed with the panel.
-    workspace.onDidChangeConfiguration(
-      (e) => {
-        if (disposed) {
-          return;
-        }
-        if (
-          e.affectsConfiguration(LINT_GUTTER_CONFIG_KEY) ||
-          e.affectsConfiguration(SPELLCHECK_CONFIG_KEY)
-        ) {
-          postEditorConfig();
-        }
+    // Editor-surface config push (side channel, does NOT enter the host-session
+    // core — the gutter/spellcheck flags are independent of document/edit
+    // lifecycle). `push()` is called at seed + `ready` (so it lands regardless
+    // of which handshake wins); the subscription re-pushes on a relevant
+    // onDidChangeConfiguration. Idempotent webview-side. Created HERE (the old
+    // config-listener site) so its disposables position — hence teardown order —
+    // is unchanged.
+    const editorConfig = createEditorConfigWiring({
+      subscribe: (onRelevantChange) => {
+        const sub = subscribeWhileAlive(workspace.onDidChangeConfiguration, (e) => {
+          if (
+            e.affectsConfiguration(LINT_GUTTER_CONFIG_KEY) ||
+            e.affectsConfiguration(SPELLCHECK_CONFIG_KEY)
+          ) {
+            onRelevantChange();
+          }
+        });
+        return () => sub.dispose();
       },
-      undefined,
-      disposables
-    );
+      push: () => post(buildEditorConfigMessage(readLintGutterEnabled(), readSpellcheckEnabled())),
+    });
+    disposables.push(editorConfig);
 
     // Hidden-webview resync (visible) + caret handoff (active edge).
     //   - Visible: UNCHANGED from the prior implementation — when the panel is
@@ -1147,7 +1163,9 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
       switch (raw.type) {
         case "ready":
           dispatch({ type: "ready" });
-          postEditorConfig();
+          // Guard-less: relies on handleInbound's top-of-function `disposed`
+          // guard above, which already gates this whole switch.
+          editorConfig.push();
           // Reverse switch caret restore. A REVERSE-created panel is fresh (no
           // pending edit, no write-lock), so the ready dispatch posts the seed
           // Document synchronously and this selection-only caret-apply lands
@@ -1519,7 +1537,7 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
     // the reliable fallback path. If VS Code ever stops buffering, the
     // eager seed becomes a no-op and Ready takes over.
     dispatch({ type: "seed" });
-    postEditorConfig();
+    editorConfig.push();
   }
 
   static getWebviewContent(webview: Webview, extensionUri: Uri, document: TextDocument): string {

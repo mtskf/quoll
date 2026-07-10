@@ -24,7 +24,7 @@ const isReadyInbound = (r: { raw: unknown }): boolean =>
 // Pins host->webview editor-config delivery: an editor-config is posted at
 // seed time (carrying the current setting), and a fresh one is posted when
 // quoll.lint.gutter.enabled changes (onDidChangeConfiguration). This is the
-// only automated coverage of the three host postEditorConfig call-sites.
+// only automated coverage of the three host editorConfig.push() call-sites.
 describe("editor-config-propagate", function () {
   this.timeout(25000);
 
@@ -85,7 +85,7 @@ describe("editor-config-propagate", function () {
 
   // Sibling of the lint-gutter test above, keyed off quoll.editor.spellcheck.
   // Pins the OTHER editor-surface flag rides the SAME three host
-  // postEditorConfig call-sites (seed + ready + onDidChangeConfiguration): a
+  // editorConfig.push() call-sites (seed + ready + onDidChangeConfiguration): a
   // known non-default (false) must arrive on-open, and flipping it back to true
   // must re-push. Non-vacuous against BOTH halves of the wiring — the seed
   // assertion reds if readSpellcheckEnabled() stops being read into the message,
