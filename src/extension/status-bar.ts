@@ -7,8 +7,9 @@
 //
 // OUT of scope on purpose: encoding (no public VS Code API reads a document's
 // encoding — the built-in indicator is internal) and indentation (no
-// `TextEditor.options` for a custom editor). Selection count is a follow-up
-// (needs the selection anchor on the `caret-report` wire, currently head-only).
+// `TextEditor.options` for a custom editor). A non-empty PRIMARY selection is
+// appended to the caret slot (`Ln X, Col Y (N selected)`, VS Code's native
+// format) from the `selectedChars` count on the `caret-report` wire.
 //
 // Pure of VS Code: the formatters take primitives and the controller drives an
 // injected `StatusBarSlot` interface, so the whole module unit-tests without a
@@ -27,9 +28,12 @@ export type EndOfLineValue = 1 | 2;
 const EOL_CRLF: EndOfLineValue = 2;
 
 /** `Ln X, Col Y` — VS Code's built-in label. The caret is 0-based (VS Code
- *  `Position` convention); the status bar shows it 1-based. */
-export function formatCaretPosition(caret: Caret): string {
-  return `Ln ${caret.line + 1}, Col ${caret.character + 1}`;
+ *  `Position` convention); the status bar shows it 1-based. A non-empty
+ *  primary selection appends ` (N selected)`, matching VS Code's native
+ *  format; `selectedChars <= 0` (collapsed) renders position-only. */
+export function formatCaretPosition(caret: Caret, selectedChars = 0): string {
+  const position = `Ln ${caret.line + 1}, Col ${caret.character + 1}`;
+  return selectedChars > 0 ? `${position} (${selectedChars} selected)` : position;
 }
 
 /** `LF` / `CRLF` from a `vscode.EndOfLine` value (1 = LF, 2 = CRLF). The input
@@ -81,10 +85,15 @@ export interface StatusBarSlots {
   language: StatusBarSlot;
 }
 
-/** Live inputs for a refresh: the 0-based caret and the document's EOL. */
+/** Live inputs for a refresh: the 0-based caret, the document's EOL, and the
+ *  primary-selection character count (0 = no selection). Required (mirroring
+ *  the required `CaretReportMessage.selectedChars`) so a caller cannot silently
+ *  conflate "no selection" with "count omitted" — the seed passes an explicit
+ *  0 for its pre-any-caret-report state. */
 export interface StatusBarView {
   caret: Caret;
   eol: EndOfLineValue;
+  selectedChars: number;
 }
 
 export interface StatusBarController {
@@ -109,8 +118,8 @@ export function createStatusBarController(
   const all: readonly StatusBarSlot[] = [slots.caret, slots.eol, slots.language];
 
   const controller: StatusBarController = {
-    update({ caret, eol }) {
-      slots.caret.text = formatCaretPosition(caret);
+    update({ caret, eol, selectedChars }) {
+      slots.caret.text = formatCaretPosition(caret, selectedChars);
       slots.eol.text = formatEol(eol);
     },
     show() {

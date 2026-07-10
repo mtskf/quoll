@@ -54,7 +54,13 @@ describe("caret-handoff", function () {
     const panel = harness.activePanel;
     assert.ok(panel, "activePanel must be set before simulating caret-report");
     // Simulate the webview reporting its caret. This must NOT enter the reducer.
-    panel.simulateInbound({ protocol: PROTOCOL, type: "caret-report", line: 2, character: 1 });
+    panel.simulateInbound({
+      protocol: PROTOCOL,
+      type: "caret-report",
+      line: 2,
+      character: 1,
+      selectedChars: 0,
+    });
     await tick(200);
 
     // No Document echo (the side channel never reseeds), and the document is
@@ -82,7 +88,13 @@ describe("caret-handoff", function () {
     // The webview reports a caret while Quoll is active → host stores it.
     const panel = harness.activePanel;
     assert.ok(panel, "activePanel must be set before simulating caret-report");
-    panel.simulateInbound({ protocol: PROTOCOL, type: "caret-report", line: 2, character: 3 });
+    panel.simulateInbound({
+      protocol: PROTOCOL,
+      type: "caret-report",
+      line: 2,
+      character: 3,
+      selectedChars: 0,
+    });
     await tick(50);
 
     // Switch to the DEFAULT text editor for the same uri → host applies the

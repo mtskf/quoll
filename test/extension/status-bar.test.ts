@@ -15,6 +15,19 @@ describe("formatCaretPosition", () => {
     expect(formatCaretPosition({ line: 0, character: 0 })).toBe("Ln 1, Col 1");
     expect(formatCaretPosition({ line: 4, character: 9 })).toBe("Ln 5, Col 10");
   });
+
+  it("omits the selection suffix when selectedChars is 0 / absent", () => {
+    expect(formatCaretPosition({ line: 4, character: 9 }, 0)).toBe("Ln 5, Col 10");
+    // A negative count (defensive) is treated as no selection.
+    expect(formatCaretPosition({ line: 4, character: 9 }, -1)).toBe("Ln 5, Col 10");
+  });
+
+  it("appends ` (N selected)` for a non-empty primary selection", () => {
+    expect(formatCaretPosition({ line: 28, character: 1551 }, 147)).toBe(
+      "Ln 29, Col 1552 (147 selected)"
+    );
+    expect(formatCaretPosition({ line: 0, character: 0 }, 1)).toBe("Ln 1, Col 1 (1 selected)");
+  });
 });
 
 describe("formatEol", () => {
@@ -94,7 +107,7 @@ describe("createStatusBarController", () => {
     const { slots, caret, eol, language } = makeSlots();
     const crlf: EndOfLineValue = 2;
     createStatusBarController(slots, {
-      view: { caret: { line: 2, character: 3 }, eol: crlf },
+      view: { caret: { line: 2, character: 3 }, eol: crlf, selectedChars: 0 },
       languageLabel: "Markdown",
     });
     expect(caret.slot.text).toBe("Ln 3, Col 4");
@@ -105,19 +118,32 @@ describe("createStatusBarController", () => {
   it("update() refreshes caret + EOL but leaves the static language label", () => {
     const { slots, caret, eol, language } = makeSlots();
     const c = createStatusBarController(slots, {
-      view: { caret: { line: 0, character: 0 }, eol: 1 },
+      view: { caret: { line: 0, character: 0 }, eol: 1, selectedChars: 0 },
       languageLabel: "Markdown",
     });
-    c.update({ caret: { line: 9, character: 0 }, eol: 1 });
+    c.update({ caret: { line: 9, character: 0 }, eol: 1, selectedChars: 0 });
     expect(caret.slot.text).toBe("Ln 10, Col 1");
     expect(eol.slot.text).toBe("LF");
     expect(language.slot.text).toBe("Markdown");
   });
 
+  it("update() wires a non-empty selectedChars into the caret slot text", () => {
+    const { slots, caret } = makeSlots();
+    const c = createStatusBarController(slots, {
+      view: { caret: { line: 0, character: 0 }, eol: 1, selectedChars: 0 },
+      languageLabel: "Markdown",
+    });
+    c.update({ caret: { line: 9, character: 0 }, eol: 1, selectedChars: 5 });
+    expect(caret.slot.text).toBe("Ln 10, Col 1 (5 selected)");
+    // Collapsing back to 0 drops the suffix.
+    c.update({ caret: { line: 9, character: 0 }, eol: 1, selectedChars: 0 });
+    expect(caret.slot.text).toBe("Ln 10, Col 1");
+  });
+
   it("show / hide / dispose fan out to every slot", () => {
     const { slots, caret, eol, language } = makeSlots();
     const c = createStatusBarController(slots, {
-      view: { caret: { line: 0, character: 0 }, eol: 1 },
+      view: { caret: { line: 0, character: 0 }, eol: 1, selectedChars: 0 },
       languageLabel: "Markdown",
     });
     c.show();

@@ -1,7 +1,12 @@
 import { EditorSelection, EditorState, Text } from "@codemirror/state";
 import { describe, expect, it } from "vitest";
 
-import { applyCaret, type Caret, selectionToCaret } from "../../src/webview/cm/caret.js";
+import {
+  applyCaret,
+  type Caret,
+  selectionCharCount,
+  selectionToCaret,
+} from "../../src/webview/cm/caret.js";
 
 function stateWith(doc: string, head: number): EditorState {
   return EditorState.create({ doc, selection: EditorSelection.cursor(head) });
@@ -35,6 +40,32 @@ describe("selectionToCaret", () => {
       extensions: [EditorState.allowMultipleSelections.of(true)],
     });
     expect(selectionToCaret(state)).toEqual({ line: 1, character: 2 });
+  });
+});
+
+describe("selectionCharCount", () => {
+  it("is 0 for a collapsed selection (cursor)", () => {
+    expect(selectionCharCount(stateWith("abc\ndef", 2))).toBe(0);
+  });
+
+  it("counts the primary range extent (to - from)", () => {
+    const state = EditorState.create({
+      doc: "abc\ndef",
+      selection: EditorSelection.range(1, 6), // spans 5 code units across the newline
+    });
+    expect(selectionCharCount(state)).toBe(5);
+  });
+
+  it("reads the MAIN range of a multi-range selection", () => {
+    const state = EditorState.create({
+      doc: "abcdef",
+      selection: EditorSelection.create(
+        [EditorSelection.range(0, 1), EditorSelection.range(2, 5)],
+        1 // mainIndex → the 3-wide range
+      ),
+      extensions: [EditorState.allowMultipleSelections.of(true)],
+    });
+    expect(selectionCharCount(state)).toBe(3);
   });
 });
 

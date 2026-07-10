@@ -17,7 +17,7 @@ import {
   PROTOCOL_VERSION,
   type WebviewToHost,
 } from "../shared/protocol.js";
-import { applyCaret, type Caret, selectionToCaret } from "./cm/caret.js";
+import { applyCaret, type Caret, selectionCharCount, selectionToCaret } from "./cm/caret.js";
 import { quollContextHandoffKeymap } from "./cm/context-handoff.js";
 import { blockStyle } from "./cm/decorations/block-style.js";
 import { blockZoneArrowKeymap } from "./cm/decorations/block-zone-arrow-keymap.js";
@@ -245,12 +245,13 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
   // side channel; the host keeps only the latest for the Quoll→text-editor
   // handoff). Failures are logged and swallowed — a dropped report just means
   // the host carries a slightly older caret on the next switch, never data loss.
-  const postCaretReport = (caret: Caret): void => {
+  const postCaretReport = (caret: Caret, selectedChars: number): void => {
     const message: WebviewToHost = {
       protocol: PROTOCOL_VERSION,
       type: "caret-report",
       line: caret.line,
       character: caret.character,
+      selectedChars,
     };
     try {
       getHost().postMessage(message);
@@ -268,7 +269,7 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
   // stranded inside the debounce window. (A mid-window report the user overtypes
   // is dropped by design, within the documented tolerance: a slightly older
   // caret on the next switch, never data loss — see postCaretReport above.)
-  let pendingCaret: Caret | null = null;
+  let pendingCaret: { caret: Caret; selectedChars: number } | null = null;
   let caretTimer: ReturnType<typeof setTimeout> | null = null;
   const clearCaretTimer = (): void => {
     if (caretTimer !== null) {
@@ -278,13 +279,13 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
   };
   const emitPendingCaret = (): void => {
     if (pendingCaret !== null) {
-      const caret = pendingCaret;
+      const { caret, selectedChars } = pendingCaret;
       pendingCaret = null;
-      postCaretReport(caret);
+      postCaretReport(caret, selectedChars);
     }
   };
-  const scheduleCaretReport = (caret: Caret): void => {
-    pendingCaret = caret; // latest-wins; the burst collapses to one post
+  const scheduleCaretReport = (caret: Caret, selectedChars: number): void => {
+    pendingCaret = { caret, selectedChars }; // latest-wins; the burst collapses to one post
     clearCaretTimer();
     caretTimer = setTimeout(() => {
       caretTimer = null;
@@ -631,7 +632,7 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
           // not echo back). `selectionSet` covers both pure caret moves and
           // typing (a doc change moves the caret too).
           if (u.selectionSet && !seeding && !applyingRemoteCaret) {
-            scheduleCaretReport(selectionToCaret(u.state));
+            scheduleCaretReport(selectionToCaret(u.state), selectionCharCount(u.state));
           }
           if (QUOLL_PERF) {
             perfRecord("webview:update-listener", perfNow() - updateStart);

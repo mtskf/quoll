@@ -1046,6 +1046,39 @@ describe("caret handoff (applyRemoteCaret + caret-report)", () => {
     expect(reports[0]).toMatchObject({ type: "caret-report", line: 0, character: 5 });
   });
 
+  it("coalesces a burst of range selections to ONE report carrying the LAST selectedChars", () => {
+    vi.useFakeTimers();
+    const { handle, view } = mount();
+    handle.applyDocument("hello\nworld", true, 1);
+    postMessage.mockReset();
+    // A drag-select that grows: each dispatch changes the selection length; only
+    // the final extent must survive (latest-wins through the debounce).
+    view.dispatch({ selection: { anchor: 0, head: 2 } });
+    view.dispatch({ selection: { anchor: 0, head: 4 } });
+    view.dispatch({ selection: { anchor: 0, head: 5 } });
+    expect(caretReports()).toHaveLength(0); // still debounced
+    vi.advanceTimersByTime(100);
+    const reports = caretReports();
+    expect(reports).toHaveLength(1);
+    expect(reports[0]).toMatchObject({ type: "caret-report", character: 5, selectedChars: 5 });
+  });
+
+  it("reports the primary-selection char count; a collapsed caret reports 0", () => {
+    vi.useFakeTimers();
+    const { handle, view } = mount();
+    handle.applyDocument("hello\nworld", true, 1);
+    postMessage.mockReset();
+    // A non-empty selection: anchor 1 → head 5 spans 4 code units.
+    view.dispatch({ selection: { anchor: 1, head: 5 } });
+    vi.advanceTimersByTime(100);
+    expect(caretReports()[0]).toMatchObject({ type: "caret-report", selectedChars: 4 });
+    // Collapsing back to a cursor reports 0 (drives the `(N selected)` suffix off).
+    postMessage.mockReset();
+    view.dispatch({ selection: { anchor: 3 } });
+    vi.advanceTimersByTime(100);
+    expect(caretReports()[0]).toMatchObject({ type: "caret-report", selectedChars: 0 });
+  });
+
   // The "Done when" pin: the pre-switch flush. Moving the caret then switching
   // editors INSIDE the debounce window must still deliver the final caret —
   // and BEFORE switch-to-text (FIFO), so the host applies the just-moved caret
