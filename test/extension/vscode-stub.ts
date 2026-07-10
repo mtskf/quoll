@@ -125,6 +125,10 @@ export const workspace = {
   onDidChangeConfiguration: (_listener: (e: unknown) => void) => ({
     dispose: (): void => undefined,
   }),
+  // revert-rescue-wiring's applyRestoreEdit calls workspace.applyEdit. Default
+  // resolves true (success); the wiring unit test overrides via vi.spyOn to drive
+  // the ok:false / reject failure arms.
+  applyEdit: (_edit: unknown): Thenable<boolean> => Promise.resolve(true),
 };
 
 // Stub for `vscode.env`. QuollEditorPanel imports `env` to call
@@ -158,6 +162,17 @@ export class Range {
     public readonly start: Position,
     public readonly end: Position
   ) {}
+}
+
+// revert-rescue-wiring.ts's applyRestoreEdit builds a WorkspaceEdit (replace the
+// changed span) and applies it via workspace.applyEdit. The unit test spies on
+// applyEdit to assert the rescue fired (or did not). Only `replace` is recorded;
+// the real ordering/positions are exercised by the panel's e2e.
+export class WorkspaceEdit {
+  public readonly edits: Array<{ uri: unknown; range: unknown; newText: string }> = [];
+  replace(uri: unknown, range: unknown, newText: string): void {
+    this.edits.push({ uri, range, newText });
+  }
 }
 
 // context-handoff-wiring.ts imports Selection + ViewColumn at module load (its

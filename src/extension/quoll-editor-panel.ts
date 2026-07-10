@@ -60,7 +60,6 @@ import { type Caret, clampCaret } from "./caret-handoff.js";
 import { createContextHandoffWiring } from "./context-handoff-wiring.js";
 import { createDiskConflictWiring } from "./disk-conflict-wiring.js";
 import { buildDocumentMessageFromDocument, canonicalDocumentText } from "./document-canonical.js";
-import { createTrailingDebounce } from "./document-change-debounce.js";
 import {
   buildCaretApplyMessage,
   buildDocumentMessage,
@@ -84,10 +83,9 @@ import {
 import { createImageWriteWiring } from "./image-write-wiring.js";
 import { toLintDiagnostics } from "./lint-diagnostics.js";
 import { LintMirror } from "./lint-mirror.js";
-import { minimalEditSpan } from "./minimal-edit.js";
 import { openInQuollEditor } from "./open-in-quoll.js";
 import { openInTextEditor } from "./reopen-text-editor.js";
-import { createRevertRescueTracker } from "./revert-rescue.js";
+import { createRevertRescueWiring } from "./revert-rescue-wiring.js";
 import { showSafely } from "./show-safely.js";
 import {
   createStatusBarController,
@@ -127,14 +125,6 @@ const SPELLCHECK_CONFIG_KEY = "quoll.editor.spellcheck";
 function readSpellcheckEnabled(): boolean {
   return workspace.getConfiguration().get<boolean>(SPELLCHECK_CONFIG_KEY, true);
 }
-
-/** Trailing-debounce window for coalescing LOCK-FREE external-edit
- *  `documentChanged` dispatches. ~100 ms: long enough to collapse the sub-ms
- *  bursts that dominate the cost (formatter, git checkout, an AI tool writing
- *  the open file) into one Document repost, short enough that a lone external
- *  edit still propagates promptly. Normal split-editor typing (~150 ms/char)
- *  exceeds this window, so each keystroke propagates on its pause. */
-const DOC_CHANGE_DEBOUNCE_MS = 100;
 
 export class QuollEditorPanel implements CustomTextEditorProvider {
   public static register(context: ExtensionContext, harness?: TestHarness): Disposable {
@@ -280,22 +270,6 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
     // text→Quoll switch) where a Quoll selection is no longer authoritative.
     let lastKnownSelectedChars = 0;
 
-    // Revert-rescue: VS Code core reverts the shared working copy when THIS
-    // custom editor tab is closed via "Don't Save", even while a built-in text
-    // editor for the same resource stays open (CustomEditorInput never matches
-    // the text editor's FileEditorInput, so core thinks we are the last holder
-    // of the dirty state — see the dispose handler below + docs/LEARNING.md).
-    // CustomTextEditorProvider has no hook to PREVENT that revert, so we REPAIR
-    // it on dispose. Seed with the current snapshot: the document can be dirty
-    // BEFORE Quoll opens (the reported bug), and onDidChangeTextDocument never
-    // fires for that pre-existing dirty content. Raw getText() (not
-    // canonicalised) — VS Code owns this document's EOL and we read+write it.
-    const revertRescue = createRevertRescueTracker();
-    revertRescue.observe({
-      isDirty: document.isDirty,
-      content: document.getText(),
-      at: Date.now(),
-    });
     // Active-edge tracker for the panel. onDidChangeViewState fires on
     // visible/active/focus changes; the caret apply must fire ONCE per
     // inactive→active transition, not on every event. Seeded from the panel's
@@ -528,163 +502,62 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
       editor.revealRange(new Range(pos, pos));
     };
 
-    // Coalesce a burst of LOCK-FREE external-edit events (formatter, git
-    // checkout, an AI tool writing the open file, typing in a split text editor
-    // on the same doc) into ONE trailing `documentChanged` dispatch. Each
-    // dispatch reposts the full Document, which forces a wholesale webview
-    // re-parse + block-field recompute + re-lint; without this, that runs once
-    // PER change event.
-    //
-    // The fire thunk reads `document.version` LIVE (latest-wins): staleness
-    // detection is unaffected because the `edit` arm snapshots the live version
-    // itself, and the reducer's version-identical no-op guard + write-lock
-    // deferral both hold at the (possibly settled) fire-time version. A trailing
-    // fire that lands after a superseding immediate dispatch / settlement reads
-    // an already-synced version and the reducer no-ops it; a trailing fire that
-    // lands WHILE the lock is still held is deferred by the reducer
-    // (pendingApplyBaseVersion), and the settlement then reposts the
-    // authoritative version (ok overrides lastAppliedDocVersion, refused reposts
-    // the fire-thunk-synced version) — both harmless.
-    //
-    // TRADE-OFF (recorded): this widens the window in which the webview still
-    // holds the pre-edit baseDocVersion by up to DOC_CHANGE_DEBOUNCE_MS. A
-    // webview edit typed in that window is judged stale by the `edit` arm's live
-    // resync and reseeded to the external content (external wins — intended
-    // conflict semantics; at most one local edit BURST — every keystroke typed
-    // within the window, already coalesced by the webview's own edit-sync
-    // debounce — is lost, then the reseed lands). No pure trailing debounce
-    // `maxWait`: sustained sub-100ms same-doc typing in a split editor defers
-    // the Quoll update until a pause (follow-up, not this PR).
-    //
-    // Hidden-panel suppression is DECLINED for this PR (1 PR = 1 purpose): with
-    // `retainContextWhenHidden` this still reposts to a hidden panel, redundant
-    // with the visible-edge resync, but suppressing it would let the host→
-    // Problems lint mirror go stale while hidden — a separate freshness-contract
-    // change with its own tests. Possible follow-up.
-    const scheduleDocumentChanged = createTrailingDebounce(DOC_CHANGE_DEBOUNCE_MS, () => {
-      if (disposed) {
-        return;
-      }
-      dispatch({ type: "documentChanged", documentVersion: document.version });
-    });
-
-    // Restore reverted-away dirty bytes via a direct WorkspaceEdit (OUTSIDE the
-    // reducer — like image-write and the dispose rescue). Shared by the
-    // dispose-time rescue and the alive-panel (text-tab-close) rescue. Success
-    // is SILENT (the surviving/live editor visibly holds the restored bytes);
-    // only failure is surfaced. `onFailure` lets the ALIVE path reseed the
-    // webview to the real doc state when the restore could not land (the dispose
-    // path passes none — the panel is already gone, nothing to reseed).
-    const applyRestoreEdit = (content: string, onFailure?: () => void): void => {
-      const span = minimalEditSpan(document.getText(), content);
-      const edit = new WorkspaceEdit();
-      edit.replace(
-        document.uri,
-        new Range(document.positionAt(span.from), document.positionAt(span.to)),
-        span.insert
-      );
-      void workspace.applyEdit(edit).then(
-        (ok) => {
-          if (!ok) {
-            showError("Quoll could not restore your unsaved changes after closing the editor.");
-            onFailure?.();
+    // Revert-rescue wiring (see revert-rescue-wiring.ts + docs/LEARNING.md). VS
+    // Code core reverts the shared working copy when THIS custom editor tab is
+    // closed via "Don't Save" while a built-in text editor for the same resource
+    // stays open. The provider has no hook to PREVENT that, so the factory REPAIRS
+    // it on dispose (and the reverse text-tab-close direction while alive). It also
+    // owns the lock-free external-edit `documentChanged` coalescing (the
+    // onDidChangeTextDocument body). The panel injects the VS Code event sources as
+    // subscribe closures (uri filter + TabInput* detection stay here) and the lazy
+    // reducer/write reads; the factory owns the tracker + decision + restore edit.
+    // Created HERE (the old onDidChangeTextDocument site) so the doc-change
+    // subscription keeps its former disposables position. The tab-close
+    // subscription (formerly registered later) now tears down at this earlier
+    // slot — behaviourally inert: teardown is a side-effect-free unsubscribe and
+    // both handlers are disposed-guarded no-ops once torn down.
+    const uriString = document.uri.toString();
+    const revertRescueWiring = createRevertRescueWiring({
+      document,
+      isDisposed: () => disposed,
+      isWriteLockHeld: () => isWriteLockHeld(state),
+      canWrite: canWriteNow,
+      hasSurvivingEditor: () =>
+        window.tabGroups.all.some((group) =>
+          group.tabs.some(
+            (tab) =>
+              (tab.input instanceof TabInputText && tab.input.uri.toString() === uriString) ||
+              (tab.input instanceof TabInputTextDiff && tab.input.modified.toString() === uriString)
+          )
+        ),
+      dispatchDocumentChanged: (documentVersion) =>
+        dispatch({ type: "documentChanged", documentVersion }),
+      showError,
+      subscribeDocumentChange: (onChange) => {
+        const sub = subscribeWhileAlive(workspace.onDidChangeTextDocument, (e) => {
+          if (e.document.uri.toString() !== uriString) {
+            return;
           }
-        },
-        (err: unknown) => {
-          showError(
-            `Quoll could not restore your unsaved changes: ${
-              err instanceof Error ? err.message : String(err)
-            }`
-          );
-          onFailure?.();
-        }
-      );
-    };
-
-    // Alive-panel analogue of the dispose-time revert-rescue. Called from BOTH
-    // triggers (the tab-close listener and the document-change handler) because
-    // the revert onDidChangeTextDocument and the tab-close onDidChangeTabs can
-    // arrive in either order; decideOnAliveRevert consumes both tokens so the
-    // second call is a no-op. On a positive decision it BEST-EFFORT suppresses
-    // the debounced disk (revert) repost — cancel() clears a timer a revert
-    // change-event may already have scheduled, and the change-event caller ALSO
-    // early-returns so it never schedules one. The restore's OWN change event
-    // then reposts the authoritative dirty Document as the FINAL state. This is
-    // an END-STATE guarantee, not a transient one: other host paths outside this
-    // PR's scope (viewStateVisible on the panel activating as the text tab
-    // closes; the edit-arm live-version resync) can still emit a transient disk
-    // repost — cosmetic only, the restore always wins the end-state. On restore
-    // FAILURE the onFailure reseeds the webview to the real (disk) doc so the
-    // live panel never silently diverges (the toast already warned the user).
-    // Returns true iff a rescue was performed. Skipped when the write lock is
-    // held (decideOnAliveRevert → rescue:false) so it never races an in-flight
-    // apply.
-    const maybeRescueAliveRevert = (): boolean => {
-      if (disposed) {
-        return false;
-      }
-      const decision = revertRescue.decideOnAliveRevert({
-        writeInFlight: isWriteLockHeld(state),
-        canWrite: canWriteNow(),
-        currentContent: document.getText(),
-        at: Date.now(),
-      });
-      if (!decision.rescue) {
-        return false;
-      }
-      scheduleDocumentChanged.cancel();
-      applyRestoreEdit(decision.content, () => {
-        if (!disposed) {
-          dispatch({ type: "documentChanged", documentVersion: document.version });
-        }
-      });
-      return true;
-    };
-
-    workspace.onDidChangeTextDocument(
-      (e) => {
-        if (disposed) {
-          return;
-        }
-        if (e.document.uri.toString() !== document.uri.toString()) {
-          return;
-        }
-        // Feed the revert-rescue tracker every transition (see the dispose
-        // handler). Raw getText() — no per-keystroke canonicalise.
-        revertRescue.observe({
-          isDirty: e.document.isDirty,
-          content: e.document.getText(),
-          at: Date.now(),
+          onChange();
         });
-        // Reverse-direction rescue: if this change is a text-tab-close revert of
-        // dirty bytes we still hold (paired with a recent close), restore them
-        // and SUPPRESS this (disk) change's repost — the restore's own change
-        // event reposts the authoritative dirty Document. No-op (returns false)
-        // for an ordinary external edit / a manual revert with no paired close.
-        if (maybeRescueAliveRevert()) {
-          return;
-        }
-        // Lock-held change events go to the reducer IMMEDIATELY, unchanged: the
-        // host's OWN in-flight apply fires its change event under the lock, and
-        // an external edit racing the apply→settle window also arrives locked.
-        // The reducer owns the write-lock deferral + non-OK settlement ordering
-        // contract and must see these in order (a refused settlement keeps the
-        // prior lastAppliedDocVersion, so a delayed racing-edit resync would
-        // post stale-versioned content). Only lock-FREE external bursts coalesce.
-        if (isWriteLockHeld(state)) {
-          // Supersede any pending coalesced timer: the immediate dispatch
-          // carries an equal-or-higher version, so a later trailing fire would
-          // only no-op. Cancelling makes "at most one pending documentChanged
-          // path" an invariant rather than leaning on the fire-time no-op.
-          scheduleDocumentChanged.cancel();
-          dispatch({ type: "documentChanged", documentVersion: e.document.version });
-          return;
-        }
-        scheduleDocumentChanged.schedule();
+        return () => sub.dispose();
       },
-      undefined,
-      disposables
-    );
+      subscribeTextTabClose: (onClose) => {
+        const sub = subscribeWhileAlive(window.tabGroups.onDidChangeTabs, (e) => {
+          const closedThisDoc = e.closed.some(
+            (tab) =>
+              (tab.input instanceof TabInputText && tab.input.uri.toString() === uriString) ||
+              (tab.input instanceof TabInputTextDiff && tab.input.modified.toString() === uriString)
+          );
+          if (!closedThisDoc) {
+            return;
+          }
+          onClose();
+        });
+        return () => sub.dispose();
+      },
+    });
+    disposables.push(revertRescueWiring);
 
     // Theme sync: forwards a dark/light change as a `themeChanged` core event
     // (a core SIGNAL — it touches no document / write-lock / caret state). The
@@ -750,40 +623,6 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
           return;
         }
         applyCaretToTextEditor(editor, lastKnownCaret);
-      },
-      undefined,
-      disposables
-    );
-
-    // Watch for a built-in text editor (or diff editor's modified side) for THIS
-    // document being CLOSED — the causal token for the reverse-direction
-    // revert-rescue. Record the close time and attempt the rescue: if the revert
-    // already armed the tracker (revert-first, the common order) this restores
-    // now; if the revert has not landed yet (close-first) the document-change
-    // handler's call restores when it does. decideOnAliveRevert pairs the two
-    // tokens in time so an unrelated close never resurrects a manual revert.
-    // NOTE: this ALSO fires for the panel's OWN programmatic closes — the
-    // revealForMention cleanup (tabGroups.close of a reveal-opened text tab of
-    // this doc) for the Claude Code handoff. That is benign: the handoff save()s
-    // the doc first, so no dirty→clean revert arms pendingRevert, and
-    // decideOnAliveRevert returns rescue:false with no armed revert (pinned by
-    // the "close with NO revert armed" case in test/extension/revert-rescue.test.ts).
-    window.tabGroups.onDidChangeTabs(
-      (e) => {
-        if (disposed) {
-          return;
-        }
-        const uriString = document.uri.toString();
-        const closedThisDoc = e.closed.some(
-          (tab) =>
-            (tab.input instanceof TabInputText && tab.input.uri.toString() === uriString) ||
-            (tab.input instanceof TabInputTextDiff && tab.input.modified.toString() === uriString)
-        );
-        if (!closedThisDoc) {
-          return;
-        }
-        revertRescue.observeTextTabClose(Date.now());
-        maybeRescueAliveRevert();
       },
       undefined,
       disposables
@@ -1152,32 +991,27 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
     }
 
     webviewPanel.onDidDispose(() => {
-      // Snapshot the write lock BEFORE the disposed transition clears it — the
-      // revert-rescue (below) must skip when a reducer applyEdit is in flight
-      // (else it races that apply's landing with a stale span = wrong-offset
-      // corruption). The `disposed` transition sets pendingApplyBaseVersion to
-      // null, so this MUST be read before the dispatch below.
-      const writeInFlightAtDispose = isWriteLockHeld(state);
-      // Set the local guard FIRST (arms the executor / listener guards),
-      // then drive the core's `disposed` transition (clears the write lock
-      // so any late settlement is a no-op), then tear down.
+      // Snapshot the write lock + cancel the pending coalesced documentChanged
+      // BEFORE the disposed transition clears the lock (prepareDispose reads
+      // isWriteLockHeld(state) NOW). MUST run before dispatch({ type: "disposed" }).
+      revertRescueWiring.prepareDispose();
+      // Set the local guard FIRST (arms the executor / listener guards), then drive
+      // the core's `disposed` transition (clears the write lock so any late
+      // settlement is a no-op), then tear down.
       disposed = true;
-      // Drop any pending coalesced documentChanged — the panel is gone; the
-      // trailing dispatch would be a no-op anyway (the thunk's `disposed`
-      // guard), but cancelling releases the timer + closure promptly.
-      scheduleDocumentChanged.cancel();
       dispatch({ type: "disposed" });
       // Clear THIS document's lint diagnostics when its editor closes. The
-      // collection itself outlives the panel (disposed via context.subscriptions
-      // on extension deactivate); only this uri's entry is removed so a
-      // re-open re-populates cleanly. Satisfies "diagnostics clear on close".
+      // collection itself outlives the panel (disposed via context.subscriptions on
+      // extension deactivate); only this uri's entry is removed so a re-open
+      // re-populates cleanly.
       this.lintMirror.remove(document.uri);
       if (panelControls) {
         this.harness?.setActivePanel(null, panelControls);
       }
-      // VS Code's Disposable.from is a plain loop with no per-item
-      // try/catch: a throwing dispose() aborts the rest, leaking the
-      // remaining items. The outer try/catch at least surfaces the error.
+      // VS Code's Disposable.from is a plain loop with no per-item try/catch: a
+      // throwing dispose() aborts the rest, leaking the remaining items. The outer
+      // try/catch at least surfaces the error. This tears down revertRescueWiring's
+      // subscriptions too (pushed to disposables above).
       try {
         Disposable.from(...disposables).dispose();
       } catch (err) {
@@ -1185,33 +1019,10 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
       } finally {
         disposables.length = 0;
       }
-      // Revert-rescue (see the tracker construction above). If closing THIS
-      // custom editor made VS Code revert the shared working copy while another
-      // editor still holds the document, re-apply the dirty bytes so the still-
-      // open editor does not silently lose them. Runs AFTER teardown: the edit
-      // targets the TextDocument (not the disposed webview), and the surviving
-      // editor keeps the document alive so applyEdit is not a no-op. The change
-      // event this applyEdit fires cannot re-enter the tracker/reducer — both
-      // subscriptions are disposed above and the `disposed` guard drops any late
-      // callback.
-      const uriString = document.uri.toString();
-      const hasSurvivingEditor = window.tabGroups.all.some((group) =>
-        group.tabs.some(
-          (tab) =>
-            (tab.input instanceof TabInputText && tab.input.uri.toString() === uriString) ||
-            (tab.input instanceof TabInputTextDiff && tab.input.modified.toString() === uriString)
-        )
-      );
-      const rescue = revertRescue.decideOnDispose({
-        writeInFlight: writeInFlightAtDispose,
-        hasSurvivingEditor,
-        canWrite: canWriteNow(),
-        currentContent: document.getText(),
-        disposedAt: Date.now(),
-      });
-      if (rescue.rescue) {
-        applyRestoreEdit(rescue.content);
-      }
+      // Revert-rescue AFTER teardown: the edit targets the TextDocument (not the
+      // disposed webview), and the surviving editor keeps the document alive so
+      // applyEdit is not a no-op. Uses the write-lock snapshot from prepareDispose.
+      revertRescueWiring.rescueOnDispose();
       if (QUOLL_PERF) {
         perfReport("host:session");
       }
