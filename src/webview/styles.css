@@ -21,17 +21,25 @@
  * beats EVERY layered one, so CodeMirror's structural styling (.cm-content
  * reading column, cursor, selection) sits above everything here by design.
  * Keep any CSS that must influence a CM widget INSIDE a layer below — do
- * NOT add competing unlayered rules.
+ * NOT add competing unlayered rules. The lone deliberate exception is the
+ * body reset just below (see its own note).
  */
 
 @layer reset, base, theme, widget;
 
 /* ───────────────────────────── reset ───────────────────────────── */
-@layer reset {
-  body {
-    margin: 0;
-    padding: 0;
-  }
+/* The body reset is DELIBERATELY UNLAYERED. VS Code injects its default webview
+ * stylesheet `body { margin:0; padding:0 20px }` UNLAYERED, and per the
+ * "Layered vs unlayered" note above an unlayered declaration beats every layered
+ * one regardless of specificity or source order. A layered `body` reset would
+ * silently lose the 20px horizontal padding, insetting the editor (and its
+ * vertical scrollbar) 20px from the pane edge. `html body` (specificity 0,0,2)
+ * outranks VS Code's bare `body` (0,0,1) order-independently, so the reset wins
+ * provably regardless of stylesheet injection order. The centred reading column
+ * is unaffected: .cm-content owns its own 60em measure + inset in cm/theme.ts. */
+html body {
+  margin: 0;
+  padding: 0;
 }
 
 /* ────────────────────────────── base ───────────────────────────── */
