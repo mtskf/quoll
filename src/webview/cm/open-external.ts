@@ -16,6 +16,7 @@ import { Facet } from "@codemirror/state";
 
 import { isAllowedUrl } from "../../markdown/url-allowlist.js";
 import { PROTOCOL_VERSION, type WebviewToHost } from "../../shared/protocol.js";
+import { safePostMessage } from "../safe-post-message.js";
 
 /** Minimal host surface the sink needs — a thin structural type so tests pass
  *  a spy (identical shape to link-handlers' LinkOpenHost). */
@@ -53,10 +54,10 @@ export function openExternalSinkFor(host: OpenExternalHost): (href: string) => v
       console.warn("[quoll] open-external sink dropped: URL not in allowlist");
       return;
     }
-    try {
-      host.postMessage({ protocol: PROTOCOL_VERSION, type: "open-external", href });
-    } catch (err) {
-      console.error("[quoll] postMessage(open-external) failed", err);
-    }
+    safePostMessage(
+      host,
+      { protocol: PROTOCOL_VERSION, type: "open-external", href },
+      "open-external"
+    );
   };
 }

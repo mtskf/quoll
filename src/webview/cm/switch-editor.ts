@@ -30,6 +30,7 @@ import { type Extension, Prec } from "@codemirror/state";
 import { EditorView, type PluginValue, ViewPlugin } from "@codemirror/view";
 
 import { buildSwitchToTextMessage, type WebviewToHost } from "../../shared/protocol.js";
+import { safePostMessage } from "../safe-post-message.js";
 import { requireQuollEditorHost } from "./editor-host.js";
 
 export type SwitchEditorHost = { postMessage(message: WebviewToHost): void };
@@ -94,11 +95,7 @@ function postSwitchToText(host: SwitchEditorHost, flushPendingEdit: () => void):
   } catch (err) {
     console.error("[quoll] flushPendingEdit before switch failed", err);
   }
-  try {
-    host.postMessage(buildSwitchToTextMessage());
-  } catch (err) {
-    console.error("[quoll] postMessage(switch-to-text) failed", err);
-  }
+  safePostMessage(host, buildSwitchToTextMessage(), "switch-to-text");
 }
 
 class SwitchEditorButton implements PluginValue {

@@ -61,6 +61,7 @@ import {
   quollTokenMarkers,
 } from "./cm/theme.js";
 import { getHost } from "./host.js";
+import { safePostMessage } from "./safe-post-message.js";
 import { type Action, canPostEdit, type WebviewState } from "./state.js";
 
 type Dispatch = (action: Action) => void;
@@ -156,21 +157,17 @@ function postEditMessage(dispatch: Dispatch, content: string, baseDocVersion: nu
     baseDocVersion,
   };
   const postStart = QUOLL_PERF ? perfNow() : 0;
-  try {
-    getHost().postMessage(message);
-    if (QUOLL_PERF) {
-      perfRecord("webview:postMessage", perfNow() - postStart);
-    }
-    return true;
-  } catch (err) {
+  const ok = safePostMessage(getHost(), message, "edit", (err) => {
     const detail = err instanceof Error ? err.message : String(err);
-    console.error("[quoll] postMessage(edit) failed", err);
     dispatch({
       type: "serialize-error",
       error: { code: "internal_error", message: `Could not send edit to host: ${detail}` },
     });
-    return false;
+  });
+  if (ok && QUOLL_PERF) {
+    perfRecord("webview:postMessage", perfNow() - postStart);
   }
+  return ok;
 }
 
 export function mountEditor(opts: EditorOptions): EditorHandle {
@@ -234,11 +231,7 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
       type: "lint-diagnostics",
       diagnostics,
     };
-    try {
-      getHost().postMessage(message);
-    } catch (err) {
-      console.error("[quoll] postMessage(lint-diagnostics) failed", err);
-    }
+    safePostMessage(getHost(), message, "lint-diagnostics");
   };
 
   // Report the current caret to the host on every selection change (one-shot
@@ -253,11 +246,7 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
       character: caret.character,
       selectedChars,
     };
-    try {
-      getHost().postMessage(message);
-    } catch (err) {
-      console.error("[quoll] postMessage(caret-report) failed", err);
-    }
+    safePostMessage(getHost(), message, "caret-report");
   };
 
   // caret-report trailing debounce. The updateListener schedules the latest

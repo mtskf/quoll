@@ -17,6 +17,7 @@ import { EditorView } from "@codemirror/view";
 import { isAllowedUrl } from "../../markdown/url-allowlist.js";
 import { decodeMarkdownDestination } from "../../markdown/url-decode.js";
 import { MAX_HREF_LENGTH, PROTOCOL_VERSION, type WebviewToHost } from "../../shared/protocol.js";
+import { safePostMessage } from "../safe-post-message.js";
 
 // --- Click-to-open helper ---
 //
@@ -76,13 +77,7 @@ function relativeMarkdownTarget(decoded: string): boolean {
  *  fall-through open-external already relies on (intentional parity; not a new
  *  risk). Shared by the open-external and open-link branches of tryOpenLinkAt. */
 function postToHost(host: LinkOpenHost, message: WebviewToHost): boolean {
-  try {
-    host.postMessage(message);
-  } catch (err) {
-    console.error("[quoll] postMessage(link-open) failed", err);
-    return false;
-  }
-  return true;
+  return safePostMessage(host, message, "link-open");
 }
 
 function selectionIntersects(state: EditorState, from: number, to: number): boolean {
