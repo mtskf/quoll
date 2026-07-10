@@ -109,6 +109,7 @@ import {
   resolveSeedCaret,
   type StatusBarSlots,
 } from "./status-bar.js";
+import { noteSurface } from "./surface-memory.js";
 import { finalizeSurfaceSwap, findSourceTab } from "./surface-swap.js";
 import type { PanelControls, TestHarness } from "./test-harness.js";
 import {
@@ -1325,6 +1326,10 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
             const caret = lastKnownCaret;
             void openInTextEditor(document.uri).then(
               () => {
+                // Record intent AFTER the open succeeds and BEFORE the source
+                // close, so the surface-restore watcher adopts "text" for this
+                // deliberate Quoll→text swap (a failed open records nothing).
+                noteSurface(document.uri.toString(), "text");
                 if (caret !== null) {
                   const editor = window.visibleTextEditors.find(
                     (e) => e.document.uri.toString() === document.uri.toString()
