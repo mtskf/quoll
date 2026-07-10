@@ -64,6 +64,18 @@ describe("htmlTableToGfm — cell escaping", () => {
     expect(htmlTableToGfm("<table><tr><td>*b*</td><td>d</td></tr></table>")).toContain("\\*b\\*");
   });
 
+  it("escapes underscore, tilde and angle-bracket so emphasis/strike/HTML stay literal", () => {
+    // _ (emphasis), ~ (GFM strikethrough), < (raw-HTML / autolink) must not
+    // re-activate as live formatting when a cell round-trips as literal text.
+    expect(htmlTableToGfm("<table><tr><td>_i_</td><td>c</td></tr></table>")).toContain("\\_i\\_");
+    expect(htmlTableToGfm("<table><tr><td>~~s~~</td><td>c</td></tr></table>")).toContain(
+      "\\~\\~s\\~\\~"
+    );
+    // `a<x>b`: DOMParser drops the unknown `<x>` element (no text), leaving `ab`
+    // — so use a bare `<` that survives as text to assert the angle-bracket escape.
+    expect(htmlTableToGfm("<table><tr><td>a &lt; b</td><td>c</td></tr></table>")).toContain("\\<");
+  });
+
   it("leaves line-start-only constructs literal (not inline-active in a cell)", () => {
     const out = htmlTableToGfm("<table><tr><td># x</td><td>1.5</td><td>- y</td></tr></table>");
     expect(out).toContain("# x");
@@ -111,6 +123,29 @@ describe("htmlTableToGfm — cell text extraction", () => {
   });
 });
 
+describe("htmlTableToGfm — mixed-content fragments", () => {
+  it("returns null when prose precedes the table (defer, do not drop the prose)", () => {
+    expect(htmlTableToGfm("<p>intro</p><table><tr><td>A</td><td>B</td></tr></table>")).toBeNull();
+  });
+
+  it("returns null when prose follows the table", () => {
+    expect(htmlTableToGfm("<table><tr><td>A</td><td>B</td></tr></table><p>outro</p>")).toBeNull();
+  });
+
+  it("returns null when the fragment carries two top-level tables", () => {
+    expect(
+      htmlTableToGfm("<table><tr><td>A</td></tr></table><table><tr><td>B</td></tr></table>")
+    ).toBeNull();
+  });
+
+  it("still converts a plain single table wrapped in <meta>/whitespace", () => {
+    // The browser wraps a table copy in <meta>/<style>; those carry no prose
+    // (no text node / SKIP_TAGS), so a normal single-table copy still converts.
+    const html = "<meta charset='utf-8'>\n  <table><tr><td>A</td><td>B</td></tr></table>\n  ";
+    expect(htmlTableToGfm(html)).toBe("| A | B |\n| --- | --- |");
+  });
+});
+
 describe("htmlTableToGfm — colspan / rowspan spread", () => {
   it("expands colspan into empty cells keeping columns aligned", () => {
     const html =
@@ -139,6 +174,18 @@ describe("htmlTableToGfm — colspan / rowspan spread", () => {
     );
   });
 
+  it("spreads a cell with both colspan and rowspan (2x2 merge block)", () => {
+    // The most common merged-cell shape from spreadsheets. The 2x2 region is the
+    // anchor + three empty cells; the next row's cell must land in column 2.
+    const html =
+      "<table><tr><td colspan='2' rowspan='2'>M</td><td>X</td></tr>" +
+      "<tr><td>Y</td></tr>" +
+      "<tr><td>a</td><td>b</td><td>c</td></tr></table>";
+    expect(htmlTableToGfm(html)).toBe(
+      "| M |  | X |\n| --- | --- | --- |\n|  |  | Y |\n| a | b | c |"
+    );
+  });
+
   it("degrades a colspan overrunning a pending column without crashing", () => {
     // Dirty HTML: a rowspan from row 0 and a colspan in row 1 overlap.
     const html =
@@ -161,6 +208,19 @@ describe("htmlTableToGfm — caps", () => {
     const wide = `<tr>${"<td>x</td>".repeat(1000)}</tr>`;
     const narrow = "<tr><td>y</td></tr>".repeat(60);
     expect(htmlTableToGfm(`<table>${wide}${narrow}</table>`)).toBeNull();
+  });
+
+  it("returns null when the row count exceeds the cap inside one tbody", () => {
+    // 5001 > MAX_HTML_TABLE_ROWS (5000), all in a single browser-implicit tbody:
+    // the running cap must fire INSIDE the section, not only per top-level child.
+    const rows = "<tr><td>x</td></tr>".repeat(5001);
+    expect(htmlTableToGfm(`<table><tbody>${rows}</tbody></table>`)).toBeNull();
+  });
+
+  it("returns null when a single row exceeds the column cap", () => {
+    // 1001 > MAX_HTML_TABLE_COLS (1000): exercises the in-loop col cap + placed guard.
+    const row = `<tr>${"<td>x</td>".repeat(1001)}</tr>`;
+    expect(htmlTableToGfm(`<table>${row}</table>`)).toBeNull();
   });
 });
 
@@ -242,6 +302,36 @@ describe("htmlTablePaste — handler", () => {
     view.dispatch({ selection: { anchor: 5 } });
     firePaste(view, { html: "<table><tr><td>A</td><td>B</td></tr></table>" });
     expect(view.state.doc.toString()).toBe("hello\n\n| A | B |\n| --- | --- |\n");
+    view.destroy();
+  });
+
+  it("blank-line separates a table pasted between existing text (non-empty after)", () => {
+    // Caret in the MIDDLE: `after` = "world" (no leading newline) exercises the
+    // blockSuffix `else → "\n\n"` branch, which the end-anchored case never hits.
+    const view = mount("helloworld");
+    view.dispatch({ selection: { anchor: 5 } });
+    firePaste(view, { html: "<table><tr><td>A</td><td>B</td></tr></table>" });
+    expect(view.state.doc.toString()).toBe("hello\n\n| A | B |\n| --- | --- |\n\nworld");
+    view.destroy();
+  });
+
+  it("uses a single newline suffix when one blank line already follows (\\n branch)", () => {
+    // `after` starts with a single "\n" → blockSuffix returns "\n" (not "\n\n").
+    const view = mount("hello\nworld");
+    view.dispatch({ selection: { anchor: 5 } }); // caret right before the "\n"
+    firePaste(view, { html: "<table><tr><td>A</td><td>B</td></tr></table>" });
+    expect(view.state.doc.toString()).toBe("hello\n\n| A | B |\n| --- | --- |\n\nworld");
+    view.destroy();
+  });
+
+  it("defers a fragment with prose alongside a table (preserves the prose)", () => {
+    const view = mount("");
+    firePaste(view, {
+      html: "<p>intro</p><table><tr><td>A</td><td>B</td></tr></table>",
+      text: "intro\nA\tB",
+    });
+    // Not converted: no delimiter row is inserted; the plain-text path keeps prose.
+    expect(view.state.doc.toString()).not.toContain("| --- |");
     view.destroy();
   });
 

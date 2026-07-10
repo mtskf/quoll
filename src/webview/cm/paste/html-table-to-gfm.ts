@@ -82,6 +82,62 @@ function clampSpan(n: number, max: number): number {
   return Math.min(Math.floor(n), max);
 }
 
+/** `true` when `el` has an ancestor `<table>` (i.e. it is a nested table, not a
+ *  top-level one). Walks `parentElement` rather than `closest("table")` because
+ *  `el` itself IS a table and `closest` would match it. */
+function hasAncestorTable(el: Element): boolean {
+  let p = el.parentElement;
+  while (p) {
+    if (p.tagName === "TABLE") {
+      return true;
+    }
+    p = p.parentElement;
+  }
+  return false;
+}
+
+/** `true` when the document carries meaningful (non-whitespace) text OUTSIDE the
+ *  given table's subtree — prose alongside the table. Iterative pre-order DFS
+ *  (same explicit-stack style as `collectCellText`) over `<body>`, skipping the
+ *  table's own subtree and `SKIP_TAGS` (whose text never belongs in a cell and
+ *  is likewise not "prose"). `<meta>`/comments contribute no text node, so a
+ *  normal single-table clipboard copy — which the browser wraps in
+ *  `<meta>`/`<style>` — is NOT flagged. */
+function hasTextOutsideTable(body: Element, table: Element): boolean {
+  const stack: Node[] = [];
+  const seed = body.childNodes;
+  for (let i = seed.length - 1; i >= 0; i--) {
+    stack.push(seed[i]);
+  }
+  while (stack.length > 0) {
+    const node = stack.pop();
+    if (node === undefined) {
+      continue;
+    }
+    if (node === table) {
+      continue; // skip the chosen table's entire subtree
+    }
+    if (node.nodeType === TEXT_NODE) {
+      if ((node.textContent ?? "").trim() !== "") {
+        return true;
+      }
+      continue;
+    }
+    if (node.nodeType !== ELEMENT_NODE) {
+      continue;
+    }
+    const el = node as Element;
+    if (SKIP_TAGS.has(el.tagName)) {
+      continue;
+    }
+    const kids = el.childNodes;
+    for (let i = kids.length - 1; i >= 0; i--) {
+      stack.push(kids[i]);
+    }
+  }
+  return false;
+}
+
 /** Direct `<tr>` of the table PLUS the direct `<tr>` of its direct
  *  `<thead>`/`<tbody>`/`<tfoot>`, in document order. Excludes nested-table rows. */
 function directRows(table: Element): Element[] {
@@ -94,10 +150,17 @@ function directRows(table: Element): Element[] {
       for (const grandchild of Array.from(child.children)) {
         if (grandchild.tagName === "TR") {
           rows.push(grandchild);
+          // Running row cap, per `<tr>`: a single browser-implicit `<tbody>`
+          // holds every row, so the bound must fire INSIDE this loop (not just
+          // once per section) to actually cap a giant single-section table. One
+          // extra past the limit is enough for the caller to reject.
+          if (rows.length > MAX_HTML_TABLE_ROWS) {
+            return rows;
+          }
         }
       }
     }
-    // Running row cap: one extra past the limit is enough for the caller to reject.
+    // Also cap across top-level children (direct `<tr>` + multiple sections).
     if (rows.length > MAX_HTML_TABLE_ROWS) {
       break;
     }
@@ -183,20 +246,32 @@ function rowToLine(cells: readonly string[]): string {
   return `| ${cells.join(" | ")} |`;
 }
 
-/** Convert the FIRST `<table>` in an HTML fragment to a GFM table string, or
- *  `null` when there is no convertible table or a cap is exceeded. */
+/** Convert a table-ONLY HTML fragment to a GFM table string, or `null` when the
+ *  fragment is not a single top-level table (no table, ≥2 top-level tables, or
+ *  meaningful prose alongside the table) or a cap is exceeded. Returning `null`
+ *  for mixed content lets the caller defer to normal paste so surrounding text
+ *  and sibling tables are preserved rather than silently dropped. */
 export function htmlTableToGfm(html: string): string | null {
   if (html.length > MAX_HTML_TABLE_INPUT_CHARS) {
     return null;
   }
   let table: Element | null;
+  let body: Element | null;
   try {
     const doc = new DOMParser().parseFromString(html, "text/html");
-    table = doc.querySelector("table");
+    body = doc.body;
+    // Only TOP-LEVEL tables (a nested cell-table is not a paste target). Require
+    // EXACTLY one: 0 = nothing to convert, ≥2 = defer so no table is dropped.
+    const topLevel = Array.from(doc.querySelectorAll("table")).filter((t) => !hasAncestorTable(t));
+    table = topLevel.length === 1 ? topLevel[0] : null;
   } catch {
     return null; // belt-and-suspenders: parseFromString is spec'd not to throw
   }
-  if (!table) {
+  if (!table || !body) {
+    return null;
+  }
+  // Prose alongside the table → defer to normal paste (no data loss).
+  if (hasTextOutsideTable(body, table)) {
     return null;
   }
   const rows = directRows(table);
