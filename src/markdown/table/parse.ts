@@ -117,11 +117,29 @@ function escapeAt(text: string, idx: number): boolean {
   return count % 2 === 1;
 }
 
-function parseContentRow(line: LineRange): Row {
-  const { text, from } = line;
+/** Shared row-prefix scan result for content and delimiter rows. */
+interface RowPrefix {
+  /** Offset just past the row body, before any trailing spaces/tabs. */
+  lineBodyEnd: number;
+  /** Trailing spaces/tabs after the body (NEVER the last `|`), preserved verbatim. */
+  trailingLineSpace: string;
+  /** Leading indentation (spaces/tabs) before the first pipe/content, preserved verbatim. */
+  leadingIndent: string;
+  /** Whether the row body opens with a `|`. */
+  leadingPipe: boolean;
+  /** Cursor just past the leading indent + optional leading `|`, where cell-splitting begins. */
+  bodyStart: number;
+}
 
-  // 1. Capture trailing-line whitespace (spaces/tabs only, NEVER the
-  //    body's last `|`) so `| x | y |  ` round-trips verbatim.
+// The prefix scan shared by content and delimiter rows: trailing-line
+// whitespace (spaces/tabs only, so `| x | y |  ` round-trips verbatim),
+// leading indentation (non-empty for a list-nested table's continuation rows,
+// where Lezer keeps the indent in the Table node slice — skipping it here
+// rather than letting it bleed into cell[0] keeps a leading-pipe row from
+// spawning a phantom empty first cell), and an optional leading `|`. The
+// cell-splitting that follows differs per row type (escape tracking vs
+// alignment-marker validation) and stays in each caller.
+function scanRowPrefix(text: string): RowPrefix {
   let lineBodyEnd = text.length;
   while (lineBodyEnd > 0) {
     const ch = text.charCodeAt(lineBodyEnd - 1);
@@ -133,15 +151,6 @@ function parseContentRow(line: LineRange): Row {
   }
   const trailingLineSpace = text.slice(lineBodyEnd);
 
-  const cells: Cell[] = [];
-  let leadingPipe = false;
-  let trailingPipe = false;
-
-  // Capture leading indentation (spaces/tabs) before the row's first pipe or
-  // content. Non-empty for a list-nested table's continuation rows, where Lezer
-  // retains the indent in the Table node slice. Skipping it here (rather than
-  // letting it bleed into cell[0]) keeps the leading-pipe row from spawning a
-  // phantom empty first cell; it is preserved verbatim as `leadingIndent`.
   let indentEnd = 0;
   while (indentEnd < lineBodyEnd) {
     const ch = text.charCodeAt(indentEnd);
@@ -153,11 +162,26 @@ function parseContentRow(line: LineRange): Row {
   }
   const leadingIndent = text.slice(0, indentEnd);
 
-  let i = indentEnd;
-  if (text.charCodeAt(i) === 124 /* | */) {
+  let bodyStart = indentEnd;
+  let leadingPipe = false;
+  if (text.charCodeAt(bodyStart) === 124 /* | */) {
     leadingPipe = true;
-    i++;
+    bodyStart++;
   }
+
+  return { lineBodyEnd, trailingLineSpace, leadingIndent, leadingPipe, bodyStart };
+}
+
+function parseContentRow(line: LineRange): Row {
+  const { text, from } = line;
+
+  const { lineBodyEnd, trailingLineSpace, leadingIndent, leadingPipe, bodyStart } =
+    scanRowPrefix(text);
+
+  const cells: Cell[] = [];
+  let trailingPipe = false;
+
+  let i = bodyStart;
 
   let cellStart = -1;
   let cellEnd = -1;
@@ -202,13 +226,13 @@ function parseContentRow(line: LineRange): Row {
   }
 
   // Tail: did the row body end with an unescaped `|`?
-  // The position guard (`lineBodyEnd - 1 !== indentEnd`) stops a lone `|` body
-  // row — whose sole pipe sits at `indentEnd` and was already consumed as the
-  // leading pipe — from being double-counted as a trailing pipe too. Without
-  // it, `|` would parse as leadingPipe AND trailingPipe with zero cells; with
-  // it, that row is correctly leading-pipe-only.
+  // The position guard (`lineBodyEnd - 1 !== leadingIndent.length`) stops a lone
+  // `|` body row — whose sole pipe sits at the indent end and was already
+  // consumed as the leading pipe — from being double-counted as a trailing pipe
+  // too. Without it, `|` would parse as leadingPipe AND trailingPipe with zero
+  // cells; with it, that row is correctly leading-pipe-only.
   if (
-    lineBodyEnd - 1 !== indentEnd &&
+    lineBodyEnd - 1 !== leadingIndent.length &&
     text.charCodeAt(lineBodyEnd - 1) === 124 &&
     !escapeAt(text, lineBodyEnd - 1)
   ) {
@@ -233,40 +257,15 @@ function parseContentRow(line: LineRange): Row {
 function parseDelimiterRow(line: LineRange): DelimiterRow | null {
   const { text, from } = line;
 
-  // Same trailing-line-whitespace handling as content rows.
-  let lineBodyEnd = text.length;
-  while (lineBodyEnd > 0) {
-    const ch = text.charCodeAt(lineBodyEnd - 1);
-    if (ch === 32 || ch === 9) {
-      lineBodyEnd--;
-    } else {
-      break;
-    }
-  }
-  const trailingLineSpace = text.slice(lineBodyEnd);
+  // Prefix scan is identical to content rows (see scanRowPrefix); only the
+  // cell-splitting below differs — alignment-marker validation instead of
+  // escape tracking.
+  const { lineBodyEnd, trailingLineSpace, leadingIndent, leadingPipe, bodyStart } =
+    scanRowPrefix(text);
 
-  let leadingPipe = false;
   let trailingPipe = false;
 
-  // See parseContentRow: capture and skip leading indentation so an indented
-  // delimiter line (`  |---|---|`, a list-nested continuation) is not misread
-  // as a first cell whose raw is the whitespace prefix.
-  let indentEnd = 0;
-  while (indentEnd < lineBodyEnd) {
-    const ch = text.charCodeAt(indentEnd);
-    if (ch === 32 || ch === 9) {
-      indentEnd++;
-    } else {
-      break;
-    }
-  }
-  const leadingIndent = text.slice(0, indentEnd);
-
-  let i = indentEnd;
-  if (text.charCodeAt(i) === 124) {
-    leadingPipe = true;
-    i++;
-  }
+  let i = bodyStart;
 
   const cells: DelimiterCell[] = [];
   let cellRawStart = i;
