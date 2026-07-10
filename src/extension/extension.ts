@@ -1,6 +1,7 @@
 import { commands, type ExtensionContext, ExtensionMode, window, workspace } from "vscode";
 import { canEditWith } from "./can-edit-with.js";
 import { QuollEditorPanel } from "./quoll-editor-panel.js";
+import { __clearSurfaceMemoryForTest } from "./surface-memory.js";
 import { registerSurfaceRestoreWatcher } from "./surface-restore-watcher.js";
 import { registerToggleEditor } from "./toggle-editor.js";
 
@@ -13,6 +14,13 @@ export async function activate(context: ExtensionContext) {
     context.extensionMode === ExtensionMode.Test
       ? new (await import("./test-harness.js")).TestHarness()
       : undefined;
+  if (harness) {
+    // Inject THIS bundle's surface-memory clear so the harness `reset()`
+    // (per-test cleanup) empties the map the restore watcher actually reads.
+    // test-harness.js is a separate esbuild bundle, so it cannot import
+    // surface-memory itself without cloning the map. Test mode only.
+    harness.surfaceMemoryReset = __clearSurfaceMemoryForTest;
+  }
 
   context.subscriptions.push(QuollEditorPanel.register(context, harness));
   context.subscriptions.push(registerToggleEditor());
