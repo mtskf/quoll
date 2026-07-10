@@ -44,7 +44,6 @@ import {
   languages,
   Position,
   Range,
-  RelativePattern,
   Selection,
   StatusBarAlignment,
   TabInputCustom,
@@ -62,12 +61,7 @@ import { perfReport } from "../shared/perf.js";
 import { isWebviewToHost } from "../shared/protocol.js";
 import { canHostWrite } from "./can-host-write.js";
 import { type Caret, clampCaret } from "./caret-handoff.js";
-import { createDirtyDocConflictWatcher } from "./dirty-doc-conflict-watcher.js";
-import {
-  DISK_CONFLICT_KEEP,
-  DISK_CONFLICT_MESSAGE,
-  DISK_CONFLICT_RELOAD,
-} from "./disk-conflict.js";
+import { createDiskConflictWiring } from "./disk-conflict-wiring.js";
 import { buildDocumentMessageFromDocument, canonicalDocumentText } from "./document-canonical.js";
 import { createTrailingDebounce } from "./document-change-debounce.js";
 import {
@@ -910,71 +904,24 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
     );
 
     // --- Dirty-doc on-disk conflict watcher ---------------------------------
-    // The orchestration (debounce, single-flight, read → prompt → reload flow)
-    // lives in the vscode-free createDirtyDocConflictWatcher factory; this
-    // wires the VS Code touchpoints and hands the disposable to teardown.
-    // file-scheme only: createFileSystemWatcher needs a real path, and a
-    // non-file doc (untitled / virtual) has no backing disk to diverge from.
-    if (document.uri.scheme === "file") {
-      // Watch the parent directory with a plain `*` and filter by URI in the
-      // factory, rather than globbing the basename directly: a filename with
-      // glob metacharacters (e.g. `notes[1].md`, `a{b}.md`) would otherwise
-      // miss or mis-match (Codex C88). `*` is non-recursive — direct children
-      // only — so this stays scoped to the document's own folder.
-      const watcher = workspace.createFileSystemWatcher(
-        new RelativePattern(Uri.joinPath(document.uri, ".."), "*"),
-        false, // ignoreCreate: an atomic save (temp + rename) can surface as create
-        false, // ignoreChange: the common in-place external write
-        true // ignoreDelete: a deleted backing file is the platform's UX, not a content conflict
-      );
-      disposables.push(watcher);
-
-      const conflictWatcher = createDirtyDocConflictWatcher({
-        // onDidChange + onDidCreate are the divergence signals; the factory
-        // filters by URI and debounces. The teardown disposes both listeners.
-        subscribe: (onSignal) => {
-          const subs = [
-            watcher.onDidChange((changed) => onSignal(changed.toString())),
-            watcher.onDidCreate((changed) => onSignal(changed.toString())),
-          ];
-          return () => {
-            for (const sub of subs) {
-              sub.dispose();
-            }
-          };
-        },
-        documentUriString: document.uri.toString(),
+    // The VS Code wiring (file-scheme gate, parent-folder fs watcher, disk-read /
+    // prompt / true-revert dep closures) lives in createDiskConflictWiring; the
+    // pure orchestration stays in dirty-doc-conflict-watcher.ts. A non-file doc
+    // gets an inert no-op wiring (nothing to diverge from). Disposed with the
+    // panel (the wiring bundles both the fs watcher and the conflict watcher into
+    // one dispose). All reads stay lazy (isDirty / buffer text / harness override
+    // / viewColumn) so behaviour matches the former inline closures exactly.
+    disposables.push(
+      createDiskConflictWiring({
+        documentUri: document.uri,
         isDisposed: () => disposed,
         isDirty: () => document.isDirty,
-        readDiskText: async () =>
-          Buffer.from(await workspace.fs.readFile(document.uri)).toString("utf8"),
         readBufferText: () => canonicalDocumentText(document),
-        promptReload: () =>
-          this.harness?.diskConflictPromptOverride
-            ? this.harness.diskConflictPromptOverride(
-                DISK_CONFLICT_MESSAGE,
-                DISK_CONFLICT_RELOAD,
-                DISK_CONFLICT_KEEP
-              )
-            : window.showWarningMessage(
-                DISK_CONFLICT_MESSAGE,
-                DISK_CONFLICT_RELOAD,
-                DISK_CONFLICT_KEEP
-              ),
-        reloadChoice: DISK_CONFLICT_RELOAD,
-        // User-confirmed TRUE revert. reveal(...false) makes the panel the
-        // active editor so the text-file revert targets THIS document; the
-        // platform reload then fires onDidChangeTextDocument → the reducer
-        // reseeds the webview with disk content (the same path the clean case
-        // rides) AND clears the dirty flag + refreshes VS Code's etag.
-        reloadFromDisk: async () => {
-          webviewPanel.reveal(webviewPanel.viewColumn, false);
-          await commands.executeCommand("workbench.action.files.revert");
-        },
+        promptOverride: () => this.harness?.diskConflictPromptOverride ?? null,
+        revealPanel: () => webviewPanel.reveal(webviewPanel.viewColumn, false),
         showError,
-      });
-      disposables.push(conflictWatcher);
-    }
+      })
+    );
 
     // Tier-0 reveal for the Claude Code handoff (deps.revealForMention — see
     // handle-context-handoff.ts's module header). Claude Code's zero-arg
