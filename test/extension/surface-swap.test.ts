@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { Tab, TextDocument, Uri } from "vscode";
 import {
+  closeSourceTabIfClean,
   type FinalizeSwapDeps,
   finalizeSurfaceSwap,
   shouldCloseSourceTab,
@@ -163,5 +164,73 @@ describe("finalizeSurfaceSwap", () => {
     await finalizeSurfaceSwap(fileUri, undefined, deps);
     expect(reresolve).not.toHaveBeenCalled();
     expect(closeTab).not.toHaveBeenCalled();
+  });
+});
+
+describe("closeSourceTabIfClean (no-save passive restore finalizer)", () => {
+  const uri = { toString: () => "file:///a.md", scheme: "file" } as unknown as Uri;
+  const fakeTab = { input: {} } as unknown as Tab;
+
+  it("does nothing when there is no source tab", async () => {
+    let closed = false;
+    await closeSourceTabIfClean(uri, undefined, {
+      openDoc: async () => ({ isDirty: false }) as unknown as TextDocument,
+      reresolveSourceTab: () => fakeTab,
+      closeTab: async () => {
+        closed = true;
+        return true;
+      },
+    });
+    expect(closed).toBe(false);
+  });
+
+  it("closes the re-resolved source tab when the doc is clean", async () => {
+    let closedWith: Tab | null = null;
+    await closeSourceTabIfClean(uri, fakeTab, {
+      openDoc: async () => ({ isDirty: false }) as unknown as TextDocument,
+      reresolveSourceTab: () => fakeTab,
+      closeTab: async (t) => {
+        closedWith = t;
+        return true;
+      },
+    });
+    expect(closedWith).toBe(fakeTab);
+  });
+
+  it("does NOT close (and never saves) when the doc is dirty", async () => {
+    let closed = false;
+    let saved = false;
+    await closeSourceTabIfClean(uri, fakeTab, {
+      // A save() on this fake would flip `saved`; closeSourceTabIfClean must
+      // never call it.
+      openDoc: async () =>
+        ({
+          isDirty: true,
+          save: async () => {
+            saved = true;
+            return true;
+          },
+        }) as unknown as TextDocument,
+      reresolveSourceTab: () => fakeTab,
+      closeTab: async () => {
+        closed = true;
+        return true;
+      },
+    });
+    expect(closed).toBe(false);
+    expect(saved).toBe(false);
+  });
+
+  it("does not close when the source tab can no longer be re-resolved", async () => {
+    let closed = false;
+    await closeSourceTabIfClean(uri, fakeTab, {
+      openDoc: async () => ({ isDirty: false }) as unknown as TextDocument,
+      reresolveSourceTab: () => undefined,
+      closeTab: async () => {
+        closed = true;
+        return true;
+      },
+    });
+    expect(closed).toBe(false);
   });
 });
