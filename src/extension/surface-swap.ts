@@ -7,7 +7,15 @@
 // clean tab closes with no revert and no dialog. If the doc can't be made clean
 // we DO NOT close (both-open, never data loss).
 
-import { type Tab, TabInputCustom, TabInputText, type Uri, window, workspace } from "vscode";
+import {
+  type Tab,
+  TabInputCustom,
+  TabInputText,
+  type TextDocument,
+  type Uri,
+  window,
+  workspace,
+} from "vscode";
 
 /** Safety gate: close the source tab only when there is one AND the document is
  *  provably clean — either it was already clean, or it was dirty and the save
@@ -67,37 +75,69 @@ export function findSourceTab(
   return matches.length === 1 ? matches[0] : undefined;
 }
 
-/** Re-find a live tab matching `captured`'s identity (uri + surface kind, and
- *  viewType when it is a Quoll custom tab). `captured` may be a stale `Tab`
- *  object from an earlier tab-model snapshot — VS Code's Tab identity does not
- *  survive tab-model events, so this re-reads `window.tabGroups.all` fresh
- *  rather than trusting `captured` still resolves. Returns undefined if the
- *  tab is gone (e.g. the user closed it manually in between). */
+/** Re-find a live tab matching `captured`'s identity. `captured` may be a stale
+ *  `Tab` object from an earlier tab-model snapshot — VS Code's Tab identity does
+ *  not survive tab-model events (the target surface opening in between IS such an
+ *  event), so this re-reads the tab model fresh rather than trusting `captured`
+ *  still resolves.
+ *
+ *  Re-resolution is scoped to the captured tab's OWN group (keyed by the stable
+ *  `viewColumn`), NOT a first-match sweep across all groups: with the same file
+ *  open as text in multiple splits, an all-groups `.find` can return a DIFFERENT
+ *  split's tab and close the wrong one (the source tab then stays open — both
+ *  surfaces visible in the group the user toggled from). If the tab is gone from
+ *  its group, refuse (return undefined) rather than fall back to another split. */
 function reresolveTab(captured: Tab): Tab | undefined {
-  const uriKey =
-    captured.input instanceof TabInputCustom
-      ? captured.input.uri.toString()
-      : captured.input instanceof TabInputText
-        ? captured.input.uri.toString()
-        : undefined;
-  if (uriKey === undefined) {
+  // Classify the captured tab once (custom vs text); anything else is not a swap
+  // source and cannot be re-resolved.
+  let uriKey: string;
+  let surface: SourceSurface;
+  let quollViewType: string;
+  if (captured.input instanceof TabInputCustom) {
+    uriKey = captured.input.uri.toString();
+    surface = "quoll";
+    quollViewType = captured.input.viewType;
+  } else if (captured.input instanceof TabInputText) {
+    uriKey = captured.input.uri.toString();
+    surface = "text";
+    quollViewType = "";
+  } else {
     return undefined;
   }
-  const surface: SourceSurface = captured.input instanceof TabInputCustom ? "quoll" : "text";
-  const quollViewType = captured.input instanceof TabInputCustom ? captured.input.viewType : "";
-  return window.tabGroups.all
-    .flatMap((g) => g.tabs)
-    .find((t) => tabMatches(t, uriKey, surface, quollViewType));
+  // `captured.group.viewColumn` is a primitive captured at snapshot time, stable
+  // across the intervening tab-model event even though the Tab object is not.
+  const capturedColumn = captured.group.viewColumn;
+  const group = window.tabGroups.all.find((g) => g.viewColumn === capturedColumn);
+  return group?.tabs.find((t) => tabMatches(t, uriKey, surface, quollViewType));
 }
+
+/** Injectable IO seam for `finalizeSurfaceSwap`. Production wires the real VS
+ *  Code surfaces (`REAL_SWAP_DEPS`); unit tests inject fakes to exercise the
+ *  save-failure and tab-gone / cancelled-close arms without a live tab model. */
+export interface FinalizeSwapDeps {
+  openDoc: (uri: Uri) => Thenable<TextDocument>;
+  reresolveSourceTab: (tab: Tab) => Tab | undefined;
+  closeTab: (tab: Tab) => Thenable<boolean>;
+}
+
+const REAL_SWAP_DEPS: FinalizeSwapDeps = {
+  openDoc: (uri) => workspace.openTextDocument(uri),
+  reresolveSourceTab: reresolveTab,
+  closeTab: (tab) => window.tabGroups.close(tab, true),
+};
 
 /** Finalize an in-place swap: the caller has already opened the TARGET surface.
  *  Save the shared doc if dirty (so the source tab is clean and closing it can
  *  neither revert the working copy nor pop a save dialog), then close the
  *  pre-captured source tab. Refuses to close if the doc can't be made clean
- *  (never data loss). Best-effort; never throws. */
-export async function finalizeSurfaceSwap(uri: Uri, sourceTab: Tab | undefined): Promise<void> {
+ *  (never data loss). Best-effort; never throws. `deps` is seamed for tests. */
+export async function finalizeSurfaceSwap(
+  uri: Uri,
+  sourceTab: Tab | undefined,
+  deps: FinalizeSwapDeps = REAL_SWAP_DEPS
+): Promise<void> {
   try {
-    const doc = await workspace.openTextDocument(uri);
+    const doc = await deps.openDoc(uri);
     const wasDirty = doc.isDirty;
     let saveSucceeded = false;
     // Only save a dirty FILE-scheme doc. A non-file/untitled doc's save() can
@@ -135,14 +175,13 @@ export async function finalizeSurfaceSwap(uri: Uri, sourceTab: Tab | undefined):
     }
     // sourceTab is defined here (shouldCloseSourceTab is false when it is not).
     // Re-resolve a LIVE tab for the same identity right before closing: Tab
-    // object identity is not stable across tab-model events (the target
-    // surface opening in between IS such an event — same fact already
-    // documented for the reveal-for-mention cleanup in
-    // reveal-for-mention-cleanup.ts), so closing the tab captured earlier by
-    // findSourceTab can throw "Invalid tab not found" even though the tab it
-    // refers to (by uri) is still open.
-    const liveSourceTab = sourceTab && reresolveTab(sourceTab);
-    const closed = liveSourceTab ? await window.tabGroups.close(liveSourceTab, true) : true;
+    // object identity is not stable across tab-model events (the target surface
+    // opening in between IS such an event), so closing the tab captured earlier
+    // by findSourceTab can throw "Invalid tab not found" even though the tab it
+    // refers to (by uri, in its group) is still open. reresolveTab returns
+    // undefined if the tab is gone → nothing to close (both-open, safe).
+    const liveSourceTab = sourceTab && deps.reresolveSourceTab(sourceTab);
+    const closed = liveSourceTab ? await deps.closeTab(liveSourceTab) : true;
     if (!closed) {
       console.warn("[quoll] surface-swap: source tab close was cancelled; both surfaces remain");
     }

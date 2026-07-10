@@ -227,4 +227,68 @@ describe("⌘⌥E in-place editor-surface swap", function () {
       "the OTHER split's text tab is preserved (the toggle acts on the active group)"
     );
   });
+
+  it("multi-split from the SECOND group: closes the toggled group's text tab, not the first split's", async () => {
+    // Regression for the reresolveTab first-match-across-all-groups bug: toggling
+    // from a group that is NOT first in window.tabGroups.all must close THAT
+    // group's text tab, not another split's (which left both surfaces open in the
+    // toggled group). The earlier multi-split test toggles from the first group,
+    // where first-match coincidentally = the right tab, so it does NOT catch this.
+    const uri = tempMd("split2.md");
+    const doc = await vscode.workspace.openTextDocument(uri);
+    // First group's text editor, then a SECOND group (Beside) which stays active.
+    await vscode.window.showTextDocument(doc, {
+      viewColumn: vscode.ViewColumn.One,
+      preserveFocus: false,
+      preview: false,
+    });
+    await tick(200);
+    await vscode.window.showTextDocument(doc, {
+      viewColumn: vscode.ViewColumn.Beside,
+      preserveFocus: false,
+      preview: false,
+    });
+    await tick(300);
+    assert.ok(
+      allTabs().filter(textTab(uri)).length >= 2,
+      "precondition: the doc is open as text in two groups"
+    );
+    assert.strictEqual(
+      vscode.window.activeTextEditor?.document.uri.toString(),
+      uri.toString(),
+      "precondition: the SECOND group's text editor is active"
+    );
+
+    await vscode.commands.executeCommand("quoll.toggleEditor");
+
+    // The Quoll tab's group must NOT also still hold a text tab for the doc
+    // (that would be both-open in the toggled group), and the first split's text
+    // tab must survive.
+    const quollGroupTabs = (): readonly vscode.Tab[] => {
+      const g = vscode.window.tabGroups.all.find((grp) => grp.tabs.some(customTab(uri)));
+      return g ? g.tabs : [];
+    };
+    const deadline = Date.now() + 8000;
+    while (Date.now() < deadline) {
+      if (
+        allTabs().some(customTab(uri)) &&
+        !quollGroupTabs().some(textTab(uri)) &&
+        allTabs().some(textTab(uri))
+      ) {
+        break;
+      }
+      await tick(100);
+    }
+    assert.ok(allTabs().some(customTab(uri)), "Quoll tab must be open");
+    assert.ok(
+      !quollGroupTabs().some(textTab(uri)),
+      `Quoll's group must not also hold a text tab (would be both-open) — ${JSON.stringify(
+        quollGroupTabs().map((t) => t.label)
+      )}`
+    );
+    assert.ok(
+      allTabs().some(textTab(uri)),
+      "the first split's text tab must survive (only the toggled group is consolidated)"
+    );
+  });
 });
