@@ -105,6 +105,7 @@ import {
   type RevealCleanupGroup,
 } from "./reveal-for-mention-cleanup.js";
 import { createRevertRescueTracker } from "./revert-rescue.js";
+import { showSafely } from "./show-safely.js";
 import {
   createStatusBarController,
   formatLanguageLabel,
@@ -221,16 +222,14 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
       localResourceRoots: buildLocalResourceRoots(extensionUri, document),
     };
 
-    // showError centralises window.showErrorMessage with rejection handling.
-    // Hoisted above the try/catch below so the catch arm can reuse it instead
-    // of inlining a `void window.showErrorMessage(...)` that would silently
-    // swallow toast rejections — the same asymmetry showError closes for every
-    // other call site below (grep `showError(` for the full set).
+    // showError centralises window.showErrorMessage with rejection handling
+    // (via showSafely). Hoisted above the try/catch below so the catch arm can
+    // reuse it instead of inlining a call that would silently swallow toast
+    // rejections — the same asymmetry showError closes for every other call
+    // site below (grep `showError(` for the full set).
     const showError = (message: string): void => {
       this.harness?.recordError(message);
-      void window.showErrorMessage(message).then(undefined, (err: unknown) => {
-        console.error("[quoll] showErrorMessage rejected", err);
-      });
+      showSafely(window.showErrorMessage(message), "showErrorMessage");
     };
 
     // Reverse editor-switch caret restore (one-shot). A text-editor→Quoll switch
@@ -1395,15 +1394,14 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
                 // Symmetric with quoll.toggleEditor's forward error toast (a
                 // silent console-only failure would make the button look dead).
                 console.error("[quoll] switch-to-text openWith rejected", err);
-                void window
-                  .showErrorMessage(
+                showSafely(
+                  window.showErrorMessage(
                     `Quoll: could not open the text editor: ${
                       err instanceof Error ? err.message : String(err)
                     }`
-                  )
-                  .then(undefined, (e: unknown) =>
-                    console.error("[quoll] showErrorMessage rejected", e)
-                  );
+                  ),
+                  "showErrorMessage"
+                );
               }
             );
           });

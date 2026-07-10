@@ -24,6 +24,7 @@ import { canEditWith } from "./can-edit-with.js";
 import { stashSwitchCaret, takeSwitchCaret } from "./editor-switch-caret.js";
 import { QuollEditorPanel } from "./quoll-editor-panel.js";
 import { openInTextEditor } from "./reopen-text-editor.js";
+import { showSafely } from "./show-safely.js";
 import { noteSurface } from "./surface-memory.js";
 import { finalizeSurfaceSwap, findSourceTab } from "./surface-swap.js";
 
@@ -51,9 +52,12 @@ function isMarkdownUri(uri: { path: string }): boolean {
 
 function surfaceError(prefix: string, err: unknown): void {
   console.error(`[quoll] ${prefix}`, err);
-  void window
-    .showErrorMessage(`Quoll: ${prefix}: ${err instanceof Error ? err.message : String(err)}`)
-    .then(undefined, (e: unknown) => console.error("[quoll] showErrorMessage rejected", e));
+  showSafely(
+    window.showErrorMessage(
+      `Quoll: ${prefix}: ${err instanceof Error ? err.message : String(err)}`
+    ),
+    "showErrorMessage"
+  );
 }
 
 export function registerToggleEditor(): { dispose(): void } {
@@ -123,11 +127,7 @@ export function registerToggleEditor(): { dispose(): void } {
           workspace.fs.isWritableFileSystem(scheme)
         );
         if (!decision.ok) {
-          void window
-            .showWarningMessage(decision.reason)
-            .then(undefined, (e: unknown) =>
-              console.error("[quoll] showWarningMessage rejected", e)
-            );
+          showSafely(window.showWarningMessage(decision.reason), "showWarningMessage");
           return;
         }
         const key = editor.document.uri.toString();
@@ -154,13 +154,12 @@ export function registerToggleEditor(): { dispose(): void } {
         return;
       }
       case "none":
-        void window
-          .showInformationMessage(
+        showSafely(
+          window.showInformationMessage(
             "Quoll: open a Markdown file to toggle between the rich and text editors."
-          )
-          .then(undefined, (e: unknown) =>
-            console.error("[quoll] showInformationMessage rejected", e)
-          );
+          ),
+          "showInformationMessage"
+        );
         return;
       default: {
         // Exhaustiveness guard — a new SwitchTarget without a case reds tsc,
