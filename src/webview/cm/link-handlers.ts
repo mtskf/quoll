@@ -189,8 +189,9 @@ export function tryOpenLinkAt(state: EditorState, pos: number, host: LinkOpenHos
 // EditorView.domEventHandlers wrapper. Unit tests cover the helper's
 // branches directly; the extension wrapper is a one-line delegation.
 
-/** Pure mousedown handler. Returns true when the click was consumed (an
- *  open-external was posted AND event.preventDefault was called).
+/** Pure mousedown handler. Returns true when the click was consumed (a
+ *  host message — `open-external` for a launchable URL OR `open-link` for a
+ *  relative `.md` target — was posted AND event.preventDefault was called).
  *  Extracted from quollLinkClickHandler so the branches (button !== 0,
  *  posAtCoords null, out-of-range pos, tryOpenLinkAt false) are testable
  *  without synthesising real coords-based mousedown events under
@@ -205,11 +206,12 @@ export function handleLinkMouseDown(
   if (event.button !== 0) {
     return false;
   }
-  // Modifier-click is left to the user: Ctrl/Cmd + click is the platform
-  // convention for "open in new tab", which env.openExternal honours via
-  // the system browser. Plain click and modifier click both reach this
-  // handler; the only meaningful difference is browser-side and out of
-  // scope (documented in Risks).
+  // Modifier-click is left to the user: for an external URL, Ctrl/Cmd + click
+  // is the platform "open in new tab" convention, which env.openExternal honours
+  // via the system browser; for a relative `.md` target it routes in-editor
+  // through the host `open-link` path either way. Plain click and modifier click
+  // both reach this handler; the only meaningful difference is browser-side (for
+  // external URLs) and out of scope (documented in Risks).
   const pos = view.posAtCoords({ x: event.clientX, y: event.clientY }, /* precise */ false);
   if (pos === null) {
     return false;

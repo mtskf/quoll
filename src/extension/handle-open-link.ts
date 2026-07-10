@@ -113,6 +113,23 @@ export function handleOpenLink(href: string, deps: HandleOpenLinkDeps): void {
 
   // Fail-closed containment: inside a workspace folder, OR (no workspace /
   // escaped the workspace) inside the document's own directory subtree.
+  //
+  // Encoded segments do NOT traverse: decodeMarkdownDestination does not
+  // percent-decode and Uri.joinPath does not treat a literal `%2f`/`%5c` as a
+  // separator, so `..%2f..%2fx.md` resolves to a single literal (non-existent)
+  // filename INSIDE `dir` — never an escape. Containment is asserted on the
+  // resolved `target`, authoritative regardless of encoding. (The image-write
+  // gate in url-allowlist.ts decodes per segment because it validates absolute
+  // resolved URLs; this handler only joins relative segments onto `dir`, so the
+  // literal-separator property suffices.) A literal `%` is deliberately NOT
+  // rejected so a legitimate `%20`-in-filename link still opens.
+  //
+  // A rejection here is log-only by design: the webview cannot evaluate
+  // containment (it owns no path), so a containment-refused click is a normal
+  // reachable outcome for out-of-workspace user content. The webview has already
+  // preventDefault'd, so such a click neither navigates nor moves the caret nor
+  // toasts — an accepted phase-1 trade-off (refusing to confirm an escape is the
+  // safer default; a recovery `open-link-rejected` channel is deferred).
   if (!deps.isInWorkspace(target) && !isWithinDir(target, dir)) {
     console.warn("[quoll] open-link dropped: target outside workspace/document dir", {
       hrefPreview: sanitizeForLog(href),

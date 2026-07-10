@@ -99,15 +99,43 @@ describe("handleOpenLink", () => {
 
   it("rejects an href carrying a control byte", () => {
     const { deps, opened } = makeDeps();
-    handleOpenLink("./other.md", deps);
+    handleOpenLink("./oth\u0001er.md", deps);
     expect(opened).toEqual([]);
   });
 
-  it("shows an error toast when openWith rejects", async () => {
+  it("rejects a sibling dir that shares the doc-dir name as a prefix (no workspace)", () => {
+    // /ws/notes vs /ws/notes-evil must NOT match on a bare prefix — guards the
+    // trailing-slash normalisation in isWithinDir (without it, startsWith would
+    // wrongly accept the sibling).
+    const { deps, opened } = makeDeps({ isInWorkspace: () => false });
+    handleOpenLink("../notes-evil/secret.md", deps);
+    expect(opened).toEqual([]);
+  });
+
+  it("does not traverse via percent-encoded separators (stays contained)", () => {
+    // `%2f` is literal (not a separator) through Uri.joinPath, so this resolves
+    // to a single literal filename INSIDE the doc dir — contained, never an
+    // escape. Pins the threat-model claim that encoded segments don't traverse.
+    const { deps, opened } = makeDeps();
+    handleOpenLink("..%2f..%2fsecret.md", deps);
+    expect(opened).toEqual(["/ws/notes/..%2f..%2fsecret.md"]);
+  });
+
+  it("shows the failure toast when openWith rejects asynchronously", async () => {
     const { deps, errors } = makeDeps({ openWith: () => Promise.reject(new Error("boom")) });
     handleOpenLink("./other.md", deps);
     await Promise.resolve();
     await Promise.resolve();
-    expect(errors.length).toBe(1);
+    expect(errors).toEqual([expect.stringContaining("couldn't open the linked file")]);
+  });
+
+  it("shows the failure toast when openWith throws synchronously", () => {
+    const { deps, errors } = makeDeps({
+      openWith: () => {
+        throw new Error("sync boom");
+      },
+    });
+    handleOpenLink("./other.md", deps);
+    expect(errors).toEqual([expect.stringContaining("couldn't open the linked file")]);
   });
 });
