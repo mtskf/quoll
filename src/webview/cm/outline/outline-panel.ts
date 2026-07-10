@@ -272,6 +272,11 @@ class OutlinePanel implements PluginValue {
   }
 
   private setPinned(pinned: boolean): void {
+    // Invariant: pinned ⇒ open. Pinning a closed sidebar opens it first, so the
+    // guarantee holds at every mutation point — not just via setOpen's close path.
+    if (pinned && !this.open) {
+      this.setOpen(true);
+    }
     this.pinned = pinned;
     this.host.classList.toggle(OUTLINE_PINNED_CLASS, pinned);
     this.pinEl.classList.toggle("pinned", pinned);

@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import { EditorState } from "@codemirror/state";
+import { EditorSelection, EditorState } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { quollMarkdownLanguage } from "../../src/webview/cm/markdown.js";
@@ -274,5 +274,31 @@ describe("quollOutline sidebar", () => {
     expect(host.querySelector(".quoll-outline-sidebar")).toBeNull();
     expect(isOpen(host)).toBe(false);
     expect(host.classList.contains(OUTLINE_PINNED_CLASS)).toBe(false);
+  });
+
+  it("pinning a closed sidebar opens it (invariant: pinned ⇒ open, enforced at setPinned)", () => {
+    // Clicking pin while the sidebar is CLOSED must not leave {pinned, !open}:
+    // the guard in setPinned opens it first, so both classes land together.
+    const { host } = mount("# Alpha\n");
+    expect(isOpen(host)).toBe(false); // starts closed
+    pinEl(host).click(); // pin without opening first
+    expect(host.classList.contains(OUTLINE_OPEN_CLASS)).toBe(true);
+    expect(host.classList.contains(OUTLINE_PINNED_CLASS)).toBe(true);
+  });
+
+  it("marks the heading enclosing the caret active, and moves it on selection change", () => {
+    const { view: v, host } = mount("# Alpha\n\nbody\n\n## Beta\n\nmore\n");
+    v.plugin(outlinePlugin)?.toggle(); // open + build
+    const items = () => [...host.querySelectorAll<HTMLElement>(".quoll-outline-item")];
+    expect(items().map((el) => el.classList.contains("active"))).toEqual([true, false]);
+    const beta = v.state.doc.line(5).from;
+    v.dispatch({ selection: EditorSelection.cursor(beta) });
+    expect(items().map((el) => el.classList.contains("active"))).toEqual([false, true]);
+  });
+
+  it("labels a bare-# empty heading as (untitled)", () => {
+    const { view: v, host } = mount("#\n");
+    v.plugin(outlinePlugin)?.toggle();
+    expect(itemTexts(host)).toEqual(["(untitled)"]);
   });
 });
