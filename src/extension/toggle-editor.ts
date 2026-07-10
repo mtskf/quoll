@@ -126,6 +126,7 @@ export function registerToggleEditor(): { dispose(): void } {
           return;
         }
         const key = editor.document.uri.toString();
+        const sourceTab = findSourceTab(key, "text", QuollEditorPanel.viewType);
         const active = editor.selection.active;
         stashSwitchCaret(key, { line: active.line, character: active.character });
         try {
@@ -138,6 +139,7 @@ export function registerToggleEditor(): { dispose(): void } {
             editor.document.uri,
             QuollEditorPanel.viewType
           );
+          await finalizeSurfaceSwap(editor.document.uri, sourceTab);
         } catch (err) {
           takeSwitchCaret(key); // clear the stash so it does not apply on a later open
           surfaceError("could not open the rich editor", err);
