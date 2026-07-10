@@ -25,12 +25,49 @@ export const WORDS_PER_MINUTE = 200;
  *  is never mistaken for frontmatter. */
 const FRONTMATTER = /^---[ \t]*\r?\n[\s\S]*?\r?\n---[ \t]*(?:\r?\n|$)/;
 
-/** Fenced code blocks: ``` or ~~~ (>=3 of one char), any info string, through
- *  the matching closing fence — same character, length >= 3. CommonMark lets the
- *  closer be LONGER than the opener (``` opened, ```` closed), so group 1
- *  captures the single fence char and the closer is `\1{3,}` rather than an
- *  exact-length backreference. Multiline. */
-const FENCED_CODE = /^[ \t]*([`~])\1{2,}[^\n]*\n[\s\S]*?^[ \t]*\1{3,}[ \t]*$/gm;
+/** Opener of a fenced code block: >=3 of one fence char (` or ~), plus any info
+ *  string on the rest of the line. */
+const FENCE_OPEN = /^[ \t]*(`{3,}|~{3,})/;
+/** A CLOSER candidate: a whole line of >=3 fence chars and nothing else (bar
+ *  surrounding spaces). Same-char + length>=opener is enforced at the call site. */
+const FENCE_CLOSE = /^[ \t]*(`{3,}|~{3,})[ \t]*$/;
+
+/** Remove fenced code blocks by scanning lines. A regex backreference cannot
+ *  express the CommonMark rule "the closing fence is the SAME character and AT
+ *  LEAST as long as the opener": an exact-length backreference misses a longer
+ *  closer, while an any-length `{3,}` closer lets a shorter inner fence close a
+ *  longer block early (both surfaced in review). The scanner records the
+ *  opener's char + length and closes only on a same-char fence of length >=
+ *  opener. An unclosed opener is left as prose (kept), matching prior behaviour. */
+function stripFencedCode(text: string): string {
+  const lines = text.split("\n");
+  const out: string[] = [];
+  let i = 0;
+  while (i < lines.length) {
+    const open = FENCE_OPEN.exec(lines[i]);
+    if (open === null) {
+      out.push(lines[i]);
+      i += 1;
+      continue;
+    }
+    const fenceChar = open[1][0];
+    const fenceLen = open[1].length;
+    let j = i + 1;
+    for (; j < lines.length; j += 1) {
+      const close = FENCE_CLOSE.exec(lines[j]);
+      if (close !== null && close[1][0] === fenceChar && close[1].length >= fenceLen) {
+        break;
+      }
+    }
+    if (j < lines.length) {
+      i = j + 1; // matched closer → drop opener..closer inclusive
+    } else {
+      out.push(lines[i]); // unclosed opener: keep as prose, resume after it
+      i += 1;
+    }
+  }
+  return out.join("\n");
+}
 
 /** CJK code points counted individually (no whitespace word boundaries).
  *  Explicit `\u` escapes (never literal glyphs) so a homoglyph can't silently
@@ -43,7 +80,7 @@ const FENCED_CODE = /^[ \t]*([`~])\1{2,}[^\n]*\n[\s\S]*?^[ \t]*\1{3,}[ \t]*$/gm;
 const CJK = /[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uac00-\ud7af\uf900-\ufaff]/gu;
 
 export function computeReadingStats(text: string): ReadingTextStats {
-  const stripped = text.replace(FRONTMATTER, "").replace(FENCED_CODE, "");
+  const stripped = stripFencedCode(text.replace(FRONTMATTER, ""));
 
   const cjkWords = stripped.match(CJK)?.length ?? 0;
   const latin = stripped.replace(CJK, " ").trim();

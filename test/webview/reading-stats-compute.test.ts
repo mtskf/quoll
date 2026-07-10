@@ -65,6 +65,13 @@ describe("computeReadingStats — word/char counting", () => {
     expect(computeReadingStats(doc).words).toBe(2); // before after
   });
 
+  it("does not let a shorter inner fence close a longer opened block", () => {
+    // Block opened with 4 backticks; the inner 3-backtick line is content, not a
+    // closer (CommonMark: a closer is the same char AND >= the opener length).
+    const doc = "before\n\n````\n```\nstill code\n````\n\nafter";
+    expect(computeReadingStats(doc).words).toBe(2); // before after
+  });
+
   it("counts an astral (surrogate-pair) char once — words and characters agree", () => {
     // Without the /u flag the CJK range straddled the UTF-16 surrogate block and
     // counted each emoji as 2 "words" while characters counted 1. Now both agree.
@@ -82,7 +89,7 @@ describe("computeReadingStats — word/char counting", () => {
   });
 
   it("counts each CJK character as one word (character-based, not morpheme)", () => {
-    // 5 kanji + 1 hiragana = 6 CJK code points
+    // 5 kanji + 2 hiragana (は, い) = 7 CJK code points
     const s = computeReadingStats("今日は良い天気");
     expect(s.words).toBe(7); // 今 日 は 良 い 天 気
     expect(s.characters).toBe(7);
