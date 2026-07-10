@@ -42,10 +42,9 @@ export async function activate(context: ExtensionContext) {
         workspace.fs.isWritableFileSystem(scheme)
       );
       if (!decision.ok) {
-        // showWarningMessage returns a Thenable that can reject (host
-        // detached, dispatcher torn down). QuollEditorPanel's showError
-        // helper closes the same asymmetry; mirror it here so activation
-        // code does not silently swallow rejection.
+        // showWarningMessage's Thenable can reject (host detached, dispatcher
+        // torn down); showSafely logs instead of letting it become an
+        // unhandled rejection. See show-safely.ts for the shared rationale.
         showSafely(window.showWarningMessage(decision.reason), "showWarningMessage");
         return;
       }
