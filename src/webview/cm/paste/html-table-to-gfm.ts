@@ -396,6 +396,16 @@ export function htmlTableToGfm(html: string): string | null {
   // <caption> only (a nested table's caption belongs to that table, which is
   // already excluded since we chose a top-level table).
   const captionEl = Array.from(table.children).find((c) => c.tagName === "CAPTION");
-  const caption = captionEl ? escapeCell(collectCellText(captionEl)) : "";
+  // escapeCell covers inline-active chars, which is enough for a table cell (always
+  // mid-line). The caption is emitted at LINE START, though, so it must also escape
+  // the leading BLOCK markers that only activate there (heading `#`, blockquote `>`,
+  // bullet `-`/`+`, thematic break `---`, ordered-list `1.`/`1)`) — else a caption
+  // like `# Q3` would render as a heading. All are valid CommonMark punctuation
+  // escapes, so the caption still round-trips as literal text.
+  const caption = captionEl
+    ? escapeCell(collectCellText(captionEl))
+        .replace(/^(\d{1,9})([.)])(?=\s|$)/, "$1\\$2")
+        .replace(/^([#>+-])/, "\\$1")
+    : "";
   return caption ? `${caption}\n\n${gfm}` : gfm;
 }

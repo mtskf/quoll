@@ -50,6 +50,20 @@ describe("htmlTableToGfm — caption & section order", () => {
     expect(htmlTableToGfm(html)).toBe("Sales 2024\n\n| A | B |\n| --- | --- |");
   });
 
+  it("escapes leading block markers in a caption (emitted at line start)", () => {
+    // A caption is a line-start paragraph, so block constructs (heading, bullet,
+    // ordered-list, thematic-break) would activate — escape the leading marker.
+    expect(htmlTableToGfm("<table><caption># Q3</caption><tr><td>A</td></tr></table>")).toBe(
+      "\\# Q3\n\n| A |\n| --- |"
+    );
+    expect(htmlTableToGfm("<table><caption>1. first</caption><tr><td>A</td></tr></table>")).toBe(
+      "1\\. first\n\n| A |\n| --- |"
+    );
+    expect(htmlTableToGfm("<table><caption>- item</caption><tr><td>A</td></tr></table>")).toBe(
+      "\\- item\n\n| A |\n| --- |"
+    );
+  });
+
   it("orders rows thead → tbody → tfoot even when tfoot precedes tbody in source", () => {
     // HTML 4 required <tfoot> before <tbody>; browsers keep source order in the
     // DOM but render the footer last. Row order must follow render order.
