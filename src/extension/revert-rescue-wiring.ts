@@ -27,7 +27,7 @@
 // which this only re-wires.
 
 import type { TextDocument } from "vscode";
-import { Range, workspace, WorkspaceEdit } from "vscode";
+import { Range, WorkspaceEdit, workspace } from "vscode";
 
 import { createTrailingDebounce } from "./document-change-debounce.js";
 import { minimalEditSpan } from "./minimal-edit.js";
@@ -149,9 +149,7 @@ export function createRevertRescueWiring(deps: RevertRescueWiringDeps): RevertRe
     void workspace.applyEdit(edit).then(
       (ok) => {
         if (!ok) {
-          deps.showError(
-            "Quoll could not restore your unsaved changes after closing the editor."
-          );
+          deps.showError("Quoll could not restore your unsaved changes after closing the editor.");
           onFailure?.();
         }
       },
