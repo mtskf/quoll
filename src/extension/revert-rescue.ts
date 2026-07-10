@@ -70,9 +70,28 @@ export function createRevertRescueTracker(
   // Failure asymmetry (deliberate): too-SHORT a window mis-classifies a genuine
   // close-triggered revert as stale -> the original silent data-loss bug
   // returns; too-LONG only risks a benign, visible, undoable re-dirty when a
-  // user manually reverts (or undoes to clean) and closes within the window. So
-  // bias LONG. The measured close-revert->dispose gap is ~9 ms; 2500 ms clears
-  // it by orders of magnitude while staying well under human revert-then-close time.
+  // user manually reverts and closes within the window. So bias LONG. The
+  // measured close-revert->dispose gap is ~9 ms; 2500 ms clears it by orders of
+  // magnitude while staying well under human revert-then-close time.
+  //
+  // Residual scope (VERIFIED, PR #155): the only within-window false-fire is a
+  // manual "Revert File" then close. An UNDO/REDO back to clean is NOT a
+  // residual — the content-comparison below already neutralises it. VS Code
+  // fires an undo as TWO events: (1) a still-DIRTY content change back to the
+  // disk bytes (this resets `lastDirtyContent` via the `if (isDirty)` branch),
+  // then (2) the dirty->clean flip, whose content now EQUALS `lastDirtyContent`
+  // so it classifies as a SAVE and does not arm. (A close-triggered revert, by
+  // contrast, fires ONE clean event whose content differs from the last dirty
+  // bytes -> arms.) A `TextDocumentChangeReason.Undo/Redo` discriminator was
+  // evaluated and REJECTED: event (2) — the only arming site — carries
+  // reason === undefined (the Undo reason rides event (1), which never reaches
+  // the arming code), so the check would be dead code. Manual "Revert File"
+  // carries reason === undefined and changes content in one event like a close
+  // revert, so no reason check can separate it either; the window is the only
+  // discriminator and its residual is accepted (visible + undoable, never data
+  // loss). Both the two-event undo sequence and the end-to-end "undo then close
+  // does not resurrect" outcome are pinned by tests (see the tracker unit suite
+  // and the preserve-unsaved-on-close e2e).
   const windowMs = opts.windowMs ?? 2500;
   // Causal-pairing window between a text-tab close and the revert it triggered:
   // decideOnAliveRevert restores only when |lastCloseAt - pendingRevert.at| is
