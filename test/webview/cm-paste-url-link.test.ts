@@ -1,9 +1,12 @@
 // @vitest-environment happy-dom
 import { history, undo } from "@codemirror/commands";
+import { ensureSyntaxTree } from "@codemirror/language";
 import { EditorSelection, EditorState } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import { describe, expect, it } from "vitest";
 
+import { validateMarkdownForWrite } from "../../src/markdown/validate-for-write.js";
+import { quollMarkdownLanguage } from "../../src/webview/cm/markdown.js";
 import { detectPasteLinkUrl, pasteUrlOverSelection } from "../../src/webview/cm/paste/index.js";
 
 describe("detectPasteLinkUrl — URL detection boundary", () => {
@@ -56,18 +59,26 @@ describe("detectPasteLinkUrl — URL detection boundary", () => {
 
 // --- Handler ---
 
+// The Markdown language is mounted so the handler's syntax-context guard
+// (`markdownLanguage.isActiveAt` + `syntaxTree` walk) is exercised; ensureSyntaxTree
+// forces a synchronous parse so the tree is populated at paste time.
 function mount(doc: string, anchor: number, head: number, canWrite = true): EditorView {
+  const parent = document.createElement("div");
+  document.body.appendChild(parent);
   const view = new EditorView({
+    parent,
     state: EditorState.create({
       doc,
       selection: EditorSelection.single(anchor, head),
       extensions: [
+        quollMarkdownLanguage(),
         EditorState.readOnly.of(!canWrite),
         history(),
         pasteUrlOverSelection({ canWrite: () => canWrite }),
       ],
     }),
   });
+  ensureSyntaxTree(view.state, view.state.doc.length, 5000);
   return view;
 }
 
@@ -135,6 +146,50 @@ describe("pasteUrlOverSelection — handler", () => {
     const event = firePaste(view, "https://example.com");
     expect(event.defaultPrevented).toBe(true); // committed to wrapping, then swallowed
     expect(view.state.doc.toString()).toBe("select me"); // no insert
+    view.destroy();
+  });
+
+  it("angle-brackets a URL containing parens so it round-trips (Wikipedia case)", () => {
+    const view = mount("Foo", 0, "Foo".length);
+    const url = "https://en.wikipedia.org/wiki/Foo_(bar)";
+    firePaste(view, url);
+    // A bare `](…)` would truncate at the first `)`; angle brackets keep it whole.
+    const doc = view.state.doc.toString();
+    expect(doc).toBe(`[Foo](<${url}>)`);
+    // …and the result is accepted by the host write-gate (never rejected).
+    expect(validateMarkdownForWrite(`${doc}\n`).ok).toBe(true);
+    view.destroy();
+  });
+});
+
+// Syntax-context guard (ported from the built-in pasteURLAsLink): a URL is NEVER
+// wrapped into a non-plain-text construct. Wrapping `](url)` into inline/fenced
+// code, an existing link, etc. would corrupt it, so the handler defers.
+describe("pasteUrlOverSelection — syntax-context guard", () => {
+  it("defers when the selection is inside an inline code span", () => {
+    const view = mount("`code`", 1, 5); // select "code" between the backticks
+    firePaste(view, "https://example.com");
+    expect(view.state.doc.toString()).not.toContain("]("); // no wrap injected into code
+    view.destroy();
+  });
+
+  it("defers when the selection is inside a fenced code block", () => {
+    const doc = "```\ncode\n```";
+    const view = mount(doc, doc.indexOf("code"), doc.indexOf("code") + 4);
+    firePaste(view, "https://example.com");
+    expect(view.state.doc.toString()).not.toContain("](");
+    view.destroy();
+  });
+
+  it("defers when the selection is inside an existing link label", () => {
+    const doc = "[label](https://x.com)";
+    const view = mount(doc, 1, 6); // select "label"
+    firePaste(view, "https://example.com");
+    // The doc starts with exactly one `](` (the existing link). A wrap regression
+    // would inject a SECOND one; a plain-paste defer leaves the count at one
+    // (regardless of whether CM core replaces the selection text).
+    const count = view.state.doc.toString().split("](").length - 1;
+    expect(count).toBe(1);
     view.destroy();
   });
 });

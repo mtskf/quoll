@@ -11,13 +11,25 @@
 // outside Quoll's url-allowlist were accepted. Ours requires the clipboard text
 // to be EXACTLY one http(s) URL token and reuses the shared `isAllowedUrl`
 // hardening (C0/DEL, protocol-relative) so paste stays in lockstep with the
-// write-/render-gates. The insert rides the normal dispatch → updateListener →
-// edit-sync → host write-lock → validateMarkdownForWrite pipeline (no raw write).
+// write-/render-gates. It KEEPS the built-in's syntax-context guard
+// (`selectionIsPlainText`) so a URL is never wrapped into code / an existing
+// link / emphasis / raw HTML. The insert rides the normal dispatch →
+// updateListener → edit-sync → host write-lock → validateMarkdownForWrite
+// pipeline (no raw write).
 
+import { markdownLanguage } from "@codemirror/lang-markdown";
+import { syntaxTree } from "@codemirror/language";
 import { type Extension, Prec } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 
-import { isAllowedUrl } from "../../../markdown/url-allowlist.js";
+import { type AllowlistedUrl, isAllowedUrl } from "../../../markdown/url-allowlist.js";
+
+// Ported verbatim from @codemirror/lang-markdown's built-in pasteURLAsLink: Lezer
+// node names that mean the selection is NOT plain Markdown text, so wrapping a link
+// into it would corrupt the construct (code, an existing link/image, emphasis
+// marks, raw HTML, an autolink URL, …). Matched case-insensitively.
+const nonPlainText =
+  /code|horizontalrule|html|link|comment|processing|escape|entity|image|mark|url/i;
 
 /**
  * The clipboard text is a wrappable link target iff, after trimming, it is a
@@ -30,7 +42,7 @@ import { isAllowedUrl } from "../../../markdown/url-allowlist.js";
  * owns the actual hardening (C0/DEL bytes, protocol-relative `//host`), so we do
  * not re-derive an ad-hoc URL validator here.
  */
-export function detectPasteLinkUrl(clipboardText: string): string | null {
+export function detectPasteLinkUrl(clipboardText: string): AllowlistedUrl | null {
   const trimmed = clipboardText.trim();
   // Exactly one token: any interior whitespace/newline means it is not a bare URL.
   if (trimmed === "" || /\s/.test(trimmed)) {
@@ -45,20 +57,64 @@ export function detectPasteLinkUrl(clipboardText: string): string | null {
   return trimmed;
 }
 
+/**
+ * Port of the built-in pasteURLAsLink guard: the wrap is only safe when the
+ * selection sits in ACTIVE plain Markdown text. Refuses when the Markdown
+ * language is not active at the anchor, or when the selected range crosses a
+ * node boundary or sits inside a non-plain-text construct (code, an existing
+ * link/image, emphasis marks, raw HTML, an autolink). Without this a URL pasted
+ * over a selection inside inline/fenced code, a link, or emphasis would inject
+ * `[..](url)` into that construct.
+ */
+function selectionIsPlainText(view: EditorView, from: number, to: number): boolean {
+  if (!markdownLanguage.isActiveAt(view.state, from, 1)) {
+    return false;
+  }
+  let crossesNode = false;
+  syntaxTree(view.state).iterate({
+    from,
+    to,
+    enter: (node) => {
+      if (node.from > from || nonPlainText.test(node.name)) {
+        crossesNode = true;
+      }
+    },
+    leave: (node) => {
+      if (node.to < to) {
+        crossesNode = true;
+      }
+    },
+  });
+  return !crossesNode;
+}
+
+/**
+ * Render the URL as a CommonMark link destination. A bare destination closes at
+ * the first UNBALANCED `)`, so a URL like `…/Foo_(bar)` (common on Wikipedia)
+ * would truncate to `…/Foo_(bar` and leak `)` as text. Angle-bracket
+ * destinations read literally up to `>`, so wrap the URL in `<…>` when it
+ * carries a paren. Guarded on the absence of `<`/`>` — bytes that never appear
+ * unencoded in a real http(s) URL and that would themselves break the angle
+ * form; such a value falls back to the bare destination.
+ */
+function linkDestination(url: string): string {
+  return /[()]/.test(url) && !/[<>]/.test(url) ? `<${url}>` : url;
+}
+
 // TODO(dedupe): unify with the Cmd+K link-wrap helper from
 // feat/inline-formatting-shortcuts once merged.
 /**
  * Wrap the main selection as `[selection](url)` in ONE dispatch (a single undo
  * step). Two point-insertions bracket the selected text so the label is
  * preserved verbatim and CM maps the selection through the changes. The caller
- * guarantees a non-empty single-line main range.
+ * guarantees a non-empty single-line main range in plain Markdown text.
  */
-function insertLinkOverSelection(view: EditorView, url: string): void {
+function insertLinkOverSelection(view: EditorView, url: AllowlistedUrl): void {
   const { from, to } = view.state.selection.main;
   view.dispatch({
     changes: [
       { from, insert: "[" },
-      { from: to, insert: `](${url})` },
+      { from: to, insert: `](${linkDestination(url)})` },
     ],
     userEvent: "input.paste",
     scrollIntoView: true,
@@ -88,6 +144,11 @@ export function pasteUrlOverSelection(opts: { canWrite: () => boolean }): Extens
         const url = detectPasteLinkUrl(text);
         if (url === null) {
           return false; // not a bare http(s) URL → normal paste
+        }
+        // Don't wrap inside code / an existing link / emphasis / raw HTML —
+        // mirrors the built-in pasteURLAsLink guard we replaced.
+        if (!selectionIsPlainText(view, main.from, main.to)) {
+          return false;
         }
         // preventDefault ONLY here, AFTER we commit to wrapping (mirrors
         // htmlTablePaste): moving it earlier would swallow non-URL pastes.
