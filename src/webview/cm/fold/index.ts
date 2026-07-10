@@ -674,8 +674,8 @@ export const headingRhythmFoldGutterLineClass = defineFoldGutterLineClass({
 
 /** Chevron styling + placement. The reading-column GROUP centring lives in
  *  cm/theme.ts; here we (a) horizontally slide the chevron toward the text (see
- *  `.cm-foldGutter` `left` below — unchanged from #198) and (b) vertically centre
- *  the chevron on its foldable line's FIRST text row.
+ *  `.cm-foldGutter` `left` below — tightening the caret↔content gap to ~2/3) and
+ *  (b) vertically centre the chevron on its foldable line's FIRST text row.
  *
  *  Alignment (#215 regression fix — design VERIFIED in the real-browser harness;
  *  happy-dom has no layout so this cannot be asserted in a unit test):
@@ -706,9 +706,16 @@ export const headingRhythmFoldGutterLineClass = defineFoldGutterLineClass({
 const quollFoldTheme = EditorView.theme({
   ".cm-foldGutter": {
     position: "relative",
-    // Slid right toward the reading column (#198 baseline was 1.875rem) so the
-    // chevron sits close to the content column without overlapping its glyphs.
-    left: "2rem",
+    // Slid right toward the reading column so the chevron sits close to the
+    // content column without overlapping its glyphs. History: #198 nudged this
+    // to 2rem (from a 1.875rem baseline); this value tightens the caret↔content
+    // gap to ~2/3 — measured in the real-browser preview harness (happy-dom has
+    // no layout), the chevron→first-glyph gap goes 13.5px→9px, and the chevron's
+    // right edge still stops ~3px short of the reading-column edge (no overlap,
+    // stays clickable) in both collapsed and expanded states. The centred
+    // reading column is unaffected — this only shifts the chevron within the
+    // gutter, left of the column, which does not move.
+    left: "2.35rem",
   },
   ".cm-foldGutter .quoll-fold-marker": {
     display: "flex",
