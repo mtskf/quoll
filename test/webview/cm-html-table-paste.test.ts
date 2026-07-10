@@ -144,6 +144,26 @@ describe("htmlTableToGfm — mixed-content fragments", () => {
     const html = "<meta charset='utf-8'>\n  <table><tr><td>A</td><td>B</td></tr></table>\n  ";
     expect(htmlTableToGfm(html)).toBe("| A | B |\n| --- | --- |");
   });
+
+  it("still converts when SKIP_TAGS siblings (<style>/<script>) carry non-empty text", () => {
+    // Pins the SKIP_TAGS skip branch of hasTextOutsideTable: <style>/<script>
+    // text must NOT be treated as prose (else a browser-wrapped copy would defer).
+    // The <meta> case above is a void element and would pass even without the
+    // skip — this uses text-bearing SKIP_TAGS to actually exercise it.
+    const html =
+      "<style>.x{color:red}</style><table><tr><td>A</td><td>B</td></tr></table>" +
+      "<script>var y=1;</script>";
+    expect(htmlTableToGfm(html)).toBe("| A | B |\n| --- | --- |");
+  });
+
+  it("still converts when a text-less sibling element (<img>/<hr>) sits beside the table", () => {
+    // Deliberate text-only boundary (Codex review): a media/void sibling does NOT
+    // defer. Deferring would be strictly worse — plain-text paste preserves the
+    // <img> no better AND loses the table structure. Pin the intended behaviour.
+    const html =
+      "<table><tr><td>A</td><td>B</td></tr></table><img src='https://example.com/x.png'><hr>";
+    expect(htmlTableToGfm(html)).toBe("| A | B |\n| --- | --- |");
+  });
 });
 
 describe("htmlTableToGfm — colspan / rowspan spread", () => {

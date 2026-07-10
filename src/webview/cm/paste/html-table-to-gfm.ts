@@ -102,7 +102,16 @@ function hasAncestorTable(el: Element): boolean {
  *  table's own subtree and `SKIP_TAGS` (whose text never belongs in a cell and
  *  is likewise not "prose"). `<meta>`/comments contribute no text node, so a
  *  normal single-table clipboard copy — which the browser wraps in
- *  `<meta>`/`<style>` — is NOT flagged. */
+ *  `<meta>`/`<style>` — is NOT flagged.
+ *
+ *  Scope is deliberately TEXT-only (Codex review): a text-less sibling element
+ *  (`<img>`, `<hr>`, media, form controls) does NOT flag the fragment. Deferring
+ *  on those would be strictly worse — plain-text paste (the fallback) preserves
+ *  none of them either, and it would additionally lose the table's structure by
+ *  pasting tab-separated text. Text is exactly the content the fallback DOES
+ *  preserve, so it is the correct boundary for "defer instead of convert". (A
+ *  clipboard that carries a real image FILE alongside a table is a separate,
+ *  deliberate arbitration: the Prec.high table handler wins — see html-table-paste.ts.) */
 function hasTextOutsideTable(body: Element, table: Element): boolean {
   const stack: Node[] = [];
   const seed = body.childNodes;
