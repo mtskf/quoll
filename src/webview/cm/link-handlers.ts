@@ -50,6 +50,41 @@ function schemeOf(url: string): string | null {
   return match ? match[1] : null;
 }
 
+/** True when `decoded` is a schemeless, NON-ABSOLUTE destination whose path
+ *  (after stripping a trailing #fragment) ends in `.md` (case-insensitive) —
+ *  i.e. a relative in-workspace Markdown link eligible for the `open-link`
+ *  page-to-page path. Caller has already confirmed `schemeOf(decoded) === null`.
+ *  The absolute-path reject stops an absolute link from being CONSUMED here
+ *  (which would swallow the caret move) even though the host would drop it. The
+ *  host (`handleOpenLink`) re-derives + re-validates all of this — this is the
+ *  webview-side half of the defense-in-depth gate. */
+function relativeMarkdownTarget(decoded: string): boolean {
+  // Reject absolute `/…` and ANY backslash (markdown paths use `/`; a `\` is a
+  // separator under real Uri.joinPath but not the test stub — reject it so the
+  // host containment check is separator-agnostic). Mirrors handleOpenLink.
+  if (decoded.startsWith("/") || decoded.includes("\\")) {
+    return false;
+  }
+  const hashIdx = decoded.indexOf("#");
+  const pathPart = hashIdx >= 0 ? decoded.slice(0, hashIdx) : decoded;
+  return pathPart.length > 0 && /\.md$/i.test(pathPart);
+}
+
+/** Post a webview→host message, swallowing a transport throw (panel dispose
+ *  mid-click, structured-clone edge cases) under the [quoll] grep prefix and
+ *  returning false so the click falls through to a caret move — the same
+ *  fall-through open-external already relies on (intentional parity; not a new
+ *  risk). Shared by the open-external and open-link branches of tryOpenLinkAt. */
+function postToHost(host: LinkOpenHost, message: WebviewToHost): boolean {
+  try {
+    host.postMessage(message);
+  } catch (err) {
+    console.error("[quoll] postMessage(link-open) failed", err);
+    return false;
+  }
+  return true;
+}
+
 function selectionIntersects(state: EditorState, from: number, to: number): boolean {
   // Boundary-inclusive — mirror of linkReveal's intersectsAnySelection so
   // the click contract is symmetric with the visual REVEAL state. A
@@ -63,9 +98,11 @@ function selectionIntersects(state: EditorState, from: number, to: number): bool
   return false;
 }
 
-/** Try to open the Link at `pos`. Returns true ONLY when an open-external
- *  message was posted (caller should preventDefault on the originating
- *  event). Returns false when:
+/** Try to open the Link at `pos`. Returns true ONLY when a message was
+ *  posted to the host — either an `open-external` (http/https/mailto) OR an
+ *  `open-link` (a schemeless, non-absolute relative `.md` link, the phase-1
+ *  page-to-page path). The caller should preventDefault on the originating
+ *  event. Returns false when:
  *    - the position is not inside a Link node, or
  *    - the Link has no URL child (reference-form), or
  *    - the CURRENT selection already intersects the Link (review fix #4:
@@ -76,9 +113,12 @@ function selectionIntersects(state: EditorState, from: number, to: number): bool
  *      instead of posting + getting silently rejected at the host shape
  *      check), or
  *    - the URL is non-allowlisted (post-decode), or
- *    - the URL is allowlisted but not launchable (relative / fragment).
- *  The security invariant is "post-only-when-safe-and-launchable" — the
- *  return value is a caller-convenience signal for preventDefault. */
+ *    - the URL is allowlisted but not launchable AND not a relative `.md`
+ *      target (an unknown scheme, a fragment, an absolute path, or a
+ *      schemeless non-.md relative → falls through to a caret move).
+ *  The security invariant is "post-only-when-safe-and-launchable-or-a-
+ *  relative-.md-target" — the return value is a caller-convenience signal
+ *  for preventDefault. */
 export function tryOpenLinkAt(state: EditorState, pos: number, host: LinkOpenHost): boolean {
   const tree = syntaxTree(state);
   let node = tree.resolveInner(pos, 0);
@@ -124,25 +164,20 @@ export function tryOpenLinkAt(state: EditorState, pos: number, host: LinkOpenHos
     return false;
   }
   const scheme = schemeOf(decoded);
-  if (scheme === null || !OPENABLE_SCHEMES.has(scheme)) {
-    return false;
+  if (scheme !== null) {
+    // Scheme-bearing: only http/https/mailto are launchable externally.
+    if (!OPENABLE_SCHEMES.has(scheme)) {
+      return false;
+    }
+    return postToHost(host, { protocol: PROTOCOL_VERSION, type: "open-external", href: decoded });
   }
-  try {
-    host.postMessage({
-      protocol: PROTOCOL_VERSION,
-      type: "open-external",
-      href: decoded,
-    });
-  } catch (err) {
-    // Symmetric with src/webview/editor.ts postEditMessage's try/catch:
-    // postMessage can throw on transport detach (panel dispose mid-click,
-    // structured-clone edge cases). Log under the [quoll] grep prefix and
-    // return false so the click falls through to caret-move — the only
-    // signal the user has that the open did not happen.
-    console.error("[quoll] postMessage(open-external) failed", err);
-    return false;
+  // Schemeless: a relative `.md` link opens IN-EDITOR via the host (phase-1
+  // page-to-page). Everything else schemeless (fragments, absolute paths,
+  // non-.md relatives) falls through to a caret move.
+  if (relativeMarkdownTarget(decoded)) {
+    return postToHost(host, { protocol: PROTOCOL_VERSION, type: "open-link", href: decoded });
   }
-  return true;
+  return false;
 }
 
 // --- Mousedown wiring ---
