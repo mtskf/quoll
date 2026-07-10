@@ -47,6 +47,7 @@ import {
   Selection,
   TabInputCustom,
   TabInputText,
+  TabInputTextDiff,
   Uri,
   ViewColumn,
   WorkspaceEdit,
@@ -92,8 +93,10 @@ import {
 import { handleImageWrite } from "./image-write-service.js";
 import { toLintDiagnostics } from "./lint-diagnostics.js";
 import { LintMirror } from "./lint-mirror.js";
+import { minimalEditSpan } from "./minimal-edit.js";
 import { openInQuollEditor } from "./open-in-quoll.js";
 import { openInTextEditor } from "./reopen-text-editor.js";
+import { createRevertRescueTracker } from "./revert-rescue.js";
 import {
   decideRevealInvariant,
   planRevealTabClose,
@@ -269,6 +272,19 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
     // editor active); applied on the activation edge to whichever surface the
     // user switches INTO. null until the first report — nothing to carry yet.
     let lastKnownCaret: Caret | null = null;
+
+    // Revert-rescue: VS Code core reverts the shared working copy when THIS
+    // custom editor tab is closed via "Don't Save", even while a built-in text
+    // editor for the same resource stays open (CustomEditorInput never matches
+    // the text editor's FileEditorInput, so core thinks we are the last holder
+    // of the dirty state — see the dispose handler below + docs/LEARNING.md).
+    // CustomTextEditorProvider has no hook to PREVENT that revert, so we REPAIR
+    // it on dispose. Seed with the current snapshot: the document can be dirty
+    // BEFORE Quoll opens (the reported bug), and onDidChangeTextDocument never
+    // fires for that pre-existing dirty content. Raw getText() (not
+    // canonicalised) — VS Code owns this document's EOL and we read+write it.
+    const revertRescue = createRevertRescueTracker();
+    revertRescue.observe({ isDirty: document.isDirty, content: document.getText(), at: Date.now() });
     // Active-edge tracker for the panel. onDidChangeViewState fires on
     // visible/active/focus changes; the caret apply must fire ONCE per
     // inactive→active transition, not on every event. Seeded from the panel's
@@ -528,6 +544,13 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
         if (e.document.uri.toString() !== document.uri.toString()) {
           return;
         }
+        // Feed the revert-rescue tracker every transition (see the dispose
+        // handler). Raw getText() — no per-keystroke canonicalise.
+        revertRescue.observe({
+          isDirty: e.document.isDirty,
+          content: e.document.getText(),
+          at: Date.now(),
+        });
         // Lock-held change events go to the reducer IMMEDIATELY, unchanged: the
         // host's OWN in-flight apply fires its change event under the lock, and
         // an external edit racing the apply→settle window also arrives locked.
@@ -1185,6 +1208,12 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
     }
 
     webviewPanel.onDidDispose(() => {
+      // Snapshot the write lock BEFORE the disposed transition clears it — the
+      // revert-rescue (below) must skip when a reducer applyEdit is in flight
+      // (else it races that apply's landing with a stale span = wrong-offset
+      // corruption). The `disposed` transition sets pendingApplyBaseVersion to
+      // null, so this MUST be read before the dispatch below.
+      const writeInFlightAtDispose = isWriteLockHeld(state);
       // Set the local guard FIRST (arms the executor / listener guards),
       // then drive the core's `disposed` transition (clears the write lock
       // so any late settlement is a no-op), then tear down.
@@ -1211,6 +1240,63 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
         console.error("[quoll] error during disposables teardown", err);
       } finally {
         disposables.length = 0;
+      }
+      // Revert-rescue (see the tracker construction above). If closing THIS
+      // custom editor made VS Code revert the shared working copy while another
+      // editor still holds the document, re-apply the dirty bytes so the still-
+      // open editor does not silently lose them. Runs AFTER teardown: the edit
+      // targets the TextDocument (not the disposed webview), and the surviving
+      // editor keeps the document alive so applyEdit is not a no-op. The change
+      // event this applyEdit fires cannot re-enter the tracker/reducer — both
+      // subscriptions are disposed above and the `disposed` guard drops any late
+      // callback.
+      const uriString = document.uri.toString();
+      const hasSurvivingEditor = window.tabGroups.all.some((group) =>
+        group.tabs.some(
+          (tab) =>
+            (tab.input instanceof TabInputText && tab.input.uri.toString() === uriString) ||
+            (tab.input instanceof TabInputTextDiff && tab.input.modified.toString() === uriString)
+        )
+      );
+      const rescue = revertRescue.decideOnDispose({
+        writeInFlight: writeInFlightAtDispose,
+        hasSurvivingEditor,
+        canWrite: canWriteNow(),
+        currentContent: document.getText(),
+        disposedAt: Date.now(),
+      });
+      if (rescue.rescue) {
+        const span = minimalEditSpan(document.getText(), rescue.content);
+        const edit = new WorkspaceEdit();
+        edit.replace(
+          document.uri,
+          new Range(document.positionAt(span.from), document.positionAt(span.to)),
+          span.insert
+        );
+        void workspace.applyEdit(edit).then(
+          (ok) => {
+            if (ok) {
+              void window
+                .showInformationMessage(
+                  "Quoll kept your unsaved changes — they are still open in the text editor."
+                )
+                .then(undefined, (err: unknown) =>
+                  console.error("[quoll] revert-rescue info toast rejected", err)
+                );
+            } else {
+              // Data-loss context with no editor left to retry: surface it
+              // (mirrors host-session-core's failed-save showError-survives-dispose).
+              showError("Quoll could not restore your unsaved changes after closing the editor.");
+            }
+          },
+          (err: unknown) => {
+            showError(
+              `Quoll could not restore your unsaved changes: ${
+                err instanceof Error ? err.message : String(err)
+              }`
+            );
+          }
+        );
       }
       if (QUOLL_PERF) {
         perfReport("host:session");

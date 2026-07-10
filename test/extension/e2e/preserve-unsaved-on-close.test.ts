@@ -1,6 +1,15 @@
 import * as assert from "node:assert";
 import * as vscode from "vscode";
-import { cleanupBetweenTests, fixtureUri, getHarness, isDocumentEvent, tick, VIEW_TYPE } from "./harness";
+import { PROTOCOL_VERSION } from "./constants";
+import {
+  cleanupBetweenTests,
+  fixtureUri,
+  getHarness,
+  isDocumentEvent,
+  openFixtureWithQuoll,
+  tick,
+  VIEW_TYPE,
+} from "./harness";
 
 // Data-loss repro: closing a Quoll custom editor whose shared TextDocument is
 // dirty (and still open in a built-in text editor) must NOT discard the dirty
@@ -50,18 +59,29 @@ describe("preserve-unsaved-on-close", function () {
   it("sole editor: closing Quoll (Don't Save) honours the discard (no rescue)", async () => {
     const harness = await getHarness();
     const uri = fixtureUri("sample.md");
+    const original = Buffer.from(await vscode.workspace.fs.readFile(uri)).toString("utf8");
 
-    const doc = await vscode.workspace.openTextDocument(uri);
-    const original = doc.getText();
-    const editor = await vscode.window.showTextDocument(doc, { viewColumn: vscode.ViewColumn.One });
-    await editor.edit((eb) => eb.insert(new vscode.Position(0, 0), "DIRTY_PREFIX "));
-    assert.ok(doc.isDirty, "precondition: dirty");
+    // Open ONLY in Quoll (no text editor holds the doc), then dirty it via a
+    // webview edit through the host write path — so Quoll is the sole editor.
+    await openFixtureWithQuoll("sample.md");
+    const seed = await harness.waitForEvent(isDocumentEvent, 8000);
+    const panel = harness.activePanel;
+    assert.ok(panel, "no active Quoll panel");
 
-    // Reopen-with-Quoll in the SAME column -> Quoll is the sole editor.
-    await vscode.commands.executeCommand("vscode.openWith", uri, VIEW_TYPE, vscode.ViewColumn.One);
-    await harness.waitForEvent(isDocumentEvent, 8000);
-    await tick(400);
+    panel.simulateInbound({
+      protocol: PROTOCOL_VERSION,
+      type: "edit",
+      content: `SOLE_DIRTY ${original}`,
+      baseDocVersion: seed.message.docVersion,
+    });
+    const doc = panel.document;
+    const dirtyDeadline = Date.now() + 3000;
+    while (!doc.isDirty && Date.now() < dirtyDeadline) {
+      await tick(30);
+    }
+    assert.ok(doc.isDirty, "precondition: Quoll-only doc is dirty");
 
+    // "Don't Save" close of the sole Quoll editor.
     await vscode.commands.executeCommand("workbench.action.revertAndCloseActiveEditor");
     await tick(800);
 
