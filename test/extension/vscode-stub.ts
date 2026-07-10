@@ -36,6 +36,15 @@ export const Uri = {
   },
 };
 
+// Minimal RelativePattern: helpers under test only construct it (base + glob);
+// the real matching happens inside VS Code, exercised by e2e.
+export class RelativePattern {
+  constructor(
+    public readonly base: unknown,
+    public readonly pattern: string
+  ) {}
+}
+
 // `extension.ts` module-load surface: extension.activate.test.ts asserts
 // both Production and Test branches by loading the module under vitest's
 // vscode alias. The activate body references commands/window/workspace

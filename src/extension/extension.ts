@@ -1,6 +1,7 @@
 import { commands, type ExtensionContext, ExtensionMode, window, workspace } from "vscode";
 import { canEditWith } from "./can-edit-with.js";
 import { QuollEditorPanel } from "./quoll-editor-panel.js";
+import { showSafely } from "./show-safely.js";
 import { __clearSurfaceMemoryForTest } from "./surface-memory.js";
 import { registerSurfaceRestoreWatcher } from "./surface-restore-watcher.js";
 import { registerToggleEditor } from "./toggle-editor.js";
@@ -31,24 +32,20 @@ export async function activate(context: ExtensionContext) {
       if (!editor) {
         // Silent no-op left users wondering whether the keybinding /
         // palette invocation registered at all. Tell them what to do.
-        void window
-          .showInformationMessage("Open a Markdown file in the editor first to use Quoll.")
-          .then(undefined, (err: unknown) => {
-            console.error("[quoll] showInformationMessage rejected", err);
-          });
+        showSafely(
+          window.showInformationMessage("Open a Markdown file in the editor first to use Quoll."),
+          "showInformationMessage"
+        );
         return;
       }
       const decision = canEditWith(editor.document, (scheme) =>
         workspace.fs.isWritableFileSystem(scheme)
       );
       if (!decision.ok) {
-        // showWarningMessage returns a Thenable that can reject (host
-        // detached, dispatcher torn down). QuollEditorPanel's showError
-        // helper closes the same asymmetry; mirror it here so activation
-        // code does not silently swallow rejection.
-        void window.showWarningMessage(decision.reason).then(undefined, (err: unknown) => {
-          console.error("[quoll] showWarningMessage rejected", err);
-        });
+        // showWarningMessage's Thenable can reject (host detached, dispatcher
+        // torn down); showSafely logs instead of letting it become an
+        // unhandled rejection. See show-safely.ts for the shared rationale.
+        showSafely(window.showWarningMessage(decision.reason), "showWarningMessage");
         return;
       }
       try {
@@ -63,13 +60,12 @@ export async function activate(context: ExtensionContext) {
         // context. Catch and re-surface with a Quoll-prefixed message so
         // triage can attribute the failure.
         console.error("[quoll] vscode.openWith rejected", err);
-        void window
-          .showErrorMessage(
+        showSafely(
+          window.showErrorMessage(
             `Quoll could not open this file: ${err instanceof Error ? err.message : String(err)}`
-          )
-          .then(undefined, (err: unknown) => {
-            console.error("[quoll] showErrorMessage rejected", err);
-          });
+          ),
+          "showErrorMessage"
+        );
       }
     })
   );

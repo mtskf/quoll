@@ -16,6 +16,7 @@ import {
   window,
   workspace,
 } from "vscode";
+import { showSafely } from "./show-safely.js";
 
 /** Safety gate: close the source tab only when there is one AND the document is
  *  provably clean — either it was already clean, or it was dirty and the save
@@ -175,11 +176,12 @@ export async function finalizeSurfaceSwap(
         console.warn(
           "[quoll] surface-swap: document still dirty; leaving both surfaces open to avoid a revert"
         );
-        void window
-          .showWarningMessage(
+        showSafely(
+          window.showWarningMessage(
             "Quoll: couldn't save the document, so both editors stay open. Save manually, then try again."
-          )
-          .then(undefined, (e: unknown) => console.error("[quoll] showWarningMessage rejected", e));
+          ),
+          "showWarningMessage"
+        );
       }
       return;
     }
