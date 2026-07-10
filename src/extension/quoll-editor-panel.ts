@@ -731,7 +731,7 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
     // this doc) for the Claude Code handoff. That is benign: the handoff save()s
     // the doc first, so no dirty→clean revert arms pendingRevert, and
     // decideOnAliveRevert returns rescue:false with no armed revert (pinned by
-    // the "close with NO revert armed" unit case in Task 1).
+    // the "close with NO revert armed" case in test/extension/revert-rescue.test.ts).
     window.tabGroups.onDidChangeTabs(
       (e) => {
         if (disposed) {

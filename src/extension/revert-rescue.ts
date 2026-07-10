@@ -74,21 +74,31 @@ export function createRevertRescueTracker(
   // bias LONG. The measured close-revert->dispose gap is ~9 ms; 2500 ms clears
   // it by orders of magnitude while staying well under human revert-then-close time.
   const windowMs = opts.windowMs ?? 2500;
-  // Causal-pairing window between a text-tab close and the revert it triggered.
-  // The two failure modes are ASYMMETRIC (per revert-rescue's existing
-  // "bias LONG" note): too TIGHT → a genuine close-revert whose two events
-  // straddle the window is missed → the ORIGINAL silent data loss (bad); too
-  // LOOSE → a manual "Revert File" then an unrelated close within the window
-  // falsely restores → a benign, visible, UNDOABLE re-dirty (fine). So bias
-  // toward the longer side, bounded ABOVE only by deliberate two-action human
-  // spacing (moving+clicking twice is ≫ 1 s, far above any close-with-discard,
-  // whose revert-change-event and onDidChangeTabs both fire inside one
-  // synchronous VS Code close operation). The concrete default is CONFIRMED
-  // against the real revert↔onDidChangeTabs gap measured in the Task 3 E2E
-  // (NOT the forward fix's revert→dispose gap, a different event pair). 250 ms
-  // is the starting default; Task 3 widens it if the measured gap + full-suite
-  // load margin warrants, staying well under human two-action spacing.
-  const pairingWindowMs = opts.pairingWindowMs ?? 250;
+  // Causal-pairing window between a text-tab close and the revert it triggered:
+  // decideOnAliveRevert restores only when |lastCloseAt - pendingRevert.at| is
+  // within this window. A genuine close-with-discard fires its revert-change
+  // event and onDidChangeTabs inside ONE synchronous VS Code close operation —
+  // measured at 0–1 ms apart (revert→dispose in the forward path is ~9 ms; both
+  // are effectively instantaneous), and load-insensitive since they are event
+  // dispatches, not CPU work. The window must be:
+  //   - comfortably ABOVE that gap (missing a real pair = the ORIGINAL silent
+  //     data loss — the worse failure), and
+  //   - BELOW the time it takes a human to perceive an UNRELATED same-doc tab
+  //     close and then invoke a manual "Revert File" (perceive + command
+  //     invocation ≫ 250 ms). Otherwise a lingering close token pairs with a
+  //     later manual revert and resurrects content the user explicitly discarded
+  //     — the exact "external edit wins" violation this guard exists to prevent.
+  // 120 ms sits between those bounds (≈10× the ~9 ms worst observed close-side
+  // gap, well under human perceive-then-invoke latency). Time is the only
+  // discriminator available: a genuine close-first revert arrives ~1 ms after
+  // its close, a manual revert 100s of ms after an unrelated one — so this is a
+  // window, not an ordering rule (staying robust to VS Code firing the two
+  // events in either order; the alive path handles both). RESIDUAL (accepted,
+  // same benign class as the dispose-path window above): a manual revert within
+  // 120 ms of an unrelated same-doc close still false-pairs — but that timing is
+  // below human perception+action latency, so it is not reachable in practice,
+  // and the outcome is a visible, UNDOABLE re-dirty, never data loss.
+  const pairingWindowMs = opts.pairingWindowMs ?? 120;
   let lastDirtyContent: string | null = null;
   let pendingRevert: { content: string; at: number } | null = null;
   let lastCloseAt: number | null = null;

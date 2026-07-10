@@ -163,6 +163,32 @@ describe("revert-rescue tracker", () => {
       expect(t.decideOnAliveRevert(aliveCtx({ at: 300 }))).toEqual({ rescue: false });
     });
 
+    // Codex #2 (the reverse order of Codex #1, exercising the SHIPPED default
+    // pairingWindowMs): an unrelated same-doc close, THEN a human-timed manual
+    // Revert File must NOT pair — the lingering close token cannot resurrect a
+    // later manual revert. 200 ms is below any real human perceive-then-invoke
+    // latency yet ≥ the 120 ms default, so it is firmly outside the window.
+    it("does NOT resurrect a later manual revert via an EARLIER unrelated close (default window)", () => {
+      const t = createRevertRescueTracker(); // shipped default pairingWindowMs
+      t.observe({ isDirty: true, content: "DIRTY", at: 0 });
+      t.observeTextTabClose(0); // unrelated close first
+      t.observe({ isDirty: false, content: "DISK", at: 200 }); // manual revert 200ms later
+      expect(t.decideOnAliveRevert(aliveCtx({ at: 200 }))).toEqual({ rescue: false });
+    });
+
+    // Guard the OTHER side of the default: a genuine close-with-discard whose
+    // close and revert are ~1 ms apart still pairs under the shipped default.
+    it("DOES rescue a genuine close-first pair ~1ms apart (default window)", () => {
+      const t = createRevertRescueTracker(); // shipped default pairingWindowMs
+      t.observe({ isDirty: true, content: "DIRTY", at: 0 });
+      t.observeTextTabClose(1000); // close
+      t.observe({ isDirty: false, content: "DISK", at: 1001 }); // revert 1ms later (paired)
+      expect(t.decideOnAliveRevert(aliveCtx({ at: 1001 }))).toEqual({
+        rescue: true,
+        content: "DIRTY",
+      });
+    });
+
     it("does NOT rescue a close with NO revert armed (nothing to restore)", () => {
       const t = createRevertRescueTracker({ pairingWindowMs: 250 });
       t.observe({ isDirty: true, content: "DIRTY", at: 0 });
