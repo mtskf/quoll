@@ -209,12 +209,14 @@ describe("two-panel-config-caret", function () {
       type: "caret-report",
       line: 1,
       character: 1,
+      selectedChars: 0,
     });
     b.panel.simulateInbound({
       protocol: PROTOCOL_VERSION,
       type: "caret-report",
       line: 3,
       character: 2,
+      selectedChars: 0,
     });
     await tick(50);
 

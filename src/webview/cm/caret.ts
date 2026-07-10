@@ -20,6 +20,16 @@ export function selectionToCaret(state: EditorState): Caret {
   return { line: line.number - 1, character: head - line.from };
 }
 
+/** Character count of the PRIMARY (main) selection — `to - from` in UTF-16
+ *  code units, matching `selectionToCaret`'s character semantics. 0 when the
+ *  selection is collapsed. Feeds the status bar's `(N selected)` readout via
+ *  the caret-report wire; primary selection only (multi-cursor sum is a
+ *  follow-up). Pure so it unit-tests in the node environment. */
+export function selectionCharCount(state: EditorState): number {
+  const main = state.selection.main;
+  return main.to - main.from;
+}
+
 /** Convert a 0-based caret to a CodeMirror document offset, clamped to the
  *  live document's bounds. Line clamps to [0, lines-1]; character clamps to
  *  [0, lineLength]. The webview re-clamps here because the host's caret was

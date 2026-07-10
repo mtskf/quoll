@@ -15,6 +15,19 @@ describe("formatCaretPosition", () => {
     expect(formatCaretPosition({ line: 0, character: 0 })).toBe("Ln 1, Col 1");
     expect(formatCaretPosition({ line: 4, character: 9 })).toBe("Ln 5, Col 10");
   });
+
+  it("omits the selection suffix when selectedChars is 0 / absent", () => {
+    expect(formatCaretPosition({ line: 4, character: 9 }, 0)).toBe("Ln 5, Col 10");
+    // A negative count (defensive) is treated as no selection.
+    expect(formatCaretPosition({ line: 4, character: 9 }, -1)).toBe("Ln 5, Col 10");
+  });
+
+  it("appends ` (N selected)` for a non-empty primary selection", () => {
+    expect(formatCaretPosition({ line: 28, character: 1551 }, 147)).toBe(
+      "Ln 29, Col 1552 (147 selected)"
+    );
+    expect(formatCaretPosition({ line: 0, character: 0 }, 1)).toBe("Ln 1, Col 1 (1 selected)");
+  });
 });
 
 describe("formatEol", () => {

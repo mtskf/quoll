@@ -80,6 +80,7 @@ export type CaretReportMessageShape = EnvelopeShape & {
   type: "caret-report";
   line: number;
   character: number;
+  selectedChars: number;
 };
 
 export type SwitchToTextMessageShape = EnvelopeShape & {

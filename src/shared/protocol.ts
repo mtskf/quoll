@@ -349,11 +349,21 @@ export function buildSwitchToTextMessage(): SwitchToTextMessage {
  *  write-lock (like `context-handoff` / `lint-diagnostics`). Coordinates are
  *  bounded by `MAX_LINT_COORDINATE` at the boundary and re-clamped to the
  *  live document before the host applies them. No debounce — the message is
- *  tiny and the host only keeps the most recent value. */
+ *  tiny and the host only keeps the most recent value.
+ *
+ *  `selectedChars` is the character count (UTF-16 code units, matching the
+ *  caret's character semantics) of the PRIMARY selection — `range.to -
+ *  range.from`, 0 when the selection is collapsed. The host appends it to the
+ *  status-bar caret readout (`… (N selected)`); it never positions anything, so
+ *  the Quoll→text caret handoff ignores it. Bounded by `MAX_LINT_COORDINATE`
+ *  at the boundary like the coordinates (any real selection is far smaller —
+ *  a selection cannot exceed the document, itself capped at
+ *  `MAX_CONTENT_LENGTH`). */
 export type CaretReportMessage = Envelope & {
   type: "caret-report";
   line: number;
   character: number;
+  selectedChars: number;
 };
 
 /** One advisory lint finding on the wire, as a 0-based line/character range
@@ -438,6 +448,19 @@ function isCaretCoordinate(value: unknown): value is number {
   // 0-based, non-negative, safe integer, capped — VS Code Position semantics.
   // Reuses MAX_LINT_COORDINATE: both are 0-based line/character caps. The host
   // and webview re-clamp to the live document; this is the boundary bound only.
+  return (
+    typeof value === "number" &&
+    Number.isSafeInteger(value) &&
+    value >= 0 &&
+    value <= MAX_LINT_COORDINATE
+  );
+}
+
+function isSelectionCharCount(value: unknown): value is number {
+  // A primary-selection character count: 0-based (0 = collapsed), non-negative,
+  // safe integer, capped. Numerically identical to isCaretCoordinate but named
+  // for its distinct meaning (a length, not a coordinate). Reuses
+  // MAX_LINT_COORDINATE — any real selection is bounded by the document itself.
   return (
     typeof value === "number" &&
     Number.isSafeInteger(value) &&
@@ -575,7 +598,11 @@ export function isWebviewToHost(value: unknown): value is WebviewToHost {
         Array.from(v.diagnostics).every(isLintDiagnosticWire)
       );
     case "caret-report":
-      return isCaretCoordinate(v.line) && isCaretCoordinate(v.character);
+      return (
+        isCaretCoordinate(v.line) &&
+        isCaretCoordinate(v.character) &&
+        isSelectionCharCount(v.selectedChars)
+      );
     case "switch-to-text":
       return true;
     default:

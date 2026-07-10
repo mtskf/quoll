@@ -280,6 +280,12 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
     // editor active); applied on the activation edge to whichever surface the
     // user switches INTO. null until the first report — nothing to carry yet.
     let lastKnownCaret: Caret | null = null;
+    // Primary-selection character count that rode the last `caret-report`, for
+    // the status bar's `(N selected)` readout. 0 = no selection. Tracked
+    // alongside lastKnownCaret so the active-edge refresh shows the last live
+    // count; reset to 0 by the position-only provenances (text-editor selection,
+    // text→Quoll switch) where a Quoll selection is no longer authoritative.
+    let lastKnownSelectedChars = 0;
 
     // Revert-rescue: VS Code core reverts the shared working copy when THIS
     // custom editor tab is closed via "Don't Save", even while a built-in text
@@ -738,6 +744,11 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
         }
         const active = (e.selections[0] ?? e.textEditor.selection).active;
         lastKnownCaret = { line: active.line, character: active.character };
+        // Position-only provenance: the text editor owns its own selection
+        // readout, so Quoll's `(N selected)` count is no longer authoritative.
+        // Reset so the active-edge refresh does not surface a stale count when
+        // the user switches back into Quoll (it re-reports its live selection).
+        lastKnownSelectedChars = 0;
       },
       undefined,
       disposables
@@ -852,6 +863,7 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
           statusBar.update({
             caret: lastKnownCaret ?? { line: 0, character: 0 },
             eol: document.eol,
+            selectedChars: lastKnownSelectedChars,
           });
           statusBar.show();
         } else {
@@ -1136,7 +1148,9 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
             // Quoll→text handoff read the applied position (the webview suppresses the
             // echo caret-report, so no follow-up report arrives to refresh it).
             lastKnownCaret = switchCaret;
-            statusBar.update({ caret: switchCaret, eol: document.eol });
+            // The switch places a collapsed caret — no selection to carry.
+            lastKnownSelectedChars = 0;
+            statusBar.update({ caret: switchCaret, eol: document.eol, selectedChars: 0 });
             post(buildCaretApplyMessage(switchCaret));
           }
           return;
@@ -1291,10 +1305,16 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
           // context-handoff. The protocol validator already bounded the
           // coordinates; they are re-clamped at apply time.
           lastKnownCaret = { line: raw.line, character: raw.character };
+          lastKnownSelectedChars = raw.selectedChars;
           // Live-refresh the status bar caret readout (harmless while hidden —
           // the item is only visible on the active edge). EOL re-read each time
-          // so a mid-session EOL change surfaces without its own listener.
-          statusBar.update({ caret: lastKnownCaret, eol: document.eol });
+          // so a mid-session EOL change surfaces without its own listener. A
+          // non-empty selection appends ` (N selected)`.
+          statusBar.update({
+            caret: lastKnownCaret,
+            eol: document.eol,
+            selectedChars: lastKnownSelectedChars,
+          });
           return;
         case "switch-to-text": {
           // Pure side channel: reopen THIS document in the built-in text editor.

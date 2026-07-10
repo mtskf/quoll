@@ -818,6 +818,7 @@ const validCaretReport = () =>
     type: "caret-report",
     line: 0,
     character: 0,
+    selectedChars: 0,
   }) as const;
 
 const validCaretApply = () =>
@@ -843,6 +844,13 @@ describe("caret-report (webview→host)", () => {
     ).toBe(true);
   });
 
+  it("accepts a non-empty selectedChars up to the coordinate cap", () => {
+    expect(isWebviewToHost({ ...validCaretReport(), selectedChars: 147 })).toBe(true);
+    expect(isWebviewToHost({ ...validCaretReport(), selectedChars: MAX_LINT_COORDINATE })).toBe(
+      true
+    );
+  });
+
   it.each([
     ["negative line", { line: -1, character: 0 }],
     ["negative character", { line: 0, character: -1 }],
@@ -850,8 +858,18 @@ describe("caret-report (webview→host)", () => {
     ["over-cap line", { line: MAX_LINT_COORDINATE + 1, character: 0 }],
     ["NaN character", { line: 0, character: Number.NaN }],
     ["string line", { line: "0", character: 0 }],
+    ["negative selectedChars", { selectedChars: -1 }],
+    ["fractional selectedChars", { selectedChars: 2.5 }],
+    ["over-cap selectedChars", { selectedChars: MAX_LINT_COORDINATE + 1 }],
+    ["NaN selectedChars", { selectedChars: Number.NaN }],
+    ["string selectedChars", { selectedChars: "0" }],
   ])("rejects %s", (_label, patch) => {
     expect(isWebviewToHost({ ...validCaretReport(), ...patch })).toBe(false);
+  });
+
+  it("rejects a caret-report missing selectedChars", () => {
+    const { selectedChars: _omit, ...withoutCount } = validCaretReport();
+    expect(isWebviewToHost(withoutCount)).toBe(false);
   });
 
   it("is not accepted by the host→webview validator", () => {
