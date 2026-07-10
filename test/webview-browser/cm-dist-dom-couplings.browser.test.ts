@@ -14,6 +14,7 @@ import { blockStyle } from "../../src/webview/cm/decorations/block-style.js";
 import { quollSyntaxReveal } from "../../src/webview/cm/decorations/index.js";
 import { fencedCodeCollapseField } from "../../src/webview/cm/fenced-code/fenced-code-collapse.js";
 import { quollFolding } from "../../src/webview/cm/fold/index.js";
+import { quollTheme } from "../../src/webview/cm/theme.js";
 
 /** Drain CM's bounded measure queue so getComputedStyle()/adjacency read a settled
  *  DOM (same 4-frame idiom as list-hang-layout.browser.test.ts). */
@@ -93,8 +94,12 @@ describe("collapse-bar adjacency has no interposed .cm-widgetBuffer (theme.ts :h
     // No `.cm-widgetBuffer` anywhere in the panel's row stream.
     expect(content.querySelectorAll(".cm-widgetBuffer").length).toBe(0);
 
-    // The actual CSS combinator both footer rules rely on must resolve in the real
-    // DOM (vacuous unless the sibling adjacency above holds).
+    // The exact adjacency combinator both footer rules are written against resolves
+    // against the rendered DOM structure (this checks the STRUCTURE the selector keys
+    // on — the direct-sibling relationship — not that any stylesheet is mounted). It is
+    // non-vacuous: interpose a `.cm-widgetBuffer` or rename the close-fence class and
+    // `:has(+ …)` stops matching. (Test-analyzer confirmed via mutation: renaming
+    // FENCED_CODE_CLOSE_CLASS in block-style.ts reddens this test.)
     expect(bar?.matches(":has(+ .cm-line.quoll-fenced-code-close)")).toBe(true);
   });
 });
@@ -102,10 +107,14 @@ describe("collapse-bar adjacency has no interposed .cm-widgetBuffer (theme.ts :h
 // Fold-gutter couplings (2) + (3) share one mount: a foldable heading document with
 // the real fold extension, which renders `.cm-gutters` + `.cm-foldGutter`.
 describe("fold gutter dist-DOM couplings", () => {
+  // Mount the real base theme (quollTheme) alongside the fold extension, exactly as
+  // editor.ts composes them in production, so coupling (2)'s border-neutralising rule
+  // is actually applied and its effect on the rendered gutter can be measured.
   function mountFold(): EditorView {
     return mount(`# Heading\n\nbody line\nmore body\n`, [
       markdown({ base: markdownLanguage }),
       quollFolding(),
+      quollTheme,
     ]);
   }
 
@@ -113,16 +122,22 @@ describe("fold gutter dist-DOM couplings", () => {
   // The gutter border-neutralising rules win on specificity by mirroring CM's OWN
   // double-class (`.cm-gutters.cm-gutters-before`). If CM stopped emitting the
   // positional `cm-gutters-before` class, the specificity mirror would silently
-  // under-match and the grey gutter band would return.
-  it("(2) CM renders the .cm-gutters.cm-gutters-before double class the theme mirrors", async () => {
+  // under-match and the grey gutter band (CM's 1px right border) would return.
+  it("(2) the .cm-gutters.cm-gutters-before double class is present and the border is neutralised", async () => {
     view = mountFold();
     await settled();
-    const gutters = view.dom.querySelector(".cm-gutters");
+    const gutters = view.dom.querySelector<HTMLElement>(".cm-gutters");
     expect(gutters).not.toBeNull();
-    // Both classes present → the `.cm-gutters.cm-gutters-before` selector matches.
+    // Structural fact the selector keys on: CM emits BOTH classes on the wrapper.
     expect(gutters?.classList.contains("cm-gutters")).toBe(true);
     expect(gutters?.classList.contains("cm-gutters-before")).toBe(true);
     expect(gutters?.matches(".cm-gutters.cm-gutters-before")).toBe(true);
+    // …and Quoll's `.cm-gutters.cm-gutters-before { border-right-width: 0 }` actually
+    // wins and neutralises CM's default 1px separator. Non-vacuous BOTH ways: CM's
+    // baseTheme paints a 1px right border here, so a computed 0px proves our rule
+    // applied; and if a CM bump dropped `cm-gutters-before`, the double-class selector
+    // would under-match and the border would revert to 1px → this assertion goes red.
+    expect(getComputedStyle(gutters as HTMLElement).borderRightWidth).toBe("0px");
   });
 
   // ── Coupling (3): fold/index.ts `.cm-foldGutter { position: relative; left: <rem> }` ──
@@ -140,7 +155,7 @@ describe("fold gutter dist-DOM couplings", () => {
     // Read the declared rule (source of truth) from the injected CM StyleModule sheet.
     const rule = findFoldGutterRule();
     expect(rule.style.position).toBe("relative");
-    const declaredLeft = rule.style.left; // e.g. "2rem" (fold-caret may tighten this)
+    const declaredLeft = rule.style.left; // current shipped value, e.g. "2.35rem" — read live, may be retuned
     expect(declaredLeft).toMatch(/^[\d.]+rem$/);
     const rootPx = parseFloat(getComputedStyle(document.documentElement).fontSize);
     const expectedLeftPx = parseFloat(declaredLeft) * rootPx;
