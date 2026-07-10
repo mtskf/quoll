@@ -43,6 +43,7 @@ import { listIndentKeymap } from "./cm/list/list-indent-keymap.js";
 import { quollMarkdownLanguage } from "./cm/markdown.js";
 import { openExternalSinkFor, quollOpenExternalSink } from "./cm/open-external.js";
 import { quollOutline } from "./cm/outline/index.js";
+import { htmlTablePaste } from "./cm/paste/index.js";
 import { detectLineSeparator, splitToCmText } from "./cm/seed.js";
 import { quollSwitchEditor } from "./cm/switch-editor.js";
 import { tableBlockField, tableSkeletonField } from "./cm/table/index.js";
@@ -581,6 +582,12 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
         // scroll-down and return on scroll-up / at the top. Display-only chrome
         // (no CM change, no write-lock); the two toggle ViewPlugins are untouched.
         quollFloatingToolbarScroll(),
+        // Smart paste: a clipboard `text/html` fragment containing a <table> is
+        // converted to a GFM Markdown table and inserted through the normal edit
+        // pipeline. Prec.high so it arbitrates before imagePaste / pasteURLAsLink /
+        // default paste; on a non-table paste it returns false and defers. Grouped
+        // with imagePaste to keep the paste handlers together.
+        htmlTablePaste({ canWrite: () => opts.getState().canWrite }),
         // Paste/drop image ingestion: capture image files, post image-write, and
         // insert the relative link at a position-mapped anchor on the host's
         // reply. canWrite mirrors edit-sync's readonly hard-drop; the host is the

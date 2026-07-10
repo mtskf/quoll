@@ -115,6 +115,14 @@ const RENDER_ENDPOINTS = [
 // Any OTHER file minting a raw URL is still flagged (default-deny). The
 // liveness test below flags a stale entry if either file no longer uses the
 // primitive.
+// Smart-paste HTML→GFM converter (html-table-to-gfm.ts) parses a `text/html`
+// clipboard fragment with DOMParser to read table structure. It is a legitimate
+// choke-point exception BECAUSE it reads cell TEXT ONLY (`textContent`) — every
+// `href`/`src` in the parsed DOM is dropped, so no URL from the parsed tree ever
+// reaches the render- or write-gate as a live URL. The parse extracts structure,
+// never a URL.
+const HTML_TABLE_PASTE_PARSE = ["src/webview/cm/paste/html-table-to-gfm.ts"] as const;
+
 const URL_PARSE_ENDPOINTS = [
   "src/markdown/url-allowlist.ts",
   "src/webview/cm/image/resource-base.ts",
@@ -186,7 +194,7 @@ const CHOKE_POINTS: readonly ChokePoint[] = [
     // string→DOM via the HTML parser — construction.
     name: "new DOMParser(",
     pattern: /\bnew\s+DOMParser\s*\(/,
-    allow: new Set<string>(),
+    allow: new Set(HTML_TABLE_PASTE_PARSE),
   },
   {
     // The actual dangerous DOMParser op (Codex review #6): catches
@@ -194,7 +202,7 @@ const CHOKE_POINTS: readonly ChokePoint[] = [
     // was constructed (module import, globalThis, aliased).
     name: "parseFromString(",
     pattern: /\.parseFromString\s*\(/,
-    allow: new Set<string>(),
+    allow: new Set(HTML_TABLE_PASTE_PARSE),
   },
   {
     // Range.createContextualFragment(str) parses HTML into a fragment.
