@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { workspace } from "vscode";
 
 import { createImageWriteWiring } from "../../src/extension/image-write-wiring.js";
 
@@ -37,7 +38,13 @@ describe("createImageWriteWiring", () => {
     );
   });
 
-  it("writes under ./assets/ and posts the content-addressed relative path", async () => {
+  it("creates the assets dir BEFORE writing, then posts the content-addressed path", async () => {
+    // Spy on the stub's createDirectory so we can assert it ran (the impl calls it
+    // to avoid depending on writeFile's undocumented parent-dir behaviour) AND that
+    // it ran before the write — reverting the createDirectory line in the wiring
+    // makes this test red.
+    const createDirSpy = vi.spyOn(workspace.fs, "createDirectory");
+    createDirSpy.mockClear();
     const write = vi.fn(async () => {});
     const post = vi.fn();
     const wiring = createImageWriteWiring({
@@ -51,7 +58,12 @@ describe("createImageWriteWiring", () => {
     wiring.handle("req-ok", PNG_BASE64);
     await flush();
 
+    expect(createDirSpy).toHaveBeenCalledOnce();
     expect(write).toHaveBeenCalledOnce();
+    // Ordering: createDirectory must be invoked before the write override.
+    expect(createDirSpy.mock.invocationCallOrder[0]).toBeLessThan(
+      write.mock.invocationCallOrder[0]
+    );
     expect(post).toHaveBeenCalledWith(
       expect.objectContaining({
         type: "image-write-result",
@@ -59,6 +71,35 @@ describe("createImageWriteWiring", () => {
         ok: true,
         relativePath: expect.stringMatching(/^\.\/assets\/[0-9a-f]{64}\.png$/),
       })
+    );
+
+    createDirSpy.mockRestore();
+  });
+
+  it("re-reads writeFileOverride per call (late-bound override, not captured at construction)", async () => {
+    // The wiring reads deps.writeFileOverride() fresh inside the write closure on
+    // every handle() — the e2e harness sets writeImageFileOverride AFTER the panel
+    // (and thus the wiring) is constructed. A regression to eager, construct-time
+    // resolution would capture the null below and this test would go red.
+    const post = vi.fn();
+    let currentOverride: ((uri: unknown, content: Uint8Array) => Thenable<void>) | null = null;
+    const wiring = createImageWriteWiring({
+      documentUri,
+      canWrite: () => true,
+      showError: vi.fn(),
+      post,
+      writeFileOverride: () => currentOverride as never,
+    });
+
+    const write = vi.fn(async () => {});
+    currentOverride = write; // set AFTER the wiring object is built
+
+    wiring.handle("req-late", PNG_BASE64);
+    await flush();
+
+    expect(write).toHaveBeenCalledOnce();
+    expect(post).toHaveBeenCalledWith(
+      expect.objectContaining({ type: "image-write-result", requestId: "req-late", ok: true })
     );
   });
 });
