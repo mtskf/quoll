@@ -24,6 +24,7 @@ import { canEditWith } from "./can-edit-with.js";
 import { stashSwitchCaret, takeSwitchCaret } from "./editor-switch-caret.js";
 import { QuollEditorPanel } from "./quoll-editor-panel.js";
 import { openInTextEditor } from "./reopen-text-editor.js";
+import { finalizeSurfaceSwap, findSourceTab } from "./surface-swap.js";
 
 export type SwitchTarget = "to-text" | "to-quoll" | "none";
 
@@ -90,12 +91,14 @@ export function registerToggleEditor(): { dispose(): void } {
           return;
         }
         const uri = input.uri;
+        const sourceTab = findSourceTab(uri.toString(), "quoll", QuollEditorPanel.viewType);
         // Observability for the documented caret non-preservation on this path.
         console.info(
           "[quoll] palette forward: caret not preserved (use the button or ⌘⌥E / Ctrl+Alt+E)"
         );
         try {
           await openInTextEditor(uri);
+          await finalizeSurfaceSwap(uri, sourceTab);
         } catch (err) {
           surfaceError("could not open the text editor", err);
         }
@@ -123,6 +126,7 @@ export function registerToggleEditor(): { dispose(): void } {
           return;
         }
         const key = editor.document.uri.toString();
+        const sourceTab = findSourceTab(key, "text", QuollEditorPanel.viewType);
         const active = editor.selection.active;
         stashSwitchCaret(key, { line: active.line, character: active.character });
         try {
@@ -135,6 +139,7 @@ export function registerToggleEditor(): { dispose(): void } {
             editor.document.uri,
             QuollEditorPanel.viewType
           );
+          await finalizeSurfaceSwap(editor.document.uri, sourceTab);
         } catch (err) {
           takeSwitchCaret(key); // clear the stash so it does not apply on a later open
           surfaceError("could not open the rich editor", err);

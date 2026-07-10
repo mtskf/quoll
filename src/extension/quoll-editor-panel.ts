@@ -109,6 +109,7 @@ import {
   resolveSeedCaret,
   type StatusBarSlots,
 } from "./status-bar.js";
+import { finalizeSurfaceSwap, findSourceTab } from "./surface-swap.js";
 import type { PanelControls, TestHarness } from "./test-harness.js";
 import {
   buildLocalResourceRoots,
@@ -1305,26 +1306,34 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
           // the caret handoff clamps against the applied document). Runs
           // immediately when the lock is free.
           //
-          // Caret handoff: vscode.openWith disposes THIS panel as part of the
-          // swap, unsubscribing the window.onDidChangeActiveTextEditor caret
-          // listener BEFORE the text editor activates — so we cannot rely on it.
-          // Capture lastKnownCaret at run time and apply it directly once
-          // openWith resolves. applyCaretToTextEditor + document.uri are closure
-          // locals, safe to call post-dispose (they touch a TextEditor, not the
-          // webview).
+          // Forward in-place swap. openInTextEditor (vscode.openWith … "default")
+          // opens the text editor as a SECOND tab beside THIS Quoll custom tab —
+          // it does NOT replace it (E2E-probed 2026-07-10). We capture the
+          // source custom tab now (before the barrier defers / the target
+          // opens), apply the stashed caret to the freshly-opened text editor,
+          // then finalizeSurfaceSwap saves-if-dirty and closes the Quoll tab so
+          // only one surface remains. Closing disposes THIS panel, so it is the
+          // last action; caret apply + document.uri are closure locals, safe
+          // across the dispose. finalizeSurfaceSwap never throws and refuses to
+          // close a doc it could not make clean (no revert / no data loss).
+          const sourceTab = findSourceTab(
+            document.uri.toString(),
+            "quoll",
+            QuollEditorPanel.viewType
+          );
           editSettledBarrier.run(() => {
             const caret = lastKnownCaret;
             void openInTextEditor(document.uri).then(
               () => {
-                if (caret === null) {
-                  return;
+                if (caret !== null) {
+                  const editor = window.visibleTextEditors.find(
+                    (e) => e.document.uri.toString() === document.uri.toString()
+                  );
+                  if (editor) {
+                    applyCaretToTextEditor(editor, caret);
+                  }
                 }
-                const editor = window.visibleTextEditors.find(
-                  (e) => e.document.uri.toString() === document.uri.toString()
-                );
-                if (editor) {
-                  applyCaretToTextEditor(editor, caret);
-                }
+                void finalizeSurfaceSwap(document.uri, sourceTab);
               },
               (err: unknown) => {
                 // Symmetric with quoll.toggleEditor's forward error toast (a
