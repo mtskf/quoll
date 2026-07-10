@@ -7,10 +7,11 @@
 
 import { commands, type Uri } from "vscode";
 
-/** VS Code's built-in text-editor viewType for `vscode.openWith`. Reopening a
- *  resource with this viewType swaps the current editor for the default text
- *  editor in the same group — the native "Reopen Editor With… → Text Editor"
- *  path. A stable VS Code contract, not a Quoll construct. */
+/** VS Code's built-in text-editor viewType for `vscode.openWith`. Opening a
+ *  resource with this viewType opens/reveals the built-in text editor as a
+ *  SEPARATE tab beside any existing editor of the resource — it does NOT replace
+ *  a Quoll custom tab (E2E-probed 2026-07-10). The in-place swap closes the
+ *  source tab separately (see surface-swap.ts). A stable VS Code contract. */
 export const DEFAULT_TEXT_EDITOR_VIEW_TYPE = "default";
 
 /** Reopen `uri` in the built-in text editor. `exec` is seamed for unit tests;
