@@ -69,7 +69,6 @@ import {
   buildDocumentMessage,
   buildEditorConfigMessage,
   buildEditRejectedMessage,
-  buildImageWriteResultMessage,
   buildThemeMessage,
 } from "./document-message.js";
 import { createEditSettledBarrier } from "./edit-settled-barrier.js";
@@ -87,7 +86,7 @@ import {
   type HostSessionEvent,
   isWriteLockHeld,
 } from "./host-session-core.js";
-import { handleImageWrite } from "./image-write-service.js";
+import { createImageWriteWiring } from "./image-write-wiring.js";
 import { toLintDiagnostics } from "./lint-diagnostics.js";
 import { LintMirror } from "./lint-mirror.js";
 import { minimalEditSpan } from "./minimal-edit.js";
@@ -511,32 +510,17 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
 
     // Image-write executor. Orthogonal to the document-text write lock (it writes
     // a SEPARATE binary file, not the TextDocument), so it does NOT enter the
-    // host-session core. writeImage creates <docFolder>/assets/ then writes — the
-    // explicit createDirectory removes any dependency on writeFile's
-    // (undocumented) parent-dir behaviour and is idempotent. canWriteNow() is the
-    // read-only guard (defense in depth: the webview also drops paste on
-    // !canWrite).
-    const runImageWrite = (requestId: string, data: string): void => {
-      void handleImageWrite(
-        {
-          canWrite: canWriteNow,
-          showError,
-          postResult: (id, relativePath) => post(buildImageWriteResultMessage(id, relativePath)),
-          writeImage: async (filename, bytes) => {
-            const assetsDir = Uri.joinPath(document.uri, "..", "assets");
-            await workspace.fs.createDirectory(assetsDir);
-            const target = Uri.joinPath(assetsDir, filename);
-            const write: (uri: Uri, content: Uint8Array) => Thenable<void> =
-              this.harness?.writeImageFileOverride ??
-              ((uri, content) => workspace.fs.writeFile(uri, content));
-            await write(target, bytes);
-            return `./assets/${filename}`;
-          },
-        },
-        requestId,
-        data
-      );
-    };
+    // host-session core. The VS Code wiring (assets/ dir create + write, override
+    // resolution, result post) lives in createImageWriteWiring; canWriteNow() is
+    // the read-only guard (defense in depth: the webview also drops paste on
+    // !canWrite). No shared mutable state with the reducer.
+    const imageWriteWiring = createImageWriteWiring({
+      documentUri: document.uri,
+      canWrite: canWriteNow,
+      showError,
+      post,
+      writeFileOverride: () => this.harness?.writeImageFileOverride ?? null,
+    });
 
     // Apply lastKnownCaret to a live text editor for the same document. Clamps
     // to the editor's current document (the webview measured the caret against
@@ -1175,7 +1159,7 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
           });
           return;
         case "image-write":
-          runImageWrite(raw.requestId, raw.data);
+          imageWriteWiring.handle(raw.requestId, raw.data);
           return;
         case "context-handoff": {
           // Direct host-side side effect (no document-state mutation → not a

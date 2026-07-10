@@ -107,6 +107,13 @@ export const window = {
 export const workspace = {
   fs: {
     isWritableFileSystem: (_scheme: string): boolean => true,
+    // image-write-wiring's writeImage closure calls createDirectory (idempotent
+    // assets/ create) before writing. No-op resolves so the unit test's happy
+    // path reaches the write override.
+    createDirectory: (_uri: unknown): Thenable<void> => Promise.resolve(),
+    // Fallback write when no harness override is supplied. The unit test always
+    // injects writeFileOverride, so this stays a settled no-op.
+    writeFile: (_uri: unknown, _content: Uint8Array): Thenable<void> => Promise.resolve(),
   },
   // QuollEditorPanel's constructor reads `quoll.lint.problems.enabled` and
   // subscribes to config changes to gate the Problems lint mirror. Return the
