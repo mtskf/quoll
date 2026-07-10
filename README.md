@@ -4,10 +4,10 @@
 [![Marketplace installs](https://badgen.net/vs-marketplace/i/mtskf.quoll)](https://marketplace.visualstudio.com/items?itemName=mtskf.quoll)
 [![License: MIT](https://img.shields.io/github/license/mtskf/quoll)](LICENSE)
 
-Edit Markdown in VS Code with a Notion/Obsidian-style WYSIWYG editor, right inside your editor tabs.
+Edit Markdown in VS Code with an Obsidian-style WYSIWYG editor, right inside your editor tabs.
 
 - **Raw Markdown stays canonical** — the file on disk is always plain `.md`; Quoll renders it live and never rewrites your bytes.
-- **Notion/Obsidian-style live-reveal** — move the caret into a construct to edit its Markdown source, and away to re-render.
+- **Obsidian-style live-reveal** — move the caret into a construct to edit its Markdown source, and away to re-render.
 - **Opt-in and non-intrusive** — registers with `priority: option`, so it never hijacks `.md` from your other editors.
 
 <p align="center">
