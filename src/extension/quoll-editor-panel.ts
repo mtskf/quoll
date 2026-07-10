@@ -103,7 +103,7 @@ import {
   type RevealCleanupGroup,
 } from "./reveal-for-mention-cleanup.js";
 import { createRevertRescueTracker } from "./revert-rescue.js";
-import { createStatusBarController, formatLanguageLabel } from "./status-bar.js";
+import { createStatusBarController, formatLanguageLabel, resolveSeedCaret } from "./status-bar.js";
 import type { PanelControls, TestHarness } from "./test-harness.js";
 import {
   buildLocalResourceRoots,
@@ -313,7 +313,7 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
         language: window.createStatusBarItem(StatusBarAlignment.Right, 100),
       },
       {
-        view: { caret: lastKnownCaret ?? { line: 0, character: 0 }, eol: document.eol },
+        view: { caret: resolveSeedCaret(switchCaret, lastKnownCaret), eol: document.eol },
         languageLabel: formatLanguageLabel(document.languageId),
       }
     );
@@ -1114,6 +1114,12 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
           // reducer/write-lock). One-shot so a webview reload does not re-fire.
           if (switchCaret !== null && !switchCaretApplied) {
             switchCaretApplied = true;
+            // The stashed toggle caret is now the last-known caret: keep it in
+            // lastKnownCaret so the status bar's active-edge refresh and the reverse
+            // Quoll→text handoff read the applied position (the webview suppresses the
+            // echo caret-report, so no follow-up report arrives to refresh it).
+            lastKnownCaret = switchCaret;
+            statusBar.update({ caret: switchCaret, eol: document.eol });
             post(buildCaretApplyMessage(switchCaret));
           }
           return;

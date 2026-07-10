@@ -1,9 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
   createStatusBarController,
+  type EndOfLineValue,
   formatCaretPosition,
   formatEol,
   formatLanguageLabel,
+  resolveSeedCaret,
   type StatusBarSlot,
   type StatusBarSlots,
 } from "../../src/extension/status-bar.js";
@@ -20,10 +22,6 @@ describe("formatEol", () => {
     expect(formatEol(1)).toBe("LF");
     expect(formatEol(2)).toBe("CRLF");
   });
-
-  it("treats any non-CRLF value as LF (two-valued enum)", () => {
-    expect(formatEol(0)).toBe("LF");
-  });
 });
 
 describe("formatLanguageLabel", () => {
@@ -33,6 +31,26 @@ describe("formatLanguageLabel", () => {
 
   it("passes an empty id through unchanged", () => {
     expect(formatLanguageLabel("")).toBe("");
+  });
+});
+
+describe("resolveSeedCaret", () => {
+  it("prefers the stashed toggle caret over the last-known caret", () => {
+    expect(resolveSeedCaret({ line: 7, character: 2 }, { line: 3, character: 5 })).toEqual({
+      line: 7,
+      character: 2,
+    });
+  });
+
+  it("falls back to the last-known caret when there is no toggle caret", () => {
+    expect(resolveSeedCaret(null, { line: 3, character: 5 })).toEqual({
+      line: 3,
+      character: 5,
+    });
+  });
+
+  it("falls back to the document origin when both are null", () => {
+    expect(resolveSeedCaret(null, null)).toEqual({ line: 0, character: 0 });
   });
 });
 
@@ -64,8 +82,9 @@ function makeSlots() {
 describe("createStatusBarController", () => {
   it("seeds all three slots at construction (no blank item before first update)", () => {
     const { slots, caret, eol, language } = makeSlots();
+    const crlf: EndOfLineValue = 2;
     createStatusBarController(slots, {
-      view: { caret: { line: 2, character: 3 }, eol: 2 },
+      view: { caret: { line: 2, character: 3 }, eol: crlf },
       languageLabel: "Markdown",
     });
     expect(caret.slot.text).toBe("Ln 3, Col 4");
