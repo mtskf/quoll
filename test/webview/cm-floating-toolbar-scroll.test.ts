@@ -148,14 +148,15 @@ describe("quollFloatingToolbarScroll — ViewPlugin (happy-dom)", () => {
     // Mount the ACTUAL outline + switch-editor plugins so the chrome is built by
     // production code — this pins that their real class names match
     // CHROME_SELECTOR (a rename that broke the a11y sync would fail here). The
-    // outline panel is created (closed) at construction, so all three exist.
+    // outline SIDEBAR is deliberately NOT chrome (it owns its own inert state),
+    // so only the two corner toggles match.
     const host = mount([
       quollFloatingToolbarScroll(),
       quollOutline(),
       quollSwitchEditor({ postMessage() {} }, () => {}),
     ]);
     const chrome = (): Element[] => Array.from(host.querySelectorAll(CHROME_SELECTOR));
-    expect(chrome()).toHaveLength(3); // outline toggle + switch toggle + panel
+    expect(chrome()).toHaveLength(2); // outline toggle + switch toggle
     // shown: nothing inert
     expect(chrome().some((el) => el.hasAttribute("inert"))).toBe(false);
     // `inert` is set the INSTANT the hide begins — not delayed like the CSS
