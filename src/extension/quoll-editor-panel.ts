@@ -540,6 +540,80 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
       }
       dispatch({ type: "documentChanged", documentVersion: document.version });
     });
+
+    // Restore reverted-away dirty bytes via a direct WorkspaceEdit (OUTSIDE the
+    // reducer — like image-write and the dispose rescue). Shared by the
+    // dispose-time rescue and the alive-panel (text-tab-close) rescue. Success
+    // is SILENT (the surviving/live editor visibly holds the restored bytes);
+    // only failure is surfaced. `onFailure` lets the ALIVE path reseed the
+    // webview to the real doc state when the restore could not land (the dispose
+    // path passes none — the panel is already gone, nothing to reseed).
+    const applyRestoreEdit = (content: string, onFailure?: () => void): void => {
+      const span = minimalEditSpan(document.getText(), content);
+      const edit = new WorkspaceEdit();
+      edit.replace(
+        document.uri,
+        new Range(document.positionAt(span.from), document.positionAt(span.to)),
+        span.insert
+      );
+      void workspace.applyEdit(edit).then(
+        (ok) => {
+          if (!ok) {
+            showError("Quoll could not restore your unsaved changes after closing the editor.");
+            onFailure?.();
+          }
+        },
+        (err: unknown) => {
+          showError(
+            `Quoll could not restore your unsaved changes: ${
+              err instanceof Error ? err.message : String(err)
+            }`
+          );
+          onFailure?.();
+        }
+      );
+    };
+
+    // Alive-panel analogue of the dispose-time revert-rescue. Called from BOTH
+    // triggers (the tab-close listener and the document-change handler) because
+    // the revert onDidChangeTextDocument and the tab-close onDidChangeTabs can
+    // arrive in either order; decideOnAliveRevert consumes both tokens so the
+    // second call is a no-op. On a positive decision it BEST-EFFORT suppresses
+    // the debounced disk (revert) repost — cancel() clears a timer a revert
+    // change-event may already have scheduled, and the change-event caller ALSO
+    // early-returns so it never schedules one. The restore's OWN change event
+    // then reposts the authoritative dirty Document as the FINAL state. This is
+    // an END-STATE guarantee, not a transient one: other host paths outside this
+    // PR's scope (viewStateVisible on the panel activating as the text tab
+    // closes; the edit-arm live-version resync) can still emit a transient disk
+    // repost — cosmetic only, the restore always wins the end-state. On restore
+    // FAILURE the onFailure reseeds the webview to the real (disk) doc so the
+    // live panel never silently diverges (the toast already warned the user).
+    // Returns true iff a rescue was performed. Skipped when the write lock is
+    // held (decideOnAliveRevert → rescue:false) so it never races an in-flight
+    // apply.
+    const maybeRescueAliveRevert = (): boolean => {
+      if (disposed) {
+        return false;
+      }
+      const decision = revertRescue.decideOnAliveRevert({
+        writeInFlight: isWriteLockHeld(state),
+        canWrite: canWriteNow(),
+        currentContent: document.getText(),
+        at: Date.now(),
+      });
+      if (!decision.rescue) {
+        return false;
+      }
+      scheduleDocumentChanged.cancel();
+      applyRestoreEdit(decision.content, () => {
+        if (!disposed) {
+          dispatch({ type: "documentChanged", documentVersion: document.version });
+        }
+      });
+      return true;
+    };
+
     workspace.onDidChangeTextDocument(
       (e) => {
         if (disposed) {
@@ -555,6 +629,14 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
           content: e.document.getText(),
           at: Date.now(),
         });
+        // Reverse-direction rescue: if this change is a text-tab-close revert of
+        // dirty bytes we still hold (paired with a recent close), restore them
+        // and SUPPRESS this (disk) change's repost — the restore's own change
+        // event reposts the authoritative dirty Document. No-op (returns false)
+        // for an ordinary external edit / a manual revert with no paired close.
+        if (maybeRescueAliveRevert()) {
+          return;
+        }
         // Lock-held change events go to the reducer IMMEDIATELY, unchanged: the
         // host's OWN in-flight apply fires its change event under the lock, and
         // an external edit racing the apply→settle window also arrives locked.
@@ -632,6 +714,40 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
           return;
         }
         applyCaretToTextEditor(editor, lastKnownCaret);
+      },
+      undefined,
+      disposables
+    );
+
+    // Watch for a built-in text editor (or diff editor's modified side) for THIS
+    // document being CLOSED — the causal token for the reverse-direction
+    // revert-rescue. Record the close time and attempt the rescue: if the revert
+    // already armed the tracker (revert-first, the common order) this restores
+    // now; if the revert has not landed yet (close-first) the document-change
+    // handler's call restores when it does. decideOnAliveRevert pairs the two
+    // tokens in time so an unrelated close never resurrects a manual revert.
+    // NOTE: this ALSO fires for the panel's OWN programmatic closes — the
+    // revealForMention cleanup (tabGroups.close of a reveal-opened text tab of
+    // this doc) for the Claude Code handoff. That is benign: the handoff save()s
+    // the doc first, so no dirty→clean revert arms pendingRevert, and
+    // decideOnAliveRevert returns rescue:false with no armed revert (pinned by
+    // the "close with NO revert armed" unit case in Task 1).
+    window.tabGroups.onDidChangeTabs(
+      (e) => {
+        if (disposed) {
+          return;
+        }
+        const uriString = document.uri.toString();
+        const closedThisDoc = e.closed.some(
+          (tab) =>
+            (tab.input instanceof TabInputText && tab.input.uri.toString() === uriString) ||
+            (tab.input instanceof TabInputTextDiff && tab.input.modified.toString() === uriString)
+        );
+        if (!closedThisDoc) {
+          return;
+        }
+        revertRescue.observeTextTabClose(Date.now());
+        maybeRescueAliveRevert();
       },
       undefined,
       disposables
@@ -1270,32 +1386,7 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
         disposedAt: Date.now(),
       });
       if (rescue.rescue) {
-        const span = minimalEditSpan(document.getText(), rescue.content);
-        const edit = new WorkspaceEdit();
-        edit.replace(
-          document.uri,
-          new Range(document.positionAt(span.from), document.positionAt(span.to)),
-          span.insert
-        );
-        void workspace.applyEdit(edit).then(
-          (ok) => {
-            // Success is intentionally SILENT: the still-open editor visibly
-            // holds the restored bytes, so a toast would be noise on every
-            // close-with-discard. Only FAILURE is surfaced (below) — a data-loss
-            // context with no editor left to retry, mirroring host-session-core's
-            // failed-save showError-survives-dispose.
-            if (!ok) {
-              showError("Quoll could not restore your unsaved changes after closing the editor.");
-            }
-          },
-          (err: unknown) => {
-            showError(
-              `Quoll could not restore your unsaved changes: ${
-                err instanceof Error ? err.message : String(err)
-              }`
-            );
-          }
-        );
+        applyRestoreEdit(rescue.content);
       }
       if (QUOLL_PERF) {
         perfReport("host:session");
