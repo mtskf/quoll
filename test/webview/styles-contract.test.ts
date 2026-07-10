@@ -473,15 +473,6 @@ describe("styles.css — floating-toolbar scroll-hide", () => {
     expect(body).toMatch(/pointer-events\s*:\s*none/);
   });
 
-  it("hides the outline panel with the chrome (no detached / focusable panel left floating)", () => {
-    const rule =
-      css.match(/\.quoll-chrome-hidden\s+\.quoll-outline-panel\s*\{([^}]*)\}/s)?.[1] ?? "";
-    expect(rule).toMatch(/transform\s*:\s*translateY\(-/);
-    expect(rule).toMatch(/opacity\s*:\s*0/);
-    expect(rule).toMatch(/visibility\s*:\s*hidden/);
-    expect(rule).toMatch(/pointer-events\s*:\s*none/);
-  });
-
   it("disables the slide under prefers-reduced-motion for BOTH base AND hidden (2-class) selectors", () => {
     const mq =
       css.match(/@media\s*\(prefers-reduced-motion:\s*reduce\)\s*\{([\s\S]*?)\}\s*\}/)?.[1] ?? "";
@@ -489,13 +480,11 @@ describe("styles.css — floating-toolbar scroll-hide", () => {
     // base (1-class) selectors
     expect(mq).toMatch(/\.quoll-outline-toggle/);
     expect(mq).toMatch(/\.quoll-switch-editor-toggle/);
-    expect(mq).toMatch(/\.quoll-outline-panel/);
     // hidden (2-class, higher-specificity) selectors MUST also be present, else
     // the MQ can't override the hidden rules and the hide direction still
     // animates (Codex re-review specificity bug).
     expect(mq).toMatch(/\.quoll-chrome-hidden\s+\.quoll-outline-toggle/);
     expect(mq).toMatch(/\.quoll-chrome-hidden\s+\.quoll-switch-editor-toggle/);
-    expect(mq).toMatch(/\.quoll-chrome-hidden\s+\.quoll-outline-panel/);
   });
 });
 
@@ -600,5 +589,99 @@ describe("styles.css — shared floating-control resting tokens", () => {
       // No bare resting-opacity literal survives on the control itself.
       expect(rule).not.toMatch(/opacity\s*:\s*0\.\d/);
     }
+  });
+});
+
+describe("styles.css — outline sidebar", () => {
+  const css = readFileSync(new URL("../../src/webview/styles.css", import.meta.url), "utf8");
+  // Strip comments so a token-shaped literal inside a CSS comment can't
+  // vacuously satisfy a match (styles-contract grep-vacuation guard).
+  const live = css.replace(/\/\*[\s\S]*?\*\//g, "");
+
+  it(":root declares the sidebar tokens (width / lifted surface / hairline border)", () => {
+    const root = live.match(/:root\s*\{([^}]*)\}/)?.[1] ?? "";
+    expect(root).toMatch(/--quoll-outline-sidebar-width\s*:\s*\d+px\s*;/);
+    // The surface must be DERIVED from the editor background (slightly lifted),
+    // not a hard-coded colour — that is what keeps all themes tracking.
+    expect(root).toMatch(
+      /--quoll-outline-sidebar-background\s*:\s*color-mix\([^;]*--vscode-editor-background[^;]*;/
+    );
+    expect(root).toMatch(
+      /--quoll-outline-sidebar-border\s*:\s*color-mix\([^;]*--vscode-panel-border[^;]*;/
+    );
+  });
+
+  it("the sidebar consumes the tokens and slides in from the left edge", () => {
+    const rule = live.match(/\.quoll-outline-sidebar\s*\{[^}]*\}/)?.[0] ?? "";
+    expect(rule).not.toBe("");
+    expect(rule).toMatch(/width\s*:\s*var\(--quoll-outline-sidebar-width\)/);
+    expect(rule).toMatch(/background\s*:\s*var\(--quoll-outline-sidebar-background\)/);
+    expect(rule).toMatch(/border-right\s*:\s*1px\s+solid\s+var\(--quoll-outline-sidebar-border\)/);
+    expect(rule).toMatch(/transform\s*:\s*translateX\(-100%\)/);
+    expect(rule).toMatch(/visibility\s*:\s*hidden/);
+    const open =
+      live.match(/\.quoll-outline-open\s+\.quoll-outline-sidebar\s*\{[^}]*\}/)?.[0] ?? "";
+    expect(open).toMatch(/transform\s*:\s*none/);
+    expect(open).toMatch(/visibility\s*:\s*visible/);
+  });
+
+  it("open state hides the corner toggle (the header pin takes its spot)", () => {
+    const rule = live.match(/\.quoll-outline-open\s+\.quoll-outline-toggle\s*\{[^}]*\}/)?.[0] ?? "";
+    expect(rule).toMatch(/visibility\s*:\s*hidden/);
+    expect(rule).toMatch(/pointer-events\s*:\s*none/);
+  });
+
+  it("pinned mode is a real 2-column flex layout, not a wider overlay", () => {
+    const host = live.match(/\.quoll-editor\.quoll-outline-pinned\s*\{[^}]*\}/)?.[0] ?? "";
+    expect(host).toMatch(/display\s*:\s*flex/);
+    const sidebar =
+      live.match(
+        /\.quoll-editor\.quoll-outline-pinned\s+\.quoll-outline-sidebar\s*\{[^}]*\}/
+      )?.[0] ?? "";
+    expect(sidebar).toMatch(/position\s*:\s*static/);
+    expect(sidebar).toMatch(/flex\s*:\s*0\s+0\s+var\(--quoll-outline-sidebar-width\)/);
+    const editor =
+      live.match(/\.quoll-editor\.quoll-outline-pinned\s+\.cm-editor\s*\{[^}]*\}/)?.[0] ?? "";
+    expect(editor).toMatch(/flex\s*:\s*1\s+1\s+auto/);
+    // Flex items default to min-width:auto and refuse to shrink — without this
+    // the editor column can't narrow and the pinned layout overflows.
+    expect(editor).toMatch(/min-width\s*:\s*0/);
+  });
+
+  it("the pinned pin button turns red via the theme error token", () => {
+    const rule = live.match(/\.quoll-outline-pin\.pinned\s*\{[^}]*\}/)?.[0] ?? "";
+    expect(rule).toMatch(/color\s*:\s*var\(--vscode-errorForeground/);
+  });
+
+  it("high-contrast redefines the sidebar tokens inside the existing 4-selector HC block", () => {
+    // Covers BOTH HC kinds + both data-vscode-theme-kind attribute selectors —
+    // one shared block (the established HC pattern in this sheet), so an
+    // HC-light user is never left with the color-mix surface. Pin the FULL
+    // selector list, not just the first selector: a block that dropped the
+    // -light / attribute variants would still match a lazier regex.
+    const hcMatch = live.match(/body\.vscode-high-contrast\s*,([^{]*)\{([^}]*)\}/);
+    const hcSelectors = hcMatch?.[1] ?? "";
+    const hcBody = hcMatch?.[2] ?? "";
+    expect(hcSelectors).toMatch(/body\.vscode-high-contrast-light/);
+    expect(hcSelectors).toMatch(/body\[data-vscode-theme-kind="vscode-high-contrast"\]/);
+    expect(hcSelectors).toMatch(/body\[data-vscode-theme-kind="vscode-high-contrast-light"\]/);
+    expect(hcBody).toMatch(
+      /--quoll-outline-sidebar-background\s*:\s*var\(--vscode-editor-background\)/
+    );
+    expect(hcBody).toMatch(/--quoll-outline-sidebar-border\s*:\s*var\(--vscode-contrastBorder/);
+  });
+
+  it("the sidebar is NOT scroll-hide chrome (a pinned column must survive scrolling)", () => {
+    expect(live).not.toMatch(/\.quoll-chrome-hidden[^{]*\.quoll-outline-sidebar/);
+    expect(live).not.toMatch(/quoll-outline-panel/); // old floating-panel class fully retired
+  });
+
+  it("disables the sidebar slide under prefers-reduced-motion (both closed and open forms)", () => {
+    const mq =
+      live.match(/@media\s*\(prefers-reduced-motion:\s*reduce\)\s*\{([\s\S]*?)\}\s*\}/)?.[1] ?? "";
+    expect(mq).toMatch(/\.quoll-outline-sidebar/);
+    // The 2-class open selector must be listed too, or it out-specifies the MQ
+    // and the slide keeps animating (same bug class as the chrome-hidden MQ).
+    expect(mq).toMatch(/\.quoll-outline-open\s+\.quoll-outline-sidebar/);
   });
 });
