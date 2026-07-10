@@ -36,7 +36,14 @@ class ReadingStats implements PluginValue {
   }
 
   update(u: ViewUpdate): void {
-    if (u.docChanged) {
+    // Recompute on edits AND when the background parser advances. syntaxTree()
+    // can be PARTIAL on a large document, so the heading/link counts render()
+    // reads from the tree would otherwise stay under-counted until the next
+    // edit forced a recompute. A tree-identity change signals the parser filled
+    // in more of the document (the same trigger the outline panel watches).
+    // Still debounced, so a burst of parse-progress updates collapses to a
+    // single recompute off the keystroke path.
+    if (u.docChanged || syntaxTree(u.startState) !== syntaxTree(u.state)) {
       this.schedule();
     }
   }

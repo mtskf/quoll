@@ -25,12 +25,22 @@ export const WORDS_PER_MINUTE = 200;
  *  is never mistaken for frontmatter. */
 const FRONTMATTER = /^---[ \t]*\r?\n[\s\S]*?\r?\n---[ \t]*(?:\r?\n|$)/;
 
-/** Fenced code blocks: ``` or ~~~ (>=3), any info string, through the matching
- *  closing fence of the SAME character. Multiline; `\1` pins the fence char. */
-const FENCED_CODE = /^[ \t]*(`{3,}|~{3,})[^\n]*\n[\s\S]*?^[ \t]*\1[ \t]*$/gm;
+/** Fenced code blocks: ``` or ~~~ (>=3 of one char), any info string, through
+ *  the matching closing fence — same character, length >= 3. CommonMark lets the
+ *  closer be LONGER than the opener (``` opened, ```` closed), so group 1
+ *  captures the single fence char and the closer is `\1{3,}` rather than an
+ *  exact-length backreference. Multiline. */
+const FENCED_CODE = /^[ \t]*([`~])\1{2,}[^\n]*\n[\s\S]*?^[ \t]*\1{3,}[ \t]*$/gm;
 
-/** CJK code points counted individually (no whitespace word boundaries). */
-const CJK = /[぀-ヿ㐀-䶿一-鿿가-힯豈-﫿]/g;
+/** CJK code points counted individually (no whitespace word boundaries).
+ *  Explicit `\u` escapes (never literal glyphs) so a homoglyph can't silently
+ *  shift a range boundary, and the `u` flag makes the ranges operate on code
+ *  points — an astral char (emoji, CJK Ext-B) is then one unit, never a
+ *  double-counted surrogate pair straddling U+D800–U+DFFF. Ranges:
+ *  Hiragana/Katakana (U+3040–U+30FF), CJK Ext-A (U+3400–U+4DBF), CJK Unified
+ *  (U+4E00–U+9FFF), Hangul syllables (U+AC00–U+D7AF), CJK Compatibility
+ *  Ideographs (U+F900–U+FAFF). */
+const CJK = /[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uac00-\ud7af\uf900-\ufaff]/gu;
 
 export function computeReadingStats(text: string): ReadingTextStats {
   const stripped = text.replace(FRONTMATTER, "").replace(FENCED_CODE, "");

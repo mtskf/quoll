@@ -27,4 +27,11 @@ describe("countStructure", () => {
   it("reports zero counts for prose with no headings or links", () => {
     expect(counts("just some plain prose here")).toEqual({ headings: 0, links: 0 });
   });
+
+  it("does not count images or autolinks as links (only explicit Link nodes)", () => {
+    // Image (![](...)) and Autolink (<https://...>) are distinct Lezer node
+    // types; countStructure tallies only `Link` nodes.
+    const doc = "![alt](img.png) x <https://auto.example> y [real](https://e.example)";
+    expect(counts(doc).links).toBe(1); // only the [real](...) link
+  });
 });

@@ -53,6 +53,34 @@ describe("computeReadingStats — word/char counting", () => {
     expect(computeReadingStats(doc).words).toBe(2); // alpha beta
   });
 
+  it("strips a CRLF frontmatter block (Windows line endings)", () => {
+    const doc = "---\r\ntitle: X\r\ntags: [a]\r\n---\r\nhello world\r\n";
+    expect(computeReadingStats(doc).words).toBe(2); // only "hello world"
+  });
+
+  it("strips a fenced block whose closing fence is longer than the opener", () => {
+    // CommonMark allows a longer closer; the inline ``` in the body is not a
+    // closer (a closer is a whole line of fence chars), so the block is all code.
+    const doc = "before\n\n```\ncode ``` still code\n````\n\nafter";
+    expect(computeReadingStats(doc).words).toBe(2); // before after
+  });
+
+  it("counts an astral (surrogate-pair) char once — words and characters agree", () => {
+    // Without the /u flag the CJK range straddled the UTF-16 surrogate block and
+    // counted each emoji as 2 "words" while characters counted 1. Now both agree.
+    const s = computeReadingStats("😀😀😀");
+    expect(s.characters).toBe(3); // 3 code points
+    expect(s.words).toBe(1); // one whitespace-delimited token, not 6
+  });
+
+  it("does not double-count astral CJK Ext-B ideographs via surrogates", () => {
+    // 𠀀𠀁 are astral (U+20000+); the /u flag treats them as single code points
+    // outside the BMP CJK ranges, so they never match as two surrogate halves.
+    const s = computeReadingStats("𠀀𠀁");
+    expect(s.characters).toBe(2);
+    expect(s.words).toBe(1); // one token, not 4
+  });
+
   it("counts each CJK character as one word (character-based, not morpheme)", () => {
     // 5 kanji + 1 hiragana = 6 CJK code points
     const s = computeReadingStats("今日は良い天気");
