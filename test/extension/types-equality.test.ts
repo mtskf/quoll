@@ -8,12 +8,17 @@
 // surfaced via the AssertEqual identity check at the `const _check:`
 // line; the runtime test wrapper is just a vehicle for tsc to run.
 //
-// Decision: only protocol-message shapes are pinned. RecordedEvent /
-// PanelControls / TestHarness mirrors are intentionally looser
-// (e.g. RecordedEventShape's `message` is widened to
+// Decision: for the e2e-mirror guard above, only protocol-message shapes are
+// pinned. RecordedEvent / PanelControls / TestHarness mirrors are
+// intentionally looser (e.g. RecordedEventShape's `message` is widened to
 // `{ type: string } & Record<string, unknown>` so the e2e tests can
 // narrow via the `is*Event` predicates). The protocol-message types
-// are where the load-bearing drift lives.
+// are where the load-bearing e2e-mirror drift lives.
+//
+// This file also hosts unrelated tsc-enforced type-level pins for source
+// modules (see the "status-bar type pins" describe block below) — they reuse
+// the same AssertEqual-runs-under-`pnpm compile` mechanism but are NOT part of
+// the e2e-mirror equality guard described above.
 
 import { describe, expect, it } from "vitest";
 import type { EndOfLineValue } from "../../src/extension/status-bar";
