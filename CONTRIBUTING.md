@@ -1,7 +1,7 @@
 # Contributing to Quoll
 
 Thanks for your interest in Quoll — a VS Code custom editor that opens `.md`
-files in a Notion- and Obsidian-style WYSIWYG surface, with the raw Markdown
+files in an Obsidian-style WYSIWYG surface, with the raw Markdown
 text kept as the single source of truth.
 
 ## Prerequisites
