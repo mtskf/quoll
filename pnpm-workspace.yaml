@@ -1,0 +1,12 @@
+# Supply-chain cooldown: refuse to install package versions published less than
+# 7 days ago. npm account-takeover malware is typically detected and unpublished
+# within hours-to-days, so this window sidesteps most of that blast radius.
+# The cooldown bites only on dependency bumps/adds; --frozen-lockfile CI installs
+# (which resolve nothing) are unaffected. Requires pnpm >= 10.16; unit is MINUTES.
+#
+# Escape hatch for an urgent security-fix bump that is itself younger than the
+# window: add the package (name, glob, or name@version) to minimumReleaseAgeExclude
+# below, install, then remove the entry once the pin is in the lockfile. Prefer this
+# over lifting the global setting.
+minimumReleaseAge: 10080
+minimumReleaseAgeExclude: []
