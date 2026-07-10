@@ -1279,17 +1279,12 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
         );
         void workspace.applyEdit(edit).then(
           (ok) => {
-            if (ok) {
-              void window
-                .showInformationMessage(
-                  "Quoll kept your unsaved changes — they are still open in the text editor."
-                )
-                .then(undefined, (err: unknown) =>
-                  console.error("[quoll] revert-rescue info toast rejected", err)
-                );
-            } else {
-              // Data-loss context with no editor left to retry: surface it
-              // (mirrors host-session-core's failed-save showError-survives-dispose).
+            // Success is intentionally SILENT: the still-open editor visibly
+            // holds the restored bytes, so a toast would be noise on every
+            // close-with-discard. Only FAILURE is surfaced (below) — a data-loss
+            // context with no editor left to retry, mirroring host-session-core's
+            // failed-save showError-survives-dispose.
+            if (!ok) {
               showError("Quoll could not restore your unsaved changes after closing the editor.");
             }
           },
