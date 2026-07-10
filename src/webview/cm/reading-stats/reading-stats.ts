@@ -8,7 +8,7 @@
 
 import { syntaxTree } from "@codemirror/language";
 import type { Extension } from "@codemirror/state";
-import { type PluginValue, ViewPlugin, type ViewUpdate, type EditorView } from "@codemirror/view";
+import { type EditorView, type PluginValue, ViewPlugin, type ViewUpdate } from "@codemirror/view";
 import { requireQuollEditorHost } from "../editor-host.js";
 import { computeReadingStats } from "./compute.js";
 import { countStructure } from "./structure.js";

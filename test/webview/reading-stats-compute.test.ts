@@ -1,6 +1,9 @@
 // test/webview/reading-stats-compute.test.ts
 import { describe, expect, it } from "vitest";
-import { computeReadingStats, WORDS_PER_MINUTE } from "../../src/webview/cm/reading-stats/compute.js";
+import {
+  computeReadingStats,
+  WORDS_PER_MINUTE,
+} from "../../src/webview/cm/reading-stats/compute.js";
 
 describe("computeReadingStats — word/char counting", () => {
   it("counts plain English words and non-whitespace characters", () => {
@@ -16,7 +19,11 @@ describe("computeReadingStats — word/char counting", () => {
 
   it("returns zeros for empty / whitespace-only input", () => {
     expect(computeReadingStats("")).toEqual({ words: 0, characters: 0, readingTimeMinutes: 0 });
-    expect(computeReadingStats("   \n\t ")).toEqual({ words: 0, characters: 0, readingTimeMinutes: 0 });
+    expect(computeReadingStats("   \n\t ")).toEqual({
+      words: 0,
+      characters: 0,
+      readingTimeMinutes: 0,
+    });
   });
 
   it("excludes a leading YAML frontmatter block from counts", () => {
