@@ -103,4 +103,145 @@ describe("revert-rescue tracker", () => {
     t.observe({ isDirty: false, content: "DISK", at: 6 }); // trailing empty dirty-flip clean event
     expect(t.decideOnDispose(ctx({ disposedAt: 10 }))).toEqual({ rescue: true, content: "DIRTY" });
   });
+
+  const aliveCtx = (
+    over: Partial<
+      Parameters<ReturnType<typeof createRevertRescueTracker>["decideOnAliveRevert"]>[0]
+    > = {}
+  ) => ({
+    writeInFlight: false,
+    canWrite: true,
+    currentContent: "DISK",
+    at: 1000,
+    ...over,
+  });
+
+  describe("decideOnAliveRevert (two-token causal pairing)", () => {
+    it("rescues when a revert then a tightly-paired close arrive (revert-first)", () => {
+      const t = createRevertRescueTracker({ windowMs: 2500, pairingWindowMs: 250 });
+      t.observe({ isDirty: true, content: "DIRTY", at: 0 });
+      t.observe({ isDirty: false, content: "DISK", at: 990 }); // revert armed
+      t.observeTextTabClose(999); // close 9ms later (paired)
+      expect(t.decideOnAliveRevert(aliveCtx({ at: 1000 }))).toEqual({
+        rescue: true,
+        content: "DIRTY",
+      });
+    });
+
+    it("rescues when a close then a tightly-paired revert arrive (close-first)", () => {
+      const t = createRevertRescueTracker({ windowMs: 2500, pairingWindowMs: 250 });
+      t.observe({ isDirty: true, content: "DIRTY", at: 0 });
+      t.observeTextTabClose(990); // close first
+      t.observe({ isDirty: false, content: "DISK", at: 999 }); // revert 9ms later (paired)
+      expect(t.decideOnAliveRevert(aliveCtx({ at: 1000 }))).toEqual({
+        rescue: true,
+        content: "DIRTY",
+      });
+    });
+
+    it("CONSUMES both tokens (a second decide after a rescue is a no-op)", () => {
+      const t = createRevertRescueTracker({ windowMs: 2500, pairingWindowMs: 250 });
+      t.observe({ isDirty: true, content: "DIRTY", at: 0 });
+      t.observe({ isDirty: false, content: "DISK", at: 990 });
+      t.observeTextTabClose(999);
+      expect(t.decideOnAliveRevert(aliveCtx({ at: 1000 })).rescue).toBe(true);
+      expect(t.decideOnAliveRevert(aliveCtx({ at: 1001 }))).toEqual({ rescue: false });
+    });
+
+    it("does NOT rescue a manual revert with NO close (external wins)", () => {
+      const t = createRevertRescueTracker({ pairingWindowMs: 250 });
+      t.observe({ isDirty: true, content: "DIRTY", at: 0 });
+      t.observe({ isDirty: false, content: "DISK", at: 5 }); // manual revert, no close
+      expect(t.decideOnAliveRevert(aliveCtx({ at: 10 }))).toEqual({ rescue: false });
+    });
+
+    it("does NOT resurrect a manual revert via a LATER unrelated close (Codex #1)", () => {
+      const t = createRevertRescueTracker({ windowMs: 2500, pairingWindowMs: 250 });
+      t.observe({ isDirty: true, content: "DIRTY", at: 0 });
+      t.observe({ isDirty: false, content: "DISK", at: 0 }); // manual revert at t=0
+      t.observeTextTabClose(300); // unrelated close 300ms later (NOT paired: 300 > 250)
+      expect(t.decideOnAliveRevert(aliveCtx({ at: 300 }))).toEqual({ rescue: false });
+    });
+
+    // Codex #2 (the reverse order of Codex #1, exercising the SHIPPED default
+    // pairingWindowMs): an unrelated same-doc close, THEN a human-timed manual
+    // Revert File must NOT pair — the lingering close token cannot resurrect a
+    // later manual revert. 200 ms is below any real human perceive-then-invoke
+    // latency yet ≥ the 120 ms default, so it is firmly outside the window.
+    it("does NOT resurrect a later manual revert via an EARLIER unrelated close (default window)", () => {
+      const t = createRevertRescueTracker(); // shipped default pairingWindowMs
+      t.observe({ isDirty: true, content: "DIRTY", at: 0 });
+      t.observeTextTabClose(0); // unrelated close first
+      t.observe({ isDirty: false, content: "DISK", at: 200 }); // manual revert 200ms later
+      expect(t.decideOnAliveRevert(aliveCtx({ at: 200 }))).toEqual({ rescue: false });
+    });
+
+    // Guard the OTHER side of the default: a genuine close-with-discard whose
+    // close and revert are ~1 ms apart still pairs under the shipped default.
+    it("DOES rescue a genuine close-first pair ~1ms apart (default window)", () => {
+      const t = createRevertRescueTracker(); // shipped default pairingWindowMs
+      t.observe({ isDirty: true, content: "DIRTY", at: 0 });
+      t.observeTextTabClose(1000); // close
+      t.observe({ isDirty: false, content: "DISK", at: 1001 }); // revert 1ms later (paired)
+      expect(t.decideOnAliveRevert(aliveCtx({ at: 1001 }))).toEqual({
+        rescue: true,
+        content: "DIRTY",
+      });
+    });
+
+    it("does NOT rescue a close with NO revert armed (nothing to restore)", () => {
+      const t = createRevertRescueTracker({ pairingWindowMs: 250 });
+      t.observe({ isDirty: true, content: "DIRTY", at: 0 });
+      t.observeTextTabClose(10); // close but no revert followed
+      expect(t.decideOnAliveRevert(aliveCtx({ at: 12 }))).toEqual({ rescue: false });
+    });
+
+    it("does NOT rescue a save (content unchanged going clean) even if a close pairs", () => {
+      const t = createRevertRescueTracker({ pairingWindowMs: 250 });
+      t.observe({ isDirty: true, content: "DIRTY", at: 0 });
+      t.observe({ isDirty: false, content: "DIRTY", at: 5 }); // save: disk holds DIRTY
+      t.observeTextTabClose(6);
+      expect(t.decideOnAliveRevert(aliveCtx({ currentContent: "DIRTY", at: 10 }))).toEqual({
+        rescue: false,
+      });
+    });
+
+    it("does NOT rescue when a reducer applyEdit is in flight (avoid racing the writer)", () => {
+      const t = createRevertRescueTracker({ pairingWindowMs: 250 });
+      t.observe({ isDirty: true, content: "DIRTY", at: 0 });
+      t.observe({ isDirty: false, content: "DISK", at: 5 });
+      t.observeTextTabClose(6);
+      expect(t.decideOnAliveRevert(aliveCtx({ writeInFlight: true, at: 10 }))).toEqual({
+        rescue: false,
+      });
+    });
+
+    it("does NOT rescue when read-only", () => {
+      const t = createRevertRescueTracker({ pairingWindowMs: 250 });
+      t.observe({ isDirty: true, content: "DIRTY", at: 0 });
+      t.observe({ isDirty: false, content: "DISK", at: 5 });
+      t.observeTextTabClose(6);
+      expect(t.decideOnAliveRevert(aliveCtx({ canWrite: false, at: 10 }))).toEqual({
+        rescue: false,
+      });
+    });
+
+    it("does NOT rescue when currentContent already equals the pending dirty content", () => {
+      const t = createRevertRescueTracker({ pairingWindowMs: 250 });
+      t.observe({ isDirty: true, content: "DIRTY", at: 0 });
+      t.observe({ isDirty: false, content: "DISK", at: 5 });
+      t.observeTextTabClose(6);
+      expect(t.decideOnAliveRevert(aliveCtx({ currentContent: "DIRTY", at: 10 }))).toEqual({
+        rescue: false,
+      });
+    });
+
+    it("does NOT rescue an ancient paired set (absolute freshness bound)", () => {
+      const t = createRevertRescueTracker({ windowMs: 2500, pairingWindowMs: 250 });
+      t.observe({ isDirty: true, content: "DIRTY", at: 0 });
+      t.observe({ isDirty: false, content: "DISK", at: 100 });
+      t.observeTextTabClose(105); // paired (5ms) but...
+      expect(t.decideOnAliveRevert(aliveCtx({ at: 5000 }))).toEqual({ rescue: false }); // 4.9s later
+    });
+  });
 });

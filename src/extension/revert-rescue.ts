@@ -34,18 +34,38 @@ export type RescueDecision =
   | { readonly rescue: false }
   | { readonly rescue: true; readonly content: string };
 
+export interface AliveRevertContext {
+  /** A reducer applyEdit was in flight (write lock held). When true the
+   *  rescue is skipped so it never races the in-flight apply's landing. */
+  readonly writeInFlight: boolean;
+  readonly canWrite: boolean;
+  /** Live document text now (the reverted / on-disk bytes). */
+  readonly currentContent: string;
+  /** Now (epoch ms), injected — an absolute freshness bound on the pair. */
+  readonly at: number;
+}
+
 export interface RevertRescueTracker {
   /** Feed a (isDirty, content) snapshot. Call at construction with the initial
    *  state and on every onDidChangeTextDocument. */
   observe(snapshot: DirtySnapshot): void;
   /** Decide at dispose whether the close reverted still-needed dirty bytes. */
   decideOnDispose(ctx: RescueContext): RescueDecision;
+  /** Record that a built-in text editor (or diff editor's modified side) for
+   *  THIS document was closed, at `at` (epoch ms). The causal token paired
+   *  against an armed revert by decideOnAliveRevert. */
+  observeTextTabClose(at: number): void;
+  /** Decide, while the panel is ALIVE, whether a text-tab close reverted
+   *  still-needed dirty bytes. Fires only when an armed revert and a text-tab
+   *  close are tightly paired in time (≤ pairingWindowMs apart). Consumes BOTH
+   *  tokens on a positive decision so neither is reused by a later event. */
+  decideOnAliveRevert(ctx: AliveRevertContext): RescueDecision;
 }
 
 const NO_RESCUE: RescueDecision = { rescue: false };
 
 export function createRevertRescueTracker(
-  opts: { readonly windowMs?: number } = {}
+  opts: { readonly windowMs?: number; readonly pairingWindowMs?: number } = {}
 ): RevertRescueTracker {
   // Failure asymmetry (deliberate): too-SHORT a window mis-classifies a genuine
   // close-triggered revert as stale -> the original silent data-loss bug
@@ -54,8 +74,34 @@ export function createRevertRescueTracker(
   // bias LONG. The measured close-revert->dispose gap is ~9 ms; 2500 ms clears
   // it by orders of magnitude while staying well under human revert-then-close time.
   const windowMs = opts.windowMs ?? 2500;
+  // Causal-pairing window between a text-tab close and the revert it triggered:
+  // decideOnAliveRevert restores only when |lastCloseAt - pendingRevert.at| is
+  // within this window. A genuine close-with-discard fires its revert-change
+  // event and onDidChangeTabs inside ONE synchronous VS Code close operation —
+  // measured at 0–1 ms apart (revert→dispose in the forward path is ~9 ms; both
+  // are effectively instantaneous), and load-insensitive since they are event
+  // dispatches, not CPU work. The window must be:
+  //   - comfortably ABOVE that gap (missing a real pair = the ORIGINAL silent
+  //     data loss — the worse failure), and
+  //   - BELOW the time it takes a human to perceive an UNRELATED same-doc tab
+  //     close and then invoke a manual "Revert File" (perceive + command
+  //     invocation ≫ 250 ms). Otherwise a lingering close token pairs with a
+  //     later manual revert and resurrects content the user explicitly discarded
+  //     — the exact "external edit wins" violation this guard exists to prevent.
+  // 120 ms sits between those bounds (≈10× the ~9 ms worst observed close-side
+  // gap, well under human perceive-then-invoke latency). Time is the only
+  // discriminator available: a genuine close-first revert arrives ~1 ms after
+  // its close, a manual revert 100s of ms after an unrelated one — so this is a
+  // window, not an ordering rule (staying robust to VS Code firing the two
+  // events in either order; the alive path handles both). RESIDUAL (accepted,
+  // same benign class as the dispose-path window above): a manual revert within
+  // 120 ms of an unrelated same-doc close still false-pairs — but that timing is
+  // below human perception+action latency, so it is not reachable in practice,
+  // and the outcome is a visible, UNDOABLE re-dirty, never data loss.
+  const pairingWindowMs = opts.pairingWindowMs ?? 120;
   let lastDirtyContent: string | null = null;
   let pendingRevert: { content: string; at: number } | null = null;
+  let lastCloseAt: number | null = null;
 
   return {
     observe({ isDirty, content, at }) {
@@ -94,6 +140,40 @@ export function createRevertRescueTracker(
         return NO_RESCUE; // nothing was lost
       }
       return { rescue: true, content: pendingRevert.content };
+    },
+
+    observeTextTabClose(at) {
+      lastCloseAt = at;
+    },
+
+    decideOnAliveRevert({ writeInFlight, canWrite, currentContent, at }) {
+      if (writeInFlight) {
+        return NO_RESCUE; // never race an in-flight reducer applyEdit
+      }
+      if (pendingRevert === null || lastCloseAt === null) {
+        return NO_RESCUE; // need BOTH a revert and a close to pair
+      }
+      if (!canWrite) {
+        return NO_RESCUE;
+      }
+      // Causal pairing: the close and the revert must be tightly paired in time
+      // (part of one close-with-discard action) — NOT merely each recent. This
+      // is what keeps a manual revert from being resurrected by a later,
+      // unrelated close within the loose freshness window (Codex #1).
+      if (Math.abs(lastCloseAt - pendingRevert.at) >= pairingWindowMs) {
+        return NO_RESCUE;
+      }
+      // Absolute freshness bound (defensive): never act on an ancient pair.
+      if (at - pendingRevert.at >= windowMs) {
+        return NO_RESCUE;
+      }
+      if (currentContent === pendingRevert.content) {
+        return NO_RESCUE; // nothing was lost
+      }
+      const { content } = pendingRevert;
+      pendingRevert = null; // consume both tokens (the alive tracker lives on)
+      lastCloseAt = null;
+      return { rescue: true, content };
     },
   };
 }
