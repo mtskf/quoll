@@ -1,15 +1,21 @@
-// Document outline overlay — a webview-native ViewPlugin that renders a toggle
-// button + a floating heading list inside the .quoll-editor host. View-only:
-// clicking a heading dispatches a SELECTION-ONLY transaction (no `changes`), so
-// the round-trip is byte-identical and no Edit is posted. All rebuild work is
-// gated on the panel being open AND debounced, so the keystroke path pays
-// nothing while closed and only an amortised cost while open. Colours come from
-// --vscode-* CSS vars (styles.css) so dark / light / high-contrast track.
+// Document outline sidebar — a webview-native ViewPlugin that renders the
+// top-left toggle button + a left-edge slide-in sidebar inside the
+// .quoll-editor host. Hovering the toggle opens the sidebar; the pointer
+// leaving it (grace-delayed), a heading jump, or Mod-Alt-o closes it — unless
+// PINNED via the header pin button. Pinned mode swaps the absolute overlay for
+// a static 2-column flex layout. CSS owns ALL geometry off two host classes
+// (quoll-outline-open / quoll-outline-pinned); this module owns state + DOM.
+// View-only: clicking a heading dispatches a SELECTION-ONLY transaction (no
+// `changes`), so the round-trip is byte-identical and no Edit is posted. All
+// rebuild work is gated on the sidebar being open AND debounced, so the
+// keystroke path pays nothing while closed and only an amortised cost while
+// open. Colours come from --vscode-* vars + the --quoll-outline-sidebar-*
+// tokens (styles.css) so dark / light / high-contrast track.
 //
-// Responsibility split (vs build-outline.ts): this module owns the *policy* —
-// WHEN to rebuild (open = immediate + one forced complete parse; edits =
-// debounced, cheap syntaxTree) and the DOM. build-outline.ts is the pure
-// extraction given a tree.
+// Responsibility split: this module owns the *policy* — WHEN to rebuild
+// (open = immediate + one forced complete parse; edits = debounced, cheap
+// syntaxTree) and the DOM. build-outline.ts is the pure extraction given a
+// tree; icons.ts owns the Lucide SVG subtrees.
 
 import { ensureSyntaxTree, syntaxTree } from "@codemirror/language";
 import { EditorSelection, type Extension } from "@codemirror/state";
@@ -22,6 +28,7 @@ import {
 } from "@codemirror/view";
 import { requireQuollEditorHost } from "../editor-host.js";
 import { extractOutline, type OutlineHeading } from "./build-outline.js";
+import { createPinIcon, createSettingsIcon } from "./icons.js";
 
 /** Toggle chord. CM-scoped (fires only while the editor has focus), so it never
  *  collides with a workbench keybinding — same posture as the context-handoff /
@@ -33,7 +40,7 @@ const INDENT_PX = 12;
 const BASE_PAD_PX = 8;
 
 /** Trailing debounce for edit-driven rebuilds — keeps the full tree walk off
- *  the per-keystroke path while the panel is open. */
+ *  the per-keystroke path while the sidebar is open. */
 const REBUILD_DEBOUNCE_MS = 200;
 
 /** Ceiling (ms) for the ONE forced complete parse on the deliberate open. A
@@ -44,20 +51,41 @@ const REBUILD_DEBOUNCE_MS = 200;
  *  check). Edit-driven refreshes never force a parse — they read syntaxTree. */
 const PARSE_BUDGET_MS = 500;
 
+/** Grace (ms) between the pointer leaving the OPEN sidebar and the actual
+ *  close — short enough that the overlay never feels sticky. Re-entering the
+ *  sidebar cancels it. Only the sidebar's own pointerleave arms this (the
+ *  toggle's leave never does — see the constructor's flicker note). */
+const HOVER_CLOSE_DELAY_MS = 150;
+
+/** Hover-intent (ms) before a pointerenter on the toggle actually opens. A
+ *  pointer merely grazing the top-left corner neither flashes the sidebar nor
+ *  pays the open-time forced parse (ensureSyntaxTree, up to PARSE_BUDGET_MS).
+ *  Deliberate opens (click / Mod-Alt-o) skip it. */
+const HOVER_OPEN_DELAY_MS = 120;
+
+/** Host classes CSS keys ALL open/pinned geometry off. Exported for tests. */
+export const OUTLINE_OPEN_CLASS = "quoll-outline-open";
+export const OUTLINE_PINNED_CLASS = "quoll-outline-pinned";
+
 class OutlinePanel implements PluginValue {
   private readonly host: HTMLElement;
   private readonly toggleEl: HTMLButtonElement;
-  private readonly panelEl: HTMLElement;
+  private readonly sidebarEl: HTMLElement;
+  private readonly pinEl: HTMLButtonElement;
   private readonly listEl: HTMLElement;
   private open = false;
+  /** Invariant: pinned ⇒ open (closing by any path unpins). */
+  private pinned = false;
   private headings: OutlineHeading[] = [];
   /** Signature of the last rendered list; null forces the first render. */
   private renderedSignature: string | null = null;
   private rebuildTimer: ReturnType<typeof setTimeout> | null = null;
+  private closeTimer: ReturnType<typeof setTimeout> | null = null;
+  private openTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(private readonly view: EditorView) {
     // In production the EditorView is mounted inside the `.quoll-editor` host,
-    // which is the overlay's positioned ancestor (styles.css sets
+    // which is the sidebar's positioned ancestor (styles.css sets
     // position: relative on it). Fail fast rather than attaching the overlay
     // into CodeMirror's own managed DOM (view.dom) if that host is missing.
     const host = requireQuollEditorHost(view, "quollOutline");
@@ -66,49 +94,105 @@ class OutlinePanel implements PluginValue {
     this.toggleEl = document.createElement("button");
     this.toggleEl.type = "button";
     this.toggleEl.className = "quoll-outline-toggle";
-    this.toggleEl.title = "Toggle document outline (Ctrl/Cmd+Alt+O)";
-    this.toggleEl.setAttribute("aria-label", "Toggle document outline");
+    this.toggleEl.title = "Show document outline (Ctrl/Cmd+Alt+O)";
+    this.toggleEl.setAttribute("aria-label", "Show document outline");
     this.toggleEl.setAttribute("aria-pressed", "false");
     this.toggleEl.textContent = "☰"; // ☰
     // preventDefault on mousedown so clicking the button does not blur/move the
     // editor selection before we act; focus is managed explicitly on jump.
     this.toggleEl.addEventListener("mousedown", (e) => e.preventDefault());
+    // Click OPENS (idempotent), it does not toggle: while open the toggle is
+    // pointer-invisible (open-state CSS), so a real click-to-close can never
+    // happen — a toggle here would only manifest as a keyboard/AT surprise.
+    // Closing paths: pointer-leave grace, jump, Escape, Mod-Alt-o.
     this.toggleEl.addEventListener("click", (e) => {
       e.preventDefault();
-      this.toggle();
+      this.setOpen(true);
     });
+    // Hover-open with intent delay: entering the toggle arms the open; leaving
+    // before it fires disarms it (grazing pointers never open). The toggle's
+    // leave deliberately does NOT schedule a close: at open time this button
+    // goes pointer-events:none under a possibly-stationary pointer, and the
+    // browser's async hover recompute fires its leave BEFORE the sliding
+    // sidebar arrives to cancel — a close/reopen flicker loop. Once open,
+    // closing belongs to the sidebar's pointerleave / jump / Escape / keymap.
+    this.toggleEl.addEventListener("pointerenter", () => {
+      this.cancelScheduledClose();
+      this.scheduleOpen();
+    });
+    this.toggleEl.addEventListener("pointerleave", () => this.cancelScheduledOpen());
 
-    this.panelEl = document.createElement("div");
-    this.panelEl.className = "quoll-outline-panel";
-    this.panelEl.hidden = true;
+    this.sidebarEl = document.createElement("div");
+    this.sidebarEl.className = "quoll-outline-sidebar";
+    // Closed = slid off-screen but still rendered (the slide transition needs a
+    // live element). `inert` drops the hidden sidebar from the focus + a11y
+    // tree immediately — the CSS visibility flip is delayed until the slide-out
+    // finishes. Same posture as the scroll-hide chrome.
+    this.sidebarEl.toggleAttribute("inert", true);
+    this.sidebarEl.addEventListener("pointerenter", () => this.cancelScheduledClose());
+    this.sidebarEl.addEventListener("pointerleave", () => this.scheduleClose());
+    // Escape = explicit keyboard close (and unpin, via the setOpen invariant).
+    // This is the close affordance for keyboard-driven opens, which have no
+    // pointer to leave with; focus is handed back to the editor by setOpen.
+    this.sidebarEl.addEventListener("keydown", (e) => {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        this.setOpen(false);
+      }
+    });
 
     const header = document.createElement("div");
     header.className = "quoll-outline-header";
+    this.pinEl = document.createElement("button");
+    this.pinEl.type = "button";
+    this.pinEl.className = "quoll-outline-pin";
+    this.pinEl.title = "Pin outline sidebar";
+    this.pinEl.setAttribute("aria-label", "Pin outline sidebar");
+    this.pinEl.setAttribute("aria-pressed", "false");
+    this.pinEl.appendChild(createPinIcon());
+    this.pinEl.addEventListener("mousedown", (e) => e.preventDefault());
+    this.pinEl.addEventListener("click", (e) => {
+      e.preventDefault();
+      this.setPinned(!this.pinned);
+    });
     const titleEl = document.createElement("span");
     titleEl.className = "quoll-outline-title";
     titleEl.textContent = "Outline";
-    const closeEl = document.createElement("button");
-    closeEl.type = "button";
-    closeEl.className = "quoll-outline-close";
-    closeEl.title = "Close outline";
-    closeEl.setAttribute("aria-label", "Close outline");
-    closeEl.textContent = "×"; // ×
-    closeEl.addEventListener("mousedown", (e) => e.preventDefault());
-    closeEl.addEventListener("click", (e) => {
-      e.preventDefault();
-      this.setOpen(false);
-    });
+    header.appendChild(this.pinEl);
     header.appendChild(titleEl);
-    header.appendChild(closeEl);
 
     this.listEl = document.createElement("ul");
     this.listEl.className = "quoll-outline-list";
 
-    this.panelEl.appendChild(header);
-    this.panelEl.appendChild(this.listEl);
+    const footer = document.createElement("div");
+    footer.className = "quoll-outline-footer";
+    const settingsEl = document.createElement("button");
+    settingsEl.type = "button";
+    settingsEl.className = "quoll-outline-settings";
+    settingsEl.title = "Settings";
+    settingsEl.setAttribute("aria-label", "Settings");
+    settingsEl.appendChild(createSettingsIcon());
+    const settingsLabel = document.createElement("span");
+    settingsLabel.textContent = "Settings";
+    settingsEl.appendChild(settingsLabel);
+    settingsEl.addEventListener("mousedown", (e) => e.preventDefault());
+    // Deliberately a no-op today: the settings surface ships as a separate
+    // task; the button pins the sidebar's final layout + affordance now.
+    // aria-disabled (not `disabled`) keeps it visible and focusable while
+    // telling AT the truth — REMOVE when the click handler lands.
+    settingsEl.setAttribute("aria-disabled", "true");
+    settingsEl.addEventListener("click", (e) => e.preventDefault());
+    footer.appendChild(settingsEl);
 
+    this.sidebarEl.appendChild(header);
+    this.sidebarEl.appendChild(this.listEl);
+    this.sidebarEl.appendChild(footer);
+
+    // Sidebar FIRST in DOM order (before CodeMirror's element) so the pinned
+    // flex row reads sidebar-then-editor without `order` tricks, and the tab /
+    // a11y order matches the visual left-to-right order.
+    this.host.insertBefore(this.sidebarEl, this.host.firstChild);
     this.host.appendChild(this.toggleEl);
-    this.host.appendChild(this.panelEl);
   }
 
   update(u: ViewUpdate): void {
@@ -129,8 +213,14 @@ class OutlinePanel implements PluginValue {
     if (this.rebuildTimer !== null) {
       clearTimeout(this.rebuildTimer);
     }
+    this.cancelScheduledClose();
+    this.cancelScheduledOpen();
     this.toggleEl.remove();
-    this.panelEl.remove();
+    this.sidebarEl.remove();
+    // Clear the host flags so a lingering host node (tests, re-mount) never
+    // inherits a stale open/pinned layout — mirrors FloatingToolbarScroll's
+    // destroy hygiene.
+    this.host.classList.remove(OUTLINE_OPEN_CLASS, OUTLINE_PINNED_CLASS);
   }
 
   toggle(): void {
@@ -138,19 +228,98 @@ class OutlinePanel implements PluginValue {
   }
 
   private setOpen(open: boolean): void {
+    // Re-entering the toggle while already open must cancel a pending
+    // hover-close — so cancel BEFORE the idempotence early-return. A
+    // deliberate open/close also supersedes any armed hover-intent.
+    this.cancelScheduledClose();
+    this.cancelScheduledOpen();
+    if (open === this.open) {
+      return;
+    }
     this.open = open;
-    this.panelEl.hidden = !open;
-    this.toggleEl.setAttribute("aria-pressed", String(open));
-    this.toggleEl.classList.toggle("active", open);
+    // Capture BEFORE mutating: setting `inert` below can make the browser
+    // evict focus from the sidebar synchronously, so an after-the-fact
+    // activeElement check would miss it and strand focus on <body>.
+    const hadSidebarFocus = this.sidebarEl.contains(document.activeElement);
     if (this.rebuildTimer !== null) {
       clearTimeout(this.rebuildTimer);
       this.rebuildTimer = null;
     }
-    // Opening is a deliberate action — rebuild immediately AND force a complete
-    // parse so the WHOLE document's headings appear, not just the parsed
-    // viewport. This is the only forced parse; it is off the keystroke path.
+    if (!open && this.pinned) {
+      // Invariant: pinned ⇒ open. An explicit close (toggle / Mod-Alt-o)
+      // unpins too — a pinned-but-closed host combo has no CSS meaning.
+      this.setPinned(false);
+    }
+    this.host.classList.toggle(OUTLINE_OPEN_CLASS, open);
+    this.sidebarEl.toggleAttribute("inert", !open);
+    this.toggleEl.setAttribute("aria-pressed", String(open));
+    this.toggleEl.classList.toggle("active", open);
     if (open) {
+      // The open-state CSS hides the toggle (the header pin takes its spot); a
+      // keyboard-focused toggle would strand focus on an invisible control.
+      if (document.activeElement === this.toggleEl) {
+        this.pinEl.focus();
+      }
+      // Opening is a deliberate action — rebuild immediately AND force a
+      // complete parse so the WHOLE document's headings appear, not just the
+      // parsed viewport. The only forced parse; off the keystroke path.
       this.rebuild(true);
+    } else if (hadSidebarFocus) {
+      // Closing while focus was inside the (now-inert) sidebar: hand focus
+      // back to the editor instead of letting the browser drop it on <body>.
+      this.view.focus();
+    }
+  }
+
+  private setPinned(pinned: boolean): void {
+    this.pinned = pinned;
+    this.host.classList.toggle(OUTLINE_PINNED_CLASS, pinned);
+    this.pinEl.classList.toggle("pinned", pinned);
+    this.pinEl.setAttribute("aria-pressed", String(pinned));
+    if (pinned) {
+      this.cancelScheduledClose();
+    }
+    // Unpinning deliberately KEEPS the sidebar open: a pointer-driven unpin
+    // happens with the pointer inside the sidebar, so the normal pointer-leave
+    // path closes it afterwards; a keyboard unpin never surprise-closes a
+    // surface the user is focused in.
+  }
+
+  private scheduleOpen(): void {
+    if (this.open) {
+      return;
+    }
+    this.cancelScheduledOpen();
+    this.openTimer = setTimeout(() => {
+      this.openTimer = null;
+      this.setOpen(true);
+    }, HOVER_OPEN_DELAY_MS);
+  }
+
+  private cancelScheduledOpen(): void {
+    if (this.openTimer !== null) {
+      clearTimeout(this.openTimer);
+      this.openTimer = null;
+    }
+  }
+
+  private scheduleClose(): void {
+    if (this.pinned || !this.open) {
+      return;
+    }
+    this.cancelScheduledClose();
+    this.closeTimer = setTimeout(() => {
+      this.closeTimer = null;
+      if (!this.pinned) {
+        this.setOpen(false);
+      }
+    }, HOVER_CLOSE_DELAY_MS);
+  }
+
+  private cancelScheduledClose(): void {
+    if (this.closeTimer !== null) {
+      clearTimeout(this.closeTimer);
+      this.closeTimer = null;
     }
   }
 
@@ -224,6 +393,11 @@ class OutlinePanel implements PluginValue {
     });
     this.view.focus();
     this.updateActive();
+    // Overlay mode is a transient navigator — the jump ends the task, so put
+    // the surface away. Pinned mode is a persistent map: stay open.
+    if (!this.pinned) {
+      this.setOpen(false);
+    }
   }
 
   private updateActive(): void {
@@ -266,7 +440,7 @@ const outlineKeymap = keymap.of([
   },
 ]);
 
-/** The outline extension: the overlay ViewPlugin + its toggle keymap. */
+/** The outline extension: the sidebar ViewPlugin + its toggle keymap. */
 export function quollOutline(): Extension {
   return [outlinePlugin, outlineKeymap];
 }

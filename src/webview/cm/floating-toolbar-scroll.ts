@@ -1,13 +1,13 @@
 // Floating-toolbar scroll-hide. A display-only, shared scroll-direction
 // observer for the two floating chrome buttons (outline toggle + switch-editor
-// toggle) and the outline panel. Scrolling DOWN slides them off the top edge;
+// toggle). Scrolling DOWN slides them off the top edge;
 // scrolling UP brings them back; they are ALWAYS shown near the very top.
 //
 // The observer owns ONE `scroll` listener on `view.scrollDOM` (the .cm-scroller)
 // and drives BOTH buttons through a single class on the `.quoll-editor` host —
 // so there is one direction source, and the two button-owning ViewPlugins
 // (cm/outline, cm/switch-editor) are NOT touched. Alongside the class it toggles
-// the `inert` attribute on the chrome so hidden toggles / panel leave the focus
+// the `inert` attribute on the chrome so hidden toggles leave the focus
 // + a11y tree IMMEDIATELY (the CSS `visibility:hidden` is delayed until the
 // slide finishes — see setChromeHidden). Pure view chrome: no document
 // mutation, no CodeMirror change, no write-lock, no protocol message.
@@ -44,13 +44,15 @@ export const CHROME_HIDDEN_CLASS = "quoll-chrome-hidden";
 /** The floating chrome the observer removes from the focus / a11y tree while
  *  hidden. Kept in lockstep with the `.quoll-chrome-hidden …` CSS selectors.
  *  The CSS `visibility:hidden` is DELAYED until the 0.2s slide finishes
- *  (`visibility 0s 0.2s`), so on its own it would leave the offscreen toggles /
- *  panel keyboard-focusable for that window; toggling `inert` from JS in sync
- *  with the class closes it IMMEDIATELY (set on hide, cleared on show). Queried
- *  at each transition (never cached) so plugin construction order and the
- *  lazily-shown outline panel are handled uniformly. */
-export const CHROME_SELECTOR =
-  ".quoll-outline-toggle, .quoll-switch-editor-toggle, .quoll-outline-panel";
+ *  (`visibility 0s 0.2s`), so on its own it would leave the offscreen toggles
+ *  keyboard-focusable for that window; toggling `inert` from JS in sync with
+ *  the class closes it IMMEDIATELY (set on hide, cleared on show). The outline
+ *  SIDEBAR is deliberately NOT chrome: unpinned it is hover-scoped (scrolling
+ *  the content means the pointer already left it, so it is closed) and pinned
+ *  it is a structural column that must survive scrolling. Queried at each
+ *  transition (never cached) so plugin construction order is handled
+ *  uniformly. */
+export const CHROME_SELECTOR = ".quoll-outline-toggle, .quoll-switch-editor-toggle";
 
 /** Default jitter dead-zone (px). Movement within this of the anchor does NOT
  *  flip visibility, so the chrome never flickers on a trackpad wiggle. */
