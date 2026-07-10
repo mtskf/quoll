@@ -16,6 +16,7 @@
     "test",
     "out",
     "vitest.config.ts",
+    "vitest.browser.config.ts",
     "esbuild.config.mjs",
     "src/webview"
   ]

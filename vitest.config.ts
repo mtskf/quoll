@@ -19,7 +19,7 @@ export default defineConfig({
   test: {
     environment: "node",
     include: ["test/**/*.test.ts"],
-    exclude: ["test/extension/e2e/**", "node_modules/**"],
+    exclude: ["test/extension/e2e/**", "test/webview-browser/**", "node_modules/**"],
     coverage: {
       provider: "v8",
       include: ["src/**/*.ts"],

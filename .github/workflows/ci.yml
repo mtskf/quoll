@@ -60,6 +60,35 @@ jobs:
       - name: Unit tests
         run: pnpm test:unit
 
+      # Real-chromium layout gate (test/webview-browser via @vitest/browser).
+      # happy-dom has no layout engine, so the list-hang pixel alignment + the
+      # "hang base == real computed .cm-line padding" contract can only run here.
+      # Cache the Playwright browser keyed on the installed version so a bump
+      # invalidates it (mirrors the .vscode-test cache pattern below); the version
+      # lives in the lockfile (single source of truth), extracted here so a bump
+      # invalidates the cache automatically.
+      - name: Resolve Playwright version
+        id: pw-version
+        run: |
+          version=$(node -p "require('playwright/package.json').version")
+          if [ -z "$version" ]; then
+            echo "::error::Could not read playwright version" >&2
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Cache Playwright browsers
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ steps.pw-version.outputs.version }}
+
+      - name: Install Playwright chromium
+        run: pnpm exec playwright install --with-deps chromium
+
+      - name: Browser tests (@vitest/browser chromium)
+        run: pnpm test:browser
+
       - name: Build (host + webview via esbuild)
         run: pnpm build
 
