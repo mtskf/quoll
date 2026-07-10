@@ -104,8 +104,18 @@ function reresolveTab(captured: Tab): Tab | undefined {
   } else {
     return undefined;
   }
-  // `captured.group.viewColumn` is a primitive captured at snapshot time, stable
-  // across the intervening tab-model event even though the Tab object is not.
+  // Scope to the captured tab's own group by COLUMN, then find the tab there.
+  // `captured` is a stale snapshot Tab after the intervening open; its `.group`
+  // wrapper is NOT retained in `window.tabGroups.all` (a reference/`includes`
+  // check rejects every swap — verified empirically on VS Code 1.94.0), so we
+  // read the source group's `viewColumn` off it and re-find the LIVE group at
+  // that column. This closes the correct split for the real cases (single view,
+  // and multi-split toggled from any group — pinned by the E2E). Accepted narrow
+  // gap: if the source group is itself destroyed mid-swap AND an unrelated
+  // same-file text split is compacted into its old column slot, this could match
+  // that split's tab — reachable only by closing the entire source split within
+  // the sub-ms open window, and the stable Tabs API exposes no group identity to
+  // disambiguate it.
   const capturedColumn = captured.group.viewColumn;
   const group = window.tabGroups.all.find((g) => g.viewColumn === capturedColumn);
   return group?.tabs.find((t) => tabMatches(t, uriKey, surface, quollViewType));
