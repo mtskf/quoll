@@ -159,10 +159,19 @@ function postEditMessage(dispatch: Dispatch, content: string, baseDocVersion: nu
   const postStart = QUOLL_PERF ? perfNow() : 0;
   const ok = safePostMessage(getHost(), message, "edit", (err) => {
     const detail = err instanceof Error ? err.message : String(err);
-    dispatch({
-      type: "serialize-error",
-      error: { code: "internal_error", message: `Could not send edit to host: ${detail}` },
-    });
+    try {
+      dispatch({
+        type: "serialize-error",
+        error: { code: "internal_error", message: `Could not send edit to host: ${detail}` },
+      });
+    } catch (dispatchErr) {
+      // dispatch is not expected to throw, but if it ever does, editInFlight would
+      // otherwise stay stuck true and silently block all further edits — log it.
+      console.error(
+        "[quoll] serialize-error dispatch itself failed; edits may be silently blocked",
+        dispatchErr
+      );
+    }
   });
   if (ok && QUOLL_PERF) {
     perfRecord("webview:postMessage", perfNow() - postStart);

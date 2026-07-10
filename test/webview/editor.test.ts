@@ -354,6 +354,45 @@ describe("editor — postEditMessage debounce-path throw surface (V-M13(a))", ()
   });
 });
 
+// V-M13(b): a throw from `dispatch` itself, inside postEditMessage's onError
+// callback, must not propagate out of the debounce-driven flush. Without a
+// guard around this inner dispatch call, editInFlight (set true by the prior
+// post-edit dispatch) would never be cleared by serialize-error, silently
+// blocking all further edits (state.ts's post-edit case: `if (editInFlight)
+// return state`).
+describe("editor — postEditMessage survives a throwing serialize-error dispatch (V-M13(b))", () => {
+  it("logs and does not propagate when the serialize-error dispatch itself throws", () => {
+    vi.useFakeTimers();
+    const consoleSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    let calls = 0;
+    postMessage.mockImplementation((m) => {
+      if ((m as { type?: string })?.type === "edit") {
+        calls++;
+        if (calls === 1) {
+          throw new Error("structuredClone failed");
+        }
+      }
+    });
+    const dispatchSpy = vi.fn((action: Action) => {
+      if (action.type === "serialize-error") {
+        throw new Error("dispatch exploded");
+      }
+    });
+    const { handle, view } = mount({ onDispatch: dispatchSpy });
+    handle.applyDocument("seed", true, 1);
+    view.dispatch({ changes: { from: view.state.doc.length, insert: "x" } });
+    // Must not throw out of the debounce-driven flush.
+    expect(() => vi.advanceTimersByTime(300)).not.toThrow();
+    const quollLogs = consoleSpy.mock.calls.filter(
+      (args) =>
+        typeof args[0] === "string" &&
+        args[0].includes("[quoll] serialize-error dispatch itself failed")
+    );
+    expect(quollLogs.length).toBe(1);
+    consoleSpy.mockRestore();
+  });
+});
+
 // Oversized doc: an edit whose content exceeds MAX_CONTENT_LENGTH would be
 // silently dropped by the host boundary validator (isBoundedContent →
 // console.warn, no edit-rejected), so the webview MUST intercept it on the
