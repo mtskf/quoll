@@ -116,6 +116,15 @@ interface TestOverrides {
    *  (which the test process cannot spy on through the vscode module
    *  namespace). */
   openExternal: ((url: string) => Thenable<boolean>) | null;
+  /** When non-null, the panel's `case "open-link"` arm routes
+   *  `handleOpenLink`'s injected `openWith` dep through this instead of
+   *  `(uri) => openInQuollEditor(uri, QuollEditorPanel.viewType)`. The
+   *  override sees the host-resolved, containment-gated target Uri and is
+   *  used by the open-link E2E test to assert the resolved target
+   *  deterministically (and to confirm the containment gate drops
+   *  out-of-scope targets) without depending on the real `vscode.openWith`
+   *  command. */
+  openLink: ((uri: Uri) => Thenable<unknown>) | null;
   /** When non-null, resolveCustomTextEditor builds the webview HTML
    *  through this instead of `QuollEditorPanel.getWebviewContent`. The
    *  override may throw synchronously to simulate a `buildWebviewHtml`
@@ -146,6 +155,7 @@ function createOverrides(): TestOverrides {
     applyEdit: null,
     webviewPostMessage: null,
     openExternal: null,
+    openLink: null,
     buildWebviewHtml: null,
     writeImageFile: null,
     diskConflictPrompt: null,
@@ -217,6 +227,16 @@ export class TestHarness {
 
   set openExternalOverride(override: ((url: string) => Thenable<boolean>) | null) {
     this._overrides.openExternal = override;
+  }
+
+  /** Read by the panel's `case "open-link"` arm to route the
+   *  `openWith` dep through a test override — see `TestOverrides.openLink`. */
+  get openLinkOverride(): ((uri: Uri) => Thenable<unknown>) | null {
+    return this._overrides.openLink;
+  }
+
+  set openLinkOverride(override: ((uri: Uri) => Thenable<unknown>) | null) {
+    this._overrides.openLink = override;
   }
 
   /** Read by resolveCustomTextEditor to build the webview HTML through a
