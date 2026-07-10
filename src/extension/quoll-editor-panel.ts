@@ -917,7 +917,7 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
         isDisposed: () => disposed,
         isDirty: () => document.isDirty,
         readBufferText: () => canonicalDocumentText(document),
-        promptOverride: () => this.harness?.diskConflictPromptOverride,
+        promptOverride: () => this.harness?.diskConflictPromptOverride ?? null,
         revealPanel: () => webviewPanel.reveal(webviewPanel.viewColumn, false),
         showError,
       })

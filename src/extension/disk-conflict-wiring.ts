@@ -43,11 +43,10 @@ export interface DiskConflictWiringDeps {
   readonly readBufferText: () => string;
   /** Getter for the test override of the warning prompt
    *  (harness.diskConflictPromptOverride) — read PER PROMPT (it can be set after
-   *  resolve). null/undefined routes to window.showWarningMessage. */
+   *  resolve). null routes to window.showWarningMessage. */
   readonly promptOverride: () =>
     | ((message: string, ...actions: string[]) => Thenable<string | undefined>)
-    | null
-    | undefined;
+    | null;
   /** Make the panel the active editor so the platform revert targets THIS doc. */
   readonly revealPanel: () => void;
   /** Surface an error toast. */
