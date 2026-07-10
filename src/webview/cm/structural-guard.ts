@@ -133,10 +133,10 @@ export function touchesStructuralReparse(tr: Transaction): boolean {
     }
     // TABLE-DELIM — a GFM table delimiter row completing / breaking via a
     // single-char edit (`|--x|`→`|---|`) interrupts a lazy continuation and can
-    // CLOSE an enclosing list, re-shaping a boundary OUTSIDE the changed run —
-    // a same-line, non-newline, non-shape edit that SHAPE and the other arms
-    // all miss (it flips a far ListItem's list membership, which the fold
-    // fields' new listItemGetsVerticalGap eligibility reads). Over-approximate
+    // CLOSE an enclosing list while FORMING a Table, re-shaping the block
+    // structure OUTSIDE the changed run — a same-line, non-newline, non-shape
+    // edit that SHAPE and the other arms all miss (it splits a list / forms a
+    // table block that the fold fields and block widgets read). Over-approximate
     // on any `|` in the changed line (a table cell/delimiter separator); a false
     // match only costs a full rebuild (speed), never correctness — same contract
     // as the other arms. Completeness is also guaranteed at the parser level:

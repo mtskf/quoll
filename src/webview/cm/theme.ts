@@ -85,7 +85,7 @@ export const quollTheme = EditorView.theme({
   // (horizontal hang), so nested-list alignment is untouched. Token retunes it
   // from :root (styles.css); display-only — the Markdown bytes never change.
   ".cm-line.quoll-list-hang": {
-    paddingTop: "var(--quoll-list-item-gap, 0.6em)",
+    paddingTop: "var(--quoll-list-item-gap, 0.5em)",
   },
   ".cm-cursor, .cm-dropCursor": {
     borderLeftColor: "var(--vscode-editorCursor-foreground)",
