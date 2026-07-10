@@ -149,7 +149,11 @@ function postEditMessage(dispatch: Dispatch, content: string, baseDocVersion: nu
     });
     return false;
   }
-  dispatch({ type: "post-edit" });
+  try {
+    dispatch({ type: "post-edit" });
+  } catch (dispatchErr) {
+    console.error("[quoll] post-edit dispatch itself failed", dispatchErr);
+  }
   const message: WebviewToHost = {
     protocol: PROTOCOL_VERSION,
     type: "edit",
@@ -165,10 +169,16 @@ function postEditMessage(dispatch: Dispatch, content: string, baseDocVersion: nu
         error: { code: "internal_error", message: `Could not send edit to host: ${detail}` },
       });
     } catch (dispatchErr) {
-      // dispatch is not expected to throw, but if it ever does, editInFlight would
-      // otherwise stay stuck true and silently block all further edits — log it.
+      // Not a reducer throw (state.ts's serialize-error case is a pure spread
+      // and cannot throw) — state.editInFlight is already committed false by
+      // the time this catches. The realistic source is shell.ts's dispatch
+      // side effects: renderBanners' DOM write, or the synchronous re-entrant
+      // drain (onReducerCommit -> edit-sync.replayIfNeeded -> postEditMessage).
+      // In that case editInFlight recovers correctly, but the "Cannot save"
+      // banner never reached the DOM for this tick — log it so that failure
+      // mode is diagnosable.
       console.error(
-        "[quoll] serialize-error dispatch itself failed; edits may be silently blocked",
+        "[quoll] serialize-error dispatch itself failed (banner may not have rendered)",
         dispatchErr
       );
     }

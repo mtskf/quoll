@@ -389,6 +389,45 @@ describe("editor — postEditMessage survives a throwing serialize-error dispatc
         args[0].includes("[quoll] serialize-error dispatch itself failed")
     );
     expect(quollLogs.length).toBe(1);
+    // The inner catch must fully absorb the throw — safePostMessage's own
+    // outer onError catcher (safe-post-message.ts) must never see it, or the
+    // error would surface twice.
+    const outerLogs = consoleSpy.mock.calls.filter(
+      (args) =>
+        typeof args[0] === "string" &&
+        args[0].includes("[quoll] onError for postMessage(edit) failed")
+    );
+    expect(outerLogs.length).toBe(0);
+    consoleSpy.mockRestore();
+  });
+});
+
+// V-M14: a throw from `dispatch` on the post-edit action itself (the FIRST
+// dispatch call in postEditMessage, before the Edit message is even built)
+// must not propagate out of the debounce-driven flush. Symmetric with
+// V-M13(b)'s guard around the serialize-error dispatch.
+describe("editor — postEditMessage survives a throwing post-edit dispatch (V-M14)", () => {
+  it("logs and does not propagate when the post-edit dispatch itself throws, and still posts the edit", () => {
+    vi.useFakeTimers();
+    const consoleSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const dispatchSpy = vi.fn((action: Action) => {
+      if (action.type === "post-edit") {
+        throw new Error("post-edit dispatch exploded");
+      }
+    });
+    const { handle, view } = mount({ onDispatch: dispatchSpy });
+    handle.applyDocument("seed", true, 1);
+    view.dispatch({ changes: { from: view.state.doc.length, insert: "x" } });
+    // Must not throw out of the debounce-driven flush.
+    expect(() => vi.advanceTimersByTime(300)).not.toThrow();
+    const quollLogs = consoleSpy.mock.calls.filter(
+      (args) =>
+        typeof args[0] === "string" && args[0].includes("[quoll] post-edit dispatch itself failed")
+    );
+    expect(quollLogs.length).toBe(1);
+    // The dispatch throw is swallowed, not a short-circuit — the Edit message
+    // still ships to the host afterward.
+    expect(editPosts()).toHaveLength(1);
     consoleSpy.mockRestore();
   });
 });
