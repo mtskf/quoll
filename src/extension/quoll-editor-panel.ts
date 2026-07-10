@@ -511,8 +511,11 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
     // onDidChangeTextDocument body). The panel injects the VS Code event sources as
     // subscribe closures (uri filter + TabInput* detection stay here) and the lazy
     // reducer/write reads; the factory owns the tracker + decision + restore edit.
-    // Created HERE (the old onDidChangeTextDocument site) so its disposables
-    // position — hence teardown order — matches the former inline listeners.
+    // Created HERE (the old onDidChangeTextDocument site) so the doc-change
+    // subscription keeps its former disposables position. The tab-close
+    // subscription (formerly registered later) now tears down at this earlier
+    // slot — behaviourally inert: teardown is a side-effect-free unsubscribe and
+    // both handlers are disposed-guarded no-ops once torn down.
     const uriString = document.uri.toString();
     const revertRescueWiring = createRevertRescueWiring({
       document,

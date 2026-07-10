@@ -223,6 +223,31 @@ describe("createRevertRescueWiring — coalescing branch", () => {
     vi.advanceTimersByTime(100);
     expect(t.dispatched).toEqual([6]);
   });
+
+  it("a positive alive rescue CANCELS a pending coalesced disk repost", () => {
+    vi.useFakeTimers();
+    const t = wire();
+    t.doc.text = "DIRTY";
+    t.doc.isDirty = true;
+    t.fireDocChange();
+    t.doc.text = "DISK";
+    t.doc.isDirty = false;
+    t.fireDocChange(); // arms revert + schedules trailing dispatch
+    const before = t.dispatched.length;
+    t.fireTabClose(); // pairs → rescue → cancel()
+    vi.advanceTimersByTime(100);
+    expect(t.dispatched.length).toBe(before); // cancelled timer must NOT fire a stale disk repost
+  });
+
+  it("a trailing dispatch scheduled before dispose does NOT fire after dispose", () => {
+    vi.useFakeTimers();
+    const t = wire();
+    t.writeLock.held = false;
+    t.fireDocChange(); // schedules trailing dispatch
+    t.disposedFlag.value = true; // panel disposed before the timer fires
+    vi.advanceTimersByTime(100);
+    expect(t.dispatched).toEqual([]);
+  });
 });
 
 describe("createRevertRescueWiring — alive tab-close rescue", () => {
@@ -281,5 +306,29 @@ describe("createRevertRescueWiring — alive tab-close rescue", () => {
 
     expect(t.showErrors.length).toBe(1);
     expect(t.showErrors[0]).toContain("boom");
+  });
+
+  it("skips the alive rescue when already disposed", async () => {
+    const t = wire();
+    const applySpy = vi.spyOn(workspace, "applyEdit");
+    armRevert(t);
+    t.disposedFlag.value = true;
+    t.fireTabClose(); // would pair, but disposed → no-op
+    await flush();
+
+    expect(applySpy).not.toHaveBeenCalled();
+  });
+
+  it("alive-path restore failure does NOT reseed if disposed before settle", async () => {
+    const t = wire();
+    vi.spyOn(workspace, "applyEdit").mockResolvedValue(false);
+    t.doc.version = 42;
+    armRevert(t);
+    t.fireTabClose(); // rescue fires; apply will resolve false
+    t.disposedFlag.value = true; // disposed before the promise settles
+    await flush();
+
+    expect(t.showErrors.length).toBe(1); // toast still fires
+    expect(t.dispatched).not.toContain(42); // but reseed is suppressed
   });
 });
