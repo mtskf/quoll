@@ -44,6 +44,31 @@ describe("htmlTableToGfm — structure", () => {
   });
 });
 
+describe("htmlTableToGfm — caption & section order", () => {
+  it("emits a <caption> as a paragraph above the table (not dropped)", () => {
+    const html = "<table><caption>Sales 2024</caption><tr><td>A</td><td>B</td></tr></table>";
+    expect(htmlTableToGfm(html)).toBe("Sales 2024\n\n| A | B |\n| --- | --- |");
+  });
+
+  it("orders rows thead → tbody → tfoot even when tfoot precedes tbody in source", () => {
+    // HTML 4 required <tfoot> before <tbody>; browsers keep source order in the
+    // DOM but render the footer last. Row order must follow render order.
+    const html =
+      "<table><thead><tr><td>H</td></tr></thead>" +
+      "<tfoot><tr><td>F</td></tr></tfoot>" +
+      "<tbody><tr><td>B1</td></tr></tbody></table>";
+    expect(htmlTableToGfm(html)).toBe("| H |\n| --- |\n| B1 |\n| F |");
+  });
+
+  it("does not promote a tfoot-first footer row to the GFM header (no thead)", () => {
+    const html =
+      "<table><tfoot><tr><td>F</td></tr></tfoot>" +
+      "<tbody><tr><td>B1</td></tr><tr><td>B2</td></tr></tbody></table>";
+    // header must be the first BODY row, footer stays last
+    expect(htmlTableToGfm(html)).toBe("| B1 |\n| --- |\n| B2 |\n| F |");
+  });
+});
+
 describe("htmlTableToGfm — cell escaping", () => {
   it("escapes pipes and backslashes so cells round-trip literally", () => {
     expect(htmlTableToGfm("<table><tr><td>a|b</td><td>c</td></tr></table>")).toContain("| a\\|b |");
@@ -74,6 +99,14 @@ describe("htmlTableToGfm — cell escaping", () => {
     // `a<x>b`: DOMParser drops the unknown `<x>` element (no text), leaving `ab`
     // — so use a bare `<` that survives as text to assert the angle-bracket escape.
     expect(htmlTableToGfm("<table><tr><td>a &lt; b</td><td>c</td></tr></table>")).toContain("\\<");
+  });
+
+  it("escapes ampersand so an entity-looking cell round-trips literally", () => {
+    // `&copy; 2024` (from a text node) would otherwise resolve to `© 2024` in a
+    // GFM renderer, breaking the literal round-trip. Escaping keeps it verbatim.
+    expect(htmlTableToGfm("<table><tr><td>&amp;copy; 2024</td><td>c</td></tr></table>")).toContain(
+      "\\&copy; 2024"
+    );
   });
 
   it("leaves line-start-only constructs literal (not inline-active in a cell)", () => {
@@ -241,6 +274,16 @@ describe("htmlTableToGfm — caps", () => {
     // 1001 > MAX_HTML_TABLE_COLS (1000): exercises the in-loop col cap + placed guard.
     const row = `<tr>${"<td>x</td>".repeat(1001)}</tr>`;
     expect(htmlTableToGfm(`<table>${row}</table>`)).toBeNull();
+  });
+
+  it("returns null when empty rows drain-balloon past the cell cap", () => {
+    // One 1000-wide row makes pending.length 1000, so every later EMPTY <tr> drains
+    // to width 1000. 1000 wide + 60 empty rows → 61 * 1000 > 50000. Pins the
+    // running (incremental) rectangle cap that bounds drain/skip cells, which the
+    // `placed` counter never sees.
+    const wide = `<tr>${"<td>x</td>".repeat(1000)}</tr>`;
+    const empties = "<tr></tr>".repeat(60);
+    expect(htmlTableToGfm(`<table>${wide}${empties}</table>`)).toBeNull();
   });
 });
 

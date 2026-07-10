@@ -148,33 +148,43 @@ function hasTextOutsideTable(body: Element, table: Element): boolean {
 }
 
 /** Direct `<tr>` of the table PLUS the direct `<tr>` of its direct
- *  `<thead>`/`<tbody>`/`<tfoot>`, in document order. Excludes nested-table rows. */
+ *  `<thead>`/`<tbody>`/`<tfoot>`, in RENDER order (thead → tbody / direct-`<tr>` →
+ *  tfoot), NOT source order. HTML 4 required `<tfoot>` to be written BEFORE
+ *  `<tbody>`, and browsers keep that source order in the DOM while rendering the
+ *  footer last; flattening in source order would put footer rows first (and, with
+ *  no `<thead>`, promote a footer row to the GFM header). Bucketing by section
+ *  keeps the row order the user actually saw. Excludes nested-table rows. */
 function directRows(table: Element): Element[] {
-  const rows: Element[] = [];
+  const head: Element[] = [];
+  const bodyRows: Element[] = []; // direct <tr> + <tbody> rows, in source order
+  const foot: Element[] = [];
+  let count = 0;
+  const concat = (): Element[] => [...head, ...bodyRows, ...foot];
+  // Running row cap fires per `<tr>` (a single browser-implicit `<tbody>` holds
+  // every row): one past the limit is enough for the caller to reject.
+  const push = (bucket: Element[], tr: Element): boolean => {
+    bucket.push(tr);
+    count++;
+    return count > MAX_HTML_TABLE_ROWS;
+  };
   for (const child of Array.from(table.children)) {
     const tag = child.tagName;
     if (tag === "TR") {
-      rows.push(child);
+      if (push(bodyRows, child)) {
+        return concat();
+      }
     } else if (tag === "THEAD" || tag === "TBODY" || tag === "TFOOT") {
+      const bucket = tag === "THEAD" ? head : tag === "TFOOT" ? foot : bodyRows;
       for (const grandchild of Array.from(child.children)) {
         if (grandchild.tagName === "TR") {
-          rows.push(grandchild);
-          // Running row cap, per `<tr>`: a single browser-implicit `<tbody>`
-          // holds every row, so the bound must fire INSIDE this loop (not just
-          // once per section) to actually cap a giant single-section table. One
-          // extra past the limit is enough for the caller to reject.
-          if (rows.length > MAX_HTML_TABLE_ROWS) {
-            return rows;
+          if (push(bucket, grandchild)) {
+            return concat();
           }
         }
       }
     }
-    // Also cap across top-level children (direct `<tr>` + multiple sections).
-    if (rows.length > MAX_HTML_TABLE_ROWS) {
-      break;
-    }
   }
-  return rows;
+  return concat();
 }
 
 /** Direct `<th>`/`<td>` children of a row (nested-table cells are descendants of a
@@ -244,11 +254,15 @@ function collectCellText(cell: Element): string {
 }
 
 /** Backslash-escape the Markdown-inline-active characters that can form an
- *  explicit link/image/code/emphasis, so a cell renders as LITERAL text. `\` is
- *  escaped FIRST so the backslashes added for the rest are not doubled.
- *  `a|b`→`a\|b`; `a\b`→`a\\b`; `a\|b`→`a\\\|b`; `[x](y)`→`\[x\](y)`. */
+ *  explicit link/image/code/emphasis, plus `&` (HTML entity references), so a
+ *  cell renders as LITERAL text. `\` is escaped FIRST so the backslashes added
+ *  for the rest are not doubled. `&` is included so an entity-looking cell such
+ *  as `&copy; 2024` round-trips verbatim instead of resolving to `© 2024` (a
+ *  fidelity fix — entities carry no security weight, they are literal-text
+ *  substitutions that cannot form structure).
+ *  `a|b`→`a\|b`; `a\b`→`a\\b`; `a\|b`→`a\\\|b`; `[x](y)`→`\[x\](y)`; `&copy;`→`\&copy;`. */
 function escapeCell(text: string): string {
-  return text.replace(/\\/g, "\\\\").replace(/[`*_[\]<~|]/g, "\\$&");
+  return text.replace(/\\/g, "\\\\").replace(/[`*_[\]<~|&]/g, "\\$&");
 }
 
 function rowToLine(cells: readonly string[]): string {
@@ -340,6 +354,18 @@ export function htmlTableToGfm(html: string): string | null {
       }
     }
 
+    // Bound the RECTANGULAR size incrementally. `placed` counts only source-cell
+    // colspan expansion; the drain/skip cells above (which balloon a narrow or
+    // EMPTY row up to a prior wide row's width via `pending.length`) are not
+    // counted, so a single wide row followed by many short/empty rows would
+    // otherwise materialise rows×maxCols cells before any post-loop guard. Reject
+    // as soon as the running rectangle would exceed the cap (≈51 rows for a
+    // 1000-wide balloon, not thousands).
+    const runningMaxCols = Math.max(maxCols, col);
+    if ((grid.length + 1) * runningMaxCols > MAX_HTML_TABLE_CELLS) {
+      return null;
+    }
+
     if (col > maxCols) {
       maxCols = col;
     }
@@ -347,11 +373,6 @@ export function htmlTableToGfm(html: string): string | null {
   }
 
   if (maxCols === 0) {
-    return null;
-  }
-  // Cap BEFORE rectangular padding: a single wide row among many narrow rows
-  // would balloon to rows×maxCols cells at padding time even if few were placed.
-  if (grid.length * maxCols > MAX_HTML_TABLE_CELLS) {
     return null;
   }
   for (const out of grid) {
@@ -366,5 +387,15 @@ export function htmlTableToGfm(html: string): string | null {
   for (let i = 1; i < grid.length; i++) {
     lines.push(rowToLine(grid[i]));
   }
-  return lines.join("\n"); // no trailing newline — the handler adds terminators
+  const gfm = lines.join("\n"); // no trailing newline — the handler adds terminators
+
+  // <caption> lives INSIDE the table subtree (so hasTextOutsideTable skips it),
+  // but it is visible text the plain-paste fallback would preserve — emit it as a
+  // paragraph above the table rather than dropping it. GFM has no table-caption
+  // syntax, so a leading paragraph is the faithful representation. Direct-child
+  // <caption> only (a nested table's caption belongs to that table, which is
+  // already excluded since we chose a top-level table).
+  const captionEl = Array.from(table.children).find((c) => c.tagName === "CAPTION");
+  const caption = captionEl ? escapeCell(collectCellText(captionEl)) : "";
+  return caption ? `${caption}\n\n${gfm}` : gfm;
 }
