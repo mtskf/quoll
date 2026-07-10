@@ -12,6 +12,7 @@ import {
   PROTOCOL_VERSION,
   type WebviewToHost,
 } from "../../../shared/protocol.js";
+import { safePostMessage } from "../../safe-post-message.js";
 import { hostDocumentReseed } from "../host-reseed.js";
 
 const MAX_IMAGES_PER_EVENT = 16;
@@ -135,10 +136,12 @@ export function createImagePasteDrop(opts: {
         clearPending(view, requestId);
         return;
       }
-      try {
-        opts.post({ protocol: PROTOCOL_VERSION, type: "image-write", requestId, data: base64 });
-      } catch (err) {
-        console.error("[quoll] postMessage(image-write) failed", err);
+      const ok = safePostMessage(
+        { postMessage: opts.post },
+        { protocol: PROTOCOL_VERSION, type: "image-write", requestId, data: base64 },
+        "image-write"
+      );
+      if (!ok) {
         clearPending(view, requestId);
       }
     };

@@ -15,13 +15,13 @@
 import { Facet } from "@codemirror/state";
 
 import { isAllowedUrl } from "../../markdown/url-allowlist.js";
-import { PROTOCOL_VERSION, type WebviewToHost } from "../../shared/protocol.js";
+import { PROTOCOL_VERSION } from "../../shared/protocol.js";
+import { type PostMessageHost, safePostMessage } from "../safe-post-message.js";
 
-/** Minimal host surface the sink needs — a thin structural type so tests pass
- *  a spy (identical shape to link-handlers' LinkOpenHost). */
-export type OpenExternalHost = {
-  postMessage(message: WebviewToHost): void;
-};
+/** Minimal host surface the sink needs — an alias of the safe-post-message
+ *  host shape, shared with link-handlers' LinkOpenHost, so tests can pass a
+ *  thin spy. */
+export type OpenExternalHost = PostMessageHost;
 
 /** Injectable sink for widget-originated "open external" requests. The table
  *  widget reads it at click time via `view.state.facet(...)`. Default is a
@@ -53,10 +53,10 @@ export function openExternalSinkFor(host: OpenExternalHost): (href: string) => v
       console.warn("[quoll] open-external sink dropped: URL not in allowlist");
       return;
     }
-    try {
-      host.postMessage({ protocol: PROTOCOL_VERSION, type: "open-external", href });
-    } catch (err) {
-      console.error("[quoll] postMessage(open-external) failed", err);
-    }
+    safePostMessage(
+      host,
+      { protocol: PROTOCOL_VERSION, type: "open-external", href },
+      "open-external"
+    );
   };
 }

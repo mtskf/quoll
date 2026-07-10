@@ -21,8 +21,9 @@ import { type EditorState, type Extension, Prec } from "@codemirror/state";
 import { type Command, keymap } from "@codemirror/view";
 
 import { PROTOCOL_VERSION, type WebviewToHost } from "../../shared/protocol.js";
+import { type PostMessageHost, safePostMessage } from "../safe-post-message.js";
 
-export type HandoffHost = { postMessage(message: WebviewToHost): void };
+export type HandoffHost = PostMessageHost;
 
 /** Flush any pending debounced Edit BEFORE posting a handoff. edit-sync
  *  debounces outbound Edits by 300 ms, so a handoff fired mid-window would hand
@@ -97,13 +98,9 @@ export function contextHandoffCommand(host: HandoffHost, flushPendingEdit: () =>
       startLine,
       endLine,
     };
-    try {
-      host.postMessage(message);
-    } catch (err) {
-      // Mirror the edit-post failure posture: log, never throw out of a
-      // keymap command (a throw would unwind CodeMirror's key dispatch).
-      console.error("[quoll] postMessage(context-handoff) failed", err);
-    }
+    // Log, never throw out of a keymap command (a throw would unwind
+    // CodeMirror's key dispatch) — safePostMessage handles that.
+    safePostMessage(host, message, "context-handoff");
     // Return true unconditionally: the chord is "claimed" by Quoll whether or
     // not the post succeeded, so CodeMirror stops default handling and the
     // event never bubbles to a stale native binding.
@@ -126,12 +123,8 @@ export function codexContextHandoffCommand(
       protocol: PROTOCOL_VERSION,
       type: "codex-context-handoff",
     };
-    try {
-      host.postMessage(message);
-    } catch (err) {
-      // Mirror contextHandoffCommand: log, never throw out of a keymap command.
-      console.error("[quoll] postMessage(codex-context-handoff) failed", err);
-    }
+    // Mirror contextHandoffCommand: log, never throw out of a keymap command.
+    safePostMessage(host, message, "codex-context-handoff");
     // Claim the chord regardless so CodeMirror preventDefaults and the event
     // does not bubble to the workbench (togglePanel) — see CODEX_CONTEXT_HANDOFF_KEY.
     return true;

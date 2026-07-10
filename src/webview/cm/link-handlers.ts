@@ -17,6 +17,7 @@ import { EditorView } from "@codemirror/view";
 import { isAllowedUrl } from "../../markdown/url-allowlist.js";
 import { decodeMarkdownDestination } from "../../markdown/url-decode.js";
 import { MAX_HREF_LENGTH, PROTOCOL_VERSION, type WebviewToHost } from "../../shared/protocol.js";
+import { type PostMessageHost, safePostMessage } from "../safe-post-message.js";
 
 // --- Click-to-open helper ---
 //
@@ -35,12 +36,9 @@ import { MAX_HREF_LENGTH, PROTOCOL_VERSION, type WebviewToHost } from "../../sha
 // shared module is rejected as scope creep (10 LOC ×2 is cheaper than
 // a third file in the C9b deletion footprint).
 
-/** Subset of the Host singleton's surface used by tryOpenLinkAt. Pinned
- *  as a structural type so tests can pass a thin spy without importing the
- *  full host module. */
-export type LinkOpenHost = {
-  postMessage(message: WebviewToHost): void;
-};
+/** Alias of the safe-post-message host shape (not the full Host singleton),
+ *  so tests can pass a thin spy without importing the full host module. */
+export type LinkOpenHost = PostMessageHost;
 
 const OPENABLE_SCHEMES = new Set(["http", "https", "mailto"]);
 
@@ -76,13 +74,7 @@ function relativeMarkdownTarget(decoded: string): boolean {
  *  fall-through open-external already relies on (intentional parity; not a new
  *  risk). Shared by the open-external and open-link branches of tryOpenLinkAt. */
 function postToHost(host: LinkOpenHost, message: WebviewToHost): boolean {
-  try {
-    host.postMessage(message);
-  } catch (err) {
-    console.error("[quoll] postMessage(link-open) failed", err);
-    return false;
-  }
-  return true;
+  return safePostMessage(host, message, "link-open");
 }
 
 function selectionIntersects(state: EditorState, from: number, to: number): boolean {

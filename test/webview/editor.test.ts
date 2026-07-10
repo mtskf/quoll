@@ -354,6 +354,84 @@ describe("editor — postEditMessage debounce-path throw surface (V-M13(a))", ()
   });
 });
 
+// V-M13(b): a throw from `dispatch` itself, inside postEditMessage's onError
+// callback, must not propagate out of the debounce-driven flush. Without a
+// guard around this inner dispatch call, editInFlight (set true by the prior
+// post-edit dispatch) would never be cleared by serialize-error, silently
+// blocking all further edits (state.ts's post-edit case: `if (editInFlight)
+// return state`).
+describe("editor — postEditMessage survives a throwing serialize-error dispatch (V-M13(b))", () => {
+  it("logs and does not propagate when the serialize-error dispatch itself throws", () => {
+    vi.useFakeTimers();
+    const consoleSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    let calls = 0;
+    postMessage.mockImplementation((m) => {
+      if ((m as { type?: string })?.type === "edit") {
+        calls++;
+        if (calls === 1) {
+          throw new Error("structuredClone failed");
+        }
+      }
+    });
+    const dispatchSpy = vi.fn((action: Action) => {
+      if (action.type === "serialize-error") {
+        throw new Error("dispatch exploded");
+      }
+    });
+    const { handle, view } = mount({ onDispatch: dispatchSpy });
+    handle.applyDocument("seed", true, 1);
+    view.dispatch({ changes: { from: view.state.doc.length, insert: "x" } });
+    // Must not throw out of the debounce-driven flush.
+    expect(() => vi.advanceTimersByTime(300)).not.toThrow();
+    const quollLogs = consoleSpy.mock.calls.filter(
+      (args) =>
+        typeof args[0] === "string" &&
+        args[0].includes("[quoll] serialize-error dispatch itself failed")
+    );
+    expect(quollLogs.length).toBe(1);
+    // The inner catch must fully absorb the throw — safePostMessage's own
+    // outer onError catcher (safe-post-message.ts) must never see it, or the
+    // error would surface twice.
+    const outerLogs = consoleSpy.mock.calls.filter(
+      (args) =>
+        typeof args[0] === "string" &&
+        args[0].includes("[quoll] onError for postMessage(edit) failed")
+    );
+    expect(outerLogs.length).toBe(0);
+    consoleSpy.mockRestore();
+  });
+});
+
+// V-M14: a throw from `dispatch` on the post-edit action itself (the FIRST
+// dispatch call in postEditMessage, before the Edit message is even built)
+// must not propagate out of the debounce-driven flush. Symmetric with
+// V-M13(b)'s guard around the serialize-error dispatch.
+describe("editor — postEditMessage survives a throwing post-edit dispatch (V-M14)", () => {
+  it("logs and does not propagate when the post-edit dispatch itself throws, and still posts the edit", () => {
+    vi.useFakeTimers();
+    const consoleSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const dispatchSpy = vi.fn((action: Action) => {
+      if (action.type === "post-edit") {
+        throw new Error("post-edit dispatch exploded");
+      }
+    });
+    const { handle, view } = mount({ onDispatch: dispatchSpy });
+    handle.applyDocument("seed", true, 1);
+    view.dispatch({ changes: { from: view.state.doc.length, insert: "x" } });
+    // Must not throw out of the debounce-driven flush.
+    expect(() => vi.advanceTimersByTime(300)).not.toThrow();
+    const quollLogs = consoleSpy.mock.calls.filter(
+      (args) =>
+        typeof args[0] === "string" && args[0].includes("[quoll] post-edit dispatch itself failed")
+    );
+    expect(quollLogs.length).toBe(1);
+    // The dispatch throw is swallowed, not a short-circuit — the Edit message
+    // still ships to the host afterward.
+    expect(editPosts()).toHaveLength(1);
+    consoleSpy.mockRestore();
+  });
+});
+
 // Oversized doc: an edit whose content exceeds MAX_CONTENT_LENGTH would be
 // silently dropped by the host boundary validator (isBoundedContent →
 // console.warn, no edit-rejected), so the webview MUST intercept it on the

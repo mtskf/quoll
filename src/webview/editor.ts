@@ -61,6 +61,7 @@ import {
   quollTokenMarkers,
 } from "./cm/theme.js";
 import { getHost } from "./host.js";
+import { safePostMessage } from "./safe-post-message.js";
 import { type Action, canPostEdit, type WebviewState } from "./state.js";
 
 type Dispatch = (action: Action) => void;
@@ -148,7 +149,11 @@ function postEditMessage(dispatch: Dispatch, content: string, baseDocVersion: nu
     });
     return false;
   }
-  dispatch({ type: "post-edit" });
+  try {
+    dispatch({ type: "post-edit" });
+  } catch (dispatchErr) {
+    console.error("[quoll] post-edit dispatch itself failed", dispatchErr);
+  }
   const message: WebviewToHost = {
     protocol: PROTOCOL_VERSION,
     type: "edit",
@@ -156,21 +161,32 @@ function postEditMessage(dispatch: Dispatch, content: string, baseDocVersion: nu
     baseDocVersion,
   };
   const postStart = QUOLL_PERF ? perfNow() : 0;
-  try {
-    getHost().postMessage(message);
-    if (QUOLL_PERF) {
-      perfRecord("webview:postMessage", perfNow() - postStart);
-    }
-    return true;
-  } catch (err) {
+  const ok = safePostMessage(getHost(), message, "edit", (err) => {
     const detail = err instanceof Error ? err.message : String(err);
-    console.error("[quoll] postMessage(edit) failed", err);
-    dispatch({
-      type: "serialize-error",
-      error: { code: "internal_error", message: `Could not send edit to host: ${detail}` },
-    });
-    return false;
+    try {
+      dispatch({
+        type: "serialize-error",
+        error: { code: "internal_error", message: `Could not send edit to host: ${detail}` },
+      });
+    } catch (dispatchErr) {
+      // Not a reducer throw (state.ts's serialize-error case is a pure spread
+      // and cannot throw) — state.editInFlight is already committed false by
+      // the time this catches. The realistic source is shell.ts's dispatch
+      // side effects: renderBanners' DOM write, or the synchronous re-entrant
+      // drain (onReducerCommit -> edit-sync.replayIfNeeded -> postEditMessage).
+      // In that case editInFlight recovers correctly, but the "Cannot save"
+      // banner never reached the DOM for this tick — log it so that failure
+      // mode is diagnosable.
+      console.error(
+        "[quoll] serialize-error dispatch itself failed (banner may not have rendered)",
+        dispatchErr
+      );
+    }
+  });
+  if (ok && QUOLL_PERF) {
+    perfRecord("webview:postMessage", perfNow() - postStart);
   }
+  return ok;
 }
 
 export function mountEditor(opts: EditorOptions): EditorHandle {
@@ -234,11 +250,7 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
       type: "lint-diagnostics",
       diagnostics,
     };
-    try {
-      getHost().postMessage(message);
-    } catch (err) {
-      console.error("[quoll] postMessage(lint-diagnostics) failed", err);
-    }
+    safePostMessage(getHost(), message, "lint-diagnostics");
   };
 
   // Report the current caret to the host on every selection change (one-shot
@@ -253,11 +265,7 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
       character: caret.character,
       selectedChars,
     };
-    try {
-      getHost().postMessage(message);
-    } catch (err) {
-      console.error("[quoll] postMessage(caret-report) failed", err);
-    }
+    safePostMessage(getHost(), message, "caret-report");
   };
 
   // caret-report trailing debounce. The updateListener schedules the latest
