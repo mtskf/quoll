@@ -46,14 +46,15 @@ async function openTempQuoll(
   harness: TestHarnessShape,
   content: string,
   slug: string,
-  previous: PanelControlsShape | null
+  previous: PanelControlsShape | null,
+  openOptions?: vscode.TextDocumentShowOptions
 ): Promise<{ uri: vscode.Uri; file: string; panel: PanelControlsShape }> {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), `quoll-sbar-${slug}-`));
   const file = path.join(dir, `${slug}.md`);
   await fs.writeFile(file, content);
   const uri = vscode.Uri.file(file);
 
-  await vscode.commands.executeCommand("vscode.openWith", uri, VIEW_TYPE);
+  await vscode.commands.executeCommand("vscode.openWith", uri, VIEW_TYPE, openOptions);
   const deadline = Date.now() + 8000;
   for (;;) {
     const panel = harness.activePanel;
@@ -177,5 +178,59 @@ describe("status-bar-active-edge", function () {
       () => [...aItems, ...bItems].every((i) => i.disposeCount === 1),
       "every status-bar item disposed exactly once on close"
     );
+  });
+
+  // The seed's `if (webviewPanel.active) statusBar.show()` FALSE-arm: a panel
+  // constructed while it is NOT the active editor must leave its status-bar
+  // trio hidden — no seed `show()` — until it later becomes active. The
+  // active TRUE-arm above never exercises this because every prior open takes
+  // focus. Here panel A opens first and KEEPS focus; panel B opens `Beside`
+  // with `preserveFocus: true`, so B resolves with `webviewPanel.active ===
+  // false` and its seed must not show. `showCount === 0` is the load-bearing
+  // proof of construction-time inactivity (a panel that constructed active, or
+  // took a transient active edge, would carry a non-zero count even if it
+  // ended hidden).
+  it("a panel constructed while inactive keeps its status bar hidden until an active edge", async () => {
+    const harness = await getHarness();
+
+    // Panel A opens active and holds keyboard focus.
+    const a = await openTempQuoll(harness, "a0\na1\n", "seeda", null);
+    files.push(a.file);
+    await pollUntil(() => allVisible(a.panel.statusBarItems), "panel A visible");
+
+    // Panel B opens beside without stealing focus → constructs inactive.
+    const b = await openTempQuoll(harness, "b0\nb1\n", "seedb", a.panel, {
+      viewColumn: vscode.ViewColumn.Beside,
+      preserveFocus: true,
+    });
+    files.push(b.file);
+    assert.strictEqual(
+      b.panel.statusBarItems.length,
+      3,
+      "panel B must expose three status-bar items"
+    );
+    assert.notStrictEqual(a.panel, b.panel, "the two panels must be distinct controls");
+    assert.strictEqual(
+      b.panel.webviewPanel.active,
+      false,
+      "panel B must resolve inactive (preserveFocus beside) — the seam under test"
+    );
+    // The false-arm invariant: seed never called show(), so items stay hidden.
+    for (const item of b.panel.statusBarItems) {
+      assert.strictEqual(item.showCount, 0, "inactive-at-open item is never seed-shown");
+      assert.strictEqual(item.visible, false, "inactive-at-open item stays hidden");
+    }
+    // A kept focus, so its trio is still visible and untouched by B's open.
+    assert.ok(allVisible(a.panel.statusBarItems), "panel A stays visible while B opens inactive");
+
+    // Activating B fires its first active edge → the trio shows.
+    b.panel.webviewPanel.reveal();
+    await pollUntil(
+      () => allVisible(b.panel.statusBarItems),
+      "panel B status bar visible after activation"
+    );
+    for (const item of b.panel.statusBarItems) {
+      assert.ok(item.showCount >= 1, "B item shown on its first active edge");
+    }
   });
 });
