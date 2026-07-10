@@ -45,6 +45,7 @@ import {
   Range,
   RelativePattern,
   Selection,
+  StatusBarAlignment,
   TabInputCustom,
   TabInputText,
   TabInputTextDiff,
@@ -102,6 +103,7 @@ import {
   type RevealCleanupGroup,
 } from "./reveal-for-mention-cleanup.js";
 import { createRevertRescueTracker } from "./revert-rescue.js";
+import { createStatusBarController, formatLanguageLabel, resolveSeedCaret } from "./status-bar.js";
 import type { PanelControls, TestHarness } from "./test-harness.js";
 import {
   buildLocalResourceRoots,
@@ -294,6 +296,34 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
     // inactive→active transition, not on every event. Seeded from the panel's
     // current active state so the first event does not read a false edge.
     let wasActive = webviewPanel.active;
+
+    // Status-bar parity (src/extension/status-bar.ts). A custom editor is not a
+    // TextEditor, so window.activeTextEditor is undefined and VS Code drops ALL
+    // of its built-in status-bar items. This host-owned surface reintroduces the
+    // subset whose data already flows here — caret position, EOL, a static
+    // language label — shown ONLY while THIS panel is active. Pure additive side
+    // channel: no core event/state, no write-lock, no reducer touch; it reuses
+    // lastKnownCaret / document.eol (encoding + indentation are deliberately
+    // omitted — no public API reads them for a custom editor). Right-aligned with
+    // descending priority so the order matches native (caret leftmost).
+    const statusBar = createStatusBarController(
+      {
+        caret: window.createStatusBarItem(StatusBarAlignment.Right, 102),
+        eol: window.createStatusBarItem(StatusBarAlignment.Right, 101),
+        language: window.createStatusBarItem(StatusBarAlignment.Right, 100),
+      },
+      {
+        view: { caret: resolveSeedCaret({ switchCaret, lastKnownCaret }), eol: document.eol },
+        languageLabel: formatLanguageLabel(document.languageId),
+      }
+    );
+    // Disposed with the panel via the teardown loop below.
+    disposables.push({ dispose: () => statusBar.dispose() });
+    // onDidChangeViewState does not fire for the panel's INITIAL active state,
+    // so show once here if it opens active; the edge handler owns it thereafter.
+    if (webviewPanel.active) {
+      statusBar.show();
+    }
 
     // The pure host-session reducer owns every state mutation (write-lock
     // ordering, rejected-draft barrier, resync rules, settlement). This
@@ -798,6 +828,18 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
         const panel = e.webviewPanel;
         const enteringActive = panel.active && !wasActive;
         wasActive = panel.active;
+        // Status-bar parity is bound to the ACTIVE edge (native items track the
+        // active editor). Refresh caret + EOL before showing so a change made
+        // while inactive is reflected; hide on the inactive edge.
+        if (panel.active) {
+          statusBar.update({
+            caret: lastKnownCaret ?? { line: 0, character: 0 },
+            eol: document.eol,
+          });
+          statusBar.show();
+        } else {
+          statusBar.hide();
+        }
         if (panel.visible) {
           dispatch({ type: "viewStateVisible" });
         }
@@ -1072,6 +1114,12 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
           // reducer/write-lock). One-shot so a webview reload does not re-fire.
           if (switchCaret !== null && !switchCaretApplied) {
             switchCaretApplied = true;
+            // The stashed toggle caret is now the last-known caret: keep it in
+            // lastKnownCaret so the status bar's active-edge refresh and the reverse
+            // Quoll→text handoff read the applied position (the webview suppresses the
+            // echo caret-report, so no follow-up report arrives to refresh it).
+            lastKnownCaret = switchCaret;
+            statusBar.update({ caret: switchCaret, eol: document.eol });
             post(buildCaretApplyMessage(switchCaret));
           }
           return;
@@ -1226,6 +1274,10 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
           // context-handoff. The protocol validator already bounded the
           // coordinates; they are re-clamped at apply time.
           lastKnownCaret = { line: raw.line, character: raw.character };
+          // Live-refresh the status bar caret readout (harmless while hidden —
+          // the item is only visible on the active edge). EOL re-read each time
+          // so a mid-session EOL change surfaces without its own listener.
+          statusBar.update({ caret: lastKnownCaret, eol: document.eol });
           return;
         case "switch-to-text": {
           // Pure side channel: reopen THIS document in the built-in text editor.

@@ -8,14 +8,20 @@
 // surfaced via the AssertEqual identity check at the `const _check:`
 // line; the runtime test wrapper is just a vehicle for tsc to run.
 //
-// Decision: only protocol-message shapes are pinned. RecordedEvent /
-// PanelControls / TestHarness mirrors are intentionally looser
-// (e.g. RecordedEventShape's `message` is widened to
+// Decision: for the e2e-mirror guard above, only protocol-message shapes are
+// pinned. RecordedEvent / PanelControls / TestHarness mirrors are
+// intentionally looser (e.g. RecordedEventShape's `message` is widened to
 // `{ type: string } & Record<string, unknown>` so the e2e tests can
 // narrow via the `is*Event` predicates). The protocol-message types
-// are where the load-bearing drift lives.
+// are where the load-bearing e2e-mirror drift lives.
+//
+// This file also hosts unrelated tsc-enforced type-level pins for source
+// modules (see the "status-bar type pins" describe block below) — they reuse
+// the same AssertEqual-runs-under-`pnpm compile` mechanism but are NOT part of
+// the e2e-mirror equality guard described above.
 
 import { describe, expect, it } from "vitest";
+import type { EndOfLineValue } from "../../src/extension/status-bar";
 import type { PanelControls } from "../../src/extension/test-harness";
 import type {
   DocumentMessage,
@@ -79,5 +85,19 @@ describe("e2e/types mirror equality", () => {
     const _drift: PanelControlsShape = _src;
     void _drift;
     expect(true).toBe(true);
+  });
+});
+
+describe("status-bar type pins", () => {
+  it("EndOfLineValue stays the two-valued union and nothing wider", () => {
+    // Lives here (not in src/extension/status-bar.ts) because this file is
+    // the repo's dedicated home for tsc-enforced type-level pins: unlike a
+    // test-file `@ts-expect-error`, which would be vacuous under the unit
+    // tsconfig's narrow include, this file's AssertEqual check is itself
+    // type-checked by `pnpm compile`. Revert-check: widen EndOfLineValue to
+    // `number` and this assertion evaluates to `false` — the `= true`
+    // assignment fails to typecheck and `pnpm compile` goes red.
+    const _check: AssertEqual<EndOfLineValue, 1 | 2> = true;
+    expect(_check).toBe(true);
   });
 });
