@@ -88,17 +88,27 @@ export function planRestore(
   return "reopen-text";
 }
 
-/** True iff the same doc is already open in the OTHER surface — the signal of a
- *  deliberate side-by-side / mid-swap rather than a fresh reopen. Reuses
- *  classifyOpenedTab so surface/uri matching stays in one place. */
-function hasSiblingInOtherSurface(uri: Uri, shown: EditorSurface, quollViewType: string): boolean {
-  const uriKey = uri.toString();
-  return window.tabGroups.all
-    .flatMap((g) => g.tabs)
-    .some((t) => {
-      const c = classifyOpenedTab(t.input, quollViewType);
-      return c !== null && c.uri.toString() === uriKey && c.surface !== shown;
-    });
+/** True iff `tabInputs` contains a tab for `uriKey` in a surface OTHER than
+ *  `shown` — the signal of a deliberate side-by-side / mid-swap rather than a
+ *  fresh reopen. Pure over the tab-input list (the caller passes the live tab
+ *  model) so it is unit-testable; reuses classifyOpenedTab so surface/uri
+ *  matching stays in one place. */
+export function hasSiblingInOtherSurface(
+  tabInputs: readonly unknown[],
+  uriKey: string,
+  shown: EditorSurface,
+  quollViewType: string
+): boolean {
+  return tabInputs.some((input) => {
+    const c = classifyOpenedTab(input, quollViewType);
+    return c !== null && c.uri.toString() === uriKey && c.surface !== shown;
+  });
+}
+
+/** The `.input` of every open tab across all groups — the live tab model the
+ *  sibling check reads. */
+function allOpenTabInputs(): unknown[] {
+  return window.tabGroups.all.flatMap((g) => g.tabs).map((t) => t.input);
 }
 
 /** Reopen `uri` in `target` and close the just-opened (wrong-surface) source tab
@@ -152,7 +162,12 @@ export function registerSurfaceRestoreWatcher(quollViewType: string): Disposable
       if (restoring.has(uriKey)) {
         continue;
       }
-      const hasSibling = hasSiblingInOtherSurface(uri, surface, quollViewType);
+      const hasSibling = hasSiblingInOtherSurface(
+        allOpenTabInputs(),
+        uriKey,
+        surface,
+        quollViewType
+      );
       const reopen = reconcileOpen(uriKey, surface, hasSibling);
       if (reopen === null) {
         continue;

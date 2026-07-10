@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { TabInputCustom, TabInputText } from "vscode";
-import { classifyOpenedTab, planRestore } from "../../src/extension/surface-restore-watcher.js";
+import {
+  classifyOpenedTab,
+  hasSiblingInOtherSurface,
+  planRestore,
+} from "../../src/extension/surface-restore-watcher.js";
 
 const quollVt = "quoll.editMarkdown";
 const mdUri = { toString: () => "file:///a.md", path: "/a.md" } as never;
@@ -32,6 +36,35 @@ describe("classifyOpenedTab", () => {
   it("ignores an unknown input kind", () => {
     expect(classifyOpenedTab({}, quollVt)).toBeNull();
     expect(classifyOpenedTab(undefined, quollVt)).toBeNull();
+  });
+});
+
+describe("hasSiblingInOtherSurface", () => {
+  const textInput = new TabInputText(mdUri);
+  const quollInput = new TabInputCustom(mdUri, quollVt);
+  const otherMd = { toString: () => "file:///b.md", path: "/b.md" } as never;
+
+  it("finds a Quoll sibling when a text tab is shown", () => {
+    expect(hasSiblingInOtherSurface([quollInput], "file:///a.md", "text", quollVt)).toBe(true);
+  });
+
+  it("finds a text sibling when a Quoll tab is shown", () => {
+    expect(hasSiblingInOtherSurface([textInput], "file:///a.md", "quoll", quollVt)).toBe(true);
+  });
+
+  it("does not count a tab in the SAME surface as a sibling", () => {
+    expect(hasSiblingInOtherSurface([textInput], "file:///a.md", "text", quollVt)).toBe(false);
+    expect(hasSiblingInOtherSurface([quollInput], "file:///a.md", "quoll", quollVt)).toBe(false);
+  });
+
+  it("does not count a different uri as a sibling", () => {
+    const otherQuoll = new TabInputCustom(otherMd, quollVt);
+    expect(hasSiblingInOtherSurface([otherQuoll], "file:///a.md", "text", quollVt)).toBe(false);
+  });
+
+  it("is false for an empty tab list or only unrelated inputs", () => {
+    expect(hasSiblingInOtherSurface([], "file:///a.md", "text", quollVt)).toBe(false);
+    expect(hasSiblingInOtherSurface([{}, undefined], "file:///a.md", "text", quollVt)).toBe(false);
   });
 });
 

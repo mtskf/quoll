@@ -76,8 +76,11 @@ export function noteSurface(uriKey: string, surface: EditorSurface): void {
   surfaces.set(uriKey, surface);
 }
 
-/** The remembered surface for `uriKey`, or undefined if none. */
-export function getRememberedSurface(uriKey: string): EditorSurface | undefined {
+/** Test-only: read the remembered surface for `uriKey`, or undefined if none.
+ *  Named with the `__…ForTest` convention because no production code reads
+ *  memory directly — the watcher goes through `reconcileOpen`, the switch sites
+ *  through `noteSurface`. */
+export function __getRememberedSurfaceForTest(uriKey: string): EditorSurface | undefined {
   return surfaces.get(uriKey);
 }
 

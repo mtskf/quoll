@@ -1,8 +1,8 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import {
   __clearSurfaceMemoryForTest,
+  __getRememberedSurfaceForTest,
   decideOpenReconcile,
-  getRememberedSurface,
   noteSurface,
   reconcileOpen,
 } from "../../src/extension/surface-memory.js";
@@ -44,29 +44,29 @@ describe("decideOpenReconcile (pure, asymmetric upgrade-to-Quoll)", () => {
 describe("reconcileOpen (stateful, in-memory map)", () => {
   it("records the shown surface on a first open and returns null (no reopen)", () => {
     expect(reconcileOpen("file:///a.md", "text", false)).toBeNull();
-    expect(getRememberedSurface("file:///a.md")).toBe("text");
+    expect(__getRememberedSurfaceForTest("file:///a.md")).toBe("text");
   });
 
   it("returns 'quoll' WITHOUT overwriting memory on a fresh text open when Quoll is remembered", () => {
     noteSurface("file:///a.md", "quoll");
     expect(reconcileOpen("file:///a.md", "text", false)).toBe("quoll");
     // memory is preserved so the incoming Quoll (restore) open matches it
-    expect(getRememberedSurface("file:///a.md")).toBe("quoll");
+    expect(__getRememberedSurfaceForTest("file:///a.md")).toBe("quoll");
     // the subsequent quoll open reconciles to a match and records
     expect(reconcileOpen("file:///a.md", "quoll", false)).toBeNull();
-    expect(getRememberedSurface("file:///a.md")).toBe("quoll");
+    expect(__getRememberedSurfaceForTest("file:///a.md")).toBe("quoll");
   });
 
   it("keys are independent", () => {
     noteSurface("file:///a.md", "quoll");
     noteSurface("file:///b.md", "text");
-    expect(getRememberedSurface("file:///a.md")).toBe("quoll");
-    expect(getRememberedSurface("file:///b.md")).toBe("text");
+    expect(__getRememberedSurfaceForTest("file:///a.md")).toBe("quoll");
+    expect(__getRememberedSurfaceForTest("file:///b.md")).toBe("text");
   });
 
   it("is in-memory only: clearing forgets everything (host-restart analogue)", () => {
     noteSurface("file:///a.md", "quoll");
     __clearSurfaceMemoryForTest();
-    expect(getRememberedSurface("file:///a.md")).toBeUndefined();
+    expect(__getRememberedSurfaceForTest("file:///a.md")).toBeUndefined();
   });
 });
