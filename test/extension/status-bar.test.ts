@@ -36,21 +36,31 @@ describe("formatLanguageLabel", () => {
 
 describe("resolveSeedCaret", () => {
   it("prefers the stashed toggle caret over the last-known caret", () => {
-    expect(resolveSeedCaret({ line: 7, character: 2 }, { line: 3, character: 5 })).toEqual({
+    expect(
+      resolveSeedCaret({
+        switchCaret: { line: 7, character: 2 },
+        lastKnownCaret: { line: 3, character: 5 },
+      })
+    ).toEqual({
       line: 7,
       character: 2,
     });
   });
 
   it("falls back to the last-known caret when there is no toggle caret", () => {
-    expect(resolveSeedCaret(null, { line: 3, character: 5 })).toEqual({
+    expect(
+      resolveSeedCaret({ switchCaret: null, lastKnownCaret: { line: 3, character: 5 } })
+    ).toEqual({
       line: 3,
       character: 5,
     });
   });
 
   it("falls back to the document origin when both are null", () => {
-    expect(resolveSeedCaret(null, null)).toEqual({ line: 0, character: 0 });
+    expect(resolveSeedCaret({ switchCaret: null, lastKnownCaret: null })).toEqual({
+      line: 0,
+      character: 0,
+    });
   });
 });
 

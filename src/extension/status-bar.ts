@@ -24,17 +24,6 @@ import type { Caret } from "./caret-handoff.js";
 // the formatter ever sees.
 export type EndOfLineValue = 1 | 2;
 
-// Type-level pin that EndOfLineValue is the two-valued union and nothing wider:
-// `0` (and any other value outside 1 | 2) must NOT be assignable to it. This
-// lives in the src module because `tsc -p ./` type-checks src/ but no tsc
-// program compiles status-bar.test.ts (the unit config's include is narrow),
-// so a test-file `@ts-expect-error` would be vacuous. The assertion holds only
-// while the union stays `1 | 2`: widen EndOfLineValue back to `number` and
-// `0 extends EndOfLineValue` becomes true → the type is `false`, the `= true`
-// assignment fails, and `pnpm compile` goes red.
-const _eolIsNarrow: [0] extends [EndOfLineValue] ? false : true = true;
-void _eolIsNarrow;
-
 const EOL_CRLF: EndOfLineValue = 2;
 
 /** `Ln X, Col Y` — VS Code's built-in label. The caret is 0-based (VS Code
@@ -54,7 +43,13 @@ export function formatEol(eol: EndOfLineValue): string {
  *  stashed from a text→Quoll toggle wins, else the last webview-reported
  *  caret, else the document origin. Extracted so the seed decision is
  *  unit-tested rather than inlined at the panel construction site. */
-export function resolveSeedCaret(switchCaret: Caret | null, lastKnownCaret: Caret | null): Caret {
+export function resolveSeedCaret({
+  switchCaret,
+  lastKnownCaret,
+}: {
+  switchCaret: Caret | null;
+  lastKnownCaret: Caret | null;
+}): Caret {
   return switchCaret ?? lastKnownCaret ?? { line: 0, character: 0 };
 }
 

@@ -16,6 +16,7 @@
 // are where the load-bearing drift lives.
 
 import { describe, expect, it } from "vitest";
+import type { EndOfLineValue } from "../../src/extension/status-bar";
 import type { PanelControls } from "../../src/extension/test-harness";
 import type {
   DocumentMessage,
@@ -79,5 +80,19 @@ describe("e2e/types mirror equality", () => {
     const _drift: PanelControlsShape = _src;
     void _drift;
     expect(true).toBe(true);
+  });
+});
+
+describe("status-bar type pins", () => {
+  it("EndOfLineValue stays the two-valued union and nothing wider", () => {
+    // Lives here (not in src/extension/status-bar.ts) because this file is
+    // the repo's dedicated home for tsc-enforced type-level pins: unlike a
+    // test-file `@ts-expect-error`, which would be vacuous under the unit
+    // tsconfig's narrow include, this file's AssertEqual check is itself
+    // type-checked by `pnpm compile`. Revert-check: widen EndOfLineValue to
+    // `number` and this assertion evaluates to `false` — the `= true`
+    // assignment fails to typecheck and `pnpm compile` goes red.
+    const _check: AssertEqual<EndOfLineValue, 1 | 2> = true;
+    expect(_check).toBe(true);
   });
 });

@@ -313,7 +313,7 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
         language: window.createStatusBarItem(StatusBarAlignment.Right, 100),
       },
       {
-        view: { caret: resolveSeedCaret(switchCaret, lastKnownCaret), eol: document.eol },
+        view: { caret: resolveSeedCaret({ switchCaret, lastKnownCaret }), eol: document.eol },
         languageLabel: formatLanguageLabel(document.languageId),
       }
     );
