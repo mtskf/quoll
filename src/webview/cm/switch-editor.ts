@@ -29,11 +29,11 @@
 import { type Extension, Prec } from "@codemirror/state";
 import { EditorView, type PluginValue, ViewPlugin } from "@codemirror/view";
 
-import { buildSwitchToTextMessage, type WebviewToHost } from "../../shared/protocol.js";
-import { safePostMessage } from "../safe-post-message.js";
+import { buildSwitchToTextMessage } from "../../shared/protocol.js";
+import { type PostMessageHost, safePostMessage } from "../safe-post-message.js";
 import { requireQuollEditorHost } from "./editor-host.js";
 
-export type SwitchEditorHost = { postMessage(message: WebviewToHost): void };
+export type SwitchEditorHost = PostMessageHost;
 
 /** Match the Quoll→text switch chord: Ctrl/Cmd + Alt + E, keyed on the PHYSICAL
  *  `event.code` ("KeyE") — NOT `event.key`. On macOS Option+E is the acute-accent

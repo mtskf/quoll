@@ -21,9 +21,9 @@ import { type EditorState, type Extension, Prec } from "@codemirror/state";
 import { type Command, keymap } from "@codemirror/view";
 
 import { PROTOCOL_VERSION, type WebviewToHost } from "../../shared/protocol.js";
-import { safePostMessage } from "../safe-post-message.js";
+import { type PostMessageHost, safePostMessage } from "../safe-post-message.js";
 
-export type HandoffHost = { postMessage(message: WebviewToHost): void };
+export type HandoffHost = PostMessageHost;
 
 /** Flush any pending debounced Edit BEFORE posting a handoff. edit-sync
  *  debounces outbound Edits by 300 ms, so a handoff fired mid-window would hand

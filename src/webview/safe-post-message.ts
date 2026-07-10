@@ -29,7 +29,11 @@ export function safePostMessage(
     return true;
   } catch (err) {
     console.error(`[quoll] postMessage(${label}) failed`, err);
-    onError?.(err);
+    try {
+      onError?.(err);
+    } catch (onErrorErr) {
+      console.error(`[quoll] onError for postMessage(${label}) threw`, onErrorErr);
+    }
     return false;
   }
 }

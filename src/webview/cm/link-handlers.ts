@@ -17,7 +17,7 @@ import { EditorView } from "@codemirror/view";
 import { isAllowedUrl } from "../../markdown/url-allowlist.js";
 import { decodeMarkdownDestination } from "../../markdown/url-decode.js";
 import { MAX_HREF_LENGTH, PROTOCOL_VERSION, type WebviewToHost } from "../../shared/protocol.js";
-import { safePostMessage } from "../safe-post-message.js";
+import { type PostMessageHost, safePostMessage } from "../safe-post-message.js";
 
 // --- Click-to-open helper ---
 //
@@ -38,10 +38,8 @@ import { safePostMessage } from "../safe-post-message.js";
 
 /** Subset of the Host singleton's surface used by tryOpenLinkAt. Pinned
  *  as a structural type so tests can pass a thin spy without importing the
- *  full host module. */
-export type LinkOpenHost = {
-  postMessage(message: WebviewToHost): void;
-};
+ *  full host module. Shared shape → alias of the safe-post-message host. */
+export type LinkOpenHost = PostMessageHost;
 
 const OPENABLE_SCHEMES = new Set(["http", "https", "mailto"]);
 

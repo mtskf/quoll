@@ -15,14 +15,12 @@
 import { Facet } from "@codemirror/state";
 
 import { isAllowedUrl } from "../../markdown/url-allowlist.js";
-import { PROTOCOL_VERSION, type WebviewToHost } from "../../shared/protocol.js";
-import { safePostMessage } from "../safe-post-message.js";
+import { PROTOCOL_VERSION } from "../../shared/protocol.js";
+import { type PostMessageHost, safePostMessage } from "../safe-post-message.js";
 
 /** Minimal host surface the sink needs — a thin structural type so tests pass
  *  a spy (identical shape to link-handlers' LinkOpenHost). */
-export type OpenExternalHost = {
-  postMessage(message: WebviewToHost): void;
-};
+export type OpenExternalHost = PostMessageHost;
 
 /** Injectable sink for widget-originated "open external" requests. The table
  *  widget reads it at click time via `view.state.facet(...)`. Default is a
