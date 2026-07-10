@@ -101,13 +101,7 @@ import {
 } from "../decorations/shared.js";
 import type { BuildContext } from "../decorations/types.js";
 import { CM_LINE_START_PADDING } from "../theme.js";
-import {
-  columnAt,
-  isBulletItem,
-  isTaskItem,
-  listItemGetsVerticalGap,
-  resolveListItemHang,
-} from "./list-geometry.js";
+import { columnAt, isBulletItem, isTaskItem, resolveListItemHang } from "./list-geometry.js";
 
 /** Visual-column width of the blockquote `>`-prefix that blockquote-reveal
  *  HIDES on `line` caret-off. Sums EACH wrapping `QuoteMark`'s hidden width
@@ -224,7 +218,6 @@ export function buildListHangIndent(
           return;
         }
         emitted.add(line.from);
-        const gap = listItemGetsVerticalGap(ctx.state, node.node);
         // Continuation half of the marker → text gap (list-marker-restyle). Added
         // to BOTH indent and pad so it cancels in the first-line flow origin (the
         // dot / checkbox does not move) while the soft-wrap continuation shifts right
@@ -242,11 +235,12 @@ export function buildListHangIndent(
           from: line.from,
           deco: Decoration.line({
             // `.quoll-list-hang` delivers ONLY the vertical inter-item gap
-            // (cm/theme.ts padding-top). Drop it for tight consecutive siblings
-            // so a tight list renders packed; the horizontal hang below is
-            // ALWAYS applied (soft-wrap indent + widget text-indent). Kept in
-            // lock-step with the fold-gutter offset in cm/fold/index.ts.
-            ...(gap ? { class: "quoll-list-hang" } : {}),
+            // (cm/theme.ts padding-top). EVERY renderable list-item marker line
+            // carries it — the uniform gap that keeps lists from reading cramped;
+            // the horizontal hang below (soft-wrap indent + widget text-indent) is
+            // an independent concern. Kept in lock-step with the fold-gutter offset
+            // in cm/fold/index.ts (both keyed on the same renderable-item gate).
+            class: "quoll-list-hang",
             attributes: {
               style: `text-indent:calc(-1 * (${hang.indent}${markerGap}));padding-inline-start:calc(${CM_LINE_START_PADDING} + (${hang.pad}${markerGap}))`,
             },

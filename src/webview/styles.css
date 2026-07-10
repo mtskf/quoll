@@ -121,20 +121,20 @@ html body {
      * value on the editor root; this `1ch` default keeps monospace exact and
      * covers the pre-measurement frame. */
     --quoll-prose-space: 1ch;
-    /* Vertical breathing room ABOVE a list-item marker line that separates it
-     * from what precedes it: the first item of a list, a LOOSE item (blank
-     * line above), or a list's first item after prose. Delivered as
+    /* Vertical breathing room ABOVE every list-item marker line — the uniform
+     * inter-item gap that keeps bullet / ordered / task lists from reading
+     * cramped (Notion/Obsidian feel; user request 2026-07-10). Delivered as
      * `padding-top` on `.cm-line.quoll-list-hang` in cm/theme.ts (an
      * EditorView.theme, so it beats CodeMirror's unlayered baseTheme
-     * `.cm-line` padding). The class — and so the gap — is DROPPED between
-     * consecutive TIGHT sibling items (list/list-geometry.ts's
-     * `listItemGetsVerticalGap`), so a tight list renders packed; only
-     * gap-worthy marker lines carry it. Vertical only — it never touches the
+     * `.cm-line` padding). EVERY renderable list-item marker line carries the
+     * class — tight consecutive siblings breathe by the SAME amount as loose
+     * items (a loose item still reads more open because its blank source line
+     * adds its own height on top). Vertical only — it never touches the
      * horizontal hang-indent (text-indent / padding-inline-start), which is
-     * ALWAYS emitted regardless of gap eligibility, so nested alignment is
-     * unaffected. Display-only: the underlying Markdown bytes are untouched.
-     * `em` so the gap tracks the body font size. */
-    --quoll-list-item-gap: 0.6em;
+     * emitted independently, so nested alignment is unaffected. Display-only:
+     * the underlying Markdown bytes are untouched. `em` so the gap tracks the
+     * body font size. */
+    --quoll-list-item-gap: 0.5em;
     /* Vertical breathing room ABOVE each heading line (Notion-style), per
      * heading level. Delivered as `padding-top` on `.cm-line.quoll-heading-rhythm-{n}`
      * in cm/theme.ts (an EditorView.theme, so it beats CodeMirror's unlayered
