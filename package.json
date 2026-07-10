@@ -106,7 +106,7 @@
     ]
   },
   "scripts": {
-    "compile": "tsc -p ./ && tsc -p ./test/extension/tsconfig.unit.json && tsc -p ./test/webview/tsconfig.json",
+    "compile": "tsc -p ./ && tsc -p ./test/extension/tsconfig.unit.json && tsc -p ./test/webview/tsconfig.json && tsc -p ./test/webview-browser/tsconfig.json",
     "compile:webview": "tsc -p ./src/webview",
     "build": "pnpm compile && pnpm compile:webview && node esbuild.config.mjs --production",
     "watch": "node esbuild.config.mjs --watch",
@@ -118,9 +118,10 @@
     "gen:perf-fixtures": "node scripts/gen-perf-fixtures.mjs",
     "preview": "node scripts/preview/serve.mjs",
     "test:unit": "vitest run",
+    "test:browser": "vitest run --config vitest.browser.config.ts",
     "test:e2e": "pnpm build && pnpm test:e2e:run",
     "test:e2e:run": "node test/extension/build.mjs && node ./out/test-e2e/launch.js",
-    "test": "pnpm test:unit && pnpm test:e2e",
+    "test": "pnpm test:unit && pnpm test:browser && pnpm test:e2e",
     "test:watch": "vitest",
     "package": "pnpm vsce package --no-dependencies && node scripts/audit-vsix.mjs quoll-$(node -p \"require('./package.json').version\").vsix"
   },
@@ -141,6 +142,7 @@
     "@types/node": "20.16.0",
     "@types/vscode": "1.94.0",
     "@types/vscode-webview": "^1.57.0",
+    "@vitest/browser-playwright": "^4.1.9",
     "@vitest/coverage-v8": "^4.1.9",
     "@vscode/test-electron": "^2.4.1",
     "@vscode/vsce": "^3.9.1",
@@ -148,6 +150,7 @@
     "happy-dom": "^20.10.6",
     "mocha": "^11",
     "ovsx": "0.10.12",
+    "playwright": "^1.61.1",
     "typescript": "^5.9.3",
     "vite": "^7.3.6",
     "vitest": "^4.1.9"
