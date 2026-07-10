@@ -1,0 +1,140 @@
+// @vitest-environment happy-dom
+import { history, undo } from "@codemirror/commands";
+import { EditorSelection, EditorState } from "@codemirror/state";
+import { EditorView } from "@codemirror/view";
+import { describe, expect, it } from "vitest";
+
+import { detectPasteLinkUrl, pasteUrlOverSelection } from "../../src/webview/cm/paste/index.js";
+
+describe("detectPasteLinkUrl — URL detection boundary", () => {
+  it("accepts a bare http(s) URL (trimming surrounding whitespace)", () => {
+    expect(detectPasteLinkUrl("https://example.com")).toBe("https://example.com");
+    expect(detectPasteLinkUrl("http://example.com/a?b=1#c")).toBe("http://example.com/a?b=1#c");
+    expect(detectPasteLinkUrl("  https://example.com  ")).toBe("https://example.com");
+    // Scheme match is case-insensitive; the original casing is preserved.
+    expect(detectPasteLinkUrl("HTTPS://Example.com")).toBe("HTTPS://Example.com");
+  });
+
+  it("rejects a URL with trailing text (not a single token)", () => {
+    // THE key spec boundary: `URL + trailing text` must stay a plain paste.
+    expect(detectPasteLinkUrl("https://example.com trailing")).toBeNull();
+    expect(detectPasteLinkUrl("see https://example.com")).toBeNull();
+  });
+
+  it("rejects any interior whitespace / newline", () => {
+    expect(detectPasteLinkUrl("https://example.com\nfoo")).toBeNull();
+    expect(detectPasteLinkUrl("https://exa mple.com")).toBeNull();
+    // trailing \t is stripped by trim() → still a single token
+    expect(detectPasteLinkUrl("https://example.com\t")).toBe("https://example.com");
+  });
+
+  it("rejects empty / whitespace-only text", () => {
+    expect(detectPasteLinkUrl("")).toBeNull();
+    expect(detectPasteLinkUrl("   ")).toBeNull();
+  });
+
+  it("rejects a non-http(s) scheme (aligns with the http(s)-only target)", () => {
+    expect(detectPasteLinkUrl("mailto:a@b.com")).toBeNull(); // allowlisted, but not a web link
+    expect(detectPasteLinkUrl("ftp://host/x")).toBeNull();
+    expect(detectPasteLinkUrl("xmpp:foo@bar")).toBeNull();
+    expect(detectPasteLinkUrl("javascript:alert(1)")).toBeNull();
+  });
+
+  it("rejects a schemeless / relative token (would pass isAllowedUrl as relative)", () => {
+    expect(detectPasteLinkUrl("example.com")).toBeNull();
+    expect(detectPasteLinkUrl("foo/bar.md")).toBeNull();
+    expect(detectPasteLinkUrl("#anchor")).toBeNull();
+  });
+
+  it("rejects protocol-relative and control-byte forms (shared allowlist hardening)", () => {
+    expect(detectPasteLinkUrl("//evil.com/x")).toBeNull(); // no http prefix + protocol-relative
+    // A C0 byte (not whitespace) survives trim + the whitespace/scheme checks but
+    // is rejected by isAllowedUrl's raw-value control-char guard.
+    expect(detectPasteLinkUrl(`https://exa${String.fromCharCode(1)}mple.com`)).toBeNull();
+  });
+});
+
+// --- Handler ---
+
+function mount(doc: string, anchor: number, head: number, canWrite = true): EditorView {
+  const view = new EditorView({
+    state: EditorState.create({
+      doc,
+      selection: EditorSelection.single(anchor, head),
+      extensions: [
+        EditorState.readOnly.of(!canWrite),
+        history(),
+        pasteUrlOverSelection({ canWrite: () => canWrite }),
+      ],
+    }),
+  });
+  return view;
+}
+
+function firePaste(view: EditorView, text: string): Event {
+  const event = new Event("paste", { bubbles: true, cancelable: true });
+  Object.defineProperty(event, "clipboardData", {
+    value: { getData: (type: string) => (type === "text/plain" ? text : "") },
+  });
+  view.contentDOM.dispatchEvent(event);
+  return event;
+}
+
+describe("pasteUrlOverSelection — handler", () => {
+  it("wraps a single-line selection as a link and consumes the event", () => {
+    const view = mount("select me", 0, "select".length); // select "select"
+    const event = firePaste(view, "https://example.com");
+    expect(event.defaultPrevented).toBe(true);
+    expect(view.state.doc.toString()).toBe("[select](https://example.com) me");
+    view.destroy();
+  });
+
+  it("wraps as exactly ONE undo step (single dispatch)", () => {
+    const view = mount("select me", 0, "select".length);
+    firePaste(view, "https://example.com");
+    expect(view.state.doc.toString()).toBe("[select](https://example.com) me");
+    undo(view); // one undo restores the pre-paste document
+    expect(view.state.doc.toString()).toBe("select me");
+    view.destroy();
+  });
+
+  // Defer cases: our handler returns false, so CM's OWN core paste handler runs
+  // (and preventDefaults for its own clipboard insert) — `defaultPrevented` is
+  // therefore an unreliable signal here. The behavioural contract under test is
+  // "no link wrap occurred", i.e. the document never gains `](` link syntax.
+  it("defers plain paste when there is no selection (empty range)", () => {
+    const view = mount("hello", 5, 5); // caret, no selection
+    firePaste(view, "https://example.com");
+    expect(view.state.doc.toString()).not.toContain("]("); // no link wrap
+    view.destroy();
+  });
+
+  it("defers plain paste for a multi-line selection", () => {
+    const view = mount("line one\nline two", 0, "line one\nline".length); // spans the newline
+    firePaste(view, "https://example.com");
+    expect(view.state.doc.toString()).not.toContain("](");
+    view.destroy();
+  });
+
+  it("defers plain paste for a URL with trailing text (spec boundary)", () => {
+    const view = mount("select me", 0, "select".length);
+    firePaste(view, "https://example.com and more");
+    expect(view.state.doc.toString()).not.toContain("](");
+    view.destroy();
+  });
+
+  it("defers plain paste for non-URL text over a selection", () => {
+    const view = mount("select me", 0, "select".length);
+    firePaste(view, "just some text");
+    expect(view.state.doc.toString()).not.toContain("](");
+    view.destroy();
+  });
+
+  it("swallows the paste in a read-only editor without wrapping", () => {
+    const view = mount("select me", 0, "select".length, false);
+    const event = firePaste(view, "https://example.com");
+    expect(event.defaultPrevented).toBe(true); // committed to wrapping, then swallowed
+    expect(view.state.doc.toString()).toBe("select me"); // no insert
+    view.destroy();
+  });
+});
