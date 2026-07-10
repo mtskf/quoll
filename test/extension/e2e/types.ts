@@ -164,11 +164,28 @@ export interface RecordedInboundShape {
   readonly timestamp: number;
 }
 
+// Mirror of the recording `FakeStatusBarItem` surface the E2E suite reads off
+// `PanelControls.statusBarItems`. Looser than the host class (methods omitted —
+// tests only observe the recorded fields), matching the intentionally-loose
+// PanelControls mirror. The one-directional assignability guard in
+// types-equality.test.ts pins that the host `FakeStatusBarItem` stays
+// assignable to this.
+export interface StatusBarItemProbeShape {
+  text: string;
+  showCount: number;
+  hideCount: number;
+  disposeCount: number;
+  visible: boolean;
+  readonly alignment: number | undefined;
+  readonly priority: number | undefined;
+}
+
 export interface PanelControlsShape {
   readonly document: TextDocument;
   readonly webviewPanel: WebviewPanel;
   simulateInbound(message: WebviewToHostShape): void;
   rawSimulate(raw: unknown): void;
+  readonly statusBarItems: readonly StatusBarItemProbeShape[];
 }
 
 export interface TestHarnessShape {

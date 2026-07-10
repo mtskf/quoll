@@ -46,6 +46,48 @@ export interface RecordedInbound {
   readonly timestamp: number;
 }
 
+/** A recording stand-in for a `vscode.StatusBarItem`. `window.createStatusBarItem`
+ *  is invisible to the E2E harness — the real item exposes no surface the test
+ *  host can read back — so under the harness the panel builds its status-bar
+ *  slots from these instead (see `TestHarness.newStatusBarItem` +
+ *  `PanelControls.statusBarItems`). The controller only ever drives the
+ *  `StatusBarSlot` surface (text + show/hide/dispose), so that is all this
+ *  implements; the counters + `visible` snapshot let a test assert the item
+ *  shows on the active edge, hides on the inactive edge, and disposes with the
+ *  panel. Unconditional harness infrastructure, NOT a test-installed override —
+ *  the fake must always stand in so no real status-bar item leaks into the test
+ *  host. */
+export class FakeStatusBarItem {
+  text = "";
+  showCount = 0;
+  hideCount = 0;
+  disposeCount = 0;
+  /** Last show/hide outcome — the deterministic end-state a test polls on
+   *  (raw show/hide counts can exceed one per logical transition because VS
+   *  Code may fire several onDidChangeViewState events for a single tab
+   *  switch, and the panel re-shows/refreshes on every active event). */
+  visible = false;
+
+  constructor(
+    readonly alignment: number | undefined,
+    readonly priority: number | undefined
+  ) {}
+
+  show(): void {
+    this.showCount++;
+    this.visible = true;
+  }
+
+  hide(): void {
+    this.hideCount++;
+    this.visible = false;
+  }
+
+  dispose(): void {
+    this.disposeCount++;
+  }
+}
+
 export interface PanelControls {
   readonly document: TextDocument;
   readonly webviewPanel: WebviewPanel;
@@ -61,6 +103,12 @@ export interface PanelControls {
    *  that the recorder fired (received) and that the validator dropped
    *  it (no Document reply). */
   rawSimulate(raw: unknown): void;
+  /** The three recording status-bar items this panel's controller drives,
+   *  in native left-to-right order (caret, eol, language). Populated only
+   *  under the harness — the panel builds them via `newStatusBarItem` and
+   *  hands the trio through here so a test observes show/hide/dispose PER
+   *  panel (window.createStatusBarItem is otherwise unobservable). */
+  readonly statusBarItems: readonly FakeStatusBarItem[];
 }
 
 type EventWaiter = {
@@ -301,6 +349,16 @@ export class TestHarness {
         this._inboundWaiters.splice(i, 1);
       }
     }
+  }
+
+  /** Build a recording status-bar item for a panel opened under the harness.
+   *  The panel routes `window.createStatusBarItem` through this when a harness
+   *  is present (production keeps the real call) and exposes the returned trio
+   *  on its `PanelControls.statusBarItems`. Stateless per call — attribution is
+   *  the panel's job (it groups the three items it built), so this holds no
+   *  per-item registry to clear in `reset()`. */
+  newStatusBarItem(alignment: number | undefined, priority: number | undefined): FakeStatusBarItem {
+    return new FakeStatusBarItem(alignment, priority);
   }
 
   recordError(message: string): void {

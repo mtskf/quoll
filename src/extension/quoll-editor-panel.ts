@@ -103,7 +103,12 @@ import {
   type RevealCleanupGroup,
 } from "./reveal-for-mention-cleanup.js";
 import { createRevertRescueTracker } from "./revert-rescue.js";
-import { createStatusBarController, formatLanguageLabel, resolveSeedCaret } from "./status-bar.js";
+import {
+  createStatusBarController,
+  formatLanguageLabel,
+  resolveSeedCaret,
+  type StatusBarSlots,
+} from "./status-bar.js";
 import { finalizeSurfaceSwap, findSourceTab } from "./surface-swap.js";
 import type { PanelControls, TestHarness } from "./test-harness.js";
 import {
@@ -307,17 +312,28 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
     // lastKnownCaret / document.eol (encoding + indentation are deliberately
     // omitted — no public API reads them for a custom editor). Right-aligned with
     // descending priority so the order matches native (caret leftmost).
-    const statusBar = createStatusBarController(
-      {
-        caret: window.createStatusBarItem(StatusBarAlignment.Right, 102),
-        eol: window.createStatusBarItem(StatusBarAlignment.Right, 101),
-        language: window.createStatusBarItem(StatusBarAlignment.Right, 100),
-      },
-      {
-        view: { caret: resolveSeedCaret({ switchCaret, lastKnownCaret }), eol: document.eol },
-        languageLabel: formatLanguageLabel(document.languageId),
-      }
-    );
+    // Under the E2E harness, build recording fakes so a test can observe
+    // show/hide/dispose per panel — window.createStatusBarItem is otherwise
+    // invisible to the harness. Production keeps the real items. The trio (when
+    // present) is handed to panelControls below for per-panel observation.
+    const statusBarProbes = this.harness
+      ? [
+          this.harness.newStatusBarItem(StatusBarAlignment.Right, 102),
+          this.harness.newStatusBarItem(StatusBarAlignment.Right, 101),
+          this.harness.newStatusBarItem(StatusBarAlignment.Right, 100),
+        ]
+      : null;
+    const statusBarSlots: StatusBarSlots = statusBarProbes
+      ? { caret: statusBarProbes[0], eol: statusBarProbes[1], language: statusBarProbes[2] }
+      : {
+          caret: window.createStatusBarItem(StatusBarAlignment.Right, 102),
+          eol: window.createStatusBarItem(StatusBarAlignment.Right, 101),
+          language: window.createStatusBarItem(StatusBarAlignment.Right, 100),
+        };
+    const statusBar = createStatusBarController(statusBarSlots, {
+      view: { caret: resolveSeedCaret({ switchCaret, lastKnownCaret }), eol: document.eol },
+      languageLabel: formatLanguageLabel(document.languageId),
+    });
     // Disposed with the panel via the teardown loop below.
     disposables.push({ dispose: () => statusBar.dispose() });
     // onDidChangeViewState does not fire for the panel's INITIAL active state,
@@ -1384,6 +1400,9 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
           this.harness?.recordInbound(raw);
           handleInbound(raw);
         },
+        // Non-null in this branch: `this.harness` gates both the probe build
+        // above and this panelControls install, so statusBarProbes is set.
+        statusBarItems: statusBarProbes ?? [],
       };
       this.harness.setActivePanel(panelControls);
     }

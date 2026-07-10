@@ -6,7 +6,7 @@
     "theme": "light"
   },
   "displayName": "Quoll",
-  "description": "Notion- and Obsidian-style Markdown editor, right inside VS Code.",
+  "description": "Obsidian-style Markdown editor, right inside VS Code.",
   "license": "MIT",
   "categories": [
     "Programming Languages",
@@ -24,9 +24,10 @@
     "markdown-editor",
     "live-preview",
     "note-taking",
-    "gfm"
+    "gfm",
+    "MEO"
   ],
-  "version": "0.1.31",
+  "version": "0.1.32",
   "publisher": "mtskf",
   "type": "module",
   "engines": {
