@@ -337,7 +337,12 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
           language: window.createStatusBarItem(StatusBarAlignment.Right, 100),
         };
     const statusBar = createStatusBarController(statusBarSlots, {
-      view: { caret: resolveSeedCaret({ switchCaret, lastKnownCaret }), eol: document.eol },
+      // selectedChars: 0 — the seed predates any caret-report, so no selection.
+      view: {
+        caret: resolveSeedCaret({ switchCaret, lastKnownCaret }),
+        eol: document.eol,
+        selectedChars: 0,
+      },
       languageLabel: formatLanguageLabel(document.languageId),
     });
     // Disposed with the panel via the teardown loop below.
@@ -856,6 +861,14 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
         const panel = e.webviewPanel;
         const enteringActive = panel.active && !wasActive;
         wasActive = panel.active;
+        // The active-edge caret-apply posted below collapses any selection in
+        // the webview (buildCaretApplyMessage carries a single point, and the
+        // webview suppresses the echo caret-report), so a stale `(N selected)`
+        // would otherwise survive re-activation with no corrective report. Zero
+        // the tracked count to match the imminent collapse, before the refresh.
+        if (enteringActive && lastKnownCaret !== null) {
+          lastKnownSelectedChars = 0;
+        }
         // Status-bar parity is bound to the ACTIVE edge (native items track the
         // active editor). Refresh caret + EOL before showing so a change made
         // while inactive is reflected; hide on the inactive edge.

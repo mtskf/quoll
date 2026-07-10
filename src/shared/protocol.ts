@@ -357,8 +357,9 @@ export function buildSwitchToTextMessage(): SwitchToTextMessage {
  *  status-bar caret readout (`… (N selected)`); it never positions anything, so
  *  the Quoll→text caret handoff ignores it. Bounded by `MAX_LINT_COORDINATE`
  *  at the boundary like the coordinates (any real selection is far smaller —
- *  a selection cannot exceed the document, itself capped at
- *  `MAX_CONTENT_LENGTH`). */
+ *  it cannot exceed the open document's length, which itself has no wire-level
+ *  cap: host→webview `DocumentMessage.content` is deliberately uncapped, and
+ *  `MAX_CONTENT_LENGTH` bounds only webview→host edits/saves). */
 export type CaretReportMessage = Envelope & {
   type: "caret-report";
   line: number;

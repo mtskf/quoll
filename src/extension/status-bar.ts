@@ -86,11 +86,14 @@ export interface StatusBarSlots {
 }
 
 /** Live inputs for a refresh: the 0-based caret, the document's EOL, and the
- *  primary-selection character count (omitted / 0 = no selection). */
+ *  primary-selection character count (0 = no selection). Required (mirroring
+ *  the required `CaretReportMessage.selectedChars`) so a caller cannot silently
+ *  conflate "no selection" with "count omitted" — the seed passes an explicit
+ *  0 for its pre-any-caret-report state. */
 export interface StatusBarView {
   caret: Caret;
   eol: EndOfLineValue;
-  selectedChars?: number;
+  selectedChars: number;
 }
 
 export interface StatusBarController {
@@ -116,7 +119,7 @@ export function createStatusBarController(
 
   const controller: StatusBarController = {
     update({ caret, eol, selectedChars }) {
-      slots.caret.text = formatCaretPosition(caret, selectedChars ?? 0);
+      slots.caret.text = formatCaretPosition(caret, selectedChars);
       slots.eol.text = formatEol(eol);
     },
     show() {

@@ -233,4 +233,75 @@ describe("status-bar-active-edge", function () {
       assert.ok(item.showCount >= 1, "B item shown on its first active edge");
     }
   });
+
+  // Selection-count readout: a caret-report carrying a non-empty `selectedChars`
+  // appends ` (N selected)` to the caret slot (statusBarItems[0], priority 102),
+  // and it drops back to a bare `Ln X, Col Y` when the selection collapses.
+  const PROTOCOL = 1;
+  const caretSlotText = (panel: PanelControlsShape): string => panel.statusBarItems[0].text;
+
+  it("appends `(N selected)` on a non-empty caret-report and drops it on a 0 report", async () => {
+    const harness = await getHarness();
+    const a = await openTempQuoll(harness, "hello world\nsecond line\n", "sel-live", null);
+    files.push(a.file);
+    await pollUntil(() => allVisible(a.panel.statusBarItems), "panel A status bar visible");
+
+    // Non-empty selection → suffix present (active-edge non-zero path).
+    a.panel.simulateInbound({
+      protocol: PROTOCOL,
+      type: "caret-report",
+      line: 0,
+      character: 5,
+      selectedChars: 5,
+    });
+    await tick(20);
+    assert.strictEqual(caretSlotText(a.panel), "Ln 1, Col 6 (5 selected)");
+
+    // Collapse → a later 0 report drops the suffix.
+    a.panel.simulateInbound({
+      protocol: PROTOCOL,
+      type: "caret-report",
+      line: 0,
+      character: 3,
+      selectedChars: 0,
+    });
+    await tick(20);
+    assert.strictEqual(caretSlotText(a.panel), "Ln 1, Col 4");
+  });
+
+  // Regression for the Codex-confirmed stale-count bug: the active-edge
+  // caret-apply collapses the webview selection and suppresses its echo report,
+  // so the tracked count must be zeroed on re-activation or a stale
+  // `(N selected)` survives. Pins that returning to Quoll never shows it.
+  it("clears a stale selection count when the panel is re-activated", async () => {
+    const harness = await getHarness();
+    const a = await openTempQuoll(harness, "hello world\n", "sel-reactivate-a", null);
+    files.push(a.file);
+    await pollUntil(() => allVisible(a.panel.statusBarItems), "panel A status bar visible");
+
+    a.panel.simulateInbound({
+      protocol: PROTOCOL,
+      type: "caret-report",
+      line: 0,
+      character: 5,
+      selectedChars: 7,
+    });
+    await tick(20);
+    assert.strictEqual(caretSlotText(a.panel), "Ln 1, Col 6 (7 selected)");
+
+    // Open B beside → A goes inactive (status bar hides, count untouched).
+    const b = await openTempQuoll(harness, "other doc\n", "sel-reactivate-b", a.panel);
+    files.push(b.file);
+    await pollUntil(() => allHidden(a.panel.statusBarItems), "panel A hidden while B active");
+
+    // Re-activate A → the active-edge caret-apply collapses the selection; the
+    // status bar must NOT keep showing `(7 selected)`.
+    a.panel.webviewPanel.reveal();
+    await pollUntil(() => allVisible(a.panel.statusBarItems), "panel A re-visible");
+    assert.strictEqual(
+      caretSlotText(a.panel),
+      "Ln 1, Col 6",
+      "stale (N selected) must be cleared on re-activation"
+    );
+  });
 });
