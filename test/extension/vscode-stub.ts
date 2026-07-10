@@ -160,6 +160,26 @@ export class Range {
   ) {}
 }
 
+// context-handoff-wiring.ts imports Selection + ViewColumn at module load (its
+// reveal path builds `new Selection(start, end)` and targets ViewColumn.Active).
+// esbuild binds a missing named import to `undefined` (throwing only on deref),
+// so the current capture-barrier tests pass without these — but the stub's
+// contract is to export every surface a helper under test imports. Added so a
+// future test that exercises the reveal (hasSelection:true) does not fault on an
+// undefined constructor. Selection mirrors the (anchor, active) overload the
+// reveal uses; ViewColumn.Active matches the real vscode enum value (-1).
+export class Selection {
+  constructor(
+    public readonly anchor: Position,
+    public readonly active: Position
+  ) {}
+}
+
+export const ViewColumn = {
+  Active: -1,
+  Beside: -2,
+} as const;
+
 export class Diagnostic {
   source?: string;
   code?: string | number;

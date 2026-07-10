@@ -77,8 +77,9 @@ export function createContextHandoffWiring(deps: ContextHandoffWiringDeps): Cont
   // .finally below OR the barrier's onDrop.
   let codexHandoffInFlight = false;
 
-  // Tier-0 reveal for the Claude Code handoff (deps.revealForMention — see
-  // handle-context-handoff.ts's module header). Claude Code's zero-arg
+  // Tier-0 reveal for the Claude Code handoff (passed to the pure handler below
+  // as HandleContextHandoffDeps.revealForMention — see handle-context-handoff.ts's
+  // module header). Claude Code's zero-arg
   // `claude-code.insertAtMentioned` reads window.activeTextEditor (verified
   // against claude-code 2.1.199, re-verified through 2.1.204 — the 2.1.204
   // sibling `claude-vscode.insertAtMention` is the same zero-arg shape), and
