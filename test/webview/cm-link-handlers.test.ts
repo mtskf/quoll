@@ -4,7 +4,7 @@ import { EditorSelection, EditorState } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import { describe, expect, it, vi } from "vitest";
 
-import type { WebviewToHost } from "../../src/shared/protocol.js";
+import { PROTOCOL_VERSION, type WebviewToHost } from "../../src/shared/protocol.js";
 import {
   handleLinkMouseDown,
   type LinkOpenHost,
@@ -79,6 +79,94 @@ describe("tryOpenLinkAt — safe URLs", () => {
     const host = { postMessage: (m: { type: string; href?: string }) => posted.push(m) };
     expect(tryOpenLinkAt(state, posOf(doc, "[t]") + 1, host)).toBe(true);
     expect(posted[0]?.href).toBe("https://example.com");
+  });
+});
+
+// ---- open-link (relative .md) branch ----
+//
+// Mirrors the "safe URLs" fixture convention: the doc is prefixed with
+// `"see "` so the Link node starts at pos ≥ 4 and the default caret-at-0
+// selection stays OUTSIDE it (otherwise the revealed-link guard returns
+// false vacuously). `linkPos` lands on the inline link text so the click
+// resolves to the Link node. `host.posted` collects the messages.
+function setupLink(markup: string): {
+  host: LinkOpenHost & { posted: WebviewToHost[] };
+  state: EditorState;
+  linkPos: number;
+} {
+  const doc = `see ${markup}`;
+  const state = stateOf(doc);
+  const posted: WebviewToHost[] = [];
+  const host = { posted, postMessage: (m: WebviewToHost) => posted.push(m) };
+  // Position on the first inline text char of the link label (`[X` → `X`).
+  const linkPos = posOf(doc, markup) + 1;
+  return { host, state, linkPos };
+}
+
+describe("tryOpenLinkAt — open-link (relative .md)", () => {
+  it("posts open-link for a relative .md link", () => {
+    const { host, state, linkPos } = setupLink("[go](./other.md)");
+    expect(tryOpenLinkAt(state, linkPos, host)).toBe(true);
+    expect(host.posted).toContainEqual({
+      protocol: PROTOCOL_VERSION,
+      type: "open-link",
+      href: "./other.md",
+    });
+  });
+
+  it("posts open-link for a parent-relative .md link", () => {
+    const { host, state, linkPos } = setupLink("[go](../notes/other.md)");
+    expect(tryOpenLinkAt(state, linkPos, host)).toBe(true);
+    expect(host.posted).toContainEqual({
+      protocol: PROTOCOL_VERSION,
+      type: "open-link",
+      href: "../notes/other.md",
+    });
+  });
+
+  it("posts open-link (fragment retained) for a .md link with a #fragment", () => {
+    const { host, state, linkPos } = setupLink("[go](./other.md#sec)");
+    expect(tryOpenLinkAt(state, linkPos, host)).toBe(true);
+    expect(host.posted).toContainEqual({
+      protocol: PROTOCOL_VERSION,
+      type: "open-link",
+      href: "./other.md#sec",
+    });
+  });
+
+  it("still posts open-external for an https link", () => {
+    const { host, state, linkPos } = setupLink("[go](https://example.com)");
+    expect(tryOpenLinkAt(state, linkPos, host)).toBe(true);
+    expect(host.posted).toContainEqual({
+      protocol: PROTOCOL_VERSION,
+      type: "open-external",
+      href: "https://example.com",
+    });
+  });
+
+  it("does not post for a relative non-.md link", () => {
+    const { host, state, linkPos } = setupLink("[img](./photo.png)");
+    expect(tryOpenLinkAt(state, linkPos, host)).toBe(false);
+    expect(host.posted).toEqual([]);
+  });
+
+  it("does not post for an absolute .md link (falls to caret move)", () => {
+    const { host, state, linkPos } = setupLink("[x](/etc/passwd.md)");
+    expect(tryOpenLinkAt(state, linkPos, host)).toBe(false);
+    expect(host.posted).toEqual([]);
+  });
+
+  // NOTE: backslash rejection is asserted deterministically in the HOST matrix
+  // (Task 2 "rejects a backslash path") — handleOpenLink takes a raw string with
+  // no markdown parse. A webview-side backslash test would have to thread a `\`
+  // through the Lezer markdown parser + decodeMarkdownDestination (CommonMark
+  // backslash-escape semantics), which is fragile; the webview `includes("\\")`
+  // guard is defense-in-depth and its behaviour is pinned host-side.
+
+  it("does not post for a fragment-only link", () => {
+    const { host, state, linkPos } = setupLink("[x](#sec)");
+    expect(tryOpenLinkAt(state, linkPos, host)).toBe(false);
+    expect(host.posted).toEqual([]);
   });
 });
 
@@ -290,7 +378,7 @@ describe("tryOpenLinkAt — host.postMessage failure (review-cycle 1 C2)", () =>
     try {
       expect(tryOpenLinkAt(state, posOf(doc, "[t]") + 1, host)).toBe(false);
       expect(errorSpy).toHaveBeenCalledWith(
-        "[quoll] postMessage(open-external) failed",
+        "[quoll] postMessage(link-open) failed",
         expect.any(Error)
       );
     } finally {
