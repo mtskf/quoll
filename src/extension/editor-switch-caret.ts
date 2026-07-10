@@ -1,9 +1,11 @@
 // One-shot per-uri caret handoff for the text-editor → Quoll switch.
 //
-// `vscode.openWith` REPLACES the editor: switching a text editor back to Quoll
-// creates a FRESH QuollEditorPanel whose per-panel `lastKnownCaret` starts null,
-// so the existing caret handoff (which spans two *live* editors on the same doc)
-// cannot carry the caret across this boundary. The `quoll.toggleEditor` command
+// `vscode.openWith` opens Quoll as a SEPARATE tab beside the text editor — it
+// does NOT replace it in place (E2E-probed 2026-07-10; the in-place swap closes
+// the source tab separately, see surface-swap.ts). Either way, switching a text
+// editor back to Quoll creates a FRESH QuollEditorPanel whose per-panel
+// `lastKnownCaret` starts null, so the existing caret handoff (which spans two
+// *live* editors on the same doc) cannot carry the caret across this boundary. The `quoll.toggleEditor` command
 // stashes the text editor's caret here just before reopening in Quoll; the new
 // panel takes it at `ready` and applies it once via a `caret-apply` message.
 //

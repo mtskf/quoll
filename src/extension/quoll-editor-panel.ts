@@ -97,7 +97,6 @@ import { LintMirror } from "./lint-mirror.js";
 import { minimalEditSpan } from "./minimal-edit.js";
 import { openInQuollEditor } from "./open-in-quoll.js";
 import { openInTextEditor } from "./reopen-text-editor.js";
-import { finalizeSurfaceSwap, findSourceTab } from "./surface-swap.js";
 import {
   decideRevealInvariant,
   planRevealTabClose,
@@ -105,6 +104,7 @@ import {
 } from "./reveal-for-mention-cleanup.js";
 import { createRevertRescueTracker } from "./revert-rescue.js";
 import { createStatusBarController, formatLanguageLabel, resolveSeedCaret } from "./status-bar.js";
+import { finalizeSurfaceSwap, findSourceTab } from "./surface-swap.js";
 import type { PanelControls, TestHarness } from "./test-harness.js";
 import {
   buildLocalResourceRoots,

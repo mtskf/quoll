@@ -7,6 +7,8 @@
 // clean tab closes with no revert and no dialog. If the doc can't be made clean
 // we DO NOT close (both-open, never data loss).
 
+import { type Tab, TabInputCustom, TabInputText, type Uri, window, workspace } from "vscode";
+
 /** Safety gate: close the source tab only when there is one AND the document is
  *  provably clean — either it was already clean, or it was dirty and the save
  *  succeeded and it is no longer dirty. Any other dirty state means the close
@@ -26,12 +28,15 @@ export function shouldCloseSourceTab(state: {
   return state.saveSucceeded && !state.stillDirtyAfterSave;
 }
 
-import { type Tab, TabInputCustom, TabInputText, type Uri, window, workspace } from "vscode";
-
 /** The surface being switched AWAY from (its tab is the one to close). */
 export type SourceSurface = "text" | "quoll";
 
-function tabMatches(t: Tab, uriKey: string, surface: SourceSurface, quollViewType: string): boolean {
+function tabMatches(
+  t: Tab,
+  uriKey: string,
+  surface: SourceSurface,
+  quollViewType: string
+): boolean {
   if (surface === "quoll") {
     return (
       t.input instanceof TabInputCustom &&
@@ -79,8 +84,7 @@ function reresolveTab(captured: Tab): Tab | undefined {
     return undefined;
   }
   const surface: SourceSurface = captured.input instanceof TabInputCustom ? "quoll" : "text";
-  const quollViewType =
-    captured.input instanceof TabInputCustom ? captured.input.viewType : "";
+  const quollViewType = captured.input instanceof TabInputCustom ? captured.input.viewType : "";
   return window.tabGroups.all
     .flatMap((g) => g.tabs)
     .find((t) => tabMatches(t, uriKey, surface, quollViewType));

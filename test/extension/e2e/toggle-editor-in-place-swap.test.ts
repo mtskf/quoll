@@ -20,12 +20,16 @@ function tempMd(name: string): vscode.Uri {
   fs.writeFileSync(p, "# Title\n\nbody\n", "utf8");
   return vscode.Uri.file(p);
 }
-const customTab = (uri: vscode.Uri) => (t: vscode.Tab): boolean =>
-  t.input instanceof vscode.TabInputCustom &&
-  t.input.viewType === VIEW_TYPE &&
-  t.input.uri.toString() === uri.toString();
-const textTab = (uri: vscode.Uri) => (t: vscode.Tab): boolean =>
-  t.input instanceof vscode.TabInputText && t.input.uri.toString() === uri.toString();
+const customTab =
+  (uri: vscode.Uri) =>
+  (t: vscode.Tab): boolean =>
+    t.input instanceof vscode.TabInputCustom &&
+    t.input.viewType === VIEW_TYPE &&
+    t.input.uri.toString() === uri.toString();
+const textTab =
+  (uri: vscode.Uri) =>
+  (t: vscode.Tab): boolean =>
+    t.input instanceof vscode.TabInputText && t.input.uri.toString() === uri.toString();
 const allTabs = (): vscode.Tab[] => vscode.window.tabGroups.all.flatMap((g) => g.tabs);
 async function dirty(uri: vscode.Uri): Promise<void> {
   const e = new vscode.WorkspaceEdit();
@@ -60,12 +64,17 @@ describe("⌘⌥E in-place editor-surface swap", function () {
     const deadline = Date.now() + 8000;
     while (Date.now() < deadline) {
       const tabs = allTabs();
-      if (tabs.some(textTab(uri)) && !tabs.some(customTab(uri))) break;
+      if (tabs.some(textTab(uri)) && !tabs.some(customTab(uri))) {
+        break;
+      }
       await tick(100);
     }
     const tabs = allTabs();
     assert.ok(tabs.some(textTab(uri)), "text tab must be open");
-    assert.ok(!tabs.some(customTab(uri)), `Quoll tab must be closed — ${JSON.stringify(tabs.map((t) => t.label))}`);
+    assert.ok(
+      !tabs.some(customTab(uri)),
+      `Quoll tab must be closed — ${JSON.stringify(tabs.map((t) => t.label))}`
+    );
     const doc = await vscode.workspace.openTextDocument(uri);
     assert.ok(doc.getText().startsWith("EDIT "), "unsaved edit must be preserved");
     assert.strictEqual(doc.isDirty, false, "save-then-close leaves the doc clean");
@@ -93,12 +102,17 @@ describe("⌘⌥E in-place editor-surface swap", function () {
     const deadline = Date.now() + 8000;
     while (Date.now() < deadline) {
       const tabs = allTabs();
-      if (tabs.some(customTab(uri)) && !tabs.some(textTab(uri))) break;
+      if (tabs.some(customTab(uri)) && !tabs.some(textTab(uri))) {
+        break;
+      }
       await tick(100);
     }
     const tabs = allTabs();
     assert.ok(tabs.some(customTab(uri)), "Quoll tab must be open");
-    assert.ok(!tabs.some(textTab(uri)), `text tab must be closed — ${JSON.stringify(tabs.map((t) => t.label))}`);
+    assert.ok(
+      !tabs.some(textTab(uri)),
+      `text tab must be closed — ${JSON.stringify(tabs.map((t) => t.label))}`
+    );
     const after = await vscode.workspace.openTextDocument(uri);
     assert.ok(after.getText().startsWith("EDIT "), "unsaved edit must be preserved");
   });
@@ -117,11 +131,100 @@ describe("⌘⌥E in-place editor-surface swap", function () {
     const deadline = Date.now() + 8000;
     while (Date.now() < deadline) {
       const tabs = allTabs();
-      if (tabs.some(textTab(uri)) && !tabs.some(customTab(uri))) break;
+      if (tabs.some(textTab(uri)) && !tabs.some(customTab(uri))) {
+        break;
+      }
       await tick(100);
     }
     const tabs = allTabs();
     assert.ok(tabs.some(textTab(uri)), "text tab must be open");
     assert.ok(!tabs.some(customTab(uri)), "Quoll tab must be closed");
+  });
+
+  it("reverse (clean): text→Quoll closes the text tab", async () => {
+    const uri = tempMd("clean-rev.md");
+    const doc = await vscode.workspace.openTextDocument(uri);
+    await vscode.window.showTextDocument(doc, {
+      viewColumn: vscode.ViewColumn.Active,
+      preserveFocus: false,
+      preview: false,
+    });
+    await tick(300);
+    assert.strictEqual(
+      vscode.window.activeTextEditor?.document.uri.toString(),
+      uri.toString(),
+      "precondition: the markdown text editor is active"
+    );
+
+    await vscode.commands.executeCommand("quoll.toggleEditor");
+
+    const deadline = Date.now() + 8000;
+    while (Date.now() < deadline) {
+      const tabs = allTabs();
+      if (tabs.some(customTab(uri)) && !tabs.some(textTab(uri))) {
+        break;
+      }
+      await tick(100);
+    }
+    const tabs = allTabs();
+    assert.ok(tabs.some(customTab(uri)), "Quoll tab must be open");
+    assert.ok(!tabs.some(textTab(uri)), "text tab must be closed");
+  });
+
+  it("multi-split: reverse toggle from the ACTIVE group consolidates it to Quoll; the other split's text tab survives", async () => {
+    const activeGroupTabs = (): readonly vscode.Tab[] =>
+      vscode.window.tabGroups.activeTabGroup.tabs;
+    const uri = tempMd("split.md");
+    const doc = await vscode.workspace.openTextDocument(uri);
+    // Open the doc as text in a SECOND group (Beside), then re-focus the first
+    // group and show it there too, so the same doc is a text editor in two
+    // splits with the FIRST group active at toggle time.
+    await vscode.window.showTextDocument(doc, {
+      viewColumn: vscode.ViewColumn.Beside,
+      preserveFocus: false,
+      preview: false,
+    });
+    await tick(200);
+    await vscode.commands.executeCommand("workbench.action.focusFirstEditorGroup");
+    await vscode.window.showTextDocument(doc, {
+      viewColumn: vscode.ViewColumn.Active,
+      preserveFocus: false,
+      preview: false,
+    });
+    await tick(300);
+    assert.strictEqual(
+      vscode.window.activeTextEditor?.document.uri.toString(),
+      uri.toString(),
+      "precondition: active group shows the text editor"
+    );
+    assert.ok(
+      allTabs().filter(textTab(uri)).length >= 2,
+      "precondition: the doc is open as text in two splits"
+    );
+
+    await vscode.commands.executeCommand("quoll.toggleEditor");
+
+    const deadline = Date.now() + 8000;
+    while (Date.now() < deadline) {
+      if (
+        activeGroupTabs().some(customTab(uri)) &&
+        !activeGroupTabs().some(textTab(uri)) &&
+        allTabs().some(textTab(uri))
+      ) {
+        break;
+      }
+      await tick(100);
+    }
+    assert.ok(activeGroupTabs().some(customTab(uri)), "active group shows Quoll");
+    assert.ok(
+      !activeGroupTabs().some(textTab(uri)),
+      `active group's text tab must be closed — ${JSON.stringify(
+        activeGroupTabs().map((t) => t.label)
+      )}`
+    );
+    assert.ok(
+      allTabs().some(textTab(uri)),
+      "the OTHER split's text tab is preserved (the toggle acts on the active group)"
+    );
   });
 });
