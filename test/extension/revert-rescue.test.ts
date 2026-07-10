@@ -17,7 +17,10 @@ describe("revert-rescue tracker", () => {
     const t = createRevertRescueTracker({ windowMs: 2500 });
     t.observe({ isDirty: true, content: "DIRTY", at: 0 });
     t.observe({ isDirty: false, content: "DISK", at: 995 }); // revert (content changed)
-    expect(t.decideOnDispose(ctx({ disposedAt: 1000 }))).toEqual({ rescue: true, content: "DIRTY" });
+    expect(t.decideOnDispose(ctx({ disposedAt: 1000 }))).toEqual({
+      rescue: true,
+      content: "DIRTY",
+    });
   });
 
   it("does NOT rescue a save (content unchanged going clean)", () => {

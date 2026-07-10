@@ -96,12 +96,12 @@ import { LintMirror } from "./lint-mirror.js";
 import { minimalEditSpan } from "./minimal-edit.js";
 import { openInQuollEditor } from "./open-in-quoll.js";
 import { openInTextEditor } from "./reopen-text-editor.js";
-import { createRevertRescueTracker } from "./revert-rescue.js";
 import {
   decideRevealInvariant,
   planRevealTabClose,
   type RevealCleanupGroup,
 } from "./reveal-for-mention-cleanup.js";
+import { createRevertRescueTracker } from "./revert-rescue.js";
 import type { PanelControls, TestHarness } from "./test-harness.js";
 import {
   buildLocalResourceRoots,
@@ -284,7 +284,11 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
     // fires for that pre-existing dirty content. Raw getText() (not
     // canonicalised) — VS Code owns this document's EOL and we read+write it.
     const revertRescue = createRevertRescueTracker();
-    revertRescue.observe({ isDirty: document.isDirty, content: document.getText(), at: Date.now() });
+    revertRescue.observe({
+      isDirty: document.isDirty,
+      content: document.getText(),
+      at: Date.now(),
+    });
     // Active-edge tracker for the panel. onDidChangeViewState fires on
     // visible/active/focus changes; the caret apply must fire ONCE per
     // inactive→active transition, not on every event. Seeded from the panel's

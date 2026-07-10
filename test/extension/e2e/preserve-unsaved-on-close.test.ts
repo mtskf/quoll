@@ -87,7 +87,11 @@ describe("preserve-unsaved-on-close", function () {
 
     // No surviving editor -> the discard is honoured: disk content, not dirty.
     const reDoc = await vscode.workspace.openTextDocument(uri);
-    assert.strictEqual(reDoc.getText(), original, "sole-editor discard must be honoured (disk content)");
+    assert.strictEqual(
+      reDoc.getText(),
+      original,
+      "sole-editor discard must be honoured (disk content)"
+    );
     assert.ok(!reDoc.isDirty, "sole-editor discard must leave the document clean");
   });
 
@@ -112,7 +116,11 @@ describe("preserve-unsaved-on-close", function () {
       await vscode.window.tabGroups.close(secondTab);
     }
     await tick(400);
-    assert.strictEqual(doc.getText(), dirtyText, "control: closing one text editor must not revert");
+    assert.strictEqual(
+      doc.getText(),
+      dirtyText,
+      "control: closing one text editor must not revert"
+    );
     assert.ok(doc.isDirty, "control: doc still dirty");
   });
 });
