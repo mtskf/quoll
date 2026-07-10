@@ -52,6 +52,11 @@ export type OpenExternalMessageShape = EnvelopeShape & {
   href: string;
 };
 
+export type OpenLinkMessageShape = EnvelopeShape & {
+  type: "open-link";
+  href: string;
+};
+
 export type ThemeMessageShape = EnvelopeShape & {
   type: "theme";
   isDarkTheme: boolean;
@@ -141,6 +146,7 @@ export type WebviewToHostShape =
   | ReadyMessageShape
   | EditMessageShape
   | OpenExternalMessageShape
+  | OpenLinkMessageShape
   | ImageWriteMessageShape
   | ContextHandoffMessageShape
   | CodexContextHandoffMessageShape

@@ -267,6 +267,25 @@ export type OpenExternalMessage = Envelope & {
   href: string;
 };
 
+/** Webview→host request to open a relative in-workspace Markdown link
+ *  (`[text](./other.md)`) with the Quoll editor — the phase-1 page-to-page
+ *  navigation channel. The webview posts this (instead of `open-external`)
+ *  when the decoded destination is allowlisted, SCHEMELESS, NON-ABSOLUTE, and
+ *  its path ends in `.md`. The host owns `document.uri`, so the webview sends
+ *  only the decoded relative destination STRING — never a path or Uri. The
+ *  host (`handleOpenLink`) resolves it against the document's directory,
+ *  RE-validates (isAllowedUrl + schemeless + non-absolute + `.md` +
+ *  workspace/doc-dir containment), and routes through
+ *  `vscode.openWith(target, "quoll.editMarkdown")`.
+ *
+ *  `href` is the already-decoded destination (post
+ *  `decodeMarkdownDestination`) — NOT raw Markdown source bytes. Bounded by
+ *  `MAX_HREF_LENGTH` at the validator, symmetric with `open-external`. */
+export type OpenLinkMessage = Envelope & {
+  type: "open-link";
+  href: string;
+};
+
 /** Webview→host request to materialise a pasted/dropped image to disk. `data`
  *  is base64 (no `data:` prefix); the host re-sniffs the decoded bytes and NEVER
  *  trusts a client-supplied type. `requestId` correlates the async
@@ -379,6 +398,7 @@ export type WebviewToHost =
   | ReadyMessage
   | EditMessage
   | OpenExternalMessage
+  | OpenLinkMessage
   | ImageWriteMessage
   | ContextHandoffMessage
   | CodexContextHandoffMessage
@@ -526,6 +546,11 @@ export function isWebviewToHost(value: unknown): value is WebviewToHost {
     case "edit":
       return isBoundedContent(v.content) && isValidDocVersion(v.baseDocVersion);
     case "open-external":
+      return typeof v.href === "string" && v.href.length <= MAX_HREF_LENGTH;
+    case "open-link":
+      // Same shape + bound as open-external: an already-decoded destination
+      // string capped at MAX_HREF_LENGTH. The host re-derives everything else
+      // (scheme, extension, containment) from this string — it is not trusted.
       return typeof v.href === "string" && v.href.length <= MAX_HREF_LENGTH;
     case "image-write":
       return (

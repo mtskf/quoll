@@ -455,6 +455,32 @@ describe("isWebviewToHost — open-external", () => {
   });
 });
 
+// ---------- isWebviewToHost / open-link ----------
+
+describe("isWebviewToHost — open-link", () => {
+  it("accepts a well-formed open-link message", () => {
+    expect(
+      isWebviewToHost({ protocol: PROTOCOL_VERSION, type: "open-link", href: "./other.md" })
+    ).toBe(true);
+  });
+
+  it("rejects open-link with a non-string href", () => {
+    expect(isWebviewToHost({ protocol: PROTOCOL_VERSION, type: "open-link", href: 42 })).toBe(
+      false
+    );
+  });
+
+  it("rejects open-link whose href exceeds MAX_HREF_LENGTH", () => {
+    expect(
+      isWebviewToHost({
+        protocol: PROTOCOL_VERSION,
+        type: "open-link",
+        href: "a".repeat(MAX_HREF_LENGTH + 1),
+      })
+    ).toBe(false);
+  });
+});
+
 // ---------- isHostToWebview / edit-rejected ----------
 
 describe("isHostToWebview — edit-rejected", () => {

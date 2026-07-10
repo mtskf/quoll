@@ -82,6 +82,7 @@ import { getNonce } from "./get-nonce.js";
 import { handleCodexContextHandoff } from "./handle-codex-context-handoff.js";
 import { handleContextHandoff } from "./handle-context-handoff.js";
 import { handleOpenExternal } from "./handle-open-external.js";
+import { handleOpenLink } from "./handle-open-link.js";
 import {
   createDrainingDispatcher,
   createHostSessionCore,
@@ -91,6 +92,7 @@ import {
 import { handleImageWrite } from "./image-write-service.js";
 import { toLintDiagnostics } from "./lint-diagnostics.js";
 import { LintMirror } from "./lint-mirror.js";
+import { openInQuollEditor } from "./open-in-quoll.js";
 import { openInTextEditor } from "./reopen-text-editor.js";
 import {
   decideRevealInvariant,
@@ -950,6 +952,27 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
           return;
         case "open-external":
           dispatch({ type: "openExternal", href: raw.href });
+          return;
+        case "open-link":
+          // Phase-1 page-to-page navigation. Direct host-side side effect (no
+          // document-state mutation → not a core reducer transition, like
+          // open-external). The host owns document.uri; the webview sent only
+          // the decoded relative destination string. handleOpenLink resolves it
+          // against THIS document's directory, enforces workspace/doc-dir
+          // containment, and opens the target with the Quoll editor via the
+          // open-in-quoll adapter. No edit-settled barrier: it opens a DIFFERENT
+          // document and reads only the stable document.uri (never the in-flight
+          // content/dirty state). Dropped when disposed by the top-of-handleInbound
+          // guard, like every other side channel.
+          handleOpenLink(raw.href, {
+            documentUri: document.uri,
+            joinPath: (base, ...segments) => Uri.joinPath(base, ...segments),
+            isInWorkspace: (uri) => workspace.getWorkspaceFolder(uri) !== undefined,
+            openWith:
+              this.harness?.openLinkOverride ??
+              ((uri) => openInQuollEditor(uri, QuollEditorPanel.viewType)),
+            showError,
+          });
           return;
         case "image-write":
           runImageWrite(raw.requestId, raw.data);
