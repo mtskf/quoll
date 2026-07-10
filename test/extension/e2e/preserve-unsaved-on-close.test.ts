@@ -56,6 +56,75 @@ describe("preserve-unsaved-on-close", function () {
     assert.ok(reDoc.isDirty, "document must still be dirty (unsaved) after Quoll closes");
   });
 
+  // Characterisation (PR #155): if the user UNDOES their own text-editor edits back
+  // to clean and then closes Quoll, the just-undone bytes must NOT be resurrected.
+  // This is already handled WITHOUT any reason-based discriminator: VS Code fires a
+  // real undo as a still-dirty content change back to disk (which resets the
+  // tracker's lastDirtyContent) then a dirty->clean flip whose content is unchanged,
+  // so the rescue never arms (see revert-rescue.ts + the tracker unit suite). This
+  // e2e pins that VS Code actually produces that two-event sequence end-to-end — if
+  // it ever collapsed undo into a single clean content-change event, the tracker's
+  // content-comparison assumption would break and this test would go red.
+  it("undo-to-clean then close Quoll does NOT resurrect the undone edits", async () => {
+    const harness = await getHarness();
+    const uri = fixtureUri("sample.md");
+    const original = Buffer.from(await vscode.workspace.fs.readFile(uri)).toString("utf8");
+
+    const doc = await vscode.workspace.openTextDocument(uri);
+    const editor = await vscode.window.showTextDocument(doc, { viewColumn: vscode.ViewColumn.One });
+    await editor.edit((eb) => eb.insert(new vscode.Position(0, 0), "UNDO_ME "));
+    assert.ok(doc.isDirty, "precondition: dirty after edit");
+
+    // Open Quoll BESIDE — both tabs share the doc.
+    await vscode.commands.executeCommand("vscode.openWith", uri, VIEW_TYPE, vscode.ViewColumn.Two);
+    await harness.waitForEvent(isDocumentEvent, 8000);
+    await tick(400);
+
+    // Undo the edit back to clean through the text editor (fires the real
+    // TextDocumentChangeReason.Undo event sequence).
+    await vscode.window.showTextDocument(doc, { viewColumn: vscode.ViewColumn.One });
+    await vscode.commands.executeCommand("undo");
+    const cleanDeadline = Date.now() + 3000;
+    while (doc.isDirty && Date.now() < cleanDeadline) {
+      await tick(30);
+    }
+    assert.ok(!doc.isDirty, "precondition: undo returned the doc to clean");
+
+    // Close the Quoll CUSTOM editor tab specifically (locate it by TabInputCustom +
+    // viewType) so the close disposes QuollEditorPanel and drives decideOnDispose —
+    // the path that would resurrect the undone bytes if the tracker had armed.
+    // Closing via revertAndCloseActiveEditor after showTextDocument would instead
+    // close a text tab and make the assertion vacuous.
+    const quollTab = vscode.window.tabGroups.all
+      .flatMap((g) => g.tabs)
+      .find(
+        (t) =>
+          t.input instanceof vscode.TabInputCustom &&
+          t.input.viewType === VIEW_TYPE &&
+          t.input.uri.toString() === uri.toString()
+      );
+    assert.ok(quollTab, "precondition: the Quoll custom editor tab must be open to close");
+    await vscode.window.tabGroups.close(quollTab);
+    await tick(1000);
+    assert.ok(
+      !vscode.window.tabGroups.all
+        .flatMap((g) => g.tabs)
+        .some(
+          (t) =>
+            t.input instanceof vscode.TabInputCustom && t.input.uri.toString() === uri.toString()
+        ),
+      "the Quoll tab must actually be closed (else the assertion would be vacuous)"
+    );
+
+    const reDoc = await vscode.workspace.openTextDocument(uri);
+    assert.strictEqual(
+      reDoc.getText(),
+      original,
+      "undone edits must NOT be resurrected by the Quoll close"
+    );
+    assert.ok(!reDoc.isDirty, "doc must stay clean — the user's undo is honoured");
+  });
+
   it("sole editor: closing Quoll (Don't Save) honours the discard (no rescue)", async () => {
     const harness = await getHarness();
     const uri = fixtureUri("sample.md");

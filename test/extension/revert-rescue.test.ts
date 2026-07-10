@@ -104,6 +104,22 @@ describe("revert-rescue tracker", () => {
     expect(t.decideOnDispose(ctx({ disposedAt: 10 }))).toEqual({ rescue: true, content: "DIRTY" });
   });
 
+  // An UNDO back to clean must NOT arm (the user deliberately discarded their own
+  // edits). Verified (PR #155): VS Code fires an undo as TWO events — a still-DIRTY
+  // content change back to the disk bytes, then the dirty->clean flip. The first
+  // resets lastDirtyContent to disk, so the flip's content EQUALS it and classifies
+  // as a SAVE (no arm). This is why the existing content-comparison already handles
+  // undo-to-clean and a TextDocumentChangeReason discriminator was unnecessary (the
+  // flip carries reason === undefined regardless). Contrast: a close-triggered
+  // revert fires ONE clean event with changed content (armed by the first case above).
+  it("an undo-to-clean (dirty content-change to disk, then clean flip) does NOT arm", () => {
+    const t = createRevertRescueTracker({ windowMs: 2500 });
+    t.observe({ isDirty: true, content: "DIRTY", at: 0 }); // construction seed: doc dirty
+    t.observe({ isDirty: true, content: "DISK", at: 5 }); // undo event 1: still dirty, content back to disk
+    t.observe({ isDirty: false, content: "DISK", at: 6 }); // undo event 2: clean flip, content unchanged
+    expect(t.decideOnDispose(ctx({ disposedAt: 10 }))).toEqual({ rescue: false });
+  });
+
   const aliveCtx = (
     over: Partial<
       Parameters<ReturnType<typeof createRevertRescueTracker>["decideOnAliveRevert"]>[0]
