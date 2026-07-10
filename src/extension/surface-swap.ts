@@ -62,6 +62,30 @@ export function findSourceTab(
   return matches.length === 1 ? matches[0] : undefined;
 }
 
+/** Re-find a live tab matching `captured`'s identity (uri + surface kind, and
+ *  viewType when it is a Quoll custom tab). `captured` may be a stale `Tab`
+ *  object from an earlier tab-model snapshot — VS Code's Tab identity does not
+ *  survive tab-model events, so this re-reads `window.tabGroups.all` fresh
+ *  rather than trusting `captured` still resolves. Returns undefined if the
+ *  tab is gone (e.g. the user closed it manually in between). */
+function reresolveTab(captured: Tab): Tab | undefined {
+  const uriKey =
+    captured.input instanceof TabInputCustom
+      ? captured.input.uri.toString()
+      : captured.input instanceof TabInputText
+        ? captured.input.uri.toString()
+        : undefined;
+  if (uriKey === undefined) {
+    return undefined;
+  }
+  const surface: SourceSurface = captured.input instanceof TabInputCustom ? "quoll" : "text";
+  const quollViewType =
+    captured.input instanceof TabInputCustom ? captured.input.viewType : "";
+  return window.tabGroups.all
+    .flatMap((g) => g.tabs)
+    .find((t) => tabMatches(t, uriKey, surface, quollViewType));
+}
+
 /** Finalize an in-place swap: the caller has already opened the TARGET surface.
  *  Save the shared doc if dirty (so the source tab is clean and closing it can
  *  neither revert the working copy nor pop a save dialog), then close the
@@ -106,7 +130,15 @@ export async function finalizeSurfaceSwap(uri: Uri, sourceTab: Tab | undefined):
       return;
     }
     // sourceTab is defined here (shouldCloseSourceTab is false when it is not).
-    const closed = sourceTab ? await window.tabGroups.close(sourceTab, true) : true;
+    // Re-resolve a LIVE tab for the same identity right before closing: Tab
+    // object identity is not stable across tab-model events (the target
+    // surface opening in between IS such an event — same fact already
+    // documented for the reveal-for-mention cleanup in
+    // reveal-for-mention-cleanup.ts), so closing the tab captured earlier by
+    // findSourceTab can throw "Invalid tab not found" even though the tab it
+    // refers to (by uri) is still open.
+    const liveSourceTab = sourceTab && reresolveTab(sourceTab);
+    const closed = liveSourceTab ? await window.tabGroups.close(liveSourceTab, true) : true;
     if (!closed) {
       console.warn("[quoll] surface-swap: source tab close was cancelled; both surfaces remain");
     }
