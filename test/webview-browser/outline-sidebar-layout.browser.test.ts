@@ -12,7 +12,7 @@
 //      sidebar survives it).
 import { EditorState } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
-import { userEvent } from "@vitest/browser/context";
+import { userEvent } from "vitest/browser";
 import { afterEach, describe, expect, it } from "vitest";
 import "../../src/webview/styles.css";
 import { quollFloatingToolbarScroll } from "../../src/webview/cm/floating-toolbar-scroll.js";
