@@ -1,0 +1,24 @@
+{
+  // Type-check program for the real-browser webview suite. Same compiler view
+  // as the webview source (ESM + bundler resolution + DOM lib). Browser-only —
+  // no node/vscode-webview ambient types. vitest 4 no longer pulls test-runner
+  // types transitively, so the suite imports { describe, it, expect } from
+  // "vitest" explicitly. noEmit inherited (CI gate, not a build step).
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "module": "esnext",
+    "moduleResolution": "bundler",
+    "lib": ["es2022", "dom", "dom.iterable"],
+    "types": [],
+    "rootDir": "../.."
+  },
+  // src/shared carries the ambient `QUOLL_PERF` declaration (quoll-perf-flag.d.ts)
+  // that the pulled-in webview source references; src/markdown is a transitive
+  // import target. Mirrors test/webview/tsconfig.json's cross-layer includes.
+  "include": [
+    "**/*.ts",
+    "../../src/webview/**/*.ts",
+    "../../src/markdown/**/*.ts",
+    "../../src/shared/**/*.ts"
+  ]
+}

@@ -60,3 +60,7 @@ Thumbs.db
 
 # Generated perf fixtures (scripts/gen-perf-fixtures.mjs)
 perf-fixtures/
+
+# @vitest/browser failure artifacts (screenshots + attachments)
+**/__screenshots__/
+.vitest-attachments/
