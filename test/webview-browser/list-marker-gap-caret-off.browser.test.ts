@@ -15,9 +15,12 @@
 // Why a NEW gate: the sibling list-hang-layout.browser.test.ts soft-wrap case
 // mounts a single bullet with the DEFAULT caret at pos 0, which
 // intersectsAnySelection (boundary-inclusive) treats as caret-ON — so
-// markerGap="" and the `.quoll-bullet-marker` span is never even emitted. That
-// suite pins the hang base + padding token; it does NOT exercise the caret-OFF
-// marker-gap path. A production regression where the first-line marker margin
+// listHangIndent's markerGap term resolves to "". That suite also never mounts
+// bulletMarkerReveal/quollBulletMarkerTheme, so the `.quoll-bullet-marker` span
+// and its first-line margin are absent there for a separate, structural reason
+// (the provider isn't loaded), not caret gating. Either way that suite pins only
+// the hang base + padding token; it does NOT exercise the caret-OFF marker-gap
+// path. A production regression where the first-line marker margin
 // and the continuation markerGap term drift apart (one consumes the token, the
 // other stops) would still pass it. This file is that missing gate: it mounts
 // the production bullet-reveal + bullet-marker theme, parks the caret OFF the
