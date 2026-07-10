@@ -36,9 +36,8 @@ import { type PostMessageHost, safePostMessage } from "../safe-post-message.js";
 // shared module is rejected as scope creep (10 LOC ×2 is cheaper than
 // a third file in the C9b deletion footprint).
 
-/** Subset of the Host singleton's surface used by tryOpenLinkAt. Pinned
- *  as a structural type so tests can pass a thin spy without importing the
- *  full host module. Shared shape → alias of the safe-post-message host. */
+/** Alias of the safe-post-message host shape (not the full Host singleton),
+ *  so tests can pass a thin spy without importing the full host module. */
 export type LinkOpenHost = PostMessageHost;
 
 const OPENABLE_SCHEMES = new Set(["http", "https", "mailto"]);

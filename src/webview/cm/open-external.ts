@@ -18,8 +18,9 @@ import { isAllowedUrl } from "../../markdown/url-allowlist.js";
 import { PROTOCOL_VERSION } from "../../shared/protocol.js";
 import { type PostMessageHost, safePostMessage } from "../safe-post-message.js";
 
-/** Minimal host surface the sink needs — a thin structural type so tests pass
- *  a spy (identical shape to link-handlers' LinkOpenHost). */
+/** Minimal host surface the sink needs — an alias of the safe-post-message
+ *  host shape, shared with link-handlers' LinkOpenHost, so tests can pass a
+ *  thin spy. */
 export type OpenExternalHost = PostMessageHost;
 
 /** Injectable sink for widget-originated "open external" requests. The table
