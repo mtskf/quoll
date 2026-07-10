@@ -96,12 +96,16 @@ describe("list hang-indent — real-pixel layout (browser gate)", () => {
     expect(getComputedStyle(line).paddingLeft).toBe("11px");
   });
 
-  it("(b) default base is 6px == the decoration hang base", async () => {
-    // Plain paragraph again (isolates the theme rule from the hang decoration's
-    // inline padding-inline-start). No styles.css in this mount, so the token is
-    // undeclared and the line resolves via the `var(…, 6px)` fallback — the same
-    // 6px the decoration's CM_LINE_START_PADDING constant uses as its hang base,
-    // kept in lockstep.
+  it("(b) default base is 6px == the decoration hang base (confirmatory)", async () => {
+    // CONFIRMATORY, not the cascade gate — the `11px` override test above is what
+    // proves quollCmLinePaddingTheme is mounted and wins. CM's OWN baseTheme also
+    // sets `.cm-line` padding-left:6px, so removing the theme would leave this test
+    // green; it does NOT gate the theme's presence on its own. What it DOES pin is
+    // the numeric lock-step: the token's `var(…, 6px)` fallback equals the 6px the
+    // decoration's CM_LINE_START_PADDING constant uses as its hang base. (No
+    // styles.css here, so the token is undeclared and the fallback is what resolves;
+    // the plain paragraph isolates the theme rule from the hang decoration's inline
+    // padding-inline-start.)
     view = mount("paragraph");
     await settled();
     const line = view.contentDOM.querySelector(".cm-line") as HTMLElement;
