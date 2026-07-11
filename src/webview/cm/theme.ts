@@ -352,11 +352,37 @@ export const blockStyleThemeSpec = {
   },
   // Round the top + add top breathing room only on the opening fence line — the shared
   // elliptical corner spec (blockEdgeCorner; its doc comment explains the padding-box
-  // radius compensation and the SHARED --quoll-block-* tokens).
+  // radius compensation and the SHARED --quoll-block-* tokens). The EXTERNAL gap rides a
+  // SEPARATE adjacency-gated rule below (mirroring the blockquote split).
   ".cm-line.quoll-fenced-code-open": blockEdgeCorner("top"),
   // Round the bottom + bottom breathing room only on the closing fence line
   // (blockEdgeCorner's bottom mirror).
   ".cm-line.quoll-fenced-code-close": blockEdgeCorner("bottom"),
+  // EXTERNAL gap at the fenced-code panel's TRUE top boundary — same mechanism as the
+  // blockquote top gap below (blockEdgeGapCorner: transparent --quoll-block-gap-y border
+  // + vertical-radius compensation). Gated so a fenced block NESTED in a blockquote (its
+  // open fence / migrated first body line co-carries `.quoll-blockquote` via the
+  // block-style byLine class union) does NOT punch a transparent strip through the outer
+  // quote panel — mirrors the blockquote gating but against `.quoll-blockquote` for the
+  // fenced-in-quote case. Covers the caret-out concealed-open case too: `-open` migrates
+  // onto the first body line whose previous rendered sibling is the zero-height concealed
+  // fence row (which carries `.quoll-blockquote` only inside a quote), so the gate fires
+  // correctly in both plain and nested cases. Higher specificity than the base -open rule,
+  // so the compensated radii win. Pinned by cm-decoration-block-style.test.ts.
+  ".cm-line.quoll-fenced-code-open:not(.cm-line.quoll-blockquote + .cm-line.quoll-fenced-code-open)":
+    blockEdgeGapCorner("top"),
+  // EXTERNAL gap at the TRUE bottom boundary: a -close line NOT immediately followed by a
+  // quote line (fenced-in-quote nesting) AND NOT immediately followed by a collapse bar.
+  // The only case a VISIBLE -close line is directly followed by a collapse bar is the
+  // caret-out expanded state, where `-close` has migrated onto the last body line sitting
+  // ABOVE the "Show less" bar (the interior seam the un-round rule in collapseToggleThemeSpec
+  // flattens) — excluding it hands the gap to the bar footer (the real panel bottom) so no
+  // phantom mid-panel gap appears there. A REVEALED -close (caret in) sits BELOW the bar,
+  // is followed by nothing, and correctly keeps the gap. This mutually-exclusive gating —
+  // rather than a broad gap rule suppressed by the un-round — keeps the two rules from
+  // colliding at equal specificity across the two theme extensions.
+  ".cm-line.quoll-fenced-code-close:not(:has(+ .cm-line.quoll-blockquote)):not(:has(+ .quoll-fenced-collapse-bar))":
+    blockEdgeGapCorner("bottom"),
   // Blockquote: subtle navy fill + muted text. The fill lands on every quote
   // line so the panel is continuous; horizontal padding insets the text from
   // the fill's edges.
@@ -792,10 +818,17 @@ export const quollCopyButtonTheme = EditorView.theme(copyButtonThemeSpec);
 // are verified in the real-browser harness (not assertable in happy-dom).
 // The rounded, padded footer edge shared by the collapse bar's TWO footer states —
 // the collapsed "Show more" bar AND the expanded "Show less" bar when it is the panel's
-// visible bottom. Both draw the same bottom edge as .cm-line.quoll-fenced-code-close via
-// the shared blockEdgeCorner spec (see its doc comment), so the three footers can never
-// drift.
-const collapseBarFooterCorner = blockEdgeCorner("bottom");
+// visible bottom. Both are the panel's TRUE bottom, so they draw the same bottom edge as
+// the .cm-line.quoll-fenced-code-close true-bottom rule: the rounded/padded blockEdgeCorner
+// PLUS the external --quoll-block-gap-y gap (blockEdgeGapCorner). The gap spread second
+// overrides blockEdgeCorner's non-compensated radii with the gap-compensated ones and adds
+// the transparent borderBottom; paddingBottom survives from blockEdgeCorner. Both footer
+// keys reference this const, so the three footers can never drift. The interior seam (a
+// code row ABOVE an expanded bar) is un-rounded separately below and carries NO gap.
+const collapseBarFooterCorner = {
+  ...blockEdgeCorner("bottom"),
+  ...blockEdgeGapCorner("bottom"),
+};
 
 export const collapseToggleThemeSpec = {
   ".quoll-fenced-collapse-bar": {

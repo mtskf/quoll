@@ -666,23 +666,26 @@ describe("quollCollapseToggleTheme", () => {
     }
   });
 
-  it("rounds + pads the collapsed bar's bottom to match .quoll-fenced-code-close (panel footer)", () => {
-    // The collapsed bar is the panel's visible bottom, so it carries the same
-    // bottom radius + bottom padding as the closing fence line — BOTH drawn from the
-    // shared --quoll-block-radius / --quoll-block-pad-y :root tokens, so a retuned
-    // panel keeps its footer in lockstep. The radii are ELLIPTICAL
-    // (`radius + 6px` / `radius + 2px` border-box horizontal) to compensate for
-    // `background-clip: padding-box`: the border eats into the corner, so the outer
-    // radius is bumped by the border width to leave a true --quoll-block-radius round
-    // on the painted fill (see theme.ts). Real-pixel geometry is left to the browser
-    // harness (happy-dom has no layout — fenced-collapse precedent).
+  it("rounds + pads + gaps the collapsed bar's bottom to match the .quoll-fenced-code-close true bottom (panel footer)", () => {
+    // The collapsed bar is the panel's visible bottom, so it carries the same TRUE-bottom
+    // edge as the closing fence line: bottom padding + the external --quoll-block-gap-y gap
+    // (transparent borderBottom) + gap-compensated bottom radii — ALL drawn from the shared
+    // --quoll-block-radius / --quoll-block-pad-y / --quoll-block-gap-y :root tokens, so a
+    // retuned panel keeps its footer in lockstep. The radii are ELLIPTICAL (`radius + 6px` /
+    // `radius + 2px` border-box horizontal, `radius + gap-y` vertical) to compensate for
+    // `background-clip: padding-box`: both the horizontal alignment border AND the vertical
+    // gap border eat into the corner, so each axis is bumped by its border width to leave a
+    // true --quoll-block-radius round on the painted fill (see theme.ts). Real-pixel geometry
+    // is left to the browser harness (happy-dom has no layout — fenced-collapse precedent).
+    // REVERT-CHECK: dropping the gap layer turns the borderBottom + compensated radii red.
     const footer = collapseToggleThemeSpec[".quoll-fenced-collapse-bar-collapsed"];
     expect(footer).toBeDefined();
+    expect(footer.borderBottom).toBe("var(--quoll-block-gap-y, 8px) solid transparent");
     expect(footer.borderBottomLeftRadius).toBe(
-      "calc(var(--quoll-block-radius, 8px) + var(--quoll-column-inset-left, 6px)) var(--quoll-block-radius, 8px)"
+      "calc(var(--quoll-block-radius, 8px) + var(--quoll-column-inset-left, 6px)) calc(var(--quoll-block-radius, 8px) + var(--quoll-block-gap-y, 8px))"
     );
     expect(footer.borderBottomRightRadius).toBe(
-      "calc(var(--quoll-block-radius, 8px) + var(--quoll-column-inset-right, 2px)) var(--quoll-block-radius, 8px)"
+      "calc(var(--quoll-block-radius, 8px) + var(--quoll-column-inset-right, 2px)) calc(var(--quoll-block-radius, 8px) + var(--quoll-block-gap-y, 8px))"
     );
     expect(footer.paddingBottom).toBe("var(--quoll-block-pad-y, 12px)");
   });
@@ -722,6 +725,13 @@ describe("quollCollapseToggleTheme", () => {
     expect(unround.borderBottomLeftRadius).toBe("0");
     expect(unround.borderBottomRightRadius).toBe("0");
     expect(unround.paddingBottom).toBe("0");
+    // The interior seam carries NO external gap: the .cm-line.quoll-fenced-code-close gap
+    // selector is gated with :not(:has(+ .quoll-fenced-collapse-bar)), so it never matches
+    // this migrated row above the expanded bar — no phantom mid-panel gap. (The gap lands on
+    // the bar footer instead.) REVERT-CHECK: broadening the close-fence gap to match this row
+    // would need this un-round rule to also zero borderBottom; pinning undefined keeps the
+    // mutually-exclusive gating honest.
+    expect((unround as Record<string, unknown>).borderBottom).toBeUndefined();
   });
 
   it("toggle draws its resting dim + fade from the shared floating-control tokens", () => {

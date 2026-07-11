@@ -12,6 +12,8 @@ All notable changes to Quoll are documented here.
 
 - Blockquotes and callouts now keep a small vertical gap from the block directly above and below them, even when no blank line separates them in the source. A panel that immediately follows a list item or paragraph no longer renders flush against that line's bottom edge, while nested quotes stay visually joined to their parent.
 
+- Fenced code blocks now keep that same vertical gap from the block directly above and below them. A code block that immediately follows a list item or paragraph no longer renders flush against that line, and a long block's "Show more" / "Show less" collapse bar keeps the gap at the panel's true bottom without opening a gap mid-panel. A code block nested inside a blockquote stays visually joined to its parent.
+
 ## 0.1.40 — 2026-07-11
 
 ### Added
