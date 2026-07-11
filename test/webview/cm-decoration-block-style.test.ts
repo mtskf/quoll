@@ -146,8 +146,8 @@ describe("block-style — fenced code panel (selection-aware fence rows)", () =>
     const out = buildFencedCodePanel(ctxCaret(docP, docP.indexOf("para") + 2));
     expect(lines(out)).toEqual([
       { from: 0, cls: "quoll-fenced-code-fence-hidden" },
-      { from: 6, cls: "quoll-fenced-code quoll-fenced-code-open" },
-      { from: 19, cls: "quoll-fenced-code quoll-fenced-code-close" },
+      { from: 6, cls: "quoll-fenced-code quoll-fenced-code-open quoll-fenced-code-outer-open" },
+      { from: 19, cls: "quoll-fenced-code quoll-fenced-code-close quoll-fenced-code-outer-close" },
       { from: 30, cls: "quoll-fenced-code-fence-hidden" },
     ]);
   });
@@ -155,20 +155,20 @@ describe("block-style — fenced code panel (selection-aware fence rows)", () =>
   it("caret in the CODE BODY reveals BOTH fences (no fence row collapses)", () => {
     const out = buildFencedCodePanel(ctxCaret(doc, doc.indexOf("const") + 2)); // caret in "const x = 1;" body
     expect(lines(out)).toEqual([
-      { from: 0, cls: "quoll-fenced-code quoll-fenced-code-open" },
+      { from: 0, cls: "quoll-fenced-code quoll-fenced-code-open quoll-fenced-code-outer-open" },
       { from: 6, cls: "quoll-fenced-code" },
       { from: 19, cls: "quoll-fenced-code" },
-      { from: 30, cls: "quoll-fenced-code quoll-fenced-code-close" },
+      { from: 30, cls: "quoll-fenced-code quoll-fenced-code-close quoll-fenced-code-outer-close" },
     ]);
   });
 
   it("caret INSIDE the block (on close fence line) reveals BOTH fences", () => {
     const out = buildFencedCodePanel(ctxCaret(doc, 31)); // inside the trailing "```"
     expect(lines(out)).toEqual([
-      { from: 0, cls: "quoll-fenced-code quoll-fenced-code-open" },
+      { from: 0, cls: "quoll-fenced-code quoll-fenced-code-open quoll-fenced-code-outer-open" },
       { from: 6, cls: "quoll-fenced-code" },
       { from: 19, cls: "quoll-fenced-code" },
-      { from: 30, cls: "quoll-fenced-code quoll-fenced-code-close" },
+      { from: 30, cls: "quoll-fenced-code quoll-fenced-code-close quoll-fenced-code-outer-close" },
     ]);
   });
 
@@ -178,7 +178,10 @@ describe("block-style — fenced code panel (selection-aware fence rows)", () =>
     const out = buildFencedCodePanel(ctxCaret(d, d.indexOf("para") + 1));
     expect(lines(out)).toEqual([
       { from: 0, cls: "quoll-fenced-code-fence-hidden" },
-      { from: 4, cls: "quoll-fenced-code quoll-fenced-code-open quoll-fenced-code-close" },
+      {
+        from: 4,
+        cls: "quoll-fenced-code quoll-fenced-code-open quoll-fenced-code-outer-open quoll-fenced-code-close quoll-fenced-code-outer-close",
+      },
       { from: 9, cls: "quoll-fenced-code-fence-hidden" },
     ]);
   });
@@ -186,8 +189,8 @@ describe("block-style — fenced code panel (selection-aware fence rows)", () =>
   it("unclosed block at EOF: caret inside reveals the open fence; last body line is the bottom edge", () => {
     const out = buildFencedCodePanel(ctxCaret("```js\nconst x = 1;", 18)); // caret in body (in-block)
     expect(lines(out)).toEqual([
-      { from: 0, cls: "quoll-fenced-code quoll-fenced-code-open" },
-      { from: 6, cls: "quoll-fenced-code quoll-fenced-code-close" },
+      { from: 0, cls: "quoll-fenced-code quoll-fenced-code-open quoll-fenced-code-outer-open" },
+      { from: 6, cls: "quoll-fenced-code quoll-fenced-code-close quoll-fenced-code-outer-close" },
     ]);
   });
 
@@ -197,9 +200,84 @@ describe("block-style — fenced code panel (selection-aware fence rows)", () =>
       ctxCaret("```\n```\n\npara", "```\n```\n\npara".indexOf("para") + 1)
     );
     expect(lines(out)).toEqual([
-      { from: 0, cls: "quoll-fenced-code quoll-fenced-code-open" },
-      { from: 4, cls: "quoll-fenced-code quoll-fenced-code-close" },
+      { from: 0, cls: "quoll-fenced-code quoll-fenced-code-open quoll-fenced-code-outer-open" },
+      { from: 4, cls: "quoll-fenced-code quoll-fenced-code-close quoll-fenced-code-outer-close" },
     ]);
+  });
+});
+
+describe("block-style — fenced outer-boundary (document-model, viewport-independent)", () => {
+  // The panel's TRUE outer top/bottom carries -outer-open / -outer-close, decided
+  // from the document model (NOT rendered siblings), so cm/theme.ts styles the
+  // external gap unconditionally. These pin the cross-panel one-gap rule + the NEW
+  // adjacent-fenced single-gap behaviour.
+
+  const clsAt = (set: DecorationSet, from: number): string =>
+    lines(set).find((l) => l.from === from)?.cls ?? "";
+
+  it("two DIRECTLY-adjacent fenced blocks (no blank line) collapse to ONE gap: block1 keeps -outer-close, block2 drops -outer-open", () => {
+    // L1 ```[0,3] L2 a[4,5] L3 ```[6,9] L4 ```[10,13] L5 b[14,15] L6 ```[16,19]
+    // L7 ""[20] L8 para[21,25]. Caret on para → both blocks concealed → edges on
+    // the single body lines L2 (from 4) and L5 (from 14).
+    const d = "```\na\n```\n```\nb\n```\n\npara";
+    const out = buildFencedCodePanel(ctxCaret(d, d.indexOf("para") + 1));
+    // block1's bottom edge is the TRUE panel↔panel boundary and keeps the gap…
+    expect(clsAt(out, 4)).toBe(
+      "quoll-fenced-code quoll-fenced-code-open quoll-fenced-code-outer-open quoll-fenced-code-close quoll-fenced-code-outer-close"
+    );
+    // …while block2's top edge YIELDS its -outer-open (directly-adjacent fenced above),
+    // so the pair shows a single ~8px gap instead of a stacked ~16px. block2 still
+    // keeps its own -outer-close (nothing panel-like below it).
+    expect(clsAt(out, 14)).toBe(
+      "quoll-fenced-code quoll-fenced-code-open quoll-fenced-code-close quoll-fenced-code-outer-close"
+    );
+  });
+
+  it("two BLANK-separated fenced blocks each keep BOTH outer edges (the blank is a real separator)", () => {
+    // block2 open fence is NOT the line directly after block1's close (a blank sits
+    // between), so `precededByAdjacentFenced` is false → block2 keeps -outer-open.
+    const d = "```\na\n```\n\n```\nb\n```\n\npara";
+    const out = buildFencedCodePanel(ctxCaret(d, d.indexOf("para") + 1));
+    expect(clsAt(out, 4)).toContain("quoll-fenced-code-outer-close");
+    const block2Body = d.indexOf("\nb\n") + 1; // start of the "b" body line
+    expect(clsAt(out, block2Body)).toContain("quoll-fenced-code-outer-open");
+    expect(clsAt(out, block2Body)).toContain("quoll-fenced-code-outer-close");
+  });
+
+  it("a quote DIRECTLY above a standalone fenced block suppresses the fenced -outer-open (quote keeps the gap)", () => {
+    // L1 "> quote"[0,7] L2 ```[8,11] L3 code[12,16] L4 ```[17,20]. Caret on para →
+    // fenced concealed → its edge rides body line L3 (from 12).
+    const d = "> quote\n```\ncode\n```\n\npara";
+    const out = buildFencedCodePanel(ctxCaret(d, d.indexOf("para") + 1));
+    const cls = clsAt(out, 12);
+    expect(cls).toContain("quoll-fenced-code-open");
+    expect(cls).not.toContain("quoll-fenced-code-outer-open"); // prev line is a quote line
+    expect(cls).toContain("quoll-fenced-code-outer-close"); // bottom is a true boundary
+  });
+
+  it("a standalone fenced block DIRECTLY above a quote suppresses the fenced -outer-close (quote keeps the gap)", () => {
+    // L1 ```[0,3] L2 code[4,8] L3 ```[9,12] L4 "> quote"[13,20]. Caret on para →
+    // fenced concealed → its edge rides body line L2 (from 4).
+    const d = "```\ncode\n```\n> quote\n\npara";
+    const out = buildFencedCodePanel(ctxCaret(d, d.indexOf("para") + 1));
+    const cls = clsAt(out, 4);
+    expect(cls).toContain("quoll-fenced-code-outer-open"); // top is a true boundary (doc start)
+    expect(cls).toContain("quoll-fenced-code-close");
+    expect(cls).not.toContain("quoll-fenced-code-outer-close"); // next line is a quote line
+  });
+
+  it("a BODYLESS fenced block counts as the adjacent neighbour: the following block drops -outer-open (Codex #3)", () => {
+    // L1 ```[0,3] L2 ```[4,7] = bodyless block1 (fences stay visible). L3 ```[8,11]
+    // L4 x[12,13] L5 ```[14,17] = block2. block2 open (L3) is directly after block1's
+    // visible close fence (L2), so block2 yields its -outer-open; block1 keeps its own.
+    const d = "```\n```\n```\nx\n```\n\npara";
+    const out = buildFencedCodePanel(ctxCaret(d, d.indexOf("para") + 1));
+    expect(clsAt(out, 0)).toContain("quoll-fenced-code-outer-open"); // block1 top (doc start)
+    expect(clsAt(out, 4)).toContain("quoll-fenced-code-outer-close"); // block1 bottom = the boundary
+    const block2Body = d.indexOf("\nx\n") + 1;
+    const b2 = clsAt(out, block2Body);
+    expect(b2).toContain("quoll-fenced-code-open");
+    expect(b2).not.toContain("quoll-fenced-code-outer-open"); // yielded to adjacent bodyless block
   });
 });
 
@@ -208,18 +286,19 @@ describe("block-style — blockquote rule", () => {
     // L1 "> line one"[0,10] L2 "> line two"[11,21] L3 ">"[22,23] L4 "> line four"[24,35]
     const set = buildBlockquoteRule(ctx("> line one\n> line two\n>\n> line four"));
     expect(lines(set)).toEqual([
-      { from: 0, cls: "quoll-blockquote quoll-blockquote-open" },
+      { from: 0, cls: "quoll-blockquote quoll-blockquote-open quoll-blockquote-outer-open" },
       { from: 11, cls: "quoll-blockquote" },
       { from: 22, cls: "quoll-blockquote" },
-      { from: 24, cls: "quoll-blockquote quoll-blockquote-close" },
+      { from: 24, cls: "quoll-blockquote quoll-blockquote-close quoll-blockquote-outer-close" },
     ]);
   });
 
   it("single-line blockquote: the one line gets both open AND close", () => {
+    // Top-level (outermost) quote → its one line is BOTH true outer boundaries.
     expect(lines(buildBlockquoteRule(ctx("> quote")))).toEqual([
       {
         from: 0,
-        cls: "quoll-blockquote quoll-blockquote-open quoll-blockquote-close",
+        cls: "quoll-blockquote quoll-blockquote-open quoll-blockquote-outer-open quoll-blockquote-close quoll-blockquote-outer-close",
       },
     ]);
   });
@@ -230,8 +309,8 @@ describe("block-style — blockquote rule", () => {
     // Markdown Studio's whole-<blockquote> treatment), so the continuation
     // line — the node's last line — gets the rule + -close.
     expect(lines(buildBlockquoteRule(ctx("> quoted\ncontinuation line")))).toEqual([
-      { from: 0, cls: "quoll-blockquote quoll-blockquote-open" },
-      { from: 9, cls: "quoll-blockquote quoll-blockquote-close" },
+      { from: 0, cls: "quoll-blockquote quoll-blockquote-open quoll-blockquote-outer-open" },
+      { from: 9, cls: "quoll-blockquote quoll-blockquote-close quoll-blockquote-outer-close" },
     ]);
   });
 });
@@ -258,19 +337,28 @@ describe("block-style — blockquote rule nested deeper tint", () => {
   it("`> >` lines carry depth-2 ALONGSIDE the base class + open/close edges", () => {
     // "> > a"[0,5] "> > b"[6,11]: both lines have two `>` → depth 2. Outer +
     // inner Blockquote share the first/last line so it is open (L1) / close (L2).
+    // Both lines are the OUTERMOST node's own first/last edge → both true outer
+    // boundaries (the inner node shares those lines but adds no outer class).
     expect(lines(buildBlockquoteRule(ctx("> > a\n> > b")))).toEqual([
-      { from: 0, cls: "quoll-blockquote quoll-blockquote-depth-2 quoll-blockquote-open" },
-      { from: 6, cls: "quoll-blockquote quoll-blockquote-depth-2 quoll-blockquote-close" },
+      {
+        from: 0,
+        cls: "quoll-blockquote quoll-blockquote-depth-2 quoll-blockquote-open quoll-blockquote-outer-open",
+      },
+      {
+        from: 6,
+        cls: "quoll-blockquote quoll-blockquote-depth-2 quoll-blockquote-close quoll-blockquote-outer-close",
+      },
     ]);
   });
 
   it("mixed depth: only the `> >` line deepens; a `> c` continuation stays depth-1", () => {
     // "> a"[0,3] "> > b"[4,9] "> c"[10,13]. Per-line `>` count: 1, 2, 1 — so only
-    // L2 gets depth-2. L2 is the inner quote's OPEN edge; L3 is the shared close.
+    // L2 gets depth-2. L2 is the inner quote's OPEN edge (NO outer class — it is
+    // interior to the outer panel); L1/L3 are the OUTERMOST node's true edges.
     expect(lines(buildBlockquoteRule(ctx("> a\n> > b\n> c")))).toEqual([
-      { from: 0, cls: "quoll-blockquote quoll-blockquote-open" },
+      { from: 0, cls: "quoll-blockquote quoll-blockquote-open quoll-blockquote-outer-open" },
       { from: 4, cls: "quoll-blockquote quoll-blockquote-depth-2 quoll-blockquote-open" },
-      { from: 10, cls: "quoll-blockquote quoll-blockquote-close" },
+      { from: 10, cls: "quoll-blockquote quoll-blockquote-close quoll-blockquote-outer-close" },
     ]);
   });
 
@@ -278,7 +366,7 @@ describe("block-style — blockquote rule nested deeper tint", () => {
     expect(lines(buildBlockquoteRule(ctx("> > > deep")))).toEqual([
       {
         from: 0,
-        cls: "quoll-blockquote quoll-blockquote-depth-3 quoll-blockquote-open quoll-blockquote-close",
+        cls: "quoll-blockquote quoll-blockquote-depth-3 quoll-blockquote-open quoll-blockquote-outer-open quoll-blockquote-close quoll-blockquote-outer-close",
       },
     ]);
   });
@@ -294,7 +382,7 @@ describe("block-style — blockquote rule nested deeper tint", () => {
 
   it("a plain single-level quote carries NO depth class (regression)", () => {
     expect(lines(buildBlockquoteRule(ctx("> plain")))[0]?.cls).toBe(
-      "quoll-blockquote quoll-blockquote-open quoll-blockquote-close"
+      "quoll-blockquote quoll-blockquote-open quoll-blockquote-outer-open quoll-blockquote-close quoll-blockquote-outer-close"
     );
   });
 
@@ -322,7 +410,10 @@ describe("block-style — blockquote edge migrates off a concealed boundary fenc
     const out = buildBlockquoteRule(ctxCaret(d, d.indexOf("para") + 1));
     expect(lines(out)).toEqual([
       { from: 0, cls: "quoll-blockquote" },
-      { from: 6, cls: "quoll-blockquote quoll-blockquote-open quoll-blockquote-close" },
+      {
+        from: 6,
+        cls: "quoll-blockquote quoll-blockquote-open quoll-blockquote-outer-open quoll-blockquote-close quoll-blockquote-outer-close",
+      },
       { from: 13, cls: "quoll-blockquote" },
     ]);
   });
@@ -335,8 +426,8 @@ describe("block-style — blockquote edge migrates off a concealed boundary fenc
     const out = buildBlockquoteRule(ctxCaret(d, d.indexOf("para") + 1));
     expect(lines(out)).toEqual([
       { from: 0, cls: "quoll-blockquote" },
-      { from: 6, cls: "quoll-blockquote quoll-blockquote-open" },
-      { from: 10, cls: "quoll-blockquote quoll-blockquote-close" },
+      { from: 6, cls: "quoll-blockquote quoll-blockquote-open quoll-blockquote-outer-open" },
+      { from: 10, cls: "quoll-blockquote quoll-blockquote-close quoll-blockquote-outer-close" },
       { from: 14, cls: "quoll-blockquote" },
     ]);
   });
@@ -349,9 +440,9 @@ describe("block-style — blockquote edge migrates off a concealed boundary fenc
     const out = buildBlockquoteRule(ctxCaret(d, d.indexOf("para") + 1));
     expect(lines(out)).toEqual([
       { from: 0, cls: "quoll-blockquote" },
-      { from: 6, cls: "quoll-blockquote quoll-blockquote-open" },
+      { from: 6, cls: "quoll-blockquote quoll-blockquote-open quoll-blockquote-outer-open" },
       { from: 13, cls: "quoll-blockquote" },
-      { from: 19, cls: "quoll-blockquote quoll-blockquote-close" },
+      { from: 19, cls: "quoll-blockquote quoll-blockquote-close quoll-blockquote-outer-close" },
     ]);
   });
 
@@ -362,9 +453,9 @@ describe("block-style — blockquote edge migrates off a concealed boundary fenc
     const d = "> before\n> ```\n> code\n> ```\n\npara";
     const out = buildBlockquoteRule(ctxCaret(d, d.indexOf("para") + 1));
     expect(lines(out)).toEqual([
-      { from: 0, cls: "quoll-blockquote quoll-blockquote-open" },
+      { from: 0, cls: "quoll-blockquote quoll-blockquote-open quoll-blockquote-outer-open" },
       { from: 9, cls: "quoll-blockquote" },
-      { from: 15, cls: "quoll-blockquote quoll-blockquote-close" },
+      { from: 15, cls: "quoll-blockquote quoll-blockquote-close quoll-blockquote-outer-close" },
       { from: 22, cls: "quoll-blockquote" },
     ]);
   });
@@ -375,9 +466,9 @@ describe("block-style — blockquote edge migrates off a concealed boundary fenc
     const d = "> ```\n> code\n> ```\n\npara";
     const out = buildBlockquoteRule(ctxCaret(d, 3)); // inside L1 "> ```"
     expect(lines(out)).toEqual([
-      { from: 0, cls: "quoll-blockquote quoll-blockquote-open" },
+      { from: 0, cls: "quoll-blockquote quoll-blockquote-open quoll-blockquote-outer-open" },
       { from: 6, cls: "quoll-blockquote" },
-      { from: 13, cls: "quoll-blockquote quoll-blockquote-close" },
+      { from: 13, cls: "quoll-blockquote quoll-blockquote-close quoll-blockquote-outer-close" },
     ]);
   });
 
@@ -388,9 +479,9 @@ describe("block-style — blockquote edge migrates off a concealed boundary fenc
     const d = "> ```\n> code\n> ```\n\npara";
     const out = buildBlockquoteRule(ctxCaret(d, 15)); // inside L3 "> ```" [13,18]
     expect(lines(out)).toEqual([
-      { from: 0, cls: "quoll-blockquote quoll-blockquote-open" },
+      { from: 0, cls: "quoll-blockquote quoll-blockquote-open quoll-blockquote-outer-open" },
       { from: 6, cls: "quoll-blockquote" },
-      { from: 13, cls: "quoll-blockquote quoll-blockquote-close" },
+      { from: 13, cls: "quoll-blockquote quoll-blockquote-close quoll-blockquote-outer-close" },
     ]);
   });
 
@@ -401,9 +492,9 @@ describe("block-style — blockquote edge migrates off a concealed boundary fenc
     const d = "> ```\n> code\n> ```\n\npara";
     const out = buildBlockquoteRule(ctxCaret(d, d.indexOf("code") + 1)); // caret on the BODY line, NOT a fence line
     expect(lines(out)).toEqual([
-      { from: 0, cls: "quoll-blockquote quoll-blockquote-open" },
+      { from: 0, cls: "quoll-blockquote quoll-blockquote-open quoll-blockquote-outer-open" },
       { from: 6, cls: "quoll-blockquote" },
-      { from: 13, cls: "quoll-blockquote quoll-blockquote-close" },
+      { from: 13, cls: "quoll-blockquote quoll-blockquote-close quoll-blockquote-outer-close" },
     ]);
   });
 
@@ -413,8 +504,8 @@ describe("block-style — blockquote edge migrates off a concealed boundary fenc
     const d = "> ```\n> ```\n\npara";
     const out = buildBlockquoteRule(ctxCaret(d, d.indexOf("para") + 1));
     expect(lines(out)).toEqual([
-      { from: 0, cls: "quoll-blockquote quoll-blockquote-open" },
-      { from: 6, cls: "quoll-blockquote quoll-blockquote-close" },
+      { from: 0, cls: "quoll-blockquote quoll-blockquote-open quoll-blockquote-outer-open" },
+      { from: 6, cls: "quoll-blockquote quoll-blockquote-close quoll-blockquote-outer-close" },
     ]);
   });
 
@@ -440,7 +531,10 @@ describe("block-style — blockquote edge migrates off a concealed boundary fenc
       tree: fullTree(state),
     });
     expect(lines(set)).toEqual([
-      { from: 6, cls: "quoll-blockquote quoll-blockquote-open quoll-blockquote-close" },
+      {
+        from: 6,
+        cls: "quoll-blockquote quoll-blockquote-open quoll-blockquote-outer-open quoll-blockquote-close quoll-blockquote-outer-close",
+      },
       { from: 13, cls: "quoll-blockquote" },
     ]);
   });
@@ -456,7 +550,9 @@ describe("block-style — gating & clamping", () => {
     // "> a"[0,3] "> b"[4,7]; zone covers L1's start only. L2 (from=4) is the
     // Blockquote node's LAST line, so it still carries the -close modifier.
     const set = buildBlockquoteRule(ctx("> a\n> b"), [{ from: 0, to: 1 }]);
-    expect(lines(set)).toEqual([{ from: 4, cls: "quoll-blockquote quoll-blockquote-close" }]);
+    expect(lines(set)).toEqual([
+      { from: 4, cls: "quoll-blockquote quoll-blockquote-close quoll-blockquote-outer-close" },
+    ]);
   });
 
   it("clamps emission to visible ranges; caret in-block keeps body lines bare (both fences revealed)", () => {
@@ -478,7 +574,7 @@ describe("block-style — gating & clamping", () => {
     // lineAt(8) = L3 would surface a stray line at the viewport edge).
     const set = buildBlockquoteRule(ctxWithRanges("> a\n> b\n> c", [{ from: 0, to: 8 }]));
     expect(lines(set)).toEqual([
-      { from: 0, cls: "quoll-blockquote quoll-blockquote-open" },
+      { from: 0, cls: "quoll-blockquote quoll-blockquote-open quoll-blockquote-outer-open" },
       { from: 4, cls: "quoll-blockquote" },
     ]);
   });
@@ -516,9 +612,9 @@ describe("block-style — multi-range dedup", () => {
       ])
     );
     expect(lines(set)).toEqual([
-      { from: 0, cls: "quoll-blockquote quoll-blockquote-open" },
+      { from: 0, cls: "quoll-blockquote quoll-blockquote-open quoll-blockquote-outer-open" },
       { from: 4, cls: "quoll-blockquote" },
-      { from: 8, cls: "quoll-blockquote quoll-blockquote-close" },
+      { from: 8, cls: "quoll-blockquote quoll-blockquote-close quoll-blockquote-outer-close" },
     ]);
   });
 
@@ -534,12 +630,12 @@ describe("block-style — multi-range dedup", () => {
     expect(mergedLines(buildBlockquoteRule(c), buildFencedCodePanel(c))).toEqual([
       {
         from: 0,
-        cls: "quoll-blockquote quoll-blockquote-open quoll-fenced-code quoll-fenced-code-open",
+        cls: "quoll-blockquote quoll-blockquote-open quoll-blockquote-outer-open quoll-fenced-code quoll-fenced-code-open",
       },
       { from: 6, cls: "quoll-blockquote quoll-fenced-code" },
       {
         from: 13,
-        cls: "quoll-blockquote quoll-blockquote-close quoll-fenced-code quoll-fenced-code-close",
+        cls: "quoll-blockquote quoll-blockquote-close quoll-blockquote-outer-close quoll-fenced-code quoll-fenced-code-close",
       },
     ]);
   });
@@ -563,9 +659,15 @@ describe("block-style — mixed block types", () => {
     );
     expect(mergedLines(buildBlockquoteRule(c), buildFencedCodePanel(c))).toEqual([
       { from: 0, cls: "quoll-fenced-code-fence-hidden" },
-      { from: 4, cls: "quoll-fenced-code quoll-fenced-code-open quoll-fenced-code-close" },
+      {
+        from: 4,
+        cls: "quoll-fenced-code quoll-fenced-code-open quoll-fenced-code-outer-open quoll-fenced-code-close quoll-fenced-code-outer-close",
+      },
       { from: 9, cls: "quoll-fenced-code-fence-hidden" },
-      { from: 14, cls: "quoll-blockquote quoll-blockquote-open quoll-blockquote-close" },
+      {
+        from: 14,
+        cls: "quoll-blockquote quoll-blockquote-open quoll-blockquote-outer-open quoll-blockquote-close quoll-blockquote-outer-close",
+      },
     ]);
   });
 });
@@ -587,16 +689,19 @@ describe("block-style — nested constructs compose classes", () => {
     // neither the fenced NOR the blockquote edge migrates — L1 keeps base+open
     // (quote AND fenced), L3 keeps base+close (quote AND fenced), and the single
     // body line L2 stays bare. No boundary-fence collapse when the caret is in-block.
+    // The fenced block is INSIDE the quote (Blockquote ancestor) → it is an interior
+    // element and gets NO -outer-* class; the surrounding OUTERMOST quote owns the
+    // panel's true top/bottom boundary, so only its open/close carry the outer class.
     const c = ctx("> ```\n> code\n> ```");
     expect(mergedLines(buildBlockquoteRule(c), buildFencedCodePanel(c))).toEqual([
       {
         from: 0,
-        cls: "quoll-blockquote quoll-blockquote-open quoll-fenced-code quoll-fenced-code-open",
+        cls: "quoll-blockquote quoll-blockquote-open quoll-blockquote-outer-open quoll-fenced-code quoll-fenced-code-open",
       },
       { from: 6, cls: "quoll-blockquote quoll-fenced-code" },
       {
         from: 13,
-        cls: "quoll-blockquote quoll-blockquote-close quoll-fenced-code quoll-fenced-code-close",
+        cls: "quoll-blockquote quoll-blockquote-close quoll-blockquote-outer-close quoll-fenced-code quoll-fenced-code-close",
       },
     ]);
   });
@@ -609,11 +714,37 @@ describe("block-style — nested constructs compose classes", () => {
     // bare "quoll-blockquote" before — outer's middle line, inner skipped). It
     // also carries -depth-2 (two leading `>` → the nested deeper-tint class).
     // Both nodes share the base class, so the Set dedups it to a single rule.
+    // Only the OUTERMOST node's edges are true outer boundaries: L1 (outer open) and
+    // L3 (outer close) get the outer class; the inner node's OPEN on L2 does NOT
+    // (interior to the outer panel). See the sibling test below for the symmetric
+    // inner-CLOSE case (an inner close that is strictly interior).
     const set = buildBlockquoteRule(ctx("> outer\n> > inner\n> outer2"));
     expect(lines(set)).toEqual([
-      { from: 0, cls: "quoll-blockquote quoll-blockquote-open" },
+      { from: 0, cls: "quoll-blockquote quoll-blockquote-open quoll-blockquote-outer-open" },
       { from: 8, cls: "quoll-blockquote quoll-blockquote-depth-2 quoll-blockquote-open" },
-      { from: 18, cls: "quoll-blockquote quoll-blockquote-close" },
+      { from: 18, cls: "quoll-blockquote quoll-blockquote-close quoll-blockquote-outer-close" },
+    ]);
+  });
+
+  it("nested inner CLOSE that is strictly interior carries NO -outer-close (symmetric edge)", () => {
+    // "> > a"[0,5] "> b"[6,9] ">"[10,11] "> c"[12,15].
+    //   outer Blockquote [0,15]: first=L1(0), last=L4(12)
+    //   inner Blockquote [2,9]: first=L1(0), last=L2(6)  (the empty `>` on L3 ends it)
+    // L2 (from=6) is the inner node's CLOSE, but it is NEITHER the outer open (L1)
+    // NOR the outer close (L4) — a purely INTERIOR line. It must carry -close but
+    // NO -outer-close: the external gap belongs to the OUTERMOST panel's real bottom
+    // (L4), not to a nested inner edge in the middle. L2 has one `>` → depth-1 (no
+    // depth class). Closes the close-side of the virtualised-edge regression
+    // symmetrically with the inner-OPEN case above.
+    const set = buildBlockquoteRule(ctx("> > a\n> b\n>\n> c"));
+    expect(lines(set)).toEqual([
+      {
+        from: 0,
+        cls: "quoll-blockquote quoll-blockquote-depth-2 quoll-blockquote-open quoll-blockquote-outer-open",
+      },
+      { from: 6, cls: "quoll-blockquote quoll-blockquote-close" },
+      { from: 10, cls: "quoll-blockquote" },
+      { from: 12, cls: "quoll-blockquote quoll-blockquote-close quoll-blockquote-outer-close" },
     ]);
   });
 
@@ -624,10 +755,13 @@ describe("block-style — nested constructs compose classes", () => {
     // The one line is every node's first AND last line, so it accumulates the
     // base + open + close (deduped across the two same-name nodes), plus -depth-2
     // (two leading `>`).
+    // The ONE physical line is the OUTERMOST node's first AND last line, so the outer
+    // classes are pinned to exactly that line (the inner node shares it but adds no
+    // outer class) — the union does not leak an outer class onto any other line.
     expect(lines(buildBlockquoteRule(ctx("> > deep")))).toEqual([
       {
         from: 0,
-        cls: "quoll-blockquote quoll-blockquote-depth-2 quoll-blockquote-open quoll-blockquote-close",
+        cls: "quoll-blockquote quoll-blockquote-depth-2 quoll-blockquote-open quoll-blockquote-outer-open quoll-blockquote-close quoll-blockquote-outer-close",
       },
     ]);
   });
@@ -661,10 +795,10 @@ describe("block-style — theme spec contract", () => {
       "calc(var(--quoll-block-radius, 8px) + var(--quoll-column-inset-right, 2px)) var(--quoll-block-radius, 8px)"
     );
     expect(open.paddingTop).toBe("var(--quoll-block-pad-y, 12px)");
-    // The BASE -open/-close keys carry NO external gap border — the gap rides a separate
-    // adjacency-gated rule (see the "external gap on the TRUE fenced-code boundary" test
-    // below), so a fenced block nested in a blockquote keeps this plain rounding with no
-    // mid-panel strip.
+    // The BASE -open/-close keys carry NO external gap border — the gap rides the separate
+    // builder-emitted `-outer-open` / `-outer-close` classes (see the "external gap on the
+    // TRUE fenced-code boundary" test below), so a fenced block nested in a blockquote keeps
+    // this plain rounding with no mid-panel strip.
     expect(open.borderTop).toBeUndefined();
     const close = blockStyleThemeSpec[".cm-line.quoll-fenced-code-close"];
     expect(close.borderBottomLeftRadius).toBe(
@@ -677,22 +811,18 @@ describe("block-style — theme spec contract", () => {
     expect(close.borderBottom).toBeUndefined();
   });
 
-  it("external gap on the TRUE fenced-code boundary only (adjacency-gated, radius-compensated)", () => {
+  it("external gap on the TRUE fenced-code boundary only (document-model outer class, radius-compensated)", () => {
     // The fenced-code panel breathes from the block directly above/below via the SAME
     // transparent --quoll-block-gap-y border + vertical-radius compensation the blockquote
-    // panel uses (blockEdgeGapCorner). The TOP gap rides a -open line NOT immediately
-    // preceded by a quote line and the BOTTOM gap a -close line NOT immediately followed by
-    // a quote line — so a fenced block NESTED in a blockquote (its inner edges co-carry
-    // .quoll-blockquote via the byLine union) is excluded, no strip splits the parent quote.
-    // The bottom selector ALSO excludes a following collapse bar so the gap lands on the bar
-    // footer (the real panel bottom), never the interior close-fence row above an expanded
-    // bar. Real-pixel gap + rounded corner + no-nested-strip + no-phantom-interior-gap are
-    // verified in the browser harness (happy-dom has no layout). REVERT-CHECK: dropping
-    // either gated rule, or the vertical compensation, turns these red.
-    const topGap =
-      blockStyleThemeSpec[
-        ".cm-line.quoll-fenced-code-open:not(.cm-line.quoll-blockquote + .cm-line.quoll-fenced-code-open)"
-      ];
+    // panel uses (blockEdgeGapCorner). The gap now rides the builder-emitted
+    // `.quoll-fenced-code-outer-open` / `-outer-close` classes (UNCONDITIONAL selectors —
+    // the block-style.ts builder decides the true outer boundary from the document model, so
+    // a fenced block nested in a quote / directly adjacent to another panel never gets the
+    // outer class and no strip splits the parent). The old rendered-sibling `:not(...)` gates
+    // are GONE (assert below). Real-pixel gap + rounded corner + no-nested-strip are verified
+    // in the browser harness (happy-dom has no layout). REVERT-CHECK: dropping either outer
+    // rule, or the vertical compensation, turns these red.
+    const topGap = blockStyleThemeSpec[".cm-line.quoll-fenced-code-outer-open"];
     expect(topGap.borderTop).toBe("var(--quoll-block-gap-y, 8px) solid transparent");
     expect(topGap.borderTopLeftRadius).toBe(
       "calc(var(--quoll-block-radius, 8px) + var(--quoll-column-inset-left, 6px)) calc(var(--quoll-block-radius, 8px) + var(--quoll-block-gap-y, 8px))"
@@ -700,10 +830,7 @@ describe("block-style — theme spec contract", () => {
     expect(topGap.borderTopRightRadius).toBe(
       "calc(var(--quoll-block-radius, 8px) + var(--quoll-column-inset-right, 2px)) calc(var(--quoll-block-radius, 8px) + var(--quoll-block-gap-y, 8px))"
     );
-    const bottomGap =
-      blockStyleThemeSpec[
-        ".cm-line.quoll-fenced-code-close:not(:has(+ .cm-line.quoll-blockquote)):not(:has(+ .quoll-fenced-collapse-bar))"
-      ];
+    const bottomGap = blockStyleThemeSpec[".cm-line.quoll-fenced-code-outer-close"];
     expect(bottomGap.borderBottom).toBe("var(--quoll-block-gap-y, 8px) solid transparent");
     expect(bottomGap.borderBottomLeftRadius).toBe(
       "calc(var(--quoll-block-radius, 8px) + var(--quoll-column-inset-left, 6px)) calc(var(--quoll-block-radius, 8px) + var(--quoll-block-gap-y, 8px))"
@@ -711,6 +838,19 @@ describe("block-style — theme spec contract", () => {
     expect(bottomGap.borderBottomRightRadius).toBe(
       "calc(var(--quoll-block-radius, 8px) + var(--quoll-column-inset-right, 2px)) calc(var(--quoll-block-radius, 8px) + var(--quoll-block-gap-y, 8px))"
     );
+    // The old rendered-sibling adjacency `:not(...)` gap selectors are REMOVED (cast: the
+    // typed spec no longer declares these keys, which is exactly the contract).
+    const removed = blockStyleThemeSpec as Record<string, unknown>;
+    expect(
+      removed[
+        ".cm-line.quoll-fenced-code-open:not(.cm-line.quoll-blockquote + .cm-line.quoll-fenced-code-open)"
+      ]
+    ).toBeUndefined();
+    expect(
+      removed[
+        ".cm-line.quoll-fenced-code-close:not(:has(+ .cm-line.quoll-blockquote)):not(:has(+ .quoll-fenced-collapse-bar))"
+      ]
+    ).toBeUndefined();
   });
 
   it("blockquote corners: token elliptical radius (background-clip compensation) + shared vertical padding on open/close only", () => {
@@ -732,9 +872,10 @@ describe("block-style — theme spec contract", () => {
       "calc(var(--quoll-block-radius, 8px) + var(--quoll-column-inset-right, 2px)) var(--quoll-block-radius, 8px)"
     );
     expect(open.paddingTop).toBe("var(--quoll-block-pad-y, 12px)");
-    // The base -open/-close rules carry NO external gap border — the gap rides a separate
-    // adjacency-gated rule (see the "external gap on the TRUE boundary" test below) so a
-    // nested quote's inner -open line keeps this plain rounding with no mid-panel strip.
+    // The base -open/-close rules carry NO external gap border — the gap rides the separate
+    // builder-emitted `-outer-open` / `-outer-close` classes (see the "external gap on the
+    // TRUE boundary" test below) so a nested quote's inner -open line keeps this plain
+    // rounding with no mid-panel strip.
     expect(open.borderTop).toBeUndefined();
     const close = blockStyleThemeSpec[".cm-line.quoll-blockquote-close"];
     expect(close.borderBottomLeftRadius).toBe(
@@ -747,23 +888,19 @@ describe("block-style — theme spec contract", () => {
     expect(close.borderBottom).toBeUndefined();
   });
 
-  it("external gap on the TRUE quote/callout boundary only (adjacency-gated, radius-compensated)", () => {
+  it("external gap on the TRUE quote/callout boundary only (document-model outer class, radius-compensated)", () => {
     // The panel breathes from the block directly above/below via a TRANSPARENT vertical
-    // border (--quoll-block-gap-y) shown through by background-clip:padding-box. It rides
-    // an adjacency-gated selector — a -open line NOT immediately preceded by another quote
-    // line (`.quoll-blockquote + .quoll-blockquote-open`), a -close NOT immediately
-    // followed by one — so a NESTED quote's inner edge (which also carries -open/-close
-    // while inside the parent panel) is excluded and no transparent strip splits the
-    // parent. Because the gap border is on the same axis the fill clips to, it eats the
-    // painted vertical corner radius, so the vertical radius term is bumped by
-    // --quoll-block-gap-y to keep a true --quoll-block-radius round. Real-pixel gap +
-    // rounded corner + no-nested-strip are verified in the browser harness (happy-dom has
-    // no layout). REVERT-CHECK: dropping either gated rule, or the vertical compensation,
-    // turns these red.
-    const topGap =
-      blockStyleThemeSpec[
-        ".cm-line.quoll-blockquote-open:not(.cm-line.quoll-blockquote + .cm-line.quoll-blockquote-open)"
-      ];
+    // border (--quoll-block-gap-y) shown through by background-clip:padding-box. It rides the
+    // builder-emitted `.quoll-blockquote-outer-open` / `-outer-close` classes (UNCONDITIONAL
+    // — the block-style.ts builder emits them only on the OUTERMOST quote's edges, so a
+    // NESTED quote's inner edge never gets the outer class and no transparent strip splits
+    // the parent). The old rendered-sibling `:not(...)` gates are GONE (assert below).
+    // Because the gap border is on the same axis the fill clips to, it eats the painted
+    // vertical corner radius, so the vertical radius term is bumped by --quoll-block-gap-y to
+    // keep a true --quoll-block-radius round. Real-pixel gap + rounded corner + no-nested-strip
+    // are verified in the browser harness. REVERT-CHECK: dropping either outer rule, or the
+    // vertical compensation, turns these red.
+    const topGap = blockStyleThemeSpec[".cm-line.quoll-blockquote-outer-open"];
     expect(topGap.borderTop).toBe("var(--quoll-block-gap-y, 8px) solid transparent");
     expect(topGap.borderTopLeftRadius).toBe(
       "calc(var(--quoll-block-radius, 8px) + var(--quoll-column-inset-left, 6px)) calc(var(--quoll-block-radius, 8px) + var(--quoll-block-gap-y, 8px))"
@@ -771,8 +908,7 @@ describe("block-style — theme spec contract", () => {
     expect(topGap.borderTopRightRadius).toBe(
       "calc(var(--quoll-block-radius, 8px) + var(--quoll-column-inset-right, 2px)) calc(var(--quoll-block-radius, 8px) + var(--quoll-block-gap-y, 8px))"
     );
-    const bottomGap =
-      blockStyleThemeSpec[".cm-line.quoll-blockquote-close:not(:has(+ .cm-line.quoll-blockquote))"];
+    const bottomGap = blockStyleThemeSpec[".cm-line.quoll-blockquote-outer-close"];
     expect(bottomGap.borderBottom).toBe("var(--quoll-block-gap-y, 8px) solid transparent");
     expect(bottomGap.borderBottomLeftRadius).toBe(
       "calc(var(--quoll-block-radius, 8px) + var(--quoll-column-inset-left, 6px)) calc(var(--quoll-block-radius, 8px) + var(--quoll-block-gap-y, 8px))"
@@ -780,6 +916,17 @@ describe("block-style — theme spec contract", () => {
     expect(bottomGap.borderBottomRightRadius).toBe(
       "calc(var(--quoll-block-radius, 8px) + var(--quoll-column-inset-right, 2px)) calc(var(--quoll-block-radius, 8px) + var(--quoll-block-gap-y, 8px))"
     );
+    // The old rendered-sibling adjacency `:not(...)` gap selectors are REMOVED (cast: the
+    // typed spec no longer declares these keys, which is exactly the contract).
+    const removed = blockStyleThemeSpec as Record<string, unknown>;
+    expect(
+      removed[
+        ".cm-line.quoll-blockquote-open:not(.cm-line.quoll-blockquote + .cm-line.quoll-blockquote-open)"
+      ]
+    ).toBeUndefined();
+    expect(
+      removed[".cm-line.quoll-blockquote-close:not(:has(+ .cm-line.quoll-blockquote))"]
+    ).toBeUndefined();
   });
 
   it("both panels source horizontal padding from ONE shared --quoll-block-pad-x token (unification contract)", () => {
@@ -1102,7 +1249,9 @@ describe("block-style — callout admonition classes", () => {
 
   it("a plain quote is unchanged (no callout class)", () => {
     const out = lines(buildBlockquoteRule(ctx("> just a quote")));
-    expect(out[0]?.cls).toBe("quoll-blockquote quoll-blockquote-open quoll-blockquote-close");
+    expect(out[0]?.cls).toBe(
+      "quoll-blockquote quoll-blockquote-open quoll-blockquote-outer-open quoll-blockquote-close quoll-blockquote-outer-close"
+    );
   });
 
   it("a TAB-separated `>\\t[!NOTE]` marker gets the callout + per-type + marker classes", () => {
@@ -1195,6 +1344,11 @@ describe("block-style — callout marker conceal migrates -open (caret outside)"
     const code = out.find((l) => l.from === codeLine.from);
     expect(code?.cls).toContain("quoll-blockquote-open");
     expect(code?.cls).toContain("quoll-callout-tip");
+    // The TRUE outer-boundary class rides the SAME migrated line (this callout is the
+    // outermost quote), NOT the concealed marker row — so the external gap follows the
+    // first visible body line. Single-body fence ⇒ this line is BOTH edges.
+    expect(code?.cls).toContain("quoll-blockquote-outer-open");
+    expect(code?.cls).toContain("quoll-blockquote-outer-close");
   });
 });
 

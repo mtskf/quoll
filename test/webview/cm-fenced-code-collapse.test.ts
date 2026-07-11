@@ -725,13 +725,13 @@ describe("quollCollapseToggleTheme", () => {
     expect(unround.borderBottomLeftRadius).toBe("0");
     expect(unround.borderBottomRightRadius).toBe("0");
     expect(unround.paddingBottom).toBe("0");
-    // The interior seam carries NO external gap: the .cm-line.quoll-fenced-code-close gap
-    // selector is gated with :not(:has(+ .quoll-fenced-collapse-bar)), so it never matches
-    // this migrated row above the expanded bar — no phantom mid-panel gap. (The gap lands on
-    // the bar footer instead.) REVERT-CHECK: broadening the close-fence gap to match this row
-    // would need this un-round rule to also zero borderBottom; pinning undefined keeps the
-    // mutually-exclusive gating honest.
-    expect((unround as Record<string, unknown>).borderBottom).toBeUndefined();
+    // The interior seam carries NO external gap. The gap now rides the UNCONDITIONAL
+    // document-model `.cm-line.quoll-fenced-code-outer-close` rule, which DOES match this
+    // migrated true-bottom-boundary row (caret-out expanded) — so this higher-specificity
+    // widget-adjacency override must actively zero the gap (`borderBottom: "0"`) to hand it
+    // to the bar footer instead. REVERT-CHECK: dropping this borderBottom zero re-introduces
+    // a phantom mid-panel gap above the expanded bar (the bar footer would double it).
+    expect(unround.borderBottom).toBe("0");
   });
 
   it("toggle draws its resting dim + fade from the shared floating-control tokens", () => {

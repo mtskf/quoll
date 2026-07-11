@@ -149,6 +149,7 @@ import {
   calloutClassForType,
   calloutMarkerConceal,
   calloutTypeForOutermost,
+  hasBlockquoteAncestor,
 } from "./callout.js";
 import { quollSyntaxExclusionZones } from "./orchestrator.js";
 import { pointInExclusionZone } from "./shared.js";
@@ -166,6 +167,14 @@ type SyntaxNode = ReturnType<typeof syntaxTree>["topNode"];
 export const FENCED_CODE_CLASS = "quoll-fenced-code";
 export const FENCED_CODE_OPEN_CLASS = "quoll-fenced-code-open";
 export const FENCED_CODE_CLOSE_CLASS = "quoll-fenced-code-close";
+/** TRUE outer-boundary classes: the panel's outermost top / bottom edge, decided
+ *  from the DOCUMENT MODEL (not rendered siblings), so the external gap can be
+ *  styled UNCONDITIONALLY in cm/theme.ts without a viewport-dependent adjacency
+ *  `:not(...)` gate. A fenced block only carries these when it is NOT inside a
+ *  blockquote, NOT directly below another panel line, and (for `-outer-open`) NOT
+ *  the second of two directly-adjacent fenced blocks (they collapse to ONE gap). */
+export const FENCED_CODE_OUTER_OPEN_CLASS = "quoll-fenced-code-outer-open";
+export const FENCED_CODE_OUTER_CLOSE_CLASS = "quoll-fenced-code-outer-close";
 /** Class for a CONCEALED fence row (caret off it → fenced-code-reveal has
  *  replaced its ``` with empty DOM). The theme collapses it to zero height so
  *  no blank padded row remains; the panel edge moves to the adjacent body
@@ -176,6 +185,14 @@ export const FENCED_CODE_FENCE_HIDDEN_CLASS = "quoll-fenced-code-fence-hidden";
 export const BLOCKQUOTE_CLASS = "quoll-blockquote";
 export const BLOCKQUOTE_OPEN_CLASS = "quoll-blockquote-open";
 export const BLOCKQUOTE_CLOSE_CLASS = "quoll-blockquote-close";
+/** TRUE outer-boundary classes (see the fenced pair above). A blockquote line
+ *  carries these only when the node is the OUTERMOST quote (no Blockquote
+ *  ancestor): a nested `> >` inner edge sits inside the parent panel and must NOT
+ *  punch an external gap through it. Rides the SAME migrated open/close line the
+ *  base `-open`/`-close` do (a concealed boundary fence / callout marker moves the
+ *  edge inward). */
+export const BLOCKQUOTE_OUTER_OPEN_CLASS = "quoll-blockquote-outer-open";
+export const BLOCKQUOTE_OUTER_CLOSE_CLASS = "quoll-blockquote-outer-close";
 
 /** Deepest nesting level that gets its own deeper-tint class. Level 1 (a single
  *  `>`) uses the base BLOCKQUOTE_CLASS fill; levels 2+ add
@@ -213,6 +230,15 @@ type FencedLandmarks = {
   openConcealed: boolean;
   /** Same for the closing fence (closed blocks with a body only). */
   closeConcealed: boolean;
+  /** This block's TOP is the panel's TRUE outer boundary (document-model, not
+   *  rendered-sibling): not inside a quote, not directly below another panel line,
+   *  not the SECOND of two directly-adjacent fenced blocks. Rides the visible open
+   *  edge (fence line when revealed, first body line when concealed). */
+  outerOpen: boolean;
+  /** This block's BOTTOM is the panel's TRUE outer boundary: not inside a quote and
+   *  not directly above a quote line. The FIRST of two adjacent fenced blocks keeps
+   *  its outer-close, so the pair shows ONE gap. Rides the visible close edge. */
+  outerClose: boolean;
 };
 
 /** Class list for line `n` of a FencedCode node. The panel edge (-open/-close,
@@ -229,39 +255,44 @@ export function fencedCodeLineClasses(n: number, L: FencedLandmarks): string[] {
   // the empty block VANISH entirely, which is worse UX than a small placeholder
   // panel. The "no blank row" goal targets blocks WITH a body; document this
   // exception in the PR. A single-line block is its own open AND close.
+  // The TRUE outer-boundary gap class rides the SAME visible line as the base
+  // -open/-close (whichever line that migrates to), so these two helpers pair each
+  // base-edge push with its optional outer push.
+  const openEdge = L.outerOpen
+    ? [FENCED_CODE_OPEN_CLASS, FENCED_CODE_OUTER_OPEN_CLASS]
+    : [FENCED_CODE_OPEN_CLASS];
+  const closeEdge = L.outerClose
+    ? [FENCED_CODE_CLOSE_CLASS, FENCED_CODE_OUTER_CLOSE_CLASS]
+    : [FENCED_CODE_CLOSE_CLASS];
   if (L.firstBodyLine === null) {
     const out = [FENCED_CODE_CLASS];
     if (n === L.openFenceLine) {
-      out.push(FENCED_CODE_OPEN_CLASS);
+      out.push(...openEdge);
     }
     if (n === (L.closeFenceLine ?? L.openFenceLine)) {
-      out.push(FENCED_CODE_CLOSE_CLASS);
+      out.push(...closeEdge);
     }
     return out;
   }
   if (n === L.openFenceLine) {
-    return L.openConcealed
-      ? [FENCED_CODE_FENCE_HIDDEN_CLASS]
-      : [FENCED_CODE_CLASS, FENCED_CODE_OPEN_CLASS];
+    return L.openConcealed ? [FENCED_CODE_FENCE_HIDDEN_CLASS] : [FENCED_CODE_CLASS, ...openEdge];
   }
   if (L.closeFenceLine !== null && n === L.closeFenceLine) {
-    return L.closeConcealed
-      ? [FENCED_CODE_FENCE_HIDDEN_CLASS]
-      : [FENCED_CODE_CLASS, FENCED_CODE_CLOSE_CLASS];
+    return L.closeConcealed ? [FENCED_CODE_FENCE_HIDDEN_CLASS] : [FENCED_CODE_CLASS, ...closeEdge];
   }
   // Body lines. `lastBodyLine` is non-null whenever `firstBodyLine` is (they are
   // set together from the body span); the explicit guard satisfies the compiler.
   if (L.lastBodyLine !== null && n >= L.firstBodyLine && n <= L.lastBodyLine) {
     const out = [FENCED_CODE_CLASS];
     if (L.openConcealed && n === L.firstBodyLine) {
-      out.push(FENCED_CODE_OPEN_CLASS);
+      out.push(...openEdge);
     }
     if (n === L.lastBodyLine) {
       // Closed block: the body edge takes -close only when the close fence is
       // concealed (collapsed). Unclosed: there is no close fence, so the last
       // body line is always the bottom edge.
       if (L.closeFenceLine === null || L.closeConcealed) {
-        out.push(FENCED_CODE_CLOSE_CLASS);
+        out.push(...closeEdge);
       }
     }
     return out;
@@ -467,6 +498,15 @@ function buildBlockquoteRuleWithBoundaryInfo(
     if (concealable.has(nodeFirstLine) || concealable.has(nodeLastLine)) {
       hasConcealableBoundaryFence = true;
     }
+    // TRUE outer-boundary ELIGIBILITY (selection-INDEPENDENT): only the OUTERMOST
+    // quote's edges are the panel's real top/bottom — a nested `> >` inner node sits
+    // inside the parent panel, so its -open/-close get rounded corners but NO external
+    // gap. The gap CARRIER line is still the migrated openLine/closeLine below (that
+    // migration IS selection-dependent, but it rides the existing edge-migration
+    // rebuild triggers — no NEW trigger is needed for the outer flag). This replaces the
+    // old rendered-sibling CSS `:not(.quoll-blockquote + .quoll-blockquote-open)` gate,
+    // which virtualisation could misfire at the render edge.
+    const isOutermost = !hasBlockquoteAncestor(node.node);
     // Callout admonition: an OUTERMOST blockquote whose `[!TYPE]` first line selects
     // a per-type accent + icon. Scoped to the outermost quote (a nested `> >` inner
     // node returns null via calloutTypeForOutermost) so a line never gets two
@@ -509,9 +549,15 @@ function buildBlockquoteRuleWithBoundaryInfo(
         }
         if (n === openLine) {
           out.push(BLOCKQUOTE_OPEN_CLASS);
+          if (isOutermost) {
+            out.push(BLOCKQUOTE_OUTER_OPEN_CLASS);
+          }
         }
         if (n === closeLine) {
           out.push(BLOCKQUOTE_CLOSE_CLASS);
+          if (isOutermost) {
+            out.push(BLOCKQUOTE_OUTER_CLOSE_CLASS);
+          }
         }
         if (calloutType !== null) {
           out.push(CALLOUT_CLASS, calloutClassForType(calloutType));
@@ -540,6 +586,36 @@ export function buildBlockquoteRule(
   return buildBlockquoteRuleWithBoundaryInfo(ctx, zones).decorations;
 }
 
+/** True when document LINE `line1based` lies within a Blockquote node — the
+ *  viewport-INDEPENDENT, span-based replacement for the CSS `.quoll-blockquote +`
+ *  sibling gate (a line carries `.quoll-blockquote` iff a Blockquote node overlaps
+ *  it, exactly the per-line decoration semantics). Queries the parsed tree at an
+ *  arbitrary line, so it is correct even when that line is outside the rendered
+ *  viewport. Out-of-range lines (a doc-start / EOF neighbour) → false. */
+function lineIntersectsBlockquote(ctx: BuildContext, line1based: number): boolean {
+  const doc = ctx.state.doc;
+  if (line1based < 1 || line1based > doc.lines) {
+    return false;
+  }
+  const line = doc.line(line1based);
+  let found = false;
+  ctx.tree.iterate({
+    from: line.from,
+    to: line.to,
+    enter: (nd) => {
+      if (found) {
+        return false;
+      }
+      if (nd.name === "Blockquote") {
+        found = true;
+        return false;
+      }
+      return undefined;
+    },
+  });
+  return found;
+}
+
 /** Fenced-code panel line decorations. Selection-AWARE: fenced-code-reveal
  *  conceals both ``` fences when the caret is OUTSIDE the block, and this builder
  *  moves the panel edge (-open/-close) onto the adjacent body line + collapses the
@@ -565,6 +641,29 @@ export function buildFencedCodePanel(
     );
     const hasBody = bodyStartLine !== null;
     const blockRevealed = fencedCodeBlockRevealed(doc, ctx.selection, sn);
+    // TRUE outer-boundary ELIGIBILITY (all selection-INDEPENDENT — tree structure
+    // only): the carrier line the flag rides IS selection-dependent (it follows the
+    // fence conceal migration below), but that migration already keeps `fencedCodePanel`
+    // on the per-caret rebuild path, so no NEW trigger is needed. This replaces the old
+    // rendered-sibling CSS `:not(.quoll-blockquote + …)` / `:not(:has(+ …))` gates.
+    //   - insideQuote: a fenced block nested in `> …` is an interior element — the
+    //     surrounding quote panel owns the outer boundary (hasBlockquoteAncestor).
+    //   - a fenced block directly BELOW another panel line (quote below/above) yields
+    //     its gap to that panel — the same one-gap-between-adjacent-panels rule the old
+    //     asymmetric CSS enforced (lineIntersectsBlockquote on the block's true
+    //     neighbour LINE, not the migrated interior edge).
+    //   - precededByAdjacentFenced: two directly-adjacent fenced blocks (no blank line)
+    //     collapse to ONE gap — the SECOND yields its -outer-open, the FIRST keeps its
+    //     -outer-close. `prevSibling` is tree structure (viewport-independent); the line
+    //     check separates a directly-adjacent pair from a blank-separated one (which is
+    //     a real author separation and keeps both gaps).
+    const insideQuote = hasBlockquoteAncestor(sn);
+    const prev = sn.prevSibling;
+    const precededByAdjacentFenced =
+      prev !== null &&
+      prev.name === "FencedCode" &&
+      fencedCodeFenceLandmarks(doc, prev).closeFenceLine === openFenceLine - 1;
+    const closeEdgeNextLine = (closeFenceLine ?? bodyEndLine ?? openFenceLine) + 1;
     const landmarks: FencedLandmarks = {
       openFenceLine,
       closeFenceLine,
@@ -574,6 +673,11 @@ export function buildFencedCodePanel(
       // the whole block (predicate shared with fenced-code-reveal.ts).
       openConcealed: hasBody && !blockRevealed,
       closeConcealed: closeFenceLine !== null && hasBody && !blockRevealed,
+      outerOpen:
+        !insideQuote &&
+        !lineIntersectsBlockquote(ctx, openFenceLine - 1) &&
+        !precededByAdjacentFenced,
+      outerClose: !insideQuote && !lineIntersectsBlockquote(ctx, closeEdgeNextLine),
     };
     return {
       from: sn.from,
