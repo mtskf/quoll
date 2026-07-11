@@ -3,7 +3,7 @@
 // invariant, enforced by test/markdown/url-choke-point.test.ts). Path data is
 // inlined so no dependency is added; stroke=currentColor makes each icon track
 // its button's `color` (the pin turns red purely via CSS on `.pinned`).
-// Same construction pattern as cm/switch-editor.ts's file-pen-line icon.
+// Same construction pattern as cm/switch-editor.ts's file-code icon.
 
 const SVG_NS = "http://www.w3.org/2000/svg";
 
@@ -27,6 +27,39 @@ function appendPaths(svg: SVGSVGElement, ds: readonly string[]): void {
     path.setAttribute("d", d);
     svg.appendChild(path);
   }
+}
+
+function appendLines(
+  svg: SVGSVGElement,
+  lines: readonly (readonly [number, number, number, number])[]
+): void {
+  for (const [x1, y1, x2, y2] of lines) {
+    const line = document.createElementNS(SVG_NS, "line");
+    line.setAttribute("x1", String(x1));
+    line.setAttribute("y1", String(y1));
+    line.setAttribute("x2", String(x2));
+    line.setAttribute("y2", String(y2));
+    svg.appendChild(line);
+  }
+}
+
+/** Lucide `menu` — the corner outline toggle (hamburger). */
+export function createMenuIcon(): SVGSVGElement {
+  const svg = createLucideSvg();
+  appendLines(svg, [
+    [4, 6, 20, 6],
+    [4, 12, 20, 12],
+    [4, 18, 20, 18],
+  ]);
+  return svg;
+}
+
+/** Lucide `chevron-right` — the collapsible header twistie (CSS rotates it to
+ *  chevron-down when the section is expanded). */
+export function createChevronIcon(): SVGSVGElement {
+  const svg = createLucideSvg();
+  appendPaths(svg, ["m9 18 6-6-6-6"]);
+  return svg;
 }
 
 /** Lucide `pin` — the sidebar's pin/unpin toggle. */
