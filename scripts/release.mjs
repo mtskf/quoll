@@ -102,7 +102,10 @@ function checkChangelog(version) {
   if (version === "0.1.0") {
     return raw.includes("## 0.1.0 — Initial public release")
       ? { ok: true }
-      : { ok: false, message: 'CHANGELOG.md is missing the "## 0.1.0 — Initial public release" heading.' };
+      : {
+          ok: false,
+          message: 'CHANGELOG.md is missing the "## 0.1.0 — Initial public release" heading.',
+        };
   }
   const [maj, min, patch] = version.split(".").map(Number);
   if (maj === 0 && min === 1 && patch <= 36) {
