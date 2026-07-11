@@ -219,6 +219,7 @@ export type ThemeMessage = Envelope & {
 export type EditorConfigMessage = Envelope & {
   type: "editor-config";
   lintGutter: boolean;
+  proseLint: boolean;
   spellcheck: boolean;
   fontFamily: FontFamilyPref;
   fontSize: FontSizePref;
@@ -614,6 +615,7 @@ export function isHostToWebview(value: unknown): value is HostToWebview {
     case "editor-config":
       return (
         typeof v.lintGutter === "boolean" &&
+        typeof v.proseLint === "boolean" &&
         typeof v.spellcheck === "boolean" &&
         isPrefValue("quoll.editor.fontFamily", v.fontFamily) &&
         isPrefValue("quoll.editor.fontSize", v.fontSize) &&

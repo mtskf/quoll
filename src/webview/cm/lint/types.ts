@@ -33,7 +33,12 @@ export type LintRuleCode =
   | "duplicate-heading-text"
   | "table-column-count"
   | "frontmatter-duplicate-key"
-  | "frontmatter-malformed-line";
+  | "frontmatter-malformed-line"
+  // Opt-in advisory PROSE rules (gated behind quoll.lint.prose.enabled; run only
+  // when the prose facet is on — see engine.ts LintOptions). All emit "info".
+  | "passive-voice"
+  | "filler-words"
+  | "long-sentence";
 
 // A single advisory finding over the raw Markdown text. Offsets are absolute
 // UTF-16 code-unit positions into the document (CodeMirror's position space),

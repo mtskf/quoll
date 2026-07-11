@@ -1,4 +1,11 @@
-import { type Extension, type Range, StateEffect, StateField, type Text } from "@codemirror/state";
+import {
+  type Extension,
+  Facet,
+  type Range,
+  StateEffect,
+  StateField,
+  type Text,
+} from "@codemirror/state";
 import {
   Decoration,
   type DecorationSet,
@@ -28,6 +35,18 @@ function safeLint(
   }
 }
 
+// Gates the opt-in advisory PROSE rules (passive-voice / filler-words /
+// long-sentence). Held in a Compartment in editor.ts and reconfigured by the
+// host's editor-config push (setProseLint), mirroring the lint-gutter compartment
+// shape. A Facet — not a StateField — so it is always readable with a fail-safe
+// default (no source ⇒ `false`, e.g. in tests that mount quollLint() without the
+// compartment) and has no create-order dependency. Read by lintField.create and
+// the debounced compute plugin, both of which pass it to the engine as
+// `{ prose }`. Last-writer-wins over the single source the compartment provides.
+export const proseLintEnabled = Facet.define<boolean, boolean>({
+  combine: (values) => values.at(-1) ?? false,
+});
+
 // Publishes a freshly-computed diagnostic set. Dispatched by the debounced
 // compute plugin; carries NO document change, so applying it never mutates bytes.
 export const setLintDiagnostics = StateEffect.define<readonly LintDiagnostic[]>();
@@ -39,7 +58,8 @@ export const setLintDiagnostics = StateEffect.define<readonly LintDiagnostic[]>(
 // at field creation so a document present at creation lints immediately.
 export const lintField = StateField.define<readonly LintDiagnostic[]>({
   create(state) {
-    return safeLint(lintMarkdown, state.doc.toString());
+    const prose = state.facet(proseLintEnabled);
+    return safeLint((raw) => lintMarkdown(raw, { prose }), state.doc.toString());
   },
   update(value, tr) {
     for (const effect of tr.effects) {
@@ -132,7 +152,13 @@ const lintComputePlugin = ViewPlugin.fromClass(
     private readonly lint = createIncrementalLinter();
 
     update(update: ViewUpdate): void {
-      if (update.docChanged) {
+      // Recompute on a doc change OR a prose-gate toggle. The toggle reconfigures
+      // the prose compartment (a transaction with no doc change), so compare the
+      // facet across the transaction; when it flips, re-lint so the prose
+      // underlines appear/clear within one debounce window (≤ LINT_DEBOUNCE_MS).
+      const proseToggled =
+        update.startState.facet(proseLintEnabled) !== update.state.facet(proseLintEnabled);
+      if (update.docChanged || proseToggled) {
         this.schedule(update.view);
       }
     }
@@ -143,8 +169,13 @@ const lintComputePlugin = ViewPlugin.fromClass(
       }
       this.timer = setTimeout(() => {
         this.timer = undefined;
+        // Read the facet at FIRE time (post-transaction state), so the newest
+        // toggle value is used even if it landed after this was scheduled.
+        const prose = view.state.facet(proseLintEnabled);
         view.dispatch({
-          effects: setLintDiagnostics.of(safeLint(this.lint, view.state.doc.toString())),
+          effects: setLintDiagnostics.of(
+            safeLint((raw) => this.lint(raw, { prose }), view.state.doc.toString())
+          ),
         });
       }, LINT_DEBOUNCE_MS);
     }

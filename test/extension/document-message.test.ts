@@ -86,10 +86,11 @@ describe("buildEditorConfigMessage", () => {
   };
 
   it("builds an editor-config message with the given flags and presets", () => {
-    expect(buildEditorConfigMessage(true, true, prefs)).toEqual({
+    expect(buildEditorConfigMessage(true, true, true, prefs)).toEqual({
       protocol: PROTOCOL_VERSION,
       type: "editor-config",
       lintGutter: true,
+      proseLint: true,
       spellcheck: true,
       fontFamily: "serif",
       fontSize: "large",
@@ -99,19 +100,22 @@ describe("buildEditorConfigMessage", () => {
   });
 
   it("carries the boolean flags through independently of the presets", () => {
-    const msg = buildEditorConfigMessage(false, false, prefs);
-    expect(msg.lintGutter).toBe(false);
-    expect(msg.spellcheck).toBe(false);
+    // Distinct values per flag so an argument-order swap is caught.
+    const msg = buildEditorConfigMessage(true, false, true, prefs);
+    expect(msg.lintGutter).toBe(true);
+    expect(msg.proseLint).toBe(false);
+    expect(msg.spellcheck).toBe(true);
   });
 
   it("emits exactly the editor-config key set (no extra fields on the wire)", () => {
-    expect(Object.keys(buildEditorConfigMessage(false, false, prefs)).sort()).toEqual(
+    expect(Object.keys(buildEditorConfigMessage(false, false, false, prefs)).sort()).toEqual(
       [
         "contentWidth",
         "fontFamily",
         "fontSize",
         "lineHeight",
         "lintGutter",
+        "proseLint",
         "protocol",
         "spellcheck",
         "type",

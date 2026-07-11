@@ -120,6 +120,13 @@ function readLintGutterEnabled(): boolean {
 }
 
 // `affectsConfiguration` matches on this exact key.
+const PROSE_LINT_CONFIG_KEY = "quoll.lint.prose.enabled";
+
+function readProseLintEnabled(): boolean {
+  return workspace.getConfiguration().get<boolean>(PROSE_LINT_CONFIG_KEY, false);
+}
+
+// `affectsConfiguration` matches on this exact key.
 const SPELLCHECK_CONFIG_KEY = "quoll.editor.spellcheck";
 
 function readSpellcheckEnabled(): boolean {
@@ -575,7 +582,11 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
           // unscoped, matching the existing boolean-read precedent. Extracted to
           // a pure predicate so the document.uri argument is unit-testable.
           if (
-            isRelevantConfigChange(e, document.uri, [LINT_GUTTER_CONFIG_KEY, SPELLCHECK_CONFIG_KEY])
+            isRelevantConfigChange(e, document.uri, [
+              LINT_GUTTER_CONFIG_KEY,
+              PROSE_LINT_CONFIG_KEY,
+              SPELLCHECK_CONFIG_KEY,
+            ])
           ) {
             onRelevantChange();
           }
@@ -586,6 +597,7 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
         post(
           buildEditorConfigMessage(
             readLintGutterEnabled(),
+            readProseLintEnabled(),
             readSpellcheckEnabled(),
             readEditorPrefs(getPref)
           )

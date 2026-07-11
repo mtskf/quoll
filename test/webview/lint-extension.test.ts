@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
-import { EditorState, Text } from "@codemirror/state";
+import { Compartment, EditorState, Text } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { LintDiagnosticWire } from "../../src/shared/protocol.js";
@@ -9,6 +9,7 @@ import {
   buildLintDecorations,
   diagnosticsAt,
   lintField,
+  proseLintEnabled,
   quollLint,
   setLintDiagnostics,
   toWireDiagnostics,
@@ -543,5 +544,90 @@ describe("quollLint diagnostics publisher (sink)", () => {
       extensions: [markdown({ base: markdownLanguage }), quollLint()],
     });
     expect(state.field(lintField).some((d) => d.code === "heading-increment")).toBe(true);
+  });
+});
+
+describe("prose-lint live toggle (facet + compartment)", () => {
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => vi.useRealTimers());
+
+  // Trailing spaces ⇒ a structural finding (no-trailing-spaces); "very" ⇒ a prose
+  // finding (filler-words) once the gate is on. So both layers are observable.
+  const DOC = "This is very good.   \n";
+  const PROSE = new Set(["passive-voice", "filler-words", "long-sentence"]);
+  const has = (view: EditorView, code: string) =>
+    view.state.field(lintField).some((d) => d.code === code);
+  const anyProse = (view: EditorView) => view.state.field(lintField).some((d) => PROSE.has(d.code));
+
+  // Mount a view wired exactly like editor.ts: quollLint + a prose compartment
+  // defaulting off. Returns the view + a reconfigure(enabled) helper.
+  function mount(doc = DOC) {
+    const comp = new Compartment();
+    const view = new EditorView({
+      doc,
+      parent: document.body,
+      extensions: [
+        markdown({ base: markdownLanguage }),
+        quollLint(),
+        comp.of(proseLintEnabled.of(false)),
+      ],
+    });
+    const setProse = (enabled: boolean) =>
+      view.dispatch({ effects: comp.reconfigure(proseLintEnabled.of(enabled)) });
+    return { view, setProse };
+  }
+
+  it("no prose findings at mount; structural findings present immediately", () => {
+    const { view } = mount();
+    try {
+      expect(anyProse(view)).toBe(false);
+      expect(has(view, "no-trailing-spaces")).toBe(true);
+    } finally {
+      view.destroy();
+    }
+  });
+
+  it("enabling adds prose underlines within one debounce window; disabling clears them", () => {
+    const { view, setProse } = mount();
+    try {
+      setProse(true);
+      expect(anyProse(view)).toBe(false); // still debounced right after the toggle
+      vi.advanceTimersByTime(300);
+      expect(has(view, "filler-words")).toBe(true);
+      expect(has(view, "no-trailing-spaces")).toBe(true); // structural unaffected
+
+      setProse(false);
+      vi.advanceTimersByTime(300);
+      expect(anyProse(view)).toBe(false);
+      expect(has(view, "no-trailing-spaces")).toBe(true);
+    } finally {
+      view.destroy();
+    }
+  });
+
+  it("resolves to the latest flag regardless of toggle/docChange order", () => {
+    // docChange then enable (both before advancing) → prose on.
+    const a = mount();
+    try {
+      a.view.dispatch({ changes: { from: a.view.state.doc.length, insert: "Really nice.\n" } });
+      a.setProse(true);
+      vi.advanceTimersByTime(300);
+      expect(a.view.state.field(lintField).filter((d) => d.code === "filler-words").length).toBe(2);
+    } finally {
+      a.view.destroy();
+    }
+
+    // Rapid enable → disable → docChange (no advance between) must settle OFF.
+    const b = mount();
+    try {
+      b.setProse(true);
+      b.setProse(false);
+      b.view.dispatch({ changes: { from: b.view.state.doc.length, insert: "x" } });
+      vi.advanceTimersByTime(300);
+      expect(anyProse(b.view)).toBe(false);
+      expect(has(b.view, "no-trailing-spaces")).toBe(true);
+    } finally {
+      b.view.destroy();
+    }
   });
 });

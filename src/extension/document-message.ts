@@ -83,6 +83,7 @@ export function buildImageWriteResultMessage(
  *  full document reseed. */
 export function buildEditorConfigMessage(
   lintGutter: boolean,
+  proseLint: boolean,
   spellcheck: boolean,
   prefs: EditorPrefs
 ): EditorConfigMessage {
@@ -90,6 +91,7 @@ export function buildEditorConfigMessage(
     protocol: PROTOCOL_VERSION,
     type: "editor-config",
     lintGutter,
+    proseLint,
     spellcheck,
     fontFamily: prefs.fontFamily,
     fontSize: prefs.fontSize,
