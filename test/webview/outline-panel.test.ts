@@ -413,4 +413,41 @@ describe("quollOutline resizable width", () => {
     view = null;
     expect(vi.mocked(patchPersistedState)).not.toHaveBeenCalled();
   });
+
+  it("ignores a FINITE but out-of-range persisted width (the in-range restore guard)", () => {
+    // Distinct from the NaN case: 5000 passes Number.isFinite but fails the
+    // clampWidth(persisted) === persisted in-range guard (happy-dom has no
+    // layout ⇒ upper bound is MAX_WIDTH_PX 600), so it must NOT be applied.
+    vi.mocked(readPersistedState).mockReturnValueOnce({ outlineWidthPx: 5000 });
+    const { host } = mount("# Alpha\n");
+    expect(widthVar(host)).toBe(""); // rejected — falls through to the stylesheet default
+  });
+
+  it("clamps an over-wide drag to the maximum (the sole width bound, no CSS max-width)", () => {
+    const { host } = mount("# Alpha\n");
+    const h = handleEl(host);
+    stubPointerCapture(h);
+    h.dispatchEvent(pd(260));
+    h.dispatchEvent(pm(5000)); // far past the ceiling
+    // happy-dom: host.clientWidth 0 ⇒ upper bound falls back to MAX_WIDTH_PX.
+    expect(widthVar(host)).toBe("600px");
+  });
+
+  it("ignores pointermove/up from a second pointer mid-drag (hijack guard)", () => {
+    const { host } = mount("# Alpha\n");
+    const h = handleEl(host);
+    stubPointerCapture(h);
+    h.dispatchEvent(pd(260)); // drag owned by pointerId 1
+    h.dispatchEvent(pm(300));
+    expect(widthVar(host)).toBe("300px");
+    // A second pointer's move must not steer the active drag.
+    h.dispatchEvent(new PointerEvent("pointermove", { clientX: 450, pointerId: 2 }));
+    expect(widthVar(host)).toBe("300px");
+    // Nor may its up end/persist the drag.
+    h.dispatchEvent(new PointerEvent("pointerup", { clientX: 450, pointerId: 2 }));
+    expect(vi.mocked(patchPersistedState)).not.toHaveBeenCalled();
+    // Pointer 1 still owns it.
+    h.dispatchEvent(pm(320));
+    expect(widthVar(host)).toBe("320px");
+  });
 });

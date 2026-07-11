@@ -884,7 +884,7 @@ html body {
     position: absolute;
     top: 0;
     bottom: 0;
-    left: var(--quoll-outline-sidebar-width);
+    left: min(var(--quoll-outline-sidebar-width), 80%);
     z-index: 7; /* above the sidebar (z-index:6) so the grab strip is hittable */
     width: 8px;
     margin-left: -4px; /* centre the 8px grab strip on the border seam */
@@ -903,7 +903,12 @@ html body {
     z-index: 6; /* above the z-index:5 corner toggles it slides over */
     display: flex;
     flex-direction: column;
-    width: var(--quoll-outline-sidebar-width);
+    /* min(var, 80%) caps the live width at 80% of the host so the editor column
+     * always keeps ≥20% even after the host shrinks (window narrows / editor
+     * splits) below the width the user dragged — the CSS analogue of the JS
+     * drag-time clamp, but re-evaluated on every layout. The handle's `left`
+     * and the pinned flex-basis use the SAME expression so they never desync. */
+    width: min(var(--quoll-outline-sidebar-width), 80%);
     border-right: 1px solid var(--quoll-outline-sidebar-border);
     background: var(--quoll-outline-sidebar-background);
     color: var(--vscode-editorWidget-foreground, var(--vscode-foreground));
@@ -931,7 +936,7 @@ html body {
   }
   .quoll-editor.quoll-outline-pinned .quoll-outline-sidebar {
     position: static;
-    flex: 0 0 var(--quoll-outline-sidebar-width);
+    flex: 0 0 min(var(--quoll-outline-sidebar-width), 80%);
     transform: none;
     visibility: visible;
     transition: none;

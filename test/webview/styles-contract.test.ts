@@ -624,7 +624,9 @@ describe("styles.css — outline sidebar", () => {
   it("the sidebar consumes the tokens and slides in from the left edge", () => {
     const rule = live.match(/\.quoll-outline-sidebar\s*\{[^}]*\}/)?.[0] ?? "";
     expect(rule).not.toBe("");
-    expect(rule).toMatch(/width\s*:\s*var\(--quoll-outline-sidebar-width\)/);
+    // min(var, 80%) caps the live width at 80% of the host so a large dragged
+    // width can't squeeze the editor to zero after the host shrinks.
+    expect(rule).toMatch(/width\s*:\s*min\(var\(--quoll-outline-sidebar-width\),\s*80%\)/);
     expect(rule).toMatch(/background\s*:\s*var\(--quoll-outline-sidebar-background\)/);
     expect(rule).toMatch(/border-right\s*:\s*1px\s+solid\s+var\(--quoll-outline-sidebar-border\)/);
     expect(rule).toMatch(/transform\s*:\s*translateX\(-100%\)/);
@@ -638,7 +640,9 @@ describe("styles.css — outline sidebar", () => {
   it("the resize handle tracks the width var and shows an ew-resize cursor", () => {
     const rule =
       live.match(/\.quoll-outline-open\s+\.quoll-outline-resize-handle\s*\{[^}]*\}/)?.[0] ?? "";
-    expect(rule).toMatch(/left\s*:\s*var\(--quoll-outline-sidebar-width\)/);
+    // Same min(var, 80%) as the sidebar width so the handle never desyncs from
+    // the (capped) right edge.
+    expect(rule).toMatch(/left\s*:\s*min\(var\(--quoll-outline-sidebar-width\),\s*80%\)/);
     expect(rule).toMatch(/cursor\s*:\s*ew-resize/);
   });
 
@@ -656,7 +660,9 @@ describe("styles.css — outline sidebar", () => {
         /\.quoll-editor\.quoll-outline-pinned\s+\.quoll-outline-sidebar\s*\{[^}]*\}/
       )?.[0] ?? "";
     expect(sidebar).toMatch(/position\s*:\s*static/);
-    expect(sidebar).toMatch(/flex\s*:\s*0\s+0\s+var\(--quoll-outline-sidebar-width\)/);
+    expect(sidebar).toMatch(
+      /flex\s*:\s*0\s+0\s+min\(var\(--quoll-outline-sidebar-width\),\s*80%\)/
+    );
     const editor =
       live.match(/\.quoll-editor\.quoll-outline-pinned\s+\.cm-editor\s*\{[^}]*\}/)?.[0] ?? "";
     expect(editor).toMatch(/flex\s*:\s*1\s+1\s+auto/);
