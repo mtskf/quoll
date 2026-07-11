@@ -7,6 +7,7 @@ All notable changes to Quoll are documented here.
 ### Added
 
 - Collapse and expand individual headings in the document outline: any heading that has sub-headings now shows a chevron — like the Explorer file tree — that folds just that heading's children (mouse or keyboard). Leaf headings stay aligned without one.
+- Opt-in advisory prose lint rules: flags passive voice, filler/hedge words, and sentences over 30 words as info-level hints in paragraphs. Off by default — enable with the `quoll.lint.prose.enabled` setting.
 
 ### Changed
 
