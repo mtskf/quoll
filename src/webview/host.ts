@@ -22,19 +22,22 @@ export type Host = {
   postMessage(message: WebviewToHost): void;
 };
 
+let rawApi: WebviewApi<Record<string, unknown>> | null = null;
 let memo: Host | null = null;
 let acquireFailed: Error | null = null;
 
-export function getHost(): Host {
-  if (memo) {
-    return memo;
-  }
-  // Cache the failure: every caller (shell mount, editor post, retry) must
-  // see the same error rather than re-throwing a fresh ReferenceError.
-  // Without this cache the init-error catch in index.ts would see a
-  // different Error identity per call and could thrash the banner.
+/** Acquire (once) the VS Code webview handle, throwing on failure — the
+ *  contract getHost() relies on. Memoizes both the raw api and the failure.
+ *  `acquireFailed` is checked BEFORE `rawApi`: a hard failure is terminal, so a
+ *  soft acquire that later populates `rawApi` can NOT silently un-fail
+ *  getHost() — the "same Error identity forever" anti-banner-thrash contract
+ *  (see index.ts's init-error catch) is preserved. */
+function acquireRawApiOrThrow(): WebviewApi<Record<string, unknown>> {
   if (acquireFailed) {
     throw acquireFailed;
+  }
+  if (rawApi) {
+    return rawApi;
   }
   if (typeof acquireVsCodeApi !== "function") {
     acquireFailed = new Error(
@@ -43,16 +46,80 @@ export function getHost(): Host {
     throw acquireFailed;
   }
   try {
-    const api: WebviewApi<unknown> = acquireVsCodeApi();
-    memo = {
-      postMessage: (message) => {
-        api.postMessage(message);
-      },
-    };
-    return memo;
+    rawApi = acquireVsCodeApi() as WebviewApi<Record<string, unknown>>;
+    return rawApi;
   } catch (err) {
     acquireFailed = err instanceof Error ? err : new Error(String(err));
     throw acquireFailed;
+  }
+}
+
+/** Soft acquire: the raw handle, or null when unavailable — for persistence
+ *  that must degrade to a no-op outside a webview (unit tests, preview). This
+ *  path MUST NOT write `acquireFailed` — poisoning that cache would make a
+ *  LATER getHost() (once the API appears) keep throwing the stale "not
+ *  defined". And it bails on an already-cached hard failure so it can't
+ *  resurrect a terminated getHost(). */
+function tryRawApi(): WebviewApi<Record<string, unknown>> | null {
+  if (rawApi) {
+    return rawApi;
+  }
+  if (acquireFailed) {
+    return null; // hard failure is terminal — soft path must not resurrect it
+  }
+  if (typeof acquireVsCodeApi !== "function") {
+    return null; // no cache write — soft path
+  }
+  try {
+    rawApi = acquireVsCodeApi() as WebviewApi<Record<string, unknown>>;
+    return rawApi;
+  } catch {
+    return null; // no cache write — soft path
+  }
+}
+
+export function getHost(): Host {
+  if (memo) {
+    return memo;
+  }
+  const api = acquireRawApiOrThrow();
+  memo = {
+    postMessage: (message) => {
+      api.postMessage(message);
+    },
+  };
+  return memo;
+}
+
+/** The webview-local persisted view state (survives reload / hidden). Returns
+ *  {} when unavailable OR on any error. This is where webview UI view state
+ *  lives — a flat plain-object bag; callers own their own keys (contract:
+ *  plain objects only, no arrays/other shapes). Never throws (the host's
+ *  getState may itself throw). */
+export function readPersistedState(): Record<string, unknown> {
+  try {
+    const api = tryRawApi();
+    const state = api?.getState();
+    return state && typeof state === "object" && !Array.isArray(state) ? state : {};
+  } catch {
+    return {};
+  }
+}
+
+/** Shallow-merge a patch into the persisted view state. No-op when the API is
+ *  unavailable. Never throws — persistence failure must not break the UI; a
+ *  lost width preference is strictly better than a crashed drag-end. */
+export function patchPersistedState(patch: Record<string, unknown>): void {
+  try {
+    const api = tryRawApi();
+    if (!api) {
+      return;
+    }
+    const current = api.getState();
+    const base = current && typeof current === "object" && !Array.isArray(current) ? current : {};
+    api.setState({ ...base, ...patch });
+  } catch {
+    // swallow: UI preference persistence is best-effort
   }
 }
 
