@@ -23,7 +23,12 @@ import { afterEach, describe, expect, it } from "vitest";
 import { blockStyle } from "../../src/webview/cm/decorations/block-style.js";
 import { quollSyntaxReveal } from "../../src/webview/cm/decorations/index.js";
 import { fencedCodeCollapseField } from "../../src/webview/cm/fenced-code/fenced-code-collapse.js";
-import { quollBlockStyleTheme, quollCmLinePaddingTheme } from "../../src/webview/cm/theme.js";
+import { setFencedCollapseEffect } from "../../src/webview/cm/fenced-code/fenced-code-collapse-state.js";
+import {
+  quollBlockStyleTheme,
+  quollCmLinePaddingTheme,
+  quollCollapseToggleTheme,
+} from "../../src/webview/cm/theme.js";
 
 // Two directly-adjacent single-body fenced blocks, then a blank + paragraph so the caret
 // can park OFF both. block2's opening fence is doc line 4 — the split point between the
@@ -139,5 +144,76 @@ describe("adjacent fenced blocks — single external gap (real-pixel browser gat
     const gap = paintedFillGap(view);
     expect(gap).toBeGreaterThan(SINGLE_GAP_MIN);
     expect(gap).toBeLessThan(SINGLE_GAP_MAX);
+  });
+});
+
+// The collapse-bar expanded caret-out state is the ONE render-time interaction the
+// builder cannot see: `-outer-close` is now UNCONDITIONAL, and in this state it migrates
+// onto the last body line sitting directly ABOVE the "Show less" widget. The only thing
+// stopping a phantom mid-panel gap there is the widget-adjacency override in
+// collapseToggleThemeSpec (`.quoll-fenced-code-close:has(+ expanded-bar)` → borderBottom:0).
+// Its correctness rests on two render-time facts the unit spec (a static object-key read)
+// cannot exercise: the `:has(+ collapse-bar)` match against a WIDGET sibling, and the
+// override's specificity beating the plain `.quoll-fenced-code-outer-close` gap rule. This
+// gate mounts a real expanded bar and measures the geometry — the same rigour the
+// adjacent-fenced case gets above.
+describe("collapse-bar expanded caret-out — outer-close gap yields to the bar footer (browser gate)", () => {
+  // A >COLLAPSE_THRESHOLD (10) body-line fenced block is collapsible; a trailing paragraph
+  // parks the caret OFF it. L1 ```js, L2..L13 body (12 lines), L14 ```, L16 para.
+  const LONG = `\`\`\`js\n${Array.from({ length: 12 }, (_, i) => `line${i}`).join("\n")}\n\`\`\`\n\npara`;
+
+  function mountLong(caret: number): EditorView {
+    const parent = document.createElement("div");
+    parent.className = "cm-adjacent-fenced-probe";
+    parent.style.width = "400px";
+    document.body.appendChild(parent);
+    return new EditorView({
+      state: EditorState.create({
+        doc: LONG,
+        selection: EditorSelection.single(caret),
+        extensions: [
+          markdown({ base: markdownLanguage }),
+          quollSyntaxReveal(),
+          blockStyle,
+          fencedCodeCollapseField,
+          quollCmLinePaddingTheme,
+          quollBlockStyleTheme,
+          // The `borderBottom:0` override + the bar footer corner live HERE — without it the
+          // override never applies and the test would be measuring the wrong thing.
+          quollCollapseToggleTheme,
+        ],
+      }),
+      parent,
+    });
+  }
+
+  it("the migrated -close row above the expanded 'Show less' bar carries NO gap border (the bar footer owns it)", async () => {
+    view = mountLong(LONG.indexOf("para") + 1); // caret OUTSIDE the block
+    // Expand the block (sticky) so the 'Show less' bar renders while the caret stays out.
+    // key = the open-fence offset (doc start = 0).
+    view.dispatch({ effects: setFencedCollapseEffect.of({ key: 0, expanded: true }) });
+    await settled();
+
+    const bar = view.contentDOM.querySelector<HTMLElement>(
+      ".quoll-fenced-collapse-bar:not(.quoll-fenced-collapse-bar-collapsed)"
+    );
+    expect(bar, "an expanded 'Show less' bar must render").not.toBeNull();
+
+    // Caret-out ⇒ the close fence is concealed and `-close` migrates UP onto the last body
+    // line, which sits directly ABOVE the bar (its previous rendered sibling).
+    const closeRow = bar?.previousElementSibling as HTMLElement | null;
+    expect(closeRow?.classList.contains("quoll-fenced-code-close")).toBe(true);
+
+    // The override must have zeroed this interior row's bottom gap border — reverting the
+    // `borderBottom: "0"` line makes it ~8px (a phantom mid-panel strip). Red-first target.
+    const rowBorder = Number.parseFloat(
+      getComputedStyle(closeRow as HTMLElement).borderBottomWidth
+    );
+    expect(rowBorder).toBeLessThan(1);
+
+    // …and the panel's true bottom gap lives on the bar footer instead (a single ~8px).
+    const barBorder = Number.parseFloat(getComputedStyle(bar as HTMLElement).borderBottomWidth);
+    expect(barBorder).toBeGreaterThan(4);
+    expect(barBorder).toBeLessThan(12);
   });
 });
