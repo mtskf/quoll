@@ -88,7 +88,7 @@ const HOST_CM_FORBIDDEN = /@codemirror\//;
 // NOTE the metric: this matcher is checked against SHIPPED bytes (metafileShippedBytes),
 // NOT the parse graph (metafileInputs). @codemirror/lang-markdown STATICALLY imports
 // @codemirror/lang-html + @codemirror/autocomplete at its module top, so importing
-// markdownLanguage / markdownKeymap / pasteURLAsLink at all forces those modules into
+// markdownLanguage / markdownKeymap at all forces those modules into
 // the webview's PARSE graph unavoidably — a parse-graph-absence assertion would be
 // unsatisfiable. What the refactor actually delivers is that esbuild tree-shakes every
 // forbidden module to `bytesInOutput` 0, so it ships nothing. That is the guarantee we
@@ -166,7 +166,7 @@ describe("bundle independence (esbuild metafile)", () => {
     ]) {
       expect(WEBVIEW_HTML_STACK_FORBIDDEN.test(sample)).toBe(true);
     }
-    // The editor language (markdownLanguage/markdownKeymap/pasteURLAsLink) + lint
+    // The editor language (markdownLanguage/markdownKeymap) + lint
     // parser still come from these, so they MUST ship real bytes — proving the
     // shipped-bytes metric reads live data and the exclusion is not vacuous.
     const shipsBytes = (re: RegExp) =>
