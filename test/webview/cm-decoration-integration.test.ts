@@ -16,6 +16,8 @@ import { fullTree } from "./helpers/full-tree.js";
 vi.mock("../../src/webview/host.js", () => ({
   getHost: () => ({ postMessage: vi.fn() }),
   subscribeToHost: () => () => {},
+  readPersistedState: () => ({}),
+  patchPersistedState: () => {},
 }));
 
 function mount(doc: string): EditorView {

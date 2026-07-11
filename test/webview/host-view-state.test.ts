@@ -45,7 +45,10 @@ describe("host persisted view-state", () => {
       },
       postMessage: vi.fn(),
     };
-    vi.stubGlobal("acquireVsCodeApi", vi.fn(() => api));
+    vi.stubGlobal(
+      "acquireVsCodeApi",
+      vi.fn(() => api)
+    );
     vi.resetModules();
     const host = await import("../../src/webview/host.js");
     expect(host.readPersistedState()).toEqual({}); // degrades to empty, no throw
@@ -61,7 +64,10 @@ describe("host persisted view-state", () => {
     // Now the API appears (e.g. re-eval order). getHost must succeed, not throw
     // a cached "not defined".
     const api = { getState: () => undefined, setState: (s: unknown) => s, postMessage: vi.fn() };
-    vi.stubGlobal("acquireVsCodeApi", vi.fn(() => api));
+    vi.stubGlobal(
+      "acquireVsCodeApi",
+      vi.fn(() => api)
+    );
     expect(() => host.getHost()).not.toThrow();
   });
 
@@ -80,7 +86,10 @@ describe("host persisted view-state", () => {
     expect(firstError).toBeInstanceOf(Error);
     // API appears; a soft read would otherwise populate rawApi.
     const api = { getState: () => ({}), setState: (s: unknown) => s, postMessage: vi.fn() };
-    vi.stubGlobal("acquireVsCodeApi", vi.fn(() => api));
+    vi.stubGlobal(
+      "acquireVsCodeApi",
+      vi.fn(() => api)
+    );
     expect(host.readPersistedState()).toEqual({}); // soft path bails on the cached failure
     expect(() => host.getHost()).toThrow(); // still throws
     try {

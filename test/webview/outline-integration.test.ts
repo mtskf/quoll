@@ -12,6 +12,8 @@ const postsOfType = (type: string) =>
 vi.mock("../../src/webview/host.js", () => ({
   getHost: () => ({ postMessage }),
   subscribeToHost: () => () => {},
+  readPersistedState: () => ({}),
+  patchPersistedState: () => {},
 }));
 
 let container: HTMLElement | null = null;

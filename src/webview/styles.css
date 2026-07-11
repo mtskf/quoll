@@ -872,6 +872,25 @@ html body {
     pointer-events: none;
   }
 
+  /* Resize handle: a host child pinned to the sidebar's right edge (left =
+   * the same width var the sidebar consumes). Only present while open. Dragging
+   * it is wired in cm/outline; it rewrites --quoll-outline-sidebar-width inline
+   * on the host so the sidebar edge and this handle move together. */
+  .quoll-outline-resize-handle {
+    display: none;
+  }
+  .quoll-outline-open .quoll-outline-resize-handle {
+    display: block;
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: var(--quoll-outline-sidebar-width);
+    z-index: 7; /* above the sidebar (z-index:6) so the grab strip is hittable */
+    width: 8px;
+    margin-left: -4px; /* centre the 8px grab strip on the border seam */
+    cursor: ew-resize;
+  }
+
   /* The sidebar. Closed = slid off the left edge but still rendered (the slide
    * needs a live element; the plugin sets `inert` and the delayed visibility
    * flip keeps it out of the focus / a11y tree). Open = absolute overlay above
@@ -885,7 +904,6 @@ html body {
     display: flex;
     flex-direction: column;
     width: var(--quoll-outline-sidebar-width);
-    max-width: 80vw;
     border-right: 1px solid var(--quoll-outline-sidebar-border);
     background: var(--quoll-outline-sidebar-background);
     color: var(--vscode-editorWidget-foreground, var(--vscode-foreground));

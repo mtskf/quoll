@@ -141,6 +141,36 @@ describe("outline sidebar — real-chromium layout", () => {
     expect(after.width).toBeLessThan(before.width); // the column actually narrowed
   });
 
+  it("dragging the resize handle widens the pinned sidebar (real geometry)", async () => {
+    const { view: v, host } = mount(DOC);
+    v.plugin(outlinePlugin)?.toggle();
+    (host.querySelector(".quoll-outline-pin") as HTMLElement).click();
+    await settled();
+    const sidebar = host.querySelector(".quoll-outline-sidebar") as HTMLElement;
+    const before = sidebar.getBoundingClientRect().width;
+    const handle = host.querySelector(".quoll-outline-resize-handle") as HTMLElement;
+    const rect = handle.getBoundingClientRect();
+    const y = rect.top + rect.height / 2;
+    // Real Chromium has a layout engine + setPointerCapture, so dispatched
+    // PointerEvents exercise the true geometry: applyResize reads the live
+    // getBoundingClientRect and clampWidth reads the live host width. Drag the
+    // handle ~80px to the right and assert the sidebar column actually grew —
+    // the desync/clamp bug class happy-dom can't observe.
+    const x0 = rect.left + rect.width / 2;
+    handle.dispatchEvent(
+      new PointerEvent("pointerdown", { clientX: x0, clientY: y, pointerId: 1, bubbles: true })
+    );
+    handle.dispatchEvent(
+      new PointerEvent("pointermove", { clientX: x0 + 80, clientY: y, pointerId: 1, bubbles: true })
+    );
+    handle.dispatchEvent(
+      new PointerEvent("pointerup", { clientX: x0 + 80, clientY: y, pointerId: 1, bubbles: true })
+    );
+    await settled();
+    const after = sidebar.getBoundingClientRect().width;
+    expect(after).toBeGreaterThan(before + 40); // dragged ~80px right (clamp permitting)
+  });
+
   it("pinned mode keeps .cm-scroller as the real scroller (scroll-hide fires; sidebar survives)", async () => {
     const { view: v, host } = mount(LONG_DOC);
     v.plugin(outlinePlugin)?.toggle();

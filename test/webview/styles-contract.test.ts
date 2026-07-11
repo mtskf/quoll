@@ -635,6 +635,13 @@ describe("styles.css — outline sidebar", () => {
     expect(open).toMatch(/visibility\s*:\s*visible/);
   });
 
+  it("the resize handle tracks the width var and shows an ew-resize cursor", () => {
+    const rule =
+      live.match(/\.quoll-outline-open\s+\.quoll-outline-resize-handle\s*\{[^}]*\}/)?.[0] ?? "";
+    expect(rule).toMatch(/left\s*:\s*var\(--quoll-outline-sidebar-width\)/);
+    expect(rule).toMatch(/cursor\s*:\s*ew-resize/);
+  });
+
   it("open state hides the corner toggle (the header pin takes its spot)", () => {
     const rule = live.match(/\.quoll-outline-open\s+\.quoll-outline-toggle\s*\{[^}]*\}/)?.[0] ?? "";
     expect(rule).toMatch(/visibility\s*:\s*hidden/);
