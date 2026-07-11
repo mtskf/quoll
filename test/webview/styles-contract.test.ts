@@ -759,3 +759,19 @@ describe("editor-preset CSS var reads (source-shape)", () => {
     expect(css).not.toMatch(/\.quoll-editor\s*\{[^}]*font-size/);
   });
 });
+
+describe("settings popover CSS (source-shape)", () => {
+  const strip = (s: string) => s.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/[^\n]*/g, "");
+  const css = strip(readFileSync(new URL("../../src/webview/styles.css", import.meta.url), "utf8"));
+  it("the outline footer is a positioned ancestor for the popover", () => {
+    expect(css).toMatch(/\.quoll-outline-footer\s*\{[^}]*position:\s*relative/);
+  });
+  it("the active segment shows its check icon", () => {
+    expect(css).toMatch(
+      /\.quoll-settings-segment\.active\s+\.quoll-settings-check\s*\{[^}]*visibility:\s*visible/
+    );
+  });
+  it("segments wrap so the 4-up font-size row survives the 180px min sidebar width", () => {
+    expect(css).toMatch(/\.quoll-settings-segments\s*\{[^}]*flex-wrap:\s*wrap/);
+  });
+});
