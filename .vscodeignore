@@ -28,6 +28,11 @@
 !walkthroughs/
 !walkthroughs/**
 
+# Editor title-bar toggle icons — referenced from contributes.commands
+# `icon` { light, dark } paths (Rich ↔ Text switch buttons).
+!media/
+!media/**
+
 # Marketplace metadata — vsce requires these at the extension root.
 !package.json
 !README.md

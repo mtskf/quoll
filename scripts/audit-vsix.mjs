@@ -120,6 +120,8 @@ const ALLOWED_PAYLOAD = [
   /^changelog\.md$/i,
   /^dist\/[\w./-]+\.(cjs|js|css|json)$/,
   /^walkthroughs\/getting-started\/[\w-]+\.md$/,
+  // Editor title-bar toggle icons — contributes.commands `icon` { light, dark }.
+  /^media\/icons\/[\w-]+\.svg$/,
 ];
 
 // Required runtime files. vsce enforces package.json#main exists, but
