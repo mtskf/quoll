@@ -29,6 +29,17 @@ const outDir = resolve(repoRoot, "artifacts/visual-smoke");
 
 const THEMES = ["light", "dark"];
 
+// A 1x1 transparent PNG, used to fulfil the fixture's allowlisted image request
+// locally. The live-image check asserts the <img> element + its https src (not
+// that the pixels painted), so serving a stub keeps the smoke deterministic and
+// offline-safe — a real fetch to example.com would stall/flake on a firewalled
+// or offline clean checkout (exactly the "one command from a clean checkout"
+// path this harness exists for).
+const STUB_PNG = Buffer.from(
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==",
+  "base64"
+);
+
 // Listen on an ephemeral OS-assigned port (0) bound to loopback — avoids the
 // fixed 4599 collision (and any lsof/kill restart prompt) entirely.
 function listenEphemeral(server) {
@@ -50,12 +61,17 @@ function assertInPage(theme) {
   const add = (name, pass, msg) => results.push({ name, pass, msg });
   const text = (el) => (el?.textContent ?? "").replace(/\s+/g, " ").trim();
 
-  // 1. Frontmatter → read-only metadata block, visible.
+  // 1. Frontmatter → read-only metadata block rendering the seeded fields
+  //    (assert the title value is actually shown, not just that a block exists —
+  //    a bare presence + display check would pass on any rendered element).
   const fm = document.querySelector(".quoll-frontmatter-block");
+  const fmText = text(fm);
   add(
     "frontmatter",
-    !!fm && getComputedStyle(fm).display !== "none",
-    fm ? "frontmatter block rendered + visible" : ".quoll-frontmatter-block not found"
+    !!fm && getComputedStyle(fm).display !== "none" && fmText.includes("smoke test"),
+    fm
+      ? `frontmatter block text="${fmText}" (want it to contain the title "smoke test")`
+      : ".quoll-frontmatter-block not found"
   );
 
   // 2. Table → rendered <table>; the escaped `\|` stays inside ONE cell.
@@ -138,12 +154,22 @@ async function run() {
   const browser = await chromium.launch({ headless: true });
   try {
     for (const theme of THEMES) {
-      const server = createPreviewServer({
-        override: { theme, content, variations: [{ label: "smoke", css: "" }] },
-      });
-      const port = await listenEphemeral(server);
-      const page = await browser.newPage({ viewport: { width: 900, height: 1200 } });
+      // Created inside the try so a throw from listen/newPage still hits the
+      // finally that closes them — nothing leaks and both themes are attempted.
+      let server = null;
+      let page = null;
       try {
+        server = createPreviewServer({
+          override: { theme, content, variations: [{ label: "smoke", css: "" }] },
+        });
+        const port = await listenEphemeral(server);
+        page = await browser.newPage({ viewport: { width: 900, height: 1200 } });
+        // Stub the fixture's allowlisted image so navigation never waits on a
+        // real network fetch (see STUB_PNG). Must be routed before goto.
+        await page.route("https://example.com/**", (route) =>
+          route.fulfill({ status: 200, contentType: "image/png", body: STUB_PNG })
+        );
+
         await page.goto(`http://127.0.0.1:${port}/instance?v=0`, { waitUntil: "load" });
         // Deterministic mount signals: CM content, then a real block widget.
         await page.waitForSelector(".cm-content", { timeout: 15000 });
@@ -155,27 +181,42 @@ async function run() {
 
         results.push(...(await page.evaluate(assertInPage, theme)));
 
-        // Fence collapse — light run only: click the toggle, assert collapsed,
-        // and capture the collapsed state for the eyeball grid.
+        // Fence collapse — light run only. The long fence is collapsed by
+        // default (empty expanded set, caret not inside it), so clicking the
+        // toggle button must FLIP the -collapsed class. Assert the state
+        // actually changed (a no-op click or an unconditionally-present bar
+        // both fail) rather than reading a class that was already there.
         if (theme === "light") {
-          const toggle = await page.$(".quoll-fenced-collapse-toggle, .quoll-fenced-collapse-bar");
-          if (!toggle) {
+          const collapsedSel = ".quoll-fenced-collapse-bar-collapsed";
+          const collapsedBefore = (await page.$(collapsedSel)) !== null;
+          const toggleBtn = await page.$(".quoll-fenced-collapse-toggle");
+          if (!toggleBtn) {
             results.push({
               name: "fence-collapse",
               pass: false,
-              msg: "no .quoll-fenced-collapse-toggle to click",
+              msg: "no .quoll-fenced-collapse-toggle button found",
             });
           } else {
-            await toggle.click();
-            const collapsed = await page.$(".quoll-fenced-collapse-bar-collapsed");
+            await toggleBtn.click();
+            let collapsedAfter = collapsedBefore;
+            try {
+              // The toggle dispatches a StateEffect → re-render; wait for the
+              // class to flip rather than reading it racily right after click.
+              await page.waitForFunction(
+                ([sel, was]) => (document.querySelector(sel) !== null) !== was,
+                [collapsedSel, collapsedBefore],
+                { timeout: 5000 }
+              );
+              collapsedAfter = !collapsedBefore;
+            } catch {
+              collapsedAfter = (await page.$(collapsedSel)) !== null;
+            }
             results.push({
               name: "fence-collapse",
-              pass: !!collapsed,
-              msg: collapsed
-                ? "toggle collapsed the fence"
-                : "collapse bar did not gain -collapsed after click",
+              pass: collapsedAfter !== collapsedBefore,
+              msg: `toggle flipped fence collapsed ${collapsedBefore} -> ${collapsedAfter} (want a flip)`,
             });
-            const shot2 = resolve(outDir, "fence-collapsed.png");
+            const shot2 = resolve(outDir, "fence-toggled.png");
             await page.screenshot({ path: shot2, fullPage: true });
             screenshots.push(shot2);
           }
@@ -185,8 +226,12 @@ async function run() {
         // failure so BOTH themes are attempted and the failure is loud+named.
         results.push({ name: `theme=${theme} setup`, pass: false, msg: err.message });
       } finally {
-        await page.close();
-        await closeServer(server);
+        if (page) {
+          await page.close();
+        }
+        if (server) {
+          await closeServer(server);
+        }
       }
     }
   } finally {

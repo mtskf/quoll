@@ -47,7 +47,7 @@ It builds the real bundle, serves the combined fixture `scripts/preview/fixtures
 frontmatter block, table (escaped `\|` stays in one cell), task checkboxes, allowlisted `<img>` vs an
 inert `javascript:` placeholder, fenced code + its collapse bar, and the per-theme `<html>` class.
 
-Screenshots land in `artifacts/visual-smoke/` (`light.png`, `dark.png`, `fence-collapsed.png`,
+Screenshots land in `artifacts/visual-smoke/` (`light.png`, `dark.png`, `fence-toggled.png`,
 git-ignored) — eyeball those for anything the assertions don't cover. Any failed assertion prints a
 named `❌ <name>: <msg>` and the command **exits non-zero**, so a render regression is loud.
 
