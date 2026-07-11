@@ -57,8 +57,8 @@ export function handleUpdateConfig(key: string, value: string, deps: HandleUpdat
       console.error("[quoll] update-config write rejected", err);
       deps.showError?.(FAILURE_MESSAGE);
       // On failure the config never changed → no re-push would reach the
-      // popover; re-push so its pending row clears at once (round-3 item 4,
-      // uniform with the override branch). 2s fallback stays for silent cases.
+      // popover; re-push so its pending row clears at once (uniform with the
+      // override branch). 2s fallback stays for silent cases.
       deps.repush();
     });
   } catch (err) {

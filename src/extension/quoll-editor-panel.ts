@@ -556,9 +556,9 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
     // onDidChangeConfiguration. Idempotent webview-side. Created HERE (the old
     // config-listener site) so its disposables position — hence teardown order —
     // is unchanged.
-    // Production config-get: resource-scoped to THIS document (round-3 item 5) so
-    // a folder-level override in a multi-root workspace is read + pushed for the
-    // right file. NOTE: this deviates from the existing unscoped
+    // Production config-get: resource-scoped to THIS document so a folder-level
+    // override in a multi-root workspace is read + pushed for the right file.
+    // NOTE: this deviates from the existing unscoped
     // readLintGutterEnabled/readSpellcheckEnabled reads — those are booleans with
     // no per-folder story yet; the preset reads are new and resource-correct from
     // the start. (A later PR can align the lint/spellcheck reads; out of scope here.)
@@ -568,13 +568,12 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
     const editorConfig = createEditorConfigWiring({
       subscribe: (onRelevantChange) => {
         const sub = subscribeWhileAlive(workspace.onDidChangeConfiguration, (e) => {
-          // The 4 preset keys are RESOURCE-SCOPED (round-4 item 2): pass
-          // document.uri so an unrelated folder's change does NOT fire a
-          // redundant same-value push into this webview (the setEditorPrefs
-          // guard was removed in Task 5, so a redundant push = a real CM
-          // dispatch). lintGutter/spellcheck stay unscoped, matching the
-          // existing boolean-read precedent. Extracted to a pure predicate so
-          // the document.uri argument is unit-testable.
+          // The 4 preset keys are RESOURCE-SCOPED: pass document.uri so an
+          // unrelated folder's change does NOT fire a redundant same-value push
+          // into this webview (setEditorPrefs has no same-value guard, so a
+          // redundant push = a real CM dispatch). lintGutter/spellcheck stay
+          // unscoped, matching the existing boolean-read precedent. Extracted to
+          // a pure predicate so the document.uri argument is unit-testable.
           if (
             isRelevantConfigChange(e, document.uri, [LINT_GUTTER_CONFIG_KEY, SPELLCHECK_CONFIG_KEY])
           ) {
@@ -829,9 +828,9 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
             updateConfig: (key, value) =>
               workspace.getConfiguration().update(key, value, ConfigurationTarget.Global),
             inspectOverride: (key) => {
-              // Resource-scoped inspect (round-3 item 5) so a workspace-FOLDER
-              // override for THIS document is seen (workspaceFolderValue is only
-              // populated when the configuration is scoped to a resource uri).
+              // Resource-scoped inspect so a workspace-FOLDER override for THIS
+              // document is seen (workspaceFolderValue is only populated when
+              // the configuration is scoped to a resource uri).
               const info = workspace.getConfiguration(undefined, document.uri).inspect<string>(key);
               return {
                 workspace: info?.workspaceValue !== undefined,

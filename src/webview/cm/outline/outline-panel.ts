@@ -350,7 +350,7 @@ class OutlinePanel implements PluginValue {
       onChange: (key, value) => this.view.state.facet(quollUpdateConfigSink)(key, value),
       // Escape inside the popover delegates here — closeSettings is the SOLE
       // unmount path (removes el, resets aria-expanded, drops the pointerdown
-      // listener), so the popover never half-closes itself (round-2 item 1).
+      // listener), so the popover never half-closes itself.
       onRequestClose: () => this.closeSettings(),
     });
     this.settingsPopover = popover;
