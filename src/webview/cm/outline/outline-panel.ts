@@ -70,9 +70,11 @@ export const OUTLINE_PINNED_CLASS = "quoll-outline-pinned";
 
 /** Runtime-resizable sidebar width bounds (px). The stylesheet default
  *  (--quoll-outline-sidebar-width: 260px) applies until the user drags; a drag
- *  overrides the var inline on the host and persists the value. This clamp is
- *  the SOLE width bound — styles.css carries no independent max-width cap (a
- *  second bound would desync the handle at left:var). */
+ *  overrides the var inline on the host and persists the value. This clamp
+ *  bounds the STORED width at drag/restore time; styles.css additionally caps
+ *  the LIVE display at min(var, 80%) of the host (re-evaluated on layout, for
+ *  host-shrink) using the SAME expression on the sidebar and the handle so they
+ *  never desync. The two are complementary — both keep the editor column alive. */
 const MIN_WIDTH_PX = 180;
 const MAX_WIDTH_PX = 600;
 /** Persisted view-state key (flat, survives reload) — see readPersistedState.
@@ -364,8 +366,9 @@ class OutlinePanel implements PluginValue {
   private clampWidth(px: number): number {
     // happy-dom / pre-layout: clientWidth 0 ⇒ no viewport bound yet, use the
     // absolute ceiling. In a real browser, also cap at 80% of the host width so
-    // the editor column always survives. This is the SOLE width bound — no CSS
-    // max-width competes with it.
+    // the editor column survives at drag/restore time. styles.css re-applies the
+    // same 80%-of-host cap live via min(var, 80%) for later host shrinks; the two
+    // caps agree, so a value this clamp passes is never re-capped on a stable host.
     const hostWidth = this.host.clientWidth;
     const upper = hostWidth > 0 ? Math.min(MAX_WIDTH_PX, hostWidth * 0.8) : MAX_WIDTH_PX;
     return Math.round(Math.max(MIN_WIDTH_PX, Math.min(upper, px)));
