@@ -117,10 +117,7 @@
             "description": "Quoll turns any `.md` file into a rich, Notion- and Obsidian-style editor — while keeping raw Markdown as the single source of truth underneath.",
             "media": {
               "markdown": "walkthroughs/getting-started/open-in-quoll.md"
-            },
-            "completionEvents": [
-              "onCommand:quoll.editWith"
-            ]
+            }
           },
           {
             "id": "caretReveal",
@@ -136,10 +133,7 @@
             "description": "Switch to VS Code's built-in text editor to see the raw Markdown, then switch back — your cursor position carries over either way.",
             "media": {
               "markdown": "walkthroughs/getting-started/toggle-editor.md"
-            },
-            "completionEvents": [
-              "onCommand:quoll.toggleEditor"
-            ]
+            }
           },
           {
             "id": "outline",
