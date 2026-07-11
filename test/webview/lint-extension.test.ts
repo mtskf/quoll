@@ -3,7 +3,7 @@ import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
 import { Compartment, EditorState, Text } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { LintDiagnosticWire } from "../../src/shared/protocol.js";
+import { type LintDiagnosticWire, MAX_LINT_DIAGNOSTICS } from "../../src/shared/protocol.js";
 import { lintMarkdown } from "../../src/webview/cm/lint/engine.js";
 import {
   buildLintDecorations,
@@ -469,6 +469,24 @@ describe("toWireDiagnostics (offset → 0-based line/character)", () => {
         "startLine",
       ].sort()
     );
+  });
+
+  it("caps the wire set at MAX_LINT_DIAGNOSTICS so the host never rejects the whole mirror", () => {
+    // The host's lint-diagnostics boundary validator rejects the ENTIRE message
+    // when diagnostics.length > MAX_LINT_DIAGNOSTICS, which would blank the
+    // Problems mirror. A dense prose document can realistically exceed the cap;
+    // truncate here so a partial mirror survives instead. REVERT-CHECK: removing
+    // the `.slice(0, MAX_LINT_DIAGNOSTICS)` makes this length assertion fail.
+    const over = MAX_LINT_DIAGNOSTICS + 5;
+    const doc = Text.of(["a".repeat(over + 1)]);
+    const diags: LintDiagnostic[] = Array.from({ length: over }, (_, i) => ({
+      from: i,
+      to: i + 1,
+      severity: "info" as const,
+      code: "filler-words" as const,
+      message: "f",
+    }));
+    expect(toWireDiagnostics(doc, diags)).toHaveLength(MAX_LINT_DIAGNOSTICS);
   });
 });
 

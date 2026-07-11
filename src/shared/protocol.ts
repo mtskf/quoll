@@ -213,9 +213,10 @@ export type ThemeMessage = Envelope & {
  *  lifecycle (it carries no content / version), so it is delivered as its own
  *  message rather than folded into DocumentMessage: a settings change must not
  *  force a full document reseed. Pushed at seed time and on
- *  workspace.onDidChangeConfiguration. Carries the editor-surface flags — the
- *  opt-in advisory-lint gutter and the native-spellcheck toggle — modelled to
- *  grow (add fields, keep the type) as more editor-surface settings appear. */
+ *  workspace.onDidChangeConfiguration. Carries every editor-surface setting —
+ *  the opt-in advisory-lint gutter, the opt-in advisory prose lint, the native-
+ *  spellcheck toggle, and the four typography presets — modelled to grow (add
+ *  fields, keep the type) as more editor-surface settings appear. */
 export type EditorConfigMessage = Envelope & {
   type: "editor-config";
   lintGutter: boolean;

@@ -14,7 +14,7 @@ import {
   ViewPlugin,
   type ViewUpdate,
 } from "@codemirror/view";
-import type { LintDiagnosticWire } from "../../../shared/protocol.js";
+import { type LintDiagnosticWire, MAX_LINT_DIAGNOSTICS } from "../../../shared/protocol.js";
 import { createIncrementalLinter, lintMarkdown } from "./engine.js";
 import type { LintDiagnostic, LintSeverity } from "./types.js";
 
@@ -233,11 +233,21 @@ export function diagnosticsAt(
 // 1-based line + its start offset, from which the 0-based VS Code line and the
 // in-line character fall out. Explicit field-by-field projection so the
 // reserved `fix` field of LintDiagnostic never crosses the wire.
+//
+// Capped at MAX_LINT_DIAGNOSTICS: the host's `lint-diagnostics` boundary
+// validator REJECTS the whole message when `diagnostics.length` exceeds the cap,
+// which would blank the Problems mirror entirely. Since prose findings (esp.
+// filler-words) can be far denser than the sparse structural rules, a long
+// document could realistically cross 2000; truncating here keeps the mirror
+// populated with the first N (diagnostics arrive sorted by document position) —
+// a partial mirror beats a rejected/blank one. The in-editor underlines are
+// UNAFFECTED (they read the uncapped lintField), so nothing is hidden in the
+// editor; only the host-side Problems mirror is bounded to what the wire accepts.
 export function toWireDiagnostics(
   doc: Text,
   diagnostics: readonly LintDiagnostic[]
 ): LintDiagnosticWire[] {
-  return diagnostics.map((d) => {
+  return diagnostics.slice(0, MAX_LINT_DIAGNOSTICS).map((d) => {
     const start = doc.lineAt(d.from);
     const end = doc.lineAt(d.to);
     return {

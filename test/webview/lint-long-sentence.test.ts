@@ -30,11 +30,14 @@ describe("lint rule: long-sentence", () => {
     expect(long(doc)).toHaveLength(0);
   });
 
-  it("flags only the long sentence in a mixed paragraph", () => {
+  it("flags only the long sentence in a mixed paragraph, at the right byte range", () => {
     const doc = `${sentence(5)} ${sentence(31)}\n`;
     const diags = long(doc);
     expect(diags).toHaveLength(1);
     expect(diags[0]!.message).toContain("31 words");
+    // Pin the underline span: it must start AFTER the leading-space trim (at the
+    // second sentence's first word), not at the space, and cover the full sentence.
+    expect(doc.slice(diags[0]!.from, diags[0]!.to)).toBe(sentence(31));
   });
 
   it("is off unless prose is enabled", () => {

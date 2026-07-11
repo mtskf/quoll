@@ -59,8 +59,6 @@ const IRREGULAR = [
   "laid",
   "said",
   "read",
-  "led",
-  "fed",
   "met",
   "set",
   "put",
