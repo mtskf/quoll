@@ -158,8 +158,11 @@ class OutlinePanel implements PluginValue {
     const titleEl = document.createElement("span");
     titleEl.className = "quoll-outline-title";
     titleEl.textContent = "Outline";
-    header.appendChild(this.pinEl);
+    // Title leads, pin trails: matches VS Code side-panel header order (title
+    // left, action button right) and keeps tab order visual-left-to-right. The
+    // pin is pushed to the right edge by margin-left:auto (styles.css).
     header.appendChild(titleEl);
+    header.appendChild(this.pinEl);
 
     this.listEl = document.createElement("ul");
     this.listEl.className = "quoll-outline-list";

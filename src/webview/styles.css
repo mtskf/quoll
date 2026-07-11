@@ -173,15 +173,15 @@ html body {
      *                                 leg. Duration converged (was 0.1s / 0.12s). */
     --quoll-control-rest-opacity: 0.6;
     --quoll-control-transition: opacity 0.12s ease;
-    /* Outline sidebar: fixed column width, a surface lifted slightly toward
-     * white above the editor background, and a hairline right border. One
-     * token trio consumed by BOTH overlay and pinned modes so they can never
-     * drift — retune here only. In light themes the lift is nearly invisible
-     * by construction (white on white); the hairline border carries the
-     * separation there. NOTE: keep these comments free of brace-wrapped rule
-     * literals — the styles-contract greps match raw CSS text. */
+    /* Outline sidebar: default column width (resizable at runtime — the plugin
+     * overrides --quoll-outline-sidebar-width inline on the host on drag), the
+     * native VS Code side-panel background so the outline matches the built-in
+     * side panels, and a hairline right border. One token trio consumed by BOTH
+     * overlay and pinned modes so they can never drift — retune here only.
+     * NOTE: keep these comments free of brace-wrapped rule literals — the
+     * styles-contract greps match raw CSS text. */
     --quoll-outline-sidebar-width: 260px;
-    --quoll-outline-sidebar-background: color-mix(in srgb, var(--vscode-editor-background) 95%, #fff);
+    --quoll-outline-sidebar-background: var(--vscode-sideBar-background, var(--vscode-editor-background));
     --quoll-outline-sidebar-border: color-mix(in srgb, var(--vscode-panel-border, #8888) 60%, transparent);
   }
 
@@ -972,18 +972,20 @@ html body {
     align-items: center;
     gap: 8px;
     flex: 0 0 auto;
-    /* 8px/12px insets place the pin button exactly where the (now hidden)
-     * corner toggle sits, so opening reads as the toggle morphing into pin. */
+    /* VS Code side-panel header: title on the left, action button (pin) pushed
+     * to the right edge via margin-left:auto on the pin. */
     padding: 8px 12px 4px;
   }
   .quoll-outline-pin {
     display: flex;
     align-items: center;
     justify-content: center;
+    box-sizing: border-box;
+    margin-left: auto; /* push to the header's right edge (VS Code panel actions) */
     width: 26px;
     height: 26px;
     padding: 0;
-    border: none;
+    border: 1px solid var(--quoll-outline-sidebar-border);
     border-radius: 5px;
     background: transparent;
     color: var(--vscode-icon-foreground, var(--vscode-foreground));
@@ -1007,11 +1009,11 @@ html body {
     height: 16px;
   }
   .quoll-outline-title {
-    font-size: 0.72rem;
-    font-weight: 600;
+    color: var(--vscode-sideBarSectionHeader-foreground, var(--vscode-foreground));
+    font-size: 11px;
+    font-weight: 700;
     text-transform: uppercase;
-    letter-spacing: 0.04em;
-    opacity: 0.8;
+    letter-spacing: normal;
   }
 
   .quoll-outline-list {

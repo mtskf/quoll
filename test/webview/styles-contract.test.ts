@@ -598,17 +598,27 @@ describe("styles.css — outline sidebar", () => {
   // vacuously satisfy a match (styles-contract grep-vacuation guard).
   const live = css.replace(/\/\*[\s\S]*?\*\//g, "");
 
-  it(":root declares the sidebar tokens (width / lifted surface / hairline border)", () => {
+  it(":root declares the sidebar tokens (width / side-bar surface / hairline border)", () => {
     const root = live.match(/:root\s*\{([^}]*)\}/)?.[1] ?? "";
     expect(root).toMatch(/--quoll-outline-sidebar-width\s*:\s*\d+px\s*;/);
-    // The surface must be DERIVED from the editor background (slightly lifted),
-    // not a hard-coded colour — that is what keeps all themes tracking.
+    // The surface tracks VS Code's native side-panel background so the outline
+    // matches the built-in side panels (falls back to editor bg for old hosts).
     expect(root).toMatch(
-      /--quoll-outline-sidebar-background\s*:\s*color-mix\([^;]*--vscode-editor-background[^;]*;/
+      /--quoll-outline-sidebar-background\s*:\s*var\(--vscode-sideBar-background[^;]*;/
     );
     expect(root).toMatch(
       /--quoll-outline-sidebar-border\s*:\s*color-mix\([^;]*--vscode-panel-border[^;]*;/
     );
+  });
+
+  it("the header right-aligns a bordered pin and uses the side-bar section-header title", () => {
+    const pin = live.match(/\.quoll-outline-pin\s*\{[^}]*\}/)?.[0] ?? "";
+    expect(pin).toMatch(/margin-left\s*:\s*auto/); // pushed to the right edge
+    expect(pin).toMatch(/border\s*:\s*1px\s+solid/); // reads as a button, not a bare icon
+    expect(pin).toMatch(/border-radius\s*:/);
+    const title = live.match(/\.quoll-outline-title\s*\{[^}]*\}/)?.[0] ?? "";
+    expect(title).toMatch(/color\s*:\s*var\(--vscode-sideBarSectionHeader-foreground/);
+    expect(title).toMatch(/text-transform\s*:\s*uppercase/);
   });
 
   it("the sidebar consumes the tokens and slides in from the left edge", () => {
