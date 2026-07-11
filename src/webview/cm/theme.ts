@@ -48,7 +48,22 @@ export const quollTheme = EditorView.theme({
     flexShrink: "1",
     // Editor-preset content width (outline settings popover). Default = var
     // removed → 60em, today's exact reading column.
-    flexBasis: "var(--quoll-editor-content-width, 60em)",
+    //
+    // `!important` is load-bearing, not cosmetic: CodeMirror's DocView keeps a
+    // "widest line seen" minWidth latch and writes it as an INLINE
+    // `flex-basis: <px>` on this same `.cm-content` element on every DOM update
+    // (@codemirror/view DocView.sync). Under a transient collapsed measure — the
+    // pinned-outline flex row reflowing as the webview goes hidden→visible on a
+    // ⌘⌥K handoff — that latch captures a tiny stale width (e.g. 65px) and, since
+    // `.cm-content` is `flex-grow: 0`, pins the reading column to that sliver so
+    // every line wraps at ~1 char. The latch only clears on a doc edit touching
+    // its range, so a same-content reseed never releases it → the collapse
+    // sticks. Quoll always runs `EditorView.lineWrapping`, so the minWidth
+    // feature (horizontal room for un-wrapped long lines) is vestigial here and
+    // only ever writes garbage; `!important` makes THIS deterministic basis win
+    // over that inline write, neutralising the latch with no downside. Verified
+    // in test/webview-browser/outline-sidebar-layout.browser.test.ts.
+    flexBasis: "var(--quoll-editor-content-width, 60em) !important",
     maxWidth: "100%",
     padding: "3.5rem 2.5rem 6rem",
     // Body rhythm, tokenised. The value lives on :root as
