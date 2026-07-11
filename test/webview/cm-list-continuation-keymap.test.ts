@@ -124,6 +124,20 @@ describe("continueListOnEnter — marker continuation", () => {
     }
   });
 
+  it("splits a task mid-content: the tail flows into a fresh unchecked task", () => {
+    // Caret past the checkbox, inside the task body (space-free so the split is
+    // clean, mirroring the bullet mid-content case). Pins that `contentStart =
+    // taskMarker.to` lets a body caret proceed and the `isTask` branch emits a
+    // fresh `- [ ] ` for the split-off tail.
+    const view = mount("- [x] helloworld", at(11)); // caret after "hello"
+    try {
+      expect(continueListOnEnter(view)).toBe(true);
+      expect(view.state.doc.toString()).toBe("- [x] hello\n- [ ] world");
+    } finally {
+      view.destroy();
+    }
+  });
+
   it("keeps a nested item's indentation", () => {
     const view = caretAtEndOf(mount("- a\n  - b", at(0)), 2);
     try {
@@ -183,6 +197,21 @@ describe("continueListOnEnter — ordered renumber", () => {
     try {
       expect(continueListOnEnter(view)).toBe(true);
       expect(view.state.doc.toString()).toBe("1. a\n2. b\n3. \nlazy line\n4. c");
+    } finally {
+      view.destroy();
+    }
+  });
+
+  it("renumbers on a mid-content split of an ordered item", () => {
+    // Caret in the MIDDLE of an ordered item's content: the split insert AND the
+    // renumber diff compose in one ChangeSpec array. Pins that the renumber edits
+    // stay original-document-relative (they sit past `head`) while the tail flows
+    // onto the new item.
+    const view = mount("1. helloworld\n2. b", at(8)); // caret after "hello"
+    try {
+      expect(continueListOnEnter(view)).toBe(true);
+      expect(view.state.doc.toString()).toBe("1. hello\n2. world\n3. b");
+      expect(view.state.selection.main.head).toBe(view.state.doc.line(2).from + 3);
     } finally {
       view.destroy();
     }
