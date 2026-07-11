@@ -14,7 +14,7 @@
 import { EndOfLine, type TextDocument } from "vscode";
 // DocumentMessage is defined in the protocol module; document-message.ts uses
 // it internally but does NOT re-export it, so import the type from the source.
-import type { DocumentMessage } from "../shared/protocol.js";
+import type { DocumentMessage } from "../../shared/protocol.js";
 import { buildDocumentMessage } from "./document-message.js";
 
 export function canonicalDocumentText(document: Pick<TextDocument, "eol" | "getText">): string {

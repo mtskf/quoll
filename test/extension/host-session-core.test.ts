@@ -7,7 +7,7 @@ import {
   type HostSessionEvent,
   type HostSessionState,
   isWriteLockHeld,
-} from "../../src/extension/host-session-core.js";
+} from "../../src/extension/session/host-session-core.js";
 import type { MarkdownError } from "../../src/markdown/errors.js";
 import type { ValidateForWriteResult } from "../../src/markdown/validate-for-write.js";
 

@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { createEditSettledBarrier } from "../../src/extension/edit-settled-barrier.js";
+import { createEditSettledBarrier } from "../../src/extension/session/edit-settled-barrier.js";
 
 describe("createEditSettledBarrier", () => {
   it("runs the side channel immediately when the lock is free", () => {

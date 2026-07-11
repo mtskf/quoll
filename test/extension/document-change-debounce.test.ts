@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { createTrailingDebounce } from "../../src/extension/document-change-debounce.js";
+import { createTrailingDebounce } from "../../src/extension/session/document-change-debounce.js";
 
 describe("createTrailingDebounce", () => {
   beforeEach(() => {

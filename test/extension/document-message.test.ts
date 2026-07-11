@@ -5,7 +5,7 @@ import {
   buildEditorConfigMessage,
   buildEditRejectedMessage,
   buildThemeMessage,
-} from "../../src/extension/document-message.js";
+} from "../../src/extension/session/document-message.js";
 import { PROTOCOL_VERSION } from "../../src/shared/protocol.js";
 
 describe("buildDocumentMessage", () => {

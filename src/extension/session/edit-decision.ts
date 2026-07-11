@@ -17,11 +17,11 @@
 // (default = validateMarkdownForWrite) so the unit test can substitute a
 // fake and exercise every arm deterministically.
 
-import type { MarkdownError } from "../markdown/errors.js";
+import type { MarkdownError } from "../../markdown/errors.js";
 import {
   type ValidateForWriteResult,
   validateMarkdownForWrite,
-} from "../markdown/validate-for-write.js";
+} from "../../markdown/validate-for-write.js";
 
 export type EditVerdict =
   | { kind: "accept" }

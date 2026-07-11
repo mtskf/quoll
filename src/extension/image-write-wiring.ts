@@ -17,8 +17,8 @@
 import { Uri, workspace } from "vscode";
 
 import type { HostToWebview } from "../shared/protocol.js";
-import { buildImageWriteResultMessage } from "./document-message.js";
 import { handleImageWrite } from "./image-write-service.js";
+import { buildImageWriteResultMessage } from "./session/document-message.js";
 
 export interface ImageWriteWiringDeps {
   /** The document whose parent folder hosts ./assets/ and against which the

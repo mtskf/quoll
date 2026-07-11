@@ -28,10 +28,9 @@
 
 import type { TextDocument } from "vscode";
 import { Range, WorkspaceEdit, workspace } from "vscode";
-
-import { createTrailingDebounce } from "./document-change-debounce.js";
-import { minimalEditSpan } from "./minimal-edit.js";
 import { createRevertRescueTracker } from "./revert-rescue.js";
+import { createTrailingDebounce } from "./session/document-change-debounce.js";
+import { minimalEditSpan } from "./session/minimal-edit.js";
 
 /** Trailing-debounce window for coalescing LOCK-FREE external-edit
  *  `documentChanged` dispatches. ~100 ms: long enough to collapse the sub-ms

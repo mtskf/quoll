@@ -4,7 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   createEffectExecutor,
   type EffectExecutorDeps,
-} from "../../src/extension/effect-executor.js";
+} from "../../src/extension/session/effect-executor.js";
 import type { HostToWebview } from "../../src/shared/protocol.js";
 
 const themeMsg: HostToWebview = { protocol: 1, type: "theme", isDarkTheme: true };
@@ -135,7 +135,7 @@ describe("effect-executor post()", () => {
   });
 });
 
-import type { HostSessionState } from "../../src/extension/host-session-core.js";
+import type { HostSessionState } from "../../src/extension/session/host-session-core.js";
 
 // A state with no pending edit (drainSnapshot skips readCanonical).
 const noStash = { pendingEdit: null } as unknown as HostSessionState;
