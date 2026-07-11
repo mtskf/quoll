@@ -70,10 +70,32 @@ export type EditRejectedMessageShape = EnvelopeShape & {
   };
 };
 
+// Local mirrors of the preset unions (the e2e tsconfig cannot import from src/).
+// types-equality.test.ts pins these against the real protocol unions.
+type FontFamilyPrefShape = "default" | "serif" | "sans";
+type FontSizePrefShape = "small" | "default" | "large" | "x-large";
+type LineHeightPrefShape = "compact" | "cozy" | "roomy";
+type ContentWidthPrefShape = "narrow" | "medium" | "wide";
+type EditorPrefKeyShape =
+  | "quoll.editor.fontFamily"
+  | "quoll.editor.fontSize"
+  | "quoll.editor.lineHeight"
+  | "quoll.editor.contentWidth";
+
 export type EditorConfigMessageShape = EnvelopeShape & {
   type: "editor-config";
   lintGutter: boolean;
   spellcheck: boolean;
+  fontFamily: FontFamilyPrefShape;
+  fontSize: FontSizePrefShape;
+  lineHeight: LineHeightPrefShape;
+  contentWidth: ContentWidthPrefShape;
+};
+
+export type UpdateConfigMessageShape = EnvelopeShape & {
+  type: "update-config";
+  key: EditorPrefKeyShape;
+  value: string;
 };
 
 export type CaretReportMessageShape = EnvelopeShape & {
@@ -159,7 +181,8 @@ export type WebviewToHostShape =
   | CodexContextHandoffMessageShape
   | LintDiagnosticsMessageShape
   | CaretReportMessageShape
-  | SwitchToTextMessageShape;
+  | SwitchToTextMessageShape
+  | UpdateConfigMessageShape;
 
 export interface RecordedEventShape {
   readonly message: { type: string } & Record<string, unknown>;

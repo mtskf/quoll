@@ -793,6 +793,10 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
           });
           return;
         }
+        case "update-config":
+          // Placeholder (Task 1): keeps the exhaustiveness guard compiling.
+          // Task 3 replaces this with the validated handleUpdateConfig call.
+          break;
         default: {
           // Exhaustiveness guard — when a new WebviewToHost variant is
           // added without a case here, TS flags the assignment as
