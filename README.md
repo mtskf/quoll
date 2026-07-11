@@ -1,14 +1,14 @@
+<p align="center">
+  <img src="images/hero.png" alt="Quoll is an Obsidian-style WYSIWYG editor for VS Code." width="900">
+</p>
+
 # Quoll
+
+> Edit Markdown in VS Code with an Obsidian-style WYSIWYG editor, right inside your editor tabs.
 
 [![VS Marketplace version](https://badgen.net/vs-marketplace/v/mtskf.quoll)](https://marketplace.visualstudio.com/items?itemName=mtskf.quoll)
 [![Marketplace installs](https://badgen.net/vs-marketplace/i/mtskf.quoll)](https://marketplace.visualstudio.com/items?itemName=mtskf.quoll)
 [![License: MIT](https://img.shields.io/github/license/mtskf/quoll)](LICENSE)
-
-Edit Markdown in VS Code with an Obsidian-style WYSIWYG editor, right inside your editor tabs.
-
-- **Raw Markdown stays canonical** — the file on disk is always plain `.md`; Quoll renders it live and never rewrites your bytes.
-- **Obsidian-style live-reveal** — move the caret into a construct to edit its Markdown source, and away to re-render.
-- **Opt-in and non-intrusive** — registers with `priority: option`, so it never hijacks `.md` from your other editors.
 
 <p align="center">
   <img src="images/editor-overview.png" alt="Quoll editing a Markdown file in VS Code: live-rendered headings, a frontmatter panel, a callout, a task list, an editable GFM table, and a fenced code block" width="900">
