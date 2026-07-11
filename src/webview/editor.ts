@@ -42,6 +42,7 @@ import { quollLinkClickHandler } from "./cm/link-handlers.js";
 import { quollLintFixKeymap } from "./cm/lint/apply-fix.js";
 import { quollLintGutter } from "./cm/lint/gutter.js";
 import { quollLint } from "./cm/lint/index.js";
+import { listContinuationKeymap } from "./cm/list/list-continuation-keymap.js";
 import { listHangIndent } from "./cm/list/list-hang-indent.js";
 import { listIndentKeymap } from "./cm/list/list-indent-keymap.js";
 import { quollMarkdownLanguage } from "./cm/markdown.js";
@@ -540,6 +541,14 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
         // Tab never escapes to VS Code focus navigation. Prec.high so it wins
         // before CM's default. Edits raw source → normal edit-sync path.
         listIndentKeymap(),
+        // Enter in a bullet/ordered/task list item continues the marker on the
+        // next line; Enter on an empty marker line removes it (exiting the list);
+        // ordered runs renumber to stay sequential. Registered BEFORE the
+        // fenced-code Enter so a normal list line is handled here, while a fence
+        // opener on a list marker line (`- ```\`) is deferred (caretInCode guard)
+        // to fencedCodeEnterKeymap. Prec.high; returns false for every non-list
+        // caret so the default Enter still runs. One transaction → edit-sync path.
+        listContinuationKeymap(),
         // Enter on an unclosed ```-fence opener auto-inserts a matching closing
         // fence and lands the caret on the empty body line between the two, so a
         // fence typed mid-document no longer reflows every following line into
