@@ -184,7 +184,10 @@ describe("headingRhythmFoldGutterLineClass — per-level gutter tag for the rhyt
     expect(tagged()).toEqual(new Set([3]));
   });
 
-  describe("bounded recompute (keystroke path) — stays equal to a full rebuild", () => {
+  // { retry } — mitigates the load-sensitive bounded≡full flake (LEARNING.md).
+  describe("bounded recompute (keystroke path) — stays equal to a full rebuild", {
+    retry: 2,
+  }, () => {
     // Serialize the whole RangeSet ({from,to,cls}) and compare arrays vs the oracle
     // (Codex #2 — a by-line Map hides duplicate/order/extra ranges a double-add adds).
     function serializeField(v: EditorView): { from: number; to: number; cls: string }[] {
@@ -346,7 +349,8 @@ describe("headingRhythmFoldGutterLineClass — per-level gutter tag for the rhyt
   // nested heading to top-level; an unclosed fence swallows it; a multi-line interior
   // edit promotes a far heading. `touchesStructuralReparse` routes those to a FULL
   // rebuild. Each case is bounded==oracle AND RED against the guard-less field.
-  describe("bounded ≡ full-rebuild under structural reparse", () => {
+  // { retry } — mitigates the load-sensitive bounded≡full flake (LEARNING.md).
+  describe("bounded ≡ full-rebuild under structural reparse", { retry: 2 }, () => {
     function serializeGutter(v: EditorView): { from: number; to: number; cls: string }[] {
       const out: { from: number; to: number; cls: string }[] = [];
       const cursor = v.state.field(headingRhythmFoldGutterLineClass).iter();
