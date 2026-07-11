@@ -13,13 +13,24 @@
 import type { MarkdownError } from "../markdown/errors.js";
 import {
   type CaretApplyMessage,
+  type ContentWidthPref,
   type DocumentMessage,
   type EditorConfigMessage,
   type EditRejectedMessage,
+  type FontFamilyPref,
+  type FontSizePref,
   type ImageWriteResultMessage,
+  type LineHeightPref,
   PROTOCOL_VERSION,
   type ThemeMessage,
 } from "../shared/protocol.js";
+
+export type EditorPrefs = {
+  fontFamily: FontFamilyPref;
+  fontSize: FontSizePref;
+  lineHeight: LineHeightPref;
+  contentWidth: ContentWidthPref;
+};
 
 export type BuildDocumentMessageInput = {
   content: string;
@@ -72,9 +83,19 @@ export function buildImageWriteResultMessage(
  *  full document reseed. */
 export function buildEditorConfigMessage(
   lintGutter: boolean,
-  spellcheck: boolean
+  spellcheck: boolean,
+  prefs: EditorPrefs
 ): EditorConfigMessage {
-  return { protocol: PROTOCOL_VERSION, type: "editor-config", lintGutter, spellcheck };
+  return {
+    protocol: PROTOCOL_VERSION,
+    type: "editor-config",
+    lintGutter,
+    spellcheck,
+    fontFamily: prefs.fontFamily,
+    fontSize: prefs.fontSize,
+    lineHeight: prefs.lineHeight,
+    contentWidth: prefs.contentWidth,
+  };
 }
 
 /** Construct a CaretApply message carrying a 0-based caret. Pushed once on the

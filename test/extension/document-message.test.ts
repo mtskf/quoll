@@ -78,31 +78,44 @@ describe("buildThemeMessage", () => {
 });
 
 describe("buildEditorConfigMessage", () => {
-  it("builds an editor-config message with the given flags", () => {
-    expect(buildEditorConfigMessage(true, true)).toEqual({
+  const prefs = {
+    fontFamily: "serif" as const,
+    fontSize: "large" as const,
+    lineHeight: "compact" as const,
+    contentWidth: "wide" as const,
+  };
+
+  it("builds an editor-config message with the given flags and presets", () => {
+    expect(buildEditorConfigMessage(true, true, prefs)).toEqual({
       protocol: PROTOCOL_VERSION,
       type: "editor-config",
       lintGutter: true,
       spellcheck: true,
+      fontFamily: "serif",
+      fontSize: "large",
+      lineHeight: "compact",
+      contentWidth: "wide",
     });
-    expect(buildEditorConfigMessage(false, false).lintGutter).toBe(false);
-    expect(buildEditorConfigMessage(false, false).spellcheck).toBe(false);
   });
 
-  it("carries the two flags independently", () => {
-    expect(buildEditorConfigMessage(true, false)).toMatchObject({
-      lintGutter: true,
-      spellcheck: false,
-    });
-    expect(buildEditorConfigMessage(false, true)).toMatchObject({
-      lintGutter: false,
-      spellcheck: true,
-    });
+  it("carries the boolean flags through independently of the presets", () => {
+    const msg = buildEditorConfigMessage(false, false, prefs);
+    expect(msg.lintGutter).toBe(false);
+    expect(msg.spellcheck).toBe(false);
   });
 
   it("emits exactly the editor-config key set (no extra fields on the wire)", () => {
-    expect(Object.keys(buildEditorConfigMessage(false, false)).sort()).toEqual(
-      ["lintGutter", "protocol", "spellcheck", "type"].sort()
+    expect(Object.keys(buildEditorConfigMessage(false, false, prefs)).sort()).toEqual(
+      [
+        "contentWidth",
+        "fontFamily",
+        "fontSize",
+        "lineHeight",
+        "lintGutter",
+        "protocol",
+        "spellcheck",
+        "type",
+      ].sort()
     );
   });
 });
