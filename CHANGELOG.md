@@ -5,6 +5,7 @@ All notable changes to Quoll are documented here.
 ## 0.1.41 — 2026-07-11
 
 ### Fixed
+- cat title-bar button swaps to Quoll in place instead of opening a second tab (#193)
 
 - The cat title-bar button on a Markdown text tab now swaps that tab to the Quoll editor in place, instead of leaving the text tab open and adding a second Quoll tab. It mirrors the file-code button's Quoll→text swap, so switching either direction keeps you on a single tab.
 
