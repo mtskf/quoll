@@ -64,3 +64,6 @@ perf-fixtures/
 # @vitest/browser failure artifacts (screenshots + attachments)
 **/__screenshots__/
 .vitest-attachments/
+
+# Visual-smoke screenshots (pnpm smoke:visual — scripts/preview/visual-smoke.mjs)
+artifacts/
