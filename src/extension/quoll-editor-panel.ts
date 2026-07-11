@@ -51,7 +51,11 @@ import {
 
 import { createIncrementalWriteValidator } from "../markdown/validate-for-write.js";
 import { perfReport } from "../shared/perf.js";
-import { isWebviewToHost } from "../shared/protocol.js";
+import {
+  buildFormatCommandMessage,
+  type FormatCommandMessage,
+  isWebviewToHost,
+} from "../shared/protocol.js";
 import { canHostWrite } from "./can-host-write.js";
 import { createCaretHandoffWiring } from "./caret-handoff-wiring.js";
 import { createContextHandoffWiring } from "./context-handoff-wiring.js";
@@ -68,6 +72,7 @@ import { createEditSettledBarrier } from "./edit-settled-barrier.js";
 import { createEditorConfigWiring } from "./editor-config-wiring.js";
 import { takeSwitchCaret } from "./editor-switch-caret.js";
 import { createEffectExecutor } from "./effect-executor.js";
+import { clearActiveFormatPoster, setActiveFormatPoster } from "./format-command.js";
 import { getNonce } from "./get-nonce.js";
 import { handleOpenExternal } from "./handle-open-external.js";
 import { handleOpenLink } from "./handle-open-link.js";
@@ -421,6 +426,19 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
         }),
     });
 
+    // Forward inline-format actions from the global `quoll.format` command to
+    // this webview when the panel is the active editor. Bound once so the
+    // identity-guarded clear (below) matches on the active edge / dispose.
+    const formatPoster = (action: FormatCommandMessage["action"]): void => {
+      post(buildFormatCommandMessage(action));
+    };
+    // onDidChangeViewState does NOT fire for the initial active state, so
+    // register once here if this panel opens active (the edge handler owns it
+    // thereafter). This runs after `post`/`formatPoster` are defined.
+    if (webviewPanel.active) {
+      setActiveFormatPoster(formatPoster);
+    }
+
     // Image-write executor. Orthogonal to the document-text write lock (it writes
     // a SEPARATE binary file, not the TextDocument), so it does NOT enter the
     // host-session core. The VS Code wiring (assets/ dir create + write, override
@@ -550,6 +568,28 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
       push: () => post(buildEditorConfigMessage(readLintGutterEnabled(), readSpellcheckEnabled())),
     });
     disposables.push(editorConfig);
+
+    // Active-edge tracking for the `quoll.format` command's forward target.
+    // PR6 (#179) moved the status-bar + caret-apply active edge into
+    // createCaretHandoffWiring (above); this small listener owns ONLY the format
+    // poster — set while this panel is the active editor, clear otherwise. Both
+    // ops are idempotent (set overwrites the global; clear is identity-guarded),
+    // so no inactive→active edge detection is needed. Kept separate from the
+    // caret wiring so the inline-format feature stays single-responsibility.
+    webviewPanel.onDidChangeViewState(
+      (e) => {
+        if (disposed) {
+          return;
+        }
+        if (e.webviewPanel.active) {
+          setActiveFormatPoster(formatPoster);
+        } else {
+          clearActiveFormatPoster(formatPoster);
+        }
+      },
+      undefined,
+      disposables
+    );
 
     // --- Dirty-doc on-disk conflict watcher ---------------------------------
     // The VS Code wiring (file-scheme gate, parent-folder fs watcher, disk-read /
@@ -816,6 +856,10 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
       // the core's `disposed` transition (clears the write lock so any late
       // settlement is a no-op), then tear down.
       disposed = true;
+      // Clear the format poster immediately so `quoll.format` can never forward
+      // to a disposing panel. Primary guard; `post` (createEffectExecutor) is a
+      // backstop that self-suppresses after dispose (effect-executor.ts).
+      clearActiveFormatPoster(formatPoster);
       dispatch({ type: "disposed" });
       // Clear THIS document's lint diagnostics when its editor closes. The
       // collection itself outlives the panel (disposed via context.subscriptions on

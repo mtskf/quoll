@@ -63,6 +63,10 @@
       {
         "command": "quoll.toggleEditor",
         "title": "Quoll: Toggle Between Rich and Text Editor"
+      },
+      {
+        "command": "quoll.format",
+        "title": "Quoll: Format Selection (bold / italic / code / strike / link)"
       }
     ],
     "customEditors": [
@@ -103,6 +107,41 @@
         "key": "ctrl+alt+e",
         "mac": "cmd+alt+e",
         "when": "editorLangId == markdown && editorTextFocus && !inDiffEditor"
+      },
+      {
+        "command": "quoll.format",
+        "args": "bold",
+        "key": "ctrl+b",
+        "mac": "cmd+b",
+        "when": "activeCustomEditorId == 'quoll.editMarkdown'"
+      },
+      {
+        "command": "quoll.format",
+        "args": "italic",
+        "key": "ctrl+i",
+        "mac": "cmd+i",
+        "when": "activeCustomEditorId == 'quoll.editMarkdown'"
+      },
+      {
+        "command": "quoll.format",
+        "args": "code",
+        "key": "ctrl+e",
+        "mac": "cmd+e",
+        "when": "activeCustomEditorId == 'quoll.editMarkdown'"
+      },
+      {
+        "command": "quoll.format",
+        "args": "strike",
+        "key": "ctrl+shift+x",
+        "mac": "cmd+shift+x",
+        "when": "activeCustomEditorId == 'quoll.editMarkdown'"
+      },
+      {
+        "command": "quoll.format",
+        "args": "link",
+        "key": "ctrl+k",
+        "mac": "cmd+k",
+        "when": "activeCustomEditorId == 'quoll.editMarkdown'"
       }
     ]
   },
