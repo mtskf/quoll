@@ -3,9 +3,10 @@
 // .quoll-editor host. Hovering the toggle opens the sidebar; the pointer
 // leaving it (grace-delayed), a heading jump, or Mod-Alt-o closes it — unless
 // PINNED via the header pin button. Pinned mode swaps the absolute overlay for
-// a static 2-column flex layout. CSS owns ALL geometry off three host classes
-// (quoll-outline-open / quoll-outline-pinned / quoll-outline-collapsed); this
-// module owns state + DOM.
+// a static 2-column flex layout. CSS owns ALL geometry off two host classes
+// (quoll-outline-open / quoll-outline-pinned); this module owns state + DOM.
+// Individual headings with children collapse their own subtree via per-row
+// twisties (no whole-section fold — the OUTLINE header is a static label).
 // View-only: clicking a heading dispatches a SELECTION-ONLY transaction (no
 // `changes`), so the round-trip is byte-identical and no Edit is posted. All
 // rebuild work is gated on the sidebar being open AND debounced, so the
@@ -75,7 +76,6 @@ const HOVER_OPEN_DELAY_MS = 120;
 /** Host classes CSS keys ALL open/pinned geometry off. Exported for tests. */
 export const OUTLINE_OPEN_CLASS = "quoll-outline-open";
 export const OUTLINE_PINNED_CLASS = "quoll-outline-pinned";
-export const OUTLINE_COLLAPSED_CLASS = "quoll-outline-collapsed";
 
 /** Runtime-resizable sidebar width bounds (px). The stylesheet default
  *  (--quoll-outline-sidebar-width: 260px) applies until the user drags; a drag
@@ -91,12 +91,20 @@ const MAX_WIDTH_PX = 600;
  *  without a nested schema (one key today). */
 const WIDTH_STATE_KEY = "outlineWidthPx";
 
+/** A rendered outline row + its structural facts, for post-render visibility
+ *  updates that never rebuild the DOM (collapse toggles reuse these refs). */
+interface RowRef {
+  heading: OutlineHeading;
+  hasChildren: boolean;
+  li: HTMLLIElement;
+  twistie: HTMLButtonElement | null;
+}
+
 class OutlinePanel implements PluginValue {
   private readonly host: HTMLElement;
   private readonly toggleEl: HTMLButtonElement;
   private readonly sidebarEl: HTMLElement;
   private readonly pinEl: HTMLButtonElement;
-  private readonly headerToggleEl: HTMLButtonElement;
   private readonly listEl: HTMLElement;
   private readonly resizeEl: HTMLElement;
   private readonly settingsToggleEl: HTMLButtonElement;
@@ -118,9 +126,14 @@ class OutlinePanel implements PluginValue {
   private open = false;
   /** Invariant: pinned ⇒ open (closing by any path unpins). */
   private pinned = false;
-  /** Section collapse (session-local, independent of open/pinned). */
-  private collapsed = false;
   private headings: OutlineHeading[] = [];
+  /** Session-local per-heading collapse: `from` offsets of collapsed headings.
+   *  Positional identity (`from`) per build-outline's contract — session-local &
+   *  never persisted (no protocol / storage). Pruned on each rebuild to parent
+   *  headings that still exist, so it never grows unbounded. */
+  private readonly collapsedFroms = new Set<number>();
+  /** Rendered rows for post-render visibility refresh (see refreshVisibility). */
+  private rows: RowRef[] = [];
   /** Signature of the last rendered list; null forces the first render. */
   private renderedSignature: string | null = null;
   private rebuildTimer: ReturnType<typeof setTimeout> | null = null;
@@ -197,32 +210,17 @@ class OutlinePanel implements PluginValue {
     this.pinEl.addEventListener("mousedown", (e) => e.preventDefault());
     this.pinEl.addEventListener("click", (e) => {
       e.preventDefault();
-      e.stopPropagation(); // pinning must never toggle the header collapse
       this.setPinned(!this.pinned);
     });
-    // Header toggle: a native button (keyboard-activable for free) holding the
-    // twistie chevron + the OUTLINE label — clicking it collapses/expands the
-    // section like a VS Code side-bar section header. The pin is a SIBLING to
-    // its right, so a pin click never reaches this handler; the pin also
-    // stopPropagation's defensively.
-    this.headerToggleEl = document.createElement("button");
-    this.headerToggleEl.type = "button";
-    this.headerToggleEl.className = "quoll-outline-header-toggle";
-    this.headerToggleEl.setAttribute("aria-expanded", "true");
-    this.headerToggleEl.appendChild(createChevronIcon());
+    // Static "OUTLINE" section label — a plain, non-interactive title (the panel
+    // itself has no whole-section fold; only per-heading twisties collapse
+    // subtrees). Title leads, pin trails: matches VS Code side-panel header order
+    // (title left, action button right). The pin is pushed to the right edge by
+    // margin-left:auto (styles.css).
     const titleEl = document.createElement("span");
     titleEl.className = "quoll-outline-title";
     titleEl.textContent = "Outline";
-    this.headerToggleEl.appendChild(titleEl);
-    this.headerToggleEl.addEventListener("mousedown", (e) => e.preventDefault());
-    this.headerToggleEl.addEventListener("click", (e) => {
-      e.preventDefault();
-      this.setCollapsed(!this.collapsed);
-    });
-    // Title-region leads, pin trails: matches VS Code side-panel header order
-    // (title left, action button right) and keeps tab order visual-left-to-right.
-    // The pin is pushed to the right edge by margin-left:auto (styles.css).
-    header.appendChild(this.headerToggleEl);
+    header.appendChild(titleEl);
     header.appendChild(this.pinEl);
 
     this.listEl = document.createElement("ul");
@@ -326,7 +324,7 @@ class OutlinePanel implements PluginValue {
     // Clear the host flags so a lingering host node (tests, re-mount) never
     // inherits a stale open/pinned layout — mirrors FloatingToolbarScroll's
     // destroy hygiene.
-    this.host.classList.remove(OUTLINE_OPEN_CLASS, OUTLINE_PINNED_CLASS, OUTLINE_COLLAPSED_CLASS);
+    this.host.classList.remove(OUTLINE_OPEN_CLASS, OUTLINE_PINNED_CLASS);
   }
 
   toggle(): void {
@@ -451,12 +449,6 @@ class OutlinePanel implements PluginValue {
     // happens with the pointer inside the sidebar, so the normal pointer-leave
     // path closes it afterwards; a keyboard unpin never surprise-closes a
     // surface the user is focused in.
-  }
-
-  private setCollapsed(collapsed: boolean): void {
-    this.collapsed = collapsed;
-    this.host.classList.toggle(OUTLINE_COLLAPSED_CLASS, collapsed);
-    this.headerToggleEl.setAttribute("aria-expanded", String(!collapsed));
   }
 
   private scheduleOpen(): void {
@@ -613,6 +605,7 @@ class OutlinePanel implements PluginValue {
 
   private renderList(): void {
     this.listEl.textContent = "";
+    this.rows = [];
     if (this.headings.length === 0) {
       const empty = document.createElement("li");
       empty.className = "quoll-outline-empty";
@@ -620,12 +613,43 @@ class OutlinePanel implements PluginValue {
       this.listEl.appendChild(empty);
       return;
     }
-    for (const heading of this.headings) {
+    const hasChildren = this.computeHasChildren();
+    // Prune stale collapse entries: keep only froms that are still a parent
+    // heading, so the set tracks the live document and never grows unbounded.
+    const liveParents = new Set(this.headings.filter((_, i) => hasChildren[i]).map((h) => h.from));
+    for (const from of [...this.collapsedFroms]) {
+      if (!liveParents.has(from)) {
+        this.collapsedFroms.delete(from);
+      }
+    }
+    this.headings.forEach((heading, i) => {
       const li = document.createElement("li");
+      li.className = "quoll-outline-row";
+      // Depth indent rides the row; the twistie column is a fixed inset inside it.
+      li.style.paddingLeft = `${BASE_PAD_PX + heading.depth * INDENT_PX}px`;
+
+      let twistie: HTMLButtonElement | null = null;
+      if (hasChildren[i]) {
+        twistie = document.createElement("button");
+        twistie.type = "button";
+        twistie.className = "quoll-outline-twistie";
+        twistie.appendChild(createChevronIcon());
+        twistie.addEventListener("mousedown", (e) => e.preventDefault());
+        twistie.addEventListener("click", (e) => {
+          e.preventDefault();
+          this.toggleCollapse(heading.from);
+        });
+        li.appendChild(twistie);
+      } else {
+        const spacer = document.createElement("span");
+        spacer.className = "quoll-outline-twistie-spacer";
+        spacer.setAttribute("aria-hidden", "true");
+        li.appendChild(spacer);
+      }
+
       const btn = document.createElement("button");
       btn.type = "button";
       btn.className = `quoll-outline-item level-${heading.level}`;
-      btn.style.paddingLeft = `${BASE_PAD_PX + heading.depth * INDENT_PX}px`;
       btn.textContent = heading.text.length > 0 ? heading.text : "(untitled)";
       btn.dataset.from = String(heading.from);
       btn.addEventListener("mousedown", (e) => e.preventDefault());
@@ -634,7 +658,52 @@ class OutlinePanel implements PluginValue {
         this.jumpTo(heading);
       });
       li.appendChild(btn);
+
       this.listEl.appendChild(li);
+      this.rows.push({ heading, hasChildren: hasChildren[i], li, twistie });
+    });
+    this.refreshVisibility();
+  }
+
+  /** hasChildren[i] ⇔ the next heading is deeper (its subtree starts under i). */
+  private computeHasChildren(): boolean[] {
+    return this.headings.map((h, i) => {
+      const next = this.headings[i + 1];
+      return next !== undefined && next.depth > h.depth;
+    });
+  }
+
+  /** Flip a heading's collapse state, then re-hide/reveal + re-sync active. */
+  private toggleCollapse(from: number): void {
+    if (this.collapsedFroms.has(from)) {
+      this.collapsedFroms.delete(from);
+    } else {
+      this.collapsedFroms.add(from);
+    }
+    this.refreshVisibility();
+    this.updateActive();
+  }
+
+  /** Walk the flat rows with a depth stack: any row deeper than the shallowest
+   *  active collapsed ancestor is hidden. Syncs each twistie's aria state. No DOM
+   *  rebuild — only li.hidden + aria flip, so it is cheap on every toggle. */
+  private refreshVisibility(): void {
+    let collapseDepth: number | null = null; // depth of the hiding ancestor, or null
+    for (const row of this.rows) {
+      const depth = row.heading.depth;
+      if (collapseDepth !== null && depth <= collapseDepth) {
+        collapseDepth = null; // exited the collapsed subtree
+      }
+      const hidden = collapseDepth !== null;
+      row.li.hidden = hidden;
+      const collapsed = this.collapsedFroms.has(row.heading.from);
+      if (row.twistie !== null) {
+        row.twistie.setAttribute("aria-expanded", String(!collapsed));
+        row.twistie.setAttribute("aria-label", collapsed ? "Expand section" : "Collapse section");
+      }
+      if (!hidden && collapsed && row.hasChildren) {
+        collapseDepth = depth; // hide this row's descendants
+      }
     }
   }
 
@@ -666,10 +735,26 @@ class OutlinePanel implements PluginValue {
         break;
       }
     }
+    // If the active heading's row is hidden (inside a collapsed subtree), walk up
+    // to the nearest VISIBLE ancestor so the highlight never lands on a hidden
+    // row — we keep the nearest visible ancestor lit rather than auto-expanding
+    // (auto-expand would undo a deliberate collapse on every caret move).
+    if (activeFrom !== null) {
+      const idx = this.rows.findIndex((r) => r.heading.from === activeFrom);
+      if (idx !== -1 && this.rows[idx].li.hidden) {
+        for (let i = idx - 1; i >= 0; i--) {
+          if (!this.rows[i].li.hidden) {
+            activeFrom = this.rows[i].heading.from;
+            break;
+          }
+        }
+      }
+    }
     for (const item of this.listEl.querySelectorAll<HTMLElement>(".quoll-outline-item")) {
       const isActive = activeFrom !== null && item.dataset.from === String(activeFrom);
       item.classList.toggle("active", isActive);
-      if (isActive) {
+      // Skip scroll for a hidden row (its parent li is collapsed away).
+      if (isActive && (item.parentElement as HTMLElement | null)?.hidden !== true) {
         item.scrollIntoView({ block: "nearest" });
       }
     }

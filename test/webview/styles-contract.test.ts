@@ -625,21 +625,27 @@ describe("styles.css — outline sidebar", () => {
     expect(title).toMatch(/font-weight\s*:\s*400/);
   });
 
-  it("collapses the section body via the host class and rotates the twistie", () => {
-    const collapsedList =
-      live.match(/\.quoll-outline-collapsed\s+\.quoll-outline-list[^{]*\{[^}]*\}/)?.[0] ?? "";
-    expect(collapsedList).toMatch(/display\s*:\s*none/);
-    const chevron =
-      live.match(
-        /\.quoll-outline-collapsed\s+\.quoll-outline-header-toggle\s+svg\s*\{[^}]*\}/
-      )?.[0] ?? "";
-    expect(chevron).toMatch(/transform\s*:\s*rotate\(0deg\)/);
-    const expanded = live.match(/\.quoll-outline-header-toggle\s+svg\s*\{[^}]*\}/)?.[0] ?? "";
+  it("rotates the per-heading twistie chevron by its aria-expanded state", () => {
+    // Expanded rows point the chevron down (90deg); collapsed rows point it right
+    // (0deg), keyed off the twistie button's aria-expanded attribute.
+    const expanded = live.match(/\.quoll-outline-twistie\s+svg\s*\{[^}]*\}/)?.[0] ?? "";
     expect(expanded).toMatch(/transform\s*:\s*rotate\(90deg\)/);
-    const collapsedHandle =
-      live.match(/\.quoll-outline-collapsed\s+\.quoll-outline-resize-handle\s*\{[^}]*\}/)?.[0] ??
-      "";
-    expect(collapsedHandle).toMatch(/display\s*:\s*none/);
+    const collapsed =
+      live.match(/\.quoll-outline-twistie\[aria-expanded="false"\]\s+svg\s*\{[^}]*\}/)?.[0] ?? "";
+    expect(collapsed).toMatch(/transform\s*:\s*rotate\(0deg\)/);
+    // A leaf row's spacer holds the same 16px column so sibling text aligns.
+    const spacer = live.match(/\.quoll-outline-twistie-spacer\s*\{[^}]*\}/)?.[0] ?? "";
+    expect(spacer).toMatch(/flex\s*:\s*0\s+0\s+16px/);
+  });
+
+  it("hides a collapsed descendant row (the [hidden] rule beats .quoll-outline-row's display:flex)", () => {
+    // .quoll-outline-row { display: flex } has the same specificity as the UA
+    // [hidden]{display:none}; the author sheet would win and keep hidden rows on
+    // screen. This higher-specificity rule restores the collapse. Removing it
+    // reintroduces the "collapsed rows still visible" bug (invisible to happy-dom,
+    // which has no layout engine).
+    const hiddenRow = live.match(/\.quoll-outline-row\[hidden\]\s*\{[^}]*\}/)?.[0] ?? "";
+    expect(hiddenRow).toMatch(/display\s*:\s*none/);
   });
 
   it("the sidebar consumes the tokens and slides in from the left edge", () => {

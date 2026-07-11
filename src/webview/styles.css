@@ -987,7 +987,7 @@ html body {
     .quoll-switch-editor-toggle,
     .quoll-outline-sidebar,
     .quoll-outline-open .quoll-outline-sidebar,
-    .quoll-outline-header-toggle svg,
+    .quoll-outline-twistie svg,
     .quoll-chrome-hidden .quoll-outline-toggle,
     .quoll-chrome-hidden .quoll-switch-editor-toggle {
       transition: none;
@@ -1048,38 +1048,6 @@ html body {
     text-transform: uppercase;
     letter-spacing: normal;
   }
-  .quoll-outline-header-toggle {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    flex: 1 1 auto;
-    min-width: 0; /* let the title ellipsis engage instead of overflowing */
-    padding: 0;
-    border: none;
-    background: transparent;
-    color: inherit;
-    font: inherit;
-    text-align: left;
-    cursor: pointer;
-  }
-  .quoll-outline-header-toggle svg {
-    flex: 0 0 auto;
-    width: 16px;
-    height: 16px;
-    color: var(--vscode-icon-foreground, var(--vscode-foreground));
-    transition: transform 0.15s ease;
-    transform: rotate(90deg); /* expanded: chevron-right rotated to point down */
-  }
-  .quoll-outline-collapsed .quoll-outline-header-toggle svg {
-    transform: rotate(0deg); /* collapsed: chevron points right */
-  }
-  .quoll-outline-collapsed .quoll-outline-list,
-  .quoll-outline-collapsed .quoll-outline-footer {
-    display: none;
-  }
-  .quoll-outline-collapsed .quoll-outline-resize-handle {
-    display: none;
-  }
 
   .quoll-outline-list {
     flex: 1 1 auto;
@@ -1089,11 +1057,64 @@ html body {
     list-style: none;
     font-size: calc(var(--vscode-font-size) * 0.92);
   }
+  /* Each heading is a flex row: a fixed-width twistie column (chevron button for
+   * a parent, blank spacer for a leaf so sibling text aligns) + the jump button.
+   * The depth indent is set inline per row by outline-panel.ts; the row owns the
+   * hover / active highlight so it spans the full width like a VS Code tree row. */
+  .quoll-outline-row {
+    display: flex;
+    align-items: center;
+  }
+  /* A collapsed ancestor hides its descendant rows via the `hidden` attribute
+   * (outline-panel.ts sets li.hidden). The rule above (`.quoll-outline-row`,
+   * specificity 0,1,0) would otherwise beat the UA `[hidden]{display:none}` (same
+   * specificity, author sheet wins), leaving hidden rows on screen — so restore
+   * display:none with a higher-specificity author rule. */
+  .quoll-outline-row[hidden] {
+    display: none;
+  }
+  .quoll-outline-row:hover {
+    background: var(--vscode-list-hoverBackground, rgb(128 128 128 / 15%));
+  }
+  .quoll-outline-row:has(> .quoll-outline-item.active) {
+    background: var(--vscode-list-activeSelectionBackground, var(--vscode-list-hoverBackground, rgb(128 128 128 / 25%)));
+  }
+  .quoll-outline-row:has(> .quoll-outline-item.active) .quoll-outline-item {
+    color: var(--vscode-list-activeSelectionForeground, inherit);
+  }
+  .quoll-outline-twistie {
+    flex: 0 0 16px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 16px;
+    height: 16px;
+    padding: 0;
+    border: none;
+    background: transparent;
+    color: var(--vscode-icon-foreground, var(--vscode-foreground));
+    cursor: pointer;
+  }
+  .quoll-outline-twistie svg {
+    width: 14px;
+    height: 14px;
+    transition: transform 0.15s ease;
+    transform: rotate(90deg); /* expanded: chevron-right rotated to point down */
+  }
+  .quoll-outline-twistie[aria-expanded="false"] svg {
+    transform: rotate(0deg); /* collapsed: chevron points right */
+  }
+  .quoll-outline-twistie-spacer {
+    flex: 0 0 16px;
+    width: 16px;
+    height: 16px;
+  }
   .quoll-outline-item {
     display: block;
     box-sizing: border-box;
-    width: 100%;
-    padding: 3px 10px;
+    flex: 1 1 auto;
+    min-width: 0;
+    padding: 3px 10px 3px 4px;
     border: none;
     background: transparent;
     color: inherit;
@@ -1103,13 +1124,6 @@ html body {
     overflow: hidden;
     text-overflow: ellipsis;
     cursor: pointer;
-  }
-  .quoll-outline-item:hover {
-    background: var(--vscode-list-hoverBackground, rgb(128 128 128 / 15%));
-  }
-  .quoll-outline-item.active {
-    background: var(--vscode-list-activeSelectionBackground, var(--vscode-list-hoverBackground, rgb(128 128 128 / 25%)));
-    color: var(--vscode-list-activeSelectionForeground, inherit);
   }
   .quoll-outline-item:focus-visible {
     outline: 1px solid var(--vscode-focusBorder);

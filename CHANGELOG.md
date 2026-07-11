@@ -2,6 +2,16 @@
 
 All notable changes to Quoll are documented here.
 
+## 0.1.40 — 2026-07-11
+
+### Added
+
+- Collapse and expand individual headings in the document outline: any heading that has sub-headings now shows a chevron — like the Explorer file tree — that folds just that heading's children (mouse or keyboard). Leaf headings stay aligned without one.
+
+### Changed
+
+- The outline's "OUTLINE" header is now a plain label; folding happens per heading instead of collapsing the whole panel.
+
 ## 0.1.39 — 2026-07-11
 
 ### Added
