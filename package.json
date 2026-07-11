@@ -306,6 +306,7 @@
     "check:todo-hygiene": "node scripts/check-todo-hygiene.mjs",
     "gen:perf-fixtures": "node scripts/gen-perf-fixtures.mjs",
     "preview": "node scripts/preview/serve.mjs",
+    "smoke:visual": "node scripts/preview/visual-smoke.mjs",
     "test:unit": "vitest run",
     "test:browser": "vitest run --config vitest.browser.config.ts",
     "test:e2e": "pnpm build && pnpm test:e2e:run",

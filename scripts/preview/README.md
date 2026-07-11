@@ -32,6 +32,28 @@ On start it prints `http://localhost:4599/`. Open it in Chrome. Flags:
 | `--config <path>`| `scripts/preview/preview.config.mjs`| Alternate config module.                           |
 | `--no-build`     | (build)                             | Skip the esbuild step and reuse existing `dist/webview`. |
 
+## Visual smoke (`pnpm smoke:visual`)
+
+`visual-smoke.mjs` drives this harness in **headless Chromium** (via `playwright`, already a
+devDependency — no new deps) to automate the *render-appearance* half of the manual visual smoke:
+
+```bash
+pnpm smoke:visual
+```
+
+It builds the real bundle, serves the combined fixture `scripts/preview/fixtures/visual-smoke.md`
+(the single source of truth the HUMAN smoke entry in `.claude/docs/TODO.md` points to) on an
+**ephemeral port** in light + dark, and asserts one DOM / `getComputedStyle` check per construct:
+frontmatter block, table (escaped `\|` stays in one cell), task checkboxes, allowlisted `<img>` vs an
+inert `javascript:` placeholder, fenced code + its collapse bar, and the per-theme `<html>` class.
+
+Screenshots land in `artifacts/visual-smoke/` (`light.png`, `dark.png`, `fence-collapsed.png`,
+git-ignored) — eyeball those for anything the assertions don't cover. Any failed assertion prints a
+named `❌ <name>: <msg>` and the command **exits non-zero**, so a render regression is loud.
+
+It does **not** cover the editing/round-trip half (typing, save, byte-identity, CRLF, caret reveal
+toggle) — that still needs the real VS Code host and stays in the HUMAN smoke entry.
+
 ## Adding variations (no restart)
 
 Edit `preview.config.mjs` and refresh the browser — the config is re-read on

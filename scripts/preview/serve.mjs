@@ -108,27 +108,36 @@ function escapeScript(js) {
   return String(js).replace(/<\/(script)/gi, "<\\/$1");
 }
 
-// Read the config FRESH each request (cache-busted dynamic import) so editing
-// preview.config.mjs + refreshing the browser shows new variations without a
-// server restart. Resolves the doc content (positional override > cfg.doc file
-// > cfg.content inline).
-async function loadConfig(opts) {
-  const mod = await import(`${pathToFileURL(opts.config).href}?t=${Date.now()}`);
-  const cfg = mod.default ?? {};
+function normaliseConfig(cfg) {
   const theme = cfg.theme === "dark" ? "dark" : "light";
   const variations =
     Array.isArray(cfg.variations) && cfg.variations.length > 0
       ? cfg.variations
       : [{ label: "baseline", css: "" }];
+  const content = typeof cfg.content === "string" ? cfg.content : "";
+  return { theme, variations, content };
+}
 
-  let content = "";
+// Read the config FRESH each request (cache-busted dynamic import) so editing
+// preview.config.mjs + refreshing the browser shows new variations without a
+// server restart. Resolves the doc content (positional override > cfg.doc file
+// > cfg.content inline). When `opts.override` is set (programmatic callers such
+// as the visual-smoke harness), it short-circuits the file read so the doc +
+// theme can be driven in-memory without a config file.
+async function loadConfig(opts) {
+  if (opts.override) {
+    return normaliseConfig(opts.override);
+  }
+  const mod = await import(`${pathToFileURL(opts.config).href}?t=${Date.now()}`);
+  const cfg = mod.default ?? {};
+
+  // Positional override > cfg.doc file > cfg.content inline.
+  let content = typeof cfg.content === "string" ? cfg.content : "";
   const docPath = opts.doc ?? (cfg.doc ? resolve(repoRoot, cfg.doc) : null);
   if (docPath) {
     content = await readFile(docPath, "utf8");
-  } else if (typeof cfg.content === "string") {
-    content = cfg.content;
   }
-  return { theme, variations, content };
+  return normaliseConfig({ ...cfg, content });
 }
 
 async function renderInstance(cfg, index) {
@@ -226,7 +235,11 @@ async function serveStatic(res, pathname) {
   res.end(body);
 }
 
-function createPreviewServer(opts) {
+// Returns an UNSTARTED http.Server. The `.listen()` call is the caller's job —
+// it lives only inside the guarded `main()` below or in an explicit importer
+// (the visual-smoke harness). Never bind a port at module top-level, so the
+// entrypoint guard stays the sole gate against an accidental server on import.
+export function createPreviewServer(opts) {
   return createServer(async (req, res) => {
     try {
       const url = new URL(req.url ?? "/", "http://localhost");
@@ -283,12 +296,19 @@ function listen(server, port, retriesLeft) {
   });
 }
 
+// Bundle the REAL webview via the shipped esbuild config (no loader/define
+// duplication), so importers (the visual-smoke harness) get a byte-faithful
+// dist/webview without shelling out to `pnpm build`.
+export async function buildWebviewBundle() {
+  const { webviewConfig } = createBuildConfigs({ production: false });
+  await esbuild.build(webviewConfig);
+}
+
 async function main() {
   const opts = parseArgs(process.argv.slice(2));
 
   if (opts.build) {
-    const { webviewConfig } = createBuildConfigs({ production: false });
-    await esbuild.build(webviewConfig);
+    await buildWebviewBundle();
   } else if (!existsSync(resolve(distWebview, "index.js"))) {
     console.error(
       "[preview] --no-build set but dist/webview/index.js is missing; build once first."
@@ -299,7 +319,12 @@ async function main() {
   listen(createPreviewServer(opts), opts.port, PORT_RETRIES);
 }
 
-main().catch((err) => {
-  console.error(err);
-  process.exit(1);
-});
+// Entrypoint guard: only start a server when run directly (`pnpm preview` /
+// `node scripts/preview/serve.mjs`), NOT when imported by the visual-smoke
+// harness. Pair with the "no top-level .listen()" invariant on createPreviewServer.
+if (process.argv[1] && pathToFileURL(process.argv[1]).href === import.meta.url) {
+  main().catch((err) => {
+    console.error(err);
+    process.exit(1);
+  });
+}
