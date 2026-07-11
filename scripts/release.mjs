@@ -94,8 +94,27 @@ function remoteTagExists(tag) {
  * Returns { ok, message? }.
  */
 function checkChangelog(version) {
-  const escaped = version.replace(/\./g, "\\.");
   const raw = readFileSync(changelogPath, "utf8");
+
+  // 0.1.0 and 0.1.1-0.1.36 predate the per-version heading convention (see
+  // the frozen headings' own explanatory notes) — verify against those
+  // fixed headings instead of demanding one that policy says won't exist.
+  if (version === "0.1.0") {
+    return raw.includes("## 0.1.0 — Initial public release")
+      ? { ok: true }
+      : { ok: false, message: 'CHANGELOG.md is missing the "## 0.1.0 — Initial public release" heading.' };
+  }
+  const [maj, min, patch] = version.split(".").map(Number);
+  if (maj === 0 && min === 1 && patch <= 36) {
+    return raw.includes("## 0.1.x (0.1.1 – 0.1.36, combined)")
+      ? { ok: true }
+      : {
+          ok: false,
+          message: `CHANGELOG.md is missing the frozen "## 0.1.x (0.1.1 – 0.1.36, combined)" heading that covers ${version}.`,
+        };
+  }
+
+  const escaped = version.replace(/\./g, "\\.");
   const headingRe = new RegExp(`^##\\s+${escaped}\\s+—\\s+\\d{4}-\\d{2}-\\d{2}\\s*$`, "m");
   if (!headingRe.test(raw)) {
     return {
