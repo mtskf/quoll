@@ -54,6 +54,7 @@ import { listIndentKeymap } from "./cm/list/list-indent-keymap.js";
 import { quollMarkdownLanguage } from "./cm/markdown.js";
 import { openExternalSinkFor, quollOpenExternalSink } from "./cm/open-external.js";
 import { quollOutline } from "./cm/outline/index.js";
+import { quollUpdateConfigSink, updateConfigSinkFor } from "./cm/outline/update-config-sink.js";
 import { htmlTablePaste, pasteUrlOverSelection } from "./cm/paste/index.js";
 import { detectLineSeparator, splitToCmText } from "./cm/seed.js";
 import { quollSwitchEditor } from "./cm/switch-editor.js";
@@ -580,6 +581,12 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
         // facet fall back to its no-op default → table links silently stop
         // opening on modifier-click (caught by the manual smoke below).
         quollOpenExternalSink.of(openExternalSinkFor(getHost())),
+        // Provide the update-config sink read by the outline settings popover
+        // (cm/outline/settings-popover.ts) — same injected-facet pattern as the
+        // open-external sink above (the popover lives in a ViewPlugin and reads
+        // this at click time). Forgetting it falls back to the no-op default →
+        // settings clicks silently do nothing.
+        quollUpdateConfigSink.of(updateConfigSinkFor(getHost())),
         // Cmd+Option+K → Claude Code handoff; Cmd+J → Codex handoff. One
         // Prec.high keymap (see cm/context-handoff.ts) scoped to CM focus — no
         // package.json keybinding. Cmd+Option+K never collides with Claude's
