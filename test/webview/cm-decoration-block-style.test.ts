@@ -795,10 +795,10 @@ describe("block-style — theme spec contract", () => {
       "calc(var(--quoll-block-radius, 8px) + var(--quoll-column-inset-right, 2px)) var(--quoll-block-radius, 8px)"
     );
     expect(open.paddingTop).toBe("var(--quoll-block-pad-y, 12px)");
-    // The BASE -open/-close keys carry NO external gap border — the gap rides a separate
-    // adjacency-gated rule (see the "external gap on the TRUE fenced-code boundary" test
-    // below), so a fenced block nested in a blockquote keeps this plain rounding with no
-    // mid-panel strip.
+    // The BASE -open/-close keys carry NO external gap border — the gap rides the separate
+    // builder-emitted `-outer-open` / `-outer-close` classes (see the "external gap on the
+    // TRUE fenced-code boundary" test below), so a fenced block nested in a blockquote keeps
+    // this plain rounding with no mid-panel strip.
     expect(open.borderTop).toBeUndefined();
     const close = blockStyleThemeSpec[".cm-line.quoll-fenced-code-close"];
     expect(close.borderBottomLeftRadius).toBe(
@@ -811,22 +811,18 @@ describe("block-style — theme spec contract", () => {
     expect(close.borderBottom).toBeUndefined();
   });
 
-  it("external gap on the TRUE fenced-code boundary only (adjacency-gated, radius-compensated)", () => {
+  it("external gap on the TRUE fenced-code boundary only (document-model outer class, radius-compensated)", () => {
     // The fenced-code panel breathes from the block directly above/below via the SAME
     // transparent --quoll-block-gap-y border + vertical-radius compensation the blockquote
-    // panel uses (blockEdgeGapCorner). The TOP gap rides a -open line NOT immediately
-    // preceded by a quote line and the BOTTOM gap a -close line NOT immediately followed by
-    // a quote line — so a fenced block NESTED in a blockquote (its inner edges co-carry
-    // .quoll-blockquote via the byLine union) is excluded, no strip splits the parent quote.
-    // The bottom selector ALSO excludes a following collapse bar so the gap lands on the bar
-    // footer (the real panel bottom), never the interior close-fence row above an expanded
-    // bar. Real-pixel gap + rounded corner + no-nested-strip + no-phantom-interior-gap are
-    // verified in the browser harness (happy-dom has no layout). REVERT-CHECK: dropping
-    // either gated rule, or the vertical compensation, turns these red.
-    const topGap =
-      blockStyleThemeSpec[
-        ".cm-line.quoll-fenced-code-open:not(.cm-line.quoll-blockquote + .cm-line.quoll-fenced-code-open)"
-      ];
+    // panel uses (blockEdgeGapCorner). The gap now rides the builder-emitted
+    // `.quoll-fenced-code-outer-open` / `-outer-close` classes (UNCONDITIONAL selectors —
+    // the block-style.ts builder decides the true outer boundary from the document model, so
+    // a fenced block nested in a quote / directly adjacent to another panel never gets the
+    // outer class and no strip splits the parent). The old rendered-sibling `:not(...)` gates
+    // are GONE (assert below). Real-pixel gap + rounded corner + no-nested-strip are verified
+    // in the browser harness (happy-dom has no layout). REVERT-CHECK: dropping either outer
+    // rule, or the vertical compensation, turns these red.
+    const topGap = blockStyleThemeSpec[".cm-line.quoll-fenced-code-outer-open"];
     expect(topGap.borderTop).toBe("var(--quoll-block-gap-y, 8px) solid transparent");
     expect(topGap.borderTopLeftRadius).toBe(
       "calc(var(--quoll-block-radius, 8px) + var(--quoll-column-inset-left, 6px)) calc(var(--quoll-block-radius, 8px) + var(--quoll-block-gap-y, 8px))"
@@ -834,10 +830,7 @@ describe("block-style — theme spec contract", () => {
     expect(topGap.borderTopRightRadius).toBe(
       "calc(var(--quoll-block-radius, 8px) + var(--quoll-column-inset-right, 2px)) calc(var(--quoll-block-radius, 8px) + var(--quoll-block-gap-y, 8px))"
     );
-    const bottomGap =
-      blockStyleThemeSpec[
-        ".cm-line.quoll-fenced-code-close:not(:has(+ .cm-line.quoll-blockquote)):not(:has(+ .quoll-fenced-collapse-bar))"
-      ];
+    const bottomGap = blockStyleThemeSpec[".cm-line.quoll-fenced-code-outer-close"];
     expect(bottomGap.borderBottom).toBe("var(--quoll-block-gap-y, 8px) solid transparent");
     expect(bottomGap.borderBottomLeftRadius).toBe(
       "calc(var(--quoll-block-radius, 8px) + var(--quoll-column-inset-left, 6px)) calc(var(--quoll-block-radius, 8px) + var(--quoll-block-gap-y, 8px))"
@@ -845,6 +838,19 @@ describe("block-style — theme spec contract", () => {
     expect(bottomGap.borderBottomRightRadius).toBe(
       "calc(var(--quoll-block-radius, 8px) + var(--quoll-column-inset-right, 2px)) calc(var(--quoll-block-radius, 8px) + var(--quoll-block-gap-y, 8px))"
     );
+    // The old rendered-sibling adjacency `:not(...)` gap selectors are REMOVED (cast: the
+    // typed spec no longer declares these keys, which is exactly the contract).
+    const removed = blockStyleThemeSpec as Record<string, unknown>;
+    expect(
+      removed[
+        ".cm-line.quoll-fenced-code-open:not(.cm-line.quoll-blockquote + .cm-line.quoll-fenced-code-open)"
+      ]
+    ).toBeUndefined();
+    expect(
+      removed[
+        ".cm-line.quoll-fenced-code-close:not(:has(+ .cm-line.quoll-blockquote)):not(:has(+ .quoll-fenced-collapse-bar))"
+      ]
+    ).toBeUndefined();
   });
 
   it("blockquote corners: token elliptical radius (background-clip compensation) + shared vertical padding on open/close only", () => {
@@ -866,9 +872,10 @@ describe("block-style — theme spec contract", () => {
       "calc(var(--quoll-block-radius, 8px) + var(--quoll-column-inset-right, 2px)) var(--quoll-block-radius, 8px)"
     );
     expect(open.paddingTop).toBe("var(--quoll-block-pad-y, 12px)");
-    // The base -open/-close rules carry NO external gap border — the gap rides a separate
-    // adjacency-gated rule (see the "external gap on the TRUE boundary" test below) so a
-    // nested quote's inner -open line keeps this plain rounding with no mid-panel strip.
+    // The base -open/-close rules carry NO external gap border — the gap rides the separate
+    // builder-emitted `-outer-open` / `-outer-close` classes (see the "external gap on the
+    // TRUE boundary" test below) so a nested quote's inner -open line keeps this plain
+    // rounding with no mid-panel strip.
     expect(open.borderTop).toBeUndefined();
     const close = blockStyleThemeSpec[".cm-line.quoll-blockquote-close"];
     expect(close.borderBottomLeftRadius).toBe(
@@ -881,23 +888,19 @@ describe("block-style — theme spec contract", () => {
     expect(close.borderBottom).toBeUndefined();
   });
 
-  it("external gap on the TRUE quote/callout boundary only (adjacency-gated, radius-compensated)", () => {
+  it("external gap on the TRUE quote/callout boundary only (document-model outer class, radius-compensated)", () => {
     // The panel breathes from the block directly above/below via a TRANSPARENT vertical
-    // border (--quoll-block-gap-y) shown through by background-clip:padding-box. It rides
-    // an adjacency-gated selector — a -open line NOT immediately preceded by another quote
-    // line (`.quoll-blockquote + .quoll-blockquote-open`), a -close NOT immediately
-    // followed by one — so a NESTED quote's inner edge (which also carries -open/-close
-    // while inside the parent panel) is excluded and no transparent strip splits the
-    // parent. Because the gap border is on the same axis the fill clips to, it eats the
-    // painted vertical corner radius, so the vertical radius term is bumped by
-    // --quoll-block-gap-y to keep a true --quoll-block-radius round. Real-pixel gap +
-    // rounded corner + no-nested-strip are verified in the browser harness (happy-dom has
-    // no layout). REVERT-CHECK: dropping either gated rule, or the vertical compensation,
-    // turns these red.
-    const topGap =
-      blockStyleThemeSpec[
-        ".cm-line.quoll-blockquote-open:not(.cm-line.quoll-blockquote + .cm-line.quoll-blockquote-open)"
-      ];
+    // border (--quoll-block-gap-y) shown through by background-clip:padding-box. It rides the
+    // builder-emitted `.quoll-blockquote-outer-open` / `-outer-close` classes (UNCONDITIONAL
+    // — the block-style.ts builder emits them only on the OUTERMOST quote's edges, so a
+    // NESTED quote's inner edge never gets the outer class and no transparent strip splits
+    // the parent). The old rendered-sibling `:not(...)` gates are GONE (assert below).
+    // Because the gap border is on the same axis the fill clips to, it eats the painted
+    // vertical corner radius, so the vertical radius term is bumped by --quoll-block-gap-y to
+    // keep a true --quoll-block-radius round. Real-pixel gap + rounded corner + no-nested-strip
+    // are verified in the browser harness. REVERT-CHECK: dropping either outer rule, or the
+    // vertical compensation, turns these red.
+    const topGap = blockStyleThemeSpec[".cm-line.quoll-blockquote-outer-open"];
     expect(topGap.borderTop).toBe("var(--quoll-block-gap-y, 8px) solid transparent");
     expect(topGap.borderTopLeftRadius).toBe(
       "calc(var(--quoll-block-radius, 8px) + var(--quoll-column-inset-left, 6px)) calc(var(--quoll-block-radius, 8px) + var(--quoll-block-gap-y, 8px))"
@@ -905,8 +908,7 @@ describe("block-style — theme spec contract", () => {
     expect(topGap.borderTopRightRadius).toBe(
       "calc(var(--quoll-block-radius, 8px) + var(--quoll-column-inset-right, 2px)) calc(var(--quoll-block-radius, 8px) + var(--quoll-block-gap-y, 8px))"
     );
-    const bottomGap =
-      blockStyleThemeSpec[".cm-line.quoll-blockquote-close:not(:has(+ .cm-line.quoll-blockquote))"];
+    const bottomGap = blockStyleThemeSpec[".cm-line.quoll-blockquote-outer-close"];
     expect(bottomGap.borderBottom).toBe("var(--quoll-block-gap-y, 8px) solid transparent");
     expect(bottomGap.borderBottomLeftRadius).toBe(
       "calc(var(--quoll-block-radius, 8px) + var(--quoll-column-inset-left, 6px)) calc(var(--quoll-block-radius, 8px) + var(--quoll-block-gap-y, 8px))"
@@ -914,6 +916,17 @@ describe("block-style — theme spec contract", () => {
     expect(bottomGap.borderBottomRightRadius).toBe(
       "calc(var(--quoll-block-radius, 8px) + var(--quoll-column-inset-right, 2px)) calc(var(--quoll-block-radius, 8px) + var(--quoll-block-gap-y, 8px))"
     );
+    // The old rendered-sibling adjacency `:not(...)` gap selectors are REMOVED (cast: the
+    // typed spec no longer declares these keys, which is exactly the contract).
+    const removed = blockStyleThemeSpec as Record<string, unknown>;
+    expect(
+      removed[
+        ".cm-line.quoll-blockquote-open:not(.cm-line.quoll-blockquote + .cm-line.quoll-blockquote-open)"
+      ]
+    ).toBeUndefined();
+    expect(
+      removed[".cm-line.quoll-blockquote-close:not(:has(+ .cm-line.quoll-blockquote))"]
+    ).toBeUndefined();
   });
 
   it("both panels source horizontal padding from ONE shared --quoll-block-pad-x token (unification contract)", () => {

@@ -254,12 +254,13 @@ export const quollTokenMarkers = syntaxHighlighting(
 // is pinned by cm-decoration-block-style.test.ts / cm-fenced-code-collapse.test.ts.
 //
 // The EXTERNAL gap that separates a panel from the block directly above/below it is
-// deliberately NOT here — it rides a SEPARATE, adjacency-gated rule (blockEdgeGapCorner
-// below) applied only to the panel's TRUE outer boundary lines. It cannot live on this
-// factory because -open/-close are applied to EVERY block node's first/last line,
+// deliberately NOT here — it rides a SEPARATE rule (blockEdgeGapCorner below) applied only
+// to the builder-emitted `.quoll-*-outer-open` / `-outer-close` classes. It cannot live on
+// this factory because -open/-close are applied to EVERY block node's first/last line,
 // including a NESTED quote's inner line (`> > inner` carries quoll-blockquote-open while
 // inside the outer panel — see block-style.ts) — a gap there would punch a transparent
-// strip through the middle of the parent panel.
+// strip through the middle of the parent panel. The block-style.ts builder decides the
+// TRUE outer boundary from the document model and emits the `-outer-*` class only there.
 const blockEdgeLeftRadius =
   "calc(var(--quoll-block-radius, 8px) + var(--quoll-column-inset-left, 6px)) var(--quoll-block-radius, 8px)";
 const blockEdgeRightRadius =
@@ -287,9 +288,10 @@ const blockEdgeCorner = (edge: "top" | "bottom"): Record<string, string> =>
 // horizontal alignment border eats the horizontal one — so the vertical radius term is
 // bumped by --quoll-block-gap-y here (mirroring the `+ inset` horizontal compensation on
 // blockEdge*Radius) to keep the painted corner a true --quoll-block-radius round. Applied
-// ONLY via adjacency-gated selectors (a -open line NOT preceded by a same-panel line, a
-// -close line NOT followed by one) so nested/continuation edges inside a panel are
-// untouched. Pinned by cm-decoration-block-style.test.ts.
+// ONLY via the builder-emitted `.quoll-*-outer-open` / `-outer-close` classes (the
+// block-style.ts decoration builder marks the panel's TRUE outer boundary from the document
+// model), so nested/continuation edges inside a panel are untouched. Pinned by
+// cm-decoration-block-style.test.ts.
 const blockEdgeGap = "var(--quoll-block-gap-y, 8px) solid transparent";
 const blockEdgeGapLeftRadius =
   "calc(var(--quoll-block-radius, 8px) + var(--quoll-column-inset-left, 6px)) calc(var(--quoll-block-radius, 8px) + var(--quoll-block-gap-y, 8px))";
@@ -358,31 +360,27 @@ export const blockStyleThemeSpec = {
   // Round the bottom + bottom breathing room only on the closing fence line
   // (blockEdgeCorner's bottom mirror).
   ".cm-line.quoll-fenced-code-close": blockEdgeCorner("bottom"),
-  // EXTERNAL gap at the fenced-code panel's TRUE top boundary — same mechanism as the
-  // blockquote top gap below (blockEdgeGapCorner: transparent --quoll-block-gap-y border
-  // + vertical-radius compensation). Gated so a fenced block NESTED in a blockquote (its
-  // open fence / migrated first body line co-carries `.quoll-blockquote` via the
-  // block-style byLine class union) does NOT punch a transparent strip through the outer
-  // quote panel — mirrors the blockquote gating but against `.quoll-blockquote` for the
-  // fenced-in-quote case. Covers the caret-out concealed-open case too: `-open` migrates
-  // onto the first body line whose previous rendered sibling is the zero-height concealed
-  // fence row (which carries `.quoll-blockquote` only inside a quote), so the gate fires
-  // correctly in both plain and nested cases. Higher specificity than the base -open rule,
-  // so the compensated radii win. Pinned by cm-decoration-block-style.test.ts.
-  ".cm-line.quoll-fenced-code-open:not(.cm-line.quoll-blockquote + .cm-line.quoll-fenced-code-open)":
-    blockEdgeGapCorner("top"),
-  // EXTERNAL gap at the TRUE bottom boundary: a -close line NOT immediately followed by a
-  // quote line (fenced-in-quote nesting) AND NOT immediately followed by a collapse bar.
-  // The only case a VISIBLE -close line is directly followed by a collapse bar is the
-  // caret-out expanded state, where `-close` has migrated onto the last body line sitting
-  // ABOVE the "Show less" bar (the interior seam the un-round rule in collapseToggleThemeSpec
-  // flattens) — excluding it hands the gap to the bar footer (the real panel bottom) so no
-  // phantom mid-panel gap appears there. A REVEALED -close (caret in) sits BELOW the bar,
-  // is followed by nothing, and correctly keeps the gap. This mutually-exclusive gating —
-  // rather than a broad gap rule suppressed by the un-round — keeps the two rules from
-  // colliding at equal specificity across the two theme extensions.
-  ".cm-line.quoll-fenced-code-close:not(:has(+ .cm-line.quoll-blockquote)):not(:has(+ .quoll-fenced-collapse-bar))":
-    blockEdgeGapCorner("bottom"),
+  // EXTERNAL gap at the fenced-code panel's TRUE top boundary. The boundary decision is
+  // made in the block-style.ts DECORATION BUILDER (document-model, viewport-independent):
+  // it emits `.quoll-fenced-code-outer-open` on the panel's real top edge line ONLY when
+  // the block is a true outer boundary — not inside a quote, not directly below another
+  // panel line, and not the second of two directly-adjacent fenced blocks. So this rule is
+  // UNCONDITIONAL (no rendered-sibling `:not(...)` gate that CM virtualisation could
+  // misfire at the render edge). blockEdgeGapCorner adds the transparent --quoll-block-gap-y
+  // border + vertical-radius compensation; the outer class co-occurs with the base -open on
+  // the same line, so the compensated radii layer on top. Pinned by
+  // cm-decoration-block-style.test.ts.
+  ".cm-line.quoll-fenced-code-outer-open": blockEdgeGapCorner("top"),
+  // EXTERNAL gap at the panel's TRUE bottom boundary (builder-emitted
+  // `.quoll-fenced-code-outer-close`; unconditional, same rationale as the top). The one
+  // render-time interaction the builder CANNOT see is the "Show less" collapse bar (a block
+  // widget): in the caret-out expanded state `-outer-close` migrates onto the last body line
+  // sitting ABOVE the bar, so the bar footer (the real panel bottom) must own the gap. That
+  // is handled by a narrow widget-adjacency override in collapseToggleThemeSpec below
+  // (`:has(+ collapse-bar)` → borderBottom:0), NOT by gating this rule — a widget's
+  // adjacency is reliable, unlike the virtualised line-panel-membership the old `:not(...)`
+  // gates read.
+  ".cm-line.quoll-fenced-code-outer-close": blockEdgeGapCorner("bottom"),
   // Blockquote: subtle navy fill + muted text. The fill lands on every quote
   // line so the panel is continuous; horizontal padding insets the text from
   // the fill's edges.
@@ -431,32 +429,20 @@ export const blockStyleThemeSpec = {
   ".cm-line.quoll-blockquote-open": blockEdgeCorner("top"),
   // Round the bottom corners on the closing quote line (blockEdgeCorner's bottom mirror).
   ".cm-line.quoll-blockquote-close": blockEdgeCorner("bottom"),
-  // EXTERNAL gap at the quote/callout panel's TRUE top boundary: a -open line NOT
-  // immediately preceded by another quote line (blockEdgeGapCorner adds the transparent
-  // border + vertical-radius compensation). A nested/continuation -open (`> > inner`,
-  // whose previous rendered sibling is the outer `> …` line and so carries
-  // .quoll-blockquote) is excluded by the `:not(… + …)`, so no transparent strip splits
-  // the parent panel. Callouts inherit this — their lines carry quoll-blockquote-open too
-  // (and a concealed-marker callout migrates -open onto the first body line, whose
-  // previous sibling is the zero-height marker row, which is facet-excluded from
-  // block-style and so carries no .quoll-blockquote — the gap still lands). Higher
-  // specificity than the base -open rule above, so the compensated radii win.
-  //
-  // The gating reads RENDERED `.cm-line` siblings, not document lines — CM virtualises the
-  // viewport, so at the render boundary a nested inner -open's preceding same-panel line
-  // may be absent from the DOM, letting the `:not()` misfire and add a spurious strip.
-  // In practice that is bounded to the render edge, which sits ~1000px offscreen (CM's
-  // default viewportMargin, not overridden here) and CM renders a CONTIGUOUS line range —
-  // so the only affected line is the offscreen first/last rendered one, never a visible
-  // nested boundary. A fully viewport-independent version would emit an explicit
-  // outer-boundary class from the block-style.ts builder (document-model driven); tracked
-  // as a follow-up. See docs/TODO.md.
-  ".cm-line.quoll-blockquote-open:not(.cm-line.quoll-blockquote + .cm-line.quoll-blockquote-open)":
-    blockEdgeGapCorner("top"),
-  // EXTERNAL gap at the TRUE bottom boundary: a -close line NOT immediately followed by
-  // another quote line (a nested/continuation close is followed by the outer `> …` line).
-  ".cm-line.quoll-blockquote-close:not(:has(+ .cm-line.quoll-blockquote))":
-    blockEdgeGapCorner("bottom"),
+  // EXTERNAL gap at the quote/callout panel's TRUE top boundary (builder-emitted
+  // `.quoll-blockquote-outer-open`; blockEdgeGapCorner adds the transparent border +
+  // vertical-radius compensation). The block-style.ts builder emits this class ONLY on the
+  // OUTERMOST quote's open edge (document-model `hasBlockquoteAncestor` gate), so a
+  // nested/continuation `> > inner` open never carries it and no transparent strip splits
+  // the parent panel — replacing the old rendered-sibling `:not(.quoll-blockquote + …)`
+  // gate that CM virtualisation could misfire at the render edge. Callouts inherit this
+  // (their lines carry -blockquote-open too), and a concealed-marker callout migrates the
+  // outer class onto the first visible body line exactly as -open migrates. The outer class
+  // co-occurs with the base -open on the same line, so the compensated radii layer on top.
+  ".cm-line.quoll-blockquote-outer-open": blockEdgeGapCorner("top"),
+  // EXTERNAL gap at the TRUE bottom boundary (builder-emitted `.quoll-blockquote-outer-close`
+  // on the outermost quote's close edge only; unconditional, same rationale as the top).
+  ".cm-line.quoll-blockquote-outer-close": blockEdgeGapCorner("bottom"),
   // Nested-quote deeper tint (block-style.ts blockquoteDepthClass). A `> >` /
   // `> > >` line carries `quoll-blockquote-depth-{2,3}` ON TOP of the base
   // .quoll-blockquote class; these override ONLY the fill, deepening it per level
@@ -884,15 +870,23 @@ export const collapseToggleThemeSpec = {
   ".quoll-fenced-collapse-bar:not(.quoll-fenced-collapse-bar-collapsed):not(:has(+ .cm-line.quoll-fenced-code-close))":
     collapseBarFooterCorner,
   // …and when the bar IS that footer, the last body line directly above it must NOT
-  // also round — otherwise block-style's migrated `-close` (caret-out) and this bar
-  // both round, double-rounding an interior row. Un-round exactly the code row that
-  // sits immediately above an expanded (non-collapsed) bar. Higher specificity than
-  // block-style's base `.cm-line.quoll-fenced-code-close`, so this wins.
+  // also round OR carry the external gap — otherwise block-style's migrated `-close`
+  // (caret-out) and this bar both round + gap, double-rounding/gapping an interior row.
+  // Un-round + un-gap exactly the code row that sits immediately above an expanded
+  // (non-collapsed) bar. Keyed on `-close` (NOT `-outer-close`): the migrated close row
+  // always carries `-close`, and keying on `-close` also covers the fenced→quote-below
+  // case where the row has `-close` but no `-outer-close`. This is a WIDGET-adjacency
+  // read (reliable) — it is NOT one of the removed line-panel-membership `:not(...)`
+  // gates. `borderBottom: "0"` suppresses the now-UNCONDITIONAL `.quoll-fenced-code-
+  // outer-close` gap here so the bar footer owns it; this rule's specificity (2 classes +
+  // `:has(arg)`) beats that plain 2-class gap rule. Higher specificity than block-style's
+  // base `.cm-line.quoll-fenced-code-close`, so the un-round wins too.
   ".cm-line.quoll-fenced-code-close:has(+ .quoll-fenced-collapse-bar:not(.quoll-fenced-collapse-bar-collapsed))":
     {
       borderBottomLeftRadius: "0",
       borderBottomRightRadius: "0",
       paddingBottom: "0",
+      borderBottom: "0",
     },
   ".quoll-fenced-collapse-toggle": {
     display: "inline-flex",
