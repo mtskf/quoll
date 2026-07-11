@@ -475,8 +475,8 @@ describe("toWireDiagnostics (offset → 0-based line/character)", () => {
     // The host's lint-diagnostics boundary validator rejects the ENTIRE message
     // when diagnostics.length > MAX_LINT_DIAGNOSTICS, which would blank the
     // Problems mirror. A dense prose document can realistically exceed the cap;
-    // truncate here so a partial mirror survives instead. REVERT-CHECK: removing
-    // the `.slice(0, MAX_LINT_DIAGNOSTICS)` makes this length assertion fail.
+    // bound here so a partial mirror survives instead. REVERT-CHECK: removing the
+    // cap makes this length assertion fail.
     const over = MAX_LINT_DIAGNOSTICS + 5;
     const doc = Text.of(["a".repeat(over + 1)]);
     const diags: LintDiagnostic[] = Array.from({ length: over }, (_, i) => ({
@@ -487,6 +487,36 @@ describe("toWireDiagnostics (offset → 0-based line/character)", () => {
       message: "f",
     }));
     expect(toWireDiagnostics(doc, diags)).toHaveLength(MAX_LINT_DIAGNOSTICS);
+  });
+
+  it("keeps every structural warning when prose info overflows the cap", () => {
+    // A late structural warning (by position) must NOT be evicted from the mirror
+    // by dense earlier prose info: warnings are kept unconditionally, info fills
+    // the remaining budget. REVERT-CHECK: a naive first-N-by-position slice drops
+    // this warning (it sits past position MAX_LINT_DIAGNOSTICS), failing the
+    // `.some(warning)` assertion.
+    const infoCount = MAX_LINT_DIAGNOSTICS + 1;
+    const doc = Text.of(["a".repeat(infoCount + 2)]);
+    const diags: LintDiagnostic[] = Array.from({ length: infoCount }, (_, i) => ({
+      from: i,
+      to: i + 1,
+      severity: "info" as const,
+      code: "filler-words" as const,
+      message: "f",
+    }));
+    // A structural warning positioned AFTER the whole info run.
+    diags.push({
+      from: infoCount,
+      to: infoCount + 1,
+      severity: "warning",
+      code: "no-trailing-spaces",
+      message: "w",
+    });
+    const wire = toWireDiagnostics(doc, diags);
+    expect(wire).toHaveLength(MAX_LINT_DIAGNOSTICS);
+    expect(wire.some((d) => d.severity === "warning" && d.code === "no-trailing-spaces")).toBe(
+      true
+    );
   });
 });
 

@@ -234,20 +234,37 @@ export function diagnosticsAt(
 // in-line character fall out. Explicit field-by-field projection so the
 // reserved `fix` field of LintDiagnostic never crosses the wire.
 //
-// Capped at MAX_LINT_DIAGNOSTICS: the host's `lint-diagnostics` boundary
+// Bound the set to MAX_LINT_DIAGNOSTICS: the host's `lint-diagnostics` boundary
 // validator REJECTS the whole message when `diagnostics.length` exceeds the cap,
 // which would blank the Problems mirror entirely. Since prose findings (esp.
 // filler-words) can be far denser than the sparse structural rules, a long
-// document could realistically cross 2000; truncating here keeps the mirror
-// populated with the first N (diagnostics arrive sorted by document position) —
-// a partial mirror beats a rejected/blank one. The in-editor underlines are
-// UNAFFECTED (they read the uncapped lintField), so nothing is hidden in the
-// editor; only the host-side Problems mirror is bounded to what the wire accepts.
+// document could realistically cross 2000. Under the cap the set is unchanged
+// (position order preserved). Over the cap we keep EVERY `warning` (the sparse,
+// structural rules) and fill the remaining budget with `info` findings — which
+// include the dense advisory prose — so advisory prose can never evict a
+// structural warning from the mirror (the same "prose never degrades structural"
+// invariant the per-rule isolation gives the in-editor layer). Warnings are far
+// under 2000 in practice; the trailing `.slice` is a defensive backstop for the
+// pathological warning-only overflow. A partial mirror beats a rejected/blank
+// one. The in-editor underlines read the uncapped lintField, so nothing is
+// hidden in the editor — only the host Problems mirror is bounded to the wire cap.
+function capForWire(diagnostics: readonly LintDiagnostic[]): readonly LintDiagnostic[] {
+  if (diagnostics.length <= MAX_LINT_DIAGNOSTICS) {
+    return diagnostics;
+  }
+  const warnings = diagnostics.filter((d) => d.severity === "warning");
+  const infos = diagnostics.filter((d) => d.severity === "info");
+  const budget = Math.max(0, MAX_LINT_DIAGNOSTICS - warnings.length);
+  return [...warnings, ...infos.slice(0, budget)]
+    .sort((a, b) => a.from - b.from || a.to - b.to)
+    .slice(0, MAX_LINT_DIAGNOSTICS);
+}
+
 export function toWireDiagnostics(
   doc: Text,
   diagnostics: readonly LintDiagnostic[]
 ): LintDiagnosticWire[] {
-  return diagnostics.slice(0, MAX_LINT_DIAGNOSTICS).map((d) => {
+  return capForWire(diagnostics).map((d) => {
     const start = doc.lineAt(d.from);
     const end = doc.lineAt(d.to);
     return {
