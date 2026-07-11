@@ -10,7 +10,6 @@ import {
 import { quollMarkdownLanguage } from "../../src/webview/cm/markdown.js";
 import { outlinePlugin, quollOutline } from "../../src/webview/cm/outline/index.js";
 import {
-  OUTLINE_COLLAPSED_CLASS,
   OUTLINE_OPEN_CLASS,
   OUTLINE_PINNED_CLASS,
 } from "../../src/webview/cm/outline/outline-panel.js";
@@ -58,6 +57,19 @@ function itemTexts(host: HTMLElement): string[] {
   return [...host.querySelectorAll(".quoll-outline-item")].map((el) => el.textContent ?? "");
 }
 
+function rowEls(host: HTMLElement): HTMLLIElement[] {
+  return [...host.querySelectorAll<HTMLLIElement>(".quoll-outline-row")];
+}
+function twistieOf(row: HTMLLIElement): HTMLButtonElement | null {
+  return row.querySelector<HTMLButtonElement>(".quoll-outline-twistie");
+}
+// A row is "visible" when neither it nor an ancestor is collapsed (hidden attr off).
+function visibleTexts(host: HTMLElement): string[] {
+  return rowEls(host)
+    .filter((r) => !r.hidden)
+    .map((r) => r.querySelector(".quoll-outline-item")?.textContent ?? "");
+}
+
 function toggleEl(host: HTMLElement): HTMLButtonElement {
   return host.querySelector(".quoll-outline-toggle") as HTMLButtonElement;
 }
@@ -66,9 +78,6 @@ function sidebarEl(host: HTMLElement): HTMLElement {
 }
 function pinEl(host: HTMLElement): HTMLButtonElement {
   return host.querySelector(".quoll-outline-pin") as HTMLButtonElement;
-}
-function headerToggleEl(host: HTMLElement): HTMLButtonElement {
-  return host.querySelector(".quoll-outline-header-toggle") as HTMLButtonElement;
 }
 // pointerenter/-leave don't bubble; dispatch directly on the listening element.
 // happy-dom has no real hit-testing, so a plain Event with the right type is
@@ -337,45 +346,129 @@ describe("quollOutline sidebar", () => {
     expect(toggleEl(host).textContent).toBe("");
   });
 
-  it("aligns the first-level row's text inset with the OUTLINE header (12px)", () => {
+  it("aligns the first-level row's indent with the OUTLINE header (12px)", () => {
     // Pins the BASE_PAD_PX contract: a top-level (depth 0) heading row's inline
-    // paddingLeft must equal the header's 12px left inset. Reverting BASE_PAD_PX
-    // to 8 makes this red (the row would sit left of the "OUTLINE" label).
+    // paddingLeft (now on the flex row, since the twistie column lives inside it)
+    // must equal the header's 12px left inset. Reverting BASE_PAD_PX to 8 makes
+    // this red (the row would sit left of the "OUTLINE" label).
     const { host } = mount("# Alpha\n");
     toggleEl(host).click(); // open + build
-    const first = host.querySelector<HTMLElement>(".quoll-outline-item");
+    const first = host.querySelector<HTMLElement>(".quoll-outline-row");
     expect(first?.style.paddingLeft).toBe("12px");
   });
 
-  it("starts expanded and the header toggle collapses / expands the tree body", () => {
-    const { host } = mount("# Alpha\n");
-    toggleEl(host).click(); // open
-    const ht = headerToggleEl(host);
-    expect(ht.getAttribute("aria-expanded")).toBe("true");
-    expect(host.classList.contains(OUTLINE_COLLAPSED_CLASS)).toBe(false);
-    ht.click();
-    expect(ht.getAttribute("aria-expanded")).toBe("false");
-    expect(host.classList.contains(OUTLINE_COLLAPSED_CLASS)).toBe(true);
-    ht.click();
-    expect(ht.getAttribute("aria-expanded")).toBe("true");
-    expect(host.classList.contains(OUTLINE_COLLAPSED_CLASS)).toBe(false);
+  it("renders a twistie on rows with children and none on leaves", () => {
+    // A > B > C, then D (sibling of A, leaf). A has a child, B has a child, C & D
+    // are leaves.
+    const { host } = mount("# A\n\n## B\n\n### C\n\n# D\n");
+    toggleEl(host).click(); // open + build
+    const rows = rowEls(host);
+    expect(rows.map((r) => twistieOf(r) !== null)).toEqual([true, true, false, false]);
+    // Leaf rows still carry the spacer column so their text aligns with siblings.
+    expect(rows[2].querySelector(".quoll-outline-twistie-spacer")).not.toBeNull();
   });
 
-  it("clicking the pin never toggles the collapse (stopPropagation)", () => {
-    const { host } = mount("# Alpha\n");
-    toggleEl(host).click(); // open
-    pinEl(host).click(); // pin — must NOT collapse
-    expect(host.classList.contains(OUTLINE_COLLAPSED_CLASS)).toBe(false);
-    expect(headerToggleEl(host).getAttribute("aria-expanded")).toBe("true");
-  });
-
-  it("clears the collapsed host class on destroy", () => {
-    const { view: v, host } = mount("# Alpha\n");
+  it("clicking a twistie collapses only that subtree and syncs aria-expanded", () => {
+    const { host } = mount("# A\n\n## B\n\n### C\n\n# D\n");
     toggleEl(host).click();
-    headerToggleEl(host).click(); // collapse
-    v.destroy();
-    view = null;
-    expect(host.classList.contains(OUTLINE_COLLAPSED_CLASS)).toBe(false);
+    const bTwistie = twistieOf(rowEls(host)[1]) as HTMLButtonElement; // "B"
+    expect(bTwistie.getAttribute("aria-expanded")).toBe("true");
+    bTwistie.click();
+    expect(bTwistie.getAttribute("aria-expanded")).toBe("false");
+    // Only C (B's descendant) hides; A, B, D stay.
+    expect(visibleTexts(host)).toEqual(["A", "B", "D"]);
+  });
+
+  it("collapsing an ancestor hides all descendants; expanding restores them", () => {
+    const { host } = mount("# A\n\n## B\n\n### C\n\n# D\n");
+    toggleEl(host).click();
+    const aTwistie = twistieOf(rowEls(host)[0]) as HTMLButtonElement; // "A"
+    aTwistie.click();
+    expect(visibleTexts(host)).toEqual(["A", "D"]); // B and C hidden
+    aTwistie.click();
+    expect(visibleTexts(host)).toEqual(["A", "B", "C", "D"]);
+  });
+
+  it("hides descendants correctly with nested collapses (grandparent + parent both collapsed)", () => {
+    // A > B > C, with A and B both collapsed. Pins refreshVisibility's shallowest-
+    // boundary logic: the deeper collapse (B) is itself hidden under A, and
+    // expanding A must reveal B still collapsed (only C stays hidden).
+    const { host } = mount("# A\n\n## B\n\n### C\n");
+    toggleEl(host).click();
+    const aTwistie = twistieOf(rowEls(host)[0]) as HTMLButtonElement;
+    const bTwistie = twistieOf(rowEls(host)[1]) as HTMLButtonElement;
+    bTwistie.click(); // collapse B (hides C)
+    aTwistie.click(); // collapse A (hides B and C)
+    expect(visibleTexts(host)).toEqual(["A"]);
+    aTwistie.click(); // expand A → B visible again but still collapsed
+    expect(visibleTexts(host)).toEqual(["A", "B"]); // C stays hidden under B
+    expect(bTwistie.getAttribute("aria-expanded")).toBe("false");
+  });
+
+  it("uses a native <button> twistie so Enter/Space activate it (keyboard parity)", () => {
+    // Keyboard activation rides the platform: a native <button type="button">
+    // synthesizes a click from Enter/Space. Pin THAT contract (element + type)
+    // rather than re-asserting the click outcome — happy-dom does not synthesize
+    // the keyboard→click, so this is what guards against a regression to a
+    // non-button twistie (e.g. <span role="button">) that breaks keyboard use.
+    const { host } = mount("# A\n\n## B\n");
+    toggleEl(host).click();
+    const aTwistie = twistieOf(rowEls(host)[0]) as HTMLButtonElement;
+    expect(aTwistie.tagName).toBe("BUTTON");
+    expect(aTwistie.type).toBe("button");
+    aTwistie.click(); // proxy for the platform-synthesized Enter/Space click
+    expect(aTwistie.getAttribute("aria-expanded")).toBe("false");
+  });
+
+  it("keeps a heading collapsed when an edit above shifts its offset (maps collapse through changes)", () => {
+    vi.useFakeTimers();
+    const { view: v, host } = mount("# A\n\n## B\n\n### C\n");
+    v.plugin(outlinePlugin)?.toggle();
+    (twistieOf(rowEls(host)[0]) as HTMLButtonElement).click(); // collapse A (hides B, C)
+    expect(visibleTexts(host)).toEqual(["A"]);
+    // Insert a NEW parent heading (with its own child) above A. A's `from` shifts
+    // right; the collapse must follow A and must NOT land on the inserted "# New".
+    v.dispatch({ changes: { from: 0, insert: "# New\n\n## New child\n\n" } });
+    vi.advanceTimersByTime(250); // let the debounced rebuild fire
+    // Without the offset mapping, the stale offset (0) would collapse "# New"
+    // instead, yielding ["New", "A", "B", "C"].
+    expect(visibleTexts(host)).toEqual(["New", "New child", "A"]);
+  });
+
+  it("keeps collapse state across a debounced rebuild", () => {
+    vi.useFakeTimers();
+    const { view: v, host } = mount("# A\n\n## B\n");
+    v.plugin(outlinePlugin)?.toggle();
+    (twistieOf(rowEls(host)[0]) as HTMLButtonElement).click(); // collapse A
+    expect(visibleTexts(host)).toEqual(["A"]);
+    // Edit that keeps A's from at 0 but changes B's text (signature changes → rebuild).
+    v.dispatch({ changes: { from: 0, to: v.state.doc.length, insert: "# A\n\n## B2\n" } });
+    vi.advanceTimersByTime(250);
+    expect(visibleTexts(host)).toEqual(["A"]); // still collapsed after rebuild
+  });
+
+  it("highlights the nearest visible ancestor when the caret is in a collapsed subtree", () => {
+    const { view: v, host } = mount("# A\n\nbody\n\n## B\n\nmore\n");
+    v.plugin(outlinePlugin)?.toggle();
+    (twistieOf(rowEls(host)[0]) as HTMLButtonElement).click(); // collapse A (hides B)
+    const bFrom = v.state.doc.line(5).from; // "## B"
+    v.dispatch({ selection: EditorSelection.cursor(bFrom) });
+    const activeTexts = [...host.querySelectorAll<HTMLElement>(".quoll-outline-item")]
+      .filter((el) => el.classList.contains("active"))
+      .map((el) => el.textContent);
+    expect(activeTexts).toEqual(["A"]); // B is hidden → its visible ancestor A is active
+  });
+
+  it("renders a static OUTLINE title with no whole-section fold toggle", () => {
+    // The panel has no whole-section fold: the header is a plain label, not a
+    // button, and there is no header twistie/chevron to collapse the tree body.
+    const { host } = mount("# Alpha\n");
+    toggleEl(host).click(); // open
+    const title = host.querySelector(".quoll-outline-title");
+    expect(title?.textContent).toBe("Outline");
+    // The title is a plain span, not a button — no whole-section fold toggle.
+    expect(title?.tagName).toBe("SPAN");
+    expect(host.querySelector(".quoll-outline-header-toggle")).toBeNull();
   });
 });
 
