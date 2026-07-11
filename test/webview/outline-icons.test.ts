@@ -1,6 +1,7 @@
 // @vitest-environment happy-dom
 import { describe, expect, it } from "vitest";
 import {
+  createCheckIcon,
   createChevronIcon,
   createMenuIcon,
   createPinIcon,
@@ -48,5 +49,11 @@ describe("outline sidebar icons", () => {
 
   it("returns a fresh subtree per call (safe to mount in several buttons)", () => {
     expect(createPinIcon()).not.toBe(createPinIcon());
+  });
+
+  it("createCheckIcon builds an svg with a path (no innerHTML)", () => {
+    const svg = createCheckIcon();
+    expect(svg.tagName.toLowerCase()).toBe("svg");
+    expect(svg.querySelector("path")).not.toBeNull();
   });
 });
