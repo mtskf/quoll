@@ -28,8 +28,10 @@ const PREF_KEY_BY_FIELD: Record<keyof EditorPrefs, EditorPrefKey> = {
 export function editorPrefsApply(): Extension {
   return ViewPlugin.fromClass(
     class implements PluginValue {
+      private readonly view: EditorView;
       private readonly host: HTMLElement;
       constructor(view: EditorView) {
+        this.view = view;
         this.host = view.dom;
         this.apply(view.state.field(editorPrefsField, false) ?? DEFAULT_EDITOR_PREFS);
       }
@@ -38,6 +40,11 @@ export function editorPrefsApply(): Extension {
         const next = u.state.field(editorPrefsField, false);
         if (prev !== next && next !== undefined) {
           this.apply(next);
+          // lineHeight/contentWidth vars change CM's geometry (scroll height,
+          // caret hit-test, scrollIntoView) while the scroll container size may
+          // be unchanged — schedule a coalesced remeasure so CM does not keep
+          // stale measurements until an unrelated resize/scroll/doc change.
+          this.view.requestMeasure();
         }
       }
       private apply(prefs: EditorPrefs): void {

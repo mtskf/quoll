@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 import { EditorState } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { editorPrefsField, setEditorPrefsEffect } from "../../src/webview/cm/editor-prefs.js";
 import { editorPrefsApply } from "../../src/webview/cm/editor-prefs-apply.js";
 
@@ -60,5 +60,30 @@ describe("editorPrefsApply", () => {
     });
     expect(v.dom.style.getPropertyValue("--quoll-editor-font-family")).toBe("");
     expect(v.dom.style.getPropertyValue("--quoll-editor-content-width")).toBe("");
+  });
+
+  it("requests a CM remeasure when a preset dispatch changes the field", () => {
+    // lineHeight/contentWidth vars change CM geometry (scroll height, caret
+    // hit-test); apply() alone leaves CM's measurements stale until an
+    // unrelated resize/scroll. The plugin must schedule a remeasure ON the
+    // field-changing dispatch — over and above CM's own dispatch bookkeeping.
+    // Control: a dispatch that does NOT change editorPrefsField (a plain
+    // selection move) establishes the CM-internal requestMeasure baseline;
+    // the preset dispatch must call it strictly more (the plugin's own call).
+    const v = mount();
+    v.dispatch({ changes: { from: 0, insert: "abc" } });
+    const spy = vi.spyOn(v, "requestMeasure");
+    v.dispatch({ selection: { anchor: 1 } }); // no editorPrefsField change
+    const baseline = spy.mock.calls.length;
+    spy.mockClear();
+    v.dispatch({
+      effects: setEditorPrefsEffect.of({
+        fontFamily: "default",
+        fontSize: "default",
+        lineHeight: "compact",
+        contentWidth: "wide",
+      }),
+    });
+    expect(spy.mock.calls.length).toBeGreaterThan(baseline);
   });
 });
