@@ -123,10 +123,11 @@ describe("outline sidebar — real-chromium layout", () => {
   });
 
   it("pinned mode is a real 2-column reflow (static sidebar, narrowed editor column)", async () => {
-    // Scope note: this pins the HOST/EDITOR flex reflow. The reading column's
-    // own adaptation inside .cm-editor (flexBasis 60em capped by maxWidth 100%)
-    // is theme-level (cm/theme.ts) and this mount does not load the theme —
-    // that visual half is covered by Task 5's manual check item 5.
+    // Scope note: this pins the HOST/EDITOR flex reflow — the sidebar going
+    // static at the left edge and the editor column narrowing. The reading
+    // column's own adaptation inside .cm-editor (flexBasis 60em capped by
+    // maxWidth 100%, cm/theme.ts) rides the shared mount's quollTheme but is not
+    // asserted here; its full visual check is Task 5's manual check item 5.
     const { view: v, host } = mount(DOC);
     v.plugin(outlinePlugin)?.toggle(); // deliberate open — no pointer involved
     await settled();
