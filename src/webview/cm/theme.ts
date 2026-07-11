@@ -246,12 +246,20 @@ export const quollTokenMarkers = syntaxHighlighting(
 // fill is the PADDING box, whose corner radius is the border-box radius MINUS the
 // transparent alignment border. --quoll-block-radius is the wanted PAINTED round, so the
 // border-box HORIZONTAL radius is bumped by that border width (`radius + 6px` left,
-// `radius + 2px` right); the vertical borders are 0, so the vertical radius passes
+// `radius + 2px` right); the vertical borders are 0 here, so the vertical radius passes
 // through as the token value. The vertical breathing room is --quoll-block-pad-y. All
 // tokens are SHARED across the surfaces — retuning :root moves them together. Kept as a
 // top/bottom factory (NOT a bottom-edge const reused directly) because the -open rules
 // are the TOP-edge mirror. The 6px/2px inset literals live ONCE here; each edge variant
 // is pinned by cm-decoration-block-style.test.ts / cm-fenced-code-collapse.test.ts.
+//
+// The EXTERNAL gap that separates a panel from the block directly above/below it is
+// deliberately NOT here — it rides a SEPARATE, adjacency-gated rule (blockEdgeGapCorner
+// below) applied only to the panel's TRUE outer boundary lines. It cannot live on this
+// factory because -open/-close are applied to EVERY block node's first/last line,
+// including a NESTED quote's inner line (`> > inner` carries quoll-blockquote-open while
+// inside the outer panel — see block-style.ts) — a gap there would punch a transparent
+// strip through the middle of the parent panel.
 const blockEdgeLeftRadius =
   "calc(var(--quoll-block-radius, 8px) + var(--quoll-column-inset-left, 6px)) var(--quoll-block-radius, 8px)";
 const blockEdgeRightRadius =
@@ -267,6 +275,37 @@ const blockEdgeCorner = (edge: "top" | "bottom"): Record<string, string> =>
         borderBottomLeftRadius: blockEdgeLeftRadius,
         borderBottomRightRadius: blockEdgeRightRadius,
         paddingBottom: "var(--quoll-block-pad-y, 12px)",
+      };
+
+// EXTERNAL vertical gap on a panel's TRUE outer boundary line — a TRANSPARENT vertical
+// border sourced from --quoll-block-gap-y. The panel surfaces paint with
+// `background-clip: padding-box`, so the transparent border renders the editor background
+// through it (a real gap) WITHOUT a `.cm-line` margin (which would break CM's line
+// geometry — a border, like padding, stays inside the box CM measures, so posAtCoords
+// stays accurate; heading-rhythm padding precedent). Because the border is on the SAME
+// axis the fill clips to, it ALSO eats the painted vertical corner radius the same way the
+// horizontal alignment border eats the horizontal one — so the vertical radius term is
+// bumped by --quoll-block-gap-y here (mirroring the `+ inset` horizontal compensation on
+// blockEdge*Radius) to keep the painted corner a true --quoll-block-radius round. Applied
+// ONLY via adjacency-gated selectors (a -open line NOT preceded by a same-panel line, a
+// -close line NOT followed by one) so nested/continuation edges inside a panel are
+// untouched. Pinned by cm-decoration-block-style.test.ts.
+const blockEdgeGap = "var(--quoll-block-gap-y, 8px) solid transparent";
+const blockEdgeGapLeftRadius =
+  "calc(var(--quoll-block-radius, 8px) + var(--quoll-column-inset-left, 6px)) calc(var(--quoll-block-radius, 8px) + var(--quoll-block-gap-y, 8px))";
+const blockEdgeGapRightRadius =
+  "calc(var(--quoll-block-radius, 8px) + var(--quoll-column-inset-right, 2px)) calc(var(--quoll-block-radius, 8px) + var(--quoll-block-gap-y, 8px))";
+const blockEdgeGapCorner = (edge: "top" | "bottom"): Record<string, string> =>
+  edge === "top"
+    ? {
+        borderTop: blockEdgeGap,
+        borderTopLeftRadius: blockEdgeGapLeftRadius,
+        borderTopRightRadius: blockEdgeGapRightRadius,
+      }
+    : {
+        borderBottom: blockEdgeGap,
+        borderBottomLeftRadius: blockEdgeGapLeftRadius,
+        borderBottomRightRadius: blockEdgeGapRightRadius,
       };
 
 // Fenced-code panel + blockquote rule styling for the block-style.ts line
@@ -366,6 +405,32 @@ export const blockStyleThemeSpec = {
   ".cm-line.quoll-blockquote-open": blockEdgeCorner("top"),
   // Round the bottom corners on the closing quote line (blockEdgeCorner's bottom mirror).
   ".cm-line.quoll-blockquote-close": blockEdgeCorner("bottom"),
+  // EXTERNAL gap at the quote/callout panel's TRUE top boundary: a -open line NOT
+  // immediately preceded by another quote line (blockEdgeGapCorner adds the transparent
+  // border + vertical-radius compensation). A nested/continuation -open (`> > inner`,
+  // whose previous rendered sibling is the outer `> …` line and so carries
+  // .quoll-blockquote) is excluded by the `:not(… + …)`, so no transparent strip splits
+  // the parent panel. Callouts inherit this — their lines carry quoll-blockquote-open too
+  // (and a concealed-marker callout migrates -open onto the first body line, whose
+  // previous sibling is the zero-height marker row, which is facet-excluded from
+  // block-style and so carries no .quoll-blockquote — the gap still lands). Higher
+  // specificity than the base -open rule above, so the compensated radii win.
+  //
+  // The gating reads RENDERED `.cm-line` siblings, not document lines — CM virtualises the
+  // viewport, so at the render boundary a nested inner -open's preceding same-panel line
+  // may be absent from the DOM, letting the `:not()` misfire and add a spurious strip.
+  // In practice that is bounded to the render edge, which sits ~1000px offscreen (CM's
+  // default viewportMargin, not overridden here) and CM renders a CONTIGUOUS line range —
+  // so the only affected line is the offscreen first/last rendered one, never a visible
+  // nested boundary. A fully viewport-independent version would emit an explicit
+  // outer-boundary class from the block-style.ts builder (document-model driven); tracked
+  // as a follow-up. See docs/TODO.md.
+  ".cm-line.quoll-blockquote-open:not(.cm-line.quoll-blockquote + .cm-line.quoll-blockquote-open)":
+    blockEdgeGapCorner("top"),
+  // EXTERNAL gap at the TRUE bottom boundary: a -close line NOT immediately followed by
+  // another quote line (a nested/continuation close is followed by the outer `> …` line).
+  ".cm-line.quoll-blockquote-close:not(:has(+ .cm-line.quoll-blockquote))":
+    blockEdgeGapCorner("bottom"),
   // Nested-quote deeper tint (block-style.ts blockquoteDepthClass). A `> >` /
   // `> > >` line carries `quoll-blockquote-depth-{2,3}` ON TOP of the base
   // .quoll-blockquote class; these override ONLY the fill, deepening it per level

@@ -9,6 +9,8 @@ All notable changes to Quoll are documented here.
 
 - The cat title-bar button on a Markdown text tab now swaps that tab to the Quoll editor in place, instead of leaving the text tab open and adding a second Quoll tab. It mirrors the file-code button's Quoll→text swap, so switching either direction keeps you on a single tab.
 
+- Blockquotes and callouts now keep a small vertical gap from the block directly above and below them, even when no blank line separates them in the source. A panel that immediately follows a list item or paragraph no longer renders flush against that line's bottom edge, while nested quotes stay visually joined to their parent.
+
 ## 0.1.40 — 2026-07-11
 
 ### Added
