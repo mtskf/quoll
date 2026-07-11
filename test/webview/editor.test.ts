@@ -9,6 +9,7 @@ import {
   buildBlockquoteRule,
   fencedCodePanel,
 } from "../../src/webview/cm/decorations/block-style.js";
+import { editorPrefsField } from "../../src/webview/cm/editor-prefs.js";
 import { buildListHangIndent, listHangIndent } from "../../src/webview/cm/list/list-hang-indent.js";
 import { quollOpenExternalSink } from "../../src/webview/cm/open-external.js";
 import { type EditorHandle, mountEditor } from "../../src/webview/editor.js";
@@ -1371,5 +1372,34 @@ describe("editor — quollOpenExternalSink wiring", () => {
       type: "open-external",
       href: "https://example.com",
     });
+  });
+});
+
+// setEditorPrefs writes the CSS var on view.dom (.cm-editor) AND is NOT
+// same-value-guarded: a same-value push must re-dispatch a fresh effect so the
+// field identity changes and a downstream syncFromState (outline popover pending
+// clear) fires. The opposite of the setLintGutter/setSpellcheck no-op guards.
+describe("editor — setEditorPrefs applies vars and re-dispatches on same-value push", () => {
+  it("writes the CSS var and re-dispatches on a same-value push (no no-op guard)", () => {
+    const { handle, view } = mount();
+    const dom = view.dom;
+    const prefs = {
+      fontFamily: "serif",
+      fontSize: "default",
+      lineHeight: "cozy",
+      contentWidth: "medium",
+    } as const;
+    handle.setEditorPrefs(prefs);
+    expect(dom.style.getPropertyValue("--quoll-editor-font-family")).toBe(
+      "Georgia, 'Times New Roman', serif"
+    );
+    // A same-value push must STILL dispatch a fresh effect (field identity change)
+    // so a downstream syncFromState fires — pin it by observing a new field object.
+    const before = view.state.field(editorPrefsField);
+    handle.setEditorPrefs({ ...prefs });
+    expect(view.state.field(editorPrefsField)).not.toBe(before); // fresh object ⇒ identity changed
+    expect(dom.style.getPropertyValue("--quoll-editor-font-family")).toBe(
+      "Georgia, 'Times New Roman', serif"
+    );
   });
 });

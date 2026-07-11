@@ -224,9 +224,11 @@ html body {
     flex: 0 0 auto;
   }
 
-  /* Notion-style reading column. font-size scales off --vscode-font-size
-   * so the column follows the user's editor font setting; 1.15 lifts the
-   * 13px default to ~15px reading size.
+  /* Notion-style reading column host. The editor font-size is owned by the CM
+   * theme's "&" (.cm-editor) declaration (cm/theme.ts) — an element's OWN
+   * declaration beats inheritance, so a font-size set HERE never reached the
+   * editor text. It has been removed (it was a no-op); the editor-preset
+   * font-size (outline settings popover) rides that "&" declaration instead.
    *
    * Review fix #40 (C1): the PM-era reading-column measure (max-width:
    * 44em) and outer padding (3.5rem 2.5rem 6rem) MOVED to .cm-content
@@ -249,7 +251,6 @@ html body {
      * editor below the banner and re-opening document scroll. */
     flex: 1 1 auto;
     min-height: 0;
-    font-size: calc(var(--vscode-font-size) * 1.15);
     outline: none;
   }
 

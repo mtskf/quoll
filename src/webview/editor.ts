@@ -26,6 +26,12 @@ import { headingRhythm } from "./cm/decorations/heading-rhythm.js";
 import { quollSyntaxReveal } from "./cm/decorations/index.js";
 import { proseSpaceMetric } from "./cm/decorations/prose-space-metric.js";
 import { createEditSync } from "./cm/edit-sync.js";
+import { editorPrefsApply } from "./cm/editor-prefs-apply.js";
+import {
+  type EditorPrefs,
+  editorPrefsField,
+  setEditorPrefsEffect,
+} from "./cm/editor-prefs.js";
 import { fencedCodeCollapseField } from "./cm/fenced-code/fenced-code-collapse.js";
 import { fencedCodeCopyButton } from "./cm/fenced-code/fenced-code-copy-button.js";
 import { fencedCodeEnterKeymap } from "./cm/fenced-code/fenced-code-enter-keymap.js";
@@ -121,6 +127,10 @@ export type EditorHandle = {
    *  host's editor-config push; whether the red underlines actually paint is
    *  the webview host's (VS Code/Electron) call, not ours. */
   setSpellcheck(enabled: boolean): void;
+  /** Apply the host-pushed editor-surface presets. NOT same-value-guarded — a
+   *  same-value push is the pending-clear signal (see the setter body). Driven
+   *  by editor-config. */
+  setEditorPrefs(prefs: EditorPrefs): void;
   /** Run an inline-format action on the current selection. Rides the normal
    *  dispatch -> edit-sync pipeline; a no-op when the view is read-only. */
   runFormatCommand(action: FormatAction): void;
@@ -587,6 +597,12 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
         // debounced so the keystroke path is untouched. Present in read-only
         // mode too (navigation, not editing).
         quollOutline(),
+        // Editor-preset settings: the field holds the 4 preset ids (default =
+        // today's rendering); editorPrefsApply writes them as CSS vars on
+        // view.dom. Driven by the host's editor-config push via setEditorPrefs
+        // (last-write-wins over the single FIFO channel).
+        editorPrefsField,
+        editorPrefsApply(),
         // Quoll → text-editor switch: a top-right overlay button + the
         // ⌘⌥E / Ctrl+Alt+E chord, both posting `switch-to-text`. Pure side channel
         // (no CM change, no write-lock); the host reopens the document in the
@@ -788,6 +804,13 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
       view.dispatch({
         effects: spellcheckCompartment.reconfigure(spellcheckAttrs(enabled)),
       });
+    },
+    setEditorPrefs(prefs) {
+      // No same-value guard — a same-value push is the signal that clears the
+      // popover's pending row (override / host-failure branches re-push the
+      // unchanged snapshot). Fresh object each time ⇒ field identity changes ⇒
+      // outline update() runs syncFromState(). Idempotent applier, no ping-pong.
+      view.dispatch({ effects: setEditorPrefsEffect.of(prefs) });
     },
     runFormatCommand(action) {
       runInlineFormat(view, action);

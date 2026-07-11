@@ -18,7 +18,11 @@ export const quollTheme = EditorView.theme({
   "&": {
     color: "var(--vscode-editor-foreground)",
     backgroundColor: "var(--vscode-editor-background)",
-    fontSize: "var(--vscode-font-size)",
+    // Editor-preset font-size (outline settings popover). This "&" (.cm-editor)
+    // declaration is the one that WINS for the editor text — an element's own
+    // declaration beats inheritance, so setting it on .quoll-editor never
+    // reached the content. Default preset = var removed → var(--vscode-font-size).
+    fontSize: "var(--quoll-editor-font-size, var(--vscode-font-size))",
     height: "100%",
   },
   // .cm-content is the SINGLE owner of the reading column (review fix #40):
@@ -31,7 +35,9 @@ export const quollTheme = EditorView.theme({
   // .quoll-editor.read-only (styles.css, @layer base) — do NOT dim
   // .cm-content too.
   ".cm-content": {
-    fontFamily: "var(--vscode-font-family)",
+    // Editor-preset font-family (outline settings popover). Default = var
+    // removed → var(--vscode-font-family), today's exact rendering.
+    fontFamily: "var(--quoll-editor-font-family, var(--vscode-font-family))",
     caretColor: "var(--vscode-editorCursor-foreground)",
     // Group-centre the [foldGutter][content] pair so the fold chevron (cm/fold)
     // sits beside the reading column, not the viewport edge. Deterministic
@@ -40,7 +46,9 @@ export const quollTheme = EditorView.theme({
     // narrow panes, centred by `.cm-scroller { justify-content }` below.
     flexGrow: "0",
     flexShrink: "1",
-    flexBasis: "60em",
+    // Editor-preset content width (outline settings popover). Default = var
+    // removed → 60em, today's exact reading column.
+    flexBasis: "var(--quoll-editor-content-width, 60em)",
     maxWidth: "100%",
     padding: "3.5rem 2.5rem 6rem",
     // Body rhythm, tokenised. The value lives on :root as
@@ -52,7 +60,10 @@ export const quollTheme = EditorView.theme({
     // widgets that inherit it. Without an explicit line-height the block
     // widgets compute their own, and the mismatch accumulates a click→caret
     // offset for every line below a widget.
-    lineHeight: "var(--quoll-line-height, 1.7)",
+    // Editor-preset line height (outline settings popover) layered ABOVE the
+    // base --quoll-line-height token: default preset (Cozy) removes the var →
+    // var(--quoll-line-height, 1.7), today's exact rhythm.
+    lineHeight: "var(--quoll-editor-line-height, var(--quoll-line-height, 1.7))",
   },
   // The fold gutter (cm/fold) is ALWAYS mounted, so CM's view baseTheme paints
   // `.cm-gutters` with a grey background (#f5f5f5 light / #333338 dark) + a 1px
