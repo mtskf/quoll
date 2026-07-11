@@ -33,7 +33,7 @@
 ### Navigation, lint & fit
 
 - **Document outline** — a toggle-able overlay lists the document's headings; click one to jump straight to it. Open it with the top-right button or `Ctrl/Cmd+Alt+O`.
-- **Switch to the text editor** — flip the active Markdown file to VS Code's built-in text editor (and back) with a top-right button or `⌘⌥E` (`Ctrl+Alt+E` on Windows/Linux); your caret position carries across.
+- **Switch between rich and text** — flip the active Markdown file between Quoll and VS Code's built-in text editor, in both directions. Use the editor title-bar button (a cat icon on a text editor opens Quoll; a file-code icon on Quoll reopens the text editor), the in-editor top-right button, or `⌘⌥E` (`Ctrl+Alt+E` on Windows/Linux) — the `⌘⌥E` and in-editor-button paths carry your caret position across.
 - **Markdown lint** — advisory findings as inline underlines, with an optional gutter dot and an optional **Problems**-panel mirror.
 - **Theme-aware & opt-in** — follows your light/dark theme, and registers with `priority: option` so it never hijacks `.md` from other extensions.
 
@@ -74,14 +74,18 @@ Reload the VS Code window after installing.
 
 | Command              | Title                                      | Keybinding       | Notes                                      |
 | -------------------- | ------------------------------------------ | ---------------- | ------------------------------------------ |
-| `quoll.editWith`     | Edit with Quoll                            | —                | Opens the active file in the Quoll editor. |
+| `quoll.editWith`     | Edit with Quoll                            | —                | Opens the active file in the Quoll editor; also the cat-icon editor title-bar button on a Markdown text editor. |
 | `quoll.toggleEditor` | Quoll: Toggle Between Rich and Text Editor | `⌘⌥E` / `Ctrl+Alt+E` | Swaps between Quoll and the text editor.   |
+| `quoll.reopenInTextEditor` | Quoll: Reopen in Text Editor         | —                | Reopens the current Quoll document in the built-in text editor; the file-code-icon editor title-bar button on Quoll. |
 
-Two overlay affordances sit in the editor's top-right corner: a button to
-toggle the **document outline** (`Ctrl/Cmd+Alt+O`) and a button to **switch to
-the text editor** (`⌘⌥E` / `Ctrl+Alt+E`). Like the live-reveal below, the outline
-toggle is editor-internal behavior rather than a VS Code command, so it does not
-appear in the keybindings UI.
+The editor title bar shows a one-click switch button whose direction follows the
+active editor: a **cat** icon on a Markdown text editor opens it in Quoll, and a
+**file-code** icon on Quoll reopens it in the text editor. Two more overlay
+affordances sit in the editor's top-right corner: a button to toggle the
+**document outline** (`Ctrl/Cmd+Alt+O`) and a button to **switch to the text
+editor** (`⌘⌥E` / `Ctrl+Alt+E`). Like the live-reveal below, the outline toggle is
+editor-internal behavior rather than a VS Code command, so it does not appear in
+the keybindings UI.
 
 Inline formatting is plain Markdown — type `**bold**`, `*italic*`, or
 `` `code` `` and the editor live-renders it. Move the caret into a

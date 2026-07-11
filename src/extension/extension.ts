@@ -5,7 +5,7 @@ import { QuollEditorPanel } from "./quoll-editor-panel.js";
 import { showSafely } from "./show-safely.js";
 import { __clearSurfaceMemoryForTest } from "./surface-memory.js";
 import { registerSurfaceRestoreWatcher } from "./surface-restore-watcher.js";
-import { registerToggleEditor } from "./toggle-editor.js";
+import { registerToggleEditor, reopenActiveQuollTabAsText } from "./toggle-editor.js";
 
 export async function activate(context: ExtensionContext) {
   // Dynamic import so esbuild tree-shakes the TestHarness class body out
@@ -26,6 +26,12 @@ export async function activate(context: ExtensionContext) {
 
   context.subscriptions.push(QuollEditorPanel.register(context, harness));
   context.subscriptions.push(registerToggleEditor());
+  // Title-bar "Reopen in Text Editor" (file-code icon) — the forward half of the
+  // Rich ↔ Text switch, driving the same swap path as quoll.toggleEditor's
+  // to-text case. The reverse (cat icon → Quoll) reuses quoll.editWith below.
+  context.subscriptions.push(
+    commands.registerCommand("quoll.reopenInTextEditor", reopenActiveQuollTabAsText)
+  );
   context.subscriptions.push(registerFormatCommand());
   context.subscriptions.push(registerSurfaceRestoreWatcher(QuollEditorPanel.viewType));
   context.subscriptions.push(

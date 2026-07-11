@@ -42,7 +42,8 @@
   "activationEvents": [
     "onCustomEditor:quoll.editMarkdown",
     "onCommand:quoll.editWith",
-    "onCommand:quoll.toggleEditor"
+    "onCommand:quoll.toggleEditor",
+    "onCommand:quoll.reopenInTextEditor"
   ],
   "capabilities": {
     "untrustedWorkspaces": {
@@ -58,17 +59,43 @@
     "commands": [
       {
         "command": "quoll.editWith",
-        "title": "Edit with Quoll"
+        "title": "Edit with Quoll",
+        "icon": {
+          "light": "media/icons/cat-light.svg",
+          "dark": "media/icons/cat-dark.svg"
+        }
       },
       {
         "command": "quoll.toggleEditor",
         "title": "Quoll: Toggle Between Rich and Text Editor"
       },
       {
+        "command": "quoll.reopenInTextEditor",
+        "title": "Quoll: Reopen in Text Editor",
+        "icon": {
+          "light": "media/icons/file-code-light.svg",
+          "dark": "media/icons/file-code-dark.svg"
+        }
+      },
+      {
         "command": "quoll.format",
         "title": "Quoll: Format Selection (bold / italic / code / strike / link)"
       }
     ],
+    "menus": {
+      "editor/title": [
+        {
+          "command": "quoll.editWith",
+          "group": "navigation",
+          "when": "resourceExtname == '.md' && !activeCustomEditorId && !isInDiffEditor"
+        },
+        {
+          "command": "quoll.reopenInTextEditor",
+          "group": "navigation",
+          "when": "activeCustomEditorId == 'quoll.editMarkdown'"
+        }
+      ]
+    },
     "customEditors": [
       {
         "viewType": "quoll.editMarkdown",

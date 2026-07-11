@@ -60,6 +60,37 @@ function surfaceError(prefix: string, err: unknown): void {
   );
 }
 
+/** Forward swap: reopen the active Quoll custom tab in the built-in text editor,
+ *  then close the Quoll source tab (save-then-swap; see surface-swap.ts). No-op
+ *  if the active tab is not a Quoll custom tab. Caret is NOT preserved on this
+ *  path — the caret-preserving forward affordances are the in-editor button + the
+ *  ⌘⌥E / Ctrl+Alt+E chord (they post `switch-to-text` to the panel, which owns
+ *  lastKnownCaret). Shared by `quoll.toggleEditor` (to-text case) and the
+ *  title-bar `quoll.reopenInTextEditor` button so both directions drive one swap
+ *  path — no duplicated surface-swap logic. */
+export async function reopenActiveQuollTabAsText(): Promise<void> {
+  const input = window.tabGroups.activeTabGroup.activeTab?.input;
+  if (!(input instanceof TabInputCustom) || input.viewType !== QuollEditorPanel.viewType) {
+    return;
+  }
+  const uri = input.uri;
+  const sourceTab = findSourceTab(uri.toString(), "quoll", QuollEditorPanel.viewType);
+  // Observability for the documented caret non-preservation on this path.
+  console.info(
+    "[quoll] forward: caret not preserved (use the in-editor button or ⌘⌥E / Ctrl+Alt+E)"
+  );
+  try {
+    await openInTextEditor(uri);
+    // Record intent AFTER the open succeeds and BEFORE the source close, so the
+    // surface-restore watcher adopts "text" instead of bouncing this deliberate
+    // swap (and a failed open records nothing).
+    noteSurface(uri.toString(), "text");
+    await finalizeSurfaceSwap(uri, sourceTab);
+  } catch (err) {
+    surfaceError("could not open the text editor", err);
+  }
+}
+
 export function registerToggleEditor(): { dispose(): void } {
   return commands.registerCommand("quoll.toggleEditor", async () => {
     const input = window.tabGroups.activeTabGroup.activeTab?.input;
@@ -84,33 +115,12 @@ export function registerToggleEditor(): { dispose(): void } {
     const target = decideSwitchTarget({ onQuollTab, activeMarkdownUriKey });
     switch (target) {
       case "to-text": {
-        // Re-narrow for the type system (decideSwitchTarget's boolean hides the
-        // instanceof from TS) — and a cheap guard should a future refactor ever
-        // decouple `onQuollTab` from this check. This is the Command-Palette
-        // forward path (Quoll active, no live activeTextEditor caret to read
-        // here); it does NOT restore the caret — the caret-preserving forward
-        // affordances are the top-right button + the ⌘⌥E / Ctrl+Alt+E chord,
-        // which post `switch-to-text` to the panel (owns lastKnownCaret, re-applies
-        // it — Task 5). A rare, acceptable gap.
-        if (!(input instanceof TabInputCustom)) {
-          return;
-        }
-        const uri = input.uri;
-        const sourceTab = findSourceTab(uri.toString(), "quoll", QuollEditorPanel.viewType);
-        // Observability for the documented caret non-preservation on this path.
-        console.info(
-          "[quoll] palette forward: caret not preserved (use the button or ⌘⌥E / Ctrl+Alt+E)"
-        );
-        try {
-          await openInTextEditor(uri);
-          // Record intent AFTER the open succeeds and BEFORE the source close,
-          // so the surface-restore watcher adopts "text" instead of bouncing
-          // this deliberate swap (and a failed open records nothing).
-          noteSurface(uri.toString(), "text");
-          await finalizeSurfaceSwap(uri, sourceTab);
-        } catch (err) {
-          surfaceError("could not open the text editor", err);
-        }
+        // The active tab is the Quoll custom editor here (onQuollTab). Delegate
+        // to the shared forward-swap helper — also the title-bar
+        // `quoll.reopenInTextEditor` handler — so both drive one swap path. This
+        // is the Command-Palette forward entry; caret is not preserved (a rare,
+        // acceptable gap — see reopenActiveQuollTabAsText).
+        await reopenActiveQuollTabAsText();
         return;
       }
       case "to-quoll": {

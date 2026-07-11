@@ -141,6 +141,38 @@ describe("⌘⌥E in-place editor-surface swap", function () {
     assert.ok(!tabs.some(customTab(uri)), "Quoll tab must be closed");
   });
 
+  it("forward via quoll.reopenInTextEditor command: Quoll→text closes the Quoll tab", async () => {
+    // Pins the title-bar button's command-id → handler wiring end-to-end. The
+    // other forward cases drive the webview switch-to-text host path
+    // (simulateInbound); this one invokes the NEW command id the file-code
+    // title-bar button is wired to, so a typo between package.json's
+    // contributes.commands / editor/title menu and extension.ts's
+    // registerCommand would surface here (package-contributions.test.ts only
+    // asserts the declarative shape, never invokes the command).
+    const uri = tempMd("cmd-fwd.md");
+    await vscode.commands.executeCommand("vscode.openWith", uri, VIEW_TYPE);
+    const harness = await getHarness();
+    await harness.waitForEvent(isDocumentEvent, 8000);
+    await tick(300);
+
+    await vscode.commands.executeCommand("quoll.reopenInTextEditor");
+
+    const deadline = Date.now() + 8000;
+    while (Date.now() < deadline) {
+      const tabs = allTabs();
+      if (tabs.some(textTab(uri)) && !tabs.some(customTab(uri))) {
+        break;
+      }
+      await tick(100);
+    }
+    const tabs = allTabs();
+    assert.ok(tabs.some(textTab(uri)), "text tab must be open");
+    assert.ok(
+      !tabs.some(customTab(uri)),
+      `Quoll tab must be closed — ${JSON.stringify(tabs.map((t) => t.label))}`
+    );
+  });
+
   it("reverse (clean): text→Quoll closes the text tab", async () => {
     const uri = tempMd("clean-rev.md");
     const doc = await vscode.workspace.openTextDocument(uri);
