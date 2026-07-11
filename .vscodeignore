@@ -23,6 +23,11 @@
 !dist/
 !dist/**
 
+# Getting Started walkthrough media — markdown referenced from
+# contributes.walkthroughs in package.json.
+!walkthroughs/
+!walkthroughs/**
+
 # Marketplace metadata — vsce requires these at the extension root.
 !package.json
 !README.md

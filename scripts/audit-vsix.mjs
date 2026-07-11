@@ -119,6 +119,7 @@ const ALLOWED_PAYLOAD = [
   /^notice(\.txt)?$/i,
   /^changelog\.md$/i,
   /^dist\/[\w./-]+\.(cjs|js|css|json)$/,
+  /^walkthroughs\/getting-started\/[\w-]+\.md$/,
 ];
 
 // Required runtime files. vsce enforces package.json#main exists, but

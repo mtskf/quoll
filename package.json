@@ -27,7 +27,7 @@
     "gfm",
     "MEO"
   ],
-  "version": "0.1.35",
+  "version": "0.1.36",
   "publisher": "mtskf",
   "type": "module",
   "engines": {
@@ -142,6 +142,61 @@
         "key": "ctrl+k",
         "mac": "cmd+k",
         "when": "activeCustomEditorId == 'quoll.editMarkdown'"
+      }
+    ],
+    "walkthroughs": [
+      {
+        "id": "quoll.gettingStarted",
+        "title": "Get Started with Quoll",
+        "description": "A Notion- and Obsidian-style Markdown editor, right inside VS Code.",
+        "steps": [
+          {
+            "id": "openInQuoll",
+            "title": "Open a Markdown file in Quoll",
+            "description": "Quoll turns any `.md` file into a rich, Notion- and Obsidian-style editor — while keeping raw Markdown as the single source of truth underneath.",
+            "media": {
+              "markdown": "walkthroughs/getting-started/open-in-quoll.md"
+            }
+          },
+          {
+            "id": "caretReveal",
+            "title": "Watch your caret reveal the Markdown",
+            "description": "Move your caret over bold text, a heading, or a link, and its raw Markdown syntax reveals for editing. Move away, and it conceals back into clean, rendered text.",
+            "media": {
+              "markdown": "walkthroughs/getting-started/caret-reveal.md"
+            }
+          },
+          {
+            "id": "toggleEditor",
+            "title": "Toggle between rich and text editing",
+            "description": "Switch to VS Code's built-in text editor to see the raw Markdown, then switch back — your cursor position carries over either way.",
+            "media": {
+              "markdown": "walkthroughs/getting-started/toggle-editor.md"
+            }
+          },
+          {
+            "id": "outline",
+            "title": "Navigate with the Outline view",
+            "description": "Every heading in your document shows up in VS Code's built-in Outline view, so you can jump around long documents without scrolling.",
+            "media": {
+              "markdown": "walkthroughs/getting-started/outline.md"
+            },
+            "completionEvents": [
+              "onView:outline"
+            ]
+          },
+          {
+            "id": "lintSettings",
+            "title": "Tune inline lint feedback",
+            "description": "Quoll lints your Markdown as you type. Adjust the gutter marker, the Problems-panel mirror, and native spellcheck to taste.",
+            "media": {
+              "markdown": "walkthroughs/getting-started/lint-settings.md"
+            },
+            "completionEvents": [
+              "onSettingChanged:quoll.lint.gutter.enabled"
+            ]
+          }
+        ]
       }
     ]
   },
