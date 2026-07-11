@@ -30,51 +30,15 @@
 // innermost construct. The tree comes from ensureSyntaxTree so a freshly-seeded
 // long doc whose caret region is not yet lazily parsed still classifies.
 //
-// Imports only the pure column-math helper columnAt from list-geometry.ts;
-// the task-fold helpers there (fail-closed semantics) are still not used here.
+// Imports the pure column-math helper columnAt from list-geometry.ts and the
+// shared caret→ListItem resolver (listItemAt / listMarkOf) from list-tree.ts;
+// the task-fold helpers in list-geometry.ts are still not used here.
 
-import { ensureSyntaxTree, syntaxTree } from "@codemirror/language";
 import { type ChangeSpec, type EditorState, Prec } from "@codemirror/state";
 import { type Command, type EditorView, keymap } from "@codemirror/view";
 
 import { columnAt } from "./list-geometry.js";
-
-// Derive SyntaxNode from syntaxTree's return type (same strategy as
-// list-geometry.ts — @lezer/common is a direct dep as of PR #66, derived rather
-// than imported to keep the direct-dep surface narrow).
-type Tree = ReturnType<typeof syntaxTree>;
-type SyntaxNode = Tree["topNode"];
-
-/** The innermost `ListItem` for the line containing `head`, or null when that
- *  line is not in a list item OR the probe sits inside a `FencedCode` /
- *  `CodeBlock`. Probes the line's first non-whitespace column, not `head`. */
-function listItemAt(state: EditorState, head: number): SyntaxNode | null {
-  const line = state.doc.lineAt(head);
-  const blank = line.text.trim() === "";
-  const wsLen = line.text.length - line.text.trimStart().length;
-  // Blank line: probe at line.from. If that position is structurally inside a
-  // ListItem (a loose item's blank interior line), the item is still returned;
-  // otherwise the walk-up reaches Document and returns null.
-  const probe = blank ? line.from : line.from + wsLen;
-  const tree = ensureSyntaxTree(state, line.to, 50) ?? syntaxTree(state);
-  let node: SyntaxNode | null = tree.resolveInner(probe, 1);
-  while (node !== null) {
-    if (node.name === "FencedCode" || node.name === "CodeBlock") {
-      return null;
-    }
-    if (node.name === "ListItem") {
-      return node;
-    }
-    node = node.parent;
-  }
-  return null;
-}
-
-/** The item's `ListMark` child, or null on grammar drift. */
-function listMarkOf(item: SyntaxNode): SyntaxNode | null {
-  const first = item.firstChild;
-  return first !== null && first.name === "ListMark" ? first : null;
-}
+import { listItemAt, listMarkOf, type SyntaxNode } from "./list-tree.js";
 
 /** Column where the item's content begins (its ListMark's next sibling), or
  *  null when the item is empty / malformed. This is the nesting target column:
