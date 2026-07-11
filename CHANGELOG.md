@@ -5,6 +5,7 @@ All notable changes to Quoll are documented here.
 ## 0.1.41 — 2026-07-11
 
 ### Fixed
+- external vertical gap for the fenced-code panel and its collapse-bar footers (#195)
 - vertical gap between block panels and adjacent blocks (#194)
 - cat title-bar button swaps to Quoll in place instead of opening a second tab (#193)
 
