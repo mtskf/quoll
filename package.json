@@ -27,7 +27,7 @@
     "gfm",
     "MEO"
   ],
-  "version": "0.1.38",
+  "version": "0.1.39",
   "publisher": "mtskf",
   "type": "module",
   "engines": {
@@ -125,6 +125,51 @@
           "type": "boolean",
           "default": true,
           "markdownDescription": "Enable the editor's native spellchecker (red squiggly underlines) on the Quoll editing surface. On by default. Turning it off sets the `spellcheck` attribute on the editor to `false` so no native spell suggestions appear."
+        },
+        "quoll.editor.fontFamily": {
+          "type": "string",
+          "enum": ["default", "serif", "sans"],
+          "default": "default",
+          "enumDescriptions": [
+            "Inherit the VS Code editor font (current behaviour).",
+            "A serif reading font (Georgia).",
+            "A sans-serif reading font."
+          ],
+          "markdownDescription": "Font family for the Quoll editing surface. **Default** inherits your VS Code font; **Serif** / **Sans** apply a curated reading font. Set from the outline sidebar's Settings popover."
+        },
+        "quoll.editor.fontSize": {
+          "type": "string",
+          "enum": ["small", "default", "large", "x-large"],
+          "default": "default",
+          "enumDescriptions": [
+            "Slightly smaller than the default reading size.",
+            "The default reading size (current behaviour).",
+            "Larger reading size.",
+            "Largest reading size."
+          ],
+          "markdownDescription": "Font size for the Quoll editing surface, relative to your VS Code font size. **Default** keeps the current reading size. Set from the outline sidebar's Settings popover."
+        },
+        "quoll.editor.lineHeight": {
+          "type": "string",
+          "enum": ["compact", "cozy", "roomy"],
+          "default": "cozy",
+          "enumDescriptions": [
+            "Tighter line spacing.",
+            "The default line spacing (current behaviour).",
+            "Looser line spacing."
+          ],
+          "markdownDescription": "Line height for the Quoll editing surface. **Cozy** is the current spacing. Set from the outline sidebar's Settings popover."
+        },
+        "quoll.editor.contentWidth": {
+          "type": "string",
+          "enum": ["narrow", "medium", "wide"],
+          "default": "medium",
+          "enumDescriptions": [
+            "Narrower reading column.",
+            "The default reading column width (current behaviour).",
+            "Wider reading column."
+          ],
+          "markdownDescription": "Reading-column width for the Quoll editing surface. **Medium** is the current width. Set from the outline sidebar's Settings popover."
         }
       }
     },
