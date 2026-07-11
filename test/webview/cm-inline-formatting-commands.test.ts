@@ -100,6 +100,32 @@ describe("computeInlineFormat — unwrap (round-trip)", () => {
   });
 });
 
+describe("computeInlineFormat — code & strike unwrap / round-trip", () => {
+  it("unwraps inline code (single backtick) when the inner text is selected", () => {
+    expect(applyFormat("`foo`", { anchor: 1, head: 4 }, "code").doc).toBe("foo");
+  });
+
+  it("wrap then unwrap is byte-identical (code)", () => {
+    const wrapped = applyFormat("foo", { anchor: 0, head: 3 }, "code");
+    expect(wrapped.doc).toBe("`foo`");
+    expect(applyFormat(wrapped.doc, { anchor: wrapped.from, head: wrapped.to }, "code").doc).toBe(
+      "foo"
+    );
+  });
+
+  it("unwraps strikethrough (double tilde) when the inner text is selected", () => {
+    expect(applyFormat("~~foo~~", { anchor: 2, head: 5 }, "strike").doc).toBe("foo");
+  });
+
+  it("wrap then unwrap is byte-identical (strike)", () => {
+    const wrapped = applyFormat("foo", { anchor: 0, head: 3 }, "strike");
+    expect(wrapped.doc).toBe("~~foo~~");
+    expect(applyFormat(wrapped.doc, { anchor: wrapped.from, head: wrapped.to }, "strike").doc).toBe(
+      "foo"
+    );
+  });
+});
+
 describe("computeInlineFormat — empty selection", () => {
   it("inserts a bold marker pair with the caret between them", () => {
     const r = applyFormat("", { anchor: 0 }, "bold");

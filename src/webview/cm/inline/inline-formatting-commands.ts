@@ -26,7 +26,6 @@ import {
 import type { EditorView } from "@codemirror/view";
 
 export type FormatAction = "bold" | "italic" | "code" | "strike" | "link";
-export const FORMAT_ACTIONS: readonly FormatAction[] = ["bold", "italic", "code", "strike", "link"];
 
 // open === close for every inline mark; a single `marker` string is enough.
 const MARKERS: Record<Exclude<FormatAction, "link">, string> = {
@@ -143,6 +142,15 @@ export function computeInlineFormat(state: EditorState, action: FormatAction): F
 /** Dispatch wrapper. Guards read-only; the edit rides the normal dispatch ->
  *  edit-sync -> host write-lock pipeline. Returns true on dispatch. */
 export function runFormatCommand(view: EditorView, action: FormatAction): boolean {
+  // Only act when the editor content owns focus. The host keybindings are scoped
+  // to `activeCustomEditorId`, which is true whenever the Quoll panel is active —
+  // including when focus sits in another webview control (e.g. the CodeMirror
+  // search/replace panel). Without this guard, Cmd+B pressed there would format
+  // the editor's last selection instead of no-op'ing. `hasFocus` is true only
+  // while `.cm-content` holds focus.
+  if (!view.hasFocus) {
+    return false;
+  }
   if (view.state.readOnly) {
     return false;
   }
