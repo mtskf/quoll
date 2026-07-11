@@ -2,6 +2,16 @@
 
 All notable changes to Quoll are documented here.
 
+## 0.1.37 — 2026-07-11
+
+### Added
+
+- Smart list continuation: pressing Enter at the end of a list item now continues the list (adding the next bullet, or the next number for ordered lists) instead of just inserting a blank line, and pressing Enter on an empty list item exits the list instead of leaving a dangling empty marker. Deleting or reordering items in an ordered list renumbers the remaining items to stay sequential.
+
+### Changed
+
+- Refresh the Marketplace branding: a new extension icon, updated hero and editor-overview images, and a tidied README header.
+
 ## 0.1.x (0.1.1 – 0.1.36, combined)
 
 *Combined patch-release notes, newest first. Releases after 0.1.36 get their own per-version sections above.*
