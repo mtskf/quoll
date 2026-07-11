@@ -1,1 +1,1 @@
-export { quollLint } from "./extension.js";
+export { proseLintEnabled, quollLint } from "./extension.js";

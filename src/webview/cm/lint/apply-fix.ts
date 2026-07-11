@@ -21,6 +21,7 @@ import { type EditorState, type Extension, Prec } from "@codemirror/state";
 import { type Command, keymap } from "@codemirror/view";
 
 import { lintMarkdown } from "./engine.js";
+import { proseLintEnabled } from "./extension.js";
 
 /** The "apply fix" chord. Single source of truth — used by the keymap and
  *  pinned by a unit test. Mod = Cmd (mac) / Ctrl (win+linux). Chosen to mirror
@@ -43,7 +44,11 @@ type Fix = { from: number; to: number; insert: string };
  *  future rule emits unordered or overlapping fixes. Pure (calls the engine);
  *  may throw if the engine throws — the caller catches. */
 function collectFreshFixesForSelection(state: EditorState): Fix[] {
-  const diagnostics = lintMarkdown(state.doc.toString());
+  // Pass the live prose-gate so the fix path stays consistent with the displayed
+  // diagnostic set. Inert in v1 (no prose rule emits a `fix`), but forward-correct
+  // the day one does — otherwise a prose fix would be invisible to Mod-. while its
+  // underline showed. Same-value semantics as the compute plugin's facet read.
+  const diagnostics = lintMarkdown(state.doc.toString(), { prose: state.facet(proseLintEnabled) });
   const spans = state.selection.ranges.map((r) => {
     // Exclude a line the selection only touches at its very start: a non-empty
     // range ending exactly at lineN.from selected lineN-1, not lineN (CM ranges

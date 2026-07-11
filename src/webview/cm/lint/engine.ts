@@ -2,8 +2,33 @@ import { markdownLanguage } from "@codemirror/lang-markdown";
 import type { ChangedRange } from "@lezer/common";
 import { TreeFragment } from "@lezer/common";
 import { frontmatterContentLines, leadingFrontmatterBodyStart } from "./frontmatter-range.js";
-import { FRONTMATTER_RULES, RULES } from "./rules/index.js";
-import type { LintDiagnostic } from "./types.js";
+import { FRONTMATTER_RULES, PROSE_RULES, RULES } from "./rules/index.js";
+import type { LintContext, LintDiagnostic, LintRule } from "./types.js";
+
+// Caller-selected lint options. A named-field bag (not a positional boolean) so
+// the engine — advertised for reuse by a future host-side DiagnosticCollection —
+// can grow more toggles/thresholds without an API break. `prose` gates the
+// opt-in advisory prose rules; absent ⇒ off (fail-safe default `{}`).
+export type LintOptions = { readonly prose?: boolean };
+
+// Run one rule with per-rule fail-open isolation: a throwing rule contributes no
+// findings and logs, instead of taking down every OTHER rule's output. The whole
+// lintMarkdown call is ALSO wrapped once by safeLint (extension.ts), but that
+// call-level guard would drop EVERY finding — including the structural ones a
+// user relies on — if any single rule threw. The prose rules (regex + tokenizer)
+// are the most throw-prone in the set, so their failure must not erase the
+// structural squiggles. Isolation applies to all rules uniformly (structural
+// rules never throw on valid input, so this changes nothing for them).
+// Exported for the isolation unit test (a throwing rule yields [] without taking
+// down the others); not part of the engine's public entry-point surface.
+export function runRuleSafely(rule: LintRule, ctx: LintContext): LintDiagnostic[] {
+  try {
+    return rule(ctx);
+  } catch (err) {
+    console.error("[quoll] lint rule threw; skipping it", err);
+    return [];
+  }
+}
 
 // The GFM-configured Markdown parser, matching what the editor renders. Point
 // straight at `markdownLanguage.parser` (a MarkdownParser) instead of building it
@@ -25,11 +50,19 @@ type ParseTree = ReturnType<typeof PARSER.parse>;
 // re-offset back into whole-document coordinates by the sliced-off frontmatter
 // length. UNSORTED — `combine` merges these with the frontmatter findings and
 // sorts the union once.
-function lintBody(text: string, tree: ParseTree, bodyStart: number): LintDiagnostic[] {
-  const ctx = { text, tree };
-  return RULES.flatMap((rule) => rule(ctx)).map((d) =>
-    bodyStart > 0 ? shiftDiagnostic(d, bodyStart) : d
-  );
+function lintBody(
+  text: string,
+  tree: ParseTree,
+  bodyStart: number,
+  options: LintOptions
+): LintDiagnostic[] {
+  const ctx: LintContext = { text, tree };
+  // Prose rules run only when opted in; appended after the structural rules
+  // (combine() sorts the merged output by position).
+  const rules = options.prose === true ? [...RULES, ...PROSE_RULES] : RULES;
+  return rules
+    .flatMap((rule) => runRuleSafely(rule, ctx))
+    .map((d) => (bodyStart > 0 ? shiftDiagnostic(d, bodyStart) : d));
 }
 
 // Run the frontmatter lint pass over the sliced-off leading block. `bodyStart` is
@@ -82,9 +115,9 @@ function sliceBody(raw: string): [text: string, bodyStart: number] {
 // host-side VS Code DiagnosticCollection) behind the same signature. May throw
 // on pathological input (the parser's own failure mode); callers that drive the
 // editor wrap it in `safeLint` (extension.ts) for fail-open behaviour.
-export function lintMarkdown(raw: string): LintDiagnostic[] {
+export function lintMarkdown(raw: string, options: LintOptions = {}): LintDiagnostic[] {
   const [text, bodyStart] = sliceBody(raw);
-  return combine(raw, lintBody(text, PARSER.parse(text), bodyStart), bodyStart);
+  return combine(raw, lintBody(text, PARSER.parse(text), bodyStart, options), bodyStart);
 }
 
 // A single conservative changed range bracketing where two strings differ:
@@ -123,10 +156,13 @@ export function diffRange(a: string, b: string): ChangedRange {
 // EditorView: the debounced compute plugin owns one, cleared implicitly when the
 // plugin is destroyed. Pinned by the tree-shape parity + diagnostics-equivalence
 // tests, not taken on faith.
-export function createIncrementalLinter(): (raw: string) => LintDiagnostic[] {
+export function createIncrementalLinter(): (
+  raw: string,
+  options?: LintOptions
+) => LintDiagnostic[] {
   let prevBody: string | null = null;
   let prevTree: ParseTree | null = null;
-  return (raw: string): LintDiagnostic[] => {
+  return (raw: string, options: LintOptions = {}): LintDiagnostic[] => {
     const [text, bodyStart] = sliceBody(raw);
     let tree: ParseTree;
     if (prevBody === null || prevTree === null) {
@@ -143,7 +179,7 @@ export function createIncrementalLinter(): (raw: string) => LintDiagnostic[] {
     // is deliberate — do NOT move these below `lintBody` "to be safe".
     prevBody = text;
     prevTree = tree;
-    return combine(raw, lintBody(text, tree, bodyStart), bodyStart);
+    return combine(raw, lintBody(text, tree, bodyStart, options), bodyStart);
   };
 }
 

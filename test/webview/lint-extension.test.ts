@@ -1,14 +1,15 @@
 // @vitest-environment happy-dom
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
-import { EditorState, Text } from "@codemirror/state";
+import { Compartment, EditorState, Text } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { LintDiagnosticWire } from "../../src/shared/protocol.js";
+import { type LintDiagnosticWire, MAX_LINT_DIAGNOSTICS } from "../../src/shared/protocol.js";
 import { lintMarkdown } from "../../src/webview/cm/lint/engine.js";
 import {
   buildLintDecorations,
   diagnosticsAt,
   lintField,
+  proseLintEnabled,
   quollLint,
   setLintDiagnostics,
   toWireDiagnostics,
@@ -469,6 +470,54 @@ describe("toWireDiagnostics (offset → 0-based line/character)", () => {
       ].sort()
     );
   });
+
+  it("caps the wire set at MAX_LINT_DIAGNOSTICS so the host never rejects the whole mirror", () => {
+    // The host's lint-diagnostics boundary validator rejects the ENTIRE message
+    // when diagnostics.length > MAX_LINT_DIAGNOSTICS, which would blank the
+    // Problems mirror. A dense prose document can realistically exceed the cap;
+    // bound here so a partial mirror survives instead. REVERT-CHECK: removing the
+    // cap makes this length assertion fail.
+    const over = MAX_LINT_DIAGNOSTICS + 5;
+    const doc = Text.of(["a".repeat(over + 1)]);
+    const diags: LintDiagnostic[] = Array.from({ length: over }, (_, i) => ({
+      from: i,
+      to: i + 1,
+      severity: "info" as const,
+      code: "filler-words" as const,
+      message: "f",
+    }));
+    expect(toWireDiagnostics(doc, diags)).toHaveLength(MAX_LINT_DIAGNOSTICS);
+  });
+
+  it("keeps every structural warning when prose info overflows the cap", () => {
+    // A late structural warning (by position) must NOT be evicted from the mirror
+    // by dense earlier prose info: warnings are kept unconditionally, info fills
+    // the remaining budget. REVERT-CHECK: a naive first-N-by-position slice drops
+    // this warning (it sits past position MAX_LINT_DIAGNOSTICS), failing the
+    // `.some(warning)` assertion.
+    const infoCount = MAX_LINT_DIAGNOSTICS + 1;
+    const doc = Text.of(["a".repeat(infoCount + 2)]);
+    const diags: LintDiagnostic[] = Array.from({ length: infoCount }, (_, i) => ({
+      from: i,
+      to: i + 1,
+      severity: "info" as const,
+      code: "filler-words" as const,
+      message: "f",
+    }));
+    // A structural warning positioned AFTER the whole info run.
+    diags.push({
+      from: infoCount,
+      to: infoCount + 1,
+      severity: "warning",
+      code: "no-trailing-spaces",
+      message: "w",
+    });
+    const wire = toWireDiagnostics(doc, diags);
+    expect(wire).toHaveLength(MAX_LINT_DIAGNOSTICS);
+    expect(wire.some((d) => d.severity === "warning" && d.code === "no-trailing-spaces")).toBe(
+      true
+    );
+  });
 });
 
 describe("quollLint diagnostics publisher (sink)", () => {
@@ -543,5 +592,90 @@ describe("quollLint diagnostics publisher (sink)", () => {
       extensions: [markdown({ base: markdownLanguage }), quollLint()],
     });
     expect(state.field(lintField).some((d) => d.code === "heading-increment")).toBe(true);
+  });
+});
+
+describe("prose-lint live toggle (facet + compartment)", () => {
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => vi.useRealTimers());
+
+  // Trailing spaces ⇒ a structural finding (no-trailing-spaces); "very" ⇒ a prose
+  // finding (filler-words) once the gate is on. So both layers are observable.
+  const DOC = "This is very good.   \n";
+  const PROSE = new Set(["passive-voice", "filler-words", "long-sentence"]);
+  const has = (view: EditorView, code: string) =>
+    view.state.field(lintField).some((d) => d.code === code);
+  const anyProse = (view: EditorView) => view.state.field(lintField).some((d) => PROSE.has(d.code));
+
+  // Mount a view wired exactly like editor.ts: quollLint + a prose compartment
+  // defaulting off. Returns the view + a reconfigure(enabled) helper.
+  function mount(doc = DOC) {
+    const comp = new Compartment();
+    const view = new EditorView({
+      doc,
+      parent: document.body,
+      extensions: [
+        markdown({ base: markdownLanguage }),
+        quollLint(),
+        comp.of(proseLintEnabled.of(false)),
+      ],
+    });
+    const setProse = (enabled: boolean) =>
+      view.dispatch({ effects: comp.reconfigure(proseLintEnabled.of(enabled)) });
+    return { view, setProse };
+  }
+
+  it("no prose findings at mount; structural findings present immediately", () => {
+    const { view } = mount();
+    try {
+      expect(anyProse(view)).toBe(false);
+      expect(has(view, "no-trailing-spaces")).toBe(true);
+    } finally {
+      view.destroy();
+    }
+  });
+
+  it("enabling adds prose underlines within one debounce window; disabling clears them", () => {
+    const { view, setProse } = mount();
+    try {
+      setProse(true);
+      expect(anyProse(view)).toBe(false); // still debounced right after the toggle
+      vi.advanceTimersByTime(300);
+      expect(has(view, "filler-words")).toBe(true);
+      expect(has(view, "no-trailing-spaces")).toBe(true); // structural unaffected
+
+      setProse(false);
+      vi.advanceTimersByTime(300);
+      expect(anyProse(view)).toBe(false);
+      expect(has(view, "no-trailing-spaces")).toBe(true);
+    } finally {
+      view.destroy();
+    }
+  });
+
+  it("resolves to the latest flag regardless of toggle/docChange order", () => {
+    // docChange then enable (both before advancing) → prose on.
+    const a = mount();
+    try {
+      a.view.dispatch({ changes: { from: a.view.state.doc.length, insert: "Really nice.\n" } });
+      a.setProse(true);
+      vi.advanceTimersByTime(300);
+      expect(a.view.state.field(lintField).filter((d) => d.code === "filler-words").length).toBe(2);
+    } finally {
+      a.view.destroy();
+    }
+
+    // Rapid enable → disable → docChange (no advance between) must settle OFF.
+    const b = mount();
+    try {
+      b.setProse(true);
+      b.setProse(false);
+      b.view.dispatch({ changes: { from: b.view.state.doc.length, insert: "x" } });
+      vi.advanceTimersByTime(300);
+      expect(anyProse(b.view)).toBe(false);
+      expect(has(b.view, "no-trailing-spaces")).toBe(true);
+    } finally {
+      b.view.destroy();
+    }
   });
 });

@@ -73,6 +73,31 @@ describe("isRelevantConfigChange", () => {
     expect(seen).toContainEqual(["quoll.editor.spellcheck", undefined]);
   });
 
+  it("treats quoll.lint.prose.enabled (unscoped) as a relevant change", () => {
+    // Guards the single re-push gate in the panel: omitting the prose key from the
+    // isRelevantConfigChange([...]) array would silently stop live re-pushes to
+    // open webviews when the prose setting is toggled. Prose is a boolean setting,
+    // so — like the gutter / spellcheck booleans — it is checked UNSCOPED.
+    const onlyProse = {
+      affectsConfiguration: (section: string, scope?: unknown) =>
+        section === "quoll.lint.prose.enabled" && scope === undefined,
+    };
+    expect(
+      isRelevantConfigChange(onlyProse, URI, [
+        "quoll.lint.gutter.enabled",
+        "quoll.lint.prose.enabled",
+        "quoll.editor.spellcheck",
+      ])
+    ).toBe(true);
+    // Absent from the key list ⇒ not relevant (documents the gate's dependency).
+    expect(
+      isRelevantConfigChange(onlyProse, URI, [
+        "quoll.lint.gutter.enabled",
+        "quoll.editor.spellcheck",
+      ])
+    ).toBe(false);
+  });
+
   it("is true when a resource-scoped preset key is affected, false otherwise", () => {
     const only = (match: string, scoped: boolean) => ({
       affectsConfiguration: (section: string, scope?: unknown) =>

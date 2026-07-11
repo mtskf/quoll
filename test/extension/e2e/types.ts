@@ -85,6 +85,7 @@ type EditorPrefKeyShape =
 export type EditorConfigMessageShape = EnvelopeShape & {
   type: "editor-config";
   lintGutter: boolean;
+  proseLint: boolean;
   spellcheck: boolean;
   fontFamily: FontFamilyPrefShape;
   fontSize: FontSizePrefShape;

@@ -213,12 +213,14 @@ export type ThemeMessage = Envelope & {
  *  lifecycle (it carries no content / version), so it is delivered as its own
  *  message rather than folded into DocumentMessage: a settings change must not
  *  force a full document reseed. Pushed at seed time and on
- *  workspace.onDidChangeConfiguration. Carries the editor-surface flags — the
- *  opt-in advisory-lint gutter and the native-spellcheck toggle — modelled to
- *  grow (add fields, keep the type) as more editor-surface settings appear. */
+ *  workspace.onDidChangeConfiguration. Carries every editor-surface setting —
+ *  the opt-in advisory-lint gutter, the opt-in advisory prose lint, the native-
+ *  spellcheck toggle, and the four typography presets — modelled to grow (add
+ *  fields, keep the type) as more editor-surface settings appear. */
 export type EditorConfigMessage = Envelope & {
   type: "editor-config";
   lintGutter: boolean;
+  proseLint: boolean;
   spellcheck: boolean;
   fontFamily: FontFamilyPref;
   fontSize: FontSizePref;
@@ -614,6 +616,7 @@ export function isHostToWebview(value: unknown): value is HostToWebview {
     case "editor-config":
       return (
         typeof v.lintGutter === "boolean" &&
+        typeof v.proseLint === "boolean" &&
         typeof v.spellcheck === "boolean" &&
         isPrefValue("quoll.editor.fontFamily", v.fontFamily) &&
         isPrefValue("quoll.editor.fontSize", v.fontSize) &&

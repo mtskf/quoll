@@ -43,7 +43,7 @@ import {
 import { quollLinkClickHandler } from "./cm/link-handlers.js";
 import { quollLintFixKeymap } from "./cm/lint/apply-fix.js";
 import { quollLintGutter } from "./cm/lint/gutter.js";
-import { quollLint } from "./cm/lint/index.js";
+import { proseLintEnabled, quollLint } from "./cm/lint/index.js";
 import { listContinuationKeymap } from "./cm/list/list-continuation-keymap.js";
 import { listHangIndent } from "./cm/list/list-hang-indent.js";
 import { listIndentKeymap } from "./cm/list/list-indent-keymap.js";
@@ -118,6 +118,11 @@ export type EditorHandle = {
    *  gutter extension is wholly present (on) or absent (off); off restores the
    *  pixel-identical no-gutter layout. Driven by the host's editor-config push. */
   setLintGutter(enabled: boolean): void;
+  /** Toggle the opt-in advisory PROSE lint rules (passive-voice / filler-words /
+   *  long-sentence). Reconfigures the prose-lint Compartment so the proseLintEnabled
+   *  facet flips; the debounced lint compute re-runs within one debounce window,
+   *  adding/clearing the prose underlines. Driven by the host's editor-config push. */
+  setProseLint(enabled: boolean): void;
   /** Toggle the native (Electron) spellchecker on the contenteditable surface.
    *  Reconfigures a Compartment holding `EditorView.contentAttributes` so the
    *  `spellcheck` attribute on `.cm-content` flips true/false. Driven by the
@@ -214,6 +219,11 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
   const lineSepComp = new Compartment();
   const lintGutterCompartment = new Compartment();
   const lintGutterExtension = quollLintGutter();
+  // Opt-in advisory prose-lint gate: a Compartment holding the proseLintEnabled
+  // facet value, reconfigured by the host's editor-config push (setProseLint
+  // below). Defaults to `false` (matching the quoll.lint.prose.enabled default),
+  // so the prose rules stay dormant until the host pushes the live setting.
+  const proseLintCompartment = new Compartment();
   // Native-spellcheck toggle: a Compartment holding EditorView.contentAttributes
   // so the `spellcheck` attribute on the contenteditable `.cm-content` flips.
   // Reconfigured by the host's editor-config push (setSpellcheck below).
@@ -231,6 +241,11 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
   // (the eager-seed + ready double-send, or an unrelated config change) is a
   // no-op instead of a churn-inducing reconfigure.
   let lintGutterEnabled = false;
+  // Mirrors the prose-lint compartment's default-off state so a redundant same-
+  // value push (the eager-seed + ready double-send, or an unrelated config
+  // change) is a no-op instead of a churn-inducing reconfigure — same posture as
+  // the gutter. Named distinctly from the `proseLintEnabled` facet to avoid shadowing.
+  let proseLintOn = false;
   // Mirrors the spellcheck compartment's initial state (default ON, matching
   // the `quoll.editor.spellcheck` default) so a redundant same-value push is a
   // no-op instead of a churn-inducing reconfigure — same posture as the gutter.
@@ -442,6 +457,12 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
         // via shell.setLintGutter. A read-only view of lintField — no document
         // mutation, no write-gate coupling.
         lintGutterCompartment.of([]),
+        // Opt-in advisory prose-lint gate. The proseLintEnabled facet drives
+        // whether the engine runs the prose rules; held in a Compartment so the
+        // host's editor-config push (setProseLint) can flip it at runtime.
+        // Defaults false (matching quoll.lint.prose.enabled) so no prose
+        // underlines appear until the host pushes the live setting. Display-only.
+        proseLintCompartment.of(proseLintEnabled.of(false)),
         // Native-spellcheck attribute, held in a Compartment so the host's
         // editor-config push can flip `spellcheck` on the contenteditable
         // `.cm-content` at runtime. Defaults ON (matching quoll.editor.spellcheck)
@@ -793,6 +814,20 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
       lintGutterEnabled = enabled;
       view.dispatch({
         effects: lintGutterCompartment.reconfigure(enabled ? lintGutterExtension : []),
+      });
+    },
+    setProseLint(enabled) {
+      // Same-value guard lives ONLY here (dispatch-skip): the compute plugin
+      // re-schedules purely on the facet value CHANGING, so a guarded no-op simply
+      // never dispatches — no need to re-check the value downstream. Mirrors the
+      // gutter's guard; the host posts editor-config at eager-seed + `ready` + on
+      // every relevant config change, so duplicates must not churn the compartment.
+      if (enabled === proseLintOn) {
+        return;
+      }
+      proseLintOn = enabled;
+      view.dispatch({
+        effects: proseLintCompartment.reconfigure(proseLintEnabled.of(enabled)),
       });
     },
     setSpellcheck(enabled) {

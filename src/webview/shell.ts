@@ -230,6 +230,7 @@ export function mountShell(root: HTMLElement, opts: ShellOptions): ShellHandle {
         return;
       case "editor-config":
         editor?.setLintGutter(message.lintGutter);
+        editor?.setProseLint(message.proseLint);
         editor?.setSpellcheck(message.spellcheck);
         editor?.setEditorPrefs({
           fontFamily: message.fontFamily,

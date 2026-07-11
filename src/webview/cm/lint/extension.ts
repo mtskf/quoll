@@ -1,4 +1,11 @@
-import { type Extension, type Range, StateEffect, StateField, type Text } from "@codemirror/state";
+import {
+  type Extension,
+  Facet,
+  type Range,
+  StateEffect,
+  StateField,
+  type Text,
+} from "@codemirror/state";
 import {
   Decoration,
   type DecorationSet,
@@ -7,7 +14,7 @@ import {
   ViewPlugin,
   type ViewUpdate,
 } from "@codemirror/view";
-import type { LintDiagnosticWire } from "../../../shared/protocol.js";
+import { type LintDiagnosticWire, MAX_LINT_DIAGNOSTICS } from "../../../shared/protocol.js";
 import { createIncrementalLinter, lintMarkdown } from "./engine.js";
 import type { LintDiagnostic, LintSeverity } from "./types.js";
 
@@ -28,6 +35,18 @@ function safeLint(
   }
 }
 
+// Gates the opt-in advisory PROSE rules (passive-voice / filler-words /
+// long-sentence). Held in a Compartment in editor.ts and reconfigured by the
+// host's editor-config push (setProseLint), mirroring the lint-gutter compartment
+// shape. A Facet — not a StateField — so it is always readable with a fail-safe
+// default (no source ⇒ `false`, e.g. in tests that mount quollLint() without the
+// compartment) and has no create-order dependency. Read by lintField.create and
+// the debounced compute plugin, both of which pass it to the engine as
+// `{ prose }`. Last-writer-wins over the single source the compartment provides.
+export const proseLintEnabled = Facet.define<boolean, boolean>({
+  combine: (values) => values.at(-1) ?? false,
+});
+
 // Publishes a freshly-computed diagnostic set. Dispatched by the debounced
 // compute plugin; carries NO document change, so applying it never mutates bytes.
 export const setLintDiagnostics = StateEffect.define<readonly LintDiagnostic[]>();
@@ -39,7 +58,8 @@ export const setLintDiagnostics = StateEffect.define<readonly LintDiagnostic[]>(
 // at field creation so a document present at creation lints immediately.
 export const lintField = StateField.define<readonly LintDiagnostic[]>({
   create(state) {
-    return safeLint(lintMarkdown, state.doc.toString());
+    const prose = state.facet(proseLintEnabled);
+    return safeLint((raw) => lintMarkdown(raw, { prose }), state.doc.toString());
   },
   update(value, tr) {
     for (const effect of tr.effects) {
@@ -132,7 +152,13 @@ const lintComputePlugin = ViewPlugin.fromClass(
     private readonly lint = createIncrementalLinter();
 
     update(update: ViewUpdate): void {
-      if (update.docChanged) {
+      // Recompute on a doc change OR a prose-gate toggle. The toggle reconfigures
+      // the prose compartment (a transaction with no doc change), so compare the
+      // facet across the transaction; when it flips, re-lint so the prose
+      // underlines appear/clear within one debounce window (≤ LINT_DEBOUNCE_MS).
+      const proseToggled =
+        update.startState.facet(proseLintEnabled) !== update.state.facet(proseLintEnabled);
+      if (update.docChanged || proseToggled) {
         this.schedule(update.view);
       }
     }
@@ -143,8 +169,13 @@ const lintComputePlugin = ViewPlugin.fromClass(
       }
       this.timer = setTimeout(() => {
         this.timer = undefined;
+        // Read the facet at FIRE time (post-transaction state), so the newest
+        // toggle value is used even if it landed after this was scheduled.
+        const prose = view.state.facet(proseLintEnabled);
         view.dispatch({
-          effects: setLintDiagnostics.of(safeLint(this.lint, view.state.doc.toString())),
+          effects: setLintDiagnostics.of(
+            safeLint((raw) => this.lint(raw, { prose }), view.state.doc.toString())
+          ),
         });
       }, LINT_DEBOUNCE_MS);
     }
@@ -202,11 +233,38 @@ export function diagnosticsAt(
 // 1-based line + its start offset, from which the 0-based VS Code line and the
 // in-line character fall out. Explicit field-by-field projection so the
 // reserved `fix` field of LintDiagnostic never crosses the wire.
+//
+// Bound the set to MAX_LINT_DIAGNOSTICS: the host's `lint-diagnostics` boundary
+// validator REJECTS the whole message when `diagnostics.length` exceeds the cap,
+// which would blank the Problems mirror entirely. Since prose findings (esp.
+// filler-words) can be far denser than the sparse structural rules, a long
+// document could realistically cross 2000. Under the cap the set is unchanged
+// (position order preserved). Over the cap we keep EVERY `warning` (the sparse,
+// structural rules) and fill the remaining budget with `info` findings — which
+// include the dense advisory prose — so advisory prose can never evict a
+// structural warning from the mirror (the same "prose never degrades structural"
+// invariant the per-rule isolation gives the in-editor layer). Warnings are far
+// under 2000 in practice; the trailing `.slice` is a defensive backstop for the
+// pathological warning-only overflow. A partial mirror beats a rejected/blank
+// one. The in-editor underlines read the uncapped lintField, so nothing is
+// hidden in the editor — only the host Problems mirror is bounded to the wire cap.
+function capForWire(diagnostics: readonly LintDiagnostic[]): readonly LintDiagnostic[] {
+  if (diagnostics.length <= MAX_LINT_DIAGNOSTICS) {
+    return diagnostics;
+  }
+  const warnings = diagnostics.filter((d) => d.severity === "warning");
+  const infos = diagnostics.filter((d) => d.severity === "info");
+  const budget = Math.max(0, MAX_LINT_DIAGNOSTICS - warnings.length);
+  return [...warnings, ...infos.slice(0, budget)]
+    .sort((a, b) => a.from - b.from || a.to - b.to)
+    .slice(0, MAX_LINT_DIAGNOSTICS);
+}
+
 export function toWireDiagnostics(
   doc: Text,
   diagnostics: readonly LintDiagnostic[]
 ): LintDiagnosticWire[] {
-  return diagnostics.map((d) => {
+  return capForWire(diagnostics).map((d) => {
     const start = doc.lineAt(d.from);
     const end = doc.lineAt(d.to);
     return {

@@ -685,6 +685,7 @@ describe("isHostToWebview — editor-config", () => {
     protocol: PROTOCOL_VERSION,
     type: "editor-config" as const,
     lintGutter: false,
+    proseLint: false,
     spellcheck: true,
     fontFamily: "default" as const,
     fontSize: "default" as const,
@@ -695,7 +696,18 @@ describe("isHostToWebview — editor-config", () => {
   it("accepts a well-formed editor-config", () => {
     expect(isHostToWebview(valid())).toBe(true);
     expect(isHostToWebview({ ...valid(), lintGutter: true })).toBe(true);
+    expect(isHostToWebview({ ...valid(), proseLint: true })).toBe(true);
     expect(isHostToWebview({ ...valid(), spellcheck: false })).toBe(true);
+  });
+
+  it("rejects a non-boolean proseLint", () => {
+    expect(isHostToWebview({ ...valid(), proseLint: "yes" })).toBe(false);
+    expect(isHostToWebview({ ...valid(), proseLint: 1 })).toBe(false);
+  });
+
+  it("rejects a missing proseLint", () => {
+    const { proseLint: _omit, ...rest } = valid();
+    expect(isHostToWebview(rest)).toBe(false);
   });
 
   it("rejects a non-boolean lintGutter", () => {
@@ -729,6 +741,7 @@ describe("isHostToWebview — editor-config preset fields", () => {
     protocol: PROTOCOL_VERSION,
     type: "editor-config" as const,
     lintGutter: false,
+    proseLint: false,
     spellcheck: true,
     fontFamily: "default" as const,
     fontSize: "default" as const,
