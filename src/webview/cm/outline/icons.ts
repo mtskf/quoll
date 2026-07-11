@@ -3,7 +3,7 @@
 // invariant, enforced by test/markdown/url-choke-point.test.ts). Path data is
 // inlined so no dependency is added; stroke=currentColor makes each icon track
 // its button's `color` (the pin turns red purely via CSS on `.pinned`).
-// Same construction pattern as cm/switch-editor.ts's file-pen-line icon.
+// Same construction pattern as cm/switch-editor.ts's file-code icon.
 
 const SVG_NS = "http://www.w3.org/2000/svg";
 
