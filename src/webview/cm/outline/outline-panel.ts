@@ -3,8 +3,9 @@
 // .quoll-editor host. Hovering the toggle opens the sidebar; the pointer
 // leaving it (grace-delayed), a heading jump, or Mod-Alt-o closes it — unless
 // PINNED via the header pin button. Pinned mode swaps the absolute overlay for
-// a static 2-column flex layout. CSS owns ALL geometry off two host classes
-// (quoll-outline-open / quoll-outline-pinned); this module owns state + DOM.
+// a static 2-column flex layout. CSS owns ALL geometry off three host classes
+// (quoll-outline-open / quoll-outline-pinned / quoll-outline-collapsed); this
+// module owns state + DOM.
 // View-only: clicking a heading dispatches a SELECTION-ONLY transaction (no
 // `changes`), so the round-trip is byte-identical and no Edit is posted. All
 // rebuild work is gated on the sidebar being open AND debounced, so the
@@ -37,8 +38,10 @@ import { createChevronIcon, createMenuIcon, createPinIcon, createSettingsIcon } 
 const TOGGLE_KEY = "Mod-Alt-o";
 
 /** Per-depth indent step (px) and the list's base left padding (px). The base
- *  matches the OUTLINE header's 12px text inset so a first-level (depth 0) row
- *  lines up under the "OUTLINE" label (VS Code side-panel parity). */
+ *  matches the OUTLINE header's 12px left inset (padding-left) so a first-level
+ *  (depth 0) row lines up under the header's left edge — the chevron/twistie
+ *  column — the way VS Code aligns side-panel tree rows under their section
+ *  twistie (the "OUTLINE" label itself sits further right, past the chevron). */
 const INDENT_PX = 12;
 const BASE_PAD_PX = 12;
 

@@ -1076,6 +1076,9 @@ html body {
   .quoll-outline-collapsed .quoll-outline-footer {
     display: none;
   }
+  .quoll-outline-collapsed .quoll-outline-resize-handle {
+    display: none;
+  }
 
   .quoll-outline-list {
     flex: 1 1 auto;

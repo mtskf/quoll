@@ -616,9 +616,13 @@ describe("styles.css — outline sidebar", () => {
     expect(pin).toMatch(/margin-left\s*:\s*auto/); // pushed to the right edge
     expect(pin).toMatch(/border\s*:\s*1px\s+solid/); // reads as a button, not a bare icon
     expect(pin).toMatch(/border-radius\s*:/);
+    expect(pin).toMatch(/background\s*:\s*var\(--vscode-editor-background\)/);
+    const pinSvg = live.match(/\.quoll-outline-pin\s+svg\s*\{[^}]*\}/)?.[0] ?? "";
+    expect(pinSvg).toMatch(/width\s*:\s*14px/);
     const title = live.match(/\.quoll-outline-title\s*\{[^}]*\}/)?.[0] ?? "";
     expect(title).toMatch(/color\s*:\s*var\(--vscode-sideBarSectionHeader-foreground/);
     expect(title).toMatch(/text-transform\s*:\s*uppercase/);
+    expect(title).toMatch(/font-weight\s*:\s*400/);
   });
 
   it("collapses the section body via the host class and rotates the twistie", () => {
@@ -632,6 +636,10 @@ describe("styles.css — outline sidebar", () => {
     expect(chevron).toMatch(/transform\s*:\s*rotate\(0deg\)/);
     const expanded = live.match(/\.quoll-outline-header-toggle\s+svg\s*\{[^}]*\}/)?.[0] ?? "";
     expect(expanded).toMatch(/transform\s*:\s*rotate\(90deg\)/);
+    const collapsedHandle =
+      live.match(/\.quoll-outline-collapsed\s+\.quoll-outline-resize-handle\s*\{[^}]*\}/)?.[0] ??
+      "";
+    expect(collapsedHandle).toMatch(/display\s*:\s*none/);
   });
 
   it("the sidebar consumes the tokens and slides in from the left edge", () => {
