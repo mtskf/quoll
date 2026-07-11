@@ -36,6 +36,7 @@ import type {
 } from "vscode";
 import {
   ColorThemeKind,
+  ConfigurationTarget,
   Disposable,
   env,
   languages,
@@ -71,6 +72,7 @@ import {
 import { createEditSettledBarrier } from "./edit-settled-barrier.js";
 import { createEditorConfigWiring } from "./editor-config-wiring.js";
 import { isRelevantConfigChange, readEditorPrefs } from "./editor-prefs-config.js";
+import { handleUpdateConfig } from "./handle-update-config.js";
 import { takeSwitchCaret } from "./editor-switch-caret.js";
 import { createEffectExecutor } from "./effect-executor.js";
 import { clearActiveFormatPoster, setActiveFormatPoster } from "./format-command.js";
@@ -817,9 +819,34 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
           return;
         }
         case "update-config":
-          // Placeholder (Task 1): keeps the exhaustiveness guard compiling.
-          // Task 3 replaces this with the validated handleUpdateConfig call.
-          break;
+          // Pure side channel: persist an editor-surface preset to GLOBAL config.
+          // Never enters the host-session core (no write lock, no document
+          // mutation) — like open-external / open-link. handleUpdateConfig
+          // re-validates key+value, resets on a default id, and refuses to write
+          // blind under a workspace override. onDidChangeConfiguration then
+          // re-pushes editor-config to every open webview.
+          handleUpdateConfig(raw.key, raw.value, {
+            updateConfig: (key, value) =>
+              workspace.getConfiguration().update(key, value, ConfigurationTarget.Global),
+            inspectOverride: (key) => {
+              // Resource-scoped inspect (round-3 item 5) so a workspace-FOLDER
+              // override for THIS document is seen (workspaceFolderValue is only
+              // populated when the configuration is scoped to a resource uri).
+              const info = workspace.getConfiguration(undefined, document.uri).inspect<string>(key);
+              return {
+                workspace: info?.workspaceValue !== undefined,
+                folder: info?.workspaceFolderValue !== undefined,
+              };
+            },
+            // Re-push the current editor-config so the popover's pending row
+            // clears immediately in the override branch (no config write → no
+            // onDidChangeConfiguration → this is the only signal that reaches it).
+            repush: () => editorConfig.push(),
+            showInfo: (message) =>
+              showSafely(window.showInformationMessage(message), "showInformationMessage"),
+            showError,
+          });
+          return;
         default: {
           // Exhaustiveness guard — when a new WebviewToHost variant is
           // added without a case here, TS flags the assignment as
