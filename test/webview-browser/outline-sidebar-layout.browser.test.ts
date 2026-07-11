@@ -18,6 +18,7 @@ import "../../src/webview/styles.css";
 import { quollFloatingToolbarScroll } from "../../src/webview/cm/floating-toolbar-scroll.js";
 import { quollMarkdownLanguage } from "../../src/webview/cm/markdown.js";
 import { outlinePlugin, quollOutline } from "../../src/webview/cm/outline/index.js";
+import { quollTheme } from "../../src/webview/cm/theme.js";
 
 const DOC = "# Alpha\n\nbody\n\n## Beta\n\nmore\n";
 const LONG_DOC = `# Alpha\n\n${"line\n".repeat(400)}\n## Beta\n`;
@@ -46,7 +47,12 @@ function mount(doc: string): { view: EditorView; host: HTMLElement } {
     parent: host,
     state: EditorState.create({
       doc,
-      extensions: [quollMarkdownLanguage(), quollOutline(), quollFloatingToolbarScroll()],
+      extensions: [
+        quollTheme,
+        quollMarkdownLanguage(),
+        quollOutline(),
+        quollFloatingToolbarScroll(),
+      ],
     }),
   });
   return { view, host };
@@ -117,10 +123,11 @@ describe("outline sidebar — real-chromium layout", () => {
   });
 
   it("pinned mode is a real 2-column reflow (static sidebar, narrowed editor column)", async () => {
-    // Scope note: this pins the HOST/EDITOR flex reflow. The reading column's
-    // own adaptation inside .cm-editor (flexBasis 60em capped by maxWidth 100%)
-    // is theme-level (cm/theme.ts) and this mount does not load the theme —
-    // that visual half is covered by Task 5's manual check item 5.
+    // Scope note: this pins the HOST/EDITOR flex reflow — the sidebar going
+    // static at the left edge and the editor column narrowing. The reading
+    // column's own adaptation inside .cm-editor (flexBasis 60em capped by
+    // maxWidth 100%, cm/theme.ts) rides the shared mount's quollTheme but is not
+    // asserted here; its full visual check is Task 5's manual check item 5.
     const { view: v, host } = mount(DOC);
     v.plugin(outlinePlugin)?.toggle(); // deliberate open — no pointer involved
     await settled();
@@ -197,6 +204,40 @@ describe("outline sidebar — real-chromium layout", () => {
     const hostW = host.getBoundingClientRect().width;
     expect(sbW).toBeLessThanOrEqual(Math.round(hostW * 0.8) + 1); // capped at 80% of the host
     expect(editorEl.getBoundingClientRect().width).toBeGreaterThan(0); // editor survives
+  });
+
+  it("pinned reading column survives CodeMirror's inline flex-basis latch write (⌘⌥K collapse regression)", async () => {
+    // Regression for the ⌘⌥K-with-pinned-outline collapse (user report
+    // 2026-07-11). Root cause: CodeMirror's DocView keeps a "widest line seen"
+    // minWidth latch and writes it as an INLINE `flex-basis: <px>` on
+    // `.cm-content` on every DOM-update sync (@codemirror/view DocView). During
+    // the hidden→visible reflow the ⌘⌥K handoff triggers, that latch captures a
+    // stale tiny width (observed live: 65px); because `.cm-content` is
+    // `flex-grow: 0` (cm/theme.ts) it then pins the reading column to that
+    // sliver and every line wraps at ~1 char, and the latch only clears on a doc
+    // edit — a same-content reseed never releases it, so the collapse sticks.
+    // The fix marks the reading-column flex-basis `!important` (cm/theme.ts) so
+    // the theme value always beats CM's inline write. Simulate that exact write
+    // (a same-element inline `flex-basis`) and assert the column ignores it.
+    //
+    // Measured synchronously: CM would clear a manual inline write on its next
+    // measure, but the USER-visible collapse is precisely this pre-clear frame,
+    // and the fix must neutralise it regardless of timing. Without the
+    // `!important` this assertion reds (the column drops to ~1 char).
+    const { view: v, host } = mount(DOC);
+    // A definite, generous host width so the healthy reading column is clearly
+    // wide (the latch value below is a ~1-char 65px) and the collapse a
+    // regression would produce is unambiguous.
+    (document.getElementById("root") as HTMLElement).style.width = "900px";
+    v.plugin(outlinePlugin)?.toggle();
+    (host.querySelector(".quoll-outline-pin") as HTMLElement).click();
+    await settled();
+    const content = host.querySelector(".cm-content") as HTMLElement;
+    const healthy = content.getBoundingClientRect().width;
+    expect(healthy).toBeGreaterThan(400); // reading column is wide before the latch
+    content.style.setProperty("flex-basis", "65px"); // mimic CM's DocView latch write
+    const afterLatch = content.getBoundingClientRect().width;
+    expect(afterLatch).toBeGreaterThan(healthy * 0.9); // the inline write is inert
   });
 
   it("pinned mode keeps .cm-scroller as the real scroller (scroll-hide fires; sidebar survives)", async () => {

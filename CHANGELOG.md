@@ -2,6 +2,12 @@
 
 All notable changes to Quoll are documented here.
 
+## 0.1.42 — 2026-07-11
+
+### Fixed
+
+- With the document outline pinned, pressing Cmd+Option+K (hand the selection to Claude Code) no longer squeezes the editor into a one-character-wide column. The reading column now keeps its width through the hand-off.
+
 ## 0.1.41 — 2026-07-11
 
 ### Fixed

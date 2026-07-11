@@ -48,7 +48,29 @@ export const quollTheme = EditorView.theme({
     flexShrink: "1",
     // Editor-preset content width (outline settings popover). Default = var
     // removed → 60em, today's exact reading column.
-    flexBasis: "var(--quoll-editor-content-width, 60em)",
+    //
+    // `!important` is load-bearing, not cosmetic: CodeMirror's DocView keeps a
+    // "widest line seen" minWidth latch and writes it as an INLINE
+    // `flex-basis: <px>` on this same `.cm-content` element on every DOM update
+    // (@codemirror/view 6.43.0, DocView update just before tile.sync()). Under a
+    // transient collapsed measure — the pinned-outline flex row reflowing as the
+    // webview goes hidden→visible on a ⌘⌥K handoff — that latch captures a tiny
+    // stale width (e.g. 65px). In stock CodeMirror `.cm-content` is
+    // `flex-grow: 2`, so that basis is only a FLOOR that grow refills; our
+    // `flex-grow: 0` above (for the centred reading column) turns the same basis
+    // into an EXACT width, so the stale 65px pins the reading column to a sliver
+    // and every line wraps at ~1 char. The latch only clears on a doc edit
+    // touching its range, so a same-content reseed never releases it → the
+    // collapse sticks. Quoll always runs `EditorView.lineWrapping` (editor.ts) +
+    // `max-width: 100%` below, so contentDOM can never legitimately exceed
+    // scrollDOM — the latch's `isWider` guard can only fire on degenerate
+    // mid-reflow geometry, i.e. the write has no valid trigger here and only ever
+    // carries garbage. `!important` makes THIS deterministic basis win over the
+    // inline write, restoring the contract with no downside. (Caveat: a LAYERED
+    // `!important` on this property in styles.css would outrank this unlayered
+    // theme one — none exists today.) On a @codemirror/view bump, re-run the
+    // regression in test/webview-browser/outline-sidebar-layout.browser.test.ts.
+    flexBasis: "var(--quoll-editor-content-width, 60em) !important",
     maxWidth: "100%",
     padding: "3.5rem 2.5rem 6rem",
     // Body rhythm, tokenised. The value lives on :root as
