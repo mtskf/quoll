@@ -18,11 +18,11 @@
 // and synchronous feedback (construct/apply throw) re-enter as feedback
 // events, so no mutation escapes the table.
 
-import type { MarkdownError } from "../markdown/errors.js";
+import type { MarkdownError } from "../../markdown/errors.js";
 import {
   type ValidateForWriteResult,
   validateMarkdownForWrite,
-} from "../markdown/validate-for-write.js";
+} from "../../markdown/validate-for-write.js";
 import { decideEdit } from "./edit-decision.js";
 
 export interface HostSessionContext {

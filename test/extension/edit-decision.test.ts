@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { decideEdit } from "../../src/extension/edit-decision.js";
+import { decideEdit } from "../../src/extension/session/edit-decision.js";
 
 describe("decideEdit", () => {
   // The adapter never holds a Schema — the validator is injected. The

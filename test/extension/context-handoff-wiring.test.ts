@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { createContextHandoffWiring } from "../../src/extension/context-handoff-wiring.js";
-import type { EditSettledBarrier } from "../../src/extension/edit-settled-barrier.js";
+import type { EditSettledBarrier } from "../../src/extension/session/edit-settled-barrier.js";
 
 // A fake barrier that CAPTURES the (run, onDrop) pair without running it — the
 // wiring's single-flight / disposed routing is observable without triggering the

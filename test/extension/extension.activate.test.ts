@@ -18,7 +18,7 @@ import { describe, expect, it, vi } from "vitest";
 // is no real `window.registerCustomEditorProvider`, so the register
 // static is mocked to return a disposable directly. We assert it was
 // invoked with the correct harness reference in each branch.
-vi.mock("../../src/extension/quoll-editor-panel.js", () => ({
+vi.mock("../../src/extension/session/quoll-editor-panel.js", () => ({
   QuollEditorPanel: {
     register: vi.fn(() => ({ dispose: () => undefined })),
     viewType: "quoll.editMarkdown",
@@ -27,7 +27,7 @@ vi.mock("../../src/extension/quoll-editor-panel.js", () => ({
 
 import type { ExtensionContext } from "vscode";
 import { activate } from "../../src/extension/extension.js";
-import { QuollEditorPanel } from "../../src/extension/quoll-editor-panel.js";
+import { QuollEditorPanel } from "../../src/extension/session/quoll-editor-panel.js";
 import { ExtensionMode } from "../extension/vscode-stub.js";
 
 // Cast helper: activate's real signature is ExtensionContext, but tests

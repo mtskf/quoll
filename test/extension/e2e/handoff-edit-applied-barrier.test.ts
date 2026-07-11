@@ -4,7 +4,7 @@
 // pre-edit snapshot.
 //
 // Mechanism under test: the edit-settled barrier
-// (src/extension/edit-settled-barrier.ts, wired in QuollEditorPanel). The
+// (src/extension/session/edit-settled-barrier.ts, wired in QuollEditorPanel). The
 // applyEditOverride APPLIES the real edit but only AFTER a gate the test
 // controls, so while the gate is pending the write lock stays held
 // (pendingApplyBaseVersion non-null) AND the document is still pre-edit;

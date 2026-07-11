@@ -10,7 +10,7 @@
 //   - buildEditRejectedMessage: constructs the edit rejection message
 //     from a MarkdownError, stripping detail from the wire shape.
 
-import type { MarkdownError } from "../markdown/errors.js";
+import type { MarkdownError } from "../../markdown/errors.js";
 import {
   type CaretApplyMessage,
   type ContentWidthPref,
@@ -23,7 +23,7 @@ import {
   type LineHeightPref,
   PROTOCOL_VERSION,
   type ThemeMessage,
-} from "../shared/protocol.js";
+} from "../../shared/protocol.js";
 
 export type EditorPrefs = {
   fontFamily: FontFamilyPref;

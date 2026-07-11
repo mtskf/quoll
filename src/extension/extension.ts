@@ -1,6 +1,6 @@
 import { commands, type ExtensionContext, ExtensionMode, window } from "vscode";
 import { registerFormatCommand } from "./format-command.js";
-import { QuollEditorPanel } from "./quoll-editor-panel.js";
+import { QuollEditorPanel } from "./session/quoll-editor-panel.js";
 import { showSafely } from "./show-safely.js";
 import { __clearSurfaceMemoryForTest } from "./surface-memory.js";
 import { registerSurfaceRestoreWatcher } from "./surface-restore-watcher.js";

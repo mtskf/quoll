@@ -4,8 +4,8 @@ import { EndOfLine, type TextDocument } from "vscode";
 import {
   buildDocumentMessageFromDocument,
   canonicalDocumentText,
-} from "../../src/extension/document-canonical.js";
-import { decideEdit } from "../../src/extension/edit-decision.js";
+} from "../../src/extension/session/document-canonical.js";
+import { decideEdit } from "../../src/extension/session/edit-decision.js";
 
 function fakeDoc(eol: EndOfLine, text: string): Pick<TextDocument, "eol" | "getText"> {
   return { eol, getText: () => text } as Pick<TextDocument, "eol" | "getText">;

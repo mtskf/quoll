@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { minimalEditSpan } from "../../src/extension/minimal-edit.js";
+import { minimalEditSpan } from "../../src/extension/session/minimal-edit.js";
 
 const apply = (old: string, s: { from: number; to: number; insert: string }) =>
   old.slice(0, s.from) + s.insert + old.slice(s.to);

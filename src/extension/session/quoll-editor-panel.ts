@@ -2,7 +2,7 @@
 //
 // The host-session STATE MACHINE — write-lock ordering, the rejected-draft
 // barrier, the resync rules, and the applyEdit settlement — lives in the
-// pure reducer `src/extension/host-session-core.ts`. This file is the VS
+// pure reducer `src/extension/session/host-session-core.ts`. This file is the VS
 // Code wiring around it: it snapshots live VS Code inputs
 // (`document.version`, `canWriteNow()`, canonical text, theme) into core
 // EVENTS, runs the returned EFFECTS as real side effects, and feeds async
@@ -50,17 +50,43 @@ import {
   workspace,
 } from "vscode";
 
-import { createIncrementalWriteValidator } from "../markdown/validate-for-write.js";
-import { perfReport } from "../shared/perf.js";
+import { createIncrementalWriteValidator } from "../../markdown/validate-for-write.js";
+import { perfReport } from "../../shared/perf.js";
 import {
   buildFormatCommandMessage,
   type FormatCommandMessage,
   isWebviewToHost,
-} from "../shared/protocol.js";
+} from "../../shared/protocol.js";
+import { createCaretHandoffWiring } from "../caret-handoff-wiring.js";
+import { createContextHandoffWiring } from "../context-handoff-wiring.js";
+import { createDiskConflictWiring } from "../disk-conflict-wiring.js";
+import { createEditorConfigWiring } from "../editor-config-wiring.js";
+import { isRelevantConfigChange, readEditorPrefs } from "../editor-prefs-config.js";
+import { takeSwitchCaret } from "../editor-switch-caret.js";
+import { clearActiveFormatPoster, setActiveFormatPoster } from "../format-command.js";
+import { getNonce } from "../get-nonce.js";
+import { handleOpenExternal } from "../handle-open-external.js";
+import { handleOpenLink } from "../handle-open-link.js";
+import { handleUpdateConfig } from "../handle-update-config.js";
+import { createImageWriteWiring } from "../image-write-wiring.js";
+import { toLintDiagnostics } from "../lint-diagnostics.js";
+import { LintMirror } from "../lint-mirror.js";
+import { openInQuollEditor } from "../open-in-quoll.js";
+import { openInTextEditor } from "../reopen-text-editor.js";
+import { createRevertRescueWiring } from "../revert-rescue-wiring.js";
+import { showSafely } from "../show-safely.js";
+import type { StatusBarSlots } from "../status-bar.js";
+import { noteSurface } from "../surface-memory.js";
+import { finalizeSurfaceSwap, findSourceTab } from "../surface-swap.js";
+import type { PanelControls, TestHarness } from "../test-harness.js";
+import { createThemeSyncWiring } from "../theme-sync-wiring.js";
+import {
+  buildLocalResourceRoots,
+  buildResourceBaseUri,
+  buildWebviewAssetUris,
+} from "../webview-assets.js";
+import { buildWebviewHtml } from "../webview-html.js";
 import { canHostWrite } from "./can-host-write.js";
-import { createCaretHandoffWiring } from "./caret-handoff-wiring.js";
-import { createContextHandoffWiring } from "./context-handoff-wiring.js";
-import { createDiskConflictWiring } from "./disk-conflict-wiring.js";
 import { buildDocumentMessageFromDocument, canonicalDocumentText } from "./document-canonical.js";
 import {
   buildCaretApplyMessage,
@@ -70,39 +96,13 @@ import {
   buildThemeMessage,
 } from "./document-message.js";
 import { createEditSettledBarrier } from "./edit-settled-barrier.js";
-import { createEditorConfigWiring } from "./editor-config-wiring.js";
-import { isRelevantConfigChange, readEditorPrefs } from "./editor-prefs-config.js";
-import { takeSwitchCaret } from "./editor-switch-caret.js";
 import { createEffectExecutor } from "./effect-executor.js";
-import { clearActiveFormatPoster, setActiveFormatPoster } from "./format-command.js";
-import { getNonce } from "./get-nonce.js";
-import { handleOpenExternal } from "./handle-open-external.js";
-import { handleOpenLink } from "./handle-open-link.js";
-import { handleUpdateConfig } from "./handle-update-config.js";
 import {
   createDrainingDispatcher,
   createHostSessionCore,
   type HostSessionEvent,
   isWriteLockHeld,
 } from "./host-session-core.js";
-import { createImageWriteWiring } from "./image-write-wiring.js";
-import { toLintDiagnostics } from "./lint-diagnostics.js";
-import { LintMirror } from "./lint-mirror.js";
-import { openInQuollEditor } from "./open-in-quoll.js";
-import { openInTextEditor } from "./reopen-text-editor.js";
-import { createRevertRescueWiring } from "./revert-rescue-wiring.js";
-import { showSafely } from "./show-safely.js";
-import type { StatusBarSlots } from "./status-bar.js";
-import { noteSurface } from "./surface-memory.js";
-import { finalizeSurfaceSwap, findSourceTab } from "./surface-swap.js";
-import type { PanelControls, TestHarness } from "./test-harness.js";
-import { createThemeSyncWiring } from "./theme-sync-wiring.js";
-import {
-  buildLocalResourceRoots,
-  buildResourceBaseUri,
-  buildWebviewAssetUris,
-} from "./webview-assets.js";
-import { buildWebviewHtml } from "./webview-html.js";
 
 // Full dotted id of the setting that gates the host→Problems lint mirror.
 // `affectsConfiguration` matches on this exact key.
@@ -351,14 +351,14 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
     dispatch = createDrainingDispatcher<HostSessionEvent>(step);
 
     // canWriteNow gates host-side writes to on-disk file: documents only
-    // (see src/extension/can-host-write.ts). Re-checked at post time so
+    // (see src/extension/session/can-host-write.ts). Re-checked at post time so
     // a runtime filesystem flip (read-only mount) is reflected on the
     // next Document push.
     const canWriteNow = (): boolean =>
       canHostWrite(document.uri.scheme, (scheme) => workspace.fs.isWritableFileSystem(scheme));
 
     // Effect executor — owns `post`, `sendEditRejected`, `runApplyEdit`, and
-    // `runEffects` (extracted to src/extension/effect-executor.ts so the
+    // `runEffects` (extracted to src/extension/session/effect-executor.ts so the
     // dispose / lifecycle branches get direct unit tests). It stays vscode-free:
     // every VS Code touch (postMessage surface, WorkspaceEdit build/apply,
     // document text/version, theme/canWrite reads, handleOpenExternal, the

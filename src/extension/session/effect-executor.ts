@@ -23,9 +23,9 @@
 // core is the decision authority and needs the settlement to drain a stashed
 // last-keystroke edit (the "type-one-more-char-then-close" data-loss race).
 
-import type { MarkdownError } from "../markdown/errors.js";
-import { perfNow, perfRecord, perfReport } from "../shared/perf.js";
-import type { HostToWebview } from "../shared/protocol.js";
+import type { MarkdownError } from "../../markdown/errors.js";
+import { perfNow, perfRecord, perfReport } from "../../shared/perf.js";
+import type { HostToWebview } from "../../shared/protocol.js";
 import type { HostSessionEffect, HostSessionEvent, HostSessionState } from "./host-session-core.js";
 import type { MinimalEditSpan } from "./minimal-edit.js";
 import { minimalEditSpan } from "./minimal-edit.js";

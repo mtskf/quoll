@@ -5,7 +5,7 @@
 // the protocol's single source (EDITOR_PREF_ENUMS / EDITOR_PREF_DEFAULTS).
 
 import { EDITOR_PREF_DEFAULTS, EDITOR_PREF_ENUMS, type EditorPrefKey } from "../shared/protocol.js";
-import type { EditorPrefs } from "./document-message.js";
+import type { EditorPrefs } from "./session/document-message.js";
 
 export const EDITOR_PREF_KEYS = Object.keys(EDITOR_PREF_ENUMS) as EditorPrefKey[];
 

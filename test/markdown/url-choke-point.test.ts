@@ -165,7 +165,7 @@ const CHOKE_POINTS: readonly ChokePoint[] = [
     // `env.openExternal(...)` added there would still be flagged.
     allow: new Set([
       "src/extension/handle-open-external.ts",
-      "src/extension/quoll-editor-panel.ts",
+      "src/extension/session/quoll-editor-panel.ts",
     ]),
   },
   {
@@ -425,7 +425,7 @@ describe("URL/security choke-point lint", () => {
     const fixture: SourceFile[] = [
       { rel: "src/webview/cm/image/image-widget.ts", content: "img.src = this.safeUrl;" },
       {
-        rel: "src/extension/quoll-editor-panel.ts",
+        rel: "src/extension/session/quoll-editor-panel.ts",
         content: "openExternal: (url) => env.openExternal(Uri.parse(url)),",
       },
     ];

@@ -29,8 +29,6 @@ import {
   window,
   workspace,
 } from "vscode";
-
-import type { EditSettledBarrier } from "./edit-settled-barrier.js";
 import { handleCodexContextHandoff } from "./handle-codex-context-handoff.js";
 import { handleContextHandoff } from "./handle-context-handoff.js";
 import {
@@ -38,6 +36,7 @@ import {
   planRevealTabClose,
   type RevealCleanupGroup,
 } from "./reveal-for-mention-cleanup.js";
+import type { EditSettledBarrier } from "./session/edit-settled-barrier.js";
 
 export interface ContextHandoffWiringDeps {
   /** The handed-off document. The factory reads uri / lineCount / isDirty /
