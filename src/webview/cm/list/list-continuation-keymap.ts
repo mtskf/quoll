@@ -24,7 +24,8 @@
 // byte-identically. No raw write path.
 
 import { isolateHistory } from "@codemirror/commands";
-import { EditorSelection, type EditorState, Prec } from "@codemirror/state";
+import { ensureSyntaxTree } from "@codemirror/language";
+import { type ChangeSpec, EditorSelection, type EditorState, Prec } from "@codemirror/state";
 import { type Command, keymap } from "@codemirror/view";
 
 import { leadingFrontmatterEnd } from "../frontmatter/detect.js";
@@ -51,6 +52,53 @@ function isEmptyItem(state: EditorState, content: SyntaxNode | null): boolean {
     }
   }
   return false;
+}
+
+/** Bump every following `ListItem` sibling of the edited item's `OrderedList` by
+ *  +1 (they shift down one because a new item was inserted before them). Uses the
+ *  Lezer sibling relationship — NOT a line scan — so it is correct across
+ *  lazy-continuation lines (inside the item, not siblings), blockquote-prefixed
+ *  lists (positions are absolute), and tab-mixed indent. Re-resolves the item
+ *  from an EOF-bounded tree because listItemAt's caret-line-bounded tree does not
+ *  contain the siblings below the caret. Positions are original-document offsets,
+ *  disjoint from the caret insert, so they compose in one ChangeSpec array.
+ *
+ *  Fail-closed: a null `ensureSyntaxTree` means the parse did not reach EOF within
+ *  budget, so the list tail may be unparsed. Renumbering only the visible prefix
+ *  would leave a split-brain run (worse than none), so skip renumber entirely —
+ *  the insert still lands; the tail keeps its original numbers. */
+function orderedRenumberChanges(state: EditorState, markFrom: number): ChangeSpec[] {
+  const tree = ensureSyntaxTree(state, state.doc.length, 50);
+  if (tree === null) {
+    return [];
+  }
+  let item: SyntaxNode | null = tree.resolveInner(markFrom, 1);
+  while (item !== null && item.name !== "ListItem") {
+    item = item.parent;
+  }
+  if (item === null || item.parent?.name !== "OrderedList") {
+    return [];
+  }
+  const changes: ChangeSpec[] = [];
+  for (let sib = item.nextSibling; sib !== null; sib = sib.nextSibling) {
+    if (sib.name !== "ListItem") {
+      continue;
+    }
+    const sibMark = sib.firstChild;
+    if (sibMark === null || sibMark.name !== "ListMark") {
+      continue;
+    }
+    const m = /^(\d+)([.)])$/.exec(state.doc.sliceString(sibMark.from, sibMark.to));
+    if (m === null) {
+      continue;
+    }
+    changes.push({
+      from: sibMark.from,
+      to: sibMark.from + m[1].length,
+      insert: String(Number.parseInt(m[1], 10) + 1),
+    });
+  }
+  return changes;
 }
 
 export const continueListOnEnter: Command = (view) => {
@@ -126,8 +174,14 @@ export const continueListOnEnter: Command = (view) => {
   const markerStr = isTask ? `${base} [ ] ` : `${base} `;
   const insert = `\n${indent}${markerStr}`;
   const caret = head + insert.length;
+  const changes: ChangeSpec[] = [{ from: head, insert }];
+  if (ordered) {
+    // Keep the contiguous ordered run sequential; caret is unaffected because the
+    // renumber edits sit past `head`.
+    changes.push(...orderedRenumberChanges(state, mark.from));
+  }
   view.dispatch({
-    changes: { from: head, insert },
+    changes,
     selection: EditorSelection.cursor(caret),
     userEvent: "input",
     annotations: isolateHistory.of("full"),

@@ -147,6 +147,60 @@ describe("continueListOnEnter — marker continuation", () => {
   });
 });
 
+describe("continueListOnEnter — ordered renumber", () => {
+  it("renumbers a sequential run after the inserted item", () => {
+    const view = caretAtEndOf(mount("1. a\n2. b", at(0)), 1);
+    try {
+      expect(continueListOnEnter(view)).toBe(true);
+      expect(view.state.doc.toString()).toBe("1. a\n2. \n3. b");
+    } finally {
+      view.destroy();
+    }
+  });
+
+  it("preserves user-typed number gaps (only bumps following siblings)", () => {
+    const view = caretAtEndOf(mount("1. a\n5. b\n9. c", at(0)), 2);
+    try {
+      expect(continueListOnEnter(view)).toBe(true);
+      expect(view.state.doc.toString()).toBe("1. a\n5. b\n6. \n10. c");
+    } finally {
+      view.destroy();
+    }
+  });
+
+  it("does NOT bump a nested child run (different OrderedList)", () => {
+    const view = caretAtEndOf(mount("1. a\n   1. x\n2. b", at(0)), 1);
+    try {
+      expect(continueListOnEnter(view)).toBe(true);
+      expect(view.state.doc.toString()).toBe("1. a\n2. \n   1. x\n3. b");
+    } finally {
+      view.destroy();
+    }
+  });
+
+  it("renumbers across a lazy-continuation line (tree siblings, not a line scan)", () => {
+    const view = caretAtEndOf(mount("1. a\n2. b\nlazy line\n3. c", at(0)), 2);
+    try {
+      expect(continueListOnEnter(view)).toBe(true);
+      expect(view.state.doc.toString()).toBe("1. a\n2. b\n3. \nlazy line\n4. c");
+    } finally {
+      view.destroy();
+    }
+  });
+
+  it("is ONE undo step including the renumber", () => {
+    const view = caretAtEndOf(mount("1. a\n2. b", at(0), { withHistory: true }), 1);
+    try {
+      expect(continueListOnEnter(view)).toBe(true);
+      expect(view.state.doc.toString()).toBe("1. a\n2. \n3. b");
+      expect(undo(view)).toBe(true);
+      expect(view.state.doc.toString()).toBe("1. a\n2. b");
+    } finally {
+      view.destroy();
+    }
+  });
+});
+
 describe("continueListOnEnter — fall-through (returns false, doc unchanged)", () => {
   function expectNoop(doc: string, caret: number, opts?: { readOnly?: boolean }) {
     const view = mount(doc, at(caret), opts);
@@ -235,6 +289,21 @@ describe("continueListOnEnter — fall-through (returns false, doc unchanged)", 
     try {
       expect(continueListOnEnter(view)).toBe(false);
       expect(view.state.doc.toString()).toBe("- a\n- b");
+    } finally {
+      view.destroy();
+    }
+  });
+
+  it("a blockquote-prefixed list item (listItemAt probes `>`, resolves no ListItem)", () => {
+    // Blockquoted lists are out of scope for both list keymaps: listItemAt probes
+    // the line's first non-whitespace column (`>`), which resolves to the
+    // Blockquote's QuoteMark, not a ListItem. The command defers to the default
+    // Enter — a safe non-handling, never a corrupting edit.
+    const doc = "> 1. a\n> 2. b";
+    const view = caretAtEndOf(mount(doc, at(0)), 1);
+    try {
+      expect(continueListOnEnter(view)).toBe(false);
+      expect(view.state.doc.toString()).toBe(doc);
     } finally {
       view.destroy();
     }
