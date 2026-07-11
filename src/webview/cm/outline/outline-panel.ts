@@ -297,6 +297,24 @@ class OutlinePanel implements PluginValue {
     ) {
       this.settingsPopover.syncFromState();
     }
+    // Map per-heading collapse offsets through document edits so a collapsed
+    // heading stays collapsed when text shifts it — and its state never lands on
+    // an unrelated heading inserted at the old offset (assoc +1: an insertion at
+    // the heading's line start moves the offset to AFTER the inserted text, i.e.
+    // it follows the heading, not the new content). Runs regardless of open
+    // state: collapse survives a close, so edits made while closed must map too.
+    // The subsequent rebuild's live-parent prune then drops offsets whose
+    // heading was actually deleted.
+    if (u.docChanged && this.collapsedFroms.size > 0) {
+      const mapped = new Set<number>();
+      for (const from of this.collapsedFroms) {
+        mapped.add(u.changes.mapPos(from, 1));
+      }
+      this.collapsedFroms.clear();
+      for (const from of mapped) {
+        this.collapsedFroms.add(from);
+      }
+    }
     if (!this.open) {
       return;
     }

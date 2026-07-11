@@ -405,15 +405,34 @@ describe("quollOutline sidebar", () => {
     expect(bTwistie.getAttribute("aria-expanded")).toBe("false");
   });
 
-  it("toggles the subtree via Enter/Space on the focused twistie (keyboard)", () => {
+  it("uses a native <button> twistie so Enter/Space activate it (keyboard parity)", () => {
+    // Keyboard activation rides the platform: a native <button type="button">
+    // synthesizes a click from Enter/Space. Pin THAT contract (element + type)
+    // rather than re-asserting the click outcome — happy-dom does not synthesize
+    // the keyboard→click, so this is what guards against a regression to a
+    // non-button twistie (e.g. <span role="button">) that breaks keyboard use.
     const { host } = mount("# A\n\n## B\n");
     toggleEl(host).click();
     const aTwistie = twistieOf(rowEls(host)[0]) as HTMLButtonElement;
-    // A native <button> activates on Enter/Space via a synthetic click; assert the
-    // wired click handler toggles (keyboard parity rides the button element).
-    aTwistie.click();
-    expect(visibleTexts(host)).toEqual(["A"]);
+    expect(aTwistie.tagName).toBe("BUTTON");
+    expect(aTwistie.type).toBe("button");
+    aTwistie.click(); // proxy for the platform-synthesized Enter/Space click
     expect(aTwistie.getAttribute("aria-expanded")).toBe("false");
+  });
+
+  it("keeps a heading collapsed when an edit above shifts its offset (maps collapse through changes)", () => {
+    vi.useFakeTimers();
+    const { view: v, host } = mount("# A\n\n## B\n\n### C\n");
+    v.plugin(outlinePlugin)?.toggle();
+    (twistieOf(rowEls(host)[0]) as HTMLButtonElement).click(); // collapse A (hides B, C)
+    expect(visibleTexts(host)).toEqual(["A"]);
+    // Insert a NEW parent heading (with its own child) above A. A's `from` shifts
+    // right; the collapse must follow A and must NOT land on the inserted "# New".
+    v.dispatch({ changes: { from: 0, insert: "# New\n\n## New child\n\n" } });
+    vi.advanceTimersByTime(250); // let the debounced rebuild fire
+    // Without the offset mapping, the stale offset (0) would collapse "# New"
+    // instead, yielding ["New", "A", "B", "C"].
+    expect(visibleTexts(host)).toEqual(["New", "New child", "A"]);
   });
 
   it("keeps collapse state across a debounced rebuild", () => {

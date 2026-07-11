@@ -32,7 +32,7 @@
 
 ### Navigation, lint & fit
 
-- **Document outline** — a toggle-able overlay lists the document's headings; click one to jump straight to it, or collapse a heading's chevron to fold its sub-headings (like the Explorer file tree). Open it with the top-right button or `Ctrl/Cmd+Alt+O`.
+- **Document outline** — a toggle-able overlay lists the document's headings; click one to jump straight to it, or collapse a heading's chevron to fold its sub-headings (like the Explorer file tree). Open it with the top-left button or `Ctrl/Cmd+Alt+O`.
 - **Switch between rich and text** — flip the active Markdown file between Quoll and VS Code's built-in text editor, in both directions. Use the editor title-bar button (a cat icon on a text editor opens Quoll; a file-code icon on Quoll reopens the text editor), the in-editor top-right button, or `⌘⌥E` (`Ctrl+Alt+E` on Windows/Linux) — the `⌘⌥E` and in-editor-button paths carry your caret position across.
 - **Markdown lint** — advisory findings as inline underlines, with an optional gutter dot and an optional **Problems**-panel mirror.
 - **Theme-aware & opt-in** — follows your light/dark theme, and registers with `priority: option` so it never hijacks `.md` from other extensions.
