@@ -304,6 +304,7 @@
     "check": "biome check --write",
     "check:todo-markers": "node scripts/check-stale-todo-markers.mjs",
     "check:todo-hygiene": "node scripts/check-todo-hygiene.mjs",
+    "check:doc-sync": "node scripts/check-doc-sync.mjs",
     "gen:perf-fixtures": "node scripts/gen-perf-fixtures.mjs",
     "preview": "node scripts/preview/serve.mjs",
     "smoke:visual": "node scripts/preview/visual-smoke.mjs",
