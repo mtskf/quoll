@@ -70,9 +70,9 @@ describe("package.json contributions — quoll.gettingStarted walkthrough", () =
       const absolutePath = fileURLToPath(new URL(mediaPath, repoRootUrl));
       const markdown = readFileSync(absolutePath, "utf8");
       for (const commandId of extractCommandUris(markdown)) {
-        expect(
-          declaredCommandIds.has(commandId) || builtinCommandAllowlist.has(commandId)
-        ).toBe(true);
+        expect(declaredCommandIds.has(commandId) || builtinCommandAllowlist.has(commandId)).toBe(
+          true
+        );
       }
     }
   });
