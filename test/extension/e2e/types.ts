@@ -130,6 +130,11 @@ export type LintDiagnosticsMessageShape = EnvelopeShape & {
   diagnostics: readonly LintDiagnosticWireShape[];
 };
 
+export type FormatCommandMessageShape = EnvelopeShape & {
+  type: "format-command";
+  action: "bold" | "italic" | "code" | "strike" | "link";
+};
+
 // The host→webview union mirror. Previously omitted because the E2E
 // suite only asserted on outbound message shapes by type-narrowing in
 // the predicates (isDocumentEvent etc.); now that `edit-rejected` joins
@@ -141,7 +146,8 @@ export type HostToWebviewShape =
   | EditRejectedMessageShape
   | ImageWriteResultMessageShape
   | EditorConfigMessageShape
-  | CaretApplyMessageShape;
+  | CaretApplyMessageShape
+  | FormatCommandMessageShape;
 
 export type WebviewToHostShape =
   | ReadyMessageShape
