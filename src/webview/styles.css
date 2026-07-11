@@ -77,6 +77,22 @@ html body {
     --quoll-block-pad-x: 16px;
     --quoll-block-pad-y: 12px;
     --quoll-block-radius: 8px;
+    /* EXTERNAL vertical gap between a block panel and the block directly
+     * above / below it. Quoll is text-canonical, so inter-block spacing
+     * otherwise comes ONLY from blank source lines; a blockquote / callout
+     * panel that directly follows a list item or paragraph would render flush
+     * against it (zero gap). cm/theme.ts's blockEdgeGapCorner applies this as a
+     * TRANSPARENT vertical border on the panel's TRUE outer boundary lines
+     * (adjacency-gated so a nested quote's inner edge is untouched): those
+     * surfaces already paint their fill with `background-clip: padding-box`, so a
+     * transparent border shows the editor background through it — a real gap —
+     * WITHOUT painting the fill into it and WITHOUT a `.cm-line` margin (which
+     * would break CM's line geometry). This is the EXTERNAL separation;
+     * --quoll-block-pad-y is the INTERNAL top/bottom inset of the text within the
+     * fill. Notion-style rhythm (mirroring --quoll-heading-space-*); retune here
+     * in one line. (The fenced-code panel's external gap is a separate follow-up
+     * — its collapse-bar footer states need their own handling.) */
+    --quoll-block-gap-y: 8px;
     /* Column inset — mirrors CodeMirror's base `.cm-line` padding (0 2px 0 6px, a
      * CM baseTheme implementation detail). Every block-widget / block-line surface
      * that must sit flush with the paragraph text column reserves this inset — the

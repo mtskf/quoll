@@ -152,6 +152,17 @@ describe("styles.css — column-inset tokens (mirror of CM's base .cm-line paddi
     expect(root).toMatch(/--quoll-column-inset-left\s*:\s*6px\s*;/);
     expect(root).toMatch(/--quoll-column-inset-right\s*:\s*2px\s*;/);
   });
+
+  // The EXTERNAL block-panel gap: cm/theme.ts's blockEdgeCorner factory applies this
+  // as a transparent vertical border on the -open/-close edge lines so a panel
+  // (blockquote / callout / fenced-code) breathes from the block directly above/below
+  // even with no blank source line. Distinct from the INTERNAL --quoll-block-pad-y.
+  // Pinned inside the :root rule body (not a whole-file grep) so a comment literal can
+  // never satisfy it; non-vacuous — changing the value here reds.
+  it("declares --quoll-block-gap-y on :root", () => {
+    const root = css.match(/:root\s*\{([\s\S]*?)\}/)?.[1] ?? "";
+    expect(root).toMatch(/--quoll-block-gap-y\s*:\s*8px\s*;/);
+  });
 });
 
 describe("styles.css — list hang-indent token (LH)", () => {
