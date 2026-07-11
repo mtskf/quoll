@@ -4,10 +4,15 @@ All notable changes to Quoll are documented here.
 
 ## 0.1.38 — 2026-07-11
 
+### Added
+
+- Add title-bar buttons to switch between Quoll and the built-in text editor from either side: a cat icon on a Markdown text editor opens it in Quoll, and a file-code icon on a Quoll editor reopens it as text.
+
 ### Changed
 
 - Polish the document outline sidebar to match VS Code's native side panels: the corner toggle and pin button use proper icons, the "OUTLINE" header now reads and behaves like the built-in EXPLORER section (including a chevron to collapse/expand it), and row alignment sits under the header label.
 - Switch the toolbar's "open in text editor" icon to better match what it does.
+- Refresh the hero image used on the Marketplace page.
 
 ## 0.1.37 — 2026-07-11
 
