@@ -3,8 +3,9 @@
 // .quoll-editor host. Hovering the toggle opens the sidebar; the pointer
 // leaving it (grace-delayed), a heading jump, or Mod-Alt-o closes it — unless
 // PINNED via the header pin button. Pinned mode swaps the absolute overlay for
-// a static 2-column flex layout. CSS owns ALL geometry off two host classes
-// (quoll-outline-open / quoll-outline-pinned); this module owns state + DOM.
+// a static 2-column flex layout. CSS owns ALL geometry off three host classes
+// (quoll-outline-open / quoll-outline-pinned / quoll-outline-collapsed); this
+// module owns state + DOM.
 // View-only: clicking a heading dispatches a SELECTION-ONLY transaction (no
 // `changes`), so the round-trip is byte-identical and no Edit is posted. All
 // rebuild work is gated on the sidebar being open AND debounced, so the
@@ -29,16 +30,20 @@ import {
 import { patchPersistedState, readPersistedState } from "../../host.js";
 import { requireQuollEditorHost } from "../editor-host.js";
 import { extractOutline, type OutlineHeading } from "./build-outline.js";
-import { createPinIcon, createSettingsIcon } from "./icons.js";
+import { createChevronIcon, createMenuIcon, createPinIcon, createSettingsIcon } from "./icons.js";
 
 /** Toggle chord. CM-scoped (fires only while the editor has focus), so it never
  *  collides with a workbench keybinding — same posture as the context-handoff /
  *  lint-fix chords. `Mod-Alt-o` is unused by the other Quoll keymaps. */
 const TOGGLE_KEY = "Mod-Alt-o";
 
-/** Per-depth indent step (px) and the list's base left padding (px). */
+/** Per-depth indent step (px) and the list's base left padding (px). The base
+ *  matches the OUTLINE header's 12px left inset (padding-left) so a first-level
+ *  (depth 0) row lines up under the header's left edge — the chevron/twistie
+ *  column — the way VS Code aligns side-panel tree rows under their section
+ *  twistie (the "OUTLINE" label itself sits further right, past the chevron). */
 const INDENT_PX = 12;
-const BASE_PAD_PX = 8;
+const BASE_PAD_PX = 12;
 
 /** Trailing debounce for edit-driven rebuilds — keeps the full tree walk off
  *  the per-keystroke path while the sidebar is open. */
@@ -67,6 +72,7 @@ const HOVER_OPEN_DELAY_MS = 120;
 /** Host classes CSS keys ALL open/pinned geometry off. Exported for tests. */
 export const OUTLINE_OPEN_CLASS = "quoll-outline-open";
 export const OUTLINE_PINNED_CLASS = "quoll-outline-pinned";
+export const OUTLINE_COLLAPSED_CLASS = "quoll-outline-collapsed";
 
 /** Runtime-resizable sidebar width bounds (px). The stylesheet default
  *  (--quoll-outline-sidebar-width: 260px) applies until the user drags; a drag
@@ -87,6 +93,7 @@ class OutlinePanel implements PluginValue {
   private readonly toggleEl: HTMLButtonElement;
   private readonly sidebarEl: HTMLElement;
   private readonly pinEl: HTMLButtonElement;
+  private readonly headerToggleEl: HTMLButtonElement;
   private readonly listEl: HTMLElement;
   private readonly resizeEl: HTMLElement;
   private resizing = false;
@@ -100,6 +107,8 @@ class OutlinePanel implements PluginValue {
   private open = false;
   /** Invariant: pinned ⇒ open (closing by any path unpins). */
   private pinned = false;
+  /** Section collapse (session-local, independent of open/pinned). */
+  private collapsed = false;
   private headings: OutlineHeading[] = [];
   /** Signature of the last rendered list; null forces the first render. */
   private renderedSignature: string | null = null;
@@ -121,7 +130,7 @@ class OutlinePanel implements PluginValue {
     this.toggleEl.title = "Show document outline (Ctrl/Cmd+Alt+O)";
     this.toggleEl.setAttribute("aria-label", "Show document outline");
     this.toggleEl.setAttribute("aria-pressed", "false");
-    this.toggleEl.textContent = "☰"; // ☰
+    this.toggleEl.appendChild(createMenuIcon());
     // preventDefault on mousedown so clicking the button does not blur/move the
     // editor selection before we act; focus is managed explicitly on jump.
     this.toggleEl.addEventListener("mousedown", (e) => e.preventDefault());
@@ -177,15 +186,32 @@ class OutlinePanel implements PluginValue {
     this.pinEl.addEventListener("mousedown", (e) => e.preventDefault());
     this.pinEl.addEventListener("click", (e) => {
       e.preventDefault();
+      e.stopPropagation(); // pinning must never toggle the header collapse
       this.setPinned(!this.pinned);
     });
+    // Header toggle: a native button (keyboard-activable for free) holding the
+    // twistie chevron + the OUTLINE label — clicking it collapses/expands the
+    // section like a VS Code side-bar section header. The pin is a SIBLING to
+    // its right, so a pin click never reaches this handler; the pin also
+    // stopPropagation's defensively.
+    this.headerToggleEl = document.createElement("button");
+    this.headerToggleEl.type = "button";
+    this.headerToggleEl.className = "quoll-outline-header-toggle";
+    this.headerToggleEl.setAttribute("aria-expanded", "true");
+    this.headerToggleEl.appendChild(createChevronIcon());
     const titleEl = document.createElement("span");
     titleEl.className = "quoll-outline-title";
     titleEl.textContent = "Outline";
-    // Title leads, pin trails: matches VS Code side-panel header order (title
-    // left, action button right) and keeps tab order visual-left-to-right. The
-    // pin is pushed to the right edge by margin-left:auto (styles.css).
-    header.appendChild(titleEl);
+    this.headerToggleEl.appendChild(titleEl);
+    this.headerToggleEl.addEventListener("mousedown", (e) => e.preventDefault());
+    this.headerToggleEl.addEventListener("click", (e) => {
+      e.preventDefault();
+      this.setCollapsed(!this.collapsed);
+    });
+    // Title-region leads, pin trails: matches VS Code side-panel header order
+    // (title left, action button right) and keeps tab order visual-left-to-right.
+    // The pin is pushed to the right edge by margin-left:auto (styles.css).
+    header.appendChild(this.headerToggleEl);
     header.appendChild(this.pinEl);
 
     this.listEl = document.createElement("ul");
@@ -275,7 +301,7 @@ class OutlinePanel implements PluginValue {
     // Clear the host flags so a lingering host node (tests, re-mount) never
     // inherits a stale open/pinned layout — mirrors FloatingToolbarScroll's
     // destroy hygiene.
-    this.host.classList.remove(OUTLINE_OPEN_CLASS, OUTLINE_PINNED_CLASS);
+    this.host.classList.remove(OUTLINE_OPEN_CLASS, OUTLINE_PINNED_CLASS, OUTLINE_COLLAPSED_CLASS);
   }
 
   toggle(): void {
@@ -343,6 +369,12 @@ class OutlinePanel implements PluginValue {
     // happens with the pointer inside the sidebar, so the normal pointer-leave
     // path closes it afterwards; a keyboard unpin never surprise-closes a
     // surface the user is focused in.
+  }
+
+  private setCollapsed(collapsed: boolean): void {
+    this.collapsed = collapsed;
+    this.host.classList.toggle(OUTLINE_COLLAPSED_CLASS, collapsed);
+    this.headerToggleEl.setAttribute("aria-expanded", String(!collapsed));
   }
 
   private scheduleOpen(): void {

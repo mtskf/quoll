@@ -1,6 +1,11 @@
 // @vitest-environment happy-dom
 import { describe, expect, it } from "vitest";
-import { createPinIcon, createSettingsIcon } from "../../src/webview/cm/outline/icons.js";
+import {
+  createChevronIcon,
+  createMenuIcon,
+  createPinIcon,
+  createSettingsIcon,
+} from "../../src/webview/cm/outline/icons.js";
 
 const SVG_NS = "http://www.w3.org/2000/svg";
 
@@ -22,6 +27,23 @@ describe("outline sidebar icons", () => {
     expect(svg.getAttribute("aria-hidden")).toBe("true");
     expect(svg.querySelectorAll("path")).toHaveLength(1);
     expect(svg.querySelectorAll("circle")).toHaveLength(1);
+  });
+
+  it("builds the Lucide menu as three stroke lines (no path, no innerHTML)", () => {
+    const svg = createMenuIcon();
+    expect(svg.namespaceURI).toBe(SVG_NS);
+    expect(svg.getAttribute("stroke")).toBe("currentColor");
+    expect(svg.getAttribute("aria-hidden")).toBe("true");
+    expect(svg.querySelectorAll("line")).toHaveLength(3);
+    expect(svg.querySelectorAll("path")).toHaveLength(0);
+  });
+
+  it("builds the Lucide chevron as a single stroke path (twistie)", () => {
+    const svg = createChevronIcon();
+    expect(svg.namespaceURI).toBe(SVG_NS);
+    expect(svg.getAttribute("stroke")).toBe("currentColor");
+    expect(svg.getAttribute("aria-hidden")).toBe("true");
+    expect(svg.querySelectorAll("path")).toHaveLength(1);
   });
 
   it("returns a fresh subtree per call (safe to mount in several buttons)", () => {
