@@ -5,15 +5,11 @@ All notable changes to Quoll are documented here.
 ## 0.1.41 — 2026-07-11
 
 ### Fixed
-- external vertical gap for the fenced-code panel and its collapse-bar footers (#195)
-- vertical gap between block panels and adjacent blocks (#194)
-- cat title-bar button swaps to Quoll in place instead of opening a second tab (#193)
 
 - The cat title-bar button on a Markdown text tab now swaps that tab to the Quoll editor in place, instead of leaving the text tab open and adding a second Quoll tab. It mirrors the file-code button's Quoll→text swap, so switching either direction keeps you on a single tab.
-
 - Blockquotes and callouts now keep a small vertical gap from the block directly above and below them, even when no blank line separates them in the source. A panel that immediately follows a list item or paragraph no longer renders flush against that line's bottom edge, while nested quotes stay visually joined to their parent.
-
 - Fenced code blocks now keep that same vertical gap from the block directly above and below them. A code block that immediately follows a list item or paragraph no longer renders flush against that line, and a long block's "Show more" / "Show less" collapse bar keeps the gap at the panel's true bottom without opening a gap mid-panel. A code block nested inside a blockquote stays visually joined to its parent.
+- Two fenced code blocks written back-to-back with no blank line between them now sit a single small gap apart, matching the spacing used everywhere else, instead of a doubled gap.
 
 ## 0.1.40 — 2026-07-11
 
