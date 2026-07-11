@@ -275,14 +275,10 @@ export function fencedCodeLineClasses(n: number, L: FencedLandmarks): string[] {
     return out;
   }
   if (n === L.openFenceLine) {
-    return L.openConcealed
-      ? [FENCED_CODE_FENCE_HIDDEN_CLASS]
-      : [FENCED_CODE_CLASS, ...openEdge];
+    return L.openConcealed ? [FENCED_CODE_FENCE_HIDDEN_CLASS] : [FENCED_CODE_CLASS, ...openEdge];
   }
   if (L.closeFenceLine !== null && n === L.closeFenceLine) {
-    return L.closeConcealed
-      ? [FENCED_CODE_FENCE_HIDDEN_CLASS]
-      : [FENCED_CODE_CLASS, ...closeEdge];
+    return L.closeConcealed ? [FENCED_CODE_FENCE_HIDDEN_CLASS] : [FENCED_CODE_CLASS, ...closeEdge];
   }
   // Body lines. `lastBodyLine` is non-null whenever `firstBodyLine` is (they are
   // set together from the body span); the explicit guard satisfies the compiler.
