@@ -93,6 +93,26 @@ describe("handleUpdateConfig", () => {
     expect(repush).toHaveBeenCalledOnce();
   });
 
+  it("on inspectOverride throw: does NOT throw, toasts the error AND re-pushes", () => {
+    const updateConfig = vi.fn(() => Promise.resolve());
+    const showError = vi.fn();
+    const repush = vi.fn();
+    expect(() =>
+      handleUpdateConfig("quoll.editor.fontSize", "large", {
+        updateConfig,
+        inspectOverride: () => {
+          throw new Error("inspect boom");
+        },
+        repush,
+        showInfo: vi.fn(),
+        showError,
+      })
+    ).not.toThrow();
+    expect(updateConfig).not.toHaveBeenCalled();
+    expect(showError).toHaveBeenCalledOnce();
+    expect(repush).toHaveBeenCalledOnce();
+  });
+
   it("on synchronous throw: toasts the error AND re-pushes so pending clears", () => {
     const updateConfig = vi.fn(() => {
       throw new Error("sync boom");

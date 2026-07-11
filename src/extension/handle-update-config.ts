@@ -37,18 +37,22 @@ export function handleUpdateConfig(key: string, value: string, deps: HandleUpdat
     return;
   }
   const prefKey = key as EditorPrefKey;
-  const override = deps.inspectOverride(prefKey);
-  if (override.workspace || override.folder) {
-    deps.showInfo(OVERRIDE_MESSAGE);
-    // Re-push so the popover's pending row clears now (no config write → no
-    // config event → no automatic re-push would otherwise reach it).
-    deps.repush();
-    return;
-  }
-  // Default id ⇒ reset (remove the settings.json entry) rather than persist the
-  // literal default, per VS Code convention.
-  const write = value === EDITOR_PREF_DEFAULTS[prefKey] ? undefined : value;
+  // The try spans inspectOverride + the override branch + the write so a throw
+  // from inspect() (not just the write) lands on the same showError + repush
+  // path — otherwise it would unwind out of the unguarded onDidReceiveMessage
+  // callback with no toast, no repush, no log.
   try {
+    const override = deps.inspectOverride(prefKey);
+    if (override.workspace || override.folder) {
+      deps.showInfo(OVERRIDE_MESSAGE);
+      // Re-push so the popover's pending row clears now (no config write → no
+      // config event → no automatic re-push would otherwise reach it).
+      deps.repush();
+      return;
+    }
+    // Default id ⇒ reset (remove the settings.json entry) rather than persist
+    // the literal default, per VS Code convention.
+    const write = value === EDITOR_PREF_DEFAULTS[prefKey] ? undefined : value;
     void Promise.resolve(deps.updateConfig(prefKey, write)).then(undefined, (err: unknown) => {
       console.error("[quoll] update-config write rejected", err);
       deps.showError?.(FAILURE_MESSAGE);
@@ -58,7 +62,7 @@ export function handleUpdateConfig(key: string, value: string, deps: HandleUpdat
       deps.repush();
     });
   } catch (err) {
-    console.error("[quoll] update-config write threw synchronously", err);
+    console.error("[quoll] update-config threw synchronously", err);
     deps.showError?.(FAILURE_MESSAGE);
     deps.repush();
   }
