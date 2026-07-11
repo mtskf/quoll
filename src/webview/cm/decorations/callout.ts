@@ -116,8 +116,10 @@ export function calloutTypeForLine(lineText: string): CalloutType | null {
 /** True when `node` sits inside another Blockquote (a nested `> >` inner node).
  *  Callout classification is scoped to the OUTERMOST quote so a line never
  *  receives two conflicting `quoll-callout-{type}` classes — the container's
- *  type wins by construction, not by CSS source-order accident. */
-function hasBlockquoteAncestor(node: SyntaxNode): boolean {
+ *  type wins by construction, not by CSS source-order accident. Also consumed by
+ *  block-style.ts to gate the document-model outer-boundary flag (a nested inner
+ *  quote / a fenced block inside a quote is never a panel's TRUE outer edge). */
+export function hasBlockquoteAncestor(node: SyntaxNode): boolean {
   for (let p = node.parent; p !== null; p = p.parent) {
     if (p.name === "Blockquote") {
       return true;
