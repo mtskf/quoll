@@ -70,6 +70,7 @@ import {
 } from "./document-message.js";
 import { createEditSettledBarrier } from "./edit-settled-barrier.js";
 import { createEditorConfigWiring } from "./editor-config-wiring.js";
+import { isRelevantConfigChange, readEditorPrefs } from "./editor-prefs-config.js";
 import { takeSwitchCaret } from "./editor-switch-caret.js";
 import { createEffectExecutor } from "./effect-executor.js";
 import { clearActiveFormatPoster, setActiveFormatPoster } from "./format-command.js";
@@ -553,19 +554,41 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
     // onDidChangeConfiguration. Idempotent webview-side. Created HERE (the old
     // config-listener site) so its disposables position — hence teardown order —
     // is unchanged.
+    // Production config-get: resource-scoped to THIS document (round-3 item 5) so
+    // a folder-level override in a multi-root workspace is read + pushed for the
+    // right file. NOTE: this deviates from the existing unscoped
+    // readLintGutterEnabled/readSpellcheckEnabled reads — those are booleans with
+    // no per-folder story yet; the preset reads are new and resource-correct from
+    // the start. (A later PR can align the lint/spellcheck reads; out of scope here.)
+    const getPref = (key: string, def: string): string =>
+      workspace.getConfiguration(undefined, document.uri).get<string>(key, def);
+
     const editorConfig = createEditorConfigWiring({
       subscribe: (onRelevantChange) => {
         const sub = subscribeWhileAlive(workspace.onDidChangeConfiguration, (e) => {
+          // The 4 preset keys are RESOURCE-SCOPED (round-4 item 2): pass
+          // document.uri so an unrelated folder's change does NOT fire a
+          // redundant same-value push into this webview (the setEditorPrefs
+          // guard was removed in Task 5, so a redundant push = a real CM
+          // dispatch). lintGutter/spellcheck stay unscoped, matching the
+          // existing boolean-read precedent. Extracted to a pure predicate so
+          // the document.uri argument is unit-testable.
           if (
-            e.affectsConfiguration(LINT_GUTTER_CONFIG_KEY) ||
-            e.affectsConfiguration(SPELLCHECK_CONFIG_KEY)
+            isRelevantConfigChange(e, document.uri, [LINT_GUTTER_CONFIG_KEY, SPELLCHECK_CONFIG_KEY])
           ) {
             onRelevantChange();
           }
         });
         return () => sub.dispose();
       },
-      push: () => post(buildEditorConfigMessage(readLintGutterEnabled(), readSpellcheckEnabled())),
+      push: () =>
+        post(
+          buildEditorConfigMessage(
+            readLintGutterEnabled(),
+            readSpellcheckEnabled(),
+            readEditorPrefs(getPref)
+          )
+        ),
     });
     disposables.push(editorConfig);
 
