@@ -91,8 +91,10 @@ describe("check-doc-sync — drift contract (doc ⊆ code)", () => {
 
   it("planted drift: a renamed code type orphans the doc reference", () => {
     // Simulate `edit-rejected` renamed away in protocol.ts; the bullet still
-    // mentions it → it must be reported as stale.
-    const renamed = PROTOCOL.replace('type: "edit-rejected"', 'type: "edit-rejected-X"');
+    // mentions it → it must be reported as stale. The new name stays all-lowercase
+    // so the orphan arises purely from `edit-rejected` disappearing, not from the
+    // code-side charclass rejecting an uppercase char.
+    const renamed = PROTOCOL.replace('type: "edit-rejected"', 'type: "edit-rejected-alt"');
     const { orphans } = findDrift(renamed, CLAUDE_MD);
     expect(orphans).toEqual(["edit-rejected"]);
   });
@@ -101,5 +103,23 @@ describe("check-doc-sync — drift contract (doc ⊆ code)", () => {
     const extra = `${PROTOCOL}export type FakeMsg = { type: "fake-msg" };\n`;
     const { orphans } = findDrift(extra, CLAUDE_MD);
     expect(orphans).toEqual([]);
+  });
+});
+
+// The non-vacuity backstops in main() exit 2 rather than pass green when
+// extraction breaks. main()'s process.exit wiring is not unit-testable via the
+// pure functions, but its DECISION INPUTS (codeCount, bulletFound) are exported
+// on findDrift — pin them so a regressed threshold / bullet-detection cannot
+// silently start passing.
+describe("check-doc-sync — backstop decision inputs", () => {
+  it("codeCount falls below the exit-2 floor when the type regex extracts nothing", () => {
+    const { codeCount } = findDrift("no message types here", CLAUDE_MD);
+    expect(codeCount).toBe(0);
+    expect(codeCount).toBeLessThan(5);
+  });
+
+  it("bulletFound is false when the Message protocol bullet is absent", () => {
+    const { bulletFound } = findDrift(PROTOCOL, "## Nothing\n\n- **Other**: text.\n");
+    expect(bulletFound).toBe(false);
   });
 });
