@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  buildFormatCommandMessage,
   buildSwitchToTextMessage,
   isHostToWebview,
   isWebviewToHost,
@@ -951,5 +952,29 @@ describe("buildSwitchToTextMessage", () => {
   });
   it("produces a message that passes isWebviewToHost", () => {
     expect(isWebviewToHost(buildSwitchToTextMessage())).toBe(true);
+  });
+});
+
+describe("format-command message", () => {
+  it("builds a valid envelope", () => {
+    const m = buildFormatCommandMessage("bold");
+    expect(m).toEqual({ protocol: PROTOCOL_VERSION, type: "format-command", action: "bold" });
+    expect(isHostToWebview(m)).toBe(true);
+  });
+
+  it("accepts every action", () => {
+    for (const a of ["bold", "italic", "code", "strike", "link"] as const) {
+      expect(isHostToWebview(buildFormatCommandMessage(a))).toBe(true);
+    }
+  });
+
+  it("rejects an unknown action", () => {
+    expect(
+      isHostToWebview({ protocol: PROTOCOL_VERSION, type: "format-command", action: "underline" })
+    ).toBe(false);
+  });
+
+  it("rejects a missing action", () => {
+    expect(isHostToWebview({ protocol: PROTOCOL_VERSION, type: "format-command" })).toBe(false);
   });
 });

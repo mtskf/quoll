@@ -215,13 +215,39 @@ export type ImageWriteResultMessage = Envelope & {
   requestId: string;
 } & ({ ok: true; relativePath: string } | { ok: false; relativePath?: undefined });
 
+/** Host→webview instruction to run an inline-formatting command on the
+ *  active selection. Sent by the `quoll.format` command (bound to a
+ *  keybinding scoped to the active Quoll editor) to the active panel's
+ *  webview, which performs the actual CodeMirror transaction — no document
+ *  mutation happens on the host side. `action` is an inline union (NOT
+ *  imported from the webview) to keep this module import-free. */
+export type FormatCommandMessage = Envelope & {
+  type: "format-command";
+  action: "bold" | "italic" | "code" | "strike" | "link";
+};
+
+const FORMAT_COMMAND_ACTIONS: ReadonlySet<string> = new Set([
+  "bold",
+  "italic",
+  "code",
+  "strike",
+  "link",
+]);
+
+export function buildFormatCommandMessage(
+  action: FormatCommandMessage["action"]
+): FormatCommandMessage {
+  return { protocol: PROTOCOL_VERSION, type: "format-command", action };
+}
+
 export type HostToWebview =
   | DocumentMessage
   | ThemeMessage
   | EditRejectedMessage
   | ImageWriteResultMessage
   | EditorConfigMessage
-  | CaretApplyMessage;
+  | CaretApplyMessage
+  | FormatCommandMessage;
 
 // ---------- Webview → Host ----------
 
@@ -519,6 +545,8 @@ export function isHostToWebview(value: unknown): value is HostToWebview {
       return typeof v.lintGutter === "boolean" && typeof v.spellcheck === "boolean";
     case "caret-apply":
       return isCaretCoordinate(v.line) && isCaretCoordinate(v.character);
+    case "format-command":
+      return typeof v.action === "string" && FORMAT_COMMAND_ACTIONS.has(v.action);
     default:
       return false;
   }

@@ -34,6 +34,10 @@ import { quollFolding } from "./cm/fold/index.js";
 import { frontmatterBlockField, frontmatterRevealKeymap } from "./cm/frontmatter/index.js";
 import { hostDocumentReseed } from "./cm/host-reseed.js";
 import { createImagePasteDrop, imageBlockField, quollResourceBaseUri } from "./cm/image/index.js";
+import {
+  type FormatAction,
+  runFormatCommand as runInlineFormat,
+} from "./cm/inline/inline-formatting-commands.js";
 import { quollLinkClickHandler } from "./cm/link-handlers.js";
 import { quollLintFixKeymap } from "./cm/lint/apply-fix.js";
 import { quollLintGutter } from "./cm/lint/gutter.js";
@@ -116,6 +120,9 @@ export type EditorHandle = {
    *  host's editor-config push; whether the red underlines actually paint is
    *  the webview host's (VS Code/Electron) call, not ours. */
   setSpellcheck(enabled: boolean): void;
+  /** Run an inline-format action on the current selection. Rides the normal
+   *  dispatch -> edit-sync pipeline; a no-op when the view is read-only. */
+  runFormatCommand(action: FormatAction): void;
   /** Apply a host-pushed caret (one-shot editor-switch handoff). Focuses the
    *  view — only when this webview already owns focus — so CodeMirror paints the
    *  cursor, then dispatches a selection-only transaction (no document mutation)
@@ -772,6 +779,9 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
       view.dispatch({
         effects: spellcheckCompartment.reconfigure(spellcheckAttrs(enabled)),
       });
+    },
+    runFormatCommand(action) {
+      runInlineFormat(view, action);
     },
     applyRemoteCaret(caret) {
       const anchor = applyCaret(view.state.doc, caret);
