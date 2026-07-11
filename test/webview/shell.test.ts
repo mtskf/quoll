@@ -28,6 +28,8 @@ const subscribeImpl = vi.fn((handler: (message: HostToWebview) => void) => {
 vi.mock("../../src/webview/host.js", () => ({
   getHost: () => ({ postMessage }),
   subscribeToHost: (handler: (message: HostToWebview) => void) => subscribeImpl(handler),
+  readPersistedState: () => ({}),
+  patchPersistedState: () => {},
 }));
 
 let container: HTMLElement | null = null;

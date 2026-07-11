@@ -141,6 +141,64 @@ describe("outline sidebar — real-chromium layout", () => {
     expect(after.width).toBeLessThan(before.width); // the column actually narrowed
   });
 
+  it("dragging the resize handle widens the pinned sidebar (real geometry)", async () => {
+    const { view: v, host } = mount(DOC);
+    v.plugin(outlinePlugin)?.toggle();
+    (host.querySelector(".quoll-outline-pin") as HTMLElement).click();
+    await settled();
+    const sidebar = host.querySelector(".quoll-outline-sidebar") as HTMLElement;
+    const before = sidebar.getBoundingClientRect().width;
+    const handle = host.querySelector(".quoll-outline-resize-handle") as HTMLElement;
+    const rect = handle.getBoundingClientRect();
+    const y = rect.top + rect.height / 2;
+    // Real Chromium has a layout engine + setPointerCapture, so dispatched
+    // PointerEvents exercise the true geometry: applyResize reads the live
+    // getBoundingClientRect and clampWidth reads the live host width. Drag the
+    // handle ~80px to the right and assert the sidebar column actually grew —
+    // the desync/clamp bug class happy-dom can't observe.
+    const x0 = rect.left + rect.width / 2;
+    handle.dispatchEvent(
+      new PointerEvent("pointerdown", { clientX: x0, clientY: y, pointerId: 1, bubbles: true })
+    );
+    handle.dispatchEvent(
+      new PointerEvent("pointermove", { clientX: x0 + 80, clientY: y, pointerId: 1, bubbles: true })
+    );
+    handle.dispatchEvent(
+      new PointerEvent("pointerup", { clientX: x0 + 80, clientY: y, pointerId: 1, bubbles: true })
+    );
+    await settled();
+    const after = sidebar.getBoundingClientRect().width;
+    expect(after).toBeGreaterThan(before + 40); // dragged ~80px right (clamp permitting)
+  });
+
+  it("a wide sidebar caps at 80% of the host when the host narrows (editor column survives)", async () => {
+    // Codex #182: dropping the CSS max-width made clampWidth the sole bound, but
+    // it only runs at restore/drag. min(var, 80%) on the sidebar width /
+    // flex-basis / handle re-caps on every layout, so a large dragged width
+    // can't squeeze the pinned editor column to zero after the host shrinks.
+    const { view: v, host } = mount(DOC);
+    const outerRoot = document.getElementById("root") as HTMLElement;
+    outerRoot.style.width = "1000px";
+    v.plugin(outlinePlugin)?.toggle();
+    (host.querySelector(".quoll-outline-pin") as HTMLElement).click();
+    // Force a wide width via the same var the drag would set.
+    host.style.setProperty("--quoll-outline-sidebar-width", "600px");
+    await settled();
+    const sidebar = host.querySelector(".quoll-outline-sidebar") as HTMLElement;
+    const editorEl = host.querySelector(".cm-editor") as HTMLElement;
+    // Wide host: the 600px var is well under 80% of the host, so it's honoured
+    // in full (proves the width isn't defaulting to 260 — the narrow cap below
+    // would pass vacuously otherwise).
+    expect(sidebar.getBoundingClientRect().width).toBeGreaterThan(500);
+    // Narrow the host well below the dragged width.
+    outerRoot.style.width = "500px";
+    await settled();
+    const sbW = sidebar.getBoundingClientRect().width;
+    const hostW = host.getBoundingClientRect().width;
+    expect(sbW).toBeLessThanOrEqual(Math.round(hostW * 0.8) + 1); // capped at 80% of the host
+    expect(editorEl.getBoundingClientRect().width).toBeGreaterThan(0); // editor survives
+  });
+
   it("pinned mode keeps .cm-scroller as the real scroller (scroll-hide fires; sidebar survives)", async () => {
     const { view: v, host } = mount(LONG_DOC);
     v.plugin(outlinePlugin)?.toggle();

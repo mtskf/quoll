@@ -8,6 +8,12 @@ import {
   OUTLINE_OPEN_CLASS,
   OUTLINE_PINNED_CLASS,
 } from "../../src/webview/cm/outline/outline-panel.js";
+import { patchPersistedState, readPersistedState } from "../../src/webview/host.js";
+
+vi.mock("../../src/webview/host.js", () => ({
+  readPersistedState: vi.fn(() => ({})),
+  patchPersistedState: vi.fn(),
+}));
 
 let view: EditorView | null = null;
 
@@ -16,6 +22,8 @@ afterEach(() => {
   view = null;
   document.body.textContent = "";
   vi.useRealTimers();
+  vi.mocked(readPersistedState).mockReturnValue({});
+  vi.mocked(patchPersistedState).mockClear();
 });
 
 function mount(doc: string): { view: EditorView; host: HTMLElement } {
@@ -300,5 +308,146 @@ describe("quollOutline sidebar", () => {
     const { view: v, host } = mount("#\n");
     v.plugin(outlinePlugin)?.toggle();
     expect(itemTexts(host)).toEqual(["(untitled)"]);
+  });
+});
+
+// Pointer events target the HANDLE element (the plugin binds pointermove /
+// pointerup / pointercancel on it + setPointerCapture, not on window), so
+// dispatching on the handle in happy-dom triggers those listeners directly.
+function handleEl(host: HTMLElement): HTMLElement {
+  return host.querySelector(".quoll-outline-resize-handle") as HTMLElement;
+}
+function widthVar(host: HTMLElement): string {
+  return host.style.getPropertyValue("--quoll-outline-sidebar-width").trim();
+}
+// happy-dom has no Element.setPointerCapture — stub it so the plugin's guarded
+// call is a no-op instead of throwing (the impl also optional-chains it).
+function stubPointerCapture(el: HTMLElement): void {
+  (el as unknown as { setPointerCapture: (id: number) => void }).setPointerCapture = () => {};
+  (el as unknown as { releasePointerCapture: (id: number) => void }).releasePointerCapture =
+    () => {};
+}
+function pd(clientX: number): PointerEvent {
+  return new PointerEvent("pointerdown", { clientX, pointerId: 1, bubbles: true });
+}
+function pm(clientX: number): PointerEvent {
+  return new PointerEvent("pointermove", { clientX, pointerId: 1 });
+}
+function pu(clientX: number): PointerEvent {
+  return new PointerEvent("pointerup", { clientX, pointerId: 1 });
+}
+
+describe("quollOutline resizable width", () => {
+  it("applies a persisted width as the host CSS var on mount", () => {
+    vi.mocked(readPersistedState).mockReturnValueOnce({ outlineWidthPx: 320 });
+    const { host } = mount("# Alpha\n");
+    expect(widthVar(host)).toBe("320px");
+  });
+
+  it("ignores a non-finite / out-of-range persisted width", () => {
+    vi.mocked(readPersistedState).mockReturnValueOnce({ outlineWidthPx: Number.NaN });
+    const { host } = mount("# Alpha\n");
+    expect(widthVar(host)).toBe(""); // falls through to the stylesheet default
+  });
+
+  it("dragging the handle rewrites the width var, clamped to the minimum", () => {
+    const { host } = mount("# Alpha\n");
+    const h = handleEl(host);
+    stubPointerCapture(h);
+    h.dispatchEvent(pd(260));
+    h.dispatchEvent(pm(300));
+    expect(widthVar(host)).toBe("300px");
+    h.dispatchEvent(pm(10));
+    expect(widthVar(host)).toBe("180px"); // clamped to MIN_WIDTH_PX
+  });
+
+  it("persists the final width on pointer-up", () => {
+    const { host } = mount("# Alpha\n");
+    const h = handleEl(host);
+    stubPointerCapture(h);
+    h.dispatchEvent(pd(260));
+    h.dispatchEvent(pm(300));
+    h.dispatchEvent(pu(300));
+    expect(vi.mocked(patchPersistedState)).toHaveBeenCalledWith({ outlineWidthPx: 300 });
+  });
+
+  it("pointercancel ends the drag and persists (Codex F5 — released outside frame)", () => {
+    const { host } = mount("# Alpha\n");
+    const h = handleEl(host);
+    stubPointerCapture(h);
+    h.dispatchEvent(pd(260));
+    h.dispatchEvent(pm(300));
+    h.dispatchEvent(new PointerEvent("pointercancel", { pointerId: 1 }));
+    expect(vi.mocked(patchPersistedState)).toHaveBeenCalledWith({ outlineWidthPx: 300 });
+    // A move after the cancel must be ignored (drag ended).
+    h.dispatchEvent(pm(500));
+    expect(widthVar(host)).toBe("300px");
+  });
+
+  it("persists an in-flight width if the view is destroyed mid-drag (eh-F1)", () => {
+    const { view: v, host } = mount("# Alpha\n");
+    const h = handleEl(host);
+    stubPointerCapture(h);
+    h.dispatchEvent(pd(260));
+    h.dispatchEvent(pm(300));
+    v.destroy();
+    view = null;
+    expect(vi.mocked(patchPersistedState)).toHaveBeenCalledWith({ outlineWidthPx: 300 });
+  });
+
+  it("a click-without-drag (pointerdown→up, no move) persists nothing (eh Issue 2/3)", () => {
+    const { host } = mount("# Alpha\n");
+    const h = handleEl(host);
+    stubPointerCapture(h);
+    h.dispatchEvent(pd(260));
+    h.dispatchEvent(pu(260)); // released without a single pointermove
+    expect(vi.mocked(patchPersistedState)).not.toHaveBeenCalled();
+  });
+
+  it("a pointerdown then immediate destroy (no move) persists nothing (eh Issue 2)", () => {
+    const { view: v, host } = mount("# Alpha\n");
+    const h = handleEl(host);
+    stubPointerCapture(h);
+    h.dispatchEvent(pd(260));
+    v.destroy();
+    view = null;
+    expect(vi.mocked(patchPersistedState)).not.toHaveBeenCalled();
+  });
+
+  it("ignores a FINITE but out-of-range persisted width (the in-range restore guard)", () => {
+    // Distinct from the NaN case: 5000 passes Number.isFinite but fails the
+    // clampWidth(persisted) === persisted in-range guard (happy-dom has no
+    // layout ⇒ upper bound is MAX_WIDTH_PX 600), so it must NOT be applied.
+    vi.mocked(readPersistedState).mockReturnValueOnce({ outlineWidthPx: 5000 });
+    const { host } = mount("# Alpha\n");
+    expect(widthVar(host)).toBe(""); // rejected — falls through to the stylesheet default
+  });
+
+  it("clamps an over-wide drag to the maximum (the sole width bound, no CSS max-width)", () => {
+    const { host } = mount("# Alpha\n");
+    const h = handleEl(host);
+    stubPointerCapture(h);
+    h.dispatchEvent(pd(260));
+    h.dispatchEvent(pm(5000)); // far past the ceiling
+    // happy-dom: host.clientWidth 0 ⇒ upper bound falls back to MAX_WIDTH_PX.
+    expect(widthVar(host)).toBe("600px");
+  });
+
+  it("ignores pointermove/up from a second pointer mid-drag (hijack guard)", () => {
+    const { host } = mount("# Alpha\n");
+    const h = handleEl(host);
+    stubPointerCapture(h);
+    h.dispatchEvent(pd(260)); // drag owned by pointerId 1
+    h.dispatchEvent(pm(300));
+    expect(widthVar(host)).toBe("300px");
+    // A second pointer's move must not steer the active drag.
+    h.dispatchEvent(new PointerEvent("pointermove", { clientX: 450, pointerId: 2 }));
+    expect(widthVar(host)).toBe("300px");
+    // Nor may its up end/persist the drag.
+    h.dispatchEvent(new PointerEvent("pointerup", { clientX: 450, pointerId: 2 }));
+    expect(vi.mocked(patchPersistedState)).not.toHaveBeenCalled();
+    // Pointer 1 still owns it.
+    h.dispatchEvent(pm(320));
+    expect(widthVar(host)).toBe("320px");
   });
 });

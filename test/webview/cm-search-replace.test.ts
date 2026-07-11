@@ -12,6 +12,8 @@ const posted: unknown[] = [];
 vi.mock("../../src/webview/host.js", () => ({
   getHost: () => ({ postMessage: (m: unknown) => posted.push(m) }),
   subscribeToHost: () => () => {},
+  readPersistedState: () => ({}),
+  patchPersistedState: () => {},
 }));
 
 type EditMsg = { protocol: number; type: string; content: string; baseDocVersion: number };

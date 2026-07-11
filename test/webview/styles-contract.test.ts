@@ -598,23 +598,35 @@ describe("styles.css — outline sidebar", () => {
   // vacuously satisfy a match (styles-contract grep-vacuation guard).
   const live = css.replace(/\/\*[\s\S]*?\*\//g, "");
 
-  it(":root declares the sidebar tokens (width / lifted surface / hairline border)", () => {
+  it(":root declares the sidebar tokens (width / side-bar surface / hairline border)", () => {
     const root = live.match(/:root\s*\{([^}]*)\}/)?.[1] ?? "";
     expect(root).toMatch(/--quoll-outline-sidebar-width\s*:\s*\d+px\s*;/);
-    // The surface must be DERIVED from the editor background (slightly lifted),
-    // not a hard-coded colour — that is what keeps all themes tracking.
+    // The surface tracks VS Code's native side-panel background so the outline
+    // matches the built-in side panels (falls back to editor bg for old hosts).
     expect(root).toMatch(
-      /--quoll-outline-sidebar-background\s*:\s*color-mix\([^;]*--vscode-editor-background[^;]*;/
+      /--quoll-outline-sidebar-background\s*:\s*var\(--vscode-sideBar-background[^;]*;/
     );
     expect(root).toMatch(
       /--quoll-outline-sidebar-border\s*:\s*color-mix\([^;]*--vscode-panel-border[^;]*;/
     );
   });
 
+  it("the header right-aligns a bordered pin and uses the side-bar section-header title", () => {
+    const pin = live.match(/\.quoll-outline-pin\s*\{[^}]*\}/)?.[0] ?? "";
+    expect(pin).toMatch(/margin-left\s*:\s*auto/); // pushed to the right edge
+    expect(pin).toMatch(/border\s*:\s*1px\s+solid/); // reads as a button, not a bare icon
+    expect(pin).toMatch(/border-radius\s*:/);
+    const title = live.match(/\.quoll-outline-title\s*\{[^}]*\}/)?.[0] ?? "";
+    expect(title).toMatch(/color\s*:\s*var\(--vscode-sideBarSectionHeader-foreground/);
+    expect(title).toMatch(/text-transform\s*:\s*uppercase/);
+  });
+
   it("the sidebar consumes the tokens and slides in from the left edge", () => {
     const rule = live.match(/\.quoll-outline-sidebar\s*\{[^}]*\}/)?.[0] ?? "";
     expect(rule).not.toBe("");
-    expect(rule).toMatch(/width\s*:\s*var\(--quoll-outline-sidebar-width\)/);
+    // min(var, 80%) caps the live width at 80% of the host so a large dragged
+    // width can't squeeze the editor to zero after the host shrinks.
+    expect(rule).toMatch(/width\s*:\s*min\(var\(--quoll-outline-sidebar-width\),\s*80%\)/);
     expect(rule).toMatch(/background\s*:\s*var\(--quoll-outline-sidebar-background\)/);
     expect(rule).toMatch(/border-right\s*:\s*1px\s+solid\s+var\(--quoll-outline-sidebar-border\)/);
     expect(rule).toMatch(/transform\s*:\s*translateX\(-100%\)/);
@@ -623,6 +635,15 @@ describe("styles.css — outline sidebar", () => {
       live.match(/\.quoll-outline-open\s+\.quoll-outline-sidebar\s*\{[^}]*\}/)?.[0] ?? "";
     expect(open).toMatch(/transform\s*:\s*none/);
     expect(open).toMatch(/visibility\s*:\s*visible/);
+  });
+
+  it("the resize handle tracks the width var and shows an ew-resize cursor", () => {
+    const rule =
+      live.match(/\.quoll-outline-open\s+\.quoll-outline-resize-handle\s*\{[^}]*\}/)?.[0] ?? "";
+    // Same min(var, 80%) as the sidebar width so the handle never desyncs from
+    // the (capped) right edge.
+    expect(rule).toMatch(/left\s*:\s*min\(var\(--quoll-outline-sidebar-width\),\s*80%\)/);
+    expect(rule).toMatch(/cursor\s*:\s*ew-resize/);
   });
 
   it("open state hides the corner toggle (the header pin takes its spot)", () => {
@@ -639,7 +660,9 @@ describe("styles.css — outline sidebar", () => {
         /\.quoll-editor\.quoll-outline-pinned\s+\.quoll-outline-sidebar\s*\{[^}]*\}/
       )?.[0] ?? "";
     expect(sidebar).toMatch(/position\s*:\s*static/);
-    expect(sidebar).toMatch(/flex\s*:\s*0\s+0\s+var\(--quoll-outline-sidebar-width\)/);
+    expect(sidebar).toMatch(
+      /flex\s*:\s*0\s+0\s+min\(var\(--quoll-outline-sidebar-width\),\s*80%\)/
+    );
     const editor =
       live.match(/\.quoll-editor\.quoll-outline-pinned\s+\.cm-editor\s*\{[^}]*\}/)?.[0] ?? "";
     expect(editor).toMatch(/flex\s*:\s*1\s+1\s+auto/);

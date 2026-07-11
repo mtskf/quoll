@@ -26,6 +26,7 @@ import {
   ViewPlugin,
   type ViewUpdate,
 } from "@codemirror/view";
+import { patchPersistedState, readPersistedState } from "../../host.js";
 import { requireQuollEditorHost } from "../editor-host.js";
 import { extractOutline, type OutlineHeading } from "./build-outline.js";
 import { createPinIcon, createSettingsIcon } from "./icons.js";
@@ -67,12 +68,35 @@ const HOVER_OPEN_DELAY_MS = 120;
 export const OUTLINE_OPEN_CLASS = "quoll-outline-open";
 export const OUTLINE_PINNED_CLASS = "quoll-outline-pinned";
 
+/** Runtime-resizable sidebar width bounds (px). The stylesheet default
+ *  (--quoll-outline-sidebar-width: 260px) applies until the user drags; a drag
+ *  overrides the var inline on the host and persists the value. This clamp
+ *  bounds the STORED width at drag/restore time; styles.css additionally caps
+ *  the LIVE display at min(var, 80%) of the host (re-evaluated on layout, for
+ *  host-shrink) using the SAME expression on the sidebar and the handle so they
+ *  never desync. The two are complementary — both keep the editor column alive. */
+const MIN_WIDTH_PX = 180;
+const MAX_WIDTH_PX = 600;
+/** Persisted view-state key (flat, survives reload) — see readPersistedState.
+ *  Flat + namespaced by name so it shallow-merges alongside any future keys
+ *  without a nested schema (one key today). */
+const WIDTH_STATE_KEY = "outlineWidthPx";
+
 class OutlinePanel implements PluginValue {
   private readonly host: HTMLElement;
   private readonly toggleEl: HTMLButtonElement;
   private readonly sidebarEl: HTMLElement;
   private readonly pinEl: HTMLButtonElement;
   private readonly listEl: HTMLElement;
+  private readonly resizeEl: HTMLElement;
+  private resizing = false;
+  /** The pointerId that started the active drag; guards against a second
+   *  pointer's events hijacking the resize. */
+  private resizePointerId: number | null = null;
+  /** True once a pointermove actually changed the width during this drag. Only
+   *  a moved drag persists — a click-without-drag (pointerdown→up, no move)
+   *  must not fire a redundant setState. */
+  private resizeMoved = false;
   private open = false;
   /** Invariant: pinned ⇒ open (closing by any path unpins). */
   private pinned = false;
@@ -158,8 +182,11 @@ class OutlinePanel implements PluginValue {
     const titleEl = document.createElement("span");
     titleEl.className = "quoll-outline-title";
     titleEl.textContent = "Outline";
-    header.appendChild(this.pinEl);
+    // Title leads, pin trails: matches VS Code side-panel header order (title
+    // left, action button right) and keeps tab order visual-left-to-right. The
+    // pin is pushed to the right edge by margin-left:auto (styles.css).
     header.appendChild(titleEl);
+    header.appendChild(this.pinEl);
 
     this.listEl = document.createElement("ul");
     this.listEl.className = "quoll-outline-list";
@@ -193,6 +220,32 @@ class OutlinePanel implements PluginValue {
     // a11y order matches the visual left-to-right order.
     this.host.insertBefore(this.sidebarEl, this.host.firstChild);
     this.host.appendChild(this.toggleEl);
+
+    // Resize handle: a host child (not a sidebar child) pinned to the sidebar's
+    // right edge via `left: var(--quoll-outline-sidebar-width)`. Dragging it
+    // rewrites that var inline on the host, which moves the sidebar edge, the
+    // pinned flex-basis, AND the handle together — one source of truth for the
+    // runtime width. Only interactive while the sidebar is open (CSS gates it).
+    // Listeners live on the handle + pointer capture, so a release outside the
+    // iframe still ends the drag (pointerup/pointercancel), and remove() cleans
+    // them up.
+    this.resizeEl = document.createElement("div");
+    this.resizeEl.className = "quoll-outline-resize-handle";
+    this.resizeEl.setAttribute("aria-hidden", "true"); // pointer affordance; keyboard resize is a follow-up
+    this.resizeEl.addEventListener("pointerdown", (e) => this.onResizePointerDown(e));
+    this.resizeEl.addEventListener("pointermove", (e) => this.onResizePointerMove(e));
+    this.resizeEl.addEventListener("pointerup", (e) => this.onResizePointerEnd(e));
+    this.resizeEl.addEventListener("pointercancel", (e) => this.onResizePointerEnd(e));
+    this.host.appendChild(this.resizeEl);
+
+    // Restore a persisted width before first paint (guarded + in-range only:
+    // a corrupt / out-of-range value falls through to the stylesheet default).
+    const persisted = readPersistedState()[WIDTH_STATE_KEY];
+    if (typeof persisted === "number" && Number.isFinite(persisted)) {
+      if (this.clampWidth(persisted) === persisted) {
+        this.host.style.setProperty("--quoll-outline-sidebar-width", `${persisted}px`);
+      }
+    }
   }
 
   update(u: ViewUpdate): void {
@@ -215,8 +268,10 @@ class OutlinePanel implements PluginValue {
     }
     this.cancelScheduledClose();
     this.cancelScheduledOpen();
+    this.endResize(); // persist an in-flight drag before teardown (no-op if idle)
     this.toggleEl.remove();
     this.sidebarEl.remove();
+    this.resizeEl.remove(); // drops its pointer listeners with it
     // Clear the host flags so a lingering host node (tests, re-mount) never
     // inherits a stale open/pinned layout — mirrors FloatingToolbarScroll's
     // destroy hygiene.
@@ -308,8 +363,87 @@ class OutlinePanel implements PluginValue {
     }
   }
 
+  private clampWidth(px: number): number {
+    // happy-dom / pre-layout: clientWidth 0 ⇒ no viewport bound yet, use the
+    // absolute ceiling. In a real browser, also cap at 80% of the host width so
+    // the editor column survives at drag/restore time. styles.css re-applies the
+    // same 80%-of-host cap live via min(var, 80%) for later host shrinks; the two
+    // caps agree, so a value this clamp passes is never re-capped on a stable host.
+    const hostWidth = this.host.clientWidth;
+    const upper = hostWidth > 0 ? Math.min(MAX_WIDTH_PX, hostWidth * 0.8) : MAX_WIDTH_PX;
+    return Math.round(Math.max(MIN_WIDTH_PX, Math.min(upper, px)));
+  }
+
+  /** Set the width var from a pointer's clientX (relative to the host's left). */
+  private applyResize(clientX: number): void {
+    const width = this.clampWidth(clientX - this.host.getBoundingClientRect().left);
+    this.host.style.setProperty("--quoll-outline-sidebar-width", `${width}px`);
+  }
+
+  private onResizePointerDown(e: PointerEvent): void {
+    if (this.resizing) {
+      return; // a second pointer must not hijack an active drag
+    }
+    e.preventDefault();
+    this.resizing = true;
+    this.resizeMoved = false;
+    this.resizePointerId = e.pointerId;
+    // Route subsequent moves/up to the handle even outside the iframe. Guarded:
+    // happy-dom has no setPointerCapture.
+    this.resizeEl.setPointerCapture?.(e.pointerId);
+    // Dragging in overlay mode moves the pointer out of the sidebar — cancel any
+    // armed hover-close so the surface can't vanish mid-drag (scheduleClose also
+    // early-returns while resizing).
+    this.cancelScheduledClose();
+  }
+
+  private onResizePointerMove(e: PointerEvent): void {
+    if (!this.resizing || e.pointerId !== this.resizePointerId) {
+      return;
+    }
+    this.resizeMoved = true;
+    this.applyResize(e.clientX);
+  }
+
+  /** Unified drag-end for pointerup AND pointercancel. */
+  private onResizePointerEnd(e: PointerEvent): void {
+    if (!this.resizing || e.pointerId !== this.resizePointerId) {
+      return;
+    }
+    // pointercancel carries no useful clientX — only apply on pointerup.
+    if (e.type === "pointerup") {
+      this.applyResize(e.clientX);
+    }
+    this.endResize();
+  }
+
+  /** Stop the drag and persist the committed width. Idempotent + shared by the
+   *  pointer-end path and destroy-mid-drag. Only a drag that actually moved
+   *  persists — a click-without-drag fires no redundant setState. */
+  private endResize(): void {
+    if (!this.resizing) {
+      return;
+    }
+    this.resizing = false;
+    if (this.resizePointerId !== null) {
+      this.resizeEl.releasePointerCapture?.(this.resizePointerId);
+      this.resizePointerId = null;
+    }
+    if (!this.resizeMoved) {
+      return; // no movement ⇒ no new width to persist
+    }
+    this.resizeMoved = false;
+    const width = Number.parseInt(
+      this.host.style.getPropertyValue("--quoll-outline-sidebar-width"),
+      10
+    );
+    if (Number.isFinite(width)) {
+      patchPersistedState({ [WIDTH_STATE_KEY]: width });
+    }
+  }
+
   private scheduleClose(): void {
-    if (this.pinned || !this.open) {
+    if (this.pinned || !this.open || this.resizing) {
       return;
     }
     this.cancelScheduledClose();
