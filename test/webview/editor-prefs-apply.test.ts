@@ -1,0 +1,89 @@
+// @vitest-environment happy-dom
+import { EditorState } from "@codemirror/state";
+import { EditorView } from "@codemirror/view";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { editorPrefsField, setEditorPrefsEffect } from "../../src/webview/cm/editor-prefs.js";
+import { editorPrefsApply } from "../../src/webview/cm/editor-prefs-apply.js";
+
+let view: EditorView | null = null;
+afterEach(() => {
+  view?.destroy();
+  view = null;
+  document.body.textContent = "";
+});
+
+function mount(): EditorView {
+  const parent = document.createElement("div");
+  document.body.appendChild(parent);
+  view = new EditorView({
+    parent,
+    state: EditorState.create({ extensions: [editorPrefsField, editorPrefsApply()] }),
+  });
+  return view;
+}
+
+describe("editorPrefsApply", () => {
+  it("sets no inline vars at the defaults (today's rendering preserved)", () => {
+    const v = mount();
+    expect(v.dom.style.getPropertyValue("--quoll-editor-font-family")).toBe("");
+    expect(v.dom.style.getPropertyValue("--quoll-editor-font-size")).toBe("");
+    expect(v.dom.style.getPropertyValue("--quoll-editor-line-height")).toBe("");
+    expect(v.dom.style.getPropertyValue("--quoll-editor-content-width")).toBe("");
+  });
+
+  it("writes vars for non-default presets and clears them on return to default", () => {
+    const v = mount();
+    v.dispatch({
+      effects: setEditorPrefsEffect.of({
+        fontFamily: "serif",
+        fontSize: "large",
+        lineHeight: "compact",
+        contentWidth: "wide",
+      }),
+    });
+    expect(v.dom.style.getPropertyValue("--quoll-editor-font-family")).toBe(
+      "Georgia, 'Times New Roman', serif"
+    );
+    expect(v.dom.style.getPropertyValue("--quoll-editor-font-size")).toBe(
+      "calc(var(--vscode-font-size) * 1.15)"
+    );
+    expect(v.dom.style.getPropertyValue("--quoll-editor-line-height")).toBe("1.5");
+    expect(v.dom.style.getPropertyValue("--quoll-editor-content-width")).toBe("75em");
+
+    v.dispatch({
+      effects: setEditorPrefsEffect.of({
+        fontFamily: "default",
+        fontSize: "default",
+        lineHeight: "cozy",
+        contentWidth: "medium",
+      }),
+    });
+    expect(v.dom.style.getPropertyValue("--quoll-editor-font-family")).toBe("");
+    expect(v.dom.style.getPropertyValue("--quoll-editor-content-width")).toBe("");
+  });
+
+  it("requests a CM remeasure when a preset dispatch changes the field", () => {
+    // lineHeight/contentWidth vars change CM geometry (scroll height, caret
+    // hit-test); apply() alone leaves CM's measurements stale until an
+    // unrelated resize/scroll. The plugin must schedule a remeasure ON the
+    // field-changing dispatch — over and above CM's own dispatch bookkeeping.
+    // Control: a dispatch that does NOT change editorPrefsField (a plain
+    // selection move) establishes the CM-internal requestMeasure baseline;
+    // the preset dispatch must call it strictly more (the plugin's own call).
+    const v = mount();
+    v.dispatch({ changes: { from: 0, insert: "abc" } });
+    const spy = vi.spyOn(v, "requestMeasure");
+    v.dispatch({ selection: { anchor: 1 } }); // no editorPrefsField change
+    const baseline = spy.mock.calls.length;
+    spy.mockClear();
+    v.dispatch({
+      effects: setEditorPrefsEffect.of({
+        fontFamily: "default",
+        fontSize: "default",
+        lineHeight: "compact",
+        contentWidth: "wide",
+      }),
+    });
+    expect(spy.mock.calls.length).toBeGreaterThan(baseline);
+  });
+});

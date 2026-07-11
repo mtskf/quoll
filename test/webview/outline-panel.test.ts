@@ -2,6 +2,11 @@
 import { EditorSelection, EditorState } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  DEFAULT_EDITOR_PREFS,
+  editorPrefsField,
+  setEditorPrefsEffect,
+} from "../../src/webview/cm/editor-prefs.js";
 import { quollMarkdownLanguage } from "../../src/webview/cm/markdown.js";
 import { outlinePlugin, quollOutline } from "../../src/webview/cm/outline/index.js";
 import {
@@ -9,6 +14,7 @@ import {
   OUTLINE_OPEN_CLASS,
   OUTLINE_PINNED_CLASS,
 } from "../../src/webview/cm/outline/outline-panel.js";
+import { quollUpdateConfigSink } from "../../src/webview/cm/outline/update-config-sink.js";
 import { patchPersistedState, readPersistedState } from "../../src/webview/host.js";
 
 vi.mock("../../src/webview/host.js", () => ({
@@ -17,6 +23,7 @@ vi.mock("../../src/webview/host.js", () => ({
 }));
 
 let view: EditorView | null = null;
+const updateConfigSpy = vi.fn();
 
 afterEach(() => {
   view?.destroy();
@@ -25,6 +32,7 @@ afterEach(() => {
   vi.useRealTimers();
   vi.mocked(readPersistedState).mockReturnValue({});
   vi.mocked(patchPersistedState).mockClear();
+  updateConfigSpy.mockClear();
 });
 
 function mount(doc: string): { view: EditorView; host: HTMLElement } {
@@ -33,7 +41,15 @@ function mount(doc: string): { view: EditorView; host: HTMLElement } {
   document.body.appendChild(host);
   view = new EditorView({
     parent: host,
-    state: EditorState.create({ doc, extensions: [quollMarkdownLanguage(), quollOutline()] }),
+    state: EditorState.create({
+      doc,
+      extensions: [
+        quollMarkdownLanguage(),
+        editorPrefsField,
+        quollUpdateConfigSink.of((key, value) => updateConfigSpy(key, value)),
+        quollOutline(),
+      ],
+    }),
   });
   return { view, host };
 }
@@ -81,14 +97,15 @@ describe("quollOutline sidebar", () => {
     expect(sidebarEl(host).hasAttribute("inert")).toBe(true);
   });
 
-  it("renders pin + settings controls with SVG icons (settings inert + honest to AT)", () => {
+  it("renders pin + settings controls with SVG icons (settings enabled, opens a dialog)", () => {
     const { host } = mount("# Alpha\n");
+    // Keep the existing pin-icon SVG pin (round-3 item 8 — do NOT drop it).
     expect(pinEl(host).querySelector("svg")).not.toBeNull();
     const settings = host.querySelector(".quoll-outline-settings") as HTMLButtonElement;
     expect(settings.querySelector("svg")).not.toBeNull();
     expect(settings.textContent).toContain("Settings");
-    expect(settings.getAttribute("aria-disabled")).toBe("true"); // no-op today, say so to AT
-    settings.click(); // deliberately a no-op today — must not throw
+    expect(settings.getAttribute("aria-disabled")).toBeNull();
+    expect(settings.getAttribute("aria-haspopup")).toBe("dialog");
   });
 
   it("opens on toggle hover (after the hover-intent delay) and lists headings in document order", () => {
@@ -500,5 +517,75 @@ describe("quollOutline resizable width", () => {
     // Pointer 1 still owns it.
     h.dispatchEvent(pm(320));
     expect(widthVar(host)).toBe("320px");
+  });
+});
+
+describe("quollOutline settings popover wiring", () => {
+  it("gear opens the popover (mounted into the footer) and toggles aria-expanded", () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const { host } = mount("# H1");
+    hoverToggle(host);
+    const gear = host.querySelector(".quoll-outline-settings") as HTMLButtonElement;
+    expect(host.querySelector(".quoll-settings-popover")).toBeNull(); // unmounted while closed
+    gear.click();
+    expect(host.querySelector(".quoll-settings-popover")).not.toBeNull();
+    expect(gear.getAttribute("aria-expanded")).toBe("true");
+    gear.click();
+    expect(host.querySelector(".quoll-settings-popover")).toBeNull();
+    expect(gear.getAttribute("aria-expanded")).toBe("false");
+  });
+
+  it("a segment click posts through the injected sink", () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const { host } = mount("# H1");
+    hoverToggle(host);
+    (host.querySelector(".quoll-outline-settings") as HTMLButtonElement).click();
+    (host.querySelector("[data-pref-value='serif']") as HTMLButtonElement).click();
+    expect(updateConfigSpy).toHaveBeenCalledWith("quoll.editor.fontFamily", "serif");
+  });
+
+  it("Escape with the popover open closes ONLY the popover (sidebar stays open)", () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const { host } = mount("# H1");
+    hoverToggle(host);
+    const gear = host.querySelector(".quoll-outline-settings") as HTMLButtonElement;
+    gear.click();
+    const popover = host.querySelector(".quoll-settings-popover") as HTMLElement;
+    popover.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    expect(host.querySelector(".quoll-settings-popover")).toBeNull(); // popover closed
+    expect(isOpen(host)).toBe(true); // sidebar NOT closed
+  });
+
+  it("a pointerdown outside the popover (and not on the gear) closes it", () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const { host } = mount("# H1");
+    hoverToggle(host);
+    (host.querySelector(".quoll-outline-settings") as HTMLButtonElement).click();
+    document.dispatchEvent(new Event("pointerdown"));
+    expect(host.querySelector(".quoll-settings-popover")).toBeNull();
+  });
+
+  it("closing the sidebar closes the popover", () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const { view, host } = mount("# H1");
+    hoverToggle(host);
+    (host.querySelector(".quoll-outline-settings") as HTMLButtonElement).click();
+    view.plugin(outlinePlugin)?.toggle(); // close the sidebar
+    expect(host.querySelector(".quoll-settings-popover")).toBeNull();
+  });
+
+  it("a SAME-VALUE editorPrefsField push clears the pending row (round-3 item 1)", () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const { view, host } = mount("# H1");
+    hoverToggle(host);
+    (host.querySelector(".quoll-outline-settings") as HTMLButtonElement).click();
+    const serif = host.querySelector("[data-pref-value='serif']") as HTMLButtonElement;
+    serif.click();
+    expect(serif.classList.contains("pending")).toBe(true);
+    // Simulate the host's override/failure re-push: dispatch the SAME (default)
+    // prefs as a FRESH object — the field identity changes even though the value
+    // is unchanged, so the outline's update() runs syncFromState() → pending clears.
+    view.dispatch({ effects: setEditorPrefsEffect.of({ ...DEFAULT_EDITOR_PREFS }) });
+    expect(serif.classList.contains("pending")).toBe(false);
   });
 });

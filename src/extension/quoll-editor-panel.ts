@@ -36,6 +36,7 @@ import type {
 } from "vscode";
 import {
   ColorThemeKind,
+  ConfigurationTarget,
   Disposable,
   env,
   languages,
@@ -70,12 +71,14 @@ import {
 } from "./document-message.js";
 import { createEditSettledBarrier } from "./edit-settled-barrier.js";
 import { createEditorConfigWiring } from "./editor-config-wiring.js";
+import { isRelevantConfigChange, readEditorPrefs } from "./editor-prefs-config.js";
 import { takeSwitchCaret } from "./editor-switch-caret.js";
 import { createEffectExecutor } from "./effect-executor.js";
 import { clearActiveFormatPoster, setActiveFormatPoster } from "./format-command.js";
 import { getNonce } from "./get-nonce.js";
 import { handleOpenExternal } from "./handle-open-external.js";
 import { handleOpenLink } from "./handle-open-link.js";
+import { handleUpdateConfig } from "./handle-update-config.js";
 import {
   createDrainingDispatcher,
   createHostSessionCore,
@@ -553,19 +556,40 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
     // onDidChangeConfiguration. Idempotent webview-side. Created HERE (the old
     // config-listener site) so its disposables position — hence teardown order —
     // is unchanged.
+    // Production config-get: resource-scoped to THIS document so a folder-level
+    // override in a multi-root workspace is read + pushed for the right file.
+    // NOTE: this deviates from the existing unscoped
+    // readLintGutterEnabled/readSpellcheckEnabled reads — those are booleans with
+    // no per-folder story yet; the preset reads are new and resource-correct from
+    // the start. (A later PR can align the lint/spellcheck reads; out of scope here.)
+    const getPref = (key: string, def: string): string =>
+      workspace.getConfiguration(undefined, document.uri).get<string>(key, def);
+
     const editorConfig = createEditorConfigWiring({
       subscribe: (onRelevantChange) => {
         const sub = subscribeWhileAlive(workspace.onDidChangeConfiguration, (e) => {
+          // The 4 preset keys are RESOURCE-SCOPED: pass document.uri so an
+          // unrelated folder's change does NOT fire a redundant same-value push
+          // into this webview (setEditorPrefs has no same-value guard, so a
+          // redundant push = a real CM dispatch). lintGutter/spellcheck stay
+          // unscoped, matching the existing boolean-read precedent. Extracted to
+          // a pure predicate so the document.uri argument is unit-testable.
           if (
-            e.affectsConfiguration(LINT_GUTTER_CONFIG_KEY) ||
-            e.affectsConfiguration(SPELLCHECK_CONFIG_KEY)
+            isRelevantConfigChange(e, document.uri, [LINT_GUTTER_CONFIG_KEY, SPELLCHECK_CONFIG_KEY])
           ) {
             onRelevantChange();
           }
         });
         return () => sub.dispose();
       },
-      push: () => post(buildEditorConfigMessage(readLintGutterEnabled(), readSpellcheckEnabled())),
+      push: () =>
+        post(
+          buildEditorConfigMessage(
+            readLintGutterEnabled(),
+            readSpellcheckEnabled(),
+            readEditorPrefs(getPref)
+          )
+        ),
     });
     disposables.push(editorConfig);
 
@@ -793,6 +817,35 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
           });
           return;
         }
+        case "update-config":
+          // Pure side channel: persist an editor-surface preset to GLOBAL config.
+          // Never enters the host-session core (no write lock, no document
+          // mutation) — like open-external / open-link. handleUpdateConfig
+          // re-validates key+value, resets on a default id, and refuses to write
+          // blind under a workspace override. onDidChangeConfiguration then
+          // re-pushes editor-config to every open webview.
+          handleUpdateConfig(raw.key, raw.value, {
+            updateConfig: (key, value) =>
+              workspace.getConfiguration().update(key, value, ConfigurationTarget.Global),
+            inspectOverride: (key) => {
+              // Resource-scoped inspect so a workspace-FOLDER override for THIS
+              // document is seen (workspaceFolderValue is only populated when
+              // the configuration is scoped to a resource uri).
+              const info = workspace.getConfiguration(undefined, document.uri).inspect<string>(key);
+              return {
+                workspace: info?.workspaceValue !== undefined,
+                folder: info?.workspaceFolderValue !== undefined,
+              };
+            },
+            // Re-push the current editor-config so the popover's pending row
+            // clears immediately in the override branch (no config write → no
+            // onDidChangeConfiguration → this is the only signal that reaches it).
+            repush: () => editorConfig.push(),
+            showInfo: (message) =>
+              showSafely(window.showInformationMessage(message), "showInformationMessage"),
+            showError,
+          });
+          return;
         default: {
           // Exhaustiveness guard — when a new WebviewToHost variant is
           // added without a case here, TS flags the assignment as

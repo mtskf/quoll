@@ -119,6 +119,59 @@ export const MAX_REQUEST_ID_LENGTH = 64;
 
 type Envelope = { protocol: typeof PROTOCOL_VERSION };
 
+// ---------- Editor-preset settings (shared source of truth) ----------
+
+/** The four preset-only editor-surface settings and their allowed ids. ONE
+ *  source of truth for both directions: the host→webview `EditorConfigMessage`
+ *  field validators and the webview→host `update-config` key+value validator
+ *  read it, so a new id can never be accepted on one side and rejected on the
+ *  other. Defaults are NOT positional here — see `EDITOR_PREF_DEFAULTS` for the
+ *  default id of each key. Keys are the exact dotted config ids in
+ *  package.json's contributes.configuration. */
+export const EDITOR_PREF_ENUMS = {
+  "quoll.editor.fontFamily": ["default", "serif", "sans"],
+  "quoll.editor.fontSize": ["small", "default", "large", "x-large"],
+  "quoll.editor.lineHeight": ["compact", "cozy", "roomy"],
+  "quoll.editor.contentWidth": ["narrow", "medium", "wide"],
+} as const satisfies Record<string, readonly string[]>;
+
+/** Default id per key = today's rendering (Font/Size Default, Line-height Cozy,
+ *  Content-width Medium). Single source consumed by host readers, the webview
+ *  field, AND the package.json crosscheck test. */
+export const EDITOR_PREF_DEFAULTS = {
+  "quoll.editor.fontFamily": "default",
+  "quoll.editor.fontSize": "default",
+  "quoll.editor.lineHeight": "cozy",
+  "quoll.editor.contentWidth": "medium",
+} as const satisfies {
+  [K in keyof typeof EDITOR_PREF_ENUMS]: (typeof EDITOR_PREF_ENUMS)[K][number];
+};
+
+export type EditorPrefKey = keyof typeof EDITOR_PREF_ENUMS;
+export type FontFamilyPref = (typeof EDITOR_PREF_ENUMS)["quoll.editor.fontFamily"][number];
+export type FontSizePref = (typeof EDITOR_PREF_ENUMS)["quoll.editor.fontSize"][number];
+export type LineHeightPref = (typeof EDITOR_PREF_ENUMS)["quoll.editor.lineHeight"][number];
+export type ContentWidthPref = (typeof EDITOR_PREF_ENUMS)["quoll.editor.contentWidth"][number];
+
+const EDITOR_PREF_VALUE_SETS: Record<EditorPrefKey, ReadonlySet<string>> = {
+  "quoll.editor.fontFamily": new Set(EDITOR_PREF_ENUMS["quoll.editor.fontFamily"]),
+  "quoll.editor.fontSize": new Set(EDITOR_PREF_ENUMS["quoll.editor.fontSize"]),
+  "quoll.editor.lineHeight": new Set(EDITOR_PREF_ENUMS["quoll.editor.lineHeight"]),
+  "quoll.editor.contentWidth": new Set(EDITOR_PREF_ENUMS["quoll.editor.contentWidth"]),
+};
+
+/** True iff `key` is one of the 4 allowlisted keys AND `value` is a string in
+ *  that key's id set. Object.hasOwn (NOT `key in`) so a prototype key
+ *  ("toString"/"constructor") is rejected instead of indexing a Function and
+ *  throwing. Shared by the editor-config field checks and the update-config
+ *  value check so the host can never accept an id the webview enum does not know. */
+export function isPrefValue(key: string, value: unknown): boolean {
+  if (!Object.hasOwn(EDITOR_PREF_VALUE_SETS, key)) {
+    return false;
+  }
+  return typeof value === "string" && EDITOR_PREF_VALUE_SETS[key as EditorPrefKey].has(value);
+}
+
 // ---------- Host → Webview ----------
 
 /** Authoritative document snapshot. The host posts a Document on every
@@ -167,6 +220,10 @@ export type EditorConfigMessage = Envelope & {
   type: "editor-config";
   lintGutter: boolean;
   spellcheck: boolean;
+  fontFamily: FontFamilyPref;
+  fontSize: FontSizePref;
+  lineHeight: LineHeightPref;
+  contentWidth: ContentWidthPref;
 };
 
 /** Host→webview one-shot caret apply. Posted exactly once on the panel's
@@ -366,6 +423,18 @@ export function buildSwitchToTextMessage(): SwitchToTextMessage {
   return { protocol: PROTOCOL_VERSION, type: "switch-to-text" };
 }
 
+/** Webview→host request to persist an editor-surface preset. The host
+ *  re-validates key+value (isPrefValue) then writes global config. A PURE SIDE
+ *  CHANNEL — never enters the reducer/write-lock (like open-external). NEVER
+ *  trust the webview key/value. The write fires onDidChangeConfiguration → the
+ *  host re-pushes editor-config → every webview applies (host = single source of
+ *  truth; the UI reflects the pushed state, not an optimistic local write). */
+export type UpdateConfigMessage = Envelope & {
+  type: "update-config";
+  key: EditorPrefKey;
+  value: string;
+};
+
 /** Webview→host one-shot caret report. Posted whenever the CodeMirror
  *  selection changes while Quoll is the active editor, so the host always
  *  holds the latest caret for the Quoll→text-editor handoff. 0-based
@@ -440,6 +509,7 @@ export type WebviewToHost =
   | ContextHandoffMessage
   | CodexContextHandoffMessage
   | SwitchToTextMessage
+  | UpdateConfigMessage
   | LintDiagnosticsMessage
   | CaretReportMessage;
 
@@ -542,7 +612,14 @@ export function isHostToWebview(value: unknown): value is HostToWebview {
       }
       return v.ok ? typeof v.relativePath === "string" : v.relativePath === undefined;
     case "editor-config":
-      return typeof v.lintGutter === "boolean" && typeof v.spellcheck === "boolean";
+      return (
+        typeof v.lintGutter === "boolean" &&
+        typeof v.spellcheck === "boolean" &&
+        isPrefValue("quoll.editor.fontFamily", v.fontFamily) &&
+        isPrefValue("quoll.editor.fontSize", v.fontSize) &&
+        isPrefValue("quoll.editor.lineHeight", v.lineHeight) &&
+        isPrefValue("quoll.editor.contentWidth", v.contentWidth)
+      );
     case "caret-apply":
       return isCaretCoordinate(v.line) && isCaretCoordinate(v.character);
     case "format-command":
@@ -634,6 +711,8 @@ export function isWebviewToHost(value: unknown): value is WebviewToHost {
       );
     case "switch-to-text":
       return true;
+    case "update-config":
+      return typeof v.key === "string" && isPrefValue(v.key, v.value);
     default:
       return false;
   }

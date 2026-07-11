@@ -231,6 +231,12 @@ export function mountShell(root: HTMLElement, opts: ShellOptions): ShellHandle {
       case "editor-config":
         editor?.setLintGutter(message.lintGutter);
         editor?.setSpellcheck(message.spellcheck);
+        editor?.setEditorPrefs({
+          fontFamily: message.fontFamily,
+          fontSize: message.fontSize,
+          lineHeight: message.lineHeight,
+          contentWidth: message.contentWidth,
+        });
         return;
       case "format-command":
         editor?.runFormatCommand(message.action);

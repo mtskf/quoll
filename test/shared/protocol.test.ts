@@ -686,6 +686,10 @@ describe("isHostToWebview — editor-config", () => {
     type: "editor-config" as const,
     lintGutter: false,
     spellcheck: true,
+    fontFamily: "default" as const,
+    fontSize: "default" as const,
+    lineHeight: "cozy" as const,
+    contentWidth: "medium" as const,
   });
 
   it("accepts a well-formed editor-config", () => {
@@ -716,6 +720,96 @@ describe("isHostToWebview — editor-config", () => {
 
   it("rejects the wrong protocol version", () => {
     expect(isHostToWebview({ ...valid(), protocol: 2 })).toBe(false);
+  });
+});
+
+// ---------- isHostToWebview / editor-config preset fields ----------
+describe("isHostToWebview — editor-config preset fields", () => {
+  const valid = () => ({
+    protocol: PROTOCOL_VERSION,
+    type: "editor-config" as const,
+    lintGutter: false,
+    spellcheck: true,
+    fontFamily: "default" as const,
+    fontSize: "default" as const,
+    lineHeight: "cozy" as const,
+    contentWidth: "medium" as const,
+  });
+
+  it("accepts a well-formed editor-config with preset fields", () => {
+    expect(isHostToWebview(valid())).toBe(true);
+    expect(isHostToWebview({ ...valid(), fontFamily: "serif" })).toBe(true);
+    expect(isHostToWebview({ ...valid(), fontSize: "x-large" })).toBe(true);
+    expect(isHostToWebview({ ...valid(), lineHeight: "roomy" })).toBe(true);
+    expect(isHostToWebview({ ...valid(), contentWidth: "wide" })).toBe(true);
+  });
+
+  it("rejects an unknown preset id on any field", () => {
+    expect(isHostToWebview({ ...valid(), fontFamily: "comic-sans" })).toBe(false);
+    expect(isHostToWebview({ ...valid(), fontSize: "huge" })).toBe(false);
+    expect(isHostToWebview({ ...valid(), lineHeight: "tight" })).toBe(false);
+    expect(isHostToWebview({ ...valid(), contentWidth: "full" })).toBe(false);
+  });
+
+  it("rejects a missing preset field", () => {
+    const { fontFamily: _omit, ...rest } = valid();
+    expect(isHostToWebview(rest)).toBe(false);
+  });
+});
+
+// ---------- isWebviewToHost / update-config ----------
+describe("isWebviewToHost — update-config", () => {
+  const valid = () => ({
+    protocol: PROTOCOL_VERSION,
+    type: "update-config" as const,
+    key: "quoll.editor.fontFamily" as const,
+    value: "serif" as const,
+  });
+
+  it("accepts a well-formed update-config for each key", () => {
+    expect(isWebviewToHost(valid())).toBe(true);
+    expect(isWebviewToHost({ ...valid(), key: "quoll.editor.fontSize", value: "large" })).toBe(
+      true
+    );
+    expect(isWebviewToHost({ ...valid(), key: "quoll.editor.lineHeight", value: "compact" })).toBe(
+      true
+    );
+    expect(isWebviewToHost({ ...valid(), key: "quoll.editor.contentWidth", value: "wide" })).toBe(
+      true
+    );
+  });
+
+  it("rejects an unknown key", () => {
+    expect(isWebviewToHost({ ...valid(), key: "quoll.lint.gutter.enabled" })).toBe(false);
+    expect(isWebviewToHost({ ...valid(), key: "arbitrary.key" })).toBe(false);
+  });
+
+  it("rejects a prototype key WITHOUT throwing (Object.hasOwn gate, not `in`)", () => {
+    // `"toString" in EDITOR_PREF_VALUE_SETS` is TRUE on a plain object, which
+    // would then index a Function and throw on `.has(...)`. isWebviewToHost is
+    // called un-try/caught in the host handleInbound, so a throw here crashes
+    // the host message handler. Object.hasOwn makes this a clean `false`.
+    expect(() => isWebviewToHost({ ...valid(), key: "toString", value: "x" })).not.toThrow();
+    expect(isWebviewToHost({ ...valid(), key: "toString", value: "x" })).toBe(false);
+    expect(isWebviewToHost({ ...valid(), key: "constructor", value: "x" })).toBe(false);
+  });
+
+  it("rejects a value not in the key's enum (cross-key value rejected too)", () => {
+    expect(isWebviewToHost({ ...valid(), value: "large" })).toBe(false); // large ∈ fontSize, not fontFamily
+    expect(isWebviewToHost({ ...valid(), value: "nonsense" })).toBe(false);
+    expect(
+      isWebviewToHost({
+        key: "quoll.editor.fontSize",
+        value: "serif",
+        protocol: PROTOCOL_VERSION,
+        type: "update-config",
+      })
+    ).toBe(false);
+  });
+
+  it("rejects non-string key/value", () => {
+    expect(isWebviewToHost({ ...valid(), key: 1 })).toBe(false);
+    expect(isWebviewToHost({ ...valid(), value: 2 })).toBe(false);
   });
 });
 

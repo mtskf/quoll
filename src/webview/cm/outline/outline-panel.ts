@@ -29,8 +29,11 @@ import {
 } from "@codemirror/view";
 import { patchPersistedState, readPersistedState } from "../../host.js";
 import { requireQuollEditorHost } from "../editor-host.js";
+import { DEFAULT_EDITOR_PREFS, editorPrefsField } from "../editor-prefs.js";
 import { extractOutline, type OutlineHeading } from "./build-outline.js";
 import { createChevronIcon, createMenuIcon, createPinIcon, createSettingsIcon } from "./icons.js";
+import { createSettingsPopover, type SettingsPopover } from "./settings-popover.js";
+import { quollUpdateConfigSink } from "./update-config-sink.js";
 
 /** Toggle chord. CM-scoped (fires only while the editor has focus), so it never
  *  collides with a workbench keybinding — same posture as the context-handoff /
@@ -96,6 +99,14 @@ class OutlinePanel implements PluginValue {
   private readonly headerToggleEl: HTMLButtonElement;
   private readonly listEl: HTMLElement;
   private readonly resizeEl: HTMLElement;
+  private readonly settingsToggleEl: HTMLButtonElement;
+  private readonly footerEl: HTMLElement;
+  /** The mounted settings popover, or null while closed. Its presence IS the
+   *  open state — no separate boolean can diverge from the DOM. */
+  private settingsPopover: SettingsPopover | null = null;
+  /** Capturing document pointerdown listener installed while the popover is open
+   *  (click-outside close); removed by closeSettings. */
+  private onDocPointerDown: ((e: Event) => void) | null = null;
   private resizing = false;
   /** The pointerId that started the active drag; guards against a second
    *  pointer's events hijacking the resize. */
@@ -222,20 +233,22 @@ class OutlinePanel implements PluginValue {
     const settingsEl = document.createElement("button");
     settingsEl.type = "button";
     settingsEl.className = "quoll-outline-settings";
-    settingsEl.title = "Settings";
-    settingsEl.setAttribute("aria-label", "Settings");
+    settingsEl.title = "Editor settings";
+    settingsEl.setAttribute("aria-label", "Editor settings");
+    settingsEl.setAttribute("aria-haspopup", "dialog");
+    settingsEl.setAttribute("aria-expanded", "false");
     settingsEl.appendChild(createSettingsIcon());
     const settingsLabel = document.createElement("span");
     settingsLabel.textContent = "Settings";
     settingsEl.appendChild(settingsLabel);
     settingsEl.addEventListener("mousedown", (e) => e.preventDefault());
-    // Deliberately a no-op today: the settings surface ships as a separate
-    // task; the button pins the sidebar's final layout + affordance now.
-    // aria-disabled (not `disabled`) keeps it visible and focusable while
-    // telling AT the truth — REMOVE when the click handler lands.
-    settingsEl.setAttribute("aria-disabled", "true");
-    settingsEl.addEventListener("click", (e) => e.preventDefault());
+    settingsEl.addEventListener("click", (e) => {
+      e.preventDefault();
+      this.toggleSettings();
+    });
+    this.settingsToggleEl = settingsEl;
     footer.appendChild(settingsEl);
+    this.footerEl = footer;
 
     this.sidebarEl.appendChild(header);
     this.sidebarEl.appendChild(this.listEl);
@@ -275,6 +288,17 @@ class OutlinePanel implements PluginValue {
   }
 
   update(u: ViewUpdate): void {
+    // Sync the settings popover on ANY editorPrefsField change (host echo). This
+    // runs BEFORE the open-gated early-return: a same-value re-push (override /
+    // host-failure branch) carries a FRESH prefs object so field identity
+    // changes even when the value is unchanged — that is precisely the signal
+    // that clears the popover's pending row. Guarded on popover existence.
+    if (
+      this.settingsPopover !== null &&
+      u.startState.field(editorPrefsField, false) !== u.state.field(editorPrefsField, false)
+    ) {
+      this.settingsPopover.syncFromState();
+    }
     if (!this.open) {
       return;
     }
@@ -294,6 +318,7 @@ class OutlinePanel implements PluginValue {
     }
     this.cancelScheduledClose();
     this.cancelScheduledOpen();
+    this.closeSettings(); // unmount the popover + drop its document listener
     this.endResize(); // persist an in-flight drag before teardown (no-op if idle)
     this.toggleEl.remove();
     this.sidebarEl.remove();
@@ -306,6 +331,58 @@ class OutlinePanel implements PluginValue {
 
   toggle(): void {
     this.setOpen(!this.open);
+  }
+
+  private toggleSettings(): void {
+    if (this.settingsPopover !== null) {
+      this.closeSettings();
+    } else {
+      this.openSettings();
+    }
+  }
+
+  private openSettings(): void {
+    if (this.settingsPopover !== null) {
+      return;
+    }
+    const popover = createSettingsPopover({
+      getPrefs: () => this.view.state.field(editorPrefsField, false) ?? DEFAULT_EDITOR_PREFS,
+      onChange: (key, value) => this.view.state.facet(quollUpdateConfigSink)(key, value),
+      // Escape inside the popover delegates here — closeSettings is the SOLE
+      // unmount path (removes el, resets aria-expanded, drops the pointerdown
+      // listener), so the popover never half-closes itself.
+      onRequestClose: () => this.closeSettings(),
+    });
+    this.settingsPopover = popover;
+    this.footerEl.appendChild(popover.el); // footer is position:relative (styles.css)
+    // The popover synced its active state at construction; no open() call.
+    this.settingsToggleEl.setAttribute("aria-expanded", "true");
+    // Click-outside: a pointerdown outside the popover AND not on the gear closes
+    // it. Ignoring the gear prevents the pointerdown→close then click→reopen flap.
+    this.onDocPointerDown = (e: Event) => {
+      const target = e.target as Node | null;
+      if (
+        target !== null &&
+        (popover.el.contains(target) || this.settingsToggleEl.contains(target))
+      ) {
+        return;
+      }
+      this.closeSettings();
+    };
+    this.view.dom.ownerDocument.addEventListener("pointerdown", this.onDocPointerDown, true);
+  }
+
+  private closeSettings(): void {
+    if (this.settingsPopover === null) {
+      return;
+    }
+    if (this.onDocPointerDown !== null) {
+      this.view.dom.ownerDocument.removeEventListener("pointerdown", this.onDocPointerDown, true);
+      this.onDocPointerDown = null;
+    }
+    this.settingsPopover.destroy();
+    this.settingsPopover = null;
+    this.settingsToggleEl.setAttribute("aria-expanded", "false");
   }
 
   private setOpen(open: boolean): void {
@@ -325,6 +402,11 @@ class OutlinePanel implements PluginValue {
     if (this.rebuildTimer !== null) {
       clearTimeout(this.rebuildTimer);
       this.rebuildTimer = null;
+    }
+    if (!open) {
+      // Closing the sidebar closes the settings popover too (it lives in the
+      // footer; a lingering popover over a closed sidebar has no meaning).
+      this.closeSettings();
     }
     if (!open && this.pinned) {
       // Invariant: pinned ⇒ open. An explicit close (toggle / Mod-Alt-o)

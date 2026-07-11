@@ -224,9 +224,11 @@ html body {
     flex: 0 0 auto;
   }
 
-  /* Notion-style reading column. font-size scales off --vscode-font-size
-   * so the column follows the user's editor font setting; 1.15 lifts the
-   * 13px default to ~15px reading size.
+  /* Notion-style reading column host. The editor font-size is owned by the CM
+   * theme's "&" (.cm-editor) declaration (cm/theme.ts) — an element's OWN
+   * declaration beats inheritance, so a font-size set HERE never reached the
+   * editor text. It has been removed (it was a no-op); the editor-preset
+   * font-size (outline settings popover) rides that "&" declaration instead.
    *
    * Review fix #40 (C1): the PM-era reading-column measure (max-width:
    * 44em) and outer padding (3.5rem 2.5rem 6rem) MOVED to .cm-content
@@ -249,7 +251,6 @@ html body {
      * editor below the banner and re-opening document scroll. */
     flex: 1 1 auto;
     min-height: 0;
-    font-size: calc(var(--vscode-font-size) * 1.15);
     outline: none;
   }
 
@@ -1123,6 +1124,9 @@ html body {
     opacity: 0.7;
   }
   .quoll-outline-footer {
+    /* position: relative — anchors the settings popover's absolute bottom:100%
+     * placement to the footer rather than the viewport. */
+    position: relative;
     flex: 0 0 auto;
     padding: 4px 8px 8px;
     border-top: 1px solid var(--quoll-outline-sidebar-border);
@@ -1149,6 +1153,69 @@ html body {
     width: 16px;
     height: 16px;
     flex: 0 0 auto;
+  }
+  .quoll-settings-popover {
+    position: absolute;
+    bottom: 100%;
+    left: 8px;
+    right: 8px;
+    margin-bottom: 6px;
+    padding: 8px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    background: var(--vscode-menu-background, var(--vscode-editorWidget-background));
+    color: var(--vscode-menu-foreground, var(--vscode-editor-foreground));
+    border: 1px solid var(--vscode-menu-border, var(--quoll-outline-sidebar-border));
+    border-radius: 6px;
+    box-shadow: 0 2px 8px rgb(0 0 0 / 30%);
+    z-index: 2;
+  }
+  .quoll-settings-row {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+  .quoll-settings-label {
+    font-size: 0.85em;
+    color: var(--vscode-descriptionForeground);
+  }
+  .quoll-settings-segments {
+    display: flex;
+    flex-wrap: wrap; /* the 4-segment font-size row must not overflow at the 180px min sidebar width */
+    gap: 2px;
+  }
+  .quoll-settings-segment {
+    display: inline-flex;
+    align-items: center;
+    gap: 2px;
+    flex: 1;
+    padding: 2px 6px;
+    font-size: 0.85em;
+    color: inherit;
+    background: transparent;
+    border: 1px solid var(--quoll-outline-sidebar-border);
+    border-radius: 4px;
+    cursor: pointer;
+  }
+  .quoll-settings-segment[aria-disabled="true"] {
+    cursor: default;
+    opacity: 0.6;
+  }
+  .quoll-settings-segment.active {
+    background: var(--vscode-toolbar-activeBackground, var(--vscode-list-activeSelectionBackground));
+    border-color: var(--vscode-focusBorder);
+  }
+  .quoll-settings-segment.pending {
+    opacity: 0.7;
+  }
+  .quoll-settings-check {
+    width: 12px;
+    height: 12px;
+    visibility: hidden;
+  }
+  .quoll-settings-segment.active .quoll-settings-check {
+    visibility: visible;
   }
 }
 

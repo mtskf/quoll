@@ -2,6 +2,12 @@
 
 All notable changes to Quoll are documented here.
 
+## 0.1.39 — 2026-07-11
+
+### Added
+
+- Editor settings popover in the outline sidebar: choose the font (Default / Serif / Sans), font size, line height, and reading-column width. Open it from the gear button in the sidebar footer; choices are saved to your settings and apply to every open Quoll editor.
+
 ## 0.1.38 — 2026-07-11
 
 ### Added

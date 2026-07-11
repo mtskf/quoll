@@ -89,15 +89,19 @@ export const proseSpaceMetric = ViewPlugin.fromClass(
     constructor(view: EditorView) {
       this.host = view.dom;
       // Persistent, hidden, absolutely-positioned probe. Font tokens mirror
-      // .cm-content via the SAME CSS variables. Created via the view's own
-      // ownerDocument (iframe/webview-safe).
+      // .cm-content / the "&" theme via the SAME editor-preset CSS variables
+      // (outline settings popover), each with the today-default fallback — so
+      // --quoll-prose-space is measured in the ACTIVE font/size and the list
+      // hang-indent metric stays correct under a Serif/Sans or Large preset.
+      // Created via the view's own ownerDocument (iframe/webview-safe).
       const probe = view.dom.ownerDocument.createElement("span");
       probe.className = "quoll-prose-probe";
       probe.setAttribute("aria-hidden", "true");
       probe.style.cssText =
         "position:absolute;visibility:hidden;top:-9999px;left:0;white-space:pre;" +
-        "pointer-events:none;font-family:var(--vscode-font-family);" +
-        "font-size:var(--vscode-font-size);";
+        "pointer-events:none;" +
+        "font-family:var(--quoll-editor-font-family, var(--vscode-font-family));" +
+        "font-size:var(--quoll-editor-font-size, var(--vscode-font-size));";
       probe.textContent = " ".repeat(PROBE_SPACES);
       this.host.appendChild(probe);
       this.probe = probe;

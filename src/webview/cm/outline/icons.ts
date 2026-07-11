@@ -85,3 +85,10 @@ export function createSettingsIcon(): SVGSVGElement {
   svg.appendChild(circle);
   return svg;
 }
+
+/** Lucide `check` — marks the active segment in the settings popover. */
+export function createCheckIcon(): SVGSVGElement {
+  const svg = createLucideSvg();
+  appendPaths(svg, ["M20 6 9 17l-5-5"]);
+  return svg;
+}
