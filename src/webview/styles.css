@@ -819,8 +819,6 @@ html body {
     border-radius: 5px;
     background: var(--vscode-editorWidget-background, var(--vscode-editor-background));
     color: var(--vscode-icon-foreground, var(--vscode-foreground));
-    font-size: 14px;
-    line-height: 1;
     cursor: pointer;
     opacity: var(--quoll-control-rest-opacity);
     transition: var(--quoll-control-transition), transform 0.2s ease, visibility 0s;
@@ -829,6 +827,10 @@ html body {
   .quoll-outline-toggle:focus-visible,
   .quoll-outline-toggle.active {
     opacity: 1;
+  }
+  .quoll-outline-toggle svg {
+    width: 16px;
+    height: 16px;
   }
 
   /* ───────────────── switch-to-text-editor toggle (top-right) ─────────────────
@@ -984,6 +986,7 @@ html body {
     .quoll-switch-editor-toggle,
     .quoll-outline-sidebar,
     .quoll-outline-open .quoll-outline-sidebar,
+    .quoll-outline-header-toggle svg,
     .quoll-chrome-hidden .quoll-outline-toggle,
     .quoll-chrome-hidden .quoll-switch-editor-toggle {
       transition: none;
@@ -1008,9 +1011,12 @@ html body {
     width: 26px;
     height: 26px;
     padding: 0;
-    border: 1px solid var(--quoll-outline-sidebar-border);
+    /* A brighter hairline than the sidebar border (90% vs 60% of panel-border)
+     * so the button reads as a control; background is the editor surface so it
+     * sits on the same plane as the reading column. */
+    border: 1px solid color-mix(in srgb, var(--vscode-panel-border, #8888) 90%, transparent);
     border-radius: 5px;
-    background: transparent;
+    background: var(--vscode-editor-background);
     color: var(--vscode-icon-foreground, var(--vscode-foreground));
     cursor: pointer;
     opacity: var(--quoll-control-rest-opacity);
@@ -1028,15 +1034,47 @@ html body {
     color: var(--vscode-errorForeground, #e51400);
   }
   .quoll-outline-pin svg {
-    width: 16px;
-    height: 16px;
+    width: 14px;
+    height: 14px;
   }
+  /* Match VS Code's native side-bar section header (EXPLORER): 11px uppercase,
+   * normal weight, the sideBarSectionHeader foreground token — NOT an ad-hoc
+   * bold, so "OUTLINE" reads identically to "EXPLORER". */
   .quoll-outline-title {
     color: var(--vscode-sideBarSectionHeader-foreground, var(--vscode-foreground));
     font-size: 11px;
-    font-weight: 700;
+    font-weight: 400;
     text-transform: uppercase;
     letter-spacing: normal;
+  }
+  .quoll-outline-header-toggle {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex: 1 1 auto;
+    min-width: 0; /* let the title ellipsis engage instead of overflowing */
+    padding: 0;
+    border: none;
+    background: transparent;
+    color: inherit;
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+  }
+  .quoll-outline-header-toggle svg {
+    flex: 0 0 auto;
+    width: 16px;
+    height: 16px;
+    color: var(--vscode-icon-foreground, var(--vscode-foreground));
+    transition: transform 0.15s ease;
+    transform: rotate(90deg); /* expanded: chevron-right rotated to point down */
+  }
+  .quoll-outline-collapsed .quoll-outline-header-toggle svg {
+    transform: rotate(0deg); /* collapsed: chevron points right */
+  }
+  .quoll-outline-collapsed .quoll-outline-list,
+  .quoll-outline-collapsed .quoll-outline-footer {
+    display: none;
   }
 
   .quoll-outline-list {

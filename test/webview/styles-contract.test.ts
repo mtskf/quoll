@@ -621,6 +621,19 @@ describe("styles.css — outline sidebar", () => {
     expect(title).toMatch(/text-transform\s*:\s*uppercase/);
   });
 
+  it("collapses the section body via the host class and rotates the twistie", () => {
+    const collapsedList =
+      live.match(/\.quoll-outline-collapsed\s+\.quoll-outline-list[^{]*\{[^}]*\}/)?.[0] ?? "";
+    expect(collapsedList).toMatch(/display\s*:\s*none/);
+    const chevron =
+      live.match(
+        /\.quoll-outline-collapsed\s+\.quoll-outline-header-toggle\s+svg\s*\{[^}]*\}/
+      )?.[0] ?? "";
+    expect(chevron).toMatch(/transform\s*:\s*rotate\(0deg\)/);
+    const expanded = live.match(/\.quoll-outline-header-toggle\s+svg\s*\{[^}]*\}/)?.[0] ?? "";
+    expect(expanded).toMatch(/transform\s*:\s*rotate\(90deg\)/);
+  });
+
   it("the sidebar consumes the tokens and slides in from the left edge", () => {
     const rule = live.match(/\.quoll-outline-sidebar\s*\{[^}]*\}/)?.[0] ?? "";
     expect(rule).not.toBe("");

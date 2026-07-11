@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { quollMarkdownLanguage } from "../../src/webview/cm/markdown.js";
 import { outlinePlugin, quollOutline } from "../../src/webview/cm/outline/index.js";
 import {
+  OUTLINE_COLLAPSED_CLASS,
   OUTLINE_OPEN_CLASS,
   OUTLINE_PINNED_CLASS,
 } from "../../src/webview/cm/outline/outline-panel.js";
@@ -49,6 +50,9 @@ function sidebarEl(host: HTMLElement): HTMLElement {
 }
 function pinEl(host: HTMLElement): HTMLButtonElement {
   return host.querySelector(".quoll-outline-pin") as HTMLButtonElement;
+}
+function headerToggleEl(host: HTMLElement): HTMLButtonElement {
+  return host.querySelector(".quoll-outline-header-toggle") as HTMLButtonElement;
 }
 // pointerenter/-leave don't bubble; dispatch directly on the listening element.
 // happy-dom has no real hit-testing, so a plain Event with the right type is
@@ -308,6 +312,53 @@ describe("quollOutline sidebar", () => {
     const { view: v, host } = mount("#\n");
     v.plugin(outlinePlugin)?.toggle();
     expect(itemTexts(host)).toEqual(["(untitled)"]);
+  });
+
+  it("the corner toggle renders the menu SVG (no ☰ text glyph)", () => {
+    const { host } = mount("# Alpha\n");
+    expect(toggleEl(host).querySelector("svg")).not.toBeNull();
+    expect(toggleEl(host).textContent).toBe("");
+  });
+
+  it("aligns the first-level row's text inset with the OUTLINE header (12px)", () => {
+    // Pins the BASE_PAD_PX contract: a top-level (depth 0) heading row's inline
+    // paddingLeft must equal the header's 12px left inset. Reverting BASE_PAD_PX
+    // to 8 makes this red (the row would sit left of the "OUTLINE" label).
+    const { host } = mount("# Alpha\n");
+    toggleEl(host).click(); // open + build
+    const first = host.querySelector<HTMLElement>(".quoll-outline-item");
+    expect(first?.style.paddingLeft).toBe("12px");
+  });
+
+  it("starts expanded and the header toggle collapses / expands the tree body", () => {
+    const { host } = mount("# Alpha\n");
+    toggleEl(host).click(); // open
+    const ht = headerToggleEl(host);
+    expect(ht.getAttribute("aria-expanded")).toBe("true");
+    expect(host.classList.contains(OUTLINE_COLLAPSED_CLASS)).toBe(false);
+    ht.click();
+    expect(ht.getAttribute("aria-expanded")).toBe("false");
+    expect(host.classList.contains(OUTLINE_COLLAPSED_CLASS)).toBe(true);
+    ht.click();
+    expect(ht.getAttribute("aria-expanded")).toBe("true");
+    expect(host.classList.contains(OUTLINE_COLLAPSED_CLASS)).toBe(false);
+  });
+
+  it("clicking the pin never toggles the collapse (stopPropagation)", () => {
+    const { host } = mount("# Alpha\n");
+    toggleEl(host).click(); // open
+    pinEl(host).click(); // pin — must NOT collapse
+    expect(host.classList.contains(OUTLINE_COLLAPSED_CLASS)).toBe(false);
+    expect(headerToggleEl(host).getAttribute("aria-expanded")).toBe("true");
+  });
+
+  it("clears the collapsed host class on destroy", () => {
+    const { view: v, host } = mount("# Alpha\n");
+    toggleEl(host).click();
+    headerToggleEl(host).click(); // collapse
+    v.destroy();
+    view = null;
+    expect(host.classList.contains(OUTLINE_COLLAPSED_CLASS)).toBe(false);
   });
 });
 
