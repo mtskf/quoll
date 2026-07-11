@@ -18,7 +18,7 @@
 // pipeline (no raw write).
 
 import { markdownLanguage } from "@codemirror/lang-markdown";
-import { syntaxTree } from "@codemirror/language";
+import { ensureSyntaxTree } from "@codemirror/language";
 import { type Extension, Prec } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 
@@ -57,21 +57,38 @@ export function detectPasteLinkUrl(clipboardText: string): AllowlistedUrl | null
   return trimmed;
 }
 
+// Budget for parsing the syntax tree up to the selection before the guard walk.
+// A selection already in the viewport is cached so ensureSyntaxTree returns
+// instantly; only a genuinely unparsed (far-off) selection spends time, and if
+// the budget is exhausted the guard fails closed (see selectionIsPlainText).
+const GUARD_PARSE_BUDGET_MS = 50;
+
 /**
- * Port of the built-in pasteURLAsLink guard: the wrap is only safe when the
- * selection sits in ACTIVE plain Markdown text. Refuses when the Markdown
- * language is not active at the anchor, or when the selected range crosses a
- * node boundary or sits inside a non-plain-text construct (code, an existing
- * link/image, emphasis marks, raw HTML, an autolink). Without this a URL pasted
- * over a selection inside inline/fenced code, a link, or emphasis would inject
- * `[..](url)` into that construct.
+ * Port of the built-in pasteURLAsLink guard, hardened: the wrap is only safe
+ * when the selection sits in ACTIVE plain Markdown text. Refuses when the
+ * Markdown language is not active at the anchor, or when the selected range
+ * crosses a node boundary or sits inside a non-plain-text construct (code, an
+ * existing link/image, emphasis marks, raw HTML, an autolink). Without this a
+ * URL pasted over a selection inside inline/fenced code, a link, or emphasis
+ * would inject `[..](url)` into that construct.
+ *
+ * The built-in walked `syntaxTree(view.state)` directly, which in a large or
+ * freshly-opened document may only be parsed to the viewport frontier — a
+ * selection beyond it would walk zero nodes, look like plain text, and wrap into
+ * code anyway. We `ensureSyntaxTree` up to the selection first and FAIL CLOSED
+ * (defer) when the tree can't be produced within the budget, so an unclassified
+ * selection is never wrapped.
  */
 function selectionIsPlainText(view: EditorView, from: number, to: number): boolean {
   if (!markdownLanguage.isActiveAt(view.state, from, 1)) {
     return false;
   }
+  const tree = ensureSyntaxTree(view.state, to, GUARD_PARSE_BUDGET_MS);
+  if (tree === null) {
+    return false; // tree unavailable for the selection → can't verify → defer
+  }
   let crossesNode = false;
-  syntaxTree(view.state).iterate({
+  tree.iterate({
     from,
     to,
     enter: (node) => {
@@ -89,13 +106,15 @@ function selectionIsPlainText(view: EditorView, from: number, to: number): boole
 }
 
 /**
- * Render the URL as a CommonMark link destination. A bare destination closes at
- * the first UNBALANCED `)`, so a URL like `…/Foo_(bar)` (common on Wikipedia)
- * would truncate to `…/Foo_(bar` and leak `)` as text. Angle-bracket
- * destinations read literally up to `>`, so wrap the URL in `<…>` when it
- * carries a paren. Guarded on the absence of `<`/`>` — bytes that never appear
- * unencoded in a real http(s) URL and that would themselves break the angle
- * form; such a value falls back to the bare destination.
+ * Render the URL as a CommonMark link destination. A bare destination allows
+ * BALANCED parens (CommonMark tracks depth, so `…/Foo_(bar)` round-trips fine),
+ * but an UNBALANCED `)` — e.g. `…/foo)bar` — closes the destination early,
+ * truncating the URL and leaking the tail as text. Rather than compute paren
+ * balance, conservatively angle-bracket the URL whenever it carries any paren;
+ * angle-bracket destinations read literally up to `>`. Guarded on the absence of
+ * `<`/`>` — bytes that never appear unencoded in a real http(s) URL and that
+ * would themselves break the angle form; such a value falls back to the bare
+ * destination.
  */
 function linkDestination(url: string): string {
   return /[()]/.test(url) && !/[<>]/.test(url) ? `<${url}>` : url;

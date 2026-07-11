@@ -60,8 +60,10 @@ describe("detectPasteLinkUrl — URL detection boundary", () => {
 // --- Handler ---
 
 // The Markdown language is mounted so the handler's syntax-context guard
-// (`markdownLanguage.isActiveAt` + `syntaxTree` walk) is exercised; ensureSyntaxTree
-// forces a synchronous parse so the tree is populated at paste time.
+// (`markdownLanguage.isActiveAt` + the syntaxTree walk) is exercised. The
+// ensureSyntaxTree call is a best-effort, time-budgeted warm-up so the tree is
+// populated at paste time (the handler self-ensures too, so this is a warm-up,
+// not load-bearing).
 function mount(doc: string, anchor: number, head: number, canWrite = true): EditorView {
   const parent = document.createElement("div");
   document.body.appendChild(parent);
@@ -149,14 +151,27 @@ describe("pasteUrlOverSelection — handler", () => {
     view.destroy();
   });
 
-  it("angle-brackets a URL containing parens so it round-trips (Wikipedia case)", () => {
+  it("angle-brackets any paren-bearing URL (balanced Wikipedia case)", () => {
+    // Balanced parens round-trip fine in a bare destination, but we bracket ANY
+    // paren conservatively rather than compute balance. Pin the bracketing.
     const view = mount("Foo", 0, "Foo".length);
     const url = "https://en.wikipedia.org/wiki/Foo_(bar)";
     firePaste(view, url);
-    // A bare `](…)` would truncate at the first `)`; angle brackets keep it whole.
     const doc = view.state.doc.toString();
     expect(doc).toBe(`[Foo](<${url}>)`);
     // …and the result is accepted by the host write-gate (never rejected).
+    expect(validateMarkdownForWrite(`${doc}\n`).ok).toBe(true);
+    view.destroy();
+  });
+
+  it("angle-brackets an UNBALANCED-paren URL so it is not truncated", () => {
+    // The real corruption case: a lone `)` closes a bare CommonMark destination
+    // early. Angle brackets keep the whole URL as the destination.
+    const view = mount("Foo", 0, "Foo".length);
+    const url = "https://example.com/a)b";
+    firePaste(view, url);
+    const doc = view.state.doc.toString();
+    expect(doc).toBe(`[Foo](<${url}>)`);
     expect(validateMarkdownForWrite(`${doc}\n`).ok).toBe(true);
     view.destroy();
   });
@@ -193,3 +208,11 @@ describe("pasteUrlOverSelection — syntax-context guard", () => {
     view.destroy();
   });
 });
+
+// NOTE: the handler's parse-frontier hardening (`ensureSyntaxTree` + fail-closed
+// in selectionIsPlainText) is not unit-tested here. In happy-dom the syntax tree
+// is parsed synchronously regardless of the mount's prewarm, so the "selection
+// beyond the parse frontier" race the fix guards against cannot be reproduced
+// deterministically (a probe test passed identically with and without the fix).
+// The fix is a defensive robustness improvement over the ported built-in; the
+// tree-available guard behaviour is covered by the code/link defer tests above.
