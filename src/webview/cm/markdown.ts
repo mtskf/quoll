@@ -35,7 +35,7 @@
 // lang-markdown's PUBLIC API but depends on its 6.5.0 fold *behaviour*;
 // cm-fold-blockquote.test.ts detects a future upgrade that re-enables a
 // subtracted chevron (it is NOT immunity).
-import { markdownKeymap, markdownLanguage, pasteURLAsLink } from "@codemirror/lang-markdown";
+import { markdownKeymap, markdownLanguage } from "@codemirror/lang-markdown";
 import {
   foldNodeProp,
   foldService,
@@ -205,12 +205,15 @@ const headerIndent = foldService.of((state, start, end) => {
  *  what `markdown()` builds MINUS that stack:
  *    - parser: markdownLanguage.parser + nonFoldableBlocks (our fold subtraction),
  *      with NO parseCode wrapper (no nested HTML/code sub-parser referenced).
- *    - data: markdownLanguage.data REUSED — markdownKeymap's commands and
- *      pasteURLAsLink call markdownLanguage.isActiveAt(), which compares the
- *      languageDataProp facet identity, so the editor language MUST carry the
- *      same `data` facet to be recognised as active (mkLang does the same).
- *    - support: headerIndent (heading folds), pasteURLAsLink, and markdownKeymap
- *      at Prec.high — the three support extensions `markdown()` adds that we keep.
+ *    - data: markdownLanguage.data REUSED — markdownKeymap's commands call
+ *      markdownLanguage.isActiveAt(), which compares the languageDataProp facet
+ *      identity, so the editor language MUST carry the same `data` facet to be
+ *      recognised as active (mkLang does the same).
+ *    - support: headerIndent (heading folds) and markdownKeymap at Prec.high —
+ *      the support extensions `markdown()` adds that we keep. We deliberately
+ *      DROP the built-in pasteURLAsLink; Quoll's own paste-URL-over-selection
+ *      handler (src/webview/cm/paste/url-link-paste.ts, mounted in editor.ts)
+ *      supersedes it with allowlist-aligned, single-token http(s) detection.
  *  Mounted by editor.ts; the fold + keymap + paste contracts are pinned by
  *  cm-markdown-language / cm-fold-blockquote / cm-fold-delegation. */
 export function quollMarkdownLanguage(): LanguageSupport {
@@ -220,9 +223,5 @@ export function quollMarkdownLanguage(): LanguageSupport {
   // imported for MarkdownExtension) — no cast to a fresh dependency.
   const parser = (markdownLanguage.parser as MarkdownParser).configure(nonFoldableBlocks);
   const language = new Language(markdownLanguage.data, parser, [], "markdown");
-  return new LanguageSupport(language, [
-    headerIndent,
-    pasteURLAsLink,
-    Prec.high(keymap.of(markdownKeymap)),
-  ]);
+  return new LanguageSupport(language, [headerIndent, Prec.high(keymap.of(markdownKeymap))]);
 }

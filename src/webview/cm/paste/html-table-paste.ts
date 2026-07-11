@@ -1,8 +1,9 @@
 // CodeMirror paste handler: when the clipboard carries a `text/html` flavour
 // containing a `<table>`, insert an equivalent GFM Markdown table instead of the
 // raw HTML/plain-text. Every other paste is left untouched — the handler returns
-// `false` (without preventDefault) so `pasteURLAsLink` (markdown.ts), the image
-// paste pipeline (image-paste.ts), and CM's default plain-text paste still run.
+// `false` (without preventDefault) so `pasteUrlOverSelection` (url-link-paste.ts),
+// the image paste pipeline (image-paste.ts), and CM's default plain-text paste
+// still run.
 //
 // Mounted at Prec.high so it arbitrates before those handlers: on a convertible
 // table it consumes the event; otherwise it defers. The insert rides the normal
