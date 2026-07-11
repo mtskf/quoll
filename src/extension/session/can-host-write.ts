@@ -9,7 +9,7 @@
 // rejected. `canEditWith` enforces the same policy for the
 // `quoll.editWith` command gate; both call sites share
 // `SUPPORTED_FILE_SCHEME` and `IsWritableFileSystem` from
-// `./fileSystem`. This closes the gap where a direct `vscode.openWith`
+// `../file-system.js`. This closes the gap where a direct `vscode.openWith`
 // call or a custom-editor restore could land a non-`file:` document in
 // the provider and have its scheme treated as writable just because
 // `workspace.fs.isWritableFileSystem` returned `undefined` for it.
