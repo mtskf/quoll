@@ -31,10 +31,7 @@ describe("package.json contributions — quoll.gettingStarted walkthrough", () =
     ]);
   });
 
-  it("only references onCommand completion events for commands declared in contributes.commands", () => {
-    const declaredCommandIds = new Set(
-      pkg.contributes.commands.map((c: { command: string }) => c.command)
-    );
+  it("wires no onCommand completion events", () => {
     const onCommandEvents = walkthrough.steps.flatMap((s: { completionEvents?: string[] }) =>
       (s.completionEvents ?? []).filter((e: string) => e.startsWith("onCommand:"))
     );
@@ -45,10 +42,6 @@ describe("package.json contributions — quoll.gettingStarted walkthrough", () =
     // the step done without anything having happened. Users mark these steps done
     // manually instead (same pattern as the caretReveal step).
     expect(onCommandEvents).toEqual([]);
-    for (const event of onCommandEvents) {
-      const commandId = event.slice("onCommand:".length);
-      expect(declaredCommandIds.has(commandId)).toBe(true);
-    }
   });
 
   it("points every step's media.markdown at a file that exists on disk", () => {
