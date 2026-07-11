@@ -54,11 +54,11 @@ export function matchesSwitchEditorChord(event: KeyboardEvent): boolean {
 
 const SVG_NS = "http://www.w3.org/2000/svg";
 
-/** Build the Lucide `file-pen-line` (MIT) icon as an SVG DOM subtree —
+/** Build the Lucide `file-code` (MIT) icon as an SVG DOM subtree —
  *  createElementNS, never innerHTML (the src/** no-innerHTML invariant, enforced
  *  by test/markdown/url-choke-point.test.ts). stroke=currentColor tracks
  *  --vscode-icon-foreground via the button's `color`. */
-function createFilePenLineIcon(): SVGSVGElement {
+function createFileCodeIcon(): SVGSVGElement {
   const svg = document.createElementNS(SVG_NS, "svg");
   svg.setAttribute("width", "16");
   svg.setAttribute("height", "16");
@@ -70,10 +70,10 @@ function createFilePenLineIcon(): SVGSVGElement {
   svg.setAttribute("stroke-linejoin", "round");
   svg.setAttribute("aria-hidden", "true");
   const paths = [
-    "M14.364 13.634a2 2 0 0 0-.506.854l-.837 2.87a.5.5 0 0 0 .62.62l2.87-.837a2 2 0 0 0 .854-.506l4.013-4.009a1 1 0 0 0-3.004-3.004z",
-    "M14.487 7.858A1 1 0 0 1 14 7V2",
-    "M20 19.645V20a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h8a2.4 2.4 0 0 1 1.704.706l2.516 2.516",
-    "M8 18h1",
+    "M6 22a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h8a2.4 2.4 0 0 1 1.704.706l3.588 3.588A2.4 2.4 0 0 1 20 8v12a2 2 0 0 1-2 2z",
+    "M14 2v5a1 1 0 0 0 1 1h5",
+    "M10 12.5 8 15l2 2.5",
+    "m14 12.5 2 2.5-2 2.5",
   ];
   for (const d of paths) {
     const path = document.createElementNS(SVG_NS, "path");
@@ -118,7 +118,7 @@ class SwitchEditorButton implements PluginValue {
     this.buttonEl.className = "quoll-switch-editor-toggle";
     this.buttonEl.title = "Open in text editor (⌘⌥E / Ctrl+Alt+E)";
     this.buttonEl.setAttribute("aria-label", "Open in text editor");
-    this.buttonEl.appendChild(createFilePenLineIcon());
+    this.buttonEl.appendChild(createFileCodeIcon());
     // preventDefault on mousedown so clicking does not blur/move the selection
     // before we act (mirrors the outline toggle).
     this.buttonEl.addEventListener("mousedown", (e) => e.preventDefault());
