@@ -82,29 +82,28 @@ function remoteTagExists(tag) {
 /**
  * Assert CHANGELOG.md documents `version`.
  *
- * CHANGELOG uses ONE `## <major>.<minor>.x` heading with free-prose bullets
- * and NO structured per-patch version markers — and the prose legitimately
- * mentions older versions (e.g. "...stay on 0.1.7..."), so scanning for a
- * literal version token would false-positive/negative. The strictest check
- * the real format supports is therefore heading existence, with a warning
- * that a specific patch entry cannot be verified.
+ * Each release since 0.1.37 gets its own `## <version> — <YYYY-MM-DD>`
+ * heading, so this checks for that exact per-version heading (including the
+ * date suffix the policy requires) — a strict, unambiguous match, unlike the
+ * old shared-heading format. Releases 0.1.1–0.1.36 predate this convention
+ * and stay combined under the frozen `## 0.1.x (0.1.1 – 0.1.36, combined)`
+ * heading; 0.1.0 has its own standalone `## 0.1.0 — Initial public release`
+ * heading. Neither matches this regex (those versions are not re-verified
+ * here).
  *
- * Returns { ok, message?, warning? }.
+ * Returns { ok, message? }.
  */
 function checkChangelog(version) {
-  const [maj, min] = version.split(".");
+  const escaped = version.replace(/\./g, "\\.");
   const raw = readFileSync(changelogPath, "utf8");
-  const headingRe = new RegExp(`^##\\s+${maj}\\.${min}\\.x(\\b|\\s|$)`, "m");
+  const headingRe = new RegExp(`^##\\s+${escaped}\\s+—\\s+\\d{4}-\\d{2}-\\d{2}\\s*$`, "m");
   if (!headingRe.test(raw)) {
     return {
       ok: false,
-      message: `CHANGELOG.md has no "## ${maj}.${min}.x" section — add the release notes heading (and this patch's bullet) before tagging.`,
+      message: `CHANGELOG.md has no "## ${version} — YYYY-MM-DD" section — add this release's section (\`## ${version} — YYYY-MM-DD\`) before tagging.`,
     };
   }
-  return {
-    ok: true,
-    warning: `CHANGELOG.md "## ${maj}.${min}.x" section exists, but its bullets carry no per-patch version markers, so an entry for ${version} specifically cannot be verified — confirm the note is present by eye.`,
-  };
+  return { ok: true };
 }
 
 function fail(msg) {
@@ -140,8 +139,6 @@ function runCheck() {
   const cl = checkChangelog(version);
   if (!cl.ok) {
     problems.push(cl.message);
-  } else if (cl.warning) {
-    warnings.push(cl.warning);
   }
 
   for (const w of warnings) {
