@@ -1,11 +1,14 @@
-import { commands, type ExtensionContext, ExtensionMode, window, workspace } from "vscode";
-import { canEditWith } from "./can-edit-with.js";
+import { commands, type ExtensionContext, ExtensionMode, window } from "vscode";
 import { registerFormatCommand } from "./format-command.js";
 import { QuollEditorPanel } from "./quoll-editor-panel.js";
 import { showSafely } from "./show-safely.js";
 import { __clearSurfaceMemoryForTest } from "./surface-memory.js";
 import { registerSurfaceRestoreWatcher } from "./surface-restore-watcher.js";
-import { registerToggleEditor, reopenActiveQuollTabAsText } from "./toggle-editor.js";
+import {
+  registerToggleEditor,
+  reopenActiveQuollTabAsText,
+  reopenTextEditorAsQuoll,
+} from "./toggle-editor.js";
 
 export async function activate(context: ExtensionContext) {
   // Dynamic import so esbuild tree-shakes the TestHarness class body out
@@ -26,9 +29,10 @@ export async function activate(context: ExtensionContext) {
 
   context.subscriptions.push(QuollEditorPanel.register(context, harness));
   context.subscriptions.push(registerToggleEditor());
-  // Title-bar "Reopen in Text Editor" (file-code icon) — the forward half of the
-  // Rich ↔ Text switch, driving the same swap path as quoll.toggleEditor's
-  // to-text case. The reverse (cat icon → Quoll) reuses quoll.editWith below.
+  // Title-bar "Reopen in Text Editor" (file-code icon) — the Quoll→text half of
+  // the Rich ↔ Text switch, driving the same swap path as quoll.toggleEditor's
+  // to-text case. The other direction (cat icon → Quoll, quoll.editWith below)
+  // drives the shared reopenTextEditorAsQuoll helper so both swap in place.
   context.subscriptions.push(
     commands.registerCommand("quoll.reopenInTextEditor", reopenActiveQuollTabAsText)
   );
@@ -46,35 +50,12 @@ export async function activate(context: ExtensionContext) {
         );
         return;
       }
-      const decision = canEditWith(editor.document, (scheme) =>
-        workspace.fs.isWritableFileSystem(scheme)
-      );
-      if (!decision.ok) {
-        // showWarningMessage's Thenable can reject (host detached, dispatcher
-        // torn down); showSafely logs instead of letting it become an
-        // unhandled rejection. See show-safely.ts for the shared rationale.
-        showSafely(window.showWarningMessage(decision.reason), "showWarningMessage");
-        return;
-      }
-      try {
-        await commands.executeCommand(
-          "vscode.openWith",
-          editor.document.uri,
-          QuollEditorPanel.viewType
-        );
-      } catch (err: unknown) {
-        // vscode.openWith rejection bubbled to the dispatcher previously,
-        // surfacing as a generic "Command failed" toast with no Quoll
-        // context. Catch and re-surface with a Quoll-prefixed message so
-        // triage can attribute the failure.
-        console.error("[quoll] vscode.openWith rejected", err);
-        showSafely(
-          window.showErrorMessage(
-            `Quoll could not open this file: ${err instanceof Error ? err.message : String(err)}`
-          ),
-          "showErrorMessage"
-        );
-      }
+      // Drive the shared in-place swap (validate → open Quoll → close the source
+      // text tab). Pre-fix this ran a raw vscode.openWith with no source-tab
+      // close, so the cat button opened a SECOND tab beside the source instead of
+      // swapping in place. The helper owns validation, the openWith, the
+      // save-then-close, and error surfacing — symmetric with quoll.toggleEditor.
+      await reopenTextEditorAsQuoll(editor);
     })
   );
 
