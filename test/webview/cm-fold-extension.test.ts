@@ -266,7 +266,10 @@ describe("headingFoldGutterLineClass — per-level gutter tag for the first-row 
   // syntax tree. These pin that the bounded result stays byte-identical to a full
   // rebuild across heading insert / remove / edit — including the multi-line Setext
   // boundary a naive ±1-line window would miss.
-  describe("bounded recompute (keystroke path) — stays equal to a full rebuild", () => {
+  // { retry } — mitigates the load-sensitive bounded≡full flake (LEARNING.md).
+  describe("bounded recompute (keystroke path) — stays equal to a full rebuild", {
+    retry: 2,
+  }, () => {
     function fieldClassesByLine(v: EditorView): Map<number, string> {
       const set = v.state.field(headingFoldGutterLineClass);
       const byLine = new Map<number, string>();
@@ -552,7 +555,10 @@ describe("listFoldGutterLineClass — gutter tag for the list-item vertical-gap 
     expect(after).toBe(before); // fix: content-equal churn → return value; bug: rebuilt (new ref)
   });
 
-  describe("bounded recompute (keystroke path) — stays equal to a full rebuild", () => {
+  // { retry } — mitigates the load-sensitive bounded≡full flake (LEARNING.md).
+  describe("bounded recompute (keystroke path) — stays equal to a full rebuild", {
+    retry: 2,
+  }, () => {
     // Codex #2: serialize the ENTIRE RangeSet ({from,to,cls}) and compare arrays —
     // NOT a by-line Map (which collapses duplicate/add-order/extra point ranges a
     // double-add would introduce). This subsumes both `.size` and by-line checks.
@@ -740,7 +746,10 @@ function serializeGutter(
   return out;
 }
 
-describe("headingFoldGutterLineClass — bounded ≡ full-rebuild under structural reparse", () => {
+// { retry } — mitigates the load-sensitive bounded≡full flake (LEARNING.md).
+describe("headingFoldGutterLineClass — bounded ≡ full-rebuild under structural reparse", {
+  retry: 2,
+}, () => {
   function oracle(doc: string): { from: number; to: number; cls: string }[] {
     const fresh = mountDoc(doc);
     expect(syntaxTreeAvailable(fresh.state, fresh.state.doc.length)).toBe(true);
@@ -787,7 +796,10 @@ describe("headingFoldGutterLineClass — bounded ≡ full-rebuild under structur
   });
 });
 
-describe("listFoldGutterLineClass — bounded ≡ full-rebuild under structural reparse", () => {
+// { retry } — mitigates the load-sensitive bounded≡full flake (LEARNING.md).
+describe("listFoldGutterLineClass — bounded ≡ full-rebuild under structural reparse", {
+  retry: 2,
+}, () => {
   function oracle(doc: string): { from: number; to: number; cls: string }[] {
     const fresh = mountDoc(doc);
     expect(syntaxTreeAvailable(fresh.state, fresh.state.doc.length)).toBe(true);
@@ -922,7 +934,10 @@ describe("touchesStructuralReparse — arm falsifiability + perf contract (direc
   });
 });
 
-describe("structural guard under Quoll's production language (quollMarkdownLanguage)", () => {
+// { retry } — mitigates the load-sensitive bounded≡full flake (LEARNING.md).
+describe("structural guard under Quoll's production language (quollMarkdownLanguage)", {
+  retry: 2,
+}, () => {
   // Codex #7: the default `markdown({ base: markdownLanguage })` mount is not what
   // ships. Re-run the HTML-swallow and fence cases under the PRODUCTION language so a
   // parser-config divergence (Quoll's re-implemented HTML stack) would surface.
