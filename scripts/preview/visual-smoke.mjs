@@ -226,8 +226,10 @@ async function run() {
         // failure so BOTH themes are attempted and the failure is loud+named.
         results.push({ name: `theme=${theme} setup`, pass: false, msg: err.message });
       } finally {
+        // Guard page.close() so a rejection never skips the server close (leak)
+        // or aborts the remaining theme — closeServer already never rejects.
         if (page) {
-          await page.close();
+          await page.close().catch(() => {});
         }
         if (server) {
           await closeServer(server);
