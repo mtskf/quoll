@@ -3,9 +3,11 @@
 // since 1.67) and the active text editor — stateless, no per-panel tracking:
 //   - Active tab is the Quoll custom editor  → forward: reopen in the text editor.
 //   - Otherwise a markdown text editor is active → reverse: validate with
-//     canEditWith, stash its caret, then open Quoll via vscode.openWith directly
-//     (NOT delegated to quoll.editWith, so a swallowed rejection cannot orphan
-//     the stash — the catch cleans it up).
+//     canEditWith, stash its caret, then open Quoll IN PLACE via the shared
+//     `reopenTextEditorAsQuoll` helper (findSourceTab + finalizeSurfaceSwap —
+//     the same helper the title-bar cat button `quoll.editWith` drives, so both
+//     directions share ONE swap path; the helper owns the catch that clears the
+//     stash so a swallowed rejection cannot orphan it).
 //   - Anything else (diff editor, non-markdown, non-text tab) → a friendly no-op
 //     notification (do NOT blindly open Quoll).
 //
@@ -19,7 +21,7 @@
 // bounce the switch. package.json binds the chord to this command ONLY in the
 // text-editor (reverse) context.
 
-import { commands, TabInputCustom, TabInputText, window, workspace } from "vscode";
+import { commands, TabInputCustom, TabInputText, type TextEditor, window, workspace } from "vscode";
 import { canEditWith } from "./can-edit-with.js";
 import { stashSwitchCaret, takeSwitchCaret } from "./editor-switch-caret.js";
 import { QuollEditorPanel } from "./quoll-editor-panel.js";
@@ -91,6 +93,50 @@ export async function reopenActiveQuollTabAsText(): Promise<void> {
   }
 }
 
+/** Reverse swap: open a markdown text editor as Quoll IN PLACE, closing the
+ *  source text tab (save-then-swap; see surface-swap.ts). Shared by
+ *  `quoll.toggleEditor`'s to-quoll case and the title-bar `quoll.editWith` (cat
+ *  icon) button so both directions drive ONE swap path — no duplicated
+ *  surface-swap logic, and the cat button no longer opens a second tab.
+ *
+ *  Order is load-bearing (do NOT reorder): validate → findSourceTab (captured
+ *  BEFORE openWith per surface-swap.ts:findSourceTab) → stash caret (AFTER
+ *  validate, so a rejected validate cannot orphan a stash) → openWith →
+ *  noteSurface → finalizeSurfaceSwap. On open failure the caret stash is cleared
+ *  so it cannot mis-apply on a later normal open. `editor` must be a markdown
+ *  text editor; canEditWith re-checks scheme/readonly and warns + no-ops if not. */
+export async function reopenTextEditorAsQuoll(editor: TextEditor): Promise<void> {
+  const decision = canEditWith(editor.document, (scheme) =>
+    workspace.fs.isWritableFileSystem(scheme)
+  );
+  if (!decision.ok) {
+    showSafely(window.showWarningMessage(decision.reason), "showWarningMessage");
+    return;
+  }
+  const key = editor.document.uri.toString();
+  const sourceTab = findSourceTab(key, "text", QuollEditorPanel.viewType);
+  const active = editor.selection.active;
+  stashSwitchCaret(key, { line: active.line, character: active.character });
+  try {
+    // Open Quoll directly (validation already done above). The fresh panel takes
+    // the stashed caret at `ready`. NOT delegated to the `quoll.editWith` command
+    // so a swallowed rejection cannot leave the stash orphaned and un-toasted.
+    await commands.executeCommand(
+      "vscode.openWith",
+      editor.document.uri,
+      QuollEditorPanel.viewType
+    );
+    // Record intent AFTER the open succeeds and BEFORE the source close, so the
+    // surface-restore watcher adopts "quoll" instead of bouncing this deliberate
+    // swap (and a failed open records nothing).
+    noteSurface(key, "quoll");
+    await finalizeSurfaceSwap(editor.document.uri, sourceTab);
+  } catch (err) {
+    takeSwitchCaret(key); // clear the stash so it does not apply on a later open
+    surfaceError("could not open the rich editor", err);
+  }
+}
+
 export function registerToggleEditor(): { dispose(): void } {
   return commands.registerCommand("quoll.toggleEditor", async () => {
     const input = window.tabGroups.activeTabGroup.activeTab?.input;
@@ -128,39 +174,9 @@ export function registerToggleEditor(): { dispose(): void } {
         if (reverseEditor === null) {
           return; // unreachable when target is "to-quoll", but narrows for TS
         }
-        const editor = reverseEditor;
-        // Validate BEFORE stashing: canEditWith may reject (non-file / readonly)
-        // in which case NO Quoll panel is created and `takeSwitchCaret` would
-        // never fire — a stashed caret would then leak and mis-apply on a later
-        // normal open. Validate first, stash only when Quoll will actually open.
-        const decision = canEditWith(editor.document, (scheme) =>
-          workspace.fs.isWritableFileSystem(scheme)
-        );
-        if (!decision.ok) {
-          showSafely(window.showWarningMessage(decision.reason), "showWarningMessage");
-          return;
-        }
-        const key = editor.document.uri.toString();
-        const sourceTab = findSourceTab(key, "text", QuollEditorPanel.viewType);
-        const active = editor.selection.active;
-        stashSwitchCaret(key, { line: active.line, character: active.character });
-        try {
-          // Open Quoll directly (validation already done above). The fresh panel
-          // takes the stashed caret at `ready` (Task 5). NOT delegated to
-          // `quoll.editWith` so a swallowed rejection cannot leave the stash
-          // orphaned and un-toasted.
-          await commands.executeCommand(
-            "vscode.openWith",
-            editor.document.uri,
-            QuollEditorPanel.viewType
-          );
-          // Record intent AFTER the open succeeds and BEFORE the source close.
-          noteSurface(key, "quoll");
-          await finalizeSurfaceSwap(editor.document.uri, sourceTab);
-        } catch (err) {
-          takeSwitchCaret(key); // clear the stash so it does not apply on a later open
-          surfaceError("could not open the rich editor", err);
-        }
+        // Delegate to the shared reverse-swap helper — also the title-bar
+        // `quoll.editWith` (cat) handler — so both drive one in-place swap path.
+        await reopenTextEditorAsQuoll(reverseEditor);
         return;
       }
       case "none":

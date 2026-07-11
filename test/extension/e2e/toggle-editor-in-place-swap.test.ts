@@ -203,6 +203,82 @@ describe("⌘⌥E in-place editor-surface swap", function () {
     assert.ok(!tabs.some(textTab(uri)), "text tab must be closed");
   });
 
+  it("cat button (clean): quoll.editWith on a text tab closes the text tab, no second tab", async () => {
+    // Regression for the title-bar cat button (quoll.editWith) opening a SECOND
+    // Quoll tab beside the source instead of swapping in place. The reverse cases
+    // above drive quoll.toggleEditor; the cat button is a SEPARATE command that
+    // pre-fix ran raw vscode.openWith with no source-tab close — so the text tab
+    // survived (both open). Post-fix it drives the shared reopenTextEditorAsQuoll
+    // helper (findSourceTab + finalizeSurfaceSwap), same as the toggle path.
+    const uri = tempMd("cat-clean.md");
+    const doc = await vscode.workspace.openTextDocument(uri);
+    await vscode.window.showTextDocument(doc, {
+      viewColumn: vscode.ViewColumn.Active,
+      preserveFocus: false,
+      preview: false,
+    });
+    await tick(300);
+    assert.strictEqual(
+      vscode.window.activeTextEditor?.document.uri.toString(),
+      uri.toString(),
+      "precondition: the markdown text editor is active"
+    );
+
+    await vscode.commands.executeCommand("quoll.editWith");
+
+    const deadline = Date.now() + 8000;
+    while (Date.now() < deadline) {
+      const tabs = allTabs();
+      if (tabs.some(customTab(uri)) && !tabs.some(textTab(uri))) {
+        break;
+      }
+      await tick(100);
+    }
+    const tabs = allTabs();
+    assert.ok(tabs.some(customTab(uri)), "Quoll tab must be open");
+    assert.ok(
+      !tabs.some(textTab(uri)),
+      `text tab must be closed (no second tab) — ${JSON.stringify(tabs.map((t) => t.label))}`
+    );
+  });
+
+  it("cat button (dirty): quoll.editWith on a dirty text tab closes it, keeps edits", async () => {
+    const uri = tempMd("cat-dirty.md");
+    const doc = await vscode.workspace.openTextDocument(uri);
+    await vscode.window.showTextDocument(doc, {
+      viewColumn: vscode.ViewColumn.Active,
+      preserveFocus: false,
+      preview: false,
+    });
+    await tick(300);
+    await dirty(uri);
+    await tick(200);
+    assert.strictEqual(
+      vscode.window.activeTextEditor?.document.uri.toString(),
+      uri.toString(),
+      "precondition: the markdown text editor is active"
+    );
+
+    await vscode.commands.executeCommand("quoll.editWith");
+
+    const deadline = Date.now() + 8000;
+    while (Date.now() < deadline) {
+      const tabs = allTabs();
+      if (tabs.some(customTab(uri)) && !tabs.some(textTab(uri))) {
+        break;
+      }
+      await tick(100);
+    }
+    const tabs = allTabs();
+    assert.ok(tabs.some(customTab(uri)), "Quoll tab must be open");
+    assert.ok(
+      !tabs.some(textTab(uri)),
+      `text tab must be closed — ${JSON.stringify(tabs.map((t) => t.label))}`
+    );
+    const after = await vscode.workspace.openTextDocument(uri);
+    assert.ok(after.getText().startsWith("EDIT "), "unsaved edit must be preserved");
+  });
+
   it("multi-split: reverse toggle from the ACTIVE group consolidates it to Quoll; the other split's text tab survives", async () => {
     const activeGroupTabs = (): readonly vscode.Tab[] =>
       vscode.window.tabGroups.activeTabGroup.tabs;
