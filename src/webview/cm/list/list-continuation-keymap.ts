@@ -144,7 +144,16 @@ export const continueListOnEnter: Command = (view) => {
   const content = mark.nextSibling;
   const indent = state.doc.sliceString(caretLine.from, mark.from);
   if (isEmptyItem(state, content)) {
-    return false; // empty-exit handled in a later slice
+    // Empty item → remove the whole marker line, exiting the list. Uniform across
+    // nesting: no outdent (outdentListItem shifts whitespace only and would leave
+    // a duplicate ordered number at the promoted level — Codex review 2026-07-11).
+    view.dispatch({
+      changes: { from: caretLine.from, to: caretLine.to },
+      selection: EditorSelection.cursor(caretLine.from),
+      userEvent: "delete",
+      annotations: isolateHistory.of("full"),
+    });
+    return true;
   }
   // content is non-null here (isEmptyItem covers the null case).
   const contentNode = content as SyntaxNode;

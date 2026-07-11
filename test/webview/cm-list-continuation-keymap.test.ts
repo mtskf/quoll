@@ -201,6 +201,55 @@ describe("continueListOnEnter — ordered renumber", () => {
   });
 });
 
+describe("continueListOnEnter — empty marker line exits the list", () => {
+  function expectExit(doc: string, caretLineNo: number, expected: string) {
+    const view = caretAtEndOf(mount(doc, at(0)), caretLineNo);
+    try {
+      expect(continueListOnEnter(view)).toBe(true);
+      expect(view.state.doc.toString()).toBe(expected);
+      expect(view.state.selection.main.head).toBe(view.state.doc.line(caretLineNo).from);
+    } finally {
+      view.destroy();
+    }
+  }
+
+  it("exits a bare bullet `- `", () => {
+    expectExit("- ", 1, "");
+  });
+
+  it("exits a bare ordered `1. `", () => {
+    expectExit("1. ", 1, "");
+  });
+
+  it("exits a content-less task marker `- [ ]`", () => {
+    expectExit("- [ ]", 1, "");
+  });
+
+  it("exits a trailing-space empty task `- [ ] ` (a Task node)", () => {
+    expectExit("- [ ] ", 1, "");
+  });
+
+  it("exits an empty checked task `- [x] `", () => {
+    expectExit("- [x] ", 1, "");
+  });
+
+  it("exits a nested empty item, blanking only its line", () => {
+    expectExit("- a\n  - ", 2, "- a\n");
+  });
+
+  it("is ONE undo step — undo restores the marker", () => {
+    const view = caretAtEndOf(mount("- ", at(0), { withHistory: true }), 1);
+    try {
+      expect(continueListOnEnter(view)).toBe(true);
+      expect(view.state.doc.toString()).toBe("");
+      expect(undo(view)).toBe(true);
+      expect(view.state.doc.toString()).toBe("- ");
+    } finally {
+      view.destroy();
+    }
+  });
+});
+
 describe("continueListOnEnter — fall-through (returns false, doc unchanged)", () => {
   function expectNoop(doc: string, caret: number, opts?: { readOnly?: boolean }) {
     const view = mount(doc, at(caret), opts);
