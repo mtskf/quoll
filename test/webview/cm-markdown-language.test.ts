@@ -6,12 +6,15 @@
 // cm-decoration-integration mounts markdown({ base }); cm-fold-delegation
 // likewise. These four contracts are what the refactor must preserve:
 //   1. markdownLanguage.isActiveAt is true on the built language — proves the
-//      reused markdownLanguage.data facet (markdownKeymap's commands and
-//      pasteURLAsLink early-return without it, since isActiveAt compares the
-//      languageDataProp facet identity, not the Language instance).
-//   2/3. markdownKeymap (Enter/Backspace) and pasteURLAsLink are wired + active.
-//   4. the re-implemented headerIndent folds heading lines byte-identically to
+//      reused markdownLanguage.data facet (markdownKeymap's commands early-return
+//      without it, since isActiveAt compares the languageDataProp facet identity,
+//      not the Language instance).
+//   2. markdownKeymap (Enter/Backspace) is wired + active.
+//   3. the re-implemented headerIndent folds heading lines byte-identically to
 //      upstream markdown({ base }) — a parity oracle across heading fixtures.
+// NOTE: the built-in pasteURLAsLink is deliberately NOT part of this language
+// (dropped in markdown.ts); Quoll's own paste-URL-over-selection handler lives in
+// src/webview/cm/paste/url-link-paste.ts and is covered by cm-paste-url-link.test.ts.
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
 import { codeFolding, ensureSyntaxTree, foldable } from "@codemirror/language";
 import { EditorSelection, EditorState, type Extension } from "@codemirror/state";
@@ -46,7 +49,7 @@ function mount(doc: string, anchor: number, selEnd = anchor): EditorView {
 describe("quollMarkdownLanguage reuses markdownLanguage.data (isActiveAt)", () => {
   it("markdownLanguage.isActiveAt is true inside the directly-built language", () => {
     // The load-bearing invariant: building with a FRESH facet would silently
-    // disable markdownKeymap + pasteURLAsLink. State-only, no view needed.
+    // disable markdownKeymap. State-only, no view needed.
     const state = EditorState.create({ doc: "hello world", extensions: [quollLang] });
     expect(markdownLanguage.isActiveAt(state, 3, 1)).toBe(true);
   });
@@ -71,21 +74,6 @@ describe("quollMarkdownLanguage wires the active markdownKeymap", () => {
     // Upstream deleteMarkupBackward removes the bullet marker; assert the "- "
     // prefix is gone (exact remainder pinned so a broken keymap reds this).
     expect(v.state.sliceDoc()).toBe("alpha");
-  });
-});
-
-describe("quollMarkdownLanguage wires pasteURLAsLink", () => {
-  it("pasting a URL over a text selection wraps it as a link", () => {
-    const v = mount("select me", 0, "select".length); // select "select"
-    // pasteURLAsLink is an EditorView.domEventHandlers({ paste }) — dispatch a
-    // real paste event carrying a text/plain URL. clipboardData is attached
-    // explicitly for determinism across happy-dom versions.
-    const ev = new Event("paste", { bubbles: true, cancelable: true });
-    Object.defineProperty(ev, "clipboardData", {
-      value: { getData: (t: string) => (t === "text/plain" ? "https://example.com" : "") },
-    });
-    v.contentDOM.dispatchEvent(ev);
-    expect(v.state.sliceDoc()).toBe("[select](https://example.com) me");
   });
 });
 
