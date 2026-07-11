@@ -128,7 +128,11 @@
         },
         "quoll.editor.fontFamily": {
           "type": "string",
-          "enum": ["default", "serif", "sans"],
+          "enum": [
+            "default",
+            "serif",
+            "sans"
+          ],
           "default": "default",
           "enumDescriptions": [
             "Inherit the VS Code editor font (current behaviour).",
@@ -139,7 +143,12 @@
         },
         "quoll.editor.fontSize": {
           "type": "string",
-          "enum": ["small", "default", "large", "x-large"],
+          "enum": [
+            "small",
+            "default",
+            "large",
+            "x-large"
+          ],
           "default": "default",
           "enumDescriptions": [
             "Slightly smaller than the default reading size.",
@@ -151,7 +160,11 @@
         },
         "quoll.editor.lineHeight": {
           "type": "string",
-          "enum": ["compact", "cozy", "roomy"],
+          "enum": [
+            "compact",
+            "cozy",
+            "roomy"
+          ],
           "default": "cozy",
           "enumDescriptions": [
             "Tighter line spacing.",
@@ -162,7 +175,11 @@
         },
         "quoll.editor.contentWidth": {
           "type": "string",
-          "enum": ["narrow", "medium", "wide"],
+          "enum": [
+            "narrow",
+            "medium",
+            "wide"
+          ],
           "default": "medium",
           "enumDescriptions": [
             "Narrower reading column.",

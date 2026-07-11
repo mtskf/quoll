@@ -11,7 +11,11 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-function make(prefs: EditorPrefs = DEFAULT_EDITOR_PREFS, onChange = vi.fn(), onRequestClose = vi.fn()) {
+function make(
+  prefs: EditorPrefs = DEFAULT_EDITOR_PREFS,
+  onChange = vi.fn(),
+  onRequestClose = vi.fn()
+) {
   popover = createSettingsPopover({ getPrefs: () => prefs, onChange, onRequestClose });
   document.body.appendChild(popover.el); // construction already synced active state
   return { popover, onChange, onRequestClose };

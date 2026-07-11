@@ -143,7 +143,9 @@ export const EDITOR_PREF_DEFAULTS = {
   "quoll.editor.fontSize": "default",
   "quoll.editor.lineHeight": "cozy",
   "quoll.editor.contentWidth": "medium",
-} as const satisfies { [K in keyof typeof EDITOR_PREF_ENUMS]: (typeof EDITOR_PREF_ENUMS)[K][number] };
+} as const satisfies {
+  [K in keyof typeof EDITOR_PREF_ENUMS]: (typeof EDITOR_PREF_ENUMS)[K][number];
+};
 
 export type EditorPrefKey = keyof typeof EDITOR_PREF_ENUMS;
 export type FontFamilyPref = (typeof EDITOR_PREF_ENUMS)["quoll.editor.fontFamily"][number];

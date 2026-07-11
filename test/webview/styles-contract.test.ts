@@ -731,16 +731,22 @@ describe("styles.css — outline sidebar", () => {
 });
 
 describe("editor-preset CSS var reads (source-shape)", () => {
-  const strip = (s: string) =>
-    s.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/[^\n]*/g, "");
+  const strip = (s: string) => s.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/[^\n]*/g, "");
   const css = strip(readFileSync(new URL("../../src/webview/styles.css", import.meta.url), "utf8"));
-  const theme = strip(readFileSync(new URL("../../src/webview/cm/theme.ts", import.meta.url), "utf8"));
+  const theme = strip(
+    readFileSync(new URL("../../src/webview/cm/theme.ts", import.meta.url), "utf8")
+  );
   const probe = strip(
-    readFileSync(new URL("../../src/webview/cm/decorations/prose-space-metric.ts", import.meta.url), "utf8")
+    readFileSync(
+      new URL("../../src/webview/cm/decorations/prose-space-metric.ts", import.meta.url),
+      "utf8"
+    )
   );
 
   it('theme "&" font-size reads --quoll-editor-font-size with the vscode fallback', () => {
-    expect(theme).toMatch(/fontSize:\s*"var\(--quoll-editor-font-size,\s*var\(--vscode-font-size\)\)"/);
+    expect(theme).toMatch(
+      /fontSize:\s*"var\(--quoll-editor-font-size,\s*var\(--vscode-font-size\)\)"/
+    );
   });
   it(".cm-content font-family reads --quoll-editor-font-family with the vscode fallback", () => {
     expect(theme).toMatch(/var\(--quoll-editor-font-family,\s*var\(--vscode-font-family\)\)/);
@@ -749,10 +755,14 @@ describe("editor-preset CSS var reads (source-shape)", () => {
     expect(theme).toMatch(/var\(--quoll-editor-content-width,\s*60em\)/);
   });
   it(".cm-content line-height reads --quoll-editor-line-height with the --quoll-line-height fallback", () => {
-    expect(theme).toMatch(/var\(--quoll-editor-line-height,\s*var\(--quoll-line-height,\s*1\.7\)\)/);
+    expect(theme).toMatch(
+      /var\(--quoll-editor-line-height,\s*var\(--quoll-line-height,\s*1\.7\)\)/
+    );
   });
   it("the prose-space probe mirrors the active font vars", () => {
-    expect(probe).toMatch(/font-family:var\(--quoll-editor-font-family,\s*var\(--vscode-font-family\)\)/);
+    expect(probe).toMatch(
+      /font-family:var\(--quoll-editor-font-family,\s*var\(--vscode-font-family\)\)/
+    );
     expect(probe).toMatch(/font-size:var\(--quoll-editor-font-size,\s*var\(--vscode-font-size\)\)/);
   });
   it("styles.css no longer sets font-size on .quoll-editor (it never reached the text)", () => {

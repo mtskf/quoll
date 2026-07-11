@@ -768,7 +768,9 @@ describe("isWebviewToHost — update-config", () => {
 
   it("accepts a well-formed update-config for each key", () => {
     expect(isWebviewToHost(valid())).toBe(true);
-    expect(isWebviewToHost({ ...valid(), key: "quoll.editor.fontSize", value: "large" })).toBe(true);
+    expect(isWebviewToHost({ ...valid(), key: "quoll.editor.fontSize", value: "large" })).toBe(
+      true
+    );
     expect(isWebviewToHost({ ...valid(), key: "quoll.editor.lineHeight", value: "compact" })).toBe(
       true
     );

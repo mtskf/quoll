@@ -31,11 +31,7 @@ export type HandleUpdateConfigDeps = {
   showError?: (message: string) => void;
 };
 
-export function handleUpdateConfig(
-  key: string,
-  value: string,
-  deps: HandleUpdateConfigDeps
-): void {
+export function handleUpdateConfig(key: string, value: string, deps: HandleUpdateConfigDeps): void {
   if (!isPrefValue(key, value)) {
     console.warn("[quoll] update-config rejected: key/value not in allowlist", { key, value });
     return;

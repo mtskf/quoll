@@ -72,13 +72,13 @@ import {
 import { createEditSettledBarrier } from "./edit-settled-barrier.js";
 import { createEditorConfigWiring } from "./editor-config-wiring.js";
 import { isRelevantConfigChange, readEditorPrefs } from "./editor-prefs-config.js";
-import { handleUpdateConfig } from "./handle-update-config.js";
 import { takeSwitchCaret } from "./editor-switch-caret.js";
 import { createEffectExecutor } from "./effect-executor.js";
 import { clearActiveFormatPoster, setActiveFormatPoster } from "./format-command.js";
 import { getNonce } from "./get-nonce.js";
 import { handleOpenExternal } from "./handle-open-external.js";
 import { handleOpenLink } from "./handle-open-link.js";
+import { handleUpdateConfig } from "./handle-update-config.js";
 import {
   createDrainingDispatcher,
   createHostSessionCore,

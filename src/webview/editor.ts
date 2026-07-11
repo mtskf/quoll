@@ -26,12 +26,8 @@ import { headingRhythm } from "./cm/decorations/heading-rhythm.js";
 import { quollSyntaxReveal } from "./cm/decorations/index.js";
 import { proseSpaceMetric } from "./cm/decorations/prose-space-metric.js";
 import { createEditSync } from "./cm/edit-sync.js";
+import { type EditorPrefs, editorPrefsField, setEditorPrefsEffect } from "./cm/editor-prefs.js";
 import { editorPrefsApply } from "./cm/editor-prefs-apply.js";
-import {
-  type EditorPrefs,
-  editorPrefsField,
-  setEditorPrefsEffect,
-} from "./cm/editor-prefs.js";
 import { fencedCodeCollapseField } from "./cm/fenced-code/fenced-code-collapse.js";
 import { fencedCodeCopyButton } from "./cm/fenced-code/fenced-code-copy-button.js";
 import { fencedCodeEnterKeymap } from "./cm/fenced-code/fenced-code-enter-keymap.js";

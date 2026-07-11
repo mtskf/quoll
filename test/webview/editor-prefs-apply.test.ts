@@ -2,8 +2,8 @@
 import { EditorState } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import { afterEach, describe, expect, it } from "vitest";
-import { editorPrefsApply } from "../../src/webview/cm/editor-prefs-apply.js";
 import { editorPrefsField, setEditorPrefsEffect } from "../../src/webview/cm/editor-prefs.js";
+import { editorPrefsApply } from "../../src/webview/cm/editor-prefs-apply.js";
 
 let view: EditorView | null = null;
 afterEach(() => {

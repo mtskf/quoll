@@ -5,7 +5,11 @@
 // safePostMessage (never a bare getHost().postMessage from cm/).
 
 import { Facet } from "@codemirror/state";
-import { type EditorPrefKey, PROTOCOL_VERSION, type WebviewToHost } from "../../../shared/protocol.js";
+import {
+  type EditorPrefKey,
+  PROTOCOL_VERSION,
+  type WebviewToHost,
+} from "../../../shared/protocol.js";
 import { type PostMessageHost, safePostMessage } from "../../safe-post-message.js";
 
 export type UpdateConfigSink = (key: EditorPrefKey, value: string) => void;
@@ -21,7 +25,12 @@ export const quollUpdateConfigSink = Facet.define<UpdateConfigSink, UpdateConfig
 /** Build a sink that posts an update-config to `host` via safePostMessage. */
 export function updateConfigSinkFor(host: PostMessageHost): UpdateConfigSink {
   return (key, value) => {
-    const message: WebviewToHost = { protocol: PROTOCOL_VERSION, type: "update-config", key, value };
+    const message: WebviewToHost = {
+      protocol: PROTOCOL_VERSION,
+      type: "update-config",
+      key,
+      value,
+    };
     safePostMessage(host, message, "update-config");
   };
 }
