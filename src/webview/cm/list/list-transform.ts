@@ -37,8 +37,11 @@ import { isContentlessTaskParagraph } from "../task-checkbox/task-marker-shape.j
 import { columnAt, findTaskMarker, isTaskItem } from "./list-geometry.js";
 import {
   caretInCode,
+  destinationForIndent,
   destinationForOutdent,
   followingListItems,
+  isListNode,
+  lastListItemOf,
   listMarkOf,
   type SyntaxNode,
 } from "./list-tree.js";
@@ -549,4 +552,147 @@ export function planOutdentItem(state: EditorState, headPos: number): OutdentPla
 
   changes.push(...materialiseLineDeltas(state, lineDeltas));
   return selection === undefined ? { changes } : { changes, selection };
+}
+
+/** The result of a content-column-aware indent, or a `changes`-only no-op. */
+export type IndentPlan = { changes: ChangeSpec[]; selection?: SelectionRange };
+
+/** The destination child-run `item` would JOIN when nesting under `parent`:
+ *  `parent`'s LAST child is a list node AND nothing non-blank follows it (so
+ *  text order places `item` immediately after that run's last item). Returns the
+ *  list node to adopt from, or null when a NEW nested run must be started (no
+ *  child list, or the last child is a Paragraph after the list — the
+ *  `Paragraph, List, Paragraph` shape). Lezer emits no blank-line child nodes,
+ *  so `lastChild` being a list is exactly "the list is the parent's tail". */
+function childRunToJoin(parent: SyntaxNode): SyntaxNode | null {
+  const last = parent.lastChild;
+  return last !== null && isListNode(last) ? last : null;
+}
+
+/** The marker shape `item` adopts when JOINING `childRun`: continue that run's
+ *  numbering (ordered → last item's number + 1, run's delim) or its glyph
+ *  (bullet). Null on grammar drift. */
+function adoptedShapeForJoin(state: EditorState, childRun: SyntaxNode): ListMarkShape | null {
+  const last = lastListItemOf(childRun);
+  if (last === null) {
+    return null;
+  }
+  const mark = listMarkOf(last);
+  if (mark === null) {
+    return null;
+  }
+  const shape = parseListMark(state.doc.sliceString(mark.from, mark.to));
+  if (shape === null) {
+    return null;
+  }
+  if (shape.kind === "bullet") {
+    return { kind: "bullet", glyph: shape.glyph };
+  }
+  return { kind: "ordered", number: shape.number + 1, delim: shape.delim };
+}
+
+/** The marker shape `item` keeps when starting a NEW nested run: its own
+ *  kind/glyph/delim, but an ordered number RESET to 1 (Notion-style — a fresh
+ *  nested run always restarts). Null on grammar drift. */
+function newRunShapeFor(state: EditorState, item: SyntaxNode): ListMarkShape | null {
+  const mark = listMarkOf(item);
+  if (mark === null) {
+    return null;
+  }
+  const shape = parseListMark(state.doc.sliceString(mark.from, mark.to));
+  if (shape === null) {
+    return null;
+  }
+  return shape.kind === "bullet"
+    ? { kind: "bullet", glyph: shape.glyph }
+    : { kind: "ordered", number: 1, delim: shape.delim };
+}
+
+/** Plan a content-column-aware Tab indent for the item covering `headPos`: nest
+ *  it under its indent destination (its preceding sibling, resolved ACROSS
+ *  adjacent lists) at the destination parent's CONTENT column. The nested marker
+ *  either ADOPTS the destination child-run's kind/glyph/delim and CONTINUES its
+ *  numbering (when the item lands contiguously after an existing child list), or
+ *  starts a NEW nested run (keeping the item's own kind/glyph/delim, resetting an
+ *  ordered number to 1) and RENUMBERS the vacated outer run to close the gap.
+ *
+ *  Returns `[]` (a `changes`-only no-op) — never throws — for: a null EOF parse
+ *  (fail-closed), a caret not in a list item, a caret in code, no indent
+ *  destination (the doc's first list item), grammar drift, or a non-positive
+ *  marker-column delta (already at/past the target — pathological alignment).
+ *
+ *  Disjointness (mirrors `planOutdentItem`): every whitespace shift funnels
+ *  through ONE per-line net-delta map. Two deltas — the marker line via
+ *  `contentColumnOf(parent) - itemMarkCol`, and the item's OWN body/descendant
+ *  lines (`classifyItemLines(item).ownLines`) additionally by
+ *  `newMarkerLen - oldMarkerLen`. `classifyItemLines` excludes lazy-continuation
+ *  lines so a broken 2-space doc HEALS (the lazy tail is not dragged). The moved
+ *  item's ListMark rewrite and the vacated-run renumber sit on DISJOINT spans
+ *  (`renumberRun(item, item.ownNumber)` touches only the followers STAYING in the
+ *  outer run, never `item`'s own marker), so there is no overlapping ChangeSpec. */
+export function planIndentItem(state: EditorState, headPos: number): IndentPlan {
+  if (caretInCode(state, headPos)) {
+    return { changes: [] };
+  }
+  const item = resolveItemAtEof(state, headPos);
+  if (item === null) {
+    return { changes: [] };
+  }
+  const mark = listMarkOf(item);
+  if (mark === null) {
+    return { changes: [] };
+  }
+  const parent = destinationForIndent(item);
+  if (parent === null) {
+    return { changes: [] }; // doc's first list item — nothing to nest under
+  }
+
+  const targetCol = contentColumnOf(state, parent);
+  const itemMarkCol = columnAt(state, mark.from);
+  const markerDelta = targetCol - itemMarkCol;
+  if (markerDelta <= 0) {
+    return { changes: [] }; // already at/past the target — pathological alignment
+  }
+
+  // JOIN vs NEW run: joinable when the parent's tail is an existing child list.
+  const childRun = childRunToJoin(parent);
+  const adopted =
+    childRun !== null ? adoptedShapeForJoin(state, childRun) : newRunShapeFor(state, item);
+  if (adopted === null) {
+    return { changes: [] };
+  }
+  if (adopted.kind === "ordered" && adopted.number > 999_999_999) {
+    return { changes: [] }; // 9-digit cap — fail closed
+  }
+
+  const oldMarkerLen = mark.to - mark.from;
+  const newMarker = formatMarker(adopted);
+  const changes: ChangeSpec[] = [];
+  const lineDeltas = new Map<number, number>();
+
+  // Marker rewrite (adopt the destination run's kind / continue-number, OR reset
+  // to 1 for a new run) — a disjoint ListMark-span replacement.
+  changes.push({ from: mark.from, to: mark.to, insert: newMarker });
+
+  // Marker line shifts to the parent's content column; own body/descendant lines
+  // additionally absorb the marker-width change so they re-anchor to the new
+  // content column. Both funnel through the one net-delta map.
+  addLineDelta(lineDeltas, state.doc.lineAt(mark.from).from, markerDelta);
+  const contentDelta = markerDelta + (newMarker.length - oldMarkerLen);
+  for (const lineNo of classifyItemLines(state, item).ownLines) {
+    addLineDelta(lineDeltas, state.doc.line(lineNo).from, contentDelta);
+  }
+
+  // Vacated outer run: the item leaves a gap, so its OWN following siblings must
+  // renumber down by one. `renumberRun(item, item.ownNumber)` yields exactly that
+  // −1 uniform shift (delta = ownNumber − (ownNumber + 1)) and touches ONLY the
+  // followers — never the item's own (already-rewritten) marker. A bullet outer
+  // run / a null-parse / a 9-digit overflow degrades to `[]` (leave the run).
+  const itemShape = parseListMark(state.doc.sliceString(mark.from, mark.to));
+  if (item.parent?.name === "OrderedList" && itemShape !== null && itemShape.kind === "ordered") {
+    changes.push(...renumberRun(state, item, itemShape.number));
+  }
+
+  changes.push(...materialiseLineDeltas(state, lineDeltas));
+  return { changes };
 }

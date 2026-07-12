@@ -62,6 +62,19 @@ function itemDepth(view: EditorView, n: number): number {
 }
 
 describe("indentListItem", () => {
+  it("Tab nests a bullet under a preceding ordered item at its content column", () => {
+    const view = mount("1. test\n2. test\n- ddd\n3. ddd", EditorSelection.cursor(0));
+    view.dispatch({ selection: at(view, 3, 1) }); // caret in "- ddd"
+    try {
+      expect(indentListItem(view)).toBe(true);
+      expect(view.state.doc.toString()).toBe("1. test\n2. test\n   - ddd\n3. ddd");
+      expect(itemDepth(view, 3)).toBe(2);
+      expect(itemDepth(view, 4)).toBe(1);
+    } finally {
+      view.destroy();
+    }
+  });
+
   it("nests a bullet under its preceding sibling (2-space marker) — depth 1→2", () => {
     const view = mount("- A\n- B\n- C", EditorSelection.cursor(0));
     view.dispatch({ selection: at(view, 2, 2) });
@@ -75,13 +88,15 @@ describe("indentListItem", () => {
     }
   });
 
-  it("nests an ordered item by the marker width (3 spaces, NOT 2) — actually nests", () => {
+  it("nests an ordered item by the marker width (3 spaces), resetting to 1 + healing the vacated run", () => {
     const view = mount("1. A\n2. B\n3. C", EditorSelection.cursor(0));
     view.dispatch({ selection: at(view, 2, 3) });
     try {
       expect(indentListItem(view)).toBe(true);
-      // 3 spaces — the ONLY indent that parses as nested under "1. A".
-      expect(view.state.doc.toString()).toBe("1. A\n   2. B\n3. C");
+      // 3 spaces — the ONLY indent that parses as nested under "1. A". The new
+      // nested run resets to 1 (Notion-style) and the vacated outer run closes
+      // its gap (3. C → 2. C), leaving no stale ordinal.
+      expect(view.state.doc.toString()).toBe("1. A\n   1. B\n2. C");
       expect(itemDepth(view, 2)).toBe(2);
     } finally {
       view.destroy();
@@ -176,6 +191,82 @@ describe("indentListItem", () => {
     try {
       expect(indentListItem(view)).toBe(false);
       expect(view.state.doc.toString()).toBe("- A\n- B");
+    } finally {
+      view.destroy();
+    }
+  });
+
+  // (a) heals a broken 2-space nested item: only the marker line moves to col 3;
+  //     the lazy tail (flush-left "3. ddd\n4. ddd") is NOT dragged.
+  it("(a) heals a broken 2-space doc — only the marker line shifts, lazy tail stays", () => {
+    const view = mount("1. a\n2. b\n  - ddd\n3. ddd\n4. ddd", EditorSelection.cursor(0));
+    view.dispatch({ selection: at(view, 3, 3) }); // caret in "  - ddd"
+    try {
+      expect(indentListItem(view)).toBe(true);
+      expect(view.state.doc.toString()).toBe("1. a\n2. b\n   - ddd\n3. ddd\n4. ddd");
+      expect(itemDepth(view, 3)).toBe(2); // "- ddd" nested under "2. b"
+      expect(itemDepth(view, 4)).toBe(1); // "3. ddd" a top-level sibling again
+      expect(itemDepth(view, 5)).toBe(1);
+    } finally {
+      view.destroy();
+    }
+  });
+
+  // (b) joining an EXISTING nested run adopts its style + continues numbering.
+  it("(b) Tab joining an existing nested ordered run continues its numbering", () => {
+    const view = mount("1. p\n   1. a\n2. b\n3. c", EditorSelection.cursor(0));
+    view.dispatch({ selection: at(view, 3, 3) }); // caret in "2. b"
+    try {
+      expect(indentListItem(view)).toBe(true);
+      // "2. b" joins the "1. a" child run as "2. b" at col 3; vacated "3. c" → "2. c".
+      expect(view.state.doc.toString()).toBe("1. p\n   1. a\n   2. b\n2. c");
+      expect(itemDepth(view, 3)).toBe(2);
+      expect(itemDepth(view, 4)).toBe(1);
+    } finally {
+      view.destroy();
+    }
+  });
+
+  // (c) a NEW nested ordered run restarts at 1 and renumbers the vacated outer run.
+  it("(c) Tab starting a new nested ordered run resets to 1 + renumbers vacated run", () => {
+    const view = mount("1. A\n2. B\n3. C", EditorSelection.cursor(0));
+    view.dispatch({ selection: at(view, 2, 3) }); // caret in "2. B"
+    try {
+      expect(indentListItem(view)).toBe(true);
+      expect(view.state.doc.toString()).toBe("1. A\n   1. B\n2. C");
+      expect(itemDepth(view, 2)).toBe(2);
+      expect(itemDepth(view, 3)).toBe(1);
+    } finally {
+      view.destroy();
+    }
+  });
+
+  // (d) empty-item parent fallback: contentColumnOf falls back to markCol +
+  //     markerLen + 1 for the empty "2. ", so the bullet nests to col 3.
+  it("(d) nests under an EMPTY ordered parent at markCol + markerLen + 1", () => {
+    const view = mount("2. \n- x", EditorSelection.cursor(0));
+    view.dispatch({ selection: at(view, 2, 1) }); // caret in "- x"
+    try {
+      expect(indentListItem(view)).toBe(true);
+      expect(view.state.doc.toString()).toBe("2. \n   - x");
+      expect(itemDepth(view, 2)).toBe(2);
+    } finally {
+      view.destroy();
+    }
+  });
+
+  // (e) non-contiguous parent (Paragraph, List, Paragraph): the parent's tail is
+  //     a Paragraph, not the earlier child list → a NEW nested run (does NOT
+  //     continue the earlier child run's numbering).
+  it("(e) non-contiguous parent (list then paragraph) starts a NEW nested run", () => {
+    const view = mount("1. p\n\n   - a\n\n   tail\n2. b\n3. c", EditorSelection.cursor(0));
+    view.dispatch({ selection: at(view, 6, 3) }); // caret in "2. b"
+    try {
+      expect(indentListItem(view)).toBe(true);
+      // "2. b" starts a NEW ordered run reset to 1 after "tail"; "3. c" → "2. c".
+      expect(view.state.doc.toString()).toBe("1. p\n\n   - a\n\n   tail\n   1. b\n2. c");
+      expect(itemDepth(view, 6)).toBe(2);
+      expect(itemDepth(view, 7)).toBe(1);
     } finally {
       view.destroy();
     }
