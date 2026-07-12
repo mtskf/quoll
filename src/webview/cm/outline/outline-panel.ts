@@ -793,11 +793,13 @@ class OutlinePanel implements PluginValue {
     for (const item of this.listEl.querySelectorAll<HTMLElement>(".quoll-outline-item")) {
       const isActive = activeFrom !== null && item.dataset.from === String(activeFrom);
       item.classList.toggle("active", isActive);
+      // The row li is the treeitem; the label button is its inner .active target.
+      const rowLi = item.parentElement as HTMLElement | null;
       // aria-selected is the tree's selected-node signal — it rides the treeitem
       // (the row li), mirroring the visual .active on the inner label button.
-      (item.parentElement as HTMLElement | null)?.setAttribute("aria-selected", String(isActive));
+      rowLi?.setAttribute("aria-selected", String(isActive));
       // Skip scroll for a hidden row (its parent li is collapsed away).
-      if (isActive && (item.parentElement as HTMLElement | null)?.hidden !== true) {
+      if (isActive && rowLi?.hidden !== true) {
         item.scrollIntoView({ block: "nearest" });
       }
     }
