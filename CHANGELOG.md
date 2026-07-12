@@ -2,6 +2,17 @@
 
 All notable changes to Quoll are documented here.
 
+## 0.1.47 — 2026-07-13
+
+### Added
+
+- Tab and Shift-Tab in lists now perform structural moves instead of shifting whitespace: Shift-Tab out of a bullet into a numbered list adopts that list's numbering and renumbers it, and Tab nests a bullet under a numbered item to the correct content column — even healing a list that was already mis-nested too shallowly.
+- Pressing Enter then Shift-Tab on an empty list item now adopts the destination list's shape (bullet, checkbox, or number) instead of keeping the wrong marker.
+
+### Changed
+
+- Nesting an ordered list item that starts a new sub-list now restarts the sub-list at "1." and renumbers the outer list to close the gap, matching how Notion handles the same move.
+
 ## 0.1.46 — 2026-07-13
 
 ### Changed
