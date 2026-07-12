@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { workspace } from "vscode";
 
-import { createRevertRescueWiring } from "../../src/extension/revert-rescue-wiring.js";
+import { createRevertRescueWiring } from "../../src/extension/surface/revert-rescue-wiring.js";
 
 // Flush the microtask queue so the fire-and-forget `void workspace.applyEdit(...)`
 // promise settles before assertions.

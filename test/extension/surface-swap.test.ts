@@ -5,7 +5,7 @@ import {
   type FinalizeSwapDeps,
   finalizeSurfaceSwap,
   shouldCloseSourceTab,
-} from "../../src/extension/surface-swap.js";
+} from "../../src/extension/surface/surface-swap.js";
 
 describe("shouldCloseSourceTab", () => {
   it("does not close when there is no source tab", () => {

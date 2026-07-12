@@ -8,7 +8,7 @@ vi.mock("../../src/extension/session/quoll-editor-panel.js", () => ({
   QuollEditorPanel: { viewType: "quoll.editMarkdown" },
 }));
 
-import { decideSwitchTarget } from "../../src/extension/toggle-editor.js";
+import { decideSwitchTarget } from "../../src/extension/surface/toggle-editor.js";
 
 describe("decideSwitchTarget", () => {
   it("switches to the text editor when the active tab is Quoll (forward wins)", () => {
