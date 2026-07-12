@@ -799,15 +799,6 @@ export const copyButtonThemeSpec = {
     width: "1em",
     height: "1em",
   },
-  // Visually-hidden live region carrying the SR-only copy result ("Copied" /
-  // "Copy failed"). The canonical sr-only clip: off-screen to sighted users but
-  // still in the accessibility tree so its text mutations are announced. Absolute
-  // (out of flow) so it never disturbs the collapsed open-fence row's zero height.
-  // Pin the wrapper's positioning to static EXPLICITLY: it hosts the
-  // absolutely-positioned button, which must anchor to the `.quoll-fenced-code-open`
-  // panel row — NOT the wrapper. A later `position: relative`/`absolute` here would
-  // silently make the wrapper the button's positioning context and break that anchor.
-  // (display is left at the span default — inline — so the wrapper adds no layout.)
   // Pin the wrapper's positioning to static EXPLICITLY: it hosts the
   // absolutely-positioned button, which must anchor to the `.quoll-fenced-code-open`
   // panel row — NOT the wrapper. A later `position: relative`/`absolute` here would
@@ -816,6 +807,10 @@ export const copyButtonThemeSpec = {
   ".quoll-copy-button-wrap": {
     position: "static",
   },
+  // Visually-hidden live region carrying the SR-only copy result ("Copied" /
+  // "Copy failed"). The canonical sr-only clip: off-screen to sighted users but
+  // still in the accessibility tree so its text mutations are announced. Absolute
+  // (out of flow) so it never disturbs the collapsed open-fence row's zero height.
   ".quoll-copy-status": {
     position: "absolute",
     width: "1px",
