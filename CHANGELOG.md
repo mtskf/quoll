@@ -5,6 +5,7 @@ All notable changes to Quoll are documented here.
 ## 0.1.45 — 2026-07-13
 
 ### Added
+- announce fenced-code copy result to screen readers (#208)
 
 - Screen readers now announce "Copied" (or "Copy failed") when you use a fenced code block's copy button, so the result is confirmed aloud instead of only changing the button's icon.
 
@@ -38,6 +39,7 @@ All notable changes to Quoll are documented here.
 ## 0.1.40 — 2026-07-11
 
 ### Added
+- announce fenced-code copy result to screen readers (#208)
 
 - Collapse and expand individual headings in the document outline: any heading that has sub-headings now shows a chevron — like the Explorer file tree — that folds just that heading's children (mouse or keyboard). Leaf headings stay aligned without one.
 - Opt-in advisory prose lint rules: flags passive voice, filler/hedge words, and sentences over 30 words as info-level hints in paragraphs. Off by default — enable with the `quoll.lint.prose.enabled` setting.
@@ -49,12 +51,14 @@ All notable changes to Quoll are documented here.
 ## 0.1.39 — 2026-07-11
 
 ### Added
+- announce fenced-code copy result to screen readers (#208)
 
 - Editor settings popover in the outline sidebar: choose the font (Default / Serif / Sans), font size, line height, and reading-column width. Open it from the gear button in the sidebar footer; choices are saved to your settings and apply to every open Quoll editor.
 
 ## 0.1.38 — 2026-07-11
 
 ### Added
+- announce fenced-code copy result to screen readers (#208)
 
 - Add title-bar buttons to switch between Quoll and the built-in text editor from either side: a cat icon on a Markdown text editor opens it in Quoll, and a file-code icon on a Quoll editor reopens it as text.
 
@@ -67,6 +71,7 @@ All notable changes to Quoll are documented here.
 ## 0.1.37 — 2026-07-11
 
 ### Added
+- announce fenced-code copy result to screen readers (#208)
 
 - Smart list continuation: pressing Enter at the end of a list item now continues the list (adding the next bullet, or the next number for ordered lists) instead of just inserting a blank line, and pressing Enter on an empty list item exits the list instead of leaving a dangling empty marker. Deleting or reordering items in an ordered list renumbers the remaining items to stay sequential.
 
