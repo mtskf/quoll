@@ -52,6 +52,17 @@ export type ListMarkShape =
 
 const ORDERED_RE = /^(\d{1,9})([.)])$/; // Lezer caps ordered ListMark at 9 digits
 
+export const MAX_LIST_NUMBER = 999_999_999; // @lezer/markdown caps a ListMark at 9 digits
+
+/** Build an ordered shape, or null when `number` is out of the 1..MAX range
+ *  (the sole cap-enforcement point — callers propagate null as a fail-closed
+ *  no-op instead of re-checking the literal). Guards BOTH bounds: `< 1` (a
+ *  renumber delta can drive a follower negative, which `ORDERED_RE` rejects =
+ *  corrupt Markdown) and `> MAX` (a 10+-digit run stops being a ListMark). */
+export function orderedShape(number: number, delim: "." | ")"): ListMarkShape | null {
+  return number >= 1 && number <= MAX_LIST_NUMBER ? { kind: "ordered", number, delim } : null;
+}
+
 export function parseListMark(text: string): ListMarkShape | null {
   if (text === "-" || text === "*" || text === "+") {
     return { kind: "bullet", glyph: text };
@@ -210,7 +221,11 @@ export function continuationMarkerFor(state: EditorState, item: SyntaxNode): str
     if (shape === null || shape.kind !== "ordered") {
       return null;
     }
-    base = formatMarker({ kind: "ordered", number: shape.number + 1, delim: shape.delim });
+    const next = orderedShape(shape.number + 1, shape.delim);
+    if (next === null) {
+      return null; // 9-digit ListMark cap — fail closed, same as renumberRun
+    }
+    base = formatMarker(next);
   }
   return isTaskItem(state, item) ? `${base} [ ] ` : `${base} `;
 }
@@ -240,10 +255,11 @@ export function continuationMarkerFor(state: EditorState, item: SyntaxNode): str
  *  shrank) for each own line, sized to the byte-width delta.
  *
  *  Fail-closed: a null `ensureSyntaxTree` (parse did not reach EOF within
- *  budget — the list tail may be unparsed) or any resulting marker exceeding
- *  9 digits (`@lezer/markdown` stops treating a 10+-digit run as a ListMark,
- *  the same cap `parseListMark` enforces) returns `[]` rather than emitting a
- *  split-brain / corrupting renumber. */
+ *  budget — the list tail may be unparsed) or any resulting marker out of the
+ *  supported 1..9-digit range — over cap (`@lezer/markdown` stops treating a
+ *  10+-digit run as a ListMark) OR driven below 1 by a negative delta (which
+ *  `ORDERED_RE` rejects = corrupt Markdown), both gated by `orderedShape` —
+ *  returns `[]` rather than emitting a split-brain / corrupting renumber. */
 export function renumberRun(
   state: EditorState,
   afterItem: SyntaxNode,
@@ -278,12 +294,13 @@ export function renumberRun(
     if (shape === null || shape.kind !== "ordered") {
       continue;
     }
-    const n = shape.number + delta;
-    if (n > 999_999_999) {
-      return []; // would exceed Lezer's 9-digit ListMark cap — fail closed
+    const next = orderedShape(shape.number + delta, shape.delim);
+    if (next === null) {
+      return []; // out of the 1..9-digit ListMark range (over cap OR driven
+      // negative by the delta) — fail closed rather than emit a corrupt marker
     }
     const oldWidth = sibMark.to - sibMark.from;
-    const newMarker = formatMarker({ kind: "ordered", number: n, delim: shape.delim });
+    const newMarker = formatMarker(next);
     changes.push({ from: sibMark.from, to: sibMark.to, insert: newMarker });
     const deltaWidth = newMarker.length - oldWidth;
     if (deltaWidth !== 0) {
@@ -391,7 +408,7 @@ function adoptedShapeFrom(state: EditorState, parent: SyntaxNode): ListMarkShape
   if (parentShape.kind === "bullet") {
     return { kind: "bullet", glyph: parentShape.glyph };
   }
-  return { kind: "ordered", number: parentShape.number + 1, delim: parentShape.delim };
+  return orderedShape(parentShape.number + 1, parentShape.delim);
 }
 
 /** The result of a marker-adopting outdent, or `null` for a structural no-op
@@ -458,10 +475,9 @@ export function planOutdentItem(state: EditorState, headPos: number): OutdentPla
   // the nesting geometry driver (a child nests at `markerCol + listMarkerLen +
   // 1`). Distinct from the empty path's `newMarker` (a full continuation string
   // incl. trailing space + optional `[ ] `, used only for the caret) so a
-  // task-ness `[ ] ` never leaks into the content-column math.
-  if (adopted.kind === "ordered" && adopted.number > 999_999_999) {
-    return { changes: [] }; // 9-digit cap — fail closed
-  }
+  // task-ness `[ ] ` never leaks into the content-column math. (`adopted` came
+  // from `orderedShape`, so its number is already within the 1..9-digit range —
+  // no separate cap re-check here.)
   const listMarkerLen = formatMarker(adopted).length;
   const oldMarkerLen = mark.to - mark.from;
   // Marker-line whitespace shift is common to both paths: promote the marker
@@ -517,14 +533,11 @@ export function planOutdentItem(state: EditorState, headPos: number): OutdentPla
     let childWidthDelta = 0;
     const childShape = parseListMark(state.doc.sliceString(childMark.from, childMark.to));
     if (childShape !== null && childShape.kind === "ordered") {
-      if (forcedOrdinal > 999_999_999) {
+      const childAdopted = orderedShape(forcedOrdinal, childShape.delim);
+      if (childAdopted === null) {
         return { changes: [] }; // 9-digit cap — fail closed
       }
-      const newChildMarker = formatMarker({
-        kind: "ordered",
-        number: forcedOrdinal,
-        delim: childShape.delim,
-      });
+      const newChildMarker = formatMarker(childAdopted);
       changes.push({ from: childMark.from, to: childMark.to, insert: newChildMarker });
       childWidthDelta = newChildMarker.length - (childMark.to - childMark.from);
       forcedOrdinal++;
@@ -588,7 +601,7 @@ function adoptedShapeForJoin(state: EditorState, childRun: SyntaxNode): ListMark
   if (shape.kind === "bullet") {
     return { kind: "bullet", glyph: shape.glyph };
   }
-  return { kind: "ordered", number: shape.number + 1, delim: shape.delim };
+  return orderedShape(shape.number + 1, shape.delim);
 }
 
 /** The marker shape `item` keeps when starting a NEW nested run: its own
@@ -605,7 +618,7 @@ function newRunShapeFor(state: EditorState, item: SyntaxNode): ListMarkShape | n
   }
   return shape.kind === "bullet"
     ? { kind: "bullet", glyph: shape.glyph }
-    : { kind: "ordered", number: 1, delim: shape.delim };
+    : orderedShape(1, shape.delim);
 }
 
 /** Plan a content-column-aware Tab indent for the item covering `headPos`: nest
@@ -659,10 +672,8 @@ export function planIndentItem(state: EditorState, headPos: number): IndentPlan 
   const adopted =
     childRun !== null ? adoptedShapeForJoin(state, childRun) : newRunShapeFor(state, item);
   if (adopted === null) {
-    return { changes: [] };
-  }
-  if (adopted.kind === "ordered" && adopted.number > 999_999_999) {
-    return { changes: [] }; // 9-digit cap — fail closed
+    return { changes: [] }; // grammar drift OR a 9-digit-cap overflow that
+    // `orderedShape` (inside the adopt helpers) rejected — fail closed either way
   }
 
   const oldMarkerLen = mark.to - mark.from;

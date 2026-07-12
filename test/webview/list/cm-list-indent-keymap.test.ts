@@ -255,6 +255,25 @@ describe("indentListItem", () => {
     }
   });
 
+  // (codex) a `0.`-based run must never renumber a follower to a negative
+  //     marker: indenting the middle of "0. A/0. B/0. C" drives the vacated-run
+  //     delta to -1, so a naked (lower-bound-free) renumber would emit "-1. C"
+  //     (which ORDERED_RE rejects = corrupt Markdown). orderedShape fails the
+  //     whole renumber closed instead.
+  it("(codex) indenting a 0.-based run never emits a negative marker", () => {
+    const view = mount("0. A\n0. B\n0. C", EditorSelection.cursor(0));
+    view.dispatch({ selection: at(view, 2, 3) }); // caret in the middle "0. B"
+    try {
+      expect(indentListItem(view)).toBe(true);
+      expect(view.state.doc.toString()).not.toContain("-1.");
+      // The vacated-run renumber fails closed (negative follower), so "0. C"
+      // is left untouched — B still nests, but no corrupt marker is produced.
+      expect(view.state.doc.toString()).not.toContain("-1");
+    } finally {
+      view.destroy();
+    }
+  });
+
   // (e) non-contiguous parent (Paragraph, List, Paragraph): the parent's tail is
   //     a Paragraph, not the earlier child list → a NEW nested run (does NOT
   //     continue the earlier child run's numbering).

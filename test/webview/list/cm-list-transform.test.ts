@@ -125,6 +125,22 @@ describe("renumberRun", () => {
     }
   });
 
+  it("de-indents a NARROWED sibling's nested child (10. -> 9., width shrink)", () => {
+    // The width-SHRINK branch: renumbering "10. b" down to "9. b" (2->1 byte)
+    // shifts its content column left by one, so its nested "    - child"
+    // (col 4) must lose a leading space -> "   - child" (col 3). This exercises
+    // the negative-deltaWidth removal path, which the WIDEN test above cannot.
+    const view = mount("9. a\n10. b\n    - child", EditorSelection.cursor(0));
+    try {
+      const a = resolveItemAtLine(view.state, 1); // "9. a"
+      // Renumber followers of "9. a" from 9: "10. b" -> "9. b".
+      view.dispatch({ changes: renumberRun(view.state, a, 9) });
+      expect(view.state.doc.toString()).toBe("9. a\n9. b\n   - child");
+    } finally {
+      view.destroy();
+    }
+  });
+
   it("fails closed (returns []) when a new number would exceed 9 digits", () => {
     const view = mount("1. a\n2. b\n", EditorSelection.cursor(0));
     try {
