@@ -209,12 +209,182 @@ describe("outdentListItem", () => {
     }
   });
 
+  it("outdent adopts ordered marker + renumbers: nested bullet -> next number", () => {
+    const view = mount("1. test\n2. test\n   - ddd\n3. ddd", EditorSelection.cursor(0));
+    view.dispatch({ selection: at(view, 3, 5) }); // caret in "   - ddd"
+    try {
+      expect(outdentListItem(view)).toBe(true);
+      expect(view.state.doc.toString()).toBe("1. test\n2. test\n3. ddd\n4. ddd");
+      expect(itemDepth(view, 3)).toBe(1);
+    } finally {
+      view.destroy();
+    }
+  });
+
   it("is a no-op (returns true) on a top-level item — nothing to promote to", () => {
     const view = mount("- A\n- B", EditorSelection.cursor(0));
     view.dispatch({ selection: at(view, 2, 2) });
     try {
       expect(outdentListItem(view)).toBe(true);
       expect(view.state.doc.toString()).toBe("- A\n- B");
+    } finally {
+      view.destroy();
+    }
+  });
+
+  // (a) delimiter preserved on adoption
+  it("(a) adopts the parent's `)` delimiter, not `.`", () => {
+    const view = mount("1) a\n   - b\n2) c", EditorSelection.cursor(0));
+    view.dispatch({ selection: at(view, 2, 5) }); // caret in "   - b"
+    try {
+      expect(outdentListItem(view)).toBe(true);
+      expect(view.state.doc.toString()).toBe("1) a\n2) b\n3) c");
+      expect(itemDepth(view, 2)).toBe(1);
+    } finally {
+      view.destroy();
+    }
+  });
+
+  // (b) empty-item task-ness adoption (user Case 1) under a task parent
+  it("(b) empty item adopts the task parent's `[ ] `", () => {
+    const view = mount("- [ ] aaa\n  - bbb\n  - ", EditorSelection.cursor(0));
+    view.dispatch({ selection: EditorSelection.cursor(view.state.doc.line(3).to) }); // empty "  - "
+    try {
+      expect(outdentListItem(view)).toBe(true);
+      expect(view.state.doc.toString()).toBe("- [ ] aaa\n  - bbb\n- [ ] ");
+      expect(itemDepth(view, 3)).toBe(1);
+    } finally {
+      view.destroy();
+    }
+  });
+
+  // (c) checked predecessor still yields an UNCHECKED continuation
+  it("(c) empty item under a CHECKED task parent adopts `[ ] ` (unchecked)", () => {
+    const view = mount("- [x] aaa\n  - ", EditorSelection.cursor(0));
+    view.dispatch({ selection: EditorSelection.cursor(view.state.doc.line(2).to) });
+    try {
+      expect(outdentListItem(view)).toBe(true);
+      expect(view.state.doc.toString()).toBe("- [x] aaa\n- [ ] ");
+    } finally {
+      view.destroy();
+    }
+  });
+
+  // (d) ordered-task empty adoption (needs a preceding sibling — parser note)
+  it("(d) empty item adopts an ordered task parent's next-number + `[ ] `", () => {
+    const view = mount("3. [x] aaa\n   - bbb\n   - ", EditorSelection.cursor(0));
+    view.dispatch({ selection: EditorSelection.cursor(view.state.doc.line(3).to) }); // empty "   - "
+    try {
+      expect(outdentListItem(view)).toBe(true);
+      expect(view.state.doc.toString()).toBe("3. [x] aaa\n   - bbb\n4. [ ] ");
+    } finally {
+      view.destroy();
+    }
+  });
+
+  // (e) deliberate checkbox-drop: empty task under a PLAIN bullet
+  it("(e) empty task under a plain bullet drops the checkbox", () => {
+    const view = mount("- p\n  - [ ] ", EditorSelection.cursor(0));
+    view.dispatch({ selection: EditorSelection.cursor(view.state.doc.line(2).to) }); // "  - [ ] "
+    try {
+      expect(outdentListItem(view)).toBe(true);
+      expect(view.state.doc.toString()).toBe("- p\n- ");
+    } finally {
+      view.destroy();
+    }
+  });
+
+  // (f) non-empty task: checkbox bytes untouched (marker KIND only)
+  it("(f) non-empty task preserves its checkbox on ordered adoption", () => {
+    const view = mount("2. x\n   - [ ] t", EditorSelection.cursor(0));
+    view.dispatch({ selection: EditorSelection.cursor(view.state.doc.line(2).to) }); // in "   - [ ] t"
+    try {
+      expect(outdentListItem(view)).toBe(true);
+      expect(view.state.doc.toString()).toBe("2. x\n3. [ ] t");
+      expect(itemDepth(view, 2)).toBe(1);
+    } finally {
+      view.destroy();
+    }
+  });
+
+  // (g) forced-children: the item's OLD following siblings become its children
+  it("(g) forced children re-home under the promoted item; run renumbers", () => {
+    const view = mount("1. p\n   - a\n   - b\n2. c", EditorSelection.cursor(0));
+    view.dispatch({ selection: at(view, 2, 5) }); // caret in "   - a"
+    try {
+      expect(outdentListItem(view)).toBe(true);
+      expect(view.state.doc.toString()).toBe("1. p\n2. a\n   - b\n3. c");
+      expect(itemDepth(view, 2)).toBe(1); // a promoted to top level
+      expect(itemDepth(view, 3)).toBe(2); // b now a's child
+    } finally {
+      view.destroy();
+    }
+  });
+
+  // (h) multi-digit: promoted item's own nested children re-anchor to the
+  //     +1-wide content column (`10.` marker is 3 bytes → content col 3 + 1).
+  it("(h) multi-digit adoption re-indents the promoted item's own children", () => {
+    // parent "9. p" → adopted "10." (parentNumber+1). The nested bullet has an
+    // own child that must move from content col 2 to content col 4 (`10. ` = 4).
+    const view = mount("9. p\n   - a\n     - kid\n10. q", EditorSelection.cursor(0));
+    view.dispatch({ selection: at(view, 2, 5) }); // caret in "   - a"
+    try {
+      expect(outdentListItem(view)).toBe(true);
+      // "- a" adopts "10." (col 0), its "     - kid" child re-anchors to col 4;
+      // old "10. q" renumbers to "11. q".
+      expect(view.state.doc.toString()).toBe("9. p\n10. a\n    - kid\n11. q");
+    } finally {
+      view.destroy();
+    }
+  });
+
+  // (i) ordered forced-children crossing a digit-width boundary: each descendant
+  //     line gets exactly ONE net whitespace change (no overlapping ChangeSpec).
+  it("(i) ordered forced child renumber+re-indent folds into ONE net delta", () => {
+    // "1. p" has nested ordered children "9." and "10." (a forced-child run that,
+    // renumbered from 1, becomes "1." and "2." — widths 2→2 and 3→2). Outdent
+    // "9." → it adopts "2." at top level; "10." re-homes as its child renumbered
+    // to "1." (width 3→2) AND re-indented — one net change per line.
+    const doc = "1. p\n   9. a\n   10. b\n2. c";
+    const view = mount(doc, EditorSelection.cursor(0));
+    view.dispatch({ selection: at(view, 2, 6) }); // caret in "   9. a"
+    try {
+      expect(outdentListItem(view)).toBe(true);
+      // "9. a" → "2. a" at top (col 0); "10. b" → child "1. b" at content col 3.
+      expect(view.state.doc.toString()).toBe("1. p\n2. a\n   1. b\n3. c");
+    } finally {
+      view.destroy();
+    }
+  });
+
+  // (j) combined adversarial: the moved item's OWN child + an ordered forced
+  //     child + a destination width change all feed the net-delta map at once.
+  it("(j) combined: own child + ordered forced child + destination renumber", () => {
+    // parent "9. p" (adopted "10." — dest run "10. z" → "11. z", width 3→3).
+    // moved item "1. a" has own child "      - kid"; ordered forced sibling
+    // "9. b" renumbers to child "1. b" AND re-indents (+1 col). All three
+    // whitespace sources hit distinct lines with ONE net change each, no overlap.
+    const doc = "9. p\n   1. a\n      - kid\n   9. b\n10. z";
+    const view = mount(doc, EditorSelection.cursor(0));
+    view.dispatch({ selection: at(view, 2, 6) }); // caret in "   1. a"
+    try {
+      expect(outdentListItem(view)).toBe(true);
+      // "1. a" → "10. a" (col 0). own "- kid" → content col 4. forced "9. b" →
+      // child "1. b" at content col 4. dest "10. z" → "11. z".
+      expect(view.state.doc.toString()).toBe("9. p\n10. a\n    - kid\n    1. b\n11. z");
+    } finally {
+      view.destroy();
+    }
+  });
+
+  // (k) caret placement after an empty-item outdent (ready to type)
+  it("(k) empty-item outdent leaves the caret right after the synthesized marker", () => {
+    const view = mount("- [ ] aaa\n  - bbb\n  - ", EditorSelection.cursor(0));
+    view.dispatch({ selection: EditorSelection.cursor(view.state.doc.line(3).to) });
+    try {
+      expect(outdentListItem(view)).toBe(true);
+      // doc is "- [ ] aaa\n  - bbb\n- [ ] "; caret sits at end (after "- [ ] ").
+      expect(view.state.selection.main.head).toBe(view.state.doc.length);
     } finally {
       view.destroy();
     }

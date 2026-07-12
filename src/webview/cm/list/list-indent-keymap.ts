@@ -34,10 +34,12 @@
 // shared caret→ListItem resolver (listItemAt / listMarkOf) from list-tree.ts;
 // the task-fold helpers in list-geometry.ts are still not used here.
 
-import { type ChangeSpec, type EditorState, Prec } from "@codemirror/state";
+import { isolateHistory } from "@codemirror/commands";
+import { type ChangeSpec, type EditorState, Prec, type SelectionRange } from "@codemirror/state";
 import { type Command, type EditorView, keymap } from "@codemirror/view";
 
 import { columnAt } from "./list-geometry.js";
+import { planOutdentItem } from "./list-transform.js";
 import { listItemAt, listMarkOf, type SyntaxNode } from "./list-tree.js";
 
 /** Column where the item's content begins (its ListMark's next sibling), or
@@ -53,13 +55,6 @@ function contentColumnOf(state: EditorState, item: SyntaxNode): number | null {
     return null;
   }
   return columnAt(state, content.from);
-}
-
-/** The `ListItem` that encloses `item`'s list (shape: ListItem > list > ListItem),
- *  or null when `item` is top-level. */
-function enclosingListItem(item: SyntaxNode): SyntaxNode | null {
-  const parent = item.parent?.parent ?? null;
-  return parent !== null && parent.name === "ListItem" ? parent : null;
 }
 
 /** The `ListItem` immediately preceding `item` within the same list, or null
@@ -127,17 +122,26 @@ function shiftItemLines(state: EditorState, item: SyntaxNode, deltaCols: number)
 
 /** Dispatch the shift as ONE transaction; ALWAYS returns true (empty changes =
  *  intentional no-op; a dead-view throw still means "we owned this Tab" — never
- *  fall through to CM's default Tab / escape focus). */
+ *  fall through to CM's default Tab / escape focus). Annotates
+ *  `isolateHistory.of("full")` so a single undo reverts the whole marker-adopt /
+ *  renumber transform (matching `continueListOnEnter`), and accepts an optional
+ *  `selection` the planner supplies for the empty-item caret. */
 function applyShift(
   view: EditorView,
   changes: ChangeSpec[],
-  userEvent: "input.indent" | "delete.dedent"
+  userEvent: "input.indent" | "delete.dedent",
+  selection?: SelectionRange
 ): boolean {
   if (changes.length === 0) {
     return true;
   }
   try {
-    view.dispatch({ changes, userEvent });
+    view.dispatch({
+      changes,
+      ...(selection === undefined ? {} : { selection }),
+      userEvent,
+      annotations: isolateHistory.of("full"),
+    });
   } catch (err) {
     console.error("[quoll] list indent dispatch failed", err);
   }
@@ -173,33 +177,19 @@ export const indentListItem: Command = (view) => {
   return applyShift(view, shiftItemLines(state, item, delta), "input.indent");
 };
 
-/** Shift-Tab: promote the item at the caret to its parent's level. */
+/** Shift-Tab: promote the item at the caret to its parent's level, ADOPTING the
+ *  destination run's marker (bullet glyph ↔ ordered next-number), renumbering
+ *  the run, re-homing forced children, and — for an EMPTY item — adopting the
+ *  parent's task-ness. `planOutdentItem` owns resolution (EOF-bounded) and every
+ *  no-op case (caret in code, non-list, top-level, fail-closed parse), each
+ *  returning `[]` = intentional no-op. */
 export const outdentListItem: Command = (view) => {
   const { state } = view;
   if (state.readOnly) {
     return false;
   }
-  const item = listItemAt(state, state.selection.main.head);
-  if (item === null) {
-    return true;
-  }
-  const mark = listMarkOf(item);
-  if (mark === null) {
-    return true;
-  }
-  const parent = enclosingListItem(item);
-  if (parent === null) {
-    return true; // top-level — nothing to promote to
-  }
-  const parentMark = listMarkOf(parent);
-  if (parentMark === null) {
-    return true;
-  }
-  const delta = columnAt(state, parentMark.from) - columnAt(state, mark.from);
-  if (delta >= 0) {
-    return true;
-  }
-  return applyShift(view, shiftItemLines(state, item, delta), "delete.dedent");
+  const { changes, selection } = planOutdentItem(state, state.selection.main.head);
+  return applyShift(view, changes, "delete.dedent", selection);
 };
 
 /** Keymap: Tab → indent, Shift-Tab → outdent. Prec.high so Tab is intercepted
