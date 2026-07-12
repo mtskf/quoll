@@ -26,30 +26,29 @@
 //     leaves via VS Code's F6 / Focus-Next-Part or the mouse, not Tab.
 
 import { isolateHistory } from "@codemirror/commands";
-import { type ChangeSpec, Prec, type SelectionRange } from "@codemirror/state";
+import { Prec } from "@codemirror/state";
 import { type Command, type EditorView, keymap } from "@codemirror/view";
 
-import { planIndentItem, planOutdentItem } from "./list-transform.js";
+import { type ListEditPlan, planIndentItem, planOutdentItem } from "./list-transform.js";
 
-/** Dispatch the shift as ONE transaction; ALWAYS returns true (empty changes =
+/** Dispatch the shift as ONE transaction; ALWAYS returns true (a `noop` plan =
  *  intentional no-op; a dead-view throw still means "we owned this Tab" — never
  *  fall through to CM's default Tab / escape focus). Annotates
  *  `isolateHistory.of("full")` so a single undo reverts the whole marker-adopt /
- *  renumber transform (matching `continueListOnEnter`), and accepts an optional
- *  `selection` the planner supplies for the empty-item caret. */
+ *  renumber transform (matching `continueListOnEnter`), and forwards the
+ *  optional `selection` the planner supplies for the empty-item caret. */
 function applyShift(
   view: EditorView,
-  changes: ChangeSpec[],
-  userEvent: "input.indent" | "delete.dedent",
-  selection?: SelectionRange
+  plan: ListEditPlan,
+  userEvent: "input.indent" | "delete.dedent"
 ): boolean {
-  if (changes.length === 0) {
+  if (plan.kind === "noop") {
     return true;
   }
   try {
     view.dispatch({
-      changes,
-      ...(selection === undefined ? {} : { selection }),
+      changes: plan.changes,
+      ...(plan.selection === undefined ? {} : { selection: plan.selection }),
       userEvent,
       annotations: isolateHistory.of("full"),
     });
@@ -63,14 +62,13 @@ function applyShift(
  *  content column, ADOPTING the destination child-run's marker (or starting a
  *  new nested run + renumbering the vacated outer run). `planIndentItem` owns
  *  resolution (EOF-bounded) and every no-op case (caret in code, non-list, first
- *  item, fail-closed parse), each returning `[]` = intentional no-op. */
+ *  item, fail-closed parse), each a `{ kind: "noop" }` plan. */
 export const indentListItem: Command = (view) => {
   const { state } = view;
   if (state.readOnly) {
     return false;
   }
-  const { changes, selection } = planIndentItem(state, state.selection.main.head);
-  return applyShift(view, changes, "input.indent", selection);
+  return applyShift(view, planIndentItem(state, state.selection.main.head), "input.indent");
 };
 
 /** Shift-Tab: promote the item at the caret to its parent's level, ADOPTING the
@@ -78,14 +76,13 @@ export const indentListItem: Command = (view) => {
  *  the run, re-homing forced children, and — for an EMPTY item — adopting the
  *  parent's task-ness. `planOutdentItem` owns resolution (EOF-bounded) and every
  *  no-op case (caret in code, non-list, top-level, fail-closed parse), each
- *  returning `[]` = intentional no-op. */
+ *  returning a `{ kind: "noop" }` plan. */
 export const outdentListItem: Command = (view) => {
   const { state } = view;
   if (state.readOnly) {
     return false;
   }
-  const { changes, selection } = planOutdentItem(state, state.selection.main.head);
-  return applyShift(view, changes, "delete.dedent", selection);
+  return applyShift(view, planOutdentItem(state, state.selection.main.head), "delete.dedent");
 };
 
 /** Keymap: Tab → indent, Shift-Tab → outdent. Prec.high so Tab is intercepted

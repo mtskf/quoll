@@ -277,8 +277,9 @@ export function renumberRun(
     return [];
   }
   const delta = startNumber - (afterShape.number + 1);
-  const tree = ensureSyntaxTree(state, state.doc.length, 50);
+  const tree = ensureSyntaxTree(state, state.doc.length, EOF_BUDGET);
   if (tree === null) {
+    warnBudgetMiss("renumberRun", state);
     return [];
   }
   const changes: ChangeSpec[] = [];
@@ -325,6 +326,23 @@ export function renumberRun(
  *  `resolveAtEof` — big lists resolve within this on the seed path. */
 const EOF_BUDGET = 50;
 
+/** Dev-only signal that a planner fell back to a no-op because
+ *  `ensureSyntaxTree` did NOT reach EOF within budget — distinct from a genuine
+ *  STRUCTURAL no-op (a well-parsed doc with no list item at the caret). On a
+ *  large doc a budget miss is retryable, so surfacing it separates "nothing to
+ *  do" from "give it another key press". Gated on `QUOLL_PERF` so production
+ *  behaviour (and the packaged .vsix) is byte-identical — dead-coded out — and
+ *  the unit suite (QUOLL_PERF=false) stays quiet; the Tab/Shift-Tab result is
+ *  the same `{ kind: "noop" }` either way. */
+function warnBudgetMiss(where: string, state: EditorState): void {
+  if (QUOLL_PERF) {
+    console.warn(
+      `[quoll] ${where}: parse did not reach EOF within budget — list transform no-op (retryable)`,
+      { docLength: state.doc.length, budgetMs: EOF_BUDGET }
+    );
+  }
+}
+
 /** Re-resolve the innermost `ListItem` for the line containing `headPos` from an
  *  EOF-bounded tree (mirrors `list-continuation-keymap.ts`'s `resolveAtEof`,
  *  kept private here so the planner owns its resolution). The caret-line-bounded
@@ -342,7 +360,9 @@ const EOF_BUDGET = 50;
 function resolveItemAtEof(state: EditorState, headPos: number): SyntaxNode | null {
   const tree = ensureSyntaxTree(state, state.doc.length, EOF_BUDGET);
   if (tree === null) {
-    return null;
+    warnBudgetMiss("resolveItemAtEof", state);
+    return null; // budget miss (retryable), NOT a structural no-op — a non-null
+    // tree with no list item at the caret returns null silently below.
   }
   const line = state.doc.lineAt(headPos);
   const wsLen = line.text.length - line.text.trimStart().length;
@@ -411,9 +431,15 @@ function adoptedShapeFrom(state: EditorState, parent: SyntaxNode): ListMarkShape
   return orderedShape(parentShape.number + 1, parentShape.delim);
 }
 
-/** The result of a marker-adopting outdent, or `null` for a structural no-op
- *  (top-level item, caret in code, non-list caret, fail-closed parse). */
-export type OutdentPlan = { changes: ChangeSpec[]; selection?: SelectionRange };
+/** The result of a list indent / outdent planner: a discriminated union so a
+ *  no-op is a distinct variant, not an empty `changes: []` sentinel the caller
+ *  must recognise. The `edit` variant couples `changes` with the optional
+ *  `selection` (the empty-item caret) — a no-op carries neither, so a
+ *  `{ changes: [], selection }` (nonsensical: the caller would early-return and
+ *  drop the selection) is now unrepresentable. */
+export type ListEditPlan =
+  | { kind: "noop" }
+  | { kind: "edit"; changes: ChangeSpec[]; selection?: SelectionRange };
 
 /** Plan a marker-adopting Shift-Tab outdent for the item covering `headPos`:
  *  promote it to its parent's level, ADOPTING the destination run's marker
@@ -424,7 +450,7 @@ export type OutdentPlan = { changes: ChangeSpec[]; selection?: SelectionRange };
  *  had) and the returned `selection` places the caret right after it so the
  *  user keeps typing.
  *
- *  Returns `[]` (a `changes`-only no-op) — never throws — for: a null EOF parse
+ *  Returns `{ kind: "noop" }` — never throws — for: a null EOF parse
  *  (fail-closed), a caret not in a list item, a caret in code, a top-level item
  *  (no parent to promote to), or a 9-digit renumber overflow.
  *
@@ -434,29 +460,29 @@ export type OutdentPlan = { changes: ChangeSpec[]; selection?: SelectionRange };
  *  disjoint `ListMark` spans and compose separately. `renumberRun` is called
  *  for the DESTINATION run only (the parent's top-level followers touch
  *  different lines than the re-homed forced children). */
-export function planOutdentItem(state: EditorState, headPos: number): OutdentPlan {
+export function planOutdentItem(state: EditorState, headPos: number): ListEditPlan {
   if (caretInCode(state, headPos)) {
-    return { changes: [] };
+    return { kind: "noop" };
   }
   const item = resolveItemAtEof(state, headPos);
   if (item === null) {
-    return { changes: [] };
+    return { kind: "noop" };
   }
   const mark = listMarkOf(item);
   if (mark === null) {
-    return { changes: [] };
+    return { kind: "noop" };
   }
   const parent = destinationForOutdent(item);
   if (parent === null) {
-    return { changes: [] }; // top-level — nothing to promote to
+    return { kind: "noop" }; // top-level — nothing to promote to
   }
   const parentMark = listMarkOf(parent);
   if (parentMark === null) {
-    return { changes: [] };
+    return { kind: "noop" };
   }
   const adopted = adoptedShapeFrom(state, parent);
   if (adopted === null) {
-    return { changes: [] };
+    return { kind: "noop" };
   }
   const parentOrdered = adopted.kind === "ordered";
 
@@ -492,7 +518,7 @@ export function planOutdentItem(state: EditorState, headPos: number): OutdentPla
     // item has no own body lines, so there is no content-column re-anchor.
     const newMarker = continuationMarkerFor(state, parent);
     if (newMarker === null) {
-      return { changes: [] };
+      return { kind: "noop" };
     }
     changes.push({ from: mark.from, to: markerLine.to, insert: newMarker });
     // Caret right after the synthesized marker, in POST-transform coords,
@@ -552,7 +578,7 @@ export function planOutdentItem(state: EditorState, headPos: number): OutdentPla
     if (childShape !== null && childShape.kind === "ordered") {
       const childAdopted = orderedShape(forcedOrdinal, childShape.delim);
       if (childAdopted === null) {
-        return { changes: [] }; // 9-digit cap — fail closed
+        return { kind: "noop" }; // 9-digit cap — fail closed
       }
       const newChildMarker = formatMarker(childAdopted);
       changes.push({ from: childMark.from, to: childMark.to, insert: newChildMarker });
@@ -581,11 +607,10 @@ export function planOutdentItem(state: EditorState, headPos: number): OutdentPla
   }
 
   changes.push(...materialiseLineDeltas(state, lineDeltas));
-  return selection === undefined ? { changes } : { changes, selection };
+  return selection === undefined
+    ? { kind: "edit", changes }
+    : { kind: "edit", changes, selection };
 }
-
-/** The result of a content-column-aware indent, or a `changes`-only no-op. */
-export type IndentPlan = { changes: ChangeSpec[]; selection?: SelectionRange };
 
 /** The destination child-run `item` would JOIN when nesting under `parent`:
  *  `parent`'s LAST child is a list node AND nothing non-blank follows it (so
@@ -646,7 +671,7 @@ function newRunShapeFor(state: EditorState, item: SyntaxNode): ListMarkShape | n
  *  starts a NEW nested run (keeping the item's own kind/glyph/delim, resetting an
  *  ordered number to 1) and RENUMBERS the vacated outer run to close the gap.
  *
- *  Returns `[]` (a `changes`-only no-op) — never throws — for: a null EOF parse
+ *  Returns `{ kind: "noop" }` — never throws — for: a null EOF parse
  *  (fail-closed), a caret not in a list item, a caret in code, no indent
  *  destination (the doc's first list item), grammar drift, or a non-positive
  *  marker-column delta (already at/past the target — pathological alignment).
@@ -660,28 +685,28 @@ function newRunShapeFor(state: EditorState, item: SyntaxNode): ListMarkShape | n
  *  item's ListMark rewrite and the vacated-run renumber sit on DISJOINT spans
  *  (`renumberRun(item, item.ownNumber)` touches only the followers STAYING in the
  *  outer run, never `item`'s own marker), so there is no overlapping ChangeSpec. */
-export function planIndentItem(state: EditorState, headPos: number): IndentPlan {
+export function planIndentItem(state: EditorState, headPos: number): ListEditPlan {
   if (caretInCode(state, headPos)) {
-    return { changes: [] };
+    return { kind: "noop" };
   }
   const item = resolveItemAtEof(state, headPos);
   if (item === null) {
-    return { changes: [] };
+    return { kind: "noop" };
   }
   const mark = listMarkOf(item);
   if (mark === null) {
-    return { changes: [] };
+    return { kind: "noop" };
   }
   const parent = destinationForIndent(item);
   if (parent === null) {
-    return { changes: [] }; // doc's first list item — nothing to nest under
+    return { kind: "noop" }; // doc's first list item — nothing to nest under
   }
 
   const targetCol = contentColumnOf(state, parent);
   const itemMarkCol = columnAt(state, mark.from);
   const markerDelta = targetCol - itemMarkCol;
   if (markerDelta <= 0) {
-    return { changes: [] }; // already at/past the target — pathological alignment
+    return { kind: "noop" }; // already at/past the target — pathological alignment
   }
 
   // JOIN vs NEW run: joinable when the parent's tail is an existing child list.
@@ -689,7 +714,7 @@ export function planIndentItem(state: EditorState, headPos: number): IndentPlan 
   const adopted =
     childRun !== null ? adoptedShapeForJoin(state, childRun) : newRunShapeFor(state, item);
   if (adopted === null) {
-    return { changes: [] }; // grammar drift OR a 9-digit-cap overflow that
+    return { kind: "noop" }; // grammar drift OR a 9-digit-cap overflow that
     // `orderedShape` (inside the adopt helpers) rejected — fail closed either way
   }
 
@@ -722,5 +747,5 @@ export function planIndentItem(state: EditorState, headPos: number): IndentPlan 
   }
 
   changes.push(...materialiseLineDeltas(state, lineDeltas));
-  return { changes };
+  return { kind: "edit", changes };
 }

@@ -10,6 +10,8 @@ import {
   formatMarker,
   isEmptyItem,
   parseListMark,
+  planIndentItem,
+  planOutdentItem,
   renumberRun,
 } from "../../../src/webview/cm/list/list-transform.js";
 
@@ -247,6 +249,48 @@ describe("classifyItemLines", () => {
       const { markerLine, ownLines } = classifyItemLines(view.state, item);
       expect(markerLine).toBe(1);
       expect(ownLines).toEqual([2]); // "  - child" col 2 ≥ content col 2 → own
+    } finally {
+      view.destroy();
+    }
+  });
+});
+
+describe("ListEditPlan discriminant", () => {
+  // The planners return a discriminated union — a structural no-op is
+  // `{ kind: "noop" }`, not an empty `changes: []` the caller must recognise.
+  // These pin the discriminant so applyShift's `plan.kind === "noop"` branch
+  // (and the fact that a real transform is `kind: "edit"`) stays honest.
+  it("planOutdentItem returns kind 'noop' on a top-level item", () => {
+    const view = mount("- A\n- B", EditorSelection.cursor(0));
+    view.dispatch({ selection: EditorSelection.cursor(view.state.doc.line(2).from + 2) });
+    try {
+      const plan = planOutdentItem(view.state, view.state.selection.main.head);
+      expect(plan.kind).toBe("noop");
+    } finally {
+      view.destroy();
+    }
+  });
+
+  it("planOutdentItem returns kind 'edit' with changes on a real promotion", () => {
+    const view = mount("- A\n  - B", EditorSelection.cursor(0));
+    view.dispatch({ selection: EditorSelection.cursor(view.state.doc.line(2).from + 4) });
+    try {
+      const plan = planOutdentItem(view.state, view.state.selection.main.head);
+      expect(plan.kind).toBe("edit");
+      if (plan.kind === "edit") {
+        expect(plan.changes.length).toBeGreaterThan(0);
+      }
+    } finally {
+      view.destroy();
+    }
+  });
+
+  it("planIndentItem returns kind 'noop' on the first item (nothing to nest under)", () => {
+    const view = mount("- A\n- B", EditorSelection.cursor(0));
+    view.dispatch({ selection: EditorSelection.cursor(view.state.doc.line(1).from + 2) });
+    try {
+      const plan = planIndentItem(view.state, view.state.selection.main.head);
+      expect(plan.kind).toBe("noop");
     } finally {
       view.destroy();
     }
