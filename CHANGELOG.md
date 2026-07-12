@@ -2,6 +2,12 @@
 
 All notable changes to Quoll are documented here.
 
+## 0.1.43 — 2026-07-12
+
+### Fixed
+
+- With the outline panel pinned, switching away from and back to a Quoll tab (including the Cmd+Option+K context hand-off) no longer leaves the editor blank or partially blank until you scroll — the editor now restores your position and redraws the text immediately.
+
 ## 0.1.42 — 2026-07-11
 
 ### Fixed

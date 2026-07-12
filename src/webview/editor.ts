@@ -68,6 +68,7 @@ import {
   quollTheme,
   quollTokenMarkers,
 } from "./cm/theme.js";
+import { quollVisibleEdgeRecovery } from "./cm/visible-edge-recovery.js";
 import { getHost } from "./host.js";
 import { safePostMessage } from "./safe-post-message.js";
 import { type Action, canPostEdit, type WebviewState } from "./state.js";
@@ -647,6 +648,16 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
         // scroll-down and return on scroll-up / at the top. Display-only chrome
         // (no CM change, no write-lock); the two toggle ViewPlugins are untouched.
         quollFloatingToolbarScroll(),
+        // Visible-edge scroll/viewport recovery: when the webview is hidden and
+        // re-shown (editor switch, ⌘⌥K handoff) CM's first measure can run
+        // mid-reflow with the pinned outline, losing the scroll anchor and
+        // leaving a viewport-sized .cm-gap over the visible area until the user
+        // scrolls. The plugin keeps a rolling scroll snapshot (frozen across the
+        // hidden window, mapped through doc changes) and restores + re-measures
+        // once post-visible geometry settles. Display-only (no doc change, no
+        // write-lock). Companion PAINT-side fix: the !important flex-basis in
+        // cm/theme.ts (PR #199).
+        quollVisibleEdgeRecovery(),
         // Smart paste: a clipboard `text/html` fragment containing a <table> is
         // converted to a GFM Markdown table and inserted through the normal edit
         // pipeline. Prec.high so it arbitrates before imagePaste / default paste;
