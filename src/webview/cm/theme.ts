@@ -799,6 +799,21 @@ export const copyButtonThemeSpec = {
     width: "1em",
     height: "1em",
   },
+  // Visually-hidden live region carrying the SR-only copy result ("Copied" /
+  // "Copy failed"). The canonical sr-only clip: off-screen to sighted users but
+  // still in the accessibility tree so its text mutations are announced. Absolute
+  // (out of flow) so it never disturbs the collapsed open-fence row's zero height.
+  ".quoll-copy-status": {
+    position: "absolute",
+    width: "1px",
+    height: "1px",
+    padding: "0",
+    margin: "-1px",
+    overflow: "hidden",
+    clip: "rect(0, 0, 0, 0)",
+    whiteSpace: "nowrap",
+    border: "0",
+  },
   ".quoll-copy-button:hover, .quoll-copy-button:focus-visible": {
     opacity: "1",
     backgroundColor: fencedControlHoverBackground,

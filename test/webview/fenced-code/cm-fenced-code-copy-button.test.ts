@@ -207,12 +207,42 @@ function pathDs(el: HTMLElement): string[] {
   return [...el.querySelectorAll("path")].map((p) => p.getAttribute("d") ?? "");
 }
 
+// toDOM now returns a wrapper hosting the button + a visually-hidden live region.
+// These helpers pull each part back out so the assertions read against the right
+// node (the button for label/icon/classes, the region for SR announcements).
+function widgetDOM(widget: CopyButtonWidget): HTMLElement {
+  return widget.toDOM({} as EditorView) as HTMLElement;
+}
+function copyButton(root: HTMLElement): HTMLButtonElement {
+  const btn = root.querySelector<HTMLButtonElement>(".quoll-copy-button");
+  if (btn === null) {
+    throw new Error("no .quoll-copy-button in widget DOM");
+  }
+  return btn;
+}
+function statusRegion(root: HTMLElement): HTMLElement {
+  const status = root.querySelector<HTMLElement>(".quoll-copy-status");
+  if (status === null) {
+    throw new Error("no .quoll-copy-status in widget DOM");
+  }
+  return status;
+}
+
 describe("CopyButtonWidget", () => {
   it("renders a Lucide copy icon button with an accessible name (no text label)", () => {
-    const dom = new CopyButtonWidget(0, () => "x").toDOM({} as EditorView) as HTMLButtonElement;
-    expect(dom.tagName).toBe("BUTTON");
-    expect(dom.getAttribute("aria-label")).toBe("Copy code");
-    expect(pathDs(dom)).toContain(COPY_ICON_PATH);
+    const btn = copyButton(widgetDOM(new CopyButtonWidget(0, () => "x")));
+    expect(btn.tagName).toBe("BUTTON");
+    expect(btn.getAttribute("aria-label")).toBe("Copy code");
+    expect(pathDs(btn)).toContain(COPY_ICON_PATH);
+  });
+
+  it("carries an empty, visually-hidden polite live region before any copy", () => {
+    // Present-but-empty at build time so the first copy is an observable mutation
+    // (an SR only announces a CHANGE to a live region already in the tree).
+    const region = statusRegion(widgetDOM(new CopyButtonWidget(0, () => "x")));
+    expect(region.getAttribute("aria-live")).toBe("polite");
+    expect(region.getAttribute("aria-atomic")).toBe("true");
+    expect(region.textContent).toBe("");
   });
 
   it("copies exactly the code body on click and swaps to the Lucide check (Copied)", async () => {
@@ -221,18 +251,33 @@ describe("CopyButtonWidget", () => {
     try {
       // The body is resolved lazily at click; a stub resolver stands in for the
       // live tree walk (fencedCodeBodyAt is covered by the DOM-integration suite).
-      const dom = new CopyButtonWidget(0, () => "const x = 1;\nfoo();").toDOM(
-        {} as EditorView
-      ) as HTMLButtonElement;
-      dom.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      const root = widgetDOM(new CopyButtonWidget(0, () => "const x = 1;\nfoo();"));
+      const btn = copyButton(root);
+      btn.dispatchEvent(new MouseEvent("click", { bubbles: true }));
       // let the writeText promise + feedback microtask settle
       await Promise.resolve();
       await Promise.resolve();
       expect(writeText).toHaveBeenCalledTimes(1);
       expect(writeText).toHaveBeenCalledWith("const x = 1;\nfoo();");
-      expect(dom.getAttribute("aria-label")).toBe("Copied");
-      expect(dom.classList.contains("is-copied")).toBe(true);
-      expect(pathDs(dom)).toContain(CHECK_ICON_PATH);
+      expect(btn.getAttribute("aria-label")).toBe("Copied");
+      expect(btn.classList.contains("is-copied")).toBe(true);
+      expect(pathDs(btn)).toContain(CHECK_ICON_PATH);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("announces the copy success in the polite live region (unfocused label swap is not enough)", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    vi.stubGlobal("navigator", { clipboard: { writeText } });
+    try {
+      const root = widgetDOM(new CopyButtonWidget(0, () => "x"));
+      copyButton(root).dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      await Promise.resolve();
+      await Promise.resolve();
+      const region = statusRegion(root);
+      expect(region.textContent).toBe("Copied");
+      expect(region.getAttribute("aria-live")).toBe("polite");
     } finally {
       vi.unstubAllGlobals();
     }
@@ -242,14 +287,53 @@ describe("CopyButtonWidget", () => {
     const writeText = vi.fn().mockRejectedValue(new Error("NotAllowedError"));
     vi.stubGlobal("navigator", { clipboard: { writeText } });
     try {
-      const dom = new CopyButtonWidget(0, () => "x").toDOM({} as EditorView) as HTMLButtonElement;
-      dom.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      const root = widgetDOM(new CopyButtonWidget(0, () => "x"));
+      const btn = copyButton(root);
+      btn.dispatchEvent(new MouseEvent("click", { bubbles: true }));
       await Promise.resolve();
       await Promise.resolve();
-      expect(dom.getAttribute("aria-label")).toBe("Copy failed");
-      expect(dom.classList.contains("is-copy-failed")).toBe(true);
-      expect(dom.classList.contains("is-copied")).toBe(false);
+      expect(btn.getAttribute("aria-label")).toBe("Copy failed");
+      expect(btn.classList.contains("is-copy-failed")).toBe(true);
+      expect(btn.classList.contains("is-copied")).toBe(false);
     } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("announces the copy failure ASSERTIVELY in the live region", async () => {
+    const writeText = vi.fn().mockRejectedValue(new Error("NotAllowedError"));
+    vi.stubGlobal("navigator", { clipboard: { writeText } });
+    try {
+      const root = widgetDOM(new CopyButtonWidget(0, () => "x"));
+      copyButton(root).dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      await Promise.resolve();
+      await Promise.resolve();
+      const region = statusRegion(root);
+      expect(region.textContent).toBe("Copy failed");
+      // Assertive so a failed copy the user asked for is surfaced immediately.
+      expect(region.getAttribute("aria-live")).toBe("assertive");
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("clears the live region (back to polite) after the feedback window so a repeat copy re-announces", async () => {
+    vi.useFakeTimers();
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    vi.stubGlobal("navigator", { clipboard: { writeText } });
+    try {
+      const root = widgetDOM(new CopyButtonWidget(0, () => "x"));
+      const region = statusRegion(root);
+      copyButton(root).dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(region.textContent).toBe("Copied");
+      // After the 1500ms revert the region is emptied — the next identical copy is
+      // then a real mutation (empty → "Copied") the SR will re-announce.
+      await vi.advanceTimersByTimeAsync(1500);
+      expect(region.textContent).toBe("");
+      expect(region.getAttribute("aria-live")).toBe("polite");
+    } finally {
+      vi.useRealTimers();
       vi.unstubAllGlobals();
     }
   });
@@ -267,7 +351,7 @@ describe("CopyButtonWidget", () => {
   });
 
   it("always carries the base copy-button class (no single-line variant)", () => {
-    const btn = new CopyButtonWidget(0, () => "x").toDOM({} as EditorView) as HTMLButtonElement;
+    const btn = copyButton(widgetDOM(new CopyButtonWidget(0, () => "x")));
     expect(btn.classList.contains("quoll-copy-button")).toBe(true);
     expect(btn.classList.contains("quoll-copy-button-single-line")).toBe(false);
   });
@@ -277,20 +361,20 @@ describe("CopyButtonWidget", () => {
     const writeText = vi.fn().mockResolvedValue(undefined);
     vi.stubGlobal("navigator", { clipboard: { writeText } });
     try {
-      const dom = new CopyButtonWidget(0, () => "x").toDOM({} as EditorView) as HTMLButtonElement;
+      const btn = copyButton(widgetDOM(new CopyButtonWidget(0, () => "x")));
       // First click resolves → "Copied" and schedules a 1500ms revert.
-      dom.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      btn.dispatchEvent(new MouseEvent("click", { bubbles: true }));
       await vi.advanceTimersByTimeAsync(0);
-      expect(dom.getAttribute("aria-label")).toBe("Copied");
+      expect(btn.getAttribute("aria-label")).toBe("Copied");
       // Click again just before the first revert deadline, then cross it. With
       // the click-start clearTimeout the stale revert is cancelled, so the
       // button stays "Copied" instead of flashing back to "Copy code". (Without
       // the fix the t=1500 revert fires while the second click is still pending
       // and the assertion goes red.)
       vi.advanceTimersByTime(1490);
-      dom.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      btn.dispatchEvent(new MouseEvent("click", { bubbles: true }));
       vi.advanceTimersByTime(20);
-      expect(dom.getAttribute("aria-label")).toBe("Copied");
+      expect(btn.getAttribute("aria-label")).toBe("Copied");
     } finally {
       vi.useRealTimers();
       vi.unstubAllGlobals();
@@ -551,6 +635,18 @@ describe("quollCopyButtonTheme", () => {
     const btn = copyButtonThemeSpec[".quoll-copy-button"];
     expect(btn.opacity).toMatch(/^var\(--quoll-control-rest-opacity/);
     expect(btn.transition).toMatch(/^var\(--quoll-control-transition/);
+  });
+
+  it("hides the copy live region off-screen (clip) while keeping it in the a11y tree", () => {
+    // The SR status node must be invisible to sighted users but still announced —
+    // the canonical sr-only clip: 1px box, hidden overflow, clip rect, out of flow
+    // so it never disturbs the collapsed open-fence row's zero height.
+    const region = copyButtonThemeSpec[".quoll-copy-status"] as Record<string, string | undefined>;
+    expect(region.position).toBe("absolute");
+    expect(region.width).toBe("1px");
+    expect(region.height).toBe("1px");
+    expect(region.overflow).toBe("hidden");
+    expect(region.clip).toBe("rect(0, 0, 0, 0)");
   });
 
   it("collapsed open-fence row keeps position:relative in the COPY theme so the button still anchors", () => {

@@ -19,6 +19,17 @@
 // dispatches a document change, so the source round-trips byte-identically. The
 // read-only gate lives in the builder (no widget is emitted at all when
 // state.readOnly), so this DOM only ever exists on a writable surface.
+//
+// Copy feedback is ALSO announced to screen readers. The copy/failed state
+// otherwise shows up only as a swap of the button's own aria-label, and a label
+// change on an element that is not focused is not announced — so an SR user who
+// clicks (or presses Enter on) the button gets no confirmation. toDOM therefore
+// returns a wrapper holding the button PLUS a visually-hidden `aria-live` status
+// node; the copy result is written into that region alongside the label swap
+// (polite for success, assertive for the failure path). The region is a SIBLING
+// of the button, not a child: a `role=button` subtree is often exposed atomically,
+// so a live region nested inside it may never be observed — the banners
+// (src/webview/banners.ts, role="alert") use the same standalone-region pattern.
 
 import type { EditorState } from "@codemirror/state";
 import { type EditorView, WidgetType } from "@codemirror/view";
@@ -73,6 +84,16 @@ function setIcon(button: HTMLButtonElement, children: IconChild[]): void {
   button.replaceChildren(makeIcon(children));
 }
 
+/** Announce a copy result in the visually-hidden live region. Setting the
+ *  politeness BEFORE the text (assertive for the failure path, so a "Copy failed"
+ *  interrupts) keeps the announcement's urgency in step with the text change. An
+ *  empty message clears the region (on revert) so a subsequent identical copy is a
+ *  fresh mutation and re-announces rather than being deduped as unchanged. */
+function announce(status: HTMLElement, message: string, assertive: boolean): void {
+  status.setAttribute("aria-live", assertive ? "assertive" : "polite");
+  status.textContent = message;
+}
+
 /** Copy `text` via the webview-native Clipboard API. Returns true on success.
  *  No execCommand fallback: VS Code webview iframes grant clipboard-write, so
  *  navigator.clipboard.writeText is the available path; on the rare rejection we
@@ -111,12 +132,29 @@ export class CopyButtonWidget extends WidgetType {
   }
 
   toDOM(view: EditorView): HTMLElement {
+    // Wrapper hosts the button PLUS a sibling live region (see the header). It is
+    // NOT a positioning context (default static), so the absolutely-positioned
+    // button still anchors to the `.cm-line.quoll-fenced-code-open` panel row, not
+    // the wrapper. Both children sit out of flow (button absolute, region
+    // visually-hidden absolute), so the wrapper contributes zero layout.
+    const wrap = document.createElement("span");
+    wrap.className = "quoll-copy-button-wrap";
+
     const button = document.createElement("button");
     button.type = "button";
     // Class name matches the theme selector in cm/theme.ts (copyButtonThemeSpec).
     button.className = "quoll-copy-button";
     button.setAttribute("aria-label", COPY_LABEL);
     setIcon(button, COPY_ICON);
+
+    // Visually-hidden polite live region: empty at build time (present in the DOM
+    // before any text lands, so the first write is an observable mutation SRs
+    // announce). aria-atomic so the whole short phrase is read as a unit. The copy
+    // handler flips it to assertive for the failure path.
+    const status = document.createElement("span");
+    status.className = "quoll-copy-status";
+    status.setAttribute("aria-live", "polite");
+    status.setAttribute("aria-atomic", "true");
 
     let revertTimer: ReturnType<typeof setTimeout> | undefined;
     // Last-click-wins guard: clipboard promises can settle OUT OF ORDER (a slow
@@ -173,23 +211,31 @@ export class CopyButtonWidget extends WidgetType {
           button.setAttribute("aria-label", COPIED_LABEL);
           button.classList.remove("is-copy-failed");
           button.classList.add("is-copied");
+          // Polite: a success needn't interrupt the SR's current utterance.
+          announce(status, COPIED_LABEL, false);
         } else {
           button.setAttribute("aria-label", FAILED_LABEL);
           button.classList.remove("is-copied");
           button.classList.add("is-copy-failed");
+          // Assertive: the copy the user asked for did NOT happen — surface it now.
+          announce(status, FAILED_LABEL, true);
         }
         revertTimer = setTimeout(() => {
           // Safe even if the widget DOM was discarded mid-timeout: this only
-          // mutates the button's own (possibly detached) glyph/attrs — no view
-          // access, mirroring image-widget's post-discard load listener.
+          // mutates the button's own (possibly detached) glyph/attrs + the live
+          // region text — no view access, mirroring image-widget's post-discard
+          // load listener. Clearing the region (back to polite) lets a later
+          // identical copy re-announce instead of being deduped as unchanged.
           setIcon(button, COPY_ICON);
           button.setAttribute("aria-label", COPY_LABEL);
           button.classList.remove("is-copied", "is-copy-failed");
+          announce(status, "", false);
         }, COPIED_FEEDBACK_MS);
       });
     });
 
-    return button;
+    wrap.append(button, status);
+    return wrap;
   }
 
   ignoreEvent(): boolean {
