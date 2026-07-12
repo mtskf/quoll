@@ -495,11 +495,20 @@ export function planOutdentItem(state: EditorState, headPos: number): OutdentPla
       return { changes: [] };
     }
     changes.push({ from: mark.from, to: markerLine.to, insert: newMarker });
-    // Caret right after the synthesized marker, in POST-transform coords: the
-    // leading whitespace collapses to `parentMarkCol` spaces, then the marker.
-    // (Computed in new coords — `mark.from` is a pre-transform byte and the
-    // whitespace removal before it would push an absolute cursor out of range.)
-    selection = EditorSelection.cursor(markerLine.from + parentMarkCol + newMarker.length);
+    // Caret right after the synthesized marker, in POST-transform coords,
+    // derived from the CHARS removed ahead of the marker (the same
+    // `leadingCharsForColumns` count `materialiseLineDeltas` will apply for the
+    // `parentMarkCol - itemMarkCol` marker-line delta), NOT from the column
+    // count. On a tab-indented line surviving chars != surviving columns, so
+    // adding a column count to `markerLine.from` overshoots the shortened line
+    // and `view.dispatch` throws RangeError (swallowed by applyShift = the whole
+    // outdent silently lost). Removed chars keep the caret in range.
+    const removedChars = leadingCharsForColumns(
+      markerLine.text,
+      itemMarkCol - parentMarkCol,
+      state.tabSize
+    );
+    selection = EditorSelection.cursor(mark.from - removedChars + newMarker.length);
   } else {
     // Non-empty: adopt only the marker KIND — replace the ListMark span; the
     // item's content bytes (incl. its own `[ ]`/`[x]`) are untouched.
@@ -517,7 +526,15 @@ export function planOutdentItem(state: EditorState, headPos: number): OutdentPla
   // each of their lines to land at the promoted item's NEW content column, and
   // renumber them from 1 if they were ordered (folding any width change into
   // the same per-line net delta — NOT a second ChangeSpec).
-  const promotedContentCol = parentMarkCol + listMarkerLen + 1; // list marker + one space
+  // The promoted item's REAL post-transform content column. The non-empty path
+  // replaces ONLY the ListMark span, so the item's original marker->content gap
+  // (which may be > 1 for an aligned run like `1.  a`) is preserved in the
+  // output; hard-coding gap 1 here would compute a content column LEFT of where
+  // the item actually sits, so a forced child at the true column reads as a
+  // top-level sibling instead of nesting (corrupting the outer run). The empty
+  // path synthesizes a single-space marker (gap 1).
+  const gap = Math.max(1, contentColumnOf(state, item) - (itemMarkCol + oldMarkerLen));
+  const promotedContentCol = parentMarkCol + listMarkerLen + (empty ? 1 : gap);
   const forced = followingListItems(item);
   let forcedOrdinal = 1;
   for (const child of forced) {

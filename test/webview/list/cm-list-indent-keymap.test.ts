@@ -20,7 +20,7 @@ function forceParse(view: EditorView): EditorView {
 function mount(
   doc: string,
   selection: EditorSelection | SelectionRange,
-  opts: { readOnly?: boolean } = {}
+  opts: { readOnly?: boolean; tabSize?: number } = {}
 ): EditorView {
   const parent = document.createElement("div");
   document.body.appendChild(parent);
@@ -30,6 +30,7 @@ function mount(
     extensions: [
       markdown({ base: markdownLanguage }),
       EditorState.readOnly.of(opts.readOnly ?? false),
+      ...(opts.tabSize === undefined ? [] : [EditorState.tabSize.of(opts.tabSize)]),
     ],
   });
   return forceParse(new EditorView({ state, parent }));
@@ -495,6 +496,84 @@ describe("outdentListItem", () => {
       expect(outdentListItem(view)).toBe(true);
       // doc is "- [ ] aaa\n  - bbb\n- [ ] "; caret sits at end (after "- [ ] ").
       expect(view.state.selection.main.head).toBe(view.state.doc.length);
+    } finally {
+      view.destroy();
+    }
+  });
+
+  // (fable-1) empty-item outdent with TAB indent at EOF: the caret must be
+  //     derived from CHARS removed, not the column count. With a surviving tab
+  //     (1 char = tabSize columns) a column-based caret overshoots the
+  //     shortened line -> view.dispatch throws RangeError -> applyShift swallows
+  //     it -> the WHOLE outdent is silently lost. Chars-removed keeps it in range.
+  it("(fable-1) empty item under TAB indent at EOF outdents without a RangeError", () => {
+    const view = mount("- a\n\t- b\n\t\t- ", EditorSelection.cursor(0), { tabSize: 4 });
+    view.dispatch({ selection: EditorSelection.cursor(view.state.doc.line(3).to) }); // empty "\t\t- "
+    try {
+      expect(outdentListItem(view)).toBe(true);
+      // The outdent COMPOSED (not swallowed): the empty item promoted one level,
+      // its tab collapsing to a single one under "- b".
+      expect(view.state.doc.toString()).toBe("- a\n\t- b\n\t- ");
+      // Caret stays within the (shortened) document — the bug parked it past EOF.
+      expect(view.state.selection.main.head).toBeLessThanOrEqual(view.state.doc.length);
+    } finally {
+      view.destroy();
+    }
+  });
+
+  // (fable-2) aligned-gap (gap 2) non-empty outdent: promotedContentCol must use
+  //     the item's REAL marker->content gap, not a hard-coded 1. A forced child
+  //     at the true content column would otherwise fail to nest and the outer
+  //     run corrupts to 1,2,1,3.
+  it("(fable-2) aligned-gap outdent nests the forced child; outer run stays intact", () => {
+    const view = mount("1. p\n   1.  a\n   2. b\n2. q", EditorSelection.cursor(0));
+    view.dispatch({ selection: at(view, 2, 7) }); // caret in "   1.  a" (gap 2)
+    try {
+      expect(outdentListItem(view)).toBe(true);
+      // "1.  a" promotes to "2.  a" (gap 2 preserved -> content col 4); forced
+      // "2. b" nests as its child "1. b" at col 4; dest "2. q" -> "3. q". Outer
+      // run is 1,2,3 — NOT 1,2,1,3 (the hard-coded gap-1 bug parked the child at
+      // col 3 < 4, so it stayed top-level and the run corrupted).
+      expect(view.state.doc.toString()).toBe("1. p\n2.  a\n    1. b\n3. q");
+      expect(itemDepth(view, 2)).toBe(1);
+      expect(itemDepth(view, 3)).toBe(2);
+    } finally {
+      view.destroy();
+    }
+  });
+
+  // (test-analyzer-1) empty item WITH forced children: marker synthesis +
+  //     re-homed forced children + destination renumber must compose without a
+  //     disjointness throw, and the caret lands after the synthesized marker.
+  it("(test-analyzer-1) empty item with forced children composes; caret after marker", () => {
+    const view = mount("- p\n  - \n  - b\n  - c", EditorSelection.cursor(0));
+    view.dispatch({ selection: EditorSelection.cursor(view.state.doc.line(2).to) }); // empty "  - "
+    try {
+      expect(outdentListItem(view)).toBe(true);
+      // The empty item promotes to top level "- "; "b" and "c" become its
+      // forced children at content col 2.
+      expect(view.state.doc.toString()).toBe("- p\n- \n  - b\n  - c");
+      expect(itemDepth(view, 2)).toBe(1);
+      expect(itemDepth(view, 3)).toBe(2);
+      // Caret right after the synthesized "- " on line 2.
+      expect(view.state.selection.main.head).toBe(view.state.doc.line(2).to);
+    } finally {
+      view.destroy();
+    }
+  });
+
+  // (test-analyzer-3) tab-indented nested item outdent: the documented
+  //     whole-tab removal (leadingCharsForColumns counts a straddling tab
+  //     whole) is exercised — a tab-indented child promotes by removing the
+  //     whole tab, not a partial column count. Lands after fable-1's fix.
+  it("(test-analyzer-3) tab-indented nested item outdents by whole-tab removal", () => {
+    const view = mount("- A\n\t- B", EditorSelection.cursor(0), { tabSize: 4 });
+    view.dispatch({ selection: EditorSelection.cursor(view.state.doc.line(2).to) }); // in "\t- B"
+    try {
+      expect(outdentListItem(view)).toBe(true);
+      // "\t- B" promotes to top level "- B": the whole leading tab is removed.
+      expect(view.state.doc.toString()).toBe("- A\n- B");
+      expect(itemDepth(view, 2)).toBe(1);
     } finally {
       view.destroy();
     }
