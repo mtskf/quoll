@@ -1111,6 +1111,10 @@ html body {
     color: var(--vscode-icon-foreground, var(--vscode-foreground));
     cursor: pointer;
   }
+  .quoll-outline-twistie:focus-visible {
+    outline: 1px solid var(--vscode-focusBorder);
+    outline-offset: -1px;
+  }
   .quoll-outline-twistie svg {
     width: 14px;
     height: 14px;
@@ -1227,6 +1231,10 @@ html body {
     border: 1px solid var(--quoll-outline-sidebar-border);
     border-radius: 4px;
     cursor: pointer;
+  }
+  .quoll-settings-segment:focus-visible {
+    outline: 1px solid var(--vscode-focusBorder);
+    outline-offset: 1px;
   }
   .quoll-settings-segment[aria-disabled="true"] {
     cursor: default;

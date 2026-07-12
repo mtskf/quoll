@@ -2,6 +2,12 @@
 
 All notable changes to Quoll are documented here.
 
+## 0.1.44 — 2026-07-13
+
+### Fixed
+
+- Keyboard users arrowing through the outline panel's font/size/line-height/width segments, or focusing a heading's expand/collapse twistie, now see a visible focus ring — previously neither control showed any focus indicator.
+
 ## 0.1.43 — 2026-07-12
 
 ### Fixed
