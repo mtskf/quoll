@@ -139,9 +139,9 @@ export function classifyItemLines(
 
 /** Number of leading-whitespace CHARS whose expanded columns reach `cols` (a
  *  straddling tab is counted whole → slight over-de-dent, documented). Stops at
- *  the first non-whitespace char. MOVE-BY-COPY from `list-indent-keymap.ts`
- *  (kept there too — its old `shiftItemLines`/commands still use their own
- *  copy until the Task 5/6 consolidation; do not delete the original). */
+ *  the first non-whitespace char. The sole copy — the former duplicate in
+ *  `list-indent-keymap.ts` was removed when both indent/outdent commands became
+ *  planner shells. */
 export function leadingCharsForColumns(text: string, cols: number, tabSize: number): number {
   let col = 0;
   let i = 0;
