@@ -371,10 +371,13 @@ describe("quollOutline sidebar", () => {
   it("clicking a twistie collapses only that subtree and syncs aria-expanded", () => {
     const { host } = mount("# A\n\n## B\n\n### C\n\n# D\n");
     toggleEl(host).click();
-    const bTwistie = twistieOf(rowEls(host)[1]) as HTMLButtonElement; // "B"
-    expect(bTwistie.getAttribute("aria-expanded")).toBe("true");
+    const bRow = rowEls(host)[1]; // "B"
+    const bTwistie = twistieOf(bRow) as HTMLButtonElement;
+    // aria-expanded lives on the treeitem row, not the twistie (single source
+    // of truth for the tree node's expand state).
+    expect(bRow.getAttribute("aria-expanded")).toBe("true");
     bTwistie.click();
-    expect(bTwistie.getAttribute("aria-expanded")).toBe("false");
+    expect(bRow.getAttribute("aria-expanded")).toBe("false");
     // Only C (B's descendant) hides; A, B, D stay.
     expect(visibleTexts(host)).toEqual(["A", "B", "D"]);
   });
@@ -402,7 +405,23 @@ describe("quollOutline sidebar", () => {
     expect(visibleTexts(host)).toEqual(["A"]);
     aTwistie.click(); // expand A → B visible again but still collapsed
     expect(visibleTexts(host)).toEqual(["A", "B"]); // C stays hidden under B
-    expect(bTwistie.getAttribute("aria-expanded")).toBe("false");
+    expect(rowEls(host)[1].getAttribute("aria-expanded")).toBe("false"); // B row
+  });
+
+  it("preserves a nested row's own collapse state across an ancestor re-expand", () => {
+    // A > B > C > D, one level deeper than the sibling test above. Pins that a
+    // row's own aria-expanded/hidden state survives an UNRELATED ancestor's
+    // collapse+re-expand cycle (not just the shallowest-boundary walk itself).
+    const { host } = mount("# A\n\n## B\n\n### C\n\n#### D\n");
+    toggleEl(host).click();
+    const rows = rowEls(host);
+    (twistieOf(rows[2]) as HTMLButtonElement).click(); // collapse C (hides D)
+    (twistieOf(rows[1]) as HTMLButtonElement).click(); // collapse B (hides C, D)
+    expect(rowEls(host)[2].hidden).toBe(true); // C hidden under collapsed B
+    (twistieOf(rowEls(host)[1]) as HTMLButtonElement).click(); // re-expand B
+    expect(rowEls(host)[2].hidden).toBe(false);
+    expect(rowEls(host)[2].getAttribute("aria-expanded")).toBe("false"); // C row
+    expect(rowEls(host)[3].hidden).toBe(true); // D still hidden under collapsed C
   });
 
   it("uses a native <button> twistie so Enter/Space activate it (keyboard parity)", () => {
@@ -417,7 +436,7 @@ describe("quollOutline sidebar", () => {
     expect(aTwistie.tagName).toBe("BUTTON");
     expect(aTwistie.type).toBe("button");
     aTwistie.click(); // proxy for the platform-synthesized Enter/Space click
-    expect(aTwistie.getAttribute("aria-expanded")).toBe("false");
+    expect(rowEls(host)[0].getAttribute("aria-expanded")).toBe("false"); // A row
   });
 
   it("keeps a heading collapsed when an edit above shifts its offset (maps collapse through changes)", () => {
@@ -469,6 +488,79 @@ describe("quollOutline sidebar", () => {
     // The title is a plain span, not a button — no whole-section fold toggle.
     expect(title?.tagName).toBe("SPAN");
     expect(host.querySelector(".quoll-outline-header-toggle")).toBeNull();
+  });
+
+  it("exposes the list as a named ARIA tree of treeitems", () => {
+    const { host } = mount("# Alpha\n\n## Beta\n");
+    toggleEl(host).click(); // open + build
+    const tree = host.querySelector(".quoll-outline-list") as HTMLElement;
+    expect(tree.getAttribute("role")).toBe("tree");
+    expect(tree.getAttribute("aria-label")).toBe("Document outline");
+    // Every rendered row is a treeitem (the tree's owned nodes).
+    expect(rowEls(host).map((r) => r.getAttribute("role"))).toEqual(["treeitem", "treeitem"]);
+  });
+
+  it("sets aria-level from the render depth, collapsing skipped heading levels", () => {
+    // h1 → h3 (level 2 skipped): the tree nests h3 directly under h1, so depth is
+    // contiguous (0, 1) and aria-level is 1-based off it (1, 2) — NOT the raw
+    // heading levels (1, 3).
+    const { host } = mount("# A\n\n### C\n\n#### D\n\n# E\n");
+    toggleEl(host).click();
+    expect(rowEls(host).map((r) => r.getAttribute("aria-level"))).toEqual(["1", "2", "3", "1"]);
+  });
+
+  it("puts aria-expanded on parent rows only (leaves have none) and reflects collapse", () => {
+    const { host } = mount("# A\n\n## B\n\n### C\n\n# D\n");
+    toggleEl(host).click();
+    const rows = rowEls(host);
+    // A and B have children (expanded); C and D are leaves (no expand state).
+    expect(rows.map((r) => r.getAttribute("aria-expanded"))).toEqual(["true", "true", null, null]);
+    (twistieOf(rows[0]) as HTMLButtonElement).click(); // collapse A
+    expect(rowEls(host)[0].getAttribute("aria-expanded")).toBe("false");
+  });
+
+  it("removes aria-expanded when an edit turns a parent heading into a leaf", () => {
+    vi.useFakeTimers();
+    const { view: v, host } = mount("# A\n\n## B\n");
+    v.plugin(outlinePlugin)?.toggle();
+    const aBefore = rowEls(host)[0];
+    expect(aBefore.getAttribute("aria-expanded")).toBe("true");
+    (twistieOf(aBefore) as HTMLButtonElement).click(); // collapse A first
+    expect(rowEls(host)[0].getAttribute("aria-expanded")).toBe("false");
+    const bFrom = v.state.doc.line(3).from;
+    v.dispatch({ changes: { from: bFrom, to: v.state.doc.length } }); // delete "## B"
+    vi.runAllTimers(); // flush the debounced rebuild
+    const aAfter = rowEls(host)[0];
+    expect(aAfter.getAttribute("aria-expanded")).toBeNull(); // no stale "false"
+    expect(twistieOf(aAfter)).toBeNull(); // A is now a leaf
+  });
+
+  it("reflects the active heading via aria-selected on the treeitem, moving with the caret", () => {
+    const { view: v, host } = mount("# Alpha\n\nbody\n\n## Beta\n\nmore\n");
+    v.plugin(outlinePlugin)?.toggle();
+    const selected = () => rowEls(host).map((r) => r.getAttribute("aria-selected"));
+    expect(selected()).toEqual(["true", "false"]); // caret at top → Alpha selected
+    v.dispatch({ selection: EditorSelection.cursor(v.state.doc.line(5).from) }); // "## Beta"
+    expect(selected()).toEqual(["false", "true"]);
+  });
+
+  it("does not mark the empty-state row as a treeitem", () => {
+    const { view: v, host } = mount("no headings here\n");
+    v.plugin(outlinePlugin)?.toggle();
+    const empty = host.querySelector(".quoll-outline-empty") as HTMLElement;
+    expect(empty.getAttribute("role")).toBe("none"); // not a treeitem inside role="tree"
+  });
+
+  it("switches the tree from treeitems to role=none empty message when the last heading is deleted", () => {
+    vi.useFakeTimers();
+    const { view: v, host } = mount("# Only\n");
+    v.plugin(outlinePlugin)?.toggle();
+    expect(rowEls(host).map((r) => r.getAttribute("role"))).toEqual(["treeitem"]);
+    v.dispatch({ changes: { from: 0, to: v.state.doc.length, insert: "no headings here\n" } });
+    vi.runAllTimers(); // flush the debounced rebuild
+    expect(rowEls(host)).toHaveLength(0);
+    const empty = host.querySelector(".quoll-outline-empty") as HTMLElement;
+    expect(empty.getAttribute("role")).toBe("none");
   });
 });
 

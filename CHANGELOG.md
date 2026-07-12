@@ -2,6 +2,12 @@
 
 All notable changes to Quoll are documented here.
 
+## 0.1.46 — 2026-07-13
+
+### Changed
+
+- Screen readers now present the document outline as a tree — announcing each heading's depth in the hierarchy, your current position, and whether a section is expanded or collapsed — instead of a flat list of buttons.
+
 ## 0.1.45 — 2026-07-13
 
 ### Added
