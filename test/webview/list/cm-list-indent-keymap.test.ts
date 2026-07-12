@@ -531,8 +531,11 @@ describe("outdentListItem", () => {
       // The outdent COMPOSED (not swallowed): the empty item promoted one level,
       // its tab collapsing to a single one under "- b".
       expect(view.state.doc.toString()).toBe("- a\n\t- b\n\t- ");
-      // Caret stays within the (shortened) document — the bug parked it past EOF.
-      expect(view.state.selection.main.head).toBeLessThanOrEqual(view.state.doc.length);
+      // Caret sits exactly at the end of the outdented empty line — directly
+      // after the synthesized "- " marker on the tab-collapsed line 3. Pinning
+      // the EXACT column (not just "in range") is what catches a caret parked
+      // before the marker on a tab line, where surviving chars != columns.
+      expect(view.state.selection.main.head).toBe(view.state.doc.line(3).to);
     } finally {
       view.destroy();
     }
