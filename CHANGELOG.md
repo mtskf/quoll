@@ -34,6 +34,7 @@ All notable changes to Quoll are documented here.
 - Opt-in advisory prose lint rules: flags passive voice, filler/hedge words, and sentences over 30 words as info-level hints in paragraphs. Off by default — enable with the `quoll.lint.prose.enabled` setting.
 
 ### Changed
+- move handoff/ bucket into src/extension/handoff/ (#202)
 - move session/ bucket into src/extension/session/ (#200)
 
 - The outline's "OUTLINE" header is now a plain label; folding happens per heading instead of collapsing the whole panel.
@@ -51,6 +52,7 @@ All notable changes to Quoll are documented here.
 - Add title-bar buttons to switch between Quoll and the built-in text editor from either side: a cat icon on a Markdown text editor opens it in Quoll, and a file-code icon on a Quoll editor reopens it as text.
 
 ### Changed
+- move handoff/ bucket into src/extension/handoff/ (#202)
 - move session/ bucket into src/extension/session/ (#200)
 
 - Polish the document outline sidebar to match VS Code's native side panels: the corner toggle and pin button use proper icons, the "OUTLINE" header now reads and behaves like the built-in EXPLORER section (including a chevron to collapse/expand it), and row alignment sits under the header label.
@@ -64,6 +66,7 @@ All notable changes to Quoll are documented here.
 - Smart list continuation: pressing Enter at the end of a list item now continues the list (adding the next bullet, or the next number for ordered lists) instead of just inserting a blank line, and pressing Enter on an empty list item exits the list instead of leaving a dangling empty marker. Deleting or reordering items in an ordered list renumbers the remaining items to stay sequential.
 
 ### Changed
+- move handoff/ bucket into src/extension/handoff/ (#202)
 - move session/ bucket into src/extension/session/ (#200)
 
 - Refresh the Marketplace branding: a new extension icon, updated hero and editor-overview images, and a tidied README header.
