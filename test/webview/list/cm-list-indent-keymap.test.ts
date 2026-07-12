@@ -275,6 +275,23 @@ describe("indentListItem", () => {
     }
   });
 
+  // (codex-0) the DISCRIMINATING case for orderedShape's lower bound: `0.` is a
+  //     VALID CommonMark ordered start, so a vacated-run renumber whose correct
+  //     target is 0 must fire (not fail closed like the negative case above).
+  //     Indenting the middle "1. b" of "2. a/1. b/1. c" drives the follower
+  //     "1. c" by delta -1 to a legitimate "0. c". A `>= 1` bound over-rejects
+  //     this and leaves the run stale ("1. c"); `>= 0` renumbers it correctly.
+  it("(codex-0) indenting a 1.-follower run renumbers a legitimate 0. follower (not stale)", () => {
+    const view = mount("2. a\n1. b\n1. c\n", EditorSelection.cursor(0));
+    view.dispatch({ selection: EditorSelection.cursor(view.state.doc.line(2).from + 1) });
+    try {
+      expect(indentListItem(view)).toBe(true);
+      expect(view.state.doc.toString()).toBe("2. a\n   1. b\n0. c\n");
+    } finally {
+      view.destroy();
+    }
+  });
+
   // (e) non-contiguous parent (Paragraph, List, Paragraph): the parent's tail is
   //     a Paragraph, not the earlier child list → a NEW nested run (does NOT
   //     continue the earlier child run's numbering).

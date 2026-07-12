@@ -63,13 +63,15 @@ const ORDERED_RE = /^(\d{1,9})([.)])$/; // Lezer caps ordered ListMark at 9 digi
 
 export const MAX_LIST_NUMBER = 999_999_999; // @lezer/markdown caps a ListMark at 9 digits
 
-/** Build an ordered shape, or null when `number` is out of the 1..MAX range
+/** Build an ordered shape, or null when `number` is out of the 0..MAX range
  *  (the sole cap-enforcement point — callers propagate null as a fail-closed
- *  no-op instead of re-checking the literal). Guards BOTH bounds: `< 1` (a
- *  renumber delta can drive a follower negative, which `ORDERED_RE` rejects =
- *  corrupt Markdown) and `> MAX` (a 10+-digit run stops being a ListMark). */
+ *  no-op instead of re-checking the literal). Guards BOTH bounds: `< 0` (a
+ *  renumber delta can drive a follower NEGATIVE, which `ORDERED_RE` rejects =
+ *  corrupt Markdown; note `0.` itself is a VALID CommonMark ordered start, so
+ *  the reject condition is strictly negative, not `< 1`) and `> MAX` (a
+ *  10+-digit run stops being a ListMark). */
 export function orderedShape(number: number, delim: "." | ")"): ListMarkShape | null {
-  return number >= 1 && number <= MAX_LIST_NUMBER ? { kind: "ordered", number, delim } : null;
+  return number >= 0 && number <= MAX_LIST_NUMBER ? { kind: "ordered", number, delim } : null;
 }
 
 export function parseListMark(text: string): ListMarkShape | null {
@@ -262,10 +264,11 @@ export function continuationMarkerFor(state: EditorState, item: SyntaxNode): str
  *
  *  Fail-closed: a null `ensureSyntaxTree` (parse did not reach EOF within
  *  budget — the list tail may be unparsed) or any resulting marker out of the
- *  supported 1..9-digit range — over cap (`@lezer/markdown` stops treating a
- *  10+-digit run as a ListMark) OR driven below 1 by a negative delta (which
- *  `ORDERED_RE` rejects = corrupt Markdown), both gated by `orderedShape` —
- *  returns `[]` rather than emitting a split-brain / corrupting renumber. */
+ *  supported 0..9-digit range — over cap (`@lezer/markdown` stops treating a
+ *  10+-digit run as a ListMark) OR driven NEGATIVE (below 0) by a delta (which
+ *  `ORDERED_RE` rejects = corrupt Markdown; `0.` itself stays valid), both
+ *  gated by `orderedShape` — returns `[]` rather than emitting a split-brain /
+ *  corrupting renumber. */
 export function renumberRun(
   state: EditorState,
   afterItem: SyntaxNode,
