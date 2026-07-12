@@ -408,6 +408,22 @@ describe("quollOutline sidebar", () => {
     expect(rowEls(host)[1].getAttribute("aria-expanded")).toBe("false"); // B row
   });
 
+  it("preserves a nested row's own collapse state across an ancestor re-expand", () => {
+    // A > B > C > D, one level deeper than the sibling test above. Pins that a
+    // row's own aria-expanded/hidden state survives an UNRELATED ancestor's
+    // collapse+re-expand cycle (not just the shallowest-boundary walk itself).
+    const { host } = mount("# A\n\n## B\n\n### C\n\n#### D\n");
+    toggleEl(host).click();
+    const rows = rowEls(host);
+    (twistieOf(rows[2]) as HTMLButtonElement).click(); // collapse C (hides D)
+    (twistieOf(rows[1]) as HTMLButtonElement).click(); // collapse B (hides C, D)
+    expect(rowEls(host)[2].hidden).toBe(true); // C hidden under collapsed B
+    (twistieOf(rowEls(host)[1]) as HTMLButtonElement).click(); // re-expand B
+    expect(rowEls(host)[2].hidden).toBe(false);
+    expect(rowEls(host)[2].getAttribute("aria-expanded")).toBe("false"); // C row
+    expect(rowEls(host)[3].hidden).toBe(true); // D still hidden under collapsed C
+  });
+
   it("uses a native <button> twistie so Enter/Space activate it (keyboard parity)", () => {
     // Keyboard activation rides the platform: a native <button type="button">
     // synthesizes a click from Enter/Space. Pin THAT contract (element + type)
@@ -503,6 +519,22 @@ describe("quollOutline sidebar", () => {
     expect(rowEls(host)[0].getAttribute("aria-expanded")).toBe("false");
   });
 
+  it("removes aria-expanded when an edit turns a parent heading into a leaf", () => {
+    vi.useFakeTimers();
+    const { view: v, host } = mount("# A\n\n## B\n");
+    v.plugin(outlinePlugin)?.toggle();
+    const aBefore = rowEls(host)[0];
+    expect(aBefore.getAttribute("aria-expanded")).toBe("true");
+    (twistieOf(aBefore) as HTMLButtonElement).click(); // collapse A first
+    expect(rowEls(host)[0].getAttribute("aria-expanded")).toBe("false");
+    const bFrom = v.state.doc.line(3).from;
+    v.dispatch({ changes: { from: bFrom, to: v.state.doc.length } }); // delete "## B"
+    vi.runAllTimers(); // flush the debounced rebuild
+    const aAfter = rowEls(host)[0];
+    expect(aAfter.getAttribute("aria-expanded")).toBeNull(); // no stale "false"
+    expect(twistieOf(aAfter)).toBeNull(); // A is now a leaf
+  });
+
   it("reflects the active heading via aria-selected on the treeitem, moving with the caret", () => {
     const { view: v, host } = mount("# Alpha\n\nbody\n\n## Beta\n\nmore\n");
     v.plugin(outlinePlugin)?.toggle();
@@ -517,6 +549,18 @@ describe("quollOutline sidebar", () => {
     v.plugin(outlinePlugin)?.toggle();
     const empty = host.querySelector(".quoll-outline-empty") as HTMLElement;
     expect(empty.getAttribute("role")).toBe("none"); // not a treeitem inside role="tree"
+  });
+
+  it("switches the tree from treeitems to role=none empty message when the last heading is deleted", () => {
+    vi.useFakeTimers();
+    const { view: v, host } = mount("# Only\n");
+    v.plugin(outlinePlugin)?.toggle();
+    expect(rowEls(host).map((r) => r.getAttribute("role"))).toEqual(["treeitem"]);
+    v.dispatch({ changes: { from: 0, to: v.state.doc.length, insert: "no headings here\n" } });
+    vi.runAllTimers(); // flush the debounced rebuild
+    expect(rowEls(host)).toHaveLength(0);
+    const empty = host.querySelector(".quoll-outline-empty") as HTMLElement;
+    expect(empty.getAttribute("role")).toBe("none");
   });
 });
 
