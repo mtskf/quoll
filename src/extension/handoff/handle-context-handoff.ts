@@ -75,7 +75,7 @@
 //   command (or an `extension.exports` API — activate() still returns undefined)
 //   is the trigger to revisit the raw-text-flash follow-up; neither exists yet.
 
-import { clampInt } from "../shared/clamping.js";
+import { clampInt } from "../../shared/clamping.js";
 import { makeHandoffGuards } from "./handoff-guards.js";
 
 const { tryBool, tryShow } = makeHandoffGuards("context-handoff");

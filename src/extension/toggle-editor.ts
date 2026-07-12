@@ -23,7 +23,7 @@
 
 import { commands, TabInputCustom, TabInputText, type TextEditor, window, workspace } from "vscode";
 import { canEditWith } from "./can-edit-with.js";
-import { stashSwitchCaret, takeSwitchCaret } from "./editor-switch-caret.js";
+import { stashSwitchCaret, takeSwitchCaret } from "./handoff/editor-switch-caret.js";
 import { openInTextEditor } from "./reopen-text-editor.js";
 import { QuollEditorPanel } from "./session/quoll-editor-panel.js";
 import { showSafely } from "./show-safely.js";

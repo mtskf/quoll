@@ -5,7 +5,7 @@ import {
   CLAUDE_INSERT_AT_MENTIONED_COMMAND,
   type HandoffRevealSelection,
   handleContextHandoff,
-} from "../../src/extension/handle-context-handoff.js";
+} from "../../src/extension/handoff/handle-context-handoff.js";
 
 /** True if the string carries a C0 control character (U+0000–U+001F) or DEL
  *  (U+007F) — the bytes that must never reach the clipboard (a later paste

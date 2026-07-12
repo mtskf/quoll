@@ -17,7 +17,7 @@
 // structurally). The panel is the single place that calls
 // `window.createStatusBarItem` and feeds the live document in.
 
-import type { Caret } from "./caret-handoff.js";
+import type { Caret } from "./handoff/caret-handoff.js";
 
 // vscode.EndOfLine: LF = 1, CRLF = 2. Mirrored as a literal union so this
 // module stays vscode-free (no `import "vscode"`); the panel passes
