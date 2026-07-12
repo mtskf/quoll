@@ -4,7 +4,7 @@ import {
   decideRevealInvariant,
   planRevealTabClose,
   type RevealCleanupGroup,
-} from "../../src/extension/reveal-for-mention-cleanup.js";
+} from "../../src/extension/handoff/reveal-for-mention-cleanup.js";
 
 // Opaque tab handles — the planner never inspects them, only routes them.
 type Tab = { id: string };

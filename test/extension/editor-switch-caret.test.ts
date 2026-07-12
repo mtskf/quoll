@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 
-import { stashSwitchCaret, takeSwitchCaret } from "../../src/extension/editor-switch-caret.js";
+import {
+  stashSwitchCaret,
+  takeSwitchCaret,
+} from "../../src/extension/handoff/editor-switch-caret.js";
 
 describe("editor-switch caret store", () => {
   it("returns null for an unknown key", () => {

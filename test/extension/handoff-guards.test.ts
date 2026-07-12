@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { makeHandoffGuards } from "../../src/extension/handoff-guards.js";
+import { makeHandoffGuards } from "../../src/extension/handoff/handoff-guards.js";
 
 afterEach(() => vi.restoreAllMocks());
 

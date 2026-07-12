@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { type Caret, clampCaret } from "../../src/extension/caret-handoff.js";
+import { type Caret, clampCaret } from "../../src/extension/handoff/caret-handoff.js";
 
 // A 3-line document: line 0 len 5, line 1 len 3, line 2 len 0.
 const lineLengths = [5, 3, 0];

@@ -6,7 +6,7 @@
 // injected (lineCount + a line-length getter) so the function is pure and
 // unit-tests without a live VS Code TextEditor.
 
-import { clampInt } from "../shared/clamping.js";
+import { clampInt } from "../../shared/clamping.js";
 
 /** 0-based caret position (VS Code `Position` convention). */
 export type Caret = { line: number; character: number };

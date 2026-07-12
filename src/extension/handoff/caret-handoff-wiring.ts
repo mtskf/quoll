@@ -27,14 +27,13 @@
 
 import type { TextDocument, TextEditor, WebviewPanel } from "vscode";
 import { Position, Range, Selection, window } from "vscode";
-
-import { type Caret, clampCaret } from "./caret-handoff.js";
 import {
   createStatusBarController,
   formatLanguageLabel,
   resolveSeedCaret,
   type StatusBarSlots,
-} from "./status-bar.js";
+} from "../status-bar.js";
+import { type Caret, clampCaret } from "./caret-handoff.js";
 
 export interface CaretHandoffWiringDeps {
   readonly document: TextDocument;

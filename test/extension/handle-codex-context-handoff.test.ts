@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   CODEX_ADD_FILE_COMMAND,
   handleCodexContextHandoff,
-} from "../../src/extension/handle-codex-context-handoff.js";
+} from "../../src/extension/handoff/handle-codex-context-handoff.js";
 
 const URI = { fsPath: "/ws/notes/x.md" };
 
