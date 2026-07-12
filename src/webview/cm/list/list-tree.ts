@@ -45,6 +45,75 @@ export function listMarkOf(item: SyntaxNode): SyntaxNode | null {
   return first !== null && first.name === "ListMark" ? first : null;
 }
 
+/** True for the two list container node types — `OrderedList` / `BulletList`. */
+export function isListNode(node: SyntaxNode): boolean {
+  return node.name === "OrderedList" || node.name === "BulletList";
+}
+
+/** The `ListItem` that encloses `item`'s list (shape: ListItem > list >
+ *  ListItem), or null when `item` is top-level. Requires the wrapper parent to
+ *  carry a `ListMark` so the walk-up only climbs well-formed nesting — the
+ *  shared definition; `list-geometry.ts` still keeps its own private copy (not
+ *  yet rerouted here). */
+export function enclosingListItem(item: SyntaxNode): SyntaxNode | null {
+  const parent = item.parent?.parent ?? null;
+  if (parent === null || parent.name !== "ListItem") {
+    return null;
+  }
+  return listMarkOf(parent) !== null ? parent : null;
+}
+
+/** The last `ListItem` sibling within `listNode` (an `OrderedList` /
+ *  `BulletList`), or null when the list has no ListItem children. */
+export function lastListItemOf(listNode: SyntaxNode): SyntaxNode | null {
+  let last: SyntaxNode | null = null;
+  for (let n = listNode.firstChild; n !== null; n = n.nextSibling) {
+    if (n.name === "ListItem") {
+      last = n;
+    }
+  }
+  return last;
+}
+
+/** The `ListItem` siblings following `item` within the same list, in document
+ *  order (a Lezer-sibling walk, not a line scan). */
+export function followingListItems(item: SyntaxNode): SyntaxNode[] {
+  const out: SyntaxNode[] = [];
+  for (let n = item.nextSibling; n !== null; n = n.nextSibling) {
+    if (n.name === "ListItem") {
+      out.push(n);
+    }
+  }
+  return out;
+}
+
+/** The item `item` should nest under when indenting: its preceding sibling
+ *  `ListItem` when one exists; otherwise, when `item` is the first item of its
+ *  list AND the list's own preceding sibling is another list node (adjacent
+ *  lists — e.g. an ordered list immediately followed by a bullet list), the
+ *  last `ListItem` of that preceding list (cross-list resolution). Null when
+ *  neither resolves (item is the doc's first list item). */
+export function destinationForIndent(item: SyntaxNode): SyntaxNode | null {
+  const prev = item.prevSibling;
+  if (prev !== null && prev.name === "ListItem") {
+    return prev;
+  }
+  const list = item.parent;
+  const prevList = list?.prevSibling ?? null;
+  if (prevList !== null && isListNode(prevList)) {
+    return lastListItemOf(prevList);
+  }
+  return null;
+}
+
+/** The item `item` should promote to when outdenting: the enclosing parent
+ *  item whose run it joins. Alias of `enclosingListItem` kept as a distinct
+ *  name so callers express intent (indent destination vs. outdent
+ *  destination) rather than the raw tree-shape query. */
+export function destinationForOutdent(item: SyntaxNode): SyntaxNode | null {
+  return enclosingListItem(item);
+}
+
 /** True when `pos` sits inside a `FencedCode` / `CodeBlock`. Resolves AT the
  *  caret (biased left so a caret at the end of a fence-opener line resolves into
  *  the fence) and walks ancestors — so a fence that begins on a list item's

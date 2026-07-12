@@ -29,76 +29,32 @@ import { type ChangeSpec, EditorSelection, type EditorState, Prec } from "@codem
 import { type Command, keymap } from "@codemirror/view";
 
 import { leadingFrontmatterEnd } from "../frontmatter/detect.js";
-import { isContentlessTaskParagraph } from "../task-checkbox/task-marker-shape.js";
 import { findTaskMarker } from "./list-geometry.js";
+import {
+  continuationMarkerFor,
+  isEmptyItem,
+  parseListMark,
+  renumberRun,
+} from "./list-transform.js";
 import { caretInCode, listItemAt, listMarkOf, type SyntaxNode } from "./list-tree.js";
 
-/** True when the item has no continuable content: a bare `- ` / `1. `, a
- *  content-less bare task marker (`- [ ]`, which the grammar leaves as a 3-byte
- *  Paragraph), or a `Task` node with only whitespace after its 3-byte
- *  `TaskMarker` (`- [ ] ` / `- [x] ` — the just-typed empty task, which the
- *  grammar emits as a `Task`, not a content-less Paragraph). */
-function isEmptyItem(state: EditorState, content: SyntaxNode | null): boolean {
-  if (content === null || content.from === content.to) {
-    return true;
-  }
-  if (isContentlessTaskParagraph(state, content)) {
-    return true;
-  }
-  if (content.name === "Task") {
-    const marker = findTaskMarker(state, content);
-    if (marker !== null && state.doc.sliceString(marker.to, content.to).trim() === "") {
-      return true;
-    }
-  }
-  return false;
-}
-
-/** Bump every following `ListItem` sibling of the edited item's `OrderedList` by
- *  +1 (they shift down one because a new item was inserted before them). Uses the
- *  Lezer sibling relationship — NOT a line scan — so it is correct across
- *  lazy-continuation lines (inside the item, not siblings), blockquote-prefixed
- *  lists (positions are absolute), and tab-mixed indent. Re-resolves the item
- *  from an EOF-bounded tree because listItemAt's caret-line-bounded tree does not
- *  contain the siblings below the caret. Positions are original-document offsets,
- *  disjoint from the caret insert, so they compose in one ChangeSpec array.
- *
- *  Fail-closed: a null `ensureSyntaxTree` means the parse did not reach EOF within
- *  budget, so the list tail may be unparsed. Renumbering only the visible prefix
- *  would leave a split-brain run (worse than none), so skip renumber entirely —
- *  the insert still lands; the tail keeps its original numbers. */
-function orderedRenumberChanges(state: EditorState, markFrom: number): ChangeSpec[] {
+/** Re-resolve `item` from an EOF-bounded tree: `listItemAt`'s caret-line-bounded
+ *  tree does not contain the siblings below the caret, which `renumberRun`
+ *  needs to walk. Fail-closed: a null `ensureSyntaxTree` means the parse did
+ *  not reach EOF within budget, so the list tail may be unparsed — returning
+ *  null here makes the caller skip renumber entirely (the insert still lands;
+ *  the tail keeps its original numbers) rather than renumber only the visible
+ *  prefix (a split-brain run, worse than none). */
+function resolveAtEof(state: EditorState, markFrom: number): SyntaxNode | null {
   const tree = ensureSyntaxTree(state, state.doc.length, 50);
   if (tree === null) {
-    return [];
+    return null;
   }
   let item: SyntaxNode | null = tree.resolveInner(markFrom, 1);
   while (item !== null && item.name !== "ListItem") {
     item = item.parent;
   }
-  if (item === null || item.parent?.name !== "OrderedList") {
-    return [];
-  }
-  const changes: ChangeSpec[] = [];
-  for (let sib = item.nextSibling; sib !== null; sib = sib.nextSibling) {
-    if (sib.name !== "ListItem") {
-      continue;
-    }
-    const sibMark = sib.firstChild;
-    if (sibMark === null || sibMark.name !== "ListMark") {
-      continue;
-    }
-    const m = /^(\d+)([.)])$/.exec(state.doc.sliceString(sibMark.from, sibMark.to));
-    if (m === null) {
-      continue;
-    }
-    changes.push({
-      from: sibMark.from,
-      to: sibMark.from + m[1].length,
-      insert: String(Number.parseInt(m[1], 10) + 1),
-    });
-  }
-  return changes;
+  return item;
 }
 
 export const continueListOnEnter: Command = (view) => {
@@ -143,7 +99,7 @@ export const continueListOnEnter: Command = (view) => {
   }
   const content = mark.nextSibling;
   const indent = state.doc.sliceString(caretLine.from, mark.from);
-  if (isEmptyItem(state, content)) {
+  if (isEmptyItem(state, item)) {
     // Empty item → remove the whole marker line, exiting the list. Uniform across
     // nesting: no outdent (outdentListItem shifts whitespace only and would leave
     // a duplicate ordered number at the promoted level — Codex review 2026-07-11).
@@ -166,28 +122,25 @@ export const continueListOnEnter: Command = (view) => {
   if (head < contentStart) {
     return false;
   }
-  let base: string;
-  if (bullet) {
-    base = state.doc.sliceString(mark.from, mark.to);
-  } else {
-    const m = /^(\d+)([.)])$/.exec(state.doc.sliceString(mark.from, mark.to));
-    if (m === null) {
-      return false;
-    }
-    const n = Number.parseInt(m[1], 10);
-    if (!Number.isFinite(n)) {
-      return false;
-    }
-    base = `${n + 1}${m[2]}`;
+  const markerStr = continuationMarkerFor(state, item);
+  if (markerStr === null) {
+    return false;
   }
-  const markerStr = isTask ? `${base} [ ] ` : `${base} `;
   const insert = `\n${indent}${markerStr}`;
   const caret = head + insert.length;
   const changes: ChangeSpec[] = [{ from: head, insert }];
   if (ordered) {
     // Keep the contiguous ordered run sequential; caret is unaffected because the
-    // renumber edits sit past `head`.
-    changes.push(...orderedRenumberChanges(state, mark.from));
+    // renumber edits sit past `head`. Re-resolve from an EOF-bounded tree (the
+    // caret-bounded `item` above does not see siblings past the caret).
+    const eofItem = resolveAtEof(state, mark.from);
+    const precedingShape = parseListMark(state.doc.sliceString(mark.from, mark.to));
+    if (eofItem !== null && precedingShape !== null && precedingShape.kind === "ordered") {
+      // The inserted item's own number is precedingNumber + 1 (continuationMarkerFor's
+      // ordered branch); the first following sibling continues one past that.
+      const editedNumber = precedingShape.number + 1;
+      changes.push(...renumberRun(state, eofItem, editedNumber + 1));
+    }
   }
   view.dispatch({
     changes,
