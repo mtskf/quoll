@@ -456,8 +456,13 @@ describe("CopyButtonWidget", () => {
       expect(region.getAttribute("aria-live")).toBe("assertive");
 
       // Second click, BEFORE the second settle: click-start clear fires synchronously.
+      // Assert BOTH the text clear AND the polite reset at this instant — the whole
+      // point is that the failure's assertive politeness must not leak into the
+      // success window (a later success settle re-sets polite anyway, so only this
+      // synchronous check pins the click-start reset).
       btn.dispatchEvent(new MouseEvent("click", { bubbles: true }));
       expect(region.textContent).toBe("");
+      expect(region.getAttribute("aria-live")).toBe("polite");
 
       await Promise.resolve();
       await Promise.resolve();
