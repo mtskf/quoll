@@ -306,7 +306,7 @@ export function renumberRun(
     }
     const next = orderedShape(shape.number + delta, shape.delim);
     if (next === null) {
-      return []; // out of the 1..9-digit ListMark range (over cap OR driven
+      return []; // out of the 0..9-digit ListMark range (over cap OR driven
       // negative by the delta) — fail closed rather than emit a corrupt marker
     }
     const oldWidth = sibMark.to - sibMark.from;
@@ -511,7 +511,7 @@ export function planOutdentItem(state: EditorState, headPos: number): ListEditPl
   // 1`). Distinct from the empty path's `newMarker` (a full continuation string
   // incl. trailing space + optional `[ ] `, used only for the caret) so a
   // task-ness `[ ] ` never leaks into the content-column math. (`adopted` came
-  // from `orderedShape`, so its number is already within the 1..9-digit range —
+  // from `orderedShape`, so its number is already within the 0..9-digit range —
   // no separate cap re-check here.)
   const listMarkerLen = formatMarker(adopted).length;
   const oldMarkerLen = mark.to - mark.from;
