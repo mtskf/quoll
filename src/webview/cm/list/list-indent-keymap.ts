@@ -53,7 +53,17 @@ function applyShift(
       annotations: isolateHistory.of("full"),
     });
   } catch (err) {
-    console.error("[quoll] list indent dispatch failed", err);
+    // Log enough context to diagnose a planner regression: `ChangeSet.of`
+    // throws on OVERLAPPING ChangeSpecs (a disjointness-map bug) and
+    // `view.dispatch` throws on an out-of-range selection — a bare `err` alone
+    // does not say which transaction produced it.
+    console.error("[quoll] list indent dispatch failed", {
+      err,
+      userEvent,
+      docLength: view.state.doc.length,
+      selection: view.state.selection.main,
+      changeCount: plan.changes.length,
+    });
   }
   return true;
 }

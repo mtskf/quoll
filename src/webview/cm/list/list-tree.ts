@@ -53,8 +53,8 @@ export function isListNode(node: SyntaxNode): boolean {
 /** The `ListItem` that encloses `item`'s list (shape: ListItem > list >
  *  ListItem), or null when `item` is top-level. Requires the wrapper parent to
  *  carry a `ListMark` so the walk-up only climbs well-formed nesting — the
- *  single definition consolidating the private dupes in list-indent-keymap.ts
- *  and list-geometry.ts (not yet rerouted; see task-3 brief). */
+ *  shared definition; `list-geometry.ts` still keeps its own private copy (not
+ *  yet rerouted here). */
 export function enclosingListItem(item: SyntaxNode): SyntaxNode | null {
   const parent = item.parent?.parent ?? null;
   if (parent === null || parent.name !== "ListItem") {

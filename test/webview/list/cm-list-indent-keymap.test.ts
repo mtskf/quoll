@@ -579,6 +579,27 @@ describe("outdentListItem", () => {
     }
   });
 
+  // (disjointness) A forced child that is BOTH re-indented AND renumbered with a
+  //     width CROSS (10. -> 1., 3 bytes -> 2) has its marker-width delta and its
+  //     re-indent delta funneled into ONE net per-line change. If they were
+  //     emitted as two overlapping ChangeSpecs, ChangeSet.of would throw and
+  //     applyShift's catch would silently swallow the whole outdent — so a clean
+  //     dispatch (doc-string equality) proves the catch is an unreachable path.
+  it("(disjointness) width-crossing forced child folds to one net change; no throw", () => {
+    const view = mount("1. p\n   9. a\n   10. b\n2. c", EditorSelection.cursor(0));
+    view.dispatch({ selection: at(view, 2, 6) }); // caret in "   9. a"
+    try {
+      expect(outdentListItem(view)).toBe(true);
+      // "9. a" -> "2. a" at top; forced "10. b" (3 bytes) renumbers to child
+      // "1. b" (2 bytes, a width CROSS) AND re-indents to content col 3, both
+      // as ONE net change. dest "2. c" -> "3. c". No overlapping ChangeSpec.
+      expect(view.state.doc.toString()).toBe("1. p\n2. a\n   1. b\n3. c");
+      expect(itemDepth(view, 3)).toBe(2); // "1. b" nested under "2. a"
+    } finally {
+      view.destroy();
+    }
+  });
+
   it("returns true (swallow) in a plain paragraph", () => {
     const view = mount("paragraph", EditorSelection.cursor(3));
     try {

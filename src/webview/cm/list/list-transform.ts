@@ -21,8 +21,17 @@
  * incorrectly relocate text that (by CommonMark's own rules) doesn't
  * structurally belong to it.
  *
- * Later tasks will build on these primitives to handle list-structure transforms
- * (indent/dedent, renumbering, marker rewriting).
+ * Built on these primitives, this module also owns the list-structure
+ * transforms themselves: `renumberRun` (width-aware run resequencing) and the
+ * Tab/Shift-Tab planners `planIndentItem` / `planOutdentItem` (content-column
+ * nesting, marker adoption, forced-child re-homing), each returning a
+ * `ListEditPlan` the `list-indent-keymap.ts` shell dispatches.
+ *
+ * TODO (follow-up, out of scope here to keep 1PR=1purpose): this file has grown
+ * past the 500-line guideline — the planners + their private helpers
+ * (`resolveItemAtEof`, `addLineDelta`, `materialiseLineDeltas`, the adopt/shape
+ * builders) form a distinct concern from the marker primitives / classification
+ * and could move to a `list-indent-plan.ts`, leaving the primitives here.
  */
 
 import { ensureSyntaxTree } from "@codemirror/language";
@@ -83,10 +92,7 @@ export function formatMarker(shape: ListMarkShape): string {
  *  a fallback for an empty/malformed item so it is NEVER null: `markCol +
  *  markerLen + 1` (the CommonMark implied single-space content indent — the
  *  same convention `list-geometry.ts`'s `ownMarkerWidth` uses for an empty
- *  item's hang). This is a separate copy from `list-indent-keymap.ts`'s
- *  private `contentColumnOf` (which returns `null` on empty items — its
- *  `indentListItem`/`outdentListItem` callers treat that as a no-op); the two
- *  are consolidated when that module's commands are rewritten in a later task. */
+ *  item's hang). */
 export function contentColumnOf(state: EditorState, item: SyntaxNode): number {
   const mark = listMarkOf(item);
   if (mark === null) {
@@ -607,9 +613,7 @@ export function planOutdentItem(state: EditorState, headPos: number): ListEditPl
   }
 
   changes.push(...materialiseLineDeltas(state, lineDeltas));
-  return selection === undefined
-    ? { kind: "edit", changes }
-    : { kind: "edit", changes, selection };
+  return selection === undefined ? { kind: "edit", changes } : { kind: "edit", changes, selection };
 }
 
 /** The destination child-run `item` would JOIN when nesting under `parent`:
