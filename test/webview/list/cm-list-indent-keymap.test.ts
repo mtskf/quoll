@@ -582,6 +582,29 @@ describe("outdentListItem", () => {
     }
   });
 
+  // (test-analyzer-2) empty item under an ORDERED parent: the empty-path caret
+  //     synthesis and the destination renumber fire in the SAME transaction.
+  //     Existing empty-item + destination-renumber coverage uses BULLET parents
+  //     (no renumber path). Here the empty child "2." under "1. p" promotes to
+  //     the parent's next ordered sibling "2. ", and the parent's following
+  //     top-level sibling "2. q" renumbers to "3. q". Pins that the ordered
+  //     destination run renumbers AND the caret coordinate survives the renumber
+  //     insert (disjoint spans compose correctly).
+  //     (An empty BULLET child "- " here mis-parses as a setext underline under
+  //     the "1. p" paragraph, so the fixture uses an ordered empty child.)
+  it("(test-analyzer-2) empty item under an ordered parent renumbers the destination run", () => {
+    const view = mount("1. p\n   2. \n2. q", EditorSelection.cursor(0));
+    view.dispatch({ selection: EditorSelection.cursor(view.state.doc.line(2).to) }); // empty "   2. "
+    try {
+      expect(outdentListItem(view)).toBe(true);
+      expect(view.state.doc.toString()).toBe("1. p\n2. \n3. q");
+      // Caret right after the synthesized "2. " on line 2.
+      expect(view.state.selection.main.head).toBe(view.state.doc.line(2).to);
+    } finally {
+      view.destroy();
+    }
+  });
+
   // (test-analyzer-3) tab-indented nested item outdent: the documented
   //     whole-tab removal (leadingCharsForColumns counts a straddling tab
   //     whole) is exercised — a tab-indented child promotes by removing the
