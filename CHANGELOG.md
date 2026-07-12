@@ -5,21 +5,18 @@ All notable changes to Quoll are documented here.
 ## 0.1.43 — 2026-07-12
 
 ### Fixed
-- recover scroll and viewport on the webview visible edge with the outline pinned (#201)
 
 - With the outline panel pinned, switching away from and back to a Quoll tab (including the Cmd+Option+K context hand-off) no longer leaves the editor blank or partially blank until you scroll — the editor now restores your position and redraws the text immediately.
 
 ## 0.1.42 — 2026-07-11
 
 ### Fixed
-- recover scroll and viewport on the webview visible edge with the outline pinned (#201)
 
 - With the document outline pinned, pressing Cmd+Option+K (hand the selection to Claude Code) no longer squeezes the editor into a one-character-wide column. The reading column now keeps its width through the hand-off.
 
 ## 0.1.41 — 2026-07-11
 
 ### Fixed
-- recover scroll and viewport on the webview visible edge with the outline pinned (#201)
 
 - The cat title-bar button on a Markdown text tab now swaps that tab to the Quoll editor in place, instead of leaving the text tab open and adding a second Quoll tab. It mirrors the file-code button's Quoll→text swap, so switching either direction keeps you on a single tab.
 - Blockquotes and callouts now keep a small vertical gap from the block directly above and below them, even when no blank line separates them in the source. A panel that immediately follows a list item or paragraph no longer renders flush against that line's bottom edge, while nested quotes stay visually joined to their parent.
@@ -34,11 +31,6 @@ All notable changes to Quoll are documented here.
 - Opt-in advisory prose lint rules: flags passive voice, filler/hedge words, and sentences over 30 words as info-level hints in paragraphs. Off by default — enable with the `quoll.lint.prose.enabled` setting.
 
 ### Changed
-- move lint/ + image/ + commands/ buckets into src/extension/ subdirs (#205)
-- move conflict/ + config/ + links/ buckets into src/extension/ subdirs (#204)
-- move surface/ bucket into src/extension/surface/ (#203)
-- move handoff/ bucket into src/extension/handoff/ (#202)
-- move session/ bucket into src/extension/session/ (#200)
 
 - The outline's "OUTLINE" header is now a plain label; folding happens per heading instead of collapsing the whole panel.
 
@@ -55,11 +47,6 @@ All notable changes to Quoll are documented here.
 - Add title-bar buttons to switch between Quoll and the built-in text editor from either side: a cat icon on a Markdown text editor opens it in Quoll, and a file-code icon on a Quoll editor reopens it as text.
 
 ### Changed
-- move lint/ + image/ + commands/ buckets into src/extension/ subdirs (#205)
-- move conflict/ + config/ + links/ buckets into src/extension/ subdirs (#204)
-- move surface/ bucket into src/extension/surface/ (#203)
-- move handoff/ bucket into src/extension/handoff/ (#202)
-- move session/ bucket into src/extension/session/ (#200)
 
 - Polish the document outline sidebar to match VS Code's native side panels: the corner toggle and pin button use proper icons, the "OUTLINE" header now reads and behaves like the built-in EXPLORER section (including a chevron to collapse/expand it), and row alignment sits under the header label.
 - Switch the toolbar's "open in text editor" icon to better match what it does.
@@ -72,11 +59,6 @@ All notable changes to Quoll are documented here.
 - Smart list continuation: pressing Enter at the end of a list item now continues the list (adding the next bullet, or the next number for ordered lists) instead of just inserting a blank line, and pressing Enter on an empty list item exits the list instead of leaving a dangling empty marker. Deleting or reordering items in an ordered list renumbers the remaining items to stay sequential.
 
 ### Changed
-- move lint/ + image/ + commands/ buckets into src/extension/ subdirs (#205)
-- move conflict/ + config/ + links/ buckets into src/extension/ subdirs (#204)
-- move surface/ bucket into src/extension/surface/ (#203)
-- move handoff/ bucket into src/extension/handoff/ (#202)
-- move session/ bucket into src/extension/session/ (#200)
 
 - Refresh the Marketplace branding: a new extension icon, updated hero and editor-overview images, and a tidied README header.
 
