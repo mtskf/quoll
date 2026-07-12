@@ -57,18 +57,19 @@ import {
   type FormatCommandMessage,
   isWebviewToHost,
 } from "../../shared/protocol.js";
-import { createDiskConflictWiring } from "../disk-conflict-wiring.js";
-import { createEditorConfigWiring } from "../editor-config-wiring.js";
-import { isRelevantConfigChange, readEditorPrefs } from "../editor-prefs-config.js";
+import { createEditorConfigWiring } from "../config/editor-config-wiring.js";
+import { isRelevantConfigChange, readEditorPrefs } from "../config/editor-prefs-config.js";
+import { handleUpdateConfig } from "../config/handle-update-config.js";
+import { createThemeSyncWiring } from "../config/theme-sync-wiring.js";
+import { createDiskConflictWiring } from "../conflict/disk-conflict-wiring.js";
 import { clearActiveFormatPoster, setActiveFormatPoster } from "../format-command.js";
 import { getNonce } from "../get-nonce.js";
-import { handleOpenExternal } from "../handle-open-external.js";
-import { handleOpenLink } from "../handle-open-link.js";
-import { handleUpdateConfig } from "../handle-update-config.js";
 import { createCaretHandoffWiring } from "../handoff/caret-handoff-wiring.js";
 import { createContextHandoffWiring } from "../handoff/context-handoff-wiring.js";
 import { takeSwitchCaret } from "../handoff/editor-switch-caret.js";
 import { createImageWriteWiring } from "../image-write-wiring.js";
+import { handleOpenExternal } from "../links/handle-open-external.js";
+import { handleOpenLink } from "../links/handle-open-link.js";
 import { toLintDiagnostics } from "../lint-diagnostics.js";
 import { LintMirror } from "../lint-mirror.js";
 import type { StatusBarSlots } from "../status-bar.js";
@@ -79,7 +80,6 @@ import { showSafely } from "../surface/show-safely.js";
 import { noteSurface } from "../surface/surface-memory.js";
 import { finalizeSurfaceSwap, findSourceTab } from "../surface/surface-swap.js";
 import type { PanelControls, TestHarness } from "../test-harness.js";
-import { createThemeSyncWiring } from "../theme-sync-wiring.js";
 import {
   buildLocalResourceRoots,
   buildResourceBaseUri,

@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   createDiskConflictWiring,
   shouldWatchDiskConflicts,
-} from "../../src/extension/disk-conflict-wiring.js";
+} from "../../src/extension/conflict/disk-conflict-wiring.js";
 
 describe("shouldWatchDiskConflicts", () => {
   it("watches file-scheme documents (a real backing disk to diverge from)", () => {

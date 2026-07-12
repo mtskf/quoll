@@ -32,7 +32,7 @@
 // shared module is rejected as scope creep (10 LOC ×2 is cheaper than
 // a third file in the C9b deletion footprint).
 
-import { isAllowedUrl } from "../markdown/url-allowlist.js";
+import { isAllowedUrl } from "../../markdown/url-allowlist.js";
 
 const OPENABLE_SCHEMES = new Set(["http", "https", "mailto"]);
 

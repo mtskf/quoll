@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   createEditorConfigWiring,
   type EditorConfigWiringDeps,
-} from "../../src/extension/editor-config-wiring.js";
+} from "../../src/extension/config/editor-config-wiring.js";
 
 function makeWiring(overrides: Partial<EditorConfigWiringDeps> = {}) {
   let onRelevantChange: (() => void) | null = null;

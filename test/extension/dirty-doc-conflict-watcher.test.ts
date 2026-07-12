@@ -4,7 +4,7 @@ import {
   CONFLICT_DEBOUNCE_MS,
   createDirtyDocConflictWatcher,
   type DirtyDocConflictWatcherDeps,
-} from "../../src/extension/dirty-doc-conflict-watcher.js";
+} from "../../src/extension/conflict/dirty-doc-conflict-watcher.js";
 
 const URI = "file:///doc.md";
 const RELOAD = "Reload from disk";

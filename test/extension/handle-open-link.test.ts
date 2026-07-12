@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { Uri } from "vscode"; // vitest-aliased to test/extension/vscode-stub.ts (joinPath only)
-import { type HandleOpenLinkDeps, handleOpenLink } from "../../src/extension/handle-open-link.js";
+import {
+  type HandleOpenLinkDeps,
+  handleOpenLink,
+} from "../../src/extension/links/handle-open-link.js";
 
 const makeUri = (path: string) => ({ path }) as unknown as import("vscode").Uri;
 
