@@ -6,8 +6,11 @@ import { EditorView } from "@codemirror/view";
 import { describe, expect, it } from "vitest";
 import {
   classifyItemLines,
+  continuationMarkerFor,
   formatMarker,
+  isEmptyItem,
   parseListMark,
+  renumberRun,
 } from "../../../src/webview/cm/list/list-transform.js";
 
 function forceParse(view: EditorView): EditorView {
@@ -79,6 +82,132 @@ describe("formatMarker", () => {
   it("round-trips (zero-pad width not preserved — plain decimal)", () => {
     expect(formatMarker({ kind: "bullet", glyph: "*" })).toBe("*");
     expect(formatMarker({ kind: "ordered", number: 3, delim: ")" })).toBe("3)");
+  });
+});
+
+describe("renumberRun", () => {
+  it("re-indents a widened sibling's nested child (9. -> 10.)", () => {
+    const view = mount("8. a\n9. b\n   - child\n", EditorSelection.cursor(0));
+    try {
+      const a = resolveItemAtLine(view.state, 1); // "8. a"
+      // Renumber followers of "8. a" from 10: "9. b" -> "10. b" (width 1->2),
+      // so its child "   - child" gains one leading space -> "    - child".
+      view.dispatch({ changes: renumberRun(view.state, a, 10) });
+      expect(view.state.doc.toString()).toBe("8. a\n10. b\n    - child\n");
+    } finally {
+      view.destroy();
+    }
+  });
+
+  it("preserves the run's `)` delimiter while renumbering", () => {
+    // CommonMark requires a uniform delimiter within one OrderedList (a mixed
+    // delimiter starts a NEW list, so a genuine Lezer-sibling run always shares
+    // one delimiter) — this pins that renumberRun reads each sibling's OWN
+    // delimiter from its marker rather than hard-coding "." .
+    const view = mount("1) a\n2) b\n3) c", EditorSelection.cursor(0));
+    try {
+      const a = resolveItemAtLine(view.state, 1);
+      view.dispatch({ changes: renumberRun(view.state, a, 5) });
+      expect(view.state.doc.toString()).toBe("1) a\n5) b\n6) c");
+    } finally {
+      view.destroy();
+    }
+  });
+
+  it("does not touch a following sibling's own width when width is unchanged", () => {
+    const view = mount("1. a\n2. b\nlazy line\n3. c", EditorSelection.cursor(0));
+    try {
+      const a = resolveItemAtLine(view.state, 1);
+      view.dispatch({ changes: renumberRun(view.state, a, 2) });
+      expect(view.state.doc.toString()).toBe("1. a\n2. b\nlazy line\n3. c");
+    } finally {
+      view.destroy();
+    }
+  });
+
+  it("fails closed (returns []) when a new number would exceed 9 digits", () => {
+    const view = mount("1. a\n2. b\n", EditorSelection.cursor(0));
+    try {
+      const a = resolveItemAtLine(view.state, 1);
+      const changes = renumberRun(view.state, a, 1_000_000_000);
+      expect(changes).toEqual([]);
+    } finally {
+      view.destroy();
+    }
+  });
+});
+
+describe("continuationMarkerFor", () => {
+  it("builds a bullet marker", () => {
+    const view = mount("- a", EditorSelection.cursor(0));
+    try {
+      const item = resolveItemAtLine(view.state, 1);
+      expect(continuationMarkerFor(view.state, item)).toBe("- ");
+    } finally {
+      view.destroy();
+    }
+  });
+
+  it("builds an incremented ordered marker, preserving the delimiter", () => {
+    const view = mount("1) a", EditorSelection.cursor(0));
+    try {
+      const item = resolveItemAtLine(view.state, 1);
+      expect(continuationMarkerFor(view.state, item)).toBe("2) ");
+    } finally {
+      view.destroy();
+    }
+  });
+
+  it("appends an always-unchecked task marker for a task predecessor", () => {
+    const view = mount("- [x] done", EditorSelection.cursor(0));
+    try {
+      const item = resolveItemAtLine(view.state, 1);
+      expect(continuationMarkerFor(view.state, item)).toBe("- [ ] ");
+    } finally {
+      view.destroy();
+    }
+  });
+});
+
+describe("isEmptyItem", () => {
+  it("is true for a bare bullet marker", () => {
+    const view = mount("- ", EditorSelection.cursor(0));
+    try {
+      const item = resolveItemAtLine(view.state, 1);
+      expect(isEmptyItem(view.state, item)).toBe(true);
+    } finally {
+      view.destroy();
+    }
+  });
+
+  it("is true for a content-less `[ ]` task Paragraph", () => {
+    const view = mount("- [ ]", EditorSelection.cursor(0));
+    try {
+      const item = resolveItemAtLine(view.state, 1);
+      expect(isEmptyItem(view.state, item)).toBe(true);
+    } finally {
+      view.destroy();
+    }
+  });
+
+  it("is true for a whitespace-only Task", () => {
+    const view = mount("- [ ] ", EditorSelection.cursor(0));
+    try {
+      const item = resolveItemAtLine(view.state, 1);
+      expect(isEmptyItem(view.state, item)).toBe(true);
+    } finally {
+      view.destroy();
+    }
+  });
+
+  it("is false for a non-empty item", () => {
+    const view = mount("- a", EditorSelection.cursor(0));
+    try {
+      const item = resolveItemAtLine(view.state, 1);
+      expect(isEmptyItem(view.state, item)).toBe(false);
+    } finally {
+      view.destroy();
+    }
   });
 });
 

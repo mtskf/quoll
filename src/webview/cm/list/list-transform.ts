@@ -25,9 +25,11 @@
  * (indent/dedent, renumbering, marker rewriting).
  */
 
-import type { EditorState } from "@codemirror/state";
+import { ensureSyntaxTree } from "@codemirror/language";
+import type { ChangeSpec, EditorState } from "@codemirror/state";
 
-import { columnAt } from "./list-geometry.js";
+import { isContentlessTaskParagraph } from "../task-checkbox/task-marker-shape.js";
+import { columnAt, findTaskMarker, isTaskItem } from "./list-geometry.js";
 import { listMarkOf, type SyntaxNode } from "./list-tree.js";
 
 export type ListMarkShape =
@@ -119,4 +121,171 @@ export function classifyItemLines(
     }
   }
   return { markerLine, ownLines };
+}
+
+/** Number of leading-whitespace CHARS whose expanded columns reach `cols` (a
+ *  straddling tab is counted whole → slight over-de-dent, documented). Stops at
+ *  the first non-whitespace char. MOVE-BY-COPY from `list-indent-keymap.ts`
+ *  (kept there too — its old `shiftItemLines`/commands still use their own
+ *  copy until the Task 5/6 consolidation; do not delete the original). */
+export function leadingCharsForColumns(text: string, cols: number, tabSize: number): number {
+  let col = 0;
+  let i = 0;
+  while (i < text.length && col < cols) {
+    const ch = text.charCodeAt(i);
+    if (ch === 0x20) {
+      col += 1;
+    } else if (ch === 0x09) {
+      col += tabSize - (col % tabSize);
+    } else {
+      break;
+    }
+    i++;
+  }
+  return i;
+}
+
+/** True when the item has no continuable content: a bare `- ` / `1. `, a
+ *  content-less bare task marker (`- [ ]`, which the grammar leaves as a 3-byte
+ *  Paragraph), or a `Task` node with only whitespace after its 3-byte
+ *  `TaskMarker` (`- [ ] ` / `- [x] ` — the just-typed empty task, which the
+ *  grammar emits as a `Task`, not a content-less Paragraph). Re-homed from
+ *  `list-continuation-keymap.ts`'s private helper to take the ITEM (deriving
+ *  `content` internally) rather than the content node, so callers besides
+ *  Enter-continuation (planners) can share it without re-deriving `content`
+ *  themselves. */
+export function isEmptyItem(state: EditorState, item: SyntaxNode): boolean {
+  const content = listMarkOf(item)?.nextSibling ?? null;
+  if (content === null || content.from === content.to) {
+    return true;
+  }
+  if (isContentlessTaskParagraph(state, content)) {
+    return true;
+  }
+  if (content.name === "Task") {
+    const marker = findTaskMarker(state, content);
+    if (marker !== null && state.doc.sliceString(marker.to, content.to).trim() === "") {
+      return true;
+    }
+  }
+  return false;
+}
+
+/** The marker + trailing space Enter-continuation would insert to continue
+ *  `item` — bullet → `"<glyph> "`; ordered → `"<number+1><delim> "`; a task
+ *  predecessor (detected via `isTaskItem`, so a content-less `- [ ]` counts)
+ *  appends `"[ ] "` (ALWAYS unchecked, regardless of the predecessor's checked
+ *  state). Null for a non-list item or a malformed ordered marker. Extracted
+ *  from `continueListOnEnter`'s inline marker construction so the shared
+ *  `renumberRun` caller and Enter build the identical string. */
+export function continuationMarkerFor(state: EditorState, item: SyntaxNode): string | null {
+  const mark = listMarkOf(item);
+  if (mark === null) {
+    return null;
+  }
+  const ordered = item.parent?.name === "OrderedList";
+  const bullet = item.parent?.name === "BulletList";
+  if (!ordered && !bullet) {
+    return null;
+  }
+  let base: string;
+  if (bullet) {
+    base = state.doc.sliceString(mark.from, mark.to);
+  } else {
+    const shape = parseListMark(state.doc.sliceString(mark.from, mark.to));
+    if (shape === null || shape.kind !== "ordered") {
+      return null;
+    }
+    base = formatMarker({ kind: "ordered", number: shape.number + 1, delim: shape.delim });
+  }
+  return isTaskItem(state, item) ? `${base} [ ] ` : `${base} `;
+}
+
+/** For each following `ListItem` sibling of `afterItem` within its
+ *  `OrderedList`, rewrite its `ListMark` number by the SAME delta — the delta
+ *  that would make an item immediately following `afterItem` become
+ *  `startNumber` (i.e. `delta = startNumber - (afterItem's own number + 1)`)
+ *  — preserving every sibling's own gap from the next (a user-typed
+ *  `1. / 5. / 9.` run stays `1. / 5. / 10.` after inserting a `6.` after `5.`,
+ *  not resequenced to `1. / 5. / 6.`). Anchored on `afterItem`'s OWN number
+ *  (not the first following sibling's) so a caller inserting exactly one new
+ *  item always passes `startNumber = <new item's number> + 1` and gets a
+ *  uniform `+1` shift regardless of gaps in the existing run. Each sibling's
+ *  own delimiter is preserved. Uses the Lezer sibling relationship — NOT a
+ *  line scan — so it is correct across lazy-continuation lines (inside a
+ *  sibling item, not between siblings), blockquote-prefixed lists (positions
+ *  are absolute), and tab-mixed indent.
+ *
+ *  Width-aware (the latent bug this consolidation fixes): when a rewrite
+ *  changes the marker's BYTE WIDTH (e.g. `9.` → `10.`, 1 digit → 2), the
+ *  sibling's content column shifts, so its own body/descendant lines
+ *  (`classifyItemLines(state, sib).ownLines`) must shift with it — otherwise a
+ *  nested child that was exactly at the OLD content column falls out of the
+ *  widened item (a genuinely nested child reads as a lazy/sibling line
+ *  instead). Emits a leading-space insert (width grew) or removal (width
+ *  shrank) for each own line, sized to the byte-width delta.
+ *
+ *  Fail-closed: a null `ensureSyntaxTree` (parse did not reach EOF within
+ *  budget — the list tail may be unparsed) or any resulting marker exceeding
+ *  9 digits (`@lezer/markdown` stops treating a 10+-digit run as a ListMark,
+ *  the same cap `parseListMark` enforces) returns `[]` rather than emitting a
+ *  split-brain / corrupting renumber. */
+export function renumberRun(
+  state: EditorState,
+  afterItem: SyntaxNode,
+  startNumber: number
+): ChangeSpec[] {
+  if (afterItem.parent?.name !== "OrderedList") {
+    return [];
+  }
+  const afterMark = listMarkOf(afterItem);
+  if (afterMark === null) {
+    return [];
+  }
+  const afterShape = parseListMark(state.doc.sliceString(afterMark.from, afterMark.to));
+  if (afterShape === null || afterShape.kind !== "ordered") {
+    return [];
+  }
+  const delta = startNumber - (afterShape.number + 1);
+  const tree = ensureSyntaxTree(state, state.doc.length, 50);
+  if (tree === null) {
+    return [];
+  }
+  const changes: ChangeSpec[] = [];
+  for (let sib = afterItem.nextSibling; sib !== null; sib = sib.nextSibling) {
+    if (sib.name !== "ListItem") {
+      continue;
+    }
+    const sibMark = listMarkOf(sib);
+    if (sibMark === null) {
+      continue;
+    }
+    const shape = parseListMark(state.doc.sliceString(sibMark.from, sibMark.to));
+    if (shape === null || shape.kind !== "ordered") {
+      continue;
+    }
+    const n = shape.number + delta;
+    if (n > 999_999_999) {
+      return []; // would exceed Lezer's 9-digit ListMark cap — fail closed
+    }
+    const oldWidth = sibMark.to - sibMark.from;
+    const newMarker = formatMarker({ kind: "ordered", number: n, delim: shape.delim });
+    changes.push({ from: sibMark.from, to: sibMark.to, insert: newMarker });
+    const deltaWidth = newMarker.length - oldWidth;
+    if (deltaWidth !== 0) {
+      const { ownLines } = classifyItemLines(state, sib);
+      for (const lineNo of ownLines) {
+        const line = state.doc.line(lineNo);
+        if (deltaWidth > 0) {
+          changes.push({ from: line.from, insert: " ".repeat(deltaWidth) });
+        } else {
+          const remove = leadingCharsForColumns(line.text, -deltaWidth, state.tabSize);
+          if (remove > 0) {
+            changes.push({ from: line.from, to: line.from + remove });
+          }
+        }
+      }
+    }
+  }
+  return changes;
 }
