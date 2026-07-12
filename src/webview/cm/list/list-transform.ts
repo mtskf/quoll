@@ -613,7 +613,10 @@ export function planOutdentItem(state: EditorState, headPos: number): ListEditPl
   }
 
   changes.push(...materialiseLineDeltas(state, lineDeltas));
-  return selection === undefined ? { kind: "edit", changes } : { kind: "edit", changes, selection };
+  // `selection` is undefined on the non-empty path; the `edit` variant's optional
+  // `selection` carries it either way (the dispatch shell's `=== undefined` guard
+  // drops an undefined one before it reaches `view.dispatch`).
+  return { kind: "edit", changes, selection };
 }
 
 /** The destination child-run `item` would JOIN when nesting under `parent`:
