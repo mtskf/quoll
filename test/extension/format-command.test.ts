@@ -4,7 +4,7 @@ import {
   clearActiveFormatPoster,
   normalizeFormatAction,
   setActiveFormatPoster,
-} from "../../src/extension/format-command.js";
+} from "../../src/extension/commands/format-command.js";
 
 describe("normalizeFormatAction", () => {
   it("accepts the five known actions", () => {

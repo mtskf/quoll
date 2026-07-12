@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Diagnostic, Uri } from "vscode";
-import { type LintDiagnosticSink, LintMirror } from "../../src/extension/lint-mirror.js";
+import { type LintDiagnosticSink, LintMirror } from "../../src/extension/lint/lint-mirror.js";
 
 // Minimal Uri fake — LintMirror only calls .toString() for the cache key.
 const uriOf = (s: string): Uri => ({ toString: () => s }) as unknown as Uri;

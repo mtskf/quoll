@@ -3,7 +3,7 @@
 // result post) as `deps`, so this service unit-tests without the runtime AND a
 // future VS Code FS API change is swapped here, not in the Panel.
 
-import { MAX_IMAGE_DATA_LENGTH } from "../shared/protocol.js";
+import { MAX_IMAGE_DATA_LENGTH } from "../../shared/protocol.js";
 import { decideImageWrite, type ImageRejectReason } from "./image-ingest.js";
 
 export function imageRejectToast(reason: ImageRejectReason): string {

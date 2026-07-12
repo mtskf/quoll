@@ -16,7 +16,7 @@
 // editor provider hands out no registry, so the active panel registers itself).
 
 import { commands, type Disposable } from "vscode";
-import type { FormatCommandMessage } from "../shared/protocol.js";
+import type { FormatCommandMessage } from "../../shared/protocol.js";
 
 export type FormatAction = FormatCommandMessage["action"];
 export type FormatPoster = (action: FormatAction) => void;
