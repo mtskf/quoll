@@ -10,7 +10,7 @@
 //     (that write would not change the effective value → the UI would snap back
 //     silently); an info toast explains why.
 
-import { EDITOR_PREF_DEFAULTS, type EditorPrefKey, isPrefValue } from "../shared/protocol.js";
+import { EDITOR_PREF_DEFAULTS, type EditorPrefKey, isPrefValue } from "../../shared/protocol.js";
 
 const OVERRIDE_MESSAGE =
   "Quoll: this setting is overridden by your workspace settings, so the global change was not applied.";

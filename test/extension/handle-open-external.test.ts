@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { handleOpenExternal } from "../../src/extension/handle-open-external.js";
+import { handleOpenExternal } from "../../src/extension/links/handle-open-external.js";
 
 function deps() {
   const calls: string[] = [];

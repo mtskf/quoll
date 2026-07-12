@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { shouldPromptDiskConflict } from "../../src/extension/disk-conflict";
+import { shouldPromptDiskConflict } from "../../src/extension/conflict/disk-conflict";
 
 describe("shouldPromptDiskConflict", () => {
   it("does not prompt when the buffer is clean, even if disk diverges", () => {

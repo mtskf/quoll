@@ -164,7 +164,7 @@ const CHOKE_POINTS: readonly ChokePoint[] = [
     // is intentionally kept OUT of this allowlist — a future raw
     // `env.openExternal(...)` added there would still be flagged.
     allow: new Set([
-      "src/extension/handle-open-external.ts",
+      "src/extension/links/handle-open-external.ts",
       "src/extension/session/quoll-editor-panel.ts",
     ]),
   },

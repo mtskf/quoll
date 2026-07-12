@@ -23,7 +23,7 @@
 // rejects/throws) — identical posture to handle-open-external.ts.
 
 import type { Uri } from "vscode";
-import { isAllowedUrl } from "../markdown/url-allowlist.js";
+import { isAllowedUrl } from "../../markdown/url-allowlist.js";
 
 /** User-facing toast when a resolved, in-scope target still fails to open
  *  (openWith rejects/throws). Mirrors OPEN_EXTERNAL_FAILURE_MESSAGE. */

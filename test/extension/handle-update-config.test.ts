@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { handleUpdateConfig } from "../../src/extension/handle-update-config.js";
+import { handleUpdateConfig } from "../../src/extension/config/handle-update-config.js";
 
 const noOverride = () => ({ workspace: false, folder: false });
 

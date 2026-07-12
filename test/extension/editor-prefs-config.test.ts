@@ -3,7 +3,7 @@ import {
   isRelevantConfigChange,
   readEditorPref,
   readEditorPrefs,
-} from "../../src/extension/editor-prefs-config.js";
+} from "../../src/extension/config/editor-prefs-config.js";
 
 describe("readEditorPref", () => {
   it("returns the stored id when it is a known enum value", () => {

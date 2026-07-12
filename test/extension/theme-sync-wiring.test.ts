@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   createThemeSyncWiring,
   type ThemeSyncWiringDeps,
-} from "../../src/extension/theme-sync-wiring.js";
+} from "../../src/extension/config/theme-sync-wiring.js";
 
 function makeWiring(overrides: Partial<ThemeSyncWiringDeps> = {}) {
   let onThemeChange: ((isDarkTheme: boolean) => void) | null = null;
