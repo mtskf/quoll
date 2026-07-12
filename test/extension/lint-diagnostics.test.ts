@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   QUOLL_LINT_DIAGNOSTIC_SOURCE,
   toLintDiagnostics,
-} from "../../src/extension/lint-diagnostics.js";
+} from "../../src/extension/lint/lint-diagnostics.js";
 import type { LintDiagnosticWire } from "../../src/shared/protocol.js";
 import { Position } from "./vscode-stub.js";
 

@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { workspace } from "vscode";
 
-import { createImageWriteWiring } from "../../src/extension/image-write-wiring.js";
+import { createImageWriteWiring } from "../../src/extension/image/image-write-wiring.js";
 
 // A minimal valid PNG (8-byte signature) — decideImageWrite sniffs the magic
 // bytes and content-addresses the filename as <sha256>.png.

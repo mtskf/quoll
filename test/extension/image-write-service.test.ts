@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { handleImageWrite } from "../../src/extension/image-write-service.js";
+import { handleImageWrite } from "../../src/extension/image/image-write-service.js";
 import { MAX_IMAGE_DATA_LENGTH } from "../../src/shared/protocol.js";
 
 const PNG = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00]);

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { decideImageWrite, sniffImageKind } from "../../src/extension/image-ingest.js";
+import { decideImageWrite, sniffImageKind } from "../../src/extension/image/image-ingest.js";
 import { MAX_IMAGE_BYTES } from "../../src/shared/protocol.js";
 
 const PNG = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x01]);

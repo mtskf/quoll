@@ -12,7 +12,7 @@
 
 import { Diagnostic, DiagnosticSeverity, Position, Range } from "vscode";
 
-import type { LintDiagnosticWire } from "../shared/protocol.js";
+import type { LintDiagnosticWire } from "../../shared/protocol.js";
 
 /** `vscode.Diagnostic.source` shown in the Problems panel for every mirrored
  *  lint finding. The per-diagnostic `code` carries the stable rule id. */

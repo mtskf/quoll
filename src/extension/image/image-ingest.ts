@@ -14,7 +14,7 @@
 
 import { createHash } from "node:crypto";
 
-import { MAX_IMAGE_BYTES } from "../shared/protocol.js";
+import { MAX_IMAGE_BYTES } from "../../shared/protocol.js";
 
 export type ImageKind = "png" | "jpeg" | "gif" | "webp";
 
