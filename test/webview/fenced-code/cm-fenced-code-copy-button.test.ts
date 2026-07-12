@@ -338,6 +338,124 @@ describe("CopyButtonWidget", () => {
     }
   });
 
+  it("re-announces a repeated identical copy by clearing the region at click start", async () => {
+    // A second copy with the SAME result must still announce. The region is cleared
+    // synchronously at click start, so the settle re-writes "Copied" into an EMPTY
+    // region — an observable empty→text mutation the SR re-announces, even before the
+    // 1500ms revert fires. Without the click-start clear the second write is identical
+    // to the region's current text (no mutation → no re-announce).
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    vi.stubGlobal("navigator", { clipboard: { writeText } });
+    try {
+      const root = widgetDOM(new CopyButtonWidget(0, () => "x"));
+      const btn = copyButton(root);
+      const region = statusRegion(root);
+      btn.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(region.textContent).toBe("Copied");
+      // Second click, BEFORE the settle: the region is emptied synchronously.
+      btn.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      expect(region.textContent).toBe("");
+      await Promise.resolve();
+      await Promise.resolve();
+      // The settle re-writes "Copied" — a fresh mutation, so it re-announces.
+      expect(region.textContent).toBe("Copied");
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("a rapid second click does not let a stale revert blank the live region", async () => {
+    // Region counterpart of the button "rapid second click cancels the prior revert
+    // timer" test: the second click's click-start clearTimeout kills the first revert,
+    // so it can never fire at t=1500 and empty the region while the second copy is the
+    // live one. The region stays "Copied" instead of being blanked.
+    vi.useFakeTimers();
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    vi.stubGlobal("navigator", { clipboard: { writeText } });
+    try {
+      const root = widgetDOM(new CopyButtonWidget(0, () => "x"));
+      const btn = copyButton(root);
+      const region = statusRegion(root);
+      btn.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(region.textContent).toBe("Copied");
+      // Re-copy just before the first revert deadline, then cross it.
+      vi.advanceTimersByTime(1490);
+      btn.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      await vi.advanceTimersByTimeAsync(20);
+      expect(region.textContent).toBe("Copied");
+    } finally {
+      vi.useRealTimers();
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("sets aria-live to assertive BEFORE writing the failure text (politeness-before-text order)", async () => {
+    // announce()'s doc comment calls the aria-live-before-textContent order
+    // load-bearing (an assertive announcement must be assertive by the time the text
+    // lands). Reading only final state can't catch a reorder, so spy on the status
+    // node's setAttribute + textContent setter and pin the order.
+    const writeText = vi.fn().mockRejectedValue(new Error("NotAllowedError"));
+    vi.stubGlobal("navigator", { clipboard: { writeText } });
+    try {
+      const root = widgetDOM(new CopyButtonWidget(0, () => "x"));
+      const region = statusRegion(root);
+      const order: string[] = [];
+      const realSetAttribute = region.setAttribute.bind(region);
+      vi.spyOn(region, "setAttribute").mockImplementation((name, value) => {
+        if (name === "aria-live") {
+          order.push(`live:${value}`);
+        }
+        realSetAttribute(name, value);
+      });
+      let text = "";
+      Object.defineProperty(region, "textContent", {
+        configurable: true,
+        get: () => text,
+        set: (value: string) => {
+          text = value;
+          if (value !== "") {
+            order.push(`text:${value}`);
+          }
+        },
+      });
+      copyButton(root).dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      await Promise.resolve();
+      await Promise.resolve();
+      // The click-start clear emits an initial `live:polite`; the failure settle then
+      // emits assertive THEN the text. Assert that trailing pair: aria-live is set to
+      // assertive BEFORE the text lands.
+      expect(order.slice(-2)).toEqual(["live:assertive", "text:Copy failed"]);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("keeps aria-atomic=true through the whole announce → revert cycle", async () => {
+    // aria-atomic (read the short phrase as one unit) is set at build time only.
+    // announce() must not disturb it across the copy lifecycle — pin it after the
+    // announce AND after the 1500ms revert so a later 'cleanup' edit can't drop it.
+    vi.useFakeTimers();
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    vi.stubGlobal("navigator", { clipboard: { writeText } });
+    try {
+      const root = widgetDOM(new CopyButtonWidget(0, () => "x"));
+      const region = statusRegion(root);
+      copyButton(root).dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(region.textContent).toBe("Copied");
+      expect(region.getAttribute("aria-atomic")).toBe("true");
+      await vi.advanceTimersByTimeAsync(1500);
+      expect(region.textContent).toBe("");
+      expect(region.getAttribute("aria-atomic")).toBe("true");
+    } finally {
+      vi.useRealTimers();
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("eq() is keyed on openFrom alone (a body edit reuses the DOM; a shift rebuilds)", () => {
     const resolve = () => "x";
     const a = new CopyButtonWidget(5, resolve);
@@ -647,6 +765,13 @@ describe("quollCopyButtonTheme", () => {
     expect(region.height).toBe("1px");
     expect(region.overflow).toBe("hidden");
     expect(region.clip).toBe("rect(0, 0, 0, 0)");
+  });
+
+  it("pins the wrapper to position:static so it never becomes the button's anchor", () => {
+    // The button is absolutely positioned and must anchor to the open-fence panel row,
+    // not the wrapper. An explicit static rule guards against a later relative/absolute
+    // creeping in. Assert the rule directly (no `?.` fallback) so a missing rule fails.
+    expect(copyButtonThemeSpec[".quoll-copy-button-wrap"].position).toBe("static");
   });
 
   it("collapsed open-fence row keeps position:relative in the COPY theme so the button still anchors", () => {

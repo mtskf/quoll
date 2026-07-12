@@ -192,6 +192,13 @@ export class CopyButtonWidget extends WidgetType {
         clearTimeout(revertTimer);
         revertTimer = undefined;
       }
+      // Clear the live region at click START. The result text is written when the
+      // clipboard promise settles (a LATER macrotask), so the region goes empty →
+      // result even when the same result repeats — an observable mutation the AT
+      // re-announces. Without this, a second copy with an identical result writes
+      // the same text into a region that already holds it (no DOM mutation → no
+      // re-announce). The 1500ms revert stays as a fallback clear.
+      announce(status, "", false);
       void copyToClipboard(text).then((ok) => {
         // Drop a superseded (out-of-order) settle so the newest click wins.
         if (myAttempt !== attempt) {
