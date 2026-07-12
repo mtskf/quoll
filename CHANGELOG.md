@@ -5,18 +5,21 @@ All notable changes to Quoll are documented here.
 ## 0.1.43 — 2026-07-12
 
 ### Fixed
+- recover scroll and viewport on the webview visible edge with the outline pinned (#201)
 
 - With the outline panel pinned, switching away from and back to a Quoll tab (including the Cmd+Option+K context hand-off) no longer leaves the editor blank or partially blank until you scroll — the editor now restores your position and redraws the text immediately.
 
 ## 0.1.42 — 2026-07-11
 
 ### Fixed
+- recover scroll and viewport on the webview visible edge with the outline pinned (#201)
 
 - With the document outline pinned, pressing Cmd+Option+K (hand the selection to Claude Code) no longer squeezes the editor into a one-character-wide column. The reading column now keeps its width through the hand-off.
 
 ## 0.1.41 — 2026-07-11
 
 ### Fixed
+- recover scroll and viewport on the webview visible edge with the outline pinned (#201)
 
 - The cat title-bar button on a Markdown text tab now swaps that tab to the Quoll editor in place, instead of leaving the text tab open and adding a second Quoll tab. It mirrors the file-code button's Quoll→text swap, so switching either direction keeps you on a single tab.
 - Blockquotes and callouts now keep a small vertical gap from the block directly above and below them, even when no blank line separates them in the source. A panel that immediately follows a list item or paragraph no longer renders flush against that line's bottom edge, while nested quotes stay visually joined to their parent.
