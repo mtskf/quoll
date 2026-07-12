@@ -94,6 +94,22 @@ describe("quollVisibleEdgeRecovery — lifecycle + capture guards", () => {
     expect(snap).toHaveBeenCalledTimes(1); // dead geometry: no capture
   });
 
+  it("a scroll immediately followed by a same-frame hide still captures the latest position", async () => {
+    stubVisibility();
+    const v = mount(30);
+    const snap = vi.spyOn(v, "scrollSnapshot");
+    const dispatch = vi.spyOn(v, "dispatch");
+    // Same synchronous turn: scroll, then hide before the next animation frame.
+    // The capture must run synchronously on the scroll (before frozen), not be
+    // deferred to a frame that then runs while frozen and drops it.
+    scrollTick(v);
+    setVisibility("hidden");
+    expect(snap).toHaveBeenCalledTimes(1);
+    setVisibility("visible");
+    await frames(10); // wait + thaw with margin
+    expect(dispatch).toHaveBeenCalledTimes(1); // the fresh snapshot is restored
+  });
+
   it("the hidden edge freezes capture; the visible-edge restore dispatches and thaws two frames later", async () => {
     stubVisibility();
     const v = mount(30);

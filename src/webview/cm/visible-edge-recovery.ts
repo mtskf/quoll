@@ -81,15 +81,21 @@ class VisibleEdgeRecovery implements PluginValue {
   private readonly doc: Document;
 
   private readonly onScroll = (): void => {
-    // Hot path: a flag check. The capture itself runs at most once per frame
-    // and reads geometry at frame time (as fresh or fresher than the event).
+    // Coalesce to one capture per frame (the hot path is a flag check), but take
+    // the snapshot SYNCHRONOUSLY here rather than inside the rAF. A scroll
+    // immediately followed by a same-frame hide (⌘⌥K handoff / tab switch) would
+    // otherwise queue a capture that then runs while frozen and is discarded,
+    // restoring a one-frame-stale position. refreshSnapshot already gates on
+    // !frozen + visible + clientWidth>0, so the synchronous call stays
+    // geometry-safe and never reads the hidden edge; the rAF only clears the
+    // per-frame coalescing flag.
     if (this.captureQueued) {
       return;
     }
     this.captureQueued = true;
+    this.refreshSnapshot();
     requestAnimationFrame(() => {
       this.captureQueued = false;
-      this.refreshSnapshot();
     });
   };
 
