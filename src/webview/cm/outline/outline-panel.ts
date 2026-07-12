@@ -225,6 +225,13 @@ class OutlinePanel implements PluginValue {
 
     this.listEl = document.createElement("ul");
     this.listEl.className = "quoll-outline-list";
+    // Expose the outline as an ARIA tree. The DOM is a FLAT <ul> of rows (no
+    // nested <ul role="group">), so nesting is conveyed by per-row aria-level
+    // rather than DOM structure — the spec-sanctioned flat-tree model. The tree
+    // needs an accessible name of its own (the visual "Outline" title is a plain
+    // span, not associated).
+    this.listEl.setAttribute("role", "tree");
+    this.listEl.setAttribute("aria-label", "Document outline");
 
     const footer = document.createElement("div");
     footer.className = "quoll-outline-footer";
@@ -627,6 +634,9 @@ class OutlinePanel implements PluginValue {
     if (this.headings.length === 0) {
       const empty = document.createElement("li");
       empty.className = "quoll-outline-empty";
+      // Not a tree node — neutralise the implicit listitem role so the empty
+      // message never masquerades as a treeitem inside role="tree".
+      empty.setAttribute("role", "none");
       empty.textContent = "No headings";
       this.listEl.appendChild(empty);
       return;
@@ -643,6 +653,13 @@ class OutlinePanel implements PluginValue {
     this.headings.forEach((heading, i) => {
       const li = document.createElement("li");
       li.className = "quoll-outline-row";
+      // The row IS the tree node. aria-level is 1-based off the 0-based render
+      // depth, so it tracks the visual indentation (a skipped heading level,
+      // e.g. h1→h3, collapses to contiguous depth — the tree nesting the reader
+      // perceives). aria-expanded (parents only) + aria-selected are set by
+      // refreshVisibility / updateActive.
+      li.setAttribute("role", "treeitem");
+      li.setAttribute("aria-level", String(heading.depth + 1));
       // Depth indent rides the row; the twistie column is a fixed inset inside it.
       li.style.paddingLeft = `${BASE_PAD_PX + heading.depth * INDENT_PX}px`;
 
@@ -715,8 +732,13 @@ class OutlinePanel implements PluginValue {
       const hidden = collapseDepth !== null;
       row.li.hidden = hidden;
       const collapsed = this.collapsedFroms.has(row.heading.from);
+      // Expand state belongs to the tree node, so aria-expanded lives on the
+      // treeitem row (the single source of truth SRs read on the tree). The
+      // twistie is a secondary disclosure control; it only re-labels its action.
+      if (row.hasChildren) {
+        row.li.setAttribute("aria-expanded", String(!collapsed));
+      }
       if (row.twistie !== null) {
-        row.twistie.setAttribute("aria-expanded", String(!collapsed));
         row.twistie.setAttribute("aria-label", collapsed ? "Expand section" : "Collapse section");
       }
       if (!hidden && collapsed && row.hasChildren) {
@@ -771,6 +793,9 @@ class OutlinePanel implements PluginValue {
     for (const item of this.listEl.querySelectorAll<HTMLElement>(".quoll-outline-item")) {
       const isActive = activeFrom !== null && item.dataset.from === String(activeFrom);
       item.classList.toggle("active", isActive);
+      // aria-selected is the tree's selected-node signal — it rides the treeitem
+      // (the row li), mirroring the visual .active on the inner label button.
+      (item.parentElement as HTMLElement | null)?.setAttribute("aria-selected", String(isActive));
       // Skip scroll for a hidden row (its parent li is collapsed away).
       if (isActive && (item.parentElement as HTMLElement | null)?.hidden !== true) {
         item.scrollIntoView({ block: "nearest" });
