@@ -5,7 +5,7 @@ import {
   decideOpenReconcile,
   noteSurface,
   reconcileOpen,
-} from "../../src/extension/surface-memory.js";
+} from "../../src/extension/surface/surface-memory.js";
 
 beforeEach(() => __clearSurfaceMemoryForTest());
 

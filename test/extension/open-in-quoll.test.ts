@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { openInQuollEditor } from "../../src/extension/open-in-quoll.js";
+import { openInQuollEditor } from "../../src/extension/surface/open-in-quoll.js";
 
 describe("openInQuollEditor", () => {
   it("invokes vscode.openWith with the uri and the given view type", () => {

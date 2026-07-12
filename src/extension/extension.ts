@@ -1,14 +1,14 @@
 import { commands, type ExtensionContext, ExtensionMode, window } from "vscode";
 import { registerFormatCommand } from "./format-command.js";
 import { QuollEditorPanel } from "./session/quoll-editor-panel.js";
-import { showSafely } from "./show-safely.js";
-import { __clearSurfaceMemoryForTest } from "./surface-memory.js";
-import { registerSurfaceRestoreWatcher } from "./surface-restore-watcher.js";
+import { showSafely } from "./surface/show-safely.js";
+import { __clearSurfaceMemoryForTest } from "./surface/surface-memory.js";
+import { registerSurfaceRestoreWatcher } from "./surface/surface-restore-watcher.js";
 import {
   registerToggleEditor,
   reopenActiveQuollTabAsText,
   reopenTextEditorAsQuoll,
-} from "./toggle-editor.js";
+} from "./surface/toggle-editor.js";
 
 export async function activate(context: ExtensionContext) {
   // Dynamic import so esbuild tree-shakes the TestHarness class body out

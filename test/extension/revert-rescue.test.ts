@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { createRevertRescueTracker } from "../../src/extension/revert-rescue.js";
+import { createRevertRescueTracker } from "../../src/extension/surface/revert-rescue.js";
 
 const ctx = (
   over: Partial<Parameters<ReturnType<typeof createRevertRescueTracker>["decideOnDispose"]>[0]> = {}

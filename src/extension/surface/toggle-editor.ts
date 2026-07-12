@@ -22,10 +22,10 @@
 // text-editor (reverse) context.
 
 import { commands, TabInputCustom, TabInputText, type TextEditor, window, workspace } from "vscode";
+import { stashSwitchCaret, takeSwitchCaret } from "../handoff/editor-switch-caret.js";
+import { QuollEditorPanel } from "../session/quoll-editor-panel.js";
 import { canEditWith } from "./can-edit-with.js";
-import { stashSwitchCaret, takeSwitchCaret } from "./handoff/editor-switch-caret.js";
 import { openInTextEditor } from "./reopen-text-editor.js";
-import { QuollEditorPanel } from "./session/quoll-editor-panel.js";
 import { showSafely } from "./show-safely.js";
 import { noteSurface } from "./surface-memory.js";
 import { finalizeSurfaceSwap, findSourceTab } from "./surface-swap.js";

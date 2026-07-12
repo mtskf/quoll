@@ -4,7 +4,7 @@ import type { Uri } from "vscode";
 import {
   DEFAULT_TEXT_EDITOR_VIEW_TYPE,
   openInTextEditor,
-} from "../../src/extension/reopen-text-editor.js";
+} from "../../src/extension/surface/reopen-text-editor.js";
 
 describe("openInTextEditor", () => {
   it("reopens the uri in the built-in text editor via vscode.openWith", async () => {

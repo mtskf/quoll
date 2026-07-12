@@ -4,7 +4,7 @@ import {
   classifyOpenedTab,
   hasSiblingInOtherSurface,
   planRestore,
-} from "../../src/extension/surface-restore-watcher.js";
+} from "../../src/extension/surface/surface-restore-watcher.js";
 
 const quollVt = "quoll.editMarkdown";
 const mdUri = { toString: () => "file:///a.md", path: "/a.md" } as never;
