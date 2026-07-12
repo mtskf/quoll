@@ -433,6 +433,41 @@ describe("CopyButtonWidget", () => {
     }
   });
 
+  it("re-announces correctly when a failed copy is immediately followed by a successful re-click", async () => {
+    // Compound outcome sequence: first click fails (assertive "Copy failed"),
+    // then — before any revert — a second click succeeds. The click-start
+    // announce(status, "", false) must synchronously reset aria-live back to
+    // polite and clear the text, so the failure's assertive announcement
+    // doesn't leak into the success state.
+    const writeText = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("NotAllowedError"))
+      .mockResolvedValueOnce(undefined);
+    vi.stubGlobal("navigator", { clipboard: { writeText } });
+    try {
+      const root = widgetDOM(new CopyButtonWidget(0, () => "x"));
+      const btn = copyButton(root);
+      const region = statusRegion(root);
+
+      btn.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(region.textContent).toBe("Copy failed");
+      expect(region.getAttribute("aria-live")).toBe("assertive");
+
+      // Second click, BEFORE the second settle: click-start clear fires synchronously.
+      btn.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      expect(region.textContent).toBe("");
+
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(region.textContent).toBe("Copied");
+      expect(region.getAttribute("aria-live")).toBe("polite");
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("keeps aria-atomic=true through the whole announce → revert cycle", async () => {
     // aria-atomic (read the short phrase as one unit) is set at build time only.
     // announce() must not disturb it across the copy lifecycle — pin it after the
