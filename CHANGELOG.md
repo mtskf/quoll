@@ -2,6 +2,12 @@
 
 All notable changes to Quoll are documented here.
 
+## 0.1.45 — 2026-07-13
+
+### Added
+
+- Screen readers now announce "Copied" (or "Copy failed") when you use a fenced code block's copy button, so the result is confirmed aloud instead of only changing the button's icon.
+
 ## 0.1.44 — 2026-07-13
 
 ### Fixed
