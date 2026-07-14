@@ -1,12 +1,15 @@
 // Inline POINT widget (Decoration.widget — NOT a block replace) rendering a native
 // <select> language picker for a fenced code block. ONE DOM shape ALWAYS: a
-// `quoll-language-picker-label` wrapper holding a decorative square-code icon + the
-// <select>. An `is-labeled` modifier class (added when a language is set) is a CSS
-// gate the header-bar theme (fencedHeaderBarThemeSpec) keys on: WITHOUT it the
-// wrapper collapses (display:contents) and the bare <select> floats top-right
-// exactly as before (icon hidden) so a language-less block looks unchanged; WITH it
-// the wrapper is the ChatGPT-style left label (icon before the language name, box
-// chrome stripped), the copy button on the right.
+// `quoll-language-picker-label` wrapper holding a decorative square-code icon, the
+// <select>, and a decorative dropdown caret. An `is-labeled` modifier class (added
+// when a language is set) is a CSS gate the header-bar theme (fencedHeaderBarThemeSpec)
+// keys on. The wrapper is display:none by DEFAULT — the picker is READING-mode chrome:
+// a bare (is-labeled-absent) block and an editing/revealed block both show NO picker
+// (the old floating "Plain text" picker is deliberately suppressed). Only an
+// `is-labeled` wrapper on a header-carrier line (the concealed `-fence-hidden` row of
+// a bodied block, or the has-language fence line of a bodyless block) is shown, as the
+// ChatGPT-style left label (icon before the language name, box chrome stripped), with
+// the copy button on the right.
 //
 // UNLIKE the copy button (display-only), the picker MUTATES the document: on change
 // it calls setFenceLanguage, which dispatches ONE guarded edit rewriting the open
@@ -186,13 +189,14 @@ export class LanguagePickerWidget extends WidgetType {
   }
 
   toDOM(view: EditorView): HTMLElement {
-    // ONE DOM shape always: a wrapper holding the decorative icon + the <select>.
-    // `is-labeled` (language present) is a CSS gate — the header-bar theme hides the
-    // icon and floats the bare select top-right when it is absent (language-less
-    // blocks look unchanged), and lays out the left label when present. Keeping ONE
-    // shape lets updateDOM sync the language IN PLACE across the "" boundary, so a
-    // pick never destroys/recreates the focused <select> (focus + keyboard state
-    // preserved, and no self-reentrant destroy while a change handler is on stack).
+    // ONE DOM shape always: a wrapper holding the decorative icon, the <select>, and
+    // the dropdown caret. `is-labeled` (language present) is a CSS gate — the theme
+    // shows the wrapper as the left label ONLY in reading mode on a header-carrier
+    // line, and hides it otherwise (a bare block and an editing/revealed block show no
+    // picker). Keeping ONE shape lets updateDOM sync the language IN PLACE across the
+    // "" boundary, so a pick never destroys/recreates the focused <select> (focus +
+    // keyboard state preserved, and no self-reentrant destroy while a change handler is
+    // on stack).
     const wrap = document.createElement("span");
     wrap.className = PICKER_LABEL_CLASS;
     if (this.language !== "") {

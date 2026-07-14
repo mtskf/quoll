@@ -307,20 +307,33 @@ describe("buildFencedCodePanel has-language builder gate", () => {
     expect(classes.get(8)).toEqual([FENCED_CODE_FENCE_HIDDEN_CLASS]);
   });
 
+  // NOTE: these negative gates park the caret OUTSIDE the block (reading mode). With
+  // the caret ON the fence the block is revealed, and the `!blockRevealed` conjunct
+  // alone would force hasLanguage=false — masking the gate each test names (a revealed
+  // block never tags regardless). Reading mode makes hasLanguage depend solely on the
+  // gate under test, so removing the attr-list suppression or the read-only→null gate
+  // would turn these red.
   it("does NOT tag a bare (language-less) block", () => {
-    const open = panelClasses("```\nx\n```\n", 2).get(0) ?? [];
-    expect(open).toContain(FENCED_CODE_OPEN_CLASS);
-    expect(open).not.toContain(FENCED_CODE_HAS_LANGUAGE_CLASS);
+    const doc = "```\nx\n```\n\npara";
+    const classes = panelClasses(doc, doc.indexOf("para") + 1);
+    for (const cls of classes.values()) {
+      expect(cls).not.toContain(FENCED_CODE_HAS_LANGUAGE_CLASS);
+    }
   });
 
   it("does NOT tag an attr-list fence (non-plain info string)", () => {
-    const open = panelClasses("```{.js #id}\nx\n```\n", 2).get(0) ?? [];
-    expect(open).not.toContain(FENCED_CODE_HAS_LANGUAGE_CLASS);
+    const doc = "```{.js #id}\nx\n```\n\npara";
+    const classes = panelClasses(doc, doc.indexOf("para") + 1);
+    for (const cls of classes.values()) {
+      expect(cls).not.toContain(FENCED_CODE_HAS_LANGUAGE_CLASS);
+    }
   });
 
   it("does NOT tag a language-tagged block on a READ-ONLY surface", () => {
-    const open = panelClasses("```js\nx\n```\n", 2, true).get(0) ?? [];
-    expect(open).toContain(FENCED_CODE_OPEN_CLASS);
-    expect(open).not.toContain(FENCED_CODE_HAS_LANGUAGE_CLASS);
+    const doc = "```js\nx\n```\n\npara";
+    const classes = panelClasses(doc, doc.indexOf("para") + 1, true);
+    for (const cls of classes.values()) {
+      expect(cls).not.toContain(FENCED_CODE_HAS_LANGUAGE_CLASS);
+    }
   });
 });

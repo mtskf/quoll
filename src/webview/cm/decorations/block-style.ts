@@ -257,10 +257,11 @@ type FencedLandmarks = {
    *  not directly above a quote line. The FIRST of two adjacent fenced blocks keeps
    *  its outer-close, so the pair shows ONE gap. Rides the visible close edge. */
   outerClose: boolean;
-  /** Writable fence with a non-empty plain language token (fenceLanguageTarget
-   *  non-null AND its language !== ""), evaluated only when the surface is
-   *  writable. Drives the header-bar treatment; rides the visible open edge
-   *  alongside the base -open class. */
+  /** Writable fence, in READING mode (caret outside the block), carrying a non-empty
+   *  plain language token: fenceLanguageTarget non-null AND its language !== "" AND
+   *  !blockRevealed. The reading-mode conjunct hides the header while the block is
+   *  being edited (the raw ```lang line shows instead). Drives the header-bar
+   *  treatment; rides the visible open edge alongside the base -open class. */
   hasLanguage: boolean;
 };
 
