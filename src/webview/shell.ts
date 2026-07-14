@@ -124,24 +124,30 @@ export function mountShell(root: HTMLElement, opts: ShellOptions): ShellHandle {
   // assigned before the first message can arrive (subscribe is wired
   // synchronously after the editor mounts).
 
+  // Single source of truth for the <html> theme classes. Both HC kinds
+  // (`hc-dark` / `hc-light`) collapse to ONE `.hc-theme` class — the CSS escape
+  // hatch neutralises the palette to host `--vscode-*` tokens, which already
+  // differ between the two HC kinds, so the webview rounds them down here
+  // (display-only). This is the ONLY place the round happens (the reducer keeps
+  // the full four-value kind), so the mount-time apply and syncTheme cannot drift.
+  function applyThemeClasses(el: HTMLElement, theme: WebviewState["theme"]): void {
+    el.classList.toggle("dark-theme", theme === "dark");
+    el.classList.toggle("light-theme", theme === "light");
+    el.classList.toggle("hc-theme", theme === "hc-dark" || theme === "hc-light");
+  }
+
   function syncTheme(prev: WebviewState, next: WebviewState): void {
     if (prev.theme === next.theme) {
       return;
     }
-    const html = document.documentElement;
-    html.classList.toggle("dark-theme", next.theme === "dark");
-    html.classList.toggle("light-theme", next.theme === "light");
+    applyThemeClasses(document.documentElement, next.theme);
   }
 
   // Initial class application from initialState. syncTheme below is a
   // prev/next diff, so without this one-shot apply, an initialState.theme
   // equal to the first Document's theme would silently leave the <html>
   // class blank (no transition → no toggle).
-  {
-    const html = document.documentElement;
-    html.classList.toggle("dark-theme", state.theme === "dark");
-    html.classList.toggle("light-theme", state.theme === "light");
-  }
+  applyThemeClasses(document.documentElement, state.theme);
 
   function dispatch(action: Action): void {
     // Reducer is pure (state.ts) — a throw here is a precondition break,
@@ -203,7 +209,7 @@ export function mountShell(root: HTMLElement, opts: ShellOptions): ShellHandle {
     // protocol; it documents the closed-union invariant statically.
     switch (message.type) {
       case "theme":
-        dispatch({ type: "theme", isDarkTheme: message.isDarkTheme });
+        dispatch({ type: "theme", themeKind: message.themeKind });
         return;
       case "edit-rejected":
         // Host validated the inbound Edit and refused it. Mirror the
@@ -286,7 +292,7 @@ export function mountShell(root: HTMLElement, opts: ShellOptions): ShellHandle {
           type: "document",
           docVersion: message.docVersion,
           canWrite: message.canWrite,
-          isDarkTheme: message.isDarkTheme,
+          themeKind: message.themeKind,
         });
         return;
       }

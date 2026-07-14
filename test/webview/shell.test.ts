@@ -73,7 +73,7 @@ afterEach(() => {
   // pattern.
   vi.useRealTimers();
   vi.restoreAllMocks();
-  document.documentElement.classList.remove("dark-theme", "light-theme");
+  document.documentElement.classList.remove("dark-theme", "light-theme", "hc-theme");
 });
 
 async function mount(opts: { resourceBaseUri?: string } = {}): Promise<void> {
@@ -89,7 +89,7 @@ function buildDocument(
     type: "document",
     content: "",
     docVersion: 1,
-    isDarkTheme: false,
+    themeKind: "light",
     canWrite: true,
     ...overrides,
   };
@@ -136,17 +136,30 @@ describe("shell — stale Document drop at ingress", () => {
 describe("shell — theme toggles <html> classList", () => {
   it("dark theme → html has dark-theme class", async () => {
     await mount();
-    deliver(buildDocument({ docVersion: 1, isDarkTheme: true }));
+    deliver(buildDocument({ docVersion: 1, themeKind: "dark" }));
     expect(document.documentElement.classList.contains("dark-theme")).toBe(true);
     expect(document.documentElement.classList.contains("light-theme")).toBe(false);
   });
 
   it("theme message flips classes without a new Document", async () => {
     await mount();
-    deliver(buildDocument({ docVersion: 1, isDarkTheme: true }));
-    deliver({ protocol: PROTOCOL_VERSION, type: "theme", isDarkTheme: false });
+    deliver(buildDocument({ docVersion: 1, themeKind: "dark" }));
+    deliver({ protocol: PROTOCOL_VERSION, type: "theme", themeKind: "light" });
     expect(document.documentElement.classList.contains("light-theme")).toBe(true);
     expect(document.documentElement.classList.contains("dark-theme")).toBe(false);
+  });
+
+  it("both HC kinds collapse to .hc-theme (never .light-theme) — the robustness fix", async () => {
+    await mount();
+    // HC Black arrives as a Document seed …
+    deliver(buildDocument({ docVersion: 1, themeKind: "hc-dark" }));
+    expect(document.documentElement.classList.contains("hc-theme")).toBe(true);
+    expect(document.documentElement.classList.contains("dark-theme")).toBe(false);
+    expect(document.documentElement.classList.contains("light-theme")).toBe(false);
+    // … and HC Light arrives as a live theme flip — still .hc-theme, not .light-theme.
+    deliver({ protocol: PROTOCOL_VERSION, type: "theme", themeKind: "hc-light" });
+    expect(document.documentElement.classList.contains("hc-theme")).toBe(true);
+    expect(document.documentElement.classList.contains("light-theme")).toBe(false);
   });
 
   // The React-era useEffect with [state.theme] dep ran on mount even when
@@ -164,7 +177,7 @@ describe("shell — theme toggles <html> classList", () => {
     // initialState.theme === "dark"; first Document also "dark". The
     // dispatch-time syncTheme short-circuits on prev===next, so the
     // initial-apply at mount must carry the class.
-    deliver(buildDocument({ docVersion: 1, isDarkTheme: true }));
+    deliver(buildDocument({ docVersion: 1, themeKind: "dark" }));
     expect(document.documentElement.classList.contains("dark-theme")).toBe(true);
     expect(document.documentElement.classList.contains("light-theme")).toBe(false);
   });
@@ -174,7 +187,7 @@ describe("shell — raw HTML seeds inert (parse-warning coupling retired)", () =
   const RAW = "<div>raw</div>\n\nbody";
   it("seeds raw HTML verbatim with no blocking banner", async () => {
     await mount();
-    deliver(buildDocument({ docVersion: 1, content: RAW, canWrite: true, isDarkTheme: true }));
+    deliver(buildDocument({ docVersion: 1, content: RAW, canWrite: true, themeKind: "dark" }));
     const bannerHost = container?.querySelector(".quoll-banner-host") as HTMLElement;
     // (1) No "Save anyway" warning banner, no parse-error banner.
     expect(bannerHost.querySelector("button")).toBeNull();
@@ -378,7 +391,7 @@ describe("shell — teardown flush (close-without-save data loss)", () => {
     vi.useFakeTimers();
     try {
       await mount();
-      deliver(buildDocument({ docVersion: 1, canWrite: true, isDarkTheme: false }));
+      deliver(buildDocument({ docVersion: 1, canWrite: true, themeKind: "light" }));
       const view = EditorView.findFromDOM(container?.querySelector(".quoll-editor") as HTMLElement);
       if (!view) {
         throw new Error("EditorView not found");
@@ -406,7 +419,7 @@ describe("shell — teardown flush (close-without-save data loss)", () => {
     vi.useFakeTimers();
     try {
       await mount();
-      deliver(buildDocument({ docVersion: 1, canWrite: true, isDarkTheme: false }));
+      deliver(buildDocument({ docVersion: 1, canWrite: true, themeKind: "light" }));
       const view = EditorView.findFromDOM(container?.querySelector(".quoll-editor") as HTMLElement);
       if (!view) {
         throw new Error("EditorView not found");

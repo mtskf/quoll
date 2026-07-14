@@ -89,7 +89,7 @@ The page stubs the VS Code webview runtime just enough to boot the real bundle:
    posts `{ protocol: 1, type: "ready" }` through the shim when it mounts (after
    its `window` message listener is wired). The shim detects that and only then
    `window.postMessage`es the `document` seed
-   (`{ protocol: 1, type: "document", content, docVersion: 1, isDarkTheme, canWrite: true }`).
+   (`{ protocol: 1, type: "document", content, docVersion: 1, themeKind, canWrite: true }`).
 
 ## The `--vscode-*` stubbing caveat
 

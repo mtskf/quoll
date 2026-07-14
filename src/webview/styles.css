@@ -6,10 +6,11 @@
  * dependency. The platform's contract is older than every theme library
  * we could pick.
  *
- * Theme class: the host pushes `isDarkTheme` on Document/Theme messages;
- * shell.ts toggles `.dark-theme` / `.light-theme` on <html>. The two
- * classes are kept symmetric so future high-contrast / sepia variants can
- * just add a third class.
+ * Theme class: the host pushes `themeKind` (dark / light / hc-dark / hc-light)
+ * on Document/Theme messages; shell.ts toggles `.dark-theme` / `.light-theme` /
+ * `.hc-theme` on <html>. Both HC kinds collapse to `.hc-theme` (the host
+ * distinguishes them on the wire; the escape hatch renders both via host
+ * `--vscode-*` tokens). A future sepia/compact variant just adds another class.
  *
  * Cascade layers: the order is declared ONCE below as
  *   reset < base < theme < widget
@@ -417,22 +418,24 @@ html body {
      * lead the eye more than the darker #1a7050 link accent would. */
     --quoll-todo-ring: #23b06f;
     /* Light selection stays the plain host colour (user kept the current light
-     * tint). Both HC kinds map to .light-theme, so HC selection is the plain
-     * host colour too — maximal contrast, no HC override needed. */
+     * tint). HC uses the same plain host colour, but declares it in its own
+     * .hc-theme block below — HC no longer rides .light-theme. */
     --quoll-selection-fill: var(--vscode-editor-selectionBackground);
   }
 
-  /* High Contrast escape hatch (Codex C98/C90, F1). The host maps BOTH HC kinds
-   * to isDarkTheme=false → shell.ts sets .light-theme, which would otherwise
-   * paint the light navy palette on a black HC background. PRIMARY selector is
-   * the DOCUMENTED VS Code webview body class `vscode-high-contrast` (+ the
-   * `-light` variant), which VS Code adds to <body> for every webview (custom
-   * editors included). The `data-vscode-theme-kind` attribute selectors are an
-   * AUXILIARY belt-and-braces (confirmed present at the Task 6 real-VS-Code
-   * smoke). A body-level token redefinition beats the html-level .light-theme
-   * for body's whole subtree (the editor) — custom-property inheritance, not
-   * specificity. Re-point the accents to host foreground/link and drop the navy
-   * surface tints so HC keeps its intended maximal contrast. */
+  /* High Contrast escape hatch (Codex C98/C90, F1). The host now distinguishes
+   * HC from Light on the wire (`themeKind: hc-dark | hc-light`) and shell.ts
+   * toggles `.hc-theme` on <html> — so `:root.hc-theme` is Quoll's OWN,
+   * body-class-INDEPENDENT canonical HC signal (the reason this task exists: HC
+   * no longer rides `.light-theme`, so even if a future VS Code release dropped
+   * the body class, HC Black would not fall back to the light navy palette). The
+   * `body.vscode-high-contrast*` + `data-vscode-theme-kind` selectors are kept as
+   * COMPATIBILITY / defense-in-depth (VS Code adds them to <body> for every
+   * webview). All selectors set the SAME token values, so which one "wins" the
+   * cascade for the editor subtree is immaterial — custom-property inheritance,
+   * not specificity. Re-point the accents to host foreground/link and drop the
+   * navy surface tints so HC keeps its intended maximal contrast. */
+  :root.hc-theme,
   body.vscode-high-contrast,
   body.vscode-high-contrast-light,
   body[data-vscode-theme-kind="vscode-high-contrast"],
@@ -455,6 +458,10 @@ html body {
     --quoll-completed-fill: var(--vscode-editor-foreground);
     --quoll-completed-ink: var(--vscode-editor-foreground);
     --quoll-todo-ring: var(--quoll-accent-green);
+    /* HC selection: the plain host colour (maximal contrast). Previously HC
+     * inherited this from `.light-theme`; now `.hc-theme` owns the full token
+     * set, so declare it here rather than leaning on the fold-back. */
+    --quoll-selection-fill: var(--vscode-editor-selectionBackground);
     /* Outline sidebar in HC: no derived surface mixing — HC wants authored
      * colours + strong borders. Plain editor background; the contrast border
      * carries the separation. */

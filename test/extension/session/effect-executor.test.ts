@@ -7,7 +7,7 @@ import {
 } from "../../../src/extension/session/effect-executor.js";
 import type { HostToWebview } from "../../../src/shared/protocol.js";
 
-const themeMsg: HostToWebview = { protocol: 1, type: "theme", isDarkTheme: true };
+const themeMsg: HostToWebview = { protocol: 1, type: "theme", themeKind: "dark" };
 
 // Minimal deps factory — overridable per test. Unused seams throw if hit so a
 // test that accidentally reaches them fails loudly instead of silently passing.
@@ -29,7 +29,7 @@ function makeDeps(over: Partial<EffectExecutorDeps> = {}): EffectExecutorDeps {
       content: "",
       docVersion: v,
       canWrite: true,
-      isDarkTheme: false,
+      themeKind: "light",
     }),
     buildRejectedDraft: (content, v) => ({
       protocol: 1,
@@ -37,9 +37,9 @@ function makeDeps(over: Partial<EffectExecutorDeps> = {}): EffectExecutorDeps {
       content,
       docVersion: v,
       canWrite: true,
-      isDarkTheme: false,
+      themeKind: "light",
     }),
-    buildTheme: (isDarkTheme) => ({ protocol: 1, type: "theme", isDarkTheme }),
+    buildTheme: (themeKind) => ({ protocol: 1, type: "theme", themeKind }),
     buildEditRejected: (error) => ({ protocol: 1, type: "edit-rejected", error }),
     applyEditSeam: {
       readText: () => "",
@@ -531,7 +531,7 @@ describe("effect-executor runEffects other cases", () => {
           content: "x",
           docVersion: v,
           canWrite: true,
-          isDarkTheme: false,
+          themeKind: "light",
         }) as HostToWebview
     );
     const { runEffects } = createEffectExecutor(makeDeps({ send, buildSeedDocument }));
@@ -562,7 +562,7 @@ describe("effect-executor runEffects other cases", () => {
   it("postTheme: posts a theme message", () => {
     const send = vi.fn(async () => true);
     const { runEffects } = createEffectExecutor(makeDeps({ send }));
-    runEffects([{ type: "postTheme", isDarkTheme: false }]);
+    runEffects([{ type: "postTheme", themeKind: "hc-light" }]);
     expect(send).toHaveBeenCalled();
   });
 
@@ -592,10 +592,10 @@ describe("effect-executor runEffects other cases", () => {
   // construction. Flip a live value between factory build and the effect, and
   // assert the second postDocument carries the NEW value.
   it("postDocument re-invokes the builder each time (live freshness)", () => {
-    let dark = false;
-    const seen: boolean[] = [];
+    let themeKind: "light" | "dark" = "light";
+    const seen: string[] = [];
     const send = vi.fn(async (m: HostToWebview) => {
-      seen.push((m as { isDarkTheme: boolean }).isDarkTheme);
+      seen.push((m as { themeKind: string }).themeKind);
       return true;
     });
     const buildSeedDocument = (v: number): HostToWebview =>
@@ -605,12 +605,12 @@ describe("effect-executor runEffects other cases", () => {
         content: "",
         docVersion: v,
         canWrite: true,
-        isDarkTheme: dark,
+        themeKind,
       }) as HostToWebview;
     const { runEffects } = createEffectExecutor(makeDeps({ send, buildSeedDocument }));
     runEffects([{ type: "postDocument", docVersion: 1 }]);
-    dark = true; // theme changes AFTER the factory was built
+    themeKind = "dark"; // theme changes AFTER the factory was built
     runEffects([{ type: "postDocument", docVersion: 2 }]);
-    expect(seen).toEqual([false, true]);
+    expect(seen).toEqual(["light", "dark"]);
   });
 });

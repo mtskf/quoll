@@ -13,7 +13,7 @@ describe("buildDocumentMessage", () => {
     const msg = buildDocumentMessage({
       content: "hello",
       docVersion: 7,
-      isDarkTheme: true,
+      themeKind: "dark",
       canWrite: false,
     });
     expect(msg).toEqual({
@@ -21,24 +21,35 @@ describe("buildDocumentMessage", () => {
       type: "document",
       content: "hello",
       docVersion: 7,
-      isDarkTheme: true,
+      themeKind: "dark",
       canWrite: false,
     });
+  });
+
+  it("carries an HC kind verbatim (host distinguishes HC from Light)", () => {
+    expect(
+      buildDocumentMessage({ content: "", docVersion: 0, themeKind: "hc-dark", canWrite: true })
+        .themeKind
+    ).toBe("hc-dark");
+    expect(
+      buildDocumentMessage({ content: "", docVersion: 0, themeKind: "hc-light", canWrite: true })
+        .themeKind
+    ).toBe("hc-light");
   });
 
   it("pins the emitted key set (so re-introducing reason on the emitter side fails CI)", () => {
     const msg = buildDocumentMessage({
       content: "",
       docVersion: 0,
-      isDarkTheme: false,
+      themeKind: "light",
       canWrite: true,
     });
     expect(Object.keys(msg).sort()).toEqual([
       "canWrite",
       "content",
       "docVersion",
-      "isDarkTheme",
       "protocol",
+      "themeKind",
       "type",
     ]);
   });
@@ -47,7 +58,7 @@ describe("buildDocumentMessage", () => {
     const msg = buildDocumentMessage({
       content: "",
       docVersion: 0,
-      isDarkTheme: false,
+      themeKind: "light",
       canWrite: false,
     });
     expect(msg.canWrite).toBe(false);
@@ -56,22 +67,27 @@ describe("buildDocumentMessage", () => {
 
 describe("buildThemeMessage", () => {
   it("constructs a dark Theme message at the current protocol version", () => {
-    const msg = buildThemeMessage(true);
+    const msg = buildThemeMessage("dark");
     expect(msg).toEqual({
       protocol: PROTOCOL_VERSION,
       type: "theme",
-      isDarkTheme: true,
+      themeKind: "dark",
     });
   });
 
   it("constructs a light Theme message", () => {
-    expect(buildThemeMessage(false).isDarkTheme).toBe(false);
+    expect(buildThemeMessage("light").themeKind).toBe("light");
+  });
+
+  it("carries both HC kinds distinctly", () => {
+    expect(buildThemeMessage("hc-dark").themeKind).toBe("hc-dark");
+    expect(buildThemeMessage("hc-light").themeKind).toBe("hc-light");
   });
 
   it("includes protocol on the emitted key set", () => {
-    expect(Object.keys(buildThemeMessage(true)).sort()).toEqual([
-      "isDarkTheme",
+    expect(Object.keys(buildThemeMessage("dark")).sort()).toEqual([
       "protocol",
+      "themeKind",
       "type",
     ]);
   });

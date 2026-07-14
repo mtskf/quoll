@@ -28,7 +28,7 @@ const validDocument = () =>
     type: "document",
     content: "hello",
     docVersion: 0,
-    isDarkTheme: false,
+    themeKind: "light",
     canWrite: true,
   }) as const;
 
@@ -36,7 +36,7 @@ const validTheme = () =>
   ({
     protocol: PROTOCOL_VERSION,
     type: "theme",
-    isDarkTheme: true,
+    themeKind: "dark",
   }) as const;
 
 const validReady = () =>
@@ -259,16 +259,24 @@ describe("isHostToWebview — document", () => {
 
   const nonBooleans: Array<unknown> = [undefined, null, 0, 1, "true", "false", "", {}, []];
 
-  it.each(nonBooleans)("rejects non-boolean isDarkTheme %p", (isDarkTheme) => {
-    expect(isHostToWebview({ ...validDocument(), isDarkTheme })).toBe(false);
+  // "hc" is NOT a valid value — the enum is hc-dark / hc-light (both HC kinds
+  // are carried distinctly on the wire; the webview collapses them for display).
+  const badThemeKinds: Array<unknown> = ["hc", "", "DARK", "Light", 1, true, null, {}, []];
+
+  it.each(badThemeKinds)("rejects invalid themeKind %p", (themeKind) => {
+    expect(isHostToWebview({ ...validDocument(), themeKind })).toBe(false);
+  });
+
+  it.each(["dark", "light", "hc-dark", "hc-light"])("accepts themeKind %p", (themeKind) => {
+    expect(isHostToWebview({ ...validDocument(), themeKind })).toBe(true);
   });
 
   it.each(nonBooleans)("rejects non-boolean canWrite %p", (canWrite) => {
     expect(isHostToWebview({ ...validDocument(), canWrite })).toBe(false);
   });
 
-  it("rejects missing isDarkTheme", () => {
-    const { isDarkTheme: _omit, ...rest } = validDocument();
+  it("rejects missing themeKind", () => {
+    const { themeKind: _omit, ...rest } = validDocument();
     expect(isHostToWebview(rest)).toBe(false);
   });
 
@@ -285,18 +293,17 @@ describe("isHostToWebview — theme", () => {
     expect(isHostToWebview(validTheme())).toBe(true);
   });
 
-  it("accepts both boolean values", () => {
-    expect(isHostToWebview({ ...validTheme(), isDarkTheme: true })).toBe(true);
-    expect(isHostToWebview({ ...validTheme(), isDarkTheme: false })).toBe(true);
+  it.each(["dark", "light", "hc-dark", "hc-light"])("accepts themeKind %p", (themeKind) => {
+    expect(isHostToWebview({ ...validTheme(), themeKind })).toBe(true);
   });
 
-  const nonBooleans: Array<unknown> = [undefined, null, 0, 1, "true", "false", "", {}, []];
+  const badThemeKinds: Array<unknown> = ["hc", "", "DARK", 1, true, null, {}, []];
 
-  it.each(nonBooleans)("rejects non-boolean isDarkTheme %p", (isDarkTheme) => {
-    expect(isHostToWebview({ ...validTheme(), isDarkTheme })).toBe(false);
+  it.each(badThemeKinds)("rejects invalid themeKind %p", (themeKind) => {
+    expect(isHostToWebview({ ...validTheme(), themeKind })).toBe(false);
   });
 
-  it("rejects missing isDarkTheme", () => {
+  it("rejects missing themeKind", () => {
     expect(isHostToWebview({ protocol: PROTOCOL_VERSION, type: "theme" })).toBe(false);
   });
 

@@ -13,6 +13,7 @@
 // the small UI/protocol metadata that feeds the render.
 
 import type { MarkdownError } from "../markdown/errors.js";
+import type { ThemeKind } from "../shared/protocol.js";
 
 export type WebviewState = {
   /** True once the webview has accepted at least one Document from the host. */
@@ -21,7 +22,7 @@ export type WebviewState = {
    *  echoes the value back as `baseDocVersion` on outgoing Edit messages so
    *  the host can detect stale-base edits with a single equality check. */
   docVersion: number;
-  theme: "dark" | "light";
+  theme: ThemeKind;
   /** Host-authoritative write capability. When false, post-edit transitions
    *  are dropped at the reducer so read-only / virtual documents do not
    *  emit Edit messages the host would reject anyway. */
@@ -45,9 +46,9 @@ export type Action =
       type: "document";
       docVersion: number;
       canWrite: boolean;
-      isDarkTheme: boolean;
+      themeKind: ThemeKind;
     }
-  | { type: "theme"; isDarkTheme: boolean }
+  | { type: "theme"; themeKind: ThemeKind }
   | { type: "post-edit" }
   | { type: "serialize-error"; error: MarkdownError }
   | {
@@ -109,7 +110,7 @@ export function reducer(state: WebviewState, action: Action): WebviewState {
       return {
         ready: true,
         docVersion: action.docVersion,
-        theme: action.isDarkTheme ? "dark" : "light",
+        theme: action.themeKind,
         canWrite: action.canWrite,
         editInFlight: false,
         // A fresh non-stale Document clears a prior host reject so the user
@@ -119,7 +120,7 @@ export function reducer(state: WebviewState, action: Action): WebviewState {
       };
     }
     case "theme": {
-      const next = action.isDarkTheme ? "dark" : "light";
+      const next = action.themeKind;
       if (state.theme === next) {
         return state;
       }

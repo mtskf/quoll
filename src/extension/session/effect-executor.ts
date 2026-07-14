@@ -25,7 +25,7 @@
 
 import type { MarkdownError } from "../../markdown/errors.js";
 import { perfNow, perfRecord, perfReport } from "../../shared/perf.js";
-import type { HostToWebview } from "../../shared/protocol.js";
+import type { HostToWebview, ThemeKind } from "../../shared/protocol.js";
 import type { HostSessionEffect, HostSessionEvent, HostSessionState } from "./host-session-core.js";
 import type { MinimalEditSpan } from "./minimal-edit.js";
 import { minimalEditSpan } from "./minimal-edit.js";
@@ -63,7 +63,7 @@ export interface EffectExecutorDeps {
   /** Live builders — read theme/canWrite/document text at call time (freshness). */
   buildSeedDocument: (docVersion: number) => HostToWebview;
   buildRejectedDraft: (content: string, docVersion: number) => HostToWebview;
-  buildTheme: (isDarkTheme: boolean) => HostToWebview;
+  buildTheme: (themeKind: ThemeKind) => HostToWebview;
   buildEditRejected: (error: MarkdownError) => HostToWebview;
   applyEditSeam: ApplyEditSeam;
   /** Wraps handleOpenExternal(href, {openExternal, showError}). */
@@ -364,7 +364,7 @@ export function createEffectExecutor(deps: EffectExecutorDeps): EffectExecutor {
           sendEditRejected(effect.error, effect.id);
           break;
         case "postTheme":
-          post(deps.buildTheme(effect.isDarkTheme));
+          post(deps.buildTheme(effect.themeKind));
           break;
         case "applyEdit":
           runApplyEdit(effect.content);

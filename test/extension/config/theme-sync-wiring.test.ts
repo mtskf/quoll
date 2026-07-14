@@ -4,9 +4,10 @@ import {
   createThemeSyncWiring,
   type ThemeSyncWiringDeps,
 } from "../../../src/extension/config/theme-sync-wiring.js";
+import type { ThemeKind } from "../../../src/shared/protocol.js";
 
 function makeWiring(overrides: Partial<ThemeSyncWiringDeps> = {}) {
-  let onThemeChange: ((isDarkTheme: boolean) => void) | null = null;
+  let onThemeChange: ((themeKind: ThemeKind) => void) | null = null;
   let unsubscribed = false;
   const spies = { onThemeChange: vi.fn() };
   const deps: ThemeSyncWiringDeps = {
@@ -23,11 +24,11 @@ function makeWiring(overrides: Partial<ThemeSyncWiringDeps> = {}) {
   return {
     wiring,
     spies,
-    emit: (isDark: boolean) => {
+    emit: (themeKind: ThemeKind) => {
       if (onThemeChange === null) {
         throw new Error("subscribe handler not captured");
       }
-      onThemeChange(isDark);
+      onThemeChange(themeKind);
     },
     wasUnsubscribed: () => unsubscribed,
   };
@@ -41,9 +42,10 @@ describe("createThemeSyncWiring", () => {
 
   it("subscribes at construction and forwards the theme signal to onThemeChange", () => {
     const { spies, emit } = makeWiring();
-    emit(true);
-    emit(false);
-    expect(spies.onThemeChange.mock.calls).toEqual([[true], [false]]);
+    emit("dark");
+    emit("light");
+    emit("hc-dark");
+    expect(spies.onThemeChange.mock.calls).toEqual([["dark"], ["light"], ["hc-dark"]]);
   });
 
   it("tears down the subscription on dispose", () => {

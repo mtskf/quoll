@@ -22,6 +22,7 @@ import {
   type ImageWriteResultMessage,
   type LineHeightPref,
   PROTOCOL_VERSION,
+  type ThemeKind,
   type ThemeMessage,
 } from "../../shared/protocol.js";
 
@@ -35,7 +36,7 @@ export type EditorPrefs = {
 export type BuildDocumentMessageInput = {
   content: string;
   docVersion: number;
-  isDarkTheme: boolean;
+  themeKind: ThemeKind;
   canWrite: boolean;
 };
 
@@ -50,18 +51,18 @@ export function buildDocumentMessage(input: BuildDocumentMessageInput): Document
     type: "document",
     content: input.content,
     docVersion: input.docVersion,
-    isDarkTheme: input.isDarkTheme,
+    themeKind: input.themeKind,
     canWrite: input.canWrite,
   };
 }
 
 /** Construct a Theme message. Centralised so the panel does not hold the
  *  PROTOCOL_VERSION literal directly. */
-export function buildThemeMessage(isDarkTheme: boolean): ThemeMessage {
+export function buildThemeMessage(themeKind: ThemeKind): ThemeMessage {
   return {
     protocol: PROTOCOL_VERSION,
     type: "theme",
-    isDarkTheme,
+    themeKind,
   };
 }
 

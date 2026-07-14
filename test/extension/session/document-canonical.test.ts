@@ -37,7 +37,7 @@ describe("buildDocumentMessageFromDocument", () => {
   it("normalizes a mixed-EOL document's content to its eol (pins the wiring, not just the helper)", () => {
     const msg = buildDocumentMessageFromDocument(fakeDoc(EndOfLine.CRLF, "a\r\nb\nc"), {
       docVersion: 3,
-      isDarkTheme: false,
+      themeKind: "light",
       canWrite: true,
     });
     expect(msg.content).toBe("a\r\nb\r\nc");
@@ -46,8 +46,8 @@ describe("buildDocumentMessageFromDocument", () => {
       "canWrite",
       "content",
       "docVersion",
-      "isDarkTheme",
       "protocol",
+      "themeKind",
       "type",
     ]);
   });

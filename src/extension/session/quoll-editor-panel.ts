@@ -35,7 +35,6 @@ import type {
   WebviewPanel,
 } from "vscode";
 import {
-  ColorThemeKind,
   ConfigurationTarget,
   Disposable,
   env,
@@ -103,6 +102,7 @@ import {
   type HostSessionEvent,
   isWriteLockHeld,
 } from "./host-session-core.js";
+import { themeKindFromColorTheme } from "./theme-kind.js";
 
 // Full dotted id of the setting that gates the host→Problems lint mirror.
 // `affectsConfiguration` matches on this exact key.
@@ -387,17 +387,17 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
       buildSeedDocument: (docVersion) =>
         buildDocumentMessageFromDocument(document, {
           docVersion,
-          isDarkTheme: window.activeColorTheme.kind === ColorThemeKind.Dark,
+          themeKind: themeKindFromColorTheme(window.activeColorTheme.kind),
           canWrite: canWriteNow(),
         }),
       buildRejectedDraft: (content, docVersion) =>
         buildDocumentMessage({
           content,
           docVersion,
-          isDarkTheme: window.activeColorTheme.kind === ColorThemeKind.Dark,
+          themeKind: themeKindFromColorTheme(window.activeColorTheme.kind),
           canWrite: canWriteNow(),
         }),
-      buildTheme: (isDarkTheme) => buildThemeMessage(isDarkTheme),
+      buildTheme: (themeKind) => buildThemeMessage(themeKind),
       buildEditRejected: (error) => buildEditRejectedMessage(error),
       applyEditSeam: {
         // OLD text = the live buffer (applyEdit has not run yet, and the write
@@ -541,18 +541,19 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
     });
     disposables.push(revertRescueWiring);
 
-    // Theme sync: forwards a dark/light change as a `themeChanged` core event
+    // Theme sync: forwards a color-theme change as a `themeChanged` core event
     // (a core SIGNAL — it touches no document / write-lock / caret state). The
-    // panel's `subscribe` closure maps ColorThemeKind → isDarkTheme (keeping the
-    // factory vscode-free); the factory forwards that boolean to dispatch.
+    // panel's `subscribe` closure maps ColorThemeKind → themeKind via
+    // themeKindFromColorTheme (keeping the factory vscode-free); the factory
+    // forwards that themeKind to dispatch.
     const themeSync = createThemeSyncWiring({
       subscribe: (onThemeChange) => {
         const sub = subscribeWhileAlive(window.onDidChangeActiveColorTheme, (e) =>
-          onThemeChange(e.kind === ColorThemeKind.Dark)
+          onThemeChange(themeKindFromColorTheme(e.kind))
         );
         return () => sub.dispose();
       },
-      onThemeChange: (isDarkTheme) => dispatch({ type: "themeChanged", isDarkTheme }),
+      onThemeChange: (themeKind) => dispatch({ type: "themeChanged", themeKind }),
     });
     disposables.push(themeSync);
 

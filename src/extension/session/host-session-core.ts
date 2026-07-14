@@ -23,6 +23,7 @@ import {
   type ValidateForWriteResult,
   validateMarkdownForWrite,
 } from "../../markdown/validate-for-write.js";
+import type { ThemeKind } from "../../shared/protocol.js";
 import { decideEdit } from "./edit-decision.js";
 
 export interface HostSessionContext {
@@ -103,7 +104,7 @@ export type HostSessionEvent =
     }
   | { readonly type: "openExternal"; readonly href: string }
   | { readonly type: "documentChanged"; readonly documentVersion: number }
-  | { readonly type: "themeChanged"; readonly isDarkTheme: boolean }
+  | { readonly type: "themeChanged"; readonly themeKind: ThemeKind }
   | { readonly type: "viewStateVisible" }
   | {
       readonly type: "applyEditSettled";
@@ -133,7 +134,7 @@ export type HostSessionEffect =
       readonly id: number;
     }
   | { readonly type: "postEditRejected"; readonly error: MarkdownError; readonly id: number }
-  | { readonly type: "postTheme"; readonly isDarkTheme: boolean }
+  | { readonly type: "postTheme"; readonly themeKind: ThemeKind }
   | { readonly type: "applyEdit"; readonly content: string; readonly baseDocVersion: number }
   | { readonly type: "showError"; readonly message: string }
   | { readonly type: "logWarn"; readonly message: string; readonly detail: Record<string, unknown> }
@@ -581,7 +582,7 @@ export function createHostSessionCore(context: HostSessionContext, deps: HostSes
       }
 
       case "themeChanged":
-        return { state, effects: [{ type: "postTheme", isDarkTheme: event.isDarkTheme }] };
+        return { state, effects: [{ type: "postTheme", themeKind: event.themeKind }] };
 
       case "viewStateVisible": {
         if (state.pendingApplyBaseVersion !== null) {
