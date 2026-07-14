@@ -11,6 +11,13 @@
 // Each mode is imported from its own @codemirror/legacy-modes/mode/<file> so esbuild
 // tree-shakes to only the modes used. Each StreamLanguage is built ONCE (canonical
 // const); aliases reference the same instance.
+
+import {
+  HighlightStyle,
+  StreamLanguage,
+  type StreamParser,
+  syntaxHighlighting,
+} from "@codemirror/language";
 import { c, cpp, csharp, java } from "@codemirror/legacy-modes/mode/clike";
 import { css } from "@codemirror/legacy-modes/mode/css";
 import { go } from "@codemirror/legacy-modes/mode/go";
@@ -22,8 +29,9 @@ import { shell } from "@codemirror/legacy-modes/mode/shell";
 import { standardSQL } from "@codemirror/legacy-modes/mode/sql";
 import { html, xml } from "@codemirror/legacy-modes/mode/xml";
 import { yaml } from "@codemirror/legacy-modes/mode/yaml";
-import { StreamLanguage, type StreamParser } from "@codemirror/language";
+import type { Extension } from "@codemirror/state";
 import type { Parser } from "@lezer/common";
+import { quollCodeHighlightSpec } from "../theme.js";
 
 const lang = (mode: StreamParser<unknown>): StreamLanguage<unknown> => StreamLanguage.define(mode);
 
@@ -118,3 +126,20 @@ export function codeParserFor(info: string): Parser | null {
   const id = /\S*/.exec(info)?.[0]?.toLowerCase() ?? "";
   return (id ? PARSERS.get(id) : undefined) ?? null;
 }
+
+// One language-SCOPED HighlightStyle per nested code language. CM evaluates a
+// highlighter's `scope` on each (sub-)tree's TOP node (@lezer/highlight highlightTree,
+// mounted-overlay branch); only nested-code top nodes carry a code language's
+// languageDataProp, so a { scope: <codeLanguage> } style is inert on every outer-Markdown
+// node (TaskMarker/LinkTitle/HTML comment/entity), regardless of @lezer/highlight tag
+// ancestry. This is the documented, stable mixed-language mechanism (public {scope}
+// option — NOT internal-field mutation). ~17 tiny StyleModules is negligible injected
+// CSS. `codeHighlightStyles` is exported for the leak-guard test (it feeds highlightTree
+// directly, exactly as the runtime treeHighlighter does).
+export const codeHighlightStyles: readonly HighlightStyle[] = CODE_LANGUAGES.map((l) =>
+  HighlightStyle.define(quollCodeHighlightSpec, { scope: l })
+);
+
+export const quollCodeHighlighting: readonly Extension[] = codeHighlightStyles.map((s) =>
+  syntaxHighlighting(s)
+);

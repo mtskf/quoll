@@ -7,13 +7,17 @@
 import { ensureSyntaxTree } from "@codemirror/language";
 import { EditorState } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
+import { highlightTree, tags as t } from "@lezer/highlight";
 import { afterEach, describe, expect, it } from "vitest";
 import {
+  CODE_LANGUAGES,
+  codeHighlightStyles,
   codeParserFor,
   HIGHLIGHT_UNSUPPORTED,
 } from "../../src/webview/cm/fenced-code/fenced-code-highlight-languages.js";
 import { LANGUAGE_OPTIONS } from "../../src/webview/cm/fenced-code/fenced-code-languages.js";
 import { quollMarkdownLanguage } from "../../src/webview/cm/markdown.js";
+import { quollCodeHighlightSpec } from "../../src/webview/cm/theme.js";
 
 const lang = quollMarkdownLanguage();
 const FENCED = ["```js", "const x = 1 // hi", "```", ""].join("\n");
@@ -31,6 +35,31 @@ function mount(doc: string): EditorView {
   ensureSyntaxTree(v.state, v.state.doc.length, 5000);
   view = v;
   return v;
+}
+
+// Collect the highlight classes the scoped code styles assign inside [from,to). Feeds
+// highlightTree directly, exactly as the runtime treeHighlighter does.
+function codeClassesAt(doc: string, needle: string): string[] {
+  const state = EditorState.create({ doc, extensions: [lang] });
+  const tree = ensureSyntaxTree(state, state.doc.length, 5000);
+  if (!tree) {
+    throw new Error("no tree");
+  }
+  const from = doc.indexOf(needle);
+  const to = from + needle.length;
+  const out: string[] = [];
+  highlightTree(
+    tree,
+    codeHighlightStyles,
+    (f, tt, cls) => {
+      if (f < to && tt > from) {
+        out.push(cls);
+      }
+    },
+    from,
+    to
+  );
+  return out;
 }
 
 describe("code block nested parsing", () => {
@@ -86,5 +115,42 @@ describe("picker registry <-> highlight registry stay in sync", () => {
         expect(codeParserFor(value)).not.toBeNull();
       }
     }
+  });
+});
+
+describe("code highlight spec", () => {
+  const codeTags = new Set(quollCodeHighlightSpec.flatMap((s) => [s.tag].flat()));
+
+  it("covers the core code token kinds keyed to theme-aware CSS vars", () => {
+    for (const tag of [t.keyword, t.string, t.comment, t.number, t.typeName]) {
+      expect(codeTags.has(tag)).toBe(true);
+    }
+    const colours = quollCodeHighlightSpec
+      .map((s) => s.color)
+      .filter((c): c is string => typeof c === "string");
+    expect(colours.length).toBeGreaterThan(0);
+    for (const c of colours) {
+      expect(c).toMatch(/var\(--/); // theme-aware, no hard-coded hex
+    }
+  });
+
+  it("builds one scoped HighlightStyle per nested language", () => {
+    expect(codeHighlightStyles.length).toBe(CODE_LANGUAGES.length);
+  });
+});
+
+describe("scoped highlighting styles code but NOT prose (the leak guard)", () => {
+  it("styles a keyword inside a ```js fence", () => {
+    expect(codeClassesAt(FENCED, "const").length).toBeGreaterThan(0);
+  });
+
+  it("does NOT style a GFM TaskMarker (t.atom leaks through t.keyword ancestry if unscoped)", () => {
+    // Regression pin for the ancestry leak: TaskMarker → t.atom → child of t.keyword.
+    // With language scoping the code palette never touches this outer-Markdown node.
+    expect(codeClassesAt("- [ ] todo\n", "[ ]")).toEqual([]);
+  });
+
+  it("does NOT style a LinkTitle (t.string) in prose", () => {
+    expect(codeClassesAt('[a](/x "ttl")\n', "ttl")).toEqual([]);
   });
 });
