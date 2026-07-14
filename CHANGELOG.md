@@ -2,6 +2,17 @@
 
 All notable changes to Quoll are documented here.
 
+## 0.1.48 — 2026-07-14
+
+### Added
+
+- Fenced code blocks now show syntax highlighting (keywords, strings, comments, numbers, types) for blocks with a recognized language.
+- Fenced code blocks now have a language picker, so you can set or change a block's language directly in the editor.
+
+### Changed
+
+- High-Contrast themes are now recognized separately from Light, so High Contrast Black no longer risks falling back to the light color palette.
+
 ## 0.1.47 — 2026-07-13
 
 ### Added
