@@ -34,27 +34,39 @@ import { LANGUAGE_OPTIONS } from "./fenced-code-languages.js";
 
 export const PICKER_CLASS = "quoll-language-picker";
 /** Wrapper span class (ALWAYS present). `is-labeled` is added when a language is
- *  set — the header-bar theme keys the left-label layout + icon on it, and hides
- *  the icon / floats the bare <select> top-right when it is absent. */
+ *  set — the header-bar theme shows it as the left label ONLY in reading mode (the
+ *  block's fence concealed); a bare (`is-labeled`-absent) wrapper and an editing/
+ *  revealed labelled wrapper are both hidden. */
 export const PICKER_LABEL_CLASS = "quoll-language-picker-label";
 export const PICKER_LABELED_CLASS = "is-labeled";
 const PICKER_LABEL = "Code block language";
 
 const SVG_NS = "http://www.w3.org/2000/svg";
 
-// Lucide (https://lucide.dev, MIT) `square-code` glyph — a rounded square framing a
-// `< >` chevron. INLINED as static SVG built via createElementNS: per the project's
-// supply-chain default-deny we don't add the `lucide` package for one static icon,
-// and createElementNS avoids innerHTML (url-choke-point guard). The path constants
-// are exported so the widget test can assert the icon is present. The icon is
-// DECORATIVE: aria-hidden, and the theme overlays it pointer-events:none on the
-// select's left padding so clicking it still opens the native dropdown.
+/** Class on the leading `square-code` icon SVG (left of the language name). */
+export const PICKER_ICON_CLASS = "quoll-language-picker-icon";
+/** Class on the trailing chevron SVG (the dropdown-affordance caret, right side). */
+export const PICKER_CARET_CLASS = "quoll-language-picker-caret";
+
+// Lucide (https://lucide.dev, MIT) glyphs, INLINED as static SVG built via
+// createElementNS: per the project's supply-chain default-deny we don't add the
+// `lucide` package for two static icons, and createElementNS avoids innerHTML
+// (url-choke-point guard). The path constants are exported so the widget test can
+// assert each glyph is present. Both are DECORATIVE (aria-hidden); the theme overlays
+// them pointer-events:none over the select's padding so clicking anywhere in the
+// label — including the icon or the caret — still opens the native dropdown.
+//   - `square-code` (leading): a rounded square framing a `< >` chevron.
+//   - `chevron-down` (trailing): the caret that signals the language IS a dropdown.
 export const SQUARE_CODE_PATH_LEFT = "m10 9-3 3 3 3";
 export const SQUARE_CODE_PATH_RIGHT = "m14 15 3-3-3-3";
-const SQUARE_CODE_RECT = { width: "18", height: "18", x: "3", y: "3", rx: "2" };
+export const CHEVRON_DOWN_PATH = "m6 9 6 6 6-6";
 
-function makeSquareCodeIcon(): SVGSVGElement {
+type IconChild = { tag: "rect" | "path"; attrs: Record<string, string> };
+
+/** Build a Lucide-style 24×24 stroke SVG from its child shapes, tagged with `cls`. */
+function makeIcon(cls: string, children: IconChild[]): SVGSVGElement {
   const svg = document.createElementNS(SVG_NS, "svg");
+  svg.setAttribute("class", cls);
   for (const [k, v] of Object.entries({
     viewBox: "0 0 24 24",
     fill: "none",
@@ -66,17 +78,26 @@ function makeSquareCodeIcon(): SVGSVGElement {
   })) {
     svg.setAttribute(k, v);
   }
-  const rect = document.createElementNS(SVG_NS, "rect");
-  for (const [k, v] of Object.entries(SQUARE_CODE_RECT)) {
-    rect.setAttribute(k, v);
-  }
-  svg.appendChild(rect);
-  for (const d of [SQUARE_CODE_PATH_LEFT, SQUARE_CODE_PATH_RIGHT]) {
-    const path = document.createElementNS(SVG_NS, "path");
-    path.setAttribute("d", d);
-    svg.appendChild(path);
+  for (const child of children) {
+    const el = document.createElementNS(SVG_NS, child.tag);
+    for (const [k, v] of Object.entries(child.attrs)) {
+      el.setAttribute(k, v);
+    }
+    svg.appendChild(el);
   }
   return svg;
+}
+
+function makeSquareCodeIcon(): SVGSVGElement {
+  return makeIcon(PICKER_ICON_CLASS, [
+    { tag: "rect", attrs: { width: "18", height: "18", x: "3", y: "3", rx: "2" } },
+    { tag: "path", attrs: { d: SQUARE_CODE_PATH_LEFT } },
+    { tag: "path", attrs: { d: SQUARE_CODE_PATH_RIGHT } },
+  ]);
+}
+
+function makeCaretIcon(): SVGSVGElement {
+  return makeIcon(PICKER_CARET_CLASS, [{ tag: "path", attrs: { d: CHEVRON_DOWN_PATH } }]);
 }
 
 /** The <select> child of a picker wrapper (always present in the one DOM shape). */
@@ -177,7 +198,10 @@ export class LanguagePickerWidget extends WidgetType {
     if (this.language !== "") {
       wrap.classList.add(PICKER_LABELED_CLASS);
     }
-    wrap.append(makeSquareCodeIcon(), this.buildSelect(view));
+    // [square-code icon][<select> language name][chevron caret] — both icons are
+    // decorative overlays (theme: pointer-events:none over the select's padding), so
+    // the whole label is one clickable dropdown.
+    wrap.append(makeSquareCodeIcon(), this.buildSelect(view), makeCaretIcon());
     return wrap;
   }
 

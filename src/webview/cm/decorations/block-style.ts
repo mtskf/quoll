@@ -23,10 +23,10 @@
 // both. For a fence WITH A BODY the two surfaces move under one predicate and cannot
 // disagree about which fence rows are hidden (parity is load-bearing — do NOT
 // re-inline a per-line selection test on a fence line). A BODYLESS fence is the
-// deliberate exception (Codex #3): this module never collapses its row (it keeps the
-// legacy always-visible small panel so an empty block does not vanish), while its
-// marks still toggle with the predicate — an intentional scope difference, not a
-// desync.
+// deliberate exception (Codex #3): a BARE one keeps the legacy always-visible small
+// placeholder panel so an empty block does not vanish; a LANGUAGE-TAGGED one (reading
+// mode) collapses to a compact header-only bar (the header IS the panel), while its
+// marks still toggle with the predicate — an intentional scope difference, not a desync.
 // The two ship as SEPARATE ViewPlugins so a caret move re-walks only the fenced
 // pass in the COMMON case: `blockquoteRule` caches a `hasConcealableBoundaryFence`
 // flag (selection-INDEPENDENT — recomputed only on the structural rebuild) and
@@ -192,6 +192,12 @@ export const FENCED_CODE_FENCE_HIDDEN_CLASS = "quoll-fenced-code-fence-hidden";
  *  class, so language-less / read-only blocks stay bare. Rides the same
  *  conceal-migrated open line the base -open edge does. */
 export const FENCED_CODE_HAS_LANGUAGE_CLASS = "quoll-fenced-code-has-language";
+/** Marks the single open fence line of a LANGUAGE-TAGGED BODYLESS block (an empty
+ *  ```` ```lang ```` panel) in reading mode. The header-bar theme collapses it to a
+ *  compact header-height bar (no reserved code strip); the separate close fence row
+ *  collapses to zero — so an empty tagged block reads as just its header, not a tall
+ *  empty panel. A bare bodyless block keeps the legacy placeholder panel. */
+export const FENCED_CODE_HEADER_ONLY_CLASS = "quoll-fenced-code-header-only";
 
 /** Marker classes attached to each line of a blockquote. */
 export const BLOCKQUOTE_CLASS = "quoll-blockquote";
@@ -287,6 +293,16 @@ export function fencedCodeLineClasses(n: number, L: FencedLandmarks): string[] {
     ? [FENCED_CODE_CLOSE_CLASS, FENCED_CODE_OUTER_CLOSE_CLASS]
     : [FENCED_CODE_CLOSE_CLASS];
   if (L.firstBodyLine === null) {
+    // A LANGUAGE-TAGGED bodyless block (reading mode) becomes a COMPACT header-only
+    // bar: the open fence line carries BOTH edges (rounded top+bottom) plus the
+    // header-only marker (theme collapses it to the header height), and the separate
+    // (empty) close fence row collapses to zero. A bare bodyless block keeps the
+    // legacy small placeholder panel (Codex #3).
+    if (L.hasLanguage) {
+      return n === L.openFenceLine
+        ? [FENCED_CODE_CLASS, ...openEdge, ...closeEdge, FENCED_CODE_HEADER_ONLY_CLASS]
+        : [FENCED_CODE_FENCE_HIDDEN_CLASS];
+    }
     const out = [FENCED_CODE_CLASS];
     if (n === L.openFenceLine) {
       out.push(...openEdge);
@@ -690,7 +706,10 @@ export function buildFencedCodePanel(
     // Read-only surfaces get NO header (the picker/copy builders already return
     // Decoration.none there, so a bar would be empty) — skip the walk entirely.
     const langTarget = ctx.state.readOnly ? null : fenceLanguageTarget(ctx.state, sn);
-    const hasLanguage = langTarget !== null && langTarget.language !== "";
+    // Header shows only in READING mode (caret OUTSIDE the block). When the block is
+    // revealed for editing, the raw ```lang line is shown instead, so the header is
+    // suppressed to avoid duplicating the language (and to keep edit mode uncluttered).
+    const hasLanguage = langTarget !== null && langTarget.language !== "" && !blockRevealed;
     const landmarks: FencedLandmarks = {
       openFenceLine,
       closeFenceLine,

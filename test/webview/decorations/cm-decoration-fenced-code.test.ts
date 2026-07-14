@@ -6,6 +6,7 @@ import {
   buildFencedCodePanel,
   FENCED_CODE_FENCE_HIDDEN_CLASS,
   FENCED_CODE_HAS_LANGUAGE_CLASS,
+  FENCED_CODE_HEADER_ONLY_CLASS,
   FENCED_CODE_OPEN_CLASS,
   fencedCodeLineClasses,
 } from "../../../src/webview/cm/decorations/block-style.js";
@@ -274,20 +275,36 @@ describe("buildFencedCodePanel has-language builder gate", () => {
     return out;
   }
 
-  it("tags a language-tagged writable block's revealed open line", () => {
-    // Caret on the open fence line → revealed → the open line (from 0) is the edge.
-    const open = panelClasses("```js\nx\n```\n", 2).get(0) ?? [];
-    expect(open).toContain(FENCED_CODE_OPEN_CLASS);
-    expect(open).toContain(FENCED_CODE_HAS_LANGUAGE_CLASS);
+  it("does NOT tag a REVEALED (caret-in) block — the header hides for editing", () => {
+    // Caret on the open fence line → revealed → the raw ```lang is shown, so the
+    // header is suppressed (no has-language anywhere).
+    const classes = panelClasses("```js\nx\n```\n", 2);
+    for (const cls of classes.values()) {
+      expect(cls).not.toContain(FENCED_CODE_HAS_LANGUAGE_CLASS);
+    }
   });
 
-  it("migrates the tag to the first body line when the block is concealed (caret off)", () => {
+  it("tags the first body line when the block is CONCEALED (caret off = reading mode)", () => {
     const doc = "```js\nx\n```\n\npara";
     const classes = panelClasses(doc, doc.indexOf("para") + 1);
     // Concealed fence row (line.from 0) is hidden-only; the first body line (from 6)
-    // carries the migrated has-language edge.
+    // carries the migrated has-language edge (the header).
     expect(classes.get(0)).toEqual([FENCED_CODE_FENCE_HIDDEN_CLASS]);
     expect(classes.get(6) ?? []).toContain(FENCED_CODE_HAS_LANGUAGE_CLASS);
+  });
+
+  it("a bodyless tagged block (reading mode) is a compact header-only bar", () => {
+    // ```json\n``` — no body. The open fence line carries has-language + BOTH edges
+    // + the header-only marker; the empty close row (from 8) collapses to hidden.
+    const doc = "```json\n```\n\npara";
+    const classes = panelClasses(doc, doc.indexOf("para") + 1);
+    const open = classes.get(0) ?? [];
+    expect(open).toContain(FENCED_CODE_HAS_LANGUAGE_CLASS);
+    expect(open).toContain(FENCED_CODE_HEADER_ONLY_CLASS);
+    expect(open).toContain(FENCED_CODE_OPEN_CLASS);
+    expect(open).toContain("quoll-fenced-code-close"); // rounded top+bottom bar
+    // the trailing empty close row collapsed
+    expect(classes.get(8)).toEqual([FENCED_CODE_FENCE_HIDDEN_CLASS]);
   });
 
   it("does NOT tag a bare (language-less) block", () => {

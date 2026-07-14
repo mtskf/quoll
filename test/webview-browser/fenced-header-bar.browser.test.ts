@@ -111,14 +111,16 @@ describe("fenced-code header bar — real-pixel layout", () => {
     expect(label(view)).toBeNull();
   });
 
-  it("conceal↔reveal keeps the label aligned with the copy button — no vertical OR horizontal jump", async () => {
+  it("concealed: label centre aligns with the copy button (one row); revealed: header hides", async () => {
     // Compare vertical CENTRES (what reads as "one row"): the label wrapper is the
     // full strip height with centred text; the copy button is a small button — their
     // tops differ by design, their centres are what must line up.
     const midY = (r: DOMRect) => (r.top + r.bottom) / 2;
+    const shown = (el: HTMLElement | null) => el !== null && el.getClientRects().length > 0;
 
-    view = mount(TAGGED, TAGGED.indexOf("para") + 1); // concealed
+    view = mount(TAGGED, TAGGED.indexOf("para") + 1); // concealed (reading mode)
     await settled();
+    expect(shown(label(view)), "label shown in reading mode").toBe(true);
     const cLab = (label(view) as HTMLElement).getBoundingClientRect();
     const cCopy = (copy(view) as HTMLElement).getBoundingClientRect();
     // Vertical: label and copy centres share the strip band (the gap-offset fix).
@@ -126,12 +128,7 @@ describe("fenced-code header bar — real-pixel layout", () => {
 
     view.dispatch({ selection: { anchor: 2 } }); // caret onto the fence → revealed
     await settled();
-    const rLab = (label(view) as HTMLElement).getBoundingClientRect();
-    const rCopy = (copy(view) as HTMLElement).getBoundingClientRect();
-    expect(Math.abs(midY(rLab) - midY(rCopy))).toBeLessThanOrEqual(3);
-
-    // The label must not jump horizontally between the two states (the column-inset
-    // fix for the border-less fence-hidden row).
-    expect(Math.abs(cLab.left - rLab.left)).toBeLessThanOrEqual(3);
+    // Header hides in edit mode — the raw ```lang line is shown instead.
+    expect(shown(label(view)), "label hidden while editing").toBe(false);
   });
 });

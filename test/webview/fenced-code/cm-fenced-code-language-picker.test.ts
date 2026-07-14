@@ -25,8 +25,11 @@ import {
   fencedCodeLanguagePicker,
 } from "../../../src/webview/cm/fenced-code/fenced-code-language-picker.js";
 import {
+  CHEVRON_DOWN_PATH,
   LanguagePickerWidget,
+  PICKER_CARET_CLASS,
   PICKER_CLASS,
+  PICKER_ICON_CLASS,
   PICKER_LABEL_CLASS,
   PICKER_LABELED_CLASS,
   SQUARE_CODE_PATH_LEFT,
@@ -287,12 +290,17 @@ describe("LanguagePickerWidget", () => {
     view.destroy();
   });
 
-  it("carries the decorative square-code icon (aria-hidden, inline SVG)", () => {
+  it("carries the decorative square-code icon AND the dropdown caret (aria-hidden, inline SVG)", () => {
     const view = mkView("```js\nx\n```\n");
     const dom = new LanguagePickerWidget(0, "js").toDOM(view);
     const paths = [...dom.querySelectorAll("path")].map((p) => p.getAttribute("d"));
-    expect(paths).toContain(SQUARE_CODE_PATH_LEFT);
-    expect(dom.querySelector("svg")?.getAttribute("aria-hidden")).toBe("true");
+    expect(paths).toContain(SQUARE_CODE_PATH_LEFT); // leading square-code
+    expect(paths).toContain(CHEVRON_DOWN_PATH); // trailing dropdown caret
+    expect(dom.querySelector(`.${PICKER_ICON_CLASS}`)).not.toBeNull();
+    expect(dom.querySelector(`.${PICKER_CARET_CLASS}`)).not.toBeNull();
+    for (const svg of dom.querySelectorAll("svg")) {
+      expect(svg.getAttribute("aria-hidden")).toBe("true");
+    }
     view.destroy();
   });
 
@@ -476,13 +484,26 @@ describe("quollFencedHeaderBarTheme (spec contract)", () => {
     expect(bg).toContain("--quoll-surface-header");
     expect(bg).toContain("--quoll-fenced-header-height");
   });
-  it("collapses the bare wrapper out of layout (bare float unchanged)", () => {
-    expect(rule(".quoll-language-picker-label:not(.is-labeled)")?.display).toBe("contents");
+  it("hides the picker label by default (bare block AND edit/revealed mode show none)", () => {
+    expect(rule(".quoll-language-picker-label")?.display).toBe("none");
   });
-  it("lays the labelled picker on the left", () => {
-    const lab = rule(".quoll-language-picker-label.is-labeled");
+  it("shows the labelled picker on the left only when its line is a header carrier", () => {
+    const key = Object.keys(fencedHeaderBarThemeSpec).find(
+      (k) =>
+        k.includes("quoll-fenced-code-fence-hidden") &&
+        k.includes("quoll-fenced-code-has-language") &&
+        k.includes("is-labeled")
+    );
+    expect(key).toBeDefined();
+    const lab = rule(key as string);
+    expect(lab?.display).toBe("block");
     expect(lab?.position).toBe("absolute");
     expect(lab?.left).toBeDefined();
+  });
+  it("provides a decorative dropdown caret overlay (click-through)", () => {
+    const caret = rule(".quoll-language-picker-label.is-labeled .quoll-language-picker-caret");
+    expect(caret?.position).toBe("absolute");
+    expect(caret?.pointerEvents).toBe("none");
   });
   it("strips the labelled select box chrome, caps width, pins line-height", () => {
     const sel = rule(".quoll-language-picker-label.is-labeled .quoll-language-picker");
@@ -501,15 +522,27 @@ describe("quollFencedHeaderBarTheme (spec contract)", () => {
     expect(key).toBeDefined();
     expect(rule(key as string)?.top).toContain("--quoll-block-gap-y");
   });
-  it("re-adds the horizontal column inset to the fence-hidden labelled wrapper", () => {
+  it("re-adds the column inset to a NON-blockquote fence-hidden labelled wrapper only", () => {
+    // The :not(.quoll-blockquote) scope prevents double-counting the inset on a
+    // blockquote-nested fence-hidden row (which already carries the quote's border).
     const key = Object.keys(fencedHeaderBarThemeSpec).find(
       (k) =>
         k.includes("quoll-fenced-code-fence-hidden") &&
-        k.includes("quoll-language-picker-label") &&
-        !k.includes(":has(")
+        k.includes(":not(.quoll-blockquote)") &&
+        k.includes("quoll-language-picker-label")
     );
     expect(key).toBeDefined();
     expect(rule(key as string)?.left).toContain("--quoll-column-inset-left");
+  });
+  it("collapses a bodyless tagged block to a compact header-height bar", () => {
+    const key = Object.keys(fencedHeaderBarThemeSpec).find((k) =>
+      k.includes("quoll-fenced-code-header-only")
+    );
+    expect(key).toBeDefined();
+    const r = rule(key as string);
+    expect(r?.paddingTop).toContain("--quoll-fenced-header-height");
+    expect(r?.paddingBottom).toBe("0");
+    expect(r?.lineHeight).toBe("0");
   });
 });
 
