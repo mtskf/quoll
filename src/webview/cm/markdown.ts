@@ -45,9 +45,9 @@ import {
 } from "@codemirror/language";
 import { type EditorState, Prec } from "@codemirror/state";
 import { keymap } from "@codemirror/view";
-import { type MarkdownExtension, type MarkdownParser, parseCode } from "@lezer/markdown";
+import type { MarkdownExtension, MarkdownParser } from "@lezer/markdown";
 import { parseTable } from "../../markdown/table/index.js";
-import { codeParserFor } from "./fenced-code/fenced-code-highlight-languages.js";
+import { codeHighlightExtension } from "./fenced-code/fenced-code-highlight-languages.js";
 import { leadingFrontmatterEnd } from "./frontmatter/detect.js";
 
 // SyntaxNode without a direct @lezer/common import (a direct dep as of PR #66;
@@ -225,16 +225,15 @@ export function quollMarkdownLanguage(): LanguageSupport {
   // Parser (via Language.parser); the runtime instance is a MarkdownParser, which
   // is the only thing exposing `.configure`. Narrow to it (same package already
   // imported for MarkdownExtension) — no cast to a fresh dependency.
-  // nonFoldableBlocks subtracts fold chevrons; parseCode nests a sub-language parser
-  // into fenced/indented code for DISPLAY-ONLY highlighting. No htmlParser is passed —
-  // raw HTML in the Markdown body stays opaque (the no-markdown()/no-lang-html policy);
-  // a fenced ```html block is still highlighted via codeParserFor's legacy html mode
-  // (that is codeParser, not htmlParser — the two are independent). parseCode is a
-  // public @lezer/markdown export (markdown() calls it internally), so this rides the
-  // same supported surface.
+  // nonFoldableBlocks subtracts fold chevrons; codeHighlightExtension nests a
+  // sub-language parser into fenced/indented code for DISPLAY-ONLY highlighting (a
+  // size-guarded reproduction of @lezer/markdown's parseCode wrap — see
+  // fenced-code-highlight-languages.ts). No htmlParser branch — raw HTML in the
+  // Markdown body stays opaque (the no-markdown()/no-lang-html policy); a fenced
+  // ```html block is still highlighted via the code path (codeParser, not htmlParser).
   const parser = (markdownLanguage.parser as MarkdownParser).configure([
     nonFoldableBlocks,
-    parseCode({ codeParser: codeParserFor }),
+    codeHighlightExtension,
   ]);
   const language = new Language(markdownLanguage.data, parser, [], "markdown");
   return new LanguageSupport(language, [headerIndent, Prec.high(keymap.of(markdownKeymap))]);

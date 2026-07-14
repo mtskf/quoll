@@ -93,6 +93,20 @@ describe("code block nested parsing", () => {
     }
     expect(() => mount(["```constructor", "x", "```", ""].join("\n"))).not.toThrow();
   });
+
+  it("skips nested parsing for code blocks over the size cap (protects parse budgets)", () => {
+    // A mapped fence far larger than any real snippet (>50KB) must NOT be nested-parsed:
+    // the mixed parser is ~10-25x slower and would stress the synchronous full-doc
+    // ensureSyntaxTree(..., 50ms) hot paths. Rendered opaque (plain CodeText leaf) instead.
+    const huge = `${"x = 1\n".repeat(10000)}`; // ~60KB of code body
+    const doc = `\`\`\`js\n${huge}\`\`\`\n`;
+    const state = EditorState.create({ doc, extensions: [lang] });
+    const tree = ensureSyntaxTree(state, state.doc.length, 5000);
+    expect(tree).not.toBeNull();
+    const codeStart = doc.indexOf("x = 1");
+    // Interior stays a bare CodeText leaf — no sub-language mount above the cap.
+    expect(tree!.resolveInner(codeStart, 1).type.name).toBe("CodeText");
+  });
 });
 
 describe("display-only (no serialization / no text mutation)", () => {

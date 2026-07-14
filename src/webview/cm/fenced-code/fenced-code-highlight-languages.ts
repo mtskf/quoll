@@ -30,7 +30,8 @@ import { standardSQL } from "@codemirror/legacy-modes/mode/sql";
 import { html, xml } from "@codemirror/legacy-modes/mode/xml";
 import { yaml } from "@codemirror/legacy-modes/mode/yaml";
 import type { Extension } from "@codemirror/state";
-import type { Parser } from "@lezer/common";
+import { type Parser, parseMixed } from "@lezer/common";
+import type { MarkdownExtension } from "@lezer/markdown";
 import { quollCodeHighlightSpec } from "../theme.js";
 
 const lang = (mode: StreamParser<unknown>): StreamLanguage<unknown> => StreamLanguage.define(mode);
@@ -126,6 +127,48 @@ export function codeParserFor(info: string): Parser | null {
   const id = /\S*/.exec(info)?.[0]?.toLowerCase() ?? "";
   return (id ? PARSERS.get(id) : undefined) ?? null;
 }
+
+// Skip nested highlighting for very large code blocks. The mixed parser is
+// ~10-25x slower than plain Markdown, and Quoll's synchronous full-document
+// ensureSyntaxTree(..., 50ms) hot paths (list-continuation-keymap, list-transform,
+// outline-panel) fail closed when EOF isn't reached within budget. Enabling nested
+// parsing unconditionally would let one enormous mapped fence (e.g. a pasted source
+// or log file) tip those into their degraded fallback earlier than a plain-Markdown
+// doc of the same size would. A block this large is far beyond any real snippet, so
+// rendering it as plain monospace (the accepted no-highlight baseline) is the right
+// trade — it keeps those budgets intact. Guard on the node's byte span; the dominant
+// cost is a single huge block (measured in PR #214 review).
+const NESTED_HIGHLIGHT_MAX_BYTES = 50_000;
+
+// Nested-parse wrap for fenced/indented code. Reproduces @lezer/markdown's parseCode
+// wrap (overlay on CodeText, bracketed for fenced blocks) PLUS the size guard above:
+// parseCode's own codeParser callback only receives the info string, never the block
+// size, so the guard has to live at the parseMixed level. Node names are the stable
+// @lezer/markdown public names already relied on by nonFoldableBlocks (markdown.ts).
+// No htmlParser branch — raw HTML in the Markdown body stays opaque (the no-lang-html
+// policy); a fenced ```html block is still highlighted via codeParserFor.
+export const codeHighlightExtension: MarkdownExtension = {
+  wrap: parseMixed((node, input) => {
+    const name = node.type.name;
+    if (name !== "FencedCode" && name !== "CodeBlock") {
+      return null;
+    }
+    if (node.to - node.from > NESTED_HIGHLIGHT_MAX_BYTES) {
+      return null;
+    }
+    let info = "";
+    if (name === "FencedCode") {
+      const infoNode = node.node.getChild("CodeInfo");
+      if (infoNode) {
+        info = input.read(infoNode.from, infoNode.to);
+      }
+    }
+    const parser = codeParserFor(info);
+    return parser
+      ? { parser, overlay: (n) => n.type.name === "CodeText", bracketed: name === "FencedCode" }
+      : null;
+  }),
+};
 
 // One language-SCOPED HighlightStyle per nested code language. CM evaluates a
 // highlighter's `scope` on each (sub-)tree's TOP node (@lezer/highlight highlightTree,
