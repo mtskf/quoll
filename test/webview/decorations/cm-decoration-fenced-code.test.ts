@@ -3,10 +3,10 @@ import { EditorSelection, EditorState } from "@codemirror/state";
 import type { DecorationSet } from "@codemirror/view";
 import { describe, expect, it } from "vitest";
 import {
+  buildFencedCodePanel,
   FENCED_CODE_FENCE_HIDDEN_CLASS,
   FENCED_CODE_HAS_LANGUAGE_CLASS,
   FENCED_CODE_OPEN_CLASS,
-  buildFencedCodePanel,
   fencedCodeLineClasses,
 } from "../../../src/webview/cm/decorations/block-style.js";
 import { syntaxRevealProviders } from "../../../src/webview/cm/decorations/index.js";

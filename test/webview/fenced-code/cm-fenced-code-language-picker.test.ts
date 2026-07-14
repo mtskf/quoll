@@ -13,7 +13,6 @@ import { describe, expect, it, vi } from "vitest";
 import { blockStyle } from "../../../src/webview/cm/decorations/block-style.js";
 import { quollSyntaxReveal } from "../../../src/webview/cm/decorations/index.js";
 import type { BuildContext } from "../../../src/webview/cm/decorations/types.js";
-import { fencedHeaderBarThemeSpec } from "../../../src/webview/cm/theme.js";
 import { fencedCodeCopyButton } from "../../../src/webview/cm/fenced-code/fenced-code-copy-button.js";
 import {
   fenceLanguageTarget,
@@ -33,6 +32,7 @@ import {
   SQUARE_CODE_PATH_LEFT,
 } from "../../../src/webview/cm/fenced-code/fenced-code-language-picker-widget.js";
 import { LANGUAGE_OPTIONS } from "../../../src/webview/cm/fenced-code/fenced-code-languages.js";
+import { fencedHeaderBarThemeSpec } from "../../../src/webview/cm/theme.js";
 import { fullTree } from "../helpers/full-tree.js";
 
 type SyntaxNode = ReturnType<typeof fullTree>["topNode"];
@@ -526,9 +526,9 @@ describe("fencedCodeLanguagePicker mounted mode-cross (focus + no stale write)",
     expect(view.state.doc.toString()).toBe("```js\nx\n```\n");
     const after = view.dom.querySelector<HTMLSelectElement>(`.${PICKER_CLASS}`);
     expect(after).toBe(before); // in-place updateDOM, not destroy/recreate → focus kept
-    expect(
-      after?.closest(`.${PICKER_LABEL_CLASS}`)?.classList.contains(PICKER_LABELED_CLASS)
-    ).toBe(true);
+    expect(after?.closest(`.${PICKER_LABEL_CLASS}`)?.classList.contains(PICKER_LABELED_CLASS)).toBe(
+      true
+    );
     expect(errSpy).not.toHaveBeenCalled();
     errSpy.mockRestore();
     view.destroy();
@@ -546,9 +546,9 @@ describe("fencedCodeLanguagePicker mounted mode-cross (focus + no stale write)",
     expect(view.state.doc.toString()).toBe("```\nx\n```\n");
     const after = view.dom.querySelector<HTMLSelectElement>(`.${PICKER_CLASS}`);
     expect(after).toBe(before);
-    expect(
-      after?.closest(`.${PICKER_LABEL_CLASS}`)?.classList.contains(PICKER_LABELED_CLASS)
-    ).toBe(false);
+    expect(after?.closest(`.${PICKER_LABEL_CLASS}`)?.classList.contains(PICKER_LABELED_CLASS)).toBe(
+      false
+    );
     expect(errSpy).not.toHaveBeenCalled();
     errSpy.mockRestore();
     view.destroy();

@@ -942,8 +942,7 @@ export const fencedHeaderBarThemeSpec = {
     position: "relative",
     // Reserve the strip ABOVE the code: header height + normal block breathing room.
     // Three-class selector (0,3,0) outranks base .quoll-fenced-code-open (0,2,0).
-    paddingTop:
-      "calc(var(--quoll-fenced-header-height, 2.1em) + var(--quoll-block-pad-y, 12px))",
+    paddingTop: "calc(var(--quoll-fenced-header-height, 2.1em) + var(--quoll-block-pad-y, 12px))",
     // Bar painted on the line's own background layer (over the navy fill, clipped to
     // the padding box like the fill): opaque header surface down to the header
     // height, a 1px hairline, then transparent (code area keeps the panel fill).
