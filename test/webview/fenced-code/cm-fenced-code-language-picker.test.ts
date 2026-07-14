@@ -348,11 +348,12 @@ describe("fencedCodeLanguagePicker (mounted plugin)", () => {
     view.destroy();
   });
 
-  it("CM's real widget lifecycle removes stale listeners — a select retained across an edit above the block cannot write (EH-80)", () => {
-    // Exercises the ACTUAL CM path: an edit above the fence shifts openFrom → the
-    // widget moves → CM destroys the old DOM (calling destroy(), aborting its
-    // listeners). This is the "detached select during a reseed" scenario driven
-    // through CM rather than a direct destroy() call.
+  it("a select retained across an edit above the block cannot write (defence-in-depth)", () => {
+    // An edit above the fence shifts openFrom → the widget moves → CM destroys the
+    // old DOM. NOTE: this alone does NOT isolate the destroy() abort — after the
+    // shift, openFrom 0 no longer resolves to a fence, so setFenceLanguage's
+    // null-resolve guard ALSO blocks the write. It pins the combined "no stale
+    // write" property; the next test isolates the abort specifically.
     const view = mountPicker("```\nx\n```\n");
     const stale = view.dom.querySelector<HTMLSelectElement>(`.${PICKER_CLASS}`);
     if (stale === null) {
@@ -362,6 +363,31 @@ describe("fencedCodeLanguagePicker (mounted plugin)", () => {
     stale.value = "js";
     stale.dispatchEvent(new Event("change", { bubbles: true }));
     expect(view.state.doc.toString()).toBe("intro\n```\nx\n```\n"); // stale select wrote nothing
+    view.destroy();
+  });
+
+  it("destroy() via a full reseed aborts the listener even when openFrom still resolves to a fence (EH-80)", () => {
+    // Isolates the destroy() abort: a full setState reseed makes CM discard every
+    // widget DOM (destroy() → listeners aborted) and rebuild. The reseeded doc STILL
+    // has a bare fence at offset 0, so the structural null-resolve guard does NOT
+    // fire — ONLY the aborted listener prevents the retained select from writing.
+    // Revert-check: remove the `pickerState.get(dom)?.controller.abort()` line in
+    // destroy() and this goes red (the stale change writes "```js\ny\n```\n").
+    const view = mountPicker("```\nx\n```\n");
+    const stale = view.dom.querySelector<HTMLSelectElement>(`.${PICKER_CLASS}`);
+    if (stale === null) {
+      throw new Error("no select");
+    }
+    view.setState(
+      EditorState.create({
+        doc: "```\ny\n```\n",
+        selection: EditorSelection.single(0),
+        extensions: [markdown({ base: markdownLanguage }), fencedCodeLanguagePicker],
+      })
+    );
+    stale.value = "js";
+    stale.dispatchEvent(new Event("change", { bubbles: true }));
+    expect(view.state.doc.toString()).toBe("```\ny\n```\n"); // stale select wrote nothing
     view.destroy();
   });
 
