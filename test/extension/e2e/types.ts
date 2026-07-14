@@ -29,11 +29,15 @@ import type { PROTOCOL_VERSION } from "./constants";
 
 type EnvelopeShape = { protocol: typeof PROTOCOL_VERSION };
 
+// Mirror of the wire ThemeKind (src/shared/protocol.ts THEME_KINDS). Both HC
+// kinds are carried distinctly; the webview collapses them to one CSS class.
+export type ThemeKindShape = "dark" | "light" | "hc-dark" | "hc-light";
+
 export type DocumentMessageShape = EnvelopeShape & {
   type: "document";
   content: string;
   docVersion: number;
-  isDarkTheme: boolean;
+  themeKind: ThemeKindShape;
   canWrite: boolean;
 };
 
@@ -59,7 +63,7 @@ export type OpenLinkMessageShape = EnvelopeShape & {
 
 export type ThemeMessageShape = EnvelopeShape & {
   type: "theme";
-  isDarkTheme: boolean;
+  themeKind: ThemeKindShape;
 };
 
 export type EditRejectedMessageShape = EnvelopeShape & {

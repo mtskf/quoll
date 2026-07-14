@@ -108,8 +108,14 @@ function escapeScript(js) {
   return String(js).replace(/<\/(script)/gi, "<\\/$1");
 }
 
+// The wire ThemeKind vocabulary (mirrors THEME_KINDS in src/shared/protocol.ts).
+// The preview seeds the real webview via a hand-rolled `document` message, so
+// its theme value must be one the shell's boundary validator accepts — an
+// unknown value would drop the seed WHOLE and render an empty editor.
+const THEME_KINDS = ["dark", "light", "hc-dark", "hc-light"];
+
 function normaliseConfig(cfg) {
-  const theme = cfg.theme === "dark" ? "dark" : "light";
+  const theme = THEME_KINDS.includes(cfg.theme) ? cfg.theme : "light";
   const variations =
     Array.isArray(cfg.variations) && cfg.variations.length > 0
       ? cfg.variations
@@ -146,7 +152,7 @@ async function renderInstance(cfg, index) {
   const template = await readFile(templatePath, "utf8");
   return template
     .replaceAll("{{DOC_JSON}}", jsStringLiteral(cfg.content))
-    .replaceAll("{{DARK}}", cfg.theme === "dark" ? "true" : "false")
+    .replaceAll("{{THEME_KIND}}", JSON.stringify(cfg.theme))
     .replaceAll("{{LABEL}}", escapeHtml(label))
     .replaceAll("{{VARIATION_CSS}}", escapeStyle(variation.css ?? ""))
     .replaceAll("{{VARIATION_JS}}", escapeScript(variation.js ?? ""));

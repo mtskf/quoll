@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { MarkdownError } from "../../src/markdown/errors.js";
+import type { ThemeKind } from "../../src/shared/protocol.js";
 import {
   type Action,
   canPostEdit,
@@ -18,14 +19,14 @@ const docAction = (
   overrides: Partial<{
     docVersion: number;
     canWrite: boolean;
-    isDarkTheme: boolean;
+    themeKind: ThemeKind;
   }> = {}
 ) =>
   ({
     type: "document",
     docVersion: 1,
     canWrite: true,
-    isDarkTheme: true,
+    themeKind: "dark",
     ...overrides,
   }) as const;
 
@@ -176,7 +177,7 @@ describe("reducer — editInFlight single-flight invariant", () => {
       type: "document",
       docVersion: 3,
       canWrite: true,
-      isDarkTheme: true,
+      themeKind: "dark",
     });
     expect(afterResync.editInFlight).toBe(false);
     expect(afterResync.docVersion).toBe(3);
@@ -194,8 +195,8 @@ describe("reducer — editInFlight single-flight invariant", () => {
 
 describe("reducer — theme updates do not touch docVersion", () => {
   it("theme action preserves docVersion", () => {
-    const a = reducer(initialState, docAction({ docVersion: 9, isDarkTheme: true }));
-    const b = reducer(a, { type: "theme", isDarkTheme: false });
+    const a = reducer(initialState, docAction({ docVersion: 9, themeKind: "dark" }));
+    const b = reducer(a, { type: "theme", themeKind: "light" });
     expect(b.theme).toBe("light");
     expect(b.docVersion).toBe(9);
   });
@@ -203,16 +204,23 @@ describe("reducer — theme updates do not touch docVersion", () => {
   it("theme action preserves editInFlight", () => {
     const a = reducer(initialState, docAction({ docVersion: 1 }));
     const b = reducer(a, { type: "post-edit" });
-    const c = reducer(b, { type: "theme", isDarkTheme: false });
+    const c = reducer(b, { type: "theme", themeKind: "light" });
     expect(c.editInFlight).toBe(true);
     expect(c.theme).toBe("light");
   });
 
   it("theme action with same theme returns the same state reference", () => {
-    const a = reducer(initialState, docAction({ docVersion: 1, isDarkTheme: true }));
+    const a = reducer(initialState, docAction({ docVersion: 1, themeKind: "dark" }));
     expect(a.theme).toBe("dark");
-    const b = reducer(a, { type: "theme", isDarkTheme: true });
+    const b = reducer(a, { type: "theme", themeKind: "dark" });
     expect(b).toBe(a);
+  });
+
+  it("carries an HC kind through to state.theme (host distinguishes HC from Light)", () => {
+    const viaDoc = reducer(initialState, docAction({ docVersion: 1, themeKind: "hc-dark" }));
+    expect(viaDoc.theme).toBe("hc-dark");
+    const viaTheme = reducer(viaDoc, { type: "theme", themeKind: "hc-light" });
+    expect(viaTheme.theme).toBe("hc-light");
   });
 });
 

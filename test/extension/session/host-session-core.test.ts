@@ -449,10 +449,13 @@ describe("host-session-core: misc transitions", () => {
     expect(r.state.rejection).toEqual(rejection);
     expect(r.effects).toEqual([]);
   });
-  it("themeChanged → postTheme", () => {
-    expect(core.transition(base(), { type: "themeChanged", isDarkTheme: true }).effects).toEqual([
-      { type: "postTheme", isDarkTheme: true },
+  it("themeChanged → postTheme (carries the themeKind through, incl. HC)", () => {
+    expect(core.transition(base(), { type: "themeChanged", themeKind: "dark" }).effects).toEqual([
+      { type: "postTheme", themeKind: "dark" },
     ]);
+    expect(core.transition(base(), { type: "themeChanged", themeKind: "hc-dark" }).effects).toEqual(
+      [{ type: "postTheme", themeKind: "hc-dark" }]
+    );
   });
   it("viewStateVisible while lock held → no effect", () => {
     expect(
@@ -483,7 +486,7 @@ describe("host-session-core: misc transitions", () => {
   });
   it("any event after disposed (except disposed) → no effects", () => {
     expect(
-      core.transition(base({ disposed: true }), { type: "themeChanged", isDarkTheme: true }).effects
+      core.transition(base({ disposed: true }), { type: "themeChanged", themeKind: "dark" }).effects
     ).toEqual([]);
   });
 });

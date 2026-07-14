@@ -113,7 +113,7 @@ export async function hideQuollByOpeningOtherDoc(): Promise<void> {
 
 // Type-guard for outbound theme messages. Mirrors isDocumentEvent so a
 // theme-propagation test can waitForEvent with narrowing flowing through
-// to message.isDarkTheme.
+// to message.themeKind.
 export function isThemeEvent(
   e: RecordedEventShape
 ): e is RecordedEventShape & { message: ThemeMessageShape } {

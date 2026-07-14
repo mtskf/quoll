@@ -66,6 +66,15 @@ export const EndOfLine = {
   CRLF: 2,
 } as const;
 
+// theme-kind.ts maps ColorThemeKind → the wire ThemeKind.
+// Values match the real vscode.ColorThemeKind enum.
+export const ColorThemeKind = {
+  Light: 1,
+  Dark: 2,
+  HighContrast: 3,
+  HighContrastLight: 4,
+} as const;
+
 export const commands = {
   registerCommand: (_id: string, _cb: (...args: unknown[]) => unknown) => ({
     dispose: (): void => undefined,

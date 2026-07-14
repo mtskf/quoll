@@ -311,10 +311,14 @@ describe("styles.css — navy+green accent token set (palette refresh)", () => {
     expect(dark).toMatch(
       /--quoll-selection-fill\s*:\s*color-mix\([^;]*--vscode-editor-selectionBackground[^;]*#000/
     );
-    // Light: plain host selection colour, unchanged (also covers HC → .light-theme).
+    // Light: plain host selection colour, unchanged.
     expect(light).toMatch(
       /--quoll-selection-fill\s*:\s*var\(--vscode-editor-selectionBackground\)/
     );
+    // HC no longer rides .light-theme (it toggles .hc-theme), so the HC block
+    // must own selection-fill itself — plain host colour, maximal contrast.
+    const hc = css.match(/vscode-high-contrast[\s\S]*?\{([\s\S]*?)\}/)?.[1] ?? "";
+    expect(hc).toMatch(/--quoll-selection-fill\s*:\s*var\(--vscode-editor-selectionBackground\)/);
   });
 
   it("keeps the canvas anchored to --vscode-* (html bg/foreground)", () => {
@@ -331,11 +335,22 @@ describe("styles.css — navy+green accent token set (palette refresh)", () => {
     expect(light.toLowerCase()).not.toMatch(/#(bd93f9|9580ff|6272a4)/);
   });
 
+  it("makes :root.hc-theme the Quoll-owned canonical HC selector (independent of the body class)", () => {
+    // The robustness fix: the host distinguishes HC (themeKind hc-*) and the
+    // shell toggles .hc-theme on <html>, so HC no longer rides .light-theme.
+    // :root.hc-theme leads the escape-hatch selector list; the body.vscode-*
+    // selectors remain as compatibility/defense-in-depth. Non-vacuous: dropping
+    // the :root.hc-theme selector reds this.
+    expect(css, "Quoll-owned :root.hc-theme selector must lead the HC block").toMatch(
+      /:root\.hc-theme\s*,/
+    );
+  });
+
   it("neutralises the WHOLE palette to host colours under High Contrast", () => {
-    // HC Black/Light both map to .light-theme (host isDarkTheme === Dark only),
-    // so without this reset HC Black would paint the light navy palette on a
-    // black background. PRIMARY selector is the documented body.vscode-high-contrast
-    // class (F1); the reset re-points every accent/surface token to --vscode-*.
+    // HC toggles .hc-theme (Quoll-owned) + carries body.vscode-high-contrast
+    // (compatibility). Without this reset HC Black would paint the light navy
+    // palette on a black background. The reset re-points every accent/surface
+    // token to --vscode-*.
     expect(css, "documented HC class selector must be present").toMatch(
       /body\.vscode-high-contrast\b/
     );
@@ -430,10 +445,10 @@ describe("styles.css — bullet-list marker token (HC-sensitive)", () => {
   });
 
   it("re-points --quoll-bullet-marker through the host accent under High Contrast (escape hatch)", () => {
-    // HC maps to .light-theme; without an explicit override the fixed light green
-    // would paint on the HC canvas. Re-point through the (HC-neutralised) accent
-    // so the dot stays maximal-contrast. Non-vacuous: dropping the HC override
-    // reds this.
+    // HC toggles .hc-theme (not .light-theme); without an explicit override the
+    // fixed light green would paint on the HC canvas. Re-point through the
+    // (HC-neutralised) accent so the dot stays maximal-contrast. Non-vacuous:
+    // dropping the HC override reds this.
     const hc = css.match(/vscode-high-contrast[\s\S]*?\{([\s\S]*?)\}/);
     expect(hc, "HC reset block not found").not.toBeNull();
     expect(hc?.[1] ?? "").toMatch(/--quoll-bullet-marker\s*:\s*var\(--quoll-accent-green/);
@@ -714,12 +729,14 @@ describe("styles.css — outline sidebar", () => {
     expect(rule).toMatch(/color\s*:\s*var\(--vscode-errorForeground/);
   });
 
-  it("high-contrast redefines the sidebar tokens inside the existing 4-selector HC block", () => {
-    // Covers BOTH HC kinds + both data-vscode-theme-kind attribute selectors —
-    // one shared block (the established HC pattern in this sheet), so an
-    // HC-light user is never left with the color-mix surface. Pin the FULL
-    // selector list, not just the first selector: a block that dropped the
-    // -light / attribute variants would still match a lazier regex.
+  it("high-contrast redefines the sidebar tokens inside the shared HC block", () => {
+    // The block now leads with :root.hc-theme (Quoll-owned) and keeps the four
+    // body.vscode-* compatibility selectors — covers BOTH HC kinds + both
+    // data-vscode-theme-kind attribute selectors, one shared block (the
+    // established HC pattern in this sheet), so an HC-light user is never left
+    // with the color-mix surface. Pin the FULL body selector list, not just the
+    // first: a block that dropped the -light / attribute variants would still
+    // match a lazier regex.
     const hcMatch = live.match(/body\.vscode-high-contrast\s*,([^{]*)\{([^}]*)\}/);
     const hcSelectors = hcMatch?.[1] ?? "";
     const hcBody = hcMatch?.[2] ?? "";

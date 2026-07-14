@@ -174,6 +174,30 @@ export function isPrefValue(key: string, value: unknown): boolean {
 
 // ---------- Host → Webview ----------
 
+/** The theme signal carried on `document` + `theme` messages. A 1:1 encoding of
+ *  VS Code's `ColorThemeKind` (Light / Dark / HighContrast / HighContrastLight)
+ *  — the host maps its enum onto these four values (see
+ *  `src/extension/session/theme-kind.ts`) and carries the FULL kind with no
+ *  information loss at the boundary. `HighContrast` is HC *Black* (a dark HC
+ *  theme) → `"hc-dark"`; `HighContrastLight` → `"hc-light"`. The webview rounds
+ *  BOTH `hc-*` values down to a single `.hc-theme` CSS class (display-only — the
+ *  escape hatch neutralises the palette to host `--vscode-*` tokens, which
+ *  already differ between the two HC kinds). Keeping `hc-dark`/`hc-light`
+ *  distinct on the wire means a future per-HC-kind tune needs no protocol
+ *  migration. Replaced the prior boolean dark/light flag, which could not
+ *  distinguish HC from Light and forced HC onto the `.light-theme` palette. */
+export const THEME_KINDS = ["dark", "light", "hc-dark", "hc-light"] as const;
+export type ThemeKind = (typeof THEME_KINDS)[number];
+
+const THEME_KIND_SET: ReadonlySet<string> = new Set(THEME_KINDS);
+
+/** True iff `value` is one of the four allowlisted ThemeKind literals. Boundary
+ *  guard for the `document` / `theme` validators (mirrors `isPrefValue`'s
+ *  `new Set` posture). */
+export function isThemeKind(value: unknown): value is ThemeKind {
+  return typeof value === "string" && THEME_KIND_SET.has(value);
+}
+
 /** Authoritative document snapshot. The host posts a Document on every
  *  observed change — initial mount, panel revive, external edit, or echo
  *  of a webview-accepted edit. The webview's reaction is identical across
@@ -198,7 +222,7 @@ export type DocumentMessage = Envelope & {
   type: "document";
   content: string;
   docVersion: number;
-  isDarkTheme: boolean;
+  themeKind: ThemeKind;
   canWrite: boolean;
 };
 
@@ -206,7 +230,7 @@ export type DocumentMessage = Envelope & {
  *  onDidChangeActiveColorTheme. */
 export type ThemeMessage = Envelope & {
   type: "theme";
-  isDarkTheme: boolean;
+  themeKind: ThemeKind;
 };
 
 /** Host→webview editor-surface preference push. Independent of the document
@@ -590,11 +614,11 @@ export function isHostToWebview(value: unknown): value is HostToWebview {
       return (
         isUnboundedContent(v.content) &&
         isValidDocVersion(v.docVersion) &&
-        typeof v.isDarkTheme === "boolean" &&
+        isThemeKind(v.themeKind) &&
         typeof v.canWrite === "boolean"
       );
     case "theme":
-      return typeof v.isDarkTheme === "boolean";
+      return isThemeKind(v.themeKind);
     case "edit-rejected": {
       const err = v.error;
       return (

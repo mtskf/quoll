@@ -125,7 +125,7 @@ describe("subscribeToHost — boundary validation + diagnostics", () => {
     type: "document",
     content: "# hi",
     docVersion: 1,
-    isDarkTheme: true,
+    themeKind: "dark",
     canWrite: true,
   });
 
@@ -162,7 +162,7 @@ describe("subscribeToHost — boundary validation + diagnostics", () => {
           type: "document",
           content: "x",
           docVersion: 1,
-          isDarkTheme: true,
+          themeKind: "dark",
           canWrite: true,
         },
       })

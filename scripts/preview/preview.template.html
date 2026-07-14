@@ -167,7 +167,7 @@
     <script>
       (function () {
         var DOC = {{DOC_JSON}};
-        var DARK = {{DARK}};
+        var THEME_KIND = {{THEME_KIND}};
         // Best-effort measurement handle for later getComputedStyle probing.
         // The EditorView instance is not reachable from the DOM without
         // importing CodeMirror, so we expose the root element instead.
@@ -191,7 +191,7 @@
                   type: "document",
                   content: DOC,
                   docVersion: 1,
-                  isDarkTheme: DARK,
+                  themeKind: THEME_KIND,
                   canWrite: true,
                 },
                 "*"
