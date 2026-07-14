@@ -839,6 +839,43 @@ export const copyButtonThemeSpec = {
 
 export const quollCopyButtonTheme = EditorView.theme(copyButtonThemeSpec);
 
+// Language picker: a native <select> pinned to the panel's top-right, LEFT of the
+// copy button. Shares the `.cm-line.quoll-fenced-code-open` / `-fence-hidden`
+// position:relative anchor established by copyButtonThemeSpec (same theme, always
+// mounted together), so it needs no anchor rules of its own. Right-anchored so a
+// longer language label grows leftward; `max-width: min(10em, calc(100% - 3.5em))`
+// reserves room for the copy button and caps the control so it cannot overlap the
+// left-aligned revealed ```lang fence text in a narrow editor column. Reuses the
+// shared fenced-control foreground + hover tint so it reads as one set with the
+// copy button.
+export const languagePickerThemeSpec = {
+  ".quoll-language-picker": {
+    position: "absolute",
+    top: "0.25em",
+    right: "2.2em",
+    zIndex: "1",
+    maxWidth: "min(10em, calc(100% - 3.5em))",
+    boxSizing: "border-box",
+    fontSize: "0.85em",
+    lineHeight: "normal",
+    padding: "0 0.2em",
+    color: fencedControlForeground,
+    backgroundColor: "transparent",
+    border: "1px solid transparent",
+    borderRadius: "4px",
+    cursor: "pointer",
+    opacity: "var(--quoll-control-rest-opacity, 0.6)",
+    transition: "var(--quoll-control-transition, opacity 0.12s ease)",
+  },
+  ".quoll-language-picker:hover, .quoll-language-picker:focus": {
+    opacity: "1",
+    borderColor: "var(--vscode-dropdown-border, transparent)",
+    backgroundColor: fencedControlHoverBackground,
+  },
+};
+
+export const quollLanguagePickerTheme = EditorView.theme(languagePickerThemeSpec);
+
 // "Show more" / "Show less" collapse bar for long fenced code blocks
 // (fenced-code-collapse-widget.ts). Separate EditorView.theme (not styles.css) for
 // the same reason as copyButtonThemeSpec: it must beat CodeMirror's UNLAYERED

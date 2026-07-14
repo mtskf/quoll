@@ -31,6 +31,7 @@ import { editorPrefsApply } from "./cm/editor-prefs-apply.js";
 import { fencedCodeCollapseField } from "./cm/fenced-code/fenced-code-collapse.js";
 import { fencedCodeCopyButton } from "./cm/fenced-code/fenced-code-copy-button.js";
 import { fencedCodeEnterKeymap } from "./cm/fenced-code/fenced-code-enter-keymap.js";
+import { fencedCodeLanguagePicker } from "./cm/fenced-code/fenced-code-language-picker.js";
 import { quollFloatingToolbarScroll } from "./cm/floating-toolbar-scroll.js";
 import { quollFolding } from "./cm/fold/index.js";
 import { frontmatterBlockField, frontmatterRevealKeymap } from "./cm/frontmatter/index.js";
@@ -63,6 +64,7 @@ import {
   quollCopyButtonTheme,
   quollHeadingRhythmTheme,
   quollHighlighting,
+  quollLanguagePickerTheme,
   quollSearchPanelTheme,
   quollTaskCompletedContentTheme,
   quollTheme,
@@ -424,6 +426,10 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
         // EditorView.theme like quollBlockStyleTheme so it overrides CM's
         // unlayered `.cm-line` rules — see cm/theme.ts.
         quollCopyButtonTheme,
+        // Language picker <select> styling (fenced-code-language-picker-widget.ts).
+        // An EditorView.theme like quollCopyButtonTheme so it overrides CM's
+        // unlayered `.cm-line` rules — see cm/theme.ts.
+        quollLanguagePickerTheme,
         // Collapse-bar styling for long fenced blocks (fenced-code-collapse-widget.ts).
         // An EditorView.theme like quollCopyButtonTheme so it overrides CM's
         // unlayered `.cm-line` rules — see cm/theme.ts.
@@ -516,6 +522,12 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
         // button copies the code body via navigator.clipboard. Display-only
         // (byte-identical round-trip) and absent in read-only mode.
         fencedCodeCopyButton,
+        // Language picker: a selection-independent ViewPlugin emitting one inline
+        // point widget per fenced block's open line; its <select> rewrites the
+        // opening fence's language token via setFenceLanguage. The ONLY fenced-code
+        // widget that mutates the document (one guarded info-string edit, byte-clean
+        // otherwise). Absent in read-only mode, same as the copy button.
+        fencedCodeLanguagePicker,
         // Collapse long fenced blocks (>10 body lines): a block Decoration.replace
         // conceals body lines 11..N behind a "Show more" bar; "Show more"/"Show less"
         // toggle a per-block StateEffect. Block widgets MUST come from a StateField,
