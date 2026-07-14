@@ -834,8 +834,8 @@ export const copyButtonThemeSpec = {
   },
   ".quoll-copy-button svg": {
     display: "block",
-    width: "1em",
-    height: "1em",
+    width: "0.85em",
+    height: "0.85em",
   },
   // Pin the wrapper's positioning to static EXPLICITLY: it hosts the
   // absolutely-positioned button, which must anchor to the `.quoll-fenced-code-open`
@@ -913,6 +913,163 @@ export const languagePickerThemeSpec = {
 };
 
 export const quollLanguagePickerTheme = EditorView.theme(languagePickerThemeSpec);
+
+// ChatGPT-style header bar for LANGUAGE-TAGGED, writable fenced blocks. Gated on
+// the block-style `quoll-fenced-code-has-language` class (writable + non-empty
+// plain language only — see block-style.ts), so language-less / read-only blocks
+// stay bare. The visible open line reserves header height as top padding and paints
+// the bar on its OWN background layer — a linear-gradient over the panel fill, with
+// a hard stop at the header height + a 1px hairline stop — so the bar ALWAYS paints
+// behind the code text (no pseudo-element / z-index stacking to reason about) and
+// the reserved padding keeps code below the strip. The icon+language label (left)
+// and copy button (right) anchor at the open-fence offset with z-index:1 and float
+// above the bar. Fill + hairline REUSE the shared --quoll-surface-header /
+// --quoll-surface-border chrome tokens (same header surface as GFM table headers;
+// theme-complete across dark/light/high-contrast) — no new colour token.
+//
+// Conceal/reveal geometry: in the revealed state the controls share the open fence
+// line's padding box with the bar → aligned. In the concealed state the controls
+// sit in the zero-height `-fence-hidden` row while the bar rides the migrated
+// first-body-line; that row lacks the line's transparent alignment borders, so two
+// :has(+ …) / descendant rules re-add the gap-y (vertical, outer-open only) and the
+// 6px column inset (horizontal) offsets so the fence-hidden controls land on the
+// strip in both states (PR #246 adjacency precedent). Separate EditorView.theme for
+// the same unlayered-override reason as copyButtonThemeSpec; exported plain so the
+// picker suite pins the contract.
+export const fencedHeaderBarThemeSpec = {
+  ".cm-line.quoll-fenced-code-open.quoll-fenced-code-has-language": {
+    // Self-sufficient positioning context (do NOT rely on copyButtonThemeSpec's).
+    position: "relative",
+    // Reserve the strip ABOVE the code: header height + normal block breathing room.
+    // Three-class selector (0,3,0) outranks base .quoll-fenced-code-open (0,2,0).
+    paddingTop: "calc(var(--quoll-fenced-header-height, 2.1em) + var(--quoll-block-pad-y, 12px))",
+    // Bar painted on the line's own background layer (over the navy fill, clipped to
+    // the padding box like the fill): opaque header surface down to the header
+    // height, a 1px hairline, then transparent (code area keeps the panel fill).
+    backgroundImage:
+      "linear-gradient(var(--quoll-surface-header, var(--vscode-editorWidget-background)) 0, var(--quoll-surface-header, var(--vscode-editorWidget-background)) calc(var(--quoll-fenced-header-height, 2.1em) - 1px), var(--quoll-surface-border, var(--vscode-contrastBorder, transparent)) calc(var(--quoll-fenced-header-height, 2.1em) - 1px), var(--quoll-surface-border, var(--vscode-contrastBorder, transparent)) var(--quoll-fenced-header-height, 2.1em), transparent var(--quoll-fenced-header-height, 2.1em))",
+  },
+  // BODYLESS tagged block: the open fence line IS the whole panel. Collapse it to a
+  // compact header-height bar — drop the reserved code strip (no code below) and the
+  // empty concealed content (line-height 0). The four-class selector (0,4,0) beats
+  // the has-language paddingTop rule (0,3,0). The close fence row collapses via the
+  // shared -fence-hidden rule.
+  ".cm-line.quoll-fenced-code-open.quoll-fenced-code-has-language.quoll-fenced-code-header-only": {
+    paddingTop: "var(--quoll-fenced-header-height, 2.1em)",
+    paddingBottom: "0",
+    lineHeight: "0",
+  },
+  // Collapse CM's inline widget-buffer (height:1em placeholder for the picker/copy
+  // point widgets) on the header-only bar, so the bar is exactly the header height
+  // with no empty strut below the strip. The widgets are absolutely positioned, so
+  // zeroing the buffer does not affect them.
+  ".cm-line.quoll-fenced-code-header-only .cm-widgetBuffer": {
+    height: "0",
+  },
+  // The picker label is READING-mode chrome: hidden by default so a language-less
+  // block shows no "Plain text" label AND an editing/revealed block (raw ```lang
+  // shown) shows no duplicate header. It is un-hidden only when its line is the
+  // header carrier — the concealed `-fence-hidden` row (bodied block) or the
+  // has-language fence line (bodyless block). Copy button is separate (always on).
+  ".quoll-language-picker-label": {
+    display: "none",
+  },
+  // Shown as the LEFT header label, full header height so the select text centres in
+  // the bar. NO font-size override — it inherits the line's 0.9em, the same context
+  // the gradient height resolves in, so label and strip heights match.
+  ".cm-line.quoll-fenced-code-fence-hidden .quoll-language-picker-label.is-labeled, .cm-line.quoll-fenced-code-has-language .quoll-language-picker-label.is-labeled":
+    {
+      display: "block",
+      position: "absolute",
+      top: "0",
+      left: "0.55em",
+      height: "var(--quoll-fenced-header-height, 2.1em)",
+      zIndex: "1",
+      maxWidth: "calc(100% - 4em)", // reserve room for the copy button on the right
+      color: fencedControlForeground,
+      opacity: "var(--quoll-control-rest-opacity, 0.6)",
+      transition: "var(--quoll-control-transition, opacity 0.12s ease)",
+    },
+  ".quoll-language-picker-label.is-labeled:hover, .quoll-language-picker-label.is-labeled:focus-within":
+    {
+      opacity: "1",
+    },
+  // Decorative square-code icon overlaid on the select's LEFT padding, click-through.
+  ".quoll-language-picker-label.is-labeled .quoll-language-picker-icon": {
+    position: "absolute",
+    left: "0",
+    top: "50%",
+    transform: "translateY(-50%)",
+    width: "1em",
+    height: "1em",
+    pointerEvents: "none",
+  },
+  // Dropdown-affordance chevron overlaid on the select's RIGHT padding, click-through.
+  ".quoll-language-picker-label.is-labeled .quoll-language-picker-caret": {
+    position: "absolute",
+    right: "0",
+    top: "50%",
+    transform: "translateY(-50%)",
+    width: "0.85em",
+    height: "0.85em",
+    opacity: "0.7",
+    pointerEvents: "none",
+  },
+  // Labelled select: fills the wrapper (whole area clickable, so clicking the icon or
+  // caret opens the dropdown), box chrome stripped so it reads as a label; padding
+  // clears the icon (left) + caret (right); capped + clipped so a long exotic language
+  // never reaches the copy button. `lineHeight: normal` is explicit AFTER `font:
+  // inherit` (the shorthand resets it) so the concealed `-fence-hidden` row's
+  // `line-height: 0` cannot be re-inherited and clip the glyph.
+  ".quoll-language-picker-label.is-labeled .quoll-language-picker": {
+    position: "static",
+    display: "block",
+    width: "100%",
+    height: "100%",
+    minWidth: "0",
+    maxWidth: "100%",
+    overflow: "hidden",
+    textOverflow: "ellipsis",
+    whiteSpace: "nowrap",
+    appearance: "none",
+    border: "none",
+    backgroundColor: "transparent",
+    color: "inherit",
+    font: "inherit",
+    lineHeight: "normal",
+    paddingLeft: "1.5em",
+    paddingRight: "1.15em",
+    margin: "0",
+    cursor: "pointer",
+    opacity: "1",
+  },
+  // Concealed-state alignment. The `-fence-hidden` row lacks the line's transparent
+  // alignment borders, so absolute offsets resolve to the row's raw left / top edge.
+  //   - VERTICAL: only when the migrated header line is a TRUE outer boundary (its
+  //     transparent --quoll-block-gap-y top border pushes the bar's padding box
+  //     down) — offset both controls down by the gap. Scoped by the NEXT line being
+  //     a has-language outer-open header, so bare blocks are untouched.
+  //   - HORIZONTAL: the revealed line's 6px transparent left border insets the label;
+  //     a plain (non-blockquote) fence-hidden row has none, so re-add the column
+  //     inset. A BLOCKQUOTE-nested fence-hidden row ALREADY carries the blockquote's
+  //     6px transparent border (same --quoll-column-inset-left token), so it must NOT
+  //     re-add it (double-count → the nested label drifts ~6px right) — hence
+  //     :not(.quoll-blockquote).
+  ".cm-line.quoll-fenced-code-fence-hidden:has(+ .cm-line.quoll-fenced-code-has-language.quoll-fenced-code-outer-open) .quoll-copy-button":
+    {
+      top: "calc(0.3em + var(--quoll-block-gap-y, 8px))",
+    },
+  ".cm-line.quoll-fenced-code-fence-hidden:has(+ .cm-line.quoll-fenced-code-has-language.quoll-fenced-code-outer-open) .quoll-language-picker-label.is-labeled":
+    {
+      top: "var(--quoll-block-gap-y, 8px)",
+    },
+  ".cm-line.quoll-fenced-code-fence-hidden:not(.quoll-blockquote) .quoll-language-picker-label.is-labeled":
+    {
+      left: "calc(0.55em + var(--quoll-column-inset-left, 6px))",
+    },
+};
+
+export const quollFencedHeaderBarTheme = EditorView.theme(fencedHeaderBarThemeSpec);
 
 // "Show more" / "Show less" collapse bar for long fenced code blocks
 // (fenced-code-collapse-widget.ts). Separate EditorView.theme (not styles.css) for

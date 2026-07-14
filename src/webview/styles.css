@@ -78,6 +78,12 @@ html body {
     --quoll-block-pad-x: 16px;
     --quoll-block-pad-y: 12px;
     --quoll-block-radius: 8px;
+    /* Height of the ChatGPT-style header bar on a language-tagged fenced block
+     * (cm/theme.ts fencedHeaderBarThemeSpec). In em so the reserved strip scales
+     * with the 0.9em code font; the header's fill/hairline reuse the shared
+     * --quoll-surface-header / --quoll-surface-border chrome tokens (theme-complete
+     * across dark/light/high-contrast), so no new colour token is introduced. */
+    --quoll-fenced-header-height: 2.1em;
     /* EXTERNAL vertical gap between a block panel and the block directly
      * above / below it. Quoll is text-canonical, so inter-block spacing
      * otherwise comes ONLY from blank source lines; a blockquote / callout

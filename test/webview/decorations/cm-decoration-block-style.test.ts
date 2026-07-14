@@ -146,13 +146,17 @@ describe("block-style — fenced code panel (selection-aware fence rows)", () =>
     const out = buildFencedCodePanel(ctxCaret(docP, docP.indexOf("para") + 2));
     expect(lines(out)).toEqual([
       { from: 0, cls: "quoll-fenced-code-fence-hidden" },
-      { from: 6, cls: "quoll-fenced-code quoll-fenced-code-open quoll-fenced-code-outer-open" },
+      {
+        from: 6,
+        cls: "quoll-fenced-code quoll-fenced-code-open quoll-fenced-code-outer-open quoll-fenced-code-has-language",
+      },
       { from: 19, cls: "quoll-fenced-code quoll-fenced-code-close quoll-fenced-code-outer-close" },
       { from: 30, cls: "quoll-fenced-code-fence-hidden" },
     ]);
   });
 
   it("caret in the CODE BODY reveals BOTH fences (no fence row collapses)", () => {
+    // Caret INSIDE the block = editing → header suppressed (no has-language).
     const out = buildFencedCodePanel(ctxCaret(doc, doc.indexOf("const") + 2)); // caret in "const x = 1;" body
     expect(lines(out)).toEqual([
       { from: 0, cls: "quoll-fenced-code quoll-fenced-code-open quoll-fenced-code-outer-open" },
