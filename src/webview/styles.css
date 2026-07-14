@@ -418,8 +418,8 @@ html body {
      * lead the eye more than the darker #1a7050 link accent would. */
     --quoll-todo-ring: #23b06f;
     /* Light selection stays the plain host colour (user kept the current light
-     * tint). Both HC kinds map to .light-theme, so HC selection is the plain
-     * host colour too — maximal contrast, no HC override needed. */
+     * tint). HC uses the same plain host colour, but declares it in its own
+     * .hc-theme block below — HC no longer rides .light-theme. */
     --quoll-selection-fill: var(--vscode-editor-selectionBackground);
   }
 
