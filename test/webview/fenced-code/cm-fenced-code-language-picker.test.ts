@@ -13,6 +13,7 @@ import { describe, expect, it, vi } from "vitest";
 import { blockStyle } from "../../../src/webview/cm/decorations/block-style.js";
 import { quollSyntaxReveal } from "../../../src/webview/cm/decorations/index.js";
 import type { BuildContext } from "../../../src/webview/cm/decorations/types.js";
+import { fencedHeaderBarThemeSpec } from "../../../src/webview/cm/theme.js";
 import { fencedCodeCopyButton } from "../../../src/webview/cm/fenced-code/fenced-code-copy-button.js";
 import {
   fenceLanguageTarget,
@@ -458,6 +459,60 @@ describe("fencedCodeLanguagePicker (mounted plugin)", () => {
 // synchronously rebuilds decorations and re-runs updateDOM while the handler is
 // still on the stack). The single DOM shape keeps this an IN-PLACE sync, so the
 // same select is reused (focus preserved) and nothing is silently swallowed.
+describe("quollFencedHeaderBarTheme (spec contract)", () => {
+  const OPEN = ".cm-line.quoll-fenced-code-open.quoll-fenced-code-has-language";
+  const spec = fencedHeaderBarThemeSpec as Record<string, Record<string, string> | undefined>;
+  const rule = (k: string) => spec[k];
+
+  it("makes the has-language open line its own positioning context (self-sufficient)", () => {
+    expect(rule(OPEN)?.position).toBe("relative");
+  });
+  it("reserves header height as top padding", () => {
+    expect(rule(OPEN)?.paddingTop).toContain("--quoll-fenced-header-height");
+  });
+  it("paints the bar as a background-image gradient (behind text; reuses surface tokens)", () => {
+    const bg = rule(OPEN)?.backgroundImage ?? "";
+    expect(bg).toContain("linear-gradient");
+    expect(bg).toContain("--quoll-surface-header");
+    expect(bg).toContain("--quoll-fenced-header-height");
+  });
+  it("collapses the bare wrapper out of layout (bare float unchanged)", () => {
+    expect(rule(".quoll-language-picker-label:not(.is-labeled)")?.display).toBe("contents");
+  });
+  it("lays the labelled picker on the left", () => {
+    const lab = rule(".quoll-language-picker-label.is-labeled");
+    expect(lab?.position).toBe("absolute");
+    expect(lab?.left).toBeDefined();
+  });
+  it("strips the labelled select box chrome, caps width, pins line-height", () => {
+    const sel = rule(".quoll-language-picker-label.is-labeled .quoll-language-picker");
+    expect(sel?.appearance).toBe("none");
+    expect(sel?.border).toBe("none");
+    expect(sel?.backgroundColor).toBe("transparent");
+    expect(sel?.minWidth).toBe("0");
+    expect(sel?.overflow).toBe("hidden");
+    // Explicit after `font: inherit` so the concealed row's line-height:0 can't clip.
+    expect(sel?.lineHeight).toBe("normal");
+  });
+  it("offsets fence-hidden controls by the gap when the next line is an outer-open header", () => {
+    const key = Object.keys(fencedHeaderBarThemeSpec).find(
+      (k) => k.includes(":has(") && k.includes("quoll-copy-button")
+    );
+    expect(key).toBeDefined();
+    expect(rule(key as string)?.top).toContain("--quoll-block-gap-y");
+  });
+  it("re-adds the horizontal column inset to the fence-hidden labelled wrapper", () => {
+    const key = Object.keys(fencedHeaderBarThemeSpec).find(
+      (k) =>
+        k.includes("quoll-fenced-code-fence-hidden") &&
+        k.includes("quoll-language-picker-label") &&
+        !k.includes(":has(")
+    );
+    expect(key).toBeDefined();
+    expect(rule(key as string)?.left).toContain("--quoll-column-inset-left");
+  });
+});
+
 describe("fencedCodeLanguagePicker mounted mode-cross (focus + no stale write)", () => {
   it("''→js via a real change keeps the SAME select and rewrites the doc", () => {
     const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});

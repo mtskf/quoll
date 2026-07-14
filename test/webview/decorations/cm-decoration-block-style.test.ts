@@ -146,7 +146,10 @@ describe("block-style — fenced code panel (selection-aware fence rows)", () =>
     const out = buildFencedCodePanel(ctxCaret(docP, docP.indexOf("para") + 2));
     expect(lines(out)).toEqual([
       { from: 0, cls: "quoll-fenced-code-fence-hidden" },
-      { from: 6, cls: "quoll-fenced-code quoll-fenced-code-open quoll-fenced-code-outer-open" },
+      {
+        from: 6,
+        cls: "quoll-fenced-code quoll-fenced-code-open quoll-fenced-code-outer-open quoll-fenced-code-has-language",
+      },
       { from: 19, cls: "quoll-fenced-code quoll-fenced-code-close quoll-fenced-code-outer-close" },
       { from: 30, cls: "quoll-fenced-code-fence-hidden" },
     ]);
@@ -155,7 +158,10 @@ describe("block-style — fenced code panel (selection-aware fence rows)", () =>
   it("caret in the CODE BODY reveals BOTH fences (no fence row collapses)", () => {
     const out = buildFencedCodePanel(ctxCaret(doc, doc.indexOf("const") + 2)); // caret in "const x = 1;" body
     expect(lines(out)).toEqual([
-      { from: 0, cls: "quoll-fenced-code quoll-fenced-code-open quoll-fenced-code-outer-open" },
+      {
+        from: 0,
+        cls: "quoll-fenced-code quoll-fenced-code-open quoll-fenced-code-outer-open quoll-fenced-code-has-language",
+      },
       { from: 6, cls: "quoll-fenced-code" },
       { from: 19, cls: "quoll-fenced-code" },
       { from: 30, cls: "quoll-fenced-code quoll-fenced-code-close quoll-fenced-code-outer-close" },
@@ -165,7 +171,10 @@ describe("block-style — fenced code panel (selection-aware fence rows)", () =>
   it("caret INSIDE the block (on close fence line) reveals BOTH fences", () => {
     const out = buildFencedCodePanel(ctxCaret(doc, 31)); // inside the trailing "```"
     expect(lines(out)).toEqual([
-      { from: 0, cls: "quoll-fenced-code quoll-fenced-code-open quoll-fenced-code-outer-open" },
+      {
+        from: 0,
+        cls: "quoll-fenced-code quoll-fenced-code-open quoll-fenced-code-outer-open quoll-fenced-code-has-language",
+      },
       { from: 6, cls: "quoll-fenced-code" },
       { from: 19, cls: "quoll-fenced-code" },
       { from: 30, cls: "quoll-fenced-code quoll-fenced-code-close quoll-fenced-code-outer-close" },
@@ -189,7 +198,10 @@ describe("block-style — fenced code panel (selection-aware fence rows)", () =>
   it("unclosed block at EOF: caret inside reveals the open fence; last body line is the bottom edge", () => {
     const out = buildFencedCodePanel(ctxCaret("```js\nconst x = 1;", 18)); // caret in body (in-block)
     expect(lines(out)).toEqual([
-      { from: 0, cls: "quoll-fenced-code quoll-fenced-code-open quoll-fenced-code-outer-open" },
+      {
+        from: 0,
+        cls: "quoll-fenced-code quoll-fenced-code-open quoll-fenced-code-outer-open quoll-fenced-code-has-language",
+      },
       { from: 6, cls: "quoll-fenced-code quoll-fenced-code-close quoll-fenced-code-outer-close" },
     ]);
   });
