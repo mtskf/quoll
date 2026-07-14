@@ -47,6 +47,7 @@ import { type EditorState, Prec } from "@codemirror/state";
 import { keymap } from "@codemirror/view";
 import type { MarkdownExtension, MarkdownParser } from "@lezer/markdown";
 import { parseTable } from "../../markdown/table/index.js";
+import { codeHighlightExtension } from "./fenced-code/fenced-code-highlight-languages.js";
 import { leadingFrontmatterEnd } from "./frontmatter/detect.js";
 
 // SyntaxNode without a direct @lezer/common import (a direct dep as of PR #66;
@@ -202,9 +203,12 @@ const headerIndent = foldService.of((state, start, end) => {
  *  bundle) into the webview. Quoll treats raw HTML as opaque/inert source, so that
  *  stack only bought nested HTML-tag highlighting + tag autocompletion inside
  *  Markdown — a deliberate product loss (recorded in the PR). We reproduce exactly
- *  what `markdown()` builds MINUS that stack:
- *    - parser: markdownLanguage.parser + nonFoldableBlocks (our fold subtraction),
- *      with NO parseCode wrapper (no nested HTML/code sub-parser referenced).
+ *  what `markdown()` builds MINUS that HTML stack:
+ *    - parser: markdownLanguage.parser + nonFoldableBlocks (our fold subtraction) +
+ *      parseCode (nested sub-language parsing for fenced/indented code, DISPLAY-ONLY
+ *      highlighting — see fenced-code-highlight-languages.ts). NO htmlParser is passed
+ *      to parseCode, so raw HTML in the Markdown body stays opaque; a fenced ```html
+ *      block is still highlighted via the code path (codeParser ≠ htmlParser).
  *    - data: markdownLanguage.data REUSED — markdownKeymap's commands call
  *      markdownLanguage.isActiveAt(), which compares the languageDataProp facet
  *      identity, so the editor language MUST carry the same `data` facet to be
@@ -221,7 +225,16 @@ export function quollMarkdownLanguage(): LanguageSupport {
   // Parser (via Language.parser); the runtime instance is a MarkdownParser, which
   // is the only thing exposing `.configure`. Narrow to it (same package already
   // imported for MarkdownExtension) — no cast to a fresh dependency.
-  const parser = (markdownLanguage.parser as MarkdownParser).configure(nonFoldableBlocks);
+  // nonFoldableBlocks subtracts fold chevrons; codeHighlightExtension nests a
+  // sub-language parser into fenced/indented code for DISPLAY-ONLY highlighting (a
+  // size-guarded reproduction of @lezer/markdown's parseCode wrap — see
+  // fenced-code-highlight-languages.ts). No htmlParser branch — raw HTML in the
+  // Markdown body stays opaque (the no-markdown()/no-lang-html policy); a fenced
+  // ```html block is still highlighted via the code path (codeParser, not htmlParser).
+  const parser = (markdownLanguage.parser as MarkdownParser).configure([
+    nonFoldableBlocks,
+    codeHighlightExtension,
+  ]);
   const language = new Language(markdownLanguage.data, parser, [], "markdown");
   return new LanguageSupport(language, [headerIndent, Prec.high(keymap.of(markdownKeymap))]);
 }

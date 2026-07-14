@@ -236,6 +236,44 @@ const quollHighlight = HighlightStyle.define(quollHighlightSpec);
 
 export const quollHighlighting = syntaxHighlighting(quollHighlight);
 
+// Code-block token styling — the VISUAL spec only. The scoping/composition lives in
+// fenced-code/fenced-code-highlight-languages.ts (which imports this spec and builds one
+// language-SCOPED HighlightStyle per nested code language). Because that highlighter is
+// scoped, this palette applies ONLY inside nested code trees — never to outer-Markdown
+// nodes that share a tag or a tag ancestor (TaskMarker→atom→keyword, LinkTitle→string,
+// HTML Comment→comment, entities/Emoji→character→string). So this spec is free to style
+// the full useful code tag set, including t.atom, without leaking into prose. Colours
+// ride the per-theme accent CSS vars (styles.css) for legibility on the navy
+// --quoll-surface-fill fenced background in both themes. Display-only mark pass, zero
+// serialization effect. Pinned by cm-code-block-highlight.test.ts.
+export const quollCodeHighlightSpec: TagStyle[] = [
+  {
+    tag: [t.keyword, t.controlKeyword, t.operatorKeyword, t.moduleKeyword, t.definitionKeyword],
+    color: "var(--quoll-accent-blue, var(--vscode-editor-foreground))",
+    fontWeight: "600",
+  },
+  {
+    tag: [t.typeName, t.className, t.namespace, t.tagName],
+    color: "var(--quoll-accent-blue, var(--vscode-editor-foreground))",
+  },
+  {
+    tag: [t.string, t.special(t.string), t.regexp],
+    color: "var(--quoll-accent-green, var(--vscode-textLink-foreground))",
+  },
+  {
+    // t.atom covers JS true/false/null (the JS legacy mode emits `atom`, not bool/null);
+    // safe to include because the highlighter is language-scoped (won't touch TaskMarker).
+    tag: [t.number, t.atom, t.bool, t.null],
+    color: "var(--quoll-code-literal, var(--quoll-accent-green, var(--vscode-editor-foreground)))",
+  },
+  {
+    tag: [t.comment, t.lineComment, t.blockComment],
+    color: "var(--vscode-descriptionForeground)",
+    fontStyle: "italic",
+  },
+  { tag: t.invalid, color: "var(--vscode-errorForeground)" },
+];
+
 // Style-FREE marker highlighter: emits STABLE class names on the two inline
 // tokens whose look would otherwise be flattened by the nascent-setext reset
 // (setext-nascent-reveal.ts + styles.css). Setting `class` makes CM emit NO CSS

@@ -31,6 +31,7 @@ import { editorPrefsApply } from "./cm/editor-prefs-apply.js";
 import { fencedCodeCollapseField } from "./cm/fenced-code/fenced-code-collapse.js";
 import { fencedCodeCopyButton } from "./cm/fenced-code/fenced-code-copy-button.js";
 import { fencedCodeEnterKeymap } from "./cm/fenced-code/fenced-code-enter-keymap.js";
+import { quollCodeHighlighting } from "./cm/fenced-code/fenced-code-highlight-languages.js";
 import { fencedCodeLanguagePicker } from "./cm/fenced-code/fenced-code-language-picker.js";
 import { quollFloatingToolbarScroll } from "./cm/floating-toolbar-scroll.js";
 import { quollFolding } from "./cm/fold/index.js";
@@ -401,6 +402,11 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
         // hang base, so base padding and hang move together. See cm/theme.ts.
         quollCmLinePaddingTheme,
         quollHighlighting,
+        // Language-scoped sub-language token colours inside fenced code (theme.ts
+        // spec, scoped per nested language in fenced-code-highlight-languages.ts).
+        // Display-only; scoped so it never styles Markdown prose. Array (one scoped
+        // layer per language) → spread.
+        ...quollCodeHighlighting,
         // Style-free marker layer: tags strong/link spans with stable classes so
         // the nascent-setext reset can spare their bold/colour (see cm/theme.ts).
         quollTokenMarkers,

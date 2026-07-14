@@ -364,6 +364,9 @@ html body {
     --quoll-accent-blue: #7ea7e0;
     --quoll-accent-green: #5cc99a;
     --quoll-surface-fill: #151f33;
+    /* Code-token literal colour (numbers/atoms in fenced code, cm/theme.ts
+     * quollCodeHighlightSpec). Warm accent, legible on the navy --quoll-surface-fill. */
+    --quoll-code-literal: #d9a45c;
     --quoll-surface-header: #233156;
     --quoll-surface-border: #33415f;
     --quoll-on-accent: #0e1f17;
@@ -404,6 +407,7 @@ html body {
     --quoll-accent-blue: #23427a;
     --quoll-accent-green: #1a7050;
     --quoll-surface-fill: #f1f4fc;
+    --quoll-code-literal: #9a5b16;
     --quoll-surface-header: #e4ebf8;
     --quoll-surface-border: #ccd6ec;
     --quoll-on-accent: #ffffff;
@@ -443,6 +447,7 @@ html body {
     --quoll-accent-blue: var(--vscode-editor-foreground);
     --quoll-accent-green: var(--vscode-textLink-foreground, var(--vscode-editor-foreground));
     --quoll-surface-fill: transparent;
+    --quoll-code-literal: var(--vscode-editor-foreground);
     --quoll-surface-header: var(--vscode-editorWidget-background, transparent);
     --quoll-surface-border: var(--vscode-contrastBorder,
       var(--vscode-editorWidget-border, var(--vscode-panel-border, #888)));

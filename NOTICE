@@ -11,6 +11,7 @@ Their copyright and permission notices are reproduced below as required.
   @codemirror/commands        Copyright (C) 2018-2021 by Marijn Haverbeke <marijn@haverbeke.berlin> and others
   @codemirror/lang-markdown   Copyright (C) 2018-2021 by Marijn Haverbeke <marijn@haverbeke.berlin> and others
   @codemirror/language        Copyright (C) 2018-2021 by Marijn Haverbeke <marijn@haverbeke.berlin> and others
+  @codemirror/legacy-modes    Copyright (C) 2018-2021 by Marijn Haverbeke <marijn@haverbeke.berlin> and others
   @codemirror/search          Copyright (C) 2018-2021 by Marijn Haverbeke <marijn@haverbeke.berlin> and others
   @codemirror/state           Copyright (C) 2018-2021 by Marijn Haverbeke <marijn@haverbeke.berlin> and others
   @codemirror/view            Copyright (C) 2018-2021 by Marijn Haverbeke <marijn@haverbeke.berlin> and others
