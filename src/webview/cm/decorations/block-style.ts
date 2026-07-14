@@ -141,6 +141,12 @@ import {
   fencedCodeBlockRevealed,
   fencedCodeFenceLandmarks,
 } from "../fenced-code/fenced-code-body.js";
+// fenced-code-language.ts is a pure leaf (imports only @codemirror/*), so this
+// decorations→fenced-code edge is acyclic; block-style already imports
+// fenced-code-body.ts predicates, so the direction is established. If
+// fenced-code-language ever grows a decoration/theme dep, extract this predicate
+// to a lower module instead.
+import { fenceLanguageTarget } from "../fenced-code/fenced-code-language.js";
 import { buildSortedRangeSet } from "../sorted-range-set.js";
 import { toCtx } from "./build-context.js";
 import {
@@ -180,6 +186,12 @@ export const FENCED_CODE_OUTER_CLOSE_CLASS = "quoll-fenced-code-outer-close";
  *  no blank padded row remains; the panel edge moves to the adjacent body
  *  line. Consumed by cm/theme.ts `.cm-line.quoll-fenced-code-fence-hidden`. */
 export const FENCED_CODE_FENCE_HIDDEN_CLASS = "quoll-fenced-code-fence-hidden";
+/** Marks the VISIBLE open line of a WRITABLE fenced block carrying a non-empty
+ *  plain language token. The header-bar theme (cm/theme.ts
+ *  fencedHeaderBarThemeSpec) reserves top padding + paints the bar only on this
+ *  class, so language-less / read-only blocks stay bare. Rides the same
+ *  conceal-migrated open line the base -open edge does. */
+export const FENCED_CODE_HAS_LANGUAGE_CLASS = "quoll-fenced-code-has-language";
 
 /** Marker classes attached to each line of a blockquote. */
 export const BLOCKQUOTE_CLASS = "quoll-blockquote";
@@ -239,6 +251,11 @@ type FencedLandmarks = {
    *  not directly above a quote line. The FIRST of two adjacent fenced blocks keeps
    *  its outer-close, so the pair shows ONE gap. Rides the visible close edge. */
   outerClose: boolean;
+  /** Writable fence with a non-empty plain language token (fenceLanguageTarget
+   *  non-null AND its language !== ""), evaluated only when the surface is
+   *  writable. Drives the header-bar treatment; rides the visible open edge
+   *  alongside the base -open class. */
+  hasLanguage: boolean;
 };
 
 /** Class list for line `n` of a FencedCode node. The panel edge (-open/-close,
@@ -261,6 +278,11 @@ export function fencedCodeLineClasses(n: number, L: FencedLandmarks): string[] {
   const openEdge = L.outerOpen
     ? [FENCED_CODE_OPEN_CLASS, FENCED_CODE_OUTER_OPEN_CLASS]
     : [FENCED_CODE_OPEN_CLASS];
+  // Header-bar gate rides the visible open edge (whichever line -open migrates to),
+  // so the reserved strip + bar follow the fence conceal migration.
+  if (L.hasLanguage) {
+    openEdge.push(FENCED_CODE_HAS_LANGUAGE_CLASS);
+  }
   const closeEdge = L.outerClose
     ? [FENCED_CODE_CLOSE_CLASS, FENCED_CODE_OUTER_CLOSE_CLASS]
     : [FENCED_CODE_CLOSE_CLASS];
@@ -664,6 +686,11 @@ export function buildFencedCodePanel(
       prev.name === "FencedCode" &&
       fencedCodeFenceLandmarks(doc, prev).closeFenceLine === openFenceLine - 1;
     const closeEdgeNextLine = (closeFenceLine ?? bodyEndLine ?? openFenceLine) + 1;
+    // Header-bar gate: a writable fence carrying a non-empty plain language token.
+    // Read-only surfaces get NO header (the picker/copy builders already return
+    // Decoration.none there, so a bar would be empty) — skip the walk entirely.
+    const langTarget = ctx.state.readOnly ? null : fenceLanguageTarget(ctx.state, sn);
+    const hasLanguage = langTarget !== null && langTarget.language !== "";
     const landmarks: FencedLandmarks = {
       openFenceLine,
       closeFenceLine,
@@ -678,6 +705,7 @@ export function buildFencedCodePanel(
         !lineIntersectsBlockquote(ctx, openFenceLine - 1) &&
         !precededByAdjacentFenced,
       outerClose: !insideQuote && !lineIntersectsBlockquote(ctx, closeEdgeNextLine),
+      hasLanguage,
     };
     return {
       from: sn.from,

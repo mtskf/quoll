@@ -2,6 +2,13 @@ import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
 import { EditorSelection, EditorState } from "@codemirror/state";
 import type { DecorationSet } from "@codemirror/view";
 import { describe, expect, it } from "vitest";
+import {
+  FENCED_CODE_FENCE_HIDDEN_CLASS,
+  FENCED_CODE_HAS_LANGUAGE_CLASS,
+  FENCED_CODE_OPEN_CLASS,
+  buildFencedCodePanel,
+  fencedCodeLineClasses,
+} from "../../../src/webview/cm/decorations/block-style.js";
 import { syntaxRevealProviders } from "../../../src/webview/cm/decorations/index.js";
 import type { BuildContext } from "../../../src/webview/cm/decorations/types.js";
 import { fencedCodeReveal } from "../../../src/webview/cm/fenced-code/fenced-code-reveal.js";
@@ -196,5 +203,107 @@ describe("fenced code reveal provider", () => {
     const before = c.state.doc.toString();
     fencedCodeReveal.build(c);
     expect(c.state.doc.toString()).toBe(before);
+  });
+});
+
+// Header-bar gate: the has-language class rides the visible open edge only when the
+// fence is writable AND carries a non-empty plain language token. Two layers: the
+// pure fencedCodeLineClasses fold-in (deterministic, no view) + the real builder's
+// hasLanguage computation (buildFencedCodePanel over a BuildContext, incl. the
+// read-only gate — no DOM, mirrors the reveal-provider idiom above).
+const baseLandmarks = {
+  openFenceLine: 1,
+  closeFenceLine: 3,
+  firstBodyLine: 2,
+  lastBodyLine: 2,
+  openConcealed: false,
+  closeConcealed: false,
+  outerOpen: false,
+  outerClose: false,
+};
+
+describe("fencedCodeLineClasses has-language fold-in", () => {
+  it("adds has-language to the revealed open fence line when hasLanguage", () => {
+    const cls = fencedCodeLineClasses(1, { ...baseLandmarks, hasLanguage: true });
+    expect(cls).toContain(FENCED_CODE_OPEN_CLASS);
+    expect(cls).toContain(FENCED_CODE_HAS_LANGUAGE_CLASS);
+  });
+
+  it("omits has-language when hasLanguage is false", () => {
+    const cls = fencedCodeLineClasses(1, { ...baseLandmarks, hasLanguage: false });
+    expect(cls).toContain(FENCED_CODE_OPEN_CLASS);
+    expect(cls).not.toContain(FENCED_CODE_HAS_LANGUAGE_CLASS);
+  });
+
+  it("migrates has-language onto the first body line when the open fence is concealed", () => {
+    const L = { ...baseLandmarks, openConcealed: true, hasLanguage: true };
+    // The concealed fence row collapses to the hidden class ONLY — no has-language.
+    expect(fencedCodeLineClasses(1, L)).toEqual([FENCED_CODE_FENCE_HIDDEN_CLASS]);
+    // The first body line carries the migrated open edge + has-language.
+    const body = fencedCodeLineClasses(2, L);
+    expect(body).toContain(FENCED_CODE_OPEN_CLASS);
+    expect(body).toContain(FENCED_CODE_HAS_LANGUAGE_CLASS);
+  });
+});
+
+describe("buildFencedCodePanel has-language builder gate", () => {
+  // line.from → class list of the emitted Decoration.line for that line.
+  function panelClasses(doc: string, caret: number, readOnly = false): Map<number, string[]> {
+    const state = EditorState.create({
+      doc,
+      selection: EditorSelection.single(caret),
+      extensions: [
+        markdown({ base: markdownLanguage }),
+        EditorState.allowMultipleSelections.of(true),
+        EditorState.readOnly.of(readOnly),
+      ],
+    });
+    const c: BuildContext = {
+      state,
+      selection: state.selection,
+      visibleRanges: [{ from: 0, to: state.doc.length }],
+      tree: fullTree(state),
+    };
+    const out = new Map<number, string[]>();
+    const iter = buildFencedCodePanel(c).iter();
+    while (iter.value !== null) {
+      const cls = (iter.value.spec as { class?: string }).class ?? "";
+      out.set(iter.from, cls.split(" ").filter(Boolean));
+      iter.next();
+    }
+    return out;
+  }
+
+  it("tags a language-tagged writable block's revealed open line", () => {
+    // Caret on the open fence line → revealed → the open line (from 0) is the edge.
+    const open = panelClasses("```js\nx\n```\n", 2).get(0) ?? [];
+    expect(open).toContain(FENCED_CODE_OPEN_CLASS);
+    expect(open).toContain(FENCED_CODE_HAS_LANGUAGE_CLASS);
+  });
+
+  it("migrates the tag to the first body line when the block is concealed (caret off)", () => {
+    const doc = "```js\nx\n```\n\npara";
+    const classes = panelClasses(doc, doc.indexOf("para") + 1);
+    // Concealed fence row (line.from 0) is hidden-only; the first body line (from 6)
+    // carries the migrated has-language edge.
+    expect(classes.get(0)).toEqual([FENCED_CODE_FENCE_HIDDEN_CLASS]);
+    expect(classes.get(6) ?? []).toContain(FENCED_CODE_HAS_LANGUAGE_CLASS);
+  });
+
+  it("does NOT tag a bare (language-less) block", () => {
+    const open = panelClasses("```\nx\n```\n", 2).get(0) ?? [];
+    expect(open).toContain(FENCED_CODE_OPEN_CLASS);
+    expect(open).not.toContain(FENCED_CODE_HAS_LANGUAGE_CLASS);
+  });
+
+  it("does NOT tag an attr-list fence (non-plain info string)", () => {
+    const open = panelClasses("```{.js #id}\nx\n```\n", 2).get(0) ?? [];
+    expect(open).not.toContain(FENCED_CODE_HAS_LANGUAGE_CLASS);
+  });
+
+  it("does NOT tag a language-tagged block on a READ-ONLY surface", () => {
+    const open = panelClasses("```js\nx\n```\n", 2, true).get(0) ?? [];
+    expect(open).toContain(FENCED_CODE_OPEN_CLASS);
+    expect(open).not.toContain(FENCED_CODE_HAS_LANGUAGE_CLASS);
   });
 });
