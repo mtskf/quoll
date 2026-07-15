@@ -38,7 +38,7 @@
     "url": "https://github.com/mtskf/quoll"
   },
   "main": "./dist/extension.cjs",
-  "packageManager": "pnpm@11.13.0",
+  "packageManager": "pnpm@11.10.0",
   "activationEvents": [
     "onCustomEditor:quoll.editMarkdown",
     "onCommand:quoll.editWith",

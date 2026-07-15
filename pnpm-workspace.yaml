@@ -33,8 +33,10 @@ auditConfig:
 # this preserves pnpm 10's `onlyBuiltDependencies: []` (build nothing) semantics
 # under pnpm 11, and keeps `pnpm install --frozen-lockfile` from erroring on
 # ERR_PNPM_IGNORED_BUILDS. Flip an entry to `true` only if a package genuinely
-# needs its build script to function (none do today — esbuild ships prebuilt
-# platform binaries as optionalDependencies, no postinstall required).
+# needs its build script to run for it to function. None do today: e.g. esbuild
+# declares `postinstall: node install.js`, but denying it is safe — the platform
+# binary is delivered via optionalDependencies (@esbuild/<platform>), and the
+# postinstall only re-points/optimizes the bin, so esbuild runs without it.
 allowBuilds:
   '@vscode/vsce-sign': false
   esbuild: false
