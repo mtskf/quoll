@@ -1,11 +1,13 @@
 // Shared enumerator for the selection-INDEPENDENT fenced-code control widgets
 // (the copy button in fenced-code-copy-button.ts and the language picker in
-// fenced-code-language-picker.ts). Both emit exactly one point widget per fenced
-// code block whose OPEN line is visible — top-level AND blockquote-/list-nested —
-// anchored at the open-line start, de-duped per block, and ordered for
-// RangeSetBuilder. That walk (visible-range FencedCode iterate + open-line anchor
-// + `seen` de-dup + sort) is identical across both controls, so it lives here
-// once and each control supplies only its per-block widget via `makeWidget`.
+// fenced-code-language-picker.ts). Both walk fenced code blocks whose OPEN line
+// is visible — top-level AND blockquote-/list-nested — anchored at the open-line
+// start, de-duped per block, and ordered for RangeSetBuilder; each control then
+// supplies its own per-block widget via `makeWidget` (which may return `null` to
+// skip a block — the language picker does this for non-plain info strings, so it
+// emits at most one widget per block, not exactly one). That walk (visible-range
+// FencedCode iterate + open-line anchor + `seen` de-dup + sort) is identical
+// across both controls, so it lives here once.
 
 import type { syntaxTree } from "@codemirror/language";
 import { RangeSetBuilder } from "@codemirror/state";
