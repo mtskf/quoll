@@ -2,6 +2,12 @@
 
 All notable changes to Quoll are documented here.
 
+## 0.1.49 — 2026-07-15
+
+### Added
+
+- Fenced code blocks with a recognized language now show a header bar with the language name and a copy button, similar to ChatGPT's code block style. The header hides while you're editing the block so it doesn't duplicate the raw ```lang line.
+
 ## 0.1.48 — 2026-07-14
 
 ### Added
