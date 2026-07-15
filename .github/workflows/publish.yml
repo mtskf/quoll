@@ -33,7 +33,7 @@ jobs:
 
       - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
         with:
-          version: 10.27.0
+          version: 11.10.0
 
       - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
@@ -62,9 +62,9 @@ jobs:
       # @types/*, typescript) stays in `devDependencies` and is intentionally
       # excluded — those packages never reach a user. Approved exceptions
       # must be both documented in a dated release-security-audit note kept
-      # with the project's private maintenance docs and added to a
-      # `pnpm.auditConfig.ignoreCves` array in package.json (the `pnpm` block
-      # does not exist yet — add it on first exception).
+      # with the project's private maintenance docs and added to the
+      # `auditConfig.ignoreGhsas` array in pnpm-workspace.yaml (pnpm 11's bulk
+      # advisory endpoint returns GHSA ids, not CVEs).
       - name: Audit production dependencies (security gate)
         run: pnpm audit --prod --audit-level=high
 
