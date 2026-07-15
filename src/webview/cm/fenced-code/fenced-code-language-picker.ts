@@ -8,7 +8,6 @@
 // setFenceLanguage (guarded dispatch).
 
 import { syntaxTree } from "@codemirror/language";
-import { RangeSetBuilder } from "@codemirror/state";
 import {
   Decoration,
   type DecorationSet,
@@ -20,49 +19,23 @@ import { toCtx } from "../decorations/build-context.js";
 import type { BuildContext } from "../decorations/types.js";
 import { fenceLanguageTarget } from "./fenced-code-language.js";
 import { LanguagePickerWidget } from "./fenced-code-language-picker-widget.js";
+import { buildVisibleFencedCodeWidgets } from "./fenced-code-open-widgets.js";
 
 export function buildLanguagePickers(ctx: BuildContext): DecorationSet {
   if (ctx.state.readOnly) {
     return Decoration.none;
   }
-  const doc = ctx.state.doc;
-  const seen = new Set<number>();
-  const out: Array<{ from: number; deco: Decoration }> = [];
-  for (const range of ctx.visibleRanges) {
-    ctx.tree.iterate({
-      from: range.from,
-      to: range.to,
-      enter: (node) => {
-        if (node.name !== "FencedCode") {
-          return;
-        }
-        // Anchor at the open LINE start (not node.from — that sits after any
-        // indent / `> `/list prefix). Same anchor + de-dup contract as the copy
-        // button: do NOT gate on `openFrom >= range.from` (visibleRanges can begin
-        // mid-line); the `seen` set collapses a block visited from multiple ranges
-        // to one widget and the final sort satisfies RangeSetBuilder's
-        // non-decreasing-from contract.
-        const openFrom = doc.lineAt(node.from).from;
-        if (seen.has(openFrom)) {
-          return;
-        }
-        seen.add(openFrom);
-        const target = fenceLanguageTarget(ctx.state, node.node);
-        if (target === null) {
-          // Non-plain info string (attr-list) — no picker (cannot rewrite safely).
-          return;
-        }
-        const widget = new LanguagePickerWidget(openFrom, target.language);
-        out.push({ from: openFrom, deco: Decoration.widget({ widget, side: -1 }) });
-      },
-    });
-  }
-  out.sort((a, b) => a.from - b.from);
-  const builder = new RangeSetBuilder<Decoration>();
-  for (const entry of out) {
-    builder.add(entry.from, entry.from, entry.deco);
-  }
-  return builder.finish();
+  // The visible-range walk + open-line anchor + de-dup + ordering live in the
+  // shared enumerator; here we only build the picker for each block whose info
+  // string is plain.
+  return buildVisibleFencedCodeWidgets(ctx, (node, openFrom) => {
+    const target = fenceLanguageTarget(ctx.state, node);
+    if (target === null) {
+      // Non-plain info string (attr-list) — no picker (cannot rewrite safely).
+      return null;
+    }
+    return new LanguagePickerWidget(openFrom, target.language);
+  });
 }
 
 export const fencedCodeLanguagePicker = ViewPlugin.fromClass(

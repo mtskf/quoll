@@ -11,7 +11,7 @@
 // the file's on-disk EOL.
 
 import { syntaxTree } from "@codemirror/language";
-import { type EditorState, type Line, RangeSetBuilder, type Text } from "@codemirror/state";
+import type { EditorState, Line, Text } from "@codemirror/state";
 import {
   Decoration,
   type DecorationSet,
@@ -22,6 +22,7 @@ import {
 import { toCtx } from "../decorations/build-context.js";
 import type { BuildContext } from "../decorations/types.js";
 import { CopyButtonWidget } from "./fenced-code-copy-button-widget.js";
+import { buildVisibleFencedCodeWidgets } from "./fenced-code-open-widgets.js";
 
 // `@lezer/common` is a direct dep as of PR #66 (for the lint incremental
 // parser's `TreeFragment`); derive SyntaxNode from syntaxTree's return type
@@ -190,52 +191,16 @@ export function buildCopyButtons(ctx: BuildContext): DecorationSet {
   if (ctx.state.readOnly) {
     return Decoration.none;
   }
-  const doc = ctx.state.doc;
-  const seen = new Set<number>();
-  const out: Array<{ from: number; deco: Decoration }> = [];
-  for (const range of ctx.visibleRanges) {
-    ctx.tree.iterate({
-      from: range.from,
-      to: range.to,
-      enter: (node) => {
-        if (node.name !== "FencedCode") {
-          return;
-        }
-        // Anchor at the open LINE start (not node.from, which sits after any
-        // indent or `> `/list prefix). The fence-reveal HIDE replace begins at
-        // node.from: for an INDENTED (or nested) fence line.from < node.from so
-        // the widget is strictly before the replace; for the common UNINDENTED
-        // fence line.from === node.from, and a side:-1 point widget at the start
-        // of a replace range still renders (it associates with the position
-        // BEFORE the replaced text). The DOM-integration test pins that the
-        // button survives co-located with the replace.
-        const openFrom = doc.lineAt(node.from).from;
-        // De-dup by open-line offset only — do NOT gate on `openFrom >= range.from`.
-        // CodeMirror's visibleRanges can begin mid-line when a line-gap decoration
-        // splits a long wrapped line, so a fence whose open line starts just before
-        // the range would be silently dropped even though it is rendered (same
-        // reason list-hang-indent removed this guard — Codex review #92). The
-        // `seen` set keeps a block visited from multiple ranges to one button; the
-        // final sort satisfies RangeSetBuilder's non-decreasing-`from` contract.
-        if (seen.has(openFrom)) {
-          return;
-        }
-        seen.add(openFrom);
-        // Inject the click-time body resolver (a stable module-level fn) + the
-        // open-line offset key rather than the materialised body: the body is
-        // resolved LAZILY at click against the live state (see fencedCodeBodyAt),
-        // so a per-keystroke edit inside a large block allocates no body here.
-        const widget = new CopyButtonWidget(openFrom, fencedCodeBodyAt);
-        out.push({ from: openFrom, deco: Decoration.widget({ widget, side: -1 }) });
-      },
-    });
-  }
-  out.sort((a, b) => a.from - b.from);
-  const builder = new RangeSetBuilder<Decoration>();
-  for (const entry of out) {
-    builder.add(entry.from, entry.from, entry.deco);
-  }
-  return builder.finish();
+  // The visible-range walk + open-line anchor + de-dup + ordering live in the
+  // shared enumerator; here we only inject each button. Inject the click-time
+  // body resolver (a stable module-level fn) + the open-line offset key rather
+  // than the materialised body: the body is resolved LAZILY at click against the
+  // live state (see fencedCodeBodyAt), so a per-keystroke edit inside a large
+  // block allocates no body here.
+  return buildVisibleFencedCodeWidgets(
+    ctx,
+    (_node, openFrom) => new CopyButtonWidget(openFrom, fencedCodeBodyAt)
+  );
 }
 
 /** Selection-INDEPENDENT ViewPlugin holding the copy-button widgets. Parallel to
