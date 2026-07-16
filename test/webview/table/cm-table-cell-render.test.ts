@@ -353,6 +353,23 @@ describe("renderCellInline", () => {
     expect(html(renderCellInline("~~a ~~b~~ c~~"))).toBe("<del>a <del>b</del> c</del>");
   });
 
+  // The SAME interleave/nesting behaviour on the `==` side (highlight is the
+  // newer, less battle-tested delimiter — pin it independently so a future edit
+  // that broke only the `=` slot / `mark` tag branch cannot pass on `~~` alone).
+  it("interleaves `==` with emphasis like the editor (`*a==b*c==d*`)", () => {
+    expect(html(renderCellInline("*a==b*c==d*"))).toBe("<em>a==b</em>c==d*");
+  });
+
+  it("nests same-type highlight marks (`==a ==b== c==`)", () => {
+    expect(html(renderCellInline("==a ==b== c=="))).toBe("<mark>a <mark>b</mark> c</mark>");
+  });
+
+  // Cross-type nesting: a highlight inside a strikethrough, resolved in the one
+  // shared stack (both are length-2 delimiters that only differ by tag).
+  it("nests a highlight inside a strikethrough (`~~a ==b== c~~`)", () => {
+    expect(html(renderCellInline("~~a ==b== c~~"))).toBe("<del>a <mark>b</mark> c</del>");
+  });
+
   // Triple run: Lezer rescans from pos+1, so `===x===` opens at [1,3) and closes
   // at [5,7), wrapping content `x=` (Highlight span [1,7) — the measured span
   // highlight-mark.ts documents). Only the leading `=` (index 0) stays literal.

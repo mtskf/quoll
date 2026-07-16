@@ -105,7 +105,9 @@ function makeWrap<L>(tag: WrapTag, openDelim: Span, closeDelim: Span, span: Span
 // run's literal characters, so unconsumed delimiters render verbatim as text.
 interface Delimiter<L> {
   inline: Extract<Inline<L>, { kind: "text" }>;
-  ch: string;
+  // Tightened to DelimiterChar (not `string`) so the ch → WrapTag ternary in
+  // processEmphasis type-narrows: after excluding `~`/`=`, `ch` is `*`/`_`.
+  ch: DelimiterChar;
   length: number; // remaining (unconsumed) delimiters
   origLength: number; // run length at tokenization (drives the rule of 3)
   canOpen: boolean;
