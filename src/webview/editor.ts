@@ -66,7 +66,6 @@ import {
   quollFencedHeaderBarTheme,
   quollHeadingRhythmTheme,
   quollHighlighting,
-  quollLanguagePickerTheme,
   quollSearchPanelTheme,
   quollTaskCompletedContentTheme,
   quollTheme,
@@ -433,13 +432,10 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
         // EditorView.theme like quollBlockStyleTheme so it overrides CM's
         // unlayered `.cm-line` rules — see cm/theme.ts.
         quollCopyButtonTheme,
-        // Language picker <select> styling (fenced-code-language-picker-widget.ts).
-        // An EditorView.theme like quollCopyButtonTheme so it overrides CM's
-        // unlayered `.cm-line` rules — see cm/theme.ts.
-        quollLanguagePickerTheme,
         // Header-bar layout for language-tagged fences (reserved strip + gradient
-        // bar + labelled picker). An EditorView.theme like quollCopyButtonTheme so
-        // it overrides CM's unlayered `.cm-line` rules — see cm/theme.ts.
+        // bar + labelled picker <select>, incl. the picker's own box model). An
+        // EditorView.theme like quollCopyButtonTheme so it overrides CM's unlayered
+        // `.cm-line` rules — see cm/theme.ts.
         quollFencedHeaderBarTheme,
         // Collapse-bar styling for long fenced blocks (fenced-code-collapse-widget.ts).
         // An EditorView.theme like quollCopyButtonTheme so it overrides CM's
