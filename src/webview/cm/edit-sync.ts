@@ -114,25 +114,38 @@ export type EditSync = {
   discardBuffer: () => void;
   /** TEARDOWN-precursor signals (`visibilitychange:hidden` / `pagehide` /
    *  `blur` — see shell.ts). Force-posts the latest pending content to the host
-   *  EVEN while an Edit is in flight, then (on a successful post) sets
-   *  editInFlight and RETAINS the buffer. Unlike `trySend`, it does NOT
-   *  buffer-and-wait when an Edit is in flight: on a real tab close the iframe
-   *  is destroyed before the next ack, so the host — which stashes the
-   *  in-flight arrival and drains it on settlement (QuollEditorPanel
-   *  `applyEditSettled`) — is a place the bytes can survive. But that host
-   *  stash covers ONLY the window where the write lock is still held: if the
-   *  host has ALREADY settled the in-flight Edit (lock released, ack in
-   *  transit), the force-post carries a now-stale docVersion, misses the stash,
-   *  and is `stale`-rejected → the authoritative Document reposts over the typed
-   *  bytes. So the buffer is RETAINED, not nulled: on an ALIVE hide→show the
-   *  next ack replays it at the fresh docVersion (double delivery is idempotent
-   *  via the host no-op verdict). Setting editInFlight keeps single-flight
-   *  intact on an ALIVE hide→show / blur→focus (a mere tab switch), so the next
-   *  keystroke buffers rather than double-posting. Still a HARD DROP under
-   *  readonly, a buffer-keeping hold pre-seed / while the serialize-error gate
-   *  is closed, and a buffer-keeping hold when the post itself fails. NOT a
-   *  mid-session call — for a reseed always use `cancelPendingFlush`
-   *  (capture-preserving), never `flush`. */
+   *  EVEN while an Edit is in flight (unlike `trySend`, which buffers-and-waits
+   *  under single-flight): on a real tab close the iframe is destroyed before
+   *  the next ack, so the host — which stashes the in-flight arrival and drains
+   *  it on settlement (QuollEditorPanel `applyEditSettled`) — is a place the
+   *  bytes can survive. On a successful post it sets editInFlight (keeping
+   *  single-flight intact on an ALIVE hide→show / blur→focus so the next
+   *  keystroke buffers rather than double-posting).
+   *
+   *  BUFFER RETENTION IS CONDITIONAL on there having been an Edit in flight —
+   *  it mirrors `trySend`, which retains only under single-flight and nulls on
+   *  an idle post:
+   *    - Edit in flight → RETAIN. The host stash covers ONLY the lock-held
+   *      window; if the host has ALREADY settled that in-flight Edit (lock
+   *      released, ack in transit), this force-post carries a now-stale
+   *      docVersion, misses the stash, and is `stale`-rejected → the
+   *      authoritative Document reposts over the typed bytes. Retaining lets the
+   *      next ack replay them at the fresh docVersion (double delivery is
+   *      idempotent via the host `no-op` verdict; `replayIfNeeded` nulls the
+   *      buffer on its own post, so it is exactly ONE replay). On a real close
+   *      the retained buffer is simply never replayed (iframe gone).
+   *    - Nothing in flight → NULL (like trySend's idle post). The force-post
+   *      lands at a matching version and is `accept`ed outright, so the host is
+   *      already the authority for those bytes; retaining them would serve no
+   *      recovery purpose and could later replay already-applied content over a
+   *      racing EXTERNAL edit — the host has no client-side conflict guard for a
+   *      post-settlement replay, so that would silently clobber the external
+   *      change.
+   *
+   *  Still a HARD DROP under readonly, a buffer-keeping hold pre-seed / while
+   *  the serialize-error gate is closed, and a buffer-keeping hold when the post
+   *  itself fails. NOT a mid-session call — for a reseed always use
+   *  `cancelPendingFlush` (capture-preserving), never `flush`. */
   flush: () => void;
   /** Mid-session flush barrier (context-handoff): clear the debounce timer and,
    *  if a keystroke was typed inside the window, post it NOW — but RESPECT
@@ -142,9 +155,10 @@ export type EditSync = {
    *  at a stale version — trySend buffers the in-flight case, so the normal
    *  ack→replay path preserves the keystrokes with no redundant round-trip.
    *  `flush` force-posts even while in flight (it must, for teardown) and can
-   *  therefore emit a `stale`-rejected Edit in the ack-in-transit window; it
-   *  now RETAINS the buffer so the reseed cannot strand the bytes, but that
-   *  costs an extra idempotent round-trip `flushIfIdle` avoids. Reserve `flush`
+   *  therefore emit a `stale`-rejected Edit in the ack-in-transit window; in
+   *  that in-flight case it RETAINS the buffer so the reseed cannot strand the
+   *  bytes, but that costs an extra idempotent round-trip `flushIfIdle` avoids.
+   *  Reserve `flush`
    *  for TEARDOWN paths (visibilitychange / pagehide / switch-to-text) where the
    *  panel may dispose and the host stash / retained buffer are the last
    *  authorities. No-op when nothing was typed in the debounce window. */
@@ -323,22 +337,14 @@ export function createEditSync(opts: EditSyncOptions): EditSync {
       buffered = null;
     },
     flush: () => {
-      // TEARDOWN-precursor signal (visibilitychange:hidden / pagehide / blur —
-      // see shell.ts). Force the latest pending bytes to the host EVEN while an
-      // Edit is in flight: on a real close the iframe dies before the next ack,
-      // so the host stash (lock-held) is one place the bytes survive. Post
-      // directly (bypassing trySend's in-flight buffer arm), then — on a
-      // SUCCESSFUL post — set editInFlight AND RETAIN the buffer. The force-post
-      // uses the CURRENT docVersion; the instant the host has settled the
-      // in-flight Edit (lock released, ack in transit) that version is stale, so
-      // the force-post misses the lock-held stash and is `stale`-rejected. On an
-      // ALIVE hide→show the retained buffer replays at the fresh version via the
-      // next ack (idempotent host no-op on a double delivery); on a real close
-      // it is simply never replayed. Setting editInFlight keeps single-flight
-      // intact on an ALIVE hide→show (a mere tab switch), so the next keystroke
-      // buffers rather than double-posting. Same gates as trySend: readonly is a
-      // HARD DROP; pre-seed / serialize-error gate keeps the buffer; a failed
-      // post keeps the buffer for the next ack.
+      // TEARDOWN-precursor signal (visibilitychange:hidden / pagehide / blur).
+      // Force the latest pending bytes to the host even while an Edit is in
+      // flight (bypassing trySend's single-flight buffer arm). Post-success
+      // buffer handling is CONDITIONAL on prior in-flight state — see the flush
+      // JSDoc for the full rationale (settlement→ack stale recovery vs the
+      // external-edit clobber the accept path would cause). Same gates as
+      // trySend: readonly is a HARD DROP; pre-seed / serialize-error gate keeps
+      // the buffer; a failed post keeps the buffer for the next ack.
       const hadTimer = timer !== null;
       clearTimer();
       const content = hadTimer ? opts.getDoc() : buffered;
@@ -353,22 +359,14 @@ export function createEditSync(opts: EditSyncOptions): EditSync {
         buffered = content; // pre-seed / gate closed: keep for a later drain
         return;
       }
+      const wasInFlight = editInFlight;
       const ok = opts.post(content, docVersion);
       if (ok) {
         editInFlight = true; // maintain single-flight even on an alive hide→show
-        // RETAIN the buffer (do NOT null it). The force-post uses the CURRENT
-        // docVersion, which is STALE the instant the host has settled the
-        // in-flight Edit (write lock released, ack still in transit). Such a
-        // force-post misses the host's lock-held stash path and is `stale`-
-        // rejected → the host reposts the authoritative Document, erasing these
-        // bytes. Keeping the buffer lets the next ack replay them at the fresh
-        // docVersion (onReducerCommit → replayIfNeeded). Double delivery is
-        // idempotent at the host (no-op verdict on content equality), and
-        // replayIfNeeded nulls the buffer on its own post, so this is exactly
-        // ONE replay — never a loop. On a real teardown the iframe dies before
-        // any ack, so the retained buffer is simply never replayed; the host's
-        // lock-held stash remains the authority there.
-        buffered = content;
+        // Retain for ack-replay ONLY under in-flight contention (the sole path
+        // to the stale settlement→ack window); otherwise the host accepted the
+        // post and is the authority, so null it like trySend's idle post (JSDoc).
+        buffered = wasInFlight ? content : null;
       } else {
         buffered = content; // post failed: keep for the next ack
       }
@@ -378,7 +376,9 @@ export function createEditSync(opts: EditSyncOptions): EditSync {
       // the latest bytes are already posted / in-flight / buffered-for-replay,
       // so there is nothing to force (matches flush's no-op-when-nothing-typed).
       // trySend RESPECTS single-flight: posts when idle, buffers when an Edit is
-      // in flight — never the force-post-then-null that flush does.
+      // in flight — never the force-post-even-while-in-flight that flush does
+      // (flush can emit a stale-rejected Edit + one idempotent replay round-trip;
+      // flushIfIdle emits neither).
       const hadTimer = timer !== null;
       clearTimer();
       if (hadTimer) {
