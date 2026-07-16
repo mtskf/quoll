@@ -51,8 +51,9 @@ export interface CaretHandoffWiring {
   reportCaret(report: { line: number; character: number; selectedChars: number }): void;
   applySwitchCaretOnReady(): void;
   /** Re-scan the live document text into the word / character count slot. Driven
-   *  by the panel's debounced `documentChanged` fire so the count tracks edits
-   *  (from Quoll typing or external writers) without its own listener. */
+   *  by the panel's `documentChanged` fire so the count tracks edits without its
+   *  own listener — immediate for Quoll's own write-locked edit-sync, coalesced
+   *  (trailing-debounced) for lock-free external writers. */
   refreshCount(): void;
   dispose(): void;
 }
@@ -80,6 +81,12 @@ export function createCaretHandoffWiring(deps: CaretHandoffWiringDeps): CaretHan
   let wasActive = webviewPanel.active;
   // One-shot latch for the reverse-switch caret restore (below).
   let switchCaretApplied = false;
+  // Document version last scanned into the count slot. Seeded to the current
+  // version (the same buffer createStatusBarController seeds `documentText`
+  // from below) so an edit-driven refreshCount() whose documentChanged carries
+  // an UNCHANGED version skips a byte-identical full-document rescan — mirroring
+  // the reducer's version-identical `documentChanged` no-op in host-session-core.
+  let lastCountedVersion = document.version;
 
   // Status-bar parity (src/extension/status-bar.ts). A custom editor is not a
   // TextEditor, so window.activeTextEditor is undefined and VS Code drops ALL
@@ -105,6 +112,15 @@ export function createCaretHandoffWiring(deps: CaretHandoffWiringDeps): CaretHan
   if (webviewPanel.active) {
     statusBar.show();
   }
+
+  // The SINGLE writer of the count slot after the seed: scan the live text and
+  // record the version it reflects, so the count text and lastCountedVersion
+  // stay in lockstep. Both the active-edge refresh and refreshCount() route
+  // through here (refreshCount adds a version-advance guard in front).
+  const scanCountSlot = (): void => {
+    lastCountedVersion = document.version;
+    statusBar.updateCount(document.getText());
+  };
 
   // Apply lastKnownCaret to a live text editor for the same document. Clamps
   // to the editor's current document (the webview measured the caret against
@@ -219,7 +235,9 @@ export function createCaretHandoffWiring(deps: CaretHandoffWiringDeps): CaretHan
       // Refresh the count too: bind it to the active edge like caret/EOL so the
       // slot is authoritative whenever the panel is shown, independent of
       // whether an edit-driven refreshCount() happened to fire while inactive.
-      statusBar.updateCount(document.getText());
+      // Unconditional (no version guard) so re-activation always re-asserts the
+      // slot; scanCountSlot keeps lastCountedVersion in step with it.
+      scanCountSlot();
       statusBar.show();
     } else {
       statusBar.hide();
@@ -263,7 +281,16 @@ export function createCaretHandoffWiring(deps: CaretHandoffWiringDeps): CaretHan
       if (deps.isDisposed()) {
         return;
       }
-      statusBar.updateCount(document.getText());
+      // Version-advance guard: refreshCount rides EVERY documentChanged fire, but
+      // VS Code emits empty onDidChangeTextDocument events carrying an UNCHANGED
+      // version on dirty/save transitions (near-continuous under autosave). A
+      // same-version scan produces byte-identical count text, so skip it — the
+      // O(n) getText() + word-count rescan is pure waste. Same design as the
+      // reducer's version-identical `documentChanged` no-op (host-session-core).
+      if (document.version === lastCountedVersion) {
+        return;
+      }
+      scanCountSlot();
     },
     applySwitchCaretOnReady(): void {
       // Self-guard on dispose (mirrors context-handoff-wiring's public arms).

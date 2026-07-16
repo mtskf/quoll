@@ -305,4 +305,61 @@ describe("status-bar-active-edge", function () {
       "stale (N selected) must be cleared on re-activation"
     );
   });
+
+  // Edit-driven count refresh: an out-of-process fs.writeFile to a clean backing
+  // file drives VS Code's watcher → auto-revert → onDidChangeTextDocument → the
+  // panel's `dispatchDocumentChanged`, which fires `caretWiring.refreshCount()`.
+  // Pins the count slot (statusBarItems[3], priority 99) re-rendering from the
+  // new content — the feature's core promise ("the count tracks edits").
+  //
+  // ISOLATION (why B is HIDDEN and the edit is EXTERNAL): the active-edge refresh
+  // reads document.getText() LIVE on every onDidChangeViewState where the panel
+  // is active, so it is a redundant competing writer of the count slot. Three
+  // masking paths were verified to keep the revert-check GREEN with
+  // refreshCount() removed: an fs.writeFile to the ACTIVE panel, a webview `edit`
+  // (applyEdit reveals + activates the panel), and an fs.writeFile to a
+  // beside-VISIBLE inactive panel (it still took an active viewState edge). The
+  // robust isolation is a HIDDEN B — a background tab covered by A in the same
+  // group. B gets NO active viewState event, yet its clean backing model still
+  // auto-reverts on the external write and fires B's documentChanged. So
+  // refreshCount() is the SOLE writer that can update B's slot; removing it turns
+  // the revert-check red.
+  const countSlotText = (panel: PanelControlsShape): string => panel.statusBarItems[3].text;
+
+  it("refreshes the count slot text when the document changes", async () => {
+    const harness = await getHarness();
+    // Panel B opens first (active) so we can read its seed, then A opens over it.
+    const b = await openTempQuoll(harness, "one two three\n", "count-edit-b", null);
+    files.push(b.file);
+    await pollUntil(() => allVisible(b.panel.statusBarItems), "panel B visible");
+    // B's seed value: "one two three\n" = 3 words, 14 chars (newline counted).
+    assert.strictEqual(countSlotText(b.panel), "3 words · 14 chars · 1 min read");
+
+    // Panel A opens in the SAME column → A becomes the visible tab and B is
+    // pushed to a HIDDEN background tab. B now gets no active viewState edge.
+    const a = await openTempQuoll(harness, "a body\n", "count-edit-a", b.panel);
+    files.push(a.file);
+    await pollUntil(
+      () => allHidden(b.panel.statusBarItems) && allVisible(a.panel.statusBarItems),
+      "B hidden behind A"
+    );
+    // Premise guard: auto-revert only applies to a non-dirty model (mirrors
+    // external-fs-write-propagates.test.ts). Also confirm the inactive edge did
+    // not re-scan B's count off some other content.
+    assert.strictEqual(
+      b.panel.document.isDirty,
+      false,
+      "B must stay clean (a dirty model blocks auto-revert → no documentChanged)"
+    );
+    assert.strictEqual(countSlotText(b.panel), "3 words · 14 chars · 1 min read");
+
+    // Out-of-process write to hidden B's file → watcher → auto-revert →
+    // documentChanged → refreshCount (no active edge can fire on hidden B).
+    // "one two three four five\n" = 5 words, 24 chars, 1 min.
+    await fs.writeFile(b.file, "one two three four five\n");
+    await pollUntil(
+      () => countSlotText(b.panel) === "5 words · 24 chars · 1 min read",
+      "hidden panel B's count slot re-rendered after an external edit"
+    );
+  });
 });

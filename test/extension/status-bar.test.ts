@@ -149,6 +149,27 @@ describe("countWords", () => {
   it("excludes an unterminated fence through end-of-document", () => {
     expect(countWords("before\n```\ndangling code never closes")).toBe(1);
   });
+
+  it("does not let a mismatched fence marker close a code block", () => {
+    // A ~~~ line inside a ``` block (and the symmetric case) must NOT close it —
+    // the closer must match the opener's marker char, so the inner content stays
+    // code and only the trailing prose ("after") counts.
+    expect(countWords("```\n~~~\ncode words here\n```\nafter")).toBe(1);
+    expect(countWords("~~~\n```\ncode words here\n~~~\nafter")).toBe(1);
+  });
+
+  it("strips frontmatter closed by a `...` marker", () => {
+    expect(countWords("---\ntitle: My Post\n...\nBody words here")).toBe(3);
+  });
+
+  it("strips frontmatter in a CRLF document", () => {
+    expect(countWords("---\r\ntitle: My Post\r\n---\r\nBody words here")).toBe(3);
+  });
+
+  it("counts a space-free CJK run as one word (documented v1 limitation)", () => {
+    expect(countWords("日本語のテキスト")).toBe(1);
+    expect(countWords("日本語 の テキスト")).toBe(3); // spaces still delimit
+  });
 });
 
 describe("estimateReadingMinutes", () => {
