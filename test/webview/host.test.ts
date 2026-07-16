@@ -175,12 +175,18 @@ describe("subscribeToHost — boundary validation + diagnostics", () => {
     expect(detail).toMatchObject({ expected: PROTOCOL_VERSION, got: 2, type: "document" });
   });
 
-  it("rejects and logs a shapeless payload via the validator branch", () => {
-    window.dispatchEvent(new MessageEvent("message", { data: { hello: "world" } }));
+  it("rejects and logs a shapeless payload via the validator branch, previewing only type + keys", () => {
+    window.dispatchEvent(
+      new MessageEvent("message", { data: { hello: "world", secret: "sensitive-value" } })
+    );
 
     expect(handler).not.toHaveBeenCalled();
     expect(errorSpy).toHaveBeenCalledTimes(1);
-    expect(String(errorSpy.mock.calls[0][0])).toContain("rejected by validator");
+    const [message, detail] = errorSpy.mock.calls[0];
+    expect(String(message)).toContain("rejected by validator");
+    expect(detail).toEqual({ type: undefined, keys: ["hello", "secret"] });
+    // The raw payload value must never reach the console — only its shape.
+    expect(JSON.stringify(detail)).not.toContain("sensitive-value");
   });
 
   it("logs an undefined payload as an empty payload, not a validator rejection", () => {
