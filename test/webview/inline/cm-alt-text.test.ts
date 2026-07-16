@@ -19,6 +19,13 @@ describe("commonMarkAltText", () => {
     expect(commonMarkAltText("**bold** x")).toBe("bold x");
   });
 
+  it("flattens strikethrough / highlight marks to their text (~~s~~ ==h== -> s h)", () => {
+    // Marks resolve to del/mark wraps in the shared delimiter stack, so the
+    // emphasis flatten arm handles them — used for `<img alt>` in both the
+    // table-cell renderer and the block-image widget's aria-label.
+    expect(commonMarkAltText("~~s~~ ==h==")).toBe("s h");
+  });
+
   it("decodes a backslash escape (a\\*b -> a*b)", () => {
     expect(commonMarkAltText("a\\*b")).toBe("a*b");
   });

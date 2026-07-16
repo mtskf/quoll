@@ -26,19 +26,30 @@ export type Segment<L> =
   | { readonly kind: "leaf"; readonly leaf: L; readonly span: Span }
   | {
       readonly kind: "delim";
-      readonly ch: "*" | "_";
+      readonly ch: DelimiterChar;
       readonly span: Span;
       readonly canOpen: boolean;
       readonly canClose: boolean;
     };
+
+// Delimiter-run characters the resolver pairs. `*`/`_` produce `em`/`strong`
+// (CommonMark emphasis); `~`/`=` produce `del`/`mark` (GFM strikethrough `~~`
+// and Obsidian-style highlight `==`). All four share ONE delimiter stack so a
+// mark and an emphasis interleave exactly as the editor's @lezer/markdown parser
+// resolves them (e.g. `*a~~b*c~~d*` → `<em>a~~b</em>c~~d*`, the mark left inert).
+export type DelimiterChar = "*" | "_" | "~" | "=";
+
+// The inline wrapper tag a matched delimiter pair produces.
+export type WrapTag = "em" | "strong" | "del" | "mark";
 
 // Resolved output — a flat or tree-structured IR with no DOM.
 export type Resolved<L> =
   | { readonly kind: "text"; readonly value: string; readonly span: Span }
   | { readonly kind: "leaf"; readonly leaf: L; readonly span: Span }
   | {
+      // A delimiter-run wrapper (em/strong from `*`/`_`, del/mark from `~~`/`==`).
       readonly kind: "emphasis";
-      readonly tag: "em" | "strong";
+      readonly tag: WrapTag;
       readonly openDelim: Span; // the consumed opening delimiter characters
       readonly closeDelim: Span; // the consumed closing delimiter characters
       readonly span: Span; // openDelim.from .. closeDelim.to (outer)
@@ -56,7 +67,7 @@ type Inline<L> =
       kind: "wrap";
       prev: Inline<L> | null;
       next: Inline<L> | null;
-      tag: "em" | "strong";
+      tag: WrapTag;
       openDelim: Span;
       closeDelim: Span;
       span: Span;
@@ -76,12 +87,7 @@ function makeNode<L>(leaf: L, span: Span): InlineNode<L> {
   return { kind: "node", prev: null, next: null, leaf, span };
 }
 
-function makeWrap<L>(
-  tag: "em" | "strong",
-  openDelim: Span,
-  closeDelim: Span,
-  span: Span
-): InlineWrap<L> {
+function makeWrap<L>(tag: WrapTag, openDelim: Span, closeDelim: Span, span: Span): InlineWrap<L> {
   return {
     kind: "wrap",
     prev: null,
@@ -165,6 +171,11 @@ function processEmphasis<L>(bottom: Delimiter<L> | null): void {
   const openersBottom: Record<string, Array<Delimiter<L> | null>> = {
     "*": [null, null, null, null, null, null],
     _: [null, null, null, null, null, null],
+    // `~~`/`==` are fixed length-2 runs: the rule-of-3 (`oddMatch`) can never
+    // fire for them (2 % 3 ≠ 0, 2 + 2 = 4 not ≡ 0 mod 3), so the slot split is
+    // inert — but the key must exist for the `openersBottom[ch]` lookup below.
+    "~": [null, null, null, null, null, null],
+    "=": [null, null, null, null, null, null],
   };
   // Slot index: a SEPARATE lower bound per (run-length mod 3) AND per "can this
   // closer also open?". The second split is essential — a closer that can also
@@ -206,7 +217,12 @@ function processEmphasis<L>(bottom: Delimiter<L> | null): void {
 
     if (openerFound && opener !== null) {
       const useDelims = closer.length >= 2 && opener.length >= 2 ? 2 : 1;
-      wrapBetween(opener, closer, useDelims === 2 ? "strong" : "em", useDelims);
+      // `~~`/`==` wrap into del/mark (always 2 chars consumed — the tokenizer
+      // only ever emits length-2 runs for them). `*`/`_` keep the CommonMark
+      // 2-vs-1 → strong/em split.
+      const tag: WrapTag =
+        ch === "~" ? "del" : ch === "=" ? "mark" : useDelims === 2 ? "strong" : "em";
+      wrapBetween(opener, closer, tag, useDelims);
       opener.length -= useDelims;
       closer.length -= useDelims;
       removeDelimitersBetween(opener, closer);
@@ -236,7 +252,7 @@ function processEmphasis<L>(bottom: Delimiter<L> | null): void {
 function wrapBetween<L>(
   opener: Delimiter<L>,
   closer: Delimiter<L>,
-  tag: "em" | "strong",
+  tag: WrapTag,
   useDelims: number
 ): void {
   // Span threading: the opener run currently spans [os, oe) and the closer run

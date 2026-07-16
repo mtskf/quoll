@@ -619,12 +619,15 @@ html body {
     font-size: 0.875em;
   }
 
-  /* Strikethrough / highlight inside a table cell — parity with the editor's
-   * own token paint (cm/theme.ts: t.strikethrough → line-through, highlightTag →
-   * warm tint). The tint reuses the shared --quoll-highlight-bg token so both
-   * surfaces track the same theme value; `color: inherit` keeps the cell
-   * foreground legible (the <mark> UA default is black-on-yellow). Geometry-safe
-   * like the editor rule: bg + radius, no padding. */
+  /* Strikethrough / highlight inside a table cell — visual parity with the
+   * editor's own token paint (cm/theme.ts: t.strikethrough → line-through,
+   * highlightTag → warm tint). The tint reuses the shared --quoll-highlight-bg
+   * token so both surfaces track the same theme value; `color: inherit` keeps
+   * the cell foreground legible (the <mark> UA default is black-on-yellow).
+   * No padding — matching the editor rule's look, not a geometry constraint:
+   * this widget DOM is display-only (TableBlockWidget.toDOM) and click-to-reveal
+   * resolves to a fixed per-cell offset (data-cell-from), so coordsAtPos
+   * accuracy never rides on these boxes. */
   .quoll-table-block del {
     text-decoration: line-through;
   }

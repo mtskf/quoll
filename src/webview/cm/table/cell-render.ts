@@ -173,40 +173,16 @@ export function renderReadonly(
               pendingText += raw.slice(node.span.from, node.span.to);
             }
             break;
-          case "strikethrough":
-          case "highlight": {
-            // Re-parse the content slice for nested inline (so `~~*x*~~` renders
-            // bold/italic inside the mark), mirroring the emphasis arm below.
-            // Depth-bounded the same way: past the cap, merge the inert literal
-            // source instead of recursing. `<del>`/`<mark>` are styled under
-            // `.quoll-table-block` in styles.css to match the editor's own
-            // strikethrough / highlight token paint.
-            if (depth >= MAX_INLINE_NESTING_DEPTH) {
-              pendingText += raw.slice(node.span.from, node.span.to);
-              break;
-            }
-            flushPending();
-            const el = document.createElement(leaf.kind === "strikethrough" ? "del" : "mark");
-            const inner = raw.slice(leaf.content.from, leaf.content.to);
-            for (const child of renderReadonly(
-              parseCellInline(inner),
-              inner,
-              resourceBase,
-              depth + 1
-            )) {
-              el.appendChild(child);
-            }
-            out.push(el);
-            break;
-          }
           default:
             assertNever(leaf);
         }
         break;
       }
       case "emphasis": {
-        // Past the nesting cap, merge the inert literal source of the whole
-        // emphasis span (node.span covers openDelim..closeDelim) into the
+        // Delimiter-run wrapper: em/strong (`*`/`_`) or del/mark (`~~`/`==`).
+        // `node.tag` is a valid element name, so createElement builds the right
+        // box for all four. Past the nesting cap, merge the inert literal source
+        // of the whole span (node.span covers openDelim..closeDelim) into the
         // pending-text buffer instead of recursing — bounds this walker's
         // recursion depth. No flushPending(): we emit no element, so the slice
         // merges naturally with adjacent text (same topology as inert links).
