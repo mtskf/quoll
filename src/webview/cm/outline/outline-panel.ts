@@ -7,6 +7,10 @@
 // (quoll-outline-open / quoll-outline-pinned); this module owns state + DOM.
 // Individual headings with children collapse their own subtree via per-row
 // twisties (no whole-section fold — the OUTLINE header is a static label).
+// Keyboard model (WAI-ARIA tree-view): each row IS the focusable treeitem with a
+// roving tabindex (one tab stop for the whole tree); Up/Down/Home/End move focus,
+// Left/Right collapse/expand or climb/dive, Enter jumps. The twistie is an
+// aria-hidden decorative chevron — a pointer affordance only, not a tab stop.
 // View-only: clicking a heading dispatches a SELECTION-ONLY transaction (no
 // `changes`), so the round-trip is byte-identical and no Edit is posted. All
 // rebuild work is gated on the sidebar being open AND debounced, so the
@@ -92,12 +96,14 @@ const MAX_WIDTH_PX = 600;
 const WIDTH_STATE_KEY = "outlineWidthPx";
 
 /** A rendered outline row + its structural facts, for post-render visibility
- *  updates that never rebuild the DOM (collapse toggles reuse these refs). */
+ *  updates that never rebuild the DOM (collapse toggles reuse these refs). The
+ *  `li` IS the focusable tree node (roving tabindex); the twistie is an
+ *  aria-hidden decorative chevron and the item span is display-only. */
 interface RowRef {
   heading: OutlineHeading;
   hasChildren: boolean;
   li: HTMLLIElement;
-  twistie: HTMLButtonElement | null;
+  twistie: HTMLSpanElement | null;
 }
 
 class OutlinePanel implements PluginValue {
@@ -134,6 +140,10 @@ class OutlinePanel implements PluginValue {
   private readonly collapsedFroms = new Set<number>();
   /** Rendered rows for post-render visibility refresh (see refreshVisibility). */
   private rows: RowRef[] = [];
+  /** `from` of the row that currently holds `tabindex="0"` — the single tab stop
+   *  into the tree (roving tabindex). All other visible rows are `tabindex="-1"`,
+   *  reachable only via the arrow-key handlers. Null while the list is empty. */
+  private tabbableFrom: number | null = null;
   /** Signature of the last rendered list; null forces the first render. */
   private renderedSignature: string | null = null;
   private rebuildTimer: ReturnType<typeof setTimeout> | null = null;
@@ -232,6 +242,11 @@ class OutlinePanel implements PluginValue {
     // span, not associated).
     this.listEl.setAttribute("role", "tree");
     this.listEl.setAttribute("aria-label", "Document outline");
+    // Keyboard tree model (WAI-ARIA tree-view pattern): one delegated handler on
+    // the list — focus lives on a row <li> (roving tabindex), so every arrow /
+    // Home / End / Enter keydown bubbles here. Delegation survives every rebuild
+    // (the list element persists; only its rows are replaced).
+    this.listEl.addEventListener("keydown", (e) => this.onListKeydown(e));
 
     const footer = document.createElement("div");
     footer.className = "quoll-outline-footer";
@@ -662,16 +677,27 @@ class OutlinePanel implements PluginValue {
       li.setAttribute("aria-level", String(heading.depth + 1));
       // Depth indent rides the row; the twistie column is a fixed inset inside it.
       li.style.paddingLeft = `${BASE_PAD_PX + heading.depth * INDENT_PX}px`;
+      // The row is the single focusable tree node. Roving tabindex: setTabbable
+      // promotes exactly one row to 0; everyone starts at -1. Clicking the row
+      // (label included) jumps; mousedown preventDefault keeps the editor
+      // selection put until the jump dispatch runs.
+      li.tabIndex = -1;
+      li.addEventListener("mousedown", (e) => e.preventDefault());
+      li.addEventListener("click", () => this.jumpTo(heading));
 
-      let twistie: HTMLButtonElement | null = null;
+      let twistie: HTMLSpanElement | null = null;
       if (hasChildren[i]) {
-        twistie = document.createElement("button");
-        twistie.type = "button";
+        // Decorative chevron — aria-hidden, no tabindex, NOT a tab stop. The row
+        // owns the expand/collapse semantics (aria-expanded + Left/Right keys);
+        // this stays clickable purely as a pointer affordance. stopPropagation so
+        // a twistie click toggles collapse without also firing the row's jump.
+        twistie = document.createElement("span");
         twistie.className = "quoll-outline-twistie";
+        twistie.setAttribute("aria-hidden", "true");
         twistie.appendChild(createChevronIcon());
         twistie.addEventListener("mousedown", (e) => e.preventDefault());
         twistie.addEventListener("click", (e) => {
-          e.preventDefault();
+          e.stopPropagation();
           this.toggleCollapse(heading.from);
         });
         li.appendChild(twistie);
@@ -682,22 +708,20 @@ class OutlinePanel implements PluginValue {
         li.appendChild(spacer);
       }
 
-      const btn = document.createElement("button");
-      btn.type = "button";
-      btn.className = `quoll-outline-item level-${heading.level}`;
-      btn.textContent = heading.text.length > 0 ? heading.text : "(untitled)";
-      btn.dataset.from = String(heading.from);
-      btn.addEventListener("mousedown", (e) => e.preventDefault());
-      btn.addEventListener("click", (e) => {
-        e.preventDefault();
-        this.jumpTo(heading);
-      });
-      li.appendChild(btn);
+      const label = document.createElement("span");
+      label.className = `quoll-outline-item level-${heading.level}`;
+      label.textContent = heading.text.length > 0 ? heading.text : "(untitled)";
+      label.dataset.from = String(heading.from);
+      li.appendChild(label);
 
       this.listEl.appendChild(li);
       this.rows.push({ heading, hasChildren: hasChildren[i], li, twistie });
     });
     this.refreshVisibility();
+    // Seed the roving tab stop at the first visible row; updateActive (called
+    // right after in rebuild) re-homes it onto the caret's heading when the list
+    // is not focused, so Tab enters the tree at the current location.
+    this.setTabbable(this.firstVisibleFrom());
   }
 
   /** hasChildren[i] ⇔ the next heading is deeper (its subtree starts under i). */
@@ -716,12 +740,141 @@ class OutlinePanel implements PluginValue {
       this.collapsedFroms.add(from);
     }
     this.refreshVisibility();
+    // A collapse can hide the row that held the tab stop (e.g. a pointer collapse
+    // of an ancestor while a descendant was tabbable) — re-home it so the tree
+    // never keeps its only tab stop on a `display:none` row.
+    this.ensureTabbableVisible();
     this.updateActive();
   }
 
+  // ── Roving tabindex + keyboard tree navigation (WAI-ARIA tree-view) ──────────
+
+  /** `from` of the first visible row, or null when none are visible. */
+  private firstVisibleFrom(): number | null {
+    const row = this.rows.find((r) => !r.li.hidden);
+    return row !== undefined ? row.heading.from : null;
+  }
+
+  /** Promote exactly one row to `tabindex="0"` (the sole tab stop into the tree);
+   *  demote the rest to `-1`. Null clears every row to `-1` (empty list). */
+  private setTabbable(from: number | null): void {
+    this.tabbableFrom = from;
+    for (const row of this.rows) {
+      row.li.tabIndex = row.heading.from === from ? 0 : -1;
+    }
+  }
+
+  /** If the tab stop landed on a now-hidden (or removed) row, move it to the
+   *  first visible row so Tab always reaches a real, visible node. */
+  private ensureTabbableVisible(): void {
+    if (this.tabbableFrom === null) {
+      return;
+    }
+    const row = this.rows.find((r) => r.heading.from === this.tabbableFrom);
+    if (row === undefined || row.li.hidden) {
+      this.setTabbable(this.firstVisibleFrom());
+    }
+  }
+
+  /** Move the tab stop to a row and focus it — the shared move for every
+   *  arrow-key / Home / End navigation. */
+  private focusRow(row: RowRef): void {
+    this.setTabbable(row.heading.from);
+    row.li.focus();
+  }
+
+  /** Focus the nearest visible row in `dir` from `idx` (no wrap). */
+  private focusRelative(idx: number, dir: 1 | -1): void {
+    for (let i = idx + dir; i >= 0 && i < this.rows.length; i += dir) {
+      if (!this.rows[i].li.hidden) {
+        this.focusRow(this.rows[i]);
+        return;
+      }
+    }
+  }
+
+  private onListKeydown(e: KeyboardEvent): void {
+    const target = e.target as HTMLElement | null;
+    const li = target?.closest<HTMLLIElement>(".quoll-outline-row") ?? null;
+    if (li === null) {
+      return;
+    }
+    const idx = this.rows.findIndex((r) => r.li === li);
+    if (idx === -1) {
+      return;
+    }
+    const row = this.rows[idx];
+    switch (e.key) {
+      case "ArrowDown":
+        e.preventDefault();
+        this.focusRelative(idx, 1);
+        break;
+      case "ArrowUp":
+        e.preventDefault();
+        this.focusRelative(idx, -1);
+        break;
+      case "Home":
+        e.preventDefault();
+        this.focusRelative(-1, 1); // first visible: scan forward from before row 0
+        break;
+      case "End":
+        e.preventDefault();
+        this.focusRelative(this.rows.length, -1); // last visible: scan back from the end
+        break;
+      case "ArrowRight":
+        e.preventDefault();
+        this.onArrowRight(idx, row);
+        break;
+      case "ArrowLeft":
+        e.preventDefault();
+        this.onArrowLeft(idx, row);
+        break;
+      case "Enter":
+        e.preventDefault();
+        this.jumpTo(row.heading);
+        break;
+      default:
+        // Everything else (incl. Escape, handled by the sidebar) bubbles on.
+        break;
+    }
+  }
+
+  /** Right: expand a collapsed parent (focus stays); on an already-expanded
+   *  parent, dive to the first child; a leaf does nothing. */
+  private onArrowRight(idx: number, row: RowRef): void {
+    if (!row.hasChildren) {
+      return;
+    }
+    if (this.collapsedFroms.has(row.heading.from)) {
+      this.toggleCollapse(row.heading.from); // expand in place
+      this.focusRow(row); // re-assert the tab stop / focus on this row
+    } else {
+      // Expanded ⇒ the next row is this parent's first child (build order).
+      this.focusRelative(idx, 1);
+    }
+  }
+
+  /** Left: collapse an expanded parent (focus stays); otherwise climb to the
+   *  parent row (nearest shallower visible ancestor). */
+  private onArrowLeft(idx: number, row: RowRef): void {
+    if (row.hasChildren && !this.collapsedFroms.has(row.heading.from)) {
+      this.toggleCollapse(row.heading.from); // collapse in place
+      this.focusRow(row);
+      return;
+    }
+    const depth = row.heading.depth;
+    for (let i = idx - 1; i >= 0; i--) {
+      if (!this.rows[i].li.hidden && this.rows[i].heading.depth < depth) {
+        this.focusRow(this.rows[i]);
+        return;
+      }
+    }
+  }
+
   /** Walk the flat rows with a depth stack: any row deeper than the shallowest
-   *  active collapsed ancestor is hidden. Syncs each twistie's aria state. No DOM
-   *  rebuild — only li.hidden + aria flip, so it is cheap on every toggle. */
+   *  active collapsed ancestor is hidden. Syncs each parent row's aria-expanded
+   *  state. No DOM rebuild — only li.hidden + aria flip, so it is cheap on every
+   *  toggle. */
   private refreshVisibility(): void {
     let collapseDepth: number | null = null; // depth of the hiding ancestor, or null
     for (const row of this.rows) {
@@ -734,12 +887,10 @@ class OutlinePanel implements PluginValue {
       const collapsed = this.collapsedFroms.has(row.heading.from);
       // Expand state belongs to the tree node, so aria-expanded lives on the
       // treeitem row (the single source of truth SRs read on the tree). The
-      // twistie is a secondary disclosure control; it only re-labels its action.
+      // twistie is an aria-hidden decorative chevron — its rotation is driven
+      // purely by the row's aria-expanded in CSS, no per-element aria needed.
       if (row.hasChildren) {
         row.li.setAttribute("aria-expanded", String(!collapsed));
-      }
-      if (row.twistie !== null) {
-        row.twistie.setAttribute("aria-label", collapsed ? "Expand section" : "Collapse section");
       }
       if (!hidden && collapsed && row.hasChildren) {
         collapseDepth = depth; // hide this row's descendants
@@ -793,15 +944,22 @@ class OutlinePanel implements PluginValue {
     for (const item of this.listEl.querySelectorAll<HTMLElement>(".quoll-outline-item")) {
       const isActive = activeFrom !== null && item.dataset.from === String(activeFrom);
       item.classList.toggle("active", isActive);
-      // The row li is the treeitem; the label button is its inner .active target.
+      // The row li is the treeitem; the label span is its inner .active target.
       const rowLi = item.parentElement as HTMLElement | null;
       // aria-selected is the tree's selected-node signal — it rides the treeitem
-      // (the row li), mirroring the visual .active on the inner label button.
+      // (the row li), mirroring the visual .active on the inner label span.
       rowLi?.setAttribute("aria-selected", String(isActive));
       // Skip scroll for a hidden row (its parent li is collapsed away).
       if (isActive && rowLi?.hidden !== true) {
         item.scrollIntoView({ block: "nearest" });
       }
+    }
+    // Re-home the tab stop onto the caret's heading so Tab enters the tree at the
+    // current location — but ONLY while focus is outside the list. Once the user
+    // has tabbed in and is arrow-navigating, the keyboard owns the tab stop and a
+    // caret-driven move must not yank it out from under them.
+    if (!this.listEl.contains(document.activeElement)) {
+      this.setTabbable(activeFrom ?? this.firstVisibleFrom());
     }
   }
 }
