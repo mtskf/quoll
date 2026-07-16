@@ -68,7 +68,14 @@ export type CellLeaf =
       content: Span;
       closeAngle: Span;
       safeUrl: AllowlistedUrl | null;
-    };
+    }
+  // Paired inline marks tokenized as opaque leaves: `~~strikethrough~~` (GFM)
+  // and `==highlight==` (Obsidian-style, cf. src/markdown/highlight-mark.ts).
+  // Unlike code, their CONTENT is re-parsed for nested inline at render time
+  // (cell-render.ts) so `~~*x*~~` stays formatted — hence only boundary spans
+  // are stored, mirroring `code`'s openFence/content/closeFence shape.
+  | { kind: "strikethrough"; openMark: Span; content: Span; closeMark: Span }
+  | { kind: "highlight"; openMark: Span; content: Span; closeMark: Span };
 
 // Exhaustiveness guard for the `CellLeaf` discriminated union: if a future
 // leaf kind is added without a matching render/flatten arm, the `switch`
@@ -171,6 +178,35 @@ function flanking(
     };
   }
   return { canOpen: leftFlanking, canClose: rightFlanking };
+}
+
+// Paired inline mark (`~~strikethrough~~`, `==highlight==`). Both use a 2-char
+// delimiter and the plain left/right flanking rules the source parsers apply
+// (GFM Strikethrough + highlight-mark.ts) — reused verbatim via `flanking("*",…)`
+// so the widget never renders a mark the editor's own parser would reject. The
+// opener must be exactly two `markChar` (a third rejects, mirroring the source
+// `char(pos+2) === delim` guard, which also rules out empty `~~~~`/`====`); the
+// closer is the nearest following `markChar markChar` that can close. Returns the
+// content span + end index, or null when no valid pair exists.
+function scanPairedMark(
+  raw: string,
+  i: number,
+  markChar: "~" | "="
+): { content: Span; end: number } | null {
+  if (raw[i] !== markChar || raw[i + 1] !== markChar || raw[i + 2] === markChar) {
+    return null;
+  }
+  if (!flanking("*", charBefore(raw, i), charAfter(raw, i + 2)).canOpen) {
+    return null;
+  }
+  for (let k = i + 2; k + 1 < raw.length; k++) {
+    if (raw[k] === markChar && raw[k + 1] === markChar) {
+      if (flanking("*", charBefore(raw, k), charAfter(raw, k + 2)).canClose) {
+        return { content: { from: i + 2, to: k }, end: k + 2 };
+      }
+    }
+  }
+  return null;
 }
 
 // Tokenize a cell's raw Markdown into a flat segment list. Links / images /
@@ -276,6 +312,28 @@ function tokenize(raw: string): Segment<CellLeaf>[] {
       segments.push({ kind: "delim", ch, span: { from: i, to: runEnd }, canOpen, canClose });
       i = runEnd;
       continue;
+    }
+    // Paired inline marks: strikethrough `~~…~~` and highlight `==…==`. Opaque
+    // leaves (content re-parsed at render time). Bind tighter than nothing here
+    // — a single `~`/`=` (or an unmatched run) falls through to literal text.
+    if (raw[i] === "~" || raw[i] === "=") {
+      const markChar = raw[i] as "~" | "=";
+      const mark = scanPairedMark(raw, i, markChar);
+      if (mark !== null) {
+        flushText();
+        segments.push({
+          kind: "leaf",
+          leaf: {
+            kind: markChar === "~" ? "strikethrough" : "highlight",
+            openMark: { from: i, to: i + 2 },
+            content: mark.content,
+            closeMark: { from: mark.content.to, to: mark.end },
+          },
+          span: { from: i, to: mark.end },
+        });
+        i = mark.end;
+        continue;
+      }
     }
     // Inline image: ![alt](url)
     if (raw[i] === "!" && raw[i + 1] === "[") {
@@ -551,6 +609,21 @@ function flattenInlineText(ir: Resolved<CellLeaf>[], raw: string, depth = 0): st
           case "autolink":
             out += raw.slice(leaf.content.from, leaf.content.to);
             break;
+          case "strikethrough":
+          case "highlight": {
+            // Flatten the re-parsed content (nested emphasis/code contribute
+            // their text). Depth-bounded like the emphasis arm: past the cap,
+            // emit the inert literal source of the whole mark span. Recurse via
+            // flattenInlineText (NOT commonMarkAltText) so the depth budget
+            // threads through — a crafted `~~==~~==…` alternating nest stays
+            // bounded instead of resetting depth on each re-entry.
+            const inner = raw.slice(leaf.content.from, leaf.content.to);
+            out +=
+              depth >= MAX_INLINE_NESTING_DEPTH
+                ? raw.slice(node.span.from, node.span.to)
+                : flattenInlineText(parseCellInline(inner), inner, depth + 1);
+            break;
+          }
           default:
             assertNever(leaf);
         }

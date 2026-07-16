@@ -295,6 +295,47 @@ describe("renderCellInline", () => {
     expect(html(renderCellInline("__b__"))).toBe("<strong>b</strong>");
   });
 
+  // Strikethrough (`~~…~~`) + highlight (`==…==`) parity: these render formatted
+  // everywhere else in the editor, but the table-cell widget used to leak the raw
+  // delimiters (`| ~~x~~ |` showed the tildes). Pin the widget paint: <del> for
+  // strikethrough, <mark> for highlight, with content re-parsed for nested inline.
+  it("renders `~~x~~` as a live <del> (strikethrough)", () => {
+    expect(html(renderCellInline("~~x~~"))).toBe("<del>x</del>");
+  });
+
+  it("renders `==x==` as a live <mark> (highlight)", () => {
+    expect(html(renderCellInline("==x=="))).toBe("<mark>x</mark>");
+  });
+
+  it("re-parses nested emphasis inside a mark (`~~*x*~~`, `==**b**==`)", () => {
+    expect(html(renderCellInline("~~*x*~~"))).toBe("<del><em>x</em></del>");
+    expect(html(renderCellInline("==**b**=="))).toBe("<mark><strong>b</strong></mark>");
+  });
+
+  it("renders a mark amid surrounding text (`a ~~b~~ ==c== d`)", () => {
+    expect(html(renderCellInline("a ~~b~~ ==c== d"))).toBe("a <del>b</del> <mark>c</mark> d");
+  });
+
+  // Flanking parity with the source parsers: a leading space after the opener
+  // means it cannot open, so the run stays literal (the editor would not strike
+  // it either). Guards against over-matching a bare greedy scan.
+  it("leaves a non-flanking mark literal (`~~ x~~`, `a == b`)", () => {
+    expect(html(renderCellInline("~~ x~~"))).toBe("~~ x~~");
+    expect(html(renderCellInline("a == b"))).toBe("a == b");
+  });
+
+  // An unmatched opener (no closing pair) stays literal — the single/lone
+  // delimiter characters fall through to plain text.
+  it("leaves an unmatched mark opener literal (`~~x`, `a==b`)", () => {
+    expect(html(renderCellInline("~~x"))).toBe("~~x");
+    expect(html(renderCellInline("a==b"))).toBe("a==b");
+  });
+
+  // A `~~`/`==` inside inline code is inert (code binds tighter, content literal).
+  it("does not mark inside an inline code span (`` `~~x~~` ``)", () => {
+    expect(html(renderCellInline("`~~x~~`"))).toBe("<code>~~x~~</code>");
+  });
+
   it("leaves intraword underscores literal (`a_b_c`, `foo_bar_baz`)", () => {
     expect(html(renderCellInline("a_b_c"))).toBe("a_b_c");
     expect(html(renderCellInline("foo_bar_baz"))).toBe("foo_bar_baz");
@@ -597,6 +638,10 @@ describe("parseCellInline losslessness", () => {
     "[bad](javascript:1)",
     "a*b©*c",
     "pre **a *b* c** post",
+    "~~x~~",
+    "==x==",
+    "~~*x*~~",
+    "a ~~b~~ ==c== d",
   ];
   for (const raw of corpus) {
     it(`partitions ${JSON.stringify(raw)} into ordered leaves that reconstruct the source`, () => {
@@ -637,6 +682,8 @@ describe("parseCellInline losslessness", () => {
       { raw: "see [docs](https://example.com)", kind: "link" },
       { raw: "![alt](https://x.test/i.png)", kind: "image" },
       { raw: "<https://x.test>", kind: "autolink" },
+      { raw: "~~struck~~", kind: "strikethrough" },
+      { raw: "==marked==", kind: "highlight" },
     ];
     for (const { raw, kind } of samples) {
       const leaves = walkLeaves(parseCellInline(raw));
@@ -724,6 +771,9 @@ function leafBoundarySpans(leaf: CellLeaf): Span[] {
       ];
     case "autolink":
       return [leaf.openAngle, leaf.content, leaf.closeAngle];
+    case "strikethrough":
+    case "highlight":
+      return [leaf.openMark, leaf.content, leaf.closeMark];
   }
 }
 

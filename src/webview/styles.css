@@ -619,6 +619,22 @@ html body {
     font-size: 0.875em;
   }
 
+  /* Strikethrough / highlight inside a table cell — parity with the editor's
+   * own token paint (cm/theme.ts: t.strikethrough → line-through, highlightTag →
+   * warm tint). The tint reuses the shared --quoll-highlight-bg token so both
+   * surfaces track the same theme value; `color: inherit` keeps the cell
+   * foreground legible (the <mark> UA default is black-on-yellow). Geometry-safe
+   * like the editor rule: bg + radius, no padding. */
+  .quoll-table-block del {
+    text-decoration: line-through;
+  }
+
+  .quoll-table-block mark {
+    background: var(--quoll-highlight-bg, var(--vscode-editor-findMatchHighlightBackground, rgba(255, 214, 92, 0.4)));
+    color: inherit;
+    border-radius: 3px;
+  }
+
   /* C7: image block widget. Root carries `quoll-block` (margin:0 invariant);
    * breathing room via padding, never margin, so CM's getBoundingClientRect
    * block-height measurement stays in lockstep with the DOM. */
