@@ -69,9 +69,9 @@ async function openTempQuoll(
 }
 
 const allVisible = (items: readonly StatusBarItemProbeShape[]): boolean =>
-  items.length === 3 && items.every((i) => i.visible);
+  items.length === 4 && items.every((i) => i.visible);
 const allHidden = (items: readonly StatusBarItemProbeShape[]): boolean =>
-  items.length === 3 && items.every((i) => !i.visible);
+  items.length === 4 && items.every((i) => !i.visible);
 
 // Snapshot the show/hide counts so a later assertion can prove a counter did
 // (or did NOT) move across a transition.
@@ -102,19 +102,20 @@ describe("status-bar-active-edge", function () {
     files.push(a.file);
     assert.strictEqual(
       a.panel.statusBarItems.length,
-      3,
-      "panel A must expose three status-bar items"
+      4,
+      "panel A must expose four status-bar items"
     );
     await pollUntil(() => allVisible(a.panel.statusBarItems), "panel A status bar visible");
     for (const item of a.panel.statusBarItems) {
       assert.ok(item.showCount >= 1, "A item shown on the active edge");
       assert.strictEqual(item.hideCount, 0, "A item not hidden while it is the only/active panel");
     }
-    // Native right-aligned, descending priority (caret leftmost = highest).
+    // Native right-aligned, descending priority (caret leftmost = highest);
+    // the word/char count slot is appended rightmost (99).
     assert.deepStrictEqual(
       a.panel.statusBarItems.map((i) => i.priority),
-      [102, 101, 100],
-      "status-bar items keep native caret→eol→language priority order"
+      [102, 101, 100, 99],
+      "status-bar items keep native caret→eol→language order with count appended"
     );
 
     // --- Panel B opens → A goes inactive (hide), B shows -------------------
@@ -206,8 +207,8 @@ describe("status-bar-active-edge", function () {
     files.push(b.file);
     assert.strictEqual(
       b.panel.statusBarItems.length,
-      3,
-      "panel B must expose three status-bar items"
+      4,
+      "panel B must expose four status-bar items"
     );
     assert.notStrictEqual(a.panel, b.panel, "the two panels must be distinct controls");
     assert.strictEqual(

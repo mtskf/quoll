@@ -280,14 +280,23 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
           this.harness.newStatusBarItem(StatusBarAlignment.Right, 102),
           this.harness.newStatusBarItem(StatusBarAlignment.Right, 101),
           this.harness.newStatusBarItem(StatusBarAlignment.Right, 100),
+          this.harness.newStatusBarItem(StatusBarAlignment.Right, 99),
         ]
       : null;
     const statusBarSlots: StatusBarSlots = statusBarProbes
-      ? { caret: statusBarProbes[0], eol: statusBarProbes[1], language: statusBarProbes[2] }
+      ? {
+          caret: statusBarProbes[0],
+          eol: statusBarProbes[1],
+          language: statusBarProbes[2],
+          count: statusBarProbes[3],
+        }
       : {
           caret: window.createStatusBarItem(StatusBarAlignment.Right, 102),
           eol: window.createStatusBarItem(StatusBarAlignment.Right, 101),
           language: window.createStatusBarItem(StatusBarAlignment.Right, 100),
+          // Appended rightmost (priority 99) so the established caret→eol→
+          // language order is undisturbed; word/char count + reading-time.
+          count: window.createStatusBarItem(StatusBarAlignment.Right, 99),
         };
 
     // The pure host-session reducer owns every state mutation (write-lock
@@ -512,8 +521,13 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
               (tab.input instanceof TabInputTextDiff && tab.input.modified.toString() === uriString)
           )
         ),
-      dispatchDocumentChanged: (documentVersion) =>
-        dispatch({ type: "documentChanged", documentVersion }),
+      dispatchDocumentChanged: (documentVersion) => {
+        dispatch({ type: "documentChanged", documentVersion });
+        // A documentChanged fire means the buffer content changed (Quoll edit-
+        // sync under the write lock, or a coalesced external write) — refresh
+        // the word/char count slot off the same signal, no extra listener.
+        caretWiring.refreshCount();
+      },
       showError,
       subscribeDocumentChange: (onChange) => {
         const sub = subscribeWhileAlive(workspace.onDidChangeTextDocument, (e) => {
