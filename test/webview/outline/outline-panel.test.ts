@@ -688,6 +688,42 @@ describe("quollOutline keyboard tree (roving tabindex)", () => {
     expect(rowEls(host)[1].tabIndex).toBe(0);
     expect(tabIndexes(host).filter((t) => t === 0)).toHaveLength(1);
   });
+
+  it("keeps the tab stop on the focused row when the caret moves while the list is focused", () => {
+    // The negative branch of the re-home guard: once the user has tabbed into the
+    // tree AND arrow-navigated (so focus + the tab stop both sit on Beta), a
+    // caret-driven updateActive must NOT yank the tab stop out from under them.
+    // Dropping the `!listEl.contains(activeElement)` guard makes this red.
+    const { view: v, host } = mount("# Alpha\n\nbody\n\n## Beta\n\nmore\n");
+    v.plugin(outlinePlugin)?.toggle();
+    const rows = rowEls(host);
+    rows[0].focus();
+    rowKeydown(rows[0], "ArrowDown"); // focusRow(Beta): focus + tab stop now on Beta
+    expect(rows[1].tabIndex).toBe(0);
+    v.dispatch({ selection: EditorSelection.cursor(v.state.doc.line(1).from) }); // caret → Alpha
+    expect(rows[1].tabIndex).toBe(0); // tab stop NOT yanked to the caret's heading
+    expect(tabIndexes(host).filter((t) => t === 0)).toHaveLength(1);
+  });
+
+  it("re-homes the tab stop off a keyboard-focused descendant when a pointer collapse hides it", () => {
+    // ensureTabbableVisible is load-bearing precisely when the list is FOCUSED and
+    // a pointer (twistie-click) collapse of an ancestor hides the focused, tabbable
+    // descendant: updateActive's re-home is guarded off while focus is in the list,
+    // so ensureTabbableVisible is the only thing that moves the sole tabindex=0 off
+    // the now-hidden row. Dropping that call strands the tab stop on a display:none
+    // row (a roving-tabindex a11y failure) while other tests stay green.
+    const { view: v, host } = mount("# A\n\nbody\n\n## B\n\nmore\n");
+    v.plugin(outlinePlugin)?.toggle();
+    const rows = rowEls(host);
+    rows[0].focus();
+    rowKeydown(rows[0], "ArrowDown"); // focus + tab stop now on descendant B (list focused)
+    expect(rows[1].tabIndex).toBe(0);
+    (twistieOf(rows[0]) as HTMLElement).click(); // pointer-collapse A → B hidden
+    expect(rows[1].hidden).toBe(true);
+    expect(rows[1].tabIndex).toBe(-1); // re-homed off the hidden row
+    expect(tabIndexes(host).filter((t) => t === 0)).toHaveLength(1);
+    expect(rows[0].tabIndex).toBe(0); // sole tab stop now on a visible row
+  });
 });
 
 // Pointer events target the HANDLE element (the plugin binds pointermove /

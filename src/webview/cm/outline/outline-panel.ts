@@ -882,8 +882,9 @@ class OutlinePanel implements PluginValue {
   }
 
   /** Walk the flat rows with a depth stack: any row deeper than the shallowest
-   *  active collapsed ancestor is hidden. Syncs each twistie's aria state. No DOM
-   *  rebuild — only li.hidden + aria flip, so it is cheap on every toggle. */
+   *  active collapsed ancestor is hidden. Syncs each parent row's aria-expanded
+   *  state. No DOM rebuild — only li.hidden + aria flip, so it is cheap on every
+   *  toggle. */
   private refreshVisibility(): void {
     let collapseDepth: number | null = null; // depth of the hiding ancestor, or null
     for (const row of this.rows) {
