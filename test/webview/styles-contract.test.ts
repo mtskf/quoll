@@ -651,13 +651,17 @@ describe("styles.css — outline sidebar", () => {
     expect(title).toMatch(/font-weight\s*:\s*400/);
   });
 
-  it("rotates the per-heading twistie chevron by its aria-expanded state", () => {
+  it("rotates the decorative twistie chevron by the ROW's aria-expanded state", () => {
     // Expanded rows point the chevron down (90deg); collapsed rows point it right
-    // (0deg), keyed off the twistie button's aria-expanded attribute.
+    // (0deg). The twistie is now an aria-hidden decorative span, so the rotation
+    // keys off the parent ROW's aria-expanded (the single source of truth for the
+    // tree node's expand state) — not an attribute on the twistie itself.
     const expanded = live.match(/\.quoll-outline-twistie\s+svg\s*\{[^}]*\}/)?.[0] ?? "";
     expect(expanded).toMatch(/transform\s*:\s*rotate\(90deg\)/);
     const collapsed =
-      live.match(/\.quoll-outline-twistie\[aria-expanded="false"\]\s+svg\s*\{[^}]*\}/)?.[0] ?? "";
+      live.match(
+        /\.quoll-outline-row\[aria-expanded="false"\]\s+\.quoll-outline-twistie\s+svg\s*\{[^}]*\}/
+      )?.[0] ?? "";
     expect(collapsed).toMatch(/transform\s*:\s*rotate\(0deg\)/);
     // A leaf row's spacer holds the same 16px column so sibling text aligns.
     const spacer = live.match(/\.quoll-outline-twistie-spacer\s*\{[^}]*\}/)?.[0] ?? "";
