@@ -448,7 +448,7 @@ describe("cm edit-sync — flush (teardown)", () => {
     }
   });
 
-  it("force-posts the latest even while an Edit is in flight, and nulls the buffer", () => {
+  it("force-posts the latest even while an Edit is in flight, and RETAINS the buffer for ack-replay", () => {
     vi.useFakeTimers();
     try {
       let doc = "seed";
@@ -472,10 +472,112 @@ describe("cm edit-sync — flush (teardown)", () => {
         { content: "a", baseDocVersion: 1 },
         { content: "ab", baseDocVersion: 1 },
       ]);
-      // Buffer nulled → host queue is the single authority: a later ack must
-      // NOT replay "ab" a second time.
+      // Buffer is RETAINED (not nulled) because an Edit was in flight: the
+      // force-post can be stale-rejected in the host settlement→ack window
+      // (write lock already released → the lock-held stash path is missed →
+      // `stale` verdict), so the bytes must survive for the next ack to replay.
+      // Double delivery is idempotent at the host (no-op verdict on content
+      // equality).
       sync.onReducerCommit(false);
-      expect(posted.length).toBe(2);
+      expect(posted).toEqual([
+        { content: "a", baseDocVersion: 1 },
+        { content: "ab", baseDocVersion: 1 },
+        { content: "ab", baseDocVersion: 1 }, // replay from the retained buffer
+      ]);
+      // EXACTLY ONE replay, never a loop: replayIfNeeded nulls the buffer on its
+      // own post, so a SECOND commit must NOT post again. Pins the invariant the
+      // comments promise (a mutation of replayIfNeeded's self-null would grow
+      // `posted` here). Revert-check: replayIfNeeded `buffered = null` →
+      // `buffered = content` makes this assertion red.
+      sync.onReducerCommit(false);
+      expect(posted.length).toBe(3);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does NOT retain the buffer when the force-post had no Edit in flight (accepted → host is authority)", () => {
+    // Codex + error-handler review 2026-07-17: retaining unconditionally lets a
+    // force-post that the host ACCEPTS outright (no prior in-flight Edit → base
+    // matches → `accept`) leave a buffer holding already-applied bytes. A later
+    // ack (e.g. after a racing external edit advanced the version) would replay
+    // those stale bytes and clobber the external change — the host has no
+    // client-side conflict guard for a post-settlement replay. So retention is
+    // gated on there having been an Edit in flight; the not-in-flight force-post
+    // nulls the buffer like trySend's idle post.
+    //
+    // Revert-check: change flush's ok arm to `buffered = content` (unconditional)
+    // → this test goes red (the replay reposts "seed+edit" a second time).
+    vi.useFakeTimers();
+    try {
+      let doc = "seed";
+      const posted: Array<{ content: string; baseDocVersion: number }> = [];
+      const sync = createEditSync({
+        getDoc: () => doc,
+        post: (content, baseDocVersion) => {
+          posted.push({ content, baseDocVersion });
+          return true;
+        },
+      });
+      sync.onHostSnapshot(1, true);
+      doc = "seed+edit";
+      sync.onLocalChange(); // timer pending, NO Edit in flight (editInFlight false)
+      sync.flush(); // force-posts once; nothing was in flight → buffer nulled
+      expect(posted).toEqual([{ content: "seed+edit", baseDocVersion: 1 }]);
+      // A later ack must NOT replay the already-posted bytes (buffer was nulled).
+      sync.onReducerCommit(false);
+      expect(posted.length).toBe(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("retains the buffer on force-post so a stale settlement→ack-window post survives via replay", () => {
+    // The bug (Fable review 2026-07-17): flush() force-posts the pending bytes
+    // with the CURRENT (stale) docVersion. If an Edit was in flight and the
+    // host had ALREADY settled it (write lock released, ack still in transit),
+    // the force-posted Edit misses the host's lock-held stash path
+    // (host-session-core `case "edit"` only stashes while the lock is held) and
+    // hits the `stale` verdict (edit-decision) → the host reposts the
+    // authoritative Document and the typed bytes are visibly erased. Nulling
+    // the buffer on force-post left NOTHING to replay. Fix: retain the buffer;
+    // the normal ack→replay drains it at the fresh docVersion.
+    //
+    // Revert-check: restore `buffered = null` in flush's ok arm → red (the
+    // replay at v2 never fires, "ab" is lost).
+    vi.useFakeTimers();
+    try {
+      let doc = "seed";
+      const posted: Array<{ content: string; baseDocVersion: number }> = [];
+      const sync = createEditSync({
+        getDoc: () => doc,
+        post: (content, baseDocVersion) => {
+          posted.push({ content, baseDocVersion });
+          return true;
+        },
+      });
+      sync.onHostSnapshot(1, true);
+      doc = "a";
+      sync.onLocalChange();
+      vi.advanceTimersByTime(300); // edit #1 posts at v1, editInFlight = true
+      expect(posted.length).toBe(1);
+      // Type one more char inside the debounce window, then hide (alive tab
+      // switch) — flush force-posts it at the STALE v1.
+      doc = "ab";
+      sync.onLocalChange();
+      sync.flush();
+      expect(posted).toEqual([
+        { content: "a", baseDocVersion: 1 },
+        { content: "ab", baseDocVersion: 1 }, // force-posted at stale v1
+      ]);
+      // Host had already settled edit #1 (now at v2) → the force-posted
+      // {ab, v1} is stale → host reposts the authoritative Document at v2. The
+      // webview processes it: snapshot advances the version, the commit clears
+      // in-flight and REPLAYS the retained buffer at the fresh v2 — the bytes
+      // the stale force-post could not deliver.
+      sync.onHostSnapshot(2, true);
+      sync.onReducerCommit(false);
+      expect(posted).toContainEqual({ content: "ab", baseDocVersion: 2 });
     } finally {
       vi.useRealTimers();
     }
