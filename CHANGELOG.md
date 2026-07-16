@@ -2,6 +2,16 @@
 
 All notable changes to Quoll are documented here.
 
+## 0.1.51 — 2026-07-17
+
+### Added
+
+- Table cells now render `~~strikethrough~~` and `==highlight==` marks, matching how they already render everywhere else in the document.
+
+### Fixed
+
+- Fixed a rare case where switching away from a document right after typing quickly could visibly erase the last keystroke.
+
 ## 0.1.50 — 2026-07-16
 
 ### Added
