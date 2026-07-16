@@ -368,7 +368,7 @@ describe("frontmatterRevealUp — ArrowUp into the block", () => {
 });
 
 describe("FrontmatterBlockWidget — mousedown reveals (toDOM wiring, no layout)", () => {
-  function widgetView(): EditorView {
+  function widgetView(editable = true): EditorView {
     const parent = document.createElement("div");
     document.body.appendChild(parent);
     return new EditorView({
@@ -376,7 +376,7 @@ describe("FrontmatterBlockWidget — mousedown reveals (toDOM wiring, no layout)
         doc: FM,
         extensions: [
           EditorState.allowMultipleSelections.of(true),
-          writableComp.of([EditorView.editable.of(true), EditorState.readOnly.of(false)]),
+          writableComp.of([EditorView.editable.of(editable), EditorState.readOnly.of(!editable)]),
           markdown({ base: markdownLanguage }),
           probe,
         ],
@@ -430,21 +430,7 @@ describe("FrontmatterBlockWidget — mousedown reveals (toDOM wiring, no layout)
     const { FrontmatterBlockWidget } = await import(
       "../../../src/webview/cm/frontmatter/frontmatter-widget.js"
     );
-    const parent = document.createElement("div");
-    document.body.appendChild(parent);
-    const view = new EditorView({
-      state: EditorState.create({
-        doc: FM,
-        extensions: [
-          EditorState.allowMultipleSelections.of(true),
-          EditorView.editable.of(false),
-          EditorState.readOnly.of(true),
-          markdown({ base: markdownLanguage }),
-          probe,
-        ],
-      }),
-      parent,
-    });
+    const view = widgetView(false); // editable=false, readOnly=true
     try {
       const dom = new FrontmatterBlockWidget("title: x", FM.slice(0, TO)).toDOM(view);
       // The region still identifies itself (aria-label) but must NOT promise an
