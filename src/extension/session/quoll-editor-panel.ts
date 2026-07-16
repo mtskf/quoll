@@ -523,9 +523,9 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
         ),
       dispatchDocumentChanged: (documentVersion) => {
         dispatch({ type: "documentChanged", documentVersion });
-        // A documentChanged fire means the buffer content changed (Quoll edit-
-        // sync under the write lock, or a coalesced external write) — refresh
-        // the word/char count slot off the same signal, no extra listener.
+        // A documentChanged fire means the buffer content advanced — refresh the
+        // word/char count slot off the same signal, no extra listener. (Routing —
+        // immediate vs coalesced — lives in revert-rescue-wiring's onDocumentChange.)
         caretWiring.refreshCount();
       },
       showError,

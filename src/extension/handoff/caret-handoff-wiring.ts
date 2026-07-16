@@ -52,8 +52,12 @@ export interface CaretHandoffWiring {
   applySwitchCaretOnReady(): void;
   /** Re-scan the live document text into the word / character count slot. Driven
    *  by the panel's `documentChanged` fire so the count tracks edits without its
-   *  own listener — immediate for Quoll's own write-locked edit-sync, coalesced
-   *  (trailing-debounced) for lock-free external writers. */
+   *  own listener. Routing lives in revert-rescue-wiring.ts's `onDocumentChange`:
+   *  immediate while the write lock is held (Quoll's own edit-sync, or an external
+   *  edit racing the apply→settle window), coalesced (trailing-debounced) for
+   *  lock-free external writers, and also immediate (lock-free) on the rare
+   *  alive-revert-rescue restore-FAILURE fallback (maybeRescueAliveRevert's
+   *  onFailure). */
   refreshCount(): void;
   dispose(): void;
 }
