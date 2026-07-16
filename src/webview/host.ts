@@ -154,7 +154,14 @@ export function subscribeToHost(handler: (message: HostToWebview) => void): () =
           type: data.type,
         });
       } else {
-        console.error("[quoll] host message rejected by validator", event.data);
+        // Symmetric with the host-side inbound-validation log (quoll-editor-panel.ts):
+        // preview only type + top-level keys, never the full payload, so an
+        // unvalidated message can't leak arbitrary content to the console.
+        const preview =
+          data !== null && typeof data === "object"
+            ? { type: data.type, keys: Object.keys(data) }
+            : { type: typeof event.data };
+        console.error("[quoll] host message rejected by validator", preview);
       }
       return;
     }
