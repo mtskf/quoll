@@ -115,6 +115,15 @@ describe("htmlTableToGfm — cell escaping", () => {
     expect(htmlTableToGfm("<table><tr><td>a &lt; b</td><td>c</td></tr></table>")).toContain("\\<");
   });
 
+  it("escapes `=` so a pasted cell with literal ==x== stays literal (not a highlight)", () => {
+    // `==…==` is Quoll's inline highlight mark (like `~~` for strikethrough), so
+    // a cell containing literal `==x==` must round-trip escaped, not as a live
+    // highlight. Each `=` is backslash-escaped (mirrors the `~` handling above).
+    expect(htmlTableToGfm("<table><tr><td>==x==</td><td>c</td></tr></table>")).toContain(
+      "\\=\\=x\\=\\="
+    );
+  });
+
   it("escapes ampersand so an entity-looking cell round-trips literally", () => {
     // `&copy; 2024` (from a text node) would otherwise resolve to `© 2024` in a
     // GFM renderer, breaking the literal round-trip. Escaping keeps it verbatim.

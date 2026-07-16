@@ -132,9 +132,14 @@ describe("C2 write-gate has no ProseMirror runtime imports declared in its own f
     // per-panel incremental unsafe-URL finder. It is a direct dependency
     // (added for the lint incremental parser in #66) and drags in no
     // framework — the gate stays PM-free.
+    // ./highlight-mark.js is the shared Obsidian-style ==highlight== rule,
+    // registered in this parser AND the webview. It imports only @lezer/highlight
+    // (Tag) + @lezer/markdown (types) — both framework-agnostic and PM-free — so
+    // allow-listing it drags in no framework transitively.
     const ALLOW = new Set([
       "@lezer/markdown",
       "@lezer/common",
+      "./highlight-mark.js",
       "./url-allowlist.js",
       "./url-decode.js",
     ]);

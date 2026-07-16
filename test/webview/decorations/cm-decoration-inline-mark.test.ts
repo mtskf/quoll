@@ -2,6 +2,7 @@ import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
 import { EditorSelection, EditorState } from "@codemirror/state";
 import type { DecorationSet } from "@codemirror/view";
 import { describe, expect, it } from "vitest";
+import { highlightMarkExtension } from "../../../src/markdown/highlight-mark.js";
 import { inlineMarkReveal } from "../../../src/webview/cm/decorations/inline-mark-reveal.js";
 import type { BuildContext } from "../../../src/webview/cm/decorations/types.js";
 import { fullTree } from "../helpers/full-tree.js";
@@ -10,7 +11,7 @@ function ctx(doc: string, selection: EditorSelection): BuildContext {
   const state = EditorState.create({
     doc,
     selection,
-    extensions: [markdown({ base: markdownLanguage })],
+    extensions: [markdown({ base: markdownLanguage, extensions: [highlightMarkExtension] })],
   });
   return {
     state,
@@ -102,6 +103,28 @@ describe("inline-mark reveal provider", () => {
     // Strikethrough opens at offset 11 (after "paragraph\n\n"), so the
     // marks land at [11, 13) and [20, 22).
     expect(ranges.every((r) => r.kind === "replace")).toBe(true);
+  });
+
+  it("handles Highlight (`==`) — both marks conceal when caret outside", () => {
+    // Leading paragraph keeps the caret clearly outside the Highlight span.
+    const doc = "paragraph\n\n==marked==";
+    const set = inlineMarkReveal.build(ctx(doc, EditorSelection.single(3)));
+    const ranges = shape(set);
+    expect(ranges.length).toBe(2);
+    // Highlight opens at offset 11 (after "paragraph\n\n"): marks [11,13) and [19,21).
+    expect(ranges[0]?.from).toBe(11);
+    expect(ranges[0]?.to).toBe(13);
+    expect(ranges[1]?.from).toBe(19);
+    expect(ranges[1]?.to).toBe(21);
+    expect(ranges.every((r) => r.kind === "replace")).toBe(true);
+  });
+
+  it("reveals both `==` marks when caret is INSIDE the Highlight span", () => {
+    const doc = "==marked==";
+    const set = inlineMarkReveal.build(ctx(doc, EditorSelection.single(4))); // in "marked"
+    const ranges = shape(set);
+    expect(ranges.length).toBe(2);
+    expect(ranges.every((r) => r.kind === "mark")).toBe(true);
   });
 
   it("caret in inner span reveals BOTH outer (Strong) and inner (Emphasis) — every ancestor span the caret intersects reveals", () => {

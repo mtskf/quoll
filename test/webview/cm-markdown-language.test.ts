@@ -16,7 +16,7 @@
 // (dropped in markdown.ts); Quoll's own paste-URL-over-selection handler lives in
 // src/webview/cm/paste/url-link-paste.ts and is covered by cm-paste-url-link.test.ts.
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
-import { codeFolding, ensureSyntaxTree, foldable } from "@codemirror/language";
+import { codeFolding, ensureSyntaxTree, foldable, syntaxTree } from "@codemirror/language";
 import { EditorSelection, EditorState, type Extension } from "@codemirror/state";
 import { EditorView, runScopeHandlers } from "@codemirror/view";
 import { afterEach, describe, expect, it } from "vitest";
@@ -192,5 +192,19 @@ describe("re-implemented headerIndent folds byte-identically to upstream", () =>
     const bodyAt = body.indexOf("body"); // headAt > 0 → exercises `node.from < start`
     expect(foldHeadingRange(quollLang, body, bodyAt)).toBeNull();
     expect(foldHeadingRange(upstreamLang, body, bodyAt)).toBeNull();
+  });
+});
+
+describe("quollMarkdownLanguage registers the ==highlight== inline mark", () => {
+  it("parses ==text== into a Highlight span (registered in the webview config)", () => {
+    const state = EditorState.create({ doc: "==hi==", extensions: [quollLang] });
+    const names: string[] = [];
+    syntaxTree(state).iterate({
+      enter: (n) => {
+        names.push(n.name);
+      },
+    });
+    expect(names).toContain("Highlight");
+    expect(names).toContain("HighlightMark");
   });
 });

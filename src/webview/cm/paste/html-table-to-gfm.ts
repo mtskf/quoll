@@ -254,15 +254,19 @@ function collectCellText(cell: Element): string {
 }
 
 /** Backslash-escape the Markdown-inline-active characters that can form an
- *  explicit link/image/code/emphasis, plus `&` (HTML entity references), so a
- *  cell renders as LITERAL text. `\` is escaped FIRST so the backslashes added
- *  for the rest are not doubled. `&` is included so an entity-looking cell such
- *  as `&copy; 2024` round-trips verbatim instead of resolving to `© 2024` (a
- *  fidelity fix — entities carry no security weight, they are literal-text
- *  substitutions that cannot form structure).
- *  `a|b`→`a\|b`; `a\b`→`a\\b`; `a\|b`→`a\\\|b`; `[x](y)`→`\[x\](y)`; `&copy;`→`\&copy;`. */
+ *  explicit link/image/code/emphasis/strikethrough/highlight, plus `&` (HTML
+ *  entity references), so a cell renders as LITERAL text. `\` is escaped FIRST
+ *  so the backslashes added for the rest are not doubled. `&` is included so an
+ *  entity-looking cell such as `&copy; 2024` round-trips verbatim instead of
+ *  resolving to `© 2024` (a fidelity fix — entities carry no security weight,
+ *  they are literal-text substitutions that cannot form structure). `=` is
+ *  escaped because `==…==` is Quoll's inline highlight mark (like `~~` for
+ *  strikethrough); without it a pasted cell containing literal `==x==` would
+ *  round-trip into a live highlight. Escaping every `=` (not only `==` pairs)
+ *  mirrors the `~` handling and is safe — `\=` renders as a literal `=`.
+ *  `a|b`→`a\|b`; `a\b`→`a\\b`; `a\|b`→`a\\\|b`; `[x](y)`→`\[x\](y)`; `&copy;`→`\&copy;`; `==x==`→`\=\=x\=\=`. */
 function escapeCell(text: string): string {
-  return text.replace(/\\/g, "\\\\").replace(/[`*_[\]<~|&]/g, "\\$&");
+  return text.replace(/\\/g, "\\\\").replace(/[`*_[\]<~|&=]/g, "\\$&");
 }
 
 function rowToLine(cells: readonly string[]): string {

@@ -13,6 +13,7 @@
 import { HighlightStyle, syntaxHighlighting, type TagStyle } from "@codemirror/language";
 import { EditorView } from "@codemirror/view";
 import { tags as t } from "@lezer/highlight";
+import { highlightTag } from "../../markdown/highlight-mark.js";
 
 export const quollTheme = EditorView.theme({
   "&": {
@@ -192,6 +193,21 @@ export const quollHighlightSpec: TagStyle[] = [
   { tag: t.strong, fontWeight: "700" },
   { tag: t.emphasis, fontStyle: "italic" },
   { tag: t.strikethrough, textDecoration: "line-through" },
+  // Obsidian-style ==highlight== mark. A warm highlighter tint keyed on the
+  // custom highlightTag (src/markdown/highlight-mark.ts). Geometry-safe like the
+  // inline-code pill below: bg + border-radius + a spread-only box-shadow extend
+  // the tint ~2px around the glyphs WITHOUT layout impact, so coordsAtPos /
+  // click→caret stay accurate (padding would shift them). Text stays the line
+  // foreground for legibility; the tint is theme-tuned via --quoll-highlight-bg
+  // (styles.css), with a host find-match fallback for the pre-theme-class frame.
+  {
+    tag: highlightTag,
+    backgroundColor:
+      "var(--quoll-highlight-bg, var(--vscode-editor-findMatchHighlightBackground, rgba(255, 214, 92, 0.4)))",
+    borderRadius: "3px",
+    boxShadow:
+      "0 0 0 2px var(--quoll-highlight-bg, var(--vscode-editor-findMatchHighlightBackground, rgba(255, 214, 92, 0.4)))",
+  },
   // Inline code: a subtle navy pill. The monospace tag covers BOTH inline code
   // (InlineCode) AND fenced code text (CodeText) — see @lezer/markdown
   // "InlineCode CodeText": tags.monospace. So this background applies to inline
