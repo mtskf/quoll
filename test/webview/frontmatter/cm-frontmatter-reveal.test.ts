@@ -412,4 +412,47 @@ describe("FrontmatterBlockWidget — mousedown reveals (toDOM wiring, no layout)
       view.destroy();
     }
   });
+
+  it("advertises the caret-reveal hint (aria-description) when writable", async () => {
+    const { FrontmatterBlockWidget } = await import(
+      "../../../src/webview/cm/frontmatter/frontmatter-widget.js"
+    );
+    const view = widgetView(); // editable=true, readOnly=false
+    try {
+      const dom = new FrontmatterBlockWidget("title: x", FM.slice(0, TO)).toDOM(view);
+      expect(dom.getAttribute("aria-description")).toMatch(/caret|edit/i);
+    } finally {
+      view.destroy();
+    }
+  });
+
+  it("OMITS the aria-description hint on a read-only document (reveal is a no-op there, so no false affordance)", async () => {
+    const { FrontmatterBlockWidget } = await import(
+      "../../../src/webview/cm/frontmatter/frontmatter-widget.js"
+    );
+    const parent = document.createElement("div");
+    document.body.appendChild(parent);
+    const view = new EditorView({
+      state: EditorState.create({
+        doc: FM,
+        extensions: [
+          EditorState.allowMultipleSelections.of(true),
+          EditorView.editable.of(false),
+          EditorState.readOnly.of(true),
+          markdown({ base: markdownLanguage }),
+          probe,
+        ],
+      }),
+      parent,
+    });
+    try {
+      const dom = new FrontmatterBlockWidget("title: x", FM.slice(0, TO)).toDOM(view);
+      // The region still identifies itself (aria-label) but must NOT promise an
+      // edit route that revealFrontmatterAt() silently refuses in read-only.
+      expect(dom.getAttribute("aria-label")).toBe("Document metadata");
+      expect(dom.getAttribute("aria-description")).toBeNull();
+    } finally {
+      view.destroy();
+    }
+  });
 });

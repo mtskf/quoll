@@ -18,7 +18,7 @@
 
 import { type EditorView, WidgetType } from "@codemirror/view";
 
-import { revealFrontmatterAt } from "./reveal-state.js";
+import { isWritable, revealFrontmatterAt } from "./reveal-state.js";
 
 export interface FrontmatterRow {
   readonly key: string;
@@ -99,10 +99,19 @@ export class FrontmatterBlockWidget extends WidgetType {
     // to reveal; see frontmatter-reveal-keymap.ts). Advertise that route to SR
     // users via aria-description so the region isn't announced as a dead end. This
     // is display-only ARIA: zero Markdown/write impact.
-    root.setAttribute(
-      "aria-description",
-      "Move the caret into this block to reveal and edit the source."
-    );
+    //
+    // Only advertise it when the reveal can actually succeed: revealFrontmatterAt()
+    // (and the reveal state machine) are a silent no-op on a read-only document
+    // (isWritable — reveal-state.ts), so gating on the SAME authority keeps the
+    // announced affordance in lockstep with real behaviour instead of promising an
+    // edit route that dead-ends. `view` is absent only in DOM-probe unit tests;
+    // there is nothing to gate on, so the hint is emitted.
+    if (!view || isWritable(view.state)) {
+      root.setAttribute(
+        "aria-description",
+        "Move the caret into this block to reveal and edit the source."
+      );
+    }
 
     // C8b: click-to-edit. The widget renders only when the field is COLLAPSED,
     // so a LEFT mousedown here always means "reveal". Land the caret at line-2

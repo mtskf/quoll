@@ -76,7 +76,7 @@ function changeCoversRange(changes: ChangeDesc, range: { from: number; to: numbe
  *  EditorView.editable facet controls the DOM contenteditable. The reveal logic
  *  checks BOTH so a (readOnly=true, editable=true) combination cannot leak a
  *  reveal (Codex re-review #4). */
-function isWritable(state: EditorState): boolean {
+export function isWritable(state: EditorState): boolean {
   return !state.readOnly && state.facet(EditorView.editable);
 }
 
