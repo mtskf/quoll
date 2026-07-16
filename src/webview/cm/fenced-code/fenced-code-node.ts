@@ -1,13 +1,18 @@
 // Nominal (branded) types for the fenced-code widget/geometry layer, with their
-// SINGLE constructors. Two invariants that were previously re-derived (a
-// `node.name === "FencedCode"` guard) or merely trusted (a bare `number` used as
-// an anchor) at each call site are now encoded in the type system, so a caller
-// that mis-anchors a widget or hands over an unrelated node fails to COMPILE:
+// SINGLE constructors. Two invariants that the MIGRATED widget/geometry call sites
+// previously re-derived (a `node.name === "FencedCode"` guard) or merely trusted
+// (a bare `number` used as an anchor) are now encoded in the type system, so a
+// caller that mis-anchors a widget or hands an unrelated node to one of THOSE call
+// sites fails to COMPILE:
 //
-//   - FencedCodeNode — a SyntaxNode PROVEN to be a `FencedCode` node. The one
-//     `node.name === "FencedCode"` check lives in asFencedCodeNode; every consumer
-//     that needs a FencedCode-typed node routes through it, so no consumer can be
-//     handed an arbitrary node.
+//   - FencedCodeNode — a SyntaxNode PROVEN to be a `FencedCode` node. The
+//     `node.name === "FencedCode"` check lives in asFencedCodeNode, which the
+//     migrated consumers (the copy-button / language-picker enumerator + widgets,
+//     and the block-style fenced panel) route through. This is NOT a codebase-wide
+//     guarantee: other fenced-code subsystems that don't touch the branded types
+//     (e.g. reveal, collapse, enter-keymap, highlight) still derive their own
+//     `node.name === "FencedCode"` check and pass a plain SyntaxNode to the
+//     fenced-code-body geometry helpers — they remain unmigrated.
 //   - OpenLineOffset — the document offset of a fenced block's OPEN LINE START
 //     (doc.lineAt(node.from).from — NOT node.from, which sits AFTER any indent or
 //     `> `/list prefix). The widget eq/anchor key. Constructed only via
@@ -40,10 +45,11 @@ declare const openLineOffsetBrand: unique symbol;
 export type OpenLineOffset = number & { readonly [openLineOffsetBrand]: true };
 
 /** Narrow `node` to a {@link FencedCodeNode}, or null when it is not a FencedCode
- *  node. THE single `node.name === "FencedCode"` gate — every consumer that needs
- *  a FencedCode-typed node routes through here. Accepts an iterate ref so the
- *  cheap name check runs before `.node` is materialised (materialised only on a
- *  match, so a full-tree walk allocates a node only for actual fences). */
+ *  node. The `node.name === "FencedCode"` gate for the branded-type consumers —
+ *  the migrated widget/geometry call sites route through here (unmigrated
+ *  fenced-code subsystems still derive their own check). Accepts an iterate ref so
+ *  the cheap name check runs before `.node` is materialised (materialised only on
+ *  a match, so a full-tree walk allocates a node only for actual fences). */
 export function asFencedCodeNode(node: SyntaxNodeRef): FencedCodeNode | null {
   return node.name === "FencedCode" ? (node.node as FencedCodeNode) : null;
 }

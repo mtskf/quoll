@@ -147,9 +147,9 @@ import {
 // fenced-code-language ever grows a decoration/theme dep, extract this predicate
 // to a lower module instead.
 import { fenceLanguageTarget } from "../fenced-code/fenced-code-language.js";
-// asFencedCodeNode is THE `FencedCode`-ness gate (fenced-code-node.ts): the three
-// FencedCode guards in this file route through it instead of re-deriving the
-// `node.name === "FencedCode"` check, so the fence-typed nodes handed to the
+// asFencedCodeNode (fenced-code-node.ts) narrows to the branded FencedCodeNode:
+// the three FencedCode guards in this file route through it instead of re-deriving
+// the `node.name === "FencedCode"` check, so the fence-typed nodes handed to the
 // fenced-code-body/language helpers are proven, not merely asserted.
 import { asFencedCodeNode } from "../fenced-code/fenced-code-node.js";
 import { buildSortedRangeSet } from "../sorted-range-set.js";

@@ -51,9 +51,11 @@ function firstFencedCode(doc: string): { state: EditorState; node: FencedCodeNod
   return { state, node: found };
 }
 
-/** Cast a raw offset to the branded OpenLineOffset. The boundary-value tests
- *  probe invalid / mid-block offsets that openLineOffsetOf can't produce, so they
- *  construct the branded value directly. */
+/** Cast a raw offset to the branded OpenLineOffset. Used both for the boundary
+ *  tests below (invalid / mid-block offsets that openLineOffsetOf can't produce)
+ *  and for the standalone CopyButtonWidget construction tests further down, which
+ *  build widgets directly (no real document / FencedCodeNode to run openLineOffsetOf
+ *  against). */
 const off = (n: number): OpenLineOffset => n as OpenLineOffset;
 
 describe("fencedCodeBody", () => {
