@@ -19,11 +19,7 @@
 
 import { syntaxTree } from "@codemirror/language";
 import type { EditorState } from "@codemirror/state";
-
-// SyntaxNode without a direct @lezer/common import — derived from syntaxTree's
-// return type, the established webview idiom (see fenced-code-copy-button.ts).
-type Tree = ReturnType<typeof syntaxTree>;
-type SyntaxNode = Tree["topNode"];
+import { asFencedCodeNode, type FencedCodeNode, type OpenLineOffset } from "./fenced-code-node.js";
 
 // A "plain language identifier": the leading run of a simple fence language
 // (letters/digits and the handful of punctuation real language tags use, e.g.
@@ -54,7 +50,7 @@ export type FenceLanguageTarget = {
  *  info string. */
 export function fenceLanguageTarget(
   state: EditorState,
-  node: SyntaxNode
+  node: FencedCodeNode
 ): FenceLanguageTarget | null {
   let openMarkTo: number | null = null;
   let infoFrom: number | null = null;
@@ -109,7 +105,7 @@ export function fenceLanguageTarget(
  *  builder's anchor rule (doc.lineAt(node.from).from). Mirrors fencedCodeBodyAt. */
 export function fenceLanguageTargetAt(
   state: EditorState,
-  openFrom: number
+  openFrom: OpenLineOffset
 ): FenceLanguageTarget | null {
   const doc = state.doc;
   if (openFrom < 0 || openFrom > doc.length) {
@@ -124,8 +120,9 @@ export function fenceLanguageTargetAt(
       if (target !== null) {
         return false;
       }
-      if (node.name === "FencedCode" && doc.lineAt(node.from).from === openLine.from) {
-        target = fenceLanguageTarget(state, node.node);
+      const fenced = asFencedCodeNode(node);
+      if (fenced !== null && doc.lineAt(fenced.from).from === openLine.from) {
+        target = fenceLanguageTarget(state, fenced);
         return false;
       }
       return undefined;

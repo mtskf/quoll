@@ -9,23 +9,24 @@
 // FencedCode iterate + open-line anchor + `seen` de-dup + sort) is identical
 // across both controls, so it lives here once.
 
-import type { syntaxTree } from "@codemirror/language";
 import { RangeSetBuilder } from "@codemirror/state";
 import { Decoration, type DecorationSet, type WidgetType } from "@codemirror/view";
 import type { BuildContext } from "../decorations/types.js";
-
-// `@lezer/common` is a direct dep as of PR #66 (for the lint incremental parser's
-// `TreeFragment`); derive SyntaxNode from syntaxTree's return type rather than
-// importing it to keep the direct-dep surface narrow — same strategy as
-// decorations/types.ts and fenced-code-body.ts.
-type Tree = ReturnType<typeof syntaxTree>;
-type SyntaxNode = Tree["topNode"];
+import {
+  asFencedCodeNode,
+  type FencedCodeNode,
+  type OpenLineOffset,
+  openLineOffsetOf,
+} from "./fenced-code-node.js";
 
 /** Emit one `side: -1` point widget per fenced code block whose OPEN line is in a
  *  visible range, anchored at that open-line start, invoking `makeWidget(node,
- *  openFrom)` for each unique block. Returning `null` from `makeWidget` skips the
- *  block (the language picker suppresses non-plain info strings this way). Callers
- *  keep their own read-only / interactivity gate; this is a pure enumerator.
+ *  openFrom)` for each unique block. Both arguments are BRANDED — `makeWidget`
+ *  receives the {@link FencedCodeNode} the enumerator already proved and the
+ *  {@link OpenLineOffset} it anchored at, so a caller can't mis-anchor a widget on
+ *  a raw `node.from`. Returning `null` from `makeWidget` skips the block (the
+ *  language picker suppresses non-plain info strings this way). Callers keep their
+ *  own read-only / interactivity gate; this is a pure enumerator.
  *
  *  Anchor at the open LINE start (not `node.from`, which sits after any indent or
  *  `> `/list prefix): the fence-reveal HIDE replace begins at `node.from`, so a
@@ -42,25 +43,26 @@ type SyntaxNode = Tree["topNode"];
  *  RangeSetBuilder's non-decreasing-`from` contract. */
 export function buildVisibleFencedCodeWidgets(
   ctx: BuildContext,
-  makeWidget: (node: SyntaxNode, openFrom: number) => WidgetType | null
+  makeWidget: (node: FencedCodeNode, openFrom: OpenLineOffset) => WidgetType | null
 ): DecorationSet {
   const doc = ctx.state.doc;
-  const seen = new Set<number>();
+  const seen = new Set<OpenLineOffset>();
   const out: Array<{ from: number; deco: Decoration }> = [];
   for (const range of ctx.visibleRanges) {
     ctx.tree.iterate({
       from: range.from,
       to: range.to,
       enter: (node) => {
-        if (node.name !== "FencedCode") {
+        const fenced = asFencedCodeNode(node);
+        if (fenced === null) {
           return;
         }
-        const openFrom = doc.lineAt(node.from).from;
+        const openFrom = openLineOffsetOf(doc, fenced);
         if (seen.has(openFrom)) {
           return;
         }
         seen.add(openFrom);
-        const widget = makeWidget(node.node, openFrom);
+        const widget = makeWidget(fenced, openFrom);
         if (widget === null) {
           return;
         }

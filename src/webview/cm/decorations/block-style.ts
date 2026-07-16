@@ -147,6 +147,11 @@ import {
 // fenced-code-language ever grows a decoration/theme dep, extract this predicate
 // to a lower module instead.
 import { fenceLanguageTarget } from "../fenced-code/fenced-code-language.js";
+// asFencedCodeNode (fenced-code-node.ts) narrows to the branded FencedCodeNode:
+// the three FencedCode guards in this file route through it instead of re-deriving
+// the `node.name === "FencedCode"` check, so the fence-typed nodes handed to the
+// fenced-code-body/language helpers are proven, not merely asserted.
+import { asFencedCodeNode } from "../fenced-code/fenced-code-node.js";
 import { buildSortedRangeSet } from "../sorted-range-set.js";
 import { toCtx } from "./build-context.js";
 import {
@@ -436,19 +441,20 @@ function concealableFenceNodes(ctx: BuildContext): Map<number, SyntaxNode> {
       from: range.from,
       to: range.to,
       enter: (node) => {
-        if (node.name !== "FencedCode") {
+        const fenced = asFencedCodeNode(node);
+        if (fenced === null) {
           return;
         }
         const { openFenceLine, closeFenceLine, bodyStartLine } = fencedCodeFenceLandmarks(
           doc,
-          node.node
+          fenced
         );
         if (bodyStartLine === null) {
           return; // bodyless: fences stay visible, never concealable
         }
-        map.set(openFenceLine, node.node);
+        map.set(openFenceLine, fenced);
         if (closeFenceLine !== null) {
-          map.set(closeFenceLine, node.node);
+          map.set(closeFenceLine, fenced);
         }
       },
     });
@@ -668,10 +674,10 @@ export function buildFencedCodePanel(
 ): DecorationSet {
   const doc = ctx.state.doc;
   return buildBlockLineDecorations(ctx, zones, (node) => {
-    if (node.name !== "FencedCode") {
+    const sn = asFencedCodeNode(node);
+    if (sn === null) {
       return null;
     }
-    const sn = node.node;
     // All fence/body geometry comes from the single-sourced CodeMark walk in
     // fenced-code-body.ts (node.to-overshoot robustness lives there).
     const { openFenceLine, closeFenceLine, bodyStartLine, bodyEndLine } = fencedCodeFenceLandmarks(
@@ -698,10 +704,10 @@ export function buildFencedCodePanel(
     //     a real author separation and keeps both gaps).
     const insideQuote = hasBlockquoteAncestor(sn);
     const prev = sn.prevSibling;
+    const prevFenced = prev !== null ? asFencedCodeNode(prev) : null;
     const precededByAdjacentFenced =
-      prev !== null &&
-      prev.name === "FencedCode" &&
-      fencedCodeFenceLandmarks(doc, prev).closeFenceLine === openFenceLine - 1;
+      prevFenced !== null &&
+      fencedCodeFenceLandmarks(doc, prevFenced).closeFenceLine === openFenceLine - 1;
     const closeEdgeNextLine = (closeFenceLine ?? bodyEndLine ?? openFenceLine) + 1;
     // Header-bar gate: a writable fence carrying a non-empty plain language token.
     // Read-only surfaces get NO header (the picker/copy builders already return
