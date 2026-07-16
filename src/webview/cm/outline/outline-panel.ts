@@ -813,24 +813,14 @@ class OutlinePanel implements PluginValue {
         e.preventDefault();
         this.focusRelative(idx, -1);
         break;
-      case "Home": {
+      case "Home":
         e.preventDefault();
-        const first = this.rows.find((r) => !r.li.hidden);
-        if (first !== undefined) {
-          this.focusRow(first);
-        }
+        this.focusRelative(-1, 1); // first visible: scan forward from before row 0
         break;
-      }
-      case "End": {
+      case "End":
         e.preventDefault();
-        for (let i = this.rows.length - 1; i >= 0; i--) {
-          if (!this.rows[i].li.hidden) {
-            this.focusRow(this.rows[i]);
-            break;
-          }
-        }
+        this.focusRelative(this.rows.length, -1); // last visible: scan back from the end
         break;
-      }
       case "ArrowRight":
         e.preventDefault();
         this.onArrowRight(idx, row);
