@@ -12,11 +12,17 @@ on:
 # `package.json.publisher`. Tag pushes trigger a LIVE publish (v0.1.0 shipped 2026-07-02),
 # so never push a `v*` tag until you intend to release that version to users.
 
-# Least-privilege GITHUB_TOKEN: publishing uses VSCODE_PAT / OPENVSX_PAT secrets,
-# not the workflow token. Only repo read access (checkout + install + verify-tag +
-# audit + build + package) is needed — publish steps use dedicated PAT secrets.
+# Least-privilege GITHUB_TOKEN. Marketplace / Open VSX publishing uses the
+# VSCODE_PAT / OPENVSX_PAT secrets, not the workflow token, so those stay
+# read-only. The two write scopes below are required ONLY by the attestation
+# steps: `id-token: write` mints the Sigstore OIDC token, `attestations: write`
+# records the provenance + SBOM attestations in the repo's attestation store.
+# (No `artifact-metadata: write` — that is only needed for registry storage
+# records, which this file-subject attestation does not create.)
 permissions:
   contents: read
+  id-token: write
+  attestations: write
 
 jobs:
   publish:
@@ -71,6 +77,31 @@ jobs:
       - name: Build (webview + extension + esbuild bundle)
         run: pnpm build
 
+      # Supply-chain transparency. Syft (v1.42.3, baked into the SHA-pinned
+      # sbom-action release below; Dependabot bumps the action + its Syft
+      # together — so we deliberately do NOT set `syft-version`, which would
+      # drift from that baked default) catalogs the build's dependency graph
+      # into an SPDX SBOM. This is the build-input graph (a superset that covers
+      # every component esbuild bundles into the shipped `dist/`), NOT a
+      # byte-for-byte manifest of the `--no-dependencies` .vsix. Runs only on tag
+      # pushes and never ships in the .vsix.
+      #
+      # Ordered BEFORE packaging + the .vsix audit on purpose: this is the only
+      # third-party action in the job and shares the runner workspace, so keeping
+      # it ahead of the audit leaves that audit as the true last gate before the
+      # (first-party) attest + publish steps — a compromised action here cannot
+      # mutate an already-audited .vsix. It scans `path: .` (the dependency
+      # graph), so it does not need the packaged .vsix to exist. Release-asset
+      # upload is disabled — this job holds only `contents: read`; the SBOM is
+      # kept as the sbom-action workflow artifact instead.
+      - name: Generate SBOM (SPDX)
+        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
+        with:
+          path: .
+          format: spdx-json
+          output-file: sbom.spdx.json
+          upload-release-assets: false
+
       - name: Package .vsix
         run: pnpm exec vsce package --no-dependencies -o extension.vsix
 
@@ -82,6 +113,29 @@ jobs:
       # VSX — this is the last line of defence.
       - name: Audit .vsix contents
         run: node scripts/audit-vsix.mjs extension.vsix
+
+      # Signed build provenance for the exact bytes we are about to publish, via
+      # the unified actions/attest (Provenance mode = no sbom-path). GitHub has
+      # folded the older attest-build-provenance / attest-sbom wrappers into this
+      # action (attest-sbom is deprecated), so we use the canonical core action
+      # for both legs. Attests extension.vsix against the workflow run through
+      # Sigstore; consumers verify with
+      # `gh attestation verify extension.vsix --repo mtskf/quoll`. Placed before
+      # publish so an attestation failure blocks the release rather than shipping
+      # an unattested artifact, and so the attested digest equals the bytes
+      # handed to Marketplace + Open VSX.
+      - name: Attest build provenance
+        uses: actions/attest@f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6 # v4.2.0
+        with:
+          subject-path: extension.vsix
+
+      # Bind the SBOM to the same .vsix digest (SBOM mode = sbom-path) so a
+      # consumer can retrieve the dependency graph for the artifact they got.
+      - name: Attest SBOM
+        uses: actions/attest@f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6 # v4.2.0
+        with:
+          subject-path: extension.vsix
+          sbom-path: sbom.spdx.json
 
       # Token is read implicitly from the VSCE_PAT env var — never passed as a
       # `-p <token>` CLI arg, so the secret cannot leak into process arguments.

@@ -1,0 +1,57 @@
+# Dependabot version-update config. Complements the repo-level Dependabot
+# security-updates toggle (already enabled) — that raises urgent advisory PRs
+# regardless of the grouping below.
+#
+# Goal: keep dependencies visible without daily churn. Routine minor+patch
+# bumps arrive as ONE grouped PR per ecosystem per week; majors still open
+# individually because they usually need a manual look.
+version: 2
+updates:
+  # pnpm dependency graph (Dependabot reads pnpm-lock.yaml under the `npm`
+  # ecosystem).
+  - package-ecosystem: npm
+    directory: "/"
+    schedule:
+      interval: weekly
+    groups:
+      npm-minor-and-patch:
+        patterns:
+          - "*"
+        update-types:
+          - minor
+          - patch
+    ignore:
+      # engines.vscode <-> @types/vscode <-> @types/node are exact-version pins
+      # bumped together by hand on a matching VS Code Electron-Node release
+      # (CLAUDE.md "Dependency pins"). Silence only their routine VERSION updates
+      # so Dependabot never opens a lone, policy-violating bump — the
+      # update-types scoping leaves the security-update path intact (raised via
+      # the repo-level Dependabot security-updates toggle).
+      - dependency-name: "@types/vscode"
+        update-types:
+          - "version-update:semver-major"
+          - "version-update:semver-minor"
+          - "version-update:semver-patch"
+      - dependency-name: "@types/node"
+        update-types:
+          - "version-update:semver-major"
+          - "version-update:semver-minor"
+          - "version-update:semver-patch"
+
+  # First-party + third-party GitHub Actions used by ci.yml / publish.yml.
+  # Every action is SHA-pinned; Dependabot bumps the SHA and refreshes the
+  # trailing version comment, keeping the pin convention intact.
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+    groups:
+      github-actions:
+        patterns:
+          - "*"
+        # Match the npm group: routine minor+patch bumps ride one grouped PR,
+        # while action majors (which can change runner/runtime expectations)
+        # open individually for a manual look.
+        update-types:
+          - minor
+          - patch
