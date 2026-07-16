@@ -46,6 +46,7 @@ import {
 import { type EditorState, Prec } from "@codemirror/state";
 import { keymap } from "@codemirror/view";
 import type { MarkdownExtension, MarkdownParser } from "@lezer/markdown";
+import { highlightMarkExtension } from "../../markdown/highlight-mark.js";
 import { parseTable } from "../../markdown/table/index.js";
 import { codeHighlightExtension } from "./fenced-code/fenced-code-highlight-languages.js";
 import { leadingFrontmatterEnd } from "./frontmatter/detect.js";
@@ -209,6 +210,10 @@ const headerIndent = foldService.of((state, start, end) => {
  *      highlighting — see fenced-code-highlight-languages.ts). NO htmlParser is passed
  *      to parseCode, so raw HTML in the Markdown body stays opaque; a fenced ```html
  *      block is still highlighted via the code path (codeParser ≠ htmlParser).
+ *      Also + highlightMarkExtension: the Obsidian-style ==highlight== inline mark.
+ *      The SAME rule is registered host-side in src/markdown/lezer-url-walker.ts
+ *      (shared from src/markdown/highlight-mark.ts) so both parsers produce the
+ *      same Highlight span — pinned by test/webview/highlight-parity.test.ts.
  *    - data: markdownLanguage.data REUSED — markdownKeymap's commands call
  *      markdownLanguage.isActiveAt(), which compares the languageDataProp facet
  *      identity, so the editor language MUST carry the same `data` facet to be
@@ -234,6 +239,7 @@ export function quollMarkdownLanguage(): LanguageSupport {
   const parser = (markdownLanguage.parser as MarkdownParser).configure([
     nonFoldableBlocks,
     codeHighlightExtension,
+    highlightMarkExtension,
   ]);
   const language = new Language(markdownLanguage.data, parser, [], "markdown");
   return new LanguageSupport(language, [headerIndent, Prec.high(keymap.of(markdownKeymap))]);

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { findUnsafeUrl } from "../../src/markdown/lezer-url-walker.js";
+import { findUnsafeUrl, parseMarkdown } from "../../src/markdown/lezer-url-walker.js";
 
 describe("lezer-url-walker: findUnsafeUrl", () => {
   it("returns null for benign markdown", () => {
@@ -309,5 +309,36 @@ describe("lezer-url-walker: findUnsafeUrl", () => {
 
   it("rejects embedded control characters", () => {
     expect(findUnsafeUrl("[t](java script:alert(1))\n")?.code).toBe("unsafe_url");
+  });
+
+  // ==highlight== is registered in the host parser too (shared rule). These
+  // split the REGISTRATION concern (parseMarkdown yields a Highlight node) from
+  // the SECURITY concern (a Link/Image nested inside a highlight is still
+  // gated) — a `javascript:` link is gated whether or not `==` is a highlight,
+  // so a security test alone would not prove registration.
+  it("registers the Highlight rule in the host parser (parseMarkdown yields a Highlight node)", () => {
+    const names: string[] = [];
+    parseMarkdown("==hi==").iterate({
+      enter: (n) => {
+        names.push(n.name);
+      },
+    });
+    expect(names).toContain("Highlight");
+    expect(names).toContain("HighlightMark");
+  });
+
+  it("passes benign ==highlight== through the write-gate (Highlight emits no URL node)", () => {
+    expect(findUnsafeUrl("==highlighted text==\n")).toBeNull();
+    expect(findUnsafeUrl("==a [safe](https://example.com) link==\n")).toBeNull();
+  });
+
+  it("still gates an unsafe LINK nested inside a highlight", () => {
+    // Non-vacuous: the DFS walker reaches the inner Link despite the Highlight
+    // parent; checkNode gates its javascript: URL.
+    expect(findUnsafeUrl("==[t](javascript:alert(1))==\n")?.code).toBe("unsafe_url");
+  });
+
+  it("still gates an unsafe IMAGE nested inside a highlight", () => {
+    expect(findUnsafeUrl("==![alt](javascript:alert(1))==\n")?.code).toBe("unsafe_url");
   });
 });

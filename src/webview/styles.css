@@ -373,6 +373,11 @@ html body {
     /* Code-token literal colour (numbers/atoms in fenced code, cm/theme.ts
      * quollCodeHighlightSpec). Warm accent, legible on the navy --quoll-surface-fill. */
     --quoll-code-literal: #d9a45c;
+    /* ==highlight== inline-mark tint (cm/theme.ts highlightTag rule). Warm amber
+     * — an intentional warm accent (the marker-pen affordance), consistent with
+     * the warm --quoll-code-literal already in this cool palette. Translucent so
+     * caret/selection compose through it on the dark canvas. */
+    --quoll-highlight-bg: rgba(214, 164, 92, 0.28);
     --quoll-surface-header: #233156;
     --quoll-surface-border: #33415f;
     --quoll-on-accent: #0e1f17;
@@ -414,6 +419,8 @@ html body {
     --quoll-accent-green: #1a7050;
     --quoll-surface-fill: #f1f4fc;
     --quoll-code-literal: #9a5b16;
+    /* Light: classic highlighter yellow, translucent so text stays legible. */
+    --quoll-highlight-bg: rgba(255, 214, 92, 0.55);
     --quoll-surface-header: #e4ebf8;
     --quoll-surface-border: #ccd6ec;
     --quoll-on-accent: #ffffff;
@@ -454,6 +461,10 @@ html body {
     --quoll-accent-green: var(--vscode-textLink-foreground, var(--vscode-editor-foreground));
     --quoll-surface-fill: transparent;
     --quoll-code-literal: var(--vscode-editor-foreground);
+    /* HC: no invented tint — reuse the host find-match highlight so the mark
+     * stays a maximal-contrast, theme-native affordance. */
+    --quoll-highlight-bg: var(--vscode-editor-findMatchHighlightBackground,
+      var(--vscode-editor-selectionBackground));
     --quoll-surface-header: var(--vscode-editorWidget-background, transparent);
     --quoll-surface-border: var(--vscode-contrastBorder,
       var(--vscode-editorWidget-border, var(--vscode-panel-border, #888)));

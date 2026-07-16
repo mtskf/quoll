@@ -11,6 +11,12 @@
 // `markdown()` adds: no code sub-languages are configured here, and both
 // fenced-code bodies and raw HTML are opaque to this walker (see the raw
 // HTML note below), so no gated URL form is lost.
+// The Obsidian-style ==highlight== rule (highlightMarkExtension) is ALSO
+// registered here, shared from ./highlight-mark.ts and mirrored in the webview
+// (src/webview/cm/markdown.ts), so both parsers produce the SAME Highlight
+// span. It emits no URL-bearing node, so checkNode ignores a Highlight; and
+// because walkTreeForUnsafeUrl does a full DFS (cursor.next()), a Link/Image
+// nested inside a highlight is still reached and gated at its own node.
 // A single tree-cursor walk gates every URL-emitting node through
 // decodeMarkdownDestination + isAllowedUrl:
 //   - Link / Image with a URL child (inline form).
@@ -58,6 +64,7 @@ import { TreeFragment } from "@lezer/common";
 import { Emoji, GFM, parser, Subscript, Superscript } from "@lezer/markdown";
 
 import type { MarkdownError } from "./errors.js";
+import { highlightMarkExtension } from "./highlight-mark.js";
 import { isAllowedUrl } from "./url-allowlist.js";
 import { decodeMarkdownDestination } from "./url-decode.js";
 
@@ -68,7 +75,7 @@ import { decodeMarkdownDestination } from "./url-decode.js";
 // host-side Lezer parser into the webview bundle.
 export { decodeMarkdownDestination };
 
-const PARSER = parser.configure([GFM, Subscript, Superscript, Emoji]);
+const PARSER = parser.configure([GFM, Subscript, Superscript, Emoji, highlightMarkExtension]);
 
 // The parse-tree type taken from the parser's own return type, so the
 // incremental cache + tests stay honest if the parser's tree shape changes.

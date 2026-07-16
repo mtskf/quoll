@@ -5,6 +5,7 @@
 //   - Emphasis        → EmphasisMark   (two `*` or `_`)
 //   - InlineCode      → CodeMark       (two `` ` ``, or `` `` ``, etc.)
 //   - Strikethrough   → StrikethroughMark (two `~~`) — GFM
+//   - Highlight        → HighlightMark     (two `==`) — Quoll extension
 //
 // Per construct, if ANY selection range intersects the outer span node,
 // every mark child REVEALS (Decoration.mark .quoll-syntax-reveal); otherwise
@@ -35,6 +36,7 @@ const SPAN_TO_MARK: ReadonlyMap<string, ReadonlySet<string>> = new Map([
   ["Emphasis", new Set(["EmphasisMark"])],
   ["InlineCode", new Set(["CodeMark"])],
   ["Strikethrough", new Set(["StrikethroughMark"])],
+  ["Highlight", new Set(["HighlightMark"])],
 ]);
 
 export const inlineMarkReveal: DecorationProvider = {
