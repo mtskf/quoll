@@ -6,10 +6,10 @@ Quoll is distributed through the VS Code Marketplace and Open VSX. Security fixe
 are shipped only in a new published release, and only the latest published version
 is supported.
 
-| Version                | Supported          |
-| ---------------------- | ------------------ |
-| Latest published `0.1.x` | ✅                 |
-| Any older version      | ❌ (upgrade first) |
+| Version                    | Supported          |
+| -------------------------- | ------------------ |
+| Latest published release   | ✅                 |
+| Any older version          | ❌ (upgrade first) |
 
 If you are affected, update to the latest release before reporting — the fix may
 already be published.
