@@ -295,6 +295,112 @@ describe("renderCellInline", () => {
     expect(html(renderCellInline("__b__"))).toBe("<strong>b</strong>");
   });
 
+  // Strikethrough (`~~…~~`) + highlight (`==…==`) parity: these render formatted
+  // everywhere else in the editor, but the table-cell widget used to leak the raw
+  // delimiters (`| ~~x~~ |` showed the tildes). They are emitted as delimiter runs
+  // into the SAME stack as `*`/`_` (inline-emphasis.ts), so resolveInline pairs
+  // them into <del>/<mark> wraps that interleave with emphasis exactly as the
+  // editor's @lezer/markdown parser does.
+  it("renders `~~x~~` as a live <del> (strikethrough)", () => {
+    expect(html(renderCellInline("~~x~~"))).toBe("<del>x</del>");
+  });
+
+  it("renders `==x==` as a live <mark> (highlight)", () => {
+    expect(html(renderCellInline("==x=="))).toBe("<mark>x</mark>");
+  });
+
+  it("nests emphasis inside a mark (`~~*x*~~`, `==**b**==`)", () => {
+    expect(html(renderCellInline("~~*x*~~"))).toBe("<del><em>x</em></del>");
+    expect(html(renderCellInline("==**b**=="))).toBe("<mark><strong>b</strong></mark>");
+  });
+
+  it("renders a mark amid surrounding text (`a ~~b~~ ==c== d`)", () => {
+    expect(html(renderCellInline("a ~~b~~ ==c== d"))).toBe("a <del>b</del> <mark>c</mark> d");
+  });
+
+  // Flanking parity with the source parsers: a leading space after the opener
+  // means it cannot open, so the run stays literal (the editor would not strike
+  // it either). The `a == b` case is the common false-trigger — an `==` flanked
+  // by spaces neither opens nor closes.
+  it("leaves a non-flanking mark literal (`~~ x~~`, `a == b`)", () => {
+    expect(html(renderCellInline("~~ x~~"))).toBe("~~ x~~");
+    expect(html(renderCellInline("a == b"))).toBe("a == b");
+  });
+
+  // An unmatched opener (no closing pair) stays literal — the delimiter run
+  // survives as its literal characters, merged with adjacent text.
+  it("leaves an unmatched mark opener literal (`~~x`, `a==b`)", () => {
+    expect(html(renderCellInline("~~x"))).toBe("~~x");
+    expect(html(renderCellInline("a==b"))).toBe("a==b");
+  });
+
+  // A `~~`/`==` inside inline code is inert (code binds tighter, content literal).
+  it("does not mark inside an inline code span (`` `~~x~~` ``)", () => {
+    expect(html(renderCellInline("`~~x~~`"))).toBe("<code>~~x~~</code>");
+  });
+
+  // Shared-delimiter-stack interleaving parity. A greedy nearest-closer scan
+  // would mis-pair these; the delimiter stack reproduces @lezer/markdown exactly.
+  // `*a~~b*c~~d*`: emphasis wins, the crossing `~~` are left inert. Verified
+  // against @lezer/markdown + GFM directly (code-quality review).
+  it("interleaves a mark with emphasis like the editor (`*a~~b*c~~d*`)", () => {
+    expect(html(renderCellInline("*a~~b*c~~d*"))).toBe("<em>a~~b</em>c~~d*");
+  });
+
+  // Nested same-type marks: outer wraps the inner via the delimiter stack, no
+  // literal tail left behind (the greedy scan closed the outer at the inner).
+  it("nests same-type marks (`~~a ~~b~~ c~~`)", () => {
+    expect(html(renderCellInline("~~a ~~b~~ c~~"))).toBe("<del>a <del>b</del> c</del>");
+  });
+
+  // The SAME interleave/nesting behaviour on the `==` side (highlight is the
+  // newer, less battle-tested delimiter — pin it independently so a future edit
+  // that broke only the `=` slot / `mark` tag branch cannot pass on `~~` alone).
+  it("interleaves `==` with emphasis like the editor (`*a==b*c==d*`)", () => {
+    expect(html(renderCellInline("*a==b*c==d*"))).toBe("<em>a==b</em>c==d*");
+  });
+
+  it("nests same-type highlight marks (`==a ==b== c==`)", () => {
+    expect(html(renderCellInline("==a ==b== c=="))).toBe("<mark>a <mark>b</mark> c</mark>");
+  });
+
+  // Cross-type nesting: a highlight inside a strikethrough, resolved in the one
+  // shared stack (both are length-2 delimiters that only differ by tag).
+  it("nests a highlight inside a strikethrough (`~~a ==b== c~~`)", () => {
+    expect(html(renderCellInline("~~a ==b== c~~"))).toBe("<del>a <mark>b</mark> c</del>");
+  });
+
+  // Triple run: Lezer rescans from pos+1, so `===x===` opens at [1,3) and closes
+  // at [5,7), wrapping content `x=` (Highlight span [1,7) — the measured span
+  // highlight-mark.ts documents). Only the leading `=` (index 0) stays literal.
+  it("handles a triple-delimiter run like the editor (`===x===`)", () => {
+    expect(html(renderCellInline("===x==="))).toBe("=<mark>x=</mark>");
+  });
+
+  // The mark wrap does NOT bypass the URL render-gate: an unsafe link nested
+  // inside `~~…~~` still renders inert (mirrors the emphasis arm's
+  // `**[bad](javascript:1)**` case). The link leaf carries the safeUrl=null
+  // verdict; the surrounding del/mark is just a wrapper.
+  it("keeps the URL gate for an unsafe link inside a mark (`~~[bad](javascript:1)~~`)", () => {
+    expect(html(renderCellInline("~~[bad](javascript:1)~~"))).toBe(
+      "<del>[bad](javascript:1)</del>"
+    );
+  });
+
+  it("keeps a safe link live inside a mark (`==[ok](https://x.test)==`)", () => {
+    expect(html(renderCellInline("==[ok](https://x.test)==")).replace(/ title="[^"]*"/g, "")).toBe(
+      '<mark><a href="https://x.test" rel="noopener noreferrer">ok</a></mark>'
+    );
+  });
+
+  // Image alt (commonMarkAltText → flattenInlineText) flattens a mark to its
+  // text content, same as emphasis — used for `<img alt>` in both the table-cell
+  // renderer and the shared block-image widget.
+  it("flattens a mark in an image alt (`![a ~~b~~ c](url)` -> alt=`a b c`)", () => {
+    const nodes = renderCellInline("![a ~~b~~ c](https://x.test/i.png)");
+    expect((nodes[0] as HTMLImageElement).alt).toBe("a b c");
+  });
+
   it("leaves intraword underscores literal (`a_b_c`, `foo_bar_baz`)", () => {
     expect(html(renderCellInline("a_b_c"))).toBe("a_b_c");
     expect(html(renderCellInline("foo_bar_baz"))).toBe("foo_bar_baz");
@@ -597,6 +703,10 @@ describe("parseCellInline losslessness", () => {
     "[bad](javascript:1)",
     "a*b©*c",
     "pre **a *b* c** post",
+    "~~x~~",
+    "==x==",
+    "~~*x*~~",
+    "a ~~b~~ ==c== d",
   ];
   for (const raw of corpus) {
     it(`partitions ${JSON.stringify(raw)} into ordered leaves that reconstruct the source`, () => {

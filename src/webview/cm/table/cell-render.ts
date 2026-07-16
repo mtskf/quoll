@@ -179,8 +179,10 @@ export function renderReadonly(
         break;
       }
       case "emphasis": {
-        // Past the nesting cap, merge the inert literal source of the whole
-        // emphasis span (node.span covers openDelim..closeDelim) into the
+        // Delimiter-run wrapper: em/strong (`*`/`_`) or del/mark (`~~`/`==`).
+        // `node.tag` is a valid element name, so createElement builds the right
+        // box for all four. Past the nesting cap, merge the inert literal source
+        // of the whole span (node.span covers openDelim..closeDelim) into the
         // pending-text buffer instead of recursing — bounds this walker's
         // recursion depth. No flushPending(): we emit no element, so the slice
         // merges naturally with adjacent text (same topology as inert links).

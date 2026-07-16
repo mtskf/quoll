@@ -69,6 +69,10 @@ export type CellLeaf =
       closeAngle: Span;
       safeUrl: AllowlistedUrl | null;
     };
+// NOTE: `~~strikethrough~~` and `==highlight==` are NOT leaves. They are emitted
+// as delimiter runs (see the tokenizer arm below) that resolveInline pairs into
+// `del`/`mark` emphasis-wrap nodes — sharing the ONE delimiter stack with `*`/`_`
+// so a mark interleaves with emphasis exactly as @lezer/markdown resolves it.
 
 // Exhaustiveness guard for the `CellLeaf` discriminated union: if a future
 // leaf kind is added without a matching render/flatten arm, the `switch`
@@ -276,6 +280,24 @@ function tokenize(raw: string): Segment<CellLeaf>[] {
       segments.push({ kind: "delim", ch, span: { from: i, to: runEnd }, canOpen, canClose });
       i = runEnd;
       continue;
+    }
+    // Strikethrough `~~` / highlight `==` delimiter runs. Modelled on the GFM
+    // Strikethrough + highlight-mark.ts source rules: EXACTLY two delimiter chars
+    // (a third rejects — mirrors Lezer's `char(pos + 2) === delim` guard, so
+    // `~~~x` rescans and marks at [1,3)), flanking computed like `*`. Emitted as
+    // a `delim` segment into the SAME stack as `*`/`_`, so resolveInline pairs
+    // them into del/mark wraps that interleave with emphasis just as the editor's
+    // parser does. A single `~`/`=` (or the odd char of a 3-run) falls through to
+    // literal text; an unpaired run survives as its literal delimiter characters.
+    if (raw[i] === "~" || raw[i] === "=") {
+      const ch = raw[i] as "~" | "=";
+      if (raw[i + 1] === ch && raw[i + 2] !== ch) {
+        const { canOpen, canClose } = flanking("*", charBefore(raw, i), charAfter(raw, i + 2));
+        flushText();
+        segments.push({ kind: "delim", ch, span: { from: i, to: i + 2 }, canOpen, canClose });
+        i += 2;
+        continue;
+      }
     }
     // Inline image: ![alt](url)
     if (raw[i] === "!" && raw[i + 1] === "[") {

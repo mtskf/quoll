@@ -428,6 +428,17 @@ describe("styles.css — widgets consume the accent tokens (palette refresh use 
       /\.quoll-table-block code\s*\{[^}]*background\s*:\s*var\(--quoll-surface-fill/s
     );
   });
+  // Strikethrough / highlight inside a table cell (cm-table-cell-render renders
+  // <del>/<mark>). happy-dom does not apply CSS, so pin the source rule text
+  // (same idiom as the table-link/code pins above): <del> line-through, <mark>
+  // reusing the shared --quoll-highlight-bg tint. Non-vacuous — both red if the
+  // rules are dropped.
+  it("table strikethrough / highlight consume line-through and the highlight tint", () => {
+    expect(css).toMatch(/\.quoll-table-block del\s*\{[^}]*text-decoration\s*:\s*line-through/s);
+    expect(css).toMatch(
+      /\.quoll-table-block mark\s*\{[^}]*background\s*:\s*var\(--quoll-highlight-bg/s
+    );
+  });
 });
 
 describe("styles.css — bullet-list marker token (HC-sensitive)", () => {
