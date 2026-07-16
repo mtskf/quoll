@@ -368,7 +368,7 @@ describe("frontmatterRevealUp — ArrowUp into the block", () => {
 });
 
 describe("FrontmatterBlockWidget — mousedown reveals (toDOM wiring, no layout)", () => {
-  function widgetView(): EditorView {
+  function widgetView(editable = true): EditorView {
     const parent = document.createElement("div");
     document.body.appendChild(parent);
     return new EditorView({
@@ -376,7 +376,7 @@ describe("FrontmatterBlockWidget — mousedown reveals (toDOM wiring, no layout)
         doc: FM,
         extensions: [
           EditorState.allowMultipleSelections.of(true),
-          writableComp.of([EditorView.editable.of(true), EditorState.readOnly.of(false)]),
+          writableComp.of([EditorView.editable.of(editable), EditorState.readOnly.of(!editable)]),
           markdown({ base: markdownLanguage }),
           probe,
         ],
@@ -408,6 +408,35 @@ describe("FrontmatterBlockWidget — mousedown reveals (toDOM wiring, no layout)
       const dom = widget.toDOM(view);
       dom.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, button: 2 }));
       expect(view.state.field(probe).kind).toBe("collapsed");
+    } finally {
+      view.destroy();
+    }
+  });
+
+  it("advertises the caret-reveal hint (aria-description) when writable", async () => {
+    const { FrontmatterBlockWidget } = await import(
+      "../../../src/webview/cm/frontmatter/frontmatter-widget.js"
+    );
+    const view = widgetView(); // editable=true, readOnly=false
+    try {
+      const dom = new FrontmatterBlockWidget("title: x", FM.slice(0, TO)).toDOM(view);
+      expect(dom.getAttribute("aria-description")).toMatch(/caret|edit/i);
+    } finally {
+      view.destroy();
+    }
+  });
+
+  it("OMITS the aria-description hint on a read-only document (reveal is a no-op there, so no false affordance)", async () => {
+    const { FrontmatterBlockWidget } = await import(
+      "../../../src/webview/cm/frontmatter/frontmatter-widget.js"
+    );
+    const view = widgetView(false); // editable=false, readOnly=true
+    try {
+      const dom = new FrontmatterBlockWidget("title: x", FM.slice(0, TO)).toDOM(view);
+      // The region still identifies itself (aria-label) but must NOT promise an
+      // edit route that revealFrontmatterAt() silently refuses in read-only.
+      expect(dom.getAttribute("aria-label")).toBe("Document metadata");
+      expect(dom.getAttribute("aria-description")).toBeNull();
     } finally {
       view.destroy();
     }

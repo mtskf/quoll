@@ -91,6 +91,20 @@ describe("FrontmatterBlockWidget — DOM structure (a11y, read-only)", () => {
     expect((dl?.querySelectorAll("dd")[0] as HTMLElement).textContent).toBe("x");
   });
 
+  it("carries an aria-description hinting the caret-reveal edit affordance (a11y M3)", () => {
+    // The region's reveal-to-edit action is pointer-only on the element (mousedown);
+    // the canonical keyboard route is the caret model. Pin the SR discovery hint so
+    // the region is not announced as a dead end. Non-vacuous: absent the attribute,
+    // getAttribute returns null and both assertions fail.
+    const dom = new FrontmatterBlockWidget(
+      "title: x\ndraft: true",
+      "---\ntitle: x\ndraft: true\n---"
+    ).toDOM();
+    const description = dom.getAttribute("aria-description");
+    expect(description).toBeTruthy();
+    expect(description).toMatch(/caret|edit/i);
+  });
+
   it("renders a <pre> raw fallback for complex YAML (no misrepresentation)", () => {
     const dom = new FrontmatterBlockWidget(
       "author:\n  name: x",
