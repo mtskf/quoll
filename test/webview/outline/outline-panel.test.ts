@@ -424,18 +424,18 @@ describe("quollOutline sidebar", () => {
     expect(rowEls(host)[3].hidden).toBe(true); // D still hidden under collapsed C
   });
 
-  it("uses a native <button> twistie so Enter/Space activate it (keyboard parity)", () => {
-    // Keyboard activation rides the platform: a native <button type="button">
-    // synthesizes a click from Enter/Space. Pin THAT contract (element + type)
-    // rather than re-asserting the click outcome — happy-dom does not synthesize
-    // the keyboard→click, so this is what guards against a regression to a
-    // non-button twistie (e.g. <span role="button">) that breaks keyboard use.
+  it("demotes the twistie to an aria-hidden decorative chevron (not a tab stop)", () => {
+    // The twistie is no longer a focusable <button>: the row is the single
+    // focusable tree node (roving tabindex), so the twistie is a decorative
+    // <span aria-hidden> with no tabindex. It stays clickable as a pointer
+    // affordance (mouse collapse still works).
     const { host } = mount("# A\n\n## B\n");
     toggleEl(host).click();
-    const aTwistie = twistieOf(rowEls(host)[0]) as HTMLButtonElement;
-    expect(aTwistie.tagName).toBe("BUTTON");
-    expect(aTwistie.type).toBe("button");
-    aTwistie.click(); // proxy for the platform-synthesized Enter/Space click
+    const aTwistie = twistieOf(rowEls(host)[0]) as HTMLElement;
+    expect(aTwistie.tagName).toBe("SPAN");
+    expect(aTwistie.getAttribute("aria-hidden")).toBe("true");
+    expect(aTwistie.hasAttribute("tabindex")).toBe(false);
+    aTwistie.click(); // pointer affordance still collapses the subtree
     expect(rowEls(host)[0].getAttribute("aria-expanded")).toBe("false"); // A row
   });
 
@@ -561,6 +561,168 @@ describe("quollOutline sidebar", () => {
     expect(rowEls(host)).toHaveLength(0);
     const empty = host.querySelector(".quoll-outline-empty") as HTMLElement;
     expect(empty.getAttribute("role")).toBe("none");
+  });
+});
+
+// keydown targets a focused row <li>; bubbles up to the list's delegated
+// handler. happy-dom dispatches a real KeyboardEvent the handler reads .key off.
+function rowKeydown(li: HTMLLIElement, key: string): void {
+  li.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true }));
+}
+function tabIndexes(host: HTMLElement): number[] {
+  return rowEls(host).map((r) => r.tabIndex);
+}
+
+describe("quollOutline keyboard tree (roving tabindex)", () => {
+  it("exposes a single tab stop — exactly one row is tabindex=0, the rest -1", () => {
+    const { view: v, host } = mount("# A\n\n## B\n\n## C\n");
+    v.plugin(outlinePlugin)?.toggle();
+    const tis = tabIndexes(host);
+    expect(tis.filter((t) => t === 0)).toHaveLength(1); // one tab stop for the whole tree
+    expect(tis.filter((t) => t === -1)).toHaveLength(tis.length - 1);
+    // The tab stop homes onto the caret's heading (caret at top ⇒ first row).
+    expect(rowEls(host)[0].tabIndex).toBe(0);
+  });
+
+  it("ArrowDown / ArrowUp move focus AND carry the single tab stop with it", () => {
+    const { view: v, host } = mount("# A\n\n## B\n\n## C\n");
+    v.plugin(outlinePlugin)?.toggle();
+    const rows = rowEls(host);
+    rows[0].focus();
+    rowKeydown(rows[0], "ArrowDown");
+    expect(document.activeElement).toBe(rows[1]);
+    expect(rows[1].tabIndex).toBe(0);
+    expect(tabIndexes(host).filter((t) => t === 0)).toHaveLength(1); // still just one
+    rowKeydown(rows[1], "ArrowUp");
+    expect(document.activeElement).toBe(rows[0]);
+    expect(rows[0].tabIndex).toBe(0);
+  });
+
+  it("ArrowUp on the first row and ArrowDown on the last row are no-ops (no wrap)", () => {
+    const { view: v, host } = mount("# A\n\n## B\n");
+    v.plugin(outlinePlugin)?.toggle();
+    const rows = rowEls(host);
+    rows[0].focus();
+    rowKeydown(rows[0], "ArrowUp");
+    expect(document.activeElement).toBe(rows[0]); // stayed put
+    rows[1].focus();
+    rowKeydown(rows[1], "ArrowDown");
+    expect(document.activeElement).toBe(rows[1]);
+  });
+
+  it("Home / End jump focus to the first / last visible row", () => {
+    const { view: v, host } = mount("# A\n\n## B\n\n## C\n");
+    v.plugin(outlinePlugin)?.toggle();
+    const rows = rowEls(host);
+    rows[1].focus();
+    rowKeydown(rows[1], "End");
+    expect(document.activeElement).toBe(rows[2]);
+    rowKeydown(rows[2], "Home");
+    expect(document.activeElement).toBe(rows[0]);
+  });
+
+  it("ArrowRight expands a collapsed parent in place (focus stays on the row)", () => {
+    const { view: v, host } = mount("# A\n\n## B\n\n### C\n");
+    v.plugin(outlinePlugin)?.toggle();
+    (twistieOf(rowEls(host)[0]) as HTMLElement).click(); // collapse A (hides B, C)
+    const aRow = rowEls(host)[0];
+    aRow.focus();
+    expect(aRow.getAttribute("aria-expanded")).toBe("false");
+    rowKeydown(aRow, "ArrowRight");
+    expect(rowEls(host)[0].getAttribute("aria-expanded")).toBe("true"); // expanded
+    expect(document.activeElement).toBe(rowEls(host)[0]); // focus unmoved
+    expect(visibleTexts(host)).toEqual(["A", "B", "C"]);
+  });
+
+  it("ArrowRight on an already-expanded parent moves focus to the first child", () => {
+    const { view: v, host } = mount("# A\n\n## B\n\n## C\n");
+    v.plugin(outlinePlugin)?.toggle();
+    const rows = rowEls(host);
+    rows[0].focus(); // A, expanded (B and C are its children)
+    rowKeydown(rows[0], "ArrowRight");
+    expect(document.activeElement).toBe(rows[1]); // first child B
+  });
+
+  it("ArrowLeft collapses an expanded parent in place (focus stays on the row)", () => {
+    const { view: v, host } = mount("# A\n\n## B\n\n### C\n");
+    v.plugin(outlinePlugin)?.toggle();
+    const aRow = rowEls(host)[0];
+    aRow.focus();
+    expect(aRow.getAttribute("aria-expanded")).toBe("true");
+    rowKeydown(aRow, "ArrowLeft");
+    expect(rowEls(host)[0].getAttribute("aria-expanded")).toBe("false"); // collapsed
+    expect(document.activeElement).toBe(rowEls(host)[0]); // focus unmoved
+    expect(visibleTexts(host)).toEqual(["A"]);
+  });
+
+  it("ArrowLeft on a child (leaf) climbs focus to its parent row", () => {
+    const { view: v, host } = mount("# A\n\n## B\n");
+    v.plugin(outlinePlugin)?.toggle();
+    const rows = rowEls(host);
+    rows[1].focus(); // B is a leaf child of A
+    rowKeydown(rows[1], "ArrowLeft");
+    expect(document.activeElement).toBe(rows[0]); // parent A
+  });
+
+  it("Enter on a focused row jumps to the heading (selection-only, unpinned closes)", () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const { view: v, host } = mount("# Alpha\n\nbody\n\n## Beta\n\nmore\n");
+    const before = v.state.doc.toString();
+    v.plugin(outlinePlugin)?.toggle();
+    const rows = rowEls(host);
+    rows[1].focus(); // "Beta"
+    rowKeydown(rows[1], "Enter");
+    const betaLine = v.state.doc.line(5); // "## Beta"
+    expect(v.state.selection.main.head).toBe(betaLine.from);
+    expect(v.state.doc.toString()).toBe(before); // byte-identical: no write
+    expect(isOpen(host)).toBe(false); // transient navigator: jump = done
+  });
+
+  it("re-homes the tab stop onto the caret's heading while the list is unfocused", () => {
+    const { view: v, host } = mount("# Alpha\n\nbody\n\n## Beta\n\nmore\n");
+    v.plugin(outlinePlugin)?.toggle();
+    expect(rowEls(host)[0].tabIndex).toBe(0); // caret at top ⇒ Alpha tabbable
+    v.dispatch({ selection: EditorSelection.cursor(v.state.doc.line(5).from) }); // "## Beta"
+    // Focus is in the editor, not the list ⇒ the tab stop follows the caret so a
+    // later Tab enters the tree at Beta.
+    expect(rowEls(host)[1].tabIndex).toBe(0);
+    expect(tabIndexes(host).filter((t) => t === 0)).toHaveLength(1);
+  });
+
+  it("keeps the tab stop on the focused row when the caret moves while the list is focused", () => {
+    // The negative branch of the re-home guard: once the user has tabbed into the
+    // tree AND arrow-navigated (so focus + the tab stop both sit on Beta), a
+    // caret-driven updateActive must NOT yank the tab stop out from under them.
+    // Dropping the `!listEl.contains(activeElement)` guard makes this red.
+    const { view: v, host } = mount("# Alpha\n\nbody\n\n## Beta\n\nmore\n");
+    v.plugin(outlinePlugin)?.toggle();
+    const rows = rowEls(host);
+    rows[0].focus();
+    rowKeydown(rows[0], "ArrowDown"); // focusRow(Beta): focus + tab stop now on Beta
+    expect(rows[1].tabIndex).toBe(0);
+    v.dispatch({ selection: EditorSelection.cursor(v.state.doc.line(1).from) }); // caret → Alpha
+    expect(rows[1].tabIndex).toBe(0); // tab stop NOT yanked to the caret's heading
+    expect(tabIndexes(host).filter((t) => t === 0)).toHaveLength(1);
+  });
+
+  it("re-homes the tab stop off a keyboard-focused descendant when a pointer collapse hides it", () => {
+    // ensureTabbableVisible is load-bearing precisely when the list is FOCUSED and
+    // a pointer (twistie-click) collapse of an ancestor hides the focused, tabbable
+    // descendant: updateActive's re-home is guarded off while focus is in the list,
+    // so ensureTabbableVisible is the only thing that moves the sole tabindex=0 off
+    // the now-hidden row. Dropping that call strands the tab stop on a display:none
+    // row (a roving-tabindex a11y failure) while other tests stay green.
+    const { view: v, host } = mount("# A\n\nbody\n\n## B\n\nmore\n");
+    v.plugin(outlinePlugin)?.toggle();
+    const rows = rowEls(host);
+    rows[0].focus();
+    rowKeydown(rows[0], "ArrowDown"); // focus + tab stop now on descendant B (list focused)
+    expect(rows[1].tabIndex).toBe(0);
+    (twistieOf(rows[0]) as HTMLElement).click(); // pointer-collapse A → B hidden
+    expect(rows[1].hidden).toBe(true);
+    expect(rows[1].tabIndex).toBe(-1); // re-homed off the hidden row
+    expect(tabIndexes(host).filter((t) => t === 0)).toHaveLength(1);
+    expect(rows[0].tabIndex).toBe(0); // sole tab stop now on a visible row
   });
 });
 

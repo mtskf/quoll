@@ -1098,6 +1098,13 @@ html body {
   .quoll-outline-row {
     display: flex;
     align-items: center;
+    cursor: pointer;
+  }
+  /* The row IS the focusable tree node (roving tabindex) — the focus ring rides
+   * it, not the inner label/twistie (which are no longer tab stops). */
+  .quoll-outline-row:focus-visible {
+    outline: 1px solid var(--vscode-focusBorder);
+    outline-offset: -1px;
   }
   /* A collapsed ancestor hides its descendant rows via the `hidden` attribute
    * (outline-panel.ts sets li.hidden). The rule above (`.quoll-outline-row`,
@@ -1116,6 +1123,8 @@ html body {
   .quoll-outline-row:has(> .quoll-outline-item.active) .quoll-outline-item {
     color: var(--vscode-list-activeSelectionForeground, inherit);
   }
+  /* Decorative chevron (aria-hidden, not a tab stop). Its rotation is driven by
+   * the parent row's aria-expanded — the row owns the expand/collapse state. */
   .quoll-outline-twistie {
     flex: 0 0 16px;
     display: flex;
@@ -1123,15 +1132,7 @@ html body {
     justify-content: center;
     width: 16px;
     height: 16px;
-    padding: 0;
-    border: none;
-    background: transparent;
     color: var(--vscode-icon-foreground, var(--vscode-foreground));
-    cursor: pointer;
-  }
-  .quoll-outline-twistie:focus-visible {
-    outline: 1px solid var(--vscode-focusBorder);
-    outline-offset: -1px;
   }
   .quoll-outline-twistie svg {
     width: 14px;
@@ -1139,7 +1140,7 @@ html body {
     transition: transform 0.15s ease;
     transform: rotate(90deg); /* expanded: chevron-right rotated to point down */
   }
-  .quoll-outline-twistie[aria-expanded="false"] svg {
+  .quoll-outline-row[aria-expanded="false"] .quoll-outline-twistie svg {
     transform: rotate(0deg); /* collapsed: chevron points right */
   }
   .quoll-outline-twistie-spacer {
@@ -1147,25 +1148,19 @@ html body {
     width: 16px;
     height: 16px;
   }
+  /* Display-only label span (no longer a button/tab stop — the row is focusable). */
   .quoll-outline-item {
     display: block;
     box-sizing: border-box;
     flex: 1 1 auto;
     min-width: 0;
     padding: 3px 10px 3px 4px;
-    border: none;
-    background: transparent;
     color: inherit;
     font: inherit;
     text-align: left;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
-    cursor: pointer;
-  }
-  .quoll-outline-item:focus-visible {
-    outline: 1px solid var(--vscode-focusBorder);
-    outline-offset: -1px;
   }
   .quoll-outline-item.level-1 {
     font-weight: 600;
