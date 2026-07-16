@@ -2,6 +2,14 @@
 
 All notable changes to Quoll are documented here.
 
+## 0.1.50 — 2026-07-16
+
+### Added
+
+- Obsidian-style `==highlight==` marks are now recognized: type `==text==` to highlight it, styled to match your light/dark/high-contrast theme.
+- A new status bar slot shows word count, character count, and estimated reading time for the active document (frontmatter and fenced code blocks are excluded from the word count and reading time).
+- The outline sidebar now supports full keyboard navigation: Up/Down/Home/End move between headings, Left/Right collapse or expand a heading (or jump to its parent/child), and Enter jumps to that heading in the document.
+
 ## 0.1.49 — 2026-07-15
 
 ### Added
