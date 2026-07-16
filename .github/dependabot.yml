@@ -49,3 +49,9 @@ updates:
       github-actions:
         patterns:
           - "*"
+        # Match the npm group: routine minor+patch bumps ride one grouped PR,
+        # while action majors (which can change runner/runtime expectations)
+        # open individually for a manual look.
+        update-types:
+          - minor
+          - patch
