@@ -35,19 +35,25 @@ import {
   SQUARE_CODE_PATH_LEFT,
 } from "../../../src/webview/cm/fenced-code/fenced-code-language-picker-widget.js";
 import { LANGUAGE_OPTIONS } from "../../../src/webview/cm/fenced-code/fenced-code-languages.js";
+import {
+  asFencedCodeNode,
+  type FencedCodeNode,
+  type OpenLineOffset,
+} from "../../../src/webview/cm/fenced-code/fenced-code-node.js";
 import { fencedHeaderBarThemeSpec } from "../../../src/webview/cm/theme.js";
 import { fullTree } from "../helpers/full-tree.js";
 
-type SyntaxNode = ReturnType<typeof fullTree>["topNode"];
-
-function firstFencedCode(doc: string): { state: EditorState; node: SyntaxNode } {
+function firstFencedCode(doc: string): { state: EditorState; node: FencedCodeNode } {
   const state = EditorState.create({ doc, extensions: [markdown({ base: markdownLanguage })] });
   const tree = fullTree(state);
-  let found: SyntaxNode | null = null;
+  let found: FencedCodeNode | null = null;
   tree.iterate({
     enter: (n) => {
-      if (found === null && n.name === "FencedCode") {
-        found = n.node;
+      if (found === null) {
+        const fenced = asFencedCodeNode(n);
+        if (fenced !== null) {
+          found = fenced;
+        }
       }
     },
   });
@@ -56,6 +62,11 @@ function firstFencedCode(doc: string): { state: EditorState; node: SyntaxNode } 
   }
   return { state, node: found };
 }
+
+/** Cast a raw offset to the branded OpenLineOffset — the lazy-resolver / command
+ *  tests probe offsets (0, a post-shift anchor) directly rather than via
+ *  openLineOffsetOf. */
+const off = (n: number): OpenLineOffset => n as OpenLineOffset;
 
 // Apply the picker's edit at the helper level — the byte-clean round-trip proof.
 function applyPick(doc: string, chosen: string): string {
@@ -200,11 +211,11 @@ describe("fenceLanguageTarget", () => {
 describe("fenceLanguageTargetAt (lazy resolver)", () => {
   it("resolves the target from the open-line offset", () => {
     const { state } = firstFencedCode("```js\nx\n```\n");
-    expect(fenceLanguageTargetAt(state, 0)?.language).toBe("js");
+    expect(fenceLanguageTargetAt(state, off(0))?.language).toBe("js");
   });
   it("returns null when no fence starts at the offset's line", () => {
     const { state } = firstFencedCode("plain\n\n```js\nx\n```\n");
-    expect(fenceLanguageTargetAt(state, 0)).toBeNull();
+    expect(fenceLanguageTargetAt(state, off(0))).toBeNull();
   });
 });
 
@@ -234,24 +245,24 @@ describe("languageChangeSpec + round-trip (byte-clean)", () => {
 describe("setFenceLanguage command", () => {
   it("writes the language token against the live document", () => {
     const view = mkView("```\nx\n```\n");
-    expect(setFenceLanguage(view, 0, "js")).toBe(true);
+    expect(setFenceLanguage(view, off(0), "js")).toBe(true);
     expect(view.state.doc.toString()).toBe("```js\nx\n```\n");
     view.destroy();
   });
   it("is a no-op (returns false, no change) on a read-only surface", () => {
     const view = mkView("```\nx\n```\n", { readOnly: true });
-    expect(setFenceLanguage(view, 0, "js")).toBe(false);
+    expect(setFenceLanguage(view, off(0), "js")).toBe(false);
     expect(view.state.doc.toString()).toBe("```\nx\n```\n");
     view.destroy();
   });
   it("returns false when the chosen language equals the current one", () => {
     const view = mkView("```js\nx\n```\n");
-    expect(setFenceLanguage(view, 0, "js")).toBe(false);
+    expect(setFenceLanguage(view, off(0), "js")).toBe(false);
     view.destroy();
   });
   it("clears the language back to a bare fence", () => {
     const view = mkView("```js\nx\n```\n");
-    expect(setFenceLanguage(view, 0, "")).toBe(true);
+    expect(setFenceLanguage(view, off(0), "")).toBe(true);
     expect(view.state.doc.toString()).toBe("```\nx\n```\n");
     view.destroy();
   });
@@ -268,15 +279,15 @@ function pickerSelect(root: HTMLElement): HTMLSelectElement {
 
 describe("LanguagePickerWidget", () => {
   it("eq is keyed on openFrom + language", () => {
-    const w = new LanguagePickerWidget(0, "js");
-    expect(w.eq(new LanguagePickerWidget(0, "js"))).toBe(true);
-    expect(w.eq(new LanguagePickerWidget(0, "ts"))).toBe(false);
-    expect(w.eq(new LanguagePickerWidget(5, "js"))).toBe(false);
+    const w = new LanguagePickerWidget(off(0), "js");
+    expect(w.eq(new LanguagePickerWidget(off(0), "js"))).toBe(true);
+    expect(w.eq(new LanguagePickerWidget(off(0), "ts"))).toBe(false);
+    expect(w.eq(new LanguagePickerWidget(off(5), "js"))).toBe(false);
   });
 
   it("ALWAYS returns the wrapper span with an inner select; is-labeled tracks language", () => {
     const view = mkView("```js\nx\n```\n");
-    const tagged = new LanguagePickerWidget(0, "js").toDOM(view);
+    const tagged = new LanguagePickerWidget(off(0), "js").toDOM(view);
     expect(tagged.classList.contains(PICKER_LABEL_CLASS)).toBe(true);
     expect(tagged.classList.contains(PICKER_LABELED_CLASS)).toBe(true);
     const select = pickerSelect(tagged);
@@ -284,7 +295,7 @@ describe("LanguagePickerWidget", () => {
     expect(select.value).toBe("js");
     expect(select.getAttribute("aria-label")).toBeTruthy();
     // Bare fence: same wrapper shape, NO is-labeled modifier (bare float unchanged).
-    const bare = new LanguagePickerWidget(0, "").toDOM(view);
+    const bare = new LanguagePickerWidget(off(0), "").toDOM(view);
     expect(bare.classList.contains(PICKER_LABEL_CLASS)).toBe(true);
     expect(bare.classList.contains(PICKER_LABELED_CLASS)).toBe(false);
     view.destroy();
@@ -292,7 +303,7 @@ describe("LanguagePickerWidget", () => {
 
   it("carries the decorative square-code icon AND the dropdown caret (aria-hidden, inline SVG)", () => {
     const view = mkView("```js\nx\n```\n");
-    const dom = new LanguagePickerWidget(0, "js").toDOM(view);
+    const dom = new LanguagePickerWidget(off(0), "js").toDOM(view);
     const paths = [...dom.querySelectorAll("path")].map((p) => p.getAttribute("d"));
     expect(paths).toContain(SQUARE_CODE_PATH_LEFT); // leading square-code
     expect(paths).toContain(CHEVRON_DOWN_PATH); // trailing dropdown caret
@@ -306,7 +317,7 @@ describe("LanguagePickerWidget", () => {
 
   it("prepends the current language as an option when it is not in the curated list", () => {
     const view = mkView("```wat\nx\n```\n");
-    const select = pickerSelect(new LanguagePickerWidget(0, "wat").toDOM(view));
+    const select = pickerSelect(new LanguagePickerWidget(off(0), "wat").toDOM(view));
     expect(select.value).toBe("wat");
     expect([...select.options].some((o) => o.value === "wat")).toBe(true);
     view.destroy();
@@ -314,7 +325,7 @@ describe("LanguagePickerWidget", () => {
 
   it("change dispatches the token edit against the live document", () => {
     const view = mkView("```\nx\n```\n");
-    const select = pickerSelect(new LanguagePickerWidget(0, "").toDOM(view));
+    const select = pickerSelect(new LanguagePickerWidget(off(0), "").toDOM(view));
     select.value = "js";
     select.dispatchEvent(new Event("change", { bubbles: true }));
     expect(view.state.doc.toString()).toBe("```js\nx\n```\n");
@@ -323,28 +334,28 @@ describe("LanguagePickerWidget", () => {
 
   it("updateDOM toggles is-labeled IN PLACE across the '' boundary (no recreate)", () => {
     const view = mkView("```\nx\n```\n");
-    const dom = new LanguagePickerWidget(0, "").toDOM(view);
+    const dom = new LanguagePickerWidget(off(0), "").toDOM(view);
     expect(dom.classList.contains(PICKER_LABELED_CLASS)).toBe(false);
     // Same openFrom, language ''→js: updateDOM returns true and toggles in place.
-    expect(new LanguagePickerWidget(0, "js").updateDOM(dom, view)).toBe(true);
+    expect(new LanguagePickerWidget(off(0), "js").updateDOM(dom, view)).toBe(true);
     expect(dom.classList.contains(PICKER_LABELED_CLASS)).toBe(true);
     expect(pickerSelect(dom).value).toBe("js");
     // …and back: js→'' drops the modifier in place.
-    expect(new LanguagePickerWidget(0, "").updateDOM(dom, view)).toBe(true);
+    expect(new LanguagePickerWidget(off(0), "").updateDOM(dom, view)).toBe(true);
     expect(dom.classList.contains(PICKER_LABELED_CLASS)).toBe(false);
     view.destroy();
   });
 
   it("updateDOM returns false on an openFrom change (CM recreates)", () => {
     const view = mkView("```js\nx\n```\n");
-    const dom = new LanguagePickerWidget(0, "js").toDOM(view);
-    expect(new LanguagePickerWidget(5, "js").updateDOM(dom, view)).toBe(false);
+    const dom = new LanguagePickerWidget(off(0), "js").toDOM(view);
+    expect(new LanguagePickerWidget(off(5), "js").updateDOM(dom, view)).toBe(false);
     view.destroy();
   });
 
   it("after destroy(), a stale change event no longer dispatches", () => {
     const view = mkView("```\nx\n```\n");
-    const w = new LanguagePickerWidget(0, "");
+    const w = new LanguagePickerWidget(off(0), "");
     const dom = w.toDOM(view);
     const select = pickerSelect(dom);
     w.destroy(dom);
@@ -510,6 +521,9 @@ describe("quollFencedHeaderBarTheme (spec contract)", () => {
     expect(sel?.appearance).toBe("none");
     expect(sel?.border).toBe("none");
     expect(sel?.backgroundColor).toBe("transparent");
+    // Folded from the removed dead `.quoll-language-picker` base rule — pins the
+    // labelled select's box model so a future edit can't silently drop it.
+    expect(sel?.boxSizing).toBe("border-box");
     expect(sel?.minWidth).toBe("0");
     expect(sel?.overflow).toBe("hidden");
     // Explicit after `font: inherit` so the concealed row's line-height:0 can't clip.

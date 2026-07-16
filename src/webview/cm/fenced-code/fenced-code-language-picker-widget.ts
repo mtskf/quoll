@@ -34,6 +34,7 @@
 import { type EditorView, WidgetType } from "@codemirror/view";
 import { setFenceLanguage } from "./fenced-code-language-command.js";
 import { LANGUAGE_OPTIONS } from "./fenced-code-languages.js";
+import type { OpenLineOffset } from "./fenced-code-node.js";
 
 export const PICKER_CLASS = "quoll-language-picker";
 /** Wrapper span class (ALWAYS present). `is-labeled` is added when a language is
@@ -112,7 +113,10 @@ function selectOf(dom: HTMLElement): HTMLSelectElement | null {
 // (listener teardown) and the build-time openFrom (updateDOM's same-slot guard)
 // WITHOUT the widget instance holding mutable state (widgets are value objects).
 // WeakMap so a discarded select is GC'd normally.
-const pickerState = new WeakMap<Element, { controller: AbortController; openFrom: number }>();
+const pickerState = new WeakMap<
+  Element,
+  { controller: AbortController; openFrom: OpenLineOffset }
+>();
 
 /** (Re)populate `select` with the curated options — plus the current language as a
  *  prepended option when it is a non-empty value outside the curated list, so an
@@ -141,7 +145,7 @@ export class LanguagePickerWidget extends WidgetType {
     /** Open-line offset of the fenced block. Half the eq() key AND updateDOM's
      *  same-slot guard: an openFrom change forces a fresh toDOM (correct listener
      *  closures); a language-only change updates the value in place. */
-    readonly openFrom: number,
+    readonly openFrom: OpenLineOffset,
     /** Build-time language token — the other half of eq() and the select's
      *  selected value. */
     readonly language: string

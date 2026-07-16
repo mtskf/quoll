@@ -16,12 +16,17 @@
 import { isolateHistory } from "@codemirror/commands";
 import type { EditorView } from "@codemirror/view";
 import { fenceLanguageTargetAt, languageChangeSpec } from "./fenced-code-language.js";
+import type { OpenLineOffset } from "./fenced-code-node.js";
 
 /** Rewrite the language of the fenced block whose open line begins at `openFrom`
  *  to `chosen` ("" clears it). Returns true when a dispatch was issued, false
  *  when any guard aborted or the dispatch threw on a dead view. NEVER throws;
  *  never partially mutates. */
-export function setFenceLanguage(view: EditorView, openFrom: number, chosen: string): boolean {
+export function setFenceLanguage(
+  view: EditorView,
+  openFrom: OpenLineOffset,
+  chosen: string
+): boolean {
   if (view.state.readOnly) {
     return false;
   }

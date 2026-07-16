@@ -877,43 +877,6 @@ export const copyButtonThemeSpec = {
 
 export const quollCopyButtonTheme = EditorView.theme(copyButtonThemeSpec);
 
-// Language picker: a native <select> pinned to the panel's top-right, LEFT of the
-// copy button. Shares the `.cm-line.quoll-fenced-code-open` / `-fence-hidden`
-// position:relative anchor established by copyButtonThemeSpec (same theme, always
-// mounted together), so it needs no anchor rules of its own. Right-anchored so a
-// longer language label grows leftward; `max-width: min(10em, calc(100% - 3.5em))`
-// reserves room for the copy button and caps the control so it cannot overlap the
-// left-aligned revealed ```lang fence text in a narrow editor column. Reuses the
-// shared fenced-control foreground + hover tint so it reads as one set with the
-// copy button.
-export const languagePickerThemeSpec = {
-  ".quoll-language-picker": {
-    position: "absolute",
-    top: "0.25em",
-    right: "2.2em",
-    zIndex: "1",
-    maxWidth: "min(10em, calc(100% - 3.5em))",
-    boxSizing: "border-box",
-    fontSize: "0.85em",
-    lineHeight: "normal",
-    padding: "0 0.2em",
-    color: fencedControlForeground,
-    backgroundColor: "transparent",
-    border: "1px solid transparent",
-    borderRadius: "4px",
-    cursor: "pointer",
-    opacity: "var(--quoll-control-rest-opacity, 0.6)",
-    transition: "var(--quoll-control-transition, opacity 0.12s ease)",
-  },
-  ".quoll-language-picker:hover, .quoll-language-picker:focus": {
-    opacity: "1",
-    borderColor: "var(--vscode-dropdown-border, transparent)",
-    backgroundColor: fencedControlHoverBackground,
-  },
-};
-
-export const quollLanguagePickerTheme = EditorView.theme(languagePickerThemeSpec);
-
 // ChatGPT-style header bar for LANGUAGE-TAGGED, writable fenced blocks. Gated on
 // the block-style `quoll-fenced-code-has-language` class (writable + non-empty
 // plain language only — see block-style.ts), so language-less / read-only blocks
@@ -1020,10 +983,14 @@ export const fencedHeaderBarThemeSpec = {
   // clears the icon (left) + caret (right); capped + clipped so a long exotic language
   // never reaches the copy button. `lineHeight: normal` is explicit AFTER `font:
   // inherit` (the shorthand resets it) so the concealed `-fence-hidden` row's
-  // `line-height: 0` cannot be re-inherited and clip the glyph.
+  // `line-height: 0` cannot be re-inherited and clip the glyph. `box-sizing:
+  // border-box` keeps the width:100% + L/R padding inside the wrapper (this is the
+  // one property the removed floating base `.quoll-language-picker` rule used to
+  // supply — folded here so the labelled select's box model is self-contained).
   ".quoll-language-picker-label.is-labeled .quoll-language-picker": {
     position: "static",
     display: "block",
+    boxSizing: "border-box",
     width: "100%",
     height: "100%",
     minWidth: "0",

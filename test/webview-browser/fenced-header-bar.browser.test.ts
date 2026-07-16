@@ -21,7 +21,6 @@ import {
   quollCmLinePaddingTheme,
   quollCopyButtonTheme,
   quollFencedHeaderBarTheme,
-  quollLanguagePickerTheme,
 } from "../../src/webview/cm/theme.js";
 
 /** Drain CM's bounded measure queue (4-frame idiom shared with the sibling browser
@@ -61,7 +60,6 @@ function mount(doc: string, caret: number): EditorView {
         quollCmLinePaddingTheme,
         quollBlockStyleTheme,
         quollCopyButtonTheme,
-        quollLanguagePickerTheme,
         quollFencedHeaderBarTheme,
       ],
     }),

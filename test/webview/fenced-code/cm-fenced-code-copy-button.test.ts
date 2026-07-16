@@ -20,25 +20,28 @@ import {
   COPY_ICON_PATH,
   CopyButtonWidget,
 } from "../../../src/webview/cm/fenced-code/fenced-code-copy-button-widget.js";
+import {
+  asFencedCodeNode,
+  type FencedCodeNode,
+  type OpenLineOffset,
+} from "../../../src/webview/cm/fenced-code/fenced-code-node.js";
 import { collapseToggleThemeSpec, copyButtonThemeSpec } from "../../../src/webview/cm/theme.js";
 import { fullTree } from "../helpers/full-tree.js";
 
-// Derive SyntaxNode from fullTree's return (a lezer Tree) — same reason as the
-// source: `@lezer/common` is a direct dep as of PR #66, but we derive rather
-// than import it to keep the direct-dep import surface narrow.
-type SyntaxNode = ReturnType<typeof fullTree>["topNode"];
-
-function firstFencedCode(doc: string): { state: EditorState; node: SyntaxNode } {
+function firstFencedCode(doc: string): { state: EditorState; node: FencedCodeNode } {
   const state = EditorState.create({
     doc,
     extensions: [markdown({ base: markdownLanguage })],
   });
   const tree = fullTree(state);
-  let found: SyntaxNode | null = null;
+  let found: FencedCodeNode | null = null;
   tree.iterate({
     enter: (n) => {
-      if (found === null && n.name === "FencedCode") {
-        found = n.node;
+      if (found === null) {
+        const fenced = asFencedCodeNode(n);
+        if (fenced !== null) {
+          found = fenced;
+        }
       }
     },
   });
@@ -47,6 +50,13 @@ function firstFencedCode(doc: string): { state: EditorState; node: SyntaxNode } 
   }
   return { state, node: found };
 }
+
+/** Cast a raw offset to the branded OpenLineOffset. Used both for the boundary
+ *  tests below (invalid / mid-block offsets that openLineOffsetOf can't produce)
+ *  and for the standalone CopyButtonWidget construction tests further down, which
+ *  build widgets directly (no real document / FencedCodeNode to run openLineOffsetOf
+ *  against). */
+const off = (n: number): OpenLineOffset => n as OpenLineOffset;
 
 describe("fencedCodeBody", () => {
   it("extracts the body of a block WITH a language tag (fences + lang line excluded)", () => {
@@ -161,37 +171,37 @@ describe("fencedCodeBodyAt", () => {
 
   it("returns null for openFrom < 0 (out-of-bounds low)", () => {
     const state = makeState("```js\nconst x = 1;\n```\n");
-    expect(fencedCodeBodyAt(state, -1)).toBeNull();
+    expect(fencedCodeBodyAt(state, off(-1))).toBeNull();
   });
 
   it("returns null for openFrom > doc.length (out-of-bounds high)", () => {
     const state = makeState("```js\nconst x = 1;\n```\n");
-    expect(fencedCodeBodyAt(state, state.doc.length + 1)).toBeNull();
+    expect(fencedCodeBodyAt(state, off(state.doc.length + 1))).toBeNull();
   });
 
   it("returns null when no FencedCode starts on the given line (plain paragraph)", () => {
     const state = makeState("just a paragraph\n\n```js\nconst x = 1;\n```\n");
     // openFrom points at the start of the paragraph line, not a fenced block
-    expect(fencedCodeBodyAt(state, 0)).toBeNull();
+    expect(fencedCodeBodyAt(state, off(0))).toBeNull();
   });
 
   it("resolves the body of a top-level fence (openFrom = open line start)", () => {
     const doc = "```js\nconst x = 1;\n```\n";
     const state = makeState(doc);
-    expect(fencedCodeBodyAt(state, 0)).toBe("const x = 1;");
+    expect(fencedCodeBodyAt(state, off(0))).toBe("const x = 1;");
   });
 
   it("resolves the body of a blockquote-nested fence", () => {
     const doc = "> ```js\n> const x = 1;\n> foo();\n> ```\n";
     const state = makeState(doc);
     // The open line starts at offset 0 (the `> ` prefix is on the same line)
-    expect(fencedCodeBodyAt(state, 0)).toBe("const x = 1;\nfoo();");
+    expect(fencedCodeBodyAt(state, off(0))).toBe("const x = 1;\nfoo();");
   });
 
   it("resolves the body of a list-nested fence", () => {
     const doc = "- ```js\n  const x = 1;\n  foo();\n  ```\n";
     const state = makeState(doc);
-    expect(fencedCodeBodyAt(state, 0)).toBe("const x = 1;\nfoo();");
+    expect(fencedCodeBodyAt(state, off(0))).toBe("const x = 1;\nfoo();");
   });
 
   it("returns null when openFrom points to a body line (not the open fence line)", () => {
@@ -199,7 +209,7 @@ describe("fencedCodeBodyAt", () => {
     const state = makeState(doc);
     // offset 6 = start of body line "const x = 1;"; FencedCode overlaps walk
     // range but its open line is at 0 — the guard must reject this.
-    expect(fencedCodeBodyAt(state, 6)).toBeNull();
+    expect(fencedCodeBodyAt(state, off(6))).toBeNull();
   });
 });
 
@@ -230,7 +240,7 @@ function statusRegion(root: HTMLElement): HTMLElement {
 
 describe("CopyButtonWidget", () => {
   it("renders a Lucide copy icon button with an accessible name (no text label)", () => {
-    const btn = copyButton(widgetDOM(new CopyButtonWidget(0, () => "x")));
+    const btn = copyButton(widgetDOM(new CopyButtonWidget(off(0), () => "x")));
     expect(btn.tagName).toBe("BUTTON");
     expect(btn.getAttribute("aria-label")).toBe("Copy code");
     expect(pathDs(btn)).toContain(COPY_ICON_PATH);
@@ -239,7 +249,7 @@ describe("CopyButtonWidget", () => {
   it("carries an empty, visually-hidden polite live region before any copy", () => {
     // Present-but-empty at build time so the first copy is an observable mutation
     // (an SR only announces a CHANGE to a live region already in the tree).
-    const region = statusRegion(widgetDOM(new CopyButtonWidget(0, () => "x")));
+    const region = statusRegion(widgetDOM(new CopyButtonWidget(off(0), () => "x")));
     expect(region.getAttribute("aria-live")).toBe("polite");
     expect(region.getAttribute("aria-atomic")).toBe("true");
     expect(region.textContent).toBe("");
@@ -251,7 +261,7 @@ describe("CopyButtonWidget", () => {
     try {
       // The body is resolved lazily at click; a stub resolver stands in for the
       // live tree walk (fencedCodeBodyAt is covered by the DOM-integration suite).
-      const root = widgetDOM(new CopyButtonWidget(0, () => "const x = 1;\nfoo();"));
+      const root = widgetDOM(new CopyButtonWidget(off(0), () => "const x = 1;\nfoo();"));
       const btn = copyButton(root);
       btn.dispatchEvent(new MouseEvent("click", { bubbles: true }));
       // let the writeText promise + feedback microtask settle
@@ -271,7 +281,7 @@ describe("CopyButtonWidget", () => {
     const writeText = vi.fn().mockResolvedValue(undefined);
     vi.stubGlobal("navigator", { clipboard: { writeText } });
     try {
-      const root = widgetDOM(new CopyButtonWidget(0, () => "x"));
+      const root = widgetDOM(new CopyButtonWidget(off(0), () => "x"));
       copyButton(root).dispatchEvent(new MouseEvent("click", { bubbles: true }));
       await Promise.resolve();
       await Promise.resolve();
@@ -287,7 +297,7 @@ describe("CopyButtonWidget", () => {
     const writeText = vi.fn().mockRejectedValue(new Error("NotAllowedError"));
     vi.stubGlobal("navigator", { clipboard: { writeText } });
     try {
-      const root = widgetDOM(new CopyButtonWidget(0, () => "x"));
+      const root = widgetDOM(new CopyButtonWidget(off(0), () => "x"));
       const btn = copyButton(root);
       btn.dispatchEvent(new MouseEvent("click", { bubbles: true }));
       await Promise.resolve();
@@ -304,7 +314,7 @@ describe("CopyButtonWidget", () => {
     const writeText = vi.fn().mockRejectedValue(new Error("NotAllowedError"));
     vi.stubGlobal("navigator", { clipboard: { writeText } });
     try {
-      const root = widgetDOM(new CopyButtonWidget(0, () => "x"));
+      const root = widgetDOM(new CopyButtonWidget(off(0), () => "x"));
       copyButton(root).dispatchEvent(new MouseEvent("click", { bubbles: true }));
       await Promise.resolve();
       await Promise.resolve();
@@ -322,7 +332,7 @@ describe("CopyButtonWidget", () => {
     const writeText = vi.fn().mockResolvedValue(undefined);
     vi.stubGlobal("navigator", { clipboard: { writeText } });
     try {
-      const root = widgetDOM(new CopyButtonWidget(0, () => "x"));
+      const root = widgetDOM(new CopyButtonWidget(off(0), () => "x"));
       const region = statusRegion(root);
       copyButton(root).dispatchEvent(new MouseEvent("click", { bubbles: true }));
       await vi.advanceTimersByTimeAsync(0);
@@ -347,7 +357,7 @@ describe("CopyButtonWidget", () => {
     const writeText = vi.fn().mockResolvedValue(undefined);
     vi.stubGlobal("navigator", { clipboard: { writeText } });
     try {
-      const root = widgetDOM(new CopyButtonWidget(0, () => "x"));
+      const root = widgetDOM(new CopyButtonWidget(off(0), () => "x"));
       const btn = copyButton(root);
       const region = statusRegion(root);
       btn.dispatchEvent(new MouseEvent("click", { bubbles: true }));
@@ -375,7 +385,7 @@ describe("CopyButtonWidget", () => {
     const writeText = vi.fn().mockResolvedValue(undefined);
     vi.stubGlobal("navigator", { clipboard: { writeText } });
     try {
-      const root = widgetDOM(new CopyButtonWidget(0, () => "x"));
+      const root = widgetDOM(new CopyButtonWidget(off(0), () => "x"));
       const btn = copyButton(root);
       const region = statusRegion(root);
       btn.dispatchEvent(new MouseEvent("click", { bubbles: true }));
@@ -400,7 +410,7 @@ describe("CopyButtonWidget", () => {
     const writeText = vi.fn().mockRejectedValue(new Error("NotAllowedError"));
     vi.stubGlobal("navigator", { clipboard: { writeText } });
     try {
-      const root = widgetDOM(new CopyButtonWidget(0, () => "x"));
+      const root = widgetDOM(new CopyButtonWidget(off(0), () => "x"));
       const region = statusRegion(root);
       const order: string[] = [];
       const realSetAttribute = region.setAttribute.bind(region);
@@ -445,7 +455,7 @@ describe("CopyButtonWidget", () => {
       .mockResolvedValueOnce(undefined);
     vi.stubGlobal("navigator", { clipboard: { writeText } });
     try {
-      const root = widgetDOM(new CopyButtonWidget(0, () => "x"));
+      const root = widgetDOM(new CopyButtonWidget(off(0), () => "x"));
       const btn = copyButton(root);
       const region = statusRegion(root);
 
@@ -481,7 +491,7 @@ describe("CopyButtonWidget", () => {
     const writeText = vi.fn().mockResolvedValue(undefined);
     vi.stubGlobal("navigator", { clipboard: { writeText } });
     try {
-      const root = widgetDOM(new CopyButtonWidget(0, () => "x"));
+      const root = widgetDOM(new CopyButtonWidget(off(0), () => "x"));
       const region = statusRegion(root);
       copyButton(root).dispatchEvent(new MouseEvent("click", { bubbles: true }));
       await vi.advanceTimersByTimeAsync(0);
@@ -498,18 +508,18 @@ describe("CopyButtonWidget", () => {
 
   it("eq() is keyed on openFrom alone (a body edit reuses the DOM; a shift rebuilds)", () => {
     const resolve = () => "x";
-    const a = new CopyButtonWidget(5, resolve);
+    const a = new CopyButtonWidget(off(5), resolve);
     // Same open-line offset → reuse the DOM even though the body changed underneath
     // (the body is resolved lazily at click, never stored). This is the perf pin:
     // typing INSIDE the block must not rebuild the widget or re-materialise its body.
-    expect(a.eq(new CopyButtonWidget(5, () => "different body"))).toBe(true);
+    expect(a.eq(new CopyButtonWidget(off(5), () => "different body"))).toBe(true);
     // A positional shift (an edit ABOVE the block) → rebuild so the reused click
     // handler never resolves the block at a stale offset.
-    expect(a.eq(new CopyButtonWidget(9, resolve))).toBe(false);
+    expect(a.eq(new CopyButtonWidget(off(9), resolve))).toBe(false);
   });
 
   it("always carries the base copy-button class (no single-line variant)", () => {
-    const btn = copyButton(widgetDOM(new CopyButtonWidget(0, () => "x")));
+    const btn = copyButton(widgetDOM(new CopyButtonWidget(off(0), () => "x")));
     expect(btn.classList.contains("quoll-copy-button")).toBe(true);
     expect(btn.classList.contains("quoll-copy-button-single-line")).toBe(false);
   });
@@ -519,7 +529,7 @@ describe("CopyButtonWidget", () => {
     const writeText = vi.fn().mockResolvedValue(undefined);
     vi.stubGlobal("navigator", { clipboard: { writeText } });
     try {
-      const btn = copyButton(widgetDOM(new CopyButtonWidget(0, () => "x")));
+      const btn = copyButton(widgetDOM(new CopyButtonWidget(off(0), () => "x")));
       // First click resolves → "Copied" and schedules a 1500ms revert.
       btn.dispatchEvent(new MouseEvent("click", { bubbles: true }));
       await vi.advanceTimersByTimeAsync(0);

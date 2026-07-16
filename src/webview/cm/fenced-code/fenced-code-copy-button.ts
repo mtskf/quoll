@@ -22,6 +22,7 @@ import {
 import { toCtx } from "../decorations/build-context.js";
 import type { BuildContext } from "../decorations/types.js";
 import { CopyButtonWidget } from "./fenced-code-copy-button-widget.js";
+import { asFencedCodeNode, type FencedCodeNode, type OpenLineOffset } from "./fenced-code-node.js";
 import { buildVisibleFencedCodeWidgets } from "./fenced-code-open-widgets.js";
 
 // `@lezer/common` is a direct dep as of PR #66 (for the lint incremental
@@ -115,7 +116,7 @@ function fenceIndentToStrip(doc: Text, node: SyntaxNode): number {
  *  bare-`>`/blank body line can't skew it) so genuine code indentation past the
  *  fence is preserved. A list-nested fence needs no strip: Lezer already folds an
  *  indented list-fence's inner indent into the continuation margin. */
-export function fencedCodeBody(state: EditorState, node: SyntaxNode): string {
+export function fencedCodeBody(state: EditorState, node: FencedCodeNode): string {
   const doc = state.doc;
   let body = "";
   for (const codeText of node.getChildren("CodeText")) {
@@ -157,7 +158,7 @@ export function fencedCodeBody(state: EditorState, node: SyntaxNode): string {
  *  above the block shifts it (DOM rebuilt). Scopes the walk to the single open
  *  line, matching {@link buildCopyButtons}'s own anchor rule
  *  (`doc.lineAt(node.from).from`) so a blockquote-/list-nested fence still resolves. */
-export function fencedCodeBodyAt(state: EditorState, openFrom: number): string | null {
+export function fencedCodeBodyAt(state: EditorState, openFrom: OpenLineOffset): string | null {
   const doc = state.doc;
   if (openFrom < 0 || openFrom > doc.length) {
     return null;
@@ -171,8 +172,9 @@ export function fencedCodeBodyAt(state: EditorState, openFrom: number): string |
       if (body !== null) {
         return false;
       }
-      if (node.name === "FencedCode" && doc.lineAt(node.from).from === openLine.from) {
-        body = fencedCodeBody(state, node.node);
+      const fenced = asFencedCodeNode(node);
+      if (fenced !== null && doc.lineAt(fenced.from).from === openLine.from) {
+        body = fencedCodeBody(state, fenced);
         return false;
       }
       return undefined;
