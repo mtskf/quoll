@@ -510,6 +510,9 @@ describe("quollFencedHeaderBarTheme (spec contract)", () => {
     expect(sel?.appearance).toBe("none");
     expect(sel?.border).toBe("none");
     expect(sel?.backgroundColor).toBe("transparent");
+    // Folded from the removed dead `.quoll-language-picker` base rule — pins the
+    // labelled select's box model so a future edit can't silently drop it.
+    expect(sel?.boxSizing).toBe("border-box");
     expect(sel?.minWidth).toBe("0");
     expect(sel?.overflow).toBe("hidden");
     // Explicit after `font: inherit` so the concealed row's line-height:0 can't clip.
