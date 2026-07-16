@@ -61,9 +61,10 @@ export const highlightMarkExtension: MarkdownExtension = {
         // `=` == 61. Need `==` here and NOT a third `=` immediately after — the
         // exact shape of Strikethrough's `~~`/three-tilde guard (byte-identical:
         // `126`→`61`). NB this does not uniformly reject `===` runs: the parser
-        // rescans from pos+1, so `===x===` still forms a highlight around the
-        // inner `=x=` (Highlight[1,7)). This is the MEASURED behaviour pinned by
-        // the span test; it is NOT identical to Strikethrough at start-of-input
+        // rescans from pos+1, so `===x===` still forms a highlight — the `==`
+        // marks land at [1,3) and [5,7), wrapping the content `x=` (Highlight
+        // spans [1,7)). This is the MEASURED behaviour pinned by the span test;
+        // it is NOT identical to Strikethrough at start-of-input
         // (`~~~x~~~` strikes nothing there), so the parity test deliberately
         // covers only the common `==body==` flanking shape.
         if (next !== 61 || cx.char(pos + 1) !== 61 || cx.char(pos + 2) === 61) {

@@ -51,4 +51,14 @@ describe("host↔webview Highlight parity", () => {
   ])("host and webview agree on Highlight spans for %j", (src) => {
     expect(webviewHl(src)).toEqual(hostHl(src));
   });
+
+  // Guard the table-cell row above against a vacuous []===[] pass: both parsers
+  // must ACTUALLY produce a Highlight inside a table cell (the source-level parse
+  // is what agrees — the table *widget* renderer not painting the highlight is a
+  // separate, deferred gap tracked in TODO, not asserted here).
+  it("the table-cell case is non-vacuous — both parsers produce a Highlight", () => {
+    const src = "| a | b |\n| - | - |\n| ==c== | d |\n";
+    expect(hostHl(src).length).toBeGreaterThan(0);
+    expect(webviewHl(src).length).toBeGreaterThan(0);
+  });
 });

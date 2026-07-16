@@ -83,13 +83,15 @@ describe("highlightMarkExtension", () => {
   // against real @lezer/markdown), NOT to Strikethrough: the `cx.char(pos+2) ===
   // 61` guard is byte-identical to Strikethrough's three-tilde guard, but
   // Highlight and Strikethrough DIVERGE at start-of-input (`===x===` →
-  // Highlight[1,7) wrapping `=x=`, whereas `~~~x~~~` → NO Strikethrough). So do
-  // NOT assert "no Highlight for three `=`" (false) nor Strikethrough parity for
-  // `===`. Pin the actual spans:
-  it("forms a Highlight around the inner =x= for ===x=== (measured, not === rejection)", () => {
+  // Highlight[1,7): `==` marks at [1,3)/[5,7) wrapping the content `x=`, whereas
+  // `~~~x~~~` → NO Strikethrough). So do NOT assert "no Highlight for three `=`"
+  // (false) nor Strikethrough parity for `===`. Pin the actual spans:
+  it("forms a Highlight (marks [1,3)/[5,7) wrapping `x=`) for ===x=== (measured, not === rejection)", () => {
     // `===x===` (7 chars): parser rescans from pos+1, opens at [1,3), closes at [5,7).
     const ns = nodes("===x===");
     expect(ns).toContain("Highlight[1,7)");
+    expect(ns).toContain("HighlightMark[1,3)");
+    expect(ns).toContain("HighlightMark[5,7)");
     // Mid-paragraph three-`=` also forms a highlight around the inner run.
     expect(nodes("a ===x=== b")).toContain("Highlight[3,9)");
   });
