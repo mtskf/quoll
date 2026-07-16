@@ -33,6 +33,7 @@
 
 import type { EditorState } from "@codemirror/state";
 import { type EditorView, WidgetType } from "@codemirror/view";
+import type { OpenLineOffset } from "./fenced-code-node.js";
 
 const COPY_LABEL = "Copy code";
 const COPIED_LABEL = "Copied";
@@ -117,12 +118,12 @@ export class CopyButtonWidget extends WidgetType {
      *  block shifts openFrom → the DOM is rebuilt so the click resolves the block
      *  at its new offset. buildCopyButtons recomputes openFrom on every rebuild, so
      *  a reused handler's openFrom is always the live offset. */
-    readonly openFrom: number,
+    readonly openFrom: OpenLineOffset,
     /** Lazy click-time body resolver — a stable module-level fn (fencedCodeBodyAt)
      *  injected by the builder to avoid a widget↔builder import cycle. Called with
      *  the LIVE state on click, so it returns the CURRENT body of the block at
      *  openFrom (or null if the block is gone), never a stale build-time payload. */
-    readonly getBody: (state: EditorState, openFrom: number) => string | null
+    readonly getBody: (state: EditorState, openFrom: OpenLineOffset) => string | null
   ) {
     super();
   }
