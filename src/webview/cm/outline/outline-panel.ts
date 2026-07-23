@@ -5,9 +5,10 @@
 // overlay) focus leaving the sidebar closes it — unless PINNED via the
 // header pin button. The panel is a non-modal role=tree, NOT a modal dialog: it
 // never traps Tab (pinned mode is a persistent pane where Tab must flow between
-// sidebar and editor); the overlay merely self-dismisses on focus-out. Pinned mode swaps the absolute overlay for
-// a static 2-column flex layout. CSS owns ALL geometry off two host classes
-// (quoll-outline-open / quoll-outline-pinned); this module owns state + DOM.
+// sidebar and editor); the overlay merely self-dismisses on focus-out. Pinned
+// mode swaps the absolute overlay for a static 2-column flex layout. CSS owns
+// ALL geometry off two host classes (quoll-outline-open / quoll-outline-pinned);
+// this module owns state + DOM.
 // Individual headings with children collapse their own subtree via per-row
 // twisties (no whole-section fold — the OUTLINE header is a static label).
 // Keyboard model (WAI-ARIA tree-view): each row IS the focusable treeitem with a
