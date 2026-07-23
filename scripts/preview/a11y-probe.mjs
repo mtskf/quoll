@@ -117,6 +117,24 @@ function collectInPage(theme) {
     return Math.round(ratio(fg, bg) * 100) / 100;
   };
 
+  // aria-labelledby is a whitespace-separated IDREF list (ARIA spec), not a
+  // single ID — resolve each token and join the referenced elements' text.
+  const labelledByText = (el) => {
+    const lb = el.getAttribute("aria-labelledby");
+    if (!lb) {
+      return null;
+    }
+    const text = lb
+      .split(/\s+/)
+      .filter(Boolean)
+      .map((id) => document.getElementById(id))
+      .filter(Boolean)
+      .map((ref) => (ref.textContent || "").replace(/\s+/g, " ").trim())
+      .filter(Boolean)
+      .join(" ");
+    return text || null;
+  };
+
   // Accessible name (simplified): aria-label > aria-labelledby text > alt >
   // trimmed textContent. Enough to see what AT would announce for these widgets.
   const accName = (el) => {
@@ -127,12 +145,9 @@ function collectInPage(theme) {
     if (label != null) {
       return label;
     }
-    const lb = el.getAttribute("aria-labelledby");
-    if (lb) {
-      const ref = document.getElementById(lb);
-      if (ref) {
-        return (ref.textContent || "").replace(/\s+/g, " ").trim();
-      }
+    const lbText = labelledByText(el);
+    if (lbText) {
+      return lbText;
     }
     if (el.tagName === "IMG") {
       return el.getAttribute("alt");
@@ -154,14 +169,7 @@ function collectInPage(theme) {
     if (label != null) {
       return label;
     }
-    const lb = el.getAttribute("aria-labelledby");
-    if (lb) {
-      const ref = document.getElementById(lb);
-      if (ref) {
-        return (ref.textContent || "").replace(/\s+/g, " ").trim() || null;
-      }
-    }
-    return null;
+    return labelledByText(el);
   };
   const implicitRole = (el) => {
     const explicit = el.getAttribute("role");
