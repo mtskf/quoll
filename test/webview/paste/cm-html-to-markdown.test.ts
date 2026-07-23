@@ -81,6 +81,14 @@ describe("htmlToMarkdown — inline constructs", () => {
     expect(md).toBe("[t](<https://x.com/a b>)");
     expect(validateMarkdownForWrite(`${md}\n`).ok).toBe(true);
   });
+  it("percent-encodes AND angle-wraps a destination with both a space and angle brackets", () => {
+    // The combined case: `<`/`>` are percent-encoded, then the residual space
+    // still forces the angle-bracket form — exercises markdownDestination's
+    // `<${enc}>` sub-branch (distinct from the bare-encoded and no-encode paths).
+    const md = htmlToMarkdown('<p><a href="https://x.com/a b<c>d">t</a></p>');
+    expect(md).toBe("[t](<https://x.com/a b%3Cc%3Ed>)");
+    expect(validateMarkdownForWrite(`${md}\n`).ok).toBe(true);
+  });
   it("escapes a blockquote `>` marker at a line start", () => {
     expect(htmlToMarkdown("<p>> not a quote</p>")).toBe("\\> not a quote");
   });
