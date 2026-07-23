@@ -53,3 +53,90 @@ describe("htmlToMarkdown — inline constructs", () => {
     expect(validateMarkdownForWrite(`${md}\n`).ok).toBe(true);
   });
 });
+
+describe("htmlToMarkdown — block constructs", () => {
+  it("converts headings h1..h6", () => {
+    expect(htmlToMarkdown("<h1>A</h1><h3>B</h3>")).toBe("# A\n\n### B");
+  });
+  it("separates paragraphs with a blank line", () => {
+    expect(htmlToMarkdown("<p>a</p><p>b</p>")).toBe("a\n\nb");
+  });
+  it("converts an unordered list", () => {
+    expect(htmlToMarkdown("<ul><li>a</li><li>b</li></ul>")).toBe("- a\n- b");
+  });
+  it("converts an ordered list honouring start", () => {
+    expect(htmlToMarkdown('<ol start="2"><li>a</li><li>b</li></ol>')).toBe("2. a\n3. b");
+  });
+  it("nests lists tightly with marker-width indentation", () => {
+    expect(htmlToMarkdown("<ul><li>a<ul><li>b</li></ul></li></ul>")).toBe("- a\n  - b");
+  });
+  it("unwraps a single <p> inside a list item", () => {
+    expect(htmlToMarkdown("<ul><li><p>a</p></li></ul>")).toBe("- a");
+  });
+  it("keeps two paragraphs in a list item as an indented loose item", () => {
+    expect(htmlToMarkdown("<ul><li><p>a</p><p>b</p></li></ul>")).toBe("- a\n\n  b");
+  });
+  it("renders a code block inside a list item (not flattened to inline code)", () => {
+    expect(htmlToMarkdown("<ul><li><pre><code>x</code></pre></li></ul>")).toBe("- ```\n  x\n  ```");
+  });
+  it("renders a blockquote inside a list item", () => {
+    expect(htmlToMarkdown("<ul><li><blockquote>q</blockquote></li></ul>")).toBe("- > q");
+  });
+  it("converts a fenced code block from <pre>, content unescaped", () => {
+    expect(htmlToMarkdown("<pre><code>a*b\nc</code></pre>")).toBe("```\na*b\nc\n```");
+  });
+  it("extracts a code fence language from a language- class", () => {
+    expect(htmlToMarkdown('<pre><code class="language-ts">x</code></pre>')).toBe("```ts\nx\n```");
+  });
+  it("ignores a malformed / unsafe code-fence language token", () => {
+    expect(htmlToMarkdown('<pre><code class="language-a`b c">x</code></pre>')).toBe("```\nx\n```");
+  });
+  it("uses a longer fence when <pre> content contains a backtick fence", () => {
+    expect(htmlToMarkdown("<pre>```\nx\n```</pre>")).toBe("````\n```\nx\n```\n````");
+  });
+  it("converts a blockquote with two paragraphs", () => {
+    expect(htmlToMarkdown("<blockquote><p>a</p><p>b</p></blockquote>")).toBe("> a\n>\n> b");
+  });
+  it("converts <hr> to a thematic break", () => {
+    expect(htmlToMarkdown("<p>a</p><hr><p>b</p>")).toBe("a\n\n---\n\nb");
+  });
+  it("escapes block-start markers so prose stays literal", () => {
+    expect(htmlToMarkdown("<p>- not a bullet</p>")).toBe("\\- not a bullet");
+    expect(htmlToMarkdown("<p># not a heading</p>")).toBe("\\# not a heading");
+    expect(htmlToMarkdown("<p>1. not a list</p>")).toBe("1\\. not a list");
+  });
+  it("composes prose + table (reuses the table converter)", () => {
+    const md = htmlToMarkdown("<p>intro</p><table><tr><td>A</td><td>B</td></tr></table>");
+    expect(md).toBe("intro\n\n| A | B |\n| --- | --- |");
+  });
+  it("defers the WHOLE fragment (null) when a table in a mixed fragment breaches its cap", () => {
+    // The table exceeds the table converter's row cap → tableElementToGfm returns
+    // null → the whole conversion aborts so plain-text paste preserves everything
+    // (table + prose), rather than silently dropping the table.
+    const bigTable = `<table>${"<tr><td>a</td></tr>".repeat(5001)}</table>`;
+    expect(htmlToMarkdown(`<p>intro</p>${bigTable}`)).toBeNull();
+  });
+  it("returns null for an empty / whitespace-only fragment", () => {
+    expect(htmlToMarkdown("<p>   </p>")).toBeNull();
+    expect(htmlToMarkdown("")).toBeNull();
+  });
+  it("returns null when the input exceeds the size cap", () => {
+    expect(htmlToMarkdown(`<p>${"a".repeat(2 * 1024 * 1024 + 1)}</p>`)).toBeNull();
+  });
+  it("returns null when the node cap is breached (never throws)", () => {
+    const deep = `${"<div>".repeat(60_000)}x${"</div>".repeat(60_000)}`;
+    expect(htmlToMarkdown(deep)).toBeNull();
+  });
+  it("returns null when the block depth cap is breached", () => {
+    const nested = `${"<blockquote>".repeat(200)}x${"</blockquote>".repeat(200)}`;
+    expect(htmlToMarkdown(nested)).toBeNull();
+  });
+  it("returns null when table colspan expansion blows the output cap (small input, huge output)", () => {
+    // Each table expands to ~1000 columns of GFM (~a few KB); ~2000 of them
+    // exceed MAX_OUTPUT_CHARS while the INPUT stays well under the 2 MiB input cap
+    // and the node count under MAX_NODES. The incremental output counter must
+    // abort mid-build and return null (not build gigabytes then check).
+    const oneTable = '<table><tr><td colspan="1000">x</td></tr></table>';
+    expect(htmlToMarkdown(oneTable.repeat(2000))).toBeNull();
+  });
+});
