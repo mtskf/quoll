@@ -35,7 +35,12 @@ function splitLines(source: string): LineRecord[] {
   }
   // Final line without a terminator (also the sole record for an empty source).
   if (start < source.length || lines.length === 0) {
-    lines.push({ start, contentEnd: source.length, termStart: source.length, termEnd: source.length });
+    lines.push({
+      start,
+      contentEnd: source.length,
+      termStart: source.length,
+      termEnd: source.length,
+    });
   }
   return lines;
 }

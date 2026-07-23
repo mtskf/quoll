@@ -20,7 +20,9 @@ export function applyEdits(source: string, edits: readonly Edit[]): string {
       );
     }
     if (e.from < cursor) {
-      throw new Error(`Format edits overlap at offset ${e.from} (previous edit ended at ${cursor})`);
+      throw new Error(
+        `Format edits overlap at offset ${e.from} (previous edit ended at ${cursor})`
+      );
     }
     out += source.slice(cursor, e.from) + e.insert;
     cursor = e.to;

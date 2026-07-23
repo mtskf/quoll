@@ -5,7 +5,7 @@
 // a single column (the Lezer Table.to overshoot — a trailing line absorbed as a
 // phantom row — corrupts ONLY 1-column tables), or it is ragged (any body row's
 // cell count != column count). A false-skip is always safe.
-import { type Align, type Table, parseTable, tableAlign } from "../table/index.js";
+import { type Align, parseTable, type Table, tableAlign } from "../table/index.js";
 import type { Edit } from "./edit.js";
 import type { Range } from "./segment.js";
 

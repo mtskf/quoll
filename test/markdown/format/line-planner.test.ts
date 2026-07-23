@@ -5,7 +5,8 @@ import { lineEdits } from "../../../src/markdown/format/line-planner.js";
 const run = (s: string) => applyEdits(s, lineEdits(s, []));
 
 describe("lineEdits — trailing trim", () => {
-  it("removes a single trailing space", () => expect(run("hello \nworld\n")).toBe("hello\nworld\n"));
+  it("removes a single trailing space", () =>
+    expect(run("hello \nworld\n")).toBe("hello\nworld\n"));
   it("preserves a two-space hard break on a content line", () =>
     expect(run("line one  \nline two\n")).toBe("line one  \nline two\n"));
   it("normalizes 3+ trailing spaces to a two-space hard break", () =>
