@@ -41,4 +41,12 @@ describe("codeRefReveal", () => {
   it("does not mark plain prose", () => {
     expect(marks("just some src/foo.ts text")).toEqual([]);
   });
+  it("exposes the reference to assistive tech as a link (role + hover title)", () => {
+    // The interior text ("src/foo.ts:42") is the accessible name; role=link tells
+    // AT the span is actionable. Keeps SR discoverability in lockstep with the
+    // keyboard-open command (code-ref-handlers.ts).
+    const set = codeRefReveal.build(ctxFor("see `src/foo.ts:42` now"));
+    const cursor = set.iter();
+    expect(cursor.value?.spec.attributes).toMatchObject({ role: "link" });
+  });
 });

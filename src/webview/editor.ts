@@ -18,7 +18,7 @@ import {
   type WebviewToHost,
 } from "../shared/protocol.js";
 import { applyCaret, type Caret, selectionCharCount, selectionToCaret } from "./cm/caret.js";
-import { quollCodeRefClickHandler } from "./cm/code-ref/code-ref-handlers.js";
+import { quollCodeRefClickHandler, quollCodeRefKeymap } from "./cm/code-ref/code-ref-handlers.js";
 import { quollContextHandoffKeymap } from "./cm/context-handoff.js";
 import { blockStyle } from "./cm/decorations/block-style.js";
 import { blockZoneArrowKeymap } from "./cm/decorations/block-zone-arrow-keymap.js";
@@ -629,6 +629,13 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
         // is deferred by this handler's own Link-ancestor guard, so the link
         // handler's click still wins.
         quollCodeRefClickHandler(getHost()),
+        // Keyboard equivalent of the code-reference mousedown handler above:
+        // Mod-Enter opens the reference the caret is inside, routed through the
+        // same untrusted open-code-reference sink. Gives the affordance a
+        // keyboard/AT path (the mark span is not Tab-focusable inside the CM
+        // contenteditable; see code-ref-reveal.ts). Prec.high inside the keymap;
+        // returns false off a reference so CM's default Mod-Enter still runs.
+        quollCodeRefKeymap(getHost()),
         // Provide the open-external sink read by the readonly table widget's
         // modifier-click path (cm/table/table-widget.ts). Same host choke
         // point as quollLinkClickHandler above — the widget is built inside a

@@ -11,7 +11,16 @@ import { buildSortedRangeSet } from "../sorted-range-set.js";
 import { hasLinkAncestor, inlineCodeInterior } from "./inline-code-ref.js";
 import { parseInlineCodeReference } from "./parse-code-reference.js";
 
-const CLICKABLE = Decoration.mark({ class: "quoll-code-ref-clickable" });
+// `role="link"` makes the reference discoverable to assistive tech as an
+// actionable control (its accessible name comes from the reference text itself,
+// e.g. "src/foo.ts:42"); `title` gives sighted mouse users a hover hint. The
+// keyboard-operable path is the Mod-Enter command in code-ref-handlers.ts — the
+// span is not Tab-focusable (Chromium does not Tab into inline marks inside the
+// CM contenteditable; same constraint as the task-checkbox widget).
+const CLICKABLE = Decoration.mark({
+  class: "quoll-code-ref-clickable",
+  attributes: { role: "link", title: "Open referenced file" },
+});
 
 export const codeRefReveal: DecorationProvider = {
   build(ctx): DecorationSet {
