@@ -27,7 +27,10 @@ export function runFormatDocument(view: EditorView): boolean {
     // overlapping edits, so a rule bug becomes a caught bail, not corruption.
     formatted = applyEdits(source, edits);
   } catch (err) {
-    console.error("[quoll] Format Document aborted (formatter/edit error); no changes applied.", err);
+    console.error(
+      "[quoll] Format Document aborted (formatter/edit error); no changes applied.",
+      err
+    );
     return false;
   }
   if (edits.length === 0 || formatted === source) {

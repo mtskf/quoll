@@ -1106,6 +1106,8 @@ describe("format-document message", () => {
   });
 
   it("rejects a format-document message with a wrong protocol version", () => {
-    expect(isHostToWebview({ protocol: PROTOCOL_VERSION + 1, type: "format-document" })).toBe(false);
+    expect(isHostToWebview({ protocol: PROTOCOL_VERSION + 1, type: "format-document" })).toBe(
+      false
+    );
   });
 });
