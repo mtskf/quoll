@@ -123,8 +123,10 @@ const RENDER_ENDPOINTS = [
 //   - html-to-markdown.ts additionally reads `href` for `<a>` — but ONLY via
 //     `getAttribute("href")` (a plain string, not the live `.href` property) and
 //     routes it through `isAllowedUrl` BEFORE it can become a Markdown link
-//     destination; a disallowed href degrades to plain text. Every other read is
-//     `textContent`.
+//     destination; a disallowed href degrades to plain text. Its only other
+//     attribute reads are non-URL structure (`getAttribute("class")` for a code
+//     fence language, `getAttribute("start")` for an ordered list); everything
+//     else is `textContent`.
 // The parse extracts structure + gated text, never an ungated live URL.
 const HTML_TABLE_PASTE_PARSE = [
   "src/webview/cm/paste/html-table-to-gfm.ts",
