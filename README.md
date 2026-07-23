@@ -20,7 +20,7 @@
 
 - **WYSIWYG Markdown editing** — `.md` files open in a CodeMirror-based live editor. The raw Markdown stays canonical; move the caret into a construct to reveal and edit its source, and away to re-render.
 - **Live editing** — edits sync to the document as you type; VS Code owns the file and saves as usual.
-- **Interactive task lists** — toggle `- [ ]` / `- [x]` checkboxes directly in the rendered view.
+- **Interactive task lists** — toggle `- [ ]` / `- [x]` checkboxes directly in the rendered view, by click or — with the caret on the task's line — `Ctrl/Cmd+L`.
 - **Editable GFM tables** — render and edit tables from the Markdown source.
 
 ### Blocks & content

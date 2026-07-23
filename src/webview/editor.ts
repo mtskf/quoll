@@ -64,6 +64,7 @@ import {
 import { detectLineSeparator, splitToCmText } from "./cm/seed.js";
 import { quollSwitchEditor } from "./cm/switch-editor.js";
 import { tableBlockField, tableSkeletonField } from "./cm/table/index.js";
+import { quollTaskCheckboxKeymap } from "./cm/task-checkbox/task-checkbox-command.js";
 import {
   quollBlockStyleTheme,
   quollBulletMarkerTheme,
@@ -608,6 +609,15 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
         // to fencedCodeEnterKeymap. Prec.high; returns false for every non-list
         // caret so the default Enter still runs. One transaction → edit-sync path.
         listContinuationKeymap(),
+        // Mod-l toggles the GFM task-list checkbox on the caret's line — the
+        // keyboard path for the checkbox, which the inline Decoration.replace
+        // widget cannot provide (Chromium/VS Code does not Tab into it, so its
+        // own Space/Enter handler is SR-cursor-only; see
+        // task-checkbox-widget.ts / task-checkbox-command.ts). With the caret on
+        // the line the source `[ ]` renders as editable text and this toggles it
+        // through the normal edit-sync pipeline. Prec.high; returns false off a
+        // task line so Mod-l passes through everywhere else.
+        quollTaskCheckboxKeymap(),
         // Enter on an unclosed ```-fence opener auto-inserts a matching closing
         // fence and lands the caret on the empty body line between the two, so a
         // fence typed mid-document no longer reflows every following line into
