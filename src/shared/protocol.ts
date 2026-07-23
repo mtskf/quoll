@@ -71,6 +71,14 @@ export const MAX_HREF_LENGTH = 8 * 1024;
  *  host-side to the live document's line count (the authoritative bound). */
 export const MAX_LINE_NUMBER = 0x7fffffff;
 
+/** Hard cap on the 1-based line/column suffix of an `open-code-reference`
+ *  request (`src/foo.ts:42` / `:42:7`). 10,000,000 far exceeds any real
+ *  source file's line count while bounding a forged/abusive value. Shared by
+ *  the webview-side parser (parseCodeReference) and the host validator
+ *  (isWebviewToHost) so a value the parser accepts is never silently
+ *  rejected at the host boundary (a dead click). */
+export const MAX_CODE_REFERENCE_LINE = 10_000_000;
+
 /** Hard cap on the number of lint diagnostics in one inbound `lint-diagnostics`
  *  message. The webview computes advisory lint over the raw Markdown; a
  *  pathological document (e.g. hundreds of trailing-space lines) stays well
