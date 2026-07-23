@@ -2,7 +2,7 @@
 // top-left toggle button + a left-edge slide-in sidebar inside the
 // .quoll-editor host. Hovering the toggle opens the sidebar; the pointer
 // leaving it (grace-delayed), a heading jump, Mod-Alt-o, or (for the transient
-// overlay) keyboard focus leaving the sidebar closes it — unless PINNED via the
+// overlay) focus leaving the sidebar closes it — unless PINNED via the
 // header pin button. The panel is a non-modal role=tree, NOT a modal dialog: it
 // never traps Tab (pinned mode is a persistent pane where Tab must flow between
 // sidebar and editor); the overlay merely self-dismisses on focus-out. Pinned mode swaps the absolute overlay for
