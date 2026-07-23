@@ -490,12 +490,17 @@ describe("quollOutline sidebar", () => {
     expect(host.querySelector(".quoll-outline-header-toggle")).toBeNull();
   });
 
-  it("exposes the list as a named ARIA tree of treeitems", () => {
+  it("exposes the list as a named ARIA tree of treeitems, named from the visible title", () => {
     const { host } = mount("# Alpha\n\n## Beta\n");
     toggleEl(host).click(); // open + build
     const tree = host.querySelector(".quoll-outline-list") as HTMLElement;
+    const title = host.querySelector(".quoll-outline-title") as HTMLElement;
     expect(tree.getAttribute("role")).toBe("tree");
-    expect(tree.getAttribute("aria-label")).toBe("Document outline");
+    // The tree's accessible name is derived from the visible "Outline" title
+    // (not a separate aria-label) so sighted and AT users see the same string.
+    expect(title.id).toBeTruthy();
+    expect(tree.getAttribute("aria-labelledby")).toBe(title.id);
+    expect(tree.getAttribute("aria-label")).toBeNull();
     // Every rendered row is a treeitem (the tree's owned nodes).
     expect(rowEls(host).map((r) => r.getAttribute("role"))).toEqual(["treeitem", "treeitem"]);
   });
