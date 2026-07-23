@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
-import { forceParsing, syntaxTreeAvailable } from "@codemirror/language";
+import { forceParsing } from "@codemirror/language";
 import { EditorSelection, EditorState, StateEffect, StateField } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import { afterEach, describe, expect, it } from "vitest";
@@ -31,7 +31,7 @@ function mountDoc(doc: string, extra: readonly unknown[] = []): EditorView {
   // (forceParsing dispatches an empty tx if the parse advanced). ensureSyntaxTree
   // alone completes the parse CONTEXT but not the field snapshot, so under load the
   // mount-time field could be built over a truncated init tree. See settleParse.
-  forceParsing(v, v.state.doc.length, 5000);
+  expect(forceParsing(v, v.state.doc.length, 5000)).toBe(true);
   return v;
 }
 
@@ -41,7 +41,7 @@ function mountDoc(doc: string, extra: readonly unknown[] = []): EditorView {
 // several parse `advance()` steps, so under full-suite CPU starvation a >20ms
 // scheduler preemption mid-parse makes CM `takeTree()` TRUNCATE the post-edit tree
 // (treeLen < doc.length). The field then correctly falls back to a full rebuild,
-// but `syntaxTreeAvailable(state, doc.length)` reads false and a node the edit was
+// but the tree-completeness check reads false and a node the edit was
 // meant to reveal can still be missing — the historical load-sensitive flake (memory
 // [[quoll-fold-bounded-equals-full-tests-flaky-under-load]], docs/LEARNING.md).
 // `forceParsing` finishes the parse and, if it advanced, dispatches an empty tx so
@@ -50,7 +50,10 @@ function mountDoc(doc: string, extra: readonly unknown[] = []): EditorView {
 // common, unloaded case), so the bounded recompute path stays exercised there while
 // a red now strictly means a bounded-vs-full contract breach, not a parse-timing race.
 function settleParse(v: EditorView): void {
-  forceParsing(v, v.state.doc.length, 5000);
+  // Assert convergence directly: forceParsing returns false if the 5000ms budget
+  // fails to reach doc end. A non-converged settle would otherwise surface as a
+  // confusing "bounded ≠ full" mismatch rather than a clear parse-budget failure.
+  expect(forceParsing(v, v.state.doc.length, 5000)).toBe(true);
 }
 
 // A contributor that churns the facet reference every transaction (mimics
@@ -236,7 +239,6 @@ describe("headingRhythmFoldGutterLineClass — per-level gutter tag for the rhyt
       return serializeField(v).find((r) => v.state.doc.lineAt(r.from).number === lineNo)?.cls;
     }
     function expectBoundedEqualsFull(): void {
-      expect(syntaxTreeAvailable(view!.state, view!.state.doc.length)).toBe(true);
       expect(serializeField(view!)).toEqual(oracle(view!.state.doc.toString()));
     }
 
@@ -324,7 +326,6 @@ describe("headingRhythmFoldGutterLineClass — per-level gutter tag for the rhyt
       const para = view.state.doc.toString().indexOf("para");
       view.dispatch({ changes: { from: para, insert: "### " } }); // "para" → "### para"
       settleParse(view);
-      expect(syntaxTreeAvailable(view.state, view.state.doc.length)).toBe(true);
       // Serialize this field, compare to a fresh full build over the same doc + empty zones.
       const ser = (v: EditorView) => {
         const out: { from: number; to: number; cls: string }[] = [];
@@ -399,13 +400,11 @@ describe("headingRhythmFoldGutterLineClass — per-level gutter tag for the rhyt
     }
     function oracle(doc: string): { from: number; to: number; cls: string }[] {
       const fresh = mountDoc(doc);
-      expect(syntaxTreeAvailable(fresh.state, fresh.state.doc.length)).toBe(true);
       const ser = serializeGutter(fresh);
       fresh.destroy();
       return ser;
     }
     function expectBoundedEqualsFull(): void {
-      expect(syntaxTreeAvailable(view!.state, view!.state.doc.length)).toBe(true);
       expect(serializeGutter(view!)).toEqual(oracle(view!.state.doc.toString()));
     }
 
