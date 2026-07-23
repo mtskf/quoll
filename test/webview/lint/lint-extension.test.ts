@@ -518,6 +518,40 @@ describe("toWireDiagnostics (offset → 0-based line/character)", () => {
       true
     );
   });
+
+  // AT-completeness pin (A11Y-04): a `wholeLine` finding is the ONE diagnostic
+  // type that gets NO in-editor underline (buildLintDecorations skips it, above),
+  // so its only visual surface is the mouse-only gutter dot / hover tooltip and
+  // the Problems-panel mirror is its SOLE assistive-tech path. The mirror is
+  // therefore only complete if wholeLine findings cross the wire. Guard that: a
+  // zero-length blank-line finding must project to a valid same-position range
+  // with severity/code/message intact. REVERT-CHECK: dropping wholeLine findings
+  // from the wire (the sole AT path for blank-line findings) fails this.
+  it("carries a wholeLine (blank-line) finding onto the wire so the Problems AT path is complete", () => {
+    // "aa"(2) "\n"(3) ""(3 = start of blank line idx 1) "\n"(4) "bb"
+    const doc = Text.of(["aa", "", "bb"]);
+    const wire = toWireDiagnostics(doc, [
+      {
+        from: 3,
+        to: 3,
+        severity: "info",
+        code: "no-multiple-blanks",
+        message: "m",
+        wholeLine: true,
+      },
+    ]);
+    expect(wire).toEqual<LintDiagnosticWire[]>([
+      {
+        startLine: 1,
+        startCharacter: 0,
+        endLine: 1,
+        endCharacter: 0,
+        severity: "info",
+        code: "no-multiple-blanks",
+        message: "m",
+      },
+    ]);
+  });
 });
 
 describe("quollLint diagnostics publisher (sink)", () => {
