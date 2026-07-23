@@ -57,10 +57,8 @@ describe("codeRefReveal", () => {
   it("exposes the reference to assistive tech as a link (role + keyshortcuts + title)", () => {
     // The interior text ("src/foo.ts:42") is the accessible name; role=link tells
     // AT the span is actionable, and aria-keyshortcuts/title announce the activation
-    // gesture. NOTE: this decoration is suppressed while a non-empty selection
-    // intersects the same InlineCode range (see code-ref-reveal.ts) — but a bare
-    // caret inside the reference keeps it, so the cue survives at the exact position
-    // the Mod-Enter command (code-ref-handlers.ts) is invoked.
+    // gesture (the actual Mod-Enter gesture, since there is no plain-Enter link
+    // activation here).
     const set = codeRefReveal.build(ctxFor("see `src/foo.ts:42` now"));
     const cursor = set.iter();
     expect(cursor.value?.spec.attributes).toEqual({
@@ -69,15 +67,22 @@ describe("codeRefReveal", () => {
       "aria-keyshortcuts": "Meta+Enter Control+Enter",
     });
   });
-  it("keeps the link affordance when a bare caret is inside the reference (Mod-Enter position)", () => {
+  it("keeps the affordance when a bare caret is inside the reference (Mod-Enter position)", () => {
+    // The affordance is selection-independent: it must survive a caret inside the
+    // reference, since that is exactly where the Mod-Enter command is invoked —
+    // suppressing there would make the role=link cue and the command mutually
+    // exclusive.
     const doc = "see `src/foo.ts:42` now";
     const caret = doc.indexOf("foo");
     const set = codeRefReveal.build(ctxWithSelection(doc, caret, caret));
     expect(set.iter().value?.spec.attributes).toMatchObject({ role: "link" });
   });
-  it("drops the affordance during a non-empty selection over the reference (editing)", () => {
+  it("keeps the affordance during a non-empty selection over the reference (selection-independent)", () => {
+    // Unlike the syntax-reveal providers, this mark is purely additive (the
+    // inline-code text always renders as-is), so it is never suppressed by
+    // selection — the underline + role/name stay put even while text is selected.
     const doc = "see `src/foo.ts:42` now";
     const set = codeRefReveal.build(ctxWithSelection(doc, doc.indexOf("src"), doc.indexOf(":42")));
-    expect(set.iter().value).toBe(null);
+    expect(set.iter().value?.spec.attributes).toMatchObject({ role: "link" });
   });
 });

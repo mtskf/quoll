@@ -1,7 +1,12 @@
 // DecorationProvider: over each visible InlineCode whose interior parses as a
 // workspace-relative code reference (parseInlineCodeReference), emit a
-// `quoll-code-ref-clickable` mark. Skipped inside a Link (the Link owns the
-// click) or while a non-empty selection intersects the span (editing).
+// `quoll-code-ref-clickable` mark. Skipped only inside a Link (the Link owns the
+// click). The affordance is selection-independent: unlike the syntax-reveal
+// providers (which reveal raw markdown when the caret enters, so they suppress on
+// selection), this mark is purely additive — the inline-code text always renders
+// as-is, and the mark only adds the underline + role/name. Suppressing it on a
+// caret would strip the role="link" cue exactly where the Mod-Enter command
+// (code-ref-handlers.ts) is invoked, so it is never suppressed by selection.
 
 import { Decoration, type DecorationSet } from "@codemirror/view";
 
@@ -46,15 +51,6 @@ export const codeRefReveal: DecorationProvider = {
           }
           const text = ctx.state.doc.sliceString(interior.from, interior.to);
           if (parseInlineCodeReference(text) === null) {
-            return;
-          }
-          // Suppress only during a real (non-empty) selection over the span —
-          // NOT a bare caret. The Mod-Enter command (code-ref-handlers.ts) acts on
-          // a caret inside the reference, so suppressing on a caret would make the
-          // role="link" cue and the keyboard command mutually exclusive.
-          if (
-            ctx.selection.ranges.some((r) => !r.empty && r.from <= node.to && r.to >= node.from)
-          ) {
             return;
           }
           if (interior.from < range.to && range.from < interior.to) {
