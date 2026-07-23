@@ -2,6 +2,12 @@
 
 All notable changes to Quoll are documented here.
 
+## 0.1.52 — 2026-07-23
+
+### Added
+
+- Workspace code references like `` `src/foo.ts:42` `` in inline code are now clickable in the rendered view and open the file in a text editor at the referenced line and column.
+
 ## 0.1.51 — 2026-07-17
 
 ### Added
