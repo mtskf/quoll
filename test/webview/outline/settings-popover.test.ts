@@ -133,6 +133,48 @@ describe("createSettingsPopover", () => {
     expect(onChange).toHaveBeenCalledWith("quoll.editor.fontFamily", "serif");
   });
 
+  it("marks the dialog aria-modal so ATs treat it as modal", () => {
+    const { popover } = make();
+    expect(popover.el.getAttribute("aria-modal")).toBe("true");
+  });
+
+  it("focusInitial moves focus to the first group's tabbable radio", () => {
+    const { popover } = make();
+    popover.focusInitial();
+    const firstGroup = popover.el.querySelector("[role='radiogroup']") as HTMLElement;
+    const active = firstGroup.querySelector("[tabindex='0']") as HTMLButtonElement;
+    expect(document.activeElement).toBe(active);
+    expect(popover.el.contains(document.activeElement)).toBe(true);
+  });
+
+  it("traps Tab: from the last tabbable radio it wraps to the first", () => {
+    const { popover } = make();
+    const tabbable = [...popover.el.querySelectorAll<HTMLButtonElement>("[role='radio']")].filter(
+      (r) => r.tabIndex === 0
+    );
+    const first = tabbable[0];
+    const last = tabbable[tabbable.length - 1];
+    last.focus();
+    last.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Tab", bubbles: true, cancelable: true })
+    );
+    expect(document.activeElement).toBe(first);
+  });
+
+  it("traps Shift+Tab: from the first tabbable radio it wraps to the last", () => {
+    const { popover } = make();
+    const tabbable = [...popover.el.querySelectorAll<HTMLButtonElement>("[role='radio']")].filter(
+      (r) => r.tabIndex === 0
+    );
+    const first = tabbable[0];
+    const last = tabbable[tabbable.length - 1];
+    first.focus();
+    first.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Tab", shiftKey: true, bubbles: true, cancelable: true })
+    );
+    expect(document.activeElement).toBe(last);
+  });
+
   it("Escape delegates to onRequestClose and stops propagation (no self-close)", () => {
     const { popover, onRequestClose } = make();
     const bubbled = vi.fn();
