@@ -1065,6 +1065,35 @@ describe("quollOutline keyboard resize (separator)", () => {
     handleKeydown(host, "Escape");
     expect(host.classList.contains(OUTLINE_OPEN_CLASS)).toBe(false);
   });
+
+  it("Escape from the separator hands focus back to the editor (not <body>)", () => {
+    // Closing while focus is on the host-child handle must restore editor focus,
+    // exactly like Escape from inside the sidebar. setOpen captures the WHOLE
+    // outline focus region (sidebar + separator), not just the sidebar — so a
+    // handle-focused close calls view.focus() rather than stranding focus on
+    // <body> once CSS hides the handle. Mirrors the line-160 sidebar Escape test.
+    const { view: v, host } = mount("# A\n\nbody\n\n## B\n");
+    v.plugin(outlinePlugin)?.toggle(); // open as a transient overlay (not pinned)
+    handleEl(host).focus();
+    handleKeydown(host, "Escape");
+    expect(host.classList.contains(OUTLINE_OPEN_CLASS)).toBe(false);
+    expect(document.activeElement).toBe(v.contentDOM);
+  });
+
+  it("keeps a PINNED sidebar open on focus-out from the separator (pinned guard)", () => {
+    // The handle's focusout listener reuses onSidebarFocusOut, so its `this.pinned`
+    // guard must hold via the handle binding too — not only via the sidebar
+    // binding (which the overlay focus-out suite already covers). A pinned pane is
+    // persistent: tabbing off the separator to the editor must NOT dismiss it.
+    const { view: v, host } = mount("# A\n\nbody\n\n## B\n");
+    toggleEl(host).click();
+    pinEl(host).click(); // pin ⇒ persistent pane
+    handleEl(host).focus();
+    handleEl(host).dispatchEvent(
+      new FocusEvent("focusout", { relatedTarget: v.contentDOM, bubbles: true })
+    );
+    expect(host.classList.contains(OUTLINE_OPEN_CLASS)).toBe(true);
+  });
 });
 
 describe("quollOutline settings popover wiring", () => {

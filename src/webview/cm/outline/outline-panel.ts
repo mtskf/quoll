@@ -501,10 +501,14 @@ class OutlinePanel implements PluginValue {
       return;
     }
     this.open = open;
-    // Capture BEFORE mutating: setting `inert` below can make the browser
-    // evict focus from the sidebar synchronously, so an after-the-fact
-    // activeElement check would miss it and strand focus on <body>.
-    const hadSidebarFocus = this.sidebarEl.contains(document.activeElement);
+    // Capture BEFORE mutating: setting `inert` below (and, on close, CSS hiding
+    // the host-child resize handle) can make the browser evict focus from the
+    // outline synchronously, so an after-the-fact activeElement check would miss
+    // it and strand focus on <body>. The focus region is the sidebar PLUS the
+    // separator handle (a host sibling, not a sidebar child) — mirror the same
+    // union onSidebarFocusOut uses so a handle-focused close restores editor focus.
+    const hadOutlineFocus =
+      this.sidebarEl.contains(document.activeElement) || document.activeElement === this.resizeEl;
     if (this.rebuildTimer !== null) {
       clearTimeout(this.rebuildTimer);
       this.rebuildTimer = null;
@@ -533,9 +537,10 @@ class OutlinePanel implements PluginValue {
       // complete parse so the WHOLE document's headings appear, not just the
       // parsed viewport. The only forced parse; off the keystroke path.
       this.rebuild(true);
-    } else if (hadSidebarFocus) {
-      // Closing while focus was inside the (now-inert) sidebar: hand focus
-      // back to the editor instead of letting the browser drop it on <body>.
+    } else if (hadOutlineFocus) {
+      // Closing while focus was inside the outline region (the now-inert sidebar
+      // OR the resize handle that CSS hides on close): hand focus back to the
+      // editor instead of letting the browser drop it on <body>.
       this.view.focus();
     }
   }
