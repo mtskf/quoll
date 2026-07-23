@@ -6,6 +6,14 @@ import { realpath } from "node:fs/promises";
 import { isAbsolute, relative } from "node:path";
 import { FileType, Position, Selection, type Uri, window, workspace } from "vscode";
 
+/** Pure containment predicate: true when `realTarget` is `realRoot` itself or a
+ *  descendant of it. node:path only (no I/O) so it unit-tests without a live
+ *  host — the realpath resolution happens in the async wrapper below. */
+export function isRealPathWithinRoot(realTarget: string, realRoot: string): boolean {
+  const rel = relative(realRoot, realTarget);
+  return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
+}
+
 /** True only when `target` exists, is a regular file, AND its REAL (symlink-
  *  canonicalised) path stays within `root`'s real path. realpath'ing BOTH sides
  *  closes ancestor-directory-symlink containment escapes (and handles a
@@ -20,9 +28,22 @@ export async function codeReferenceFileExistsWithinRoot(target: Uri, root: Uri):
     }
     const realTarget = await realpath(target.fsPath);
     const realRoot = await realpath(root.fsPath);
-    const rel = relative(realRoot, realTarget);
-    return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
-  } catch {
+    if (!isRealPathWithinRoot(realTarget, realRoot)) {
+      // A real file resolving OUTSIDE the workspace root is a containment
+      // escape (e.g. via a symlink) — security-relevant, log it. Fail closed.
+      console.warn("[quoll] code-reference rejected: real path escapes workspace root", {
+        target: target.fsPath,
+        root: root.fsPath,
+      });
+      return false;
+    }
+    return true;
+  } catch (err) {
+    // A missing file is the normal/benign case — stay quiet. Anything else is
+    // unexpected (permissions, I/O) and worth surfacing. Still fail closed.
+    if ((err as NodeJS.ErrnoException)?.code !== "ENOENT") {
+      console.warn("[quoll] code-reference existence check failed", err);
+    }
     return false;
   }
 }
