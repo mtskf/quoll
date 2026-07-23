@@ -248,6 +248,9 @@ export function mountShell(root: HTMLElement, opts: ShellOptions): ShellHandle {
       case "format-command":
         editor?.runFormatCommand(message.action);
         return;
+      case "format-document":
+        editor?.runFormatDocument();
+        return;
       case "caret-apply":
         // One-shot caret handoff from the host (panel became active). Pure side
         // channel: it never enters the reducer (no docVersion / write-lock) — it
