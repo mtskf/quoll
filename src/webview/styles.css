@@ -335,6 +335,18 @@ html body {
     cursor: pointer;
   }
 
+  /* Clickable code-reference affordance (PR1 inline-code click-to-open).
+   * Dotted underline (distinct from the solid link underline supplied by
+   * cm/theme.ts's t.link tag) signals "opens in a text editor", not "opens
+   * in Quoll". Optimistic: shown for any path-shaped token regardless of
+   * on-disk existence (PR2 adds an existence-gated affordance). */
+  .quoll-code-ref-clickable {
+    cursor: pointer;
+    text-decoration-line: underline;
+    text-decoration-style: dotted;
+    text-underline-offset: 0.15em;
+  }
+
 }
 
 /* ────────────────────────────── theme ──────────────────────────── */

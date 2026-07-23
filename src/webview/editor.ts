@@ -18,6 +18,7 @@ import {
   type WebviewToHost,
 } from "../shared/protocol.js";
 import { applyCaret, type Caret, selectionCharCount, selectionToCaret } from "./cm/caret.js";
+import { quollCodeRefClickHandler } from "./cm/code-ref/code-ref-handlers.js";
 import { quollContextHandoffKeymap } from "./cm/context-handoff.js";
 import { blockStyle } from "./cm/decorations/block-style.js";
 import { blockZoneArrowKeymap } from "./cm/decorations/block-zone-arrow-keymap.js";
@@ -615,6 +616,14 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
         // reads syntaxTree to resolve the position to a Link node and
         // benefits from any decorations the reveal already arbitrated.
         quollLinkClickHandler(getHost()),
+        // Independent mousedown handler for the workspace-relative code-
+        // reference affordance (`src/foo.ts:42` inside inline code). Coexists
+        // with quollLinkClickHandler above: a click on a plain code reference
+        // resolves no Link (that handler returns false) and this handler
+        // consumes it; a code reference NESTED in a link (`` [`x`](y.md) ``)
+        // is deferred by this handler's own Link-ancestor guard, so the link
+        // handler's click still wins.
+        quollCodeRefClickHandler(getHost()),
         // Provide the open-external sink read by the readonly table widget's
         // modifier-click path (cm/table/table-widget.ts). Same host choke
         // point as quollLinkClickHandler above — the widget is built inside a

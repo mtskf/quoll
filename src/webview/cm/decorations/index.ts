@@ -7,6 +7,7 @@ export {
 } from "./orchestrator.js";
 export type { BuildContext, DecorationProvider } from "./types.js";
 
+import { codeRefReveal } from "../code-ref/code-ref-reveal.js";
 import { fencedCodeReveal } from "../fenced-code/fenced-code-reveal.js";
 import { taskCheckboxReveal } from "../task-checkbox/task-checkbox-reveal.js";
 import { blockquoteReveal } from "./blockquote-reveal.js";
@@ -39,6 +40,10 @@ export const syntaxRevealProviders = [
   // Lone `-`/`=` setext underline being typed under a paragraph → de-style the
   // heading so it reads as a nascent bullet list, not a heading.
   setextNascentReveal,
+  // Clickable affordance for a path-shaped inline-code code reference
+  // (`src/foo.ts:42`). Display-only mark; click-to-open is wired separately
+  // in cm/code-ref/code-ref-handlers.ts.
+  codeRefReveal,
 ] as const;
 
 /** The single extension entry `editor.ts` registers. Bundles every
