@@ -1,8 +1,10 @@
-// Open-a-code-reference for references inside inline code. Two triggers share
-// one sink: a `mousedown` handler (resolves the click pos) and a `Mod-Enter`
-// keymap command (resolves the caret pos). Both walk up to InlineCode (deferring
-// if a Link ancestor owns it) → parseInlineCodeReference → post an UNTRUSTED
-// open-code-reference. The host re-validates everything.
+// Open-a-code-reference for references inside inline code. Three triggers share
+// one sink: a `mousedown` handler (mouse — resolves the click pos), a `click`
+// handler gated on `detail === 0` (assistive-tech synthesized activation of the
+// role="link" span — resolves the click target pos), and a `Mod-Enter` keymap
+// command (keyboard — resolves the caret pos). All walk up to InlineCode
+// (deferring if a Link ancestor owns it) → parseInlineCodeReference → post an
+// UNTRUSTED open-code-reference. The host re-validates everything.
 
 import { syntaxTree } from "@codemirror/language";
 import { type EditorState, type Extension, Prec } from "@codemirror/state";
@@ -81,10 +83,48 @@ export function handleCodeRefMouseDown(
   return false;
 }
 
+/** Keyboard/AT activation of the role="link" reference span. A screen reader
+ *  activating the announced link dispatches a DOM `click` with `detail === 0`
+ *  (no pointer). A real mouse click (`detail >= 1`) is already handled by
+ *  `handleCodeRefMouseDown` above, so gating on `detail === 0` here avoids a
+ *  double-post. The position is resolved from the click TARGET (the AT user need
+ *  not have moved the CM caret into the span), and the selection-defer guard is
+ *  off for the same reason the caret command turns it off. */
+export function handleCodeRefClick(
+  event: MouseEvent,
+  view: EditorView,
+  host: CodeRefHost
+): boolean {
+  if (event.detail !== 0) {
+    return false;
+  }
+  const target = event.target;
+  if (!(target instanceof Node)) {
+    return false;
+  }
+  let pos: number;
+  try {
+    pos = view.posAtDOM(target);
+  } catch {
+    return false;
+  }
+  if (pos < 0 || pos > view.state.doc.length) {
+    return false;
+  }
+  if (tryOpenCodeRefAt(view.state, pos, host, { deferWhenSelectionIntersects: false })) {
+    event.preventDefault();
+    return true;
+  }
+  return false;
+}
+
 export function quollCodeRefClickHandler(host: CodeRefHost): Extension {
   return EditorView.domEventHandlers({
     mousedown(event, view) {
       return handleCodeRefMouseDown(event, view, host);
+    },
+    click(event, view) {
+      return handleCodeRefClick(event, view, host);
     },
   });
 }

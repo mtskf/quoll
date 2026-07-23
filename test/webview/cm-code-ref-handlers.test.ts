@@ -5,9 +5,12 @@ import { EditorView } from "@codemirror/view";
 import { describe, expect, it, vi } from "vitest";
 import {
   CODE_REF_OPEN_KEY,
+  handleCodeRefClick,
   openCodeRefAtCaretCommand,
   tryOpenCodeRefAt,
 } from "../../src/webview/cm/code-ref/code-ref-handlers.js";
+import { codeRefReveal } from "../../src/webview/cm/code-ref/code-ref-reveal.js";
+import { fullTree } from "./helpers/full-tree.js";
 
 function stateFor(doc: string, sel?: number) {
   return EditorState.create({
@@ -62,6 +65,72 @@ describe("tryOpenCodeRefAt", () => {
     expect(host.postMessage).toHaveBeenCalledWith(
       expect.objectContaining({ type: "open-code-reference", path: "src/foo.ts", line: 42 })
     );
+  });
+});
+
+describe("handleCodeRefClick", () => {
+  // Render the REAL reveal span (`.quoll-code-ref-clickable`, role="link") into a
+  // live view, so an AT-synthesized click can target the exact element a screen
+  // reader activates. `posAtDOM` on that span resolves to a position INSIDE the
+  // reference (the whole prose line is otherwise a single text node whose start is
+  // outside the span), so this genuinely exercises the open path.
+  function viewWithRefSpan(doc: string): EditorView {
+    const parent = document.createElement("div");
+    document.body.appendChild(parent);
+    const base = EditorState.create({ doc, extensions: [markdown()] });
+    const revealSet = codeRefReveal.build({
+      state: base,
+      selection: base.selection,
+      visibleRanges: [{ from: 0, to: doc.length }],
+      tree: fullTree(base),
+    });
+    return new EditorView({
+      state: EditorState.create({
+        doc,
+        extensions: [markdown(), EditorView.decorations.of(revealSet)],
+      }),
+      parent,
+    });
+  }
+  function refSpan(view: EditorView): HTMLElement {
+    const span = view.dom.querySelector<HTMLElement>(".quoll-code-ref-clickable");
+    if (span === null) {
+      throw new Error("expected a rendered .quoll-code-ref-clickable span");
+    }
+    return span;
+  }
+
+  it("opens on a synthesized (AT) click whose target is the role=link span", () => {
+    const host = { postMessage: vi.fn() };
+    const view = viewWithRefSpan("see `src/foo.ts:42` end");
+    try {
+      const ev = {
+        detail: 0,
+        target: refSpan(view),
+        preventDefault: vi.fn(),
+      } as unknown as MouseEvent;
+      expect(handleCodeRefClick(ev, view, host as never)).toBe(true);
+      expect(host.postMessage).toHaveBeenCalledWith(
+        expect.objectContaining({ type: "open-code-reference", path: "src/foo.ts", line: 42 })
+      );
+    } finally {
+      view.destroy();
+    }
+  });
+  it("ignores a real mouse click (detail>=1) so it never double-posts with mousedown", () => {
+    const host = { postMessage: vi.fn() };
+    const view = viewWithRefSpan("see `src/foo.ts:42` end");
+    try {
+      const ev = {
+        detail: 1,
+        target: refSpan(view),
+        preventDefault: vi.fn(),
+      } as unknown as MouseEvent;
+      expect(handleCodeRefClick(ev, view, host as never)).toBe(false);
+      expect(host.postMessage).not.toHaveBeenCalled();
+    } finally {
+      view.destroy();
+    }
   });
 });
 

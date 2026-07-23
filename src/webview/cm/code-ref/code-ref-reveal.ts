@@ -1,11 +1,10 @@
 // DecorationProvider: over each visible InlineCode whose interior parses as a
 // workspace-relative code reference (parseInlineCodeReference), emit a
 // `quoll-code-ref-clickable` mark. Skipped inside a Link (the Link owns the
-// click) or while the selection intersects the span (editing).
+// click) or while a non-empty selection intersects the span (editing).
 
 import { Decoration, type DecorationSet } from "@codemirror/view";
 
-import { intersectsAnySelection } from "../decorations/shared.js";
 import type { DecorationProvider } from "../decorations/types.js";
 import { buildSortedRangeSet } from "../sorted-range-set.js";
 import { hasLinkAncestor, inlineCodeInterior } from "./inline-code-ref.js";
@@ -13,13 +12,21 @@ import { parseInlineCodeReference } from "./parse-code-reference.js";
 
 // `role="link"` makes the reference discoverable to assistive tech as an
 // actionable control (its accessible name comes from the reference text itself,
-// e.g. "src/foo.ts:42"); `title` gives sighted mouse users a hover hint. The
-// keyboard-operable path is the Mod-Enter command in code-ref-handlers.ts — the
-// span is not Tab-focusable (Chromium does not Tab into inline marks inside the
-// CM contenteditable; same constraint as the task-checkbox widget).
+// e.g. "src/foo.ts:42"); `aria-keyshortcuts` + the `title` hint announce the
+// activation gesture (there is no plain-Enter link activation here — see below).
+// Activation paths: a screen-reader/AT "click" on the announced link (handled by
+// the click domEventHandler in code-ref-handlers.ts), the Mod-Enter caret command,
+// and the mouse. This span carries no tabindex, so it is not Tab-focusable;
+// whether adding one would work on a Decoration.mark inside CM's contenteditable
+// is unverified (the task-checkbox widget sets tabIndex=0 on a Decoration.replace
+// widget and still did not get real Tab traversal — a different, narrower case).
 const CLICKABLE = Decoration.mark({
   class: "quoll-code-ref-clickable",
-  attributes: { role: "link", title: "Open referenced file" },
+  attributes: {
+    role: "link",
+    title: "Open referenced file (Cmd/Ctrl+Enter)",
+    "aria-keyshortcuts": "Meta+Enter Control+Enter",
+  },
 });
 
 export const codeRefReveal: DecorationProvider = {
@@ -41,7 +48,13 @@ export const codeRefReveal: DecorationProvider = {
           if (parseInlineCodeReference(text) === null) {
             return;
           }
-          if (intersectsAnySelection(ctx.selection, node.from, node.to)) {
+          // Suppress only during a real (non-empty) selection over the span —
+          // NOT a bare caret. The Mod-Enter command (code-ref-handlers.ts) acts on
+          // a caret inside the reference, so suppressing on a caret would make the
+          // role="link" cue and the keyboard command mutually exclusive.
+          if (
+            ctx.selection.ranges.some((r) => !r.empty && r.from <= node.to && r.to >= node.from)
+          ) {
             return;
           }
           if (interior.from < range.to && range.from < interior.to) {

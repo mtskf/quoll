@@ -14,6 +14,19 @@ function ctxFor(doc: string): BuildContext {
     tree: fullTree(state),
   };
 }
+function ctxWithSelection(doc: string, anchor: number, head: number): BuildContext {
+  const state = EditorState.create({
+    doc,
+    selection: { anchor, head },
+    extensions: [markdown()],
+  });
+  return {
+    state,
+    selection: state.selection,
+    visibleRanges: [{ from: 0, to: doc.length }],
+    tree: fullTree(state),
+  };
+}
 function marks(doc: string): Array<{ from: number; to: number }> {
   const set = codeRefReveal.build(ctxFor(doc));
   const out: Array<{ from: number; to: number }> = [];
@@ -41,12 +54,30 @@ describe("codeRefReveal", () => {
   it("does not mark plain prose", () => {
     expect(marks("just some src/foo.ts text")).toEqual([]);
   });
-  it("exposes the reference to assistive tech as a link (role + hover title)", () => {
+  it("exposes the reference to assistive tech as a link (role + keyshortcuts + title)", () => {
     // The interior text ("src/foo.ts:42") is the accessible name; role=link tells
-    // AT the span is actionable. Keeps SR discoverability in lockstep with the
-    // keyboard-open command (code-ref-handlers.ts).
+    // AT the span is actionable, and aria-keyshortcuts/title announce the activation
+    // gesture. NOTE: this decoration is suppressed while a non-empty selection
+    // intersects the same InlineCode range (see code-ref-reveal.ts) — but a bare
+    // caret inside the reference keeps it, so the cue survives at the exact position
+    // the Mod-Enter command (code-ref-handlers.ts) is invoked.
     const set = codeRefReveal.build(ctxFor("see `src/foo.ts:42` now"));
     const cursor = set.iter();
-    expect(cursor.value?.spec.attributes).toMatchObject({ role: "link" });
+    expect(cursor.value?.spec.attributes).toEqual({
+      role: "link",
+      title: "Open referenced file (Cmd/Ctrl+Enter)",
+      "aria-keyshortcuts": "Meta+Enter Control+Enter",
+    });
+  });
+  it("keeps the link affordance when a bare caret is inside the reference (Mod-Enter position)", () => {
+    const doc = "see `src/foo.ts:42` now";
+    const caret = doc.indexOf("foo");
+    const set = codeRefReveal.build(ctxWithSelection(doc, caret, caret));
+    expect(set.iter().value?.spec.attributes).toMatchObject({ role: "link" });
+  });
+  it("drops the affordance during a non-empty selection over the reference (editing)", () => {
+    const doc = "see `src/foo.ts:42` now";
+    const set = codeRefReveal.build(ctxWithSelection(doc, doc.indexOf("src"), doc.indexOf(":42")));
+    expect(set.iter().value).toBe(null);
   });
 });

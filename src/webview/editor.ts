@@ -621,20 +621,23 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
         // reads syntaxTree to resolve the position to a Link node and
         // benefits from any decorations the reveal already arbitrated.
         quollLinkClickHandler(getHost()),
-        // Independent mousedown handler for the workspace-relative code-
-        // reference affordance (`src/foo.ts:42` inside inline code). Coexists
-        // with quollLinkClickHandler above: a click on a plain code reference
-        // resolves no Link (that handler returns false) and this handler
-        // consumes it; a code reference NESTED in a link (`` [`x`](y.md) ``)
-        // is deferred by this handler's own Link-ancestor guard, so the link
-        // handler's click still wins.
+        // Pointer + AT activation handlers for the workspace-relative code-
+        // reference affordance (`src/foo.ts:42` inside inline code). One
+        // domEventHandlers registration serves two of the three triggers: a
+        // `mousedown` (real mouse) and a `click` gated on `detail === 0` (an
+        // assistive-tech synthesized activation of the role="link" span; the
+        // detail gate avoids double-posting with mousedown). Coexists with
+        // quollLinkClickHandler above: a plain code reference resolves no Link
+        // (that handler returns false) and this handler consumes it; a code
+        // reference NESTED in a link (`` [`x`](y.md) ``) is deferred by this
+        // handler's own Link-ancestor guard, so the link handler still wins.
         quollCodeRefClickHandler(getHost()),
-        // Keyboard equivalent of the code-reference mousedown handler above:
-        // Mod-Enter opens the reference the caret is inside, routed through the
-        // same untrusted open-code-reference sink. Gives the affordance a
-        // keyboard/AT path (the mark span is not Tab-focusable inside the CM
-        // contenteditable; see code-ref-reveal.ts). Prec.high inside the keymap;
-        // returns false off a reference so CM's default Mod-Enter still runs.
+        // Third trigger — the keyboard caret command: Mod-Enter opens the
+        // reference the caret is inside, routed through the same untrusted
+        // open-code-reference sink. Prec.high inside the keymap; returns false
+        // off a reference so CM's default Mod-Enter still runs. (See
+        // code-ref-handlers.ts for the three-trigger sink; the mark span is not
+        // Tab-focusable, so this command is the keyboard path.)
         quollCodeRefKeymap(getHost()),
         // Provide the open-external sink read by the readonly table widget's
         // modifier-click path (cm/table/table-widget.ts). Same host choke
