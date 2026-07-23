@@ -117,12 +117,15 @@ const RENDER_ENDPOINTS = [
 // primitive.
 // Smart-paste HTML→Markdown converters (html-table-to-gfm.ts, html-to-markdown.ts)
 // parse a `text/html` clipboard fragment with DOMParser to read structure. Both
-// are legitimate choke-point exceptions BECAUSE they only ever read `href` via
-// `getAttribute("href")` (a plain string, not the live `.href` property) and
-// immediately route it through `isAllowedUrl` before it can become a Markdown
-// link destination — a disallowed href degrades to plain text. Every OTHER
-// attribute read is cell/text content (`textContent`), never a live URL. The
-// parse extracts structure + gated text, never an ungated URL.
+// are legitimate choke-point exceptions:
+//   - html-table-to-gfm.ts reads cell TEXT ONLY (`textContent`); it never reads a
+//     `href`/`src`, so no URL from the parsed tree ever reaches a gate.
+//   - html-to-markdown.ts additionally reads `href` for `<a>` — but ONLY via
+//     `getAttribute("href")` (a plain string, not the live `.href` property) and
+//     routes it through `isAllowedUrl` BEFORE it can become a Markdown link
+//     destination; a disallowed href degrades to plain text. Every other read is
+//     `textContent`.
+// The parse extracts structure + gated text, never an ungated live URL.
 const HTML_TABLE_PASTE_PARSE = [
   "src/webview/cm/paste/html-table-to-gfm.ts",
   "src/webview/cm/paste/html-to-markdown.ts",
