@@ -53,10 +53,15 @@ import { createIncrementalWriteValidator } from "../../markdown/validate-for-wri
 import { perfReport } from "../../shared/perf.js";
 import {
   buildFormatCommandMessage,
+  buildFormatDocumentMessage,
   type FormatCommandMessage,
   isWebviewToHost,
 } from "../../shared/protocol.js";
 import { clearActiveFormatPoster, setActiveFormatPoster } from "../commands/format-command.js";
+import {
+  clearActiveDocFormatPoster,
+  setActiveDocFormatPoster,
+} from "../commands/format-document-command.js";
 import { createEditorConfigWiring } from "../config/editor-config-wiring.js";
 import { isRelevantConfigChange, readEditorPrefs } from "../config/editor-prefs-config.js";
 import { handleUpdateConfig } from "../config/handle-update-config.js";
@@ -451,11 +456,17 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
     const formatPoster = (action: FormatCommandMessage["action"]): void => {
       post(buildFormatCommandMessage(action));
     };
+    // Sibling poster for the whole-document `quoll.formatDocument` command. Same
+    // active-edge lifecycle as formatPoster (registered/cleared adjacent to it).
+    const docFormatPoster = (): void => {
+      post(buildFormatDocumentMessage());
+    };
     // onDidChangeViewState does NOT fire for the initial active state, so
     // register once here if this panel opens active (the edge handler owns it
     // thereafter). This runs after `post`/`formatPoster` are defined.
     if (webviewPanel.active) {
       setActiveFormatPoster(formatPoster);
+      setActiveDocFormatPoster(docFormatPoster);
     }
 
     // Image-write executor. Orthogonal to the document-text write lock (it writes
@@ -634,8 +645,10 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
         }
         if (e.webviewPanel.active) {
           setActiveFormatPoster(formatPoster);
+          setActiveDocFormatPoster(docFormatPoster);
         } else {
           clearActiveFormatPoster(formatPoster);
+          clearActiveDocFormatPoster(docFormatPoster);
         }
       },
       undefined,
@@ -940,6 +953,7 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
       // to a disposing panel. Primary guard; `post` (createEffectExecutor) is a
       // backstop that self-suppresses after dispose (effect-executor.ts).
       clearActiveFormatPoster(formatPoster);
+      clearActiveDocFormatPoster(docFormatPoster);
       dispatch({ type: "disposed" });
       // Clear THIS document's lint diagnostics when its editor closes. The
       // collection itself outlives the panel (disposed via context.subscriptions on
