@@ -1,8 +1,8 @@
 // Paste re-indent: when the clipboard carries a MULTI-LINE plain-text Markdown
-// LIST fragment and the caret sits at the start of a line inside an existing
-// list context, re-base the fragment's leading indentation so its top level
-// aligns with the caret's column, preserving the fragment's inner relative
-// structure (Obsidian analogue). Pure text transform on the paste content; the
+// LIST fragment and the caret sits on an otherwise-blank (whitespace-only) line
+// inside an existing list context, re-base the fragment's leading indentation so
+// its top level aligns with the caret's column, preserving the fragment's inner
+// relative structure (Obsidian analogue). Pure text transform on the paste content; the
 // handler (below) inserts it through the normal edit pipeline. Every
 // non-qualifying paste defers (return null / false) so the other paste handlers
 // + CM's default plain-text paste still run.
