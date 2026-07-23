@@ -173,6 +173,14 @@ interface TestOverrides {
    *  out-of-scope targets) without depending on the real `vscode.openWith`
    *  command. */
   openLink: ((uri: Uri) => Thenable<unknown>) | null;
+  /** When non-null, the `open-code-reference` arm routes revealCodeReference
+   *  through this — the E2E asserts the resolved target + parsed line/col. */
+  openCodeReference:
+    | ((uri: Uri, line: number | undefined, col: number | undefined) => Thenable<unknown>)
+    | null;
+  /** When non-null, replaces codeReferenceFileExistsWithinRoot so the E2E
+   *  controls the existence verdict deterministically. */
+  codeReferenceExists: ((target: Uri, root: Uri) => Thenable<boolean>) | null;
   /** When non-null, resolveCustomTextEditor builds the webview HTML
    *  through this instead of `QuollEditorPanel.getWebviewContent`. The
    *  override may throw synchronously to simulate a `buildWebviewHtml`
@@ -204,6 +212,8 @@ function createOverrides(): TestOverrides {
     webviewPostMessage: null,
     openExternal: null,
     openLink: null,
+    openCodeReference: null,
+    codeReferenceExists: null,
     buildWebviewHtml: null,
     writeImageFile: null,
     diskConflictPrompt: null,
@@ -292,6 +302,34 @@ export class TestHarness {
 
   set openLinkOverride(override: ((uri: Uri) => Thenable<unknown>) | null) {
     this._overrides.openLink = override;
+  }
+
+  /** Read by the panel's `case "open-code-reference"` arm to route the
+   *  `revealInTextEditor` dep through a test override — see
+   *  `TestOverrides.openCodeReference`. */
+  get openCodeReferenceOverride():
+    | ((uri: Uri, line: number | undefined, col: number | undefined) => Thenable<unknown>)
+    | null {
+    return this._overrides.openCodeReference;
+  }
+
+  set openCodeReferenceOverride(override:
+    | ((uri: Uri, line: number | undefined, col: number | undefined) => Thenable<unknown>)
+    | null) {
+    this._overrides.openCodeReference = override;
+  }
+
+  /** Read by the panel's `case "open-code-reference"` arm to route the
+   *  `pathExists` dep through a test override — see
+   *  `TestOverrides.codeReferenceExists`. */
+  get codeReferenceExistsOverride(): ((target: Uri, root: Uri) => Thenable<boolean>) | null {
+    return this._overrides.codeReferenceExists;
+  }
+
+  set codeReferenceExistsOverride(override:
+    | ((target: Uri, root: Uri) => Thenable<boolean>)
+    | null) {
+    this._overrides.codeReferenceExists = override;
   }
 
   /** Read by resolveCustomTextEditor to build the webview HTML through a

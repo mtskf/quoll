@@ -489,6 +489,62 @@ describe("isWebviewToHost — open-link", () => {
   });
 });
 
+// ---------- isWebviewToHost / open-code-reference ----------
+
+describe("isWebviewToHost — open-code-reference", () => {
+  it("accepts open-code-reference (with and without line/col)", () => {
+    expect(
+      isWebviewToHost({
+        protocol: PROTOCOL_VERSION,
+        type: "open-code-reference",
+        path: "src/foo.ts",
+        line: 42,
+        col: 7,
+      })
+    ).toBe(true);
+    expect(
+      isWebviewToHost({
+        protocol: PROTOCOL_VERSION,
+        type: "open-code-reference",
+        path: "src/foo.ts",
+      })
+    ).toBe(true);
+  });
+  it("rejects open-code-reference with oversize path, bad line, or col-without-line", () => {
+    expect(
+      isWebviewToHost({
+        protocol: PROTOCOL_VERSION,
+        type: "open-code-reference",
+        path: "a".repeat(8193),
+      })
+    ).toBe(false);
+    expect(
+      isWebviewToHost({
+        protocol: PROTOCOL_VERSION,
+        type: "open-code-reference",
+        path: "x/y",
+        line: 0,
+      })
+    ).toBe(false);
+    expect(
+      isWebviewToHost({
+        protocol: PROTOCOL_VERSION,
+        type: "open-code-reference",
+        path: "x/y",
+        line: 1.5,
+      })
+    ).toBe(false);
+    expect(
+      isWebviewToHost({
+        protocol: PROTOCOL_VERSION,
+        type: "open-code-reference",
+        path: "x/y",
+        col: 7,
+      })
+    ).toBe(false);
+  });
+});
+
 // ---------- isHostToWebview / edit-rejected ----------
 
 describe("isHostToWebview — edit-rejected", () => {
