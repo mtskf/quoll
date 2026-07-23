@@ -39,6 +39,17 @@ describe("resolveCodeReferenceCandidates", () => {
       ).map((c) => c.target.path)
     ).toEqual(["/ws/src/foo.ts", "/ws2/src/foo.ts"]);
   });
+  it("orders the doc's own workspace folder first in a multi-root workspace", () => {
+    const candidates = resolveCodeReferenceCandidates(
+      "src/foo.ts",
+      deps({
+        documentUri: uri("/ws2/docs/notes.md"),
+        workspaceFolderUris: [uri("/ws"), uri("/ws2")],
+      }) as never
+    ).map((c) => c.target.path);
+    expect(candidates[0]).toBe("/ws2/src/foo.ts");
+    expect(candidates).toEqual(["/ws2/src/foo.ts", "/ws/src/foo.ts"]);
+  });
   it("falls back to the doc dir when no workspace is open", () => {
     expect(
       resolveCodeReferenceCandidates("src/foo.ts", deps({ workspaceFolderUris: [] }) as never).map(

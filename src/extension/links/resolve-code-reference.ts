@@ -1,7 +1,9 @@
 // Pure host gate for a webview code reference. Re-validates the UNTRUSTED path
 // and resolves it to contained candidate Uris under the workspace-folder roots
 // (doc-dir fallback when standalone). Existence is checked separately (async).
-// Shared with PR2's decoration resolver so security logic lives in one place.
+// Intended for reuse by PR2's host-side existence/resolve handler so security
+// logic lives in one place (the webview decoration uses a separate
+// parseInlineCodeReference gate, not this module).
 
 import type { Uri } from "vscode";
 import { isAllowedUrl } from "../../markdown/url-allowlist.js";
@@ -30,9 +32,15 @@ export function resolveCodeReferenceCandidates(
   if (/\.md$/i.test(path)) {
     return []; // .md is open-link's domain (opens in Quoll), never a text editor.
   }
+  // In a multi-root workspace, try the folder that CONTAINS the document first
+  // so a same-named file in the doc's own folder wins over a sibling folder's.
   const bases =
     deps.workspaceFolderUris.length > 0
-      ? deps.workspaceFolderUris
+      ? [...deps.workspaceFolderUris].sort((a, b) => {
+          const aHas = isWithinDir(deps.documentUri, a) ? 0 : 1;
+          const bHas = isWithinDir(deps.documentUri, b) ? 0 : 1;
+          return aHas - bHas;
+        })
       : [deps.joinPath(deps.documentUri, "..")];
   const out: ResolvedCodeReferenceCandidate[] = [];
   for (const base of bases) {
