@@ -323,6 +323,15 @@ export function buildFormatCommandMessage(
   return { protocol: PROTOCOL_VERSION, type: "format-command", action };
 }
 
+/** Host → webview: run the whole-document Format command. No payload; the
+ *  webview computes the format edits and dispatches them as ONE `{ changes }`
+ *  transaction (see runFormatDocument). Pure side channel — no host mutation. */
+export type FormatDocumentMessage = Envelope & { type: "format-document" };
+
+export function buildFormatDocumentMessage(): FormatDocumentMessage {
+  return { protocol: PROTOCOL_VERSION, type: "format-document" };
+}
+
 export type HostToWebview =
   | DocumentMessage
   | ThemeMessage
@@ -330,7 +339,8 @@ export type HostToWebview =
   | ImageWriteResultMessage
   | EditorConfigMessage
   | CaretApplyMessage
-  | FormatCommandMessage;
+  | FormatCommandMessage
+  | FormatDocumentMessage;
 
 // ---------- Webview → Host ----------
 
@@ -651,6 +661,8 @@ export function isHostToWebview(value: unknown): value is HostToWebview {
       return isCaretCoordinate(v.line) && isCaretCoordinate(v.character);
     case "format-command":
       return typeof v.action === "string" && FORMAT_COMMAND_ACTIONS.has(v.action);
+    case "format-document":
+      return true; // no payload beyond the validated envelope/protocol
     default:
       return false;
   }
