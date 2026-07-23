@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
-import { ensureSyntaxTree, syntaxTreeAvailable } from "@codemirror/language";
+import { forceParsing, syntaxTreeAvailable } from "@codemirror/language";
 import { EditorSelection, EditorState, StateEffect, StateField } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import { afterEach, describe, expect, it } from "vitest";
@@ -27,8 +27,30 @@ function mountDoc(doc: string, extra: readonly unknown[] = []): EditorView {
       extensions: [markdown({ base: markdownLanguage }), quollFolding(), ...(extra as never[])],
     }),
   });
-  ensureSyntaxTree(v.state, v.state.doc.length, 5000);
+  // Settle the initial parse AND rebuild fold fields over the complete tree
+  // (forceParsing dispatches an empty tx if the parse advanced). ensureSyntaxTree
+  // alone completes the parse CONTEXT but not the field snapshot, so under load the
+  // mount-time field could be built over a truncated init tree. See settleParse.
+  forceParsing(v, v.state.doc.length, 5000);
   return v;
+}
+
+// Settle CodeMirror's async parser after an edit so the fold gutter fields are
+// observed against a COMPLETE syntax tree. CM's LanguageState.apply reparses a
+// docChanged with only a hardcoded 20ms `Work.Apply` budget; these fixtures need
+// several parse `advance()` steps, so under full-suite CPU starvation a >20ms
+// scheduler preemption mid-parse makes CM `takeTree()` TRUNCATE the post-edit tree
+// (treeLen < doc.length). The field then correctly falls back to a full rebuild,
+// but `syntaxTreeAvailable(state, doc.length)` reads false and a node the edit was
+// meant to reveal can still be missing — the historical load-sensitive flake (memory
+// [[quoll-fold-bounded-equals-full-tests-flaky-under-load]], docs/LEARNING.md).
+// `forceParsing` finishes the parse and, if it advanced, dispatches an empty tx so
+// the field rebuilds over the finished tree — EXACTLY production's async-parse
+// settle path. It is a no-op when the tree already completed within budget (the
+// common, unloaded case), so the bounded recompute path stays exercised there while
+// a red now strictly means a bounded-vs-full contract breach, not a parse-timing race.
+function settleParse(v: EditorView): void {
+  forceParsing(v, v.state.doc.length, 5000);
 }
 
 // A contributor that churns the facet reference every transaction (mimics
@@ -187,10 +209,8 @@ describe("headingRhythmFoldGutterLineClass — per-level gutter tag for the rhyt
     expect(tagged()).toEqual(new Set([3]));
   });
 
-  // { retry } — mitigates the load-sensitive bounded≡full flake (LEARNING.md).
-  describe("bounded recompute (keystroke path) — stays equal to a full rebuild", {
-    retry: 2,
-  }, () => {
+  // Determinism: every edit below is settled via settleParse (see its doc), so a red is a real bounded-vs-full breach — not the former load-sensitive parse-budget flake (docs/LEARNING.md).
+  describe("bounded recompute (keystroke path) — stays equal to a full rebuild", () => {
     // Serialize the whole RangeSet ({from,to,cls}) and compare arrays vs the oracle
     // (Codex #2 — a by-line Map hides duplicate/order/extra ranges a double-add adds).
     function serializeField(v: EditorView): { from: number; to: number; cls: string }[] {
@@ -225,6 +245,7 @@ describe("headingRhythmFoldGutterLineClass — per-level gutter tag for the rhyt
       expect(classAtLine(view, 2)).toBe("quoll-fold-heading-rhythm-2");
       const pos = view.state.doc.toString().indexOf("## Two") + 1;
       view.dispatch({ changes: { from: pos, insert: "##" } }); // "## Two" → "#### Two"
+      settleParse(view);
       expect(classAtLine(view, 2)).toBe("quoll-fold-heading-rhythm-4");
       expectBoundedEqualsFull();
     });
@@ -233,11 +254,13 @@ describe("headingRhythmFoldGutterLineClass — per-level gutter tag for the rhyt
       view = mountDoc("intro\n\npara\n\n## gone\n");
       const para = view.state.doc.toString().indexOf("para");
       view.dispatch({ changes: { from: para, insert: "### " } }); // "para" → "### para"
+      settleParse(view);
       const paraLine = view.state.doc.lineAt(view.state.doc.toString().indexOf("para")).number;
       expect(classAtLine(view, paraLine)).toBe("quoll-fold-heading-rhythm-3");
       expectBoundedEqualsFull();
       const gone = view.state.doc.toString().indexOf("## gone");
       view.dispatch({ changes: { from: gone, to: gone + 3, insert: "" } }); // strip "## "
+      settleParse(view);
       const goneLine = view.state.doc.lineAt(view.state.doc.toString().indexOf("gone")).number;
       expect(classAtLine(view, goneLine)).toBeUndefined();
       expectBoundedEqualsFull();
@@ -249,6 +272,7 @@ describe("headingRhythmFoldGutterLineClass — per-level gutter tag for the rhyt
       view = mountDoc("intro\n\nfoo\nbar\nbaz\n");
       const end = view.state.doc.length;
       view.dispatch({ changes: { from: end, insert: "===\n" } }); // foo/bar/baz → Setext H1
+      settleParse(view);
       expect(classAtLine(view, 3)).toBe("quoll-fold-heading-rhythm-1"); // title line (foo)
       expectBoundedEqualsFull();
     });
@@ -257,9 +281,11 @@ describe("headingRhythmFoldGutterLineClass — per-level gutter tag for the rhyt
       view = mountDoc("# Top\n\nbody\n");
       expect(serializeField(view)).toEqual([]); // line-1 heading suppressed
       view.dispatch({ changes: { from: 0, insert: "\n" } }); // "# Top" now line 2
+      settleParse(view);
       expect(classAtLine(view, 2)).toBe("quoll-fold-heading-rhythm-1");
       expectBoundedEqualsFull();
       view.dispatch({ changes: { from: 0, to: 1, insert: "" } }); // back to line 1
+      settleParse(view);
       expect(serializeField(view)).toEqual([]);
       expectBoundedEqualsFull();
     });
@@ -272,6 +298,7 @@ describe("headingRhythmFoldGutterLineClass — per-level gutter tag for the rhyt
       view = mountDoc("intro\n# H\n\nbody\n");
       expect(classAtLine(view, 2)).toBe("quoll-fold-heading-rhythm-1");
       view.dispatch({ changes: { from: 0, to: "intro\n".length, insert: "" } }); // drop line 1
+      settleParse(view);
       expect(serializeField(view)).toEqual([]); // "# H" now line 1 → suppressed
       expectBoundedEqualsFull();
     });
@@ -286,6 +313,7 @@ describe("headingRhythmFoldGutterLineClass — per-level gutter tag for the rhyt
           { from: bFrom, to: bFrom + 1, insert: "" }, // "### b" → "## b"
         ],
       });
+      settleParse(view);
       expect(classAtLine(view, 2)).toBe("quoll-fold-heading-rhythm-1");
       expect(classAtLine(view, 6)).toBe("quoll-fold-heading-rhythm-2");
       expectBoundedEqualsFull();
@@ -295,6 +323,7 @@ describe("headingRhythmFoldGutterLineClass — per-level gutter tag for the rhyt
       view = mountDoc("intro\n## a\n\npara\n\n## gone\n", [churningZoneField([])]);
       const para = view.state.doc.toString().indexOf("para");
       view.dispatch({ changes: { from: para, insert: "### " } }); // "para" → "### para"
+      settleParse(view);
       expect(syntaxTreeAvailable(view.state, view.state.doc.length)).toBe(true);
       // Serialize this field, compare to a fresh full build over the same doc + empty zones.
       const ser = (v: EditorView) => {
@@ -338,6 +367,7 @@ describe("headingRhythmFoldGutterLineClass — per-level gutter tag for the rhyt
         changes: { from: near, insert: "X" }, // edit the bottom block
         effects: setZones.of([{ from: 0, to: view.state.doc.line(2).to }]), // zone over "## far"
       });
+      settleParse(view);
       // "## far" is zoned out despite the edit being far from it — the facetChanged
       // full-rebuild must catch it (a bounded-only path would strand its marker).
       const lines = new Set(serializeField(view).map((r) => view!.state.doc.lineAt(r.from).number));
@@ -352,8 +382,8 @@ describe("headingRhythmFoldGutterLineClass — per-level gutter tag for the rhyt
   // nested heading to top-level; an unclosed fence swallows it; a multi-line interior
   // edit promotes a far heading. `touchesStructuralReparse` routes those to a FULL
   // rebuild. Each case is bounded==oracle AND RED against the guard-less field.
-  // { retry } — mitigates the load-sensitive bounded≡full flake (LEARNING.md).
-  describe("bounded ≡ full-rebuild under structural reparse", { retry: 2 }, () => {
+  // Determinism: every edit below is settled via settleParse (see its doc), so a red is a real bounded-vs-full breach — not the former load-sensitive parse-budget flake (docs/LEARNING.md).
+  describe("bounded ≡ full-rebuild under structural reparse", () => {
     function serializeGutter(v: EditorView): { from: number; to: number; cls: string }[] {
       const out: { from: number; to: number; cls: string }[] = [];
       const cursor = v.state.field(headingRhythmFoldGutterLineClass).iter();
@@ -383,6 +413,7 @@ describe("headingRhythmFoldGutterLineClass — per-level gutter tag for the rhyt
       view = mountDoc("intro\n\n# h\n");
       expect(serializeGutter(view).length).toBe(1); // # h (line 3) tagged
       view.dispatch({ changes: { from: 0, insert: "```\n" } });
+      settleParse(view);
       expect(serializeGutter(view)).toEqual([]);
       expectBoundedEqualsFull();
     });
@@ -394,6 +425,7 @@ describe("headingRhythmFoldGutterLineClass — per-level gutter tag for the rhyt
       view = mountDoc("- a\n\n  # h\n");
       expect(serializeGutter(view)).toEqual([]); // nested heading not eligible
       view.dispatch({ changes: { from: 0, to: 2, insert: "" } }); // "- a" → "a"
+      settleParse(view);
       expect(serializeGutter(view).length).toBe(1); // "  # h" now top-level → eligible
       expectBoundedEqualsFull();
     });
@@ -410,6 +442,7 @@ describe("headingRhythmFoldGutterLineClass — per-level gutter tag for the rhyt
       expect(serializeGutter(view)).toEqual([]); // # h nested → not eligible
       const midEnd = view.state.doc.toString().indexOf("  midX") + "  midX".length;
       view.dispatch({ changes: { from: midEnd, insert: "\n\nBBB" } }); // terminate the list
+      settleParse(view);
       expect(serializeGutter(view).length).toBe(1); // "  # h" promoted → eligible
       expectBoundedEqualsFull();
     });
@@ -421,6 +454,7 @@ describe("headingRhythmFoldGutterLineClass — per-level gutter tag for the rhyt
       expect(serializeGutter(view)).toEqual([]);
       const x = view.state.doc.toString().indexOf("aXb") + 1; // the "X"
       view.dispatch({ changes: { from: x, to: x + 1, insert: "\n\nx\n  " } }); // "  aXb" → "  a\n\nx\n  b"
+      settleParse(view);
       expect(serializeGutter(view).length).toBe(1);
       expectBoundedEqualsFull();
     });
