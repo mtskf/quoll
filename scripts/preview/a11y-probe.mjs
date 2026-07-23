@@ -10,9 +10,17 @@
 //      state (aria-checked / aria-expanded / aria-live) for every shipped widget
 //      affordance. Printed so a reviewer sees exactly what AT would announce.
 //   2. Focus order — the focusable elements (native controls + [tabindex]) in DOM
-//      order, so tab-order and keyboard-reachability regressions are visible.
-//   3. Contrast — WCAG 2.x contrast ratio of each widget's text/affordance against
-//      its effective (ancestor-walked) background, per theme. HC themes included.
+//      order. This is a DOM-order report, not a Tab-driven trace: the focusable
+//      selector ignores inert/hidden ancestors and still lists elements (e.g. a
+//      tabindex="0" checkbox) whose real reachability via Tab isn't verified
+//      here, so it surfaces DOM-order regressions rather than proving keyboard
+//      reachability — actual keyboard-driven navigation is the ⏸ HUMAN half.
+//   3. Contrast — WCAG 2.x contrast ratio of each widget's CSS text color
+//      (`color`) against its effective (ancestor-walked) background, per theme.
+//      HC themes included. This only measures rendered text color; it cannot
+//      assess box/border affordances (e.g. a checkbox's own border), so a
+//      sample against such a widget is a text-color proxy, not a true
+//      affordance-contrast check (see the taskCheckbox report label).
 //
 // It is BOTH a report (full inventory to stdout) and a guard: a small set of
 // named baseline assertions pin the semantics that are correct today (real
@@ -131,6 +139,30 @@ function collectInPage(theme) {
     }
     return (el.textContent || "").replace(/\s+/g, " ").trim() || null;
   };
+
+  // Label-only accessible name: aria-label / aria-labelledby ONLY, no
+  // textContent fallback. accName()'s fallback is right for the inventory
+  // printout, but wrong for a labelled-guard check on a <select> or a region
+  // whose textContent (option text; seeded body) is always non-empty on its
+  // own — that fallback would let the guard pass even with aria-label
+  // stripped. Used only for the two guards that need to prove a real label.
+  const labelOnlyName = (el) => {
+    if (!el) {
+      return null;
+    }
+    const label = el.getAttribute("aria-label");
+    if (label != null) {
+      return label;
+    }
+    const lb = el.getAttribute("aria-labelledby");
+    if (lb) {
+      const ref = document.getElementById(lb);
+      if (ref) {
+        return (ref.textContent || "").replace(/\s+/g, " ").trim() || null;
+      }
+    }
+    return null;
+  };
   const implicitRole = (el) => {
     const explicit = el.getAttribute("role");
     if (explicit) {
@@ -172,6 +204,9 @@ function collectInPage(theme) {
       : null;
 
   // --- Semantics inventory: one entry per shipped widget surface. -------------
+  // Element refs kept for the two baseline guards below that need labelOnlyName.
+  const languagePickerEl = document.querySelector(".quoll-language-picker");
+  const frontmatterEl = document.querySelector(".quoll-frontmatter-block");
   const inventory = {
     taskCheckboxes: [...document.querySelectorAll(".quoll-task-checkbox")].map(describe),
     copyButton: describe(document.querySelector(".quoll-copy-button")),
@@ -181,10 +216,10 @@ function collectInPage(theme) {
         ? { ariaLive: s.getAttribute("aria-live"), ariaAtomic: s.getAttribute("aria-atomic") }
         : null;
     })(),
-    languagePicker: describe(document.querySelector(".quoll-language-picker")),
+    languagePicker: describe(languagePickerEl),
     collapseToggle: describe(document.querySelector(".quoll-fenced-collapse-toggle")),
     foldPlaceholder: describe(document.querySelector(".quoll-fold-placeholder")),
-    frontmatter: describe(document.querySelector(".quoll-frontmatter-block")),
+    frontmatter: describe(frontmatterEl),
     liveImage: describe(document.querySelector(".quoll-image-block img.quoll-image")),
     blockedImage: describe(document.querySelector(".quoll-image-blocked")),
     thematicBreak: describe(document.querySelector(".quoll-thematic-break")),
@@ -248,7 +283,7 @@ function collectInPage(theme) {
   );
   add(
     "language-picker-native-labelled",
-    inventory.languagePicker?.tag === "select" && !!inventory.languagePicker?.name,
+    inventory.languagePicker?.tag === "select" && !!labelOnlyName(languagePickerEl),
     `languagePicker=${JSON.stringify(inventory.languagePicker)}`
   );
   add(
@@ -260,7 +295,7 @@ function collectInPage(theme) {
   );
   add(
     "frontmatter-region-labelled",
-    inventory.frontmatter?.role === "region" && !!inventory.frontmatter?.name,
+    inventory.frontmatter?.role === "region" && !!labelOnlyName(frontmatterEl),
     `frontmatter=${JSON.stringify(inventory.frontmatter)}`
   );
   add(
@@ -351,7 +386,11 @@ async function run() {
       ["frontmatter", t.inventory.frontmatter?.contrast, TEXT_MIN],
       ["bodyLink", t.inventory.bodyLink?.contrast, TEXT_MIN],
       ["callout", t.inventory.calloutFirstLine?.contrast, TEXT_MIN],
-      ["taskCheckbox", t.inventory.taskCheckboxes?.[0]?.contrast, UI_MIN],
+      [
+        "taskCheckbox (text-color proxy, not box/border affordance)",
+        t.inventory.taskCheckboxes?.[0]?.contrast,
+        UI_MIN,
+      ],
     ];
     for (const [name, ratio, min] of contrastSamples) {
       if (ratio == null) {
