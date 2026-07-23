@@ -53,7 +53,7 @@ import { quollMarkdownLanguage } from "./cm/markdown.js";
 import { openExternalSinkFor, quollOpenExternalSink } from "./cm/open-external.js";
 import { quollOutline } from "./cm/outline/index.js";
 import { quollUpdateConfigSink, updateConfigSinkFor } from "./cm/outline/update-config-sink.js";
-import { htmlTablePaste, pasteUrlOverSelection } from "./cm/paste/index.js";
+import { htmlTablePaste, listReindentPaste, pasteUrlOverSelection } from "./cm/paste/index.js";
 import { detectLineSeparator, splitToCmText } from "./cm/seed.js";
 import { quollSwitchEditor } from "./cm/switch-editor.js";
 import { tableBlockField, tableSkeletonField } from "./cm/table/index.js";
@@ -689,6 +689,14 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
         // paste. Supersedes @codemirror/lang-markdown's built-in pasteURLAsLink
         // (dropped from quollMarkdownLanguage) with allowlist-aligned detection.
         pasteUrlOverSelection({ canWrite: () => opts.getState().canWrite }),
+        // Paste re-indent: a multi-line plain-text Markdown LIST fragment pasted
+        // at the start of a line inside an existing list context is re-based so
+        // its top level aligns with the caret's column (Obsidian analogue), inner
+        // structure preserved. Prec.high, deferring on every non-qualifying paste
+        // (single-line, non-list fragment, fence-bearing, mid-line caret, caret
+        // outside a list, tab-ambiguous) so htmlTablePaste / pasteUrlOverSelection
+        // / imagePaste / CM's default plain-text paste still run.
+        listReindentPaste({ canWrite: () => opts.getState().canWrite }),
         // Paste/drop image ingestion: capture image files, post image-write, and
         // insert the relative link at a position-mapped anchor on the host's
         // reply. canWrite mirrors edit-sync's readonly hard-drop; the host is the
