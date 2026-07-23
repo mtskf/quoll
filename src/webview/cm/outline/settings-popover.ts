@@ -270,8 +270,13 @@ export function createSettingsPopover(deps: SettingsPopoverDeps): SettingsPopove
     }
     if (e.key === "Tab") {
       // Focus trap: wrap Tab/Shift+Tab at the first/last tab stop so focus never
-      // leaves the modal. Only the boundaries are handled — interior Tab moves
-      // fall through to native traversal between the roving groups.
+      // leaves the modal. Interior Tab moves fall through to native traversal
+      // between the roving groups. The `!activeIsTabbable` arms also wrap when
+      // focus sits on a radio that is NO LONGER a tab stop: after arrow-nav +
+      // pending, the 2s no-echo fallback re-derives roving tabindex from the
+      // (unchanged) prefs, dropping the focused radio back to tabIndex -1 while
+      // focus stays on it. Without this, that stranded radio matches neither
+      // boundary and Tab would escape the aria-modal dialog.
       const radios = tabbableRadios();
       if (radios.length === 0) {
         return;
@@ -279,10 +284,11 @@ export function createSettingsPopover(deps: SettingsPopoverDeps): SettingsPopove
       const first = radios[0];
       const last = radios[radios.length - 1];
       const active = document.activeElement;
-      if (e.shiftKey && active === first) {
+      const activeIsTabbable = radios.some((r) => r === active);
+      if (e.shiftKey && (active === first || !activeIsTabbable)) {
         e.preventDefault();
         last.focus();
-      } else if (!e.shiftKey && active === last) {
+      } else if (!e.shiftKey && (active === last || !activeIsTabbable)) {
         e.preventDefault();
         first.focus();
       }

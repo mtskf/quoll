@@ -175,6 +175,33 @@ describe("createSettingsPopover", () => {
     expect(document.activeElement).toBe(last);
   });
 
+  it("still traps Tab when the no-echo fallback stranded focus on a now-non-tabbable radio", () => {
+    vi.useFakeTimers();
+    const { popover } = make(); // default prefs, onChange no-op → host never echoes
+    const group = popover.el.querySelector("[role='radiogroup']") as HTMLElement; // fontFamily
+    const radios = [...group.querySelectorAll<HTMLButtonElement>("[role='radio']")];
+    // Arrow-nav from the active default (idx 0) to serif (idx 1): focuses idx 1
+    // (tabIndex 0) and arms a pending fallback via activate().
+    radios[0].focus();
+    group.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true }));
+    expect(document.activeElement).toBe(radios[1]);
+    expect(radios[1].tabIndex).toBe(0);
+    // No host echo → the 2s fallback re-derives tabIndex from the (unchanged)
+    // prefs, dropping idx 1 back to -1 while focus stays on it.
+    vi.advanceTimersByTime(2000);
+    expect(radios[1].tabIndex).toBe(-1);
+    expect(document.activeElement).toBe(radios[1]); // focus stranded on a non-tabbable radio
+    // Tab from this stranded radio must STILL be trapped (wrap to a tab stop),
+    // not fall through to native traversal out of the aria-modal dialog.
+    const firstTabbable = [
+      ...popover.el.querySelectorAll<HTMLButtonElement>("[role='radio']"),
+    ].filter((r) => r.tabIndex === 0)[0];
+    const tab = new KeyboardEvent("keydown", { key: "Tab", bubbles: true, cancelable: true });
+    radios[1].dispatchEvent(tab);
+    expect(tab.defaultPrevented).toBe(true);
+    expect(document.activeElement).toBe(firstTabbable);
+  });
+
   it("Escape delegates to onRequestClose and stops propagation (no self-close)", () => {
     const { popover, onRequestClose } = make();
     const bubbled = vi.fn();
