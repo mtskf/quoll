@@ -243,6 +243,7 @@ class OutlinePanel implements PluginValue {
     // margin-left:auto (styles.css).
     const titleEl = document.createElement("span");
     titleEl.className = "quoll-outline-title";
+    titleEl.id = "quoll-outline-title";
     titleEl.textContent = "Outline";
     header.appendChild(titleEl);
     header.appendChild(this.pinEl);
@@ -251,11 +252,11 @@ class OutlinePanel implements PluginValue {
     this.listEl.className = "quoll-outline-list";
     // Expose the outline as an ARIA tree. The DOM is a FLAT <ul> of rows (no
     // nested <ul role="group">), so nesting is conveyed by per-row aria-level
-    // rather than DOM structure — the spec-sanctioned flat-tree model. The tree
-    // needs an accessible name of its own (the visual "Outline" title is a plain
-    // span, not associated).
+    // rather than DOM structure — the spec-sanctioned flat-tree model. The tree's
+    // accessible name is derived from the visible "Outline" title span (via
+    // aria-labelledby) so sighted and AT users get the same string.
     this.listEl.setAttribute("role", "tree");
-    this.listEl.setAttribute("aria-label", "Document outline");
+    this.listEl.setAttribute("aria-labelledby", titleEl.id);
     // Keyboard tree model (WAI-ARIA tree-view pattern): one delegated handler on
     // the list — focus lives on a row <li> (roving tabindex), so every arrow /
     // Home / End / Enter keydown bubbles here. Delegation survives every rebuild
