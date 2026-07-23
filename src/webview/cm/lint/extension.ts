@@ -197,8 +197,15 @@ const lintComputePlugin = ViewPlugin.fromClass(
 // cue; the assistive-tech representation of each finding is the host Problems-panel
 // mirror (quoll.lint.problems.enabled, ON by default — a native
 // vscode.DiagnosticCollection that carries the same range + severity + message +
-// rule code, see extension/lint/lint-diagnostics.ts and the completeness pin in
-// test/webview/lint/lint-extension.test.ts).
+// rule code, see extension/lint/lint-diagnostics.ts and the completeness pins in
+// test/webview/lint/lint-extension.test.ts). Two honest bounds on that mirror, so
+// this comment does not overclaim unconditional completeness: (1) it is
+// user-disableable — turning quoll.lint.problems.enabled OFF suppresses the Problems
+// entries while the visual underlines remain, a deliberate opt-out (per the setting's
+// own markdownDescription) that also drops the AT surface; (2) above
+// MAX_LINT_DIAGNOSTICS the wire is capped (capForWire below keeps every warning but
+// can drop surplus info), so a pathological >2000-finding document is a partial
+// mirror. Neither weakens the default path.
 const MARK_BY_SEVERITY: Record<LintSeverity, Decoration> = {
   warning: Decoration.mark({ class: "quoll-lint-mark-warning" }),
   info: Decoration.mark({ class: "quoll-lint-mark-info" }),

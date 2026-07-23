@@ -59,8 +59,10 @@ class LintGutterMarker extends GutterMarker {
   // keyboard-navigable and screen-reader-announced and carries severity + message +
   // rule code + range (extension/lint/lint-diagnostics.ts). Severity here is
   // conveyed to sighted users by the dot colour alone, which is acceptable only
-  // because this is a redundant, opt-in (default-off) visual cue over that complete
-  // AT surface — not a sole channel.
+  // because this is a redundant, opt-in (default-off) visual cue over that
+  // AT surface — not a sole channel. (Two honest bounds on the mirror — it is
+  // user-disableable and wire-capped — are documented at MARK_BY_SEVERITY in
+  // cm/lint/extension.ts; they do not affect the default path.)
   override toDOM(): Node {
     const dot = document.createElement("div");
     dot.className = `quoll-lint-gutter-dot quoll-lint-gutter-dot-${this.severity}`;

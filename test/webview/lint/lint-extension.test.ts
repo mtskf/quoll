@@ -343,6 +343,36 @@ describe("quollLint debounced recompute (view-level)", () => {
     }
   });
 
+  it("drives a real no-multiple-blanks (wholeLine) finding through the mounted publisher onto the wire (A11Y-04 AT-completeness)", () => {
+    // Companion to the toWireDiagnostics wholeLine unit pin (in the toWireDiagnostics
+    // describe): that one feeds toWireDiagnostics directly, so it only guards that
+    // projection's map body. This one drives a REAL blank-line finding through the
+    // whole production chain — the debounced lintComputePlugin → lintDiagnosticsPublisher
+    // → capForWire → toWireDiagnostics → sink — so a future "wholeLine is display-only,
+    // drop it" cleanup ANYWHERE in that chain (not just in the wire projection) turns
+    // this red. wholeLine findings have no underline, so this sink is their sole path
+    // to the Problems-panel AT surface; losing it silently is the exact regression
+    // A11Y-04 exists to prevent.
+    const sink = vi.fn();
+    const view = new EditorView({
+      doc: "aa\n\n\nbb\n", // two consecutive blank lines -> no-multiple-blanks (wholeLine)
+      parent: document.body,
+      extensions: [markdown({ base: markdownLanguage }), quollLint(sink)],
+    });
+    try {
+      // The publisher does not fire at mount; a doc change schedules the debounced
+      // compute, whose setLintDiagnostics effect drives the sink. The blank run
+      // survives the edit, so the finding is still present when the debounce fires.
+      view.dispatch({ changes: { from: view.state.doc.length, insert: "cc\n" } });
+      vi.advanceTimersByTime(300);
+      expect(sink).toHaveBeenCalled();
+      const wire = sink.mock.calls[sink.mock.calls.length - 1][0] as LintDiagnosticWire[];
+      expect(wire.some((d) => d.code === "no-multiple-blanks")).toBe(true);
+    } finally {
+      view.destroy();
+    }
+  });
+
   it("maps the underline DecorationSet through a doc change instead of leaving it stale or rebuilding", () => {
     // Pin lintDecorationsField's per-keystroke mapping: an inline mark published by a
     // fresh lint must FOLLOW an edit made inside the debounce window (no re-lint) —
