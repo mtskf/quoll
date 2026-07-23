@@ -16,6 +16,11 @@
 //     navigation, not via Tab. If a future browser/CM change makes Tab
 //     enter widgets, revisit: the keydown handler still works, but the
 //     Tab path becomes a fast-path that needs explicit a11y testing.
+//     The Tab-independent keyboard toggle is the `Mod-l` caret command
+//     (`toggleTaskCheckboxAtCaret`, task-checkbox-command.ts): with the
+//     caret on the task line the widget is suppressed (source `[ ]` shows)
+//     and that command toggles it, so keyboard-only users are not blocked
+//     on reaching this widget (A11Y-06).
 //
 // eq() is keyed on (checked, from) only — body text changes don't force
 // a re-render because the aria-label can stay slightly stale (it

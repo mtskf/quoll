@@ -23,8 +23,14 @@
 // group (Codex round-1 #8 / EH round-1 #2).
 
 import { isolateHistory } from "@codemirror/commands";
-import { syntaxTree } from "@codemirror/language";
-import type { EditorView } from "@codemirror/view";
+import { ensureSyntaxTree, syntaxTree } from "@codemirror/language";
+import { type EditorState, type Extension, Prec } from "@codemirror/state";
+import { type Command, type EditorView, keymap } from "@codemirror/view";
+import {
+  resolveContentlessTaskMarkerGeometry,
+  resolveTaskMarkerGeometry,
+  type TaskMarkerGeometry,
+} from "../list/list-geometry.js";
 import { isContentlessTaskParagraph, TASK_MARKER_RE } from "./task-marker-shape.js";
 
 // Single source of truth for the GFM TaskMarker shape — `[ ]`, `[x]`, or `[X]`.
@@ -108,4 +114,90 @@ export function toggleTaskCheckbox(view: EditorView, markerFrom: number): boolea
     console.error("[quoll] checkbox toggle dispatch failed", err);
     return false;
   }
+}
+
+/** Resolve the doc position of the `[` opening bracket of the task-list marker
+ *  whose marker line the caret at `pos` sits on, or null when the caret's line
+ *  is not a task item's marker line.
+ *
+ *  Mirrors the reveal's build logic — `resolveTaskMarkerGeometry` for a
+ *  content-bearing `Task`, `resolveContentlessTaskMarkerGeometry` for a bare
+ *  `- [ ]` `ListItem` — so the keyboard toggle targets EXACTLY the tasks that
+ *  render a checkbox (the same fail-closed contract). The on-line guard
+ *  (`markerFrom` starts on the caret's own line) picks the INNERMOST task when
+ *  the caret is on a nested item and ignores an ancestor task whose marker sits
+ *  on an earlier line, so `Mod-l` toggles the item the caret is actually on.
+ *
+ *  Resolves the tree with `ensureSyntaxTree(state, line.to, 50) ?? syntaxTree(state)`
+ *  — a bounded parse THROUGH the caret line before walking, matching every other
+ *  caret-triggered tree command in the webview (fenced-code-enter-keymap,
+ *  list-continuation-keymap, list-tree). `syntaxTree(state)` alone may be
+ *  incomplete past the initial parse budget, which would make the toggle a
+ *  silent no-op on a real task line whose region has not been parsed yet; the
+ *  50 ms budget forces the caret line in and falls back to the partial tree if
+ *  the parse cannot reach it. */
+export function findTaskMarkerOnLine(state: EditorState, pos: number): number | null {
+  const line = state.doc.lineAt(pos);
+  let markerFrom: number | null = null;
+  const tree = ensureSyntaxTree(state, line.to, 50) ?? syntaxTree(state);
+  tree.iterate({
+    from: line.from,
+    to: line.to,
+    enter: (node) => {
+      if (markerFrom !== null) {
+        return false; // first match wins — stop descending
+      }
+      let geom: TaskMarkerGeometry | null = null;
+      if (node.name === "Task") {
+        geom = resolveTaskMarkerGeometry(state, node.node);
+      } else if (node.name === "ListItem") {
+        // Content-BEARING items return null here (their `Task` child is handled
+        // above), so a nested-task ancestor never false-matches on this branch.
+        geom = resolveContentlessTaskMarkerGeometry(state, node.node);
+      }
+      if (geom !== null && state.doc.lineAt(geom.taskMarkerFrom).from === line.from) {
+        markerFrom = geom.taskMarkerFrom;
+        return false;
+      }
+      return undefined;
+    },
+  });
+  return markerFrom;
+}
+
+/** Toggle the task-list checkbox on the caret's line. Returns `true` when a
+ *  toggle was dispatched (so the keymap claims the chord), `false` when the
+ *  caret is not on a task line OR a `toggleTaskCheckbox` guard aborted (read-only,
+ *  dead view) — so the chord passes through as a no-op on ordinary lines, same
+ *  posture as the lint-fix / code-ref caret commands.
+ *
+ *  Uses the MAIN selection head only: a multi-range selection toggles the
+ *  primary caret's line, matching the single-target mouse/widget path (KISS —
+ *  multi-caret checkbox toggling is not a stated requirement). This command is
+ *  the keyboard path that the Tab-unreachable inline `Decoration.replace` widget
+ *  cannot provide (see task-checkbox-widget.ts): with the caret on the task
+ *  line the source `[ ]` renders as editable text (the widget is suppressed),
+ *  and this toggles that source through the normal edit-sync pipeline. */
+export const toggleTaskCheckboxAtCaret: Command = (view) => {
+  const markerFrom = findTaskMarkerOnLine(view.state, view.state.selection.main.head);
+  if (markerFrom === null) {
+    return false;
+  }
+  return toggleTaskCheckbox(view, markerFrom);
+};
+
+/** The "toggle task checkbox" chord. Single source of truth — used by the keymap
+ *  and pinned by a unit test. Mod = Cmd (mac) / Ctrl (win+linux). Matches
+ *  Obsidian's "Toggle checkbox status" binding, is unbound in CodeMirror's
+ *  `defaultKeymap`, and — like the `Mod-.` lint-fix chord — VS Code's own
+ *  `editorTextFocus`-gated bindings do not fire inside a custom-editor webview,
+ *  so this binding owns the chord here. The command returns false off a task
+ *  line, so `Mod-l` is a pass-through no-op everywhere else. */
+export const TASK_TOGGLE_KEY = "Mod-l";
+
+/** Prec.high keymap binding TASK_TOGGLE_KEY to the caret toggle command.
+ *  Prec.high so it is tried before `defaultKeymap` (which has no `Mod-l` binding
+ *  today; high precedence future-proofs against one being added upstream). */
+export function quollTaskCheckboxKeymap(): Extension {
+  return Prec.high(keymap.of([{ key: TASK_TOGGLE_KEY, run: toggleTaskCheckboxAtCaret }]));
 }
