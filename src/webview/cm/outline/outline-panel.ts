@@ -94,6 +94,17 @@ export const OUTLINE_PINNED_CLASS = "quoll-outline-pinned";
  *  never desync. The two are complementary — both keep the editor column alive. */
 const MIN_WIDTH_PX = 180;
 const MAX_WIDTH_PX = 600;
+/** Keyboard-resize nudge (px) per Arrow press on the focused separator. Coarse
+ *  enough that a handful of presses spans the range, in the spirit of VS Code's
+ *  keyboard sash nudges; Home jumps to MIN_WIDTH_PX. End requests MAX_WIDTH_PX but
+ *  is still subject to clampWidth's host-relative 80% cap (see the comment above),
+ *  so on a narrow host it lands below the documented max. */
+const RESIZE_STEP_PX = 16;
+/** Stylesheet baseline for --quoll-outline-sidebar-width (styles.css) — the
+ *  width the keyboard math and aria-valuenow read before any inline width is set.
+ *  Exported so a contract test machine-enforces parity with the CSS default (the
+ *  test reads styles.css and fails if the two diverge — not just this comment). */
+export const DEFAULT_WIDTH_PX = 260;
 /** Persisted view-state key (flat, survives reload) — see readPersistedState.
  *  Flat + namespaced by name so it shallow-merges alongside any future keys
  *  without a nested schema (one key today). */
@@ -196,6 +207,9 @@ class OutlinePanel implements PluginValue {
 
     this.sidebarEl = document.createElement("div");
     this.sidebarEl.className = "quoll-outline-sidebar";
+    // Stable id so the resize separator can `aria-controls` the sidebar it sizes
+    // (static, like the title id — one outline instance per webview document).
+    this.sidebarEl.id = "quoll-outline-sidebar";
     // Closed = slid off-screen but still rendered (the slide transition needs a
     // live element). `inert` drops the hidden sidebar from the focus + a11y
     // tree immediately — the CSS visibility flip is delayed until the slide-out
@@ -305,11 +319,30 @@ class OutlinePanel implements PluginValue {
     // them up.
     this.resizeEl = document.createElement("div");
     this.resizeEl.className = "quoll-outline-resize-handle";
-    this.resizeEl.setAttribute("aria-hidden", "true"); // pointer affordance; keyboard resize is a follow-up
+    // A focusable WAI-ARIA window splitter (role=separator): pointer drag AND
+    // keyboard (Arrow = nudge by RESIZE_STEP_PX, Home/End = min/max) both rewrite
+    // the width var. aria-value* report the live width to AT; aria-controls ties
+    // it to the sidebar it sizes. Only interactive while open (CSS gates display,
+    // so it drops out of the tab order when closed — matching the inert sidebar).
+    this.resizeEl.setAttribute("role", "separator");
+    this.resizeEl.setAttribute("aria-orientation", "vertical");
+    this.resizeEl.setAttribute("aria-label", "Resize outline sidebar");
+    this.resizeEl.setAttribute("aria-controls", this.sidebarEl.id);
+    this.resizeEl.setAttribute("aria-valuemin", String(MIN_WIDTH_PX));
+    this.resizeEl.setAttribute("aria-valuemax", String(MAX_WIDTH_PX));
+    this.resizeEl.tabIndex = 0;
     this.resizeEl.addEventListener("pointerdown", (e) => this.onResizePointerDown(e));
     this.resizeEl.addEventListener("pointermove", (e) => this.onResizePointerMove(e));
     this.resizeEl.addEventListener("pointerup", (e) => this.onResizePointerEnd(e));
     this.resizeEl.addEventListener("pointercancel", (e) => this.onResizePointerEnd(e));
+    this.resizeEl.addEventListener("keydown", (e) => this.onResizeKeydown(e));
+    // The handle lives on the host, not the sidebar, but belongs to the same
+    // outline focus region: bind focusout here too so tabbing from the handle to
+    // an element outside the sidebar/handle dismisses the transient overlay (the
+    // shared onSidebarFocusOut exempts focus moving BACK to the sidebar or handle).
+    // Without this, a keyboard user focused on the handle has no focus-out path to
+    // close a non-pinned overlay — the A11Y-03 obscured-focus wart would recur.
+    this.resizeEl.addEventListener("focusout", (e) => this.onSidebarFocusOut(e));
     this.host.appendChild(this.resizeEl);
 
     // Restore a persisted width before first paint (guarded + in-range only:
@@ -320,6 +353,9 @@ class OutlinePanel implements PluginValue {
         this.host.style.setProperty("--quoll-outline-sidebar-width", `${persisted}px`);
       }
     }
+    // Seed aria-valuenow AFTER the persisted restore so AT reads the effective
+    // width (restored value or the stylesheet default), not a stale placeholder.
+    this.updateResizeAria();
   }
 
   update(u: ViewUpdate): void {
@@ -465,10 +501,14 @@ class OutlinePanel implements PluginValue {
       return;
     }
     this.open = open;
-    // Capture BEFORE mutating: setting `inert` below can make the browser
-    // evict focus from the sidebar synchronously, so an after-the-fact
-    // activeElement check would miss it and strand focus on <body>.
-    const hadSidebarFocus = this.sidebarEl.contains(document.activeElement);
+    // Capture BEFORE mutating: setting `inert` below (and, on close, CSS hiding
+    // the host-child resize handle) can make the browser evict focus from the
+    // outline synchronously, so an after-the-fact activeElement check would miss
+    // it and strand focus on <body>. The focus region is the sidebar PLUS the
+    // separator handle (a host sibling, not a sidebar child) — mirror the same
+    // union onSidebarFocusOut uses so a handle-focused close restores editor focus.
+    const hadOutlineFocus =
+      this.sidebarEl.contains(document.activeElement) || document.activeElement === this.resizeEl;
     if (this.rebuildTimer !== null) {
       clearTimeout(this.rebuildTimer);
       this.rebuildTimer = null;
@@ -497,9 +537,10 @@ class OutlinePanel implements PluginValue {
       // complete parse so the WHOLE document's headings appear, not just the
       // parsed viewport. The only forced parse; off the keystroke path.
       this.rebuild(true);
-    } else if (hadSidebarFocus) {
-      // Closing while focus was inside the (now-inert) sidebar: hand focus
-      // back to the editor instead of letting the browser drop it on <body>.
+    } else if (hadOutlineFocus) {
+      // Closing while focus was inside the outline region (the now-inert sidebar
+      // OR the resize handle that CSS hides on close): hand focus back to the
+      // editor instead of letting the browser drop it on <body>.
       this.view.focus();
     }
   }
@@ -522,15 +563,22 @@ class OutlinePanel implements PluginValue {
    *     `footerEl` and so stays DOM-descended here). Any future owned overlay
    *     MUST likewise render inside `sidebarEl`, or this guard would misread it
    *     as a leave and close the sidebar out from under it.
-   *  A programmatic `.focus()` to a real element outside the sidebar is
-   *  indistinguishable from a deliberate Tab-out and will also dismiss — an
-   *  accepted tradeoff for a transient surface. */
+   *   - `next === this.resizeEl` — focus moved to the resize separator. It lives
+   *     on the host (not the sidebar) because CSS anchors it to the sidebar's
+   *     right edge, but it belongs to the outline: Tabbing to it must resize, not
+   *     dismiss the overlay out from under the very handle being focused.
+   *  This handler is bound to BOTH `sidebarEl` and `resizeEl`, so the sidebar and
+   *  the separator form one focus region: a focusout from either that lands
+   *  outside both dismisses the overlay, while a move between them is exempted by
+   *  the guards above. A programmatic `.focus()` to a real element outside the
+   *  region is indistinguishable from a deliberate Tab-out and will also dismiss —
+   *  an accepted tradeoff for a transient surface. */
   private onSidebarFocusOut(e: FocusEvent): void {
     if (!this.open || this.pinned) {
       return;
     }
     const next = e.relatedTarget as Node | null;
-    if (next === null || this.sidebarEl.contains(next)) {
+    if (next === null || this.sidebarEl.contains(next) || next === this.resizeEl) {
       return;
     }
     this.setOpen(false);
@@ -588,6 +636,68 @@ class OutlinePanel implements PluginValue {
   private applyResize(clientX: number): void {
     const width = this.clampWidth(clientX - this.host.getBoundingClientRect().left);
     this.host.style.setProperty("--quoll-outline-sidebar-width", `${width}px`);
+    this.updateResizeAria();
+  }
+
+  /** The effective sidebar width (px): the inline var if set, else the stylesheet
+   *  default. The numeric baseline the keyboard nudges and aria-valuenow read. */
+  private currentWidthPx(): number {
+    const raw = Number.parseInt(
+      this.host.style.getPropertyValue("--quoll-outline-sidebar-width"),
+      10
+    );
+    return Number.isFinite(raw) ? raw : DEFAULT_WIDTH_PX;
+  }
+
+  /** Reflect the live width onto the separator's aria-valuenow (AT read-out).
+   *  Called from every width mutation — pointer drag and keyboard alike. */
+  private updateResizeAria(): void {
+    this.resizeEl.setAttribute("aria-valuenow", String(this.currentWidthPx()));
+  }
+
+  /** Commit a keyboard-chosen width: clamp, write the var, sync aria, persist.
+   *  Unlike the pointer drag (one persist at drag-end), each Arrow/Home/End press
+   *  is its own discrete, already-committed width — so it persists immediately. */
+  private setWidth(px: number): void {
+    const width = this.clampWidth(px);
+    this.host.style.setProperty("--quoll-outline-sidebar-width", `${width}px`);
+    this.updateResizeAria();
+    patchPersistedState({ [WIDTH_STATE_KEY]: width });
+  }
+
+  /** Keyboard resize on the focused separator (WAI-ARIA window-splitter keys):
+   *  Left/Right nudge by RESIZE_STEP_PX. Home jumps to MIN_WIDTH_PX; End requests
+   *  MAX_WIDTH_PX but setWidth's clampWidth call still applies the host-relative
+   *  80% cap, so End may land below MAX_WIDTH_PX on a narrow host. Escape closes
+   *  the overlay (mirrors the sidebar's Escape); Tab and everything else bubble. */
+  private onResizeKeydown(e: KeyboardEvent): void {
+    // Escape closes the transient overlay from the handle (the handle is a host
+    // child, so the sidebar's Escape handler never sees its keydowns). Matches the
+    // sidebar Escape path: setOpen(false) also unpins via its invariant.
+    if (e.key === "Escape") {
+      e.preventDefault();
+      this.setOpen(false);
+      return;
+    }
+    let next: number;
+    switch (e.key) {
+      case "ArrowLeft":
+        next = this.currentWidthPx() - RESIZE_STEP_PX;
+        break;
+      case "ArrowRight":
+        next = this.currentWidthPx() + RESIZE_STEP_PX;
+        break;
+      case "Home":
+        next = MIN_WIDTH_PX;
+        break;
+      case "End":
+        next = MAX_WIDTH_PX;
+        break;
+      default:
+        return;
+    }
+    e.preventDefault();
+    this.setWidth(next);
   }
 
   private onResizePointerDown(e: PointerEvent): void {
