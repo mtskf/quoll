@@ -61,10 +61,9 @@
 
 import type { ChangedRange } from "@lezer/common";
 import { TreeFragment } from "@lezer/common";
-import { Emoji, GFM, parser, Subscript, Superscript } from "@lezer/markdown";
 
 import type { MarkdownError } from "./errors.js";
-import { highlightMarkExtension } from "./highlight-mark.js";
+import { gfmParser } from "./gfm-parser.js";
 import { isAllowedUrl } from "./url-allowlist.js";
 import { decodeMarkdownDestination } from "./url-decode.js";
 
@@ -75,7 +74,7 @@ import { decodeMarkdownDestination } from "./url-decode.js";
 // host-side Lezer parser into the webview bundle.
 export { decodeMarkdownDestination };
 
-const PARSER = parser.configure([GFM, Subscript, Superscript, Emoji, highlightMarkExtension]);
+const PARSER = gfmParser;
 
 // The parse-tree type taken from the parser's own return type, so the
 // incremental cache + tests stay honest if the parser's tree shape changes.
