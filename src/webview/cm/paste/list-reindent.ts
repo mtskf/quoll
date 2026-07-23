@@ -51,10 +51,20 @@ function leadingIndent(
  *  lexer state machine is needed — a fence-bearing fragment is left unchanged. */
 const FENCE_RE = /^\s*(`{3,}|~{3,})/;
 
+/** A CommonMark thematic break: >=3 of the same `-`, `*`, or `_` (optionally
+ *  space/tab separated), nothing else. `* * *` / `- - -` / `___` are NOT list
+ *  items even though their first token (`*` / `-`) parses as a bullet marker —
+ *  without this guard such a fragment would be misclassified as a bullet list. */
+const THEMATIC_BREAK_RE = /^[ \t]*([-*_])(?:[ \t]*\1){2,}[ \t]*$/;
+
 /** Is `line` (after leading whitespace) the start of a CommonMark list item? The
  *  marker token is the first whitespace-free run; `parseListMark` decides bullet
- *  (`-`/`*`/`+`) vs ordered (`\d{1,9}[.)]`). */
+ *  (`-`/`*`/`+`) vs ordered (`\d{1,9}[.)]`). Thematic breaks are excluded — their
+ *  marker char coincides with a bullet glyph but the line is not a list item. */
 function isListLine(line: string): boolean {
+  if (THEMATIC_BREAK_RE.test(line)) {
+    return false;
+  }
   const trimmed = line.trimStart();
   const token = /^(\S+)(?:\s|$)/.exec(trimmed);
   return token !== null && parseListMark(token[1]) !== null;
@@ -72,8 +82,13 @@ export function reindentPastedList(
   destColumn: number,
   tabSize: number
 ): string | null {
-  const hadTrailingNewline = text.endsWith("\n");
-  const lines = text.replace(/\r\n?/g, "\n").split("\n");
+  // Normalise line endings FIRST, then measure the trailing terminator on the
+  // normalised text — measuring on the raw text mis-detects a lone-CR-terminated
+  // fragment (e.g. "- a\r"), leaving an un-popped empty element that would slip a
+  // single-line fragment past the `< 2` guard and skew the trailing newline.
+  const normalized = text.replace(/\r\n?/g, "\n");
+  const hadTrailingNewline = normalized.endsWith("\n");
+  const lines = normalized.split("\n");
   if (hadTrailingNewline) {
     lines.pop(); // drop the empty element the trailing newline produces
   }
@@ -116,6 +131,15 @@ export function reindentPastedList(
   }
   if (nonMarkerMin < markerMin) {
     return null; // a non-list line is shallower than the list → ambiguous base
+  }
+  // A top-level list marker sits at <4 columns of indentation; >=4 is CommonMark
+  // INDENTED CODE — a code block whose lines merely look like list items (e.g.
+  // `    - code`). Re-basing it would silently turn pasted code into a list, so
+  // defer (matching the "when ambiguous, insert unchanged — never corrupt"
+  // contract; a genuinely deep-nested list copied from >=4 indent is left to the
+  // default paste rather than risk mangling code).
+  if (markerMin >= 4) {
+    return null;
   }
 
   // NOTE: delta === 0 is NOT a defer — the text is still re-emitted so the

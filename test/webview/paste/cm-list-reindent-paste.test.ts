@@ -72,6 +72,33 @@ describe("reindentPastedList — pure transform", () => {
     expect(reindentPastedList("- a\n  - b", 0, 2)).toBe("- a\n  - b");
     expect(reindentPastedList("  - a\n    - b", 2, 2)).toBe("  - a\n    - b");
   });
+
+  it("returns null for an indented code block that looks like a list (>=4 indent)", () => {
+    // `    - code` is CommonMark indented code, not a list; re-basing would turn
+    // pasted code into a nested list. markerMin 4 → defer (never corrupt code).
+    expect(reindentPastedList("    - code\n    - still code", 2, 2)).toBeNull();
+    expect(reindentPastedList("    - code\n    - still code", 0, 2)).toBeNull();
+  });
+
+  it("returns null when the fragment opens with a thematic break (not a list)", () => {
+    // `* * *` / `- - -` are thematic breaks; their marker char coincides with a
+    // bullet glyph but the line is not a list item.
+    expect(reindentPastedList("* * *\n* * *", 2, 2)).toBeNull();
+    expect(reindentPastedList("- - -\n- item", 2, 2)).toBeNull();
+  });
+
+  it("normalises CRLF line endings and re-bases (Windows clipboard path)", () => {
+    expect(reindentPastedList("- a\r\n- b\r\n", 2, 2)).toBe("  - a\n  - b\n");
+    expect(reindentPastedList("- a\r\n  - b", 2, 2)).toBe("  - a\n    - b");
+  });
+
+  it("treats a lone-CR terminator consistently with LF (normalise before measuring)", () => {
+    // A lone-CR-terminated single line must defer like its LF twin, and a lone-CR
+    // separated multi-line must re-base identically (no spurious trailing newline).
+    expect(reindentPastedList("- only\r", 2, 2)).toBeNull(); // single line → defer
+    expect(reindentPastedList("- a\r- b", 2, 2)).toBe("  - a\n  - b");
+    expect(reindentPastedList("- a\r- b\r", 2, 2)).toBe("  - a\n  - b\n");
+  });
 });
 
 // --- Handler ---
@@ -121,6 +148,18 @@ describe("listReindentPaste — handler", () => {
     firePaste(view, "- x\n  - y");
     // Prefix "  " swallowed; "- x" lands at col 2, "  - y" (col 2 in frag) at col 4.
     expect(view.state.doc.toString()).toBe("- a\n  - b\n  - x\n    - y\n  more");
+    // Caret lands at the end of the inserted block (line.from + rebased.length).
+    expect(view.state.selection.main.head).toBe("- a\n  - b\n  - x\n    - y".length);
+    view.destroy();
+  });
+
+  it("defers an indented code block pasted into a list (does not rebase pasted code)", () => {
+    // `    - code` is indented code, not a list — must not be turned into a list.
+    const view = mount(LOOSE);
+    view.dispatch({ selection: { anchor: CARET } });
+    firePaste(view, "    - code\n    - still code");
+    // Re-based would put the 2nd line at col 2 ("\n  - still code"); deferring must not.
+    expect(view.state.doc.toString()).not.toContain("\n  - still code");
     view.destroy();
   });
 
