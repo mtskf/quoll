@@ -15,6 +15,10 @@ describe("lineEdits — trailing trim", () => {
     expect(run("code\t\t\nnext\n")).toBe("code\nnext\n"));
   it("trims a whitespace-only line to empty (NOT a hard break)", () =>
     expect(run("a\n  \nb\n")).toBe("a\n\nb\n"));
+  it("preserves a tab-preceded hard break (run ENDS with 2 spaces)", () =>
+    expect(run("foo\t  \nbar\n")).toBe("foo  \nbar\n"));
+  it("trims a run that is 2 spaces then a tab (does NOT end in 2 spaces)", () =>
+    expect(run("foo  \t\nbar\n")).toBe("foo\nbar\n"));
   it("leaves protected lines untouched", () =>
     expect(lineEdits("```\nlet a = 1   \n```\n", [{ from: 0, to: 15 }])).toEqual([]));
 });

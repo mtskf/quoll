@@ -5,7 +5,10 @@ import { EditorView } from "@codemirror/view";
 import { describe, expect, it, vi } from "vitest";
 import * as fmtIndex from "../../../src/markdown/format/index.js";
 import { MAX_CONTENT_LENGTH } from "../../../src/shared/protocol.js";
-import { runFormatDocument } from "../../../src/webview/cm/format/format-document-command.js";
+import {
+  outboundContentLength,
+  runFormatDocument,
+} from "../../../src/webview/cm/format/format-document-command.js";
 
 function makeView(doc: string, readOnly = false): EditorView {
   return new EditorView({
@@ -76,6 +79,13 @@ describe("runFormatDocument", () => {
     expect(view.state.doc.toString()).toBe("a");
     spy.mockRestore();
     view.destroy();
+  });
+  it("outboundContentLength counts CRLF-serialized length (edit-sync posts CRLF)", () => {
+    // CRLF doc: each `\n` serializes to `\r\n`, so the outbound length exceeds the
+    // LF-internal length by one byte per newline.
+    expect(outboundContentLength("a\nb\nc", "\r\n")).toBe(7);
+    expect(outboundContentLength("a\nb", "\n")).toBe(3);
+    expect(outboundContentLength("no newline", "\r\n")).toBe(10);
   });
   it("catches an out-of-range edit (dispatch RangeError) without crashing", () => {
     const spy = vi

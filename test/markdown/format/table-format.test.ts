@@ -57,6 +57,13 @@ describe("tableEdits", () => {
     expect(tableEdits(src, classifyDocument(src).tableRanges)).toEqual([]);
   });
 
+  it("skips a mixed table where a BODY row lacks outer pipes (header-only guard is insufficient)", () => {
+    // Piped header, pipe-less body row `x | y`: forcing outer pipes onto the body
+    // row changes the Lezer structure signature, so the whole table is skipped.
+    const src = "| a | b |\n| - | - |\nx | y\n";
+    expect(tableEdits(src, classifyDocument(src).tableRanges)).toEqual([]);
+  });
+
   it("is idempotent", () => {
     const once = fmt("| a | bbbb |\n| - | - |\n| 1 | 2 |\n");
     expect(fmt(once)).toBe(once);

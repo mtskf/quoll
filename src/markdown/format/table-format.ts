@@ -1,7 +1,7 @@
 // Reformat GFM tables to padded, alignment-aware normal form using the pure
 // table model. Table ranges come from the Lezer classifier (parser authority),
 // already filtered against protected regions. A table is skipped (byte-
-// untouched) when parseTable rejects it, its header lacks an outer pipe, it has
+// untouched) when parseTable rejects it, ANY row lacks an outer pipe, it has
 // a single column (the Lezer Table.to overshoot — a trailing line absorbed as a
 // phantom row — corrupts ONLY 1-column tables), or it is ragged (any body row's
 // cell count != column count). A false-skip is always safe.
@@ -66,11 +66,17 @@ export function tableEdits(source: string, tableRanges: readonly Range[]): Edit[
     if (!table) {
       continue; // malformed / blockquote table
     }
-    // Only reformat "well-formed" tables with both outer pipes. formatTableBlock
-    // always emits `| … |`; forcing outer pipes onto a pipe-less-outer table
-    // (valid GFM, e.g. `a | b\n:-- | --:\n1 | 2`) is render-identical but changes
-    // the Lezer structure signature, so we conservatively leave those untouched.
-    if (!table.header.leadingPipe || !table.header.trailingPipe) {
+    // Only reformat "well-formed" tables where EVERY row (header and body) has
+    // both outer pipes. formatTableBlock always emits `| … |`; forcing outer
+    // pipes onto any pipe-less-outer row (valid GFM, e.g. `a | b\n:-- | --:\n1 |
+    // 2`, or a piped header with a pipe-less body row) is render-identical but
+    // changes the Lezer structure signature, so we conservatively leave those
+    // untouched. A header-only check would miss a pipe-less body row.
+    if (
+      !table.header.leadingPipe ||
+      !table.header.trailingPipe ||
+      table.rows.some((r) => !r.leadingPipe || !r.trailingPipe)
+    ) {
       continue;
     }
     const cols = table.delimiter.cells.length;

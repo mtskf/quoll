@@ -14,6 +14,21 @@ import { applyEdits } from "../../../markdown/format/edit.js";
 import { formatDocumentEdits } from "../../../markdown/format/index.js";
 import { MAX_CONTENT_LENGTH } from "../../../shared/protocol.js";
 
+/** Length of `text` once its `\n` newlines are serialized with `lineBreak`
+ *  (edit-sync posts the CRLF-joined content; the LF-internal length under-counts). */
+export function outboundContentLength(text: string, lineBreak: string): number {
+  if (lineBreak.length <= 1) {
+    return text.length;
+  }
+  let newlines = 0;
+  for (let i = 0; i < text.length; i++) {
+    if (text[i] === "\n") {
+      newlines++;
+    }
+  }
+  return text.length + newlines * (lineBreak.length - 1);
+}
+
 export function runFormatDocument(view: EditorView): boolean {
   if (view.state.readOnly) {
     return false;
@@ -36,9 +51,10 @@ export function runFormatDocument(view: EditorView): boolean {
   if (edits.length === 0 || formatted === source) {
     return false;
   }
-  if (formatted.length > MAX_CONTENT_LENGTH) {
-    // Otherwise edit-sync would post the full content and hit the host size
-    // banner, leaving the webview formatted while disk stays stale. Bail instead.
+  if (outboundContentLength(formatted, view.state.lineBreak) > MAX_CONTENT_LENGTH) {
+    // postEditMessage would refuse to post the oversized (CRLF-serialized) content
+    // and show the webview serialize-error banner, leaving the doc formatted but
+    // unsaved. Bail before mutating instead.
     console.error("[quoll] Format Document aborted: result exceeds the content size limit.");
     return false;
   }

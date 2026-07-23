@@ -2,9 +2,10 @@
 // trim and blank-line collapse, so the two rules can never emit overlapping edits.
 // A line intersecting a keep-out range (protected block or table) is skipped
 // entirely — by INTERSECTION, so a region starting mid-line still protects the
-// whole line. Trim is hard-break-preserving (a content line whose trailing run is
-// >= 2 spaces becomes exactly two spaces; every other trailing run — one space,
-// tabs, mixed, or a whitespace-only line — is trimmed to empty). Blank collapse
+// whole line. Trim is hard-break-preserving (a content line whose trailing run
+// ENDS with >= 2 spaces becomes exactly two spaces — the CommonMark hard break;
+// every other trailing run — one space, or one ending in a tab, or a
+// whitespace-only line — is trimmed to empty). Blank collapse
 // reduces a run of >= 3 blank lines to a single blank line; a keep-out line ends
 // a blank run, and a line deleted by collapse is excluded from the trim pass.
 import type { Edit } from "./edit.js";
@@ -107,9 +108,10 @@ export function lineEdits(source: string, keepOut: readonly Range[]): Edit[] {
       continue; // no trailing whitespace at all
     }
     const run = source.slice(wsStart, line.contentEnd);
-    // Content line with a >= 2-space run => hard break (two spaces); everything
-    // else (single space, tabs, mixed, or a whitespace-only line) trims to empty.
-    const target = wsStart > line.start && run.length >= 2 && /^ +$/.test(run) ? "  " : "";
+    // Content line whose trailing run ENDS with >= 2 spaces => hard break (two
+    // spaces); everything else (single space, a run ending in a tab, or a
+    // whitespace-only line) trims to empty.
+    const target = wsStart > line.start && / {2}$/.test(run) ? "  " : "";
     if (target !== run) {
       edits.push({ from: wsStart, to: line.contentEnd, insert: target });
     }
