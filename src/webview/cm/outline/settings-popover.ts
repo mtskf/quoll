@@ -271,26 +271,42 @@ export function createSettingsPopover(deps: SettingsPopoverDeps): SettingsPopove
     if (e.key === "Tab") {
       // Focus trap: wrap Tab/Shift+Tab at the first/last tab stop so focus never
       // leaves the modal. Interior Tab moves fall through to native traversal
-      // between the roving groups. The `!activeIsTabbable` arms also wrap when
-      // focus sits on a radio that is NO LONGER a tab stop: after arrow-nav +
-      // pending, the 2s no-echo fallback re-derives roving tabindex from the
-      // (unchanged) prefs, dropping the focused radio back to tabIndex -1 while
-      // focus stays on it. Without this, that stranded radio matches neither
-      // boundary and Tab would escape the aria-modal dialog.
+      // between the roving groups. Stranding (focus sits on a radio that is NO
+      // LONGER a tab stop) is not limited to the 2s no-echo fallback: a fast
+      // second arrow-nav also fires a real host echo whose syncFromState() drops
+      // the previously-focused radio's tabIndex to -1 while focus stays put. When
+      // stranded, Tab moves to the ADJACENT tab stop in DOM order (never straight
+      // to the opposite dialog edge) so navigation continues from where focus
+      // actually sits; only the true boundary wraps.
       const radios = tabbableRadios();
       if (radios.length === 0) {
         return;
       }
-      const first = radios[0];
-      const last = radios[radios.length - 1];
       const active = document.activeElement;
       const activeIsTabbable = radios.some((r) => r === active);
-      if (e.shiftKey && (active === first || !activeIsTabbable)) {
-        e.preventDefault();
-        last.focus();
-      } else if (!e.shiftKey && (active === last || !activeIsTabbable)) {
-        e.preventDefault();
-        first.focus();
+      if (activeIsTabbable) {
+        // Normal roving case: wrap only at the boundaries; interior Tab is native.
+        if (e.shiftKey && active === radios[0]) {
+          e.preventDefault();
+          radios[radios.length - 1].focus();
+        } else if (!e.shiftKey && active === radios[radios.length - 1]) {
+          e.preventDefault();
+          radios[0].focus();
+        }
+        return;
+      }
+      // Stranded on a now-non-tabbable radio: move to the adjacent tab stop
+      // (previous for Shift+Tab, next for Tab), wrapping only at the boundary.
+      e.preventDefault();
+      const allRadios = [...el.querySelectorAll<HTMLButtonElement>("[role='radio']")];
+      const pos =
+        active instanceof HTMLElement ? allRadios.indexOf(active as HTMLButtonElement) : -1;
+      if (e.shiftKey) {
+        const prev = [...radios].reverse().find((r) => allRadios.indexOf(r) < pos);
+        (prev ?? radios[radios.length - 1]).focus();
+      } else {
+        const next = radios.find((r) => allRadios.indexOf(r) > pos);
+        (next ?? radios[0]).focus();
       }
     }
   });

@@ -175,15 +175,19 @@ describe("createSettingsPopover", () => {
     expect(document.activeElement).toBe(last);
   });
 
-  it("still traps Tab when the no-echo fallback stranded focus on a now-non-tabbable radio", () => {
+  it("Tab from a stranded radio moves to the adjacent tab stop, not the dialog edge", () => {
     vi.useFakeTimers();
     const { popover } = make(); // default prefs, onChange no-op → host never echoes
-    const group = popover.el.querySelector("[role='radiogroup']") as HTMLElement; // fontFamily
-    const radios = [...group.querySelectorAll<HTMLButtonElement>("[role='radio']")];
+    const groups = [...popover.el.querySelectorAll<HTMLElement>("[role='radiogroup']")];
+    const fontFamilyGroup = groups[0];
+    const fontSizeGroup = groups[1];
+    const radios = [...fontFamilyGroup.querySelectorAll<HTMLButtonElement>("[role='radio']")];
     // Arrow-nav from the active default (idx 0) to serif (idx 1): focuses idx 1
     // (tabIndex 0) and arms a pending fallback via activate().
     radios[0].focus();
-    group.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true }));
+    fontFamilyGroup.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true })
+    );
     expect(document.activeElement).toBe(radios[1]);
     expect(radios[1].tabIndex).toBe(0);
     // No host echo → the 2s fallback re-derives tabIndex from the (unchanged)
@@ -191,15 +195,71 @@ describe("createSettingsPopover", () => {
     vi.advanceTimersByTime(2000);
     expect(radios[1].tabIndex).toBe(-1);
     expect(document.activeElement).toBe(radios[1]); // focus stranded on a non-tabbable radio
-    // Tab from this stranded radio must STILL be trapped (wrap to a tab stop),
-    // not fall through to native traversal out of the aria-modal dialog.
-    const firstTabbable = [
-      ...popover.el.querySelectorAll<HTMLButtonElement>("[role='radio']"),
-    ].filter((r) => r.tabIndex === 0)[0];
+    // Tab from this stranded radio must move to the NEXT tab stop (fontSize's
+    // default) — the adjacent group in DOM order — not jump to the dialog's
+    // own first stop (which here would coincidentally be the SAME group).
+    const fontSizeDefault = fontSizeGroup.querySelector(
+      "[data-pref-value='default']"
+    ) as HTMLButtonElement;
     const tab = new KeyboardEvent("keydown", { key: "Tab", bubbles: true, cancelable: true });
     radios[1].dispatchEvent(tab);
     expect(tab.defaultPrevented).toBe(true);
-    expect(document.activeElement).toBe(firstTabbable);
+    expect(document.activeElement).toBe(fontSizeDefault);
+  });
+
+  it("Tab from a stranded radio in a middle group moves to the NEXT group's tab stop", () => {
+    vi.useFakeTimers();
+    const { popover } = make();
+    const groups = [...popover.el.querySelectorAll<HTMLElement>("[role='radiogroup']")];
+    const fontSizeGroup = groups[1]; // small, default, large, x-large
+    const lineHeightGroup = groups[2];
+    const radios = [...fontSizeGroup.querySelectorAll<HTMLButtonElement>("[role='radio']")];
+    // Arrow-nav default (idx 1) → large (idx 2): strands large after the fallback.
+    radios[1].focus();
+    fontSizeGroup.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true }));
+    expect(document.activeElement).toBe(radios[2]);
+    vi.advanceTimersByTime(2000);
+    expect(radios[2].tabIndex).toBe(-1);
+    expect(document.activeElement).toBe(radios[2]); // stranded on "large"
+    const lineHeightCozy = lineHeightGroup.querySelector(
+      "[data-pref-value='cozy']"
+    ) as HTMLButtonElement;
+    const tab = new KeyboardEvent("keydown", { key: "Tab", bubbles: true, cancelable: true });
+    radios[2].dispatchEvent(tab);
+    expect(tab.defaultPrevented).toBe(true);
+    expect(document.activeElement).toBe(lineHeightCozy);
+    expect(popover.el.contains(document.activeElement)).toBe(true);
+  });
+
+  it("Shift+Tab from a stranded radio in a middle group moves to the PREVIOUS group's tab stop", () => {
+    vi.useFakeTimers();
+    const { popover } = make();
+    const groups = [...popover.el.querySelectorAll<HTMLElement>("[role='radiogroup']")];
+    const fontSizeGroup = groups[1];
+    const lineHeightGroup = groups[2]; // compact, cozy (default), roomy
+    const radios = [...lineHeightGroup.querySelectorAll<HTMLButtonElement>("[role='radio']")];
+    // Arrow-nav cozy (idx 1) → compact (idx 0): strands compact after the fallback.
+    radios[1].focus();
+    lineHeightGroup.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "ArrowLeft", bubbles: true })
+    );
+    expect(document.activeElement).toBe(radios[0]);
+    vi.advanceTimersByTime(2000);
+    expect(radios[0].tabIndex).toBe(-1);
+    expect(document.activeElement).toBe(radios[0]); // stranded on "compact"
+    const fontSizeDefault = fontSizeGroup.querySelector(
+      "[data-pref-value='default']"
+    ) as HTMLButtonElement;
+    const tab = new KeyboardEvent("keydown", {
+      key: "Tab",
+      shiftKey: true,
+      bubbles: true,
+      cancelable: true,
+    });
+    radios[0].dispatchEvent(tab);
+    expect(tab.defaultPrevented).toBe(true);
+    expect(document.activeElement).toBe(fontSizeDefault);
+    expect(popover.el.contains(document.activeElement)).toBe(true);
   });
 
   it("Escape delegates to onRequestClose and stops propagation (no self-close)", () => {
