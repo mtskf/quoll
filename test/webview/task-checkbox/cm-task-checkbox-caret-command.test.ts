@@ -90,6 +90,20 @@ describe("findTaskMarkerOnLine", () => {
       view.destroy();
     }
   });
+
+  it("returns null on a task's wrapped continuation line (marker is on the FIRST line only)", () => {
+    // The on-line guard: the marker sits on line 1, so a caret on the wrapped
+    // continuation line (line 2) resolves no marker even though it is still
+    // inside the same Task node. Deliberate contract (docstring) — pinned here.
+    const doc = "- [ ] alpha\n  continued body";
+    const caret = doc.indexOf("continued") + 3;
+    const view = mountView(doc, caret);
+    try {
+      expect(findTaskMarkerOnLine(view.state, caret)).toBeNull();
+    } finally {
+      view.destroy();
+    }
+  });
 });
 
 describe("toggleTaskCheckboxAtCaret", () => {
@@ -149,6 +163,18 @@ describe("toggleTaskCheckboxAtCaret", () => {
     try {
       expect(toggleTaskCheckboxAtCaret(view)).toBe(false);
       expect(view.state.doc.toString()).toBe("- [ ] alpha");
+    } finally {
+      view.destroy();
+    }
+  });
+
+  it("is a no-op when the caret is on a task's continuation line, not the marker line", () => {
+    const doc = "- [ ] alpha\n  continued body";
+    const caret = doc.indexOf("continued") + 3;
+    const view = mountView(doc, caret);
+    try {
+      expect(toggleTaskCheckboxAtCaret(view)).toBe(false);
+      expect(view.state.doc.toString()).toBe(doc);
     } finally {
       view.destroy();
     }

@@ -23,7 +23,7 @@
 // group (Codex round-1 #8 / EH round-1 #2).
 
 import { isolateHistory } from "@codemirror/commands";
-import { syntaxTree } from "@codemirror/language";
+import { ensureSyntaxTree, syntaxTree } from "@codemirror/language";
 import { type EditorState, type Extension, Prec } from "@codemirror/state";
 import { type Command, type EditorView, keymap } from "@codemirror/view";
 import {
@@ -126,11 +126,21 @@ export function toggleTaskCheckbox(view: EditorView, markerFrom: number): boolea
  *  render a checkbox (the same fail-closed contract). The on-line guard
  *  (`markerFrom` starts on the caret's own line) picks the INNERMOST task when
  *  the caret is on a nested item and ignores an ancestor task whose marker sits
- *  on an earlier line, so `Mod-l` toggles the item the caret is actually on. */
+ *  on an earlier line, so `Mod-l` toggles the item the caret is actually on.
+ *
+ *  Resolves the tree with `ensureSyntaxTree(state, line.to, 50) ?? syntaxTree(state)`
+ *  — a bounded parse THROUGH the caret line before walking, matching every other
+ *  caret-triggered tree command in the webview (fenced-code-enter-keymap,
+ *  list-continuation-keymap, list-tree). `syntaxTree(state)` alone may be
+ *  incomplete past the initial parse budget, which would make the toggle a
+ *  silent no-op on a real task line whose region has not been parsed yet; the
+ *  50 ms budget forces the caret line in and falls back to the partial tree if
+ *  the parse cannot reach it. */
 export function findTaskMarkerOnLine(state: EditorState, pos: number): number | null {
   const line = state.doc.lineAt(pos);
   let markerFrom: number | null = null;
-  syntaxTree(state).iterate({
+  const tree = ensureSyntaxTree(state, line.to, 50) ?? syntaxTree(state);
+  tree.iterate({
     from: line.from,
     to: line.to,
     enter: (node) => {
