@@ -48,6 +48,21 @@ class LintGutterMarker extends GutterMarker {
     return other.severity === this.severity;
   }
 
+  // Decorative by architecture — carries NO role/aria and is not the AT path
+  // (A11Y-04). CodeMirror sets `aria-hidden="true"` on the enclosing `.cm-gutters`
+  // container (@codemirror/view GutterView), so any `role`/`aria-label` on this dot
+  // sits inside an aria-hidden subtree and is unreachable by assistive tech — an
+  // ancestor's aria-hidden cannot be un-hidden by a descendant. This mirrors the
+  // fold gutter's mouse-affordance-by-design stance. The authoritative AT path for
+  // every lint finding is the host-side Problems-panel mirror (quoll.lint.problems
+  // .enabled, ON by default): a native vscode.DiagnosticCollection that is fully
+  // keyboard-navigable and screen-reader-announced and carries severity + message +
+  // rule code + range (extension/lint/lint-diagnostics.ts). Severity here is
+  // conveyed to sighted users by the dot colour alone, which is acceptable only
+  // because this is a redundant, opt-in (default-off) visual cue over that
+  // AT surface — not a sole channel. (Two honest bounds on the mirror — it is
+  // user-disableable and wire-capped — are documented at MARK_BY_SEVERITY in
+  // cm/lint/extension.ts; they do not affect the default path.)
   override toDOM(): Node {
     const dot = document.createElement("div");
     dot.className = `quoll-lint-gutter-dot quoll-lint-gutter-dot-${this.severity}`;

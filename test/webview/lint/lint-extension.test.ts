@@ -343,6 +343,36 @@ describe("quollLint debounced recompute (view-level)", () => {
     }
   });
 
+  it("drives a real no-multiple-blanks (wholeLine) finding through the mounted publisher onto the wire (A11Y-04 AT-completeness)", () => {
+    // Companion to the toWireDiagnostics wholeLine unit pin (in the toWireDiagnostics
+    // describe): that one feeds toWireDiagnostics directly, so it only guards that
+    // projection's map body. This one drives a REAL blank-line finding through the
+    // whole production chain — the debounced lintComputePlugin → lintDiagnosticsPublisher
+    // → capForWire → toWireDiagnostics → sink — so a future "wholeLine is display-only,
+    // drop it" cleanup ANYWHERE in that chain (not just in the wire projection) turns
+    // this red. wholeLine findings have no underline, so this sink is their sole path
+    // to the Problems-panel AT surface; losing it silently is the exact regression
+    // A11Y-04 exists to prevent.
+    const sink = vi.fn();
+    const view = new EditorView({
+      doc: "aa\n\n\nbb\n", // two consecutive blank lines -> no-multiple-blanks (wholeLine)
+      parent: document.body,
+      extensions: [markdown({ base: markdownLanguage }), quollLint(sink)],
+    });
+    try {
+      // The publisher does not fire at mount; a doc change schedules the debounced
+      // compute, whose setLintDiagnostics effect drives the sink. The blank run
+      // survives the edit, so the finding is still present when the debounce fires.
+      view.dispatch({ changes: { from: view.state.doc.length, insert: "cc\n" } });
+      vi.advanceTimersByTime(300);
+      expect(sink).toHaveBeenCalled();
+      const wire = sink.mock.calls[sink.mock.calls.length - 1][0] as LintDiagnosticWire[];
+      expect(wire.some((d) => d.code === "no-multiple-blanks")).toBe(true);
+    } finally {
+      view.destroy();
+    }
+  });
+
   it("maps the underline DecorationSet through a doc change instead of leaving it stale or rebuilding", () => {
     // Pin lintDecorationsField's per-keystroke mapping: an inline mark published by a
     // fresh lint must FOLLOW an edit made inside the debounce window (no re-lint) —
@@ -517,6 +547,40 @@ describe("toWireDiagnostics (offset → 0-based line/character)", () => {
     expect(wire.some((d) => d.severity === "warning" && d.code === "no-trailing-spaces")).toBe(
       true
     );
+  });
+
+  // AT-completeness pin (A11Y-04): a `wholeLine` finding is the ONE diagnostic
+  // type that gets NO in-editor underline (buildLintDecorations skips it, above),
+  // so its only visual surface is the mouse-only gutter dot / hover tooltip and
+  // the Problems-panel mirror is its SOLE assistive-tech path. The mirror is
+  // therefore only complete if wholeLine findings cross the wire. Guard that: a
+  // zero-length blank-line finding must project to a valid same-position range
+  // with severity/code/message intact. REVERT-CHECK: dropping wholeLine findings
+  // from the wire (the sole AT path for blank-line findings) fails this.
+  it("carries a wholeLine (blank-line) finding onto the wire so the Problems AT path is complete", () => {
+    // "aa"(2) "\n"(3) ""(3 = start of blank line idx 1) "\n"(4) "bb"
+    const doc = Text.of(["aa", "", "bb"]);
+    const wire = toWireDiagnostics(doc, [
+      {
+        from: 3,
+        to: 3,
+        severity: "info",
+        code: "no-multiple-blanks",
+        message: "m",
+        wholeLine: true,
+      },
+    ]);
+    expect(wire).toEqual<LintDiagnosticWire[]>([
+      {
+        startLine: 1,
+        startCharacter: 0,
+        endLine: 1,
+        endCharacter: 0,
+        severity: "info",
+        code: "no-multiple-blanks",
+        message: "m",
+      },
+    ]);
   });
 });
 

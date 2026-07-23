@@ -188,6 +188,24 @@ const lintComputePlugin = ViewPlugin.fromClass(
   }
 );
 
+// The underline marks carry ONLY a severity class — no role/aria (A11Y-04). A
+// `Decoration.mark` wraps the ranged prose in a <span> inside the contenteditable;
+// putting an `aria-label`/`role` on a text-wrapping span overrides that span's own
+// text in the accessibility name computation, so a screen reader would announce the
+// lint label INSTEAD OF (or jumbled with) the underlying document words — corrupting
+// the reading of the very prose being edited. So the underline stays a visual-only
+// cue; the assistive-tech representation of each finding is the host Problems-panel
+// mirror (quoll.lint.problems.enabled, ON by default — a native
+// vscode.DiagnosticCollection that carries the same range + severity + message +
+// rule code, see extension/lint/lint-diagnostics.ts and the completeness pins in
+// test/webview/lint/lint-extension.test.ts). Two honest bounds on that mirror, so
+// this comment does not overclaim unconditional completeness: (1) it is
+// user-disableable — turning quoll.lint.problems.enabled OFF suppresses the Problems
+// entries while the visual underlines remain, a deliberate opt-out (per the setting's
+// own markdownDescription) that also drops the AT surface; (2) above
+// MAX_LINT_DIAGNOSTICS the wire is capped (capForWire below keeps every warning but
+// can drop surplus info), so a pathological >2000-finding document is a partial
+// mirror. Neither weakens the default path.
 const MARK_BY_SEVERITY: Record<LintSeverity, Decoration> = {
   warning: Decoration.mark({ class: "quoll-lint-mark-warning" }),
   info: Decoration.mark({ class: "quoll-lint-mark-info" }),
@@ -310,6 +328,13 @@ function lintDiagnosticsPublisher(
 }
 
 // Hover a marked range -> a tooltip listing every diagnostic covering the position.
+// Mouse-affordance only, carries no ARIA (A11Y-04): a hoverTooltip is shown solely
+// on pointer hover and is never focus- or keyboard-reachable, so a screen-reader /
+// keyboard user never triggers it — a `role="tooltip"` here would advertise an AT
+// relationship that no trigger fulfils. Its content (the finding messages + rule
+// codes) is fully mirrored, per finding, into the Problems panel via the host
+// DiagnosticCollection (quoll.lint.problems.enabled, ON by default), which is the
+// keyboard/AT path.
 const lintHoverTooltip = hoverTooltip((view, pos) => {
   const diagnostics = view.state.field(lintField, false);
   if (!diagnostics) {
