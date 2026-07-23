@@ -241,6 +241,10 @@ export interface TestHarnessShape {
     | null;
   openExternalOverride: ((url: string) => Thenable<boolean>) | null;
   openLinkOverride: ((uri: Uri) => Thenable<unknown>) | null;
+  openCodeReferenceOverride:
+    | ((uri: Uri, line: number | undefined, col: number | undefined) => Thenable<unknown>)
+    | null;
+  codeReferenceExistsOverride: ((target: Uri, root: Uri) => Thenable<boolean>) | null;
   buildWebviewHtmlOverride: (() => string) | null;
   writeImageFileOverride: ((uri: Uri, content: Uint8Array) => Thenable<void>) | null;
   diskConflictPromptOverride:
