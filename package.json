@@ -80,6 +80,10 @@
       {
         "command": "quoll.format",
         "title": "Quoll: Format Selection (bold / italic / code / strike / link)"
+      },
+      {
+        "command": "quoll.formatDocument",
+        "title": "Quoll: Format Document"
       }
     ],
     "menus": {

@@ -1,5 +1,6 @@
 import { commands, type ExtensionContext, ExtensionMode, window } from "vscode";
 import { registerFormatCommand } from "./commands/format-command.js";
+import { registerFormatDocumentCommand } from "./commands/format-document-command.js";
 import { QuollEditorPanel } from "./session/quoll-editor-panel.js";
 import { showSafely } from "./surface/show-safely.js";
 import { __clearSurfaceMemoryForTest } from "./surface/surface-memory.js";
@@ -37,6 +38,7 @@ export async function activate(context: ExtensionContext) {
     commands.registerCommand("quoll.reopenInTextEditor", reopenActiveQuollTabAsText)
   );
   context.subscriptions.push(registerFormatCommand());
+  context.subscriptions.push(registerFormatDocumentCommand());
   context.subscriptions.push(registerSurfaceRestoreWatcher(QuollEditorPanel.viewType));
   context.subscriptions.push(
     commands.registerCommand("quoll.editWith", async () => {

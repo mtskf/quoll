@@ -136,10 +136,15 @@ describe("C2 write-gate has no ProseMirror runtime imports declared in its own f
     // registered in this parser AND the webview. It imports only @lezer/highlight
     // (Tag) + @lezer/markdown (types) — both framework-agnostic and PM-free — so
     // allow-listing it drags in no framework transitively.
+    // ./gfm-parser.js is the single configured GFM parser export (Format
+    // Document slice): the walker now imports it instead of duplicating
+    // parser.configure(...). It imports only @lezer/markdown + ./highlight-mark.js
+    // — both PM-free — so the gate stays framework-free.
     const ALLOW = new Set([
       "@lezer/markdown",
       "@lezer/common",
       "./highlight-mark.js",
+      "./gfm-parser.js",
       "./url-allowlist.js",
       "./url-decode.js",
     ]);

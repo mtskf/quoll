@@ -334,6 +334,27 @@ describe("shell — edit-rejected routing", () => {
   });
 });
 
+describe("shell — format-document routing", () => {
+  it("routes a format-document message to editor.runFormatDocument", async () => {
+    // Reverting shell.ts's `case "format-document"` leaves the doc unformatted →
+    // this assertion goes red. Uses the real editor (the formatter is pure string
+    // logic, no layout), mirroring the edit-rejected test's findFromDOM harness.
+    await mount();
+    deliver(buildDocument({ docVersion: 1, content: "1. a\n1. b\n" }));
+
+    const mountEl = (container as HTMLElement).querySelector(".quoll-editor") as HTMLElement;
+    const view = EditorView.findFromDOM(mountEl);
+    if (!view) {
+      throw new Error("EditorView not found via findFromDOM");
+    }
+    expect(view.state.doc.toString()).toBe("1. a\n1. b\n");
+
+    deliver({ protocol: PROTOCOL_VERSION, type: "format-document" });
+
+    expect(view.state.doc.toString()).toBe("1. a\n2. b\n");
+  });
+});
+
 describe("shell — relative image read-path seam (shell → editor → facet)", () => {
   it("resolves a relative image src against the injected resourceBaseUri", async () => {
     // End-to-end passthrough of the read-path spine: mountShell({resourceBaseUri})

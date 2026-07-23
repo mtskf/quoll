@@ -17,24 +17,23 @@
 
 import { commands, type Disposable } from "vscode";
 import type { FormatCommandMessage } from "../../shared/protocol.js";
+import { createActivePoster } from "./active-poster.js";
 
 export type FormatAction = FormatCommandMessage["action"];
 export type FormatPoster = (action: FormatAction) => void;
 
 const KNOWN: ReadonlySet<string> = new Set(["bold", "italic", "code", "strike", "link"]);
 
-let activePoster: FormatPoster | null = null;
+// Identity-guarded single-slot latch (see active-poster.ts): a panel losing
+// focus after another already became active must not wipe the new poster.
+const registry = createActivePoster<FormatPoster>();
 
 export function setActiveFormatPoster(poster: FormatPoster): void {
-  activePoster = poster;
+  registry.set(poster);
 }
 
-/** Clear only if `poster` is still the active one — a panel losing focus after
- *  another already became active must not wipe the new poster. */
 export function clearActiveFormatPoster(poster: FormatPoster): void {
-  if (activePoster === poster) {
-    activePoster = null;
-  }
+  registry.clear(poster);
 }
 
 export function normalizeFormatAction(arg: unknown): FormatAction | null {
@@ -45,12 +44,12 @@ export function registerFormatCommand(): Disposable {
   return commands.registerCommand("quoll.format", (arg: unknown) => {
     const action = normalizeFormatAction(arg);
     if (action !== null) {
-      activePoster?.(action);
+      registry.get()?.(action);
     }
   });
 }
 
 /** Test seam — do not use in production code. */
 export function __getActivePosterForTest(): FormatPoster | null {
-  return activePoster;
+  return registry.get();
 }

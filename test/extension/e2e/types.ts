@@ -169,6 +169,8 @@ export type FormatCommandMessageShape = EnvelopeShape & {
   action: "bold" | "italic" | "code" | "strike" | "link";
 };
 
+export type FormatDocumentMessageShape = EnvelopeShape & { type: "format-document" };
+
 // The host→webview union mirror. Previously omitted because the E2E
 // suite only asserted on outbound message shapes by type-narrowing in
 // the predicates (isDocumentEvent etc.); now that `edit-rejected` joins
@@ -181,7 +183,8 @@ export type HostToWebviewShape =
   | ImageWriteResultMessageShape
   | EditorConfigMessageShape
   | CaretApplyMessageShape
-  | FormatCommandMessageShape;
+  | FormatCommandMessageShape
+  | FormatDocumentMessageShape;
 
 export type WebviewToHostShape =
   | ReadyMessageShape

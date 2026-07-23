@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   buildFormatCommandMessage,
+  buildFormatDocumentMessage,
   buildSwitchToTextMessage,
   isHostToWebview,
   isWebviewToHost,
@@ -1146,5 +1147,23 @@ describe("format-command message", () => {
 
   it("rejects a missing action", () => {
     expect(isHostToWebview({ protocol: PROTOCOL_VERSION, type: "format-command" })).toBe(false);
+  });
+});
+
+describe("format-document message", () => {
+  it("builds a valid envelope", () => {
+    const m = buildFormatDocumentMessage();
+    expect(m).toEqual({ protocol: PROTOCOL_VERSION, type: "format-document" });
+    expect(isHostToWebview(m)).toBe(true);
+  });
+
+  it("accepts a well-formed format-document message at the boundary", () => {
+    expect(isHostToWebview(buildFormatDocumentMessage())).toBe(true);
+  });
+
+  it("rejects a format-document message with a wrong protocol version", () => {
+    expect(isHostToWebview({ protocol: PROTOCOL_VERSION + 1, type: "format-document" })).toBe(
+      false
+    );
   });
 });
