@@ -87,6 +87,29 @@ describe("runFormatDocument", () => {
     expect(outboundContentLength("a\nb", "\n")).toBe(3);
     expect(outboundContentLength("no newline", "\r\n")).toBe(10);
   });
+  it("converts multi-line insert newlines to the doc's separator on a CRLF doc", () => {
+    // Realistic CRLF doc: separators are real \r\n and the lineSeparator facet is
+    // set. CM splits insert text on that facet, so a raw LF inside a multi-line
+    // table-reformat insert would embed a bare \n inside ONE CM line, collapsing
+    // the table. (doc.toString() is LF-internal even here, so the formatter's
+    // positions still align with the CM doc.)
+    const view = new EditorView({
+      state: EditorState.create({
+        doc: "| a | bbbb |\r\n| - | - |\r\n| 1 | 2 |\r\n",
+        extensions: [EditorState.lineSeparator.of("\r\n")],
+      }),
+    });
+    expect(runFormatDocument(view)).toBe(true);
+    // Header + delimiter + body + trailing empty line = 4 CM lines (NOT collapsed
+    // into 1 by a stray embedded LF).
+    expect(view.state.doc.lines).toBe(4);
+    const serialized = view.state.sliceDoc();
+    // Every newline is a real \r\n — no stray bare LF embedded inside a line.
+    expect(serialized.replace(/\r\n/g, "")).not.toContain("\n");
+    expect(view.state.doc.line(1).text).toBe("| a   | bbbb |");
+    expect(view.state.doc.line(3).text).toBe("| 1   | 2    |");
+    view.destroy();
+  });
   it("catches an out-of-range edit (dispatch RangeError) without crashing", () => {
     const spy = vi
       .spyOn(fmtIndex, "formatDocumentEdits")
