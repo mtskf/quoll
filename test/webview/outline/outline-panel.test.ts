@@ -1,4 +1,6 @@
 // @vitest-environment happy-dom
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { EditorSelection, EditorState } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -10,6 +12,7 @@ import {
 import { quollMarkdownLanguage } from "../../../src/webview/cm/markdown.js";
 import { outlinePlugin, quollOutline } from "../../../src/webview/cm/outline/index.js";
 import {
+  DEFAULT_WIDTH_PX,
   OUTLINE_OPEN_CLASS,
   OUTLINE_PINNED_CLASS,
 } from "../../../src/webview/cm/outline/outline-panel.js";
@@ -843,6 +846,20 @@ describe("quollOutline resizable width", () => {
     expect(widthVar(host)).toBe("180px"); // clamped to MIN_WIDTH_PX
   });
 
+  it("keeps aria-valuenow in sync with the width var during a pointer drag", () => {
+    // applyResize must push the live width onto the separator's aria-valuenow on
+    // every pointermove (not only on keyboard nudges), so AT reads the width as it
+    // is dragged and the final value after release.
+    const { host } = mount("# Alpha\n");
+    const h = handleEl(host);
+    stubPointerCapture(h);
+    h.dispatchEvent(pd(260));
+    h.dispatchEvent(pm(300));
+    expect(h.getAttribute("aria-valuenow")).toBe("300");
+    h.dispatchEvent(pu(300));
+    expect(h.getAttribute("aria-valuenow")).toBe("300");
+  });
+
   it("persists the final width on pointer-up", () => {
     const { host } = mount("# Alpha\n");
     const h = handleEl(host);
@@ -977,14 +994,16 @@ describe("quollOutline keyboard resize (separator)", () => {
     expect(vi.mocked(patchPersistedState)).toHaveBeenLastCalledWith({ outlineWidthPx: 260 });
   });
 
-  it("Home / End jump to the min / max width bounds", () => {
+  it("Home / End jump to the min / max width bounds and persist them", () => {
     const { host } = mount("# Alpha\n");
     handleKeydown(host, "End");
     expect(widthVar(host)).toBe("600px");
     expect(handleEl(host).getAttribute("aria-valuenow")).toBe("600");
+    expect(vi.mocked(patchPersistedState)).toHaveBeenLastCalledWith({ outlineWidthPx: 600 });
     handleKeydown(host, "Home");
     expect(widthVar(host)).toBe("180px");
     expect(handleEl(host).getAttribute("aria-valuenow")).toBe("180");
+    expect(vi.mocked(patchPersistedState)).toHaveBeenLastCalledWith({ outlineWidthPx: 180 });
   });
 
   it("ArrowLeft clamps at the minimum (never below MIN_WIDTH_PX)", () => {
@@ -992,6 +1011,14 @@ describe("quollOutline keyboard resize (separator)", () => {
     handleKeydown(host, "Home"); // 180
     handleKeydown(host, "ArrowLeft"); // 180 - 16 → clamped back to 180
     expect(widthVar(host)).toBe("180px");
+  });
+
+  it("ArrowRight clamps at the maximum (never above MAX_WIDTH_PX)", () => {
+    const { host } = mount("# Alpha\n");
+    handleKeydown(host, "End"); // 600
+    handleKeydown(host, "ArrowRight"); // 600 + 16 → clamped back to 600
+    expect(widthVar(host)).toBe("600px");
+    expect(handleEl(host).getAttribute("aria-valuenow")).toBe("600");
   });
 
   it("ignores unrelated keys (no width change, nothing persisted)", () => {
@@ -1012,6 +1039,31 @@ describe("quollOutline keyboard resize (separator)", () => {
     // whose relatedTarget is the handle; the exemption keeps the overlay open.
     row.dispatchEvent(new FocusEvent("focusout", { relatedTarget: handleEl(host), bubbles: true }));
     expect(host.classList.contains(OUTLINE_OPEN_CLASS)).toBe(true);
+  });
+
+  it("dismisses the transient overlay when focus leaves the separator to the editor", () => {
+    // The mirror of the exemption above: tabbing OFF the handle to an element
+    // outside both the sidebar and the handle must dismiss the overlay, so a
+    // keyboard user focused on the separator is not trapped over the editor with
+    // focus behind it. The handle carries its OWN focusout listener (it lives on
+    // the host, not the sidebar) — without it there is no close path from here.
+    const { view: v, host } = mount("# A\n\nbody\n\n## B\n");
+    v.plugin(outlinePlugin)?.toggle(); // open as a transient overlay (not pinned)
+    handleEl(host).focus();
+    handleEl(host).dispatchEvent(
+      new FocusEvent("focusout", { relatedTarget: v.contentDOM, bubbles: true })
+    );
+    expect(host.classList.contains(OUTLINE_OPEN_CLASS)).toBe(false);
+  });
+
+  it("Escape while focus is on the separator closes the overlay", () => {
+    // The handle is a host child, so the sidebar's Escape handler never sees its
+    // keydowns — onResizeKeydown handles Escape itself, mirroring the sidebar.
+    const { view: v, host } = mount("# A\n\nbody\n\n## B\n");
+    v.plugin(outlinePlugin)?.toggle();
+    handleEl(host).focus();
+    handleKeydown(host, "Escape");
+    expect(host.classList.contains(OUTLINE_OPEN_CLASS)).toBe(false);
   });
 });
 
@@ -1118,5 +1170,21 @@ describe("quollOutline settings popover wiring", () => {
     // is unchanged, so the outline's update() runs syncFromState() → pending clears.
     view.dispatch({ effects: setEditorPrefsEffect.of({ ...DEFAULT_EDITOR_PREFS }) });
     expect(serif.classList.contains("pending")).toBe(false);
+  });
+});
+
+// DEFAULT_WIDTH_PX (the width the keyboard math + aria-valuenow read before any
+// inline drag) must equal styles.css's --quoll-outline-sidebar-width default.
+// happy-dom's getComputedStyle is unreliable for custom-property defaults, so
+// rather than measure, read the stylesheet source and machine-enforce parity —
+// changing the CSS 260px without updating the constant (or vice versa) fails here.
+describe("quollOutline default-width CSS contract", () => {
+  it("DEFAULT_WIDTH_PX matches styles.css --quoll-outline-sidebar-width", () => {
+    // Resolve from the vitest cwd (the repo root) — under `@vitest-environment
+    // happy-dom` import.meta.url is not a file: URL, so `new URL(...)` throws.
+    const css = readFileSync(resolve(process.cwd(), "src/webview/styles.css"), "utf8");
+    const match = css.match(/--quoll-outline-sidebar-width:\s*(\d+)px/);
+    expect(match).not.toBeNull();
+    expect(Number((match as RegExpMatchArray)[1])).toBe(DEFAULT_WIDTH_PX);
   });
 });

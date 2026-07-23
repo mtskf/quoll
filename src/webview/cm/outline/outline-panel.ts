@@ -96,12 +96,15 @@ const MIN_WIDTH_PX = 180;
 const MAX_WIDTH_PX = 600;
 /** Keyboard-resize nudge (px) per Arrow press on the focused separator. Coarse
  *  enough that a handful of presses spans the range, in the spirit of VS Code's
- *  keyboard sash nudges; Home/End jump straight to the min/max bounds. */
+ *  keyboard sash nudges; Home jumps to MIN_WIDTH_PX. End requests MAX_WIDTH_PX but
+ *  is still subject to clampWidth's host-relative 80% cap (see the comment above),
+ *  so on a narrow host it lands below the documented max. */
 const RESIZE_STEP_PX = 16;
 /** Stylesheet baseline for --quoll-outline-sidebar-width (styles.css) — the
- *  width the keyboard math and aria-valuenow read before any inline width is
- *  set. Keep in sync with the CSS default. */
-const DEFAULT_WIDTH_PX = 260;
+ *  width the keyboard math and aria-valuenow read before any inline width is set.
+ *  Exported so a contract test machine-enforces parity with the CSS default (the
+ *  test reads styles.css and fails if the two diverge — not just this comment). */
+export const DEFAULT_WIDTH_PX = 260;
 /** Persisted view-state key (flat, survives reload) — see readPersistedState.
  *  Flat + namespaced by name so it shallow-merges alongside any future keys
  *  without a nested schema (one key today). */
@@ -333,6 +336,13 @@ class OutlinePanel implements PluginValue {
     this.resizeEl.addEventListener("pointerup", (e) => this.onResizePointerEnd(e));
     this.resizeEl.addEventListener("pointercancel", (e) => this.onResizePointerEnd(e));
     this.resizeEl.addEventListener("keydown", (e) => this.onResizeKeydown(e));
+    // The handle lives on the host, not the sidebar, but belongs to the same
+    // outline focus region: bind focusout here too so tabbing from the handle to
+    // an element outside the sidebar/handle dismisses the transient overlay (the
+    // shared onSidebarFocusOut exempts focus moving BACK to the sidebar or handle).
+    // Without this, a keyboard user focused on the handle has no focus-out path to
+    // close a non-pinned overlay — the A11Y-03 obscured-focus wart would recur.
+    this.resizeEl.addEventListener("focusout", (e) => this.onSidebarFocusOut(e));
     this.host.appendChild(this.resizeEl);
 
     // Restore a persisted width before first paint (guarded + in-range only:
@@ -552,9 +562,12 @@ class OutlinePanel implements PluginValue {
    *     on the host (not the sidebar) because CSS anchors it to the sidebar's
    *     right edge, but it belongs to the outline: Tabbing to it must resize, not
    *     dismiss the overlay out from under the very handle being focused.
-   *  A programmatic `.focus()` to a real element outside the sidebar is
-   *  indistinguishable from a deliberate Tab-out and will also dismiss — an
-   *  accepted tradeoff for a transient surface. */
+   *  This handler is bound to BOTH `sidebarEl` and `resizeEl`, so the sidebar and
+   *  the separator form one focus region: a focusout from either that lands
+   *  outside both dismisses the overlay, while a move between them is exempted by
+   *  the guards above. A programmatic `.focus()` to a real element outside the
+   *  region is indistinguishable from a deliberate Tab-out and will also dismiss —
+   *  an accepted tradeoff for a transient surface. */
   private onSidebarFocusOut(e: FocusEvent): void {
     if (!this.open || this.pinned) {
       return;
@@ -648,9 +661,19 @@ class OutlinePanel implements PluginValue {
   }
 
   /** Keyboard resize on the focused separator (WAI-ARIA window-splitter keys):
-   *  Left/Right nudge by RESIZE_STEP_PX, Home/End jump to the min/max bound.
-   *  Everything else (Tab, Escape, …) is left to bubble. */
+   *  Left/Right nudge by RESIZE_STEP_PX. Home jumps to MIN_WIDTH_PX; End requests
+   *  MAX_WIDTH_PX but setWidth's clampWidth call still applies the host-relative
+   *  80% cap, so End may land below MAX_WIDTH_PX on a narrow host. Escape closes
+   *  the overlay (mirrors the sidebar's Escape); Tab and everything else bubble. */
   private onResizeKeydown(e: KeyboardEvent): void {
+    // Escape closes the transient overlay from the handle (the handle is a host
+    // child, so the sidebar's Escape handler never sees its keydowns). Matches the
+    // sidebar Escape path: setOpen(false) also unpins via its invariant.
+    if (e.key === "Escape") {
+      e.preventDefault();
+      this.setOpen(false);
+      return;
+    }
     let next: number;
     switch (e.key) {
       case "ArrowLeft":
