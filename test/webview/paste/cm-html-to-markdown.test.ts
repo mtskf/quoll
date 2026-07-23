@@ -1,7 +1,22 @@
 // @vitest-environment happy-dom
+import { markdownLanguage } from "@codemirror/lang-markdown";
 import { describe, expect, it } from "vitest";
 import { validateMarkdownForWrite } from "../../../src/markdown/validate-for-write.js";
 import { htmlToMarkdown } from "../../../src/webview/cm/paste/html-to-markdown.js";
+
+/** True when `md` parses (under Quoll's shipped GFM markdown parser) to a tree
+ *  containing a `Table` node — used to prove pasted prose does not fabricate one. */
+function formsGfmTable(md: string): boolean {
+  let found = false;
+  markdownLanguage.parser.parse(md).iterate({
+    enter: (n) => {
+      if (n.name === "Table") {
+        found = true;
+      }
+    },
+  });
+  return found;
+}
 
 describe("htmlToMarkdown — inline constructs", () => {
   it("converts bold (<strong> and <b>)", () => {
@@ -42,6 +57,40 @@ describe("htmlToMarkdown — inline constructs", () => {
   });
   it("collapses a text-node newline to a space (no indented code, no smuggled marker)", () => {
     expect(htmlToMarkdown("<p>a\n    - b</p>")).toBe("a - b");
+  });
+  it("escapes pipes so pasted prose cannot fabricate a GFM table", () => {
+    // A pipe line followed by a delimiter-shaped line (here split by <br>) would
+    // otherwise parse as a GFM table header+delimiter — pasted prose must remain a
+    // paragraph. escapeInline must escape `|` (mirroring escapeCell) to prevent it.
+    const md = htmlToMarkdown("<p>h1 | h2<br>:-|:-</p>");
+    expect(md).toBe("h1 \\| h2\\\n:-\\|:-");
+    // Behavioural pin against Quoll's shipped GFM parser: no Table node forms.
+    expect(md).not.toBeNull();
+    expect(formsGfmTable(md as string)).toBe(false);
+  });
+  it("percent-encodes a link destination containing angle brackets", () => {
+    // isAllowedUrl accepts the raw href (scheme-only check, no normalisation), so a
+    // `<`/`>`-bearing allowed URL reaches markdownDestination's encode branch; the
+    // bytes must be percent-encoded so they cannot terminate the destination early.
+    const md = htmlToMarkdown('<p><a href="https://x.com/a<b>c">t</a></p>');
+    expect(md).toBe("[t](https://x.com/a%3Cb%3Ec)");
+    expect(validateMarkdownForWrite(`${md}\n`).ok).toBe(true);
+  });
+  it("angle-brackets a link destination containing a space", () => {
+    const md = htmlToMarkdown('<p><a href="https://x.com/a b">t</a></p>');
+    expect(md).toBe("[t](<https://x.com/a b>)");
+    expect(validateMarkdownForWrite(`${md}\n`).ok).toBe(true);
+  });
+  it("escapes a blockquote `>` marker at a line start", () => {
+    expect(htmlToMarkdown("<p>> not a quote</p>")).toBe("\\> not a quote");
+  });
+  it("escapes a `+` bullet marker at a line start", () => {
+    expect(htmlToMarkdown("<p>+ not a bullet</p>")).toBe("\\+ not a bullet");
+  });
+  it("escapes an ordered-list marker smuggled onto a line after <br>", () => {
+    // Pins escapeMarkers' ordered-marker regex on the multiline (post-<br>) path,
+    // distinct from the `-`/`#` single-line cases already covered.
+    expect(htmlToMarkdown("<p>a<br>1. b</p>")).toBe("a\\\n1\\. b");
   });
   it("returns null (never throws) on pathologically deep inline nesting", () => {
     const deep = `${"<b>".repeat(300)}x${"</b>".repeat(300)}`;

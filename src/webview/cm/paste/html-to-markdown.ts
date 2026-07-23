@@ -11,10 +11,15 @@
 //    immune to any incidental mutation during the walk.
 //  - Text is escaped so pasted text is literal, on EVERY line — not just a
 //    block's first line — because a `<br>` or a text-node newline could
-//    otherwise smuggle an active marker onto a later line. Autolink-safe schemes
-//    are never touched: escaping only hits inline-active characters and
-//    line-start markers, never URL bytes, so a bare `http(s)://`/`www.` still
-//    autolinks exactly as typed.
+//    otherwise smuggle an active marker onto a later line. Escaping hits the
+//    inline-active characters (`` ` * _ [ ] < ~ = & | ``) and line-start block
+//    markers; scheme bytes (`:` `/` `.`) and alphanumerics are left alone, so a
+//    bare `http(s)://`/`www.` URL built only from those still autolinks. A URL
+//    that also carries an inline-active byte (`_`/`&`/`=` in a query string, say)
+//    has it escaped to stay literal — safety over fidelity, matching escapeCell:
+//    it may curtail the bare autolink but can never activate an unintended
+//    construct. Pasted text therefore never activates a construct that the same
+//    text typed by hand would not.
 //  - Never throws to the handler: caps throw an internal sentinel (`CapExceeded`);
 //    `htmlToMarkdown` wraps the whole walk in a try/catch that returns `null` for
 //    ANY thrown value, so the handler always has a safe defer-to-plain-paste path.
@@ -74,14 +79,16 @@ function count(ctx: Ctx, s: string): string {
   return s;
 }
 
-/** Backslash-escape Markdown-inline-active characters (mirrors escapeCell in
- *  html-table-to-gfm.ts) so text renders literally. `\` first so later escapes
+/** Backslash-escape Markdown-inline-active characters (the SAME set as escapeCell
+ *  in html-table-to-gfm.ts) so text renders literally. `\` first so later escapes
  *  are not doubled. `<` escaped so literal `<tag>`-looking text cannot become
- *  inline raw HTML / an autolink; URL bytes are untouched so a bare http(s) URL
- *  still autolinks. `>` is NOT escaped here (inert mid-line — handled at line
- *  start by escapeMarkers), matching the table converter's proven policy. */
+ *  inline raw HTML / an autolink. `|` escaped because an unescaped pipe plus a
+ *  following delimiter-shaped line (`h1 | h2` then `:-|:-`, e.g. via a `<br>`)
+ *  forms a GFM table — pasted prose must not fabricate a block table. `>` is NOT
+ *  escaped here (inert mid-line — handled at line start by escapeMarkers),
+ *  matching the table converter's proven policy. */
 function escapeInline(text: string): string {
-  return text.replace(/\\/g, "\\\\").replace(/[`*_[\]<~=&]/g, "\\$&");
+  return text.replace(/\\/g, "\\\\").replace(/[`*_[\]<~=&|]/g, "\\$&");
 }
 
 /** Escape block-start-only markers at EVERY line start (multiline) so a `- `,
