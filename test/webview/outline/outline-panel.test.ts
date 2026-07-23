@@ -1071,7 +1071,8 @@ describe("quollOutline keyboard resize (separator)", () => {
     // exactly like Escape from inside the sidebar. setOpen captures the WHOLE
     // outline focus region (sidebar + separator), not just the sidebar — so a
     // handle-focused close calls view.focus() rather than stranding focus on
-    // <body> once CSS hides the handle. Mirrors the line-160 sidebar Escape test.
+    // <body> once CSS hides the handle. Mirrors "Escape inside the sidebar
+    // closes it, unpins, and hands focus out of the sidebar" above.
     const { view: v, host } = mount("# A\n\nbody\n\n## B\n");
     v.plugin(outlinePlugin)?.toggle(); // open as a transient overlay (not pinned)
     handleEl(host).focus();
