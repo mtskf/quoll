@@ -564,6 +564,52 @@ describe("quollOutline sidebar", () => {
   });
 });
 
+// focusout bubbles; the sidebar's delegated handler reads e.relatedTarget (the
+// element receiving focus). happy-dom's FocusEvent carries relatedTarget from
+// its eventInit, so a synthetic event is exactly what the browser would deliver
+// on a real Tab-out.
+function focusOutSidebar(host: HTMLElement, relatedTarget: EventTarget | null): void {
+  sidebarEl(host).dispatchEvent(new FocusEvent("focusout", { bubbles: true, relatedTarget }));
+}
+
+// The outline is a NON-MODAL role=tree — it never traps Tab (a trap would break
+// pinned mode, a persistent pane where Tab must flow between sidebar and editor).
+// The one refinement: the transient OVERLAY self-dismisses when focus leaves it,
+// so it can't linger over the editor with focus behind it. These pin that policy.
+describe("quollOutline overlay focus-out dismiss (non-modal, no Tab trap)", () => {
+  it("dismisses the overlay when focus leaves the sidebar to the editor", () => {
+    const { view: v, host } = mount("# Alpha\n");
+    toggleEl(host).click(); // open (overlay, unpinned)
+    pinEl(host).focus(); // focus is inside the sidebar
+    focusOutSidebar(host, v.contentDOM); // Tab out into the editor
+    expect(isOpen(host)).toBe(false);
+    expect(sidebarEl(host).hasAttribute("inert")).toBe(true);
+  });
+
+  it("keeps a PINNED sidebar open on focus-out (persistent non-modal pane)", () => {
+    const { view: v, host } = mount("# Alpha\n");
+    toggleEl(host).click();
+    pinEl(host).click(); // pin ⇒ persistent pane
+    focusOutSidebar(host, v.contentDOM);
+    expect(isOpen(host)).toBe(true); // pinned survives focus-out (guard: this.pinned)
+  });
+
+  it("does NOT dismiss when focus moves WITHIN the sidebar (row-to-row nav)", () => {
+    const { host } = mount("# Alpha\n\n## Beta\n");
+    toggleEl(host).click();
+    const rowInside = rowEls(host)[1]; // a treeitem li lives inside the sidebar
+    focusOutSidebar(host, rowInside);
+    expect(isOpen(host)).toBe(true); // guard: sidebarEl.contains(relatedTarget)
+  });
+
+  it("does NOT dismiss on window blur (relatedTarget null — focus left the document)", () => {
+    const { host } = mount("# Alpha\n");
+    toggleEl(host).click();
+    focusOutSidebar(host, null);
+    expect(isOpen(host)).toBe(true); // guard: relatedTarget === null keeps it open
+  });
+});
+
 // keydown targets a focused row <li>; bubbles up to the list's delegated
 // handler. happy-dom dispatches a real KeyboardEvent the handler reads .key off.
 function rowKeydown(li: HTMLLIElement, key: string): void {

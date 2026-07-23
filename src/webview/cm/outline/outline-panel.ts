@@ -1,8 +1,11 @@
 // Document outline sidebar — a webview-native ViewPlugin that renders the
 // top-left toggle button + a left-edge slide-in sidebar inside the
 // .quoll-editor host. Hovering the toggle opens the sidebar; the pointer
-// leaving it (grace-delayed), a heading jump, or Mod-Alt-o closes it — unless
-// PINNED via the header pin button. Pinned mode swaps the absolute overlay for
+// leaving it (grace-delayed), a heading jump, Mod-Alt-o, or (for the transient
+// overlay) keyboard focus leaving the sidebar closes it — unless PINNED via the
+// header pin button. The panel is a non-modal role=tree, NOT a modal dialog: it
+// never traps Tab (pinned mode is a persistent pane where Tab must flow between
+// sidebar and editor); the overlay merely self-dismisses on focus-out. Pinned mode swaps the absolute overlay for
 // a static 2-column flex layout. CSS owns ALL geometry off two host classes
 // (quoll-outline-open / quoll-outline-pinned); this module owns state + DOM.
 // Individual headings with children collapse their own subtree via per-row
@@ -171,7 +174,8 @@ class OutlinePanel implements PluginValue {
     // Click OPENS (idempotent), it does not toggle: while open the toggle is
     // pointer-invisible (open-state CSS), so a real click-to-close can never
     // happen — a toggle here would only manifest as a keyboard/AT surprise.
-    // Closing paths: pointer-leave grace, jump, Escape, Mod-Alt-o.
+    // Closing paths: pointer-leave grace, jump, Escape, Mod-Alt-o, and — for the
+    // transient overlay only — focus leaving the sidebar (onSidebarFocusOut).
     this.toggleEl.addEventListener("click", (e) => {
       e.preventDefault();
       this.setOpen(true);
@@ -207,6 +211,15 @@ class OutlinePanel implements PluginValue {
         this.setOpen(false);
       }
     });
+    // Focus leaving the sidebar dismisses the transient OVERLAY. The panel is a
+    // non-modal `role=tree`, NOT a modal dialog — it deliberately does not trap
+    // Tab (a trap would be wrong in pinned mode, which is a persistent pane where
+    // Tab must flow between the sidebar and the editor like VS Code's Outline
+    // view). But an overlay left floating over the editor with focus BEHIND it is
+    // the one real wart, so the overlay self-dismisses when focus leaves it —
+    // mirroring the footer settings popover's click-outside self-close. Pinned
+    // mode never closes on focusout (see onSidebarFocusOut for the guards).
+    this.sidebarEl.addEventListener("focusout", (e) => this.onSidebarFocusOut(e));
 
     const header = document.createElement("div");
     header.className = "quoll-outline-header";
@@ -487,6 +500,38 @@ class OutlinePanel implements PluginValue {
       // back to the editor instead of letting the browser drop it on <body>.
       this.view.focus();
     }
+  }
+
+  /** Dismiss the transient OVERLAY when focus leaves the sidebar. The panel is a
+   *  non-modal `role=tree`, so it never traps Tab; this only tidies away an
+   *  overlay the user has tabbed out of, so it can't linger over the editor with
+   *  focus behind it. Fires on `focusout` (which bubbles, so intra-sidebar focus
+   *  moves reach it too). Guards, in order:
+   *   - `!this.open` — a focusout emitted while a close is already in flight
+   *     (e.g. `inert` evicting focus) is a no-op: setOpen flips `open` false
+   *     before toggling `inert`.
+   *   - `this.pinned` — pinned mode is a persistent, non-modal pane; Tab flows
+   *     between it and the editor (VS Code Outline-style) and it must not close.
+   *   - `relatedTarget === null` — focus left the document entirely (window blur,
+   *     dev tools, or into another browsing context / cross-origin iframe).
+   *     Deliberately KEEP the overlay so returning to the window restores state.
+   *   - `sidebarEl.contains(next)` — focus moved WITHIN the sidebar (row-to-row
+   *     arrow nav, or into the footer settings popover, which is appended to
+   *     `footerEl` and so stays DOM-descended here). Any future owned overlay
+   *     MUST likewise render inside `sidebarEl`, or this guard would misread it
+   *     as a leave and close the sidebar out from under it.
+   *  A programmatic `.focus()` to a real element outside the sidebar is
+   *  indistinguishable from a deliberate Tab-out and will also dismiss — an
+   *  accepted tradeoff for a transient surface. */
+  private onSidebarFocusOut(e: FocusEvent): void {
+    if (!this.open || this.pinned) {
+      return;
+    }
+    const next = e.relatedTarget as Node | null;
+    if (next === null || this.sidebarEl.contains(next)) {
+      return;
+    }
+    this.setOpen(false);
   }
 
   private setPinned(pinned: boolean): void {
