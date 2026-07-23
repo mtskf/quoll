@@ -2,13 +2,12 @@
 
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
 import {
-  ensureSyntaxTree,
   foldAll,
   foldable,
   foldCode,
   foldEffect,
   foldedRanges,
-  syntaxTreeAvailable,
+  forceParsing,
   unfoldAll,
   unfoldCode,
   unfoldEffect,
@@ -56,8 +55,33 @@ function mountDoc(doc: string, extra: readonly unknown[] = []): EditorView {
       extensions: [markdown({ base: markdownLanguage }), quollFolding(), ...(extra as never[])],
     }),
   });
-  ensureSyntaxTree(v.state, v.state.doc.length, 5000);
+  // Settle the initial parse AND rebuild fold fields over the complete tree
+  // (forceParsing dispatches an empty tx if the parse advanced). ensureSyntaxTree
+  // alone completes the parse CONTEXT but not the field snapshot, so under load the
+  // mount-time field could be built over a truncated init tree. See settleParse.
+  expect(forceParsing(v, v.state.doc.length, 5000)).toBe(true);
   return v;
+}
+
+// Settle CodeMirror's async parser after an edit so the fold gutter fields are
+// observed against a COMPLETE syntax tree. CM's LanguageState.apply reparses a
+// docChanged with only a hardcoded 20ms `Work.Apply` budget; these fixtures need
+// several parse `advance()` steps, so under full-suite CPU starvation a >20ms
+// scheduler preemption mid-parse makes CM `takeTree()` TRUNCATE the post-edit tree
+// (treeLen < doc.length). The field then correctly falls back to a full rebuild,
+// but the tree-completeness check reads false and a node the edit was
+// meant to reveal can still be missing — the historical load-sensitive flake (memory
+// [[quoll-fold-bounded-equals-full-tests-flaky-under-load]], docs/LEARNING.md).
+// `forceParsing` finishes the parse and, if it advanced, dispatches an empty tx so
+// the field rebuilds over the finished tree — EXACTLY production's async-parse
+// settle path. It is a no-op when the tree already completed within budget (the
+// common, unloaded case), so the bounded recompute path stays exercised there while
+// a red now strictly means a bounded-vs-full contract breach, not a parse-timing race.
+function settleParse(v: EditorView): void {
+  // Assert convergence directly: forceParsing returns false if the 5000ms budget
+  // fails to reach doc end. A non-converged settle would otherwise surface as a
+  // confusing "bounded ≠ full" mismatch rather than a clear parse-budget failure.
+  expect(forceParsing(v, v.state.doc.length, 5000)).toBe(true);
 }
 
 // A contributor that churns the facet reference every transaction (mimics
@@ -266,10 +290,8 @@ describe("headingFoldGutterLineClass — per-level gutter tag for the first-row 
   // syntax tree. These pin that the bounded result stays byte-identical to a full
   // rebuild across heading insert / remove / edit — including the multi-line Setext
   // boundary a naive ±1-line window would miss.
-  // { retry } — mitigates the load-sensitive bounded≡full flake (LEARNING.md).
-  describe("bounded recompute (keystroke path) — stays equal to a full rebuild", {
-    retry: 2,
-  }, () => {
+  // Determinism: every edit below is settled via settleParse (see its doc), so a red is a real bounded-vs-full breach — not the former load-sensitive parse-budget flake (docs/LEARNING.md).
+  describe("bounded recompute (keystroke path) — stays equal to a full rebuild", () => {
     function fieldClassesByLine(v: EditorView): Map<number, string> {
       const set = v.state.field(headingFoldGutterLineClass);
       const byLine = new Map<number, string>();
@@ -302,6 +324,7 @@ describe("headingFoldGutterLineClass — per-level gutter tag for the first-row 
       expect(fieldClassesByLine(view).get(1)).toBe("quoll-fold-heading-1");
       // Insert "##" after the first "#" so "# One" becomes "### One".
       view.dispatch({ changes: { from: 1, insert: "##" } });
+      settleParse(view);
       const byLine = fieldClassesByLine(view);
       expect(byLine.get(1)).toBe("quoll-fold-heading-3");
       expectEqualByLine(byLine, fullRebuildByLine(view.state.doc.toString()));
@@ -311,6 +334,7 @@ describe("headingFoldGutterLineClass — per-level gutter tag for the first-row 
       view = mountDoc("# Keep\n\npara\n\n## Gone\n");
       // Turn "para" into a heading, and delete the "## " off "## Gone".
       view.dispatch({ changes: { from: 8, insert: "### " } }); // "para" → "### para"
+      settleParse(view);
       let byLine = fieldClassesByLine(view);
       expect(byLine.get(3)).toBe("quoll-fold-heading-3");
       expectEqualByLine(byLine, fullRebuildByLine(view.state.doc.toString()));
@@ -318,6 +342,7 @@ describe("headingFoldGutterLineClass — per-level gutter tag for the first-row 
       // Remove the "## " marker from the last heading → it becomes body text.
       const gone = view.state.doc.toString().indexOf("## Gone");
       view.dispatch({ changes: { from: gone, to: gone + 3, insert: "" } });
+      settleParse(view);
       byLine = fieldClassesByLine(view);
       const goneLine = view.state.doc.lineAt(view.state.doc.toString().indexOf("Gone")).number;
       expect(byLine.has(goneLine)).toBe(false);
@@ -331,9 +356,7 @@ describe("headingFoldGutterLineClass — per-level gutter tag for the first-row 
       view = mountDoc("# top\n\nfoo\nbar\nbaz\n");
       // Append a "===\n" underline right after "baz\n" (pos 19) → foo/bar/baz H1.
       view.dispatch({ changes: { from: 19, insert: "===\n" } });
-      // Confirm the fast (bounded) path actually ran, not the incomplete-frontier
-      // full-rebuild fallback — otherwise this would not exercise the bounding.
-      expect(syntaxTreeAvailable(view.state, view.state.doc.length)).toBe(true);
+      settleParse(view);
       const byLine = fieldClassesByLine(view);
       expect(byLine.get(1)).toBe("quoll-fold-heading-1"); // retained ATX heading
       expect(byLine.get(3)).toBe("quoll-fold-heading-1"); // new Setext title line
@@ -347,10 +370,7 @@ describe("headingFoldGutterLineClass — per-level gutter tag for the first-row 
       // Delete the "===\n" underline → foo/bar/baz reverts to a plain paragraph.
       const und = view.state.doc.toString().indexOf("===");
       view.dispatch({ changes: { from: und, to: und + 4, insert: "" } });
-      // Confirm the bounded path ran (not the incomplete-frontier full-rebuild
-      // fallback) so the Setext-deletion up-walk is actually exercised — the
-      // symmetric guard the insertion test carries.
-      expect(syntaxTreeAvailable(view.state, view.state.doc.length)).toBe(true);
+      settleParse(view);
       const byLine = fieldClassesByLine(view);
       expect(byLine.get(1)).toBe("quoll-fold-heading-1"); // ATX heading retained
       expect(byLine.has(3)).toBe(false); // Setext gone
@@ -372,7 +392,7 @@ describe("headingFoldGutterLineClass — per-level gutter tag for the first-row 
           { from: bFrom, to: bFrom + 1, insert: "" },
         ],
       });
-      expect(syntaxTreeAvailable(view.state, view.state.doc.length)).toBe(true);
+      settleParse(view);
       const byLine = fieldClassesByLine(view);
       expect(byLine.get(1)).toBe("quoll-fold-heading-1");
       expect(byLine.get(5)).toBe("quoll-fold-heading-2");
@@ -555,10 +575,8 @@ describe("listFoldGutterLineClass — gutter tag for the list-item vertical-gap 
     expect(after).toBe(before); // fix: content-equal churn → return value; bug: rebuilt (new ref)
   });
 
-  // { retry } — mitigates the load-sensitive bounded≡full flake (LEARNING.md).
-  describe("bounded recompute (keystroke path) — stays equal to a full rebuild", {
-    retry: 2,
-  }, () => {
+  // Determinism: every edit below is settled via settleParse (see its doc), so a red is a real bounded-vs-full breach — not the former load-sensitive parse-budget flake (docs/LEARNING.md).
+  describe("bounded recompute (keystroke path) — stays equal to a full rebuild", () => {
     // Codex #2: serialize the ENTIRE RangeSet ({from,to,cls}) and compare arrays —
     // NOT a by-line Map (which collapses duplicate/add-order/extra point ranges a
     // double-add would introduce). This subsumes both `.size` and by-line checks.
@@ -585,11 +603,15 @@ describe("listFoldGutterLineClass — gutter tag for the list-item vertical-gap 
       fresh.destroy();
       return ser;
     }
-    // Assert the bounded field equals the oracle AND that the bounded branch actually
-    // ran (syntaxTreeAvailable true — not the incomplete-frontier full-rebuild
-    // fallback, which would make the comparison vacuous full≡full).
+    // Compare the bounded field to the oracle. settleParse (called after each edit)
+    // guarantees a COMPLETE tree here, so this is a meaningful byte-comparison and a
+    // red is a real bounded-vs-full breach. NOTE: the bounded recompute path is
+    // exercised only in the common unloaded case (where the tree completes within CM's
+    // 20ms apply budget at dispatch time); under CPU starvation the field correctly
+    // settles to a full rebuild instead — proving the bounded branch ran per-test under
+    // load is incompatible with determinism (see settleParse) and is deliberately not
+    // attempted here.
     function expectBoundedEqualsFull(): void {
-      expect(syntaxTreeAvailable(view!.state, view!.state.doc.length)).toBe(true);
       expect(serializeField(view!)).toEqual(oracle(view!.state.doc.toString()));
     }
 
@@ -597,9 +619,11 @@ describe("listFoldGutterLineClass — gutter tag for the list-item vertical-gap 
       view = mountDoc("- keep\n\npara\n\n- gone\n");
       const para = view.state.doc.toString().indexOf("para");
       view.dispatch({ changes: { from: para, insert: "- " } }); // "para" → "- para"
+      settleParse(view);
       expectBoundedEqualsFull();
       const gone = view.state.doc.toString().indexOf("- gone");
       view.dispatch({ changes: { from: gone, to: gone + 2, insert: "" } }); // "- gone" → "gone"
+      settleParse(view);
       expectBoundedEqualsFull();
     });
 
@@ -612,6 +636,7 @@ describe("listFoldGutterLineClass — gutter tag for the list-item vertical-gap 
           { from: bFrom, to: bFrom + 2, insert: "" }, // "- b" → "b"
         ],
       });
+      settleParse(view);
       expect(serializeField(view)).toEqual([]); // both markers gone
       expectBoundedEqualsFull();
     });
@@ -652,6 +677,7 @@ describe("listFoldGutterLineClass — gutter tag for the list-item vertical-gap 
     ])("loose-list soundness: %s", (_name, doc, mkChanges) => {
       view = mountDoc(doc);
       view.dispatch({ changes: mkChanges(view.state.doc.toString()) });
+      settleParse(view);
       expectBoundedEqualsFull();
     });
 
@@ -659,7 +685,7 @@ describe("listFoldGutterLineClass — gutter tag for the list-item vertical-gap 
       view = mountDoc("- keep\n\npara\n\n- gone\n", [churningZoneField([])]);
       const para = view.state.doc.toString().indexOf("para");
       view.dispatch({ changes: { from: para, insert: "- " } }); // "para" → "- para"
-      expect(syntaxTreeAvailable(view.state, view.state.doc.length)).toBe(true);
+      settleParse(view);
       // Serialize this field, compare to a fresh full build over the same doc + empty zones.
       const ser = (v: EditorView) => {
         const out: { from: number; to: number; cls: string }[] = [];
@@ -705,6 +731,7 @@ describe("listFoldGutterLineClass — gutter tag for the list-item vertical-gap 
         changes: { from: near, insert: "X" },
         effects: setZones.of([{ from: 0, to: view.state.doc.line(1).to }]),
       });
+      settleParse(view);
       // "- far" is now zoned out → its marker must be GONE even though the edit was far
       // from it. A bounded-only path (missing the facetChanged guard) would strand it.
       // (Can't use the default-facet `oracle` helper here — it mounts without the zone —
@@ -727,8 +754,8 @@ describe("listFoldGutterLineClass — gutter tag for the list-item vertical-gap 
 // Serialize the WHOLE RangeSet as {from,to,cls}[] (Codex #5/#6 — a by-line Map hides
 // duplicate / same-line markers a bad recompute would introduce). The oracle is a
 // fresh mount (VALID: all three fold fields are record-less — value is a pure
-// function of doc+zones). Both live view and oracle assert syntaxTreeAvailable so the
-// bounded branch actually ran (else the comparison is a vacuous full≡full).
+// function of doc+zones). settleParse / mountDoc self-assert parse convergence, so the
+// live view and oracle are both compared over COMPLETE trees (a red is a real bounded-vs-full breach; the bounded branch is exercised in the unloaded case — see settleParse).
 function serializeGutter(
   v: EditorView,
   field: StateField<RangeSet<GutterMarker>>
@@ -746,19 +773,15 @@ function serializeGutter(
   return out;
 }
 
-// { retry } — mitigates the load-sensitive bounded≡full flake (LEARNING.md).
-describe("headingFoldGutterLineClass — bounded ≡ full-rebuild under structural reparse", {
-  retry: 2,
-}, () => {
+// Determinism: every edit below is settled via settleParse (see its doc), so a red is a real bounded-vs-full breach — not the former load-sensitive parse-budget flake (docs/LEARNING.md).
+describe("headingFoldGutterLineClass — bounded ≡ full-rebuild under structural reparse", () => {
   function oracle(doc: string): { from: number; to: number; cls: string }[] {
     const fresh = mountDoc(doc);
-    expect(syntaxTreeAvailable(fresh.state, fresh.state.doc.length)).toBe(true);
     const ser = serializeGutter(fresh, headingFoldGutterLineClass);
     fresh.destroy();
     return ser;
   }
   function expectBoundedEqualsFull(): void {
-    expect(syntaxTreeAvailable(view!.state, view!.state.doc.length)).toBe(true);
     expect(serializeGutter(view!, headingFoldGutterLineClass)).toEqual(
       oracle(view!.state.doc.toString())
     );
@@ -771,6 +794,7 @@ describe("headingFoldGutterLineClass — bounded ≡ full-rebuild under structur
     view = mountDoc("intro\n\n# h\n");
     expect(serializeGutter(view, headingFoldGutterLineClass).length).toBe(1); // heading tagged
     view.dispatch({ changes: { from: 0, insert: "```\n" } }); // fence now swallows # h
+    settleParse(view);
     expect(serializeGutter(view, headingFoldGutterLineClass)).toEqual([]); // heading gone
     expectBoundedEqualsFull();
   });
@@ -780,6 +804,7 @@ describe("headingFoldGutterLineClass — bounded ≡ full-rebuild under structur
     // heading below a blank is still swallowed (unlike a blank-terminated type-6 block).
     view = mountDoc("intro\n\n# h\n");
     view.dispatch({ changes: { from: 0, insert: "<script>\n" } });
+    settleParse(view);
     expect(serializeGutter(view, headingFoldGutterLineClass)).toEqual([]);
     expectBoundedEqualsFull();
   });
@@ -791,24 +816,21 @@ describe("headingFoldGutterLineClass — bounded ≡ full-rebuild under structur
     expect(serializeGutter(view, headingFoldGutterLineClass)).toEqual([]);
     const fooEnd = view.state.doc.line(2).to; // end of "foo"
     view.dispatch({ changes: { from: fooEnd, insert: ">" } }); // "foo" → "foo>" closes the block
+    settleParse(view);
     expect(serializeGutter(view, headingFoldGutterLineClass).length).toBe(1); // # h revealed
     expectBoundedEqualsFull();
   });
 });
 
-// { retry } — mitigates the load-sensitive bounded≡full flake (LEARNING.md).
-describe("listFoldGutterLineClass — bounded ≡ full-rebuild under structural reparse", {
-  retry: 2,
-}, () => {
+// Determinism: every edit below is settled via settleParse (see its doc), so a red is a real bounded-vs-full breach — not the former load-sensitive parse-budget flake (docs/LEARNING.md).
+describe("listFoldGutterLineClass — bounded ≡ full-rebuild under structural reparse", () => {
   function oracle(doc: string): { from: number; to: number; cls: string }[] {
     const fresh = mountDoc(doc);
-    expect(syntaxTreeAvailable(fresh.state, fresh.state.doc.length)).toBe(true);
     const ser = serializeGutter(fresh, listFoldGutterLineClass);
     fresh.destroy();
     return ser;
   }
   function expectBoundedEqualsFull(): void {
-    expect(syntaxTreeAvailable(view!.state, view!.state.doc.length)).toBe(true);
     expect(serializeGutter(view!, listFoldGutterLineClass)).toEqual(
       oracle(view!.state.doc.toString())
     );
@@ -821,6 +843,7 @@ describe("listFoldGutterLineClass — bounded ≡ full-rebuild under structural 
     // Uniform gap: both "- one" and "- two" are renderable markers → 2 tags.
     expect(serializeGutter(view, listFoldGutterLineClass).length).toBe(2);
     view.dispatch({ changes: { from: 0, insert: "```\n" } });
+    settleParse(view);
     expect(serializeGutter(view, listFoldGutterLineClass)).toEqual([]);
     expectBoundedEqualsFull();
   });
@@ -828,6 +851,7 @@ describe("listFoldGutterLineClass — bounded ≡ full-rebuild under structural 
   it("an unclosed <script> inserted above a far list swallows its markers (SHAPE HTML alt)", () => {
     view = mountDoc("intro\n\n- one\n- two\n");
     view.dispatch({ changes: { from: 0, insert: "<script>\n" } });
+    settleParse(view);
     expect(serializeGutter(view, listFoldGutterLineClass)).toEqual([]);
     expectBoundedEqualsFull();
   });
@@ -934,10 +958,8 @@ describe("touchesStructuralReparse — arm falsifiability + perf contract (direc
   });
 });
 
-// { retry } — mitigates the load-sensitive bounded≡full flake (LEARNING.md).
-describe("structural guard under Quoll's production language (quollMarkdownLanguage)", {
-  retry: 2,
-}, () => {
+// Determinism: every edit below is settled via settleParse (see its doc), so a red is a real bounded-vs-full breach — not the former load-sensitive parse-budget flake (docs/LEARNING.md).
+describe("structural guard under Quoll's production language (quollMarkdownLanguage)", () => {
   // Codex #7: the default `markdown({ base: markdownLanguage })` mount is not what
   // ships. Re-run the HTML-swallow and fence cases under the PRODUCTION language so a
   // parser-config divergence (Quoll's re-implemented HTML stack) would surface.
@@ -949,7 +971,7 @@ describe("structural guard under Quoll's production language (quollMarkdownLangu
       parent,
       state: EditorState.create({ doc, extensions: [quollMarkdownLanguage(), quollFolding()] }),
     });
-    ensureSyntaxTree(v.state, v.state.doc.length, 5000);
+    settleParse(v); // complete the mount parse + rebuild fields over it (see settleParse)
     return v;
   }
   async function prodOracle(
@@ -957,7 +979,6 @@ describe("structural guard under Quoll's production language (quollMarkdownLangu
     field: StateField<RangeSet<GutterMarker>>
   ): Promise<{ from: number; to: number; cls: string }[]> {
     const fresh = await mountProd(doc);
-    expect(syntaxTreeAvailable(fresh.state, fresh.state.doc.length)).toBe(true);
     const ser = serializeGutter(fresh, field);
     fresh.destroy();
     return ser;
@@ -966,7 +987,7 @@ describe("structural guard under Quoll's production language (quollMarkdownLangu
   it("<script> swallow above a far heading: bounded ≡ full (prod language)", async () => {
     view = await mountProd("intro\n\n# h\n");
     view.dispatch({ changes: { from: 0, insert: "<script>\n" } });
-    expect(syntaxTreeAvailable(view.state, view.state.doc.length)).toBe(true);
+    settleParse(view);
     expect(serializeGutter(view, headingFoldGutterLineClass)).toEqual(
       await prodOracle(view.state.doc.toString(), headingFoldGutterLineClass)
     );
@@ -975,7 +996,7 @@ describe("structural guard under Quoll's production language (quollMarkdownLangu
   it("unclosed fence above a far list: bounded ≡ full (prod language)", async () => {
     view = await mountProd("intro\n\n- one\n- two\n");
     view.dispatch({ changes: { from: 0, insert: "```\n" } });
-    expect(syntaxTreeAvailable(view.state, view.state.doc.length)).toBe(true);
+    settleParse(view);
     expect(serializeGutter(view, listFoldGutterLineClass)).toEqual(
       await prodOracle(view.state.doc.toString(), listFoldGutterLineClass)
     );
@@ -1030,7 +1051,7 @@ describe("quollFoldKeymap — the four fold commands are wired into the keymap",
       parent,
       state: EditorState.create({ doc, extensions: [quollMarkdownLanguage(), quollFolding()] }),
     });
-    ensureSyntaxTree(view.state, view.state.doc.length, 5000);
+    settleParse(view); // complete the mount parse so foldAll sees every heading range
 
     const before = view.state.doc.toString();
     expect(foldedRanges(view.state).size).toBe(0);
