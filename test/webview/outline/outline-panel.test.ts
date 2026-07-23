@@ -608,6 +608,22 @@ describe("quollOutline overlay focus-out dismiss (non-modal, no Tab trap)", () =
     focusOutSidebar(host, null);
     expect(isOpen(host)).toBe(true); // guard: relatedTarget === null keeps it open
   });
+
+  it("does NOT dismiss when focus moves into the footer settings popover", () => {
+    // The `sidebarEl.contains(next)` guard specifically protects the footer
+    // settings popover, which is DOM-descended from the sidebar (footer is a
+    // sidebar child). Unlike row-to-row nav, this pins that the popover stays
+    // INSIDE sidebarEl — if a future change portalled it out, this goes red.
+    const { host } = mount("# Alpha\n");
+    toggleEl(host).click();
+    (host.querySelector(".quoll-outline-settings") as HTMLButtonElement).click();
+    const radio = document.activeElement as HTMLElement; // focusInitial() landed on a radio in the popover
+    expect((host.querySelector(".quoll-settings-popover") as HTMLElement).contains(radio)).toBe(
+      true
+    );
+    focusOutSidebar(host, radio); // gear → radio focus move surfaces as focusout on the sidebar
+    expect(isOpen(host)).toBe(true); // guard: the popover radio is inside sidebarEl
+  });
 });
 
 // keydown targets a focused row <li>; bubbles up to the list's delegated
