@@ -124,15 +124,20 @@ function collectInPage(theme) {
     if (!lb) {
       return null;
     }
-    const text = lb
+    const refs = lb
       .split(/\s+/)
       .filter(Boolean)
       .map((id) => document.getElementById(id))
-      .filter(Boolean)
+      .filter(Boolean);
+    if (refs.length === 0) {
+      return null;
+    }
+    // A resolved ref list "wins" even if every referenced element's text is
+    // empty — callers must distinguish that from "no aria-labelledby" (null).
+    return refs
       .map((ref) => (ref.textContent || "").replace(/\s+/g, " ").trim())
       .filter(Boolean)
       .join(" ");
-    return text || null;
   };
 
   // Accessible name (simplified): aria-label > aria-labelledby text > alt >
@@ -146,7 +151,7 @@ function collectInPage(theme) {
       return label;
     }
     const lbText = labelledByText(el);
-    if (lbText) {
+    if (lbText !== null) {
       return lbText;
     }
     if (el.tagName === "IMG") {
@@ -169,7 +174,7 @@ function collectInPage(theme) {
     if (label != null) {
       return label;
     }
-    return labelledByText(el);
+    return labelledByText(el) || null;
   };
   const implicitRole = (el) => {
     const explicit = el.getAttribute("role");
