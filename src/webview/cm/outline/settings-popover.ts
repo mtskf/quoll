@@ -282,16 +282,18 @@ export function createSettingsPopover(deps: SettingsPopoverDeps): SettingsPopove
       if (radios.length === 0) {
         return;
       }
+      const first = radios[0];
+      const last = radios[radios.length - 1];
       const active = document.activeElement;
       const activeIsTabbable = radios.some((r) => r === active);
       if (activeIsTabbable) {
         // Normal roving case: wrap only at the boundaries; interior Tab is native.
-        if (e.shiftKey && active === radios[0]) {
+        if (e.shiftKey && active === first) {
           e.preventDefault();
-          radios[radios.length - 1].focus();
-        } else if (!e.shiftKey && active === radios[radios.length - 1]) {
+          last.focus();
+        } else if (!e.shiftKey && active === last) {
           e.preventDefault();
-          radios[0].focus();
+          first.focus();
         }
         return;
       }
@@ -303,10 +305,10 @@ export function createSettingsPopover(deps: SettingsPopoverDeps): SettingsPopove
         active instanceof HTMLElement ? allRadios.indexOf(active as HTMLButtonElement) : -1;
       if (e.shiftKey) {
         const prev = [...radios].reverse().find((r) => allRadios.indexOf(r) < pos);
-        (prev ?? radios[radios.length - 1]).focus();
+        (prev ?? last).focus();
       } else {
         const next = radios.find((r) => allRadios.indexOf(r) > pos);
-        (next ?? radios[0]).focus();
+        (next ?? first).focus();
       }
     }
   });
