@@ -10,29 +10,11 @@ import type { SyntaxNode } from "@lezer/common";
 
 import { PROTOCOL_VERSION, type WebviewToHost } from "../../../shared/protocol.js";
 import { type PostMessageHost, safePostMessage } from "../../safe-post-message.js";
+import { intersectsAnySelection } from "../decorations/shared.js";
+import { hasLinkAncestor, inlineCodeInterior } from "./inline-code-ref.js";
 import { parseInlineCodeReference } from "./parse-code-reference.js";
 
 export type CodeRefHost = PostMessageHost;
-
-function selectionIntersects(state: EditorState, from: number, to: number): boolean {
-  for (const r of state.selection.ranges) {
-    if (r.from <= to && r.to >= from) {
-      return true;
-    }
-  }
-  return false;
-}
-
-function hasLinkAncestor(node: SyntaxNode): boolean {
-  let p: SyntaxNode | null = node.parent;
-  while (p !== null) {
-    if (p.name === "Link") {
-      return true;
-    }
-    p = p.parent;
-  }
-  return false;
-}
 
 export function tryOpenCodeRefAt(state: EditorState, pos: number, host: CodeRefHost): boolean {
   let node: SyntaxNode | null = syntaxTree(state).resolveInner(pos, 0);
@@ -42,26 +24,14 @@ export function tryOpenCodeRefAt(state: EditorState, pos: number, host: CodeRefH
   if (node === null || hasLinkAncestor(node)) {
     return false;
   }
-  if (selectionIntersects(state, node.from, node.to)) {
+  if (intersectsAnySelection(state.selection, node.from, node.to)) {
     return false;
   }
-  const cur = node.cursor();
-  let firstMarkTo: number | null = null;
-  let lastMarkFrom: number | null = null;
-  if (cur.firstChild()) {
-    do {
-      if (cur.name === "CodeMark") {
-        if (firstMarkTo === null) {
-          firstMarkTo = cur.to;
-        }
-        lastMarkFrom = cur.from;
-      }
-    } while (cur.nextSibling());
-  }
-  if (firstMarkTo === null || lastMarkFrom === null || firstMarkTo >= lastMarkFrom) {
+  const interior = inlineCodeInterior(node);
+  if (interior === null) {
     return false;
   }
-  const ref = parseInlineCodeReference(state.sliceDoc(firstMarkTo, lastMarkFrom));
+  const ref = parseInlineCodeReference(state.sliceDoc(interior.from, interior.to));
   if (ref === null) {
     return false;
   }
