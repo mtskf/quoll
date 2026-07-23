@@ -304,9 +304,9 @@ function mountWithFrontmatter(doc: string): EditorView {
 }
 
 describe("thematic break — orchestrator integration", () => {
-  it("registered in syntaxRevealProviders (length 9, includes thematicBreakReveal)", async () => {
+  it("registered in syntaxRevealProviders (length 10, includes thematicBreakReveal)", async () => {
     const { syntaxRevealProviders } = await import("../../../src/webview/cm/decorations/index.js");
-    expect(syntaxRevealProviders).toHaveLength(9);
+    expect(syntaxRevealProviders).toHaveLength(10);
     expect(syntaxRevealProviders).toContain(thematicBreakReveal);
   });
 

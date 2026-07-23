@@ -69,7 +69,7 @@ describe("orchestrator integration — providers wired", () => {
 
   it("module-level providers array is stable across multiple createSyntaxReveal() calls (no fresh-array-per-render)", () => {
     expect(syntaxRevealProviders).toBe(syntaxRevealProviders);
-    expect(syntaxRevealProviders).toHaveLength(9);
+    expect(syntaxRevealProviders).toHaveLength(10);
     expect(typeof syntaxRevealProviders[0]?.build).toBe("function");
     expect(typeof syntaxRevealProviders[1]?.build).toBe("function");
     expect(typeof syntaxRevealProviders[2]?.build).toBe("function");
@@ -79,6 +79,7 @@ describe("orchestrator integration — providers wired", () => {
     expect(typeof syntaxRevealProviders[6]?.build).toBe("function");
     expect(typeof syntaxRevealProviders[7]?.build).toBe("function");
     expect(typeof syntaxRevealProviders[8]?.build).toBe("function");
+    expect(typeof syntaxRevealProviders[9]?.build).toBe("function");
   });
 
   it("multi-cursor selection survives in the real editor mount — Claude reviewer H1, allowMultipleSelections facet ON", () => {
