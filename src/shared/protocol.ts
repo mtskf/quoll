@@ -403,6 +403,17 @@ export type OpenLinkMessage = Envelope & {
   href: string;
 };
 
+/** Webview → host: open a workspace-relative code reference in a plain VS Code
+ *  text editor at an optional 1-based line[:col]. `path` is parsed and
+ *  suffix-stripped but UNTRUSTED — the host re-validates it before opening.
+ *  Sibling of OpenLinkMessage (.md → Quoll). Shape contract: `col` ⇒ `line`. */
+export type OpenCodeReferenceMessage = Envelope & {
+  type: "open-code-reference";
+  path: string;
+  line?: number;
+  col?: number;
+};
+
 /** Webview→host request to materialise a pasted/dropped image to disk. `data`
  *  is base64 (no `data:` prefix); the host re-sniffs the decoded bytes and NEVER
  *  trusts a client-supplied type. `requestId` correlates the async
@@ -539,6 +550,7 @@ export type WebviewToHost =
   | EditMessage
   | OpenExternalMessage
   | OpenLinkMessage
+  | OpenCodeReferenceMessage
   | ImageWriteMessage
   | ContextHandoffMessage
   | CodexContextHandoffMessage
@@ -716,6 +728,19 @@ export function isWebviewToHost(value: unknown): value is WebviewToHost {
       // string capped at MAX_HREF_LENGTH. The host re-derives everything else
       // (scheme, extension, containment) from this string — it is not trusted.
       return typeof v.href === "string" && v.href.length <= MAX_HREF_LENGTH;
+    case "open-code-reference": {
+      const numOk = (x: unknown): boolean =>
+        x === undefined ||
+        (typeof x === "number" && Number.isInteger(x) && x >= 1 && x <= MAX_CODE_REFERENCE_LINE);
+      const shapeOk = v.col === undefined || v.line !== undefined; // col ⇒ line
+      return (
+        typeof v.path === "string" &&
+        v.path.length <= MAX_HREF_LENGTH &&
+        numOk(v.line) &&
+        numOk(v.col) &&
+        shapeOk
+      );
+    }
     case "image-write":
       return (
         typeof v.requestId === "string" &&

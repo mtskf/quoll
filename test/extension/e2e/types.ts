@@ -61,6 +61,13 @@ export type OpenLinkMessageShape = EnvelopeShape & {
   href: string;
 };
 
+export type OpenCodeReferenceMessageShape = EnvelopeShape & {
+  type: "open-code-reference";
+  path: string;
+  line?: number;
+  col?: number;
+};
+
 export type ThemeMessageShape = EnvelopeShape & {
   type: "theme";
   themeKind: ThemeKindShape;
@@ -181,6 +188,7 @@ export type WebviewToHostShape =
   | EditMessageShape
   | OpenExternalMessageShape
   | OpenLinkMessageShape
+  | OpenCodeReferenceMessageShape
   | ImageWriteMessageShape
   | ContextHandoffMessageShape
   | CodexContextHandoffMessageShape

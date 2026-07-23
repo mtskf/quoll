@@ -747,6 +747,10 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
             showError,
           });
           return;
+        case "open-code-reference":
+          // TEMPORARY (Task 2): keeps the exhaustiveness guard compiling until
+          // Task 6 wires the real handler. Drops the message for now.
+          return;
         case "image-write":
           imageWriteWiring.handle(raw.requestId, raw.data);
           return;
