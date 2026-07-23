@@ -18,7 +18,7 @@ import {
   type WebviewToHost,
 } from "../shared/protocol.js";
 import { applyCaret, type Caret, selectionCharCount, selectionToCaret } from "./cm/caret.js";
-import { quollCodeRefClickHandler } from "./cm/code-ref/code-ref-handlers.js";
+import { quollCodeRefClickHandler, quollCodeRefKeymap } from "./cm/code-ref/code-ref-handlers.js";
 import { quollContextHandoffKeymap } from "./cm/context-handoff.js";
 import { blockStyle } from "./cm/decorations/block-style.js";
 import { blockZoneArrowKeymap } from "./cm/decorations/block-zone-arrow-keymap.js";
@@ -621,14 +621,24 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
         // reads syntaxTree to resolve the position to a Link node and
         // benefits from any decorations the reveal already arbitrated.
         quollLinkClickHandler(getHost()),
-        // Independent mousedown handler for the workspace-relative code-
-        // reference affordance (`src/foo.ts:42` inside inline code). Coexists
-        // with quollLinkClickHandler above: a click on a plain code reference
-        // resolves no Link (that handler returns false) and this handler
-        // consumes it; a code reference NESTED in a link (`` [`x`](y.md) ``)
-        // is deferred by this handler's own Link-ancestor guard, so the link
-        // handler's click still wins.
+        // Pointer + AT activation handlers for the workspace-relative code-
+        // reference affordance (`src/foo.ts:42` inside inline code). One
+        // domEventHandlers registration serves two of the three triggers: a
+        // `mousedown` (real mouse) and a `click` gated on `detail === 0` (an
+        // assistive-tech synthesized activation of the role="link" span; the
+        // detail gate avoids double-posting with mousedown). Coexists with
+        // quollLinkClickHandler above: a plain code reference resolves no Link
+        // (that handler returns false) and this handler consumes it; a code
+        // reference NESTED in a link (`` [`x`](y.md) ``) is deferred by this
+        // handler's own Link-ancestor guard, so the link handler still wins.
         quollCodeRefClickHandler(getHost()),
+        // Third trigger — the keyboard caret command: Mod-Enter opens the
+        // reference the caret is inside, routed through the same untrusted
+        // open-code-reference sink. Prec.high inside the keymap; returns false
+        // off a reference so CM's default Mod-Enter still runs. (See
+        // code-ref-handlers.ts for the three-trigger sink; the mark span is not
+        // Tab-focusable, so this command is the keyboard path.)
+        quollCodeRefKeymap(getHost()),
         // Provide the open-external sink read by the readonly table widget's
         // modifier-click path (cm/table/table-widget.ts). Same host choke
         // point as quollLinkClickHandler above — the widget is built inside a
