@@ -163,6 +163,31 @@ describe("listReindentPaste — handler", () => {
     view.destroy();
   });
 
+  it("defers when the caret is in the indentation of a NON-blank list line (no corruption)", () => {
+    // Caret at col 2, before the marker of "  - existing". Prefix "  " is
+    // spaces-only and the line is in a list, but the rest of the line is NOT
+    // blank — firing here would swallow the line's indentation and corrupt the
+    // pre-existing item. The handler must defer.
+    const doc = "- a\n  - existing";
+    const view = mount(doc);
+    view.dispatch({ selection: { anchor: doc.indexOf("- existing") } });
+    firePaste(view, "- x\n  - y\n");
+    // On a (wrong) accept the 2nd line would rebase to col 4 ("    - y"); a defer
+    // never produces that fingerprint.
+    expect(view.state.doc.toString()).not.toContain("    - y");
+    view.destroy();
+  });
+
+  it("re-bases a lone-CR-separated fragment (reaches the CR-normalising transform)", () => {
+    // The multi-line gate accepts \r, so a legacy lone-CR clipboard reaches the
+    // transform and re-bases identically to its \n twin.
+    const view = mount(LOOSE);
+    view.dispatch({ selection: { anchor: CARET } });
+    firePaste(view, "- x\r  - y");
+    expect(view.state.doc.toString()).toBe("- a\n  - b\n  - x\n    - y\n  more");
+    view.destroy();
+  });
+
   it("swallows the caret prefix even when no re-indent is needed (delta 0)", () => {
     // Fragment top already at col 2; delta 0 must still swallow the "  " prefix so
     // the first line lands at col 2, not col 4 (would double-indent if deferred).

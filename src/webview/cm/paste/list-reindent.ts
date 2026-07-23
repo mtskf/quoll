@@ -96,11 +96,9 @@ export function reindentPastedList(
     return null; // single-line → not a multi-line fragment
   }
 
-  let firstNonBlank = -1;
   let markerMin = Number.POSITIVE_INFINITY; // min indent among list-marker lines
   let nonMarkerMin = Number.POSITIVE_INFINITY; // min indent among other content lines
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
+  for (const line of lines) {
     if (FENCE_RE.test(line)) {
       return null; // fence-bearing fragment → defer unchanged (byte-identical)
     }
@@ -111,9 +109,6 @@ export function reindentPastedList(
     if (hasTab) {
       return null; // tab in indentation → ambiguous, defer
     }
-    if (firstNonBlank === -1) {
-      firstNonBlank = i;
-    }
     if (isListLine(line)) {
       if (col < markerMin) {
         markerMin = col;
@@ -123,10 +118,10 @@ export function reindentPastedList(
     }
   }
 
-  // The fragment must OPEN with a list item (line 0 non-blank + a marker). A
-  // leading blank line (`firstNonBlank > 0`) is not a clean list block — and the
-  // prefix-swallow would silently de-indent that leading blank — so defer.
-  if (firstNonBlank !== 0 || !isListLine(lines[0])) {
+  // The fragment must OPEN with a list item. `isListLine("")` is false, so a
+  // leading blank line 0 (not a clean list block — the prefix-swallow would
+  // silently de-indent it) is rejected by this same check.
+  if (!isListLine(lines[0])) {
     return null;
   }
   if (nonMarkerMin < markerMin) {
@@ -178,8 +173,11 @@ export function listReindentPaste(opts: { canWrite: () => boolean }): Extension 
     EditorView.domEventHandlers({
       paste: (event, view) => {
         const text = event.clipboardData?.getData("text/plain");
-        if (!text?.includes("\n")) {
-          return false; // no text flavour / single-line → defer
+        // Multi-line only. Accept any of \n, \r\n, or lone \r as a line separator
+        // so the handler reaches the (CR-normalising) transform for every
+        // real-world clipboard; a single-line paste defers.
+        if (!text || (!text.includes("\n") && !text.includes("\r"))) {
+          return false;
         }
         const { state } = view;
         const { from, empty } = state.selection.main;
@@ -193,6 +191,16 @@ export function listReindentPaste(opts: { canWrite: () => boolean }): Extension 
         // Only paste-at-line-start is safe: a non-spaces prefix would glue a
         // pasted marker mid-line, and a tab prefix would be rewritten to spaces.
         if (!prefixIsSpacesOnly(state.doc.sliceString(line.from, from))) {
+          return false;
+        }
+        // The rest of the caret line must ALSO be blank. Without this, a caret
+        // resting in the leading indentation of a NON-blank list line (e.g. click
+        // / smart-Home before `  - existing`'s marker) still passes the prefix
+        // and listItemAt gates, and the prefix-swallow would strip that line's
+        // indentation — silently de-indenting / gluing pre-existing content the
+        // user never pasted. The feature targets a caret at the blank end of a
+        // line inside a list. (A spaces-only remainder is allowed — trim() empty.)
+        if (state.doc.sliceString(from, line.to).trim() !== "") {
           return false;
         }
         // Must be an existing list context (spec), and never inside code.
