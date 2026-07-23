@@ -262,6 +262,66 @@ describe("createSettingsPopover", () => {
     expect(popover.el.contains(document.activeElement)).toBe(true);
   });
 
+  it("Shift+Tab from a stranded radio in the FIRST group wraps to the dialog's last tab stop", () => {
+    vi.useFakeTimers();
+    const { popover } = make({ ...DEFAULT_EDITOR_PREFS, fontFamily: "serif" }); // serif is the REAL active pref
+    const groups = [...popover.el.querySelectorAll<HTMLElement>("[role='radiogroup']")];
+    const fontFamilyGroup = groups[0];
+    const contentWidthGroup = groups[3];
+    const radios = [...fontFamilyGroup.querySelectorAll<HTMLButtonElement>("[role='radio']")];
+    // Arrow-nav from serif (idx 1, the real active/tabbable radio) back to default
+    // (idx 0): default is focused, then the no-echo fallback reverts tabIndex to
+    // the unchanged real pref (serif), stranding idx 0 (the physical-first radio
+    // in the whole dialog — pos 0 in allRadios, before any tabbable radio).
+    radios[1].focus();
+    fontFamilyGroup.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "ArrowLeft", bubbles: true })
+    );
+    expect(document.activeElement).toBe(radios[0]);
+    vi.advanceTimersByTime(2000);
+    expect(radios[0].tabIndex).toBe(-1);
+    expect(document.activeElement).toBe(radios[0]); // stranded on the FIRST radio in the dialog
+    const contentWidthDefault = contentWidthGroup.querySelector(
+      "[data-pref-value='medium']"
+    ) as HTMLButtonElement;
+    const tab = new KeyboardEvent("keydown", {
+      key: "Tab",
+      shiftKey: true,
+      bubbles: true,
+      cancelable: true,
+    });
+    radios[0].dispatchEvent(tab);
+    expect(tab.defaultPrevented).toBe(true);
+    expect(document.activeElement).toBe(contentWidthDefault);
+  });
+
+  it("Tab from a stranded radio in the LAST group wraps to the dialog's first tab stop", () => {
+    vi.useFakeTimers();
+    const { popover } = make(); // default prefs: contentWidth's real pref ("medium") != its last physical option ("wide")
+    const groups = [...popover.el.querySelectorAll<HTMLElement>("[role='radiogroup']")];
+    const fontFamilyGroup = groups[0];
+    const contentWidthGroup = groups[3]; // narrow, medium (default), wide
+    const radios = [...contentWidthGroup.querySelectorAll<HTMLButtonElement>("[role='radio']")];
+    radios[0].focus(); // narrow, not the real active radio
+    contentWidthGroup.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true })
+    ); // → medium: idempotent no-op
+    contentWidthGroup.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true })
+    ); // → wide: genuinely diverges, arms fallback
+    expect(document.activeElement).toBe(radios[2]);
+    vi.advanceTimersByTime(2000);
+    expect(radios[2].tabIndex).toBe(-1);
+    expect(document.activeElement).toBe(radios[2]); // stranded on the LAST radio in the dialog
+    const fontFamilyDefault = fontFamilyGroup.querySelector(
+      "[data-pref-value='default']"
+    ) as HTMLButtonElement;
+    const tab = new KeyboardEvent("keydown", { key: "Tab", bubbles: true, cancelable: true });
+    radios[2].dispatchEvent(tab);
+    expect(tab.defaultPrevented).toBe(true);
+    expect(document.activeElement).toBe(fontFamilyDefault);
+  });
+
   it("Escape delegates to onRequestClose and stops propagation (no self-close)", () => {
     const { popover, onRequestClose } = make();
     const bubbled = vi.fn();

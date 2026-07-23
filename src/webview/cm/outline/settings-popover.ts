@@ -273,8 +273,10 @@ export function createSettingsPopover(deps: SettingsPopoverDeps): SettingsPopove
       // leaves the modal. Interior Tab moves fall through to native traversal
       // between the roving groups. Stranding (focus sits on a radio that is NO
       // LONGER a tab stop) is not limited to the 2s no-echo fallback: a fast
-      // second arrow-nav also fires a real host echo whose syncFromState() drops
-      // the previously-focused radio's tabIndex to -1 while focus stays put. When
+      // second arrow-nav (guarded by activate()'s pending check, so it posts no
+      // new request) relocates focus before the FIRST arrow-nav's still-in-flight
+      // request echoes back; that real echo's syncFromState() then drops the
+      // now-focused radio's tabIndex to -1 while focus stays put. When
       // stranded, Tab moves to the ADJACENT tab stop in DOM order (never straight
       // to the opposite dialog edge) so navigation continues from where focus
       // actually sits; only the true boundary wraps.
