@@ -37,7 +37,13 @@ export function resolveCodeReferenceCandidates(
   const bases =
     deps.workspaceFolderUris.length > 0
       ? [
-          ...deps.workspaceFolderUris.filter((f) => isWithinDir(deps.documentUri, f)),
+          // Containing folders first, MOST-SPECIFIC (longest path) first — so a
+          // document under a nested workspace root (`/repo/packages/a`) resolves
+          // against that nested root before its parent (`/repo`), honouring the
+          // own-folder precedence even when both roots contain the document.
+          ...deps.workspaceFolderUris
+            .filter((f) => isWithinDir(deps.documentUri, f))
+            .sort((a, b) => b.path.length - a.path.length),
           ...deps.workspaceFolderUris.filter((f) => !isWithinDir(deps.documentUri, f)),
         ]
       : [deps.joinPath(deps.documentUri, "..")];

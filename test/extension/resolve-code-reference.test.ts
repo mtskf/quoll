@@ -50,6 +50,18 @@ describe("resolveCodeReferenceCandidates", () => {
     expect(candidates[0]).toBe("/ws2/src/foo.ts");
     expect(candidates).toEqual(["/ws2/src/foo.ts", "/ws/src/foo.ts"]);
   });
+  it("orders the most-specific nested root first when a parent root also contains the doc", () => {
+    const candidates = resolveCodeReferenceCandidates(
+      "src/foo.ts",
+      deps({
+        documentUri: uri("/repo/packages/a/docs/notes.md"),
+        // Parent root listed first, nested root second — both contain the doc.
+        workspaceFolderUris: [uri("/repo"), uri("/repo/packages/a")],
+      }) as never
+    ).map((c) => c.target.path);
+    expect(candidates[0]).toBe("/repo/packages/a/src/foo.ts");
+    expect(candidates).toEqual(["/repo/packages/a/src/foo.ts", "/repo/src/foo.ts"]);
+  });
   it("falls back to the doc dir when no workspace is open", () => {
     expect(
       resolveCodeReferenceCandidates("src/foo.ts", deps({ workspaceFolderUris: [] }) as never).map(
