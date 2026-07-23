@@ -934,6 +934,87 @@ describe("quollOutline resizable width", () => {
   });
 });
 
+// Keyboard resize (A11Y-07): the handle is a focusable WAI-ARIA window splitter.
+// happy-dom has no layout ⇒ host.clientWidth is 0, so clampWidth's upper bound is
+// MAX_WIDTH_PX (600); Home/End land on the raw 180/600 bounds.
+function handleKeydown(host: HTMLElement, key: string): void {
+  handleEl(host).dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true }));
+}
+
+describe("quollOutline keyboard resize (separator)", () => {
+  it("exposes the handle as a focusable window splitter (role/orientation/bounds)", () => {
+    const { host } = mount("# Alpha\n");
+    const h = handleEl(host);
+    expect(h.getAttribute("role")).toBe("separator");
+    expect(h.getAttribute("aria-orientation")).toBe("vertical");
+    expect(h.getAttribute("aria-label")).toBe("Resize outline sidebar");
+    expect(h.getAttribute("aria-controls")).toBe(sidebarEl(host).id);
+    expect(h.getAttribute("aria-valuemin")).toBe("180");
+    expect(h.getAttribute("aria-valuemax")).toBe("600");
+    expect(h.tabIndex).toBe(0);
+    expect(h.getAttribute("aria-hidden")).toBeNull(); // no longer hidden from AT
+  });
+
+  it("seeds aria-valuenow from the effective width (persisted, else default)", () => {
+    vi.mocked(readPersistedState).mockReturnValueOnce({ outlineWidthPx: 320 });
+    const { host } = mount("# Alpha\n");
+    expect(handleEl(host).getAttribute("aria-valuenow")).toBe("320");
+  });
+
+  it("aria-valuenow defaults to the stylesheet width when none is persisted", () => {
+    const { host } = mount("# Alpha\n");
+    expect(handleEl(host).getAttribute("aria-valuenow")).toBe("260");
+  });
+
+  it("ArrowRight / ArrowLeft nudge the width var by one step and persist it", () => {
+    const { host } = mount("# Alpha\n");
+    handleKeydown(host, "ArrowRight");
+    expect(widthVar(host)).toBe("276px"); // 260 + 16
+    expect(handleEl(host).getAttribute("aria-valuenow")).toBe("276");
+    expect(vi.mocked(patchPersistedState)).toHaveBeenLastCalledWith({ outlineWidthPx: 276 });
+    handleKeydown(host, "ArrowLeft");
+    expect(widthVar(host)).toBe("260px"); // back down by a step
+    expect(vi.mocked(patchPersistedState)).toHaveBeenLastCalledWith({ outlineWidthPx: 260 });
+  });
+
+  it("Home / End jump to the min / max width bounds", () => {
+    const { host } = mount("# Alpha\n");
+    handleKeydown(host, "End");
+    expect(widthVar(host)).toBe("600px");
+    expect(handleEl(host).getAttribute("aria-valuenow")).toBe("600");
+    handleKeydown(host, "Home");
+    expect(widthVar(host)).toBe("180px");
+    expect(handleEl(host).getAttribute("aria-valuenow")).toBe("180");
+  });
+
+  it("ArrowLeft clamps at the minimum (never below MIN_WIDTH_PX)", () => {
+    const { host } = mount("# Alpha\n");
+    handleKeydown(host, "Home"); // 180
+    handleKeydown(host, "ArrowLeft"); // 180 - 16 → clamped back to 180
+    expect(widthVar(host)).toBe("180px");
+  });
+
+  it("ignores unrelated keys (no width change, nothing persisted)", () => {
+    const { host } = mount("# Alpha\n");
+    handleKeydown(host, "Enter");
+    handleKeydown(host, "a");
+    expect(widthVar(host)).toBe(""); // untouched — falls through to the stylesheet default
+    expect(vi.mocked(patchPersistedState)).not.toHaveBeenCalled();
+  });
+
+  it("focusing the handle from the overlay sidebar does not dismiss it (focus-out exemption)", () => {
+    const { view: v, host } = mount("# A\n\nbody\n\n## B\n");
+    const plugin = v.plugin(outlinePlugin);
+    plugin?.toggle(); // open as a transient overlay (not pinned)
+    const row = rowEls(host)[0];
+    row.focus();
+    // Tabbing from a sidebar row to the host-level handle emits a sidebar focusout
+    // whose relatedTarget is the handle; the exemption keeps the overlay open.
+    row.dispatchEvent(new FocusEvent("focusout", { relatedTarget: handleEl(host), bubbles: true }));
+    expect(host.classList.contains(OUTLINE_OPEN_CLASS)).toBe(true);
+  });
+});
+
 describe("quollOutline settings popover wiring", () => {
   it("gear opens the popover (mounted into the footer) and toggles aria-expanded", () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });

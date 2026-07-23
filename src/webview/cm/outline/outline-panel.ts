@@ -94,6 +94,14 @@ export const OUTLINE_PINNED_CLASS = "quoll-outline-pinned";
  *  never desync. The two are complementary — both keep the editor column alive. */
 const MIN_WIDTH_PX = 180;
 const MAX_WIDTH_PX = 600;
+/** Keyboard-resize nudge (px) per Arrow press on the focused separator. Coarse
+ *  enough that a handful of presses spans the range, in the spirit of VS Code's
+ *  keyboard sash nudges; Home/End jump straight to the min/max bounds. */
+const RESIZE_STEP_PX = 16;
+/** Stylesheet baseline for --quoll-outline-sidebar-width (styles.css) — the
+ *  width the keyboard math and aria-valuenow read before any inline width is
+ *  set. Keep in sync with the CSS default. */
+const DEFAULT_WIDTH_PX = 260;
 /** Persisted view-state key (flat, survives reload) — see readPersistedState.
  *  Flat + namespaced by name so it shallow-merges alongside any future keys
  *  without a nested schema (one key today). */
@@ -196,6 +204,9 @@ class OutlinePanel implements PluginValue {
 
     this.sidebarEl = document.createElement("div");
     this.sidebarEl.className = "quoll-outline-sidebar";
+    // Stable id so the resize separator can `aria-controls` the sidebar it sizes
+    // (static, like the title id — one outline instance per webview document).
+    this.sidebarEl.id = "quoll-outline-sidebar";
     // Closed = slid off-screen but still rendered (the slide transition needs a
     // live element). `inert` drops the hidden sidebar from the focus + a11y
     // tree immediately — the CSS visibility flip is delayed until the slide-out
@@ -305,11 +316,23 @@ class OutlinePanel implements PluginValue {
     // them up.
     this.resizeEl = document.createElement("div");
     this.resizeEl.className = "quoll-outline-resize-handle";
-    this.resizeEl.setAttribute("aria-hidden", "true"); // pointer affordance; keyboard resize is a follow-up
+    // A focusable WAI-ARIA window splitter (role=separator): pointer drag AND
+    // keyboard (Arrow = nudge by RESIZE_STEP_PX, Home/End = min/max) both rewrite
+    // the width var. aria-value* report the live width to AT; aria-controls ties
+    // it to the sidebar it sizes. Only interactive while open (CSS gates display,
+    // so it drops out of the tab order when closed — matching the inert sidebar).
+    this.resizeEl.setAttribute("role", "separator");
+    this.resizeEl.setAttribute("aria-orientation", "vertical");
+    this.resizeEl.setAttribute("aria-label", "Resize outline sidebar");
+    this.resizeEl.setAttribute("aria-controls", this.sidebarEl.id);
+    this.resizeEl.setAttribute("aria-valuemin", String(MIN_WIDTH_PX));
+    this.resizeEl.setAttribute("aria-valuemax", String(MAX_WIDTH_PX));
+    this.resizeEl.tabIndex = 0;
     this.resizeEl.addEventListener("pointerdown", (e) => this.onResizePointerDown(e));
     this.resizeEl.addEventListener("pointermove", (e) => this.onResizePointerMove(e));
     this.resizeEl.addEventListener("pointerup", (e) => this.onResizePointerEnd(e));
     this.resizeEl.addEventListener("pointercancel", (e) => this.onResizePointerEnd(e));
+    this.resizeEl.addEventListener("keydown", (e) => this.onResizeKeydown(e));
     this.host.appendChild(this.resizeEl);
 
     // Restore a persisted width before first paint (guarded + in-range only:
@@ -320,6 +343,9 @@ class OutlinePanel implements PluginValue {
         this.host.style.setProperty("--quoll-outline-sidebar-width", `${persisted}px`);
       }
     }
+    // Seed aria-valuenow AFTER the persisted restore so AT reads the effective
+    // width (restored value or the stylesheet default), not a stale placeholder.
+    this.updateResizeAria();
   }
 
   update(u: ViewUpdate): void {
@@ -522,6 +548,10 @@ class OutlinePanel implements PluginValue {
    *     `footerEl` and so stays DOM-descended here). Any future owned overlay
    *     MUST likewise render inside `sidebarEl`, or this guard would misread it
    *     as a leave and close the sidebar out from under it.
+   *   - `next === this.resizeEl` — focus moved to the resize separator. It lives
+   *     on the host (not the sidebar) because CSS anchors it to the sidebar's
+   *     right edge, but it belongs to the outline: Tabbing to it must resize, not
+   *     dismiss the overlay out from under the very handle being focused.
    *  A programmatic `.focus()` to a real element outside the sidebar is
    *  indistinguishable from a deliberate Tab-out and will also dismiss — an
    *  accepted tradeoff for a transient surface. */
@@ -530,7 +560,7 @@ class OutlinePanel implements PluginValue {
       return;
     }
     const next = e.relatedTarget as Node | null;
-    if (next === null || this.sidebarEl.contains(next)) {
+    if (next === null || this.sidebarEl.contains(next) || next === this.resizeEl) {
       return;
     }
     this.setOpen(false);
@@ -588,6 +618,58 @@ class OutlinePanel implements PluginValue {
   private applyResize(clientX: number): void {
     const width = this.clampWidth(clientX - this.host.getBoundingClientRect().left);
     this.host.style.setProperty("--quoll-outline-sidebar-width", `${width}px`);
+    this.updateResizeAria();
+  }
+
+  /** The effective sidebar width (px): the inline var if set, else the stylesheet
+   *  default. The numeric baseline the keyboard nudges and aria-valuenow read. */
+  private currentWidthPx(): number {
+    const raw = Number.parseInt(
+      this.host.style.getPropertyValue("--quoll-outline-sidebar-width"),
+      10
+    );
+    return Number.isFinite(raw) ? raw : DEFAULT_WIDTH_PX;
+  }
+
+  /** Reflect the live width onto the separator's aria-valuenow (AT read-out).
+   *  Called from every width mutation — pointer drag and keyboard alike. */
+  private updateResizeAria(): void {
+    this.resizeEl.setAttribute("aria-valuenow", String(this.currentWidthPx()));
+  }
+
+  /** Commit a keyboard-chosen width: clamp, write the var, sync aria, persist.
+   *  Unlike the pointer drag (one persist at drag-end), each Arrow/Home/End press
+   *  is its own discrete, already-committed width — so it persists immediately. */
+  private setWidth(px: number): void {
+    const width = this.clampWidth(px);
+    this.host.style.setProperty("--quoll-outline-sidebar-width", `${width}px`);
+    this.updateResizeAria();
+    patchPersistedState({ [WIDTH_STATE_KEY]: width });
+  }
+
+  /** Keyboard resize on the focused separator (WAI-ARIA window-splitter keys):
+   *  Left/Right nudge by RESIZE_STEP_PX, Home/End jump to the min/max bound.
+   *  Everything else (Tab, Escape, …) is left to bubble. */
+  private onResizeKeydown(e: KeyboardEvent): void {
+    let next: number;
+    switch (e.key) {
+      case "ArrowLeft":
+        next = this.currentWidthPx() - RESIZE_STEP_PX;
+        break;
+      case "ArrowRight":
+        next = this.currentWidthPx() + RESIZE_STEP_PX;
+        break;
+      case "Home":
+        next = MIN_WIDTH_PX;
+        break;
+      case "End":
+        next = MAX_WIDTH_PX;
+        break;
+      default:
+        return;
+    }
+    e.preventDefault();
+    this.setWidth(next);
   }
 
   private onResizePointerDown(e: PointerEvent): void {

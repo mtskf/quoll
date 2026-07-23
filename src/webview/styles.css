@@ -969,6 +969,14 @@ html body {
     margin-left: -4px; /* centre the 8px grab strip on the border seam */
     cursor: ew-resize;
   }
+  /* Keyboard focus ring for the resize separator (role=separator, tabindex 0).
+   * The strip is transparent at rest, so without this a keyboard user sizing it
+   * would have no visible focus target. outline-offset pulls the ring inside the
+   * 8px strip so it reads as a seam highlight, not a full-height box. */
+  .quoll-outline-resize-handle:focus-visible {
+    outline: 2px solid var(--vscode-focusBorder, var(--vscode-editor-foreground));
+    outline-offset: -3px;
+  }
 
   /* The sidebar. Closed = slid off the left edge but still rendered (the slide
    * needs a live element; the plugin sets `inert` and the delayed visibility
