@@ -54,7 +54,12 @@ import { quollMarkdownLanguage } from "./cm/markdown.js";
 import { openExternalSinkFor, quollOpenExternalSink } from "./cm/open-external.js";
 import { quollOutline } from "./cm/outline/index.js";
 import { quollUpdateConfigSink, updateConfigSinkFor } from "./cm/outline/update-config-sink.js";
-import { htmlTablePaste, listReindentPaste, pasteUrlOverSelection } from "./cm/paste/index.js";
+import {
+  htmlTablePaste,
+  listReindentPaste,
+  pasteUrlOverSelection,
+  richHtmlPaste,
+} from "./cm/paste/index.js";
 import { detectLineSeparator, splitToCmText } from "./cm/seed.js";
 import { quollSwitchEditor } from "./cm/switch-editor.js";
 import { tableBlockField, tableSkeletonField } from "./cm/table/index.js";
@@ -706,6 +711,13 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
         // outside a list, tab-ambiguous) so htmlTablePaste / pasteUrlOverSelection
         // / imagePaste / CM's default plain-text paste still run.
         listReindentPaste({ canWrite: () => opts.getState().canWrite }),
+        // Rich paste: any clipboard `text/html` fragment that converts to Markdown
+        // (bold/italic, headings, nested lists, links, code, blockquotes, tables via
+        // the shared table core) is inserted through the normal edit pipeline.
+        // Prec.high, registered AFTER the table / URL / list handlers (they keep
+        // their fast paths) and BEFORE imagePaste (a pure image copy carries no
+        // text/html → this defers). Non-convertible → return false, plain paste runs.
+        richHtmlPaste({ canWrite: () => opts.getState().canWrite }),
         // Paste/drop image ingestion: capture image files, post image-write, and
         // insert the relative link at a position-mapped anchor on the host's
         // reply. canWrite mirrors edit-sync's readonly hard-drop; the host is the

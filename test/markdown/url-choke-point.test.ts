@@ -115,13 +115,23 @@ const RENDER_ENDPOINTS = [
 // Any OTHER file minting a raw URL is still flagged (default-deny). The
 // liveness test below flags a stale entry if either file no longer uses the
 // primitive.
-// Smart-paste HTML→GFM converter (html-table-to-gfm.ts) parses a `text/html`
-// clipboard fragment with DOMParser to read table structure. It is a legitimate
-// choke-point exception BECAUSE it reads cell TEXT ONLY (`textContent`) — every
-// `href`/`src` in the parsed DOM is dropped, so no URL from the parsed tree ever
-// reaches the render- or write-gate as a live URL. The parse extracts structure,
-// never a URL.
-const HTML_TABLE_PASTE_PARSE = ["src/webview/cm/paste/html-table-to-gfm.ts"] as const;
+// Smart-paste HTML→Markdown converters (html-table-to-gfm.ts, html-to-markdown.ts)
+// parse a `text/html` clipboard fragment with DOMParser to read structure. Both
+// are legitimate choke-point exceptions:
+//   - html-table-to-gfm.ts reads cell TEXT ONLY (`textContent`); it never reads a
+//     `href`/`src`, so no URL from the parsed tree ever reaches a gate.
+//   - html-to-markdown.ts additionally reads `href` for `<a>` — but ONLY via
+//     `getAttribute("href")` (a plain string, not the live `.href` property) and
+//     routes it through `isAllowedUrl` BEFORE it can become a Markdown link
+//     destination; a disallowed href degrades to plain text. Its only other
+//     attribute reads are non-URL structure (`getAttribute("class")` for a code
+//     fence language, `getAttribute("start")` for an ordered list); everything
+//     else is `textContent`.
+// The parse extracts structure + gated text, never an ungated live URL.
+const HTML_TABLE_PASTE_PARSE = [
+  "src/webview/cm/paste/html-table-to-gfm.ts",
+  "src/webview/cm/paste/html-to-markdown.ts",
+] as const;
 
 const URL_PARSE_ENDPOINTS = [
   "src/markdown/url-allowlist.ts",
