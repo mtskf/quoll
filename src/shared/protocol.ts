@@ -71,6 +71,14 @@ export const MAX_HREF_LENGTH = 8 * 1024;
  *  host-side to the live document's line count (the authoritative bound). */
 export const MAX_LINE_NUMBER = 0x7fffffff;
 
+/** Hard cap on the 1-based line/column suffix of an `open-code-reference`
+ *  request (`src/foo.ts:42` / `:42:7`). 10,000,000 far exceeds any real
+ *  source file's line count while bounding a forged/abusive value. Shared by
+ *  the webview-side parser (parseCodeReference) and the host validator
+ *  (isWebviewToHost) so a value the parser accepts is never silently
+ *  rejected at the host boundary (a dead click). */
+export const MAX_CODE_REFERENCE_LINE = 10_000_000;
+
 /** Hard cap on the number of lint diagnostics in one inbound `lint-diagnostics`
  *  message. The webview computes advisory lint over the raw Markdown; a
  *  pathological document (e.g. hundreds of trailing-space lines) stays well
@@ -405,6 +413,17 @@ export type OpenLinkMessage = Envelope & {
   href: string;
 };
 
+/** Webview → host: open a workspace-relative code reference in a plain VS Code
+ *  text editor at an optional 1-based line[:col]. `path` is parsed and
+ *  suffix-stripped but UNTRUSTED — the host re-validates it before opening.
+ *  Sibling of OpenLinkMessage (.md → Quoll). Shape contract: `col` ⇒ `line`. */
+export type OpenCodeReferenceMessage = Envelope & {
+  type: "open-code-reference";
+  path: string;
+  line?: number;
+  col?: number;
+};
+
 /** Webview→host request to materialise a pasted/dropped image to disk. `data`
  *  is base64 (no `data:` prefix); the host re-sniffs the decoded bytes and NEVER
  *  trusts a client-supplied type. `requestId` correlates the async
@@ -541,6 +560,7 @@ export type WebviewToHost =
   | EditMessage
   | OpenExternalMessage
   | OpenLinkMessage
+  | OpenCodeReferenceMessage
   | ImageWriteMessage
   | ContextHandoffMessage
   | CodexContextHandoffMessage
@@ -720,6 +740,19 @@ export function isWebviewToHost(value: unknown): value is WebviewToHost {
       // string capped at MAX_HREF_LENGTH. The host re-derives everything else
       // (scheme, extension, containment) from this string — it is not trusted.
       return typeof v.href === "string" && v.href.length <= MAX_HREF_LENGTH;
+    case "open-code-reference": {
+      const numOk = (x: unknown): boolean =>
+        x === undefined ||
+        (typeof x === "number" && Number.isInteger(x) && x >= 1 && x <= MAX_CODE_REFERENCE_LINE);
+      const shapeOk = v.col === undefined || v.line !== undefined; // col ⇒ line
+      return (
+        typeof v.path === "string" &&
+        v.path.length <= MAX_HREF_LENGTH &&
+        numOk(v.line) &&
+        numOk(v.col) &&
+        shapeOk
+      );
+    }
     case "image-write":
       return (
         typeof v.requestId === "string" &&

@@ -36,6 +36,10 @@ const SAMPLE_DOC = [
   "",
   "para with **bold** *italic* `code` ~~strike~~ and a [link](https://example.com)",
   "",
+  // A path-shaped inline code span — the workspace-relative code-reference
+  // construct codeRefReveal marks as clickable (see cm/code-ref/code-ref-reveal.ts).
+  "see `src/foo.ts:1` for details",
+  "",
   "```js",
   "const x = 1;",
   "```",

@@ -168,6 +168,14 @@ describe("htmlTableToGfm — cell text extraction", () => {
     expect(out).not.toContain(".x{");
   });
 
+  it("excludes form-control values (textarea/select) from a cell", () => {
+    const gfm = htmlTableToGfm(
+      "<table><tr><td>a<textarea>secret</textarea></td>" +
+        "<td>b<select><option>x</option></select></td></tr></table>"
+    );
+    expect(gfm).toBe("| a | b |\n| --- | --- |");
+  });
+
   it("excludes nested-table rows and cells", () => {
     const html =
       "<table><tr><th>H1</th><th>H2</th></tr>" +

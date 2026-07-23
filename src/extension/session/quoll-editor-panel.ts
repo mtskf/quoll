@@ -72,6 +72,7 @@ import { createCaretHandoffWiring } from "../handoff/caret-handoff-wiring.js";
 import { createContextHandoffWiring } from "../handoff/context-handoff-wiring.js";
 import { takeSwitchCaret } from "../handoff/editor-switch-caret.js";
 import { createImageWriteWiring } from "../image/image-write-wiring.js";
+import { handleOpenCodeReference } from "../links/handle-open-code-reference.js";
 import { handleOpenExternal } from "../links/handle-open-external.js";
 import { handleOpenLink } from "../links/handle-open-link.js";
 import { toLintDiagnostics } from "../lint/lint-diagnostics.js";
@@ -79,6 +80,10 @@ import { LintMirror } from "../lint/lint-mirror.js";
 import type { StatusBarSlots } from "../status-bar.js";
 import { openInQuollEditor } from "../surface/open-in-quoll.js";
 import { openInTextEditor } from "../surface/reopen-text-editor.js";
+import {
+  codeReferenceFileExistsWithinRoot,
+  revealCodeReference,
+} from "../surface/reveal-code-reference.js";
 import { createRevertRescueWiring } from "../surface/revert-rescue-wiring.js";
 import { showSafely } from "../surface/show-safely.js";
 import { noteSurface } from "../surface/surface-memory.js";
@@ -759,6 +764,26 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
               ((uri) => openInQuollEditor(uri, QuollEditorPanel.viewType)),
             showError,
           });
+          return;
+        case "open-code-reference":
+          // Direct host-side side effect (like open-link): resolves the
+          // UNTRUSTED path against the workspace-folder roots, re-validates,
+          // and opens a plain text editor at the line. No editSettledBarrier —
+          // reads only the stable document.uri, opens a different document.
+          // void is safe: the handler captures all its own errors internally.
+          void handleOpenCodeReference(
+            { path: raw.path, line: raw.line, col: raw.col },
+            {
+              documentUri: document.uri,
+              workspaceFolderUris: (workspace.workspaceFolders ?? []).map((f) => f.uri),
+              joinPath: (base, ...segments) => Uri.joinPath(base, ...segments),
+              pathExists:
+                this.harness?.codeReferenceExistsOverride ?? codeReferenceFileExistsWithinRoot,
+              revealInTextEditor: this.harness?.openCodeReferenceOverride ?? revealCodeReference,
+              showError,
+              showNotFound: (path) => showError(`Quoll: referenced file not found — ${path}`),
+            }
+          );
           return;
         case "image-write":
           imageWriteWiring.handle(raw.requestId, raw.data);

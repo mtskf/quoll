@@ -38,9 +38,26 @@ const MAX_ROWSPAN = 1_000;
 const TEXT_NODE = 3;
 const ELEMENT_NODE = 1;
 
-// Elements whose text must NOT enter a cell. `DOMParser` never executes these
-// (no script runs), but their raw source would otherwise pollute the cell.
-const SKIP_TAGS = new Set(["SCRIPT", "STYLE", "NOSCRIPT", "TEMPLATE", "HEAD"]);
+// Elements whose text/value is NOT user prose and must never enter output. Shared
+// with html-to-markdown.ts (the rich converter reuses tableElementToGfm) so the
+// two can never diverge. SCRIPT/STYLE/NOSCRIPT/TEMPLATE/HEAD never render text;
+// IFRAME/OBJECT are embeds; TEXTAREA/SELECT/OPTION/OPTGROUP are form-control
+// values, not prose; TITLE lives in <head>. BUTTON is intentionally NOT skipped —
+// its label is visible prose.
+export const SKIP_TAGS = new Set([
+  "SCRIPT",
+  "STYLE",
+  "NOSCRIPT",
+  "TEMPLATE",
+  "HEAD",
+  "IFRAME",
+  "OBJECT",
+  "TEXTAREA",
+  "TITLE",
+  "SELECT",
+  "OPTION",
+  "OPTGROUP",
+]);
 
 // Block-level elements: their children are bracketed with spaces so text across a
 // boundary does not glue (`<div>a</div><div>b</div>` → `a b`, not `ab`). Unknown
@@ -273,34 +290,13 @@ function rowToLine(cells: readonly string[]): string {
   return `| ${cells.join(" | ")} |`;
 }
 
-/** Convert a table-ONLY HTML fragment to a GFM table string, or `null` when the
- *  fragment is not a single top-level table (no table, ≥2 top-level tables, or
- *  meaningful prose alongside the table) or a cap is exceeded. Returning `null`
- *  for mixed content lets the caller defer to normal paste so surrounding text
- *  and sibling tables are preserved rather than silently dropped. */
-export function htmlTableToGfm(html: string): string | null {
-  if (html.length > MAX_HTML_TABLE_INPUT_CHARS) {
-    return null;
-  }
-  let table: Element | null;
-  let body: Element | null;
-  try {
-    const doc = new DOMParser().parseFromString(html, "text/html");
-    body = doc.body;
-    // Only TOP-LEVEL tables (a nested cell-table is not a paste target). Require
-    // EXACTLY one: 0 = nothing to convert, ≥2 = defer so no table is dropped.
-    const topLevel = Array.from(doc.querySelectorAll("table")).filter((t) => !hasAncestorTable(t));
-    table = topLevel.length === 1 ? topLevel[0] : null;
-  } catch {
-    return null; // belt-and-suspenders: parseFromString is spec'd not to throw
-  }
-  if (!table || !body) {
-    return null;
-  }
-  // Prose alongside the table → defer to normal paste (no data loss).
-  if (hasTextOutsideTable(body, table)) {
-    return null;
-  }
+/** Serialise a resolved top-level `<table>` Element to a GFM table string (with a
+ *  leading caption paragraph when the table has a direct `<caption>`), or `null`
+ *  when a cap is exceeded or the table yields no columns. The caller owns the
+ *  policy of WHICH table to serialise and whether prose alongside it should defer;
+ *  this function unconditionally serialises the element it is handed. Shared by
+ *  `htmlTableToGfm` (single-table clipboard) and `htmlToMarkdown` (mixed fragment). */
+export function tableElementToGfm(table: Element): string | null {
   const rows = directRows(table);
   if (rows.length === 0 || rows.length > MAX_HTML_TABLE_ROWS) {
     return null;
@@ -412,4 +408,35 @@ export function htmlTableToGfm(html: string): string | null {
         .replace(/^([#>+-])/, "\\$1")
     : "";
   return caption ? `${caption}\n\n${gfm}` : gfm;
+}
+
+/** Convert a table-ONLY HTML fragment to a GFM table string, or `null` when the
+ *  fragment is not a single top-level table (no table, ≥2 top-level tables, or
+ *  meaningful prose alongside the table) or a cap is exceeded. Returning `null`
+ *  for mixed content lets the caller defer to normal paste so surrounding text
+ *  and sibling tables are preserved rather than silently dropped. */
+export function htmlTableToGfm(html: string): string | null {
+  if (html.length > MAX_HTML_TABLE_INPUT_CHARS) {
+    return null;
+  }
+  let table: Element | null;
+  let body: Element | null;
+  try {
+    const doc = new DOMParser().parseFromString(html, "text/html");
+    body = doc.body;
+    // Only TOP-LEVEL tables (a nested cell-table is not a paste target). Require
+    // EXACTLY one: 0 = nothing to convert, ≥2 = defer so no table is dropped.
+    const topLevel = Array.from(doc.querySelectorAll("table")).filter((t) => !hasAncestorTable(t));
+    table = topLevel.length === 1 ? topLevel[0] : null;
+  } catch {
+    return null; // belt-and-suspenders: parseFromString is spec'd not to throw
+  }
+  if (!table || !body) {
+    return null;
+  }
+  // Prose alongside the table → defer to normal paste (no data loss).
+  if (hasTextOutsideTable(body, table)) {
+    return null;
+  }
+  return tableElementToGfm(table);
 }

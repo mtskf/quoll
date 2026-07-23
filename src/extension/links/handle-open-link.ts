@@ -24,6 +24,7 @@
 
 import type { Uri } from "vscode";
 import { isAllowedUrl } from "../../markdown/url-allowlist.js";
+import { isWithinDir } from "./within-dir.js";
 
 /** User-facing toast when a resolved, in-scope target still fails to open
  *  (openWith rejects/throws). Mirrors OPEN_EXTERNAL_FAILURE_MESSAGE. */
@@ -35,18 +36,6 @@ const OPEN_LINK_FAILURE_MESSAGE =
 function sanitizeForLog(href: string): string {
   // biome-ignore lint/suspicious/noControlCharactersInRegex: intentional — sanitising untrusted control bytes for logging.
   return href.replace(/[\u0000-\u001f\u007f]/g, "?").slice(0, 64);
-}
-
-/** True when `target` is `dir` itself or a descendant (same scheme + authority
- *  + path-prefix). `dir.path` normalized to exactly one trailing slash so `/ws`
- *  does not match `/ws-evil/x`. Case-sensitive by design (see plan threat
- *  model — a case-insensitive FS can only over-block, never bypass). */
-function isWithinDir(target: Uri, dir: Uri): boolean {
-  if (target.scheme !== dir.scheme || target.authority !== dir.authority) {
-    return false;
-  }
-  const dirPath = dir.path.replace(/\/?$/, "/");
-  return target.path === dir.path || target.path.startsWith(dirPath);
 }
 
 export type HandleOpenLinkDeps = {

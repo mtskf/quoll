@@ -10,20 +10,22 @@ function bigMarkHeavyDoc(targetBytes: number): string {
   // Each repetition carries one of every syntax construct currently revealed
   // by a provider so the viewport contract is exercised uniformly across
   // headingReveal / blockquoteReveal / inlineMarkReveal / linkReveal /
-  // taskCheckboxReveal / fencedCodeReveal. Adding the task-list construct (C5)
-  // and the fenced-code block keeps the "tiny viewport emits far fewer
-  // decorations than whole-doc" assertion non-vacuous for those providers —
-  // without their construct in the fixture each would emit zero decorations in
-  // BOTH the tiny and whole viewports, and `0 < 0 / 10` is false. The fenced
-  // block's own ``` lines close before the next repetition's `# h`, so each
-  // repeat parses as one self-contained FencedCode. The trailing `---` gives
-  // thematicBreakReveal one HorizontalRule per repetition so its ratio
-  // assertion stays non-vacuous. The closing `s\n=` is a lone-`=` SetextHeading1
-  // (a nascent-list underline) so setextNascentReveal emits one decoration per
-  // repeat — without it that provider would emit zero in BOTH viewports and
-  // `0 < 0 / 10` is false.
+  // taskCheckboxReveal / fencedCodeReveal / codeRefReveal. Adding the task-list
+  // construct (C5) and the fenced-code block keeps the "tiny viewport emits far
+  // fewer decorations than whole-doc" assertion non-vacuous for those
+  // providers — without their construct in the fixture each would emit zero
+  // decorations in BOTH the tiny and whole viewports, and `0 < 0 / 10` is
+  // false. The fenced block's own ``` lines close before the next repetition's
+  // `# h`, so each repeat parses as one self-contained FencedCode. The
+  // trailing `---` gives thematicBreakReveal one HorizontalRule per repetition
+  // so its ratio assertion stays non-vacuous. The closing `s\n=` is a lone-`=`
+  // SetextHeading1 (a nascent-list underline) so setextNascentReveal emits one
+  // decoration per repeat — without it that provider would emit zero in BOTH
+  // viewports and `0 < 0 / 10` is false. `x/y` is a path-shaped inline code
+  // span so codeRefReveal (the workspace-relative code-reference affordance)
+  // stays non-vacuous under the same rule.
   const line =
-    "# h\n> q\n**bold** *italic* `code` ~~strike~~ [t](https://x)\n- [ ] t\n- b\n```js\nc\n```\n---\ns\n=\n";
+    "# h\n> q\n**bold** *italic* `code` `x/y` ~~strike~~ [t](https://x)\n- [ ] t\n- b\n```js\nc\n```\n---\ns\n=\n";
   return line.repeat(Math.ceil(targetBytes / line.length));
 }
 

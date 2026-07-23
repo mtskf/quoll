@@ -18,6 +18,7 @@ import {
   type WebviewToHost,
 } from "../shared/protocol.js";
 import { applyCaret, type Caret, selectionCharCount, selectionToCaret } from "./cm/caret.js";
+import { quollCodeRefClickHandler } from "./cm/code-ref/code-ref-handlers.js";
 import { quollContextHandoffKeymap } from "./cm/context-handoff.js";
 import { blockStyle } from "./cm/decorations/block-style.js";
 import { blockZoneArrowKeymap } from "./cm/decorations/block-zone-arrow-keymap.js";
@@ -54,7 +55,12 @@ import { quollMarkdownLanguage } from "./cm/markdown.js";
 import { openExternalSinkFor, quollOpenExternalSink } from "./cm/open-external.js";
 import { quollOutline } from "./cm/outline/index.js";
 import { quollUpdateConfigSink, updateConfigSinkFor } from "./cm/outline/update-config-sink.js";
-import { htmlTablePaste, pasteUrlOverSelection } from "./cm/paste/index.js";
+import {
+  htmlTablePaste,
+  listReindentPaste,
+  pasteUrlOverSelection,
+  richHtmlPaste,
+} from "./cm/paste/index.js";
 import { detectLineSeparator, splitToCmText } from "./cm/seed.js";
 import { quollSwitchEditor } from "./cm/switch-editor.js";
 import { tableBlockField, tableSkeletonField } from "./cm/table/index.js";
@@ -615,6 +621,14 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
         // reads syntaxTree to resolve the position to a Link node and
         // benefits from any decorations the reveal already arbitrated.
         quollLinkClickHandler(getHost()),
+        // Independent mousedown handler for the workspace-relative code-
+        // reference affordance (`src/foo.ts:42` inside inline code). Coexists
+        // with quollLinkClickHandler above: a click on a plain code reference
+        // resolves no Link (that handler returns false) and this handler
+        // consumes it; a code reference NESTED in a link (`` [`x`](y.md) ``)
+        // is deferred by this handler's own Link-ancestor guard, so the link
+        // handler's click still wins.
+        quollCodeRefClickHandler(getHost()),
         // Provide the open-external sink read by the readonly table widget's
         // modifier-click path (cm/table/table-widget.ts). Same host choke
         // point as quollLinkClickHandler above — the widget is built inside a
@@ -694,6 +708,21 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
         // paste. Supersedes @codemirror/lang-markdown's built-in pasteURLAsLink
         // (dropped from quollMarkdownLanguage) with allowlist-aligned detection.
         pasteUrlOverSelection({ canWrite: () => opts.getState().canWrite }),
+        // Paste re-indent: a multi-line plain-text Markdown LIST fragment pasted
+        // at the start of a line inside an existing list context is re-based so
+        // its top level aligns with the caret's column (Obsidian analogue), inner
+        // structure preserved. Prec.high, deferring on every non-qualifying paste
+        // (single-line, non-list fragment, fence-bearing, mid-line caret, caret
+        // outside a list, tab-ambiguous) so htmlTablePaste / pasteUrlOverSelection
+        // / imagePaste / CM's default plain-text paste still run.
+        listReindentPaste({ canWrite: () => opts.getState().canWrite }),
+        // Rich paste: any clipboard `text/html` fragment that converts to Markdown
+        // (bold/italic, headings, nested lists, links, code, blockquotes, tables via
+        // the shared table core) is inserted through the normal edit pipeline.
+        // Prec.high, registered AFTER the table / URL / list handlers (they keep
+        // their fast paths) and BEFORE imagePaste (a pure image copy carries no
+        // text/html → this defers). Non-convertible → return false, plain paste runs.
+        richHtmlPaste({ canWrite: () => opts.getState().canWrite }),
         // Paste/drop image ingestion: capture image files, post image-write, and
         // insert the relative link at a position-mapped anchor on the host's
         // reply. canWrite mirrors edit-sync's readonly hard-drop; the host is the
