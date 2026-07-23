@@ -130,12 +130,18 @@ function markdownDestination(url: string): string {
   return /[\s()]/.test(enc) ? `<${enc}>` : enc;
 }
 
+/** Length of the longest consecutive backtick run in `text` (0 when none) — the
+ *  basis for choosing a code fence one backtick longer than anything inside. */
+function longestBacktickRun(text: string): number {
+  const runs = text.match(/`+/g);
+  return runs ? Math.max(...runs.map((r) => r.length)) : 0;
+}
+
 /** Fence an inline-code span: a run of backticks one longer than the longest
  *  backtick run inside the content, space-padded when content borders a backtick
  *  (CommonMark rule). Content is verbatim (never escaped). */
 function inlineCode(text: string): string {
-  const runs = text.match(/`+/g);
-  const longest = runs ? Math.max(...runs.map((r) => r.length)) : 0;
+  const longest = longestBacktickRun(text);
   const fence = "`".repeat(longest + 1);
   const pad = longest > 0 || text.startsWith("`") || text.endsWith("`") ? " " : "";
   return `${fence}${pad}${text}${pad}${fence}`;
@@ -249,8 +255,7 @@ function prefixLines(text: string, prefix: string): string {
  *  the body, min length 3. Body is literal. `lang` is sanitised to a single safe
  *  info-string token (empty when malformed) so it cannot break the fence. */
 function fenceCode(body: string, lang: string): string {
-  const runs = body.match(/`+/g);
-  const longest = runs ? Math.max(...runs.map((r) => r.length)) : 0;
+  const longest = longestBacktickRun(body);
   const fence = "`".repeat(Math.max(3, longest + 1));
   return `${fence}${lang}\n${body}\n${fence}`;
 }
