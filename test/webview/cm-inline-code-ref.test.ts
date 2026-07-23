@@ -3,25 +3,27 @@ import { EditorState } from "@codemirror/state";
 import type { SyntaxNode } from "@lezer/common";
 import { describe, expect, it } from "vitest";
 
-import { hasLinkAncestor, inlineCodeInterior } from "../../src/webview/cm/code-ref/inline-code-ref.js";
+import {
+  hasLinkAncestor,
+  inlineCodeInterior,
+} from "../../src/webview/cm/code-ref/inline-code-ref.js";
 import { fullTree } from "./helpers/full-tree.js";
 
 // Directly pins the shared Lezer walks that keep the code-ref DECORATION
 // (code-ref-reveal.ts) and the CLICK gate (code-ref-handlers.ts) in lockstep —
 // both call these helpers, so a regression here silently diverges affordance
-// from behaviour. An array box (not a `let`) captures the node so TS control-flow
-// analysis doesn't narrow the closure-assigned value away.
+// from behaviour.
 function firstInlineCode(doc: string): SyntaxNode {
   const state = EditorState.create({ doc, extensions: [markdown()] });
-  const box: SyntaxNode[] = [];
+  const nodes: SyntaxNode[] = [];
   fullTree(state).iterate({
     enter: (n) => {
-      if (box.length === 0 && n.name === "InlineCode") {
-        box.push(n.node);
+      if (n.name === "InlineCode") {
+        nodes.push(n.node);
       }
     },
   });
-  const node = box[0];
+  const node = nodes[0];
   if (node === undefined) {
     throw new Error("no InlineCode node found");
   }

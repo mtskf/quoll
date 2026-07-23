@@ -36,11 +36,10 @@ export function resolveCodeReferenceCandidates(
   // so a same-named file in the doc's own folder wins over a sibling folder's.
   const bases =
     deps.workspaceFolderUris.length > 0
-      ? [...deps.workspaceFolderUris].sort((a, b) => {
-          const aHas = isWithinDir(deps.documentUri, a) ? 0 : 1;
-          const bHas = isWithinDir(deps.documentUri, b) ? 0 : 1;
-          return aHas - bHas;
-        })
+      ? [
+          ...deps.workspaceFolderUris.filter((f) => isWithinDir(deps.documentUri, f)),
+          ...deps.workspaceFolderUris.filter((f) => !isWithinDir(deps.documentUri, f)),
+        ]
       : [deps.joinPath(deps.documentUri, "..")];
   const out: ResolvedCodeReferenceCandidate[] = [];
   for (const base of bases) {
