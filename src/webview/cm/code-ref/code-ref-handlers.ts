@@ -20,11 +20,17 @@ import { parseInlineCodeReference } from "./parse-code-reference.js";
 export type CodeRefHost = PostMessageHost;
 
 /** Options for {@link tryOpenCodeRefAt}. `deferWhenSelectionIntersects` gates
- *  the mouse path: a click on an actively-selected/edited reference defers so
- *  the user can edit it (the reveal decoration is suppressed there too, so there
- *  is no clickable affordance). The keyboard command sets it FALSE — the caret
- *  sitting inside a reference is exactly how a keyboard user targets it, so the
- *  self-intersecting caret must NOT block the open. */
+ *  the mouse path: a real mouse click on an actively-selected/edited reference
+ *  defers (returns false) so the click just repositions the caret instead of
+ *  navigating away mid-edit. The reveal decoration (code-ref-reveal.ts) is NOT
+ *  suppressed during selection — the role="link"/underline affordance stays
+ *  visible even while the caret sits inside — so this defer is a deliberate
+ *  mouse-only asymmetry: the visible affordance's primary mouse gesture is a
+ *  click from OUTSIDE the reference, while an in-edit click is declined. The AT
+ *  click handler and the keyboard command both pass FALSE (they open regardless):
+ *  a screen reader activates by target, and the caret sitting inside a reference
+ *  is exactly how a keyboard user targets it, so a self-intersecting caret must
+ *  NOT block those paths. */
 export type TryOpenCodeRefOptions = { deferWhenSelectionIntersects: boolean };
 
 export function tryOpenCodeRefAt(
