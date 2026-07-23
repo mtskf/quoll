@@ -905,6 +905,19 @@ describe("quollOutline settings popover wiring", () => {
     expect(document.activeElement).toBe(gear);
   });
 
+  it("does NOT restore focus to the gear when focus already left the popover before close", () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const { host } = mount("# H1");
+    hoverToggle(host);
+    const gear = host.querySelector(".quoll-outline-settings") as HTMLButtonElement;
+    const pin = pinEl(host);
+    gear.click(); // opens popover, focusInitial() lands focus on a radio
+    pin.focus(); // simulate focus having already left the popover (e.g. via destroy())
+    gear.click(); // toggleSettings() → closeSettings() while focus is on `pin`
+    expect(host.querySelector(".quoll-settings-popover")).toBeNull();
+    expect(document.activeElement).toBe(pin); // NOT yanked back to the gear
+  });
+
   it("a segment click posts through the injected sink", () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     const { host } = mount("# H1");

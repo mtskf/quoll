@@ -422,10 +422,13 @@ class OutlinePanel implements PluginValue {
       this.view.dom.ownerDocument.removeEventListener("pointerdown", this.onDocPointerDown, true);
       this.onDocPointerDown = null;
     }
-    // Restore focus to the trigger ONLY when it was inside the popover (Escape,
-    // click-outside on empty space). If the close came from focusing something
-    // else (Tab out is trapped, but a click on another control moves focus
-    // first), the focus has already left — don't yank it back to the gear.
+    // Restore focus to the trigger ONLY when it was inside the popover. This
+    // guards close paths where focus already moved elsewhere before we get
+    // here (e.g. teardown via destroy(), or something else re-focusing the
+    // editor while the popover was still mounted) — in those cases, focus is
+    // no longer ours to restore, so don't yank it back to the gear. On the
+    // Escape / click-outside paths, focus is still trapped inside the popover
+    // at this point, so this restores it as expected.
     const restoreFocus = this.settingsPopover.el.contains(
       this.view.dom.ownerDocument.activeElement
     );
