@@ -882,6 +882,42 @@ describe("quollOutline settings popover wiring", () => {
     expect(gear.getAttribute("aria-expanded")).toBe("false");
   });
 
+  it("opening the popover moves focus into it (first radio)", () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const { host } = mount("# H1");
+    hoverToggle(host);
+    (host.querySelector(".quoll-outline-settings") as HTMLButtonElement).click();
+    const popover = host.querySelector(".quoll-settings-popover") as HTMLElement;
+    expect(popover.contains(document.activeElement)).toBe(true);
+    expect((document.activeElement as HTMLElement).getAttribute("role")).toBe("radio");
+  });
+
+  it("closing the popover via Escape restores focus to the gear", () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const { host } = mount("# H1");
+    hoverToggle(host);
+    const gear = host.querySelector(".quoll-outline-settings") as HTMLButtonElement;
+    gear.click();
+    const popover = host.querySelector(".quoll-settings-popover") as HTMLElement;
+    // focus is inside the popover (moved in on open) → Escape should hand it back
+    popover.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    expect(host.querySelector(".quoll-settings-popover")).toBeNull();
+    expect(document.activeElement).toBe(gear);
+  });
+
+  it("does NOT restore focus to the gear when focus already left the popover before close", () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const { host } = mount("# H1");
+    hoverToggle(host);
+    const gear = host.querySelector(".quoll-outline-settings") as HTMLButtonElement;
+    const pin = pinEl(host);
+    gear.click(); // opens popover, focusInitial() lands focus on a radio
+    pin.focus(); // simulate focus having already left the popover (e.g. via destroy())
+    gear.click(); // toggleSettings() → closeSettings() while focus is on `pin`
+    expect(host.querySelector(".quoll-settings-popover")).toBeNull();
+    expect(document.activeElement).toBe(pin); // NOT yanked back to the gear
+  });
+
   it("a segment click posts through the injected sink", () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     const { host } = mount("# H1");

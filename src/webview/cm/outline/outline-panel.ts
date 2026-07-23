@@ -395,6 +395,10 @@ class OutlinePanel implements PluginValue {
     this.footerEl.appendChild(popover.el); // footer is position:relative (styles.css)
     // The popover synced its active state at construction; no open() call.
     this.settingsToggleEl.setAttribute("aria-expanded", "true");
+    // Modal-dialog convention: move focus INTO the dialog on open (the popover
+    // traps Tab; closeSettings restores focus to this trigger). Do it after
+    // aria-expanded so ATs announce the expanded gear before the focus lands.
+    popover.focusInitial();
     // Click-outside: a pointerdown outside the popover AND not on the gear closes
     // it. Ignoring the gear prevents the pointerdown→close then click→reopen flap.
     this.onDocPointerDown = (e: Event) => {
@@ -418,9 +422,22 @@ class OutlinePanel implements PluginValue {
       this.view.dom.ownerDocument.removeEventListener("pointerdown", this.onDocPointerDown, true);
       this.onDocPointerDown = null;
     }
+    // Restore focus to the trigger ONLY when it was inside the popover. This
+    // guards close paths where focus already moved elsewhere before we get
+    // here (e.g. teardown via destroy(), or something else re-focusing the
+    // editor while the popover was still mounted) — in those cases, focus is
+    // no longer ours to restore, so don't yank it back to the gear. On the
+    // Escape / click-outside paths, focus is still trapped inside the popover
+    // at this point, so this restores it as expected.
+    const restoreFocus = this.settingsPopover.el.contains(
+      this.view.dom.ownerDocument.activeElement
+    );
     this.settingsPopover.destroy();
     this.settingsPopover = null;
     this.settingsToggleEl.setAttribute("aria-expanded", "false");
+    if (restoreFocus) {
+      this.settingsToggleEl.focus();
+    }
   }
 
   private setOpen(open: boolean): void {

@@ -89,6 +89,11 @@ export type SettingsPopover = {
   /** Sync the active segments from current prefs (called by the outline right
    *  after it appends `el`, and again on every host echo). */
   syncFromState(): void;
+  /** Move focus into the dialog on open (ARIA APG modal-dialog convention).
+   *  Lands on the first group's tabbable radio; the outline calls this right
+   *  after it appends `el`. Focus-restore-to-trigger on close is the outline's
+   *  job (it owns the trigger), so the popover only moves focus IN. */
+  focusInitial(): void;
   /** Clear pending timers + remove `el` from the DOM. The outline owns the
    *  open/closed lifecycle (mount on open, destroy on close) — the popover has
    *  NO self-owned open flag, so there is no half-closed state to diverge. */
@@ -99,6 +104,7 @@ export function createSettingsPopover(deps: SettingsPopoverDeps): SettingsPopove
   const el = document.createElement("div");
   el.className = "quoll-settings-popover";
   el.setAttribute("role", "dialog");
+  el.setAttribute("aria-modal", "true");
   el.setAttribute("aria-label", "Editor settings");
 
   const buttonsByKey = new Map<EditorPrefKey, Map<string, HTMLButtonElement>>();
@@ -239,6 +245,16 @@ export function createSettingsPopover(deps: SettingsPopoverDeps): SettingsPopove
     el.appendChild(rowEl);
   }
 
+  // The dialog's tab stops are the roving-tabindex radios (one tabbable per
+  // group). aria-modal alone does not stop Tab from walking OUT to the page, so
+  // the trap below wraps at the boundaries to keep keyboard focus inside while
+  // the modal is open (ARIA APG modal-dialog).
+  function tabbableRadios(): HTMLButtonElement[] {
+    return [...el.querySelectorAll<HTMLButtonElement>("[role='radio']")].filter(
+      (r) => r.tabIndex === 0
+    );
+  }
+
   // Escape closes ONLY the popover. The popover does NOT self-close (that would
   // leave the DOM mounted, aria-expanded stale, and the outline's document
   // pointerdown listener leaked) — it delegates to the outline's closeSettings
@@ -250,6 +266,52 @@ export function createSettingsPopover(deps: SettingsPopoverDeps): SettingsPopove
       e.preventDefault();
       e.stopPropagation();
       deps.onRequestClose();
+      return;
+    }
+    if (e.key === "Tab") {
+      // Focus trap: wrap Tab/Shift+Tab at the first/last tab stop so focus never
+      // leaves the modal. Interior Tab moves fall through to native traversal
+      // between the roving groups. Stranding (focus sits on a radio that is NO
+      // LONGER a tab stop) is not limited to the 2s no-echo fallback: a fast
+      // second arrow-nav (guarded by activate()'s pending check, so it posts no
+      // new request) relocates focus before the FIRST arrow-nav's still-in-flight
+      // request echoes back; that real echo's syncFromState() then drops the
+      // now-focused radio's tabIndex to -1 while focus stays put. When
+      // stranded, Tab moves to the ADJACENT tab stop in DOM order (never straight
+      // to the opposite dialog edge) so navigation continues from where focus
+      // actually sits; only the true boundary wraps.
+      const radios = tabbableRadios();
+      if (radios.length === 0) {
+        return;
+      }
+      const first = radios[0];
+      const last = radios[radios.length - 1];
+      const active = document.activeElement;
+      const activeIsTabbable = radios.some((r) => r === active);
+      if (activeIsTabbable) {
+        // Normal roving case: wrap only at the boundaries; interior Tab is native.
+        if (e.shiftKey && active === first) {
+          e.preventDefault();
+          last.focus();
+        } else if (!e.shiftKey && active === last) {
+          e.preventDefault();
+          first.focus();
+        }
+        return;
+      }
+      // Stranded on a now-non-tabbable radio: move to the adjacent tab stop
+      // (previous for Shift+Tab, next for Tab), wrapping only at the boundary.
+      e.preventDefault();
+      const allRadios = [...el.querySelectorAll<HTMLButtonElement>("[role='radio']")];
+      const pos =
+        active instanceof HTMLElement ? allRadios.indexOf(active as HTMLButtonElement) : -1;
+      if (e.shiftKey) {
+        const prev = [...radios].reverse().find((r) => allRadios.indexOf(r) < pos);
+        (prev ?? last).focus();
+      } else {
+        const next = radios.find((r) => allRadios.indexOf(r) > pos);
+        (next ?? first).focus();
+      }
     }
   });
 
@@ -278,6 +340,12 @@ export function createSettingsPopover(deps: SettingsPopoverDeps): SettingsPopove
   return {
     el,
     syncFromState,
+    focusInitial: () => {
+      // First group's tab stop (the checked radio; syncFromState set its
+      // tabIndex 0). Fall back to the first radio if none is tabbable yet.
+      const target = tabbableRadios()[0] ?? el.querySelector<HTMLButtonElement>("[role='radio']");
+      target?.focus();
+    },
     destroy: () => {
       for (const key of [...pendingTimers.keys()]) {
         clearPending(key);
