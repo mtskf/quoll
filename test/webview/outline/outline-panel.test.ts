@@ -565,15 +565,19 @@ describe("quollOutline sidebar", () => {
     expect(announcer.textContent).toBe("Beta — current section");
   });
 
-  it("coalesces a rapid caret sweep into one settled announcement (last section wins)", () => {
+  it("coalesces a rapid caret sweep — cancels the superseded timer, not just last-value-wins", () => {
     vi.useFakeTimers();
     const { view: v, host } = mount("# Alpha\n\nbody\n\n## Beta\n\nmore\n");
     v.plugin(outlinePlugin)?.toggle();
     const announcer = host.querySelector(".quoll-outline-announcer") as HTMLElement;
-    v.dispatch({ selection: EditorSelection.cursor(v.state.doc.line(5).from) }); // → Beta
-    v.dispatch({ selection: EditorSelection.cursor(v.state.doc.line(3).from) }); // → Alpha (body)
-    vi.runAllTimers();
-    expect(announcer.textContent).toBe("Alpha — current section"); // only the final one
+    v.dispatch({ selection: EditorSelection.cursor(v.state.doc.line(5).from) }); // → Beta (timer A, +400)
+    vi.advanceTimersByTime(300); // A still pending
+    v.dispatch({ selection: EditorSelection.cursor(v.state.doc.line(3).from) }); // → Alpha: cancels A, arms B
+    vi.advanceTimersByTime(150); // t=450 since Beta: A's original deadline has passed
+    // Non-vacuous guard: if the clearTimeout were dropped, A would have fired "Beta" by now.
+    expect(announcer.textContent).toBe(""); // A was cancelled — nothing spoken yet
+    vi.advanceTimersByTime(300); // past B's deadline
+    expect(announcer.textContent).toBe("Alpha — current section"); // only the final section
   });
 
   it("does not re-announce an in-section caret move (same active heading)", () => {
@@ -596,6 +600,111 @@ describe("quollOutline sidebar", () => {
     plugin?.toggle(); // close before the debounce fires
     vi.runAllTimers();
     expect(announcer.textContent).toBe(""); // never written into the inert sidebar
+  });
+
+  it("stays silent while focus is in the tree (row navigation self-announces)", () => {
+    vi.useFakeTimers();
+    const { view: v, host } = mount("# Alpha\n\nbody\n\n## Beta\n\nmore\n");
+    v.plugin(outlinePlugin)?.toggle();
+    const announcer = host.querySelector(".quoll-outline-announcer") as HTMLElement;
+    rowEls(host)[1].focus(); // focus the "Beta" tree row
+    expect(document.activeElement).toBe(rowEls(host)[1]);
+    v.dispatch({ selection: EditorSelection.cursor(v.state.doc.line(5).from) }); // caret → Beta
+    vi.runAllTimers();
+    expect(announcer.textContent).toBe(""); // focus in tree → suppressed, no live cue
+  });
+
+  it("stays silent on a pinned keyboard Enter-jump and cancels a superseded cue", () => {
+    vi.useFakeTimers();
+    const { view: v, host } = mount("# Alpha\n\nbody\n\n## Beta\n\nmore\n");
+    const plugin = v.plugin(outlinePlugin);
+    plugin?.toggle(); // open + prime
+    pinEl(host).click(); // pin so a jump keeps the sidebar open
+    const announcer = host.querySelector(".quoll-outline-announcer") as HTMLElement;
+    v.dispatch({ selection: EditorSelection.cursor(v.state.doc.line(5).from) }); // → Beta (timer armed)
+    const alphaRow = rowEls(host)[0];
+    alphaRow.focus(); // focus in tree
+    alphaRow.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })); // jumpTo(Alpha)
+    vi.runAllTimers();
+    // Beta's pending cue is cancelled by the suppressed re-entrant call; the
+    // tree-driven jump self-announces its treeitem, so no live cue fires.
+    expect(announcer.textContent).toBe("");
+  });
+
+  it("re-primes on reopen — no stale announcement the instant the sidebar reopens", () => {
+    vi.useFakeTimers();
+    const { view: v, host } = mount("# Alpha\n\nbody\n\n## Beta\n\nmore\n");
+    const plugin = v.plugin(outlinePlugin);
+    plugin?.toggle(); // open
+    const announcer = host.querySelector(".quoll-outline-announcer") as HTMLElement;
+    v.dispatch({ selection: EditorSelection.cursor(v.state.doc.line(5).from) }); // → Beta
+    vi.runAllTimers();
+    expect(announcer.textContent).toBe("Beta — current section");
+    plugin?.toggle(); // close (clears the region)
+    expect(announcer.textContent).toBe("");
+    plugin?.toggle(); // reopen with the caret still in Beta — must re-prime silently
+    vi.runAllTimers();
+    expect(announcer.textContent).toBe(""); // reopen is not a section change
+  });
+
+  it("does not re-announce the same section after an edit merely shifts its offset", () => {
+    vi.useFakeTimers();
+    const { view: v, host } = mount("# Alpha\n\nbody\n\n## Beta\n\nmore\n");
+    v.plugin(outlinePlugin)?.toggle();
+    const announcer = host.querySelector(".quoll-outline-announcer") as HTMLElement;
+    v.dispatch({ selection: EditorSelection.cursor(v.state.doc.line(5).from) }); // → Beta
+    vi.runAllTimers();
+    expect(announcer.textContent).toBe("Beta — current section");
+    announcer.textContent = ""; // blank so a *new* write is observable
+    // Insert a blank line at the top: Beta's `from` shifts, but the caret maps
+    // forward and stays in Beta. Mapping lastAnnouncedFrom must keep the dedup.
+    v.dispatch({ changes: { from: 0, insert: "\n" } });
+    vi.runAllTimers();
+    expect(announcer.textContent).toBe(""); // mapped dedup → no spurious re-announce
+  });
+
+  it("does not announce when a pointer collapse hides the caret's section (caret never moved)", () => {
+    vi.useFakeTimers();
+    const { view: v, host } = mount("# Alpha\n\n## Beta\n\nbody\n");
+    v.plugin(outlinePlugin)?.toggle();
+    const announcer = host.querySelector(".quoll-outline-announcer") as HTMLElement;
+    v.dispatch({ selection: EditorSelection.cursor(v.state.doc.line(3).from) }); // → Beta (child of Alpha)
+    vi.runAllTimers();
+    expect(announcer.textContent).toBe("Beta — current section");
+    announcer.textContent = ""; // blank so a spurious write is observable
+    // Collapse Alpha via its twistie: Beta (the caret's section) is hidden and the
+    // highlight walks up to Alpha, but the caret has not moved.
+    const twistie = twistieOf(rowEls(host)[0]) as HTMLElement;
+    twistie.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    vi.runAllTimers();
+    expect(announcer.textContent).toBe(""); // caret unmoved → no spurious section cue
+  });
+
+  it("resolves the announced label at fire time — a rename mid-debounce speaks the new name", () => {
+    vi.useFakeTimers();
+    const { view: v, host } = mount("# Alpha\n\nbody\n\n## Beta\n\nmore\n");
+    v.plugin(outlinePlugin)?.toggle();
+    const announcer = host.querySelector(".quoll-outline-announcer") as HTMLElement;
+    v.dispatch({ selection: EditorSelection.cursor(v.state.doc.line(5).from) }); // → Beta (timer armed)
+    // Rename "## Beta" → "## Gamma" in place before the debounce fires; the heading
+    // start offset is unchanged, so change-detection alone would keep the stale label.
+    const betaLine = v.state.doc.line(5);
+    v.dispatch({ changes: { from: betaLine.from + 3, to: betaLine.to, insert: "Gamma" } });
+    vi.runAllTimers();
+    expect(announcer.textContent).toBe("Gamma — current section"); // fire-time label, not stale "Beta"
+  });
+
+  it("announces empty when the caret sits above the first heading (null active section)", () => {
+    vi.useFakeTimers();
+    const { view: v, host } = mount("intro prose\n\n# Alpha\n\nbody\n");
+    v.plugin(outlinePlugin)?.toggle();
+    const announcer = host.querySelector(".quoll-outline-announcer") as HTMLElement;
+    v.dispatch({ selection: EditorSelection.cursor(v.state.doc.line(3).from) }); // → Alpha
+    vi.runAllTimers();
+    expect(announcer.textContent).toBe("Alpha — current section");
+    v.dispatch({ selection: EditorSelection.cursor(0) }); // caret above the first heading → null
+    vi.runAllTimers();
+    expect(announcer.textContent).toBe(""); // no active section → blank cue
   });
 
   it("does not mark the empty-state row as a treeitem", () => {

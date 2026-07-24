@@ -177,8 +177,12 @@ class OutlinePanel implements PluginValue {
   private closeTimer: ReturnType<typeof setTimeout> | null = null;
   private openTimer: ReturnType<typeof setTimeout> | null = null;
   private announceTimer: ReturnType<typeof setTimeout> | null = null;
-  /** The active heading `from` last handed to the announcer — announce only on a
-   *  genuine change, never re-speak the same section on an in-section caret move. */
+  /** The active-section heading `from` that is the current announcement baseline:
+   *  the section last primed, scheduled, or suppressed-as-tree-driven. Change
+   *  detection compares against it so an in-section caret move never re-speaks;
+   *  it is mapped through doc edits in `update()` so an offset shift alone does
+   *  not read as a change. NOTE it is stamped on the suppressed tree-focus path
+   *  too, so it is the dedup baseline — not a mirror of what the region shows. */
   private lastAnnouncedFrom: number | null = null;
   /** False from open until the first `updateActive` primes the baseline: opening
    *  the sidebar is not itself a section change, so the first sync records the
@@ -322,9 +326,12 @@ class OutlinePanel implements PluginValue {
 
     // Visually-hidden polite live region for active-section changes. Present in
     // the DOM before any text lands, so the first write is a mutation SRs
-    // announce; aria-atomic reads the short phrase as a unit. Empty at rest — it
-    // only ever holds the transient "<heading> — current section" cue. Mirrors
-    // the fenced-code copy button's status-region idiom.
+    // announce; aria-atomic reads the short phrase as a unit. Empty until the
+    // first genuine section change; thereafter it holds the last-announced
+    // "<heading> — current section" cue until the next change or sidebar close
+    // (nothing self-reverts it to empty). Reuses the fenced-code copy button's
+    // visually-hidden-region CSS technique, but is a persistent status label —
+    // NOT that button's self-clearing confirmation flash.
     this.announcerEl = document.createElement("div");
     this.announcerEl.className = "quoll-outline-announcer";
     this.announcerEl.setAttribute("aria-live", "polite");
@@ -419,6 +426,15 @@ class OutlinePanel implements PluginValue {
       for (const from of mapped) {
         this.collapsedFroms.add(from);
       }
+    }
+    // Map the last-announced heading offset through edits too (same assoc +1 as
+    // the collapse offsets — follow the heading, not text inserted at its start).
+    // Without this an edit that merely shifts the active heading's `from` (a blank
+    // line inserted above it, an external edit-sync, a lint autofix / undo) would
+    // leave lastAnnouncedFrom stale, so the next updateActive would read a changed
+    // offset for the SAME section and announce a spurious "section changed" cue.
+    if (u.docChanged && this.lastAnnouncedFrom !== null) {
+      this.lastAnnouncedFrom = u.changes.mapPos(this.lastAnnouncedFrom, 1);
     }
     if (!this.open) {
       return;
@@ -1142,6 +1158,11 @@ class OutlinePanel implements PluginValue {
         break;
       }
     }
+    // The caret's TRUE enclosing section, captured before the visible-ancestor
+    // remap below. The announcement tracks where the caret actually is, not the
+    // highlighted row — so a collapse/expand (which walks the highlight up to a
+    // visible ancestor without moving the caret) never fires a spurious cue.
+    const caretSectionFrom = activeFrom;
     // If the active heading's row is hidden (inside a collapsed subtree), walk up
     // to the nearest VISIBLE ancestor so the highlight never lands on a hidden
     // row — we keep the nearest visible ancestor lit rather than auto-expanding
@@ -1177,15 +1198,21 @@ class OutlinePanel implements PluginValue {
     if (!this.listEl.contains(document.activeElement)) {
       this.setTabbable(activeFrom ?? this.firstVisibleFrom());
     }
-    this.announceActive(activeFrom);
+    this.announceActive(caretSectionFrom);
   }
 
   /** Debounced polite announcement of the active section for SR users. The
    *  aria-selected flip above is silent, so without this a caret crossing a
    *  heading in the editor gives no cue. Announce ONLY on a genuine section
    *  change, and never on the open-time prime nor while the tree itself holds
-   *  focus (row navigation already announces each treeitem). A trailing debounce
-   *  coalesces a fast caret sweep into one settled announcement. */
+   *  focus (row navigation, incl. an Enter-jump, already announces each treeitem
+   *  — so a tree-driven change stays silent and its pending cue is cancelled). A
+   *  trailing debounce coalesces a fast caret sweep into one settled announcement.
+   *
+   *  Both the section identity check and the spoken label are resolved at FIRE
+   *  time, not schedule time: focus may enter the tree, and the heading may be
+   *  renamed (its `from` unchanged) during the debounce window — reading the live
+   *  state when the timer fires keeps the cue truthful in both cases. */
   private announceActive(activeFrom: number | null): void {
     if (!this.announcePrimed) {
       // First sync after open records the baseline silently — opening the
@@ -1198,21 +1225,31 @@ class OutlinePanel implements PluginValue {
       return; // same section — an in-section caret move, nothing new to speak
     }
     this.lastAnnouncedFrom = activeFrom;
-    // While focus is in the tree the user is arrow-navigating rows, which the SR
-    // announces per-treeitem on focus; a redundant live-region cue would double
-    // up. Only caret-driven changes (focus outside the tree) need the region.
     if (this.listEl.contains(document.activeElement)) {
+      // Focus is in the tree (arrow-nav / Enter-jump): the SR announces each
+      // treeitem on focus, so suppress the live-region cue AND cancel any pending
+      // one — an announcement scheduled for a prior caret position must not fire
+      // late after a tree jump has superseded it.
+      this.clearAnnouncement();
       return;
     }
-    const heading =
-      activeFrom === null ? undefined : this.headings.find((h) => h.from === activeFrom);
-    const label =
-      heading === undefined ? null : heading.text.length > 0 ? heading.text : "(untitled)";
     if (this.announceTimer !== null) {
       clearTimeout(this.announceTimer);
     }
     this.announceTimer = setTimeout(() => {
       this.announceTimer = null;
+      // Re-check at fire time: focus may have entered the tree since scheduling
+      // (that path announces its own treeitem), and the heading text may have
+      // changed — resolve the label from the current headings, not a stale capture.
+      if (this.listEl.contains(document.activeElement)) {
+        return;
+      }
+      const heading =
+        this.lastAnnouncedFrom === null
+          ? undefined
+          : this.headings.find((h) => h.from === this.lastAnnouncedFrom);
+      const label =
+        heading === undefined ? null : heading.text.length > 0 ? heading.text : "(untitled)";
       this.announcerEl.textContent = label === null ? "" : `${label} — current section`;
     }, ANNOUNCE_DEBOUNCE_MS);
   }
