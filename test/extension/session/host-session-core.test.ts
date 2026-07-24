@@ -318,9 +318,10 @@ describe("host-session-core: applyEditSettled drain", () => {
     );
     expect(r.state.rejection).toMatchObject({ kind: "pending", id: 1, content: "hasBAD" });
     // The draft is redelivered as a Document at the SETTLED version so the
-    // webview's docVersion bookkeeping advances (I3: no silent version stall)
-    // WITHOUT touching draft bytes — never a bare postEditRejected, never disk
-    // bytes. Mirrors the shipped `ready`-arm redelivery precedent.
+    // webview's docVersion bookkeeping advances (so the next retry lands on a
+    // live base instead of stale-rejecting) WITHOUT touching draft bytes —
+    // never a bare postEditRejected, never disk bytes. Mirrors the shipped
+    // `ready`-arm redelivery precedent.
     expect(r.effects).toEqual([
       { type: "postRejectedDraft", content: "hasBAD", error: unsafe, docVersion: 2, id: 1 },
       { type: "showError", message: `Cannot save: ${unsafe.message}` },
