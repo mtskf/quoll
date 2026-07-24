@@ -117,7 +117,10 @@ describe("createRevertRescueWiring — dispose rescue", () => {
 
   it("rescues on dispose when the write-lock was free at prepareDispose", async () => {
     const t = wire();
-    const applySpy = vi.spyOn(workspace, "applyEdit");
+    const applySpy = vi.spyOn(workspace, "applyEdit").mockImplementation(async () => {
+      t.doc.text = "DIRTY"; // applied lands the restored bytes
+      return true;
+    });
     armRevert(t);
 
     t.writeLock.held = false;
@@ -126,6 +129,7 @@ describe("createRevertRescueWiring — dispose rescue", () => {
     await flush();
 
     expect(applySpy).toHaveBeenCalledOnce();
+    expect(t.showErrors).toEqual([]); // applied → silent
   });
 
   it("does NOT rescue on dispose when no surviving editor holds the document", async () => {
@@ -255,19 +259,29 @@ describe("createRevertRescueWiring — alive tab-close rescue", () => {
     vi.restoreAllMocks();
   });
 
-  it("restores when a close pairs with an armed revert (revert-first)", async () => {
+  it("restores when a close pairs with an armed revert (revert-first) — applied is silent", async () => {
     const t = wire();
-    const applySpy = vi.spyOn(workspace, "applyEdit");
-    armRevert(t); // pendingRevert armed
+    // A clean apply LANDS the restored bytes (post-apply verify → applied).
+    const applySpy = vi.spyOn(workspace, "applyEdit").mockImplementation(async () => {
+      t.doc.text = "DIRTY";
+      return true;
+    });
+    armRevert(t); // pendingRevert armed (restore = "DIRTY")
     t.fireTabClose(); // close pairs → rescue
     await flush();
 
     expect(applySpy).toHaveBeenCalledOnce();
+    // applied → silent: no toast, no divergence resync.
+    expect(t.showErrors).toEqual([]);
+    expect(t.dispatched).toEqual([]);
   });
 
   it("restores when the close arrives BEFORE the revert (close-first ordering)", async () => {
     const t = wire();
-    const applySpy = vi.spyOn(workspace, "applyEdit");
+    const applySpy = vi.spyOn(workspace, "applyEdit").mockImplementation(async () => {
+      t.doc.text = "DIRTY";
+      return true;
+    });
 
     // Close-first: the tab closes, then the revert change event lands. This pins
     // that onDocumentChange ALSO calls maybeRescueAliveRevert (a regression that
@@ -282,6 +296,25 @@ describe("createRevertRescueWiring — alive tab-close rescue", () => {
     await flush();
 
     expect(applySpy).toHaveBeenCalledOnce();
+  });
+
+  // S6 (finding #8): the restore's applyEdit resolved true, but the document
+  // ended up holding OTHER bytes (a racing successor edit landed between the RPC
+  // settling and the `.then`, OR a stale-offset splice). This is a DIVERGENCE,
+  // not a failure — converge via a resync at the outcome's settled version, and
+  // do NOT toast (a divergence with an ok apply must not read as "save failed").
+  it("alive rescue DIVERGED (applyEdit ok but the document holds other bytes) → resync, NO toast", async () => {
+    const t = wire();
+    // apply resolves true but does NOT land the intended "DIRTY" bytes (doc.text
+    // stays "DISK") → post-apply verify reports diverged.
+    vi.spyOn(workspace, "applyEdit").mockResolvedValue(true);
+    t.doc.version = 7;
+    armRevert(t);
+    t.fireTabClose();
+    await flush();
+
+    expect(t.showErrors).toEqual([]); // diverged is not a save failure
+    expect(t.dispatched).toContain(7); // converge on the authoritative doc via resync
   });
 
   it("on restore FAILURE (applyEdit resolves false) shows an error AND reseeds via onFailure", async () => {

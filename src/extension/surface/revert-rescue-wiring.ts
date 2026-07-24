@@ -28,8 +28,10 @@
 
 import type { TextDocument } from "vscode";
 import { Range, WorkspaceEdit, workspace } from "vscode";
+import type { DocumentWriteAdapter } from "../document-write/execute-write.js";
+import { executeDocumentWrite } from "../document-write/execute-write.js";
+import { canonicalDocumentText, canonicalizeText } from "../session/document-canonical.js";
 import { createTrailingDebounce } from "../session/document-change-debounce.js";
-import { minimalEditSpan } from "../session/minimal-edit.js";
 import { createRevertRescueTracker } from "./revert-rescue.js";
 
 /** Trailing-debounce window for coalescing LOCK-FREE external-edit
@@ -130,37 +132,75 @@ export function createRevertRescueWiring(deps: RevertRescueWiringDeps): RevertRe
     deps.dispatchDocumentChanged(document.version);
   });
 
-  // Restore reverted-away dirty bytes via a direct WorkspaceEdit (OUTSIDE the
-  // reducer — like image-write and the dispose rescue). Shared by the dispose-time
-  // rescue and the alive-panel (text-tab-close) rescue. Success is SILENT (the
-  // surviving/live editor visibly holds the restored bytes); only failure is
-  // surfaced. `onFailure` lets the ALIVE path reseed the webview to the real doc
-  // state when the restore could not land (the dispose path passes none — the
-  // panel is already gone, nothing to reseed).
+  // The verified-write seam over THIS document (Plan S6). The rescue applies a
+  // direct WorkspaceEdit OUTSIDE the reducer (like image-write), but now routes
+  // through the shared post-apply-verifying executor so a stale-offset splice
+  // (#8) is DETECTED at settlement instead of masquerading as a silent success.
+  const writeAdapter: DocumentWriteAdapter = {
+    readText: () => document.getText(),
+    readVersion: () => document.version,
+    readCanonical: () => canonicalDocumentText(document),
+    canonicalize: (text) => canonicalizeText(text, document.eol),
+    build: (span) => {
+      const edit = new WorkspaceEdit();
+      edit.replace(
+        document.uri,
+        new Range(document.positionAt(span.from), document.positionAt(span.to)),
+        span.insert
+      );
+      return edit;
+    },
+    apply: (edit) => workspace.applyEdit(edit as WorkspaceEdit),
+  };
+
+  // Restore reverted-away dirty bytes through the verified write executor.
+  // Shared by the dispose-time rescue and the alive-panel (text-tab-close)
+  // rescue. Per-outcome policy (Plan S6, finding #8), mapping the tagged outcome
+  // WITHOUT re-reading the document (the outcome carries its settled version):
+  //   - applied  → SILENT success (the surviving/live editor holds the bytes).
+  //   - diverged → applyEdit landed but the document ended up holding OTHER
+  //                bytes. This is NOT a failure: it can be a legitimate successor
+  //                edit landing between the RPC settling and this `.then`, or a
+  //                stale-offset splice. Mirror the reducer's diverged rule — log
+  //                + converge via a resync (NO toast; a divergence with an ok
+  //                apply must not read as "save failed"). Resync only when alive
+  //                (the dispose path has no webview left to reseed).
+  //   - the failure family (applyRefused / applyThrew / applyRejected /
+  //                buildThrew) → the restore genuinely did not land: toast + let
+  //                the ALIVE path reseed via `onFailure` (the dispose path passes
+  //                none — the panel is gone, nothing to reseed). The rescue has
+  //                no per-kind handling to preserve, so the four collapse into one
+  //                family (the message carries any error detail for triage).
   const applyRestoreEdit = (content: string, onFailure?: () => void): void => {
-    const span = minimalEditSpan(document.getText(), content);
-    const edit = new WorkspaceEdit();
-    edit.replace(
-      document.uri,
-      new Range(document.positionAt(span.from), document.positionAt(span.to)),
-      span.insert
-    );
-    void workspace.applyEdit(edit).then(
-      (ok) => {
-        if (!ok) {
-          deps.showError("Quoll could not restore your unsaved changes after closing the editor.");
+    void executeDocumentWrite(writeAdapter, content).then((outcome) => {
+      switch (outcome.tag) {
+        case "applied":
+          return;
+        case "diverged":
+          console.warn(
+            "[quoll] revert-rescue: restore diverged after apply (racing successor edit or stale-offset splice); converging via resync"
+          );
+          if (!deps.isDisposed()) {
+            deps.dispatchDocumentChanged(outcome.settledVersion);
+          }
+          return;
+        case "applyRefused":
+        case "applyThrew":
+        case "applyRejected":
+        case "buildThrew": {
+          const detail = outcome.message ? `: ${outcome.message}` : "";
+          deps.showError(
+            `Quoll could not restore your unsaved changes after closing the editor${detail}`
+          );
           onFailure?.();
+          return;
         }
-      },
-      (err: unknown) => {
-        deps.showError(
-          `Quoll could not restore your unsaved changes: ${
-            err instanceof Error ? err.message : String(err)
-          }`
-        );
-        onFailure?.();
+        default: {
+          const _exhaustive: never = outcome.tag;
+          throw new Error(`[quoll] unhandled DocumentWriteTag: ${String(_exhaustive)}`);
+        }
       }
-    );
+    });
   };
 
   // Alive-panel analogue of the dispose-time revert-rescue. Called from BOTH
