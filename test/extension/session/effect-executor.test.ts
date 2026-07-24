@@ -403,10 +403,20 @@ describe("effect-executor runApplyEdit (via applyEdit effect)", () => {
 const rejErr = { code: "unsafe_url", message: "bad" } as const;
 
 describe("effect-executor sendEditRejected (via postEditRejected effect)", () => {
+  // readVersion → 11 so the editRejectedDeliveryFailed dispatch's documentVersion
+  // is a distinctive value read from the live seam (not the stale
+  // lastAppliedDocVersion 3) — the recovery reseed must carry the live version.
   function runReject(over: Partial<EffectExecutorDeps> = {}) {
     const { runEffects } = createEffectExecutor(
       makeDeps({
         getState: () => ({ lastAppliedDocVersion: 3 }) as unknown as HostSessionState,
+        applyEditSeam: {
+          readText: () => "",
+          readVersion: () => 11,
+          readCanonical: () => "",
+          build: () => ({}),
+          apply: async () => true,
+        },
         ...over,
       })
     );
@@ -428,7 +438,11 @@ describe("effect-executor sendEditRejected (via postEditRejected effect)", () =>
     runReject({ send: vi.fn(async () => false), dispatch });
     await Promise.resolve();
     await Promise.resolve();
-    expect(dispatch).toHaveBeenCalledWith({ type: "editRejectedDeliveryFailed", id: 42 });
+    expect(dispatch).toHaveBeenCalledWith({
+      type: "editRejectedDeliveryFailed",
+      id: 42,
+      documentVersion: 11,
+    });
   });
 
   it("reject: dispatches editRejectedDeliveryFailed(id)", async () => {
@@ -436,7 +450,11 @@ describe("effect-executor sendEditRejected (via postEditRejected effect)", () =>
     runReject({ send: () => Promise.reject(new Error("x")), dispatch });
     await Promise.resolve();
     await Promise.resolve();
-    expect(dispatch).toHaveBeenCalledWith({ type: "editRejectedDeliveryFailed", id: 42 });
+    expect(dispatch).toHaveBeenCalledWith({
+      type: "editRejectedDeliveryFailed",
+      id: 42,
+      documentVersion: 11,
+    });
   });
 
   it("send() sync throw: dispatches editRejectedDeliveryFailed(id) synchronously", () => {
@@ -447,7 +465,11 @@ describe("effect-executor sendEditRejected (via postEditRejected effect)", () =>
       },
       dispatch,
     });
-    expect(dispatch).toHaveBeenCalledWith({ type: "editRejectedDeliveryFailed", id: 42 });
+    expect(dispatch).toHaveBeenCalledWith({
+      type: "editRejectedDeliveryFailed",
+      id: 42,
+      documentVersion: 11,
+    });
   });
 
   it("disposed before send: early return, no send, no dispatch", () => {
@@ -516,7 +538,11 @@ describe("effect-executor sendEditRejected (via postEditRejected effect)", () =>
     expect(dispatch).not.toHaveBeenCalled(); // deferred by Promise.resolve assimilation
     await Promise.resolve();
     await Promise.resolve();
-    expect(dispatch).toHaveBeenCalledWith({ type: "editRejectedDeliveryFailed", id: 42 });
+    expect(dispatch).toHaveBeenCalledWith({
+      type: "editRejectedDeliveryFailed",
+      id: 42,
+      documentVersion: 11,
+    });
   });
 });
 

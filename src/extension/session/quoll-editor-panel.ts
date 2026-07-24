@@ -505,7 +505,8 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
       switchCaret,
       isDisposed: () => disposed,
       postCaretApply: (caret) => post(buildCaretApplyMessage(caret)),
-      dispatchViewStateVisible: () => dispatch({ type: "viewStateVisible" }),
+      dispatchViewStateVisible: () =>
+        dispatch({ type: "viewStateVisible", documentVersion: document.version }),
     });
     disposables.push(caretWiring);
 
@@ -716,7 +717,7 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
       }
       switch (raw.type) {
         case "ready":
-          dispatch({ type: "ready" });
+          dispatch({ type: "ready", documentVersion: document.version });
           // Guard-less: relies on handleInbound's top-of-function `disposed`
           // guard above, which already gates this whole switch.
           editorConfig.push();
@@ -1015,7 +1016,7 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
     // The Ready handshake (webview → 'ready' → host → postDocument) is
     // the reliable fallback path. If VS Code ever stops buffering, the
     // eager seed becomes a no-op and Ready takes over.
-    dispatch({ type: "seed" });
+    dispatch({ type: "seed", documentVersion: document.version });
     editorConfig.push();
   }
 

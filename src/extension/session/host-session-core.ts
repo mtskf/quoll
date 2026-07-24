@@ -92,8 +92,8 @@ export type ApplyEditOutcome =
   | { readonly kind: "rejected"; readonly message: string };
 
 export type HostSessionEvent =
-  | { readonly type: "seed" }
-  | { readonly type: "ready" }
+  | { readonly type: "seed"; readonly documentVersion: number }
+  | { readonly type: "ready"; readonly documentVersion: number }
   | {
       readonly type: "edit";
       readonly baseDocVersion: number;
@@ -105,7 +105,7 @@ export type HostSessionEvent =
   | { readonly type: "openExternal"; readonly href: string }
   | { readonly type: "documentChanged"; readonly documentVersion: number }
   | { readonly type: "themeChanged"; readonly themeKind: ThemeKind }
-  | { readonly type: "viewStateVisible" }
+  | { readonly type: "viewStateVisible"; readonly documentVersion: number }
   | {
       readonly type: "applyEditSettled";
       readonly outcome: ApplyEditOutcome;
@@ -117,7 +117,11 @@ export type HostSessionEvent =
       readonly canWrite: boolean;
       readonly currentContent: string;
     }
-  | { readonly type: "editRejectedDeliveryFailed"; readonly id: number }
+  | {
+      readonly type: "editRejectedDeliveryFailed";
+      readonly id: number;
+      readonly documentVersion: number;
+    }
   | { readonly type: "disposed" };
 
 export type HostSessionEffect =
@@ -271,9 +275,15 @@ export function createHostSessionCore(context: HostSessionContext, deps: HostSes
             ],
           };
         }
+        // Resync to the LIVE snapshot before posting. The Document carries live
+        // bytes (buildSeedDocument reads document.getText()); trusting the
+        // possibly-stale stored version would pair new bytes with an old
+        // version when an external edit is still coalescing in the
+        // documentChanged debounce → stale-reseed keystroke loss. Mirrors the
+        // `edit`/`documentChanged` arms' source-of-truth resync.
         return {
-          state: { ...state, rejection: NONE },
-          effects: [postDoc(state.lastAppliedDocVersion)],
+          state: { ...state, lastAppliedDocVersion: event.documentVersion, rejection: NONE },
+          effects: [postDoc(event.documentVersion)],
         };
       }
 
@@ -541,9 +551,12 @@ export function createHostSessionCore(context: HostSessionContext, deps: HostSes
         if (state.rejection.kind !== "pending" || state.rejection.id !== event.id) {
           return { state, effects: [] };
         }
+        // Resync to the live snapshot before the recovery reseed (see the
+        // `ready` arm) — the reseed posts live bytes, so it must carry the
+        // matching live version.
         return {
-          state: { ...state, rejection: NONE },
-          effects: [postDoc(state.lastAppliedDocVersion)],
+          state: { ...state, lastAppliedDocVersion: event.documentVersion, rejection: NONE },
+          effects: [postDoc(event.documentVersion)],
         };
       }
 
@@ -600,9 +613,12 @@ export function createHostSessionCore(context: HostSessionContext, deps: HostSes
             ],
           };
         }
+        // Resync to the live snapshot before posting (see the `ready` arm) — the
+        // reported bug's repro: focus the Quoll tab (viewStateVisible) while a
+        // split-editor edit is still in the documentChanged debounce.
         return {
-          state: { ...state, rejection: NONE },
-          effects: [postDoc(state.lastAppliedDocVersion)],
+          state: { ...state, lastAppliedDocVersion: event.documentVersion, rejection: NONE },
+          effects: [postDoc(event.documentVersion)],
         };
       }
 
