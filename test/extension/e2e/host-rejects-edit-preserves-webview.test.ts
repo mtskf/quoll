@@ -1,4 +1,5 @@
 import * as assert from "node:assert";
+import * as vscode from "vscode";
 import { PROTOCOL_VERSION } from "./constants";
 import {
   cleanupBetweenTests,
@@ -7,10 +8,23 @@ import {
   isDocumentEvent,
   openFixtureWithQuoll,
   tick,
+  VIEW_TYPE,
 } from "./harness";
 
 const isEditRejectedEvent = (e: { message: { type: string } }) =>
   e.message.type === "edit-rejected";
+
+const allTabs = (): vscode.Tab[] => vscode.window.tabGroups.all.flatMap((g) => g.tabs);
+const customTab =
+  (uri: vscode.Uri) =>
+  (t: vscode.Tab): boolean =>
+    t.input instanceof vscode.TabInputCustom &&
+    t.input.viewType === VIEW_TYPE &&
+    t.input.uri.toString() === uri.toString();
+const textTab =
+  (uri: vscode.Uri) =>
+  (t: vscode.Tab): boolean =>
+    t.input instanceof vscode.TabInputText && t.input.uri.toString() === uri.toString();
 
 describe("host-rejects-edit-preserves-webview", function () {
   this.timeout(20000);
@@ -235,6 +249,59 @@ describe("host-rejects-edit-preserves-webview", function () {
       (normalSeed.message as { content: string }).content,
       draft,
       "ready after a fallback-cleared rejection re-delivered the draft — snapshot not cleared"
+    );
+  });
+
+  it("switch-to-text while a rejection is pending is refused — the Quoll tab stays open (draft not orphaned)", async () => {
+    // Regression: the switch-to-text arm used to run finalizeSurfaceSwap
+    // unconditionally. After a write-gate rejection the user's draft lives
+    // ONLY webview-side (the on-disk doc is clean, banner showing), so closing
+    // the Quoll tab opened the text editor on the clean disk snapshot and the
+    // typed draft was silently lost. The guard now refuses the swap while a
+    // rejection is pending: the Quoll tab must remain open, no text tab opens,
+    // and the user is told to resolve the problem first.
+    const harness = await getHarness();
+    const uri = await openFixtureWithQuoll("unsafe-url.md");
+    const seed = await harness.waitForEvent(isDocumentEvent, 8000);
+
+    const panel = harness.activePanel;
+    assert.ok(panel);
+    harness.clearEvents();
+
+    const seededContent = (seed.message as { content: string }).content;
+    // Draft still carries the unsafe URL → rejected; the trailing newline makes
+    // it differ from the seed so the verdict is parse-failed, not a no-op.
+    panel.simulateInbound({
+      protocol: PROTOCOL_VERSION,
+      type: "edit",
+      content: `${seededContent}\n`,
+      baseDocVersion: seed.message.docVersion,
+    });
+    await harness.waitForEvent(isEditRejectedEvent, 5000);
+
+    // Now request the surface swap while the rejection is pending.
+    panel.simulateInbound({ protocol: PROTOCOL_VERSION, type: "switch-to-text" });
+
+    // The block surfaces a user-facing message so the button does not look dead.
+    const errorMsg = await harness.waitForError(
+      (msg) => /can't switch to the text editor/i.test(msg),
+      5000
+    );
+    assert.ok(errorMsg);
+
+    // Give any (erroneous) swap a chance to open a text tab / close the Quoll
+    // tab, then assert neither happened.
+    await tick(500);
+    const tabs = allTabs();
+    assert.ok(
+      tabs.some(customTab(uri)),
+      `Quoll tab must stay open (draft preserved) — ${JSON.stringify(tabs.map((t) => t.label))}`
+    );
+    assert.ok(
+      !tabs.some(textTab(uri)),
+      `no text tab must open while the rejection is pending — ${JSON.stringify(
+        tabs.map((t) => t.label)
+      )}`
     );
   });
 

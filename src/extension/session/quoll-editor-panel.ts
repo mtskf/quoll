@@ -843,6 +843,25 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
           // last action; caret apply + document.uri are closure locals, safe
           // across the dispose. finalizeSurfaceSwap never throws and refuses to
           // close a doc it could not make clean (no revert / no data loss).
+          //
+          // Data-loss guard (rejection pending): a write-gate rejection leaves
+          // the user's draft ONLY webview-side — the on-disk document is
+          // unchanged (clean) and the rejection banner is showing the un-saved
+          // bytes. finalizeSurfaceSwap below would close THIS Quoll tab and the
+          // text editor would open on the CLEAN disk snapshot, silently
+          // orphaning the typed draft (finalizeSurfaceSwap sees a clean doc, so
+          // its save-then-close is a no-op close — no data-loss tripwire fires).
+          // Refuse the swap while a rejection is pending: switch-to-text is a
+          // pure side channel that never reloaded the webview, so the banner +
+          // draft stay mounted intact — the user resolves the highlighted
+          // problem first, then switches. NEVER finalize a surface swap that
+          // orphans typed bytes.
+          if (state.rejection.kind === "pending") {
+            showError(
+              "Quoll: can't switch to the text editor while a change can't be saved — resolve the highlighted problem first."
+            );
+            return;
+          }
           const sourceTab = findSourceTab(
             document.uri.toString(),
             "quoll",
