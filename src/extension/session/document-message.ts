@@ -39,8 +39,9 @@ export type BuildDocumentMessageInput = {
   themeKind: ThemeKind;
   canWrite: boolean;
   // The Document identity pair (S3a). The host always emits BOTH now (the wire
-  // optionality is purely reception tolerance for an old host — see
-  // protocol.ts `EpochIdentity`), so both are required at the builder.
+  // optionality is purely reception tolerance for an old host — see the
+  // `DocumentMessage` doc block + `isValidEpochIdentity` in protocol.ts), so
+  // both are required at the builder.
   externalEpoch: number;
   epochGeneration: number;
 };

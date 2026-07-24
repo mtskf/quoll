@@ -970,6 +970,43 @@ describe("host-session-core: externalEpoch (S3a)", () => {
     expect(r.effects).toEqual([pDoc(2)]);
   });
 
+  it("ok settlement differing from inFlight ONLY by EOL → epoch UNCHANGED (CRLF-canonical vs LF-raw is NOT foreign)", () => {
+    // The settled canonical content is document.eol (CRLF) while the webview's
+    // inFlightContent is raw LF bytes — a plain newline-adding edit on a
+    // CRLF-eol single-line doc. This is the webview's OWN acked lineage, NOT a
+    // foreign edit; a byte compare would spuriously bump the epoch (and S3b
+    // would then drop the replay buffer = data loss).
+    const locked = base({
+      pendingApplyBaseVersion: 1,
+      lastAppliedDocVersion: 1,
+      inFlightContent: "a\nb",
+    });
+    const r = core.transition(
+      locked,
+      settled({ outcome: { kind: "ok", documentVersion: 2 }, currentContent: "a\r\nb" })
+    );
+    expect(r.state.externalEpoch).toBe(0);
+    expect(r.effects).toEqual([pDoc(2)]);
+  });
+
+  it("non-ok settlement differing from the pre-apply snapshot ONLY by EOL → epoch UNCHANGED", () => {
+    const locked = base({
+      pendingApplyBaseVersion: 1,
+      lastAppliedDocVersion: 1,
+      inFlightContent: "a\nb",
+    });
+    const r = core.transition(
+      locked,
+      settled({
+        outcome: { kind: "refused" },
+        currentContent: "a\r\nb",
+        preApplyContent: "a\nb",
+      })
+    );
+    expect(r.state.externalEpoch).toBe(0);
+    expect(r.effects[0]).toEqual(pDoc(1));
+  });
+
   it("ok-but-mismatch settlement (external won under the lock) → epoch++", () => {
     const locked = base({
       pendingApplyBaseVersion: 1,

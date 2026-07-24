@@ -198,6 +198,18 @@ function defaultMintEpochGeneration(): number {
   return Date.now() * 1000 + epochGenerationSalt;
 }
 
+/** EOL-insensitive content equality for the settlement foreign-bytes check.
+ *  One operand (`inFlightContent`) is raw webview bytes joined with the CM
+ *  lineSeparator facet; the other (`currentContent`/`preApplyContent`) is
+ *  canonicalised to `document.eol`. A pure byte compare would misread an
+ *  EOL-only difference (a plain edit on a CRLF-eol doc whose webview facet is
+ *  still LF) as foreign bytes. The `a === b` fast path keeps the common
+ *  byte-identical settle allocation-free; the normalise runs only when the
+ *  strings already differ. */
+function contentMatches(a: string, b: string): boolean {
+  return a === b || a.replace(/\r\n|\r|\n/g, "\n") === b.replace(/\r\n|\r|\n/g, "\n");
+}
+
 /** Resync `lastAppliedDocVersion` to the live document version, raising it as
  *  `max(old, live)` so a late/reordered event or a future call site passing a
  *  LOWER version can never REWIND it (one clamp, one test). The `externalEpoch`
@@ -519,10 +531,23 @@ export function createHostSessionCore(context: HostSessionContext, deps: HostSes
         // showError tells the user to retry. Lock-HELD `documentChanged`
         // resyncs deliberately did NOT increment (they may be this apply's own
         // echo); this is where that racy case is adjudicated.
+        //
+        // EOL-INSENSITIVE compare (contentMatches): `currentContent` /
+        // `preApplyContent` are canonicalised to `document.eol` (readCanonical /
+        // canonicalize), while `inFlightContent` is the raw webview bytes joined
+        // with the CM `lineSeparator` facet — which is "\n" whenever the seed
+        // carried no CRLF (an empty / single-line doc with eol=CRLF, e.g. every
+        // new .md on Windows). A byte compare would then read a plain
+        // newline-adding edit on such a doc as "foreign bytes" and bump the epoch
+        // on the webview's OWN acked lineage. EOL mode is a canonicalisation
+        // detail everywhere else in the pipeline, so the foreign-bytes verdict
+        // must ignore it. The `a === b` fast path keeps the hot typing path
+        // (byte-identical settle) regex-free — the normalise only runs when the
+        // strings already differ (a genuine foreign edit, or this EOL skew).
         const foreignAtSettle =
           event.outcome.kind === "ok"
-            ? inFlight !== null && event.currentContent !== inFlight
-            : event.currentContent !== event.preApplyContent;
+            ? inFlight !== null && !contentMatches(event.currentContent, inFlight)
+            : !contentMatches(event.currentContent, event.preApplyContent);
         const settled: HostSessionState = foreignAtSettle
           ? { ...versioned, externalEpoch: versioned.externalEpoch + 1 }
           : versioned;
@@ -534,6 +559,11 @@ export function createHostSessionCore(context: HostSessionContext, deps: HostSes
         // clobbered — the stash is dropped and the authoritative Document is
         // reposted (external wins, matching the pre-change drop). Non-ok never
         // drains (the save failed; its own showError surfaces it).
+        // NOTE: this raw `===` shares the EOL cross-space skew that
+        // `contentMatches` fixes for the epoch verdict above — pre-existing
+        // (only fires in the rare stash race; a CRLF-single-line doc's drain
+        // would drop the stash instead of proceeding). Left as a scoped
+        // follow-up (docs/TODO.md) rather than folded into this S3a slice.
         const canDrain =
           stash !== null &&
           event.outcome.kind === "ok" &&
