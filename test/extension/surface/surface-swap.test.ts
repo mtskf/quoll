@@ -195,6 +195,29 @@ describe("finalizeSurfaceSwap shouldAbortClose (point-of-no-return guard)", () =
     expect(closeTab).not.toHaveBeenCalled();
   });
 
+  it("checks shouldAbortClose AFTER the save await too (dirty-doc path)", async () => {
+    // A dirty doc is saved before the close, so the guard must be re-checked
+    // AFTER the save await as well — not only after openDoc. `pending` flips true
+    // inside save(), mirroring a rejection that lands while finalize is saving.
+    // Without an after-save check the dirty doc saves clean and closes.
+    let pending = false;
+    const state = { dirty: true };
+    const doc = {
+      uri: fileUri,
+      get isDirty() {
+        return state.dirty;
+      },
+      save: vi.fn(async () => {
+        pending = true;
+        state.dirty = false;
+        return true;
+      }),
+    } as unknown as TextDocument;
+    const { deps, closeTab } = makeDeps(doc);
+    await finalizeSurfaceSwap(fileUri, SENTINEL_TAB, deps, () => pending);
+    expect(closeTab).not.toHaveBeenCalled();
+  });
+
   it("closes normally when shouldAbortClose returns false (guard does not block the happy path)", async () => {
     const doc = fakeDoc(false, true);
     const { deps, closeTab } = makeDeps(doc);

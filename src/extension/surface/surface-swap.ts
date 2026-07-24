@@ -202,8 +202,17 @@ export async function finalizeSurfaceSwap(
     // immediately before the irreversible close — no await follows, so nothing
     // can slip the condition past this check. Abort → both-open (safe).
     if (shouldAbortClose?.()) {
+      // Toast, not just a console.warn: the user sees both tabs left open and a
+      // silent no-op reads as a dead keybinding — same rule the save-failure
+      // branch above follows (and surface-restore-watcher's switch-site contract).
       console.warn(
         "[quoll] surface-swap: close aborted by caller guard (e.g. a rejection landed during finalize); leaving both surfaces open"
+      );
+      showSafely(
+        window.showWarningMessage(
+          "Quoll: couldn't complete the switch to the text editor, so both editors stay open. Resolve the highlighted problem, then try again."
+        ),
+        "showWarningMessage"
       );
       return;
     }
