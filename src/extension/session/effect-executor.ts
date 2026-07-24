@@ -27,34 +27,21 @@ import type { MarkdownError } from "../../markdown/errors.js";
 import { perfNow, perfRecord, perfReport } from "../../shared/perf.js";
 import type { HostToWebview, ThemeKind } from "../../shared/protocol.js";
 import type {
+  DocumentWriteAdapter,
+  DocumentWriteOutcome,
+} from "../document-write/execute-write.js";
+import { executeDocumentWrite } from "../document-write/execute-write.js";
+import type {
   ApplyEditOutcome,
   HostSessionEffect,
   HostSessionEvent,
   HostSessionState,
 } from "./host-session-core.js";
-import type { MinimalEditSpan } from "./minimal-edit.js";
-import { minimalEditSpan } from "./minimal-edit.js";
 
-/** VS Code WorkspaceEdit build+apply seam for runApplyEdit. `build` may throw
- *  (→ constructThrew); `apply` may throw synchronously (→ applyThrew) or settle
- *  async (→ ok/refused). The edit token is opaque to the module.
- *
- *  `readText` / `readVersion` / `readCanonical` are assumed non-throwing (as
- *  `document.getText()` / `document.version` / `canonicalDocumentText(document)`
- *  are today — they run OUTSIDE the build/apply try blocks). Only `build` throws
- *  map to `constructThrew`, only synchronous `apply` throws to `applyThrew`. */
-export interface ApplyEditSeam {
-  readText: () => string;
-  readVersion: () => number;
-  readCanonical: () => string;
-  /** Normalize a raw string to the document's EOL — the string-level
-   *  `canonicalizeText`. Used to canonicalise the already-read pre-apply
-   *  `oldText` for the settlement's NON-OK epoch baseline WITHOUT a second
-   *  `getText()`. */
-  canonicalize: (text: string) => string;
-  build: (span: MinimalEditSpan) => unknown;
-  apply: (edit: unknown) => Thenable<boolean>;
-}
+/** The VS Code build+apply+verify seam for the write executor (Plan S6). The
+ *  pipeline itself lives in `document-write/execute-write.ts`; this alias keeps
+ *  the panel's inline wiring + the executor deps stable. */
+export type ApplyEditSeam = DocumentWriteAdapter;
 
 export interface EffectExecutorDeps {
   isDisposed: () => boolean;
@@ -241,132 +228,56 @@ export function createEffectExecutor(deps: EffectExecutorDeps): EffectExecutor {
     );
   };
 
-  // applyEdit executor — the lock is already set by the `accept`
-  // transition; this only constructs the WorkspaceEdit, applies it, and
-  // reports every outcome back via `applyEditSettled`. The construct /
-  // apply SYNC-throw paths dispatch-then-`return` cleanly (the enqueued
-  // outcome is drained by the same loop, clearing the optimistic lock);
-  // the async settlement is funnelled through `Promise.resolve(...).then`
-  // so it lands in a fresh drain.
+  // Map a verified-write outcome (Plan S6 `document-write/`) to the reducer's
+  // `ApplyEditOutcome`. 1:1 against today's five kinds; `diverged` is an `ok`
+  // apply whose landed bytes differ from intended (racing splice / external
+  // race) and rides out as `ok` + the `divergedAfterApply` annotation on the
+  // event (NOT `refused` — the apply DID land; this is conflict resolution, not
+  // a save failure).
+  const toApplyEditOutcome = (result: DocumentWriteOutcome): ApplyEditOutcome => {
+    switch (result.tag) {
+      case "applied":
+      case "diverged":
+        return { kind: "ok", documentVersion: result.settledVersion };
+      case "applyRefused":
+        return { kind: "refused" };
+      case "buildThrew":
+        return { kind: "constructThrew", message: result.message ?? "" };
+      case "applyThrew":
+        return { kind: "applyThrew", message: result.message ?? "" };
+      case "applyRejected":
+        return { kind: "rejected", message: result.message ?? "" };
+      default: {
+        const _exhaustive: never = result.tag;
+        throw new Error(`[quoll] unhandled DocumentWriteTag: ${String(_exhaustive)}`);
+      }
+    }
+  };
+
+  // applyEdit executor — a THIN wrapper over the session-independent verified
+  // write pipeline. The lock is already set by the `accept` transition; the
+  // pipeline (snapshot → span → build → apply → post-apply verify) lives in
+  // `executeDocumentWrite`, and this only MAPS the immutable tagged outcome onto
+  // an `applyEditSettled` event. It NEVER re-reads the document — `currentContent`
+  // / `preApplyContent` / the settled version all come from the outcome's
+  // verify-time snapshots (a re-read could observe a later edit and mis-attribute
+  // divergence). `canWrite` is read here (an FS/config read, not a document read)
+  // for the stash-drain re-gate. The settlement lands in a fresh drain (the
+  // pipeline is async) and fires EVEN post-dispose: a stashed one-more-char edit
+  // can only drain on settlement, which fires AFTER onDidDispose (the core stays
+  // a strict no-op post-dispose unless a stash is waiting; webview-bound posts
+  // self-suppress via post()'s disposed guard).
   const runApplyEdit = (content: string): void => {
-    // OLD text = the live buffer (applyEdit has not run yet, and the write
-    // lock — set by the accept transition — blocks any other inbound edit on
-    // the synchronous dispatch chain). Diff against the inbound NEW content to
-    // the smallest single span. Resulting buffer is byte-identical to a
-    // whole-document replace (measured ~90ms@1MB whole-doc vs flat ~0.5ms
-    // minimal; see PERF.md § Write-path applyEdit baseline).
-    const oldText = deps.applyEditSeam.readText();
-    // Settlement snapshot for the core (drain re-gate AND the S3a epoch
-    // foreign-bytes check). `currentContent` is now the canonical settled
-    // content read on EVERY settlement — site 2 compares it against the apply's
-    // target (ok) or the pre-apply snapshot (non-ok) to decide the epoch, so the
-    // skip-unless-stash optimisation is gone (its cost is the `host:settle-verify`
-    // perf stage). `preApplyContent` is the canonicalised `oldText`; it feeds
-    // ONLY the non-ok baseline, so the OK hot path passes "" and skips the
-    // canonicalise. LAZY: read at each dispatch site (settlement time), never at
-    // apply-start — a stash / external edit that lands during the in-flight apply
-    // must be observed at settle time.
-    const settlementSnapshot = (outcome: ApplyEditOutcome) => {
-      const verifyStart = QUOLL_PERF ? perfNow() : 0;
-      const currentContent = deps.applyEditSeam.readCanonical();
-      if (QUOLL_PERF) {
-        perfRecord("host:settle-verify", perfNow() - verifyStart);
-      }
-      return {
+    void executeDocumentWrite(deps.applyEditSeam, content).then((result) => {
+      deps.dispatch({
+        type: "applyEditSettled",
+        outcome: toApplyEditOutcome(result),
         canWrite: deps.canWrite(),
-        currentContent,
-        preApplyContent: outcome.kind === "ok" ? "" : deps.applyEditSeam.canonicalize(oldText),
-      };
-    };
-    const span = minimalEditSpan(oldText, content);
-    if (span.from === span.to && span.insert.length === 0) {
-      // No-op short-circuit (defensive — the core already gates no-ops via the
-      // canonical currentContent compare; only a mixed-EOL literal-buffer
-      // match could reach here). Settle ok with the UNCHANGED version so the
-      // write lock releases + resync proceeds, WITHOUT submitting an empty
-      // WorkspaceEdit.
-      const noopOutcome: ApplyEditOutcome = {
-        kind: "ok",
-        documentVersion: deps.applyEditSeam.readVersion(),
-      };
-      deps.dispatch({
-        type: "applyEditSettled",
-        outcome: noopOutcome,
-        ...settlementSnapshot(noopOutcome),
+        currentContent: result.settledContent,
+        preApplyContent: result.preApplyContent,
+        divergedAfterApply: result.tag === "diverged",
       });
-      return;
-    }
-    let edit: unknown;
-    try {
-      // positionAt clamps out-of-range offsets (never throws) and
-      // minimalEditSpan is pure — so constructThrew stays unreachable in
-      // practice; the arm is preserved for parity with the prior path.
-      edit = deps.applyEditSeam.build(span);
-    } catch (err) {
-      const outcome: ApplyEditOutcome = {
-        kind: "constructThrew",
-        message: err instanceof Error ? err.message : String(err),
-      };
-      deps.dispatch({
-        type: "applyEditSettled",
-        outcome,
-        ...settlementSnapshot(outcome),
-      });
-      return;
-    }
-    let pending: Thenable<boolean>;
-    const applyStart = QUOLL_PERF ? perfNow() : 0;
-    try {
-      pending = deps.applyEditSeam.apply(edit);
-    } catch (err) {
-      // Synchronous apply throw: immediate failure, not a latency sample —
-      // intentionally not recorded under host:applyEdit.
-      const outcome: ApplyEditOutcome = {
-        kind: "applyThrew",
-        message: err instanceof Error ? err.message : String(err),
-      };
-      deps.dispatch({
-        type: "applyEditSettled",
-        outcome,
-        ...settlementSnapshot(outcome),
-      });
-      return;
-    }
-    Promise.resolve(pending).then(
-      (ok) => {
-        if (QUOLL_PERF) {
-          perfRecord("host:applyEdit", perfNow() - applyStart);
-        }
-        // Dispatch EVEN post-dispose: a stashed pending edit (typed
-        // one-more-char then closed within the same ms while this apply held
-        // the lock) can only drain on settlement, which fires AFTER
-        // onDidDispose. The core stays a strict no-op post-dispose unless a
-        // stash is waiting (host-session-core applyEditSettled). Webview-bound
-        // posts self-suppress via post()'s disposed guard.
-        const outcome: ApplyEditOutcome = ok
-          ? { kind: "ok", documentVersion: deps.applyEditSeam.readVersion() }
-          : { kind: "refused" };
-        deps.dispatch({
-          type: "applyEditSettled",
-          outcome,
-          ...settlementSnapshot(outcome),
-        });
-      },
-      (err: unknown) => {
-        if (QUOLL_PERF) {
-          perfRecord("host:applyEdit", perfNow() - applyStart);
-        }
-        const outcome: ApplyEditOutcome = {
-          kind: "rejected",
-          message: err instanceof Error ? err.message : String(err),
-        };
-        deps.dispatch({
-          type: "applyEditSettled",
-          outcome,
-          ...settlementSnapshot(outcome),
-        });
-      }
-    );
+    });
   };
 
   // Effect executor — turns each core EFFECT into the real side effect.

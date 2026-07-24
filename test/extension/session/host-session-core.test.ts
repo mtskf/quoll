@@ -1076,6 +1076,57 @@ describe("host-session-core: externalEpoch (S3a)", () => {
     expect(r.effects[0]).toEqual(pDoc(1, 1));
   });
 
+  // --- S6: divergedAfterApply annotation (finding #7) ---
+  it("divergedAfterApply settlement (apply ok, landed !== intended) → epoch++ + authoritative resync + a distinct diverged log + NO error toast", () => {
+    const locked = base({
+      pendingApplyBaseVersion: 1,
+      lastAppliedDocVersion: 1,
+      inFlightContent: "target",
+    });
+    const r = core.transition(
+      locked,
+      settled({
+        outcome: { kind: "ok", documentVersion: 2 },
+        currentContent: "misplaced-splice",
+        divergedAfterApply: true,
+      })
+    );
+    // Convergence shape (the existing ok-but-mismatch handling): epoch++ so the
+    // reposted Document drops the webview's now-stale buffer, and the settled
+    // Document carries the bumped epoch.
+    expect(r.state.externalEpoch).toBe(1);
+    expect(r.effects).toContainEqual(pDoc(2, 1));
+    // A distinct diverged log fires for triage.
+    expect(r.effects).toContainEqual(
+      expect.objectContaining({
+        type: "logWarn",
+        message: expect.stringContaining("divergedAfterApply on settle"),
+      })
+    );
+    // A deliberate conflict resolution is NOT a save failure — no error toast.
+    expect(r.effects.some((e) => e.type === "showError")).toBe(false);
+  });
+
+  it("divergedAfterApply forces the epoch bump even if the byte compare were inconclusive (explicit flag drives convergence)", () => {
+    // Drive convergence off the flag, not the currentContent-vs-inFlight compare:
+    // even with currentContent byte-matching inFlight, the explicit annotation
+    // must still increment (the executor is the authoritative divergence verdict).
+    const locked = base({
+      pendingApplyBaseVersion: 1,
+      lastAppliedDocVersion: 1,
+      inFlightContent: "target",
+    });
+    const r = core.transition(
+      locked,
+      settled({
+        outcome: { kind: "ok", documentVersion: 2 },
+        currentContent: "target",
+        divergedAfterApply: true,
+      })
+    );
+    expect(r.state.externalEpoch).toBe(1);
+  });
+
   it("resyncLiveVersion never rewinds: a LOWER documentChanged version leaves lastApplied + epoch untouched", () => {
     // A late/reordered event carrying a version below the current one must not
     // rewind lastAppliedDocVersion (max clamp) and must not increment the epoch

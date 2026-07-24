@@ -142,189 +142,135 @@ describe("effect-executor post()", () => {
 
 import type { HostSessionState } from "../../../src/extension/session/host-session-core.js";
 
-// A state with no pending edit (drainSnapshot skips readCanonical).
+// A state with no pending edit.
 const noStash = { pendingEdit: null } as unknown as HostSessionState;
 
-describe("effect-executor runApplyEdit (via applyEdit effect)", () => {
-  it("no-op span: settles ok with unchanged version, does NOT call apply", () => {
-    const dispatch = vi.fn();
-    const apply = vi.fn(async () => true);
-    const seam = {
-      readText: () => "abc",
-      readVersion: () => 7,
-      readCanonical: () => "abc",
-      canonicalize: (t) => t,
-      build: () => ({}),
-      apply,
-    };
-    const { runEffects } = createEffectExecutor(
-      makeDeps({ dispatch, getState: () => noStash, applyEditSeam: seam })
-    );
-    runEffects([{ type: "applyEdit", content: "abc", baseDocVersion: 6 }]);
-    expect(apply).not.toHaveBeenCalled();
-    expect(dispatch).toHaveBeenCalledWith(
-      expect.objectContaining({
-        type: "applyEditSettled",
-        outcome: { kind: "ok", documentVersion: 7 },
-      })
-    );
-  });
-
-  it("build throws: settles constructThrew", () => {
-    const dispatch = vi.fn();
-    const seam = {
-      readText: () => "abc",
-      readVersion: () => 7,
-      readCanonical: () => "",
-      canonicalize: (t) => t,
-      build: () => {
-        throw new Error("boom-build");
-      },
-      apply: vi.fn(),
-    };
-    const { runEffects } = createEffectExecutor(
-      makeDeps({ dispatch, getState: () => noStash, applyEditSeam: seam })
-    );
-    runEffects([{ type: "applyEdit", content: "abcd", baseDocVersion: 6 }]);
-    expect(dispatch).toHaveBeenCalledWith(
-      expect.objectContaining({
-        type: "applyEditSettled",
-        outcome: expect.objectContaining({ kind: "constructThrew" }),
-      })
-    );
-  });
-
-  it("apply throws synchronously: settles applyThrew", () => {
-    const dispatch = vi.fn();
-    const seam = {
-      readText: () => "abc",
-      readVersion: () => 7,
-      readCanonical: () => "",
-      canonicalize: (t) => t,
-      build: () => ({}),
-      apply: () => {
-        throw new Error("boom-apply");
-      },
-    };
-    const { runEffects } = createEffectExecutor(
-      makeDeps({ dispatch, getState: () => noStash, applyEditSeam: seam })
-    );
-    runEffects([{ type: "applyEdit", content: "abcd", baseDocVersion: 6 }]);
-    expect(dispatch).toHaveBeenCalledWith(
-      expect.objectContaining({
-        type: "applyEditSettled",
-        outcome: expect.objectContaining({ kind: "applyThrew" }),
-      })
-    );
-  });
-
-  it("apply resolves true: settles ok with post-apply version", async () => {
-    const dispatch = vi.fn();
-    const seam = {
-      readText: () => "abc",
-      readVersion: () => 8,
-      readCanonical: () => "",
-      canonicalize: (t) => t,
-      build: () => ({}),
-      apply: async () => true,
-    };
-    const { runEffects } = createEffectExecutor(
-      makeDeps({ dispatch, getState: () => noStash, applyEditSeam: seam })
-    );
-    runEffects([{ type: "applyEdit", content: "abcd", baseDocVersion: 6 }]);
+// Flush the executor's async settlement (executeDocumentWrite awaits the apply,
+// then runApplyEdit's `.then` dispatches) — a handful of microtask turns.
+const flushSettle = async (): Promise<void> => {
+  for (let i = 0; i < 6; i++) {
     await Promise.resolve();
-    await Promise.resolve();
+  }
+};
+
+// A verified-write seam (adapter) modelling one settlement. Defaults land
+// content "new" cleanly (settled === intended → applied). readText "old" keeps
+// the span non-no-op for content !== "old".
+function seamFor(over: Partial<EffectExecutorDeps["applyEditSeam"]> = {}) {
+  return {
+    readText: () => "old",
+    readVersion: () => 1,
+    readCanonical: () => "new",
+    canonicalize: (t: string) => t,
+    build: () => ({}),
+    apply: async () => true,
+    ...over,
+  };
+}
+
+// Run one applyEdit through the wrapper and return the dispatch spy.
+async function runApply(
+  seamOver: Partial<EffectExecutorDeps["applyEditSeam"]> = {},
+  depsOver: Partial<EffectExecutorDeps> = {},
+  content = "new"
+) {
+  const dispatch = vi.fn();
+  const { runEffects } = createEffectExecutor(
+    makeDeps({ dispatch, getState: () => noStash, applyEditSeam: seamFor(seamOver), ...depsOver })
+  );
+  runEffects([{ type: "applyEdit", content, baseDocVersion: 6 }]);
+  await flushSettle();
+  return dispatch;
+}
+
+// The wrapper is a THIN mapper over the document-write executor: the write
+// pipeline itself (no-op skip, build/apply throw detection, canonical reads,
+// divergence compare) is pinned in test/extension/document-write. These tests
+// pin the MAPPING — tagged outcome → applyEditSettled event — and the
+// dispatch-EVEN-post-dispose stash-drain safety.
+describe("effect-executor runApplyEdit (wrapper mapping)", () => {
+  it("applied → ok(settledVersion) + settled snapshots + divergedAfterApply false", async () => {
+    const dispatch = await runApply({ readVersion: () => 8, readCanonical: () => "new" });
     expect(dispatch).toHaveBeenCalledWith(
       expect.objectContaining({
         type: "applyEditSettled",
         outcome: { kind: "ok", documentVersion: 8 },
+        currentContent: "new", // from the outcome's settledContent, not a re-read
+        preApplyContent: "old", // canonical pre-apply, populated for ok too
+        divergedAfterApply: false,
       })
     );
   });
 
-  it("apply resolves false: settles refused", async () => {
-    const dispatch = vi.fn();
-    const seam = {
-      readText: () => "abc",
-      readVersion: () => 8,
-      readCanonical: () => "",
-      canonicalize: (t) => t,
-      build: () => ({}),
-      apply: async () => false,
-    };
-    const { runEffects } = createEffectExecutor(
-      makeDeps({ dispatch, getState: () => noStash, applyEditSeam: seam })
-    );
-    runEffects([{ type: "applyEdit", content: "abcd", baseDocVersion: 6 }]);
-    await Promise.resolve();
-    await Promise.resolve();
+  it("diverged (settled !== intended, apply ok) → ok + divergedAfterApply true", async () => {
+    const dispatch = await runApply({ readVersion: () => 8, readCanonical: () => "CORRUPTED" });
     expect(dispatch).toHaveBeenCalledWith(
       expect.objectContaining({
         type: "applyEditSettled",
-        outcome: { kind: "refused" },
+        outcome: { kind: "ok", documentVersion: 8 },
+        currentContent: "CORRUPTED",
+        divergedAfterApply: true,
       })
     );
   });
 
-  it("apply rejects: settles rejected, dispatch still fires post-dispose", async () => {
-    const dispatch = vi.fn();
-    // isDisposed flips true after apply is kicked off — pins that settlement
-    // dispatches EVEN post-dispose (stash-drain safety).
-    let disposed = false;
-    const seam = {
-      readText: () => "abc",
-      readVersion: () => 8,
-      readCanonical: () => "",
-      canonicalize: (t) => t,
-      build: () => ({}),
-      apply: () => Promise.reject(new Error("rej")),
-    };
-    const { runEffects } = createEffectExecutor(
-      makeDeps({
-        dispatch,
-        getState: () => noStash,
-        isDisposed: () => disposed,
-        applyEditSeam: seam,
-      })
+  it("applyRefused → refused", async () => {
+    const dispatch = await runApply({ apply: async () => false });
+    expect(dispatch).toHaveBeenCalledWith(
+      expect.objectContaining({ type: "applyEditSettled", outcome: { kind: "refused" } })
     );
-    runEffects([{ type: "applyEdit", content: "abcd", baseDocVersion: 6 }]);
-    disposed = true;
-    await Promise.resolve();
-    await Promise.resolve();
+  });
+
+  it("buildThrew → constructThrew(message)", async () => {
+    const dispatch = await runApply({
+      build: () => {
+        throw new Error("boom-build");
+      },
+    });
     expect(dispatch).toHaveBeenCalledWith(
       expect.objectContaining({
         type: "applyEditSettled",
-        outcome: expect.objectContaining({ kind: "rejected" }),
+        outcome: expect.objectContaining({ kind: "constructThrew", message: "boom-build" }),
       })
     );
   });
 
-  // error-handler C: the OK arm must ALSO dispatch post-dispose. An
-  // `if (isDisposed()) return` slipped into the ok arm reintroduces the
-  // last-keystroke-on-close data-loss race — this test goes red if it does.
-  it("apply resolves true, disposed before callback: dispatch still fires (stash-drain safety)", async () => {
-    const dispatch = vi.fn();
-    let disposed = false;
-    const seam = {
-      readText: () => "abc",
-      readVersion: () => 9,
-      readCanonical: () => "",
-      canonicalize: (t) => t,
-      build: () => ({}),
-      apply: async () => true,
-    };
-    const { runEffects } = createEffectExecutor(
-      makeDeps({
-        dispatch,
-        getState: () => noStash,
-        isDisposed: () => disposed,
-        applyEditSeam: seam,
+  it("applyThrew (sync) → applyThrew(message)", async () => {
+    const dispatch = await runApply({
+      apply: () => {
+        throw new Error("boom-apply");
+      },
+    });
+    expect(dispatch).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "applyEditSettled",
+        outcome: expect.objectContaining({ kind: "applyThrew", message: "boom-apply" }),
       })
     );
-    runEffects([{ type: "applyEdit", content: "abcd", baseDocVersion: 6 }]);
-    disposed = true;
-    await Promise.resolve();
-    await Promise.resolve();
+  });
+
+  it("applyRejected → rejected(message)", async () => {
+    const dispatch = await runApply({ apply: () => Promise.reject(new Error("rej")) });
+    expect(dispatch).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "applyEditSettled",
+        outcome: expect.objectContaining({ kind: "rejected", message: "rej" }),
+      })
+    );
+  });
+
+  it("threads the live canWrite onto the settlement event", async () => {
+    const dispatch = await runApply({}, { canWrite: () => false });
+    expect(dispatch).toHaveBeenCalledWith(
+      expect.objectContaining({ type: "applyEditSettled", canWrite: false })
+    );
+  });
+
+  // Stash-drain safety (error-handler C/D): the settlement must dispatch EVEN
+  // post-dispose — for the ok arm AND the refused arm — so a one-more-char stash
+  // typed during the in-flight apply can still drain after onDidDispose.
+  it("ok settlement dispatches EVEN when disposed (stash-drain safety)", async () => {
+    const dispatch = await runApply({ readVersion: () => 9 }, { isDisposed: () => true });
     expect(dispatch).toHaveBeenCalledWith(
       expect.objectContaining({
         type: "applyEditSettled",
@@ -333,130 +279,25 @@ describe("effect-executor runApplyEdit (via applyEdit effect)", () => {
     );
   });
 
-  // Codex R2-B / error-handler D: the "every arm" constraint covers refused too.
-  // A guard slipped into ONLY the !ok sub-path (leaving the ok sub-path clean, so
-  // the test above stays green) would strand the write lock post-dispose. This
-  // pins the refused sub-path independently.
-  it("apply resolves false, disposed before callback: dispatch still fires (refused, stash-drain safety)", async () => {
-    const dispatch = vi.fn();
-    let disposed = false;
-    const seam = {
-      readText: () => "abc",
-      readVersion: () => 9,
-      readCanonical: () => "",
-      canonicalize: (t) => t,
-      build: () => ({}),
-      apply: async () => false,
-    };
-    const { runEffects } = createEffectExecutor(
-      makeDeps({
-        dispatch,
-        getState: () => noStash,
-        isDisposed: () => disposed,
-        applyEditSeam: seam,
-      })
-    );
-    runEffects([{ type: "applyEdit", content: "abcd", baseDocVersion: 6 }]);
-    disposed = true;
-    await Promise.resolve();
-    await Promise.resolve();
+  it("refused settlement dispatches EVEN when disposed (stash-drain safety)", async () => {
+    const dispatch = await runApply({ apply: async () => false }, { isDisposed: () => true });
     expect(dispatch).toHaveBeenCalledWith(
-      expect.objectContaining({
-        type: "applyEditSettled",
-        outcome: { kind: "refused" },
-      })
+      expect.objectContaining({ type: "applyEditSettled", outcome: { kind: "refused" } })
     );
   });
 
-  // S3a (site 2): the settlement now reads canonical on EVERY settlement (the
-  // epoch foreign-bytes verify), so the old skip-unless-stash optimisation is
-  // GONE. readCanonical is called even with no stash — the `host:settle-verify`
-  // perf stage is the cost this pins. The dispatched event carries that canonical
-  // as `currentContent`, and `preApplyContent` is "" on the OK hot path (the
-  // canonicalise is skipped for ok).
-  it("settlement reads canonical on EVERY settlement (site 2 verify), even with no stash", () => {
-    const readCanonical = vi.fn(() => "canon");
-    const canonicalize = vi.fn((t: string) => t);
-    const dispatch = vi.fn();
-    const seam = {
-      readText: () => "abc",
-      readVersion: () => 7,
-      readCanonical,
-      canonicalize,
-      build: () => ({}),
-      apply: vi.fn(async () => true),
-    };
-    // no-op span → settles immediately (ok); pendingEdit null.
-    const { runEffects } = createEffectExecutor(
-      makeDeps({ dispatch, getState: () => noStash, applyEditSeam: seam })
-    );
-    runEffects([{ type: "applyEdit", content: "abc", baseDocVersion: 6 }]);
-    expect(readCanonical).toHaveBeenCalledTimes(1);
-    // OK outcome → the pre-apply canonicalise is skipped (preApplyContent "").
-    expect(canonicalize).not.toHaveBeenCalled();
+  // Contract: the wrapper maps from the OUTCOME and does not re-read the
+  // document. For an ok settlement the executor reads the settled version once
+  // (inside verify); the wrapper must NOT read it again (a re-read could observe
+  // a later edit and mis-version the settlement).
+  it("does NOT re-read the document version after the outcome (maps from settledVersion)", async () => {
+    const readVersion = vi.fn(() => 5);
+    const dispatch = await runApply({ readVersion });
+    // Exactly one version read — the executor's verify. The wrapper adds none.
+    expect(readVersion).toHaveBeenCalledTimes(1);
     expect(dispatch).toHaveBeenCalledWith(
-      expect.objectContaining({
-        type: "applyEditSettled",
-        currentContent: "canon",
-        preApplyContent: "",
-      })
+      expect.objectContaining({ outcome: { kind: "ok", documentVersion: 5 } })
     );
-  });
-
-  it("settlement canonicalises the pre-apply snapshot for a NON-OK outcome (non-ok baseline)", async () => {
-    const canonicalize = vi.fn((t: string) => `canon(${t})`);
-    const dispatch = vi.fn();
-    const seam = {
-      readText: () => "old-bytes",
-      readVersion: () => 8,
-      readCanonical: () => "settled-canon",
-      canonicalize,
-      build: () => ({}),
-      apply: async () => false, // refused → non-ok
-    };
-    const { runEffects } = createEffectExecutor(
-      makeDeps({ dispatch, getState: () => noStash, applyEditSeam: seam })
-    );
-    runEffects([{ type: "applyEdit", content: "abcd", baseDocVersion: 6 }]);
-    await Promise.resolve();
-    await Promise.resolve();
-    expect(canonicalize).toHaveBeenCalledWith("old-bytes");
-    expect(dispatch).toHaveBeenCalledWith(
-      expect.objectContaining({
-        type: "applyEditSettled",
-        outcome: { kind: "refused" },
-        currentContent: "settled-canon",
-        preApplyContent: "canon(old-bytes)",
-      })
-    );
-  });
-
-  // Codex #2: the snapshot is LAZY. A stash that appears AFTER apply-start but
-  // BEFORE settle must be observed at settle time (readCanonical IS called).
-  // Caching pendingEdit at apply-start would make this go red.
-  it("drainSnapshot reads canonical when a stash grows during the in-flight apply", async () => {
-    const readCanonical = vi.fn(() => "canon");
-    let stash = false;
-    const seam = {
-      readText: () => "abc",
-      readVersion: () => 8,
-      readCanonical,
-      canonicalize: (t) => t,
-      build: () => ({}),
-      apply: async () => true,
-    };
-    const { runEffects } = createEffectExecutor(
-      makeDeps({
-        dispatch: vi.fn(),
-        getState: () => ({ pendingEdit: stash ? {} : null }) as unknown as HostSessionState,
-        applyEditSeam: seam,
-      })
-    );
-    runEffects([{ type: "applyEdit", content: "abcd", baseDocVersion: 6 }]);
-    stash = true; // stash arrives while the apply is in flight
-    await Promise.resolve();
-    await Promise.resolve();
-    expect(readCanonical).toHaveBeenCalled();
   });
 });
 

@@ -119,11 +119,13 @@ export type HostSessionEvent =
   | {
       readonly type: "applyEditSettled";
       readonly outcome: ApplyEditOutcome;
-      // Fresh live snapshots taken by the wiring at settlement time so the
+      // Fresh live snapshots taken by the executor at settlement time so the
       // stash drain can re-run the FULL decideEdit gates (canWrite + canonical
-      // current text). `currentContent` is the empty string when no stash is
-      // waiting (the wiring skips the O(n) canonicalisation then — it is only
-      // read when draining).
+      // current text) AND the epoch foreign-bytes check (site 2). Since S3a the
+      // canonical settled content is read on EVERY settlement (the epoch verify
+      // is unconditional — no skip-unless-stash), so `currentContent` is always
+      // the canonical settled document, never "" (the pre-S3a empty-when-no-stash
+      // optimisation is gone; restoring it would drop the epoch verify).
       readonly canWrite: boolean;
       readonly currentContent: string;
       // Canonical pre-apply document snapshot (the executor's `oldText`,
@@ -132,10 +134,19 @@ export type HostSessionEvent =
       // document at the pre-apply content, so `currentContent === preApplyContent`
       // means nothing foreign intervened (the retry buffer must stay replayable);
       // a mismatch means a foreign edit raced the failed apply → epoch++. For an
-      // OK outcome the baseline is `inFlightContent` instead, so this is unused
-      // and the executor may pass the empty string (skipping its canonicalise on
-      // the hot path).
+      // OK outcome the baseline is `inFlightContent` instead, so this is unused.
       readonly preApplyContent: string;
+      // Plan S6 (finding #7): the verified write executor detected that the
+      // landed content differs from the intended content on an `ok` apply — a
+      // stale-offset splice (S5: desktop MISPLACES) OR an external edit that won
+      // the apply→settle race. Undefined/false = clean apply. When true the
+      // settlement routes through the ok-but-mismatch convergence shape (epoch++
+      // + authoritative resync + a distinct diverged log, NO error toast — a
+      // deliberate conflict resolution must not read as "save failed"). It is a
+      // belt-and-braces annotation: a genuine divergence ALSO trips the byte
+      // compare below, but driving convergence off the explicit flag keeps the
+      // reducer honest even if the compare is inconclusive.
+      readonly divergedAfterApply?: boolean;
     }
   | {
       readonly type: "editRejectedDeliveryFailed";
@@ -549,10 +560,17 @@ export function createHostSessionCore(context: HostSessionContext, deps: HostSes
         // must ignore it. The `a === b` fast path keeps the hot typing path
         // (byte-identical settle) regex-free — the normalise only runs when the
         // strings already differ (a genuine foreign edit, or this EOL skew).
+        // Plan S6: an explicit `divergedAfterApply` annotation forces the
+        // foreign-bytes verdict for the reducer path (finding #7). A genuine
+        // divergence also trips the ok byte compare (settled !== inFlight), so
+        // this disjunct is belt-and-braces — but it keeps the convergence driven
+        // by the executor's authoritative verdict, not a re-derived heuristic.
+        const divergedAfterApply = event.outcome.kind === "ok" && event.divergedAfterApply === true;
         const foreignAtSettle =
-          event.outcome.kind === "ok"
+          divergedAfterApply ||
+          (event.outcome.kind === "ok"
             ? inFlight !== null && !contentMatches(event.currentContent, inFlight)
-            : !contentMatches(event.currentContent, event.preApplyContent);
+            : !contentMatches(event.currentContent, event.preApplyContent));
         const settled: HostSessionState = foreignAtSettle
           ? { ...versioned, externalEpoch: versioned.externalEpoch + 1 }
           : versioned;
@@ -586,10 +604,28 @@ export function createHostSessionCore(context: HostSessionContext, deps: HostSes
           // [showError]; an ok-but-mismatch (external won) is a valid
           // resolution, not a failure → also []. Alive: full effects.
           const baseEffects = settlementEffects(event.outcome, settled, heldBase, state.context);
-          const extraEffects: HostSessionEffect[] =
-            stash !== null &&
-            event.outcome.kind === "ok" &&
-            !contentMatches(event.currentContent, inFlight)
+          // Diagnostic log for the post-apply divergence. `divergedAfterApply`
+          // (Plan S6) takes precedence and is emitted even with NO stash — a
+          // wrong-offset splice / lost external race must be visible for triage
+          // regardless of whether a keystroke was queued. The narrower
+          // ok-but-mismatch log (external edit won a stash's apply→settle race)
+          // stays for the non-diverged case. Neither is a save failure, so
+          // neither adds a showError (the ok baseEffects carry none).
+          const extraEffects: HostSessionEffect[] = divergedAfterApply
+            ? [
+                {
+                  type: "logWarn",
+                  message:
+                    "[quoll] divergedAfterApply on settle: applyEdit landed content differs from intended (racing splice or external write); converging on authoritative content, epoch bumped",
+                  detail: {
+                    stashBase: stash?.baseDocVersion ?? null,
+                    settledDocVersion: settled.lastAppliedDocVersion,
+                  },
+                },
+              ]
+            : stash !== null &&
+                event.outcome.kind === "ok" &&
+                !contentMatches(event.currentContent, inFlight)
               ? [
                   {
                     type: "logWarn",
