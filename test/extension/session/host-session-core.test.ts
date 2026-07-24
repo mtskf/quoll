@@ -311,15 +311,48 @@ describe("host-session-core: applyEditSettled drain", () => {
     expect(r.effects).toEqual([{ type: "postDocument", docVersion: 2 }]);
   });
 
-  it("drain parse-failed (ALIVE) → postEditRejected + showError, NO ack Document, rejection pending", () => {
+  it("drain parse-failed (ALIVE) → postRejectedDraft(draft, settled version) + showError, rejection pending", () => {
     const r = core.transition(
       lockedWithStash("edit1", "hasBAD"),
       settled({ outcome: { kind: "ok", documentVersion: 2 }, currentContent: "edit1" })
     );
-    expect(r.state.rejection).toMatchObject({ kind: "pending", content: "hasBAD" });
-    expect(r.effects.some((e) => e.type === "postDocument")).toBe(false);
-    expect(r.effects[0]).toMatchObject({ type: "postEditRejected" });
-    expect(r.effects[1]).toMatchObject({ type: "showError" });
+    expect(r.state.rejection).toMatchObject({ kind: "pending", id: 1, content: "hasBAD" });
+    // The draft is redelivered as a Document at the SETTLED version so the
+    // webview's docVersion bookkeeping advances (I3: no silent version stall)
+    // WITHOUT touching draft bytes — never a bare postEditRejected, never disk
+    // bytes. Mirrors the shipped `ready`-arm redelivery precedent.
+    expect(r.effects).toEqual([
+      { type: "postRejectedDraft", content: "hasBAD", error: unsafe, docVersion: 2, id: 1 },
+      { type: "showError", message: `Cannot save: ${unsafe.message}` },
+    ]);
+  });
+
+  it("drain parse-failed (ALIVE) round-trip: the redelivered draft version un-stales the next retry", () => {
+    // The bug (finding #2): the drain-over apply already advanced the reducer's
+    // lastAppliedDocVersion, but the OLD arm posted no Document, so the webview
+    // stayed on the pre-A version and its next retry arrived at a stale base →
+    // stale verdict → authoritative reseed WIPED the draft. With the draft
+    // redelivered at the settled version, the webview retries at the settled
+    // base and is NOT stale-rejected.
+    const drained = core.transition(
+      lockedWithStash("edit1", "hasBAD"),
+      settled({ outcome: { kind: "ok", documentVersion: 2 }, currentContent: "edit1" })
+    );
+    const draftDoc = drained.effects.find((e) => e.type === "postRejectedDraft");
+    expect(draftDoc).toBeDefined();
+    const retryBase = (draftDoc as { docVersion: number }).docVersion;
+    // The webview retries at the version it just learned from the draft Document.
+    const retry = core.transition(
+      drained.state,
+      edit({ baseDocVersion: retryBase, documentVersion: retryBase, content: "fixed" })
+    );
+    // Not stale (no reseed): the fix is accepted and written.
+    expect(retry.effects.some((e) => e.type === "postDocument")).toBe(false);
+    expect(retry.effects).toContainEqual({
+      type: "applyEdit",
+      content: "fixed",
+      baseDocVersion: retryBase,
+    });
   });
 
   it("drain readonly (canWrite=false) → repost Document only, no applyEdit", () => {
