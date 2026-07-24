@@ -843,15 +843,74 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
           // last action; caret apply + document.uri are closure locals, safe
           // across the dispose. finalizeSurfaceSwap never throws and refuses to
           // close a doc it could not make clean (no revert / no data loss).
+          //
+          // Data-loss guard (rejection pending): a write-gate rejection leaves
+          // the user's draft ONLY webview-side — the on-disk document is
+          // unchanged (clean); the rejection banner is up (showing the error)
+          // and the editor beneath it still shows the un-saved bytes, because
+          // CodeMirror was never reseeded. finalizeSurfaceSwap below would close
+          // THIS Quoll tab and the text editor would open on the CLEAN disk
+          // snapshot, silently orphaning the typed draft (finalizeSurfaceSwap
+          // sees a clean doc, so its save-then-close is a no-op close — no
+          // data-loss tripwire fires). Refuse the swap while a rejection is
+          // pending: switch-to-text is a pure side channel that never reloaded
+          // the webview, so the banner + draft stay mounted intact — the user
+          // resolves the highlighted problem first, then switches. NEVER
+          // finalize a surface swap that orphans typed bytes.
+          //
+          // This receipt-time check is a cheap fast path only; the check that
+          // actually closes the hole is the DRAIN-time re-check inside
+          // editSettledBarrier.run below — see the comment there.
+          if (state.rejection.kind === "pending") {
+            showError(
+              "Quoll: can't switch to the text editor while a change can't be saved — resolve the highlighted problem first."
+            );
+            return;
+          }
           const sourceTab = findSourceTab(
             document.uri.toString(),
             "quoll",
             QuollEditorPanel.viewType
           );
           editSettledBarrier.run(() => {
+            // Re-check at DRAIN time, not just at receipt time: when the switch
+            // arrives while the write lock is held it is DEFERRED here, and the
+            // very settlement that releases this barrier can flip
+            // state.rejection to "pending" in the same transition — a stash
+            // drained on an accepted apply's settlement that fails the
+            // write-gate (host-session-core.ts applyEditSettled's parse-failed
+            // drain arm) sets the rejection AFTER the receipt-time check above
+            // already passed, then settle(true) drains this callback in the
+            // same step(). Without this re-check the deferred swap would close
+            // the Quoll tab and orphan the just-rejected draft.
+            if (state.rejection.kind === "pending") {
+              showError(
+                "Quoll: can't switch to the text editor while a change can't be saved — resolve the highlighted problem first."
+              );
+              return;
+            }
             const caret = caretWiring.getCaret();
             void openInTextEditor(document.uri).then(
               () => {
+                // Async-window guard: openInTextEditor is async, and the webview
+                // stays live (still focused, still able to emit edits) until
+                // finalizeSurfaceSwap closes the Quoll tab below. A NEW edit that
+                // arrives and fails the write-gate DURING this open sets
+                // state.rejection to "pending" AFTER both earlier checks passed.
+                // Re-check here, immediately before the surface is finalized: if
+                // a rejection landed, retain the Quoll tab (do NOT record the
+                // text-surface intent or close the source) so the just-rejected
+                // draft is not orphaned. The text editor that just opened is a
+                // harmless second view of the clean on-disk bytes; the user
+                // resolves the highlighted problem in the Quoll tab, then
+                // switches. Same data-loss invariant as the two checks above —
+                // never finalize a swap that orphans typed bytes.
+                if (state.rejection.kind === "pending") {
+                  showError(
+                    "Quoll: can't switch to the text editor while a change can't be saved — resolve the highlighted problem first."
+                  );
+                  return;
+                }
                 // Record intent AFTER the open succeeds and BEFORE the source
                 // close, so the surface-restore watcher adopts "text" for this
                 // deliberate Quoll→text swap (a failed open records nothing).
@@ -864,7 +923,18 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
                     caretWiring.applyCaretToTextEditor(editor, caret);
                   }
                 }
-                void finalizeSurfaceSwap(document.uri, sourceTab);
+                // Point-of-no-return guard: finalizeSurfaceSwap still awaits
+                // openDoc (and maybe save) before the irreversible tab close, so
+                // a rejection landing in THAT window would slip past the check
+                // above. Pass the same rejection predicate so the close is
+                // aborted synchronously right before it happens — closing every
+                // async window from open-resolve through the actual close.
+                void finalizeSurfaceSwap(
+                  document.uri,
+                  sourceTab,
+                  undefined,
+                  () => state.rejection.kind === "pending"
+                );
               },
               (err: unknown) => {
                 // Symmetric with quoll.toggleEditor's forward error toast (a

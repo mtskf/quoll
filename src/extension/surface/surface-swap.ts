@@ -141,11 +141,23 @@ const REAL_SWAP_DEPS: FinalizeSwapDeps = {
  *  Save the shared doc if dirty (so the source tab is clean and closing it can
  *  neither revert the working copy nor pop a save dialog), then close the
  *  pre-captured source tab. Refuses to close if the doc can't be made clean
- *  (never data loss). Best-effort; never throws. `deps` is seamed for tests. */
+ *  (never data loss). Best-effort; never throws. `deps` is seamed for tests.
+ *
+ *  `shouldAbortClose` (optional) is a point-of-no-return guard: this function
+ *  awaits `openDoc` (and maybe `save`) BEFORE the irreversible source-tab close,
+ *  so any condition a caller checked before calling us has a TOCTOU gap across
+ *  those awaits. Callers that must not close under a late-arriving condition —
+ *  e.g. a write-gate rejection that lands during those awaits, leaving the
+ *  user's draft only in the source webview — pass this; it is re-checked
+ *  SYNCHRONOUSLY immediately before the close (no await after it), so nothing
+ *  can slip the condition past the check. Abort → both-open (safe), symmetric
+ *  with the save-failure degradation. Omitted ⇒ never aborts (existing
+ *  callers unchanged). */
 export async function finalizeSurfaceSwap(
   uri: Uri,
   sourceTab: Tab | undefined,
-  deps: FinalizeSwapDeps = REAL_SWAP_DEPS
+  deps: FinalizeSwapDeps = REAL_SWAP_DEPS,
+  shouldAbortClose?: () => boolean
 ): Promise<void> {
   try {
     const doc = await deps.openDoc(uri);
@@ -183,6 +195,25 @@ export async function finalizeSurfaceSwap(
           "showWarningMessage"
         );
       }
+      return;
+    }
+    // Point-of-no-return guard (see the doc comment): re-check the caller's
+    // abort condition SYNCHRONOUSLY here, after the openDoc/save awaits and
+    // immediately before the irreversible close — no await follows, so nothing
+    // can slip the condition past this check. Abort → both-open (safe).
+    if (shouldAbortClose?.()) {
+      // Toast, not just a console.warn: the user sees both tabs left open and a
+      // silent no-op reads as a dead keybinding — same rule the save-failure
+      // branch above follows (and surface-restore-watcher's switch-site contract).
+      console.warn(
+        "[quoll] surface-swap: close aborted by caller guard (e.g. a rejection landed during finalize); leaving both surfaces open"
+      );
+      showSafely(
+        window.showWarningMessage(
+          "Quoll: couldn't complete the switch to the text editor, so both editors stay open. Resolve the highlighted problem, then try again."
+        ),
+        "showWarningMessage"
+      );
       return;
     }
     // sourceTab is defined here (shouldCloseSourceTab is false when it is not).

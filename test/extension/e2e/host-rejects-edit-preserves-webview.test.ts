@@ -1,16 +1,44 @@
 import * as assert from "node:assert";
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
+import * as vscode from "vscode";
 import { PROTOCOL_VERSION } from "./constants";
 import {
   cleanupBetweenTests,
+  deferred,
   getHarness,
   hideQuollByOpeningOtherDoc,
   isDocumentEvent,
   openFixtureWithQuoll,
   tick,
+  VIEW_TYPE,
 } from "./harness";
 
 const isEditRejectedEvent = (e: { message: { type: string } }) =>
   e.message.type === "edit-rejected";
+
+// Temp .md so a swap that reaches finalizeSurfaceSwap's save-then-close (the
+// resumption case, and the revert-check of the deferred-race guard) writes to a
+// throwaway file instead of mutating a committed fixture.
+function tempMd(name: string): vscode.Uri {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "quoll-reject-"));
+  const p = path.join(dir, name);
+  fs.writeFileSync(p, "# Title\n\nbody\n", "utf8");
+  return vscode.Uri.file(p);
+}
+
+const allTabs = (): vscode.Tab[] => vscode.window.tabGroups.all.flatMap((g) => g.tabs);
+const customTab =
+  (uri: vscode.Uri) =>
+  (t: vscode.Tab): boolean =>
+    t.input instanceof vscode.TabInputCustom &&
+    t.input.viewType === VIEW_TYPE &&
+    t.input.uri.toString() === uri.toString();
+const textTab =
+  (uri: vscode.Uri) =>
+  (t: vscode.Tab): boolean =>
+    t.input instanceof vscode.TabInputText && t.input.uri.toString() === uri.toString();
 
 describe("host-rejects-edit-preserves-webview", function () {
   this.timeout(20000);
@@ -236,6 +264,244 @@ describe("host-rejects-edit-preserves-webview", function () {
       draft,
       "ready after a fallback-cleared rejection re-delivered the draft — snapshot not cleared"
     );
+  });
+
+  it("switch-to-text while a rejection is pending is refused — the Quoll tab stays open (draft not orphaned)", async () => {
+    // Regression: the switch-to-text arm used to run finalizeSurfaceSwap
+    // unconditionally. After a write-gate rejection the user's draft lives
+    // ONLY webview-side (the on-disk doc is clean, banner showing), so closing
+    // the Quoll tab opened the text editor on the clean disk snapshot and the
+    // typed draft was silently lost. The guard now refuses the swap while a
+    // rejection is pending: the Quoll tab must remain open, no text tab opens,
+    // and the user is told to resolve the problem first.
+    const harness = await getHarness();
+    const uri = await openFixtureWithQuoll("unsafe-url.md");
+    const seed = await harness.waitForEvent(isDocumentEvent, 8000);
+
+    const panel = harness.activePanel;
+    assert.ok(panel);
+    harness.clearEvents();
+
+    const seededContent = (seed.message as { content: string }).content;
+    // Draft still carries the unsafe URL → rejected; the trailing newline makes
+    // it differ from the seed so the verdict is parse-failed, not a no-op.
+    panel.simulateInbound({
+      protocol: PROTOCOL_VERSION,
+      type: "edit",
+      content: `${seededContent}\n`,
+      baseDocVersion: seed.message.docVersion,
+    });
+    await harness.waitForEvent(isEditRejectedEvent, 5000);
+
+    // Now request the surface swap while the rejection is pending.
+    panel.simulateInbound({ protocol: PROTOCOL_VERSION, type: "switch-to-text" });
+
+    // The block surfaces a user-facing message so the button does not look dead.
+    const errorMsg = await harness.waitForError(
+      (msg) => /can't switch to the text editor/i.test(msg),
+      5000
+    );
+    assert.ok(errorMsg);
+
+    // Give any (erroneous) swap a chance to open a text tab / close the Quoll
+    // tab, then assert neither happened.
+    await tick(500);
+    const tabs = allTabs();
+    assert.ok(
+      tabs.some(customTab(uri)),
+      `Quoll tab must stay open (draft preserved) — ${JSON.stringify(tabs.map((t) => t.label))}`
+    );
+    assert.ok(
+      !tabs.some(textTab(uri)),
+      `no text tab must open while the rejection is pending — ${JSON.stringify(
+        tabs.map((t) => t.label)
+      )}`
+    );
+  });
+
+  it("deferred switch-to-text is refused when a stash drained by the releasing settlement is rejected", async () => {
+    // Regression for the deferred-switch race: the switch-to-text guard checked
+    // state.rejection ONLY at message-receipt time. If the switch arrives while
+    // the write lock is held it is deferred behind editSettledBarrier; the very
+    // settlement that releases the barrier can drain a stashed edit that fails
+    // the write-gate, flipping state.rejection to "pending" in the SAME step()
+    // that then drains the deferred switch callback. Without a drain-time
+    // re-check the switch still closed the Quoll tab, orphaning the just-rejected
+    // draft. Uses the same lock-holding seam as pending-edit-dispose-drain.
+    const harness = await getHarness();
+    const uri = tempMd("deferred-switch.md");
+    await vscode.commands.executeCommand("vscode.openWith", uri, VIEW_TYPE);
+    const seed = await harness.waitForEvent(isDocumentEvent, 8000);
+
+    const panel = harness.activePanel;
+    assert.ok(panel);
+    const doc = panel.document;
+    harness.clearEvents();
+
+    const seedV = seed.message.docVersion;
+
+    // Hold edit A's SETTLEMENT open so the write lock stays held while the
+    // stash (invalid B) and the switch (deferred) both queue behind it. The
+    // real applyEdit still runs immediately, so the document lands on "first".
+    const gate = deferred<boolean>();
+    let calls = 0;
+    harness.applyEditOverride = (edit) => {
+      calls += 1;
+      if (calls === 1) {
+        return vscode.workspace.applyEdit(edit).then((ok) => gate.promise.then(() => ok));
+      }
+      return vscode.workspace.applyEdit(edit);
+    };
+
+    // Edit A (valid) acquires the write lock and applies; settlement held.
+    panel.simulateInbound({
+      protocol: PROTOCOL_VERSION,
+      type: "edit",
+      content: "first",
+      baseDocVersion: seedV,
+    });
+    assert.strictEqual(calls, 1, "edit A must acquire the write lock (applyEdit called)");
+
+    // Let edit A land so the drain's canDrain premise (settled doc === inFlight)
+    // holds; otherwise the stash is dropped instead of validated.
+    const applied1Deadline = Date.now() + 3000;
+    while (doc.getText() !== "first" && Date.now() < applied1Deadline) {
+      await tick(20);
+    }
+    assert.strictEqual(doc.getText(), "first", "edit A must land while in flight");
+
+    // Edit B (invalid — unsafe URL) arrives WHILE the lock is held → stashed.
+    panel.simulateInbound({
+      protocol: PROTOCOL_VERSION,
+      type: "edit",
+      content: "[bad](javascript:alert(1))",
+      baseDocVersion: seedV,
+    });
+
+    // switch-to-text arrives WHILE the lock is held → deferred behind the
+    // barrier. The receipt-time rejection is still "none", so the fast-path
+    // guard passes and the callback is queued.
+    panel.simulateInbound({ protocol: PROTOCOL_VERSION, type: "switch-to-text" });
+
+    // Release edit A: its settlement drains stash B → parse-failed → rejection
+    // pending, then the SAME step drains the deferred switch callback.
+    gate.resolve(true);
+    await harness.waitForEvent(isEditRejectedEvent, 5000);
+
+    // The deferred switch must be refused by the DRAIN-time re-check: Quoll tab
+    // stays open, no text tab opens, the draft is not orphaned.
+    await tick(500);
+    const tabs = allTabs();
+    assert.ok(
+      tabs.some(customTab(uri)),
+      `Quoll tab must stay open (deferred-switch draft preserved) — ${JSON.stringify(
+        tabs.map((t) => t.label)
+      )}`
+    );
+    assert.ok(
+      !tabs.some(textTab(uri)),
+      `no text tab must open — the deferred switch drained after the stash was rejected — ${JSON.stringify(
+        tabs.map((t) => t.label)
+      )}`
+    );
+  });
+
+  it("a rejection arriving during the async open (after both guards pass) still retains the Quoll tab", async () => {
+    // Third data-loss window: with no rejection pending, switch-to-text passes
+    // both the receipt-time and drain-time guards and calls openInTextEditor —
+    // which is async, so its tab-closing success callback runs a tick later.
+    // The webview stays live during that open, so a NEW invalid edit can land
+    // and flip state.rejection to "pending" in the gap. simulateInbound is
+    // synchronous, so the edit below is guaranteed to be processed BEFORE
+    // openInTextEditor resolves — deterministically reproducing the race. The
+    // success callback must re-check and retain the Quoll tab.
+    const harness = await getHarness();
+    const uri = tempMd("async-open.md");
+    await vscode.commands.executeCommand("vscode.openWith", uri, VIEW_TYPE);
+    const seed = await harness.waitForEvent(isDocumentEvent, 8000);
+
+    const panel = harness.activePanel;
+    assert.ok(panel);
+    harness.clearEvents();
+
+    const seedV = seed.message.docVersion;
+    const seededContent = (seed.message as { content: string }).content;
+
+    // No rejection yet → switch-to-text passes both guards and (lock free) calls
+    // openInTextEditor synchronously; its success callback is deferred a tick.
+    panel.simulateInbound({ protocol: PROTOCOL_VERSION, type: "switch-to-text" });
+
+    // Synchronously — before openInTextEditor resolves — an invalid edit lands
+    // and fails the write-gate → state.rejection flips to "pending".
+    panel.simulateInbound({
+      protocol: PROTOCOL_VERSION,
+      type: "edit",
+      content: `${seededContent}\n[bad](javascript:alert(1))\n`,
+      baseDocVersion: seedV,
+    });
+    await harness.waitForEvent(isEditRejectedEvent, 5000);
+
+    // When the open resolves, the success callback re-checks and RETAINS the
+    // Quoll tab (draft not orphaned). The just-opened text tab is an accepted
+    // harmless second view here, so this asserts only the data-loss invariant.
+    await tick(800);
+    const tabs = allTabs();
+    assert.ok(
+      tabs.some(customTab(uri)),
+      `Quoll tab must stay open when a rejection lands during the async open — ${JSON.stringify(
+        tabs.map((t) => t.label)
+      )}`
+    );
+  });
+
+  it("switch-to-text resumes normally once a follow-up accepted Edit clears the pending rejection", async () => {
+    // Fallthrough coverage: after a rejection clears (an accepted Edit), the
+    // guard must let the ordinary forward swap proceed — mirrors the sibling
+    // "visible-edge resumes after an accepted Edit clears the flag" convention.
+    const harness = await getHarness();
+    const uri = tempMd("resume-switch.md");
+    await vscode.commands.executeCommand("vscode.openWith", uri, VIEW_TYPE);
+    const seed = await harness.waitForEvent(isDocumentEvent, 8000);
+
+    const panel = harness.activePanel;
+    assert.ok(panel);
+    harness.clearEvents();
+
+    const seedV = seed.message.docVersion;
+    const seededContent = (seed.message as { content: string }).content;
+
+    // Reject first: an unsafe URL fails the write-gate.
+    panel.simulateInbound({
+      protocol: PROTOCOL_VERSION,
+      type: "edit",
+      content: `${seededContent}\n[bad](javascript:alert(1))\n`,
+      baseDocVersion: seedV,
+    });
+    await harness.waitForEvent(isEditRejectedEvent, 5000);
+
+    // Resolve with a safe edit — rejection clears to "none".
+    panel.simulateInbound({
+      protocol: PROTOCOL_VERSION,
+      type: "edit",
+      content: `${seededContent}\nsafe line\n`,
+      baseDocVersion: seedV,
+    });
+    await harness.waitForEvent((e) => isDocumentEvent(e) && e.message.docVersion > seedV, 8000);
+
+    // Now switch-to-text must proceed like the ordinary forward swap.
+    panel.simulateInbound({ protocol: PROTOCOL_VERSION, type: "switch-to-text" });
+
+    const deadline = Date.now() + 8000;
+    while (Date.now() < deadline) {
+      const tabs = allTabs();
+      if (tabs.some(textTab(uri)) && !tabs.some(customTab(uri))) {
+        break;
+      }
+      await tick(100);
+    }
+    const tabs = allTabs();
+    assert.ok(!tabs.some(customTab(uri)), "Quoll tab should close once the rejection cleared");
+    assert.ok(tabs.some(textTab(uri)), "text tab should open once the rejection cleared");
   });
 
   it("visible-edge resync is suppressed while a rejected draft is pending", async () => {
