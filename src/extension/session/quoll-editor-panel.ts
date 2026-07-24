@@ -79,7 +79,10 @@ import { toLintDiagnostics } from "../lint/lint-diagnostics.js";
 import { LintMirror } from "../lint/lint-mirror.js";
 import type { StatusBarSlots } from "../status-bar.js";
 import { openInQuollEditor } from "../surface/open-in-quoll.js";
-import { registerPendingRejection } from "../surface/rejection-registry.js";
+import {
+  REJECTION_BLOCKS_SWITCH_MESSAGE,
+  registerPendingRejection,
+} from "../surface/rejection-registry.js";
 import { openInTextEditor } from "../surface/reopen-text-editor.js";
 import {
   codeReferenceFileExistsWithinRoot,
@@ -875,9 +878,7 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
           // actually closes the hole is the DRAIN-time re-check inside
           // editSettledBarrier.run below — see the comment there.
           if (state.rejection.kind === "pending") {
-            showError(
-              "Quoll: can't switch to the text editor while a change can't be saved — resolve the highlighted problem first."
-            );
+            showError(REJECTION_BLOCKS_SWITCH_MESSAGE);
             return;
           }
           const sourceTab = findSourceTab(
@@ -897,9 +898,7 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
             // same step(). Without this re-check the deferred swap would close
             // the Quoll tab and orphan the just-rejected draft.
             if (state.rejection.kind === "pending") {
-              showError(
-                "Quoll: can't switch to the text editor while a change can't be saved — resolve the highlighted problem first."
-              );
+              showError(REJECTION_BLOCKS_SWITCH_MESSAGE);
               return;
             }
             const caret = caretWiring.getCaret();
@@ -919,9 +918,7 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
                 // switches. Same data-loss invariant as the two checks above —
                 // never finalize a swap that orphans typed bytes.
                 if (state.rejection.kind === "pending") {
-                  showError(
-                    "Quoll: can't switch to the text editor while a change can't be saved — resolve the highlighted problem first."
-                  );
+                  showError(REJECTION_BLOCKS_SWITCH_MESSAGE);
                   return;
                 }
                 // Record intent AFTER the open succeeds and BEFORE the source

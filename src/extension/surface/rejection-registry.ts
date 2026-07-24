@@ -28,6 +28,13 @@
 // cannot delete the live panel's predicate. A missing entry reads as "no
 // rejection" (false) — the safe default that leaves the swap unblocked.
 
+/** User-facing message shown when a forward Quoll→text swap is refused because a
+ *  write-gate rejection is pending. Shared by BOTH forward entry points — the
+ *  command path (reopenActiveQuollTabAsText) and the in-webview switch-to-text arm
+ *  (quoll-editor-panel.ts) — so every refusal reads identically. */
+export const REJECTION_BLOCKS_SWITCH_MESSAGE =
+  "Quoll: can't switch to the text editor while a change can't be saved — resolve the highlighted problem first.";
+
 const pendingRejectionByUri = new Map<string, () => boolean>();
 
 /** Publish `isPending` for `uriKey`. The panel MUST call the returned

@@ -25,7 +25,7 @@ import { commands, TabInputCustom, TabInputText, type TextEditor, window, worksp
 import { stashSwitchCaret, takeSwitchCaret } from "../handoff/editor-switch-caret.js";
 import { QuollEditorPanel } from "../session/quoll-editor-panel.js";
 import { canEditWith } from "./can-edit-with.js";
-import { isRejectionPending } from "./rejection-registry.js";
+import { isRejectionPending, REJECTION_BLOCKS_SWITCH_MESSAGE } from "./rejection-registry.js";
 import { openInTextEditor } from "./reopen-text-editor.js";
 import { showSafely } from "./show-safely.js";
 import { noteSurface } from "./surface-memory.js";
@@ -85,20 +85,19 @@ export async function reopenActiveQuollTabAsText(): Promise<void> {
   // up, CodeMirror never reseeded), so closing the Quoll tab on the clean
   // snapshot would silently orphan it. This command path is tab-only and cannot
   // read the panel's state.rejection directly, so it consults the cross-surface
-  // registry keyed by uri. Fast path: refuse before opening a pointless second
-  // tab. The AUTHORITATIVE check is the shouldAbortClose predicate passed to
-  // finalizeSurfaceSwap below — a rejection can still land during the async open
-  // / finalize awaits, and only a synchronous re-check right before the
-  // irreversible close covers that window (same two-layer shape as the webview
-  // arm). Same message the webview arm shows so both forward entry points read
-  // identically.
+  // registry keyed by uri. This command path has THREE checkpoints against the
+  // same window — fast path (here) / async-window re-check (after the open
+  // resolves) / point-of-no-return (the shouldAbortClose predicate passed to
+  // finalizeSurfaceSwap below). Fast path: refuse before opening a pointless
+  // second tab. It is not sufficient on its own — a rejection can still land
+  // during the async open / finalize awaits — so the later two cover the
+  // remaining windows. (The in-webview switch-to-text arm mirrors this with a
+  // FOURTH check: a drain-time re-check inside its editSettledBarrier, needed
+  // only there because that arm can be DEFERRED behind the write lock; this
+  // command path is never deferred, so it has no drain-time layer.) Same message
+  // the webview arm shows so both forward entry points read identically.
   if (isRejectionPending(uri.toString())) {
-    showSafely(
-      window.showErrorMessage(
-        "Quoll: can't switch to the text editor while a change can't be saved — resolve the highlighted problem first."
-      ),
-      "showErrorMessage"
-    );
+    showSafely(window.showErrorMessage(REJECTION_BLOCKS_SWITCH_MESSAGE), "showErrorMessage");
     return;
   }
   const sourceTab = findSourceTab(uri.toString(), "quoll", QuollEditorPanel.viewType);
@@ -115,12 +114,7 @@ export async function reopenActiveQuollTabAsText(): Promise<void> {
     // Quoll tab so the just-rejected draft is not orphaned (the opened text tab
     // is a harmless second view of the clean disk bytes).
     if (isRejectionPending(uri.toString())) {
-      showSafely(
-        window.showErrorMessage(
-          "Quoll: can't switch to the text editor while a change can't be saved — resolve the highlighted problem first."
-        ),
-        "showErrorMessage"
-      );
+      showSafely(window.showErrorMessage(REJECTION_BLOCKS_SWITCH_MESSAGE), "showErrorMessage");
       return;
     }
     // Record intent AFTER the open succeeds and BEFORE the source close, so the
