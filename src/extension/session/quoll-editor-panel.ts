@@ -892,6 +892,25 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
             const caret = caretWiring.getCaret();
             void openInTextEditor(document.uri).then(
               () => {
+                // Async-window guard: openInTextEditor is async, and the webview
+                // stays live (still focused, still able to emit edits) until
+                // finalizeSurfaceSwap closes the Quoll tab below. A NEW edit that
+                // arrives and fails the write-gate DURING this open sets
+                // state.rejection to "pending" AFTER both earlier checks passed.
+                // Re-check here, immediately before the surface is finalized: if
+                // a rejection landed, retain the Quoll tab (do NOT record the
+                // text-surface intent or close the source) so the just-rejected
+                // draft is not orphaned. The text editor that just opened is a
+                // harmless second view of the clean on-disk bytes; the user
+                // resolves the highlighted problem in the Quoll tab, then
+                // switches. Same data-loss invariant as the two checks above —
+                // never finalize a swap that orphans typed bytes.
+                if (state.rejection.kind === "pending") {
+                  showError(
+                    "Quoll: can't switch to the text editor while a change can't be saved — resolve the highlighted problem first."
+                  );
+                  return;
+                }
                 // Record intent AFTER the open succeeds and BEFORE the source
                 // close, so the surface-restore watcher adopts "text" for this
                 // deliberate Quoll→text swap (a failed open records nothing).

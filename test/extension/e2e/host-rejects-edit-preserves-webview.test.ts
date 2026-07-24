@@ -406,6 +406,54 @@ describe("host-rejects-edit-preserves-webview", function () {
     );
   });
 
+  it("a rejection arriving during the async open (after both guards pass) still retains the Quoll tab", async () => {
+    // Third data-loss window: with no rejection pending, switch-to-text passes
+    // both the receipt-time and drain-time guards and calls openInTextEditor —
+    // which is async, so its tab-closing success callback runs a tick later.
+    // The webview stays live during that open, so a NEW invalid edit can land
+    // and flip state.rejection to "pending" in the gap. simulateInbound is
+    // synchronous, so the edit below is guaranteed to be processed BEFORE
+    // openInTextEditor resolves — deterministically reproducing the race. The
+    // success callback must re-check and retain the Quoll tab.
+    const harness = await getHarness();
+    const uri = tempMd("async-open.md");
+    await vscode.commands.executeCommand("vscode.openWith", uri, VIEW_TYPE);
+    const seed = await harness.waitForEvent(isDocumentEvent, 8000);
+
+    const panel = harness.activePanel;
+    assert.ok(panel);
+    harness.clearEvents();
+
+    const seedV = seed.message.docVersion;
+    const seededContent = (seed.message as { content: string }).content;
+
+    // No rejection yet → switch-to-text passes both guards and (lock free) calls
+    // openInTextEditor synchronously; its success callback is deferred a tick.
+    panel.simulateInbound({ protocol: PROTOCOL_VERSION, type: "switch-to-text" });
+
+    // Synchronously — before openInTextEditor resolves — an invalid edit lands
+    // and fails the write-gate → state.rejection flips to "pending".
+    panel.simulateInbound({
+      protocol: PROTOCOL_VERSION,
+      type: "edit",
+      content: `${seededContent}\n[bad](javascript:alert(1))\n`,
+      baseDocVersion: seedV,
+    });
+    await harness.waitForEvent(isEditRejectedEvent, 5000);
+
+    // When the open resolves, the success callback re-checks and RETAINS the
+    // Quoll tab (draft not orphaned). The just-opened text tab is an accepted
+    // harmless second view here, so this asserts only the data-loss invariant.
+    await tick(800);
+    const tabs = allTabs();
+    assert.ok(
+      tabs.some(customTab(uri)),
+      `Quoll tab must stay open when a rejection lands during the async open — ${JSON.stringify(
+        tabs.map((t) => t.label)
+      )}`
+    );
+  });
+
   it("switch-to-text resumes normally once a follow-up accepted Edit clears the pending rejection", async () => {
     // Fallthrough coverage: after a rejection clears (an accepted Edit), the
     // guard must let the ordinary forward swap proceed — mirrors the sibling
