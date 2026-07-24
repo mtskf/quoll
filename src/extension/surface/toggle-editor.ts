@@ -124,8 +124,12 @@ export async function reopenActiveQuollTabAsText(): Promise<void> {
     // Point-of-no-return guard: finalizeSurfaceSwap still awaits openDoc (and
     // maybe save) before the irreversible tab close, so a rejection landing in
     // THAT window would slip past the check above. Pass the same predicate so the
-    // close is aborted synchronously right before it happens.
-    await finalizeSurfaceSwap(uri, sourceTab, undefined, () => isRejectionPending(uri.toString()));
+    // close is aborted synchronously right before it happens — returning the
+    // shared refusal message as the abort REASON so finalizeSurfaceSwap surfaces
+    // it (one consistent surface with the two fast-path checks above).
+    await finalizeSurfaceSwap(uri, sourceTab, undefined, () =>
+      isRejectionPending(uri.toString()) ? REJECTION_BLOCKS_SWITCH_MESSAGE : null
+    );
   } catch (err) {
     surfaceError("could not open the text editor", err);
   }

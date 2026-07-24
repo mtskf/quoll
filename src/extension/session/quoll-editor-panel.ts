@@ -947,12 +947,12 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
                 // a rejection landing in THAT window would slip past the check
                 // above. Pass the same rejection predicate so the close is
                 // aborted synchronously right before it happens — closing every
-                // async window from open-resolve through the actual close.
-                void finalizeSurfaceSwap(
-                  document.uri,
-                  sourceTab,
-                  undefined,
-                  () => state.rejection.kind === "pending"
+                // async window from open-resolve through the actual close. It
+                // returns the shared refusal message as the abort REASON so
+                // finalizeSurfaceSwap surfaces it (one consistent surface with
+                // the drain-time / async-window checks above).
+                void finalizeSurfaceSwap(document.uri, sourceTab, undefined, () =>
+                  state.rejection.kind === "pending" ? REJECTION_BLOCKS_SWITCH_MESSAGE : null
                 );
               },
               (err: unknown) => {
