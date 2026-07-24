@@ -503,7 +503,7 @@ describe("host-rejects-edit-preserves-webview", function () {
     );
   });
 
-  it("reopenInTextEditor command: a rejection arriving during the async open (after both guards pass) still retains the Quoll tab", async () => {
+  it("reopenInTextEditor command: a rejection arriving during the async open (after the fast-path guard passes) still retains the Quoll tab", async () => {
     // Command-path analogue of the webview async-open test above (PR #256
     // follow-up). reopenActiveQuollTabAsText is TAB-ONLY: its fast-path guard
     // runs synchronously (no rejection yet → passes), then it awaits
