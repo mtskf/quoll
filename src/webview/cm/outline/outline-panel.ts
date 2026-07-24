@@ -61,6 +61,13 @@ const BASE_PAD_PX = 12;
  *  the per-keystroke path while the sidebar is open. */
 const REBUILD_DEBOUNCE_MS = 200;
 
+/** Trailing debounce (ms) before the active-section change is written to the
+ *  live region. Coalesces a caret sweeping across many headings (hold ArrowDown)
+ *  into a single announcement of the section the caret finally settles in — the
+ *  anti-chatter gate. Longer than REBUILD_DEBOUNCE_MS so a rebuild-then-resync
+ *  during a fast edit still yields one settled announcement. */
+const ANNOUNCE_DEBOUNCE_MS = 400;
+
 /** Ceiling (ms) for the ONE forced complete parse on the deliberate open. A
  *  ceiling, not a wait: an already-parsed live view returns instantly. Only a
  *  pathological multi-MB document not yet parsed to its end can hit it, in which
@@ -130,6 +137,11 @@ class OutlinePanel implements PluginValue {
   private readonly resizeEl: HTMLElement;
   private readonly settingsToggleEl: HTMLButtonElement;
   private readonly footerEl: HTMLElement;
+  /** Visually-hidden `aria-live=polite` region. `updateActive` writes the active
+   *  section into it (debounced) so an SR user hears the change when the caret
+   *  crosses a heading in the editor — a cue the silent aria-selected flip alone
+   *  never gave. Lives inside the sidebar so it leaves with it on teardown. */
+  private readonly announcerEl: HTMLElement;
   /** The mounted settings popover, or null while closed. Its presence IS the
    *  open state — no separate boolean can diverge from the DOM. */
   private settingsPopover: SettingsPopover | null = null;
@@ -164,6 +176,15 @@ class OutlinePanel implements PluginValue {
   private rebuildTimer: ReturnType<typeof setTimeout> | null = null;
   private closeTimer: ReturnType<typeof setTimeout> | null = null;
   private openTimer: ReturnType<typeof setTimeout> | null = null;
+  private announceTimer: ReturnType<typeof setTimeout> | null = null;
+  /** The active heading `from` last handed to the announcer — announce only on a
+   *  genuine change, never re-speak the same section on an in-section caret move. */
+  private lastAnnouncedFrom: number | null = null;
+  /** False from open until the first `updateActive` primes the baseline: opening
+   *  the sidebar is not itself a section change, so the first sync records the
+   *  current section silently and only later changes are announced. Reset on each
+   *  open so a reopen re-primes rather than announcing a stale carry-over. */
+  private announcePrimed = false;
 
   constructor(private readonly view: EditorView) {
     // In production the EditorView is mounted inside the `.quoll-editor` host,
@@ -299,9 +320,20 @@ class OutlinePanel implements PluginValue {
     footer.appendChild(settingsEl);
     this.footerEl = footer;
 
+    // Visually-hidden polite live region for active-section changes. Present in
+    // the DOM before any text lands, so the first write is a mutation SRs
+    // announce; aria-atomic reads the short phrase as a unit. Empty at rest — it
+    // only ever holds the transient "<heading> — current section" cue. Mirrors
+    // the fenced-code copy button's status-region idiom.
+    this.announcerEl = document.createElement("div");
+    this.announcerEl.className = "quoll-outline-announcer";
+    this.announcerEl.setAttribute("aria-live", "polite");
+    this.announcerEl.setAttribute("aria-atomic", "true");
+
     this.sidebarEl.appendChild(header);
     this.sidebarEl.appendChild(this.listEl);
     this.sidebarEl.appendChild(footer);
+    this.sidebarEl.appendChild(this.announcerEl);
 
     // Sidebar FIRST in DOM order (before CodeMirror's element) so the pinned
     // flex row reads sidebar-then-editor without `order` tricks, and the tab /
@@ -404,6 +436,9 @@ class OutlinePanel implements PluginValue {
   destroy(): void {
     if (this.rebuildTimer !== null) {
       clearTimeout(this.rebuildTimer);
+    }
+    if (this.announceTimer !== null) {
+      clearTimeout(this.announceTimer);
     }
     this.cancelScheduledClose();
     this.cancelScheduledOpen();
@@ -517,6 +552,9 @@ class OutlinePanel implements PluginValue {
       // Closing the sidebar closes the settings popover too (it lives in the
       // footer; a lingering popover over a closed sidebar has no meaning).
       this.closeSettings();
+      // Drop any pending / rendered announcement — a live-region write must never
+      // fire into a closed (inert) sidebar, and the region starts empty next open.
+      this.clearAnnouncement();
     }
     if (!open && this.pinned) {
       // Invariant: pinned ⇒ open. An explicit close (toggle / Mod-Alt-o)
@@ -533,6 +571,10 @@ class OutlinePanel implements PluginValue {
       if (document.activeElement === this.toggleEl) {
         this.pinEl.focus();
       }
+      // Re-prime the announcer so the first updateActive from the open rebuild
+      // records the current section silently (opening is not a section change);
+      // only later caret-driven changes speak.
+      this.announcePrimed = false;
       // Opening is a deliberate action — rebuild immediately AND force a
       // complete parse so the WHOLE document's headings appear, not just the
       // parsed viewport. The only forced parse; off the keystroke path.
@@ -1135,6 +1177,54 @@ class OutlinePanel implements PluginValue {
     if (!this.listEl.contains(document.activeElement)) {
       this.setTabbable(activeFrom ?? this.firstVisibleFrom());
     }
+    this.announceActive(activeFrom);
+  }
+
+  /** Debounced polite announcement of the active section for SR users. The
+   *  aria-selected flip above is silent, so without this a caret crossing a
+   *  heading in the editor gives no cue. Announce ONLY on a genuine section
+   *  change, and never on the open-time prime nor while the tree itself holds
+   *  focus (row navigation already announces each treeitem). A trailing debounce
+   *  coalesces a fast caret sweep into one settled announcement. */
+  private announceActive(activeFrom: number | null): void {
+    if (!this.announcePrimed) {
+      // First sync after open records the baseline silently — opening the
+      // sidebar is not itself a section change.
+      this.announcePrimed = true;
+      this.lastAnnouncedFrom = activeFrom;
+      return;
+    }
+    if (activeFrom === this.lastAnnouncedFrom) {
+      return; // same section — an in-section caret move, nothing new to speak
+    }
+    this.lastAnnouncedFrom = activeFrom;
+    // While focus is in the tree the user is arrow-navigating rows, which the SR
+    // announces per-treeitem on focus; a redundant live-region cue would double
+    // up. Only caret-driven changes (focus outside the tree) need the region.
+    if (this.listEl.contains(document.activeElement)) {
+      return;
+    }
+    const heading =
+      activeFrom === null ? undefined : this.headings.find((h) => h.from === activeFrom);
+    const label =
+      heading === undefined ? null : heading.text.length > 0 ? heading.text : "(untitled)";
+    if (this.announceTimer !== null) {
+      clearTimeout(this.announceTimer);
+    }
+    this.announceTimer = setTimeout(() => {
+      this.announceTimer = null;
+      this.announcerEl.textContent = label === null ? "" : `${label} — current section`;
+    }, ANNOUNCE_DEBOUNCE_MS);
+  }
+
+  /** Cancel a pending announcement and blank the live region — used on close so a
+   *  write never lands in the inert sidebar and the region reopens empty. */
+  private clearAnnouncement(): void {
+    if (this.announceTimer !== null) {
+      clearTimeout(this.announceTimer);
+      this.announceTimer = null;
+    }
+    this.announcerEl.textContent = "";
   }
 }
 

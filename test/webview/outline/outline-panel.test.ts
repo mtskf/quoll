@@ -552,6 +552,52 @@ describe("quollOutline sidebar", () => {
     expect(selected()).toEqual(["false", "true"]);
   });
 
+  it("announces the active-section change to a polite live region (debounced), silent on open", () => {
+    vi.useFakeTimers();
+    const { view: v, host } = mount("# Alpha\n\nbody\n\n## Beta\n\nmore\n");
+    v.plugin(outlinePlugin)?.toggle(); // open + build → primes baseline silently
+    const announcer = host.querySelector(".quoll-outline-announcer") as HTMLElement;
+    expect(announcer.getAttribute("aria-live")).toBe("polite");
+    expect(announcer.textContent).toBe(""); // opening is not a section change
+    v.dispatch({ selection: EditorSelection.cursor(v.state.doc.line(5).from) }); // → "## Beta"
+    expect(announcer.textContent).toBe(""); // debounced — not written yet
+    vi.runAllTimers();
+    expect(announcer.textContent).toBe("Beta — current section");
+  });
+
+  it("coalesces a rapid caret sweep into one settled announcement (last section wins)", () => {
+    vi.useFakeTimers();
+    const { view: v, host } = mount("# Alpha\n\nbody\n\n## Beta\n\nmore\n");
+    v.plugin(outlinePlugin)?.toggle();
+    const announcer = host.querySelector(".quoll-outline-announcer") as HTMLElement;
+    v.dispatch({ selection: EditorSelection.cursor(v.state.doc.line(5).from) }); // → Beta
+    v.dispatch({ selection: EditorSelection.cursor(v.state.doc.line(3).from) }); // → Alpha (body)
+    vi.runAllTimers();
+    expect(announcer.textContent).toBe("Alpha — current section"); // only the final one
+  });
+
+  it("does not re-announce an in-section caret move (same active heading)", () => {
+    vi.useFakeTimers();
+    const { view: v, host } = mount("# Alpha\n\nbody\n\nmore\n");
+    v.plugin(outlinePlugin)?.toggle();
+    const announcer = host.querySelector(".quoll-outline-announcer") as HTMLElement;
+    v.dispatch({ selection: EditorSelection.cursor(v.state.doc.line(3).from) }); // still under Alpha
+    vi.runAllTimers();
+    expect(announcer.textContent).toBe(""); // no section change → nothing spoken
+  });
+
+  it("clears a pending announcement when the sidebar closes", () => {
+    vi.useFakeTimers();
+    const { view: v, host } = mount("# Alpha\n\nbody\n\n## Beta\n\nmore\n");
+    const plugin = v.plugin(outlinePlugin);
+    plugin?.toggle(); // open
+    const announcer = host.querySelector(".quoll-outline-announcer") as HTMLElement;
+    v.dispatch({ selection: EditorSelection.cursor(v.state.doc.line(5).from) }); // → Beta (pending)
+    plugin?.toggle(); // close before the debounce fires
+    vi.runAllTimers();
+    expect(announcer.textContent).toBe(""); // never written into the inert sidebar
+  });
+
   it("does not mark the empty-state row as a treeitem", () => {
     const { view: v, host } = mount("no headings here\n");
     v.plugin(outlinePlugin)?.toggle();
