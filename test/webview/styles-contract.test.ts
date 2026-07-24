@@ -252,6 +252,21 @@ describe("styles.css — frontmatter metadata block (C8a)", () => {
     expect(css).toMatch(/\.quoll-frontmatter-list\s*\{[^}]*grid-template-columns/s);
   });
 
+  it("nudges the muted text toward editor-foreground for AA contrast (not a bare descriptionForeground)", () => {
+    // A11Y-08: the bare host descriptionForeground lands at ~4.40:1 on the card,
+    // just under AA 4.5:1. The fix mixes it 10% toward the editor foreground
+    // (monotonic: darkens on light / lightens on dark) so contrast clears the
+    // floor while staying host-theme-adaptive. Pin the exact formula so a future
+    // edit that reverts to the bare passthrough (or changes the mix) goes red —
+    // `pnpm a11y:probe` is dev-only, non-CI, and non-fatal, so unit tests are the
+    // sole automated guard. Same precedent as the --quoll-selection-fill color-mix
+    // assertion below.
+    const rule = css.match(/\.quoll-frontmatter-block\s*\{([^}]*)\}/s)?.[1] ?? "";
+    expect(rule).toMatch(
+      /color\s*:\s*color-mix\(\s*in srgb,\s*var\(--vscode-descriptionForeground,\s*#616161\)\s*90%,\s*var\(--vscode-editor-foreground,\s*#000\)\s*\)/
+    );
+  });
+
   it("insets .quoll-frontmatter-block with an order-proof horizontal margin (vertical stays 0)", () => {
     // Own-border card can't reuse the transparent-border spacer; inset via a
     // horizontal margin on the COMPOUND selector so it beats `.quoll-block { margin:0 }`

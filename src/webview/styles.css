@@ -717,8 +717,22 @@ html body {
      * 1.7 prose rhythm otherwise, which reads too airy for a metadata list).
      * Colour lives on the root so both keys and values inherit the mute — key
      * emphasis is carried by weight alone (dt below), keeping the block one
-     * cohesive quiet unit. */
-    color: var(--vscode-descriptionForeground, inherit);
+     * cohesive quiet unit.
+     *
+     * A11Y (AA contrast floor): the bare host descriptionForeground lands at
+     * ~4.40:1 on the editorWidget-background card in Default Light+ (and both HC
+     * themes) — marginally under the 4.5:1 AA normal-text threshold. Nudge it 10%
+     * toward the editor FOREGROUND so it darkens on light / lightens on dark
+     * (monotonic: contrast only ever rises, dark already clears at ~9.5:1),
+     * clearing 4.5:1 (~5.2:1 light) while staying host-theme-adaptive and still
+     * visibly quieter than body prose. Mixing toward editor-foreground follows
+     * the surface-tint precedent in cm/theme.ts. Concrete fallbacks (not the old
+     * `inherit`) because color-mix cannot take the `inherit` keyword. */
+    color: color-mix(
+      in srgb,
+      var(--vscode-descriptionForeground, #616161) 90%,
+      var(--vscode-editor-foreground, #000)
+    );
     font-size: 0.85em;
     line-height: 1.5;
     cursor: text; /* C8b: click-to-edit reveals the raw YAML source */
