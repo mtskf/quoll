@@ -245,17 +245,20 @@ describe("finalizeSurfaceSwap shouldAbortClose (point-of-no-return guard)", () =
     expect(closeTab).toHaveBeenCalledWith(LIVE_TAB);
   });
 
-  it("treats an EMPTY reason as no-abort (never shows a blank toast)", async () => {
-    // Aborting must carry a visible message, so an empty string is treated as
-    // "do not abort" rather than aborting with a blank warning toast. Closes
-    // normally and fires no warning.
+  it("treats an EMPTY reason as a FAIL-SAFE abort (keeps both open, shows a fallback warning)", async () => {
+    // A point-of-no-return data-loss guard must default to keeping both surfaces
+    // open on ANY non-null return — never take the irreversible close because the
+    // caller's diagnostic string happened to be empty. The empty reason falls
+    // back to a generic, non-blank warning so the abort stays user-visible.
     const doc = fakeDoc(false, true);
     const { deps, closeTab } = makeDeps(doc);
     const warn = vi.spyOn(window, "showWarningMessage");
     try {
       await finalizeSurfaceSwap(fileUri, SENTINEL_TAB, deps, () => "");
-      expect(closeTab).toHaveBeenCalledWith(LIVE_TAB);
-      expect(warn).not.toHaveBeenCalled();
+      expect(closeTab).not.toHaveBeenCalled();
+      expect(warn).toHaveBeenCalledTimes(1);
+      const shown = warn.mock.calls[0]?.[0] as string;
+      expect(shown.length).toBeGreaterThan(0);
     } finally {
       warn.mockRestore();
     }

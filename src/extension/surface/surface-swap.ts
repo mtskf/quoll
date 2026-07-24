@@ -150,16 +150,18 @@ const REAL_SWAP_DEPS: FinalizeSwapDeps = {
  *  e.g. a write-gate rejection that lands during those awaits, leaving the
  *  user's draft only in the source webview — pass this; it is re-checked
  *  SYNCHRONOUSLY immediately before the close (no await after it), so nothing
- *  can slip the condition past the check. A non-empty string return is the abort
- *  REASON: finalizeSurfaceSwap ITSELF logs and shows it as a warning toast (the
- *  abort is user-visible by CONTRACT, not by caller courtesy — at check time the
- *  user's focus is on the freshly opened text tab, so a bare boolean + silent
- *  abort would read as a dead keybinding). Aborting therefore REQUIRES a visible
- *  message: null / undefined / "" never abort (an empty reason could only show a
- *  blank toast, so it is treated as "do not abort" — existing callers return the
- *  shared refusal constant or null). This is the single refusal surface for
- *  every window this guard covers. Abort → both-open (safe), symmetric with the
- *  save-failure degradation. */
+ *  can slip the condition past the check. A non-null return is the abort REASON:
+ *  finalizeSurfaceSwap ITSELF logs and shows it as a warning toast (the abort is
+ *  user-visible by CONTRACT, not by caller courtesy — at check time the user's
+ *  focus is on the freshly opened text tab, so a bare boolean + silent abort
+ *  would read as a dead keybinding). Fail-safe on the ambiguous case: any
+ *  non-null reason aborts — including an empty string — because a point-of-no-
+ *  return data-loss guard must default to keeping both surfaces open, NEVER to
+ *  the irreversible close; an empty reason falls back to a generic message so
+ *  the abort is never a blank toast (no current caller returns "" — this is
+ *  defence against a future one). Only `null` / `undefined` proceed to the
+ *  close. This is the single refusal surface for every window this guard covers.
+ *  Abort → both-open (safe), symmetric with the save-failure degradation. */
 export async function finalizeSurfaceSwap(
   uri: Uri,
   sourceTab: Tab | undefined,
@@ -215,17 +217,21 @@ export async function finalizeSurfaceSwap(
     // Point-of-no-return guard (see the doc comment): re-check the caller's
     // abort condition SYNCHRONOUSLY here — after the openDoc/save awaits AND the
     // reresolve, immediately before the irreversible close, with NO await
-    // following — so nothing can slip the condition past it. A non-empty return
+    // following — so nothing can slip the condition past it. A non-null return
     // is the abort REASON; we own the user-visible warning (a silent no-op reads
     // as a dead keybinding — same rule the save-failure branch above follows,
-    // and the single refusal surface for every window this guard covers). Empty
-    // / null ⇒ proceed: aborting must carry a visible message, never a blank toast.
+    // and the single refusal surface for every window this guard covers).
+    // Fail-safe: any non-null reason aborts (a guard hit must NEVER take the
+    // irreversible close); an empty reason falls back to a generic message so the
+    // abort is user-visible, never a blank toast. Only null/undefined proceed.
     const abortReason = shouldAbortClose?.();
-    if (abortReason) {
+    if (abortReason != null) {
+      const message =
+        abortReason || "Quoll: couldn't complete the editor switch, so both editors stay open.";
       console.warn(
-        `[quoll] surface-swap: close aborted by caller guard (${abortReason}); leaving both surfaces open`
+        `[quoll] surface-swap: close aborted by caller guard (${message}); leaving both surfaces open`
       );
-      showSafely(window.showWarningMessage(abortReason), "showWarningMessage");
+      showSafely(window.showWarningMessage(message), "showWarningMessage");
       return;
     }
     const closed = liveSourceTab ? await deps.closeTab(liveSourceTab) : true;
