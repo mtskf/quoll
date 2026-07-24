@@ -287,6 +287,61 @@ describe("isHostToWebview — document", () => {
   });
 });
 
+// ---------- isHostToWebview / document — externalEpoch + epochGeneration (S3a) ----------
+
+describe("isHostToWebview — document epoch identity pair (S3a)", () => {
+  // Absence is TOLERATED (old host → new webview skew): both omitted = valid.
+  it("accepts a document with NEITHER epoch field (pure-absent, today's behaviour)", () => {
+    expect(isHostToWebview(validDocument())).toBe(true);
+  });
+
+  it("accepts a document carrying BOTH valid epoch fields", () => {
+    expect(isHostToWebview({ ...validDocument(), externalEpoch: 0, epochGeneration: 12345 })).toBe(
+      true
+    );
+    expect(isHostToWebview({ ...validDocument(), externalEpoch: 7, epochGeneration: 1 })).toBe(
+      true
+    );
+  });
+
+  // Partial pair = boundary-INVALID (the webview never sees a half-formed identity).
+  it("rejects a PARTIAL pair — externalEpoch present, epochGeneration absent", () => {
+    expect(isHostToWebview({ ...validDocument(), externalEpoch: 3 })).toBe(false);
+  });
+
+  it("rejects a PARTIAL pair — epochGeneration present, externalEpoch absent", () => {
+    expect(isHostToWebview({ ...validDocument(), epochGeneration: 3 })).toBe(false);
+  });
+
+  // An explicit `undefined` for one half is treated as absent, so a value + an
+  // explicit-undefined is still a partial pair → invalid.
+  it("rejects externalEpoch present with epochGeneration explicitly undefined", () => {
+    expect(
+      isHostToWebview({ ...validDocument(), externalEpoch: 2, epochGeneration: undefined })
+    ).toBe(false);
+  });
+
+  const badEpochComponents: Array<[string, unknown]> = [
+    ["negative", -1],
+    ["fractional", 1.5],
+    ["NaN", Number.NaN],
+    ["Infinity", Number.POSITIVE_INFINITY],
+    ["beyond 2^53", Number.MAX_SAFE_INTEGER + 1],
+    ["string", "1"],
+    ["boolean", true],
+    ["null", null],
+    ["object", {}],
+  ];
+
+  it.each(badEpochComponents)("rejects invalid externalEpoch (%s)", (_label, externalEpoch) => {
+    expect(isHostToWebview({ ...validDocument(), externalEpoch, epochGeneration: 1 })).toBe(false);
+  });
+
+  it.each(badEpochComponents)("rejects invalid epochGeneration (%s)", (_label, epochGeneration) => {
+    expect(isHostToWebview({ ...validDocument(), externalEpoch: 0, epochGeneration })).toBe(false);
+  });
+});
+
 // ---------- isHostToWebview / theme ----------
 
 describe("isHostToWebview — theme", () => {

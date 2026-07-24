@@ -39,13 +39,19 @@ describe("buildDocumentMessageFromDocument", () => {
       docVersion: 3,
       themeKind: "light",
       canWrite: true,
+      externalEpoch: 2,
+      epochGeneration: 99,
     });
     expect(msg.content).toBe("a\r\nb\r\nc");
     expect(msg.docVersion).toBe(3);
+    expect(msg.externalEpoch).toBe(2);
+    expect(msg.epochGeneration).toBe(99);
     expect(Object.keys(msg).sort()).toEqual([
       "canWrite",
       "content",
       "docVersion",
+      "epochGeneration",
+      "externalEpoch",
       "protocol",
       "themeKind",
       "type",

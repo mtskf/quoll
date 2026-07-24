@@ -23,21 +23,25 @@ function makeDeps(over: Partial<EffectExecutorDeps> = {}): EffectExecutorDeps {
     recordEvent: vi.fn(),
     showError: vi.fn(),
     canWrite: () => true,
-    buildSeedDocument: (v) => ({
+    buildSeedDocument: (v, externalEpoch, epochGeneration) => ({
       protocol: 1,
       type: "document",
       content: "",
       docVersion: v,
       canWrite: true,
       themeKind: "light",
+      externalEpoch,
+      epochGeneration,
     }),
-    buildRejectedDraft: (content, v) => ({
+    buildRejectedDraft: (content, v, externalEpoch, epochGeneration) => ({
       protocol: 1,
       type: "document",
       content,
       docVersion: v,
       canWrite: true,
       themeKind: "light",
+      externalEpoch,
+      epochGeneration,
     }),
     buildTheme: (themeKind) => ({ protocol: 1, type: "theme", themeKind }),
     buildEditRejected: (error) => ({ protocol: 1, type: "edit-rejected", error }),
@@ -45,6 +49,7 @@ function makeDeps(over: Partial<EffectExecutorDeps> = {}): EffectExecutorDeps {
       readText: () => "",
       readVersion: () => 0,
       readCanonical: () => "",
+      canonicalize: (text) => text,
       build: () => ({}),
       apply: async () => true,
     },
@@ -148,6 +153,7 @@ describe("effect-executor runApplyEdit (via applyEdit effect)", () => {
       readText: () => "abc",
       readVersion: () => 7,
       readCanonical: () => "abc",
+      canonicalize: (t) => t,
       build: () => ({}),
       apply,
     };
@@ -170,6 +176,7 @@ describe("effect-executor runApplyEdit (via applyEdit effect)", () => {
       readText: () => "abc",
       readVersion: () => 7,
       readCanonical: () => "",
+      canonicalize: (t) => t,
       build: () => {
         throw new Error("boom-build");
       },
@@ -193,6 +200,7 @@ describe("effect-executor runApplyEdit (via applyEdit effect)", () => {
       readText: () => "abc",
       readVersion: () => 7,
       readCanonical: () => "",
+      canonicalize: (t) => t,
       build: () => ({}),
       apply: () => {
         throw new Error("boom-apply");
@@ -216,6 +224,7 @@ describe("effect-executor runApplyEdit (via applyEdit effect)", () => {
       readText: () => "abc",
       readVersion: () => 8,
       readCanonical: () => "",
+      canonicalize: (t) => t,
       build: () => ({}),
       apply: async () => true,
     };
@@ -239,6 +248,7 @@ describe("effect-executor runApplyEdit (via applyEdit effect)", () => {
       readText: () => "abc",
       readVersion: () => 8,
       readCanonical: () => "",
+      canonicalize: (t) => t,
       build: () => ({}),
       apply: async () => false,
     };
@@ -265,6 +275,7 @@ describe("effect-executor runApplyEdit (via applyEdit effect)", () => {
       readText: () => "abc",
       readVersion: () => 8,
       readCanonical: () => "",
+      canonicalize: (t) => t,
       build: () => ({}),
       apply: () => Promise.reject(new Error("rej")),
     };
@@ -298,6 +309,7 @@ describe("effect-executor runApplyEdit (via applyEdit effect)", () => {
       readText: () => "abc",
       readVersion: () => 9,
       readCanonical: () => "",
+      canonicalize: (t) => t,
       build: () => ({}),
       apply: async () => true,
     };
@@ -332,6 +344,7 @@ describe("effect-executor runApplyEdit (via applyEdit effect)", () => {
       readText: () => "abc",
       readVersion: () => 9,
       readCanonical: () => "",
+      canonicalize: (t) => t,
       build: () => ({}),
       apply: async () => false,
     };
@@ -355,21 +368,67 @@ describe("effect-executor runApplyEdit (via applyEdit effect)", () => {
     );
   });
 
-  it("drainSnapshot reads canonical only when a stash waits", () => {
+  // S3a (site 2): the settlement now reads canonical on EVERY settlement (the
+  // epoch foreign-bytes verify), so the old skip-unless-stash optimisation is
+  // GONE. readCanonical is called even with no stash — the `host:settle-verify`
+  // perf stage is the cost this pins. The dispatched event carries that canonical
+  // as `currentContent`, and `preApplyContent` is "" on the OK hot path (the
+  // canonicalise is skipped for ok).
+  it("settlement reads canonical on EVERY settlement (site 2 verify), even with no stash", () => {
     const readCanonical = vi.fn(() => "canon");
+    const canonicalize = vi.fn((t: string) => t);
+    const dispatch = vi.fn();
     const seam = {
       readText: () => "abc",
       readVersion: () => 7,
       readCanonical,
+      canonicalize,
       build: () => ({}),
       apply: vi.fn(async () => true),
     };
-    // no-op span → settles immediately; pendingEdit null → readCanonical NOT called
+    // no-op span → settles immediately (ok); pendingEdit null.
     const { runEffects } = createEffectExecutor(
-      makeDeps({ dispatch: vi.fn(), getState: () => noStash, applyEditSeam: seam })
+      makeDeps({ dispatch, getState: () => noStash, applyEditSeam: seam })
     );
     runEffects([{ type: "applyEdit", content: "abc", baseDocVersion: 6 }]);
-    expect(readCanonical).not.toHaveBeenCalled();
+    expect(readCanonical).toHaveBeenCalledTimes(1);
+    // OK outcome → the pre-apply canonicalise is skipped (preApplyContent "").
+    expect(canonicalize).not.toHaveBeenCalled();
+    expect(dispatch).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "applyEditSettled",
+        currentContent: "canon",
+        preApplyContent: "",
+      })
+    );
+  });
+
+  it("settlement canonicalises the pre-apply snapshot for a NON-OK outcome (non-ok baseline)", async () => {
+    const canonicalize = vi.fn((t: string) => `canon(${t})`);
+    const dispatch = vi.fn();
+    const seam = {
+      readText: () => "old-bytes",
+      readVersion: () => 8,
+      readCanonical: () => "settled-canon",
+      canonicalize,
+      build: () => ({}),
+      apply: async () => false, // refused → non-ok
+    };
+    const { runEffects } = createEffectExecutor(
+      makeDeps({ dispatch, getState: () => noStash, applyEditSeam: seam })
+    );
+    runEffects([{ type: "applyEdit", content: "abcd", baseDocVersion: 6 }]);
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(canonicalize).toHaveBeenCalledWith("old-bytes");
+    expect(dispatch).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "applyEditSettled",
+        outcome: { kind: "refused" },
+        currentContent: "settled-canon",
+        preApplyContent: "canon(old-bytes)",
+      })
+    );
   });
 
   // Codex #2: the snapshot is LAZY. A stash that appears AFTER apply-start but
@@ -382,6 +441,7 @@ describe("effect-executor runApplyEdit (via applyEdit effect)", () => {
       readText: () => "abc",
       readVersion: () => 8,
       readCanonical,
+      canonicalize: (t) => t,
       build: () => ({}),
       apply: async () => true,
     };
@@ -414,6 +474,7 @@ describe("effect-executor sendEditRejected (via postEditRejected effect)", () =>
           readText: () => "",
           readVersion: () => 11,
           readCanonical: () => "",
+          canonicalize: (t) => t,
           build: () => ({}),
           apply: async () => true,
         },
@@ -561,8 +622,9 @@ describe("effect-executor runEffects other cases", () => {
         }) as HostToWebview
     );
     const { runEffects } = createEffectExecutor(makeDeps({ send, buildSeedDocument }));
-    runEffects([{ type: "postDocument", docVersion: 5 }]);
-    expect(buildSeedDocument).toHaveBeenCalledWith(5);
+    runEffects([{ type: "postDocument", docVersion: 5, externalEpoch: 2, epochGeneration: 88 }]);
+    // The builder receives the core-managed identity pair from the effect.
+    expect(buildSeedDocument).toHaveBeenCalledWith(5, 2, 88);
     expect(send).toHaveBeenCalled();
   });
 
@@ -578,7 +640,17 @@ describe("effect-executor runEffects other cases", () => {
         getState: () => ({ lastAppliedDocVersion: 0 }) as unknown as HostSessionState,
       })
     );
-    runEffects([{ type: "postRejectedDraft", content: "c", docVersion: 2, error: rejErr, id: 9 }]);
+    runEffects([
+      {
+        type: "postRejectedDraft",
+        content: "c",
+        docVersion: 2,
+        externalEpoch: 0,
+        epochGeneration: 1,
+        error: rejErr,
+        id: 9,
+      },
+    ]);
     await Promise.resolve();
     await Promise.resolve();
     // document first, edit-rejected second (order is load-bearing)
@@ -632,11 +704,13 @@ describe("effect-executor runEffects other cases", () => {
         docVersion: v,
         canWrite: true,
         themeKind,
+        externalEpoch: 0,
+        epochGeneration: 1,
       }) as HostToWebview;
     const { runEffects } = createEffectExecutor(makeDeps({ send, buildSeedDocument }));
-    runEffects([{ type: "postDocument", docVersion: 1 }]);
+    runEffects([{ type: "postDocument", docVersion: 1, externalEpoch: 0, epochGeneration: 1 }]);
     themeKind = "dark"; // theme changes AFTER the factory was built
-    runEffects([{ type: "postDocument", docVersion: 2 }]);
+    runEffects([{ type: "postDocument", docVersion: 2, externalEpoch: 0, epochGeneration: 1 }]);
     expect(seen).toEqual(["light", "dark"]);
   });
 });

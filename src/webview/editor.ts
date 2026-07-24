@@ -109,7 +109,13 @@ export type EditorOptions = {
 
 export type EditorHandle = {
   /** Replace the editor's document from a host snapshot. */
-  applyDocument(rawText: string, canWrite: boolean, baseDocVersion: number): void;
+  applyDocument(
+    rawText: string,
+    canWrite: boolean,
+    baseDocVersion: number,
+    externalEpoch?: number,
+    epochGeneration?: number
+  ): void;
   /** Fired by the shell after every state-changing dispatch — the SOLE
    *  drain entry point. */
   onReducerCommit(editInFlight: boolean): void;
@@ -804,7 +810,7 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
   }
 
   return {
-    applyDocument(rawText, canWrite, baseDocVersion) {
+    applyDocument(rawText, canWrite, baseDocVersion, externalEpoch, epochGeneration) {
       // Cancel a scheduled flush BEFORE writing the snapshot so a pending
       // debounced Edit cannot post the host's own bytes back — this also
       // captures an in-window keystroke into the buffer so it survives
@@ -892,7 +898,7 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
         // echo-Edit detection.
         seeding = false;
       }
-      sync.onHostSnapshot(baseDocVersion, canWrite);
+      sync.onHostSnapshot(baseDocVersion, canWrite, externalEpoch, epochGeneration);
       setReadOnlyClass(canWrite);
     },
     resolveImageWrite(requestId, relativePath) {

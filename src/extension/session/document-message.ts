@@ -38,13 +38,20 @@ export type BuildDocumentMessageInput = {
   docVersion: number;
   themeKind: ThemeKind;
   canWrite: boolean;
+  // The Document identity pair (S3a). The host always emits BOTH now (the wire
+  // optionality is purely reception tolerance for an old host — see
+  // protocol.ts `EpochIdentity`), so both are required at the builder.
+  externalEpoch: number;
+  epochGeneration: number;
 };
 
 /** Construct the final-shape Document message. No `reason` field — the
  *  property is deliberately absent so a future re-introduction shows up
  *  as a TS error at every call site rather than as a silently-accepted
  *  extra field, and the Object.keys assertion in the unit test catches
- *  it before it reaches the wire. */
+ *  it before it reaches the wire. Always emits `externalEpoch` +
+ *  `epochGeneration` (the exclusive pair) — the key-set test pins their
+ *  presence. */
 export function buildDocumentMessage(input: BuildDocumentMessageInput): DocumentMessage {
   return {
     protocol: PROTOCOL_VERSION,
@@ -53,6 +60,8 @@ export function buildDocumentMessage(input: BuildDocumentMessageInput): Document
     docVersion: input.docVersion,
     themeKind: input.themeKind,
     canWrite: input.canWrite,
+    externalEpoch: input.externalEpoch,
+    epochGeneration: input.epochGeneration,
   };
 }
 

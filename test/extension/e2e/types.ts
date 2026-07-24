@@ -39,6 +39,10 @@ export type DocumentMessageShape = EnvelopeShape & {
   docVersion: number;
   themeKind: ThemeKindShape;
   canWrite: boolean;
+  // Exclusive pair enforced by the validator (see src/shared/protocol.ts);
+  // typed as independently optional to mirror the source.
+  externalEpoch?: number;
+  epochGeneration?: number;
 };
 
 export type ReadyMessageShape = EnvelopeShape & {
