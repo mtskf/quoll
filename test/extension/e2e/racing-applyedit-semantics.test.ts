@@ -247,9 +247,13 @@ describe("racing-applyedit-semantics (Plan S5 experiment)", function () {
   it("records the version delta of an accepted single-span applyEdit (S3a O(1)-fallback premise)", async () => {
     // Validates the premise the S3a perf gate's O(1) alternative rests on:
     // "an accepted single-span applyEdit advances document.version by exactly 1".
-    // Measured on the SAME WorkspaceEdit shape the host emits (one `replace`
-    // over a minimal range) — via a direct apply (authoritative, no reducer
-    // interference) AND observed once through the Quoll edit path.
+    // Measured via a direct apply of the SAME WorkspaceEdit shape the host
+    // emits (one `replace` over a minimal range) — authoritative, no reducer
+    // interference. The Quoll edit path issues the identical single-span
+    // WorkspaceEdit through `applyEditSeam`, so the +1 semantics pinned here
+    // hold for it unchanged; driving it through `simulateInbound` as well would
+    // add nothing to the version-delta premise (and the first test already
+    // exercises the full Quoll apply path end-to-end).
     const base = "alpha bravo charlie\n";
     const uri = await openTemp(base);
 
