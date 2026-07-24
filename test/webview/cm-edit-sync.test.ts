@@ -853,3 +853,52 @@ describe("cm edit-sync — flushIfIdle", () => {
     }
   });
 });
+
+// S3a: the identity pair is RECORD-ONLY. onHostSnapshot captures
+// (externalEpoch, epochGeneration) alongside the version; nothing acts on it
+// yet (no buffer is dropped, no replay is gated) — S3b consumes it. These pins
+// keep the record-only contract honest so a premature behaviour change reddens.
+describe("cm edit-sync — recordedIdentity (S3a record-only)", () => {
+  it("starts null before the first snapshot", () => {
+    const s = setup();
+    expect(s.sync.recordedIdentity()).toEqual({ epoch: null, generation: null });
+  });
+
+  it("records the pair from an accepted host snapshot", () => {
+    const s = setup();
+    s.sync.onHostSnapshot(1, true, 3, 12345);
+    expect(s.sync.recordedIdentity()).toEqual({ epoch: 3, generation: 12345 });
+  });
+
+  it("records null for an omitted pair (old-host tolerance)", () => {
+    const s = setup();
+    s.sync.onHostSnapshot(1, true); // legacy host: no pair
+    expect(s.sync.recordedIdentity()).toEqual({ epoch: null, generation: null });
+  });
+
+  it("updates the recorded pair on each accepted snapshot", () => {
+    const s = setup();
+    s.sync.onHostSnapshot(1, true, 0, 999);
+    s.sync.onHostSnapshot(2, true, 1, 999);
+    expect(s.sync.recordedIdentity()).toEqual({ epoch: 1, generation: 999 });
+  });
+
+  it("does NOT update the recorded pair on a stale (older-version) snapshot", () => {
+    const s = setup();
+    s.sync.onHostSnapshot(5, true, 4, 777);
+    s.sync.onHostSnapshot(3, true, 2, 888); // stale — ignored wholesale
+    expect(s.sync.recordedIdentity()).toEqual({ epoch: 4, generation: 777 });
+  });
+
+  it("is record-only: recording an advanced epoch does NOT drop a held buffer or trigger a replay", () => {
+    const s = setup();
+    s.sync.onHostSnapshot(1, true, 0, 555);
+    s.type("typed-while-editing"); // buffers/posts under normal single-flight
+    s.posted.length = 0;
+    // A later snapshot records a HIGHER epoch (would be a foreign advance in
+    // S3b). In S3a nothing acts on it — no extra post, buffer untouched.
+    s.sync.onHostSnapshot(1, true, 1, 555);
+    expect(s.sync.recordedIdentity()).toEqual({ epoch: 1, generation: 555 });
+    expect(s.posted).toEqual([]);
+  });
+});

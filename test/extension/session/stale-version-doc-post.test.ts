@@ -28,7 +28,11 @@ import type { HostToWebview } from "../../../src/shared/protocol.js";
 
 const ctx = { uriString: "file:///x.md", fsPath: "/x.md" };
 const okValidate = () => ({ ok: true }) as const;
-const core = createHostSessionCore(ctx, { validateForWrite: okValidate });
+const GEN = 555;
+const core = createHostSessionCore(ctx, {
+  validateForWrite: okValidate,
+  mintEpochGeneration: () => GEN,
+});
 
 const state = (over: Partial<HostSessionState> = {}): HostSessionState => ({
   context: ctx,
@@ -39,6 +43,8 @@ const state = (over: Partial<HostSessionState> = {}): HostSessionState => ({
   nextRejectionId: 1,
   pendingEdit: null,
   inFlightContent: null,
+  externalEpoch: 0,
+  epochGeneration: GEN,
   ...over,
 });
 
@@ -54,8 +60,10 @@ describe("stale-version Document post: keystroke is not lost", () => {
     });
     // The reseed the webview receives carries the LIVE version (2) — matching
     // the live bytes buildSeedDocument reads. (Old bug: docVersion 1 with v2
-    // bytes.)
-    expect(visible.effects).toEqual([{ type: "postDocument", docVersion: 2 }]);
+    // bytes.) The foreign advance (v1→v2, lock-free) also bumps externalEpoch to 1.
+    expect(visible.effects).toEqual([
+      { type: "postDocument", docVersion: 2, externalEpoch: 1, epochGeneration: GEN },
+    ]);
 
     // The webview's next keystroke echoes the version it ACTUALLY received on
     // that post, not a value re-derived to match the fix. Read it off the
@@ -115,14 +123,17 @@ describe("stale-version Document post: executor pairs live version with live byt
       recordEvent: () => {},
       showError: () => {},
       canWrite: () => true,
-      // Mirrors the production panel closure: live bytes + the effect's version.
-      buildSeedDocument: (docVersion) =>
+      // Mirrors the production panel closure: live bytes + the effect's version
+      // + the core-managed identity pair.
+      buildSeedDocument: (docVersion, externalEpoch, epochGeneration) =>
         buildDocumentMessageFromDocument(fakeDoc, {
           docVersion,
           themeKind: "light",
           canWrite: true,
+          externalEpoch,
+          epochGeneration,
         }),
-      buildRejectedDraft: (content, docVersion) =>
+      buildRejectedDraft: (content, docVersion, externalEpoch, epochGeneration) =>
         ({
           protocol: 1,
           type: "document",
@@ -130,6 +141,8 @@ describe("stale-version Document post: executor pairs live version with live byt
           docVersion,
           canWrite: true,
           themeKind: "light",
+          externalEpoch,
+          epochGeneration,
         }) as HostToWebview,
       buildTheme: (themeKind) => ({ protocol: 1, type: "theme", themeKind }) as HostToWebview,
       buildEditRejected: (error) =>
@@ -138,6 +151,7 @@ describe("stale-version Document post: executor pairs live version with live byt
         readText: () => fakeDoc.getText(),
         readVersion: () => fakeDoc.version,
         readCanonical: () => fakeDoc.getText(),
+        canonicalize: (text) => text,
         build: () => ({}),
         apply: async () => true,
       },

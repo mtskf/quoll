@@ -17,14 +17,29 @@ import { EndOfLine, type TextDocument } from "vscode";
 import type { DocumentMessage, ThemeKind } from "../../shared/protocol.js";
 import { buildDocumentMessage } from "./document-message.js";
 
+/** Normalize a raw string's line endings to `eol`. The string-level core of
+ *  `canonicalDocumentText`, exposed so a caller that ALREADY holds the raw
+ *  bytes (e.g. the settlement pre-apply snapshot — a literal `getText()` read
+ *  captured before applyEdit) can canonicalise them for a like-for-like compare
+ *  against a canonical settlement read WITHOUT a second `getText()`. */
+export function canonicalizeText(text: string, eol: EndOfLine): string {
+  const separator = eol === EndOfLine.CRLF ? "\r\n" : "\n";
+  return text.replace(/\r\n|\r|\n/g, separator);
+}
+
 export function canonicalDocumentText(document: Pick<TextDocument, "eol" | "getText">): string {
-  const separator = document.eol === EndOfLine.CRLF ? "\r\n" : "\n";
-  return document.getText().replace(/\r\n|\r|\n/g, separator);
+  return canonicalizeText(document.getText(), document.eol);
 }
 
 export function buildDocumentMessageFromDocument(
   document: Pick<TextDocument, "eol" | "getText">,
-  metadata: { docVersion: number; themeKind: ThemeKind; canWrite: boolean }
+  metadata: {
+    docVersion: number;
+    themeKind: ThemeKind;
+    canWrite: boolean;
+    externalEpoch: number;
+    epochGeneration: number;
+  }
 ): DocumentMessage {
   return buildDocumentMessage({ content: canonicalDocumentText(document), ...metadata });
 }

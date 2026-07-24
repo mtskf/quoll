@@ -65,7 +65,12 @@ export type EditSync = {
    *  onReducerCommit, which is the only thing that clears edit-sync's
    *  flag + drains. So edit-sync never derives in-flight from a Document
    *  arrival. */
-  onHostSnapshot: (docVersion: number, canWrite: boolean) => void;
+  onHostSnapshot: (
+    docVersion: number,
+    canWrite: boolean,
+    externalEpoch?: number,
+    epochGeneration?: number
+  ) => void;
   /** The reducer committed — re-evaluate and drain. This is the SINGLE
    *  post-commit drain entry point. The shell fires it from its dispatch
    *  wrapper after every state-changing transition, governed by an
@@ -176,6 +181,12 @@ export type EditSync = {
    *  False whenever nothing is in flight (so genuine external divergence — which
    *  never matches our posted bytes — still reseeds). */
   echoesInFlightEdit: (content: string) => boolean;
+  /** The Document identity pair (externalEpoch, epochGeneration) recorded from
+   *  the most recent accepted host snapshot — `null` before the first snapshot
+   *  or when the host omitted the pair (old-host tolerance). RECORD-ONLY in
+   *  S3a: nothing acts on it yet; S3b's buffer-validity logic reads it to drop a
+   *  replay buffer on a foreign epoch advance or an identity transition. */
+  recordedIdentity: () => { epoch: number | null; generation: number | null };
 };
 
 export function createEditSync(opts: EditSyncOptions): EditSync {
@@ -190,6 +201,11 @@ export function createEditSync(opts: EditSyncOptions): EditSync {
   let inFlightContent: string | null = null;
   let buffered: string | null = null;
   let timer: ReturnType<typeof setTimeout> | null = null;
+  // Document identity pair from the most recent accepted host snapshot (S3a,
+  // record-only). `null` before the first snapshot / when the host omits the
+  // pair. S3b reads these in replayIfNeeded + at each buffer capture.
+  let recordedEpoch: number | null = null;
+  let recordedGeneration: number | null = null;
 
   const clearTimer = (): void => {
     if (timer !== null) {
@@ -299,13 +315,18 @@ export function createEditSync(opts: EditSyncOptions): EditSync {
     // the reducer's committed `state.editInFlight`. (Earlier drafts
     // cleared editInFlight here and/or replayed; both created the
     // divergences the doc comment on onHostSnapshot above details.)
-    onHostSnapshot: (nextVersion, nextCanWrite) => {
+    onHostSnapshot: (nextVersion, nextCanWrite, nextEpoch, nextGeneration) => {
       if (seeded && nextVersion < docVersion) {
         return; // stale — shell-level guard also drops it
       }
       docVersion = nextVersion;
       canWrite = nextCanWrite;
       seeded = true;
+      // RECORD-ONLY (S3a): capture the identity pair alongside the version.
+      // `undefined` (old host omitted the pair) records as `null` — the
+      // "no epoch info" fallback S3b treats as today's replay behaviour.
+      recordedEpoch = nextEpoch ?? null;
+      recordedGeneration = nextGeneration ?? null;
     },
     // The SINGLE post-commit drain. `committedEditInFlight` is the
     // reducer's committed `state.editInFlight` — the single source of
@@ -409,5 +430,6 @@ export function createEditSync(opts: EditSyncOptions): EditSync {
       }
     },
     echoesInFlightEdit: (content) => inFlightContent !== null && content === inFlightContent,
+    recordedIdentity: () => ({ epoch: recordedEpoch, generation: recordedGeneration }),
   };
 }

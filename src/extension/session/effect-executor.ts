@@ -26,7 +26,12 @@
 import type { MarkdownError } from "../../markdown/errors.js";
 import { perfNow, perfRecord, perfReport } from "../../shared/perf.js";
 import type { HostToWebview, ThemeKind } from "../../shared/protocol.js";
-import type { HostSessionEffect, HostSessionEvent, HostSessionState } from "./host-session-core.js";
+import type {
+  ApplyEditOutcome,
+  HostSessionEffect,
+  HostSessionEvent,
+  HostSessionState,
+} from "./host-session-core.js";
 import type { MinimalEditSpan } from "./minimal-edit.js";
 import { minimalEditSpan } from "./minimal-edit.js";
 
@@ -42,6 +47,11 @@ export interface ApplyEditSeam {
   readText: () => string;
   readVersion: () => number;
   readCanonical: () => string;
+  /** Normalize a raw string to the document's EOL — the string-level
+   *  `canonicalizeText`. Used to canonicalise the already-read pre-apply
+   *  `oldText` for the settlement's NON-OK epoch baseline WITHOUT a second
+   *  `getText()`. */
+  canonicalize: (text: string) => string;
   build: (span: MinimalEditSpan) => unknown;
   apply: (edit: unknown) => Thenable<boolean>;
 }
@@ -60,9 +70,20 @@ export interface EffectExecutorDeps {
   recordEvent: (message: HostToWebview) => void;
   showError: (message: string) => void;
   canWrite: () => boolean;
-  /** Live builders — read theme/canWrite/document text at call time (freshness). */
-  buildSeedDocument: (docVersion: number) => HostToWebview;
-  buildRejectedDraft: (content: string, docVersion: number) => HostToWebview;
+  /** Live builders — read theme/canWrite/document text at call time (freshness).
+   *  The (externalEpoch, epochGeneration) pair is core-managed and passed from
+   *  the effect (self-contained, like docVersion). */
+  buildSeedDocument: (
+    docVersion: number,
+    externalEpoch: number,
+    epochGeneration: number
+  ) => HostToWebview;
+  buildRejectedDraft: (
+    content: string,
+    docVersion: number,
+    externalEpoch: number,
+    epochGeneration: number
+  ) => HostToWebview;
   buildTheme: (themeKind: ThemeKind) => HostToWebview;
   buildEditRejected: (error: MarkdownError) => HostToWebview;
   applyEditSeam: ApplyEditSeam;
@@ -235,17 +256,28 @@ export function createEffectExecutor(deps: EffectExecutorDeps): EffectExecutor {
     // whole-document replace (measured ~90ms@1MB whole-doc vs flat ~0.5ms
     // minimal; see PERF.md § Write-path applyEdit baseline).
     const oldText = deps.applyEditSeam.readText();
-    // Snapshot the drain inputs the core needs at settlement. currentContent is
-    // only consulted when a stash is waiting, so skip the O(n) canonicalisation
-    // otherwise (Codex #6). Reads state via deps.getState(), as sendEditRejected
-    // already does. LAZY: the thunk re-reads getState().pendingEdit at each
-    // dispatch site (settlement time), never cached at apply-start — a stash
-    // that appears during the in-flight apply must be observed at settle time.
-    const drainSnapshot = () => ({
-      canWrite: deps.canWrite(),
-      currentContent:
-        deps.getState().pendingEdit !== null ? deps.applyEditSeam.readCanonical() : "",
-    });
+    // Settlement snapshot for the core (drain re-gate AND the S3a epoch
+    // foreign-bytes check). `currentContent` is now the canonical settled
+    // content read on EVERY settlement — site 2 compares it against the apply's
+    // target (ok) or the pre-apply snapshot (non-ok) to decide the epoch, so the
+    // skip-unless-stash optimisation is gone (its cost is the `host:settle-verify`
+    // perf stage). `preApplyContent` is the canonicalised `oldText`; it feeds
+    // ONLY the non-ok baseline, so the OK hot path passes "" and skips the
+    // canonicalise. LAZY: read at each dispatch site (settlement time), never at
+    // apply-start — a stash / external edit that lands during the in-flight apply
+    // must be observed at settle time.
+    const settlementSnapshot = (outcome: ApplyEditOutcome) => {
+      const verifyStart = QUOLL_PERF ? perfNow() : 0;
+      const currentContent = deps.applyEditSeam.readCanonical();
+      if (QUOLL_PERF) {
+        perfRecord("host:settle-verify", perfNow() - verifyStart);
+      }
+      return {
+        canWrite: deps.canWrite(),
+        currentContent,
+        preApplyContent: outcome.kind === "ok" ? "" : deps.applyEditSeam.canonicalize(oldText),
+      };
+    };
     const span = minimalEditSpan(oldText, content);
     if (span.from === span.to && span.insert.length === 0) {
       // No-op short-circuit (defensive — the core already gates no-ops via the
@@ -253,10 +285,14 @@ export function createEffectExecutor(deps: EffectExecutorDeps): EffectExecutor {
       // match could reach here). Settle ok with the UNCHANGED version so the
       // write lock releases + resync proceeds, WITHOUT submitting an empty
       // WorkspaceEdit.
+      const noopOutcome: ApplyEditOutcome = {
+        kind: "ok",
+        documentVersion: deps.applyEditSeam.readVersion(),
+      };
       deps.dispatch({
         type: "applyEditSettled",
-        outcome: { kind: "ok", documentVersion: deps.applyEditSeam.readVersion() },
-        ...drainSnapshot(),
+        outcome: noopOutcome,
+        ...settlementSnapshot(noopOutcome),
       });
       return;
     }
@@ -267,13 +303,14 @@ export function createEffectExecutor(deps: EffectExecutorDeps): EffectExecutor {
       // practice; the arm is preserved for parity with the prior path.
       edit = deps.applyEditSeam.build(span);
     } catch (err) {
+      const outcome: ApplyEditOutcome = {
+        kind: "constructThrew",
+        message: err instanceof Error ? err.message : String(err),
+      };
       deps.dispatch({
         type: "applyEditSettled",
-        outcome: {
-          kind: "constructThrew",
-          message: err instanceof Error ? err.message : String(err),
-        },
-        ...drainSnapshot(),
+        outcome,
+        ...settlementSnapshot(outcome),
       });
       return;
     }
@@ -284,13 +321,14 @@ export function createEffectExecutor(deps: EffectExecutorDeps): EffectExecutor {
     } catch (err) {
       // Synchronous apply throw: immediate failure, not a latency sample —
       // intentionally not recorded under host:applyEdit.
+      const outcome: ApplyEditOutcome = {
+        kind: "applyThrew",
+        message: err instanceof Error ? err.message : String(err),
+      };
       deps.dispatch({
         type: "applyEditSettled",
-        outcome: {
-          kind: "applyThrew",
-          message: err instanceof Error ? err.message : String(err),
-        },
-        ...drainSnapshot(),
+        outcome,
+        ...settlementSnapshot(outcome),
       });
       return;
     }
@@ -305,25 +343,27 @@ export function createEffectExecutor(deps: EffectExecutorDeps): EffectExecutor {
         // onDidDispose. The core stays a strict no-op post-dispose unless a
         // stash is waiting (host-session-core applyEditSettled). Webview-bound
         // posts self-suppress via post()'s disposed guard.
+        const outcome: ApplyEditOutcome = ok
+          ? { kind: "ok", documentVersion: deps.applyEditSeam.readVersion() }
+          : { kind: "refused" };
         deps.dispatch({
           type: "applyEditSettled",
-          outcome: ok
-            ? { kind: "ok", documentVersion: deps.applyEditSeam.readVersion() }
-            : { kind: "refused" },
-          ...drainSnapshot(),
+          outcome,
+          ...settlementSnapshot(outcome),
         });
       },
       (err: unknown) => {
         if (QUOLL_PERF) {
           perfRecord("host:applyEdit", perfNow() - applyStart);
         }
+        const outcome: ApplyEditOutcome = {
+          kind: "rejected",
+          message: err instanceof Error ? err.message : String(err),
+        };
         deps.dispatch({
           type: "applyEditSettled",
-          outcome: {
-            kind: "rejected",
-            message: err instanceof Error ? err.message : String(err),
-          },
-          ...drainSnapshot(),
+          outcome,
+          ...settlementSnapshot(outcome),
         });
       }
     );
@@ -339,7 +379,11 @@ export function createEffectExecutor(deps: EffectExecutorDeps): EffectExecutor {
       switch (effect.type) {
         case "postDocument": {
           const buildStart = QUOLL_PERF ? perfNow() : 0;
-          const documentMessage = deps.buildSeedDocument(effect.docVersion);
+          const documentMessage = deps.buildSeedDocument(
+            effect.docVersion,
+            effect.externalEpoch,
+            effect.epochGeneration
+          );
           if (QUOLL_PERF) {
             perfRecord("host:doc-build", perfNow() - buildStart);
           }
@@ -360,7 +404,14 @@ export function createEffectExecutor(deps: EffectExecutorDeps): EffectExecutor {
           // reducer's `document` arm clears `serializeError`, so the
           // Document MUST precede the `edit-rejected` (reversing it would
           // wipe the banner the user needs).
-          post(deps.buildRejectedDraft(effect.content, effect.docVersion));
+          post(
+            deps.buildRejectedDraft(
+              effect.content,
+              effect.docVersion,
+              effect.externalEpoch,
+              effect.epochGeneration
+            )
+          );
           // The replay banner is FAILURE-AWARE: route it through
           // `sendEditRejected` (with the core-stamped fresh delivery id),
           // NOT a bare `post`. A `ready`/`seed` replay can fail to deliver

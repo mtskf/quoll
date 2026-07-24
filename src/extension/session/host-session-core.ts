@@ -73,6 +73,16 @@ export interface HostSessionState {
   // window. A mismatch means an external edit interfered → drop the stash and
   // let the external change win (never clobber a newer on-disk edit).
   readonly inFlightContent: string | null;
+  // Document identity pair carried on every Document post (S3a). The reducer
+  // OWNS both (like `lastAppliedDocVersion`) so they travel on the
+  // postDocument/postRejectedDraft effects as core decisions, never re-read by
+  // the executor. `externalEpoch` advances (via `resyncLiveVersion` and the
+  // settlement foreign-bytes check) whenever content changed by anything other
+  // than the webview's own acked edit lineage; it starts at 0. `epochGeneration`
+  // is minted ONCE at initialState and never changes within a session (identity,
+  // not ordering). S3a plumbs them; the webview consumes them in S3b.
+  readonly externalEpoch: number;
+  readonly epochGeneration: number;
 }
 
 /** True while the host write lock is held — i.e. a flushed edit's
@@ -116,6 +126,16 @@ export type HostSessionEvent =
       // read when draining).
       readonly canWrite: boolean;
       readonly currentContent: string;
+      // Canonical pre-apply document snapshot (the executor's `oldText`,
+      // canonicalised). The settlement foreign-bytes check (site 2) uses it as
+      // the baseline for a NON-OK outcome: a transiently failed save leaves the
+      // document at the pre-apply content, so `currentContent === preApplyContent`
+      // means nothing foreign intervened (the retry buffer must stay replayable);
+      // a mismatch means a foreign edit raced the failed apply → epoch++. For an
+      // OK outcome the baseline is `inFlightContent` instead, so this is unused
+      // and the executor may pass the empty string (skipping its canonicalise on
+      // the hot path).
+      readonly preApplyContent: string;
     }
   | {
       readonly type: "editRejectedDeliveryFailed";
@@ -125,12 +145,22 @@ export type HostSessionEvent =
   | { readonly type: "disposed" };
 
 export type HostSessionEffect =
-  | { readonly type: "postDocument"; readonly docVersion: number }
+  | {
+      readonly type: "postDocument";
+      readonly docVersion: number;
+      // The identity pair to stamp on the wire (S3a). Core-managed, self-
+      // contained on the effect exactly like `docVersion` — the executor never
+      // re-reads reducer state for them.
+      readonly externalEpoch: number;
+      readonly epochGeneration: number;
+    }
   | {
       readonly type: "postRejectedDraft";
       readonly content: string;
       readonly error: MarkdownError;
       readonly docVersion: number;
+      readonly externalEpoch: number;
+      readonly epochGeneration: number;
       // The freshly re-stamped delivery id (Codex N6). The executor delivers
       // the replayed banner failure-aware via `sendEditRejected(error, id)`, so
       // a failed replay delivery re-enters as `editRejectedDeliveryFailed(id)`
@@ -151,11 +181,67 @@ export interface HostSessionResult {
 
 export interface HostSessionDeps {
   readonly validateForWrite?: (content: string) => ValidateForWriteResult;
+  // Mint the per-host-session `epochGeneration` nonce. Injected so tests get a
+  // deterministic identity; the production default is a counter-salted
+  // timestamp (unique across sessions even within one millisecond). Called
+  // exactly once, in `initialState`.
+  readonly mintEpochGeneration?: () => number;
+}
+
+// Module-scoped salt so two sessions minted in the same millisecond still get
+// distinct generations. Wraps well below the safe-integer ceiling (Date.now() *
+// 1000 + salt stays < 2^53 until year ~micro-far-future). Identity only — never
+// compared for order.
+let epochGenerationSalt = 0;
+function defaultMintEpochGeneration(): number {
+  epochGenerationSalt = (epochGenerationSalt + 1) % 1000;
+  return Date.now() * 1000 + epochGenerationSalt;
+}
+
+/** EOL-insensitive content equality for the settlement foreign-bytes check.
+ *  One operand (`inFlightContent`) is raw webview bytes joined with the CM
+ *  lineSeparator facet; the other (`currentContent`/`preApplyContent`) is
+ *  canonicalised to `document.eol`. A pure byte compare would misread an
+ *  EOL-only difference (a plain edit on a CRLF-eol doc whose webview facet is
+ *  still LF) as foreign bytes. The `a === b` fast path keeps the common
+ *  byte-identical settle allocation-free; the normalise runs only when the
+ *  strings already differ. */
+function contentMatches(a: string, b: string): boolean {
+  return a === b || a.replace(/\r\n|\r|\n/g, "\n") === b.replace(/\r\n|\r|\n/g, "\n");
+}
+
+/** Resync `lastAppliedDocVersion` to the live document version, raising it as
+ *  `max(old, live)` so a late/reordered event or a future call site passing a
+ *  LOWER version can never REWIND it (one clamp, one test). The `externalEpoch`
+ *  increment is gated INTERNALLY: it fires only on a genuine LOCK-FREE forward
+ *  advance (`liveVersion > old && pendingApplyBaseVersion === null`) — a
+ *  lock-free advance is FOREIGN by construction (no self-apply is in flight, so
+ *  the webview did not produce it), whereas a lock-HELD advance is usually the
+ *  in-flight apply's own echo and is adjudicated by the settlement check
+ *  instead. This is the SINGLE version-raising path in the reducer; the only
+ *  other `lastAppliedDocVersion` write is the settlement `ok` self-advance (the
+ *  sole documented exemption, fenced by the invariant test). */
+function resyncLiveVersion(state: HostSessionState, liveVersion: number): HostSessionState {
+  const raised = Math.max(state.lastAppliedDocVersion, liveVersion);
+  const foreignAdvance =
+    liveVersion > state.lastAppliedDocVersion && state.pendingApplyBaseVersion === null;
+  return {
+    ...state,
+    lastAppliedDocVersion: raised,
+    externalEpoch: foreignAdvance ? state.externalEpoch + 1 : state.externalEpoch,
+  };
 }
 
 const NONE: RejectionState = { kind: "none" };
 
-const postDoc = (docVersion: number): HostSessionEffect => ({ type: "postDocument", docVersion });
+// Build a postDocument effect stamping the identity pair from the POST-transition
+// state `s` (so any epoch++ made in the same transition rides the Document out).
+const postDoc = (s: HostSessionState, docVersion: number): HostSessionEffect => ({
+  type: "postDocument",
+  docVersion,
+  externalEpoch: s.externalEpoch,
+  epochGeneration: s.epochGeneration,
+});
 
 // Per-outcome settlement effects: the ack Document (+ non-ok diagnostics).
 // Extracted so the applyEditSettled arm can SUPPRESS these wholesale when
@@ -169,10 +255,10 @@ function settlementEffects(
 ): HostSessionEffect[] {
   switch (outcome.kind) {
     case "ok":
-      return [postDoc(settled.lastAppliedDocVersion)];
+      return [postDoc(settled, settled.lastAppliedDocVersion)];
     case "refused":
       return [
-        postDoc(settled.lastAppliedDocVersion),
+        postDoc(settled, settled.lastAppliedDocVersion),
         {
           type: "logWarn",
           message: "[quoll] applyEdit returned false",
@@ -187,7 +273,7 @@ function settlementEffects(
     case "applyThrew":
     case "rejected":
       return [
-        postDoc(settled.lastAppliedDocVersion),
+        postDoc(settled, settled.lastAppliedDocVersion),
         { type: "showError", message: `Failed to save: ${outcome.message}` },
       ];
     default: {
@@ -201,6 +287,7 @@ function settlementEffects(
 
 export function createHostSessionCore(context: HostSessionContext, deps: HostSessionDeps = {}) {
   const validateForWrite = deps.validateForWrite ?? validateMarkdownForWrite;
+  const mintEpochGeneration = deps.mintEpochGeneration ?? defaultMintEpochGeneration;
 
   function initialState(docVersion: number): HostSessionState {
     return {
@@ -212,6 +299,8 @@ export function createHostSessionCore(context: HostSessionContext, deps: HostSes
       nextRejectionId: 1,
       pendingEdit: null,
       inFlightContent: null,
+      externalEpoch: 0,
+      epochGeneration: mintEpochGeneration(),
     };
   }
 
@@ -270,6 +359,8 @@ export function createHostSessionCore(context: HostSessionContext, deps: HostSes
                 content: state.rejection.content,
                 error: state.rejection.error,
                 docVersion: state.lastAppliedDocVersion,
+                externalEpoch: state.externalEpoch,
+                epochGeneration: state.epochGeneration,
                 id,
               },
             ],
@@ -280,20 +371,30 @@ export function createHostSessionCore(context: HostSessionContext, deps: HostSes
         // possibly-stale stored version would pair new bytes with an old
         // version when an external edit is still coalescing in the
         // documentChanged debounce → stale-reseed keystroke loss. Mirrors the
-        // `edit`/`documentChanged` arms' source-of-truth resync.
+        // `edit`/`documentChanged` arms' source-of-truth resync. `resyncLiveVersion`
+        // also advances the epoch when the live version moved (this arm is only
+        // reached lock-free — the lock guard returned above — so an advance is a
+        // foreign external edit).
+        const resynced = resyncLiveVersion(state, event.documentVersion);
         return {
-          state: { ...state, lastAppliedDocVersion: event.documentVersion, rejection: NONE },
-          effects: [postDoc(event.documentVersion)],
+          state: { ...resynced, rejection: NONE },
+          effects: [postDoc(resynced, resynced.lastAppliedDocVersion)],
         };
       }
 
       case "edit": {
         // Source-of-truth resync FIRST (before the lock check), so stale
         // rejection is independent of onDidChangeTextDocument ordering.
-        const resynced: HostSessionState = {
-          ...state,
-          lastAppliedDocVersion: event.documentVersion,
-        };
+        // Through `resyncLiveVersion` (not a hand-rolled raise) because this is
+        // the KILLER epoch case: an external edit N→N+1 coalescing in the
+        // debounce lands before the webview's Edit at base N, so the live
+        // `documentVersion` here is N+1 > lastApplied N. Lock-free (no apply in
+        // flight yet) ⇒ the helper increments the epoch, and the `stale`
+        // verdict below posts a Document carrying the BUMPED epoch — without it
+        // the resync would swallow the advance (the later debounced
+        // `documentChanged` no-ops on the version-identical check) and finding
+        // #4 recurs through the front door.
+        const resynced = resyncLiveVersion(state, event.documentVersion);
         if (resynced.pendingApplyBaseVersion !== null) {
           // Host write lock held: STASH the latest edit intent instead of
           // dropping it. The webview only force-posts while in-flight on
@@ -333,7 +434,7 @@ export function createHostSessionCore(context: HostSessionContext, deps: HostSes
           case "no-op":
             return {
               state: { ...resynced, rejection: NONE },
-              effects: [postDoc(resynced.lastAppliedDocVersion)],
+              effects: [postDoc(resynced, resynced.lastAppliedDocVersion)],
             };
           case "parse-failed": {
             const id = resynced.nextRejectionId;
@@ -413,10 +514,43 @@ export function createHostSessionCore(context: HostSessionContext, deps: HostSes
           pendingEdit: null,
           inFlightContent: null,
         };
-        const settled: HostSessionState =
+        const versioned: HostSessionState =
           event.outcome.kind === "ok"
             ? { ...released, lastAppliedDocVersion: event.outcome.documentVersion }
             : released;
+
+        // Site 2 — settlement foreign-bytes check ⇒ epoch++, baseline per
+        // outcome. OK: baseline is `inFlightContent` (the apply's target); a
+        // mismatch means an external edit won the apply→settle race
+        // (ok-but-mismatch). NON-OK: baseline is the canonical PRE-apply
+        // snapshot — the failed apply left the document there, so equality means
+        // nothing foreign intervened (the retry buffer stays replayable) and a
+        // mismatch means a foreign edit raced the FAILED apply. Comparing a
+        // non-ok settlement against `inFlightContent` would spuriously bump on
+        // every transiently-failed save and drop the very keystrokes the
+        // showError tells the user to retry. Lock-HELD `documentChanged`
+        // resyncs deliberately did NOT increment (they may be this apply's own
+        // echo); this is where that racy case is adjudicated.
+        //
+        // EOL-INSENSITIVE compare (contentMatches): `currentContent` /
+        // `preApplyContent` are canonicalised to `document.eol` (readCanonical /
+        // canonicalize), while `inFlightContent` is the raw webview bytes joined
+        // with the CM `lineSeparator` facet — which is "\n" whenever the seed
+        // carried no CRLF (an empty / single-line doc with eol=CRLF, e.g. every
+        // new .md on Windows). A byte compare would then read a plain
+        // newline-adding edit on such a doc as "foreign bytes" and bump the epoch
+        // on the webview's OWN acked lineage. EOL mode is a canonicalisation
+        // detail everywhere else in the pipeline, so the foreign-bytes verdict
+        // must ignore it. The `a === b` fast path keeps the hot typing path
+        // (byte-identical settle) regex-free — the normalise only runs when the
+        // strings already differ (a genuine foreign edit, or this EOL skew).
+        const foreignAtSettle =
+          event.outcome.kind === "ok"
+            ? inFlight !== null && !contentMatches(event.currentContent, inFlight)
+            : !contentMatches(event.currentContent, event.preApplyContent);
+        const settled: HostSessionState = foreignAtSettle
+          ? { ...versioned, externalEpoch: versioned.externalEpoch + 1 }
+          : versioned;
 
         // Drain is SAFE only when a stash is waiting, edit #1 applied cleanly
         // (`ok`), and the settled document is EXACTLY edit #1's result
@@ -425,6 +559,11 @@ export function createHostSessionCore(context: HostSessionContext, deps: HostSes
         // clobbered — the stash is dropped and the authoritative Document is
         // reposted (external wins, matching the pre-change drop). Non-ok never
         // drains (the save failed; its own showError surfaces it).
+        // NOTE: this raw `===` shares the EOL cross-space skew that
+        // `contentMatches` fixes for the epoch verdict above — pre-existing
+        // (only fires in the rare stash race; a CRLF-single-line doc's drain
+        // would drop the stash instead of proceeding). Left as a scoped
+        // follow-up (docs/TODO.md) rather than folded into this S3a slice.
         const canDrain =
           stash !== null &&
           event.outcome.kind === "ok" &&
@@ -530,6 +669,8 @@ export function createHostSessionCore(context: HostSessionContext, deps: HostSes
                       content: stash.content,
                       error: verdict.error,
                       docVersion: settled.lastAppliedDocVersion,
+                      externalEpoch: settled.externalEpoch,
+                      epochGeneration: settled.epochGeneration,
                       id,
                     },
                     { type: "showError", message: `Cannot save: ${verdict.error.message}` },
@@ -543,7 +684,7 @@ export function createHostSessionCore(context: HostSessionContext, deps: HostSes
             // the webview reseeds — suppressed post-dispose.
             return {
               state: settled,
-              effects: state.disposed ? [] : [postDoc(settled.lastAppliedDocVersion)],
+              effects: state.disposed ? [] : [postDoc(settled, settled.lastAppliedDocVersion)],
             };
           default: {
             const _exhaustive: never = verdict;
@@ -568,10 +709,13 @@ export function createHostSessionCore(context: HostSessionContext, deps: HostSes
         }
         // Resync to the live snapshot before the recovery reseed (see the
         // `ready` arm) — the reseed posts live bytes, so it must carry the
-        // matching live version.
+        // matching live version (and a bumped epoch if the live version moved:
+        // this arm clears a rejection, which the `accept` arm proved cannot
+        // survive into the write lock, so the resync is lock-free here).
+        const resynced = resyncLiveVersion(state, event.documentVersion);
         return {
-          state: { ...state, lastAppliedDocVersion: event.documentVersion, rejection: NONE },
-          effects: [postDoc(event.documentVersion)],
+          state: { ...resynced, rejection: NONE },
+          effects: [postDoc(resynced, resynced.lastAppliedDocVersion)],
         };
       }
 
@@ -590,10 +734,13 @@ export function createHostSessionCore(context: HostSessionContext, deps: HostSes
         }
         // Source-of-truth resync ALWAYS (lock held or not), mirroring the
         // `edit` arm's resync-first shape: the live document version is the
-        // single source of truth even for a post we defer.
+        // single source of truth even for a post we defer. `resyncLiveVersion`
+        // increments the epoch ONLY on the lock-free branch (foreign external
+        // edit); a lock-HELD advance here is usually the in-flight apply's own
+        // echo, so the increment is withheld and site 2 adjudicates the racy
+        // case at settlement.
         const resynced: HostSessionState = {
-          ...state,
-          lastAppliedDocVersion: event.documentVersion,
+          ...resyncLiveVersion(state, event.documentVersion),
           rejection: NONE,
         };
         // While the host write lock is held, an accepted apply's own
@@ -606,7 +753,7 @@ export function createHostSessionCore(context: HostSessionContext, deps: HostSes
         if (resynced.pendingApplyBaseVersion !== null) {
           return { state: resynced, effects: [] };
         }
-        return { state: resynced, effects: [postDoc(event.documentVersion)] };
+        return { state: resynced, effects: [postDoc(resynced, resynced.lastAppliedDocVersion)] };
       }
 
       case "themeChanged":
@@ -630,10 +777,13 @@ export function createHostSessionCore(context: HostSessionContext, deps: HostSes
         }
         // Resync to the live snapshot before posting (see the `ready` arm) — the
         // reported bug's repro: focus the Quoll tab (viewStateVisible) while a
-        // split-editor edit is still in the documentChanged debounce.
+        // split-editor edit is still in the documentChanged debounce. Reached
+        // only lock-free (the lock guard returned above), so an advance is a
+        // foreign external edit and the epoch increments.
+        const resynced = resyncLiveVersion(state, event.documentVersion);
         return {
-          state: { ...state, lastAppliedDocVersion: event.documentVersion, rejection: NONE },
-          effects: [postDoc(event.documentVersion)],
+          state: { ...resynced, rejection: NONE },
+          effects: [postDoc(resynced, resynced.lastAppliedDocVersion)],
         };
       }
 

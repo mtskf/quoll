@@ -225,13 +225,34 @@ export function isThemeKind(value: unknown): value is ThemeKind {
  *  normalized to the document's `eol` (identical to `getText()` for the
  *  uniform documents VS Code produces) — and is intentionally not size-capped
  *  at the protocol layer — see MAX_CONTENT_LENGTH for the directionality
- *  rationale. */
+ *  rationale.
+ *
+ *  `externalEpoch` + `epochGeneration` are an EXCLUSIVE PAIR — both present or
+ *  both absent; a partial pair is a boundary-INVALID message (validator-
+ *  authoritative). They are wire-OPTIONAL for one release so an old host that
+ *  never sends them does not brick a new webview (absence = "no epoch info" =
+ *  today's unconditional-replay behaviour). Semantics (S3a plumbs them; S3b
+ *  consumes them): `externalEpoch` is host-owned and monotonic WITHIN one host
+ *  session (starts at 0), advancing whenever document content changed by
+ *  anything other than the webview's own acked edit lineage; `epochGeneration`
+ *  is a per-host-session nonce (minted once at session start — a counter-salted
+ *  timestamp) that identifies WHICH host session's epoch counter it is, so a
+ *  webview surviving a host restart can tell an epoch regression across
+ *  generations from a real advance. Identity, not ordering — never compared for
+ *  magnitude.
+ *
+ *  The fields are typed as INDEPENDENTLY optional, but the EXCLUSIVE-pair
+ *  contract (both present or both absent; a partial pair is invalid) is enforced
+ *  at the boundary by `isValidEpochIdentity` — the validator is the authority,
+ *  not the type. The host's `buildDocumentMessage` always emits BOTH. */
 export type DocumentMessage = Envelope & {
   type: "document";
   content: string;
   docVersion: number;
   themeKind: ThemeKind;
   canWrite: boolean;
+  externalEpoch?: number;
+  epochGeneration?: number;
 };
 
 /** Theme change only — no content, no version. Pushed on
@@ -628,6 +649,33 @@ function isUnboundedContent(value: unknown): value is string {
   return typeof value === "string";
 }
 
+/** One component (epoch OR generation) of the Document's identity pair: a
+ *  non-negative safe integer. `externalEpoch` starts at 0 and only advances;
+ *  `epochGeneration` is a counter-salted timestamp (always positive). Both are
+ *  bounded by the safe-integer ceiling for the same reason `docVersion` is —
+ *  values beyond 2^53 stop incrementing/comparing reliably. */
+function isEpochComponent(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
+}
+
+/** The Document's `externalEpoch` + `epochGeneration` pair is EXCLUSIVE:
+ *  both valid, or both absent. A partial pair (exactly one present) is a
+ *  boundary-INVALID message — the webview must never see a half-formed
+ *  identity (its S3b drop-and-adopt logic enumerates only well-formed states:
+ *  absent, or a valid pair). Absence is tolerated (old host → new webview
+ *  skew): the webview falls back to today's unconditional-replay behaviour. */
+function isValidEpochIdentity(epoch: unknown, generation: unknown): boolean {
+  const epochAbsent = epoch === undefined;
+  const generationAbsent = generation === undefined;
+  if (epochAbsent && generationAbsent) {
+    return true; // no epoch info — tolerated
+  }
+  if (epochAbsent || generationAbsent) {
+    return false; // partial pair — invalid
+  }
+  return isEpochComponent(epoch) && isEpochComponent(generation);
+}
+
 function isBoundedContent(value: unknown): value is string {
   // Webview→host: cap to bound oversized payloads from a user-controlled
   // surface. The exact boundary is asserted in test/shared/protocol.test.ts.
@@ -645,7 +693,8 @@ export function isHostToWebview(value: unknown): value is HostToWebview {
         isUnboundedContent(v.content) &&
         isValidDocVersion(v.docVersion) &&
         isThemeKind(v.themeKind) &&
-        typeof v.canWrite === "boolean"
+        typeof v.canWrite === "boolean" &&
+        isValidEpochIdentity(v.externalEpoch, v.epochGeneration)
       );
     case "theme":
       return isThemeKind(v.themeKind);

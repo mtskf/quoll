@@ -100,7 +100,11 @@ import {
 } from "../webview-assets.js";
 import { buildWebviewHtml } from "../webview-html.js";
 import { canHostWrite } from "./can-host-write.js";
-import { buildDocumentMessageFromDocument, canonicalDocumentText } from "./document-canonical.js";
+import {
+  buildDocumentMessageFromDocument,
+  canonicalDocumentText,
+  canonicalizeText,
+} from "./document-canonical.js";
 import {
   buildCaretApplyMessage,
   buildDocumentMessage,
@@ -419,18 +423,22 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
       recordEvent: (m) => this.harness?.recordEvent(m),
       showError,
       canWrite: canWriteNow,
-      buildSeedDocument: (docVersion) =>
+      buildSeedDocument: (docVersion, externalEpoch, epochGeneration) =>
         buildDocumentMessageFromDocument(document, {
           docVersion,
           themeKind: themeKindFromColorTheme(window.activeColorTheme.kind),
           canWrite: canWriteNow(),
+          externalEpoch,
+          epochGeneration,
         }),
-      buildRejectedDraft: (content, docVersion) =>
+      buildRejectedDraft: (content, docVersion, externalEpoch, epochGeneration) =>
         buildDocumentMessage({
           content,
           docVersion,
           themeKind: themeKindFromColorTheme(window.activeColorTheme.kind),
           canWrite: canWriteNow(),
+          externalEpoch,
+          epochGeneration,
         }),
       buildTheme: (themeKind) => buildThemeMessage(themeKind),
       buildEditRejected: (error) => buildEditRejectedMessage(error),
@@ -441,6 +449,7 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
         readText: () => document.getText(),
         readVersion: () => document.version,
         readCanonical: () => canonicalDocumentText(document),
+        canonicalize: (text) => canonicalizeText(text, document.eol),
         build: (span) => {
           // positionAt clamps out-of-range offsets (never throws) and
           // minimalEditSpan is pure — so a build throw stays unreachable in
