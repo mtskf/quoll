@@ -313,6 +313,35 @@ html body {
     background-color: var(--vscode-inputValidation-errorBackground, transparent);
   }
 
+  /* Clustering escalation tripwire notice (S3b). A low-alarm, once-per-session
+   * hint shown when identity transitions cluster (host restarts / re-resolves
+   * repeatedly). Distinct from .quoll-banner: it is NOT reducer-driven (it is an
+   * edit-sync lifecycle event) and carries its own dismiss control. Styled to
+   * match the warning banner so the two read as one system. */
+  .quoll-resync-notice {
+    display: flex;
+    align-items: center;
+    gap: 0.5em;
+    padding: 0.5em 1em;
+    margin: 0 0 0.5em;
+    font-size: 0.9em;
+    border-left: 3px solid var(--vscode-editorWarning-foreground);
+    background-color: var(--vscode-inputValidation-warningBackground, transparent);
+    color: var(--vscode-editor-foreground);
+  }
+
+  .quoll-resync-notice-dismiss {
+    margin-left: auto;
+    flex: 0 0 auto;
+    padding: 0 0.4em;
+    border: none;
+    background: transparent;
+    color: inherit;
+    font-size: 1.1em;
+    line-height: 1;
+    cursor: pointer;
+  }
+
   /* Decoration syntax reveal (C4a). Caret-on-token rendering — the syntax
    * marks (#, >, **, *, `, ~~) remain in the document but render dim so the
    * user can read AND edit them. Caret-off renders via Decoration.replace

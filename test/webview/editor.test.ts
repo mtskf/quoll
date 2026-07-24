@@ -132,6 +132,24 @@ describe("editor — applyDocument seeds the CM doc (a)", () => {
   });
 });
 
+// (S3b) applyDocument threads the (externalEpoch, epochGeneration) pair into
+// edit-sync, so editor.isIdentityTransition reflects the recorded pair. Pins the
+// editor.ts threading: without it the pair would record as absent and the
+// same-generation query below would wrongly report a transition.
+describe("editor — applyDocument threads the identity pair (S3b)", () => {
+  it("isIdentityTransition reflects the recorded pair after seeding", () => {
+    const { handle } = mount();
+    handle.applyDocument("seed", true, 1, 0, 111);
+    expect(handle.isIdentityTransition(0, 222)).toBe(true); // new generation
+    expect(handle.isIdentityTransition(9, 111)).toBe(false); // same generation
+    expect(handle.isIdentityTransition(undefined, undefined)).toBe(true); // present→absent
+    // A same-generation advance re-records the pair; the predicate tracks it.
+    handle.applyDocument("seed2", true, 2, 5, 111);
+    expect(handle.isIdentityTransition(5, 111)).toBe(false);
+    expect(handle.isIdentityTransition(0, 333)).toBe(true);
+  });
+});
+
 // (a2) quollTokenMarkers is wired into the PRODUCTION editor extension list.
 // The render test (cm-decoration-setext-nascent-render) mounts its own extension
 // list, so it proves the marker+keep-rule MECHANISM but not that editor.ts still

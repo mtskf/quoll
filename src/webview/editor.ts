@@ -105,6 +105,10 @@ export type EditorOptions = {
   /** Webview-resource base URI for resolving relative image paths (from the
    *  host's data-resource-base-uri). "" for non-file documents. */
   resourceBaseUri?: string;
+  /** Fired ONCE per session when identity transitions cluster (S3b tripwire).
+   *  The shell wires it to a low-alarm user-visible notice. Passed straight
+   *  through to edit-sync's `onResyncStorm`. */
+  onResyncStorm?: () => void;
 };
 
 export type EditorHandle = {
@@ -164,6 +168,11 @@ export type EditorHandle = {
    *  clamped to the live doc, suppressing the echo caret-report. The dispatch is
    *  skipped when the caret is already at the target; the focus is not. */
   applyRemoteCaret(caret: Caret): void;
+  /** Would an incoming Document's identity pair be an identity transition against
+   *  the currently recorded pair? (S3b) The shell calls this BEFORE applyDocument
+   *  so it can bypass its whole-Document stale-version drop and thread the
+   *  `adopt` flag to the reducer. Delegates to edit-sync's pure predicate. */
+  isIdentityTransition(externalEpoch?: number, epochGeneration?: number): boolean;
 };
 
 /** Dispatch `post-edit` and ship the Edit message in the same tick.
@@ -283,6 +292,7 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
     getDoc: () => view.state.sliceDoc(),
     canPost: () => canPostEdit(opts.getState()),
     post: (content, baseDocVersion) => postEditMessage(opts.dispatch, content, baseDocVersion),
+    onResyncStorm: opts.onResyncStorm,
   });
 
   const imagePaste = createImagePasteDrop({
@@ -900,6 +910,9 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
       }
       sync.onHostSnapshot(baseDocVersion, canWrite, externalEpoch, epochGeneration);
       setReadOnlyClass(canWrite);
+    },
+    isIdentityTransition(externalEpoch, epochGeneration) {
+      return sync.isIdentityTransition(externalEpoch, epochGeneration);
     },
     resolveImageWrite(requestId, relativePath) {
       imagePaste.resolve(view, requestId, relativePath);

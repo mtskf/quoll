@@ -133,6 +133,71 @@ describe("shell — stale Document drop at ingress", () => {
   });
 });
 
+describe("shell — S3b epoch-bounded acceptance ordering", () => {
+  const readDoc = (): string | undefined =>
+    EditorView.findFromDOM(
+      container?.querySelector(".quoll-editor") as HTMLElement
+    )?.state.sliceDoc();
+
+  it("still drops a stale SAME-generation Document (ordering holds within one generation)", async () => {
+    await mount();
+    deliver(
+      buildDocument({ docVersion: 5, content: "current", externalEpoch: 2, epochGeneration: 111 })
+    );
+    deliver(
+      buildDocument({ docVersion: 2, content: "STALE", externalEpoch: 1, epochGeneration: 111 })
+    );
+    expect(readDoc()).toBe("current"); // same generation, lower version → dropped
+  });
+
+  it("(e) adopts a lower-version Document from a NEW generation, end-to-end through the reducer", async () => {
+    // The reducer's inlined copy of the stale guard must ALSO adopt (via the
+    // `adopt` flag) — otherwise state.docVersion stays high and the NEXT
+    // same-generation Document is stale-dropped at the shell, leaving the webview
+    // permanently deaf. Prove the reducer adopted docVersion 1 by delivering a
+    // follow-up B Document at v2 and asserting it lands (v2 > adopted 1).
+    await mount();
+    deliver(
+      buildDocument({ docVersion: 10, content: "A", externalEpoch: 0, epochGeneration: 111 })
+    );
+    deliver(buildDocument({ docVersion: 1, content: "B", externalEpoch: 0, epochGeneration: 222 }));
+    expect(readDoc()).toBe("B"); // identity transition adopted despite v1 < v10
+    deliver(
+      buildDocument({ docVersion: 2, content: "B2", externalEpoch: 1, epochGeneration: 222 })
+    );
+    // If the reducer had NOT adopted v1, state.docVersion would be 10 and this
+    // v2 Document would be stale-dropped at the shell → still "B".
+    expect(readDoc()).toBe("B2");
+  });
+
+  it("(g) surfaces ONE resync-storm notice when identity transitions cluster", async () => {
+    await mount();
+    // Seed + three generation changes (3 identity transitions) within the window.
+    deliver(buildDocument({ docVersion: 1, content: "s", externalEpoch: 0, epochGeneration: 1 }));
+    deliver(buildDocument({ docVersion: 1, content: "s", externalEpoch: 0, epochGeneration: 2 }));
+    deliver(buildDocument({ docVersion: 1, content: "s", externalEpoch: 0, epochGeneration: 3 }));
+    expect(container?.querySelectorAll(".quoll-resync-notice").length).toBe(0);
+    deliver(buildDocument({ docVersion: 1, content: "s", externalEpoch: 0, epochGeneration: 4 }));
+    const notices = container?.querySelectorAll(".quoll-resync-notice");
+    expect(notices?.length).toBe(1);
+    expect(notices?.[0].textContent).toContain("re-synced with the editor host repeatedly");
+    // Latched: a further transition does not add a second notice.
+    deliver(buildDocument({ docVersion: 1, content: "s", externalEpoch: 0, epochGeneration: 5 }));
+    expect(container?.querySelectorAll(".quoll-resync-notice").length).toBe(1);
+    // Dismiss button removes the notice.
+    const notice = container?.querySelector(".quoll-resync-notice") as HTMLElement;
+    (notice.querySelector(".quoll-resync-notice-dismiss") as HTMLButtonElement).click();
+    expect(container?.querySelectorAll(".quoll-resync-notice").length).toBe(0);
+  });
+
+  it("shows NO resync-storm notice for a single identity transition", async () => {
+    await mount();
+    deliver(buildDocument({ docVersion: 1, content: "s", externalEpoch: 0, epochGeneration: 1 }));
+    deliver(buildDocument({ docVersion: 1, content: "s", externalEpoch: 0, epochGeneration: 2 }));
+    expect(container?.querySelectorAll(".quoll-resync-notice").length).toBe(0);
+  });
+});
+
 describe("shell — theme toggles <html> classList", () => {
   it("dark theme → html has dark-theme class", async () => {
     await mount();
