@@ -69,8 +69,23 @@ function closeServer(server) {
 // Runs inside the page (stringified by playwright), so it may not close over
 // Node scope. `theme` is passed for self-describing output.
 function collectInPage(theme) {
-  // WCAG relative luminance + contrast ratio from an "r, g, b" computed color.
+  // WCAG relative luminance + contrast ratio from a computed color string.
+  // Handles both legacy `rgb()/rgba()` and the modern `color(srgb r g b / a)`
+  // serialization — Chromium emits the latter for computed `color-mix(in srgb …)`
+  // values (e.g. the frontmatter muted-text token), which the rgb-only parser
+  // would silently drop to null (an unmeasured, audit-evading text color).
   const parseRGB = (s) => {
+    const srgb = /color\(srgb\s+([^)]+)\)/.exec(s || "");
+    if (srgb) {
+      // Components are 0–1 floats; alpha (after `/`) is optional. Scale to 0–255.
+      const [rgb, alpha] = srgb[1].split("/");
+      const [r, g, b] = rgb
+        .trim()
+        .split(/\s+/)
+        .map((x) => Number.parseFloat(x) * 255);
+      const a = alpha === undefined ? 1 : Number.parseFloat(alpha.trim());
+      return { r, g, b, a };
+    }
     const m = /rgba?\(([^)]+)\)/.exec(s || "");
     if (!m) {
       return null;
