@@ -949,8 +949,10 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
                 // aborted synchronously right before it happens — closing every
                 // async window from open-resolve through the actual close. It
                 // returns the shared refusal message as the abort REASON so
-                // finalizeSurfaceSwap surfaces it (one consistent surface with
-                // the drain-time / async-window checks above).
+                // finalizeSurfaceSwap surfaces it (the SAME message the
+                // drain-time / async-window checks above show; check 3 renders it
+                // as a warning — nothing failed, the swap was refused to protect
+                // the draft — while those fast paths use an error toast).
                 void finalizeSurfaceSwap(document.uri, sourceTab, undefined, () =>
                   state.rejection.kind === "pending" ? REJECTION_BLOCKS_SWITCH_MESSAGE : null
                 );

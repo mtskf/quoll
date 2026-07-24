@@ -244,6 +244,22 @@ describe("finalizeSurfaceSwap shouldAbortClose (point-of-no-return guard)", () =
     await finalizeSurfaceSwap(fileUri, SENTINEL_TAB, deps, () => null);
     expect(closeTab).toHaveBeenCalledWith(LIVE_TAB);
   });
+
+  it("treats an EMPTY reason as no-abort (never shows a blank toast)", async () => {
+    // Aborting must carry a visible message, so an empty string is treated as
+    // "do not abort" rather than aborting with a blank warning toast. Closes
+    // normally and fires no warning.
+    const doc = fakeDoc(false, true);
+    const { deps, closeTab } = makeDeps(doc);
+    const warn = vi.spyOn(window, "showWarningMessage");
+    try {
+      await finalizeSurfaceSwap(fileUri, SENTINEL_TAB, deps, () => "");
+      expect(closeTab).toHaveBeenCalledWith(LIVE_TAB);
+      expect(warn).not.toHaveBeenCalled();
+    } finally {
+      warn.mockRestore();
+    }
+  });
 });
 
 describe("closeSourceTabIfClean (no-save passive restore finalizer)", () => {

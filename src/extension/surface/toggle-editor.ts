@@ -126,7 +126,9 @@ export async function reopenActiveQuollTabAsText(): Promise<void> {
     // THAT window would slip past the check above. Pass the same predicate so the
     // close is aborted synchronously right before it happens — returning the
     // shared refusal message as the abort REASON so finalizeSurfaceSwap surfaces
-    // it (one consistent surface with the two fast-path checks above).
+    // it (the SAME message the two fast-path checks above show; check 3 renders
+    // it as a warning — nothing failed, the swap was refused to protect the
+    // draft — while the fast paths use an error toast).
     await finalizeSurfaceSwap(uri, sourceTab, undefined, () =>
       isRejectionPending(uri.toString()) ? REJECTION_BLOCKS_SWITCH_MESSAGE : null
     );
