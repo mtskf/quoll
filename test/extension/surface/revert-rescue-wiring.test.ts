@@ -303,18 +303,25 @@ describe("createRevertRescueWiring — alive tab-close rescue", () => {
   // settling and the `.then`, OR a stale-offset splice). This is a DIVERGENCE,
   // not a failure — converge via a resync at the outcome's settled version, and
   // do NOT toast (a divergence with an ok apply must not read as "save failed").
-  it("alive rescue DIVERGED (applyEdit ok but the document holds other bytes) → resync, NO toast", async () => {
+  it("alive rescue DIVERGED (applyEdit ok but the document holds other bytes) → resync at the SETTLED version, NO toast", async () => {
     const t = wire();
-    // apply resolves true but does NOT land the intended "DIRTY" bytes (doc.text
-    // stays "DISK") → post-apply verify reports diverged.
-    vi.spyOn(workspace, "applyEdit").mockResolvedValue(true);
-    t.doc.version = 7;
+    t.doc.version = 7; // pre-apply version
+    // apply resolves true and ADVANCES the version to 8, but does NOT land the
+    // intended "DIRTY" bytes (doc.text stays "DISK") → post-apply verify reports
+    // diverged. The resync must carry the SETTLED (post-apply) version 8, read
+    // inside the executor at verify time — mapping from `outcome.settledVersion`,
+    // NOT a stale pre-apply read (7) nor a re-read.
+    vi.spyOn(workspace, "applyEdit").mockImplementation(async () => {
+      t.doc.version = 8;
+      return true;
+    });
     armRevert(t);
     t.fireTabClose();
     await flush();
 
     expect(t.showErrors).toEqual([]); // diverged is not a save failure
-    expect(t.dispatched).toContain(7); // converge on the authoritative doc via resync
+    expect(t.dispatched).toContain(8); // converge via resync at the settled version
+    expect(t.dispatched).not.toContain(7); // never the pre-apply version
   });
 
   it("on restore FAILURE (applyEdit resolves false) shows an error AND reseeds via onFailure", async () => {

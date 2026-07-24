@@ -119,11 +119,13 @@ export type HostSessionEvent =
   | {
       readonly type: "applyEditSettled";
       readonly outcome: ApplyEditOutcome;
-      // Fresh live snapshots taken by the wiring at settlement time so the
+      // Fresh live snapshots taken by the executor at settlement time so the
       // stash drain can re-run the FULL decideEdit gates (canWrite + canonical
-      // current text). `currentContent` is the empty string when no stash is
-      // waiting (the wiring skips the O(n) canonicalisation then — it is only
-      // read when draining).
+      // current text) AND the epoch foreign-bytes check (site 2). Since S3a the
+      // canonical settled content is read on EVERY settlement (the epoch verify
+      // is unconditional — no skip-unless-stash), so `currentContent` is always
+      // the canonical settled document, never "" (the pre-S3a empty-when-no-stash
+      // optimisation is gone; restoring it would drop the epoch verify).
       readonly canWrite: boolean;
       readonly currentContent: string;
       // Canonical pre-apply document snapshot (the executor's `oldText`,

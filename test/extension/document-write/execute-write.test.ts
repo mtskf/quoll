@@ -226,3 +226,49 @@ describe("executeDocumentWrite — contract: no document read after the outcome 
     expect(o.tag).toBe("applied");
   });
 });
+
+describe("executeDocumentWrite — EOL canonicalisation is load-bearing (false-divergence guard)", () => {
+  // A CRLF-eol document seam: `canonicalize` normalises every EOL token to CRLF
+  // (as canonicalizeText does for a CRLF `document.eol`), and `readCanonical`
+  // reads the doc through the SAME canonicaliser. The webview target `content`
+  // arrives LF-joined. This is the exact skew the plan warns about: without
+  // canonicalising the intended content, a CLEAN apply on a CRLF doc would read
+  // as `diverged` → spurious epoch bump → retry-buffer drop = keystroke loss.
+  const toCrlf = (t: string) => t.replace(/\r\n|\r|\n/g, "\r\n");
+  // `landsClean` models VS Code storing the inserted LF target normalised to the
+  // doc's CRLF EOL on a successful apply.
+  function crlfAdapter(docText: string, target: string): DocumentWriteAdapter {
+    const doc = { text: docText };
+    return {
+      readText: () => doc.text,
+      readVersion: () => 1,
+      readCanonical: () => toCrlf(doc.text),
+      canonicalize: toCrlf,
+      build: (span) => span,
+      apply: () => {
+        doc.text = toCrlf(target);
+        return Promise.resolve(true);
+      },
+    };
+  }
+
+  it("a clean apply on a CRLF doc with an LF webview target is APPLIED, not diverged (intended is canonicalised before compare)", async () => {
+    const intended = "line one\nline two\n"; // LF webview bytes
+    const adapter = crlfAdapter("old\ntext\n", intended);
+    const o = await executeDocumentWrite(adapter, intended);
+    // settledContent (CRLF) === intendedContent (CRLF) — a direct compare against
+    // the RAW LF `content` would be "line one\r\nline two\r\n" !== "line one\nline
+    // two\n" → a false `diverged`. This pins the canonicalise(content) call.
+    expect(o.tag).toBe("applied");
+    expect(o.intendedContent).toBe("line one\r\nline two\r\n");
+    expect(o.settledContent).toBe("line one\r\nline two\r\n");
+  });
+
+  it("preApplyContent is the CANONICALISED pre-apply buffer, not the raw getText()", async () => {
+    const adapter = crlfAdapter("pre\napply\n", "whatever\n"); // raw LF buffer
+    const o = await executeDocumentWrite(adapter, "whatever\n");
+    // Pins the canonicalise(oldText) call — the non-ok epoch baseline depends on
+    // it; a raw passthrough would mismatch the canonical settlement read.
+    expect(o.preApplyContent).toBe("pre\r\napply\r\n");
+  });
+});

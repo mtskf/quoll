@@ -81,14 +81,19 @@ function errorMessage(err: unknown): string {
 /** Run the verified write pipeline. Async: the settlement is observed after the
  *  `apply` promise resolves. The SYNCHRONOUS prefix (readText → span → build →
  *  apply-initiation) runs before the first `await`, so the pre-apply snapshot is
- *  taken at call time under the caller's write lock — no inbound edit can
- *  interleave on the synchronous dispatch chain (same freshness contract as the
- *  prior inline `runApplyEdit`). */
+ *  taken at call time in the SAME synchronous tick the caller invoked us — no
+ *  inbound edit can interleave on the synchronous dispatch chain. The reducer
+ *  caller (runApplyEdit) additionally holds the host write lock; the rescue
+ *  caller (applyRestoreEdit) runs lock-free by design and relies on this same-
+ *  tick property plus its own `isWriteLockHeld` skip-gate. Either way the
+ *  freshness contract of the prior inline `runApplyEdit` is preserved. */
 export async function executeDocumentWrite(
   adapter: DocumentWriteAdapter,
   content: string
 ): Promise<DocumentWriteOutcome> {
-  // Pre-apply snapshot, taken synchronously (the caller holds the write lock).
+  // Pre-apply snapshot, taken synchronously in the caller's tick (see above:
+  // the reducer path holds the write lock, the rescue path is lock-free but
+  // same-tick — no inbound edit interleaves before the first await).
   const oldText = adapter.readText();
   const span = minimalEditSpan(oldText, content);
 

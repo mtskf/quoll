@@ -177,6 +177,20 @@ export function createRevertRescueWiring(deps: RevertRescueWiringDeps): RevertRe
         case "applied":
           return;
         case "diverged":
+          // applyEdit landed but the document holds OTHER bytes. Alive: converge
+          // by resyncing the webview to the authoritative doc (silent — a
+          // divergence with an ok apply is NOT a save failure; it is often a
+          // legitimate successor edit that landed between the RPC settling and
+          // this `.then`, and toasting would false-alarm normal typing).
+          //
+          // Dispose path (isDisposed): log only — NO toast. Deliberate, and it is
+          // NOT the silent-loss the failure family is: the apply DID land bytes
+          // into a SURVIVING, on-screen, undoable text editor (the doc outlives
+          // the panel — that is the whole reason the rescue ran), so the state is
+          // visible + undoable per the dispose-guard philosophy. Only a restore
+          // that did NOT land (refused/threw → reverted disk bytes = real loss)
+          // toasts on dispose. Follow-up TODO tracks whether a dispose-path
+          // diverged should additionally warn.
           console.warn(
             "[quoll] revert-rescue: restore diverged after apply (racing successor edit or stale-offset splice); converging via resync"
           );
