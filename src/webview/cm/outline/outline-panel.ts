@@ -889,7 +889,12 @@ class OutlinePanel implements PluginValue {
       this.renderedSignature = signature;
       this.renderList();
     }
-    this.updateActive();
+    // A rebuild is structural (open, an edit, or the parser catching up), never a
+    // caret navigation — so it re-baselines the announcer silently rather than
+    // speaking. This is what stops an edit that restructures headings (e.g.
+    // demoting the caret's own heading, which changes its enclosing section) from
+    // announcing as if the caret had moved.
+    this.updateActive(false);
   }
 
   private renderList(): void {
@@ -1162,7 +1167,7 @@ class OutlinePanel implements PluginValue {
     }
   }
 
-  private updateActive(): void {
+  private updateActive(caretDriven = true): void {
     if (!this.open) {
       return;
     }
@@ -1215,7 +1220,20 @@ class OutlinePanel implements PluginValue {
     if (!this.listEl.contains(document.activeElement)) {
       this.setTabbable(activeFrom ?? this.firstVisibleFrom());
     }
-    this.announceActive(caretSectionFrom);
+    if (caretDriven) {
+      this.announceActive(caretSectionFrom);
+    } else {
+      this.syncAnnounceBaseline(caretSectionFrom);
+    }
+  }
+
+  /** Silently move the announcement baseline to the caret's current section
+   *  without speaking — used on every structural (non-caret) refresh so an edit
+   *  or reparse that changes the caret's enclosing section is not mistaken for a
+   *  navigation. Also primes on the first (open-time) rebuild. */
+  private syncAnnounceBaseline(activeFrom: number | null): void {
+    this.announcePrimed = true;
+    this.lastAnnouncedFrom = activeFrom;
   }
 
   /** Debounced polite announcement of the active section for SR users. The
@@ -1263,14 +1281,18 @@ class OutlinePanel implements PluginValue {
     this.announceTimer = setTimeout(() => {
       this.announceTimer = null;
       // Re-check focus at fire time: it may have entered the tree since scheduling
-      // (that path announces its own treeitem).
+      // (that path announces its own treeitem). Record the section as known even
+      // when suppressed here — mirroring the schedule-time tree-focus path — so a
+      // later in-section caret move does not re-speak it. Safe because any doc
+      // change cancels this timer synchronously, so `activeFrom` cannot be stale.
       if (this.listEl.contains(document.activeElement)) {
+        this.lastAnnouncedFrom = activeFrom;
         return;
       }
       // Advance the baseline only now — see the doc comment: an edit-cancelled cue
       // must not have advanced it. `update()` cancels this timer on any doc change,
-      // so here `this.headings` is consistent with `activeFrom` (no rebuild is
-      // pending) and resolving the label from it is truthful.
+      // so `this.headings` is consistent with `activeFrom` here (a rebuild from an
+      // edit would have cancelled us) and resolving the label from it is truthful.
       this.lastAnnouncedFrom = activeFrom;
       const heading =
         activeFrom === null ? undefined : this.headings.find((h) => h.from === activeFrom);

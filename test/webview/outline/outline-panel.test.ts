@@ -631,6 +631,26 @@ describe("quollOutline sidebar", () => {
     expect(announcer.textContent).toBe("");
   });
 
+  it("records the baseline when a cue is suppressed by tree focus at fire time (no later re-announce)", () => {
+    vi.useFakeTimers();
+    const { view: v, host } = mount("# Alpha\n\nbody\n\n## Beta\n\nmore\n");
+    const plugin = v.plugin(outlinePlugin);
+    plugin?.toggle();
+    pinEl(host).click(); // pin so focus can move to the tree and back without closing
+    const announcer = host.querySelector(".quoll-outline-announcer") as HTMLElement;
+    v.dispatch({ selection: EditorSelection.cursor(v.state.doc.line(5).from) }); // caret → Beta (cue armed)
+    // Tab into the tree during the debounce window: no transaction fires, so the
+    // cue stays armed; the SR announces the treeitem itself.
+    rowEls(host)[1].focus();
+    vi.runAllTimers(); // cue fires but is suppressed by tree focus — baseline must record Beta
+    expect(announcer.textContent).toBe("");
+    // Focus back in the editor; an in-section caret move within Beta must NOT re-speak.
+    v.focus();
+    v.dispatch({ selection: EditorSelection.cursor(v.state.doc.line(7).from) }); // still under Beta
+    vi.runAllTimers();
+    expect(announcer.textContent).toBe(""); // in-section move → no re-announce
+  });
+
   it("re-primes on reopen — no stale announcement the instant the sidebar reopens", () => {
     vi.useFakeTimers();
     const { view: v, host } = mount("# Alpha\n\nbody\n\n## Beta\n\nmore\n");
@@ -680,18 +700,36 @@ describe("quollOutline sidebar", () => {
     expect(announcer.textContent).toBe(""); // caret unmoved → no spurious section cue
   });
 
-  it("resolves the announced label at fire time — a rename mid-debounce speaks the new name", () => {
+  it("stays silent when the caret's heading is renamed in place (an edit is not a navigation)", () => {
     vi.useFakeTimers();
     const { view: v, host } = mount("# Alpha\n\nbody\n\n## Beta\n\nmore\n");
     v.plugin(outlinePlugin)?.toggle();
     const announcer = host.querySelector(".quoll-outline-announcer") as HTMLElement;
-    v.dispatch({ selection: EditorSelection.cursor(v.state.doc.line(5).from) }); // → Beta (timer armed)
-    // Rename "## Beta" → "## Gamma" in place before the debounce fires; the heading
-    // start offset is unchanged, so change-detection alone would keep the stale label.
+    v.dispatch({ selection: EditorSelection.cursor(v.state.doc.line(5).from) }); // → Beta (cue armed)
+    // Rename "## Beta" → "## Gamma" in place before the debounce fires. The caret
+    // never moved sections; the edit cancels the pending cue and the rebuild
+    // re-baselines silently — no stale "Beta" and no edit-driven "Gamma".
     const betaLine = v.state.doc.line(5);
     v.dispatch({ changes: { from: betaLine.from + 3, to: betaLine.to, insert: "Gamma" } });
     vi.runAllTimers();
-    expect(announcer.textContent).toBe("Gamma — current section"); // fire-time label, not stale "Beta"
+    expect(announcer.textContent).toBe("");
+  });
+
+  it("stays silent when an edit demotes the caret's heading (section changes without navigation)", () => {
+    vi.useFakeTimers();
+    const { view: v, host } = mount("# Alpha\n\n## Beta\n\nbody\n");
+    v.plugin(outlinePlugin)?.toggle();
+    const announcer = host.querySelector(".quoll-outline-announcer") as HTMLElement;
+    v.dispatch({ selection: EditorSelection.cursor(v.state.doc.line(3).from) }); // → Beta
+    vi.runAllTimers();
+    expect(announcer.textContent).toBe("Beta — current section"); // Beta is the baseline
+    announcer.textContent = ""; // blank so a spurious write is observable
+    // Delete Beta's "## " marker: the caret's enclosing section structurally
+    // becomes Alpha, but the caret never moved — a rebuild is not a navigation.
+    const betaLine = v.state.doc.line(3);
+    v.dispatch({ changes: { from: betaLine.from, to: betaLine.from + 3, insert: "" } });
+    vi.runAllTimers();
+    expect(announcer.textContent).toBe(""); // edit-driven section change → silent
   });
 
   it("cancels a pending cue when the document is edited (an edit is not a navigation)", () => {
