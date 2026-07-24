@@ -163,6 +163,19 @@ export type EditSync = {
    *  panel may dispose and the host stash / retained buffer are the last
    *  authorities. No-op when nothing was typed in the debounce window. */
   flushIfIdle: () => void;
+  /** True when `content` is byte-identical to the Edit currently awaiting its
+   *  ack (single-flight → at most one). The reseed path (editor.ts
+   *  applyDocument) uses this to recognise a host Document that merely ECHOES
+   *  our own in-flight edit back — an ok-ack. When the live buffer has since
+   *  advanced past those bytes (the user kept typing during the in-flight
+   *  window), reseeding the doc back to the acked content would visibly rewind
+   *  the newer keystrokes; folding the ack into version bookkeeping instead lets
+   *  the buffered edit replay them forward. Because the live buffer is always a
+   *  descendant of what we posted, an echo match means the acked content is a
+   *  strict ancestor of the buffer, so skipping the visible reseed is safe.
+   *  False whenever nothing is in flight (so genuine external divergence — which
+   *  never matches our posted bytes — still reseeds). */
+  echoesInFlightEdit: (content: string) => boolean;
 };
 
 export function createEditSync(opts: EditSyncOptions): EditSync {
@@ -171,6 +184,10 @@ export function createEditSync(opts: EditSyncOptions): EditSync {
   let seeded = false;
   let canWrite = false;
   let editInFlight = false;
+  // The content of the Edit currently awaiting its ack — non-null EXACTLY while
+  // `editInFlight` is true (paired with every editInFlight assignment below).
+  // Read by `echoesInFlightEdit` so the reseed path can recognise an ok-ack.
+  let inFlightContent: string | null = null;
   let buffered: string | null = null;
   let timer: ReturnType<typeof setTimeout> | null = null;
 
@@ -222,10 +239,12 @@ export function createEditSync(opts: EditSyncOptions): EditSync {
     const ok = opts.post(content, docVersion);
     if (ok) {
       buffered = null;
+      inFlightContent = content;
     } else {
       // postMessage threw: drop the in-flight flag so a later ack/change
       // can retry, and retain the buffered content.
       editInFlight = false;
+      inFlightContent = null;
       buffered = content;
     }
   };
@@ -264,8 +283,10 @@ export function createEditSync(opts: EditSyncOptions): EditSync {
     const ok = opts.post(content, docVersion);
     if (ok) {
       buffered = null;
+      inFlightContent = content;
     } else {
       editInFlight = false;
+      inFlightContent = null;
       buffered = content;
     }
   };
@@ -303,6 +324,7 @@ export function createEditSync(opts: EditSyncOptions): EditSync {
         return; // genuine in-flight Edit — wait for its ack
       }
       editInFlight = false; // sync to the reducer's committed truth
+      inFlightContent = null;
       replayIfNeeded();
     },
     // Capture the latest doc into the buffer BEFORE clearing the timer.
@@ -363,6 +385,7 @@ export function createEditSync(opts: EditSyncOptions): EditSync {
       const ok = opts.post(content, docVersion);
       if (ok) {
         editInFlight = true; // maintain single-flight even on an alive hide→show
+        inFlightContent = content;
         // Retain for ack-replay ONLY under in-flight contention (the sole path
         // to the stale settlement→ack window); otherwise the host accepted the
         // post and is the authority, so null it like trySend's idle post (JSDoc).
@@ -385,5 +408,6 @@ export function createEditSync(opts: EditSyncOptions): EditSync {
         trySend();
       }
     },
+    echoesInFlightEdit: (content) => inFlightContent !== null && content === inFlightContent,
   };
 }

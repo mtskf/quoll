@@ -354,6 +354,56 @@ describe("cm edit-sync", () => {
   });
 });
 
+describe("cm edit-sync — echoesInFlightEdit", () => {
+  const ack = (s: ReturnType<typeof setup>, v: number, canWrite = true) => {
+    s.sync.onHostSnapshot(v, canWrite);
+    s.sync.onReducerCommit(false);
+  };
+
+  it("is false before anything is posted", () => {
+    const s = setup();
+    s.sync.onHostSnapshot(1, true);
+    expect(s.sync.echoesInFlightEdit("hello")).toBe(false);
+  });
+
+  it("is true for the exact bytes of the Edit currently in flight", () => {
+    const s = setup();
+    s.sync.onHostSnapshot(1, true);
+    s.type("hello world"); // posts, editInFlight = true
+    expect(s.sync.echoesInFlightEdit("hello world")).toBe(true);
+    // A different string (a genuine external divergence) never matches.
+    expect(s.sync.echoesInFlightEdit("something else")).toBe(false);
+  });
+
+  it("clears when the reducer commit acks the in-flight Edit", () => {
+    const s = setup();
+    s.sync.onHostSnapshot(1, true);
+    s.type("a"); // posts, editInFlight = true
+    expect(s.sync.echoesInFlightEdit("a")).toBe(true);
+    ack(s, 2); // ack clears editInFlight
+    expect(s.sync.echoesInFlightEdit("a")).toBe(false);
+  });
+
+  it("tracks the newest in-flight bytes across a buffered replay", () => {
+    const s = setup();
+    s.sync.onHostSnapshot(1, true);
+    s.type("a"); // posts "a", editInFlight = true
+    s.type("ab"); // buffered while in flight
+    expect(s.sync.echoesInFlightEdit("a")).toBe(true); // still "a" in flight
+    ack(s, 2); // ack "a" → replay drains "ab" → "ab" now in flight
+    expect(s.sync.echoesInFlightEdit("ab")).toBe(true);
+    expect(s.sync.echoesInFlightEdit("a")).toBe(false);
+  });
+
+  it("clears when a post fails (no phantom in-flight echo)", () => {
+    const s = setup();
+    s.sync.onHostSnapshot(1, true);
+    s.setPostOk(false);
+    s.type("x"); // post returns false → not in flight
+    expect(s.sync.echoesInFlightEdit("x")).toBe(false);
+  });
+});
+
 describe("cm edit-sync — discardBuffer", () => {
   const ack = (s: ReturnType<typeof setup>, v: number, canWrite = true) => {
     s.sync.onHostSnapshot(v, canWrite);
@@ -669,6 +719,30 @@ describe("cm edit-sync — flush (teardown)", () => {
       allow = true;
       sync.onReducerCommit(false); // drains the retained buffer
       expect(posted).toEqual(["a"]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("echoesInFlightEdit recognises the force-posted content after an idle flush (alive hide→show)", () => {
+    // flush()'s success branch sets inFlightContent so a subsequent ok-ack that
+    // echoes the force-posted bytes is recognised as an echo (and folded by
+    // applyDocument) rather than reseeding backwards — the same protection
+    // trySend/replayIfNeeded give, but reached through the teardown/hide path.
+    // Revert-check: delete `inFlightContent = content;` from flush's ok branch →
+    // this test goes red (echoesInFlightEdit returns false).
+    vi.useFakeTimers();
+    try {
+      let doc = "seed";
+      const sync = createEditSync({
+        getDoc: () => doc,
+        post: () => true,
+      });
+      sync.onHostSnapshot(1, true);
+      doc = "seed+edit";
+      sync.onLocalChange(); // timer pending, idle (no prior in-flight)
+      sync.flush(); // force-posts "seed+edit"; must record it as in-flight
+      expect(sync.echoesInFlightEdit("seed+edit")).toBe(true);
     } finally {
       vi.useRealTimers();
     }
