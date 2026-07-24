@@ -57,22 +57,32 @@ describe("stale-version Document post: keystroke is not lost", () => {
     // bytes.)
     expect(visible.effects).toEqual([{ type: "postDocument", docVersion: 2 }]);
 
-    // The user types one char. The webview echoes the version it just received
-    // (base 2). At edit time the live document is still v2.
+    // The webview's next keystroke echoes the version it ACTUALLY received on
+    // that post, not a value re-derived to match the fix. Read it off the
+    // effect above (not hardcoded) so this test genuinely exercises whatever
+    // `viewStateVisible` posts.
+    const posted = visible.effects[0];
+    const receivedVersion = posted.type === "postDocument" ? posted.docVersion : -1;
+
+    // The user types one char, echoing receivedVersion as its base. At edit
+    // time the real document is still v2 (independent of what got posted —
+    // the live doc doesn't rewind).
     const typed = core.transition(visible.state, {
       type: "edit",
-      baseDocVersion: 2,
+      baseDocVersion: receivedVersion,
       content: "v2 bytes + x",
       documentVersion: 2,
       canWrite: true,
       currentContent: "v2 bytes",
     });
     // Accepted → applyEdit (write). NOT a stale-reseed postDocument that would
-    // discard the keystroke. This is the non-vacuity pin: with the old
-    // stale-version post the base would be 1 < live 2, decideEdit returns
-    // `stale`, and this would assert a `postDocument` reseed instead.
+    // discard the keystroke. Non-vacuity: under the old stale-version post
+    // receivedVersion would be the stale 1; the `edit` arm still resyncs
+    // lastAppliedDocVersion to the live 2 (from `documentVersion` above), so
+    // decideEdit(base=1, lastApplied=2) returns `stale`, and this would assert
+    // a `postDocument` reseed instead of `applyEdit`.
     expect(typed.effects).toEqual([
-      { type: "applyEdit", content: "v2 bytes + x", baseDocVersion: 2 },
+      { type: "applyEdit", content: "v2 bytes + x", baseDocVersion: receivedVersion },
     ]);
   });
 });
