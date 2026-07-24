@@ -341,10 +341,18 @@ describe("host-session-core: applyEditSettled drain", () => {
     const draftDoc = drained.effects.find((e) => e.type === "postRejectedDraft");
     expect(draftDoc).toBeDefined();
     const retryBase = (draftDoc as { docVersion: number }).docVersion;
-    // The webview retries at the version it just learned from the draft Document.
+    // The webview retries at the version it just learned from the draft
+    // Document (retryBase). `documentVersion` is pinned to the independently
+    // known live version (2, same as the settled outcome above) rather than
+    // reusing `retryBase` — decideEdit's staleness check compares
+    // `baseDocVersion` against `documentVersion` (see host-session-core.ts's
+    // edit-arm resync), so if the two args were both `retryBase` the check
+    // would trivially pass regardless of what postRejectedDraft actually
+    // carried. Pinning `documentVersion` independently means this only
+    // passes if `retryBase` genuinely equals the live version.
     const retry = core.transition(
       drained.state,
-      edit({ baseDocVersion: retryBase, documentVersion: retryBase, content: "fixed" })
+      edit({ baseDocVersion: retryBase, documentVersion: 2, content: "fixed" })
     );
     // Not stale (no reseed): the fix is accepted and written.
     expect(retry.effects.some((e) => e.type === "postDocument")).toBe(false);
@@ -353,6 +361,25 @@ describe("host-session-core: applyEditSettled drain", () => {
       content: "fixed",
       baseDocVersion: retryBase,
     });
+  });
+
+  it("drain parse-failed (ALIVE) round-trip NEGATIVE: a retry still on the PRE-drain version IS stale-rejected (reproduces finding #2 without the fix)", () => {
+    const drained = core.transition(
+      lockedWithStash("edit1", "hasBAD"),
+      settled({ outcome: { kind: "ok", documentVersion: 2 }, currentContent: "edit1" })
+    );
+    // Simulate the OLD (pre-fix) webview: it never learned the settled
+    // version, so it retries with the stale pre-drain base (1) while the
+    // live host document version is genuinely 2.
+    const retry = core.transition(
+      drained.state,
+      edit({ baseDocVersion: 1, documentVersion: 2, content: "fixed" })
+    );
+    // Stale → authoritative reseed, NOT an applyEdit — the draft is wiped by
+    // the reseed's Document (built from live document text, not the rejected
+    // "fixed" content). This is exactly what the postRejectedDraft fix prevents
+    // by advancing the webview to the settled version.
+    expect(retry.effects).toEqual([{ type: "postDocument", docVersion: 2 }]);
   });
 
   it("drain readonly (canWrite=false) → repost Document only, no applyEdit", () => {
