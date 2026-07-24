@@ -156,7 +156,10 @@ export function createEffectExecutor(deps: EffectExecutorDeps): EffectExecutor {
   // id) is a no-op in the `editRejectedDeliveryFailed` arm, so it can neither
   // clobber the live banner nor force an unsolicited reseed. When the clear
   // DOES fire, the user's typed content is overwritten — same "external wins"
-  // semantics as for an `onDidChangeTextDocument` race.
+  // semantics as for an `onDidChangeTextDocument` race. The event carries the
+  // LIVE document version (readVersion at this dispatch, read synchronously with
+  // the reseed's live bytes) so the recovery Document's version matches its
+  // bytes — never the possibly-stale stored version.
   const sendEditRejected = (error: MarkdownError, id: number): void => {
     if (deps.isDisposed()) {
       return;
@@ -173,7 +176,11 @@ export function createEffectExecutor(deps: EffectExecutorDeps): EffectExecutor {
       pending = deps.send(message);
     } catch (err) {
       console.error("[quoll] edit-rejected delivery threw synchronously; resync fallback", err);
-      deps.dispatch({ type: "editRejectedDeliveryFailed", id });
+      deps.dispatch({
+        type: "editRejectedDeliveryFailed",
+        id,
+        documentVersion: deps.applyEditSeam.readVersion(),
+      });
       return;
     }
     // Promise.resolve(...) assimilation: a non-standard Thenable can no
@@ -193,14 +200,22 @@ export function createEffectExecutor(deps: EffectExecutorDeps): EffectExecutor {
           uri: deps.uriString(),
           docVersion: deps.getState().lastAppliedDocVersion,
         });
-        deps.dispatch({ type: "editRejectedDeliveryFailed", id });
+        deps.dispatch({
+          type: "editRejectedDeliveryFailed",
+          id,
+          documentVersion: deps.applyEditSeam.readVersion(),
+        });
       },
       (err: unknown) => {
         if (deps.isDisposed()) {
           return;
         }
         console.error("[quoll] edit-rejected delivery rejected; resync fallback", err);
-        deps.dispatch({ type: "editRejectedDeliveryFailed", id });
+        deps.dispatch({
+          type: "editRejectedDeliveryFailed",
+          id,
+          documentVersion: deps.applyEditSeam.readVersion(),
+        });
       }
     );
   };

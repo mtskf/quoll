@@ -54,12 +54,15 @@ const settled = (over: Partial<Extract<HostSessionEvent, { type: "applyEditSettl
 
 describe("host-session-core: ready/seed", () => {
   it("ready (no lock, no rejection) → postDocument(v1), rejection none", () => {
-    const r = core.transition(base(), { type: "ready" });
+    const r = core.transition(base(), { type: "ready", documentVersion: 1 });
     expect(r.effects).toEqual([{ type: "postDocument", docVersion: 1 }]);
     expect(r.state.rejection).toEqual({ kind: "none" });
   });
   it("ready while lock held → logWarn, no postDocument", () => {
-    const r = core.transition(base({ pendingApplyBaseVersion: 1 }), { type: "ready" });
+    const r = core.transition(base({ pendingApplyBaseVersion: 1 }), {
+      type: "ready",
+      documentVersion: 1,
+    });
     expect(r.effects.map((e) => e.type)).toEqual(["logWarn"]);
   });
   it("ready while rejection pending → postRejectedDraft(draft,v1), re-stamps a fresh delivery id (Codex N6)", () => {
@@ -67,7 +70,7 @@ describe("host-session-core: ready/seed", () => {
       rejection: { kind: "pending", id: 1, content: "draftBAD", error: unsafe },
       nextRejectionId: 5,
     });
-    const r = core.transition(s, { type: "ready" });
+    const r = core.transition(s, { type: "ready", documentVersion: 1 });
     // The effect carries the freshly re-stamped delivery id (5) so the executor
     // delivers the replay banner failure-aware (sendEditRejected(error, id))
     // rather than via a bare post — a failed replay then recovers (Codex N6).
@@ -85,7 +88,7 @@ describe("host-session-core: ready/seed", () => {
     expect(r.state.nextRejectionId).toBe(6);
   });
   it("seed behaves identically to ready (no lock) → postDocument", () => {
-    expect(core.transition(base(), { type: "seed" }).effects).toEqual([
+    expect(core.transition(base(), { type: "seed", documentVersion: 1 }).effects).toEqual([
       { type: "postDocument", docVersion: 1 },
     ]);
   });
@@ -99,7 +102,7 @@ describe("host-session-core: ready/seed", () => {
       rejection: { kind: "pending", id: 1, content: "draftBAD", error: unsafe },
       nextRejectionId: 5,
     });
-    const r = core.transition(s, { type: "seed" });
+    const r = core.transition(s, { type: "seed", documentVersion: 1 });
     expect(r.effects).toEqual([
       { type: "postRejectedDraft", content: "draftBAD", error: unsafe, docVersion: 1, id: 5 },
     ]);
@@ -393,19 +396,19 @@ describe("host-session-core: applyEditSettled drain", () => {
 describe("host-session-core: misc transitions", () => {
   it("editRejectedDeliveryFailed (matching id) → clear rejection + postDocument", () => {
     const s = base({ rejection: { kind: "pending", id: 1, content: "d", error: unsafe } });
-    const r = core.transition(s, { type: "editRejectedDeliveryFailed", id: 1 });
+    const r = core.transition(s, { type: "editRejectedDeliveryFailed", id: 1, documentVersion: 1 });
     expect(r.state.rejection).toEqual({ kind: "none" });
     expect(r.effects).toEqual([{ type: "postDocument", docVersion: 1 }]);
   });
   it("editRejectedDeliveryFailed (stale id ≠ pending id) → no-op (Codex N2)", () => {
     const s = base({ rejection: { kind: "pending", id: 2, content: "d", error: unsafe } });
-    const r = core.transition(s, { type: "editRejectedDeliveryFailed", id: 1 });
+    const r = core.transition(s, { type: "editRejectedDeliveryFailed", id: 1, documentVersion: 1 });
     expect(r.state).toEqual(s);
     expect(r.effects).toEqual([]);
   });
   it("editRejectedDeliveryFailed while rejection none → no-op (Codex N2)", () => {
     const s = base({ rejection: { kind: "none" } });
-    const r = core.transition(s, { type: "editRejectedDeliveryFailed", id: 1 });
+    const r = core.transition(s, { type: "editRejectedDeliveryFailed", id: 1, documentVersion: 1 });
     expect(r.state).toEqual(s);
     expect(r.effects).toEqual([]);
   });
@@ -459,19 +462,24 @@ describe("host-session-core: misc transitions", () => {
   });
   it("viewStateVisible while lock held → no effect", () => {
     expect(
-      core.transition(base({ pendingApplyBaseVersion: 1 }), { type: "viewStateVisible" }).effects
+      core.transition(base({ pendingApplyBaseVersion: 1 }), {
+        type: "viewStateVisible",
+        documentVersion: 1,
+      }).effects
     ).toEqual([]);
   });
   it("viewStateVisible while rejection pending → logWarn only", () => {
     const s = base({ rejection: { kind: "pending", id: 1, content: "d", error: unsafe } });
-    expect(core.transition(s, { type: "viewStateVisible" }).effects.map((e) => e.type)).toEqual([
-      "logWarn",
-    ]);
+    expect(
+      core
+        .transition(s, { type: "viewStateVisible", documentVersion: 1 })
+        .effects.map((e) => e.type)
+    ).toEqual(["logWarn"]);
   });
   it("viewStateVisible normal → postDocument", () => {
-    expect(core.transition(base(), { type: "viewStateVisible" }).effects).toEqual([
-      { type: "postDocument", docVersion: 1 },
-    ]);
+    expect(
+      core.transition(base(), { type: "viewStateVisible", documentVersion: 1 }).effects
+    ).toEqual([{ type: "postDocument", docVersion: 1 }]);
   });
   it("openExternal → openExternal effect", () => {
     expect(
@@ -555,7 +563,7 @@ describe("host-session-core: traces", () => {
     const { batches } = run(
       base({ lastAppliedDocVersion: 1 }),
       edit({ content: "good", currentContent: "cur", baseDocVersion: 1, documentVersion: 1 }),
-      { type: "ready" },
+      { type: "ready", documentVersion: 1 },
       settled({ outcome: { kind: "ok", documentVersion: 2 } })
     );
     expect(batches[1].map((e) => e.type)).toEqual(["logWarn"]); // ready dropped while locked
@@ -600,7 +608,11 @@ describe("host-session-core: traces", () => {
     ).state;
     expect(s.rejection).toMatchObject({ kind: "pending", content: "secondBAD" });
     // (4) A's late delivery-failure carries A's id → ignored; B survives.
-    const r = core.transition(s, { type: "editRejectedDeliveryFailed", id: idA });
+    const r = core.transition(s, {
+      type: "editRejectedDeliveryFailed",
+      id: idA,
+      documentVersion: 2,
+    });
     expect(r.state.rejection).toMatchObject({ kind: "pending", content: "secondBAD" });
     expect(r.effects).toEqual([]);
   });
@@ -632,7 +644,11 @@ describe("host-session-core: traces", () => {
     expect(s.pendingApplyBaseVersion).toBe(1);
     // (3) A's delayed delivery-failure lands while the lock is held → it must
     //     NOT emit a Document (nor any other effect) mid-lock.
-    const r = core.transition(s, { type: "editRejectedDeliveryFailed", id: idA });
+    const r = core.transition(s, {
+      type: "editRejectedDeliveryFailed",
+      id: idA,
+      documentVersion: 1,
+    });
     expect(r.effects).toEqual([]);
     expect(r.state.pendingApplyBaseVersion).toBe(1);
   });
@@ -654,7 +670,7 @@ describe("host-session-core: traces", () => {
     // (2) `ready` replay re-delivers A → re-stamps a fresh delivery id. The
     // effect carries that fresh id (attempt1Id + 1) so the executor delivers
     // the replay banner failure-aware via sendEditRejected(error, id).
-    const replay = core.transition(s, { type: "ready" });
+    const replay = core.transition(s, { type: "ready", documentVersion: 1 });
     s = replay.state;
     expect(replay.effects).toEqual([
       {
@@ -667,7 +683,11 @@ describe("host-session-core: traces", () => {
     ]);
     expect((s.rejection as { id: number }).id).not.toBe(attempt1Id);
     // (3) attempt-1's delayed delivery-failure lands → ignored; A survives.
-    const r = core.transition(s, { type: "editRejectedDeliveryFailed", id: attempt1Id });
+    const r = core.transition(s, {
+      type: "editRejectedDeliveryFailed",
+      id: attempt1Id,
+      documentVersion: 1,
+    });
     expect(r.state.rejection).toMatchObject({ kind: "pending", content: "firstBAD" });
     expect(r.effects).toEqual([]);
   });
@@ -727,6 +747,52 @@ describe("createDrainingDispatcher", () => {
   });
 });
 
+describe("host-session-core: stale-version resync", () => {
+  // Core lastApplied lags the live document (an external edit is still
+  // coalescing in the documentChanged debounce). The posting arms must stamp
+  // the LIVE version so the posted Document's version matches its live bytes —
+  // otherwise the webview's next keystroke (based on the just-posted version)
+  // is judged stale against the live version and reseeded away.
+  it("ready resyncs to live documentVersion and posts it", () => {
+    const r = core.transition(base({ lastAppliedDocVersion: 1 }), {
+      type: "ready",
+      documentVersion: 2,
+    });
+    expect(r.effects).toEqual([{ type: "postDocument", docVersion: 2 }]);
+    expect(r.state.lastAppliedDocVersion).toBe(2);
+  });
+  it("seed resyncs to live documentVersion and posts it", () => {
+    const r = core.transition(base({ lastAppliedDocVersion: 1 }), {
+      type: "seed",
+      documentVersion: 2,
+    });
+    expect(r.effects).toEqual([{ type: "postDocument", docVersion: 2 }]);
+    expect(r.state.lastAppliedDocVersion).toBe(2);
+  });
+  it("viewStateVisible resyncs to live documentVersion and posts it", () => {
+    const r = core.transition(base({ lastAppliedDocVersion: 1 }), {
+      type: "viewStateVisible",
+      documentVersion: 2,
+    });
+    expect(r.effects).toEqual([{ type: "postDocument", docVersion: 2 }]);
+    expect(r.state.lastAppliedDocVersion).toBe(2);
+  });
+  it("editRejectedDeliveryFailed (matching id) resyncs to live version and posts it", () => {
+    const s = base({
+      lastAppliedDocVersion: 1,
+      rejection: { kind: "pending", id: 1, content: "d", error: unsafe },
+    });
+    const r = core.transition(s, {
+      type: "editRejectedDeliveryFailed",
+      id: 1,
+      documentVersion: 2,
+    });
+    expect(r.effects).toEqual([{ type: "postDocument", docVersion: 2 }]);
+    expect(r.state.lastAppliedDocVersion).toBe(2);
+    expect(r.state.rejection).toEqual({ kind: "none" });
+  });
+});
+
 describe("isWriteLockHeld", () => {
   it("is false on the initial state (no apply in flight)", () => {
     const { initialState } = createHostSessionCore({ uriString: "u", fsPath: "/u" });
@@ -735,7 +801,10 @@ describe("isWriteLockHeld", () => {
 
   it("is true after an accepted edit acquires the lock", () => {
     const core = createHostSessionCore({ uriString: "u", fsPath: "/u" });
-    const seeded = core.transition(core.initialState(1), { type: "seed" }).state;
+    const seeded = core.transition(core.initialState(1), {
+      type: "seed",
+      documentVersion: 1,
+    }).state;
     const afterEdit = core.transition(seeded, {
       type: "edit",
       baseDocVersion: 1,
