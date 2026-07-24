@@ -2,19 +2,23 @@
 
 All notable changes to Quoll are documented here.
 
-## 0.1.52 — 2026-07-23
+## 0.1.53 — 2026-07-24
 
 ### Added
-- Quoll: Format Document command (manual, conservative Markdown normalization) (#241)
-- click-to-open workspace code references in inline code (PR1) (#239)
 
-- Workspace code references like `` `src/foo.ts:42` `` in inline code are now clickable in the rendered view and open the file in a text editor at the referenced line and column.
+- Workspace code references like `` `src/foo.ts:42` `` in inline code are now clickable — and openable from the keyboard with `Cmd/Ctrl+Enter` — opening the file in a text editor at the referenced line and column.
+- Pasting rich text copied from a web page, Google Docs, or a chat window now converts it to Markdown — headings, bold/italic, links, nested lists, code blocks, blockquotes, and tables all survive — instead of landing as plain text. Anything that can't be converted safely falls back to the usual plain-text paste.
+- Pasting a Markdown list into an existing list now re-bases the pasted items' indentation to the caret's nesting level, keeping the fragment's inner structure intact.
+- A new "Quoll: Format Document" command applies a conservative Markdown clean-up on demand — it runs only when you invoke it, never on save.
+- Task checkboxes can now be toggled from the keyboard: press `Cmd/Ctrl+L` with the caret on a task line.
+
+### Changed
+
+- Accessibility polish across the outline sidebar and editor chrome: the outline settings popover now behaves as a proper dialog for assistive tech, the hover outline overlay closes when keyboard focus leaves it, the outline tree announces the document's title, the pinned outline's resize divider is keyboard-operable, and the frontmatter metadata text now meets WCAG AA contrast.
 
 ## 0.1.51 — 2026-07-17
 
 ### Added
-- Quoll: Format Document command (manual, conservative Markdown normalization) (#241)
-- click-to-open workspace code references in inline code (PR1) (#239)
 
 - Table cells now render `~~strikethrough~~` and `==highlight==` marks, matching how they already render everywhere else in the document.
 
@@ -25,8 +29,6 @@ All notable changes to Quoll are documented here.
 ## 0.1.50 — 2026-07-16
 
 ### Added
-- Quoll: Format Document command (manual, conservative Markdown normalization) (#241)
-- click-to-open workspace code references in inline code (PR1) (#239)
 
 - Obsidian-style `==highlight==` marks are now recognized: type `==text==` to highlight it, styled to match your light/dark/high-contrast theme.
 - A new status bar slot shows word count, character count, and estimated reading time for the active document (frontmatter and fenced code blocks are excluded from the word count and reading time).
@@ -35,16 +37,12 @@ All notable changes to Quoll are documented here.
 ## 0.1.49 — 2026-07-15
 
 ### Added
-- Quoll: Format Document command (manual, conservative Markdown normalization) (#241)
-- click-to-open workspace code references in inline code (PR1) (#239)
 
 - Fenced code blocks with a recognized language now show a header bar with the language name and a copy button, similar to ChatGPT's code block style. The header hides while you're editing the block so it doesn't duplicate the raw ```lang line.
 
 ## 0.1.48 — 2026-07-14
 
 ### Added
-- Quoll: Format Document command (manual, conservative Markdown normalization) (#241)
-- click-to-open workspace code references in inline code (PR1) (#239)
 
 - Fenced code blocks now show syntax highlighting (keywords, strings, comments, numbers, types) for blocks with a recognized language.
 - Fenced code blocks now have a language picker, so you can set or change a block's language directly in the editor.
@@ -56,8 +54,6 @@ All notable changes to Quoll are documented here.
 ## 0.1.47 — 2026-07-13
 
 ### Added
-- Quoll: Format Document command (manual, conservative Markdown normalization) (#241)
-- click-to-open workspace code references in inline code (PR1) (#239)
 
 - Tab and Shift-Tab in lists now perform structural moves instead of shifting whitespace: Shift-Tab out of a bullet into a numbered list adopts that list's numbering and renumbers it, and Tab nests a bullet under a numbered item to the correct content column — even healing a list that was already mis-nested too shallowly.
 - Pressing Enter then Shift-Tab on an empty list item now adopts the destination list's shape (bullet, checkbox, or number) instead of keeping the wrong marker.
@@ -75,10 +71,6 @@ All notable changes to Quoll are documented here.
 ## 0.1.45 — 2026-07-13
 
 ### Added
-- Quoll: Format Document command (manual, conservative Markdown normalization) (#241)
-- click-to-open workspace code references in inline code (PR1) (#239)
-- structural list Tab/Shift-Tab — marker adoption, cross-list nesting, width-aware renumber (#207)
-- announce fenced-code copy result to screen readers (#208)
 
 - Screen readers now announce "Copied" (or "Copy failed") when you use a fenced code block's copy button, so the result is confirmed aloud instead of only changing the button's icon.
 
@@ -112,10 +104,6 @@ All notable changes to Quoll are documented here.
 ## 0.1.40 — 2026-07-11
 
 ### Added
-- Quoll: Format Document command (manual, conservative Markdown normalization) (#241)
-- click-to-open workspace code references in inline code (PR1) (#239)
-- structural list Tab/Shift-Tab — marker adoption, cross-list nesting, width-aware renumber (#207)
-- announce fenced-code copy result to screen readers (#208)
 
 - Collapse and expand individual headings in the document outline: any heading that has sub-headings now shows a chevron — like the Explorer file tree — that folds just that heading's children (mouse or keyboard). Leaf headings stay aligned without one.
 - Opt-in advisory prose lint rules: flags passive voice, filler/hedge words, and sentences over 30 words as info-level hints in paragraphs. Off by default — enable with the `quoll.lint.prose.enabled` setting.
@@ -127,20 +115,12 @@ All notable changes to Quoll are documented here.
 ## 0.1.39 — 2026-07-11
 
 ### Added
-- Quoll: Format Document command (manual, conservative Markdown normalization) (#241)
-- click-to-open workspace code references in inline code (PR1) (#239)
-- structural list Tab/Shift-Tab — marker adoption, cross-list nesting, width-aware renumber (#207)
-- announce fenced-code copy result to screen readers (#208)
 
 - Editor settings popover in the outline sidebar: choose the font (Default / Serif / Sans), font size, line height, and reading-column width. Open it from the gear button in the sidebar footer; choices are saved to your settings and apply to every open Quoll editor.
 
 ## 0.1.38 — 2026-07-11
 
 ### Added
-- Quoll: Format Document command (manual, conservative Markdown normalization) (#241)
-- click-to-open workspace code references in inline code (PR1) (#239)
-- structural list Tab/Shift-Tab — marker adoption, cross-list nesting, width-aware renumber (#207)
-- announce fenced-code copy result to screen readers (#208)
 
 - Add title-bar buttons to switch between Quoll and the built-in text editor from either side: a cat icon on a Markdown text editor opens it in Quoll, and a file-code icon on a Quoll editor reopens it as text.
 
@@ -153,10 +133,6 @@ All notable changes to Quoll are documented here.
 ## 0.1.37 — 2026-07-11
 
 ### Added
-- Quoll: Format Document command (manual, conservative Markdown normalization) (#241)
-- click-to-open workspace code references in inline code (PR1) (#239)
-- structural list Tab/Shift-Tab — marker adoption, cross-list nesting, width-aware renumber (#207)
-- announce fenced-code copy result to screen readers (#208)
 
 - Smart list continuation: pressing Enter at the end of a list item now continues the list (adding the next bullet, or the next number for ordered lists) instead of just inserting a blank line, and pressing Enter on an empty list item exits the list instead of leaving a dangling empty marker. Deleting or reordering items in an ordered list renumbers the remaining items to stay sequential.
 
