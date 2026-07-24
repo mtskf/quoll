@@ -694,6 +694,22 @@ describe("quollOutline sidebar", () => {
     expect(announcer.textContent).toBe("Gamma — current section"); // fire-time label, not stale "Beta"
   });
 
+  it("cancels a pending cue when the document is edited (an edit is not a navigation)", () => {
+    vi.useFakeTimers();
+    const { view: v, host } = mount("# Alpha\n\nbody\n\n## Beta\n\nmore\n");
+    v.plugin(outlinePlugin)?.toggle();
+    const announcer = host.querySelector(".quoll-outline-announcer") as HTMLElement;
+    v.dispatch({ selection: EditorSelection.cursor(v.state.doc.line(5).from) }); // → Beta (cue armed)
+    vi.advanceTimersByTime(100); // cue still pending
+    // Delete the "## " marker so the line is no longer a heading: the pre-edit cue
+    // must be cancelled rather than fire off the stale (pre-rebuild) outline. The
+    // caret then sits under Alpha (already the baseline), so nothing is spoken.
+    const betaLine = v.state.doc.line(5);
+    v.dispatch({ changes: { from: betaLine.from, to: betaLine.from + 3, insert: "" } });
+    vi.runAllTimers();
+    expect(announcer.textContent).toBe(""); // no stale "Beta", no edit-driven cue
+  });
+
   it("announces empty when the caret sits above the first heading (null active section)", () => {
     vi.useFakeTimers();
     const { view: v, host } = mount("intro prose\n\n# Alpha\n\nbody\n");
