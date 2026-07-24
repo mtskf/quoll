@@ -4,8 +4,9 @@
 // while an Edit is applying, inbound Edits are dropped. So the webview
 // posts at most ONE Edit at a time (editInFlight) and buffers the latest
 // doc string for replay on the next non-stale Document ack. Text-canonical
-// has no serialize step and no frontmatter side-channel — the buffer is a
-// plain Markdown string.
+// has no serialize step and no frontmatter side-channel — the buffered
+// content is a plain Markdown string (S3b wraps it in a BufferedEdit that
+// also carries the capture-time (epoch, generation) identity stamp).
 //
 // Driven by the shell's synchronous post-commit dispatch (editor.ts +
 // shell.ts):

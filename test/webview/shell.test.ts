@@ -184,6 +184,10 @@ describe("shell — S3b epoch-bounded acceptance ordering", () => {
     // Latched: a further transition does not add a second notice.
     deliver(buildDocument({ docVersion: 1, content: "s", externalEpoch: 0, epochGeneration: 5 }));
     expect(container?.querySelectorAll(".quoll-resync-notice").length).toBe(1);
+    // Dismiss button removes the notice.
+    const notice = container?.querySelector(".quoll-resync-notice") as HTMLElement;
+    (notice.querySelector(".quoll-resync-notice-dismiss") as HTMLButtonElement).click();
+    expect(container?.querySelectorAll(".quoll-resync-notice").length).toBe(0);
   });
 
   it("shows NO resync-storm notice for a single identity transition", async () => {
