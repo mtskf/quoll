@@ -669,6 +669,22 @@ describe("quollOutline sidebar", () => {
     expect(announcer.textContent).toBe("Beta — current section");
   });
 
+  it("baselines a row focused with no pending cue (treeitem announcement is not repeated)", () => {
+    vi.useFakeTimers();
+    const { view: v, host } = mount("# Alpha\n\nbody\n\n## Beta\n\nmore\n");
+    const plugin = v.plugin(outlinePlugin);
+    plugin?.toggle();
+    pinEl(host).click();
+    const announcer = host.querySelector(".quoll-outline-announcer") as HTMLElement;
+    // No caret move: baseline is Alpha from the open-time prime, no cue armed.
+    rowEls(host)[1].focus(); // SR announces Beta's treeitem → focusin must baseline Beta
+    v.focus();
+    v.dispatch({ selection: EditorSelection.cursor(v.state.doc.line(5).from) }); // caret → Beta
+    vi.runAllTimers();
+    // The treeitem already announced Beta, so the live region must stay silent.
+    expect(announcer.textContent).toBe("");
+  });
+
   it("baselines a section reached by roving into its row after a suppressed cue (no re-announce)", () => {
     vi.useFakeTimers();
     const { view: v, host } = mount("# Alpha\n\nbody\n\n## Beta\n\nmore\n");

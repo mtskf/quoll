@@ -1230,12 +1230,12 @@ class OutlinePanel implements PluginValue {
     }
     if (caretDriven || this.announceTimer !== null) {
       // Caret-driven, OR a structural rebuild that arrived while a cue was still
-      // armed. In the latter case the rebuild may have revised the caret's section
-      // (a background reparse completing over a large document reveals a heading
-      // the incomplete outline missed) — so re-derive the cue's target from the
-      // refreshed outline instead of baselining silently, keeping a genuine pending
-      // navigation truthful. An edit reaches here with no armed timer (update()
-      // cancels it), so it still re-baselines silently below.
+      // armed. The armed cue is a genuine pending caret navigation (a pure edit
+      // cancels the timer in update(), so it lands in the silent else-branch; but
+      // an edit-then-navigate, or a background reparse completing over a large
+      // document, can leave a live timer here). Re-derive its target from the
+      // refreshed outline instead of baselining silently — a reparse may reveal a
+      // heading the incomplete outline missed — so the pending cue stays truthful.
       this.announceActive(caretSectionFrom);
     } else {
       this.syncAnnounceBaseline(caretSectionFrom);
@@ -1264,6 +1264,15 @@ class OutlinePanel implements PluginValue {
     const row = this.rows.find((r) => r.li === li);
     if (row !== undefined) {
       this.lastAnnouncedFrom = row.heading.from;
+      // The treeitem now covers this section. Cancel any pending live cue (but keep
+      // the region's current text) so it is not ALSO spoken if focus returns to the
+      // editor before the debounce fires — a pure focus move dispatches no
+      // transaction, so nothing else would cancel it. clearTimeout only, not
+      // clearAnnouncement: blanking here would drop a legitimately-shown prior cue.
+      if (this.announceTimer !== null) {
+        clearTimeout(this.announceTimer);
+        this.announceTimer = null;
+      }
     }
   }
 
