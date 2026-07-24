@@ -47,6 +47,16 @@ export type Action =
       docVersion: number;
       canWrite: boolean;
       themeKind: ThemeKind;
+      /** Identity-transition adoption (S3b): when true, bypass the stale
+       *  two-comparison drop and adopt this Document unconditionally. A new host
+       *  session (fresh epochGeneration, or a legacy host that dropped the pair)
+       *  legitimately restarts at a LOWER docVersion; version ordering is
+       *  meaningful only within one generation. The shell computes this (via
+       *  edit-sync's `isIdentityTransition`) and threads it here so the reducer's
+       *  inlined copy of the stale guard cannot re-drop the adoption and strand
+       *  the webview permanently deaf to the live host. Absent/false on ordinary
+       *  same-generation (or pure-absent legacy) Documents. */
+      adopt?: boolean;
     }
   | { type: "theme"; themeKind: ThemeKind }
   | { type: "post-edit" }
@@ -103,8 +113,10 @@ export function reducer(state: WebviewState, action: Action): WebviewState {
       // Two-comparison rule: the webview accepts a Document iff
       // incoming >= displayed. The host uses === on Edit base versions;
       // the two comparisons answer different questions and stay inlined
-      // at their call sites.
-      if (action.docVersion < state.docVersion) {
+      // at their call sites. An identity-transition adoption (S3b) bypasses
+      // this: a new host generation restarts docVersion lower, and version
+      // ordering only holds within one generation (see the `adopt` JSDoc).
+      if (!action.adopt && action.docVersion < state.docVersion) {
         return state;
       }
       return {

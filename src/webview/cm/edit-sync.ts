@@ -28,6 +28,21 @@
 
 const DEBOUNCE_MS = 300;
 
+// Clustering escalation tripwire (S3b): ≥3 identity transitions within this
+// rolling window fire ONE per-session low-alarm notice. Defence-in-depth for
+// the acknowledged straggler-storm residual — surfaces a silently-repeating
+// resync to the user (log-only is insufficient; the S4 abort-toast precedent).
+const IDENTITY_FLAP_WINDOW_MS = 5 * 60 * 1000;
+const IDENTITY_FLAP_THRESHOLD = 3;
+
+/** A pre-ack replay buffer stamped with the (epoch, generation) identity pair
+ *  recorded at capture time (S3b). `replayIfNeeded` compares the stamp against
+ *  the currently recorded pair and DROPS the buffer on a foreign epoch advance
+ *  or any identity transition — the webview then mirrors the host's external-
+ *  wins policy instead of clobbering it one round-trip later. `epoch`/`generation`
+ *  are `null` when captured under a legacy (pair-less) host. */
+type BufferedEdit = { content: string; epoch: number | null; generation: number | null };
+
 export type EditSyncOptions = {
   /** Current editor doc as a raw Markdown string. */
   getDoc: () => string;
@@ -40,6 +55,16 @@ export type EditSyncOptions = {
   canPost?: () => boolean;
   /** Test seam: run the flush synchronously instead of via setTimeout. */
   scheduleFlush?: (run: () => void) => void;
+  /** Clock for the identity-transition clustering tripwire (S3b). Injected so
+   *  tests can simulate the 5-minute rolling window deterministically.
+   *  Defaults to `Date.now`. */
+  now?: () => number;
+  /** Fired ONCE per session when identity transitions cluster (≥3 within the
+   *  5-minute window) — the clustering escalation tripwire (S3b). The wiring
+   *  surfaces a low-alarm user-visible notice ("Quoll re-synced with the editor
+   *  host repeatedly — recent keystrokes may not have been saved"). Never fired
+   *  per-transition; latched after the first alarm. Defaults to a no-op. */
+  onResyncStorm?: () => void;
 };
 
 export type EditSync = {
@@ -187,6 +212,17 @@ export type EditSync = {
    *  S3a: nothing acts on it yet; S3b's buffer-validity logic reads it to drop a
    *  replay buffer on a foreign epoch advance or an identity transition. */
   recordedIdentity: () => { epoch: number | null; generation: number | null };
+  /** Pure predicate (no side effects): would an incoming Document's identity
+   *  pair be an identity transition against the CURRENTLY recorded pair? True
+   *  on a different generation, absent→present, or present→absent; false for a
+   *  same-generation Document, a pure-absent (legacy) pair, or before the first
+   *  snapshot (the seed is an adoption, not a transition). The shell reads this
+   *  BEFORE `applyDocument` to bypass its whole-Document stale-version drop on a
+   *  transition; `onHostSnapshot` recomputes it internally to bypass its own
+   *  stale guard, count the tripwire, and adopt the pair (both read the same
+   *  unchanged recorded pair, so they agree). Version ordering is meaningful
+   *  only WITHIN one host generation (S3b). */
+  isIdentityTransition: (externalEpoch?: number, epochGeneration?: number) => boolean;
 };
 
 export function createEditSync(opts: EditSyncOptions): EditSync {
@@ -199,13 +235,90 @@ export function createEditSync(opts: EditSyncOptions): EditSync {
   // `editInFlight` is true (paired with every editInFlight assignment below).
   // Read by `echoesInFlightEdit` so the reseed path can recognise an ok-ack.
   let inFlightContent: string | null = null;
-  let buffered: string | null = null;
+  let buffered: BufferedEdit | null = null;
   let timer: ReturnType<typeof setTimeout> | null = null;
-  // Document identity pair from the most recent accepted host snapshot (S3a,
-  // record-only). `null` before the first snapshot / when the host omits the
-  // pair. S3b reads these in replayIfNeeded + at each buffer capture.
+  // Document identity pair from the most recent accepted host snapshot (S3a
+  // recorded it; S3b now acts on it). `null` before the first snapshot / when
+  // the host omits the pair. Read in replayIfNeeded's drop check, at each buffer
+  // capture (via stampBuffer), and by isIdentityTransition.
   let recordedEpoch: number | null = null;
   let recordedGeneration: number | null = null;
+  const now = opts.now ?? (() => Date.now());
+  // Rolling window of identity-transition timestamps + once-per-session latch
+  // for the clustering escalation tripwire (S3b).
+  const identityTransitionTimes: number[] = [];
+  let resyncStormAlarmed = false;
+
+  // Stamp a captured buffer with the identity pair CURRENT at capture time. The
+  // four capture sites (trySend, cancelPendingFlush, flush, failed-post) route
+  // through this so a buffer triggered by a foreign Document — captured BEFORE
+  // onHostSnapshot records the incoming pair (applyDocument calls
+  // cancelPendingFlush first) — is stamped one epoch behind and correctly
+  // dropped at the next drain. Stamping from the incoming message instead would
+  // launder foreign-triggered captures as current.
+  const stampBuffer = (content: string): BufferedEdit => ({
+    content,
+    epoch: recordedEpoch,
+    generation: recordedGeneration,
+  });
+
+  // Should a held buffer be dropped rather than replayed? Compares the buffer's
+  // STAMP against the currently recorded pair (S3b, one rule at one choke point):
+  //   - both absent (legacy throughout)      → replay (today's behaviour)
+  //   - stamp present ⊕ recorded present      → identity transition → DROP
+  //   - different generation                  → identity transition → DROP
+  //   - same generation, recorded epoch ahead → foreign bytes landed → DROP
+  //   - same generation, epoch unchanged      → stale-recovery replay (no foreign
+  //     bytes; the flush→stale-reject→replay recovery path stays green)
+  const shouldDropBufferedForEpoch = (buf: BufferedEdit): boolean => {
+    const stampPresent = buf.generation !== null;
+    const recordedPresent = recordedGeneration !== null;
+    if (!stampPresent && !recordedPresent) {
+      return false;
+    }
+    if (stampPresent !== recordedPresent) {
+      return true;
+    }
+    if (buf.generation !== recordedGeneration) {
+      return true;
+    }
+    return (recordedEpoch ?? 0) > (buf.epoch ?? 0);
+  };
+
+  // Pure identity-transition predicate — see the EditSync.isIdentityTransition
+  // JSDoc. Reads (never mutates) the recorded pair, so the shell's pre-apply
+  // query and onHostSnapshot's internal call agree.
+  const isIdentityTransition = (incomingEpoch?: number, incomingGeneration?: number): boolean => {
+    if (!seeded) {
+      return false; // the first snapshot is an adoption, not a transition
+    }
+    const incomingPresent = incomingEpoch !== undefined && incomingGeneration !== undefined;
+    const recordedPresent = recordedGeneration !== null;
+    if (!incomingPresent && !recordedPresent) {
+      return false;
+    }
+    if (incomingPresent !== recordedPresent) {
+      return true;
+    }
+    return incomingGeneration !== recordedGeneration;
+  };
+
+  // Record an identity transition for the clustering tripwire and fire the
+  // once-per-session alarm when ≥3 land within the rolling window.
+  const noteIdentityTransition = (): void => {
+    const t = now();
+    identityTransitionTimes.push(t);
+    while (
+      identityTransitionTimes.length > 0 &&
+      t - identityTransitionTimes[0] > IDENTITY_FLAP_WINDOW_MS
+    ) {
+      identityTransitionTimes.shift();
+    }
+    if (!resyncStormAlarmed && identityTransitionTimes.length >= IDENTITY_FLAP_THRESHOLD) {
+      resyncStormAlarmed = true;
+      opts.onResyncStorm?.();
+    }
+  };
 
   const clearTimer = (): void => {
     if (timer !== null) {
@@ -243,12 +356,12 @@ export function createEditSync(opts: EditSyncOptions): EditSync {
       // Gate held / pre-seed (NOT readonly): keep the content buffered
       // so a later ack or serialize-error gate clear can replay it; do not
       // drop it.
-      buffered = opts.getDoc();
+      buffered = stampBuffer(opts.getDoc());
       return;
     }
     const content = opts.getDoc();
     if (editInFlight) {
-      buffered = content; // single-flight: stash latest, replay on ack
+      buffered = stampBuffer(content); // single-flight: stash latest, replay on ack
       return;
     }
     editInFlight = true;
@@ -261,7 +374,7 @@ export function createEditSync(opts: EditSyncOptions): EditSync {
       // can retry, and retain the buffered content.
       editInFlight = false;
       inFlightContent = null;
-      buffered = content;
+      buffered = stampBuffer(content);
     }
   };
 
@@ -291,10 +404,25 @@ export function createEditSync(opts: EditSyncOptions): EditSync {
     // on a pre-seed reseed) must NOT post with the placeholder
     // docVersion 0; it waits for the seed. Symmetric with trySend's
     // `!seeded || !canPost()` arm.
+    // Epoch-bounded buffer validity (S3b): drop (and log) a held buffer whose
+    // stamped identity is no longer live — foreign bytes landed under a
+    // same-generation epoch advance, or the host identity transitioned across
+    // the capture. The webview then mirrors the host's external-wins policy
+    // instead of replaying stale bytes over it one round-trip later. Placed
+    // BEFORE the drain guards so the buffer is simply gone by the time they run.
+    if (buffered !== null && shouldDropBufferedForEpoch(buffered)) {
+      console.warn("[quoll] dropping stale replay buffer (foreign epoch / identity transition)", {
+        stampGeneration: buffered.generation,
+        stampEpoch: buffered.epoch,
+        recordedGeneration,
+        recordedEpoch,
+      });
+      buffered = null;
+    }
     if (buffered === null || !seeded || editInFlight || !canWrite || !canPost()) {
       return;
     }
-    const content = buffered;
+    const content = buffered.content;
     editInFlight = true;
     const ok = opts.post(content, docVersion);
     if (ok) {
@@ -303,7 +431,7 @@ export function createEditSync(opts: EditSyncOptions): EditSync {
     } else {
       editInFlight = false;
       inFlightContent = null;
-      buffered = content;
+      buffered = stampBuffer(content);
     }
   };
 
@@ -316,15 +444,36 @@ export function createEditSync(opts: EditSyncOptions): EditSync {
     // cleared editInFlight here and/or replayed; both created the
     // divergences the doc comment on onHostSnapshot above details.)
     onHostSnapshot: (nextVersion, nextCanWrite, nextEpoch, nextGeneration) => {
-      if (seeded && nextVersion < docVersion) {
-        return; // stale — shell-level guard also drops it
+      const transition = isIdentityTransition(nextEpoch, nextGeneration);
+      // Generation-aware acceptance ordering (S3b): version order is meaningful
+      // only WITHIN one host generation. On an identity transition a new host
+      // session legitimately restarts at a LOWER docVersion, so SKIP the
+      // stale-version early-return and adopt the incoming version/pair
+      // unconditionally — matching the shell's whole-Document bypass and the
+      // reducer's `adopt` bypass. Only a same-identity Document gets the ordered
+      // stale drop.
+      if (seeded && !transition && nextVersion < docVersion) {
+        return; // stale within the same identity — shell-level guard also drops it
+      }
+      if (transition) {
+        // Log the adoption with a triage signature (old identity → new identity)
+        // BEFORE the recorded pair is overwritten, and feed the clustering
+        // tripwire. The held buffer (if any) is dropped later in
+        // replayIfNeeded, which compares its stamp against the new pair.
+        console.info("[quoll] identity transition — adopting new host session", {
+          fromGeneration: recordedGeneration,
+          toGeneration: nextGeneration ?? null,
+          fromEpoch: recordedEpoch,
+          toEpoch: nextEpoch ?? null,
+        });
+        noteIdentityTransition();
       }
       docVersion = nextVersion;
       canWrite = nextCanWrite;
       seeded = true;
-      // RECORD-ONLY (S3a): capture the identity pair alongside the version.
-      // `undefined` (old host omitted the pair) records as `null` — the
-      // "no epoch info" fallback S3b treats as today's replay behaviour.
+      // Capture the identity pair alongside the version. `undefined` (old host
+      // omitted the pair) records as `null` — the "no epoch info" fallback that
+      // keeps a pure-absent (legacy) session on today's replay behaviour.
       recordedEpoch = nextEpoch ?? null;
       recordedGeneration = nextGeneration ?? null;
     },
@@ -371,7 +520,7 @@ export function createEditSync(opts: EditSyncOptions): EditSync {
         if (seeded && !canWrite) {
           buffered = null; // readonly hard drop
         } else {
-          buffered = opts.getDoc();
+          buffered = stampBuffer(opts.getDoc());
         }
       }
       clearTimer();
@@ -390,7 +539,7 @@ export function createEditSync(opts: EditSyncOptions): EditSync {
       // the buffer; a failed post keeps the buffer for the next ack.
       const hadTimer = timer !== null;
       clearTimer();
-      const content = hadTimer ? opts.getDoc() : buffered;
+      const content = hadTimer ? opts.getDoc() : (buffered?.content ?? null);
       if (content === null) {
         return; // nothing pending — genuine no-op
       }
@@ -399,7 +548,7 @@ export function createEditSync(opts: EditSyncOptions): EditSync {
         return;
       }
       if (!seeded || !canPost()) {
-        buffered = content; // pre-seed / gate closed: keep for a later drain
+        buffered = stampBuffer(content); // pre-seed / gate closed: keep for a later drain
         return;
       }
       const wasInFlight = editInFlight;
@@ -410,9 +559,9 @@ export function createEditSync(opts: EditSyncOptions): EditSync {
         // Retain for ack-replay ONLY under in-flight contention (the sole path
         // to the stale settlement→ack window); otherwise the host accepted the
         // post and is the authority, so null it like trySend's idle post (JSDoc).
-        buffered = wasInFlight ? content : null;
+        buffered = wasInFlight ? stampBuffer(content) : null;
       } else {
-        buffered = content; // post failed: keep for the next ack
+        buffered = stampBuffer(content); // post failed: keep for the next ack
       }
     },
     flushIfIdle: () => {
@@ -431,5 +580,6 @@ export function createEditSync(opts: EditSyncOptions): EditSync {
     },
     echoesInFlightEdit: (content) => inFlightContent !== null && content === inFlightContent,
     recordedIdentity: () => ({ epoch: recordedEpoch, generation: recordedGeneration }),
+    isIdentityTransition,
   };
 }

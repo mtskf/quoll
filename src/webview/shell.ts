@@ -88,6 +88,34 @@ export function mountShell(root: HTMLElement, opts: ShellOptions): ShellHandle {
   const bannerHost = document.createElement("div");
   bannerHost.className = "quoll-banner-host";
   main.appendChild(bannerHost);
+
+  // Clustering escalation tripwire notice (S3b). A low-alarm, once-per-session,
+  // user-visible hint surfaced when identity transitions cluster (edit-sync
+  // fires onResyncStorm at ≥3 within 5 min). It lives OUTSIDE bannerHost so the
+  // reducer-driven renderBanners (replaceChildren) never clobbers it, and is NOT
+  // reducer state — it is an edit-sync lifecycle event, not a document error.
+  // Latched by edit-sync (fires at most once) and here (idempotent).
+  let resyncNoticeShown = false;
+  function showResyncNotice(): void {
+    if (resyncNoticeShown) {
+      return;
+    }
+    resyncNoticeShown = true;
+    const notice = document.createElement("div");
+    notice.className = "quoll-resync-notice";
+    notice.setAttribute("role", "status");
+    const text = document.createElement("span");
+    text.textContent =
+      "Quoll re-synced with the editor host repeatedly — recent keystrokes may not have been saved.";
+    const dismiss = document.createElement("button");
+    dismiss.type = "button";
+    dismiss.className = "quoll-resync-notice-dismiss";
+    dismiss.setAttribute("aria-label", "Dismiss");
+    dismiss.textContent = "×";
+    dismiss.addEventListener("click", () => notice.remove());
+    notice.append(text, dismiss);
+    main.appendChild(notice);
+  }
   // The editor mounts its own .quoll-editor div as a child of bannerHost's
   // sibling; we hand it `main` as the parent so it sits inside <main>.
   root.appendChild(main);
@@ -198,6 +226,7 @@ export function mountShell(root: HTMLElement, opts: ShellOptions): ShellHandle {
     resourceBaseUri,
     getState: () => state,
     dispatch,
+    onResyncStorm: showResyncNotice,
   });
 
   const unsubscribe = subscribeToHost((message) => {
@@ -258,7 +287,18 @@ export function mountShell(root: HTMLElement, opts: ShellOptions): ShellHandle {
         editor?.applyRemoteCaret({ line: message.line, character: message.character });
         return;
       case "document": {
-        if (message.docVersion < state.docVersion) {
+        // Identity-transition bypass (S3b): a new host session (fresh
+        // epochGeneration, or a legacy host that dropped the pair) legitimately
+        // restarts at a LOWER docVersion. Version ordering is meaningful only
+        // WITHIN one host generation, so on a transition we SKIP the stale drop
+        // and adopt the Document unconditionally — threading `adopt` so the
+        // reducer's inlined copy of the same guard also adopts (otherwise the
+        // webview goes permanently deaf to the live host). editor is non-null
+        // whenever a stale compare could fire (docVersion only advances past 0
+        // after the editor mounted), so the null-guard here is defensive.
+        const isTransition =
+          editor?.isIdentityTransition(message.externalEpoch, message.epochGeneration) ?? false;
+        if (!isTransition && message.docVersion < state.docVersion) {
           // Stale — drop without touching the editor or the reducer (the
           // two-comparison rule, inlined at the call site).
           return;
@@ -302,6 +342,7 @@ export function mountShell(root: HTMLElement, opts: ShellOptions): ShellHandle {
           docVersion: message.docVersion,
           canWrite: message.canWrite,
           themeKind: message.themeKind,
+          adopt: isTransition,
         });
         return;
       }
