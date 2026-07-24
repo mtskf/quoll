@@ -207,6 +207,78 @@ describe("editor — fresh canWrite from applyDocument drives Compartment + repl
   });
 });
 
+// (d2) ok-ack while ahead must NOT reseed backwards over newer keystrokes.
+// A settlement ack Document merely ECHOES the in-flight edit's bytes back; if
+// the user kept typing during the in-flight window a wholesale reseed would
+// visibly rewind those keystrokes (and lose one typed during the revert
+// round-trip). applyDocument folds such an ack into version bookkeeping only.
+describe("editor — ok-ack while ahead does not reseed backwards (d2)", () => {
+  it("an ok-ack echoing the in-flight edit does NOT visibly rewind newer keystrokes", () => {
+    vi.useFakeTimers();
+    const { handle, view, commit } = mount();
+    handle.applyDocument("D1", true, 1); // seed at v1
+    // User types "2" → the debounced Edit posts (editInFlight in edit-sync).
+    view.dispatch({ changes: { from: view.state.doc.length, insert: "2" } });
+    vi.advanceTimersByTime(300);
+    expect(editPosts()).toHaveLength(1);
+    expect((editPosts()[0] as { content: string }).content).toBe("D12");
+    // User keeps typing "3" during the in-flight window → buffered (single-flight).
+    view.dispatch({ changes: { from: view.state.doc.length, insert: "3" } });
+    vi.advanceTimersByTime(300);
+    expect(editPosts()).toHaveLength(1); // still one — "D123" buffered, not posted
+    expect(view.state.sliceDoc()).toBe("D123");
+    // The ok-ack: host applied "D12", echoes it back at v2. It must NOT reseed
+    // the doc back to "D12" (which would erase the visible "3").
+    handle.applyDocument("D12", true, 2);
+    expect(view.state.sliceDoc()).toBe("D123"); // no visible rewind
+    // The shell's post-dispatch commit clears editInFlight and replays "D123".
+    commit(false);
+    expect(editPosts()).toHaveLength(2);
+    const replay = editPosts()[1] as { content: string; baseDocVersion: number };
+    expect(replay.content).toBe("D123");
+    expect(replay.baseDocVersion).toBe(2);
+    expect(view.state.sliceDoc()).toBe("D123");
+  });
+
+  it("a keystroke typed during the ack round-trip is preserved end-to-end (no fork off a rewound base)", () => {
+    vi.useFakeTimers();
+    const { handle, view, commit } = mount();
+    handle.applyDocument("D1", true, 1);
+    view.dispatch({ changes: { from: view.state.doc.length, insert: "2" } });
+    vi.advanceTimersByTime(300); // posts "D12"
+    view.dispatch({ changes: { from: view.state.doc.length, insert: "3" } });
+    vi.advanceTimersByTime(300); // buffers "D123"
+    // ok-ack #1 echoes "D12" back; the user is ahead at "D123".
+    handle.applyDocument("D12", true, 2);
+    // Before the commit replays, the user types "4" — it must build on the live
+    // "D123", not a rewound "D12" base (which would fork off "D124", dropping 3).
+    view.dispatch({ changes: { from: view.state.doc.length, insert: "4" } });
+    expect(view.state.sliceDoc()).toBe("D1234");
+    commit(false); // replays "D123" at v2; "D1234" now buffers behind it
+    vi.advanceTimersByTime(300);
+    // ok-ack #2 echoes "D123" back; the user is ahead at "D1234".
+    handle.applyDocument("D123", true, 3);
+    commit(false); // replays "D1234" at v3
+    expect(view.state.sliceDoc()).toBe("D1234");
+    const contents = editPosts().map((m) => (m as { content: string }).content);
+    expect(contents).toContain("D1234"); // the full content reached the host
+    expect(contents).not.toContain("D124"); // the fork that drops "3" never posted
+  });
+
+  it("a genuine external divergence (content not our in-flight edit) still reseeds", () => {
+    vi.useFakeTimers();
+    const { handle, view } = mount();
+    handle.applyDocument("D1", true, 1);
+    view.dispatch({ changes: { from: view.state.doc.length, insert: "2" } });
+    vi.advanceTimersByTime(300); // posts "D12", in flight
+    expect(view.state.sliceDoc()).toBe("D12");
+    // An EXTERNAL edit changed the file to unrelated content at a newer version.
+    // It does not echo our in-flight "D12", so the reseed must still apply.
+    handle.applyDocument("EXTERNAL", true, 2);
+    expect(view.state.sliceDoc()).toBe("EXTERNAL");
+  });
+});
+
 // (e) CRLF round-trip — uniform CRLF + LF round-trip + DEFENSIVE mixed/CR-only
 // seam normalization. The host seeds canonicalDocumentText(document) (see
 // document-canonical.ts), so these raw mixed/CR-only inputs never reach the

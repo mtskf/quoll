@@ -810,7 +810,23 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
       // captures an in-window keystroke into the buffer so it survives
       // the reseed and replays on the ack.
       sync.cancelPendingFlush();
-      const needsReseed = view.state.sliceDoc() !== rawText;
+      const liveDoc = view.state.sliceDoc();
+      const aheadOfHost = liveDoc !== rawText;
+      // ok-ack fold (update-loop guard — ARCHITECTURE.md §3/§5/§7). A host
+      // Document that merely ECHOES our own in-flight edit back is an ack, not
+      // a divergence. When the user kept typing during the in-flight window the
+      // live buffer has advanced past those acked bytes; a wholesale reseed
+      // would visibly REWIND the newer keystrokes (and a keystroke typed during
+      // the revert round-trip would fork off the stale base and be lost). The
+      // buffered edit replays forward on the reducer commit below, so fold this
+      // ack into version bookkeeping only — skip the visible content replace.
+      // Gated on canWrite so the readonly hard-drop path (cancelPendingFlush
+      // nulled the buffer) is untouched. The live buffer is always a descendant
+      // of what we posted, so an echo match means the acked content is a strict
+      // ancestor of the buffer — never a genuine external divergence (whose
+      // content never matches our posted bytes), which still reseeds.
+      const foldsOkAck = aheadOfHost && canWrite && sync.echoesInFlightEdit(rawText);
+      const needsReseed = aheadOfHost && !foldsOkAck;
       // Capture BEFORE the reseed. The needsReseed branch issues a wholesale
       // `0..doc.length` replace; CodeMirror's default selection mapping
       // collapses mid-doc cursors through that delete (the typical

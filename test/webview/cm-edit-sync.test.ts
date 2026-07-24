@@ -354,6 +354,56 @@ describe("cm edit-sync", () => {
   });
 });
 
+describe("cm edit-sync — echoesInFlightEdit", () => {
+  const ack = (s: ReturnType<typeof setup>, v: number, canWrite = true) => {
+    s.sync.onHostSnapshot(v, canWrite);
+    s.sync.onReducerCommit(false);
+  };
+
+  it("is false before anything is posted", () => {
+    const s = setup();
+    s.sync.onHostSnapshot(1, true);
+    expect(s.sync.echoesInFlightEdit("hello")).toBe(false);
+  });
+
+  it("is true for the exact bytes of the Edit currently in flight", () => {
+    const s = setup();
+    s.sync.onHostSnapshot(1, true);
+    s.type("hello world"); // posts, editInFlight = true
+    expect(s.sync.echoesInFlightEdit("hello world")).toBe(true);
+    // A different string (a genuine external divergence) never matches.
+    expect(s.sync.echoesInFlightEdit("something else")).toBe(false);
+  });
+
+  it("clears when the reducer commit acks the in-flight Edit", () => {
+    const s = setup();
+    s.sync.onHostSnapshot(1, true);
+    s.type("a"); // posts, editInFlight = true
+    expect(s.sync.echoesInFlightEdit("a")).toBe(true);
+    ack(s, 2); // ack clears editInFlight
+    expect(s.sync.echoesInFlightEdit("a")).toBe(false);
+  });
+
+  it("tracks the newest in-flight bytes across a buffered replay", () => {
+    const s = setup();
+    s.sync.onHostSnapshot(1, true);
+    s.type("a"); // posts "a", editInFlight = true
+    s.type("ab"); // buffered while in flight
+    expect(s.sync.echoesInFlightEdit("a")).toBe(true); // still "a" in flight
+    ack(s, 2); // ack "a" → replay drains "ab" → "ab" now in flight
+    expect(s.sync.echoesInFlightEdit("ab")).toBe(true);
+    expect(s.sync.echoesInFlightEdit("a")).toBe(false);
+  });
+
+  it("clears when a post fails (no phantom in-flight echo)", () => {
+    const s = setup();
+    s.sync.onHostSnapshot(1, true);
+    s.setPostOk(false);
+    s.type("x"); // post returns false → not in flight
+    expect(s.sync.echoesInFlightEdit("x")).toBe(false);
+  });
+});
+
 describe("cm edit-sync — discardBuffer", () => {
   const ack = (s: ReturnType<typeof setup>, v: number, canWrite = true) => {
     s.sync.onHostSnapshot(v, canWrite);
