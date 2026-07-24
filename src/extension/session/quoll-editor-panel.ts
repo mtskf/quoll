@@ -923,7 +923,18 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
                     caretWiring.applyCaretToTextEditor(editor, caret);
                   }
                 }
-                void finalizeSurfaceSwap(document.uri, sourceTab);
+                // Point-of-no-return guard: finalizeSurfaceSwap still awaits
+                // openDoc (and maybe save) before the irreversible tab close, so
+                // a rejection landing in THAT window would slip past the check
+                // above. Pass the same rejection predicate so the close is
+                // aborted synchronously right before it happens — closing every
+                // async window from open-resolve through the actual close.
+                void finalizeSurfaceSwap(
+                  document.uri,
+                  sourceTab,
+                  undefined,
+                  () => state.rejection.kind === "pending"
+                );
               },
               (err: unknown) => {
                 // Symmetric with quoll.toggleEditor's forward error toast (a

@@ -167,6 +167,42 @@ describe("finalizeSurfaceSwap", () => {
   });
 });
 
+describe("finalizeSurfaceSwap shouldAbortClose (point-of-no-return guard)", () => {
+  it("does NOT close a clean doc when shouldAbortClose returns true", async () => {
+    // Clean doc ⇒ shouldCloseSourceTab would allow the close; the abort guard
+    // overrides it (e.g. a write-gate rejection is pending → keep both open).
+    const doc = fakeDoc(false, true);
+    const { deps, closeTab, reresolve } = makeDeps(doc);
+    await finalizeSurfaceSwap(fileUri, SENTINEL_TAB, deps, () => true);
+    expect(closeTab).not.toHaveBeenCalled();
+    expect(reresolve).not.toHaveBeenCalled(); // aborts before re-resolving
+  });
+
+  it("checks shouldAbortClose AFTER the openDoc await (closes the TOCTOU gap)", async () => {
+    // The guard must observe a condition that becomes true DURING finalize's
+    // awaits, not just at call time — mirrors a rejection that lands while
+    // finalizeSurfaceSwap is awaiting openDoc. `pending` flips true inside
+    // openDoc; the guard reads it AFTER that await and aborts the close.
+    let pending = false;
+    const doc = fakeDoc(false, true);
+    const { deps, closeTab } = makeDeps(doc, {
+      openDoc: async () => {
+        pending = true;
+        return doc;
+      },
+    });
+    await finalizeSurfaceSwap(fileUri, SENTINEL_TAB, deps, () => pending);
+    expect(closeTab).not.toHaveBeenCalled();
+  });
+
+  it("closes normally when shouldAbortClose returns false (guard does not block the happy path)", async () => {
+    const doc = fakeDoc(false, true);
+    const { deps, closeTab } = makeDeps(doc);
+    await finalizeSurfaceSwap(fileUri, SENTINEL_TAB, deps, () => false);
+    expect(closeTab).toHaveBeenCalledWith(LIVE_TAB);
+  });
+});
+
 describe("closeSourceTabIfClean (no-save passive restore finalizer)", () => {
   const uri = { toString: () => "file:///a.md", scheme: "file" } as unknown as Uri;
   const fakeTab = { input: {} } as unknown as Tab;
