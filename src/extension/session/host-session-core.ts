@@ -206,7 +206,11 @@ function defaultMintEpochGeneration(): number {
  *  still LF) as foreign bytes. The `a === b` fast path keeps the common
  *  byte-identical settle allocation-free; the normalise runs only when the
  *  strings already differ. */
-function contentMatches(a: string, b: string): boolean {
+function contentMatches(a: string, b: string | null): boolean {
+  // a is always a string here → a null operand never matches
+  if (b === null) {
+    return false;
+  }
   return a === b || a.replace(/\r\n|\r|\n/g, "\n") === b.replace(/\r\n|\r|\n/g, "\n");
 }
 
@@ -559,16 +563,17 @@ export function createHostSessionCore(context: HostSessionContext, deps: HostSes
         // clobbered — the stash is dropped and the authoritative Document is
         // reposted (external wins, matching the pre-change drop). Non-ok never
         // drains (the save failed; its own showError surfaces it).
-        // NOTE: this raw `===` shares the EOL cross-space skew that
-        // `contentMatches` fixes for the epoch verdict above — pre-existing
-        // (only fires in the rare stash race; a CRLF-single-line doc's drain
-        // would drop the stash instead of proceeding). Left as a scoped
-        // follow-up (docs/TODO.md) rather than folded into this S3a slice.
+        // EOL-INSENSITIVE compare (contentMatches): identical to the epoch
+        // verdict above — `currentContent` is canonicalised to `document.eol`
+        // while `inFlightContent` is raw webview LF bytes, so a raw `===` would
+        // misread a plain edit on a CRLF-eol single-line doc as "external won"
+        // and DROP the stash instead of draining it (the webview's OWN acked
+        // lineage, not a foreign edit).
         const canDrain =
           stash !== null &&
           event.outcome.kind === "ok" &&
           inFlight !== null &&
-          event.currentContent === inFlight;
+          contentMatches(event.currentContent, inFlight);
 
         if (!canDrain) {
           // Post-dispose the no-stash case already returned above, so a stash
@@ -581,7 +586,9 @@ export function createHostSessionCore(context: HostSessionContext, deps: HostSes
           // resolution, not a failure → also []. Alive: full effects.
           const baseEffects = settlementEffects(event.outcome, settled, heldBase, state.context);
           const extraEffects: HostSessionEffect[] =
-            stash !== null && event.outcome.kind === "ok" && event.currentContent !== inFlight
+            stash !== null &&
+            event.outcome.kind === "ok" &&
+            !contentMatches(event.currentContent, inFlight)
               ? [
                   {
                     type: "logWarn",

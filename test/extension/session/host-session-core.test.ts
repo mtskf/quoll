@@ -306,6 +306,23 @@ describe("host-session-core: applyEditSettled drain", () => {
     expect(r.effects).toEqual([{ type: "applyEdit", content: "edit1plus", baseDocVersion: 2 }]);
   });
 
+  it("ALIVE ok, currentContent matches inFlightContent ONLY by EOL (CRLF-canonical vs LF-raw) → drain accept, NOT an external-won drop", () => {
+    // The settled canonical content is document.eol (CRLF) while the webview's
+    // inFlightContent is raw LF bytes — the webview's OWN acked lineage on a
+    // CRLF-eol single-line doc, NOT an external edit. A raw byte compare would
+    // misread this as "external won the apply→settle race" and DROP the stash
+    // (data loss). The drain must proceed, mirroring the epoch-verdict EOL fix
+    // (contentMatches). Reproduces the pre-fix skew: red without contentMatches.
+    const r = core.transition(
+      lockedWithStash("a\nb", "a\nb-plus"),
+      settled({ outcome: { kind: "ok", documentVersion: 2 }, currentContent: "a\r\nb" })
+    );
+    expect(r.state.pendingEdit).toBeNull();
+    expect(r.state.pendingApplyBaseVersion).toBe(2); // re-acquired (alive) = drained
+    expect(r.state.inFlightContent).toBe("a\nb-plus");
+    expect(r.effects).toEqual([{ type: "applyEdit", content: "a\nb-plus", baseDocVersion: 2 }]);
+  });
+
   it("EXTERNAL edit raced (currentContent !== inFlightContent) → NO drain, logWarn + repost authoritative Document (external wins)", () => {
     const r = core.transition(
       lockedWithStash("edit1", "edit1plus"),
