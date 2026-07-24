@@ -724,6 +724,30 @@ describe("cm edit-sync — flush (teardown)", () => {
     }
   });
 
+  it("echoesInFlightEdit recognises the force-posted content after an idle flush (alive hide→show)", () => {
+    // flush()'s success branch sets inFlightContent so a subsequent ok-ack that
+    // echoes the force-posted bytes is recognised as an echo (and folded by
+    // applyDocument) rather than reseeding backwards — the same protection
+    // trySend/replayIfNeeded give, but reached through the teardown/hide path.
+    // Revert-check: delete `inFlightContent = content;` from flush's ok branch →
+    // this test goes red (echoesInFlightEdit returns false).
+    vi.useFakeTimers();
+    try {
+      let doc = "seed";
+      const sync = createEditSync({
+        getDoc: () => doc,
+        post: () => true,
+      });
+      sync.onHostSnapshot(1, true);
+      doc = "seed+edit";
+      sync.onLocalChange(); // timer pending, idle (no prior in-flight)
+      sync.flush(); // force-posts "seed+edit"; must record it as in-flight
+      expect(sync.echoesInFlightEdit("seed+edit")).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("flush under readonly hard-drops the buffer (no post)", () => {
     vi.useFakeTimers();
     try {

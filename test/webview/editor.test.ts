@@ -277,6 +277,31 @@ describe("editor — ok-ack while ahead does not reseed backwards (d2)", () => {
     handle.applyDocument("EXTERNAL", true, 2);
     expect(view.state.sliceDoc()).toBe("EXTERNAL");
   });
+
+  it("an ok-ack that also revokes write access still reseeds (does not fold)", () => {
+    // The `canWrite` conjunct in `foldsOkAck` is load-bearing, but ONLY matters
+    // when the editor is ahead — so the user MUST have typed past the acked bytes
+    // for this to exercise the gate (an ack with live == acked never folds
+    // regardless of canWrite). When write access is revoked simultaneously with
+    // the echo ack, cancelPendingFlush's readonly hard-drop path means the
+    // live-ahead content could never replay; folding must be suppressed so the
+    // doc reseeds to the host's authoritative readonly bytes rather than
+    // stranding unsavable content ahead of the host.
+    // Revert-check: strip `&& canWrite` from foldsOkAck → this test goes red
+    // (foldsOkAck becomes true, the doc keeps the live-ahead "D123").
+    vi.useFakeTimers();
+    const { handle, view } = mount();
+    handle.applyDocument("D1", true, 1);
+    view.dispatch({ changes: { from: view.state.doc.length, insert: "2" } });
+    vi.advanceTimersByTime(300); // posts "D12", in flight
+    view.dispatch({ changes: { from: view.state.doc.length, insert: "3" } });
+    vi.advanceTimersByTime(300); // buffers "D123" — editor is now AHEAD of the ack
+    expect(view.state.sliceDoc()).toBe("D123");
+    // ok-ack echoing "D12" back BUT canWrite=false now → must reseed, not fold.
+    handle.applyDocument("D12", false, 2);
+    expect(view.state.readOnly).toBe(true);
+    expect(view.state.sliceDoc()).toBe("D12");
+  });
 });
 
 // (e) CRLF round-trip — uniform CRLF + LF round-trip + DEFENSIVE mixed/CR-only
