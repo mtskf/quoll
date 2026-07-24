@@ -198,14 +198,15 @@ function defaultMintEpochGeneration(): number {
   return Date.now() * 1000 + epochGenerationSalt;
 }
 
-/** EOL-insensitive content equality for the settlement foreign-bytes check.
- *  One operand (`inFlightContent`) is raw webview bytes joined with the CM
- *  lineSeparator facet; the other (`currentContent`/`preApplyContent`) is
- *  canonicalised to `document.eol`. A pure byte compare would misread an
- *  EOL-only difference (a plain edit on a CRLF-eol doc whose webview facet is
- *  still LF) as foreign bytes. The `a === b` fast path keeps the common
- *  byte-identical settle allocation-free; the normalise runs only when the
- *  strings already differ. */
+/** EOL-insensitive content equality shared by the `applyEditSettled` foreign-
+ *  bytes, drain-eligibility, and ok-but-mismatch checks. One operand
+ *  (`inFlightContent`) is raw webview bytes joined with the CM lineSeparator
+ *  facet; the other (`currentContent`/`preApplyContent`) is canonicalised to
+ *  `document.eol`. A pure byte compare would misread an EOL-only difference
+ *  (a plain edit on a CRLF-eol doc whose webview facet is still LF) as
+ *  foreign bytes. The `a === b` fast path keeps the common byte-identical
+ *  settle allocation-free; the normalise runs only when the strings already
+ *  differ. */
 function contentMatches(a: string, b: string | null): boolean {
   // a is always a string here → a null operand never matches
   if (b === null) {
