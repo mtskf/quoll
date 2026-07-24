@@ -346,7 +346,7 @@
     "esbuild": "^0.25.0",
     "happy-dom": "^20.10.6",
     "mocha": "^11",
-    "ovsx": "0.10.12",
+    "ovsx": "1.0.2",
     "playwright": "^1.61.1",
     "typescript": "^5.9.3",
     "vite": "^7.3.6",
