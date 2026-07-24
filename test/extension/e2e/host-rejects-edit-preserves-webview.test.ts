@@ -1,8 +1,12 @@
 import * as assert from "node:assert";
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
 import * as vscode from "vscode";
 import { PROTOCOL_VERSION } from "./constants";
 import {
   cleanupBetweenTests,
+  deferred,
   getHarness,
   hideQuollByOpeningOtherDoc,
   isDocumentEvent,
@@ -13,6 +17,16 @@ import {
 
 const isEditRejectedEvent = (e: { message: { type: string } }) =>
   e.message.type === "edit-rejected";
+
+// Temp .md so a swap that reaches finalizeSurfaceSwap's save-then-close (the
+// resumption case, and the revert-check of the deferred-race guard) writes to a
+// throwaway file instead of mutating a committed fixture.
+function tempMd(name: string): vscode.Uri {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "quoll-reject-"));
+  const p = path.join(dir, name);
+  fs.writeFileSync(p, "# Title\n\nbody\n", "utf8");
+  return vscode.Uri.file(p);
+}
 
 const allTabs = (): vscode.Tab[] => vscode.window.tabGroups.all.flatMap((g) => g.tabs);
 const customTab =
@@ -303,6 +317,143 @@ describe("host-rejects-edit-preserves-webview", function () {
         tabs.map((t) => t.label)
       )}`
     );
+  });
+
+  it("deferred switch-to-text is refused when a stash drained by the releasing settlement is rejected", async () => {
+    // Regression for the deferred-switch race: the switch-to-text guard checked
+    // state.rejection ONLY at message-receipt time. If the switch arrives while
+    // the write lock is held it is deferred behind editSettledBarrier; the very
+    // settlement that releases the barrier can drain a stashed edit that fails
+    // the write-gate, flipping state.rejection to "pending" in the SAME step()
+    // that then drains the deferred switch callback. Without a drain-time
+    // re-check the switch still closed the Quoll tab, orphaning the just-rejected
+    // draft. Uses the same lock-holding seam as pending-edit-dispose-drain.
+    const harness = await getHarness();
+    const uri = tempMd("deferred-switch.md");
+    await vscode.commands.executeCommand("vscode.openWith", uri, VIEW_TYPE);
+    const seed = await harness.waitForEvent(isDocumentEvent, 8000);
+
+    const panel = harness.activePanel;
+    assert.ok(panel);
+    const doc = panel.document;
+    harness.clearEvents();
+
+    const seedV = seed.message.docVersion;
+
+    // Hold edit A's SETTLEMENT open so the write lock stays held while the
+    // stash (invalid B) and the switch (deferred) both queue behind it. The
+    // real applyEdit still runs immediately, so the document lands on "first".
+    const gate = deferred<boolean>();
+    let calls = 0;
+    harness.applyEditOverride = (edit) => {
+      calls += 1;
+      if (calls === 1) {
+        return vscode.workspace.applyEdit(edit).then((ok) => gate.promise.then(() => ok));
+      }
+      return vscode.workspace.applyEdit(edit);
+    };
+
+    // Edit A (valid) acquires the write lock and applies; settlement held.
+    panel.simulateInbound({
+      protocol: PROTOCOL_VERSION,
+      type: "edit",
+      content: "first",
+      baseDocVersion: seedV,
+    });
+    assert.strictEqual(calls, 1, "edit A must acquire the write lock (applyEdit called)");
+
+    // Let edit A land so the drain's canDrain premise (settled doc === inFlight)
+    // holds; otherwise the stash is dropped instead of validated.
+    const applied1Deadline = Date.now() + 3000;
+    while (doc.getText() !== "first" && Date.now() < applied1Deadline) {
+      await tick(20);
+    }
+    assert.strictEqual(doc.getText(), "first", "edit A must land while in flight");
+
+    // Edit B (invalid — unsafe URL) arrives WHILE the lock is held → stashed.
+    panel.simulateInbound({
+      protocol: PROTOCOL_VERSION,
+      type: "edit",
+      content: "[bad](javascript:alert(1))",
+      baseDocVersion: seedV,
+    });
+
+    // switch-to-text arrives WHILE the lock is held → deferred behind the
+    // barrier. The receipt-time rejection is still "none", so the fast-path
+    // guard passes and the callback is queued.
+    panel.simulateInbound({ protocol: PROTOCOL_VERSION, type: "switch-to-text" });
+
+    // Release edit A: its settlement drains stash B → parse-failed → rejection
+    // pending, then the SAME step drains the deferred switch callback.
+    gate.resolve(true);
+    await harness.waitForEvent(isEditRejectedEvent, 5000);
+
+    // The deferred switch must be refused by the DRAIN-time re-check: Quoll tab
+    // stays open, no text tab opens, the draft is not orphaned.
+    await tick(500);
+    const tabs = allTabs();
+    assert.ok(
+      tabs.some(customTab(uri)),
+      `Quoll tab must stay open (deferred-switch draft preserved) — ${JSON.stringify(
+        tabs.map((t) => t.label)
+      )}`
+    );
+    assert.ok(
+      !tabs.some(textTab(uri)),
+      `no text tab must open — the deferred switch drained after the stash was rejected — ${JSON.stringify(
+        tabs.map((t) => t.label)
+      )}`
+    );
+  });
+
+  it("switch-to-text resumes normally once a follow-up accepted Edit clears the pending rejection", async () => {
+    // Fallthrough coverage: after a rejection clears (an accepted Edit), the
+    // guard must let the ordinary forward swap proceed — mirrors the sibling
+    // "visible-edge resumes after an accepted Edit clears the flag" convention.
+    const harness = await getHarness();
+    const uri = tempMd("resume-switch.md");
+    await vscode.commands.executeCommand("vscode.openWith", uri, VIEW_TYPE);
+    const seed = await harness.waitForEvent(isDocumentEvent, 8000);
+
+    const panel = harness.activePanel;
+    assert.ok(panel);
+    harness.clearEvents();
+
+    const seedV = seed.message.docVersion;
+    const seededContent = (seed.message as { content: string }).content;
+
+    // Reject first: an unsafe URL fails the write-gate.
+    panel.simulateInbound({
+      protocol: PROTOCOL_VERSION,
+      type: "edit",
+      content: `${seededContent}\n[bad](javascript:alert(1))\n`,
+      baseDocVersion: seedV,
+    });
+    await harness.waitForEvent(isEditRejectedEvent, 5000);
+
+    // Resolve with a safe edit — rejection clears to "none".
+    panel.simulateInbound({
+      protocol: PROTOCOL_VERSION,
+      type: "edit",
+      content: `${seededContent}\nsafe line\n`,
+      baseDocVersion: seedV,
+    });
+    await harness.waitForEvent((e) => isDocumentEvent(e) && e.message.docVersion > seedV, 8000);
+
+    // Now switch-to-text must proceed like the ordinary forward swap.
+    panel.simulateInbound({ protocol: PROTOCOL_VERSION, type: "switch-to-text" });
+
+    const deadline = Date.now() + 8000;
+    while (Date.now() < deadline) {
+      const tabs = allTabs();
+      if (tabs.some(textTab(uri)) && !tabs.some(customTab(uri))) {
+        break;
+      }
+      await tick(100);
+    }
+    const tabs = allTabs();
+    assert.ok(!tabs.some(customTab(uri)), "Quoll tab should close once the rejection cleared");
+    assert.ok(tabs.some(textTab(uri)), "text tab should open once the rejection cleared");
   });
 
   it("visible-edge resync is suppressed while a rejected draft is pending", async () => {

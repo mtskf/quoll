@@ -846,16 +846,21 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
           //
           // Data-loss guard (rejection pending): a write-gate rejection leaves
           // the user's draft ONLY webview-side — the on-disk document is
-          // unchanged (clean) and the rejection banner is showing the un-saved
-          // bytes. finalizeSurfaceSwap below would close THIS Quoll tab and the
-          // text editor would open on the CLEAN disk snapshot, silently
-          // orphaning the typed draft (finalizeSurfaceSwap sees a clean doc, so
-          // its save-then-close is a no-op close — no data-loss tripwire fires).
-          // Refuse the swap while a rejection is pending: switch-to-text is a
-          // pure side channel that never reloaded the webview, so the banner +
-          // draft stay mounted intact — the user resolves the highlighted
-          // problem first, then switches. NEVER finalize a surface swap that
-          // orphans typed bytes.
+          // unchanged (clean); the rejection banner is up (showing the error)
+          // and the editor beneath it still shows the un-saved bytes, because
+          // CodeMirror was never reseeded. finalizeSurfaceSwap below would close
+          // THIS Quoll tab and the text editor would open on the CLEAN disk
+          // snapshot, silently orphaning the typed draft (finalizeSurfaceSwap
+          // sees a clean doc, so its save-then-close is a no-op close — no
+          // data-loss tripwire fires). Refuse the swap while a rejection is
+          // pending: switch-to-text is a pure side channel that never reloaded
+          // the webview, so the banner + draft stay mounted intact — the user
+          // resolves the highlighted problem first, then switches. NEVER
+          // finalize a surface swap that orphans typed bytes.
+          //
+          // This receipt-time check is a cheap fast path only; the check that
+          // actually closes the hole is the DRAIN-time re-check inside
+          // editSettledBarrier.run below — see the comment there.
           if (state.rejection.kind === "pending") {
             showError(
               "Quoll: can't switch to the text editor while a change can't be saved — resolve the highlighted problem first."
@@ -868,6 +873,22 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
             QuollEditorPanel.viewType
           );
           editSettledBarrier.run(() => {
+            // Re-check at DRAIN time, not just at receipt time: when the switch
+            // arrives while the write lock is held it is DEFERRED here, and the
+            // very settlement that releases this barrier can flip
+            // state.rejection to "pending" in the same transition — a stash
+            // drained on an accepted apply's settlement that fails the
+            // write-gate (host-session-core.ts applyEditSettled's parse-failed
+            // drain arm) sets the rejection AFTER the receipt-time check above
+            // already passed, then settle(true) drains this callback in the
+            // same step(). Without this re-check the deferred swap would close
+            // the Quoll tab and orphan the just-rejected draft.
+            if (state.rejection.kind === "pending") {
+              showError(
+                "Quoll: can't switch to the text editor while a change can't be saved — resolve the highlighted problem first."
+              );
+              return;
+            }
             const caret = caretWiring.getCaret();
             void openInTextEditor(document.uri).then(
               () => {
