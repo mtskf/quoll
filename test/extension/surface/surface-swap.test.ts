@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { Tab, TextDocument, Uri } from "vscode";
+import { window } from "vscode";
 import {
   closeSourceTabIfClean,
   type FinalizeSwapDeps,
@@ -168,14 +169,33 @@ describe("finalizeSurfaceSwap", () => {
 });
 
 describe("finalizeSurfaceSwap shouldAbortClose (point-of-no-return guard)", () => {
-  it("does NOT close a clean doc when shouldAbortClose returns true", async () => {
+  const ABORT_REASON = "Quoll: can't switch while a change was rejected — fix it first.";
+
+  it("does NOT close a clean doc when shouldAbortClose returns a reason", async () => {
     // Clean doc ⇒ shouldCloseSourceTab would allow the close; the abort guard
     // overrides it (e.g. a write-gate rejection is pending → keep both open).
     const doc = fakeDoc(false, true);
-    const { deps, closeTab, reresolve } = makeDeps(doc);
-    await finalizeSurfaceSwap(fileUri, SENTINEL_TAB, deps, () => true);
+    const { deps, closeTab } = makeDeps(doc);
+    await finalizeSurfaceSwap(fileUri, SENTINEL_TAB, deps, () => ABORT_REASON);
     expect(closeTab).not.toHaveBeenCalled();
-    expect(reresolve).not.toHaveBeenCalled(); // aborts before re-resolving
+  });
+
+  it("shows the RETURNED reason as a warning toast (test-(c): a silent abort must fail the suite)", async () => {
+    // The predicate returns a reason STRING and finalizeSurfaceSwap itself
+    // surfaces it — the abort is user-visible by contract, not by caller
+    // courtesy. At check time the user's focus is on the freshly opened text
+    // tab, so a bare boolean predicate + no toast would let a silent abort pass;
+    // this assertion is what pins the visible surface.
+    const doc = fakeDoc(false, true);
+    const { deps, closeTab } = makeDeps(doc);
+    const warn = vi.spyOn(window, "showWarningMessage");
+    try {
+      await finalizeSurfaceSwap(fileUri, SENTINEL_TAB, deps, () => ABORT_REASON);
+      expect(closeTab).not.toHaveBeenCalled();
+      expect(warn).toHaveBeenCalledWith(ABORT_REASON);
+    } finally {
+      warn.mockRestore();
+    }
   });
 
   it("checks shouldAbortClose AFTER the openDoc await (closes the TOCTOU gap)", async () => {
@@ -191,7 +211,7 @@ describe("finalizeSurfaceSwap shouldAbortClose (point-of-no-return guard)", () =
         return doc;
       },
     });
-    await finalizeSurfaceSwap(fileUri, SENTINEL_TAB, deps, () => pending);
+    await finalizeSurfaceSwap(fileUri, SENTINEL_TAB, deps, () => (pending ? ABORT_REASON : null));
     expect(closeTab).not.toHaveBeenCalled();
   });
 
@@ -214,15 +234,34 @@ describe("finalizeSurfaceSwap shouldAbortClose (point-of-no-return guard)", () =
       }),
     } as unknown as TextDocument;
     const { deps, closeTab } = makeDeps(doc);
-    await finalizeSurfaceSwap(fileUri, SENTINEL_TAB, deps, () => pending);
+    await finalizeSurfaceSwap(fileUri, SENTINEL_TAB, deps, () => (pending ? ABORT_REASON : null));
     expect(closeTab).not.toHaveBeenCalled();
   });
 
-  it("closes normally when shouldAbortClose returns false (guard does not block the happy path)", async () => {
+  it("closes normally when shouldAbortClose returns null (guard does not block the happy path)", async () => {
     const doc = fakeDoc(false, true);
     const { deps, closeTab } = makeDeps(doc);
-    await finalizeSurfaceSwap(fileUri, SENTINEL_TAB, deps, () => false);
+    await finalizeSurfaceSwap(fileUri, SENTINEL_TAB, deps, () => null);
     expect(closeTab).toHaveBeenCalledWith(LIVE_TAB);
+  });
+
+  it("treats an EMPTY reason as a FAIL-SAFE abort (keeps both open, shows a fallback warning)", async () => {
+    // A point-of-no-return data-loss guard must default to keeping both surfaces
+    // open on ANY non-null return — never take the irreversible close because the
+    // caller's diagnostic string happened to be empty. The empty reason falls
+    // back to a generic, non-blank warning so the abort stays user-visible.
+    const doc = fakeDoc(false, true);
+    const { deps, closeTab } = makeDeps(doc);
+    const warn = vi.spyOn(window, "showWarningMessage");
+    try {
+      await finalizeSurfaceSwap(fileUri, SENTINEL_TAB, deps, () => "");
+      expect(closeTab).not.toHaveBeenCalled();
+      expect(warn).toHaveBeenCalledTimes(1);
+      const shown = warn.mock.calls[0]?.[0] as string;
+      expect(shown.length).toBeGreaterThan(0);
+    } finally {
+      warn.mockRestore();
+    }
   });
 });
 
