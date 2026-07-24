@@ -1,15 +1,23 @@
 # Supply-chain cooldown: refuse to install package versions published less than
 # 7 days ago. npm account-takeover malware is typically detected and unpublished
 # within hours-to-days, so this window sidesteps most of that blast radius.
-# The cooldown bites only on dependency bumps/adds; --frozen-lockfile CI installs
-# (which resolve nothing) are unaffected. Requires pnpm >= 10.16; unit is MINUTES.
+# ⚠️ The cooldown gates LOCKED entries too, not just resolution: `pnpm install
+# --frozen-lockfile` hard-fails with ERR_PNPM_MINIMUM_RELEASE_AGE_VIOLATION on any
+# locked version younger than the cutoff (verified 2026-07-24). Requires
+# pnpm >= 10.16; unit is MINUTES.
 #
 # Escape hatch for an urgent security-fix bump that is itself younger than the
 # window: add the package (name, glob, or name@version) to minimumReleaseAgeExclude
-# below, install, then remove the entry once the pin is in the lockfile. Prefer this
-# over lifting the global setting.
+# below, install, and keep the entry until the release is OLDER than the window —
+# removing it as soon as the pin lands in the lockfile breaks frozen-lockfile CI
+# (see above). Prefer this over lifting the global setting.
 minimumReleaseAge: 10080
-minimumReleaseAgeExclude: []
+# fast-uri@3.1.4 (published 2026-07-19) fixes a HIGH Dependabot alert but is
+# still inside the 7-day cooldown as of this PR. Remove this entry once the
+# release passes 2026-07-26 (age > minimumReleaseAge) — the `overrides:`
+# pin below stays either way.
+minimumReleaseAgeExclude:
+  - fast-uri@3.1.4
 
 # Security-motivated version overrides. pnpm 11 no longer reads the `pnpm`
 # block from package.json — top-level `overrides:` here is its new home.
@@ -21,6 +29,7 @@ overrides:
   tmp: ^0.2.7
   js-yaml: ^4.2.0
   serialize-javascript: ^7.0.5
+  fast-uri: ^3.1.4
 
 # Approved audit exceptions land here (GHSA ids, not CVE — pnpm 11 uses the
 # bulk advisory endpoint, which doesn't return CVE identifiers). Document each

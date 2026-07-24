@@ -339,8 +339,8 @@
     "@types/node": "20.16.0",
     "@types/vscode": "1.94.0",
     "@types/vscode-webview": "^1.57.0",
-    "@vitest/browser-playwright": "^4.1.9",
-    "@vitest/coverage-v8": "^4.1.9",
+    "@vitest/browser-playwright": "^4.1.10",
+    "@vitest/coverage-v8": "^4.1.10",
     "@vscode/test-electron": "^2.4.1",
     "@vscode/vsce": "^3.9.1",
     "esbuild": "^0.25.0",
@@ -350,6 +350,6 @@
     "playwright": "^1.61.1",
     "typescript": "^5.9.3",
     "vite": "^7.3.6",
-    "vitest": "^4.1.9"
+    "vitest": "^4.1.10"
   }
 }
