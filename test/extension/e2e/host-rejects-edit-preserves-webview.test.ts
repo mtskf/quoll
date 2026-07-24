@@ -319,6 +319,55 @@ describe("host-rejects-edit-preserves-webview", function () {
     );
   });
 
+  it("reopenInTextEditor command while a rejection is pending is refused — the Quoll tab stays open", async () => {
+    // Follow-up to the webview switch-to-text guard (PR #256): the title-bar
+    // `quoll.reopenInTextEditor` button and `quoll.toggleEditor`'s to-text case
+    // both drive reopenActiveQuollTabAsText, which is TAB-ONLY and has no access
+    // to the panel's state.rejection. Without a cross-surface query it would
+    // close the Quoll tab on the clean disk snapshot and orphan the rejected
+    // draft — exactly the loss the webview arm already blocks. The command path
+    // now consults the pending-rejection registry keyed by uri and refuses
+    // symmetrically: the Quoll tab stays open and no text tab opens.
+    const harness = await getHarness();
+    const uri = await openFixtureWithQuoll("unsafe-url.md");
+    const seed = await harness.waitForEvent(isDocumentEvent, 8000);
+
+    const panel = harness.activePanel;
+    assert.ok(panel);
+    harness.clearEvents();
+
+    const seededContent = (seed.message as { content: string }).content;
+    // Draft still carries the unsafe URL → rejected; the trailing newline makes
+    // it differ from the seed so the verdict is parse-failed, not a no-op.
+    panel.simulateInbound({
+      protocol: PROTOCOL_VERSION,
+      type: "edit",
+      content: `${seededContent}\n`,
+      baseDocVersion: seed.message.docVersion,
+    });
+    await harness.waitForEvent(isEditRejectedEvent, 5000);
+
+    // Drive the REAL command path (not the webview switch-to-text side channel):
+    // the Quoll tab is active after openFixtureWithQuoll, so the command
+    // classifies it as the forward swap and hits the registry guard.
+    await vscode.commands.executeCommand("quoll.reopenInTextEditor");
+
+    // Give any (erroneous) swap a chance to open a text tab / close the Quoll
+    // tab, then assert neither happened.
+    await tick(500);
+    const tabs = allTabs();
+    assert.ok(
+      tabs.some(customTab(uri)),
+      `Quoll tab must stay open (draft preserved) — ${JSON.stringify(tabs.map((t) => t.label))}`
+    );
+    assert.ok(
+      !tabs.some(textTab(uri)),
+      `no text tab must open while the rejection is pending — ${JSON.stringify(
+        tabs.map((t) => t.label)
+      )}`
+    );
+  });
+
   it("deferred switch-to-text is refused when a stash drained by the releasing settlement is rejected", async () => {
     // Regression for the deferred-switch race: the switch-to-text guard checked
     // state.rejection ONLY at message-receipt time. If the switch arrives while
@@ -449,6 +498,61 @@ describe("host-rejects-edit-preserves-webview", function () {
     assert.ok(
       tabs.some(customTab(uri)),
       `Quoll tab must stay open when a rejection lands during the async open — ${JSON.stringify(
+        tabs.map((t) => t.label)
+      )}`
+    );
+  });
+
+  it("reopenInTextEditor command: a rejection arriving during the async open (after the fast-path guard passes) still retains the Quoll tab", async () => {
+    // Command-path analogue of the webview async-open test above (PR #256
+    // follow-up). reopenActiveQuollTabAsText is TAB-ONLY: its fast-path guard
+    // runs synchronously (no rejection yet → passes), then it awaits
+    // openInTextEditor — an async openWith whose success continuation records the
+    // text surface and closes the Quoll tab a tick later. The webview stays live
+    // during that open, so a NEW invalid edit can flip state.rejection to
+    // "pending" in the gap AFTER the fast-path check. The command's async-window
+    // re-check + the shouldAbortClose predicate passed to finalizeSurfaceSwap
+    // must TOGETHER retain the Quoll tab so the just-rejected draft is not
+    // orphaned. The opened text tab is a harmless second view of the clean disk
+    // bytes here, so this asserts only the data-loss invariant (Quoll retained).
+    const harness = await getHarness();
+    const uri = tempMd("cmd-async-open.md");
+    await vscode.commands.executeCommand("vscode.openWith", uri, VIEW_TYPE);
+    const seed = await harness.waitForEvent(isDocumentEvent, 8000);
+
+    const panel = harness.activePanel;
+    assert.ok(panel);
+    harness.clearEvents();
+
+    const seedV = seed.message.docVersion;
+    const seededContent = (seed.message as { content: string }).content;
+
+    // Drive the REAL command path but do NOT await it. reopenActiveQuollTabAsText
+    // is async, so calling it runs its synchronous prefix — the fast-path
+    // isRejectionPending check (no rejection yet → passes) — inside this
+    // executeCommand call, then suspends at `await openInTextEditor(uri)`. So the
+    // open is in-flight, past the fast-path guard, when this call returns.
+    const cmd = vscode.commands.executeCommand("quoll.reopenInTextEditor");
+
+    // Synchronously — before openInTextEditor resolves — an invalid edit lands
+    // and fails the write-gate → state.rejection flips to "pending" INSIDE the
+    // async window the fast-path check already cleared.
+    panel.simulateInbound({
+      protocol: PROTOCOL_VERSION,
+      type: "edit",
+      content: `${seededContent}\n[bad](javascript:alert(1))\n`,
+      baseDocVersion: seedV,
+    });
+    await harness.waitForEvent(isEditRejectedEvent, 5000);
+
+    // Let the command's open resolve and its continuation run: the async-window
+    // re-check / point-of-no-return predicate must RETAIN the Quoll tab.
+    await cmd;
+    await tick(800);
+    const tabs = allTabs();
+    assert.ok(
+      tabs.some(customTab(uri)),
+      `Quoll tab must stay open when a rejection lands during the command's async open — ${JSON.stringify(
         tabs.map((t) => t.label)
       )}`
     );
