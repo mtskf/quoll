@@ -511,12 +511,27 @@ export function createHostSessionCore(context: HostSessionContext, deps: HostSes
               },
               // showError survives dispose (VS Code toast). The banner post is
               // webview-bound — suppressed post-dispose (post() would drop it
-              // anyway); when alive it preserves the draft exactly like the
-              // normal parse-failed arm (NO ack Document to wipe it).
+              // anyway); when alive it REDELIVERS the draft as a Document at the
+              // SETTLED version (postRejectedDraft), not a bare postEditRejected.
+              // The drained-over apply already advanced lastAppliedDocVersion, so
+              // a bare rejection would leave the webview on the pre-A version →
+              // its next retry arrives stale → an authoritative reseed wipes the
+              // draft (finding #2). The draft Document carries the SAME bytes the
+              // editor already shows (never disk bytes — §6 holds; the live-path
+              // parse-failed arm stays Document-free) while advancing the
+              // webview's docVersion bookkeeping (so the next retry lands on a
+              // live base instead of stale-rejecting). Mirrors the `ready`-arm
+              // redelivery precedent.
               effects: state.disposed
                 ? [{ type: "showError", message: `Cannot save: ${verdict.error.message}` }]
                 : [
-                    { type: "postEditRejected", error: verdict.error, id },
+                    {
+                      type: "postRejectedDraft",
+                      content: stash.content,
+                      error: verdict.error,
+                      docVersion: settled.lastAppliedDocVersion,
+                      id,
+                    },
                     { type: "showError", message: `Cannot save: ${verdict.error.message}` },
                   ],
             };
