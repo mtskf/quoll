@@ -552,6 +552,299 @@ describe("quollOutline sidebar", () => {
     expect(selected()).toEqual(["false", "true"]);
   });
 
+  it("announces the active-section change to a polite live region (debounced), silent on open", () => {
+    vi.useFakeTimers();
+    const { view: v, host } = mount("# Alpha\n\nbody\n\n## Beta\n\nmore\n");
+    v.plugin(outlinePlugin)?.toggle(); // open + build → primes baseline silently
+    const announcer = host.querySelector(".quoll-outline-announcer") as HTMLElement;
+    expect(announcer.getAttribute("aria-live")).toBe("polite");
+    expect(announcer.textContent).toBe(""); // opening is not a section change
+    v.dispatch({ selection: EditorSelection.cursor(v.state.doc.line(5).from) }); // → "## Beta"
+    expect(announcer.textContent).toBe(""); // debounced — not written yet
+    vi.runAllTimers();
+    expect(announcer.textContent).toBe("Beta — current section");
+  });
+
+  it("coalesces a rapid caret sweep — cancels the superseded timer, not just last-value-wins", () => {
+    vi.useFakeTimers();
+    const { view: v, host } = mount("# Alpha\n\nbody\n\n## Beta\n\nmore\n");
+    v.plugin(outlinePlugin)?.toggle();
+    const announcer = host.querySelector(".quoll-outline-announcer") as HTMLElement;
+    v.dispatch({ selection: EditorSelection.cursor(v.state.doc.line(5).from) }); // → Beta (timer A, +400)
+    vi.advanceTimersByTime(300); // A still pending
+    v.dispatch({ selection: EditorSelection.cursor(v.state.doc.line(3).from) }); // → Alpha: cancels A, arms B
+    vi.advanceTimersByTime(150); // t=450 since Beta: A's original deadline has passed
+    // Non-vacuous guard: if the clearTimeout were dropped, A would have fired "Beta" by now.
+    expect(announcer.textContent).toBe(""); // A was cancelled — nothing spoken yet
+    vi.advanceTimersByTime(300); // past B's deadline
+    expect(announcer.textContent).toBe("Alpha — current section"); // only the final section
+  });
+
+  it("does not re-announce an in-section caret move (same active heading)", () => {
+    vi.useFakeTimers();
+    const { view: v, host } = mount("# Alpha\n\nbody\n\nmore\n");
+    v.plugin(outlinePlugin)?.toggle();
+    const announcer = host.querySelector(".quoll-outline-announcer") as HTMLElement;
+    v.dispatch({ selection: EditorSelection.cursor(v.state.doc.line(3).from) }); // still under Alpha
+    vi.runAllTimers();
+    expect(announcer.textContent).toBe(""); // no section change → nothing spoken
+  });
+
+  it("clears a pending announcement when the sidebar closes", () => {
+    vi.useFakeTimers();
+    const { view: v, host } = mount("# Alpha\n\nbody\n\n## Beta\n\nmore\n");
+    const plugin = v.plugin(outlinePlugin);
+    plugin?.toggle(); // open
+    const announcer = host.querySelector(".quoll-outline-announcer") as HTMLElement;
+    v.dispatch({ selection: EditorSelection.cursor(v.state.doc.line(5).from) }); // → Beta (pending)
+    plugin?.toggle(); // close before the debounce fires
+    vi.runAllTimers();
+    expect(announcer.textContent).toBe(""); // never written into the inert sidebar
+  });
+
+  it("stays silent while focus is in the tree (row navigation self-announces)", () => {
+    vi.useFakeTimers();
+    const { view: v, host } = mount("# Alpha\n\nbody\n\n## Beta\n\nmore\n");
+    v.plugin(outlinePlugin)?.toggle();
+    const announcer = host.querySelector(".quoll-outline-announcer") as HTMLElement;
+    rowEls(host)[1].focus(); // focus the "Beta" tree row
+    expect(document.activeElement).toBe(rowEls(host)[1]);
+    v.dispatch({ selection: EditorSelection.cursor(v.state.doc.line(5).from) }); // caret → Beta
+    vi.runAllTimers();
+    expect(announcer.textContent).toBe(""); // focus in tree → suppressed, no live cue
+  });
+
+  it("stays silent on a pinned keyboard Enter-jump and cancels a superseded cue", () => {
+    vi.useFakeTimers();
+    const { view: v, host } = mount("# Alpha\n\nbody\n\n## Beta\n\nmore\n");
+    const plugin = v.plugin(outlinePlugin);
+    plugin?.toggle(); // open + prime
+    pinEl(host).click(); // pin so a jump keeps the sidebar open
+    const announcer = host.querySelector(".quoll-outline-announcer") as HTMLElement;
+    v.dispatch({ selection: EditorSelection.cursor(v.state.doc.line(5).from) }); // → Beta (timer armed)
+    const alphaRow = rowEls(host)[0];
+    alphaRow.focus(); // focus in tree
+    alphaRow.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })); // jumpTo(Alpha)
+    vi.runAllTimers();
+    // Beta's pending cue is cancelled by the suppressed re-entrant call; the
+    // tree-driven jump self-announces its treeitem, so no live cue fires.
+    expect(announcer.textContent).toBe("");
+  });
+
+  it("records the baseline when a cue is suppressed by tree focus at fire time (no later re-announce)", () => {
+    vi.useFakeTimers();
+    const { view: v, host } = mount("# Alpha\n\nbody\n\n## Beta\n\nmore\n");
+    const plugin = v.plugin(outlinePlugin);
+    plugin?.toggle();
+    pinEl(host).click(); // pin so focus can move to the tree and back without closing
+    const announcer = host.querySelector(".quoll-outline-announcer") as HTMLElement;
+    v.dispatch({ selection: EditorSelection.cursor(v.state.doc.line(5).from) }); // caret → Beta (cue armed)
+    // Tab into the tree during the debounce window: no transaction fires, so the
+    // cue stays armed; the SR announces the treeitem itself.
+    rowEls(host)[1].focus();
+    vi.runAllTimers(); // cue fires but is suppressed by tree focus — baseline must record Beta
+    expect(announcer.textContent).toBe("");
+    // Focus back in the editor; an in-section caret move within Beta must NOT re-speak.
+    v.focus();
+    v.dispatch({ selection: EditorSelection.cursor(v.state.doc.line(7).from) }); // still under Beta
+    vi.runAllTimers();
+    expect(announcer.textContent).toBe(""); // in-section move → no re-announce
+  });
+
+  it("does not baseline the caret's section when a DIFFERENT tree row was focused at fire time", () => {
+    vi.useFakeTimers();
+    const { view: v, host } = mount("# Alpha\n\nbody\n\n## Beta\n\nmore\n");
+    const plugin = v.plugin(outlinePlugin);
+    plugin?.toggle();
+    pinEl(host).click();
+    const announcer = host.querySelector(".quoll-outline-announcer") as HTMLElement;
+    v.dispatch({ selection: EditorSelection.cursor(v.state.doc.line(5).from) }); // caret → Beta (cue armed)
+    rowEls(host)[0].focus(); // focus the ALPHA row (not Beta) during the window
+    vi.runAllTimers(); // cue suppressed, but the tree announced Alpha — Beta stays un-baselined
+    expect(announcer.textContent).toBe("");
+    // Back in the editor: Beta was never announced, so an in-Beta caret move speaks it.
+    v.focus();
+    v.dispatch({ selection: EditorSelection.cursor(v.state.doc.line(7).from) }); // still under Beta
+    vi.runAllTimers();
+    expect(announcer.textContent).toBe("Beta — current section");
+  });
+
+  it("keeps a pending cue alive when an UNRELATED tree row is focused (its section was never announced)", () => {
+    vi.useFakeTimers();
+    const { view: v, host } = mount("# Alpha\n\nbody\n\n## Beta\n\nmore\n");
+    const plugin = v.plugin(outlinePlugin);
+    plugin?.toggle();
+    pinEl(host).click();
+    const announcer = host.querySelector(".quoll-outline-announcer") as HTMLElement;
+    v.dispatch({ selection: EditorSelection.cursor(v.state.doc.line(5).from) }); // caret → Beta (cue armed)
+    rowEls(host)[0].focus(); // focus ALPHA — its treeitem announces Alpha, NOT Beta
+    v.focus(); // back to the editor before the debounce fires
+    vi.runAllTimers();
+    // The Beta cue must survive (Alpha's treeitem never covered Beta) and speak.
+    expect(announcer.textContent).toBe("Beta — current section");
+  });
+
+  it("cancels a pending cue when its OWN target row is focused (treeitem already announced it)", () => {
+    vi.useFakeTimers();
+    const { view: v, host } = mount("# Alpha\n\nbody\n\n## Beta\n\nmore\n");
+    const plugin = v.plugin(outlinePlugin);
+    plugin?.toggle();
+    pinEl(host).click();
+    const announcer = host.querySelector(".quoll-outline-announcer") as HTMLElement;
+    v.dispatch({ selection: EditorSelection.cursor(v.state.doc.line(5).from) }); // caret → Beta (cue armed)
+    rowEls(host)[1].focus(); // focus BETA — its treeitem announces Beta, the cue's target
+    v.focus(); // back to the editor before the debounce fires
+    vi.runAllTimers();
+    // The treeitem already announced Beta, so the pending cue is cancelled — no duplicate.
+    expect(announcer.textContent).toBe("");
+  });
+
+  it("baselines a row focused with no pending cue (treeitem announcement is not repeated)", () => {
+    vi.useFakeTimers();
+    const { view: v, host } = mount("# Alpha\n\nbody\n\n## Beta\n\nmore\n");
+    const plugin = v.plugin(outlinePlugin);
+    plugin?.toggle();
+    pinEl(host).click();
+    const announcer = host.querySelector(".quoll-outline-announcer") as HTMLElement;
+    // No caret move: baseline is Alpha from the open-time prime, no cue armed.
+    rowEls(host)[1].focus(); // SR announces Beta's treeitem → focusin must baseline Beta
+    v.focus();
+    v.dispatch({ selection: EditorSelection.cursor(v.state.doc.line(5).from) }); // caret → Beta
+    vi.runAllTimers();
+    // The treeitem already announced Beta, so the live region must stay silent.
+    expect(announcer.textContent).toBe("");
+  });
+
+  it("baselines a section reached by roving into its row after a suppressed cue (no re-announce)", () => {
+    vi.useFakeTimers();
+    const { view: v, host } = mount("# Alpha\n\nbody\n\n## Beta\n\nmore\n");
+    const plugin = v.plugin(outlinePlugin);
+    plugin?.toggle();
+    pinEl(host).click();
+    const announcer = host.querySelector(".quoll-outline-announcer") as HTMLElement;
+    v.dispatch({ selection: EditorSelection.cursor(v.state.doc.line(5).from) }); // caret → Beta (cue armed)
+    rowEls(host)[0].focus(); // focus ALPHA first (cue suppressed, Alpha baselined)
+    rowEls(host)[1].focus(); // then rove to BETA — its treeitem announces Beta
+    vi.runAllTimers();
+    expect(announcer.textContent).toBe("");
+    // Back in the editor: Beta's treeitem already announced it, so an in-Beta move stays silent.
+    v.focus();
+    v.dispatch({ selection: EditorSelection.cursor(v.state.doc.line(7).from) }); // still under Beta
+    vi.runAllTimers();
+    expect(announcer.textContent).toBe(""); // roving focus baselined Beta → no duplicate cue
+  });
+
+  it("re-primes on reopen — no stale announcement the instant the sidebar reopens", () => {
+    vi.useFakeTimers();
+    const { view: v, host } = mount("# Alpha\n\nbody\n\n## Beta\n\nmore\n");
+    const plugin = v.plugin(outlinePlugin);
+    plugin?.toggle(); // open
+    const announcer = host.querySelector(".quoll-outline-announcer") as HTMLElement;
+    v.dispatch({ selection: EditorSelection.cursor(v.state.doc.line(5).from) }); // → Beta
+    vi.runAllTimers();
+    expect(announcer.textContent).toBe("Beta — current section");
+    plugin?.toggle(); // close (clears the region)
+    expect(announcer.textContent).toBe("");
+    plugin?.toggle(); // reopen with the caret still in Beta — must re-prime silently
+    vi.runAllTimers();
+    expect(announcer.textContent).toBe(""); // reopen is not a section change
+  });
+
+  it("does not re-announce the same section after an edit merely shifts its offset", () => {
+    vi.useFakeTimers();
+    const { view: v, host } = mount("# Alpha\n\nbody\n\n## Beta\n\nmore\n");
+    v.plugin(outlinePlugin)?.toggle();
+    const announcer = host.querySelector(".quoll-outline-announcer") as HTMLElement;
+    v.dispatch({ selection: EditorSelection.cursor(v.state.doc.line(5).from) }); // → Beta
+    vi.runAllTimers();
+    expect(announcer.textContent).toBe("Beta — current section");
+    announcer.textContent = ""; // blank so a *new* write is observable
+    // Insert a blank line at the top: Beta's `from` shifts, but the caret maps
+    // forward and stays in Beta. Mapping lastAnnouncedFrom must keep the dedup.
+    v.dispatch({ changes: { from: 0, insert: "\n" } });
+    vi.runAllTimers();
+    expect(announcer.textContent).toBe(""); // mapped dedup → no spurious re-announce
+  });
+
+  it("does not announce when a pointer collapse hides the caret's section (caret never moved)", () => {
+    vi.useFakeTimers();
+    const { view: v, host } = mount("# Alpha\n\n## Beta\n\nbody\n");
+    v.plugin(outlinePlugin)?.toggle();
+    const announcer = host.querySelector(".quoll-outline-announcer") as HTMLElement;
+    v.dispatch({ selection: EditorSelection.cursor(v.state.doc.line(3).from) }); // → Beta (child of Alpha)
+    vi.runAllTimers();
+    expect(announcer.textContent).toBe("Beta — current section");
+    announcer.textContent = ""; // blank so a spurious write is observable
+    // Collapse Alpha via its twistie: Beta (the caret's section) is hidden and the
+    // highlight walks up to Alpha, but the caret has not moved.
+    const twistie = twistieOf(rowEls(host)[0]) as HTMLElement;
+    twistie.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    vi.runAllTimers();
+    expect(announcer.textContent).toBe(""); // caret unmoved → no spurious section cue
+  });
+
+  it("stays silent when the caret's heading is renamed in place (an edit is not a navigation)", () => {
+    vi.useFakeTimers();
+    const { view: v, host } = mount("# Alpha\n\nbody\n\n## Beta\n\nmore\n");
+    v.plugin(outlinePlugin)?.toggle();
+    const announcer = host.querySelector(".quoll-outline-announcer") as HTMLElement;
+    v.dispatch({ selection: EditorSelection.cursor(v.state.doc.line(5).from) }); // → Beta (cue armed)
+    // Rename "## Beta" → "## Gamma" in place before the debounce fires. The caret
+    // move into Beta armed the cue; the rename (an edit, not a navigation) then
+    // cancels it and the rebuild re-baselines silently — so neither the stale
+    // "Beta" nor an edit-driven "Gamma" is spoken.
+    const betaLine = v.state.doc.line(5);
+    v.dispatch({ changes: { from: betaLine.from + 3, to: betaLine.to, insert: "Gamma" } });
+    vi.runAllTimers();
+    expect(announcer.textContent).toBe("");
+  });
+
+  it("stays silent when an edit demotes the caret's heading (section changes without navigation)", () => {
+    vi.useFakeTimers();
+    const { view: v, host } = mount("# Alpha\n\n## Beta\n\nbody\n");
+    v.plugin(outlinePlugin)?.toggle();
+    const announcer = host.querySelector(".quoll-outline-announcer") as HTMLElement;
+    v.dispatch({ selection: EditorSelection.cursor(v.state.doc.line(3).from) }); // → Beta
+    vi.runAllTimers();
+    expect(announcer.textContent).toBe("Beta — current section"); // Beta is the baseline
+    announcer.textContent = ""; // blank so a spurious write is observable
+    // Delete Beta's "## " marker: the caret's enclosing section structurally
+    // becomes Alpha, but the caret never moved — a rebuild is not a navigation.
+    const betaLine = v.state.doc.line(3);
+    v.dispatch({ changes: { from: betaLine.from, to: betaLine.from + 3, insert: "" } });
+    vi.runAllTimers();
+    expect(announcer.textContent).toBe(""); // edit-driven section change → silent
+  });
+
+  it("cancels a pending cue when the document is edited (an edit is not a navigation)", () => {
+    vi.useFakeTimers();
+    const { view: v, host } = mount("# Alpha\n\nbody\n\n## Beta\n\nmore\n");
+    v.plugin(outlinePlugin)?.toggle();
+    const announcer = host.querySelector(".quoll-outline-announcer") as HTMLElement;
+    v.dispatch({ selection: EditorSelection.cursor(v.state.doc.line(5).from) }); // → Beta (cue armed)
+    vi.advanceTimersByTime(100); // cue still pending
+    // Delete the "## " marker so the line is no longer a heading: the pre-edit cue
+    // must be cancelled rather than fire off the stale (pre-rebuild) outline. The
+    // caret then sits under Alpha (already the baseline), so nothing is spoken.
+    const betaLine = v.state.doc.line(5);
+    v.dispatch({ changes: { from: betaLine.from, to: betaLine.from + 3, insert: "" } });
+    vi.runAllTimers();
+    expect(announcer.textContent).toBe(""); // no stale "Beta", no edit-driven cue
+  });
+
+  it("announces empty when the caret sits above the first heading (null active section)", () => {
+    vi.useFakeTimers();
+    const { view: v, host } = mount("intro prose\n\n# Alpha\n\nbody\n");
+    v.plugin(outlinePlugin)?.toggle();
+    const announcer = host.querySelector(".quoll-outline-announcer") as HTMLElement;
+    v.dispatch({ selection: EditorSelection.cursor(v.state.doc.line(3).from) }); // → Alpha
+    vi.runAllTimers();
+    expect(announcer.textContent).toBe("Alpha — current section");
+    v.dispatch({ selection: EditorSelection.cursor(0) }); // caret above the first heading → null
+    vi.runAllTimers();
+    expect(announcer.textContent).toBe(""); // no active section → blank cue
+  });
+
   it("does not mark the empty-state row as a treeitem", () => {
     const { view: v, host } = mount("no headings here\n");
     v.plugin(outlinePlugin)?.toggle();

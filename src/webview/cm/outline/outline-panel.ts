@@ -61,6 +61,13 @@ const BASE_PAD_PX = 12;
  *  the per-keystroke path while the sidebar is open. */
 const REBUILD_DEBOUNCE_MS = 200;
 
+/** Trailing debounce (ms) before the active-section change is written to the
+ *  live region. Coalesces a caret sweeping across many headings (hold ArrowDown)
+ *  into a single announcement of the section the caret finally settles in — the
+ *  anti-chatter gate. Longer than REBUILD_DEBOUNCE_MS so a rebuild-then-resync
+ *  during a fast edit still yields one settled announcement. */
+const ANNOUNCE_DEBOUNCE_MS = 400;
+
 /** Ceiling (ms) for the ONE forced complete parse on the deliberate open. A
  *  ceiling, not a wait: an already-parsed live view returns instantly. Only a
  *  pathological multi-MB document not yet parsed to its end can hit it, in which
@@ -130,6 +137,11 @@ class OutlinePanel implements PluginValue {
   private readonly resizeEl: HTMLElement;
   private readonly settingsToggleEl: HTMLButtonElement;
   private readonly footerEl: HTMLElement;
+  /** Visually-hidden `aria-live=polite` region. `updateActive` writes the active
+   *  section into it (debounced) so an SR user hears the change when the caret
+   *  crosses a heading in the editor — a cue the silent aria-selected flip alone
+   *  never gave. Lives inside the sidebar so it leaves with it on teardown. */
+  private readonly announcerEl: HTMLElement;
   /** The mounted settings popover, or null while closed. Its presence IS the
    *  open state — no separate boolean can diverge from the DOM. */
   private settingsPopover: SettingsPopover | null = null;
@@ -164,6 +176,26 @@ class OutlinePanel implements PluginValue {
   private rebuildTimer: ReturnType<typeof setTimeout> | null = null;
   private closeTimer: ReturnType<typeof setTimeout> | null = null;
   private openTimer: ReturnType<typeof setTimeout> | null = null;
+  private announceTimer: ReturnType<typeof setTimeout> | null = null;
+  /** The announcement baseline: the section last actually WRITTEN to the region
+   *  (advanced at debounce fire time), primed on open, or recorded on the
+   *  suppressed tree-focus path. Change detection dedups against it (with the
+   *  pending target — see `pendingAnnounceFrom`) so an in-section caret move never
+   *  re-speaks; it is mapped through doc edits in `update()` so an offset shift
+   *  alone does not read as a change. Advancing it only at fire time is what lets
+   *  an edit cancel a pending cue yet have the post-rebuild sync re-announce a
+   *  genuine section change from the refreshed outline. */
+  private lastAnnouncedFrom: number | null = null;
+  /** The section a currently-armed announce timer will speak (meaningful only
+   *  while `announceTimer !== null`). Dedup compares against THIS while a cue is
+   *  pending, so a caret sweep that returns to its origin (A→B→A) settles on A
+   *  without a stale B firing. */
+  private pendingAnnounceFrom: number | null = null;
+  /** False from open until the first `updateActive` primes the baseline: opening
+   *  the sidebar is not itself a section change, so the first sync records the
+   *  current section silently and only later changes are announced. Reset on each
+   *  open so a reopen re-primes rather than announcing a stale carry-over. */
+  private announcePrimed = false;
 
   constructor(private readonly view: EditorView) {
     // In production the EditorView is mounted inside the `.quoll-editor` host,
@@ -276,6 +308,14 @@ class OutlinePanel implements PluginValue {
     // Home / End / Enter keydown bubbles here. Delegation survives every rebuild
     // (the list element persists; only its rows are replaced).
     this.listEl.addEventListener("keydown", (e) => this.onListKeydown(e));
+    // Focusing a tree row makes the SR announce its treeitem — i.e. that section.
+    // Keep the announcement baseline in sync with whatever row holds focus (Tab-in,
+    // roving arrow nav, click) via this one delegated `focusin` (it bubbles), so
+    // the live region never re-speaks a section the treeitem already announced when
+    // the caret later returns to the editor. This is the SINGLE point of tree↔live
+    // coordination — the announce path itself only needs to suppress while focus is
+    // in the tree, not track which row.
+    this.listEl.addEventListener("focusin", (e) => this.onRowFocusIn(e));
 
     const footer = document.createElement("div");
     footer.className = "quoll-outline-footer";
@@ -299,9 +339,23 @@ class OutlinePanel implements PluginValue {
     footer.appendChild(settingsEl);
     this.footerEl = footer;
 
+    // Visually-hidden polite live region for active-section changes. Present in
+    // the DOM before any text lands, so the first write is a mutation SRs
+    // announce; aria-atomic reads the short phrase as a unit. Empty until the
+    // first genuine section change; thereafter it holds the last-announced
+    // "<heading> — current section" cue until the next change or sidebar close
+    // (nothing self-reverts it to empty). Reuses the fenced-code copy button's
+    // visually-hidden-region CSS technique, but is a persistent status label —
+    // NOT that button's self-clearing confirmation flash.
+    this.announcerEl = document.createElement("div");
+    this.announcerEl.className = "quoll-outline-announcer";
+    this.announcerEl.setAttribute("aria-live", "polite");
+    this.announcerEl.setAttribute("aria-atomic", "true");
+
     this.sidebarEl.appendChild(header);
     this.sidebarEl.appendChild(this.listEl);
     this.sidebarEl.appendChild(footer);
+    this.sidebarEl.appendChild(this.announcerEl);
 
     // Sidebar FIRST in DOM order (before CodeMirror's element) so the pinned
     // flex row reads sidebar-then-editor without `order` tricks, and the tab /
@@ -388,6 +442,25 @@ class OutlinePanel implements PluginValue {
         this.collapsedFroms.add(from);
       }
     }
+    if (u.docChanged) {
+      // An edit is NOT a navigation. Cancel any pending cue: it was scheduled from
+      // the pre-edit outline, and this.headings only refreshes after the trailing
+      // rebuild — so letting it fire could speak a heading that was renamed or
+      // deleted mid-debounce. The rebuild's updateActive then re-baselines the
+      // announcer SILENTLY (structural, non-caret), so an edit that changes the
+      // caret's enclosing section is not spoken as if the caret had moved.
+      if (this.announceTimer !== null) {
+        clearTimeout(this.announceTimer);
+        this.announceTimer = null;
+      }
+      // Map the announced baseline through the edit too (same assoc +1 as the
+      // collapse offsets — follow the heading, not text inserted at its start), so
+      // an edit that merely shifts the active heading's `from` is not later read
+      // as a section change.
+      if (this.lastAnnouncedFrom !== null) {
+        this.lastAnnouncedFrom = u.changes.mapPos(this.lastAnnouncedFrom, 1);
+      }
+    }
     if (!this.open) {
       return;
     }
@@ -404,6 +477,9 @@ class OutlinePanel implements PluginValue {
   destroy(): void {
     if (this.rebuildTimer !== null) {
       clearTimeout(this.rebuildTimer);
+    }
+    if (this.announceTimer !== null) {
+      clearTimeout(this.announceTimer);
     }
     this.cancelScheduledClose();
     this.cancelScheduledOpen();
@@ -517,6 +593,9 @@ class OutlinePanel implements PluginValue {
       // Closing the sidebar closes the settings popover too (it lives in the
       // footer; a lingering popover over a closed sidebar has no meaning).
       this.closeSettings();
+      // Drop any pending / rendered announcement — a live-region write must never
+      // fire into a closed (inert) sidebar, and the region starts empty next open.
+      this.clearAnnouncement();
     }
     if (!open && this.pinned) {
       // Invariant: pinned ⇒ open. An explicit close (toggle / Mod-Alt-o)
@@ -533,6 +612,10 @@ class OutlinePanel implements PluginValue {
       if (document.activeElement === this.toggleEl) {
         this.pinEl.focus();
       }
+      // Re-prime the announcer so the first updateActive from the open rebuild
+      // records the current section silently (opening is not a section change);
+      // only later caret-driven changes speak.
+      this.announcePrimed = false;
       // Opening is a deliberate action — rebuild immediately AND force a
       // complete parse so the WHOLE document's headings appear, not just the
       // parsed viewport. The only forced parse; off the keystroke path.
@@ -814,7 +897,12 @@ class OutlinePanel implements PluginValue {
       this.renderedSignature = signature;
       this.renderList();
     }
-    this.updateActive();
+    // A rebuild is structural (open, an edit, or the parser catching up), never a
+    // caret navigation — so it re-baselines the announcer silently rather than
+    // speaking. This is what stops an edit that restructures headings (e.g.
+    // demoting the caret's own heading, which changes its enclosing section) from
+    // announcing as if the caret had moved.
+    this.updateActive(false);
   }
 
   private renderList(): void {
@@ -1087,7 +1175,7 @@ class OutlinePanel implements PluginValue {
     }
   }
 
-  private updateActive(): void {
+  private updateActive(caretDriven = true): void {
     if (!this.open) {
       return;
     }
@@ -1100,6 +1188,11 @@ class OutlinePanel implements PluginValue {
         break;
       }
     }
+    // The caret's TRUE enclosing section, captured before the visible-ancestor
+    // remap below. The announcement tracks where the caret actually is, not the
+    // highlighted row — so a collapse/expand (which walks the highlight up to a
+    // visible ancestor without moving the caret) never fires a spurious cue.
+    const caretSectionFrom = activeFrom;
     // If the active heading's row is hidden (inside a collapsed subtree), walk up
     // to the nearest VISIBLE ancestor so the highlight never lands on a hidden
     // row — we keep the nearest visible ancestor lit rather than auto-expanding
@@ -1135,6 +1228,125 @@ class OutlinePanel implements PluginValue {
     if (!this.listEl.contains(document.activeElement)) {
       this.setTabbable(activeFrom ?? this.firstVisibleFrom());
     }
+    if (caretDriven || this.announceTimer !== null) {
+      // Caret-driven, OR a structural rebuild that arrived while a cue was still
+      // armed. The armed cue is a genuine pending caret navigation (a pure edit
+      // cancels the timer in update(), so it lands in the silent else-branch; but
+      // an edit-then-navigate, or a background reparse completing over a large
+      // document, can leave a live timer here). Re-derive its target from the
+      // refreshed outline instead of baselining silently — a reparse may reveal a
+      // heading the incomplete outline missed — so the pending cue stays truthful.
+      this.announceActive(caretSectionFrom);
+    } else {
+      this.syncAnnounceBaseline(caretSectionFrom);
+    }
+  }
+
+  /** Silently move the announcement baseline to the caret's current section
+   *  without speaking — used on every structural (non-caret) refresh so an edit
+   *  or reparse that changes the caret's enclosing section is not mistaken for a
+   *  navigation. Also primes on the first (open-time) rebuild. */
+  private syncAnnounceBaseline(activeFrom: number | null): void {
+    this.announcePrimed = true;
+    this.lastAnnouncedFrom = activeFrom;
+  }
+
+  /** A tree row gained focus — the SR announced its treeitem, i.e. that section.
+   *  Sync the baseline to it so the live region does not also speak that section
+   *  when the caret later returns to the editor within it. This single hook covers
+   *  every way a row gains focus (Tab-in, roving arrow nav, click), so the announce
+   *  path needs no per-row bookkeeping — only a plain suppress-while-tree-focused. */
+  private onRowFocusIn(e: FocusEvent): void {
+    const li = (e.target as HTMLElement | null)?.closest<HTMLLIElement>(".quoll-outline-row");
+    if (!li) {
+      return;
+    }
+    const row = this.rows.find((r) => r.li === li);
+    if (row !== undefined) {
+      this.lastAnnouncedFrom = row.heading.from;
+      // Cancel a pending live cue ONLY when this focused row IS that cue's target:
+      // then the treeitem announcement covers the very section the cue would speak,
+      // so firing it too (if focus returns to the editor before the debounce) would
+      // be a duplicate. A cue for a DIFFERENT section — the caret's — must SURVIVE:
+      // focusing an unrelated row never announced it, so cancelling would swallow a
+      // genuine navigation. clearTimeout only, not clearAnnouncement: blanking would
+      // drop a legitimately-shown prior cue.
+      if (this.announceTimer !== null && this.pendingAnnounceFrom === row.heading.from) {
+        clearTimeout(this.announceTimer);
+        this.announceTimer = null;
+      }
+    }
+  }
+
+  /** Debounced polite announcement of the active section for SR users. The
+   *  aria-selected flip above is silent, so without this a caret crossing a
+   *  heading in the editor gives no cue. Announce ONLY on a genuine caret-driven
+   *  section change: never on the open-time prime, never while the tree holds
+   *  focus (row navigation, incl. an Enter-jump, self-announces its treeitem — and
+   *  `onRowFocusIn` keeps the baseline in step with it), and never for a document
+   *  edit (handled in `update()`, which cancels a pending cue — an edit is not a
+   *  navigation). A trailing debounce coalesces a fast caret sweep into one settled
+   *  announcement.
+   *
+   *  Dedup compares against `pendingAnnounceFrom` while a cue is armed (so a sweep
+   *  A→B→A settles on A) and against `lastAnnouncedFrom` otherwise. The baseline
+   *  advances and the label are resolved at FIRE time — not schedule time — so a
+   *  cue that `update()` cancelled after an edit leaves its section unconsumed for
+   *  the post-rebuild re-derive, and the spoken label reads the (by then rebuilt)
+   *  outline rather than a stale capture. */
+  private announceActive(activeFrom: number | null): void {
+    if (!this.announcePrimed) {
+      // Defensive prime — in practice the open-time rebuild's syncAnnounceBaseline
+      // primes first (setOpen rebuilds synchronously before any caret-driven call).
+      this.announcePrimed = true;
+      this.lastAnnouncedFrom = activeFrom;
+      return;
+    }
+    const currentTarget =
+      this.announceTimer !== null ? this.pendingAnnounceFrom : this.lastAnnouncedFrom;
+    if (activeFrom === currentTarget) {
+      return; // already heading to this section — nothing new to speak
+    }
+    if (this.listEl.contains(document.activeElement)) {
+      // Focus is in the tree (arrow-nav / Enter-jump): the SR announces the focused
+      // treeitem and `onRowFocusIn` has already baselined it, so just suppress the
+      // live cue and cancel any pending one (a cue scheduled for a prior caret
+      // position must not fire late after a tree move superseded it).
+      this.clearAnnouncement();
+      return;
+    }
+    this.pendingAnnounceFrom = activeFrom;
+    if (this.announceTimer !== null) {
+      clearTimeout(this.announceTimer);
+    }
+    this.announceTimer = setTimeout(() => {
+      this.announceTimer = null;
+      // Re-check focus at fire time: it may have entered the tree since scheduling
+      // (that path self-announces its treeitem, and onRowFocusIn baselined it).
+      if (this.listEl.contains(document.activeElement)) {
+        return;
+      }
+      // Advance the baseline only now — see the doc comment: an edit-cancelled cue
+      // must not have advanced it. `update()` cancels this timer on any doc change,
+      // so `this.headings` is consistent with `activeFrom` here (a rebuild from an
+      // edit would have cancelled us) and resolving the label from it is truthful.
+      this.lastAnnouncedFrom = activeFrom;
+      const heading =
+        activeFrom === null ? undefined : this.headings.find((h) => h.from === activeFrom);
+      const label =
+        heading === undefined ? null : heading.text.length > 0 ? heading.text : "(untitled)";
+      this.announcerEl.textContent = label === null ? "" : `${label} — current section`;
+    }, ANNOUNCE_DEBOUNCE_MS);
+  }
+
+  /** Cancel a pending announcement and blank the live region — used on close so a
+   *  write never lands in the inert sidebar and the region reopens empty. */
+  private clearAnnouncement(): void {
+    if (this.announceTimer !== null) {
+      clearTimeout(this.announceTimer);
+      this.announceTimer = null;
+    }
+    this.announcerEl.textContent = "";
   }
 }
 

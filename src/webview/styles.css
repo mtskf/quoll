@@ -1234,6 +1234,20 @@ html body {
     font-style: italic;
     opacity: 0.7;
   }
+  /* Visually-hidden active-section live region: out of flow, 1px clipped box, so
+   * it never disturbs the sidebar layout but its text mutations stay in the
+   * accessibility tree for SRs to announce. Mirrors .quoll-copy-status. */
+  .quoll-outline-announcer {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
+  }
   .quoll-outline-footer {
     /* position: relative — anchors the settings popover's absolute bottom:100%
      * placement to the footer rather than the viewport. */
