@@ -651,6 +651,24 @@ describe("quollOutline sidebar", () => {
     expect(announcer.textContent).toBe(""); // in-section move → no re-announce
   });
 
+  it("does not baseline the caret's section when a DIFFERENT tree row was focused at fire time", () => {
+    vi.useFakeTimers();
+    const { view: v, host } = mount("# Alpha\n\nbody\n\n## Beta\n\nmore\n");
+    const plugin = v.plugin(outlinePlugin);
+    plugin?.toggle();
+    pinEl(host).click();
+    const announcer = host.querySelector(".quoll-outline-announcer") as HTMLElement;
+    v.dispatch({ selection: EditorSelection.cursor(v.state.doc.line(5).from) }); // caret → Beta (cue armed)
+    rowEls(host)[0].focus(); // focus the ALPHA row (not Beta) during the window
+    vi.runAllTimers(); // cue suppressed, but the tree announced Alpha — Beta stays un-baselined
+    expect(announcer.textContent).toBe("");
+    // Back in the editor: Beta was never announced, so an in-Beta caret move speaks it.
+    v.focus();
+    v.dispatch({ selection: EditorSelection.cursor(v.state.doc.line(7).from) }); // still under Beta
+    vi.runAllTimers();
+    expect(announcer.textContent).toBe("Beta — current section");
+  });
+
   it("re-primes on reopen — no stale announcement the instant the sidebar reopens", () => {
     vi.useFakeTimers();
     const { view: v, host } = mount("# Alpha\n\nbody\n\n## Beta\n\nmore\n");

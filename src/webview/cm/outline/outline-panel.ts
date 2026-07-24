@@ -1251,6 +1251,16 @@ class OutlinePanel implements PluginValue {
    *  cue that `update()` cancelled after an edit leaves its section unconsumed for
    *  the post-rebuild re-derive, and the spoken label reads the (by then rebuilt)
    *  outline rather than a stale capture. */
+  /** True when the tree row holding DOM focus is the treeitem for `from` — i.e.
+   *  the SR's per-treeitem focus announcement already covered that section, so the
+   *  live region must not also speak it. False when focus is on a different row (a
+   *  different section was announced) or on no row. */
+  private focusedRowIs(from: number | null): boolean {
+    const active = document.activeElement;
+    const row = this.rows.find((r) => r.li === active);
+    return row !== undefined && row.heading.from === from;
+  }
+
   private announceActive(activeFrom: number | null): void {
     if (!this.announcePrimed) {
       // First sync after open records the baseline silently — opening the
@@ -1268,9 +1278,13 @@ class OutlinePanel implements PluginValue {
       // Focus is in the tree (arrow-nav / Enter-jump): the SR announces each
       // treeitem on focus, so suppress the live-region cue AND cancel any pending
       // one — an announcement scheduled for a prior caret position must not fire
-      // late after a tree jump has superseded it. Record the section as known so
-      // it is not re-announced when focus later leaves the tree.
-      this.lastAnnouncedFrom = activeFrom;
+      // late after a tree jump has superseded it. Record the section as known ONLY
+      // when the focused row IS the caret's section (so its treeitem announcement
+      // covered it); otherwise leave the baseline so a later editor caret update
+      // can still announce activeFrom.
+      if (this.focusedRowIs(activeFrom)) {
+        this.lastAnnouncedFrom = activeFrom;
+      }
       this.clearAnnouncement();
       return;
     }
@@ -1281,12 +1295,16 @@ class OutlinePanel implements PluginValue {
     this.announceTimer = setTimeout(() => {
       this.announceTimer = null;
       // Re-check focus at fire time: it may have entered the tree since scheduling
-      // (that path announces its own treeitem). Record the section as known even
-      // when suppressed here — mirroring the schedule-time tree-focus path — so a
-      // later in-section caret move does not re-speak it. Safe because any doc
-      // change cancels this timer synchronously, so `activeFrom` cannot be stale.
+      // (that path announces its own treeitem). As on the schedule-time path,
+      // record the section as known only when the focused row IS activeFrom's row
+      // — so a later in-section move does not re-speak a cue the treeitem already
+      // covered, while a focus on a DIFFERENT row leaves activeFrom un-baselined
+      // for the next editor caret update. Safe because any doc change cancels this
+      // timer synchronously, so `activeFrom` cannot be stale.
       if (this.listEl.contains(document.activeElement)) {
-        this.lastAnnouncedFrom = activeFrom;
+        if (this.focusedRowIs(activeFrom)) {
+          this.lastAnnouncedFrom = activeFrom;
+        }
         return;
       }
       // Advance the baseline only now — see the doc comment: an edit-cancelled cue
