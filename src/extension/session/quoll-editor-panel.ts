@@ -79,6 +79,7 @@ import { toLintDiagnostics } from "../lint/lint-diagnostics.js";
 import { LintMirror } from "../lint/lint-mirror.js";
 import type { StatusBarSlots } from "../status-bar.js";
 import { openInQuollEditor } from "../surface/open-in-quoll.js";
+import { registerPendingRejection } from "../surface/rejection-registry.js";
 import { openInTextEditor } from "../surface/reopen-text-editor.js";
 import {
   codeReferenceFileExistsWithinRoot,
@@ -326,6 +327,18 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
       { validateForWrite: createIncrementalWriteValidator() }
     );
     let state = core.initialState(document.version);
+
+    // Publish THIS session's pending-rejection state to the cross-surface
+    // registry keyed by document.uri, so the TAB-ONLY command path to the forward
+    // swap (quoll.reopenInTextEditor title-bar button / quoll.toggleEditor
+    // to-text → reopenActiveQuollTabAsText) can refuse the swap while a write-gate
+    // rejection is pending — the same data-loss guard the in-webview
+    // switch-to-text arm applies below, which that command path cannot reach
+    // because it has no panel closure. Identity-safe deregistration on dispose
+    // (pushed onto `disposables`). See surface/rejection-registry.ts.
+    disposables.push(
+      registerPendingRejection(document.uri.toString(), () => state.rejection.kind === "pending")
+    );
 
     // Edit-applied barrier for the document side channels (context-handoff /
     // codex-context-handoff / switch-to-text). It DEFERS a side-channel thunk

@@ -319,6 +319,55 @@ describe("host-rejects-edit-preserves-webview", function () {
     );
   });
 
+  it("reopenInTextEditor command while a rejection is pending is refused — the Quoll tab stays open", async () => {
+    // Follow-up to the webview switch-to-text guard (PR #256): the title-bar
+    // `quoll.reopenInTextEditor` button and `quoll.toggleEditor`'s to-text case
+    // both drive reopenActiveQuollTabAsText, which is TAB-ONLY and has no access
+    // to the panel's state.rejection. Without a cross-surface query it would
+    // close the Quoll tab on the clean disk snapshot and orphan the rejected
+    // draft — exactly the loss the webview arm already blocks. The command path
+    // now consults the pending-rejection registry keyed by uri and refuses
+    // symmetrically: the Quoll tab stays open and no text tab opens.
+    const harness = await getHarness();
+    const uri = await openFixtureWithQuoll("unsafe-url.md");
+    const seed = await harness.waitForEvent(isDocumentEvent, 8000);
+
+    const panel = harness.activePanel;
+    assert.ok(panel);
+    harness.clearEvents();
+
+    const seededContent = (seed.message as { content: string }).content;
+    // Draft still carries the unsafe URL → rejected; the trailing newline makes
+    // it differ from the seed so the verdict is parse-failed, not a no-op.
+    panel.simulateInbound({
+      protocol: PROTOCOL_VERSION,
+      type: "edit",
+      content: `${seededContent}\n`,
+      baseDocVersion: seed.message.docVersion,
+    });
+    await harness.waitForEvent(isEditRejectedEvent, 5000);
+
+    // Drive the REAL command path (not the webview switch-to-text side channel):
+    // the Quoll tab is active after openFixtureWithQuoll, so the command
+    // classifies it as the forward swap and hits the registry guard.
+    await vscode.commands.executeCommand("quoll.reopenInTextEditor");
+
+    // Give any (erroneous) swap a chance to open a text tab / close the Quoll
+    // tab, then assert neither happened.
+    await tick(500);
+    const tabs = allTabs();
+    assert.ok(
+      tabs.some(customTab(uri)),
+      `Quoll tab must stay open (draft preserved) — ${JSON.stringify(tabs.map((t) => t.label))}`
+    );
+    assert.ok(
+      !tabs.some(textTab(uri)),
+      `no text tab must open while the rejection is pending — ${JSON.stringify(
+        tabs.map((t) => t.label)
+      )}`
+    );
+  });
+
   it("deferred switch-to-text is refused when a stash drained by the releasing settlement is rejected", async () => {
     // Regression for the deferred-switch race: the switch-to-text guard checked
     // state.rejection ONLY at message-receipt time. If the switch arrives while

@@ -25,6 +25,7 @@ import { commands, TabInputCustom, TabInputText, type TextEditor, window, worksp
 import { stashSwitchCaret, takeSwitchCaret } from "../handoff/editor-switch-caret.js";
 import { QuollEditorPanel } from "../session/quoll-editor-panel.js";
 import { canEditWith } from "./can-edit-with.js";
+import { isRejectionPending } from "./rejection-registry.js";
 import { openInTextEditor } from "./reopen-text-editor.js";
 import { showSafely } from "./show-safely.js";
 import { noteSurface } from "./surface-memory.js";
@@ -64,7 +65,9 @@ function surfaceError(prefix: string, err: unknown): void {
 
 /** Forward swap: reopen the active Quoll custom tab in the built-in text editor,
  *  then close the Quoll source tab (save-then-swap; see surface-swap.ts). No-op
- *  if the active tab is not a Quoll custom tab. Caret is NOT preserved on this
+ *  if the active tab is not a Quoll custom tab. Refused (draft-preserving) while
+ *  the doc's session holds a pending write-gate rejection — see the guard below.
+ *  Caret is NOT preserved on this
  *  path — the caret-preserving forward affordances are the in-editor button + the
  *  ⌘⌥E / Ctrl+Alt+E chord (they post `switch-to-text` to the panel, which owns
  *  lastKnownCaret). Shared by `quoll.toggleEditor` (to-text case) and the
@@ -76,6 +79,28 @@ export async function reopenActiveQuollTabAsText(): Promise<void> {
     return;
   }
   const uri = input.uri;
+  // Data-loss guard, symmetric with the in-webview switch-to-text arm
+  // (quoll-editor-panel.ts): while THIS doc's host session holds a pending
+  // write-gate rejection the draft lives ONLY webview-side (disk clean, banner
+  // up, CodeMirror never reseeded), so closing the Quoll tab on the clean
+  // snapshot would silently orphan it. This command path is tab-only and cannot
+  // read the panel's state.rejection directly, so it consults the cross-surface
+  // registry keyed by uri. Fast path: refuse before opening a pointless second
+  // tab. The AUTHORITATIVE check is the shouldAbortClose predicate passed to
+  // finalizeSurfaceSwap below — a rejection can still land during the async open
+  // / finalize awaits, and only a synchronous re-check right before the
+  // irreversible close covers that window (same two-layer shape as the webview
+  // arm). Same message the webview arm shows so both forward entry points read
+  // identically.
+  if (isRejectionPending(uri.toString())) {
+    showSafely(
+      window.showErrorMessage(
+        "Quoll: can't switch to the text editor while a change can't be saved — resolve the highlighted problem first."
+      ),
+      "showErrorMessage"
+    );
+    return;
+  }
   const sourceTab = findSourceTab(uri.toString(), "quoll", QuollEditorPanel.viewType);
   // Observability for the documented caret non-preservation on this path.
   console.info(
@@ -83,11 +108,30 @@ export async function reopenActiveQuollTabAsText(): Promise<void> {
   );
   try {
     await openInTextEditor(uri);
+    // Async-window guard: openInTextEditor is async and the webview stays live
+    // until finalizeSurfaceSwap closes the Quoll tab, so a NEW edit failing the
+    // write-gate during the open can flip the rejection to pending AFTER the
+    // fast-path check. Re-check before recording intent / closing: retain the
+    // Quoll tab so the just-rejected draft is not orphaned (the opened text tab
+    // is a harmless second view of the clean disk bytes).
+    if (isRejectionPending(uri.toString())) {
+      showSafely(
+        window.showErrorMessage(
+          "Quoll: can't switch to the text editor while a change can't be saved — resolve the highlighted problem first."
+        ),
+        "showErrorMessage"
+      );
+      return;
+    }
     // Record intent AFTER the open succeeds and BEFORE the source close, so the
     // surface-restore watcher adopts "text" instead of bouncing this deliberate
     // swap (and a failed open records nothing).
     noteSurface(uri.toString(), "text");
-    await finalizeSurfaceSwap(uri, sourceTab);
+    // Point-of-no-return guard: finalizeSurfaceSwap still awaits openDoc (and
+    // maybe save) before the irreversible tab close, so a rejection landing in
+    // THAT window would slip past the check above. Pass the same predicate so the
+    // close is aborted synchronously right before it happens.
+    await finalizeSurfaceSwap(uri, sourceTab, undefined, () => isRejectionPending(uri.toString()));
   } catch (err) {
     surfaceError("could not open the text editor", err);
   }
