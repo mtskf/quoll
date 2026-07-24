@@ -519,7 +519,8 @@ export function createHostSessionCore(context: HostSessionContext, deps: HostSes
               // draft (finding #2). The draft Document carries the SAME bytes the
               // editor already shows (never disk bytes — §6 holds; the live-path
               // parse-failed arm stays Document-free) while advancing the
-              // webview's docVersion bookkeeping (I3). Mirrors the `ready`-arm
+              // webview's docVersion bookkeeping (so the next retry lands on a
+              // live base instead of stale-rejecting). Mirrors the `ready`-arm
               // redelivery precedent.
               effects: state.disposed
                 ? [{ type: "showError", message: `Cannot save: ${verdict.error.message}` }]
