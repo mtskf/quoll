@@ -1264,12 +1264,14 @@ class OutlinePanel implements PluginValue {
     const row = this.rows.find((r) => r.li === li);
     if (row !== undefined) {
       this.lastAnnouncedFrom = row.heading.from;
-      // The treeitem now covers this section. Cancel any pending live cue (but keep
-      // the region's current text) so it is not ALSO spoken if focus returns to the
-      // editor before the debounce fires — a pure focus move dispatches no
-      // transaction, so nothing else would cancel it. clearTimeout only, not
-      // clearAnnouncement: blanking here would drop a legitimately-shown prior cue.
-      if (this.announceTimer !== null) {
+      // Cancel a pending live cue ONLY when this focused row IS that cue's target:
+      // then the treeitem announcement covers the very section the cue would speak,
+      // so firing it too (if focus returns to the editor before the debounce) would
+      // be a duplicate. A cue for a DIFFERENT section — the caret's — must SURVIVE:
+      // focusing an unrelated row never announced it, so cancelling would swallow a
+      // genuine navigation. clearTimeout only, not clearAnnouncement: blanking would
+      // drop a legitimately-shown prior cue.
+      if (this.announceTimer !== null && this.pendingAnnounceFrom === row.heading.from) {
         clearTimeout(this.announceTimer);
         this.announceTimer = null;
       }

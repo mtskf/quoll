@@ -669,6 +669,36 @@ describe("quollOutline sidebar", () => {
     expect(announcer.textContent).toBe("Beta — current section");
   });
 
+  it("keeps a pending cue alive when an UNRELATED tree row is focused (its section was never announced)", () => {
+    vi.useFakeTimers();
+    const { view: v, host } = mount("# Alpha\n\nbody\n\n## Beta\n\nmore\n");
+    const plugin = v.plugin(outlinePlugin);
+    plugin?.toggle();
+    pinEl(host).click();
+    const announcer = host.querySelector(".quoll-outline-announcer") as HTMLElement;
+    v.dispatch({ selection: EditorSelection.cursor(v.state.doc.line(5).from) }); // caret → Beta (cue armed)
+    rowEls(host)[0].focus(); // focus ALPHA — its treeitem announces Alpha, NOT Beta
+    v.focus(); // back to the editor before the debounce fires
+    vi.runAllTimers();
+    // The Beta cue must survive (Alpha's treeitem never covered Beta) and speak.
+    expect(announcer.textContent).toBe("Beta — current section");
+  });
+
+  it("cancels a pending cue when its OWN target row is focused (treeitem already announced it)", () => {
+    vi.useFakeTimers();
+    const { view: v, host } = mount("# Alpha\n\nbody\n\n## Beta\n\nmore\n");
+    const plugin = v.plugin(outlinePlugin);
+    plugin?.toggle();
+    pinEl(host).click();
+    const announcer = host.querySelector(".quoll-outline-announcer") as HTMLElement;
+    v.dispatch({ selection: EditorSelection.cursor(v.state.doc.line(5).from) }); // caret → Beta (cue armed)
+    rowEls(host)[1].focus(); // focus BETA — its treeitem announces Beta, the cue's target
+    v.focus(); // back to the editor before the debounce fires
+    vi.runAllTimers();
+    // The treeitem already announced Beta, so the pending cue is cancelled — no duplicate.
+    expect(announcer.textContent).toBe("");
+  });
+
   it("baselines a row focused with no pending cue (treeitem announcement is not repeated)", () => {
     vi.useFakeTimers();
     const { view: v, host } = mount("# Alpha\n\nbody\n\n## Beta\n\nmore\n");
