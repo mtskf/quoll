@@ -617,13 +617,29 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
         // Tab never escapes to VS Code focus navigation. Prec.high so it wins
         // before CM's default. Edits raw source → normal edit-sync path.
         listIndentKeymap(),
+        // Enter precedence story (one deliberate order, not registration luck).
+        // Effective order highest→lowest: (1) list continuation, (2) fenced-code
+        // auto-close [both Prec.highest, list registered first], (3) upstream markup
+        // continuation [Prec.high], (4) CM default newline [Prec.default]. Both Quoll
+        // handlers are promoted above upstream `markdownKeymap` Enter (mounted
+        // Prec.high by quollMarkdownLanguage, registered first) because at equal
+        // precedence upstream shadowed them: it returns true for bullet/ordered items
+        // (stealing list renumber/exit — visible on non-sequential ordered runs) AND
+        // for a fence opener whose caret sits on a `> ` / list PREFIX (it resolves to
+        // the Blockquote/ListItem, not the FencedCode, so upstream continues the
+        // markup and leaves the fence unclosed). Prec.highest fixes both.
+        // Pinned by cm-enter-precedence.test.ts.
+        //
         // Enter in a bullet/ordered/task list item continues the marker on the
         // next line; Enter on an empty marker line removes it (exiting the list);
         // ordered runs renumber to stay sequential. Registered BEFORE the
         // fenced-code Enter so a normal list line is handled here, while a fence
         // opener on a list marker line (`- ```\`) is deferred (caretInCode guard)
-        // to fencedCodeEnterKeymap. Prec.high; returns false for every non-list
-        // caret so the default Enter still runs. One transaction → edit-sync path.
+        // to fencedCodeEnterKeymap. It ALSO defers every blockquote-involved caret
+        // (`- > q`, `> - x`) to the upstream handler, which preserves the `>`
+        // context. Prec.highest; returns false for every non-owned caret so the
+        // fence handler / upstream markup / default Enter still run. One
+        // transaction → edit-sync path.
         listContinuationKeymap(),
         // Mod-l toggles the GFM task-list checkbox on the caret's line — the
         // keyboard path for the checkbox, which the inline Decoration.replace
@@ -637,9 +653,11 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
         // Enter on an unclosed ```-fence opener auto-inserts a matching closing
         // fence and lands the caret on the empty body line between the two, so a
         // fence typed mid-document no longer reflows every following line into
-        // code until EOF. Prec.high so it is tried before CM's default Enter; it
-        // returns false for every non-trigger (inline code / inside-block /
-        // already-closed) so the default newline still runs. One ordinary
+        // code until EOF. Prec.highest (see the precedence story above) so it wins
+        // over the upstream markup Enter even when the caret sits on a `> ` / list
+        // prefix before the fence (where upstream would otherwise continue the
+        // markup); it returns false for every non-trigger (inline code / inside-block
+        // / already-closed) so the default newline still runs. One ordinary
         // transaction → normal edit-sync path, byte-identical round-trip.
         fencedCodeEnterKeymap(),
         // Register AFTER quollSyntaxReveal so the reveal decoration build
