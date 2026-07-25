@@ -17,29 +17,33 @@
 // span. It emits no URL-bearing node, so checkNode ignores a Highlight; and
 // because walkTreeForUnsafeUrl does a full DFS (cursor.next()), a Link/Image
 // nested inside a highlight is still reached and gated at its own node.
-// A single tree-cursor walk gates every URL-emitting node through
-// decodeMarkdownDestination + isAllowedUrl:
-//   - Link / Image with a URL child (inline form).
-//   - Autolink.
-//   - LinkReference (definition block) - EVERY definition, including
-//     shadowed dupes, because all the bytes land on disk regardless of
-//     CommonMark's first-wins resolver semantics.
+// A single tree-cursor walk gates EVERY `URL` node through
+// decodeMarkdownDestination + isAllowedUrl. Every link destination the GFM
+// grammar recognizes is a `URL` node, so this one arm covers them all:
+//   - The URL child of an inline Link / Image `(url)`.
+//   - The URL child of an Autolink `<scheme:…>`.
+//   - The URL child of a LinkReference definition block — EVERY definition,
+//     including shadowed dupes, because all the bytes land on disk regardless
+//     of CommonMark's first-wins resolver semantics.
+//   - A GFM bare-URL autolink (`www.…` / `http(s)://…` / email `<word>@…` /
+//     `mailto:…` / `xmpp:…` written WITHOUT angle brackets), which parses as a
+//     bare `URL` node under whatever inline context it appears in (Paragraph,
+//     heading, emphasis, table cell, …) — NOT an Autolink node. Gating the
+//     `URL` node itself (not a fixed list of parent node names) closes the
+//     bare-autolink hole regardless of that parent: GFM bare-autolinks
+//     `xmpp:` too, which is OUTSIDE the allowlist, so a bare `xmpp:` autolink
+//     must be rejected just like its angle-bracket form `<xmpp:…>`, no matter
+//     which inline context it's nested in. The upstream bare-autolink scheme
+//     set is pinned by a tripwire test so a future @lezer/markdown widening
+//     surfaces loudly instead of silently widening this gate hole.
 //
 // Reference USE-SITES (shortcut / collapsed / full / image-reference)
-// are intentionally NOT resolved: their destination is the URL of the
-// definition they point at, which the walker already gates. Skipping
-// the resolver removes label normalization, an empirical-Lezer-shape
-// verification step, and a class of vacuous tests.
-//
-// GFM bare-URL autolinks (`www.…` / `http://…` WITHOUT angle brackets)
-// parse as a bare URL node directly under Paragraph — NOT an Autolink
-// node — so they fall outside the four arms above by design, and this is
-// safe rather than a gap: GFM only bare-autolinks http / https / www /
-// mailto (all allowlist-permitted) schemes, so a dangerous scheme like
-// `javascript:` is never lifted into a link node to begin with. Angle-
-// bracket autolinks `<scheme:…>` DO produce Autolink(URL) and are gated
-// by the second arm. (Identical in both the old @codemirror/lang-markdown
-// parser and this pure-@lezer/markdown one — GFM was always present.)
+// are intentionally NOT resolved: they emit no `URL` node — their destination
+// is the URL of the definition they point at, which the walker already gates.
+// Skipping the resolver removes label normalization, an empirical-Lezer-shape
+// verification step, and a class of vacuous tests. (URL-node gating is
+// identical in both the old @codemirror/lang-markdown parser and this
+// pure-@lezer/markdown one — GFM was always present.)
 //
 // Decoder order (decodeBackslashEscapes -> decodeCharacterReferences)
 // matches CommonMark's definition sequence (escape first, then char-ref).
@@ -229,27 +233,27 @@ export function createIncrementalUnsafeUrlFinder(
 }
 
 function checkNode(node: SyntaxNode, content: string): MarkdownError | null {
-  // The three URL-emitting node arms - Autolink, inline Link/Image with
-  // a URL child, and LinkReference definition. Reference use-sites
-  // (Link/Image without a URL child) are deliberately ignored: their
-  // destination lives on the definition, already gated by the third
-  // arm.
-  if (
-    node.name !== "Autolink" &&
-    node.name !== "Link" &&
-    node.name !== "Image" &&
-    node.name !== "LinkReference"
-  ) {
+  // Gate EVERY `URL` node in the tree. Every link destination the GFM grammar
+  // recognizes is a `URL` node: the destination child of an inline Link /
+  // Image `(url)`, of an Autolink `<url>`, and of a LinkReference definition,
+  // AND a GFM bare autolink — `www.` / `http(s)://` / email `<word>@` /
+  // `mailto:` / `xmpp:` written without angle brackets — which parses as a
+  // bare `URL` node under whatever inline context it appears in (Paragraph,
+  // heading, emphasis, table cell, …). Validating the `URL` node itself (not
+  // its parent) gates all of them uniformly regardless of that parent.
+  // Reference USE-SITES (`[a][b]`, shortcut `[a]`) emit no `URL` node and are
+  // gated indirectly at their definition. Title text is a separate
+  // `LinkTitle` node, never a `URL`.
+  //
+  // Fail-closed by construction: any future URL-emitting node the grammar adds
+  // is covered as long as its destination is a `URL` node — no per-node-name
+  // arm to keep in sync with upstream. The upstream bare-autolink scheme set is
+  // pinned by a tripwire test (test/markdown/lezer-url-walker.test.ts) so a
+  // widening surfaces loudly for a write-gate ↔ render-gate lockstep re-check.
+  if (node.name !== "URL") {
     return null;
   }
-  const urlNode = findChild(node, "URL");
-  if (!urlNode) {
-    // Reference use-site or definition with no URL child: nothing to
-    // gate at this node. The other definition arms still gate the
-    // actual URL where it lives.
-    return null;
-  }
-  const decoded = decodeMarkdownDestination(content.slice(urlNode.from, urlNode.to));
+  const decoded = decodeMarkdownDestination(content.slice(node.from, node.to));
   if (!isAllowedUrl(decoded)) {
     return unsafeUrlError(decoded);
   }
@@ -257,17 +261,6 @@ function checkNode(node: SyntaxNode, content: string): MarkdownError | null {
 }
 
 // ---- helpers ----------------------------------------------------------------
-
-function findChild(node: SyntaxNode, name: string): SyntaxNode | null {
-  let child = node.firstChild;
-  while (child) {
-    if (child.name === name) {
-      return child;
-    }
-    child = child.nextSibling;
-  }
-  return null;
-}
 
 // decodeMarkdownDestination + its private helpers (decodeBackslashEscapes,
 // decodeCharacterReferences, decodableCodePoint, NAMED_ENTITIES,

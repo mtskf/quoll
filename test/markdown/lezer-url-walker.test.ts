@@ -72,6 +72,86 @@ describe("lezer-url-walker: findUnsafeUrl", () => {
     expect(err?.code).toBe("unsafe_url");
   });
 
+  // ---- GFM bare autolinks (a `URL` node directly under Paragraph) ----
+  // GFM lifts `www.` / `http(s)://` / email `<word>@` / `mailto:` / `xmpp:`
+  // written WITHOUT angle brackets into a bare `URL` node directly under
+  // Paragraph — NOT an Autolink node. `xmpp:` is the one bare-autolinked
+  // scheme OUTSIDE the allowlist, so a bare `xmpp:` autolink must be gated
+  // exactly like its angle-bracket form. Regression: the walker used to gate
+  // only Autolink/Link/Image/LinkReference nodes and let bare `URL` nodes
+  // (parented directly by Paragraph) reach disk unchecked.
+
+  it("rejects a bare (non-angle-bracket) xmpp: autolink", () => {
+    expect(findUnsafeUrl("Contact me at xmpp:user@evil.example/resource\n")?.code).toBe(
+      "unsafe_url"
+    );
+  });
+
+  it("gates a bare xmpp: autolink identically to its angle-bracket form", () => {
+    expect(findUnsafeUrl("Contact me at xmpp:user@evil.example/resource\n")?.code).toBe(
+      findUnsafeUrl("Contact me at <xmpp:user@evil.example/resource>\n")?.code
+    );
+  });
+
+  it("accepts allowlisted bare autolinks (https / www / mailto / bare email)", () => {
+    expect(findUnsafeUrl("Visit https://good.example now\n")).toBeNull();
+    expect(findUnsafeUrl("Visit www.good.example now\n")).toBeNull();
+    expect(findUnsafeUrl("Mail me at mailto:hi@good.example now\n")).toBeNull();
+    expect(findUnsafeUrl("Mail me at hi@good.example now\n")).toBeNull();
+  });
+
+  // Regression: the bare-autolink `URL` node's immediate parent is whatever
+  // inline context it's nested in — NOT always Paragraph (a heading's `URL`
+  // sits directly under ATXHeading1, a table cell's under TableCell, etc.).
+  // checkNode gates on `node.name === "URL"` with no parent check, so this
+  // already works, but pin it: a future regression that re-adds a
+  // parent-name check (e.g. "only gate `URL` under Paragraph") would silently
+  // reopen the bare-autolink hole for every non-Paragraph context.
+  it("rejects a bare xmpp: autolink nested in a heading", () => {
+    expect(findUnsafeUrl("# Contact xmpp:user@evil.example\n")?.code).toBe("unsafe_url");
+  });
+
+  it("rejects a bare xmpp: autolink nested in a table cell", () => {
+    expect(findUnsafeUrl("| h |\n| - |\n| xmpp:user@evil.example |\n")?.code).toBe("unsafe_url");
+  });
+
+  it("rejects a bare xmpp: autolink nested in emphasis / list-item / blockquote", () => {
+    expect(findUnsafeUrl("*xmpp:user@evil.example*\n")?.code).toBe("unsafe_url");
+    expect(findUnsafeUrl("- xmpp:user@evil.example\n")?.code).toBe("unsafe_url");
+    expect(findUnsafeUrl("> xmpp:user@evil.example\n")?.code).toBe("unsafe_url");
+  });
+
+  // Tripwire on the UPSTREAM @lezer/markdown bare-autolink scheme set. The
+  // walker now gates EVERY `URL` node, so a future upstream widening is
+  // covered automatically — but this pins the CURRENT set so such a change
+  // surfaces loudly here (prompting a re-read of this module + the render
+  // side) instead of drifting silently. If it fails after a dependency bump,
+  // that is expected: verify the write-gate ↔ render-gate lockstep still holds.
+  it("pins the upstream GFM bare-autolink scheme set", () => {
+    const bareAutolinks = (src: string): boolean => {
+      let found = false;
+      const cursor = parseMarkdown(src).cursor();
+      do {
+        if (cursor.name === "URL" && cursor.node.parent?.name === "Paragraph") {
+          found = true;
+        }
+      } while (cursor.next());
+      return found;
+    };
+    // Schemes GFM DOES bare-autolink today (all lifted to a bare URL node):
+    expect(bareAutolinks("x www.a.example y")).toBe(true);
+    expect(bareAutolinks("x http://a.example y")).toBe(true);
+    expect(bareAutolinks("x https://a.example y")).toBe(true);
+    expect(bareAutolinks("x mailto:a@b.example y")).toBe(true);
+    expect(bareAutolinks("x xmpp:a@b.example y")).toBe(true);
+    expect(bareAutolinks("x a@b.example y")).toBe(true); // bare email
+    // Schemes GFM does NOT bare-autolink (stay plain text, emit no URL node):
+    expect(bareAutolinks("x tel:+15551234 y")).toBe(false);
+    expect(bareAutolinks("x javascript:alert(1) y")).toBe(false);
+    expect(bareAutolinks("x ftp://a.example y")).toBe(false);
+    expect(bareAutolinks("x data:text/plain,hi y")).toBe(false);
+  });
+
   it("catches a URL inside a table cell", () => {
     const src = "| h |\n| - |\n| [t](javascript:alert(1)) |\n";
     expect(findUnsafeUrl(src)?.code).toBe("unsafe_url");
