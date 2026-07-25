@@ -1,4 +1,5 @@
 // @vitest-environment happy-dom
+import { markdown } from "@codemirror/lang-markdown";
 import { EditorState } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import { describe, expect, it } from "vitest";
@@ -9,6 +10,22 @@ function mount(doc: string, canWrite = true) {
     state: EditorState.create({
       doc,
       extensions: [EditorState.readOnly.of(!canWrite), richHtmlPaste({ canWrite: () => canWrite })],
+    }),
+  });
+}
+
+// The in-code guard needs a real Lezer tree to resolve the FencedCode node, so
+// this variant loads the Markdown language. Kept separate from `mount` so the
+// unrelated conversion tests stay language-free (matching the original file).
+function mountMd(doc: string, canWrite = true) {
+  return new EditorView({
+    state: EditorState.create({
+      doc,
+      extensions: [
+        markdown(),
+        EditorState.readOnly.of(!canWrite),
+        richHtmlPaste({ canWrite: () => canWrite }),
+      ],
     }),
   });
 }
@@ -78,6 +95,33 @@ describe("richHtmlPaste — handler", () => {
     const event = firePaste(view, { html: "<p>hi</p>", text: "hi" });
     expect(event.defaultPrevented).toBe(true);
     expect(view.state.doc.toString()).toBe("");
+    view.destroy();
+  });
+
+  it("defers to plain-text paste when the caret is inside a fenced code block", () => {
+    // A <pre>-bearing fragment converts to a ``` fenced snippet whose delimiters
+    // would prematurely close the surrounding fence. The guard must defer (return
+    // false, NO preventDefault) so CM's core plain-text paste inserts the raw
+    // text/plain verbatim and the outer fence stays intact. defaultPrevented is
+    // an UNRELIABLE defer signal here (CM core runs and calls preventDefault
+    // itself — repo convention, see cm-list-reindent-paste.test.ts), so the
+    // contract is asserted on CONTENT: the raw text lands, no fence is injected.
+    const view = mountMd("```\n\n```");
+    view.dispatch({ selection: { anchor: 4 } }); // inside the fence (blank interior line)
+    firePaste(view, { html: "<pre>code</pre>", text: "code" });
+    // Plain "code" lands verbatim; no extra ``` fence lines from the conversion.
+    expect(view.state.doc.toString()).toBe("```\ncode\n```");
+    view.destroy();
+  });
+
+  it("still converts a rich fragment when the caret is outside any code block", () => {
+    // Same markdown-aware mount, but the caret sits in prose: rich conversion is
+    // unchanged (guard is a no-op outside code).
+    const view = mountMd("intro\n\n");
+    view.dispatch({ selection: { anchor: view.state.doc.length } });
+    const event = firePaste(view, { html: "<h1>Title</h1>", text: "Title" });
+    expect(event.defaultPrevented).toBe(true);
+    expect(view.state.doc.toString()).toBe("intro\n\n# Title\n");
     view.destroy();
   });
 });

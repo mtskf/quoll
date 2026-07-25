@@ -10,6 +10,7 @@
 import { type Extension, Prec } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 
+import { caretInCode } from "../list/list-tree.js";
 import { htmlToMarkdown } from "./html-to-markdown.js";
 
 function blockPrefix(before: string): string {
@@ -40,6 +41,14 @@ export function richHtmlPaste(opts: { canWrite: () => boolean }): Extension {
         const md = htmlToMarkdown(html);
         if (md === null) {
           return false; // nothing convertible / cap breached → defer to plain paste
+        }
+        // Caret inside a fenced / indented code block: a converted fragment can
+        // carry ``` fence lines (e.g. from <pre>) that would prematurely close
+        // the surrounding fence — structural corruption. Defer to plain-text
+        // paste (mirrors listReindentPaste's caretInCode guard) so the raw text
+        // lands verbatim inside the code block, fence intact.
+        if (caretInCode(view.state, view.state.selection.main.from)) {
+          return false;
         }
         event.preventDefault();
         if (!opts.canWrite()) {
