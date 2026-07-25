@@ -76,7 +76,7 @@ describe("lezer-url-walker: findUnsafeUrl", () => {
   // GFM lifts `www.` / `http(s)://` / email `<word>@` / `mailto:` / `xmpp:`
   // written WITHOUT angle brackets into a bare `URL` node — NOT an Autolink
   // node. The URL node's immediate parent depends on the inline context it's
-  // nested in (see the parent breakdown ~25 lines below); the tests directly
+  // nested in (see the parent breakdown further down in this block); the tests directly
   // below use a top-level paragraph, where it's Paragraph. `xmpp:` is the one
   // bare-autolinked scheme OUTSIDE the allowlist, so a bare `xmpp:` autolink
   // must be gated exactly like its angle-bracket form. Regression: the
