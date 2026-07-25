@@ -72,14 +72,16 @@ describe("lezer-url-walker: findUnsafeUrl", () => {
     expect(err?.code).toBe("unsafe_url");
   });
 
-  // ---- GFM bare autolinks (a `URL` node directly under Paragraph) ----
+  // ---- GFM bare autolinks (emitted as a `URL` node, NOT an Autolink) ----
   // GFM lifts `www.` / `http(s)://` / email `<word>@` / `mailto:` / `xmpp:`
-  // written WITHOUT angle brackets into a bare `URL` node directly under
-  // Paragraph — NOT an Autolink node. `xmpp:` is the one bare-autolinked
-  // scheme OUTSIDE the allowlist, so a bare `xmpp:` autolink must be gated
-  // exactly like its angle-bracket form. Regression: the walker used to gate
-  // only Autolink/Link/Image/LinkReference nodes and let bare `URL` nodes
-  // (parented directly by Paragraph) reach disk unchecked.
+  // written WITHOUT angle brackets into a bare `URL` node — NOT an Autolink
+  // node. The URL node's immediate parent depends on the inline context it's
+  // nested in (see the parent breakdown ~25 lines below); the tests directly
+  // below use a top-level paragraph, where it's Paragraph. `xmpp:` is the one
+  // bare-autolinked scheme OUTSIDE the allowlist, so a bare `xmpp:` autolink
+  // must be gated exactly like its angle-bracket form. Regression: the
+  // walker used to gate only Autolink/Link/Image/LinkReference nodes and let
+  // bare `URL` nodes reach disk unchecked.
 
   it("rejects a bare (non-angle-bracket) xmpp: autolink", () => {
     expect(findUnsafeUrl("Contact me at xmpp:user@evil.example/resource\n")?.code).toBe(
@@ -101,12 +103,17 @@ describe("lezer-url-walker: findUnsafeUrl", () => {
   });
 
   // Regression: the bare-autolink `URL` node's immediate parent is whatever
-  // inline context it's nested in — NOT always Paragraph (a heading's `URL`
-  // sits directly under ATXHeading1, a table cell's under TableCell, etc.).
-  // checkNode gates on `node.name === "URL"` with no parent check, so this
-  // already works, but pin it: a future regression that re-adds a
-  // parent-name check (e.g. "only gate `URL` under Paragraph") would silently
-  // reopen the bare-autolink hole for every non-Paragraph context.
+  // inline context it's nested in — NOT always Paragraph. A heading's `URL`
+  // sits directly under ATXHeading1, a table cell's under TableCell, and
+  // emphasis's under Emphasis. (List-item and blockquote keep Paragraph as
+  // the immediate parent — they just nest the Paragraph one level deeper,
+  // under ListItem/Blockquote — so they don't exercise a non-Paragraph
+  // parent, but are pinned below anyway since checkNode gates all of them
+  // identically.) checkNode gates on `node.name === "URL"` with no parent
+  // check, so this already works, but pin it: a future regression that
+  // re-adds a parent-name check (e.g. "only gate `URL` under Paragraph")
+  // would silently reopen the bare-autolink hole for every non-Paragraph
+  // context.
   it("rejects a bare xmpp: autolink nested in a heading", () => {
     expect(findUnsafeUrl("# Contact xmpp:user@evil.example\n")?.code).toBe("unsafe_url");
   });
@@ -115,7 +122,7 @@ describe("lezer-url-walker: findUnsafeUrl", () => {
     expect(findUnsafeUrl("| h |\n| - |\n| xmpp:user@evil.example |\n")?.code).toBe("unsafe_url");
   });
 
-  it("rejects a bare xmpp: autolink nested in emphasis / list-item / blockquote", () => {
+  it("rejects a bare xmpp: autolink nested in emphasis, list-item, or blockquote", () => {
     expect(findUnsafeUrl("*xmpp:user@evil.example*\n")?.code).toBe("unsafe_url");
     expect(findUnsafeUrl("- xmpp:user@evil.example\n")?.code).toBe("unsafe_url");
     expect(findUnsafeUrl("> xmpp:user@evil.example\n")?.code).toBe("unsafe_url");
