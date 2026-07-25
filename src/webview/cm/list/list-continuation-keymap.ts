@@ -14,6 +14,11 @@
 //   - a non-list caret, or a caret inside a FencedCode / CodeBlock — including a
 //     fence opener ON the marker line (`- ```\`, or Blockquote-wrapped `- > ``` `),
 //     which fencedCodeEnterKeymap owns (caretInCode resolves AT the caret);
+//   - a blockquote nested in the item (`- > quote`), which the upstream
+//     markdownKeymap handler owns — it preserves the `>` context (caretInBlockquote
+//     resolves AT the caret). Deferring keeps the Prec.highest promotion from
+//     stealing blockquote Enter (see the factory note; a list nested in a quote
+//     `> - x` already defers earlier via listItemAt's `>`-column probe);
 //   - a caret not on the item's marker line (a wrapped / loose body line);
 //   - a caret BEFORE the continuable content (the indent / marker / checkbox
 //     region, e.g. `1|. a` or `- [|x] a`) — never split the marker.
@@ -35,8 +40,15 @@ import {
   isEmptyItem,
   parseListMark,
   renumberRun,
+  warnBudgetMiss,
 } from "./list-transform.js";
-import { caretInCode, listItemAt, listMarkOf, type SyntaxNode } from "./list-tree.js";
+import {
+  caretInBlockquote,
+  caretInCode,
+  listItemAt,
+  listMarkOf,
+  type SyntaxNode,
+} from "./list-tree.js";
 
 /** Re-resolve `item` from an EOF-bounded tree: `listItemAt`'s caret-line-bounded
  *  tree does not contain the siblings below the caret, which `renumberRun`
@@ -48,6 +60,10 @@ import { caretInCode, listItemAt, listMarkOf, type SyntaxNode } from "./list-tre
 function resolveAtEof(state: EditorState, markFrom: number): SyntaxNode | null {
   const tree = ensureSyntaxTree(state, state.doc.length, 50);
   if (tree === null) {
+    // Dev-only signal (QUOLL_PERF-gated, prod byte-identical): a budget miss on a
+    // large doc is a retryable no-op, not "nothing to renumber" — mirrors the same
+    // warning on the sibling resolveItemAtEof in list-transform.ts.
+    warnBudgetMiss("resolveAtEof", state);
     return null;
   }
   let item: SyntaxNode | null = tree.resolveInner(markFrom, 1);
@@ -90,6 +106,17 @@ export const continueListOnEnter: Command = (view) => {
   // to the ListItem via the marker probe; fencedCodeEnterKeymap owns it. Resolve
   // AT the caret (catches the blockquote-wrapped case a content-name check misses).
   if (caretInCode(state, head)) {
+    return false;
+  }
+  // A blockquote nested in THIS item (`- > quote`) is the upstream markup handler's
+  // domain — defer so it continues the quote (`- > q\n  > `) instead of Quoll
+  // splitting into a sibling list marker (`- > q\n- `, dropping the quote). This is
+  // the case the Prec.highest promotion would otherwise steal (regression caught in
+  // review). The opposite nesting (a list INSIDE a blockquote, `> - x`) already
+  // defers earlier: listItemAt's marker-column probe lands on the `>` QuoteMark and
+  // returns null. This guard covers it too as belt-and-suspenders, keeping upstream
+  // the sole owner of all blockquote continuation per the documented fallback contract.
+  if (caretInBlockquote(state, head)) {
     return false;
   }
   const ordered = item.parent?.name === "OrderedList";
@@ -159,11 +186,12 @@ export const continueListOnEnter: Command = (view) => {
  *  upstream shadowed this handler in list contexts — it returns true for
  *  bullet/ordered items, so Quoll's marker/renumber/exit semantics never ran
  *  (visible for non-sequential ordered runs, whose renumber upstream omits).
- *  Raising to `Prec.highest` makes Quoll own list-item Enter; upstream stays the
- *  blockquote-continuation (and Backspace `deleteMarkupBackward`) fallback for the
- *  carets this returns false on. Registered before fencedCodeEnterKeymap (also
- *  `Prec.highest`) so a fence opener on a marker line (`- ```) defers here
- *  (caretInCode) and the fence handler wins. Pinned by cm-enter-precedence.test.ts. */
+ *  Raising to `Prec.highest` makes Quoll own PLAIN list-item Enter, but the
+ *  command still DEFERS (returns false) for blockquote-involved carets so upstream
+ *  keeps all blockquote continuation, and for a fence opener on a marker line so
+ *  fencedCodeEnterKeymap (Prec.high) wins — upstream is the blockquote /
+ *  fence-untouched / Backspace `deleteMarkupBackward` fallback. Pinned by
+ *  cm-enter-precedence.test.ts. */
 export function listContinuationKeymap() {
   return Prec.highest(keymap.of([{ key: "Enter", run: continueListOnEnter }]));
 }

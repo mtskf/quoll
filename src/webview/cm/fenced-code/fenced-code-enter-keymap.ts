@@ -131,12 +131,15 @@ export const autoCloseFenceOnEnter: Command = (view) => {
   return true;
 };
 
-/** Keymap: Enter → auto-close an unclosed fence opener. `Prec.highest` (matching
- *  listContinuationKeymap) so it wins over the upstream `markdownKeymap` Enter,
- *  which quollMarkdownLanguage mounts at the lower `Prec.high`; it returns false
- *  for every non-trigger so the default newline — and, for a caret the upstream
- *  markup handler continues, that handler at `Prec.high` — still runs. Pinned by
- *  cm-enter-precedence.test.ts. */
+/** Keymap: Enter → auto-close an unclosed fence opener. `Prec.high` so it is tried
+ *  before CodeMirror's default Enter; it returns false for every non-trigger so
+ *  the default still runs. No promotion over the upstream `markdownKeymap` Enter is
+ *  needed: upstream `insertNewlineContinueMarkup` bails to an empty context the
+ *  moment its ancestry walk hits a FencedCode, so it never claims a fence opener —
+ *  the shadowing this PR fixes was list-only (see listContinuationKeymap). On a
+ *  fence opener that sits on a list-marker line (`- ```), listContinuationKeymap
+ *  (Prec.highest) defers via caretInCode and upstream returns false, so this
+ *  handler still wins. Pinned by cm-enter-precedence.test.ts. */
 export function fencedCodeEnterKeymap() {
-  return Prec.highest(keymap.of([{ key: "Enter", run: autoCloseFenceOnEnter }]));
+  return Prec.high(keymap.of([{ key: "Enter", run: autoCloseFenceOnEnter }]));
 }
