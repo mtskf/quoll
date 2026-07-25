@@ -124,4 +124,65 @@ describe("richHtmlPaste — handler", () => {
     expect(view.state.doc.toString()).toBe("intro\n\n# Title\n");
     view.destroy();
   });
+
+  it("defers to plain-text paste when the caret is inside an indented code block", () => {
+    // caretInCode covers CodeBlock (4-space indented), not just FencedCode. A
+    // converted fragment's blockPrefix/blockSuffix blank lines (or the inserted
+    // non-indented text itself) would terminate the indented block early.
+    const view = mountMd("para\n\n    foo\n");
+    view.dispatch({ selection: { anchor: 11 } }); // inside "foo", after the "f"
+    firePaste(view, { html: "<h1>Title</h1>", text: "Title" });
+    expect(view.state.doc.toString()).toBe("para\n\n    fTitleoo\n");
+    view.destroy();
+  });
+
+  it("defers when the caret sits on the fence-opener line itself (left-bias boundary)", () => {
+    // caretInCode resolves with -1 bias, so a caret immediately after the
+    // opening ``` (still on that line) resolves into the FencedCode node.
+    const view = mountMd("```\n\n```");
+    view.dispatch({ selection: { anchor: 3 } }); // right after the opening ```
+    firePaste(view, { html: "<h1>Title</h1>", text: "Title" });
+    expect(view.state.doc.toString()).toBe("```Title\n\n```");
+    view.destroy();
+  });
+
+  it("still converts a rich fragment when the caret is inside an inline code span (out of guard scope)", () => {
+    // caretInCode only walks FencedCode / CodeBlock ancestry — inline code spans
+    // are a different Lezer node and are NOT covered. This pins the current
+    // scope: if caretInCode is ever widened to include inline code, this test
+    // will visibly change (doc would stop showing a converted fragment here).
+    const view = mountMd("para `foo` more");
+    view.dispatch({ selection: { anchor: 7 } }); // inside `foo`, after the "f"
+    const event = firePaste(view, { html: "<h1>Title</h1>", text: "Title" });
+    expect(event.defaultPrevented).toBe(true);
+    expect(view.state.doc.toString()).toBe("para `f\n\n# Title\n\noo` more");
+    view.destroy();
+  });
+
+  it("defers a selection that starts in prose and extends into a fenced code block", () => {
+    // A non-empty selection whose `from` sits in plain prose but whose `to`
+    // crosses into code must still defer — checking `from` alone would miss it
+    // and let a <pre>-bearing fragment inject a stray ``` inside the fence.
+    const view = mountMd("before\n\n```\n\n```");
+    view.dispatch({ selection: { anchor: 3, head: 11 } }); // "bef|ore\n\n```|\n\n```"
+    firePaste(view, { html: "<pre>x</pre>", text: "XX" });
+    // Selection is replaced by the plain-text fallback; no extra ``` from the
+    // <pre> conversion, and the untouched closing fence survives intact.
+    expect(view.state.doc.toString()).toBe("befXX\n\n```");
+    view.destroy();
+  });
+
+  it("consumes an HTML-only paste touching code without deleting the selection", () => {
+    // With no text/plain or text/uri-list fallback, deferring (return false)
+    // would let CM's core paste run doPaste(view, "") — which replaces the
+    // selection with nothing, deleting the selected code. The guard must
+    // instead consume the event itself (preventDefault + return true) and
+    // leave the document untouched.
+    const view = mountMd("```\nfoo\n```");
+    view.dispatch({ selection: { anchor: 4, head: 7 } }); // selects "foo"
+    const event = firePaste(view, { html: "<h1>Title</h1>" }); // no text key at all
+    expect(event.defaultPrevented).toBe(true);
+    expect(view.state.doc.toString()).toBe("```\nfoo\n```");
+    view.destroy();
+  });
 });

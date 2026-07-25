@@ -42,19 +42,34 @@ export function richHtmlPaste(opts: { canWrite: () => boolean }): Extension {
         if (md === null) {
           return false; // nothing convertible / cap breached → defer to plain paste
         }
-        // Caret inside a fenced / indented code block: a converted fragment can
-        // carry ``` fence lines (e.g. from <pre>) that would prematurely close
-        // the surrounding fence — structural corruption. Defer to plain-text
-        // paste (mirrors listReindentPaste's caretInCode guard) so the raw text
-        // lands verbatim inside the code block, fence intact.
-        if (caretInCode(view.state, view.state.selection.main.from)) {
-          return false;
+        const { from, to } = view.state.selection.main;
+        // Caret / selection touching a fenced or indented code block: a converted
+        // fragment can corrupt either kind — a <pre> becomes a ``` fenced snippet whose
+        // delimiters would prematurely close a surrounding *fence*, while inside an
+        // *indented* (4-space) block the blockPrefix/blockSuffix blank-line separators
+        // (and any non-indented inserted line) would terminate the block early. Check
+        // BOTH endpoints so a selection that starts in prose and extends into code (or
+        // vice versa) also defers, not just an empty caret. Mirrors listReindentPaste's
+        // caretInCode guard.
+        if (caretInCode(view.state, from) || caretInCode(view.state, to)) {
+          // Defer to plain-text paste so the raw text lands verbatim, structure intact.
+          // Only defer when a plain-text/uri fallback exists: CM's core paste falls back
+          // to getData("text/plain") || getData("text/uri-list"), and doPaste("") would
+          // replace a non-empty selection with nothing — deleting selected code. With an
+          // HTML-only clipboard, consume the event without converting or deleting.
+          const hasPlainFallback =
+            !!event.clipboardData?.getData("text/plain") ||
+            !!event.clipboardData?.getData("text/uri-list");
+          if (hasPlainFallback) {
+            return false;
+          }
+          event.preventDefault();
+          return true;
         }
         event.preventDefault();
         if (!opts.canWrite()) {
           return true; // read-only: swallow, no fallback insert (mirrors siblings)
         }
-        const { from, to } = view.state.selection.main;
         const before = view.state.doc.sliceString(0, from);
         const after = view.state.doc.sliceString(to);
         const insert = blockPrefix(before) + md + blockSuffix(after);
