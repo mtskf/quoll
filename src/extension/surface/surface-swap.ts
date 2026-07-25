@@ -150,7 +150,27 @@ const REAL_SWAP_DEPS: FinalizeSwapDeps = {
  *  e.g. a write-gate rejection that lands during those awaits, leaving the
  *  user's draft only in the source webview — pass this; it is re-checked
  *  SYNCHRONOUSLY immediately before the close (no await after it), so nothing
- *  can slip the condition past the check. A non-null return is the abort REASON:
+ *  can slip the condition past the check up to the point the close is
+ *  INITIATED.
+ *
+ *  Accepted residual boundary (teardown-atomicity, PR #256 residual): a
+ *  condition flipping DURING `await closeTab` — the sub-ms interval where the
+ *  webview is still live as the tab disposes — is NOT re-checked and is
+ *  deliberately out of scope. It is provably not a writable-content-loss window:
+ *  a VALID edit landing then is stashed under the write lock and drained onto
+ *  the live TextDocument on the post-dispose settlement (the freshly opened
+ *  target text editor keeps the doc alive — quoll-editor-panel `pendingEdit`
+ *  drain, pinned by `pending-edit-dispose-drain`), so nothing is lost; an
+ *  INVALID edit is unwritable by construction (the write-gate rejects it), so it
+ *  has no valid surface to be preserved to (the text editor only ever shows the
+ *  clean disk bytes). Fully closing this window would need an input-freeze/drain
+ *  handshake (stop webview edits → await ack + settle → final check → close) —
+ *  standing protocol surface not worth adding for a window with no
+ *  writable-content loss (KISS / protocol-minimization; NOT a No-dual-editor
+ *  concern — no second editor — but it would bloat the single protocol's
+ *  teardown face). Decision + safety-net reasoning: ARCHITECTURE.md §3 "Forward
+ *  swap の rejection-guard checkpoints と teardown-atomicity 境界" / LEARNING.md
+ *  2026-07-25. A non-null return is the abort REASON:
  *  finalizeSurfaceSwap ITSELF logs and shows it as a warning toast (the abort is
  *  user-visible by CONTRACT, not by caller courtesy — at check time the user's
  *  focus is on the freshly opened text tab, so a bare boolean + silent abort
@@ -217,7 +237,11 @@ export async function finalizeSurfaceSwap(
     // Point-of-no-return guard (see the doc comment): re-check the caller's
     // abort condition SYNCHRONOUSLY here — after the openDoc/save awaits AND the
     // reresolve, immediately before the irreversible close, with NO await
-    // following — so nothing can slip the condition past it. A non-null return
+    // following — so nothing can slip the condition past it before the close is
+    // INITIATED. A flip DURING `await closeTab` below is the accepted
+    // teardown-atomicity boundary (see the doc comment): not a
+    // writable-content-loss window, so it is deliberately not re-checked. A
+    // non-null return
     // is the abort REASON; we own the user-visible warning (a silent no-op reads
     // as a dead keybinding — same rule the save-failure branch above follows,
     // and the single refusal surface for every window this guard covers).

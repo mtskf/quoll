@@ -245,6 +245,39 @@ describe("finalizeSurfaceSwap shouldAbortClose (point-of-no-return guard)", () =
     expect(closeTab).toHaveBeenCalledWith(LIVE_TAB);
   });
 
+  it("does NOT re-check a condition that flips DURING closeTab (accepted teardown-atomicity boundary)", async () => {
+    // Contract for the documented residual boundary (PR #256 residual): the
+    // guard is the LAST synchronous gate before the close is INITIATED. A
+    // condition that flips true only DURING `await closeTab` — the sub-ms window
+    // where the webview is still live as the tab disposes — is deliberately NOT
+    // re-checked, so the close still commits. This is provably not a
+    // writable-content-loss window (a valid edit drains onto the live document
+    // post-dispose; an invalid edit is unwritable), so closing it would need an
+    // input-freeze/drain handshake we intentionally do not build. This test goes
+    // red if someone adds a naive post-close re-check that tries to "un-close".
+    let pending = false;
+    const doc = fakeDoc(false, true);
+    const closeTab = vi.fn(async () => {
+      // The rejection lands mid-close — exactly the accepted boundary.
+      pending = true;
+      return true;
+    });
+    const { deps } = makeDeps(doc, { closeTab });
+    const warn = vi.spyOn(window, "showWarningMessage");
+    try {
+      await finalizeSurfaceSwap(fileUri, SENTINEL_TAB, deps, () => (pending ? ABORT_REASON : null));
+      // The synchronous pre-close check saw pending=false → the close proceeded
+      // and committed; the during-close flip is out of scope by design.
+      expect(closeTab).toHaveBeenCalledWith(LIVE_TAB);
+      // And no spurious abort toast: a post-close re-check that treated the
+      // during-close flip as an abort would fire the warning here — this pins
+      // the boundary as accepted-silently, not accepted-then-warned.
+      expect(warn).not.toHaveBeenCalled();
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
   it("treats an EMPTY reason as a FAIL-SAFE abort (keeps both open, shows a fallback warning)", async () => {
     // A point-of-no-return data-loss guard must default to keeping both surfaces
     // open on ANY non-null return — never take the irreversible close because the
