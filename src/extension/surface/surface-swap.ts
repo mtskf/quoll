@@ -163,14 +163,21 @@ const REAL_SWAP_DEPS: FinalizeSwapDeps = {
  *  drain, pinned by `pending-edit-dispose-drain`), so nothing is lost; an
  *  INVALID edit is unwritable by construction (the write-gate rejects it), so it
  *  has no valid surface to be preserved to (the text editor only ever shows the
- *  clean disk bytes). Fully closing this window would need an input-freeze/drain
- *  handshake (stop webview edits → await ack + settle → final check → close) —
- *  standing protocol surface not worth adding for a window with no
- *  writable-content loss (KISS / protocol-minimization; NOT a No-dual-editor
- *  concern — no second editor — but it would bloat the single protocol's
- *  teardown face). Decision + safety-net reasoning: ARCHITECTURE.md §3 "Forward
- *  swap の rejection-guard checkpoints と teardown-atomicity 境界" / LEARNING.md
- *  2026-07-25. A non-null return is the abort REASON:
+ *  clean disk bytes). The rejection invariant's purpose is to keep that draft
+ *  MOUNTED in the webview so the user can fix it — but here the user has
+ *  DELIBERATELY initiated the switch away from that surface (openInTextEditor
+ *  steals focus before the close), and the only unpreserved bytes are a partial
+ *  invalid edit typed in the sub-ms window during their own teardown. Extending
+ *  the mounted-for-correction guarantee across a user-initiated teardown is
+ *  exactly what an input-freeze/drain handshake (stop webview edits → await ack
+ *  + settle → final check → close) would buy; that standing protocol surface is
+ *  not worth adding for a window with no writable-content loss (KISS /
+ *  protocol-minimization; NOT a No-dual-editor concern — no second editor — but
+ *  it would bloat the single protocol's teardown face). Considered and deferred,
+ *  not overlooked (PR #256 / #265 adversarial review re-raised it). Decision +
+ *  safety-net reasoning: ARCHITECTURE.md §3 "Forward swap の rejection-guard
+ *  checkpoints と teardown-atomicity 境界" / LEARNING.md 2026-07-25. A non-null
+ *  return is the abort REASON:
  *  finalizeSurfaceSwap ITSELF logs and shows it as a warning toast (the abort is
  *  user-visible by CONTRACT, not by caller courtesy — at check time the user's
  *  focus is on the freshly opened text tab, so a bare boolean + silent abort
