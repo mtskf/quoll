@@ -63,7 +63,7 @@ export function richHtmlPaste(opts: { canWrite: () => boolean }): Extension {
           if (hasPlainFallback) {
             return false;
           }
-          event.preventDefault(); // HTML-only in code: consume without converting or deleting
+          event.preventDefault();
           return true;
         }
         const md = htmlToMarkdown(html);
