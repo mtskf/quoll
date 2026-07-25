@@ -152,9 +152,18 @@ export const continueListOnEnter: Command = (view) => {
   return true;
 };
 
-/** Keymap: Enter → continue / exit a list item. Prec.high so it precedes the
- *  default Enter and the fenced-code Enter; returns false for every non-list
- *  caret so those still run. */
+/** Keymap: Enter → continue / exit a list item. `Prec.highest` so it wins over
+ *  the upstream `markdownKeymap` Enter (`insertNewlineContinueMarkup`, mounted at
+ *  `Prec.high` by quollMarkdownLanguage). Equal-precedence keymaps resolve in
+ *  registration order and the language mounts FIRST, so at a matching `Prec.high`
+ *  upstream shadowed this handler in list contexts — it returns true for
+ *  bullet/ordered items, so Quoll's marker/renumber/exit semantics never ran
+ *  (visible for non-sequential ordered runs, whose renumber upstream omits).
+ *  Raising to `Prec.highest` makes Quoll own list-item Enter; upstream stays the
+ *  blockquote-continuation (and Backspace `deleteMarkupBackward`) fallback for the
+ *  carets this returns false on. Registered before fencedCodeEnterKeymap (also
+ *  `Prec.highest`) so a fence opener on a marker line (`- ```) defers here
+ *  (caretInCode) and the fence handler wins. Pinned by cm-enter-precedence.test.ts. */
 export function listContinuationKeymap() {
-  return Prec.high(keymap.of([{ key: "Enter", run: continueListOnEnter }]));
+  return Prec.highest(keymap.of([{ key: "Enter", run: continueListOnEnter }]));
 }
