@@ -186,11 +186,21 @@ export function createRevertRescueWiring(deps: RevertRescueWiringDeps): RevertRe
           // Dispose path (isDisposed): log only — NO toast. Deliberate, and it is
           // NOT the silent-loss the failure family is: the apply DID land bytes
           // into a SURVIVING, on-screen, undoable text editor (the doc outlives
-          // the panel — that is the whole reason the rescue ran), so the state is
-          // visible + undoable per the dispose-guard philosophy. Only a restore
-          // that did NOT land (refused/threw → reverted disk bytes = real loss)
-          // toasts on dispose. Follow-up TODO tracks whether a dispose-path
-          // diverged should additionally warn.
+          // the panel — that is the whole reason the rescue ran, and decideOnDispose
+          // gates the rescue on hasSurvivingEditor), so the state is visible +
+          // undoable per the dispose-guard philosophy. Only a restore that did NOT
+          // land (refused/threw → reverted disk bytes = real loss) toasts on dispose.
+          //
+          // DECISION (Plan S6 review residual, PR #264 — Codex HIGH/97 and Fable
+          // both acknowledged as plan-conformant): a user-facing signal on this
+          // path is DELIBERATELY DECLINED, log-only is the accepted terminal state.
+          // The dominant diverged cause is a legitimate successor edit landing in
+          // the surviving editor between the RPC settling and this `.then`, so a
+          // toast/warning would false-alarm normal typing — and there is no
+          // recoverable loss it could avert: per plan I5 this layer is bounded
+          // post-hoc DETECTION + convergence, NOT prevention, and on dispose there
+          // is no webview left to converge. The revert-rescue-wiring dispose-path
+          // pin asserts this stays warn-only (no toast, no resync).
           console.warn(
             "[quoll] revert-rescue: restore diverged after apply (racing successor edit or stale-offset splice); converging via resync"
           );

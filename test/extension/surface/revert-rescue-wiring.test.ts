@@ -163,6 +163,40 @@ describe("createRevertRescueWiring — dispose rescue", () => {
     expect(t.dispatched).toEqual([]); // dispose path never reseeds
   });
 
+  // S6 (finding #8) review residual, PR #264: on the DISPOSE path a restore whose
+  // applyEdit resolved true but whose landed bytes DIVERGE (a legitimate successor
+  // edit won the apply→settle race, OR a stale-offset splice) is a RECORDED
+  // DECISION, not a residual — log-only, NO toast, NO resync. The bytes landed in
+  // a surviving, on-screen, undoable editor (decideOnDispose gated on
+  // hasSurvivingEditor), so this is not the silent-loss the failure family is, and
+  // a signal is deliberately declined to avoid false-alarming legitimate successor
+  // typing (there is no webview left to converge). This pins that stance.
+  it("dispose-path DIVERGED (applyEdit ok, doc holds other bytes) stays log-only — warns, NO toast, NO resync", async () => {
+    const t = wire();
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    t.doc.version = 7; // pre-apply version
+    // apply resolves true and ADVANCES the version to 8 but does NOT land the
+    // intended "DIRTY" bytes (doc.text stays "DISK") → post-apply verify reports
+    // diverged.
+    vi.spyOn(workspace, "applyEdit").mockImplementation(async () => {
+      t.doc.version = 8;
+      return true;
+    });
+    armRevert(t);
+
+    t.writeLock.held = false;
+    t.wiring.prepareDispose();
+    // Real ordering: the panel's `disposed` flag flips true BEFORE rescueOnDispose
+    // runs (quoll-editor-panel onDidDispose), so the diverged branch sees isDisposed.
+    t.disposedFlag.value = true;
+    t.wiring.rescueOnDispose();
+    await flush();
+
+    expect(warnSpy).toHaveBeenCalledOnce(); // diverged log fired
+    expect(t.showErrors).toEqual([]); // NO toast — an ok apply is not "save failed"
+    expect(t.dispatched).toEqual([]); // NO resync — disposed, no webview to converge
+  });
+
   it("skips loudly (no rescue) when rescueOnDispose is called WITHOUT prepareDispose (call-order guard)", async () => {
     const t = wire();
     const applySpy = vi.spyOn(workspace, "applyEdit");
