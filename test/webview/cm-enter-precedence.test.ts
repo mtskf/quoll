@@ -4,18 +4,18 @@
 // keymaps are composed with the upstream `markdownKeymap` — the exact contest
 // editor.ts sets up. quollMarkdownLanguage() mounts the upstream Enter
 // (`insertNewlineContinueMarkup`) at Prec.high; the language is registered FIRST,
-// so at equal precedence upstream shadowed Quoll's LIST continuation (equal-
-// precedence keymaps resolve in registration order). listContinuationKeymap is
-// therefore mounted at Prec.highest. fencedCodeEnterKeymap stays at Prec.high:
-// upstream bails on any FencedCode ancestry so it never claims a fence opener,
-// leaving nothing to shadow there.
+// so at equal precedence upstream shadowed BOTH Quoll handlers (equal-precedence
+// keymaps resolve in registration order): list continuation, and fence openers
+// whose caret sits on a `> `/list prefix (there the caret resolves to the wrapper,
+// not the FencedCode, so upstream continues the markup). Both are therefore mounted
+// at Prec.highest, list registered before fenced.
 //
-// Effective order (highest→lowest): list continuation [highest] → upstream markup
-// + fenced-code auto-close [both high] → CM default newline [default]. Each case
+// Effective order (highest→lowest): list continuation → fenced-code auto-close
+// [both highest] → upstream markup [high] → CM default newline [default]. Each case
 // below uses an input where Quoll and upstream produce DIFFERENT output, so it
-// genuinely pins WHO handled the Enter (not a byte-identical no-op). This suite
-// mirrors editor.ts's mount (same factories, same order) so it pins the real
-// behaviour, not a reconstruction.
+// genuinely pins WHO handled the Enter (not a byte-identical no-op) — reverting
+// either keymap to Prec.high turns a case red. This suite mirrors editor.ts's mount
+// (same factories, same order) so it pins the real behaviour, not a reconstruction.
 
 import { defaultKeymap } from "@codemirror/commands";
 import { forceParsing } from "@codemirror/language";
@@ -32,7 +32,7 @@ import { quollMarkdownLanguage } from "../../src/webview/cm/markdown.js";
 
 /** Mount the same Enter-relevant extension slice editor.ts composes, in the same
  *  order: language (carries upstream markdownKeymap @ Prec.high) → Quoll list
- *  Enter @ Prec.highest → Quoll fenced Enter @ Prec.high → CM default newline. */
+ *  Enter @ Prec.highest → Quoll fenced Enter @ Prec.highest → CM default newline. */
 function mount(doc: string, caret: number): EditorView {
   const parent = document.createElement("div");
   document.body.appendChild(parent);
@@ -145,6 +145,35 @@ describe("Enter precedence — Quoll list continuation vs upstream markdownKeyma
     // runs instead of a list continuation — pins the list→fence ordering. A list
     // continuation would have produced "- ```js\n- ".
     const view = mount("- ```js", "- ```js".length);
+    try {
+      expect(pressEnter(view)).toBe(true);
+      expect(view.state.doc.toString()).toBe("- ```js\n  \n  ```");
+    } finally {
+      view.destroy();
+    }
+  });
+
+  it("prefixed fence opener, caret on the blockquote prefix: fenced still wins", () => {
+    // `> ```js` with the caret on the `> ` prefix (before the backticks). The caret
+    // resolves to the Blockquote, NOT the FencedCode, so upstream returns true and
+    // would grab this Enter at an equal Prec.high (leaving the fence unclosed:
+    // ">\n>  ```js"). fencedCodeEnterKeymap's Prec.highest is what wins here — this
+    // is the case that makes that promotion falsifiable (red at Prec.high).
+    const view = mount("> ```js", 1); // caret between `>` and the space
+    try {
+      expect(pressEnter(view)).toBe(true);
+      expect(view.state.doc.toString()).toBe("> ```js\n> \n> ```");
+    } finally {
+      view.destroy();
+    }
+  });
+
+  it("prefixed fence opener, caret on the list-marker prefix: fenced still wins", () => {
+    // `- ```js` with the caret on the `- ` marker. continueListOnEnter defers (caret
+    // before the item's content), and fenced auto-close (Prec.highest) wins over the
+    // upstream markup Enter. At Prec.high the list marker would continue instead:
+    // "-\n-  ```js".
+    const view = mount("- ```js", 1); // caret between `-` and the space
     try {
       expect(pressEnter(view)).toBe(true);
       expect(view.state.doc.toString()).toBe("- ```js\n  \n  ```");

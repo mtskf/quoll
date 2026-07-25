@@ -189,8 +189,8 @@ export const continueListOnEnter: Command = (view) => {
  *  Raising to `Prec.highest` makes Quoll own PLAIN list-item Enter, but the
  *  command still DEFERS (returns false) for blockquote-involved carets so upstream
  *  keeps all blockquote continuation, and for a fence opener on a marker line so
- *  fencedCodeEnterKeymap (Prec.high) wins — upstream is the blockquote /
- *  fence-untouched / Backspace `deleteMarkupBackward` fallback. Pinned by
+ *  fencedCodeEnterKeymap (also `Prec.highest`, registered after) wins — upstream is
+ *  the blockquote / Backspace `deleteMarkupBackward` fallback. Pinned by
  *  cm-enter-precedence.test.ts. */
 export function listContinuationKeymap() {
   return Prec.highest(keymap.of([{ key: "Enter", run: continueListOnEnter }]));

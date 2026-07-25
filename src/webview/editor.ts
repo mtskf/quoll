@@ -618,15 +618,16 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
         // before CM's default. Edits raw source → normal edit-sync path.
         listIndentKeymap(),
         // Enter precedence story (one deliberate order, not registration luck).
-        // Effective order highest→lowest: (1) list continuation [Prec.highest],
-        // (2) upstream markup continuation + fenced-code auto-close [both Prec.high],
-        // (3) CM default newline [Prec.default]. Only the LIST handler is promoted:
-        // upstream `markdownKeymap` Enter (mounted Prec.high by quollMarkdownLanguage,
-        // registered first) shadowed Quoll's list continuation at equal precedence
-        // (upstream returns true for bullet/ordered items → Quoll's renumber/exit
-        // never ran; visible on non-sequential ordered runs). Prec.highest fixes
-        // that. Fenced-code stays at Prec.high — upstream bails on any FencedCode
-        // ancestry so it never claims a fence opener (no shadow to fix there).
+        // Effective order highest→lowest: (1) list continuation, (2) fenced-code
+        // auto-close [both Prec.highest, list registered first], (3) upstream markup
+        // continuation [Prec.high], (4) CM default newline [Prec.default]. Both Quoll
+        // handlers are promoted above upstream `markdownKeymap` Enter (mounted
+        // Prec.high by quollMarkdownLanguage, registered first) because at equal
+        // precedence upstream shadowed them: it returns true for bullet/ordered items
+        // (stealing list renumber/exit — visible on non-sequential ordered runs) AND
+        // for a fence opener whose caret sits on a `> ` / list PREFIX (it resolves to
+        // the Blockquote/ListItem, not the FencedCode, so upstream continues the
+        // markup and leaves the fence unclosed). Prec.highest fixes both.
         // Pinned by cm-enter-precedence.test.ts.
         //
         // Enter in a bullet/ordered/task list item continues the marker on the
@@ -652,9 +653,10 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
         // Enter on an unclosed ```-fence opener auto-inserts a matching closing
         // fence and lands the caret on the empty body line between the two, so a
         // fence typed mid-document no longer reflows every following line into
-        // code until EOF. Prec.high (see the precedence story above) — it beats CM's
-        // default Enter, and upstream never claims a fence opener, so no promotion is
-        // needed; it returns false for every non-trigger (inline code / inside-block
+        // code until EOF. Prec.highest (see the precedence story above) so it wins
+        // over the upstream markup Enter even when the caret sits on a `> ` / list
+        // prefix before the fence (where upstream would otherwise continue the
+        // markup); it returns false for every non-trigger (inline code / inside-block
         // / already-closed) so the default newline still runs. One ordinary
         // transaction → normal edit-sync path, byte-identical round-trip.
         fencedCodeEnterKeymap(),
