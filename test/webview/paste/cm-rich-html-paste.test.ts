@@ -30,13 +30,19 @@ function mountMd(doc: string, canWrite = true) {
   });
 }
 
-function firePaste(view: EditorView, data: { html?: string; text?: string }): Event {
+function firePaste(
+  view: EditorView,
+  data: { html?: string; text?: string; uriList?: string }
+): Event {
   const store = new Map<string, string>();
   if (data.html !== undefined) {
     store.set("text/html", data.html);
   }
   if (data.text !== undefined) {
     store.set("text/plain", data.text);
+  }
+  if (data.uriList !== undefined) {
+    store.set("text/uri-list", data.uriList);
   }
   const event = new Event("paste", { bubbles: true, cancelable: true });
   Object.defineProperty(event, "clipboardData", {
@@ -183,6 +189,32 @@ describe("richHtmlPaste — handler", () => {
     const event = firePaste(view, { html: "<h1>Title</h1>" }); // no text key at all
     expect(event.defaultPrevented).toBe(true);
     expect(view.state.doc.toString()).toBe("```\nfoo\n```");
+    view.destroy();
+  });
+
+  it("defers to CM's uri-list fallback for an in-code paste with no text/plain", () => {
+    // hasPlainFallback is also true for text/uri-list (mirrors CM core's own
+    // getData("text/plain") || getData("text/uri-list")). With no text/plain but a
+    // uri-list present, the guard defers and CM core inserts the uri-list value.
+    // Dropping the uri-list clause would fall through to consume, leaving the
+    // selection untouched instead of replaced — making this assertion non-vacuous.
+    const view = mountMd("```\nfoo\n```");
+    view.dispatch({ selection: { anchor: 4, head: 7 } }); // selects "foo"
+    firePaste(view, { html: "<h1>Title</h1>", uriList: "https://example.com" });
+    expect(view.state.doc.toString()).toBe("```\nhttps://example.com\n```");
+    view.destroy();
+  });
+
+  it("consumes an HTML-only unconvertible paste in code without deleting the selection", () => {
+    // Whitespace-only HTML → htmlToMarkdown returns null. The guard now runs BEFORE
+    // that check, so an HTML-only clipboard (no text/plain) over a code selection is
+    // consumed (preventDefault, no dispatch) instead of falling through to the
+    // md===null defer, which would let CM's core doPaste("") delete the selection.
+    const view = mountMd("```\nfoo\n```");
+    view.dispatch({ selection: { anchor: 4, head: 7 } }); // selects "foo"
+    const event = firePaste(view, { html: "<p>   </p>" }); // whitespace-only, no text
+    expect(event.defaultPrevented).toBe(true); // we consume it (not a defer) → reliable
+    expect(view.state.doc.toString()).toBe("```\nfoo\n```"); // selection untouched
     view.destroy();
   });
 });

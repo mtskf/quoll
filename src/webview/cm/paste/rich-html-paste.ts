@@ -38,10 +38,6 @@ export function richHtmlPaste(opts: { canWrite: () => boolean }): Extension {
         if (!html) {
           return false; // no HTML flavour → defer
         }
-        const md = htmlToMarkdown(html);
-        if (md === null) {
-          return false; // nothing convertible / cap breached → defer to plain paste
-        }
         const { from, to } = view.state.selection.main;
         // Caret / selection touching a fenced or indented code block: a converted
         // fragment can corrupt either kind — a <pre> becomes a ``` fenced snippet whose
@@ -50,7 +46,11 @@ export function richHtmlPaste(opts: { canWrite: () => boolean }): Extension {
         // (and any non-indented inserted line) would terminate the block early. Check
         // BOTH endpoints so a selection that starts in prose and extends into code (or
         // vice versa) also defers, not just an empty caret. Mirrors listReindentPaste's
-        // caretInCode guard.
+        // caretInCode guard. Checked BEFORE htmlToMarkdown so the in-code decision does
+        // not depend on convertibility — an HTML-only clipboard that fails to convert
+        // (whitespace-only, cap breach, parse error) must not fall through to the
+        // md===null defer below and let CM's doPaste("") delete a non-empty code
+        // selection.
         if (caretInCode(view.state, from) || caretInCode(view.state, to)) {
           // Defer to plain-text paste so the raw text lands verbatim, structure intact.
           // Only defer when a plain-text/uri fallback exists: CM's core paste falls back
@@ -63,8 +63,12 @@ export function richHtmlPaste(opts: { canWrite: () => boolean }): Extension {
           if (hasPlainFallback) {
             return false;
           }
-          event.preventDefault();
+          event.preventDefault(); // HTML-only in code: consume without converting or deleting
           return true;
+        }
+        const md = htmlToMarkdown(html);
+        if (md === null) {
+          return false; // nothing convertible / cap breached → defer to plain paste
         }
         event.preventDefault();
         if (!opts.canWrite()) {
