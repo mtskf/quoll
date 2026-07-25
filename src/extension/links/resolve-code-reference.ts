@@ -46,16 +46,11 @@ export function resolveCodeReferenceCandidates(
   // folder, resolve against the doc's own directory first — a doc-adjacent file
   // must win over an unrelated workspace root instead of silently falling back
   // to one. (Host-side open still re-validates workspace containment.)
+  const notContaining = deps.workspaceFolderUris.filter((f) => !isWithinDir(deps.documentUri, f));
   const bases =
     containing.length > 0
-      ? [
-          ...containing,
-          ...deps.workspaceFolderUris.filter((f) => !isWithinDir(deps.documentUri, f)),
-        ]
-      : [
-          deps.joinPath(deps.documentUri, ".."),
-          ...deps.workspaceFolderUris.filter((f) => !isWithinDir(deps.documentUri, f)),
-        ];
+      ? [...containing, ...notContaining]
+      : [deps.joinPath(deps.documentUri, ".."), ...notContaining];
   const out: ResolvedCodeReferenceCandidate[] = [];
   for (const base of bases) {
     const target = deps.joinPath(base, path);

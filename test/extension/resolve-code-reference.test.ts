@@ -84,6 +84,17 @@ describe("resolveCodeReferenceCandidates", () => {
   it("drops a traversal that escapes every base", () => {
     expect(resolveCodeReferenceCandidates("../../etc/passwd", deps() as never)).toEqual([]);
   });
+  it("still drops a traversal that escapes the doc's own dir when the doc is outside every workspace folder", () => {
+    expect(
+      resolveCodeReferenceCandidates(
+        "../../etc/passwd",
+        deps({
+          documentUri: uri("/outside/docs/notes.md"),
+          workspaceFolderUris: [uri("/ws"), uri("/ws2")],
+        }) as never
+      )
+    ).toEqual([]);
+  });
   it("rejects scheme / absolute / backslash / .md", () => {
     expect(resolveCodeReferenceCandidates("http://x/y", deps() as never)).toEqual([]);
     expect(resolveCodeReferenceCandidates("/etc/passwd", deps() as never)).toEqual([]);
