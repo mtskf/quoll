@@ -2,6 +2,21 @@
 
 All notable changes to Quoll are documented here.
 
+## 0.1.54 — 2026-07-25
+
+### Added
+
+- Screen readers now announce when the outline's active section changes as the caret moves through the document, not just when you navigate the outline tree directly.
+
+### Fixed
+
+- Enter now behaves correctly in a few list and blockquote edge cases (non-sequential ordered lists, a blockquote nested in a list, a fenced code block opened right after a `>` or list marker) where it previously produced the wrong result.
+- Pasting rich text (e.g. from a webpage) while the caret is inside a fenced code block no longer corrupts the fence — it now pastes as plain text instead.
+- Closed a gap where some auto-linked URLs (like a bare `xmpp:` address) could skip Quoll's link-safety check before being saved to disk.
+- Switching to the text editor while an edit is blocked by the safety check no longer risks closing the Quoll tab and losing your unsaved draft, and the resulting warning now explains why.
+- Fixed rare cases where typing quickly right after an edit settled, or while an external file change was still coalescing, could visibly rewind or drop your latest keystrokes.
+- Fixed a rare case on documents with Windows-style line endings (CRLF) where a queued edit could be silently dropped instead of applied.
+
 ## 0.1.53 — 2026-07-24
 
 ### Added
