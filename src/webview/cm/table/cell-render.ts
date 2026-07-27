@@ -86,9 +86,12 @@ function attachLinkClickGuard(a: HTMLAnchorElement): void {
   // "open in new tab" default — it does NOT fire `click`, so the guard above
   // never runs and the widget root handler (also `click`-only) never routes it
   // through the host `open-external` re-validation + MAX_HREF_LENGTH cap. That
-  // is a bypass of this choke point. The VS Code webview sandbox happens to
-  // neutralise the open today (its iframe carries no `allow-popups`), but the
-  // guard must not depend on that host-controlled flag. Middle-click-to-open is
+  // is a bypass of this choke point. Whether the VS Code webview's iframe
+  // sandbox (no `allow-popups`) also blocks this specific new-tab open is NOT
+  // verified here — .claude/docs/LEARNING.md's 2026-06-15 entry recorded the
+  // opposite result for a plain `<a href>` click on this same webview (a
+  // built-in VS Code handler forwarded it despite the identical missing flag),
+  // so this guard does not assume the sandbox saves us. Middle-click-to-open is
   // not a supported gesture — the vetted escape hatch is Cmd/Ctrl+left-click —
   // so preventDefault every `auxclick` unconditionally (button-agnostic: a
   // narrowing to button 1 would reopen the guard for the back/forward buttons,
@@ -99,11 +102,14 @@ function attachLinkClickGuard(a: HTMLAnchorElement): void {
   // Right-click's native "Open Link" (context menu) is a sibling native gesture
   // that, like middle-click, bypasses the click-only guard and would navigate
   // using the live href without the host round-trip. It is deliberately NOT
-  // suppressed here, and it does not need to be. RECORDED BEHAVIOUR: in a plain
-  // browser the native menu opens the href directly; inside the VS Code webview
-  // the iframe sandbox (no `allow-popups`) neutralises the new-tab open, same as
-  // the auxclick case above. We do not rely on that host-controlled flag, and we
-  // must not blanket-preventDefault `contextmenu`: that also cancels
+  // suppressed here. UNVERIFIED, DO NOT RELY ON: in a plain browser the native
+  // menu opens the href directly; whether the VS Code webview's iframe sandbox
+  // (no `allow-popups`) also blocks this specific gesture has not been smoke-
+  // tested here, and .claude/docs/LEARNING.md's 2026-06-15 entry shows a plain
+  // `<a href>` click on this same webview was NOT blocked by the sandbox despite
+  // an identical missing-flag prediction (a built-in VS Code handler forwarded
+  // it instead) — so this guard does not assume the sandbox saves us either
+  // way. We must not blanket-preventDefault `contextmenu`: that also cancels
   // keyboard-invoked menus (Shift+F10 / Menu key), stripping Copy / Open Link
   // from keyboard users with no accessible replacement (an a11y regression), and
   // replacing the native menu with our own is a larger, separate change.
