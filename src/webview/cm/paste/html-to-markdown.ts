@@ -148,18 +148,22 @@ function inlineCode(text: string): string {
   return `${fence}${pad}${text}${pad}${fence}`;
 }
 
-/** Wrap `inner` in an emphasis `marker` (`**`/`*`) with edge spaces HOISTED
+/** Wrap `inner` in an emphasis `marker` (`**`/`*`) with edge WHITESPACE HOISTED
  *  OUTSIDE the markers: CommonMark flanking rules refuse a delimiter run adjacent
  *  to whitespace, so `<strong>foo </strong>` must emit `**foo** ` (renders as
  *  emphasis) — never `**foo **` (the literal `**` shows; multiple such spans can
- *  even mis-pair). Only leading/trailing SPACE is hoisted: text-node whitespace is
- *  already collapsed to single spaces by `collapseWs`, and a `<br>` hard break
- *  (`\\\n`) is deliberately left inside so its escaping backslash is never split
- *  off the newline. All-space content stays unwrapped (matches the prior
+ *  even mis-pair). The edge run hoisted is spaces (text-node whitespace is already
+ *  collapsed to single spaces by `collapseWs`) AND `<br>` hard-break tokens
+ *  (`\\\n`), matched as a WHOLE unit by the `(?:\\\n| )` alternation so the
+ *  escaping backslash is never split from its newline (a bare `\s*` edge match
+ *  would strip the `\n` and leave a dangling `\` that escapes the marker). Without
+ *  this, a `<br>` at an emphasis edge (`<strong>foo<br></strong>`) emits
+ *  `**foo\\\n**`, whose closing run is newline-preceded → not right-flanking → the
+ *  literal markers show. All-whitespace content stays unwrapped (matches the prior
  *  `inner.trim() === ""` guard). Wrapping is O(1) and uncounted — `inner`'s leaves
  *  were already counted where they were produced. */
 function wrapEmphasis(inner: string, marker: string): string {
-  const m = /^( *)([\s\S]*?)( *)$/.exec(inner);
+  const m = /^((?:\\\n| )*)([\s\S]*?)((?:\\\n| )*)$/.exec(inner);
   if (m === null) {
     return inner; // unreachable (the pattern always matches); satisfies the type
   }

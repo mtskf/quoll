@@ -18,6 +18,22 @@ function formsGfmTable(md: string): boolean {
   return found;
 }
 
+/** True when `md` parses (under Quoll's shipped GFM parser) to a tree containing a
+ *  node named `name` — used to prove a converted construct actually renders as the
+ *  intended Markdown node (emphasis pairs, a marker is a real ListMark) rather than
+ *  degrading to literal characters. */
+function parsesToNode(md: string, name: string): boolean {
+  let found = false;
+  markdownLanguage.parser.parse(md).iterate({
+    enter: (n) => {
+      if (n.name === name) {
+        found = true;
+      }
+    },
+  });
+  return found;
+}
+
 describe("htmlToMarkdown — inline constructs", () => {
   it("converts bold (<strong> and <b>)", () => {
     expect(htmlToMarkdown("<p><strong>a</strong> <b>c</b></p>")).toBe("**a** **c**");
@@ -33,19 +49,27 @@ describe("htmlToMarkdown — inline constructs", () => {
   it("hoists leading and trailing space outside italic markers", () => {
     expect(htmlToMarkdown("<p>a<em> b </em>c</p>")).toBe("a *b* c");
   });
+  it("hoists leading-only space outside bold markers", () => {
+    expect(htmlToMarkdown("<p>a<strong> foo</strong></p>")).toBe("a **foo**");
+  });
   it("pins the hoisted emphasis renders as emphasis, not literal markers", () => {
-    // Behavioural pin: the shipped GFM parser must see an Emphasis/StrongEmphasis
-    // node — i.e. the markers actually pair — for the whitespace-edged span.
+    // Behavioural pin: the shipped GFM parser must see a StrongEmphasis node — i.e.
+    // the markers actually pair — for the whitespace-edged span.
     const md = htmlToMarkdown("<p><strong>foo </strong>bar</p>") as string;
-    let strong = false;
-    markdownLanguage.parser.parse(md).iterate({
-      enter: (nd) => {
-        if (nd.name === "StrongEmphasis") {
-          strong = true;
-        }
-      },
-    });
-    expect(strong).toBe(true);
+    expect(parsesToNode(md, "StrongEmphasis")).toBe(true);
+  });
+  it("hoists a <br> hard break out of an emphasis edge so it still renders", () => {
+    // A `<br>` (`\\\n`) at the edge must be hoisted as a WHOLE token: `**foo\\\n**`
+    // would not close (the closing `**` is newline-preceded → not right-flanking),
+    // and a naive whitespace strip would split the escaping `\` from its newline.
+    const md = htmlToMarkdown("<p><strong>foo<br></strong>bar</p>") as string;
+    expect(md).toBe("**foo**\\\nbar");
+    expect(parsesToNode(md, "StrongEmphasis")).toBe(true);
+  });
+  it("hoists a leading <br> hard break out of an emphasis edge", () => {
+    const md = htmlToMarkdown("<p>a<em><br>foo</em></p>") as string;
+    expect(md).toBe("a\\\n*foo*");
+    expect(parsesToNode(md, "Emphasis")).toBe(true);
   });
   it("leaves an all-whitespace emphasis span unwrapped", () => {
     expect(htmlToMarkdown("<p>a<strong> </strong>b</p>")).toBe("a b");
@@ -162,6 +186,15 @@ describe("htmlToMarkdown — block constructs", () => {
   });
   it("falls back to 1 for a malformed (non-numeric) start", () => {
     expect(htmlToMarkdown('<ol start="abc"><li>a</li><li>b</li></ol>')).toBe("1. a\n2. b");
+  });
+  it("pins a clamped ordinal as a real ListMark (negative and oversized starts)", () => {
+    // Behavioural pin: the clamped marker must parse to an OrderedList under the
+    // shipped GFM parser — string equality alone would not catch a future clamp or
+    // parser change that quietly stopped producing a valid ListMark.
+    const neg = htmlToMarkdown('<ol start="-3"><li>a</li><li>b</li></ol>') as string;
+    expect(parsesToNode(neg, "OrderedList")).toBe(true);
+    const big = htmlToMarkdown('<ol start="99999999999"><li>a</li><li>b</li></ol>') as string;
+    expect(parsesToNode(big, "OrderedList")).toBe(true);
   });
   it("nests lists tightly with marker-width indentation", () => {
     expect(htmlToMarkdown("<ul><li>a<ul><li>b</li></ul></li></ul>")).toBe("- a\n  - b");
