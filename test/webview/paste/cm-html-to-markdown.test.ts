@@ -4,20 +4,6 @@ import { describe, expect, it } from "vitest";
 import { validateMarkdownForWrite } from "../../../src/markdown/validate-for-write.js";
 import { htmlToMarkdown } from "../../../src/webview/cm/paste/html-to-markdown.js";
 
-/** True when `md` parses (under Quoll's shipped GFM markdown parser) to a tree
- *  containing a `Table` node — used to prove pasted prose does not fabricate one. */
-function formsGfmTable(md: string): boolean {
-  let found = false;
-  markdownLanguage.parser.parse(md).iterate({
-    enter: (n) => {
-      if (n.name === "Table") {
-        found = true;
-      }
-    },
-  });
-  return found;
-}
-
 /** True when `md` parses (under Quoll's shipped GFM parser) to a tree containing a
  *  node named `name` — used to prove a converted construct actually renders as the
  *  intended Markdown node (emphasis pairs, a marker is a real ListMark) rather than
@@ -32,6 +18,12 @@ function parsesToNode(md: string, name: string): boolean {
     },
   });
   return found;
+}
+
+/** True when `md` parses to a tree containing a `Table` node — used to prove
+ *  pasted prose does not fabricate one. */
+function formsGfmTable(md: string): boolean {
+  return parsesToNode(md, "Table");
 }
 
 describe("htmlToMarkdown — inline constructs", () => {
