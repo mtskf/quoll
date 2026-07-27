@@ -83,6 +83,19 @@ function attachLinkClickGuard(a: HTMLAnchorElement): void {
     }
     event.preventDefault();
   });
+  // Button-1 (middle-click) activation rides `auxclick` + the browser's native
+  // "open in new tab" default — it does NOT fire `click`, so the guard above
+  // never runs and the widget root handler (also `click`-only) never routes it
+  // through the host `open-external` re-validation + MAX_HREF_LENGTH cap. That
+  // is a bypass of the choke point this helper documents itself as the single
+  // source of truth for. The VS Code webview sandbox happens to neutralise the
+  // open today (its iframe carries no `allow-popups`), but the guard must not
+  // depend on that host-controlled flag. Middle-click-to-open is not a
+  // supported gesture — the vetted escape hatch is Cmd/Ctrl+left-click — so
+  // unconditionally preventDefault every non-primary activation.
+  a.addEventListener("auxclick", (event) => {
+    event.preventDefault();
+  });
 }
 
 // Walk a Resolved<CellLeaf>[] and emit DOM nodes byte-identically to the
