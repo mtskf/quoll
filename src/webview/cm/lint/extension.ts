@@ -14,7 +14,11 @@ import {
   ViewPlugin,
   type ViewUpdate,
 } from "@codemirror/view";
-import { type LintDiagnosticWire, MAX_LINT_DIAGNOSTICS } from "../../../shared/protocol.js";
+import {
+  type LintDiagnosticWire,
+  MAX_LINT_DIAGNOSTICS,
+  MAX_LINT_MESSAGE_LENGTH,
+} from "../../../shared/protocol.js";
 import { createIncrementalLinter, lintMarkdown } from "./engine.js";
 import type { LintDiagnostic, LintSeverity } from "./types.js";
 
@@ -278,6 +282,30 @@ function capForWire(diagnostics: readonly LintDiagnostic[]): readonly LintDiagno
     .slice(0, MAX_LINT_DIAGNOSTICS);
 }
 
+// Bound a single diagnostic's message to the wire cap so ONE oversize message
+// can never sink the whole `lint-diagnostics` batch. The host boundary validator
+// (`isWebviewToHost`) rejects the entire message when ANY entry fails
+// `isLintDiagnosticWire` (invoked via `.every(...)` over the batch) — including
+// a `message` over MAX_LINT_MESSAGE_LENGTH — which would silently blank
+// the Problems mirror for that doc. Rules that embed unbounded document text
+// (e.g. duplicate-heading-text quotes the heading) can realistically cross the
+// cap, so truncate HERE — the single choke point every rule funnels through — rather
+// than per-rule. The host check stays as-is (defence in depth). The trailing "…"
+// is included in the budget; a lone high surrogate at the cut is dropped so the
+// truncation never emits an unpaired surrogate.
+const ELLIPSIS = "…";
+function truncateMessage(message: string): string {
+  if (message.length <= MAX_LINT_MESSAGE_LENGTH) {
+    return message;
+  }
+  let cut = MAX_LINT_MESSAGE_LENGTH - ELLIPSIS.length;
+  const lastUnit = message.charCodeAt(cut - 1);
+  if (lastUnit >= 0xd800 && lastUnit <= 0xdbff) {
+    cut -= 1; // avoid splitting a surrogate pair at the boundary
+  }
+  return message.slice(0, cut) + ELLIPSIS;
+}
+
 export function toWireDiagnostics(
   doc: Text,
   diagnostics: readonly LintDiagnostic[]
@@ -292,7 +320,7 @@ export function toWireDiagnostics(
       endCharacter: d.to - end.from,
       severity: d.severity,
       code: d.code,
-      message: d.message,
+      message: truncateMessage(d.message),
     };
   });
 }
