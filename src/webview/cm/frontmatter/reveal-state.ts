@@ -31,12 +31,7 @@
 // be used: it needs `pos < from` strictly, impossible for a from=0 leading
 // span.)
 
-import {
-  type ChangeDesc,
-  type EditorState,
-  StateEffect,
-  type Transaction,
-} from "@codemirror/state";
+import { type ChangeDesc, EditorState, StateEffect, type Transaction } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 
 import { intersectsAnySelection } from "../decorations/shared.js";
@@ -72,10 +67,19 @@ function changeCoversRange(changes: ChangeDesc, range: { from: number; to: numbe
   return covered;
 }
 
+/** The facets `isWritable()` reads — the single source of truth for
+ *  writability's reactive dependencies. Providers whose output is gated on write
+ *  access (e.g. the collapsed widget's aria-description in frontmatter-field.ts)
+ *  spread this into their `compute()` dependency list so a facet-only reconfigure
+ *  still recomputes. KEEP IN SYNC: any facet added to `isWritable()` below MUST be
+ *  added here too, or writability-gated output goes stale on that facet's change. */
+export const writabilityFacets = [EditorState.readOnly, EditorView.editable] as const;
+
 /** CodeMirror's canonical "can edit" authority is EditorState.readOnly; the
  *  EditorView.editable facet controls the DOM contenteditable. The reveal logic
  *  checks BOTH so a (readOnly=true, editable=true) combination cannot leak a
- *  reveal (Codex re-review #4). */
+ *  reveal (Codex re-review #4). Its facet reads are mirrored by
+ *  `writabilityFacets` above. */
 export function isWritable(state: EditorState): boolean {
   return !state.readOnly && state.facet(EditorView.editable);
 }
