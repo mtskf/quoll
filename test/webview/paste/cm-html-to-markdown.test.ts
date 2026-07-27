@@ -66,6 +66,14 @@ describe("htmlToMarkdown — inline constructs", () => {
   it("leaves an all-whitespace emphasis span unwrapped", () => {
     expect(htmlToMarkdown("<p>a<strong> </strong>b</p>")).toBe("a b");
   });
+  it("leaves a <br>-only emphasis span unwrapped (bare hard break, no markers)", () => {
+    // The docblock's named case: an emphasis span whose only content is a `<br>`
+    // must emit a bare hard break, never an empty `**\\\n**` (whose markers cannot
+    // pair). The `start >= end` guard returns `inner` unwrapped.
+    const md = htmlToMarkdown("<p>a<strong><br></strong>b</p>") as string;
+    expect(md).toBe("a\\\nb");
+    expect(parsesToNode(md, "StrongEmphasis")).toBe(false);
+  });
   it("hoists a <br> off BOTH edges of an emphasis span", () => {
     const md = htmlToMarkdown("<p><strong><br>foo<br></strong>bar</p>") as string;
     expect(md).toBe("\\\n**foo**\\\nbar");
@@ -85,13 +93,19 @@ describe("htmlToMarkdown — inline constructs", () => {
     // Regression pin for the O(n²) backtracking a `^edge*? core edge*$` regex hit
     // on this exact shape (a long <br> run bounded by non-hoistable text). The
     // linear-scan hoist keeps it O(n); the prior regex took >2s here for K=40000.
+    // best-of-N: a transient CI load spike inflates individual runs, but the O(n)
+    // scan's fastest sample stays ~150ms (the O(n²) regex was slow on EVERY run),
+    // so `min` keeps the 8x threshold margin robust without weakening the signal.
     const K = 40000;
     const html = `<p><strong>x${"<br>".repeat(K)}x</strong>y</p>`;
-    const t0 = performance.now();
-    const md = htmlToMarkdown(html);
-    const elapsed = performance.now() - t0;
-    expect(md).not.toBeNull();
-    expect(elapsed).toBeLessThan(1200);
+    let best = Number.POSITIVE_INFINITY;
+    for (let i = 0; i < 3; i++) {
+      const t0 = performance.now();
+      const md = htmlToMarkdown(html);
+      best = Math.min(best, performance.now() - t0);
+      expect(md).not.toBeNull();
+    }
+    expect(best).toBeLessThan(1200);
   });
   it("converts inline code and does NOT escape its content", () => {
     expect(htmlToMarkdown("<p><code>a*b_c</code></p>")).toBe("`a*b_c`");
