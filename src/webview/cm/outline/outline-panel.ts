@@ -894,8 +894,14 @@ class OutlinePanel implements PluginValue {
     this.headings = extractOutline(state, tree);
     const signature = this.headings.map((h) => `${h.from}:${h.level}:${h.text}`).join("\n");
     if (signature !== this.renderedSignature) {
+      // renderList clears the <ul> (textContent = "") and rebuilds every row, so
+      // a rebuild that fires while a keyboard user is navigating the tree (a
+      // background reparse, or the debounced edit rebuild) removes the focused
+      // row and drops focus to <body>. Capture focus first, restore it after.
+      const focusedFrom = this.focusedRowFrom();
       this.renderedSignature = signature;
       this.renderList();
+      this.restoreRowFocus(focusedFrom);
     }
     // A rebuild is structural (open, an edit, or the parser catching up), never a
     // caret navigation — so it re-baselines the announcer silently rather than
@@ -1001,11 +1007,18 @@ class OutlinePanel implements PluginValue {
     } else {
       this.collapsedFroms.add(from);
     }
+    // Capture DOM focus BEFORE hiding rows: refreshVisibility can hide the very
+    // row that holds keyboard focus (a pointer collapse of an ancestor while a
+    // descendant li was focused), and the browser then blurs it to <body>.
+    const focusedFrom = this.focusedRowFrom();
     this.refreshVisibility();
     // A collapse can hide the row that held the tab stop (e.g. a pointer collapse
     // of an ancestor while a descendant was tabbable) — re-home it so the tree
     // never keeps its only tab stop on a `display:none` row.
     this.ensureTabbableVisible();
+    // …and if that row actually held focus, move focus with it so a keyboard
+    // user is never stranded on <body> (the roving tab stop alone is silent).
+    this.restoreRowFocus(focusedFrom);
     this.updateActive();
   }
 
@@ -1035,6 +1048,52 @@ class OutlinePanel implements PluginValue {
     const row = this.rows.find((r) => r.heading.from === this.tabbableFrom);
     if (row === undefined || row.li.hidden) {
       this.setTabbable(this.firstVisibleFrom());
+    }
+  }
+
+  /** `from` of the row that currently holds DOM focus, or null when focus is not
+   *  on a tree row. Captured BEFORE a mutation that may hide (refreshVisibility)
+   *  or replace (renderList) rows, so `restoreRowFocus` can re-home focus onto
+   *  the equivalent surviving row — a hidden or removed focused row otherwise
+   *  strands DOM focus on `<body>` (the browser blurs it), silently breaking
+   *  keyboard navigation. Returns null when focus is elsewhere so restore is a
+   *  no-op and never pulls focus INTO the tree unbidden. */
+  private focusedRowFrom(): number | null {
+    const active = document.activeElement;
+    if (active === null || !this.listEl.contains(active)) {
+      return null;
+    }
+    const li = active.closest<HTMLLIElement>(".quoll-outline-row");
+    const row = this.rows.find((r) => r.li === li);
+    return row?.heading.from ?? null;
+  }
+
+  /** Re-home focus after a mutation that may have hidden or replaced the focused
+   *  row. Prefers the same heading (by `from`) when it survived and is visible;
+   *  otherwise the nearest visible row above its old position (for a collapse,
+   *  the collapsed ancestor), falling back to the first visible row when the
+   *  heading vanished entirely (a rebuild dropped it). No-op when `from` is null
+   *  (focus was not on a row) so it never steals focus into the tree. */
+  private restoreRowFocus(from: number | null): void {
+    if (from === null) {
+      return;
+    }
+    const idx = this.rows.findIndex((r) => r.heading.from === from);
+    if (idx !== -1 && !this.rows[idx].li.hidden) {
+      this.focusRow(this.rows[idx]); // same heading survived & is visible
+      return;
+    }
+    if (idx !== -1) {
+      for (let i = idx - 1; i >= 0; i--) {
+        if (!this.rows[i].li.hidden) {
+          this.focusRow(this.rows[i]); // nearest visible ancestor / predecessor
+          return;
+        }
+      }
+    }
+    const first = this.rows.find((r) => !r.li.hidden);
+    if (first !== undefined) {
+      this.focusRow(first);
     }
   }
 
