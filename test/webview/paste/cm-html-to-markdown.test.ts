@@ -93,19 +93,21 @@ describe("htmlToMarkdown — inline constructs", () => {
     // Regression pin for the O(n²) backtracking a `^edge*? core edge*$` regex hit
     // on this exact shape (a long <br> run bounded by non-hoistable text). The
     // linear-scan hoist keeps it O(n); the prior regex took >2s here for K=40000.
-    // best-of-N: a transient CI load spike inflates individual runs, but the O(n)
-    // scan's fastest sample stays ~150ms (the O(n²) regex was slow on EVERY run),
-    // so `min` keeps the 8x threshold margin robust without weakening the signal.
+    // Assert the MEDIAN of 3 samples, not min or a single reading: the median
+    // tolerates one transient CI load spike (no flake, the O(n) scan runs ~150ms)
+    // yet still fails when latency is sustained — the O(n²) regex was slow on every
+    // sample, so its median stays >2s (min-of-N would mask a consistently-slow op).
     const K = 40000;
     const html = `<p><strong>x${"<br>".repeat(K)}x</strong>y</p>`;
-    let best = Number.POSITIVE_INFINITY;
+    const samples: number[] = [];
     for (let i = 0; i < 3; i++) {
       const t0 = performance.now();
       const md = htmlToMarkdown(html);
-      best = Math.min(best, performance.now() - t0);
+      samples.push(performance.now() - t0);
       expect(md).not.toBeNull();
     }
-    expect(best).toBeLessThan(1200);
+    samples.sort((a, b) => a - b);
+    expect(samples[1]).toBeLessThan(1200); // median of 3
   });
   it("converts inline code and does NOT escape its content", () => {
     expect(htmlToMarkdown("<p><code>a*b_c</code></p>")).toBe("`a*b_c`");
