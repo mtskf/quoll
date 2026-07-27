@@ -83,17 +83,28 @@ function attachLinkClickGuard(a: HTMLAnchorElement): void {
     }
     event.preventDefault();
   });
-  // Button-1 (middle-click) activation rides `auxclick` + the browser's native
-  // "open in new tab" default — it does NOT fire `click`, so the guard above
-  // never runs and the widget root handler (also `click`-only) never routes it
-  // through the host `open-external` re-validation + MAX_HREF_LENGTH cap. That
-  // is a bypass of the choke point this helper documents itself as the single
-  // source of truth for. The VS Code webview sandbox happens to neutralise the
-  // open today (its iframe carries no `allow-popups`), but the guard must not
-  // depend on that host-controlled flag. Middle-click-to-open is not a
-  // supported gesture — the vetted escape hatch is Cmd/Ctrl+left-click — so
-  // unconditionally preventDefault every non-primary activation.
+  // Non-primary activation must never reach the browser's native open path,
+  // which bypasses this choke point two ways:
+  //   - Button-1 (middle-click) rides `auxclick` + the native "open in new tab"
+  //     default. It does NOT fire `click`.
+  //   - Right-click exposes the native "Open Link" context-menu action, which
+  //     navigates using the live `href` directly.
+  // Neither fires `click`, so neither the guard above nor the widget root
+  // handler (also `click`-only) routes them through the host `open-external`
+  // re-validation + MAX_HREF_LENGTH cap. The VS Code webview sandbox happens to
+  // neutralise the open today (its iframe carries no `allow-popups` / top-nav),
+  // but the guard must not depend on that host-controlled flag. Neither gesture
+  // is a supported open path — the vetted escape hatch is Cmd/Ctrl+left-click,
+  // which routes through the host — and the widget is display-only (left-click
+  // reveals the source, it never navigates), so suppressing the native context
+  // menu keeps right-click consistent with that model. Both listeners are
+  // button-agnostic on purpose: `auxclick` fires for any non-primary button, so
+  // preventDefault unconditionally rather than gating on `event.button` (a
+  // narrowing to button 1 would reopen the guard for the back/forward buttons).
   a.addEventListener("auxclick", (event) => {
+    event.preventDefault();
+  });
+  a.addEventListener("contextmenu", (event) => {
     event.preventDefault();
   });
 }

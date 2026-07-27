@@ -605,10 +605,9 @@ describe("renderCellInline", () => {
   });
 
   // Button-1 (middle-click) rides `auxclick` + the browser's native "open in
-  // new tab" default — it does NOT fire `click`, so the click-only guard never
-  // runs and the open would skip the host `open-external` re-validation +
-  // MAX_HREF_LENGTH cap. Real-Chromium probe (2026-07-28) confirmed a middle
-  // click dispatches a cancelable `auxclick` with the click listener silent.
+  // new tab" default — it does NOT fire `click` (per the UI Events spec, `click`
+  // is primary-button-only), so the click-only guard never runs and the open
+  // would skip the host `open-external` re-validation + MAX_HREF_LENGTH cap.
   // Middle-click-to-open is not a supported gesture (the vetted escape hatch is
   // Cmd/Ctrl+left-click), so every `auxclick` — even on an otherwise-openable
   // absolute href — must preventDefault.
@@ -634,10 +633,40 @@ describe("renderCellInline", () => {
     }
   });
 
+  // The guard is intentionally button-agnostic — `auxclick` fires for any
+  // non-primary button (back/forward too), so a future narrowing to
+  // `event.button === 1` would silently reopen it for those. Pin a non-middle
+  // aux button (4 = forward) so such a narrowing trips.
+  it("non-middle auxclick (side button) is also preventDefault'd (button-agnostic guard)", () => {
+    const [a] = renderCellInline("[docs](https://example.com)") as HTMLAnchorElement[];
+    const event = new MouseEvent("auxclick", { bubbles: true, cancelable: true, button: 4 });
+    a.dispatchEvent(event);
+    expect(event.defaultPrevented).toBe(true);
+  });
+
+  // Right-click exposes the native "Open Link" context-menu action, which
+  // navigates using the live href directly — another non-`click` path around
+  // the host open-external gate. Suppress the context menu so it can't.
+  it("right-click (contextmenu) is preventDefault'd (no native 'Open Link' bypass)", () => {
+    const [a] = renderCellInline("[docs](https://example.com)") as HTMLAnchorElement[];
+    expect(a).toBeInstanceOf(HTMLAnchorElement);
+    const event = new MouseEvent("contextmenu", { bubbles: true, cancelable: true, button: 2 });
+    a.dispatchEvent(event);
+    expect(event.defaultPrevented).toBe(true);
+  });
+
   it("autolink middle-click (auxclick) is preventDefault'd (same gate as inline links)", () => {
     const [a] = renderCellInline("<https://example.com>") as HTMLAnchorElement[];
     expect(a).toBeInstanceOf(HTMLAnchorElement);
     const event = new MouseEvent("auxclick", { bubbles: true, cancelable: true, button: 1 });
+    a.dispatchEvent(event);
+    expect(event.defaultPrevented).toBe(true);
+  });
+
+  it("autolink right-click (contextmenu) is preventDefault'd (same gate as inline links)", () => {
+    const [a] = renderCellInline("<https://example.com>") as HTMLAnchorElement[];
+    expect(a).toBeInstanceOf(HTMLAnchorElement);
+    const event = new MouseEvent("contextmenu", { bubbles: true, cancelable: true, button: 2 });
     a.dispatchEvent(event);
     expect(event.defaultPrevented).toBe(true);
   });
