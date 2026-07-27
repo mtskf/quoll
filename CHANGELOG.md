@@ -2,6 +2,12 @@
 
 All notable changes to Quoll are documented here.
 
+## 0.1.58 — 2026-07-28
+
+### Fixed
+
+- Format Document now leaves a table whose delimiter row omits its outer pipes (e.g. `:-- | --:`) byte-untouched, matching how it already treats pipe-less header and body rows, instead of rewriting just that row's outer pipes.
+
 ## 0.1.57 — 2026-07-28
 
 ### Fixed
