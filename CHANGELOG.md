@@ -2,6 +2,13 @@
 
 All notable changes to Quoll are documented here.
 
+## 0.1.55 — 2026-07-27
+
+### Fixed
+
+- Pasting rich text where a bold or italic span has whitespace at its edge (a space, or a line break, just inside the bold) now renders as emphasis instead of showing the literal `**`/`*` markers.
+- Pasting a numbered list that starts at an unusual value (a negative or very large `start`) now produces a valid numbered list instead of degrading to plain paragraphs.
+
 ## 0.1.54 — 2026-07-25
 
 ### Added

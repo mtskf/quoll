@@ -4,18 +4,26 @@ import { describe, expect, it } from "vitest";
 import { validateMarkdownForWrite } from "../../../src/markdown/validate-for-write.js";
 import { htmlToMarkdown } from "../../../src/webview/cm/paste/html-to-markdown.js";
 
-/** True when `md` parses (under Quoll's shipped GFM markdown parser) to a tree
- *  containing a `Table` node — used to prove pasted prose does not fabricate one. */
-function formsGfmTable(md: string): boolean {
+/** True when `md` parses (under Quoll's shipped GFM parser) to a tree containing a
+ *  node named `name` — used to prove a converted construct actually renders as the
+ *  intended Markdown node (emphasis pairs, a marker is a real ListMark) rather than
+ *  degrading to literal characters. */
+function parsesToNode(md: string, name: string): boolean {
   let found = false;
   markdownLanguage.parser.parse(md).iterate({
     enter: (n) => {
-      if (n.name === "Table") {
+      if (n.name === name) {
         found = true;
       }
     },
   });
   return found;
+}
+
+/** True when `md` parses to a tree containing a `Table` node — used to prove
+ *  pasted prose does not fabricate one. */
+function formsGfmTable(md: string): boolean {
+  return parsesToNode(md, "Table");
 }
 
 describe("htmlToMarkdown — inline constructs", () => {
@@ -24,6 +32,82 @@ describe("htmlToMarkdown — inline constructs", () => {
   });
   it("converts italic (<em> and <i>)", () => {
     expect(htmlToMarkdown("<p><em>a</em> <i>c</i></p>")).toBe("*a* *c*");
+  });
+  it("hoists trailing space outside bold markers (CommonMark flanking)", () => {
+    // `**foo **` would NOT close (a `**` after a space is not right-flanking) and
+    // the literal `**` would show; the space must sit OUTSIDE the markers.
+    expect(htmlToMarkdown("<p><strong>foo </strong>bar</p>")).toBe("**foo** bar");
+  });
+  it("hoists leading and trailing space outside italic markers", () => {
+    expect(htmlToMarkdown("<p>a<em> b </em>c</p>")).toBe("a *b* c");
+  });
+  it("hoists leading-only space outside bold markers", () => {
+    expect(htmlToMarkdown("<p>a<strong> foo</strong></p>")).toBe("a **foo**");
+  });
+  it("pins the hoisted emphasis renders as emphasis, not literal markers", () => {
+    // Behavioural pin: the shipped GFM parser must see a StrongEmphasis node — i.e.
+    // the markers actually pair — for the whitespace-edged span.
+    const md = htmlToMarkdown("<p><strong>foo </strong>bar</p>") as string;
+    expect(parsesToNode(md, "StrongEmphasis")).toBe(true);
+  });
+  it("hoists a <br> hard break out of an emphasis edge so it still renders", () => {
+    // A `<br>` (`\\\n`) at the edge must be hoisted as a WHOLE token: `**foo\\\n**`
+    // would not close (the closing `**` is newline-preceded → not right-flanking),
+    // and a naive whitespace strip would split the escaping `\` from its newline.
+    const md = htmlToMarkdown("<p><strong>foo<br></strong>bar</p>") as string;
+    expect(md).toBe("**foo**\\\nbar");
+    expect(parsesToNode(md, "StrongEmphasis")).toBe(true);
+  });
+  it("hoists a leading <br> hard break out of an emphasis edge", () => {
+    const md = htmlToMarkdown("<p>a<em><br>foo</em></p>") as string;
+    expect(md).toBe("a\\\n*foo*");
+    expect(parsesToNode(md, "Emphasis")).toBe(true);
+  });
+  it("leaves an all-whitespace emphasis span unwrapped", () => {
+    expect(htmlToMarkdown("<p>a<strong> </strong>b</p>")).toBe("a b");
+  });
+  it("leaves a <br>-only emphasis span unwrapped (bare hard break, no markers)", () => {
+    // The docblock's named case: an emphasis span whose only content is a `<br>`
+    // must emit a bare hard break, never an empty `**\\\n**` (whose markers cannot
+    // pair). The `start >= end` guard returns `inner` unwrapped.
+    const md = htmlToMarkdown("<p>a<strong><br></strong>b</p>") as string;
+    expect(md).toBe("a\\\nb");
+    expect(parsesToNode(md, "StrongEmphasis")).toBe(false);
+  });
+  it("hoists a <br> off BOTH edges of an emphasis span", () => {
+    const md = htmlToMarkdown("<p><strong><br>foo<br></strong>bar</p>") as string;
+    expect(md).toBe("\\\n**foo**\\\nbar");
+    expect(parsesToNode(md, "StrongEmphasis")).toBe(true);
+  });
+  it("hoists a mixed space+<br> run at one edge (spans a token-type switch)", () => {
+    const md = htmlToMarkdown("<p><strong>foo<br> </strong>bar</p>") as string;
+    expect(md).toBe("**foo**\\\n bar");
+    expect(parsesToNode(md, "StrongEmphasis")).toBe(true);
+  });
+  it("keeps an interior (non-edge) <br> inside the emphasis markers", () => {
+    const md = htmlToMarkdown("<p><strong>foo<br>bar</strong></p>") as string;
+    expect(md).toBe("**foo\\\nbar**");
+    expect(parsesToNode(md, "StrongEmphasis")).toBe(true);
+  });
+  it("hoists a long <br> run fenced by text on both sides in linear time", () => {
+    // Regression pin for the O(n²) backtracking a `^edge*? core edge*$` regex hit
+    // on this exact shape (a long <br> run bounded by non-hoistable text). The
+    // linear-scan hoist keeps it O(n); the prior regex took >2s here for K=40000.
+    // Assert the MEDIAN of 3 samples, not min or a single reading: the median
+    // tolerates one transient CI load spike (no flake, the O(n) scan runs ~150ms)
+    // yet still fails when latency is sustained — the O(n²) regex was slow on every
+    // sample, so its median stays >2s (min-of-N would mask a consistently-slow op).
+    const K = 40000;
+    const html = `<p><strong>x${"<br>".repeat(K)}x</strong>y</p>`;
+    const samples: number[] = [];
+    for (let i = 0; i < 3; i++) {
+      const t0 = performance.now();
+      const md = htmlToMarkdown(html);
+      samples.push(performance.now() - t0);
+      expect(md).not.toBeNull();
+    }
+    samples.sort((a, b) => a - b);
+    expect(samples[1]).toBeLessThan(1200); // median of 3
   });
   it("converts inline code and does NOT escape its content", () => {
     expect(htmlToMarkdown("<p><code>a*b_c</code></p>")).toBe("`a*b_c`");
@@ -123,6 +207,29 @@ describe("htmlToMarkdown — block constructs", () => {
   });
   it("converts an ordered list honouring start", () => {
     expect(htmlToMarkdown('<ol start="2"><li>a</li><li>b</li></ol>')).toBe("2. a\n3. b");
+  });
+  it("clamps a negative start to 0 (a valid ordinal, not `-3.`)", () => {
+    // `-3.` is not a list marker → the item would degrade to a paragraph.
+    expect(htmlToMarkdown('<ol start="-3"><li>a</li><li>b</li></ol>')).toBe("0. a\n1. b");
+  });
+  it("clamps an oversized start to the 9-digit ListMark ceiling", () => {
+    // A 10+-digit ordinal stops being a ListMark; clamp to MAX_LIST_NUMBER and do
+    // not let the increment carry it past the ceiling either.
+    expect(htmlToMarkdown('<ol start="99999999999"><li>a</li><li>b</li></ol>')).toBe(
+      "999999999. a\n999999999. b"
+    );
+  });
+  it("falls back to 1 for a malformed (non-numeric) start", () => {
+    expect(htmlToMarkdown('<ol start="abc"><li>a</li><li>b</li></ol>')).toBe("1. a\n2. b");
+  });
+  it("pins a clamped ordinal as a real ListMark (negative and oversized starts)", () => {
+    // Behavioural pin: the clamped marker must parse to an OrderedList under the
+    // shipped GFM parser — string equality alone would not catch a future clamp or
+    // parser change that quietly stopped producing a valid ListMark.
+    const neg = htmlToMarkdown('<ol start="-3"><li>a</li><li>b</li></ol>') as string;
+    expect(parsesToNode(neg, "OrderedList")).toBe(true);
+    const big = htmlToMarkdown('<ol start="99999999999"><li>a</li><li>b</li></ol>') as string;
+    expect(parsesToNode(big, "OrderedList")).toBe(true);
   });
   it("nests lists tightly with marker-width indentation", () => {
     expect(htmlToMarkdown("<ul><li>a<ul><li>b</li></ul></li></ul>")).toBe("- a\n  - b");

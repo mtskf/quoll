@@ -25,6 +25,7 @@
 //    ANY thrown value, so the handler always has a safe defer-to-plain-paste path.
 
 import { isAllowedUrl } from "../../../markdown/url-allowlist.js";
+import { MAX_LIST_NUMBER } from "../list/list-transform.js";
 import { SKIP_TAGS, tableElementToGfm } from "./html-table-to-gfm.js";
 
 const TEXT_NODE = 3;
@@ -147,6 +148,47 @@ function inlineCode(text: string): string {
   return `${fence}${pad}${text}${pad}${fence}`;
 }
 
+/** Wrap `inner` in an emphasis `marker` (`**`/`*`) with edge whitespace HOISTED
+ *  outside the markers: CommonMark flanking rules reject a delimiter run adjacent
+ *  to whitespace, so `<strong>foo </strong>` must emit `**foo** ` — never
+ *  `**foo **`, whose closing run is space-preceded and shows as literal `**`. The
+ *  hoisted edge run is spaces (collapsed to single spaces by `collapseWs`) AND
+ *  `<br>` hard-break tokens (`\` + `\n`), each taken as ONE unit so its escaping
+ *  backslash is never separated from its newline: a whitespace-class match (`\s`)
+ *  would consume only the `\n` and strand the `\` at the boundary, emitting a
+ *  marker-escaping `**foo\**`. When the whole span is hoistable (spaces/`<br>`s
+ *  only) the core is empty and `inner` is returned unwrapped — a `<br>`-only span
+ *  like `<strong><br></strong>` yields a bare hard break, not an empty `**\\\n**`.
+ *  Done with two linear index scans, NOT a regex: an `^edge*? core edge*$` pattern
+ *  backtracks O(n²) on a long `<br>` run fenced by non-hoistable text on both
+ *  sides. Wrapping is O(1)/uncounted — `inner`'s leaves were already counted. */
+function wrapEmphasis(inner: string, marker: string): string {
+  let start = 0;
+  while (start < inner.length) {
+    if (inner[start] === " ") {
+      start += 1;
+    } else if (inner[start] === "\\" && inner[start + 1] === "\n") {
+      start += 2; // a `<br>` hard-break token — hoisted whole
+    } else {
+      break;
+    }
+  }
+  let end = inner.length;
+  while (end > start) {
+    if (inner[end - 1] === " ") {
+      end -= 1;
+    } else if (inner[end - 1] === "\n" && inner[end - 2] === "\\") {
+      end -= 2;
+    } else {
+      break;
+    }
+  }
+  if (start >= end) {
+    return inner; // all-whitespace / `<br>`-only: nothing to wrap
+  }
+  return `${inner.slice(0, start)}${marker}${inner.slice(start, end)}${marker}${inner.slice(end)}`;
+}
+
 /** Serialise inline content (children of a block) to a Markdown fragment. Text is
  *  whitespace-collapsed + escaped; recognised inline elements wrap their
  *  serialised children; unknown inline elements recurse transparently. `depth`
@@ -178,10 +220,10 @@ function serializeInline(node: Node, depth: number, ctx: Ctx): string {
   switch (tag) {
     case "STRONG":
     case "B":
-      return inner.trim() === "" ? inner : `**${inner}**`;
+      return wrapEmphasis(inner, "**");
     case "EM":
     case "I":
-      return inner.trim() === "" ? inner : `*${inner}*`;
+      return wrapEmphasis(inner, "*");
     case "A": {
       const href = el.getAttribute("href") ?? "";
       // Link text on one line (a newline in the label would break the link).
@@ -298,13 +340,21 @@ function serializeList(list: Element, depth: number, ctx: Ctx): string {
   }
   const ordered = list.tagName === "OL";
   let n = ordered ? Number.parseInt(list.getAttribute("start") ?? "1", 10) : 0;
+  // Clamp `start` into the ListMark-recognisable range [0, MAX_LIST_NUMBER] (the
+  // same bound `orderedShape` enforces): a negative value would emit `-3.` — not a
+  // list marker, so the item degrades to a paragraph — and a 10+-digit ordinal
+  // breaks @lezer/markdown's ListMark recognition. A malformed `start` (NaN) falls
+  // back to 1. The per-item marker below re-clamps so a start near the ceiling can
+  // never increment past it either.
   if (!Number.isFinite(n)) {
     n = 1;
+  } else {
+    n = Math.min(Math.max(n, 0), MAX_LIST_NUMBER);
   }
   const items: string[] = [];
   for (const li of directChildrenByTag(list, "LI")) {
     bump(ctx);
-    const marker = ordered ? `${n++}. ` : "- ";
+    const marker = ordered ? `${Math.min(n++, MAX_LIST_NUMBER)}. ` : "- ";
     items.push(serializeListItem(li, marker, depth, ctx));
   }
   return items.join("\n");
