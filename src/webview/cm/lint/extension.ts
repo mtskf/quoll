@@ -284,8 +284,9 @@ function capForWire(diagnostics: readonly LintDiagnostic[]): readonly LintDiagno
 
 // Bound a single diagnostic's message to the wire cap so ONE oversize message
 // can never sink the whole `lint-diagnostics` batch. The host boundary validator
-// (`isLintDiagnosticWire`) rejects the entire message when ANY entry's `message`
-// exceeds MAX_LINT_MESSAGE_LENGTH via an `every(...)`, which would silently blank
+// (`isWebviewToHost`) rejects the entire message when ANY entry fails
+// `isLintDiagnosticWire` (invoked via `.every(...)` over the batch) — including
+// a `message` over MAX_LINT_MESSAGE_LENGTH — which would silently blank
 // the Problems mirror for that doc. Rules that embed unbounded document text
 // (e.g. duplicate-heading-text quotes the heading) can realistically cross 1024,
 // so truncate HERE — the single choke point every rule funnels through — rather

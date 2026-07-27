@@ -561,6 +561,11 @@ export type LintDiagnosticWire = {
   endCharacter: number;
   severity: "warning" | "info";
   code: string;
+  // Bounded to MAX_LINT_MESSAGE_LENGTH. Enforced twice: `toWireDiagnostics`
+  // (webview producer, cm/lint/extension.ts) truncates before this type is
+  // constructed, and `isLintDiagnosticWire` (below) re-checks at the host
+  // boundary — TS structural typing does not itself prevent a future producer
+  // from skipping the truncation, so both runtime checks must stay in sync.
   message: string;
 };
 

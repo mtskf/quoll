@@ -556,10 +556,11 @@ describe("toWireDiagnostics (offset → 0-based line/character)", () => {
   });
 
   it("truncates an over-long message so ONE oversize entry can't sink the whole batch", () => {
-    // The host's isLintDiagnosticWire enforces MAX_LINT_MESSAGE_LENGTH via an
-    // `every(...)`, so a single message > the cap rejects the ENTIRE lint-diagnostics
-    // batch and silently blanks the Problems mirror. Rules that embed unbounded
-    // document text (duplicate-heading-text quotes the heading) can cross it.
+    // The host's isWebviewToHost enforces MAX_LINT_MESSAGE_LENGTH via
+    // `.every(isLintDiagnosticWire)` over the batch, so a single message > the cap
+    // rejects the ENTIRE lint-diagnostics batch and silently blanks the Problems
+    // mirror. Rules that embed unbounded document text (duplicate-heading-text
+    // quotes the heading) can cross it.
     // Truncate at the wire choke point so the batch stays acceptable and the other
     // diagnostics survive. REVERT-CHECK: dropping the truncation makes the length
     // assertion fail AND the host validator reject the batch below.
@@ -585,6 +586,54 @@ describe("toWireDiagnostics (offset → 0-based line/character)", () => {
       diagnostics: [{ ...wire[0], message: longText }, wire[1]],
     };
     expect(isWebviewToHost(rejected)).toBe(false);
+  });
+
+  it("drops a lone high surrogate instead of splitting a surrogate pair at the cut", () => {
+    // Build a message where the code unit landing exactly on the truncation
+    // boundary (index MAX_LINT_MESSAGE_LENGTH - ELLIPSIS.length - 1) is the
+    // high half of a surrogate pair (e.g. an emoji), so the naive slice would
+    // emit an unpaired lead surrogate onto the wire.
+    const cutIndex = MAX_LINT_MESSAGE_LENGTH - 1; // ELLIPSIS.length === 1
+    const prefix = "x".repeat(cutIndex - 1);
+    const pair = "😀"; // high surrogate lands at prefix.length === cutIndex - 1
+    const message = prefix + pair + "y".repeat(50);
+    const doc = Text.of([message]);
+    const wire = toWireDiagnostics(doc, [
+      { from: 0, to: 1, severity: "warning", code: "duplicate-heading-text", message },
+    ]);
+    // No lone surrogate: every high surrogate must be immediately followed by
+    // its low surrogate partner (or absent entirely).
+    for (let i = 0; i < wire[0].message.length; i++) {
+      const unit = wire[0].message.charCodeAt(i);
+      if (unit >= 0xd800 && unit <= 0xdbff) {
+        expect(wire[0].message.charCodeAt(i + 1)).toBeGreaterThanOrEqual(0xdc00);
+        expect(wire[0].message.charCodeAt(i + 1)).toBeLessThanOrEqual(0xdfff);
+      }
+    }
+    expect(wire[0].message.endsWith("…")).toBe(true);
+    const posted = { protocol: PROTOCOL_VERSION, type: "lint-diagnostics", diagnostics: wire };
+    expect(isWebviewToHost(posted)).toBe(true);
+  });
+
+  it("passes a message of exactly MAX_LINT_MESSAGE_LENGTH through unchanged (boundary: <= does not truncate)", () => {
+    const exact = "x".repeat(MAX_LINT_MESSAGE_LENGTH);
+    const doc = Text.of([exact]);
+    const wire = toWireDiagnostics(doc, [
+      { from: 0, to: 1, severity: "warning", code: "duplicate-heading-text", message: exact },
+    ]);
+    expect(wire[0].message).toBe(exact); // unchanged, no ellipsis appended
+    expect(wire[0].message.length).toBe(MAX_LINT_MESSAGE_LENGTH);
+  });
+
+  it("truncates to exactly the wire cap, not merely under it", () => {
+    const longText = "x".repeat(MAX_LINT_MESSAGE_LENGTH + 500);
+    const doc = Text.of([longText]);
+    const wire = toWireDiagnostics(doc, [
+      { from: 0, to: 1, severity: "warning", code: "duplicate-heading-text", message: longText },
+    ]);
+    // Pin the exact length (not just an upper bound) so an over-aggressive
+    // truncation regression is caught.
+    expect(wire[0].message.length).toBe(MAX_LINT_MESSAGE_LENGTH);
   });
 
   // AT-completeness pin (A11Y-04): a `wholeLine` finding is the ONE diagnostic
