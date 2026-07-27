@@ -288,8 +288,8 @@ function capForWire(diagnostics: readonly LintDiagnostic[]): readonly LintDiagno
 // `isLintDiagnosticWire` (invoked via `.every(...)` over the batch) — including
 // a `message` over MAX_LINT_MESSAGE_LENGTH — which would silently blank
 // the Problems mirror for that doc. Rules that embed unbounded document text
-// (e.g. duplicate-heading-text quotes the heading) can realistically cross 1024,
-// so truncate HERE — the single choke point every rule funnels through — rather
+// (e.g. duplicate-heading-text quotes the heading) can realistically cross the
+// cap, so truncate HERE — the single choke point every rule funnels through — rather
 // than per-rule. The host check stays as-is (defence in depth). The trailing "…"
 // is included in the budget; a lone high surrogate at the cut is dropped so the
 // truncation never emits an unpaired surrogate.
