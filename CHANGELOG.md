@@ -2,6 +2,12 @@
 
 All notable changes to Quoll are documented here.
 
+## 0.1.57 — 2026-07-28
+
+### Fixed
+
+- When a document becomes read-only, the metadata (frontmatter) block no longer tells screen-reader users they can move the caret in to edit it — that hint now disappears in step with the document's writability instead of lingering as a dead-end affordance.
+
 ## 0.1.56 — 2026-07-28
 
 ### Fixed

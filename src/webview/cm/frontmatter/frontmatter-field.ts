@@ -30,17 +30,24 @@ import { Decoration, type DecorationSet, EditorView } from "@codemirror/view";
 import { quollSyntaxExclusionZones } from "../decorations/orchestrator.js";
 import { hostDocumentReseed } from "../host-reseed.js";
 import { FrontmatterBlockWidget } from "./frontmatter-widget.js";
-import { initialRevealState, nextRevealState, type RevealState } from "./reveal-state.js";
+import {
+  initialRevealState,
+  isWritable,
+  nextRevealState,
+  type RevealState,
+} from "./reveal-state.js";
 
-/** The collapsed block-replace + atomic range set (empty in every other
- *  state). Shared by the decorations and atomicRanges providers. */
-function collapsedSet(rs: RevealState): DecorationSet {
+/** The collapsed block-replace + atomic range set (empty in every other state).
+ *  Shared by the decorations and atomicRanges providers. `canWrite` is baked into
+ *  the widget so the writability-gated aria-description stays in lockstep with the
+ *  document's real write access (frontmatter-widget.ts). */
+function collapsedSet(rs: RevealState, canWrite: boolean): DecorationSet {
   if (rs.kind !== "collapsed") {
     return Decoration.none;
   }
   return Decoration.set([
     Decoration.replace({
-      widget: new FrontmatterBlockWidget(rs.span.body, rs.span.slice),
+      widget: new FrontmatterBlockWidget(rs.span.body, rs.span.slice, canWrite),
       block: true,
     }).range(rs.span.from, rs.span.to),
   ]);
@@ -115,8 +122,15 @@ export const frontmatterBlockField = StateField.define<RevealState>({
   create: (state: EditorState) => initialRevealState(state),
   update: (prev, tr) => nextRevealState(prev, tr),
   provide: (f) => [
-    EditorView.decorations.from(f, collapsedSet),
-    EditorView.atomicRanges.from(f, (rs) => () => collapsedSet(rs)),
+    // Depend on the writability facets too: a read-only flip is a config-only
+    // reconfigure that leaves the reveal-state value (and so `f`) reference-
+    // unchanged, so `.from(f, …)` alone would never rebuild the widget and its
+    // baked aria-description would go stale. atomicRanges is writability-invariant
+    // (the caret skips the collapsed span either way) so it stays keyed on `f`.
+    EditorView.decorations.compute([f, EditorState.readOnly, EditorView.editable], (state) =>
+      collapsedSet(state.field(f), isWritable(state))
+    ),
+    EditorView.atomicRanges.from(f, (rs) => (view) => collapsedSet(rs, isWritable(view.state))),
     EditorState.transactionFilter.from(f, transactionFilterFor),
     quollSyntaxExclusionZones.from(f, exclusionRanges),
   ],

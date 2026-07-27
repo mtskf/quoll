@@ -1,6 +1,7 @@
 // @vitest-environment happy-dom
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
 import {
+  Compartment,
   EditorSelection,
   EditorState,
   type SelectionRange,
@@ -35,6 +36,24 @@ function frontmatterDecoRanges(view: EditorView): Array<{ from: number; to: numb
     }
   }
   return out;
+}
+
+// The single FrontmatterBlockWidget the field currently projects (or null when
+// not collapsed). Unlike frontmatterDecoRanges this returns the widget INSTANCE,
+// so a test can read its `canWrite` and drive its toDOM/eq.
+function frontmatterWidget(view: EditorView): FrontmatterBlockWidget | null {
+  for (const source of view.state.facet(EditorView.decorations)) {
+    const set = typeof source === "function" ? source(view) : source;
+    const iter = set.iter();
+    while (iter.value !== null) {
+      const widget = (iter.value.spec as { widget?: unknown }).widget;
+      if (widget instanceof FrontmatterBlockWidget) {
+        return widget;
+      }
+      iter.next();
+    }
+  }
+  return null;
 }
 
 function mount(doc: string, selection?: EditorSelection | SelectionRange): EditorView {
@@ -342,6 +361,90 @@ describe("frontmatterBlockField — round-trip (byte-identical)", () => {
       });
       expect(view.state.field(frontmatterBlockField).kind).toBe("absent");
       expect(frontmatterDecoRanges(view)).toEqual([]);
+    } finally {
+      view.destroy();
+    }
+  });
+
+  it("mirrors document writability into the widget (read-only mount omits the aria hint)", () => {
+    // The widget's reveal-to-edit hint must reflect the document's real write
+    // access. A writable mount projects a writable widget (hint present); a
+    // read-only mount projects a non-writable one (hint omitted, no dead-end
+    // affordance). This pins the field→widget wiring the flip test then exercises
+    // across a live reconfigure.
+    const rw = mount(FM);
+    const roParent = document.createElement("div");
+    document.body.appendChild(roParent);
+    const ro = new EditorView({
+      state: EditorState.create({
+        doc: FM,
+        extensions: [
+          EditorView.editable.of(false),
+          EditorState.readOnly.of(true),
+          markdown({ base: markdownLanguage }),
+          frontmatterBlockField,
+        ],
+      }),
+      parent: roParent,
+    });
+    try {
+      const rwWidget = frontmatterWidget(rw);
+      expect(rwWidget?.canWrite).toBe(true);
+      expect(rwWidget?.toDOM(rw).getAttribute("aria-description")).toMatch(/caret|edit/i);
+
+      const roWidget = frontmatterWidget(ro);
+      expect(roWidget?.canWrite).toBe(false);
+      expect(roWidget?.toDOM(ro).getAttribute("aria-description")).toBeNull();
+    } finally {
+      rw.destroy();
+      ro.destroy();
+    }
+  });
+
+  it("refreshes the widget's aria-description on a read-only flip (config-only, no doc/selection edit)", () => {
+    // THE BUG: a read-only flip is a config-only reconfigure that leaves the
+    // reveal-state value (and so the field) reference-unchanged. `.from(f, …)`
+    // alone never rebuilds the widget, so its baked writability-gated
+    // aria-description would go stale. The decoration must depend on the
+    // writability facets AND the widget's eq() must include canWrite so CM
+    // actually rebuilds the DOM. Non-vacuous: pre-fix `before === after` (same
+    // memoised instance) and `before.eq(after)` is true, so both assertions fail.
+    const writable = new Compartment();
+    const parent = document.createElement("div");
+    document.body.appendChild(parent);
+    const view = new EditorView({
+      state: EditorState.create({
+        doc: FM,
+        selection: EditorSelection.cursor(0),
+        extensions: [
+          EditorState.allowMultipleSelections.of(true),
+          writable.of([EditorView.editable.of(true), EditorState.readOnly.of(false)]),
+          markdown({ base: markdownLanguage }),
+          frontmatterBlockField,
+        ],
+      }),
+      parent,
+    });
+    try {
+      const before = frontmatterWidget(view);
+      expect(before?.canWrite).toBe(true);
+      expect(before?.toDOM(view).getAttribute("aria-description")).toMatch(/caret|edit/i);
+
+      // Flip to read-only — NO doc change, NO selection change.
+      view.dispatch({
+        effects: writable.reconfigure([
+          EditorView.editable.of(false),
+          EditorState.readOnly.of(true),
+        ]),
+      });
+      // The reveal state itself is untouched (still collapsed) — the widget must
+      // still refresh purely from the writability change.
+      expect(view.state.field(frontmatterBlockField).kind).toBe("collapsed");
+
+      const after = frontmatterWidget(view);
+      expect(after?.canWrite).toBe(false);
+      expect(before?.eq(after as FrontmatterBlockWidget)).toBe(false); // CM will rebuild
+      expect(after?.toDOM(view).getAttribute("aria-description")).toBeNull();
     } finally {
       view.destroy();
     }

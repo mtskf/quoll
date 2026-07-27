@@ -361,7 +361,7 @@ function frontmatterSlots(state: EditorState): Slot[] {
     {
       from: rs.span.from,
       to: rs.span.to,
-      widget: new FrontmatterBlockWidget(rs.span.body, rs.span.slice),
+      widget: new FrontmatterBlockWidget(rs.span.body, rs.span.slice, true),
     },
   ];
 }
@@ -587,10 +587,10 @@ describe("oracle non-vacuity — a byte-mutating widget fails assertEquivalent",
 
   it("frontmatter: a one-byte slice mutation is rejected", () => {
     const good = [
-      { from: 0, to: 12, widget: new FrontmatterBlockWidget("a: 1", "---\na: 1\n---") },
+      { from: 0, to: 12, widget: new FrontmatterBlockWidget("a: 1", "---\na: 1\n---", true) },
     ];
     const mutant = [
-      { from: 0, to: 12, widget: new FrontmatterBlockWidget("a: 2", "---\na: 2\n---") },
+      { from: 0, to: 12, widget: new FrontmatterBlockWidget("a: 2", "---\na: 2\n---", true) },
     ];
     expect(() => assertEquivalent(good, mutant)).toThrow();
     expect(() => assertEquivalent(good, good)).not.toThrow();
