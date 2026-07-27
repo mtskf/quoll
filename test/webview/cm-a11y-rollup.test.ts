@@ -77,7 +77,8 @@ describe("C8 a11y roll-up — frontmatter metadata block (C8a)", () => {
   it("renders a labelled region (NOT an hr) with a definition list", () => {
     const dom = new FrontmatterBlockWidget(
       "title: x\ndraft: true",
-      "---\ntitle: x\ndraft: true\n---"
+      "---\ntitle: x\ndraft: true\n---",
+      true
     ).toDOM();
     expect(dom.getAttribute("role")).toBe("region");
     expect(dom.getAttribute("aria-label")).toBe("Document metadata");

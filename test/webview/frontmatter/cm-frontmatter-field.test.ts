@@ -1,6 +1,7 @@
 // @vitest-environment happy-dom
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
 import {
+  Compartment,
   EditorSelection,
   EditorState,
   type SelectionRange,
@@ -35,6 +36,59 @@ function frontmatterDecoRanges(view: EditorView): Array<{ from: number; to: numb
     }
   }
   return out;
+}
+
+// The single FrontmatterBlockWidget the field currently projects (or null when
+// not collapsed). Unlike frontmatterDecoRanges this returns the widget INSTANCE,
+// so a test can read its `canWrite` and drive its toDOM/eq.
+function frontmatterWidget(view: EditorView): FrontmatterBlockWidget | null {
+  for (const source of view.state.facet(EditorView.decorations)) {
+    const set = typeof source === "function" ? source(view) : source;
+    const iter = set.iter();
+    while (iter.value !== null) {
+      const widget = (iter.value.spec as { widget?: unknown }).widget;
+      if (widget instanceof FrontmatterBlockWidget) {
+        return widget;
+      }
+      iter.next();
+    }
+  }
+  return null;
+}
+
+// The atomic ranges the field currently provides — pure state (each provider is
+// a `(view) => RangeSet`), so it proves the collapsed span is caret-skippable
+// without measuring layout. Widget-free by construction (collapsedRanges), so it
+// never depends on writability.
+function frontmatterAtomicRanges(view: EditorView): Array<{ from: number; to: number }> {
+  const out: Array<{ from: number; to: number }> = [];
+  for (const build of view.state.facet(EditorView.atomicRanges)) {
+    const set = build(view);
+    const iter = set.iter();
+    while (iter.value !== null) {
+      out.push({ from: iter.from, to: iter.to });
+      iter.next();
+    }
+  }
+  return out;
+}
+
+// Does any atomic range carry a FrontmatterBlockWidget? The atomic path only
+// needs each range's from/to (CM's skipAtomicRanges never reads the value), so it
+// is fed the widget-free `collapsedRanges` set — building a widget here would be
+// waste repeated on every cursor move. Pins that contract: if atomicRanges ever
+// went back to sharing the widget-bearing decorations set, this returns true.
+function frontmatterAtomicSetHasWidget(view: EditorView): boolean {
+  for (const build of view.state.facet(EditorView.atomicRanges)) {
+    const iter = build(view).iter();
+    while (iter.value !== null) {
+      if ((iter.value.spec as { widget?: unknown }).widget instanceof FrontmatterBlockWidget) {
+        return true;
+      }
+      iter.next();
+    }
+  }
+  return false;
 }
 
 function mount(doc: string, selection?: EditorSelection | SelectionRange): EditorView {
@@ -78,6 +132,29 @@ describe("frontmatterBlockField — detection + read-only block", () => {
     try {
       expect(view.state.field(frontmatterBlockField).kind).toBe("collapsed");
       expect(frontmatterDecoRanges(view)).toEqual([{ from: 0, to: SPAN_TO }]);
+    } finally {
+      view.destroy();
+    }
+  });
+
+  it("marks the collapsed span atomic (caret-skippable) and clears it when revealed", async () => {
+    // atomicRanges is fed the widget-free `collapsedRanges` set; it must still
+    // report [0, span.to] when collapsed (so the caret skips the opaque block)
+    // and nothing once revealed (raw source is freely navigable).
+    const view = mount(FM, EditorSelection.cursor(SPAN_TO + 1));
+    try {
+      expect(frontmatterAtomicRanges(view)).toEqual([{ from: 0, to: SPAN_TO }]);
+      // …and it carries NO widget: the atomic path takes the bare `collapsedRanges`
+      // set, not the widget-bearing decorations set. Non-vacuous — if atomicRanges
+      // reverted to sharing `collapsedWidgetSet`, this flips true (the throwaway
+      // FrontmatterBlockWidget the split removed from the cursor-move hot path).
+      expect(frontmatterAtomicSetHasWidget(view)).toBe(false);
+      const { revealFrontmatterEffect } = await import(
+        "../../../src/webview/cm/frontmatter/reveal-state.js"
+      );
+      view.dispatch({ effects: revealFrontmatterEffect.of(null), selection: { anchor: 6 } });
+      expect(view.state.field(frontmatterBlockField).kind).toBe("revealed");
+      expect(frontmatterAtomicRanges(view)).toEqual([]);
     } finally {
       view.destroy();
     }
@@ -342,6 +419,136 @@ describe("frontmatterBlockField — round-trip (byte-identical)", () => {
       });
       expect(view.state.field(frontmatterBlockField).kind).toBe("absent");
       expect(frontmatterDecoRanges(view)).toEqual([]);
+    } finally {
+      view.destroy();
+    }
+  });
+
+  it("mirrors document writability into the widget (read-only mount omits the aria hint)", () => {
+    // The widget's reveal-to-edit hint must reflect the document's real write
+    // access. A writable mount projects a writable widget (hint present); a
+    // read-only mount projects a non-writable one (hint omitted, no dead-end
+    // affordance). This pins the field→widget wiring the flip test then exercises
+    // across a live reconfigure.
+    const rw = mount(FM);
+    const roParent = document.createElement("div");
+    document.body.appendChild(roParent);
+    const ro = new EditorView({
+      state: EditorState.create({
+        doc: FM,
+        extensions: [
+          EditorView.editable.of(false),
+          EditorState.readOnly.of(true),
+          markdown({ base: markdownLanguage }),
+          frontmatterBlockField,
+        ],
+      }),
+      parent: roParent,
+    });
+    try {
+      const rwWidget = frontmatterWidget(rw);
+      expect(rwWidget?.canWrite).toBe(true);
+      expect(rwWidget?.toDOM(rw).getAttribute("aria-description")).toMatch(/caret|edit/i);
+
+      const roWidget = frontmatterWidget(ro);
+      expect(roWidget?.canWrite).toBe(false);
+      expect(roWidget?.toDOM(ro).getAttribute("aria-description")).toBeNull();
+    } finally {
+      rw.destroy();
+      ro.destroy();
+    }
+  });
+
+  it("refreshes the widget's aria-description on a read-only flip (config-only, no doc/selection edit)", () => {
+    // THE BUG: a read-only flip is a config-only reconfigure that leaves the
+    // reveal-state value (and so the field) reference-unchanged. `.from(f, …)`
+    // alone never rebuilds the widget, so its baked writability-gated
+    // aria-description would go stale. The decoration must depend on the
+    // writability facets AND the widget's eq() must include canWrite so CM
+    // actually rebuilds the DOM. Non-vacuous: pre-fix `before === after` (same
+    // memoised instance) and `before.eq(after)` is true, so both assertions fail.
+    const writable = new Compartment();
+    const parent = document.createElement("div");
+    document.body.appendChild(parent);
+    const view = new EditorView({
+      state: EditorState.create({
+        doc: FM,
+        selection: EditorSelection.cursor(0),
+        extensions: [
+          EditorState.allowMultipleSelections.of(true),
+          writable.of([EditorView.editable.of(true), EditorState.readOnly.of(false)]),
+          markdown({ base: markdownLanguage }),
+          frontmatterBlockField,
+        ],
+      }),
+      parent,
+    });
+    try {
+      const before = frontmatterWidget(view);
+      expect(before?.canWrite).toBe(true);
+      expect(before?.toDOM(view).getAttribute("aria-description")).toMatch(/caret|edit/i);
+
+      // Flip to read-only — NO doc change, NO selection change.
+      view.dispatch({
+        effects: writable.reconfigure([
+          EditorView.editable.of(false),
+          EditorState.readOnly.of(true),
+        ]),
+      });
+      // The reveal state itself is untouched (still collapsed) — the widget must
+      // still refresh purely from the writability change.
+      expect(view.state.field(frontmatterBlockField).kind).toBe("collapsed");
+
+      const after = frontmatterWidget(view);
+      expect(after?.canWrite).toBe(false);
+      expect(before?.eq(after as FrontmatterBlockWidget)).toBe(false); // CM will rebuild
+      expect(after?.toDOM(view).getAttribute("aria-description")).toBeNull();
+    } finally {
+      view.destroy();
+    }
+  });
+
+  it("refreshes the widget's aria-description on a WRITABLE flip (recovery direction)", () => {
+    // The mirror of the read-only flip: mount read-only (hint absent), then a
+    // config-only reconfigure back to writable must make the reveal-affordance
+    // aria-description REAPPEAR. An asymmetric eq() that rebuilt only on revoke
+    // (e.g. keyed on `this.canWrite && !other.canWrite`) would pass the read-only
+    // direction yet leave the hint permanently missing after any read-only
+    // excursion — this pins the recovery path the same facet-deps wiring drives.
+    const writable = new Compartment();
+    const parent = document.createElement("div");
+    document.body.appendChild(parent);
+    const view = new EditorView({
+      state: EditorState.create({
+        doc: FM,
+        selection: EditorSelection.cursor(0),
+        extensions: [
+          EditorState.allowMultipleSelections.of(true),
+          writable.of([EditorView.editable.of(false), EditorState.readOnly.of(true)]),
+          markdown({ base: markdownLanguage }),
+          frontmatterBlockField,
+        ],
+      }),
+      parent,
+    });
+    try {
+      const before = frontmatterWidget(view);
+      expect(before?.canWrite).toBe(false);
+      expect(before?.toDOM(view).getAttribute("aria-description")).toBeNull();
+
+      // Flip to writable — NO doc change, NO selection change.
+      view.dispatch({
+        effects: writable.reconfigure([
+          EditorView.editable.of(true),
+          EditorState.readOnly.of(false),
+        ]),
+      });
+      expect(view.state.field(frontmatterBlockField).kind).toBe("collapsed");
+
+      const after = frontmatterWidget(view);
+      expect(after?.canWrite).toBe(true);
+      expect(before?.eq(after as FrontmatterBlockWidget)).toBe(false); // CM will rebuild
+      expect(after?.toDOM(view).getAttribute("aria-description")).toMatch(/caret|edit/i);
     } finally {
       view.destroy();
     }
