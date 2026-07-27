@@ -83,6 +83,31 @@ function attachLinkClickGuard(a: HTMLAnchorElement): void {
     }
     event.preventDefault();
   });
+  // Button-1 (middle-click) activation rides `auxclick` + the browser's native
+  // "open in new tab" default — it does NOT fire `click`, so the guard above
+  // never runs and the widget root handler (also `click`-only) never routes it
+  // through the host `open-external` re-validation + MAX_HREF_LENGTH cap. That
+  // is a bypass of this choke point. The VS Code webview sandbox happens to
+  // neutralise the open today (its iframe carries no `allow-popups`), but the
+  // guard must not depend on that host-controlled flag. Middle-click-to-open is
+  // not a supported gesture — the vetted escape hatch is Cmd/Ctrl+left-click —
+  // so preventDefault every `auxclick` unconditionally (button-agnostic: a
+  // narrowing to button 1 would reopen the guard for the back/forward buttons,
+  // which fire `auxclick` too).
+  a.addEventListener("auxclick", (event) => {
+    event.preventDefault();
+  });
+  // Right-click's native "Open Link" (via the context menu) is a sibling native
+  // bypass, but it is deliberately NOT guarded here. A blanket `contextmenu`
+  // preventDefault also cancels keyboard-invoked menus (Shift+F10 / Menu key),
+  // removing Copy/Open Link for keyboard users with no accessible replacement —
+  // an a11y regression. Closing it properly needs a controlled, accessible menu
+  // that routes opens through the host, which is a separate change. The href is
+  // already allowlist-gated at render time, so the residual path can never reach
+  // a non-allowlisted URL; what it skips is the host re-check (redundant with the
+  // render-time allowlist) AND the MAX_HREF_LENGTH cap — so a document could open
+  // an over-length but still allowlist-safe URL. Bounded, low severity; tracked
+  // as follow-up.
 }
 
 // Walk a Resolved<CellLeaf>[] and emit DOM nodes byte-identically to the
