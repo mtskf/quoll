@@ -104,6 +104,14 @@ describe("renderCellInline", () => {
     expect(html(nodes)).toBe("![x](javascript&amp;#58;1)");
   });
 
+  it("does not cap image src at MAX_HREF_LENGTH (images are exempt — no open-external round-trip)", () => {
+    const longUrl = `https://x.test/${"a".repeat(9000)}.png`; // > MAX_HREF_LENGTH
+    const nodes = renderCellInline(`![x](${longUrl})`);
+    const [img] = nodes as HTMLImageElement[];
+    expect(img).toBeInstanceOf(HTMLImageElement);
+    expect(img.src).toBe(longUrl);
+  });
+
   // ── Consolidated table-cell URL-gate semantics (shared decode→gate) ─────────
   // After routing through the shared renderSafeMarkdownDestination, these inputs
   // are gated identically to the block-image widget + the host write-gate. The
@@ -619,6 +627,24 @@ describe("renderCellInline", () => {
     expect(nodes[0].textContent).toBe(src);
   });
 
+  it("autolink href at exactly MAX_HREF_LENGTH renders live (at-cap boundary, autolink arm)", () => {
+    const prefix = "https://x.example.com/";
+    const atCap = `${prefix}${"a".repeat(MAX_HREF_LENGTH - prefix.length)}`;
+    expect(atCap.length).toBe(MAX_HREF_LENGTH);
+    const [a] = renderCellInline(`<${atCap}>`) as HTMLAnchorElement[];
+    expect(a).toBeInstanceOf(HTMLAnchorElement);
+  });
+
+  it("autolink href one over MAX_HREF_LENGTH renders inert (just-over-cap boundary, autolink arm)", () => {
+    const prefix = "https://x.example.com/";
+    const overCap = `${prefix}${"a".repeat(MAX_HREF_LENGTH - prefix.length + 1)}`;
+    expect(overCap.length).toBe(MAX_HREF_LENGTH + 1);
+    const src = `<${overCap}>`;
+    const nodes = renderCellInline(src);
+    expect(nodes).toHaveLength(1);
+    expect(nodes[0].nodeType).toBe(Node.TEXT_NODE);
+  });
+
   // Button-1 (middle-click) rides `auxclick` + the browser's native "open in
   // new tab" default — it does NOT fire `click` (per the UI Events spec, `click`
   // is primary-button-only), so the click-only guard never runs and the open
@@ -673,6 +699,20 @@ describe("renderCellInline", () => {
     const event = new MouseEvent("click", { bubbles: true, cancelable: true });
     a.dispatchEvent(event);
     expect(event.defaultPrevented).toBe(true);
+  });
+
+  it("does not attach a contextmenu handler on a live link (keyboard-invoked menu / Shift+F10 still works)", () => {
+    const [a] = renderCellInline("[docs](https://example.com)") as HTMLAnchorElement[];
+    const event = new MouseEvent("contextmenu", { bubbles: true, cancelable: true });
+    a.dispatchEvent(event);
+    expect(event.defaultPrevented).toBe(false);
+  });
+
+  it("does not attach a contextmenu handler on a live autolink", () => {
+    const [a] = renderCellInline("<https://example.com>") as HTMLAnchorElement[];
+    const event = new MouseEvent("contextmenu", { bubbles: true, cancelable: true });
+    a.dispatchEvent(event);
+    expect(event.defaultPrevented).toBe(false);
   });
 
   // Autolink positive case — parallel to the inline-link Cmd/Ctrl test above.
