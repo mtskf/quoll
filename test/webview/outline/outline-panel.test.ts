@@ -1260,10 +1260,16 @@ describe("quollOutline resizable width", () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     const { host } = mount("# Alpha\n");
     hoverToggle(host);
-    // Pointer sits on the handle (close cancelled), then leaves it rightward into
-    // the editor: hover-to-close must still fire so the overlay doesn't get stuck.
     leaveSidebar(host);
     handleEl(host).dispatchEvent(new Event("pointerenter"));
+    // Prove the handle's pointerenter cancel actually fired: advance past the
+    // 150ms deadline the sidebar's own leaveSidebar() timer would have closed by,
+    // with nothing else pending. Without the cancel, the panel would be gone here
+    // — so this pins the pointerenter half independently of the re-arm below.
+    vi.advanceTimersByTime(150);
+    expect(isOpen(host)).toBe(true);
+    // Pointer sits on the handle (close cancelled), then leaves it rightward into
+    // the editor: hover-to-close must still fire so the overlay doesn't get stuck.
     handleEl(host).dispatchEvent(new Event("pointerleave"));
     expect(isOpen(host)).toBe(true); // grace window
     vi.advanceTimersByTime(200);
