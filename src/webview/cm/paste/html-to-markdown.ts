@@ -152,21 +152,41 @@ function inlineCode(text: string): string {
  *  outside the markers: CommonMark flanking rules reject a delimiter run adjacent
  *  to whitespace, so `<strong>foo </strong>` must emit `**foo** ` — never
  *  `**foo **`, whose closing run is space-preceded and shows as literal `**`. The
- *  edge run hoisted is spaces (already collapsed to single spaces by `collapseWs`)
- *  AND `<br>` hard-break tokens (`\\\n`), matched as ONE unit via the `(?:\\\n| )`
- *  alternation so the escaping backslash is never split from its newline — a bare
- *  `\s*` edge match would strip the `\n` and leave a dangling `\` that escapes the
- *  marker (`<strong>foo<br></strong>` would emit `**foo\\\n**`, whose newline-
- *  preceded closing run is not right-flanking). All-whitespace content stays
- *  unwrapped (matches the prior `inner.trim() === ""` guard). Wrapping itself is
- *  O(1) and uncounted — `inner`'s leaves were already counted where produced. */
+ *  hoisted edge run is spaces (collapsed to single spaces by `collapseWs`) AND
+ *  `<br>` hard-break tokens (`\` + `\n`), each taken as ONE unit so its escaping
+ *  backslash is never separated from its newline: a whitespace-class match (`\s`)
+ *  would consume only the `\n` and strand the `\` at the boundary, emitting a
+ *  marker-escaping `**foo\**`. When the whole span is hoistable (spaces/`<br>`s
+ *  only) the core is empty and `inner` is returned unwrapped — a `<br>`-only span
+ *  like `<strong><br></strong>` yields a bare hard break, not an empty `**\\\n**`.
+ *  Done with two linear index scans, NOT a regex: an `^edge*? core edge*$` pattern
+ *  backtracks O(n²) on a long `<br>` run fenced by non-hoistable text on both
+ *  sides. Wrapping is O(1)/uncounted — `inner`'s leaves were already counted. */
 function wrapEmphasis(inner: string, marker: string): string {
-  const m = /^((?:\\\n| )*)([\s\S]*?)((?:\\\n| )*)$/.exec(inner);
-  if (m === null) {
-    return inner; // unreachable (the pattern always matches); satisfies the type
+  let start = 0;
+  while (start < inner.length) {
+    if (inner[start] === " ") {
+      start += 1;
+    } else if (inner[start] === "\\" && inner[start + 1] === "\n") {
+      start += 2; // a `<br>` hard-break token — hoisted whole
+    } else {
+      break;
+    }
   }
-  const [, lead, core, trail] = m;
-  return core === "" ? inner : `${lead}${marker}${core}${marker}${trail}`;
+  let end = inner.length;
+  while (end > start) {
+    if (inner[end - 1] === " ") {
+      end -= 1;
+    } else if (inner[end - 1] === "\n" && inner[end - 2] === "\\") {
+      end -= 2;
+    } else {
+      break;
+    }
+  }
+  if (start >= end) {
+    return inner; // all-whitespace / `<br>`-only: nothing to wrap
+  }
+  return `${inner.slice(0, start)}${marker}${inner.slice(start, end)}${marker}${inner.slice(end)}`;
 }
 
 /** Serialise inline content (children of a block) to a Markdown fragment. Text is

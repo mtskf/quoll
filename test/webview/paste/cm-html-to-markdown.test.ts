@@ -66,6 +66,33 @@ describe("htmlToMarkdown — inline constructs", () => {
   it("leaves an all-whitespace emphasis span unwrapped", () => {
     expect(htmlToMarkdown("<p>a<strong> </strong>b</p>")).toBe("a b");
   });
+  it("hoists a <br> off BOTH edges of an emphasis span", () => {
+    const md = htmlToMarkdown("<p><strong><br>foo<br></strong>bar</p>") as string;
+    expect(md).toBe("\\\n**foo**\\\nbar");
+    expect(parsesToNode(md, "StrongEmphasis")).toBe(true);
+  });
+  it("hoists a mixed space+<br> run at one edge (spans a token-type switch)", () => {
+    const md = htmlToMarkdown("<p><strong>foo<br> </strong>bar</p>") as string;
+    expect(md).toBe("**foo**\\\n bar");
+    expect(parsesToNode(md, "StrongEmphasis")).toBe(true);
+  });
+  it("keeps an interior (non-edge) <br> inside the emphasis markers", () => {
+    const md = htmlToMarkdown("<p><strong>foo<br>bar</strong></p>") as string;
+    expect(md).toBe("**foo\\\nbar**");
+    expect(parsesToNode(md, "StrongEmphasis")).toBe(true);
+  });
+  it("hoists a long <br> run fenced by text on both sides in linear time", () => {
+    // Regression pin for the O(n²) backtracking a `^edge*? core edge*$` regex hit
+    // on this exact shape (a long <br> run bounded by non-hoistable text). The
+    // linear-scan hoist keeps it O(n); the prior regex took >2s here for K=40000.
+    const K = 40000;
+    const html = `<p><strong>x${"<br>".repeat(K)}x</strong>y</p>`;
+    const t0 = performance.now();
+    const md = htmlToMarkdown(html);
+    const elapsed = performance.now() - t0;
+    expect(md).not.toBeNull();
+    expect(elapsed).toBeLessThan(1200);
+  });
   it("converts inline code and does NOT escape its content", () => {
     expect(htmlToMarkdown("<p><code>a*b_c</code></p>")).toBe("`a*b_c`");
   });
