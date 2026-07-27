@@ -58,11 +58,12 @@ const LINK_TOOLTIP = `${IS_MAC ? "Cmd" : "Ctrl"}+click to open`;
 // the renderer wrote; `a.href` is normalised by the browser to an
 // absolute URL even for relative input, which would defeat the check.
 //
-// This guard is the single source of truth for "opens externally": an href
-// that passes (ABSOLUTE_HREF_RE + length cap) is left un-preventDefault'd
-// and bubbles to the widget root handler, which routes it through the host
-// `open-external` choke point. Centralising the length cap HERE keeps the
-// root handler a dumb router with no length logic of its own.
+// This guard decides "opens externally" for a LEFT-click: an absolute href is
+// left un-preventDefault'd and bubbles to the widget root handler, which routes
+// it through the host `open-external` choke point. The MAX_HREF_LENGTH cap is
+// NOT re-checked here — it is enforced one layer up by `renderableHref`, so
+// every live `<a href>` reaching this guard is already within the cap (an
+// over-length URL never becomes a live link — see renderReadonly).
 const ABSOLUTE_HREF_RE = /^(?:https?:|mailto:)/i;
 
 function attachLinkClickGuard(a: HTMLAnchorElement): void {
@@ -70,14 +71,12 @@ function attachLinkClickGuard(a: HTMLAnchorElement): void {
   a.addEventListener("click", (event) => {
     if (event.metaKey || event.ctrlKey) {
       const href = a.getAttribute("href") ?? "";
-      // Absolute AND within the host's inbound cap: leave un-preventDefault'd
-      // so the widget root handler routes it through the host open-external
-      // gate. An oversize absolute href would be dropped by the host protocol
-      // validator (MAX_HREF_LENGTH), which — because the root handler
-      // preventDefaults before posting — would leave a dead-click. Cap it HERE
-      // so it falls through to preventDefault → caret reveal, exactly like a
-      // relative href.
-      if (ABSOLUTE_HREF_RE.test(href) && href.length <= MAX_HREF_LENGTH) {
+      // Absolute scheme → leave un-preventDefault'd so the widget root handler
+      // routes it through the host open-external gate. Relative / fragment
+      // hrefs fall through to preventDefault → caret reveal (their in-webview
+      // navigation is undefined). No length check: renderableHref already
+      // guaranteed href.length <= MAX_HREF_LENGTH for every live link.
+      if (ABSOLUTE_HREF_RE.test(href)) {
         return;
       }
     }
@@ -87,27 +86,59 @@ function attachLinkClickGuard(a: HTMLAnchorElement): void {
   // "open in new tab" default — it does NOT fire `click`, so the guard above
   // never runs and the widget root handler (also `click`-only) never routes it
   // through the host `open-external` re-validation + MAX_HREF_LENGTH cap. That
-  // is a bypass of this choke point. The VS Code webview sandbox happens to
-  // neutralise the open today (its iframe carries no `allow-popups`), but the
-  // guard must not depend on that host-controlled flag. Middle-click-to-open is
-  // not a supported gesture — the vetted escape hatch is Cmd/Ctrl+left-click —
+  // is a bypass of this choke point. Whether the VS Code webview's iframe
+  // sandbox (no `allow-popups`) also blocks this specific new-tab open is NOT
+  // verified here — .claude/docs/LEARNING.md's 2026-06-15 entry recorded a
+  // DIFFERENT but cautionary result: an unmodified `<a href>` click on this
+  // same webview was predicted to silently no-op under the CSP sandbox, but a
+  // built-in VS Code handler forwarded it externally anyway. That entry says
+  // nothing about the `allow-popups` attribute specifically — it is cited only
+  // as evidence that "the sandbox will neutralise it" predictions have been
+  // wrong before on this webview, so this guard does not assume the sandbox
+  // saves us. Middle-click-to-open is not a supported gesture — the vetted
+  // escape hatch is Cmd/Ctrl+left-click —
   // so preventDefault every `auxclick` unconditionally (button-agnostic: a
   // narrowing to button 1 would reopen the guard for the back/forward buttons,
   // which fire `auxclick` too).
   a.addEventListener("auxclick", (event) => {
     event.preventDefault();
   });
-  // Right-click's native "Open Link" (via the context menu) is a sibling native
-  // bypass, but it is deliberately NOT guarded here. A blanket `contextmenu`
-  // preventDefault also cancels keyboard-invoked menus (Shift+F10 / Menu key),
-  // removing Copy/Open Link for keyboard users with no accessible replacement —
-  // an a11y regression. Closing it properly needs a controlled, accessible menu
-  // that routes opens through the host, which is a separate change. The href is
-  // already allowlist-gated at render time, so the residual path can never reach
-  // a non-allowlisted URL; what it skips is the host re-check (redundant with the
-  // render-time allowlist) AND the MAX_HREF_LENGTH cap — so a document could open
-  // an over-length but still allowlist-safe URL. Bounded, low severity; tracked
-  // as follow-up.
+  // Right-click's native "Open Link" (context menu) is a sibling native gesture
+  // that, like middle-click, bypasses the click-only guard and would navigate
+  // using the live href without the host round-trip. It is deliberately NOT
+  // suppressed here. UNVERIFIED, DO NOT RELY ON: in a plain browser the native
+  // menu opens the href directly; whether the VS Code webview's iframe sandbox
+  // (no `allow-popups`) also blocks this specific gesture has not been smoke-
+  // tested here. .claude/docs/LEARNING.md's 2026-06-15 entry is a cautionary
+  // precedent, not corroboration of the `allow-popups` claim itself: a plain
+  // `<a href>` click on this same webview was predicted to be neutralised by
+  // the CSP sandbox but a built-in VS Code handler forwarded it externally
+  // anyway — so this guard does not assume the sandbox saves us either
+  // way. We must not blanket-preventDefault `contextmenu`: that also cancels
+  // keyboard-invoked menus (Shift+F10 / Menu key), stripping Copy / Open Link
+  // from keyboard users with no accessible replacement (an a11y regression), and
+  // replacing the native menu with our own is a larger, separate change.
+  //
+  // Instead the bypass is closed at its ROOT by `renderableHref`: every live
+  // `<a href>` is guaranteed BOTH allowlist-safe AND within MAX_HREF_LENGTH, so
+  // whatever the native "Open Link" can reach is byte-identical to what the host
+  // `open-external` sink would open (the host adds only that redundant allowlist
+  // re-check plus the length cap). The over-length residual can no longer render
+  // as a live link, so no native gesture — right-click included — can open a URL
+  // the host would reject. No `contextmenu` handler is attached.
+}
+
+// Gate a tokenizer URL verdict into a href that is safe to expose as a LIVE
+// `<a href>`. `leaf.safeUrl` already carries the allowlist verdict; the only
+// other thing the host `open-external` sink enforces is the MAX_HREF_LENGTH
+// cap, so apply it HERE — at the single point that turns a URL into a live
+// link. An over-cap URL returns null → rendered inert (source text), exactly
+// like a non-allowlisted URL. Consolidating the cap here (rather than in the
+// click guard) is what closes the native-gesture bypasses — right-click "Open
+// Link", middle-click, drag — that never run the click guard: an over-length
+// URL simply never becomes a live href for them to act on.
+function renderableHref(safeUrl: string | null): string | null {
+  return safeUrl !== null && safeUrl.length <= MAX_HREF_LENGTH ? safeUrl : null;
 }
 
 // Walk a Resolved<CellLeaf>[] and emit DOM nodes byte-identically to the
@@ -150,20 +181,23 @@ export function renderReadonly(
             out.push(el);
             break;
           }
-          case "link":
-            if (leaf.safeUrl !== null) {
+          case "link": {
+            const href = renderableHref(leaf.safeUrl);
+            if (href !== null) {
               flushPending();
               const a = document.createElement("a");
-              a.href = leaf.safeUrl;
+              a.href = href;
               a.rel = "noopener noreferrer";
               a.textContent = raw.slice(leaf.label.from, leaf.label.to);
               attachLinkClickGuard(a);
               out.push(a);
             } else {
-              // Unsafe URL — merge the full source slice into pending text (inert).
+              // Unsafe or over-cap URL — merge the full source slice into
+              // pending text (inert), so no native gesture can open it.
               pendingText += raw.slice(node.span.from, node.span.to);
             }
             break;
+          }
           case "image": {
             // Allowlist verdict (leaf.safeUrl) is computed in the tokenizer;
             // the base resolve happens HERE because the resource base is a
@@ -185,11 +219,12 @@ export function renderReadonly(
             }
             break;
           }
-          case "autolink":
-            if (leaf.safeUrl !== null) {
+          case "autolink": {
+            const href = renderableHref(leaf.safeUrl);
+            if (href !== null) {
               flushPending();
               const a = document.createElement("a");
-              a.href = leaf.safeUrl;
+              a.href = href;
               a.rel = "noopener noreferrer";
               a.textContent = raw.slice(leaf.content.from, leaf.content.to);
               attachLinkClickGuard(a);
@@ -198,6 +233,7 @@ export function renderReadonly(
               pendingText += raw.slice(node.span.from, node.span.to);
             }
             break;
+          }
           default:
             assertNever(leaf);
         }

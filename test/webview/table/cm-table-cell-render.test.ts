@@ -104,6 +104,14 @@ describe("renderCellInline", () => {
     expect(html(nodes)).toBe("![x](javascript&amp;#58;1)");
   });
 
+  it("does not cap image src at MAX_HREF_LENGTH (images are exempt — no open-external round-trip)", () => {
+    const longUrl = `https://x.test/${"a".repeat(9000)}.png`; // > MAX_HREF_LENGTH
+    const nodes = renderCellInline(`![x](${longUrl})`);
+    const [img] = nodes as HTMLImageElement[];
+    expect(img).toBeInstanceOf(HTMLImageElement);
+    expect(img.src).toBe(longUrl);
+  });
+
   // ── Consolidated table-cell URL-gate semantics (shared decode→gate) ─────────
   // After routing through the shared renderSafeMarkdownDestination, these inputs
   // are gated identically to the block-image widget + the host write-gate. The
@@ -567,23 +575,29 @@ describe("renderCellInline", () => {
     }
   });
 
-  it("oversize absolute href modifier-click is preventDefault'd (host would drop it → avoid dead-click)", () => {
+  // Over-cap containment (render-layer MAX_HREF_LENGTH gate). An allowlist-safe
+  // but over-length URL is capped at RENDER time — it never becomes a live
+  // `<a href>` — so NO native gesture (right-click "Open Link", middle-click,
+  // drag-to-address-bar) can open a URL the host `open-external` sink would
+  // reject. This is the sandbox-independent close for the context-menu bypass:
+  // whatever the native menu can reach is byte-identical to what the host sink
+  // would open, so `contextmenu` can stay un-suppressed (a11y). Rendered inert,
+  // it merges into surrounding text like any non-allowlisted URL.
+  it("renders an over-length allowlist-safe link inert (no live <a> — unreachable by native Open Link)", () => {
     const longUrl = `https://example.com/${"a".repeat(9000)}`; // > MAX_HREF_LENGTH (8192)
-    const [a] = renderCellInline(`[x](${longUrl})`) as HTMLAnchorElement[];
-    expect(a).toBeInstanceOf(HTMLAnchorElement); // scheme-safe → live <a>, just long
-    for (const modifier of [{ metaKey: true }, { ctrlKey: true }]) {
-      const event = new MouseEvent("click", { bubbles: true, cancelable: true, ...modifier });
-      a.dispatchEvent(event);
-      expect(event.defaultPrevented).toBe(true);
-    }
+    const src = `[x](${longUrl})`;
+    const nodes = renderCellInline(src);
+    expect(nodes).toHaveLength(1);
+    expect(nodes[0].nodeType).toBe(Node.TEXT_NODE);
+    expect(nodes[0].textContent).toBe(src); // inert source slice, no anchor
   });
 
-  it("absolute href at exactly MAX_HREF_LENGTH modifier-click is NOT preventDefault'd (at-cap boundary)", () => {
+  it("absolute href at exactly MAX_HREF_LENGTH renders live and modifier-click is NOT preventDefault'd (at-cap boundary)", () => {
     const prefix = "https://x.example.com/";
     const atCap = `${prefix}${"a".repeat(MAX_HREF_LENGTH - prefix.length)}`;
     expect(atCap.length).toBe(MAX_HREF_LENGTH); // guard against miscalc
     const [a] = renderCellInline(`[x](${atCap})`) as HTMLAnchorElement[];
-    expect(a).toBeInstanceOf(HTMLAnchorElement);
+    expect(a).toBeInstanceOf(HTMLAnchorElement); // at cap → still a live link
     for (const modifier of [{ metaKey: true }, { ctrlKey: true }]) {
       const event = new MouseEvent("click", { bubbles: true, cancelable: true, ...modifier });
       a.dispatchEvent(event);
@@ -591,17 +605,44 @@ describe("renderCellInline", () => {
     }
   });
 
-  it("absolute href one over MAX_HREF_LENGTH modifier-click is preventDefault'd (just-over-cap boundary)", () => {
+  it("absolute href one over MAX_HREF_LENGTH renders inert (just-over-cap boundary)", () => {
     const prefix = "https://x.example.com/";
     const overCap = `${prefix}${"a".repeat(MAX_HREF_LENGTH - prefix.length + 1)}`;
     expect(overCap.length).toBe(MAX_HREF_LENGTH + 1);
-    const [a] = renderCellInline(`[x](${overCap})`) as HTMLAnchorElement[];
-    expect(a).toBeInstanceOf(HTMLAnchorElement); // isAllowedUrl has no length cap → live <a>
-    for (const modifier of [{ metaKey: true }, { ctrlKey: true }]) {
-      const event = new MouseEvent("click", { bubbles: true, cancelable: true, ...modifier });
-      a.dispatchEvent(event);
-      expect(event.defaultPrevented).toBe(true); // over cap → caret reveal
-    }
+    const src = `[x](${overCap})`;
+    const nodes = renderCellInline(src);
+    // Render-layer cap: one byte over → no live <a>, inert source text.
+    expect(nodes).toHaveLength(1);
+    expect(nodes[0].nodeType).toBe(Node.TEXT_NODE);
+    expect(nodes[0].textContent).toBe(src);
+  });
+
+  it("renders an over-length allowlist-safe autolink inert (parity with inline links)", () => {
+    const src = `<https://example.com/${"a".repeat(9000)}>`;
+    const nodes = renderCellInline(src);
+    expect(nodes).toHaveLength(1);
+    expect(nodes[0].nodeType).toBe(Node.TEXT_NODE);
+    // Autolink inert path HTML-escapes the angle brackets (matches the unsafe
+    // autolink case above); assert via textContent to stay escaping-agnostic.
+    expect(nodes[0].textContent).toBe(src);
+  });
+
+  it("autolink href at exactly MAX_HREF_LENGTH renders live (at-cap boundary, autolink arm)", () => {
+    const prefix = "https://x.example.com/";
+    const atCap = `${prefix}${"a".repeat(MAX_HREF_LENGTH - prefix.length)}`;
+    expect(atCap.length).toBe(MAX_HREF_LENGTH);
+    const [a] = renderCellInline(`<${atCap}>`) as HTMLAnchorElement[];
+    expect(a).toBeInstanceOf(HTMLAnchorElement);
+  });
+
+  it("autolink href one over MAX_HREF_LENGTH renders inert (just-over-cap boundary, autolink arm)", () => {
+    const prefix = "https://x.example.com/";
+    const overCap = `${prefix}${"a".repeat(MAX_HREF_LENGTH - prefix.length + 1)}`;
+    expect(overCap.length).toBe(MAX_HREF_LENGTH + 1);
+    const src = `<${overCap}>`;
+    const nodes = renderCellInline(src);
+    expect(nodes).toHaveLength(1);
+    expect(nodes[0].nodeType).toBe(Node.TEXT_NODE);
   });
 
   // Button-1 (middle-click) rides `auxclick` + the browser's native "open in
@@ -658,6 +699,20 @@ describe("renderCellInline", () => {
     const event = new MouseEvent("click", { bubbles: true, cancelable: true });
     a.dispatchEvent(event);
     expect(event.defaultPrevented).toBe(true);
+  });
+
+  it("does not attach a contextmenu handler on a live link (keyboard-invoked menu / Shift+F10 still works)", () => {
+    const [a] = renderCellInline("[docs](https://example.com)") as HTMLAnchorElement[];
+    const event = new MouseEvent("contextmenu", { bubbles: true, cancelable: true });
+    a.dispatchEvent(event);
+    expect(event.defaultPrevented).toBe(false);
+  });
+
+  it("does not attach a contextmenu handler on a live autolink", () => {
+    const [a] = renderCellInline("<https://example.com>") as HTMLAnchorElement[];
+    const event = new MouseEvent("contextmenu", { bubbles: true, cancelable: true });
+    a.dispatchEvent(event);
+    expect(event.defaultPrevented).toBe(false);
   });
 
   // Autolink positive case — parallel to the inline-link Cmd/Ctrl test above.
