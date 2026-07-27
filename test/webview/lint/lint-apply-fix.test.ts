@@ -184,6 +184,20 @@ describe("applyLintFixAtSelection", () => {
     }
   });
 
+  it("does NOT collapse a blank run with the caret at the start of the clean line below", () => {
+    // a@0, ""@2 (allowed), ""@3 (excess, flagged, fix=[3,4)). Caret at 4 = column 0
+    // of the clean content line "b". The caret only touches the fix at its exclusive
+    // `to`, so it must NOT trigger the blank-line deletion (half-open overlap).
+    const doc = "a\n\n\nb\n";
+    const view = viewFor(doc, EditorSelection.cursor(4));
+    try {
+      expect(applyLintFixAtSelection(view)).toBe(false);
+      expect(view.state.sliceDoc()).toBe(doc); // byte-identical
+    } finally {
+      view.destroy();
+    }
+  });
+
   it("collapses a 3-blank run to exactly one blank under a full-run selection", () => {
     const doc = "a\n\n\n\nb\n"; // a@0, ""@2 (allowed), ""@3 ""@4 (excess, flagged)
     const view = viewFor(doc, EditorSelection.single(0, doc.length));
