@@ -644,29 +644,10 @@ describe("renderCellInline", () => {
     expect(event.defaultPrevented).toBe(true);
   });
 
-  // Right-click exposes the native "Open Link" context-menu action, which
-  // navigates using the live href directly — another non-`click` path around
-  // the host open-external gate. Suppress the context menu so it can't.
-  it("right-click (contextmenu) is preventDefault'd (no native 'Open Link' bypass)", () => {
-    const [a] = renderCellInline("[docs](https://example.com)") as HTMLAnchorElement[];
-    expect(a).toBeInstanceOf(HTMLAnchorElement);
-    const event = new MouseEvent("contextmenu", { bubbles: true, cancelable: true, button: 2 });
-    a.dispatchEvent(event);
-    expect(event.defaultPrevented).toBe(true);
-  });
-
   it("autolink middle-click (auxclick) is preventDefault'd (same gate as inline links)", () => {
     const [a] = renderCellInline("<https://example.com>") as HTMLAnchorElement[];
     expect(a).toBeInstanceOf(HTMLAnchorElement);
     const event = new MouseEvent("auxclick", { bubbles: true, cancelable: true, button: 1 });
-    a.dispatchEvent(event);
-    expect(event.defaultPrevented).toBe(true);
-  });
-
-  it("autolink right-click (contextmenu) is preventDefault'd (same gate as inline links)", () => {
-    const [a] = renderCellInline("<https://example.com>") as HTMLAnchorElement[];
-    expect(a).toBeInstanceOf(HTMLAnchorElement);
-    const event = new MouseEvent("contextmenu", { bubbles: true, cancelable: true, button: 2 });
     a.dispatchEvent(event);
     expect(event.defaultPrevented).toBe(true);
   });

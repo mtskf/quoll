@@ -83,30 +83,28 @@ function attachLinkClickGuard(a: HTMLAnchorElement): void {
     }
     event.preventDefault();
   });
-  // Non-primary activation must never reach the browser's native open path,
-  // which bypasses this choke point two ways:
-  //   - Button-1 (middle-click) rides `auxclick` + the native "open in new tab"
-  //     default. It does NOT fire `click`.
-  //   - Right-click exposes the native "Open Link" context-menu action, which
-  //     navigates using the live `href` directly.
-  // Neither fires `click`, so neither the guard above nor the widget root
-  // handler (also `click`-only) routes them through the host `open-external`
-  // re-validation + MAX_HREF_LENGTH cap. The VS Code webview sandbox happens to
-  // neutralise the open today (its iframe carries no `allow-popups` / top-nav),
-  // but the guard must not depend on that host-controlled flag. Neither gesture
-  // is a supported open path — the vetted escape hatch is Cmd/Ctrl+left-click,
-  // which routes through the host — and the widget is display-only (left-click
-  // reveals the source, it never navigates), so suppressing the native context
-  // menu keeps right-click consistent with that model. Both listeners are
-  // button-agnostic on purpose: `auxclick` fires for any non-primary button, so
-  // preventDefault unconditionally rather than gating on `event.button` (a
-  // narrowing to button 1 would reopen the guard for the back/forward buttons).
+  // Button-1 (middle-click) activation rides `auxclick` + the browser's native
+  // "open in new tab" default — it does NOT fire `click`, so the guard above
+  // never runs and the widget root handler (also `click`-only) never routes it
+  // through the host `open-external` re-validation + MAX_HREF_LENGTH cap. That
+  // is a bypass of this choke point. The VS Code webview sandbox happens to
+  // neutralise the open today (its iframe carries no `allow-popups`), but the
+  // guard must not depend on that host-controlled flag. Middle-click-to-open is
+  // not a supported gesture — the vetted escape hatch is Cmd/Ctrl+left-click —
+  // so preventDefault every `auxclick` unconditionally (button-agnostic: a
+  // narrowing to button 1 would reopen the guard for the back/forward buttons,
+  // which fire `auxclick` too).
   a.addEventListener("auxclick", (event) => {
     event.preventDefault();
   });
-  a.addEventListener("contextmenu", (event) => {
-    event.preventDefault();
-  });
+  // Right-click's native "Open Link" (via the context menu) is a sibling native
+  // bypass, but it is deliberately NOT guarded here. A blanket `contextmenu`
+  // preventDefault also cancels keyboard-invoked menus (Shift+F10 / Menu key),
+  // removing Copy/Open Link for keyboard users with no accessible replacement —
+  // an a11y regression. Closing it properly needs a controlled, accessible menu
+  // that routes opens through the host, which is a separate change; the href is
+  // already allowlist-gated at render time, so the residual path only skips the
+  // redundant host re-check, not the allowlist. Tracked as follow-up.
 }
 
 // Walk a Resolved<CellLeaf>[] and emit DOM nodes byte-identically to the
