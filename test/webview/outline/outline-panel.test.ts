@@ -1242,6 +1242,33 @@ describe("quollOutline resizable width", () => {
     h.dispatchEvent(pm(320));
     expect(widthVar(host)).toBe("320px");
   });
+
+  it("hovering the handle cancels the armed hover-close (aiming for the grab never closes)", () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const { host } = mount("# Alpha\n");
+    hoverToggle(host);
+    // Moving the pointer from the sidebar onto the host-sibling handle fires the
+    // sidebar's pointerleave (arming the close); the handle's own pointerenter
+    // must cancel it so a pause while aiming for the grab doesn't close the panel.
+    leaveSidebar(host);
+    handleEl(host).dispatchEvent(new Event("pointerenter"));
+    vi.advanceTimersByTime(1000); // well past the 150ms grace — no pending close
+    expect(isOpen(host)).toBe(true);
+  });
+
+  it("leaving the handle (not back into the sidebar) re-arms the hover-close", () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const { host } = mount("# Alpha\n");
+    hoverToggle(host);
+    // Pointer sits on the handle (close cancelled), then leaves it rightward into
+    // the editor: hover-to-close must still fire so the overlay doesn't get stuck.
+    leaveSidebar(host);
+    handleEl(host).dispatchEvent(new Event("pointerenter"));
+    handleEl(host).dispatchEvent(new Event("pointerleave"));
+    expect(isOpen(host)).toBe(true); // grace window
+    vi.advanceTimersByTime(200);
+    expect(isOpen(host)).toBe(false);
+  });
 });
 
 // Keyboard resize (A11Y-07): the handle is a focusable WAI-ARIA window splitter.

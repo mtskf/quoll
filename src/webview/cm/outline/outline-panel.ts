@@ -398,6 +398,17 @@ class OutlinePanel implements PluginValue {
     this.resizeEl.addEventListener("pointerup", (e) => this.onResizePointerEnd(e));
     this.resizeEl.addEventListener("pointercancel", (e) => this.onResizePointerEnd(e));
     this.resizeEl.addEventListener("keydown", (e) => this.onResizeKeydown(e));
+    // The handle sits over the sidebar's right edge but is a host SIBLING, so
+    // moving the pointer from the sidebar onto it fires the sidebar's
+    // pointerleave (arming the hover-close) without any sidebar-child re-entry to
+    // cancel it — a pause while aiming for the grab would then close the sidebar
+    // mid-reach. Mirror the sidebar's own enter/leave pair here so the handle is a
+    // seamless extension of the hover region: entering cancels the armed close;
+    // leaving it (to the editor, not back into the sidebar) re-arms one, so
+    // hover-to-close still works. scheduleClose no-ops mid-drag (the resizing
+    // guard), and pointer capture suppresses these boundary events during a drag.
+    this.resizeEl.addEventListener("pointerenter", () => this.cancelScheduledClose());
+    this.resizeEl.addEventListener("pointerleave", () => this.scheduleClose());
     // The handle lives on the host, not the sidebar, but belongs to the same
     // outline focus region: bind focusout here too so tabbing from the handle to
     // an element outside the sidebar/handle dismisses the transient overlay (the
