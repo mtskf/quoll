@@ -25,6 +25,31 @@ describe("htmlToMarkdown — inline constructs", () => {
   it("converts italic (<em> and <i>)", () => {
     expect(htmlToMarkdown("<p><em>a</em> <i>c</i></p>")).toBe("*a* *c*");
   });
+  it("hoists trailing space outside bold markers (CommonMark flanking)", () => {
+    // `**foo **` would NOT close (a `**` after a space is not right-flanking) and
+    // the literal `**` would show; the space must sit OUTSIDE the markers.
+    expect(htmlToMarkdown("<p><strong>foo </strong>bar</p>")).toBe("**foo** bar");
+  });
+  it("hoists leading and trailing space outside italic markers", () => {
+    expect(htmlToMarkdown("<p>a<em> b </em>c</p>")).toBe("a *b* c");
+  });
+  it("pins the hoisted emphasis renders as emphasis, not literal markers", () => {
+    // Behavioural pin: the shipped GFM parser must see an Emphasis/StrongEmphasis
+    // node — i.e. the markers actually pair — for the whitespace-edged span.
+    const md = htmlToMarkdown("<p><strong>foo </strong>bar</p>") as string;
+    let strong = false;
+    markdownLanguage.parser.parse(md).iterate({
+      enter: (nd) => {
+        if (nd.name === "StrongEmphasis") {
+          strong = true;
+        }
+      },
+    });
+    expect(strong).toBe(true);
+  });
+  it("leaves an all-whitespace emphasis span unwrapped", () => {
+    expect(htmlToMarkdown("<p>a<strong> </strong>b</p>")).toBe("a b");
+  });
   it("converts inline code and does NOT escape its content", () => {
     expect(htmlToMarkdown("<p><code>a*b_c</code></p>")).toBe("`a*b_c`");
   });
@@ -123,6 +148,20 @@ describe("htmlToMarkdown — block constructs", () => {
   });
   it("converts an ordered list honouring start", () => {
     expect(htmlToMarkdown('<ol start="2"><li>a</li><li>b</li></ol>')).toBe("2. a\n3. b");
+  });
+  it("clamps a negative start to 0 (a valid ordinal, not `-3.`)", () => {
+    // `-3.` is not a list marker → the item would degrade to a paragraph.
+    expect(htmlToMarkdown('<ol start="-3"><li>a</li><li>b</li></ol>')).toBe("0. a\n1. b");
+  });
+  it("clamps an oversized start to the 9-digit ListMark ceiling", () => {
+    // A 10+-digit ordinal stops being a ListMark; clamp to MAX_LIST_NUMBER and do
+    // not let the increment carry it past the ceiling either.
+    expect(htmlToMarkdown('<ol start="99999999999"><li>a</li><li>b</li></ol>')).toBe(
+      "999999999. a\n999999999. b"
+    );
+  });
+  it("falls back to 1 for a malformed (non-numeric) start", () => {
+    expect(htmlToMarkdown('<ol start="abc"><li>a</li><li>b</li></ol>')).toBe("1. a\n2. b");
   });
   it("nests lists tightly with marker-width indentation", () => {
     expect(htmlToMarkdown("<ul><li>a<ul><li>b</li></ul></li></ul>")).toBe("- a\n  - b");

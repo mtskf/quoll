@@ -25,6 +25,7 @@
 //    ANY thrown value, so the handler always has a safe defer-to-plain-paste path.
 
 import { isAllowedUrl } from "../../../markdown/url-allowlist.js";
+import { MAX_LIST_NUMBER } from "../list/list-transform.js";
 import { SKIP_TAGS, tableElementToGfm } from "./html-table-to-gfm.js";
 
 const TEXT_NODE = 3;
@@ -147,6 +148,25 @@ function inlineCode(text: string): string {
   return `${fence}${pad}${text}${pad}${fence}`;
 }
 
+/** Wrap `inner` in an emphasis `marker` (`**`/`*`) with edge spaces HOISTED
+ *  OUTSIDE the markers: CommonMark flanking rules refuse a delimiter run adjacent
+ *  to whitespace, so `<strong>foo </strong>` must emit `**foo** ` (renders as
+ *  emphasis) — never `**foo **` (the literal `**` shows; multiple such spans can
+ *  even mis-pair). Only leading/trailing SPACE is hoisted: text-node whitespace is
+ *  already collapsed to single spaces by `collapseWs`, and a `<br>` hard break
+ *  (`\\\n`) is deliberately left inside so its escaping backslash is never split
+ *  off the newline. All-space content stays unwrapped (matches the prior
+ *  `inner.trim() === ""` guard). Wrapping is O(1) and uncounted — `inner`'s leaves
+ *  were already counted where they were produced. */
+function wrapEmphasis(inner: string, marker: string): string {
+  const m = /^( *)([\s\S]*?)( *)$/.exec(inner);
+  if (m === null) {
+    return inner; // unreachable (the pattern always matches); satisfies the type
+  }
+  const [, lead, core, trail] = m;
+  return core === "" ? inner : `${lead}${marker}${core}${marker}${trail}`;
+}
+
 /** Serialise inline content (children of a block) to a Markdown fragment. Text is
  *  whitespace-collapsed + escaped; recognised inline elements wrap their
  *  serialised children; unknown inline elements recurse transparently. `depth`
@@ -178,10 +198,10 @@ function serializeInline(node: Node, depth: number, ctx: Ctx): string {
   switch (tag) {
     case "STRONG":
     case "B":
-      return inner.trim() === "" ? inner : `**${inner}**`;
+      return wrapEmphasis(inner, "**");
     case "EM":
     case "I":
-      return inner.trim() === "" ? inner : `*${inner}*`;
+      return wrapEmphasis(inner, "*");
     case "A": {
       const href = el.getAttribute("href") ?? "";
       // Link text on one line (a newline in the label would break the link).
@@ -298,13 +318,21 @@ function serializeList(list: Element, depth: number, ctx: Ctx): string {
   }
   const ordered = list.tagName === "OL";
   let n = ordered ? Number.parseInt(list.getAttribute("start") ?? "1", 10) : 0;
+  // Clamp `start` into the ListMark-recognisable range [0, MAX_LIST_NUMBER] (the
+  // same bound `orderedShape` enforces): a negative value would emit `-3.` — not a
+  // list marker, so the item degrades to a paragraph — and a 10+-digit ordinal
+  // breaks @lezer/markdown's ListMark recognition. A malformed `start` (NaN) falls
+  // back to 1. The per-item marker below re-clamps so a start near the ceiling can
+  // never increment past it either.
   if (!Number.isFinite(n)) {
     n = 1;
+  } else {
+    n = Math.min(Math.max(n, 0), MAX_LIST_NUMBER);
   }
   const items: string[] = [];
   for (const li of directChildrenByTag(list, "LI")) {
     bump(ctx);
-    const marker = ordered ? `${n++}. ` : "- ";
+    const marker = ordered ? `${Math.min(n++, MAX_LIST_NUMBER)}. ` : "- ";
     items.push(serializeListItem(li, marker, depth, ctx));
   }
   return items.join("\n");
