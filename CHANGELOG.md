@@ -2,6 +2,12 @@
 
 All notable changes to Quoll are documented here.
 
+## 0.1.56 — 2026-07-28
+
+### Fixed
+
+- Inside a table cell, `[a](x\ y)` now renders as literal text instead of a link, matching how the same text renders everywhere else. Only proper backslash escapes (like `\)`) still keep a link intact.
+
 ## 0.1.55 — 2026-07-27
 
 ### Fixed

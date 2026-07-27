@@ -43,6 +43,21 @@ describe("renderCellInline", () => {
     expect(html(nodes)).toBe("[bad](javascript:alert(1))");
   });
 
+  // CommonMark §2.4: only ASCII punctuation is backslash-escapable. In
+  // `[a](x\ y)` the `\ ` is a literal backslash, so the unescaped space
+  // terminates the bare destination and this is NOT a link — matching the
+  // Lezer write-gate parse. The escaped-punctuation case (`\)`) must still
+  // suppress the paren so a genuine escape keeps the link live.
+  it("renders `[a](x\\ y)` as literal text (`\\ ` is not an escape)", () => {
+    expect(html(renderCellInline("[a](x\\ y)"))).toBe("[a](x\\ y)");
+  });
+
+  it("keeps `[a](x\\)y)` a live link (punctuation escape suppresses the paren)", () => {
+    expect(html(renderCellInline("[a](x\\)y)")).replace(/ title="[^"]*"/g, "")).toBe(
+      '<a href="x)y" rel="noopener noreferrer">a</a>'
+    );
+  });
+
   // CommonMark backslash + HTML-entity bypass. Without decoding the
   // destination before the allowlist gate, `javascript&#58;…`
   // and `javascript\:…` look schemeless to the regex in `isAllowedUrl`,
