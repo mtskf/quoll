@@ -171,6 +171,14 @@ class OutlinePanel implements PluginValue {
    *  into the tree (roving tabindex). All other visible rows are `tabindex="-1"`,
    *  reachable only via the arrow-key handlers. Null while the list is empty. */
   private tabbableFrom: number | null = null;
+  /** `from` of the row a keyboard user last focused, kept in the CURRENT
+   *  document's coordinate space by the same `u.changes.mapPos` remap as
+   *  `collapsedFroms` / `lastAnnouncedFrom` (see `update()`). Set on `focusin`
+   *  (`onRowFocusIn`) and read — only while focus is still live inside the tree —
+   *  by `focusedRowFrom()` so a rebuild re-homes focus onto that exact heading
+   *  even when an edit shifted its offset. A stale value (focus since moved to the
+   *  editor) is harmless: the live-focus gate in `focusedRowFrom()` ignores it. */
+  private pendingFocusedFrom: number | null = null;
   /** Signature of the last rendered list; null forces the first render. */
   private renderedSignature: string | null = null;
   private rebuildTimer: ReturnType<typeof setTimeout> | null = null;
@@ -459,6 +467,13 @@ class OutlinePanel implements PluginValue {
       // as a section change.
       if (this.lastAnnouncedFrom !== null) {
         this.lastAnnouncedFrom = u.changes.mapPos(this.lastAnnouncedFrom, 1);
+      }
+      // …and the focused row's offset, so a rebuild triggered by an edit that
+      // shifts the focused heading (e.g. an external / programmatic edit landing
+      // BEFORE it while a keyboard user is in the tree) re-homes focus onto that
+      // same heading, not the first-visible-row fallback. Same assoc +1 pattern.
+      if (this.pendingFocusedFrom !== null) {
+        this.pendingFocusedFrom = u.changes.mapPos(this.pendingFocusedFrom, 1);
       }
     }
     if (!this.open) {
@@ -894,8 +909,14 @@ class OutlinePanel implements PluginValue {
     this.headings = extractOutline(state, tree);
     const signature = this.headings.map((h) => `${h.from}:${h.level}:${h.text}`).join("\n");
     if (signature !== this.renderedSignature) {
+      // renderList clears the <ul> (textContent = "") and rebuilds every row, so
+      // a rebuild that fires while a keyboard user is navigating the tree (a
+      // background reparse, or the debounced edit rebuild) removes the focused
+      // row and drops focus to <body>. Capture focus first, restore it after.
+      const focusedFrom = this.focusedRowFrom();
       this.renderedSignature = signature;
       this.renderList();
+      this.restoreRowFocus(focusedFrom);
     }
     // A rebuild is structural (open, an edit, or the parser catching up), never a
     // caret navigation — so it re-baselines the announcer silently rather than
@@ -1001,11 +1022,18 @@ class OutlinePanel implements PluginValue {
     } else {
       this.collapsedFroms.add(from);
     }
+    // Capture DOM focus BEFORE hiding rows: refreshVisibility can hide the very
+    // row that holds keyboard focus (a pointer collapse of an ancestor while a
+    // descendant li was focused), and the browser then blurs it to <body>.
+    const focusedFrom = this.focusedRowFrom();
     this.refreshVisibility();
     // A collapse can hide the row that held the tab stop (e.g. a pointer collapse
     // of an ancestor while a descendant was tabbable) — re-home it so the tree
     // never keeps its only tab stop on a `display:none` row.
     this.ensureTabbableVisible();
+    // …and if that row actually held focus, move focus with it so a keyboard
+    // user is never stranded on <body> (the roving tab stop alone is silent).
+    this.restoreRowFocus(focusedFrom);
     this.updateActive();
   }
 
@@ -1036,6 +1064,61 @@ class OutlinePanel implements PluginValue {
     if (row === undefined || row.li.hidden) {
       this.setTabbable(this.firstVisibleFrom());
     }
+  }
+
+  /** `from` of the row that currently holds DOM focus, or null when focus is not
+   *  on a tree row. Read BEFORE a mutation that may hide (refreshVisibility) or
+   *  replace (renderList) rows, so `restoreRowFocus` can re-home focus onto the
+   *  equivalent surviving row — a hidden or removed focused row otherwise strands
+   *  DOM focus on `<body>` (the browser blurs it), silently breaking keyboard
+   *  navigation. Two guards, both essential:
+   *   - the LIVE `activeElement` check keeps this null whenever focus is NOT in
+   *     the tree (typing in the editor with the sidebar open), so restore is a
+   *     no-op and never pulls focus INTO the tree unbidden;
+   *   - the value comes from `pendingFocusedFrom` (set on `focusin`, remapped
+   *     through edits in `update()`), NOT from stale `this.rows` — so an edit
+   *     that shifted the focused heading's offset still yields its CURRENT `from`
+   *     and restore matches it exactly rather than falling to the first row. */
+  private focusedRowFrom(): number | null {
+    if (!this.listEl.contains(document.activeElement)) {
+      return null;
+    }
+    return this.pendingFocusedFrom;
+  }
+
+  /** Re-home focus after a mutation that may have hidden or replaced the focused
+   *  row. Prefers the same heading (by `from`) when it survived and is visible;
+   *  otherwise the nearest visible row above its old position (for a collapse,
+   *  the collapsed ancestor); then the first visible row when the heading vanished
+   *  entirely (a rebuild dropped it); and finally the editor when the tree is now
+   *  empty — so focus is never left stranded on `<body>`. No-op when `from` is
+   *  null (focus was not on a row) so it never steals focus into the tree. */
+  private restoreRowFocus(from: number | null): void {
+    if (from === null) {
+      return;
+    }
+    const idx = this.rows.findIndex((r) => r.heading.from === from);
+    if (idx !== -1 && !this.rows[idx].li.hidden) {
+      this.focusRow(this.rows[idx]); // same heading survived & is visible
+      return;
+    }
+    if (idx !== -1) {
+      for (let i = idx - 1; i >= 0; i--) {
+        if (!this.rows[i].li.hidden) {
+          this.focusRow(this.rows[i]); // nearest visible ancestor / predecessor
+          return;
+        }
+      }
+    }
+    const first = this.rows.find((r) => !r.li.hidden);
+    if (first !== undefined) {
+      this.focusRow(first);
+      return;
+    }
+    // The tree is now empty (every heading removed): nothing inside it can hold
+    // focus, so hand focus back to the editor rather than stranding it on <body>,
+    // mirroring setOpen's hadOutlineFocus rescue on close.
+    this.view.focus();
   }
 
   /** Move the tab stop to a row and focus it — the shared move for every
@@ -1108,8 +1191,7 @@ class OutlinePanel implements PluginValue {
       return;
     }
     if (this.collapsedFroms.has(row.heading.from)) {
-      this.toggleCollapse(row.heading.from); // expand in place
-      this.focusRow(row); // re-assert the tab stop / focus on this row
+      this.toggleCollapse(row.heading.from); // expand in place; re-homes focus itself
     } else {
       // Expanded ⇒ the next row is this parent's first child (build order).
       this.focusRelative(idx, 1);
@@ -1120,8 +1202,7 @@ class OutlinePanel implements PluginValue {
    *  parent row (nearest shallower visible ancestor). */
   private onArrowLeft(idx: number, row: RowRef): void {
     if (row.hasChildren && !this.collapsedFroms.has(row.heading.from)) {
-      this.toggleCollapse(row.heading.from); // collapse in place
-      this.focusRow(row);
+      this.toggleCollapse(row.heading.from); // collapse in place; re-homes focus itself
       return;
     }
     const depth = row.heading.depth;
@@ -1264,6 +1345,10 @@ class OutlinePanel implements PluginValue {
     const row = this.rows.find((r) => r.li === li);
     if (row !== undefined) {
       this.lastAnnouncedFrom = row.heading.from;
+      // Track the focused row so a later rebuild can re-home focus onto this exact
+      // heading; update() keeps it in the current doc's coordinate space. (This is
+      // the sole writer — the value is read only while focus is live in the tree.)
+      this.pendingFocusedFrom = row.heading.from;
       // Cancel a pending live cue ONLY when this focused row IS that cue's target:
       // then the treeitem announcement covers the very section the cue would speak,
       // so firing it too (if focus returns to the editor before the debounce) would
