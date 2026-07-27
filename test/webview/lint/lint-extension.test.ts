@@ -3,7 +3,13 @@ import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
 import { Compartment, EditorState, Text } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { type LintDiagnosticWire, MAX_LINT_DIAGNOSTICS } from "../../../src/shared/protocol.js";
+import {
+  isWebviewToHost,
+  type LintDiagnosticWire,
+  MAX_LINT_DIAGNOSTICS,
+  MAX_LINT_MESSAGE_LENGTH,
+  PROTOCOL_VERSION,
+} from "../../../src/shared/protocol.js";
 import { lintMarkdown } from "../../../src/webview/cm/lint/engine.js";
 import {
   buildLintDecorations,
@@ -547,6 +553,38 @@ describe("toWireDiagnostics (offset → 0-based line/character)", () => {
     expect(wire.some((d) => d.severity === "warning" && d.code === "no-trailing-spaces")).toBe(
       true
     );
+  });
+
+  it("truncates an over-long message so ONE oversize entry can't sink the whole batch", () => {
+    // The host's isLintDiagnosticWire enforces MAX_LINT_MESSAGE_LENGTH via an
+    // `every(...)`, so a single message > the cap rejects the ENTIRE lint-diagnostics
+    // batch and silently blanks the Problems mirror. Rules that embed unbounded
+    // document text (duplicate-heading-text quotes the heading) can cross it.
+    // Truncate at the wire choke point so the batch stays acceptable and the other
+    // diagnostics survive. REVERT-CHECK: dropping the truncation makes the length
+    // assertion fail AND the host validator reject the batch below.
+    const longText = "x".repeat(MAX_LINT_MESSAGE_LENGTH + 500);
+    const doc = Text.of([longText]);
+    const wire = toWireDiagnostics(doc, [
+      { from: 0, to: 1, severity: "warning", code: "duplicate-heading-text", message: longText },
+      { from: 1, to: 2, severity: "info", code: "filler-words", message: "short" },
+    ]);
+    expect(wire[0].message.length).toBeLessThanOrEqual(MAX_LINT_MESSAGE_LENGTH);
+    expect(wire[0].message.endsWith("…")).toBe(true);
+    expect(wire[0].message.startsWith("xxx")).toBe(true);
+    // A message already within the cap is passed through verbatim.
+    expect(wire[1].message).toBe("short");
+    // The host boundary validator now ACCEPTS the whole batch (before truncation the
+    // oversize entry made isWebviewToHost reject it — asserted immediately below).
+    const message = { protocol: PROTOCOL_VERSION, type: "lint-diagnostics", diagnostics: wire };
+    expect(isWebviewToHost(message)).toBe(true);
+    // Non-vacuity: the same batch with the message left un-truncated is rejected.
+    const rejected = {
+      protocol: PROTOCOL_VERSION,
+      type: "lint-diagnostics",
+      diagnostics: [{ ...wire[0], message: longText }, wire[1]],
+    };
+    expect(isWebviewToHost(rejected)).toBe(false);
   });
 
   // AT-completeness pin (A11Y-04): a `wholeLine` finding is the ONE diagnostic
