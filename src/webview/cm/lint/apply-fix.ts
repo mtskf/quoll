@@ -65,7 +65,16 @@ function collectFreshFixesForSelection(state: EditorState): Fix[] {
       continue;
     }
     const { from, to, insert } = d.fix;
-    if (spans.some((s) => from <= s.to && to >= s.from)) {
+    // Fix range is half-open `[from, to)`; the line span is closed `[s.from, s.to]`.
+    // Their intersection is non-empty iff `from <= s.to && to > s.from`. The `to >`
+    // (not `to >=`) is load-bearing: a fix whose `to` equals a content line's start
+    // offset (e.g. the no-multiple-blanks fix, which deletes a blank line up to the
+    // following line's start) must NOT match a caret parked at column 0 of that
+    // clean content line — the caret only touches the fix at its exclusive end, so
+    // the selection doesn't actually intersect the flagged blank line. A caret on
+    // the flagged blank line itself (a zero-length span at `from`) still matches
+    // via the closed `from <= s.to` end.
+    if (spans.some((s) => from <= s.to && to > s.from)) {
       inScope.push({ from, to, insert });
     }
   }
