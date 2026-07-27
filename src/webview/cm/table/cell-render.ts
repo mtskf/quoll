@@ -102,9 +102,12 @@ function attachLinkClickGuard(a: HTMLAnchorElement): void {
   // preventDefault also cancels keyboard-invoked menus (Shift+F10 / Menu key),
   // removing Copy/Open Link for keyboard users with no accessible replacement —
   // an a11y regression. Closing it properly needs a controlled, accessible menu
-  // that routes opens through the host, which is a separate change; the href is
-  // already allowlist-gated at render time, so the residual path only skips the
-  // redundant host re-check, not the allowlist. Tracked as follow-up.
+  // that routes opens through the host, which is a separate change. The href is
+  // already allowlist-gated at render time, so the residual path can never reach
+  // a non-allowlisted URL; what it skips is the host re-check (redundant with the
+  // render-time allowlist) AND the MAX_HREF_LENGTH cap — so a document could open
+  // an over-length but still allowlist-safe URL. Bounded, low severity; tracked
+  // as follow-up.
 }
 
 // Walk a Resolved<CellLeaf>[] and emit DOM nodes byte-identically to the
