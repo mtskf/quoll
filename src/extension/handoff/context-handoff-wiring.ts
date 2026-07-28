@@ -51,6 +51,10 @@ export interface ContextHandoffWiringDeps {
   /** True once the panel is disposed — each arm drops when disposed (parity with
    *  the panel-level top-of-handleInbound guard). */
   readonly isDisposed: () => boolean;
+  /** Arm the reveal-caret suppression latch (reveal-caret-suppression.ts) right
+   *  before showTextDocument, so the caret-handoff tracker does not collapse the
+   *  line-range selection this reveal sets. */
+  readonly armRevealCaretSuppression: () => void;
 }
 
 export interface ContextHandoffWiring {
@@ -176,6 +180,14 @@ export function createContextHandoffWiring(deps: ContextHandoffWiringDeps): Cont
       ? new Position(selection.endLine - 1, document.lineAt(selection.endLine - 1).text.length)
       : new Position(0, 0);
     const start = selection.hasSelection ? new Position(selection.startLine - 1, 0) : end;
+    // Arm the one-shot suppression BEFORE showTextDocument (synchronously, so the
+    // reveal's own onDidChangeActiveTextEditor is the first to consume it). The
+    // caret-handoff tracker fires on a later macrotask; this keeps it from
+    // collapsing the range selection we are about to set. No try/catch: a
+    // showTextDocument reject leaves the latch armed, an accepted self-healing
+    // residual (see reveal-caret-suppression.ts) — a disarm here would clear the
+    // SHARED latch and strip an overlapping sibling reveal's protection.
+    deps.armRevealCaretSuppression();
     await window.showTextDocument(document, {
       viewColumn: visibleColumn ?? ViewColumn.Active,
       preserveFocus: false,

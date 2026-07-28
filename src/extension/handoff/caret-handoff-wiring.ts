@@ -43,6 +43,11 @@ export interface CaretHandoffWiringDeps {
   readonly isDisposed: () => boolean;
   readonly postCaretApply: (caret: Caret) => void;
   readonly dispatchViewStateVisible: () => void;
+  /** Read-and-clear the reveal-caret suppression latch (reveal-caret-suppression.ts).
+   *  True on the FIRST activeEditorSub firing after the context-handoff reveal
+   *  armed it — the tracker then skips the caret apply so the reveal's line-range
+   *  selection survives. False (the common case) → the caret is applied as before. */
+  readonly consumeRevealCaretSuppression: () => boolean;
 }
 
 export interface CaretHandoffWiring {
@@ -186,6 +191,17 @@ export function createCaretHandoffWiring(deps: CaretHandoffWiringDeps): CaretHan
       return;
     }
     if (editor.document.uri.toString() !== uriString) {
+      return;
+    }
+    // Reveal guard: the ⌘⌥K context-handoff reveal just set a line-RANGE
+    // selection on THIS editor via showTextDocument (context-handoff-wiring.ts).
+    // This tracker fires on a LATER macrotask and would collapse it to the
+    // last-known caret. Consume the one-shot latch and skip the apply for that
+    // reveal only — an ordinary Quoll→text switch leaves the latch un-armed, so
+    // the caret is still restored below. Consumed AFTER the uri match (so an
+    // unrelated editor activating first cannot eat the latch) and BEFORE the
+    // null check (so the reveal event always clears it, even if no caret is set).
+    if (deps.consumeRevealCaretSuppression()) {
       return;
     }
     if (lastKnownCaret === null) {

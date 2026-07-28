@@ -97,6 +97,30 @@ export class TabInputText {
   constructor(public readonly uri: StubUri) {}
 }
 
+// Capturable listener registry for onDidChangeActiveTextEditor, the one editor
+// event caret-handoff-wiring.test.ts needs to drive deterministically — no live
+// VS Code host. It constructs the real wiring (which registers via this) and
+// then fires a synthetic activation through `fireActiveTextEditor` to drive
+// `activeEditorSub`. `resetStubEditorListeners` clears it between tests so a
+// torn-down wiring's stale listener never leaks across cases. Additive + inert
+// for every other unit test (nothing else fires it).
+//
+// onDidChangeTextEditorSelection below is a plain no-op-disposable, not a
+// capturable registry: the wiring only needs a disposable back at construction
+// time, and no test fires a synthetic selection change.
+type ActiveTextEditorListener = (editor: unknown) => void;
+const stubActiveTextEditorListeners: ActiveTextEditorListener[] = [];
+
+export function fireActiveTextEditor(editor: unknown): void {
+  for (const cb of [...stubActiveTextEditorListeners]) {
+    cb(editor);
+  }
+}
+
+export function resetStubEditorListeners(): void {
+  stubActiveTextEditorListeners.length = 0;
+}
+
 export const window = {
   get activeTextEditor(): unknown {
     return undefined;
@@ -104,6 +128,20 @@ export const window = {
   showInformationMessage: (_msg: string): Thenable<undefined> => Promise.resolve(undefined),
   showWarningMessage: (_msg: string): Thenable<undefined> => Promise.resolve(undefined),
   showErrorMessage: (_msg: string): Thenable<undefined> => Promise.resolve(undefined),
+  onDidChangeActiveTextEditor: (cb: ActiveTextEditorListener) => {
+    stubActiveTextEditorListeners.push(cb);
+    return {
+      dispose: (): void => {
+        const i = stubActiveTextEditorListeners.indexOf(cb);
+        if (i >= 0) {
+          stubActiveTextEditorListeners.splice(i, 1);
+        }
+      },
+    };
+  },
+  onDidChangeTextEditorSelection: (_cb: (event: unknown) => void) => ({
+    dispose: (): void => {},
+  }),
   tabGroups: {
     activeTabGroup: { activeTab: undefined as unknown },
     all: [] as unknown[],
