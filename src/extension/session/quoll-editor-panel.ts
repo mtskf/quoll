@@ -71,6 +71,7 @@ import { getNonce } from "../get-nonce.js";
 import { createCaretHandoffWiring } from "../handoff/caret-handoff-wiring.js";
 import { createContextHandoffWiring } from "../handoff/context-handoff-wiring.js";
 import { takeSwitchCaret } from "../handoff/editor-switch-caret.js";
+import { createRevealCaretSuppression } from "../handoff/reveal-caret-suppression.js";
 import { createImageWriteWiring } from "../image/image-write-wiring.js";
 import { handleOpenCodeReference } from "../links/handle-open-code-reference.js";
 import { handleOpenExternal } from "../links/handle-open-external.js";
@@ -523,6 +524,12 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
     // panel keeps building the status-bar SLOTS (harness-aware) so it stays the
     // single window.createStatusBarItem caller and can expose the probe trio on
     // panelControls. Disposed with the panel via the teardown loop below.
+    // One-shot latch shared by the two handoff wirings: the context-handoff
+    // reveal arms it before its showTextDocument; the caret tracker consumes it
+    // so the reveal's line-range selection is not collapsed. See
+    // reveal-caret-suppression.ts. One per panel (function-scoped, never
+    // module-level — like the other per-panel caret locals).
+    const revealCaretSuppression = createRevealCaretSuppression();
     const caretWiring = createCaretHandoffWiring({
       document,
       webviewPanel,
@@ -532,6 +539,7 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
       postCaretApply: (caret) => post(buildCaretApplyMessage(caret)),
       dispatchViewStateVisible: () =>
         dispatch({ type: "viewStateVisible", documentVersion: document.version }),
+      consumeRevealCaretSuppression: () => revealCaretSuppression.consume(),
     });
     disposables.push(caretWiring);
 
@@ -726,6 +734,7 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
       viewType: QuollEditorPanel.viewType,
       editSettledBarrier,
       isDisposed: () => disposed,
+      armRevealCaretSuppression: () => revealCaretSuppression.arm(),
     });
 
     const handleInbound = (raw: unknown): void => {
