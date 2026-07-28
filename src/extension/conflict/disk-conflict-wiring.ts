@@ -213,8 +213,12 @@ export function createDiskConflictWiring(deps: DiskConflictWiringDeps): DiskConf
     // onDidChangeTextDocument → the reducer reseeds the webview with disk content
     // AND clears the dirty flag + refreshes VS Code's etag. If the panel never
     // becomes active, the revert is skipped and the watcher's still-dirty
-    // post-condition surfaces the manual revert toast — never a revert of an
-    // unrelated active editor.
+    // post-condition surfaces the manual revert toast. The gate makes the host
+    // dispatch the revert only while THIS panel is active; on the 1.94 pin the
+    // argument-less command is still resolved LATER in the renderer against
+    // whatever is active then, so an unrelated editor could only be hit in the
+    // sub-frame cross-process window after a deliberate tab switch — a documented
+    // platform residual, unclosable without a URI-scoped revert API.
     reloadFromDisk: buildActiveGatedRevert({
       isDisposed: deps.isDisposed,
       isActive: deps.isPanelActive,

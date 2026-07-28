@@ -35,7 +35,9 @@ function normalizeText(text: string): string {
 // NOT cover a valid-UTF-8 file that VS Code was told to decode as another encoding
 // via files.encoding (its buffer mojibakes while the bytes decode cleanly here) —
 // that residual spurious prompt is unreachable without the 1.94-absent encoding
-// API. Either way the failure is a spurious prompt, never data loss.
+// API. In every case the code never SILENTLY discards edits — the worst outcome
+// is a spurious "This file changed on disk" prompt the user can decline via
+// "Keep my edits" (accepting it is a user-confirmed revert, not silent loss).
 //
 //   - fatal TextDecoder throws on invalid UTF-8 (Shift-JIS multibyte, a UTF-16
 //     BOM's 0xFF/0xFE lead) → null.
