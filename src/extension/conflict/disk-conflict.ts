@@ -24,6 +24,42 @@ function normalizeText(text: string): string {
   return withoutBom.replace(/\r\n|\r/g, "\n");
 }
 
+// Decode on-disk bytes to text ONLY when they are unambiguously UTF-8 we can
+// faithfully compare against the (VS-Code-decoded) in-memory buffer; return
+// null otherwise. VS Code 1.94 exposes no decode/encoding API, so a document
+// opened under a non-UTF-8 files.encoding (Shift-JIS, UTF-16) would mojibake if
+// we decoded its bytes as UTF-8 — making diskText !== bufferText ALWAYS true and
+// firing a spurious conflict prompt on every external touch. Rather than guess an
+// encoding we cannot read, we treat non-UTF-8 BYTES as "not comparable" and the
+// caller skips the prompt. This covers files whose bytes are not UTF-8; it does
+// NOT cover a valid-UTF-8 file that VS Code was told to decode as another encoding
+// via files.encoding (its buffer mojibakes while the bytes decode cleanly here) —
+// that residual spurious prompt is unreachable without the 1.94-absent encoding
+// API. In every case the code never SILENTLY discards edits — the worst outcome
+// is a spurious "This file changed on disk" prompt the user can decline via
+// "Keep my edits" (accepting it is a user-confirmed revert, not silent loss).
+//
+//   - fatal TextDecoder throws on invalid UTF-8 (Shift-JIS multibyte, a UTF-16
+//     BOM's 0xFF/0xFE lead) → null.
+//   - a decoded NUL betrays a non-UTF-8 text encoding read byte-wise (BOM-less
+//     UTF-16 of ASCII decodes to valid-but-wrong UTF-8 with interleaved NULs).
+//     Markdown text never contains NUL → treat as untrusted → null.
+//   - the default (ignoreBOM:false) decoder strips a leading UTF-8 BOM, matching
+//     how VS Code normalizes it on load (normalizeText also strips it downstream,
+//     so the two stay consistent).
+export function decodeComparableUtf8(bytes: Uint8Array): string | null {
+  let text: string;
+  try {
+    text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+  } catch {
+    return null;
+  }
+  if (text.includes("\u0000")) {
+    return null;
+  }
+  return text;
+}
+
 // Prompt ONLY when the buffer is dirty AND the on-disk content genuinely
 // diverges from the in-memory buffer. This is a DECODED-content diff (not a raw
 // byte compare): BOM-only and EOL-only differences never prompt, matching how

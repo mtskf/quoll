@@ -34,8 +34,10 @@ export interface DirtyDocConflictWatcherDeps {
   readonly isDisposed: () => boolean;
   /** Live dirty flag of the model (the precondition for a conflict). */
   readonly isDirty: () => boolean;
-  /** Read the on-disk content, decoded to text. Rejects if unreadable. */
-  readonly readDiskText: () => Promise<string>;
+  /** Read the on-disk content, decoded to comparable text. Resolves to `null`
+   *  when the bytes are not faithfully comparable as UTF-8 (non-UTF-8 encoding);
+   *  the watcher then skips the prompt. Rejects if the file is unreadable. */
+  readonly readDiskText: () => Promise<string | null>;
   /** Canonical in-memory buffer text, for the divergence compare. */
   readonly readBufferText: () => string;
   /** Show the conflict prompt; resolves to the chosen action label (or
@@ -85,7 +87,7 @@ export function createDirtyDocConflictWatcher(
     // reload); `finally` always releases it (return / throw both run it).
     conflictActionInFlight = true;
     try {
-      let diskText: string;
+      let diskText: string | null;
       try {
         diskText = await deps.readDiskText();
       } catch (err) {
@@ -95,6 +97,13 @@ export function createDirtyDocConflictWatcher(
         return;
       }
       if (deps.isDisposed()) {
+        return;
+      }
+      // Untrusted disk content (non-UTF-8 read byte-wise): we cannot faithfully
+      // compare it to the buffer, so we must not fire a spurious prompt. Treat it
+      // like a no-divergence result (the file simply is not covered by the
+      // UTF-8-only conflict check on this VS Code version floor).
+      if (diskText === null) {
         return;
       }
       // Re-read isDirty / buffer FRESH after the await: a save that landed
