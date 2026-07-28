@@ -97,6 +97,29 @@ export class TabInputText {
   constructor(public readonly uri: StubUri) {}
 }
 
+// Capturable listener registries for the two editor events the caret-handoff
+// wiring subscribes to. caret-handoff-wiring.test.ts constructs the real wiring
+// (which registers via these) and then fires a synthetic activation through
+// `fireActiveTextEditor` to drive `activeEditorSub` deterministically — no live
+// VS Code host. `resetStubEditorListeners` clears them between tests so a torn-down
+// wiring's stale listener never leaks across cases. Additive + inert for every
+// other unit test (nothing else fires them).
+type ActiveTextEditorListener = (editor: unknown) => void;
+type TextEditorSelectionListener = (event: unknown) => void;
+const stubActiveTextEditorListeners: ActiveTextEditorListener[] = [];
+const stubTextEditorSelectionListeners: TextEditorSelectionListener[] = [];
+
+export function fireActiveTextEditor(editor: unknown): void {
+  for (const cb of [...stubActiveTextEditorListeners]) {
+    cb(editor);
+  }
+}
+
+export function resetStubEditorListeners(): void {
+  stubActiveTextEditorListeners.length = 0;
+  stubTextEditorSelectionListeners.length = 0;
+}
+
 export const window = {
   get activeTextEditor(): unknown {
     return undefined;
@@ -104,6 +127,28 @@ export const window = {
   showInformationMessage: (_msg: string): Thenable<undefined> => Promise.resolve(undefined),
   showWarningMessage: (_msg: string): Thenable<undefined> => Promise.resolve(undefined),
   showErrorMessage: (_msg: string): Thenable<undefined> => Promise.resolve(undefined),
+  onDidChangeActiveTextEditor: (cb: ActiveTextEditorListener) => {
+    stubActiveTextEditorListeners.push(cb);
+    return {
+      dispose: (): void => {
+        const i = stubActiveTextEditorListeners.indexOf(cb);
+        if (i >= 0) {
+          stubActiveTextEditorListeners.splice(i, 1);
+        }
+      },
+    };
+  },
+  onDidChangeTextEditorSelection: (cb: TextEditorSelectionListener) => {
+    stubTextEditorSelectionListeners.push(cb);
+    return {
+      dispose: (): void => {
+        const i = stubTextEditorSelectionListeners.indexOf(cb);
+        if (i >= 0) {
+          stubTextEditorSelectionListeners.splice(i, 1);
+        }
+      },
+    };
+  },
   tabGroups: {
     activeTabGroup: { activeTab: undefined as unknown },
     all: [] as unknown[],
