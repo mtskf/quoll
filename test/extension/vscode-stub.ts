@@ -97,17 +97,19 @@ export class TabInputText {
   constructor(public readonly uri: StubUri) {}
 }
 
-// Capturable listener registries for the two editor events the caret-handoff
-// wiring subscribes to. caret-handoff-wiring.test.ts constructs the real wiring
-// (which registers via these) and then fires a synthetic activation through
-// `fireActiveTextEditor` to drive `activeEditorSub` deterministically — no live
-// VS Code host. `resetStubEditorListeners` clears them between tests so a torn-down
-// wiring's stale listener never leaks across cases. Additive + inert for every
-// other unit test (nothing else fires them).
+// Capturable listener registry for onDidChangeActiveTextEditor, the one editor
+// event caret-handoff-wiring.test.ts needs to drive deterministically — no live
+// VS Code host. It constructs the real wiring (which registers via this) and
+// then fires a synthetic activation through `fireActiveTextEditor` to drive
+// `activeEditorSub`. `resetStubEditorListeners` clears it between tests so a
+// torn-down wiring's stale listener never leaks across cases. Additive + inert
+// for every other unit test (nothing else fires it).
+//
+// onDidChangeTextEditorSelection below is a plain no-op-disposable, not a
+// capturable registry: the wiring only needs a disposable back at construction
+// time, and no test fires a synthetic selection change.
 type ActiveTextEditorListener = (editor: unknown) => void;
-type TextEditorSelectionListener = (event: unknown) => void;
 const stubActiveTextEditorListeners: ActiveTextEditorListener[] = [];
-const stubTextEditorSelectionListeners: TextEditorSelectionListener[] = [];
 
 export function fireActiveTextEditor(editor: unknown): void {
   for (const cb of [...stubActiveTextEditorListeners]) {
@@ -117,7 +119,6 @@ export function fireActiveTextEditor(editor: unknown): void {
 
 export function resetStubEditorListeners(): void {
   stubActiveTextEditorListeners.length = 0;
-  stubTextEditorSelectionListeners.length = 0;
 }
 
 export const window = {
@@ -138,17 +139,9 @@ export const window = {
       },
     };
   },
-  onDidChangeTextEditorSelection: (cb: TextEditorSelectionListener) => {
-    stubTextEditorSelectionListeners.push(cb);
-    return {
-      dispose: (): void => {
-        const i = stubTextEditorSelectionListeners.indexOf(cb);
-        if (i >= 0) {
-          stubTextEditorSelectionListeners.splice(i, 1);
-        }
-      },
-    };
-  },
+  onDidChangeTextEditorSelection: (_cb: (event: unknown) => void) => ({
+    dispose: (): void => {},
+  }),
   tabGroups: {
     activeTabGroup: { activeTab: undefined as unknown },
     all: [] as unknown[],
