@@ -110,6 +110,15 @@ describe("createDirtyDocConflictWatcher", () => {
     expect(w.spies.promptReload).not.toHaveBeenCalled();
   });
 
+  it("does not prompt when the disk read is untrusted (null: non-UTF-8 content)", async () => {
+    const w = makeWatcher({ readDiskText: vi.fn(async () => null) });
+    w.emit();
+    await fireDebounce();
+    expect(w.spies.promptReload).not.toHaveBeenCalled();
+    expect(w.spies.reloadFromDisk).not.toHaveBeenCalled();
+    expect(w.spies.showError).not.toHaveBeenCalled();
+  });
+
   it("does not prompt when disk and buffer do not diverge", async () => {
     const w = makeWatcher({
       readDiskText: vi.fn(async () => "same"),
