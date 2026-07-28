@@ -701,7 +701,16 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
         isDirty: () => document.isDirty,
         readBufferText: () => canonicalDocumentText(document),
         promptOverride: () => this.harness?.diskConflictPromptOverride ?? null,
+        // The active-editor confirm + gate logic lives in buildActiveGatedRevert
+        // (unit-tested); the panel supplies only these logic-free adapters over
+        // webviewPanel. isPanelActive reads webviewPanel.active (throws after
+        // dispose — the factory guards on isDisposed before every read).
         revealPanel: () => webviewPanel.reveal(webviewPanel.viewColumn, false),
+        isPanelActive: () => webviewPanel.active,
+        subscribePanelViewStateChange: (onChange) => {
+          const sub = webviewPanel.onDidChangeViewState(() => onChange());
+          return () => sub.dispose();
+        },
         showError,
       })
     );
