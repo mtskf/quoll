@@ -19,9 +19,13 @@
 // A disarm would close only one of those paths (reject) while adding a real
 // hazard — it clears the SHARED latch, so a reject on one reveal would strip an
 // overlapping sibling reveal's protection — so all three are treated uniformly
-// as an accepted residual rather than special-cased. The mention itself is never
-// affected: insertAtMentioned reads the range before this later-macrotask
-// tracker fires.
+// as an accepted residual rather than special-cased. The mention delegation
+// stays correct throughout: the common path is correct by construction (the
+// latch skips the collapse), and the residual paths (where the latch is
+// stranded) stay cosmetic because the delegated insertAtMentioned read runs
+// before this later-macrotask tracker fires. Leaning on that read-before-tracker
+// ordering for the common path too would be fragile — which is exactly why the
+// latch exists rather than relying on the timing.
 export interface RevealCaretSuppression {
   /** Arm the latch. Idempotent — arming twice before a consume stays one latch. */
   arm(): void;

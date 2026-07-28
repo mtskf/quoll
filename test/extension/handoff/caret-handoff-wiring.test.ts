@@ -115,6 +115,49 @@ describe("caret-handoff wiring: activeEditorSub reveal guard", () => {
     expect(getSelection()).toBeNull();
   });
 
+  it("does NOT consume the latch for a non-matching-uri editor (consume gated behind the uri match)", () => {
+    // Pins the load-bearing ordering: consume() runs AFTER the uri match, so an
+    // unrelated editor activating between arm() and the reveal's own activation
+    // cannot eat the latch (which would let the reveal's activation collapse the
+    // range — the exact regression this guards).
+    let consumeCalls = 0;
+    const wiring = makeWiring(() => {
+      consumeCalls += 1;
+      return true;
+    });
+    wiring.reportCaret({ line: 2, character: 3, selectedChars: 0 });
+
+    // An editor for a DIFFERENT document activates first.
+    const other = { document: { uri: { toString: () => "file:///other.md" } } } as never;
+    fireActiveTextEditor(other);
+    expect(consumeCalls).toBe(0); // latch not eaten by the unrelated editor
+
+    // The reveal's own editor then activates and consumes → range preserved.
+    const { editor, getSelection } = makeEditor();
+    fireActiveTextEditor(editor);
+    expect(consumeCalls).toBe(1);
+    expect(getSelection()).toBeNull();
+  });
+
+  it("consumes the latch on the reveal activation even before any caret-report (consume before the null check)", () => {
+    // Pins the other load-bearing ordering: consume() runs BEFORE the
+    // lastKnownCaret null check, so the reveal's activation always drains the
+    // latch even when no caret has been reported yet — otherwise it would strand
+    // and wrongly skip the NEXT ordinary switch's restore.
+    let consumeCalls = 0;
+    // Construct the wiring for its subscription side-effect; no reportCaret →
+    // lastKnownCaret stays null.
+    makeWiring(() => {
+      consumeCalls += 1;
+      return true; // armed by the reveal
+    });
+
+    const { editor, getSelection } = makeEditor();
+    fireActiveTextEditor(editor);
+    expect(consumeCalls).toBe(1); // latch cleared despite the null caret
+    expect(getSelection()).toBeNull();
+  });
+
   it("is one-shot: an ordinary activation after a consumed reveal restores the caret", () => {
     let armed = true;
     const wiring = makeWiring(() => {
