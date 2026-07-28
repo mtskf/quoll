@@ -7,6 +7,7 @@ All notable changes to Quoll are documented here.
 ### Fixed
 
 - Format Document now leaves a table whose delimiter row omits its outer pipes (e.g. `:-- | --:`) byte-untouched, matching how it already treats pipe-less header and body rows, instead of rewriting just that row's outer pipes.
+- When a file is changed on disk while you have unsaved edits, the reload-or-keep prompt now only fires for the document you're actually looking at, and a file that isn't valid UTF-8 no longer triggers a spurious conflict — closing edge cases that could otherwise discard your in-editor changes.
 
 ## 0.1.57 — 2026-07-28
 
@@ -19,6 +20,7 @@ All notable changes to Quoll are documented here.
 ### Fixed
 
 - Inside a table cell, `[a](x\ y)` now renders as literal text instead of a link, matching how the same text renders everywhere else. Only proper backslash escapes (like `\)`) still keep a link intact.
+- Links inside table cells now go through Quoll's link-safety check consistently no matter how you open them — middle-click and the right-click "Open Link" menu can no longer bypass the validation that a normal click already went through.
 
 ## 0.1.55 — 2026-07-27
 
@@ -26,6 +28,11 @@ All notable changes to Quoll are documented here.
 
 - Pasting rich text where a bold or italic span has whitespace at its edge (a space, or a line break, just inside the bold) now renders as emphasis instead of showing the literal `**`/`*` markers.
 - Pasting a numbered list that starts at an unusual value (a negative or very large `start`) now produces a valid numbered list instead of degrading to plain paragraphs.
+- Clicking a code reference like `` `src/foo.ts` `` in a document that lives outside every open workspace folder now opens the file next to the document, instead of guessing a same-named file under an unrelated workspace root.
+- A lint rule with a very long message (for example one quoting a long duplicate heading) no longer blanks out the whole Problems list for the document — the message is trimmed and the other problems still show.
+- Keyboard focus in the outline is now preserved when a section collapses or the outline rebuilds after an edit, instead of dropping back to the top of the page.
+- Reaching for the outline sidebar's resize handle no longer causes the hover-opened sidebar to close mid-reach.
+- The `Cmd/Ctrl+.` lint autofix no longer deletes the blank line above when the caret is resting at the start of the following (clean) line — it now only acts when the caret is actually on the flagged line.
 
 ## 0.1.54 — 2026-07-25
 
