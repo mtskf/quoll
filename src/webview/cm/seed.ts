@@ -31,3 +31,57 @@ export function detectLineSeparator(rawText: string): "\r\n" | "\n" {
 export function splitToCmText(rawText: string): Text {
   return Text.of(rawText.split(/\r\n?|\n/));
 }
+
+/** Compute the minimal single-span change that rewrites `oldDoc` (the live CM
+ *  document) into `newDoc` (the host snapshot, already LF-normalised via
+ *  {@link splitToCmText}). BOTH operands are CM `Text`, so the offsets are in
+ *  CodeMirror's LF-internal coordinate space (`doc.length`) — the caller MUST
+ *  pass `view.state.doc`, NOT `view.state.sliceDoc()`. `sliceDoc()` renders with
+ *  the `lineSeparator` facet (`\r\n` for a CRLF doc), which would inflate the
+ *  offsets and could push `to` past `doc.length` (a `RangeError` on dispatch, or
+ *  a silently shifted insert); `Text.toString()` always joins with `\n`.
+ *
+ *  Trimming the common prefix + suffix is what keeps an external reseed from
+ *  springing every fold open: `applyDocument`'s reseed used a wholesale
+ *  `{from: 0, to: doc.length}` replace, and CodeMirror maps ALL `foldState`
+ *  ranges through that delete — a whole-doc delete drops them, so any external
+ *  touch unfolds the document. A minimal span only maps away ranges that overlap
+ *  the actual edit; everything outside survives.
+ *
+ *  The result is content-exact regardless of surrogate boundaries: the applied
+ *  doc is `oldStr[0..from) + insert + oldStr[to..)`, and by construction the two
+ *  outer slices equal `newDoc`'s prefix/suffix and `insert` is
+ *  `newDoc.slice(from, newLen - suffix)`, so the concatenation reassembles
+ *  `newDoc` even if `from`/`to` fall inside a surrogate pair. No surrogate
+ *  special-casing is required. `insert` is a sub-`Text` (no re-split). The change
+ *  is empty (`from === to`, `insert.length === 0`) iff the two docs are
+ *  content-identical. */
+export function computeReseedChange(
+  oldDoc: Text,
+  newDoc: Text
+): { from: number; to: number; insert: Text } {
+  const oldStr = oldDoc.toString();
+  const newStr = newDoc.toString();
+  const oldLen = oldStr.length;
+  const newLen = newStr.length;
+  const maxPrefix = Math.min(oldLen, newLen);
+  let prefix = 0;
+  while (prefix < maxPrefix && oldStr.charCodeAt(prefix) === newStr.charCodeAt(prefix)) {
+    prefix++;
+  }
+  // Suffix must not reach back past the prefix on either side (prevents a
+  // negative-length span when the two shared runs overlap, e.g. "aaa"->"aa").
+  const maxSuffix = maxPrefix - prefix;
+  let suffix = 0;
+  while (
+    suffix < maxSuffix &&
+    oldStr.charCodeAt(oldLen - 1 - suffix) === newStr.charCodeAt(newLen - 1 - suffix)
+  ) {
+    suffix++;
+  }
+  return {
+    from: prefix,
+    to: oldLen - suffix,
+    insert: newDoc.slice(prefix, newLen - suffix),
+  };
+}
