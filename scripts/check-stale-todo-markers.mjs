@@ -18,10 +18,12 @@
 //    under .claude/, gitignored, absent from CI checkouts), so it never hard-
 //    blocks a contributor. A missing/unauthenticated/rate-limited `gh` warns
 //    and exits 0.
-//  - The pure / dependency-injected exports (`parseEntry`, `resolveEntry`,
-//    `scanTodo`, `summarize`, `runScan`, `classifyGhError`) are unit-tested
-//    with in-memory fixtures and a fake `ghRunner`; `main()` is a thin fs +
-//    console + process.exit wrapper behind the import-guard at the bottom.
+//  - The pure / dependency-injected exports (`parseInflight`, `parseEntry`,
+//    `resolveEntry`, `scanTodo`, `summarize`, `runScan`) are unit-tested with
+//    in-memory fixtures and a fake `ghRunner`; `classifyGhError` is pinned with
+//    fake error objects and `ghExec` with a fake `exec` (both a different seam,
+//    not the `ghRunner`). `main()` is a thin fs + console + process.exit
+//    wrapper behind the import-guard at the bottom.
 //
 // Verdict correctness (three false-verdict paths this file deliberately avoids):
 //  (a) REUSED head-branch name — a branch name may be reused after its first
@@ -210,7 +212,7 @@ export function scanTodo(text, ghRunner = ghExec) {
         aborted = { reason: err.message };
         break;
       }
-      throw err; // taxonomy-external → a real bug, surface it (Finding 2)
+      throw err; // taxonomy-external → a real bug, surface it (never swallowed)
     }
     if (result.status === "stale") {
       stale.push({ entry, merged: result.merged });
