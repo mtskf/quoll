@@ -5,6 +5,7 @@
 
 import { MAX_IMAGE_DATA_LENGTH } from "../../shared/protocol.js";
 import { decideImageWrite, type ImageRejectReason } from "./image-ingest.js";
+import type { SessionVolumeBudget } from "./image-write-budget.js";
 
 export function imageRejectToast(reason: ImageRejectReason): string {
   switch (reason) {
@@ -29,13 +30,15 @@ export type ImageWriteDeps = {
   showError: (message: string) => void;
   /** Post the image-write-result; `null` path ⇒ ok:false. */
   postResult: (requestId: string, relativePath: string | null) => void;
-  /** Charge the session cumulative-volume budget for a to-be-written image of
-   *  `byteLength` bytes; returns false once the session cap is exceeded. Checked
-   *  AFTER validation (only bytes that would actually hit disk are counted) and
-   *  the budget owns its own one-time user warning, so this path posts ok:false
-   *  WITHOUT a showError. Omitted ⇒ unbounded (the service's historical
-   *  behaviour); the Panel wiring supplies the real per-session budget. */
-  reserveBudget?: (byteLength: number) => boolean;
+  /** Session cumulative-volume budget (the DoS cap this service enforces).
+   *  REQUIRED, not optional: a security-load-bearing dep must never default to
+   *  "unbounded" — callers that genuinely want no cap pass an all-permitting
+   *  budget explicitly, so "unbounded" is a visible decision, not a silent one.
+   *  reserve() is charged AFTER validation (only bytes that would reach disk),
+   *  and released again if the write then fails, so the running total counts
+   *  only bytes actually written. The budget owns its own one-time warning, so
+   *  a budget rejection posts ok:false WITHOUT a showError. */
+  budget: SessionVolumeBudget;
 };
 
 /** Validate + write a base64 image and post the result. Never throws — every
@@ -71,10 +74,12 @@ export async function handleImageWrite(
     deps.postResult(requestId, null);
     return;
   }
-  // Session cumulative-volume gate: count only validated bytes (those that would
-  // reach disk), AFTER the per-message caps above. The budget surfaces its own
-  // one-time warning, so this rejection just clears the webview's pending entry.
-  if (deps.reserveBudget && !deps.reserveBudget(decision.bytes.length)) {
+  // Session cumulative-volume gate: reserve the validated byte count (only bytes
+  // that would reach disk), AFTER the per-message caps above and BEFORE the async
+  // write so concurrent fire-and-forget writes can't each overshoot the cap. The
+  // budget surfaces its own one-time warning, so this rejection just clears the
+  // webview's pending entry.
+  if (!deps.budget.reserve(decision.bytes.length)) {
     deps.postResult(requestId, null);
     return;
   }
@@ -82,6 +87,10 @@ export async function handleImageWrite(
     const relativePath = await deps.writeImage(decision.filename, decision.bytes);
     deps.postResult(requestId, relativePath);
   } catch (err) {
+    // The write failed — no bytes reached disk, so refund the reservation.
+    // Otherwise a run of transient FS failures would exhaust the session cap and
+    // lock out legitimate pastes until the document is reopened.
+    deps.budget.release(decision.bytes.length);
     console.error("[quoll] image write failed", err);
     deps.showError(
       "Quoll: failed to write the image file. See the extension host log for details."

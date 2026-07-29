@@ -65,7 +65,7 @@ export function createImageWriteWiring(deps: ImageWriteWiringDeps): ImageWriteWi
         {
           canWrite: deps.canWrite,
           showError: deps.showError,
-          reserveBudget: (byteLength) => budget.reserve(byteLength),
+          budget,
           postResult: (id, relativePath) =>
             deps.post(buildImageWriteResultMessage(id, relativePath)),
           // writeImage creates <docFolder>/assets/ then writes — the explicit
