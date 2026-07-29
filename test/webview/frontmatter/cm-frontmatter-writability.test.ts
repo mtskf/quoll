@@ -34,11 +34,20 @@ describe("frontmatter writability contract", () => {
     expect(writabilityFacets).toHaveLength(2);
   });
 
-  it("every declared dependency actually gates writability (no dead entries)", () => {
-    // From a fully-writable baseline, flipping each gating facet to its
-    // non-writable value must turn isWritable false. A dependency listed in
-    // writabilityFacets that isWritable ignored would leave one of these true.
-    expect(isWritable(stateWith({ readOnly: true, editable: true }))).toBe(false);
-    expect(isWritable(stateWith({ readOnly: false, editable: false }))).toBe(false);
+  it("every facet in writabilityFacets actually gates isWritable (no dead entries)", () => {
+    // Drive the real writabilityFacets list: from a fully-writable baseline,
+    // flipping ANY one listed facet away from its writable value must turn
+    // isWritable false. A facet listed in writabilityFacets that isWritable
+    // ignored (a dead entry) would leave isWritable true on that facet's flip.
+    const base = stateWith({ readOnly: false, editable: true });
+    expect(isWritable(base)).toBe(true);
+    for (const target of writabilityFacets) {
+      const flipped = EditorState.create({
+        extensions: writabilityFacets.map((facet) =>
+          facet.of(facet === target ? !base.facet(facet) : base.facet(facet))
+        ),
+      });
+      expect(isWritable(flipped)).toBe(false);
+    }
   });
 });
