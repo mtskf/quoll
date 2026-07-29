@@ -409,7 +409,9 @@ export type EditMessage = Envelope & {
  *
  *  `href` is the already-decoded URL string (post
  *  decodeMarkdownDestination) — NOT raw Markdown source bytes. The host
- *  feeds it straight to isAllowedUrl + Uri.parse with no further decode. */
+ *  feeds it to isAllowedUrl, then rebuilds the URL via `buildExternalUri`
+ *  (WHATWG split + `Uri.from`) so path/query percent-encoding (`%2F`/`+`)
+ *  reaches the browser intact — no `Uri.parse` round-trip, no further decode. */
 export type OpenExternalMessage = Envelope & {
   type: "open-external";
   href: string;

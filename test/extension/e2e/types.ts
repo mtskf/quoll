@@ -246,7 +246,7 @@ export interface TestHarnessShape {
   webviewPostMessageOverride:
     | ((message: { type: string } & Record<string, unknown>) => Thenable<boolean>)
     | null;
-  openExternalOverride: ((url: string) => Thenable<boolean>) | null;
+  openExternalOverride: ((uri: Uri) => Thenable<boolean>) | null;
   openLinkOverride: ((uri: Uri) => Thenable<unknown>) | null;
   openCodeReferenceOverride:
     | ((uri: Uri, line: number | undefined, col: number | undefined) => Thenable<unknown>)

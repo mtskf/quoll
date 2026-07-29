@@ -65,9 +65,10 @@ function sanitizeForLog(href: string): string {
 export type HandleOpenExternalDeps = {
   /** vscode.env.openExternal binding (or a test mock). Returns a Thenable
    *  per VS Code's API contract. The QuollEditorPanel wire-up wraps
-   *  `(url) => env.openExternal(Uri.parse(url))`; Uri.parse can throw
-   *  synchronously on malformed input that isAllowedUrl missed (review
-   *  fix #6) — handleOpenExternal absorbs that throw. */
+   *  `(url) => env.openExternal(buildExternalUri(url))`; `buildExternalUri`
+   *  (or its `Uri.parse` fallback) can throw synchronously on malformed input
+   *  that isAllowedUrl missed (review fix #6) — handleOpenExternal absorbs
+   *  that throw. */
   openExternal: (url: string) => Thenable<boolean>;
   /** Host showError (a window.showErrorMessage wrapper). Surfaces a
    *  user-visible toast when a launch fails so a failed link click is not
