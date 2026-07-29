@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
+import { createSessionVolumeBudget } from "../../../src/extension/image/image-write-budget.js";
 import { handleImageWrite } from "../../../src/extension/image/image-write-service.js";
 import { MAX_IMAGE_DATA_LENGTH } from "../../../src/shared/protocol.js";
 
@@ -8,7 +9,7 @@ const pngBase64 = Buffer.from(PNG).toString("base64");
 
 // An all-permitting budget stub — the default so tests that don't exercise the
 // cap read cleanly. Tests that care pass a spy via `overrides.budget`.
-const unboundedBudget = () => ({ reserve: vi.fn(() => true), release: vi.fn() });
+const unboundedBudget = () => ({ reserve: vi.fn(() => true) });
 
 function makeDeps(overrides: Partial<Parameters<typeof handleImageWrite>[0]> = {}) {
   const writeImage = vi.fn(async (filename: string) => `./assets/${filename}`);
@@ -66,7 +67,7 @@ describe("handleImageWrite", () => {
     expect(budget.reserve).not.toHaveBeenCalled();
   });
 
-  it("surfaces an error, posts null, AND refunds the budget when writeImage rejects", async () => {
+  it("surfaces an error and posts null when writeImage rejects, and keeps the charge (no refund)", async () => {
     const writeImage = vi.fn(async () => {
       throw new Error("disk full");
     });
@@ -74,23 +75,46 @@ describe("handleImageWrite", () => {
     const { deps, postResult, showError } = makeDeps({ writeImage, budget });
     await handleImageWrite(deps, "r1", pngBase64);
     expect(postResult).toHaveBeenCalledWith("r1", null);
+    // Exactly one result post — the success post is outside the try, so a write
+    // failure does not double-post.
+    expect(postResult).toHaveBeenCalledTimes(1);
     expect(showError).toHaveBeenCalledTimes(1);
-    // A failed write reached no disk, so its reservation is released — otherwise
-    // a run of transient FS failures would exhaust the session cap.
+    // The charge stands even though the write failed: a failed write can still
+    // leave a partial file, so the budget must count the attempt (no refund API).
     expect(budget.reserve).toHaveBeenCalledWith(PNG.length);
-    expect(budget.release).toHaveBeenCalledWith(PNG.length);
+    expect(budget).not.toHaveProperty("release");
   });
 
-  it("rejects an over-cap data string without decoding or writing", async () => {
-    const { deps, writeImage, postResult } = makeDeps();
+  it("a run of failed writes deterministically exhausts the session cap (fail-safe, no refund)", async () => {
+    // Real (small) budget so the no-refund contract is exercised end-to-end: two
+    // failed writes still consume the cap, so the third is rejected before the
+    // write is even attempted — this is what bounds disk under a write-failure
+    // flood. PNG is 9 bytes; budget = 2 writes' worth.
+    const writeImage = vi.fn(async () => {
+      throw new Error("disk full");
+    });
+    const budget = createSessionVolumeBudget(PNG.length * 2, vi.fn());
+    const { deps } = makeDeps({ writeImage, budget });
+    await handleImageWrite(deps, "r1", pngBase64); // charged, write fails
+    await handleImageWrite(deps, "r2", pngBase64); // charged, write fails — cap full
+    await handleImageWrite(deps, "r3", pngBase64); // over budget — rejected pre-write
+    expect(writeImage).toHaveBeenCalledTimes(2); // r3 never reached the write
+  });
+
+  it("rejects an over-cap data string without decoding, writing, OR charging the budget", async () => {
+    const budget = unboundedBudget();
+    const { deps, writeImage, postResult } = makeDeps({ budget });
     const huge = "a".repeat(MAX_IMAGE_DATA_LENGTH + 1);
     await handleImageWrite(deps, "r1", huge);
     expect(writeImage).not.toHaveBeenCalled();
     expect(postResult).toHaveBeenCalledWith("r1", null);
+    // The over-cap early exit precedes the budget charge — pins that an
+    // undecoded, oversized payload never touches the session budget.
+    expect(budget.reserve).not.toHaveBeenCalled();
   });
 
   it("rejects a validated write when the session budget denies it (no showError — the budget warns)", async () => {
-    const budget = { reserve: vi.fn(() => false), release: vi.fn() };
+    const budget = { reserve: vi.fn(() => false) };
     const { deps, writeImage, postResult, showError } = makeDeps({ budget });
     await handleImageWrite(deps, "r1", pngBase64);
     // The image passed every per-message gate — the budget is charged with the
@@ -98,21 +122,17 @@ describe("handleImageWrite", () => {
     expect(budget.reserve).toHaveBeenCalledWith(PNG.length);
     expect(writeImage).not.toHaveBeenCalled();
     expect(postResult).toHaveBeenCalledWith("r1", null);
-    // A denied reservation was never charged, so nothing to release.
-    expect(budget.release).not.toHaveBeenCalled();
     // The budget owns its one-time warning; the service must NOT toast here.
     expect(showError).not.toHaveBeenCalled();
   });
 
-  it("writes normally when the session budget allows it (and does not release on success)", async () => {
-    const budget = { reserve: vi.fn(() => true), release: vi.fn() };
+  it("writes normally when the session budget allows it", async () => {
+    const budget = { reserve: vi.fn(() => true) };
     const { deps, writeImage, postResult } = makeDeps({ budget });
     await handleImageWrite(deps, "r1", pngBase64);
     expect(budget.reserve).toHaveBeenCalledWith(PNG.length);
     expect(writeImage).toHaveBeenCalledTimes(1);
     const [filename] = writeImage.mock.calls[0];
     expect(postResult).toHaveBeenCalledWith("r1", `./assets/${filename}`);
-    // A successful write keeps its charge — no refund.
-    expect(budget.release).not.toHaveBeenCalled();
   });
 });

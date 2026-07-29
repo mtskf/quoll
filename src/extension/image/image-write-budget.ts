@@ -33,15 +33,19 @@ export interface SessionVolumeBudget {
    *  be exceeded — in which case `onExceeded` fires exactly once across the
    *  session's lifetime, no matter how many further writes are attempted.
    *  Reserve BEFORE the async write so concurrent (fire-and-forget) writes can't
-   *  each independently pass the check and overshoot the cap; `release` the
-   *  reservation if that write then fails (see below). */
+   *  each independently pass the check and overshoot the cap.
+   *
+   *  There is deliberately NO release/refund counterpart: a charge is never
+   *  reversed, even when the subsequent write fails. This is the fail-SAFE
+   *  choice for a disk-fill cap — `workspace.fs.writeFile` gives no atomicity
+   *  guarantee, so a failed write can still leave a partial content-addressed
+   *  file on disk; refunding it would let an attacker loop failing writes and
+   *  grow the disk without bound while every reservation is returned. Counting
+   *  the attempt keeps total disk growth bounded by the budget. The only cost is
+   *  that a session hitting many genuine FS failures may reach the cap early
+   *  (reopen the document to reset) — negligible for real use against a 512 MiB
+   *  ceiling. */
   reserve(byteLength: number): boolean;
-  /** Refund a prior `reserve(byteLength)` whose write did not reach disk (an FS
-   *  failure after the reservation). Keeps the running total counting only bytes
-   *  actually written, so a run of transient write failures can't exhaust the
-   *  session cap. No-op below zero. Never un-warns: a released reservation was,
-   *  by definition, admitted — it never tripped `onExceeded`. */
-  release(byteLength: number): void;
 }
 
 // Guard the numeric domain the running total assumes (non-negative integer).
@@ -75,10 +79,6 @@ export function createSessionVolumeBudget(
       }
       spent += byteLength;
       return true;
-    },
-    release(byteLength) {
-      assertByteLength(byteLength);
-      spent = Math.max(0, spent - byteLength);
     },
   };
 }
