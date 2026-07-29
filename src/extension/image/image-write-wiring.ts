@@ -18,6 +18,11 @@ import { Uri, workspace } from "vscode";
 
 import type { HostToWebview } from "../../shared/protocol.js";
 import { buildImageWriteResultMessage } from "../session/document-message.js";
+import {
+  createSessionVolumeBudget,
+  SESSION_IMAGE_WRITE_BUDGET_BYTES,
+  SESSION_IMAGE_WRITE_BUDGET_TOAST,
+} from "./image-write-budget.js";
 import { handleImageWrite } from "./image-write-service.js";
 
 export interface ImageWriteWiringDeps {
@@ -35,6 +40,10 @@ export interface ImageWriteWiringDeps {
    *  (harness.writeImageFileOverride) — read PER WRITE (it can be set after
    *  resolve). null routes to workspace.fs.writeFile. */
   readonly writeFileOverride: () => ((uri: Uri, content: Uint8Array) => Thenable<void>) | null;
+  /** Session cumulative-volume ceiling in bytes. Defaults to
+   *  SESSION_IMAGE_WRITE_BUDGET_BYTES; overridable only so tests can trip the cap
+   *  without allocating half a gigabyte. */
+  readonly budgetBytes?: number;
 }
 
 export interface ImageWriteWiring {
@@ -44,12 +53,19 @@ export interface ImageWriteWiring {
 }
 
 export function createImageWriteWiring(deps: ImageWriteWiringDeps): ImageWriteWiring {
+  // One budget per wiring instance = one per panel = one per editor session. It
+  // owns its own one-time warning (a per-write toast would be a flood vector).
+  const budget = createSessionVolumeBudget(
+    deps.budgetBytes ?? SESSION_IMAGE_WRITE_BUDGET_BYTES,
+    () => deps.showError(SESSION_IMAGE_WRITE_BUDGET_TOAST)
+  );
   return {
     handle(requestId: string, data: string): void {
       void handleImageWrite(
         {
           canWrite: deps.canWrite,
           showError: deps.showError,
+          reserveBudget: (byteLength) => budget.reserve(byteLength),
           postResult: (id, relativePath) =>
             deps.post(buildImageWriteResultMessage(id, relativePath)),
           // writeImage creates <docFolder>/assets/ then writes — the explicit

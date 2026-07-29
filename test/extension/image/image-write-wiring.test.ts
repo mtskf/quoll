@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { workspace } from "vscode";
 
+import { SESSION_IMAGE_WRITE_BUDGET_TOAST } from "../../../src/extension/image/image-write-budget.js";
 import { createImageWriteWiring } from "../../../src/extension/image/image-write-wiring.js";
 
 // A minimal valid PNG (8-byte signature) — decideImageWrite sniffs the magic
@@ -74,6 +75,48 @@ describe("createImageWriteWiring", () => {
     );
 
     createDirSpy.mockRestore();
+  });
+
+  it("enforces the per-session cumulative volume cap: writes past the budget are rejected with one warning", async () => {
+    // PNG_BYTES is 8 bytes; a budget of 8 admits exactly the first write, then
+    // denies every subsequent one for the life of this wiring (= the session).
+    const write = vi.fn(async () => {});
+    const post = vi.fn();
+    const showError = vi.fn();
+    const wiring = createImageWriteWiring({
+      documentUri,
+      canWrite: () => true,
+      showError,
+      post,
+      writeFileOverride: () => write,
+      budgetBytes: PNG_BYTES.length,
+    });
+
+    // 1st write — fits the budget exactly, written + ok:true.
+    wiring.handle("req-1", PNG_BASE64);
+    await flush();
+    // 2nd write — over budget, rejected without touching disk, ok:false + warning.
+    wiring.handle("req-2", PNG_BASE64);
+    await flush();
+    // 3rd write — still over budget, still rejected, but NO second warning.
+    wiring.handle("req-3", PNG_BASE64);
+    await flush();
+
+    expect(write).toHaveBeenCalledOnce();
+    expect(post).toHaveBeenCalledWith(
+      expect.objectContaining({ type: "image-write-result", requestId: "req-1", ok: true })
+    );
+    expect(post).toHaveBeenCalledWith(
+      expect.objectContaining({ type: "image-write-result", requestId: "req-2", ok: false })
+    );
+    expect(post).toHaveBeenCalledWith(
+      expect.objectContaining({ type: "image-write-result", requestId: "req-3", ok: false })
+    );
+    // Exactly one budget warning across the two rejected writes.
+    const budgetWarnings = showError.mock.calls.filter(
+      ([msg]) => msg === SESSION_IMAGE_WRITE_BUDGET_TOAST
+    );
+    expect(budgetWarnings).toHaveLength(1);
   });
 
   it("re-reads writeFileOverride per call (late-bound override, not captured at construction)", async () => {

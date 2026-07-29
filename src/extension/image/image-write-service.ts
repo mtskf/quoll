@@ -29,6 +29,13 @@ export type ImageWriteDeps = {
   showError: (message: string) => void;
   /** Post the image-write-result; `null` path ⇒ ok:false. */
   postResult: (requestId: string, relativePath: string | null) => void;
+  /** Charge the session cumulative-volume budget for a to-be-written image of
+   *  `byteLength` bytes; returns false once the session cap is exceeded. Checked
+   *  AFTER validation (only bytes that would actually hit disk are counted) and
+   *  the budget owns its own one-time user warning, so this path posts ok:false
+   *  WITHOUT a showError. Omitted ⇒ unbounded (the service's historical
+   *  behaviour); the Panel wiring supplies the real per-session budget. */
+  reserveBudget?: (byteLength: number) => boolean;
 };
 
 /** Validate + write a base64 image and post the result. Never throws — every
@@ -61,6 +68,13 @@ export async function handleImageWrite(
   const decision = decideImageWrite(deps.canWrite(), bytes);
   if (decision.kind === "reject") {
     deps.showError(imageRejectToast(decision.reason));
+    deps.postResult(requestId, null);
+    return;
+  }
+  // Session cumulative-volume gate: count only validated bytes (those that would
+  // reach disk), AFTER the per-message caps above. The budget surfaces its own
+  // one-time warning, so this rejection just clears the webview's pending entry.
+  if (deps.reserveBudget && !deps.reserveBudget(decision.bytes.length)) {
     deps.postResult(requestId, null);
     return;
   }

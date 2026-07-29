@@ -62,4 +62,27 @@ describe("handleImageWrite", () => {
     expect(writeImage).not.toHaveBeenCalled();
     expect(postResult).toHaveBeenCalledWith("r1", null);
   });
+
+  it("rejects a validated write when the session budget denies it (no showError — the budget warns)", async () => {
+    const reserveBudget = vi.fn(() => false);
+    const { deps, writeImage, postResult, showError } = makeDeps({ reserveBudget });
+    await handleImageWrite(deps, "r1", pngBase64);
+    // The image passed every per-message gate — the budget is charged with the
+    // validated byte length, and only then does it deny the write.
+    expect(reserveBudget).toHaveBeenCalledWith(PNG.length);
+    expect(writeImage).not.toHaveBeenCalled();
+    expect(postResult).toHaveBeenCalledWith("r1", null);
+    // The budget owns its one-time warning; the service must NOT toast here.
+    expect(showError).not.toHaveBeenCalled();
+  });
+
+  it("writes normally when the session budget allows it", async () => {
+    const reserveBudget = vi.fn(() => true);
+    const { deps, writeImage, postResult } = makeDeps({ reserveBudget });
+    await handleImageWrite(deps, "r1", pngBase64);
+    expect(reserveBudget).toHaveBeenCalledWith(PNG.length);
+    expect(writeImage).toHaveBeenCalledTimes(1);
+    const [filename] = writeImage.mock.calls[0];
+    expect(postResult).toHaveBeenCalledWith("r1", `./assets/${filename}`);
+  });
 });
