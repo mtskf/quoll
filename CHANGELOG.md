@@ -2,6 +2,12 @@
 
 All notable changes to Quoll are documented here.
 
+## 0.1.61 — 2026-07-29
+
+### Fixed
+
+- Collapsed sections no longer spring open when the file is changed outside the editor (by a formatter, git, or another editor). Your folds stay put; only a fold that directly overlaps the external change is affected.
+
 ## 0.1.60 — 2026-07-29
 
 ### Fixed
