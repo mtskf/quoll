@@ -91,6 +91,12 @@ describe("resolveEntry — fix (a): reused branch prefers an OPEN PR", () => {
     expect(resolveEntry({ branch: "feat/x", pr: null }, gh).status).toBe("clean");
   });
 
+  // This "no-OPEN + MERGED → stale" case is also the pin for the ACCEPTED
+  // branch-name-identity limitation (a reused branch with an old merged PR and
+  // no new PR opened yet reads stale — a documented, intentional gap, not a bug;
+  // see the script header note (a) + LEARNING.md 2026-07-29). Do not soften this
+  // to a warning without revisiting that decision — it is the tool's primary
+  // genuine-stale signal.
   it("returns stale when there is NO open PR and a merged one exists (exit-1 contract)", () => {
     const gh = makeGh({
       list: { "feat/x": { open: [], merged: [{ number: 42, title: "shipped" }] } },
