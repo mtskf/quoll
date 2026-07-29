@@ -61,7 +61,7 @@ import {
   pasteUrlOverSelection,
   richHtmlPaste,
 } from "./cm/paste/index.js";
-import { detectLineSeparator, splitToCmText } from "./cm/seed.js";
+import { computeReseedChange, detectLineSeparator, splitToCmText } from "./cm/seed.js";
 import { quollSwitchEditor } from "./cm/switch-editor.js";
 import { tableBlockField, tableSkeletonField } from "./cm/table/index.js";
 import { quollTaskCheckboxKeymap } from "./cm/task-checkbox/task-checkbox-command.js";
@@ -898,13 +898,15 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
           ],
           ...(insertText !== null
             ? {
-                changes: {
-                  from: 0,
-                  to: view.state.doc.length,
-                  // Pre-split on /\r\n?|\n/ so the line model is clean
-                  // regardless of facet timing.
-                  insert: insertText,
-                },
+                // Minimal single-span change (not a wholesale {0, doc.length}
+                // replace): CM maps every foldState range through the change, and
+                // a whole-doc delete drops them ALL — any external touch would
+                // spring the document open. computeReseedChange trims the common
+                // prefix/suffix so foldState ranges outside the real edit survive.
+                // Operands are CM Text in LF-internal coords (view.state.doc, not
+                // the sliceDoc() render) — see the helper's CRLF note. insertText
+                // stays the pre-split snapshot Text (also feeds newDocLength).
+                changes: computeReseedChange(view.state.doc, insertText),
               }
             : {}),
           // Restore ONLY the main range, clamped to new doc bounds.

@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import { ensureSyntaxTree, foldable } from "@codemirror/language";
+import { ensureSyntaxTree, foldable, foldEffect, foldedRanges } from "@codemirror/language";
 import { EditorView } from "@codemirror/view";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MAX_CONTENT_LENGTH, PROTOCOL_VERSION } from "../../src/shared/protocol.js";
@@ -1516,5 +1516,130 @@ describe("editor — setEditorPrefs applies vars and re-dispatches on same-value
     expect(dom.style.getPropertyValue("--quoll-editor-font-family")).toBe(
       "Georgia, 'Times New Roman', serif"
     );
+  });
+});
+
+// (r) External reseed preserves native fold ranges outside the changed span.
+// A whole-doc {0, len} replace maps every foldState range away, springing the
+// document open on any external touch; the minimal-span reseed keeps folds that
+// lie outside the actual edit — and stays correct on CRLF docs (coordinate bug
+// guard) and on EOL-only no-op reseeds. The reseed carries no `delete` user
+// event, so foldState's isUserEvent-gated auto-clear does NOT fire: an
+// overlapping fold is remapped (preserved), not sprung open — the intended
+// behaviour for an external touch.
+describe("editor — external reseed preserves unrelated folds (r)", () => {
+  const foldedCount = (view: EditorView): number => foldedRanges(view.state).size;
+  const foldRanges = (view: EditorView): Array<{ from: number; to: number }> => {
+    const ranges: Array<{ from: number; to: number }> = [];
+    foldedRanges(view.state).between(0, view.state.doc.length, (from, to) => {
+      ranges.push({ from, to });
+    });
+    return ranges;
+  };
+
+  it("(r1) a one-char edit below a folded heading keeps the heading folded", () => {
+    const { handle, view } = mount();
+    const doc = "# One\n\nalpha\nbravo\n\n# Two\n\ncharlie";
+    handle.applyDocument(doc, true, 1);
+    const foldFrom = doc.indexOf("\n"); // end of "# One" heading line
+    const foldTo = doc.indexOf("\n\n# Two") + 1; // through the blank line
+    view.dispatch({ effects: foldEffect.of({ from: foldFrom, to: foldTo }) });
+    expect(foldedCount(view)).toBe(1);
+
+    const next = doc.replace("charlie", "Charlie"); // edit in the SECOND section
+    handle.applyDocument(next, true, 2);
+
+    expect(view.state.sliceDoc()).toBe(next);
+    expect(foldedCount(view)).toBe(1); // fold above the edit survives
+  });
+
+  it("(r2) a fold BELOW the edit survives, remapped to shifted coordinates", () => {
+    const { handle, view } = mount();
+    const doc = "# One\n\nalpha\n\n# Two\n\nbravo\ncharlie";
+    handle.applyDocument(doc, true, 1);
+    // Fold the SECOND heading's body.
+    const foldFrom = doc.indexOf("# Two") + "# Two".length;
+    const foldTo = doc.length;
+    view.dispatch({ effects: foldEffect.of({ from: foldFrom, to: foldTo }) });
+    expect(foldedCount(view)).toBe(1);
+
+    // Edit the FIRST section (above the fold) — lengthens it by `delta`, so the
+    // surviving fold must shift by exactly `delta` (NOT just "still count 1",
+    // which a stale un-remapped range would also pass).
+    const next = doc.replace("alpha", "alpha extended");
+    const delta = next.length - doc.length;
+    handle.applyDocument(next, true, 2);
+
+    expect(view.state.sliceDoc()).toBe(next);
+    expect(foldRanges(view)).toEqual([{ from: foldFrom + delta, to: foldTo + delta }]);
+  });
+
+  it("(r3) a CRLF document reseed spanning interior lines does not throw and keeps folds", () => {
+    const { handle, view } = mount();
+    // CRLF doc: sliceDoc() renders \r\n, but doc.length is LF-internal. This is
+    // the integration guard that the helper was NOT wired against sliceDoc(): if
+    // it were, a diff in CRLF-inflated coordinates could overshoot doc.length and
+    // throw. (The coordinate GUARANTEE itself is Task 1's unit test; this test
+    // pins fold-survival + no-throw end-to-end on a CRLF doc.)
+    const doc = "# One\r\n\r\nalpha\r\nbravo\r\n\r\n# Two\r\n\r\ncharlie";
+    handle.applyDocument(doc, true, 1);
+    // Fold the first heading region (positions in LF-internal coords).
+    const internal = view.state.doc;
+    const foldFrom = internal.line(1).to; // end of "# One"
+    const foldTo = internal.toString().indexOf("\n\n# Two") + 1;
+    view.dispatch({ effects: foldEffect.of({ from: foldFrom, to: foldTo }) });
+    expect(foldedCount(view)).toBe(1);
+
+    // External reseed changing an interior line (still CRLF).
+    const next = doc.replace("charlie", "Charlie");
+    expect(() => handle.applyDocument(next, true, 2)).not.toThrow();
+    expect(view.state.sliceDoc()).toBe(next); // byte-identical, no corruption
+    expect(foldedCount(view)).toBe(1);
+  });
+
+  it("(r4) an external reseed that changes content posts NO edit", () => {
+    const { handle } = mount();
+    handle.applyDocument("# One\n\nalpha\nbravo", true, 1);
+    postMessage.mockReset(); // ignore the seed's traffic
+    handle.applyDocument("# One\n\nalpha\nBRAVO", true, 2);
+    expect(editPosts()).toEqual([]); // reseed is display-only, never posts an edit
+  });
+
+  it("(r5) an EOL-only reseed (normalizes identical) is a no-op change, no throw, no edit, folds kept", () => {
+    const { handle, view } = mount();
+    // Seed as CRLF so the facet renders \r\n; internal doc is "a\nb\nc".
+    handle.applyDocument("a\r\nb\r\nc", true, 1);
+    const foldFrom = view.state.doc.line(1).to;
+    view.dispatch({ effects: foldEffect.of({ from: foldFrom, to: view.state.doc.length }) });
+    expect(foldedCount(view)).toBe(1);
+    postMessage.mockReset();
+    // Reseed the SAME content as LF: raw differs (aheadOfHost true) but the
+    // normalized Text is identical → computeReseedChange yields an empty change.
+    expect(() => handle.applyDocument("a\nb\nc", true, 2)).not.toThrow();
+    expect(view.state.sliceDoc()).toBe("a\nb\nc"); // facet flipped to LF, content same
+    expect(editPosts()).toEqual([]);
+    expect(foldedCount(view)).toBe(1); // empty change maps nothing away
+  });
+
+  it("(r6) a fold CONTAINING the edit is preserved (remapped), not sprung open", () => {
+    const { handle, view } = mount();
+    // Fold "# One"'s body [foldFrom, foldTo]; the caret rests at 0 (outside the
+    // fold) so the selection-head clear does NOT fire.
+    const doc = "# One\n\nalpha\nbravo\n\n# Two\n\ncharlie";
+    handle.applyDocument(doc, true, 1);
+    const foldFrom = doc.indexOf("\n"); // end of "# One"
+    const foldTo = doc.indexOf("\n\n# Two") + 1;
+    view.dispatch({ effects: foldEffect.of({ from: foldFrom, to: foldTo }) });
+    expect(foldedCount(view)).toBe(1);
+
+    // External edit INSIDE the folded region: "bravo" -> "BR" (shrinks by 3).
+    const next = doc.replace("bravo", "BR");
+    const delta = next.length - doc.length; // -3
+    handle.applyDocument(next, true, 2);
+
+    expect(view.state.sliceDoc()).toBe(next);
+    // Fold persists, remapped: from unchanged (before the edit), to shrinks by
+    // |delta| (the edit is inside, before the fold end).
+    expect(foldRanges(view)).toEqual([{ from: foldFrom, to: foldTo + delta }]);
   });
 });
