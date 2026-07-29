@@ -18,17 +18,22 @@
 //    under .claude/, gitignored, absent from CI checkouts), so it never hard-
 //    blocks a contributor. A missing/unauthenticated/rate-limited `gh` warns
 //    and exits 0.
-//  - The pure / dependency-injected exports (`parseInflight`, `parseEntry`,
-//    `resolveEntry`, `scanTodo`, `summarize`, `runScan`) are unit-tested with
-//    in-memory fixtures and a fake `ghRunner`; `classifyGhError` is pinned with
-//    fake error objects and `ghExec` with a fake `exec` (both a different seam,
-//    not the `ghRunner`). `main()` is a thin fs + console + process.exit
-//    wrapper behind the import-guard at the bottom.
+//  - Tests split by seam: pure transforms (`parseInflight`, `parseEntry`,
+//    `summarize`) are pinned with literal in-memory fixtures; the `ghRunner`-
+//    injected exports (`resolveEntry`, `scanTodo`, `runScan`) are pinned with
+//    a fake `ghRunner`; `classifyGhError` is pinned with fake error objects
+//    and `ghExec` with a fake `exec` (a different seam, not the `ghRunner`).
+//    `main()` is a thin fs + console + process.exit wrapper behind the
+//    import-guard at the bottom.
 //
 // Verdict correctness (three false-verdict paths this file deliberately avoids):
 //  (a) REUSED head-branch name — a branch name may be reused after its first
-//      PR merged. `resolveEntry` prefers an OPEN PR for the branch, so still-
-//      in-flight work is never flagged stale by an older same-named merged PR.
+//      PR merged. `resolveEntry` prefers an OPEN PR for the branch, so
+//      still-in-flight work is not flagged stale WHILE that OPEN PR exists.
+//      Residual gap: a reused branch whose new work has not yet opened a PR
+//      still resolves via the old MERGED PR and reads STALE — durable PR
+//      identity on the marker (not just a branch name) is the real fix,
+//      tracked in the TODO backlog.
 //  (b) NUMBER-ONLY match — PR numbers are reused across repo generations, so a
 //      match resting solely on a `(#N)` / `(PR #N)` number is REPORT-ONLY
 //      (a warning), never a hard STALE verdict. A conforming in-flight entry
@@ -128,16 +133,21 @@ export function parseEntry(line) {
 // Resolve one entry against GitHub via the injected `ghRunner`.
 // Returns { status: "clean" | "stale" | "warn", merged?: { number, title } }.
 //  - branch path (authoritative): fix (a) — an OPEN PR for the head branch
-//    means the work is in flight, so it is NEVER stale, even if an OLDER
-//    same-named PR merged. Only "no OPEN + a MERGED" → stale.
+//    means the work is in flight, so it reads clean WHILE that OPEN PR
+//    exists, even if an OLDER same-named PR merged. Only "no OPEN + a
+//    MERGED" → stale. (A reused branch with no new PR yet still resolves
+//    via the old MERGED PR — see the header note.)
 //  - number-only path: fix (b) — a match resting solely on a PR number is a
 //    WARNING, never stale (PR numbers are reused across repo generations).
 export function resolveEntry({ branch, pr }, ghRunner) {
   if (branch) {
     // fix (a): an OPEN PR for the head branch means the work is in flight, so
-    // the entry is NEVER stale — even if an older same-named PR merged. Query
-    // OPEN on its own (not a truncated `--state all` slice) so a busy reused
-    // branch can't hide the in-flight PR behind a result cap.
+    // the entry reads clean while that OPEN PR exists — even if an older
+    // same-named PR merged. Query OPEN on its own (not a truncated `--state
+    // all` slice) so a busy reused branch can't hide the in-flight PR behind
+    // a result cap. (If no new PR has been opened yet for a reused branch,
+    // this still falls through to the MERGED check below and reads stale —
+    // a fundamental branch-name-identity limitation, not a bug here.)
     const open = ghRunner([
       "pr",
       "list",
@@ -151,7 +161,7 @@ export function resolveEntry({ branch, pr }, ghRunner) {
       "1",
     ]);
     if (open.length > 0) {
-      return { status: "clean" }; // in flight — never stale (fix (a))
+      return { status: "clean" }; // in flight — clean while this OPEN PR exists (fix (a))
     }
     const merged = ghRunner([
       "pr",
