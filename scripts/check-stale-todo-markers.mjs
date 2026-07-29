@@ -129,24 +129,39 @@ export function parseEntry(line) {
 //    WARNING, never stale (PR numbers are reused across repo generations).
 export function resolveEntry({ branch, pr }, ghRunner) {
   if (branch) {
-    const prs = ghRunner([
+    // fix (a): an OPEN PR for the head branch means the work is in flight, so
+    // the entry is NEVER stale — even if an older same-named PR merged. Query
+    // OPEN on its own (not a truncated `--state all` slice) so a busy reused
+    // branch can't hide the in-flight PR behind a result cap.
+    const open = ghRunner([
       "pr",
       "list",
       "--head",
       branch,
       "--state",
-      "all",
+      "open",
       "--json",
-      "number,state,title,mergedAt",
+      "number",
       "--limit",
-      "5",
+      "1",
     ]);
-    if (prs.some((p) => p.state === "OPEN")) {
+    if (open.length > 0) {
       return { status: "clean" }; // in flight — never stale (fix (a))
     }
-    const merged = prs.find((p) => p.state === "MERGED");
-    if (merged) {
-      return { status: "stale", merged: { number: merged.number, title: merged.title } };
+    const merged = ghRunner([
+      "pr",
+      "list",
+      "--head",
+      branch,
+      "--state",
+      "merged",
+      "--json",
+      "number,title,mergedAt",
+      "--limit",
+      "1",
+    ]);
+    if (merged.length > 0) {
+      return { status: "stale", merged: { number: merged[0].number, title: merged[0].title } };
     }
     return { status: "clean" };
   }

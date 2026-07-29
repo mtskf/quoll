@@ -32,14 +32,18 @@ import {
   summarize,
 } from "../../scripts/check-stale-todo-markers.mjs";
 
-// A fake `ghRunner`, keyed on the argv array. `routes.list[headBranch]` and
-// `routes.view[prNumber]` may be a canned value or a 0-arg function (a function
-// lets a route throw GhTransient/GhUnavailable/TypeError to simulate failures).
+// A fake `ghRunner`, keyed on the argv array. `resolveEntry` issues the branch
+// lookup as two independent `--state`-scoped queries (open, then merged), so
+// `routes.list[headBranch]` is itself keyed by state: `{ open: [...], merged:
+// [...] }`. `routes.view[prNumber]` keeps its single form. Any leaf may be a
+// canned value or a 0-arg function (a function lets a route throw
+// GhTransient/GhUnavailable/TypeError to simulate failures).
 function makeGh(routes = {}) {
   return (args) => {
     if (args[0] === "pr" && args[1] === "list") {
       const head = args[args.indexOf("--head") + 1];
-      const r = routes.list?.[head];
+      const state = args[args.indexOf("--state") + 1];
+      const r = routes.list?.[head]?.[state];
       return typeof r === "function" ? r() : (r ?? []);
     }
     if (args[0] === "pr" && args[1] === "view") {
@@ -63,27 +67,33 @@ describe("resolveEntry — fix (a): reused branch prefers an OPEN PR", () => {
   it("returns clean when an OPEN PR exists even though an older same-branch PR merged", () => {
     const gh = makeGh({
       list: {
-        "feat/x": [
-          { state: "OPEN", number: 99, title: "new work" },
-          { state: "MERGED", number: 12, title: "old shipped" },
-        ],
+        "feat/x": {
+          open: [{ state: "OPEN", number: 99 }],
+          merged: [{ number: 12, title: "old shipped" }],
+        },
       },
     });
     expect(resolveEntry({ branch: "feat/x", pr: null }, gh).status).toBe("clean");
   });
 
+  it("prefers an OPEN PR regardless of how many merged PRs exist (no truncation dependency)", () => {
+    const manyMerged = Array.from({ length: 30 }, (_, i) => ({ number: i, title: `m${i}` }));
+    const gh = makeGh({ list: { "feat/x": { open: [{ number: 99 }], merged: manyMerged } } });
+    expect(resolveEntry({ branch: "feat/x", pr: null }, gh).status).toBe("clean");
+  });
+
   it("returns stale when there is NO open PR and a merged one exists (exit-1 contract)", () => {
-    const gh = makeGh({ list: { "feat/x": [{ state: "MERGED", number: 42, title: "shipped" }] } });
+    const gh = makeGh({
+      list: { "feat/x": { open: [], merged: [{ number: 42, title: "shipped" }] } },
+    });
     const r = resolveEntry({ branch: "feat/x", pr: null }, gh);
     expect(r.status).toBe("stale");
     expect(r.merged.number).toBe(42);
   });
 
   it("returns clean for the no-OPEN/no-MERGED edge (empty, DRAFT, or CLOSED only)", () => {
-    expect(
-      resolveEntry({ branch: "feat/x", pr: null }, makeGh({ list: { "feat/x": [] } })).status
-    ).toBe("clean");
-    const gh = makeGh({ list: { "feat/x": [{ state: "CLOSED", number: 7, title: "abandoned" }] } });
+    // A CLOSED-only branch surfaces as neither an open nor a merged hit.
+    const gh = makeGh({ list: { "feat/x": { open: [], merged: [] } } });
     expect(resolveEntry({ branch: "feat/x", pr: null }, gh).status).toBe("clean");
   });
 });
@@ -110,10 +120,12 @@ describe("scanTodo — fix (c): a transient error skips one entry, not the whole
     );
     const gh = makeGh({
       list: {
-        "feat/flaky": () => {
-          throw new GhTransient("HTTP 404");
+        "feat/flaky": {
+          open: () => {
+            throw new GhTransient("HTTP 404");
+          },
         },
-        "feat/done": [{ state: "MERGED", number: 5, title: "Already shipped" }],
+        "feat/done": { open: [], merged: [{ number: 5, title: "Already shipped" }] },
       },
     });
     const scan = scanTodo(text, gh);
@@ -131,9 +143,11 @@ describe("scanTodo — GhUnavailable stops the loop but preserves already-found 
     );
     const gh = makeGh({
       list: {
-        "feat/done": [{ state: "MERGED", number: 5, title: "Already shipped" }],
-        "feat/auth": () => {
-          throw new GhUnavailable("gh auth login");
+        "feat/done": { open: [], merged: [{ number: 5, title: "Already shipped" }] },
+        "feat/auth": {
+          open: () => {
+            throw new GhUnavailable("gh auth login");
+          },
         },
       },
     });
@@ -183,7 +197,7 @@ describe("runScan — Finding 1: a bug becomes exit 2, never colliding with stal
   it("still returns exitCode 1 for a genuinely stale marker (2 and 1 do not collide)", () => {
     const text = todo(branchEntry("feat/done", "Shipped"));
     const gh = makeGh({
-      list: { "feat/done": [{ state: "MERGED", number: 5, title: "Shipped" }] },
+      list: { "feat/done": { open: [], merged: [{ number: 5, title: "Shipped" }] } },
     });
     expect(runScan(text, gh).exitCode).toBe(1);
   });
