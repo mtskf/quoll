@@ -30,10 +30,20 @@
 //  (a) REUSED head-branch name — a branch name may be reused after its first
 //      PR merged. `resolveEntry` prefers an OPEN PR for the branch, so
 //      still-in-flight work is not flagged stale WHILE that OPEN PR exists.
-//      Residual gap: a reused branch whose new work has not yet opened a PR
-//      still resolves via the old MERGED PR and reads STALE — durable PR
-//      identity on the marker (not just a branch name) is the real fix,
-//      tracked in the TODO backlog.
+//      Residual gap (ACCEPTED limitation, not a bug): a reused branch whose new
+//      work has not yet opened a PR still resolves via the old MERGED PR and
+//      reads STALE. A durable fix would need a repo-bound PR identity (number
+//      or head SHA) recorded on the 🚧 marker and verified here — but the
+//      marker is written by next-todo's claim BEFORE any PR exists, so that
+//      identity would have to be back-filled by a new step in the *global*
+//      /ship or /merge-pr flow and kept in lockstep across four skills, all to
+//      serve this LOCAL-only advisory backstop. The false-positive window is
+//      narrow (reused branch + old merged PR + no new PR opened yet + the check
+//      run in exactly that window), and the merged-no-open path is ALSO this
+//      tool's primary genuine-stale signal, so it cannot be downgraded to a
+//      warning without gutting detection. Decision: accept the
+//      branch-name-identity limitation. Full cost/rarity weighing:
+//      .claude/docs/LEARNING.md → "Claude Workflow" (2026-07-29).
 //  (b) NUMBER-ONLY match — PR numbers are reused across repo generations, so a
 //      match resting solely on a `(#N)` / `(PR #N)` number is REPORT-ONLY
 //      (a warning), never a hard STALE verdict. A conforming in-flight entry
@@ -146,8 +156,9 @@ export function resolveEntry({ branch, pr }, ghRunner) {
     // same-named PR merged. Query OPEN on its own (not a truncated `--state
     // all` slice) so a busy reused branch can't hide the in-flight PR behind
     // a result cap. (If no new PR has been opened yet for a reused branch,
-    // this still falls through to the MERGED check below and reads stale —
-    // a fundamental branch-name-identity limitation, not a bug here.)
+    // this still falls through to the MERGED check below and reads stale — a
+    // fundamental branch-name-identity limitation, ACCEPTED as a known gap, not
+    // a bug here. Rationale: header note (a) + LEARNING.md 2026-07-29.)
     const open = ghRunner([
       "pr",
       "list",
