@@ -37,6 +37,31 @@ jobs:
       # and `git/refs/tags/<tag>` would return its tag-object SHA, not the commit).
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
 
+      # Reachability gate — the FIRST thing after checkout so nothing else runs
+      # for an off-main tag. Branch protection does NOT cover tag refs, so a `v*`
+      # tag pushed onto an unreviewed feature/WIP commit (with a bumped
+      # package.json) would otherwise publish that code LIVE to the Marketplace +
+      # Open VSX. Require the tagged commit ($GITHUB_SHA — a tag push points it at
+      # the tagged commit) to be reachable from origin/main, the only history that
+      # passes review, before ANY build or publish step. The default checkout is
+      # shallow (depth 1), so deepen main first. The explicit refspec is required:
+      # checkout configures origin to fetch the tag ref, not a branch wildcard, so
+      # a bare `git fetch origin main` would update FETCH_HEAD without writing
+      # refs/remotes/origin/main. --unshallow gives merge-base main's full
+      # ancestry to walk; the `|| fetch` fallback covers the already-complete case
+      # (where --unshallow errors). A fetch failure or missing origin/main leaves
+      # merge-base to exit non-zero, which blocks the publish — fail-safe.
+      - name: Verify tag is reachable from main (release gate)
+        env:
+          TAGGED_SHA: ${{ github.sha }}
+        run: |
+          git fetch --no-tags --unshallow origin +refs/heads/main:refs/remotes/origin/main 2>/dev/null \
+            || git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
+          if ! git merge-base --is-ancestor "$TAGGED_SHA" origin/main; then
+            echo "::error::Tagged commit $TAGGED_SHA is not reachable from origin/main — refusing to publish unreviewed code."
+            exit 1
+          fi
+
       - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
         with:
           version: 11.10.0
