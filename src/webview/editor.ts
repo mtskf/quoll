@@ -881,6 +881,11 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
       const insertText = needsReseed ? splitToCmText(rawText) : null;
       const newDocLength = insertText !== null ? insertText.length : view.state.doc.length;
       const prevMain = prevSelection?.main;
+      // Computed BEFORE dispatch (needs the PRE-change view.state.doc — see the
+      // helper's CRLF note). Reused below, post-dispatch, to derive the edited
+      // span in POST-change coordinates for reconcileReseedFolds's orphan gate.
+      const reseedChange =
+        insertText !== null ? computeReseedChange(view.state.doc, insertText) : null;
       seeding = true;
       try {
         view.dispatch({
@@ -896,7 +901,7 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
               EditorState.readOnly.of(!canWrite),
             ]),
           ],
-          ...(insertText !== null
+          ...(reseedChange !== null
             ? {
                 // Minimal single-span change (not a wholesale {0, doc.length}
                 // replace): CM maps every foldState range through the change, and
@@ -906,7 +911,7 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
                 // Operands are CM Text in LF-internal coords (view.state.doc, not
                 // the sliceDoc() render) — see the helper's CRLF note. insertText
                 // stays the pre-split snapshot Text (also feeds newDocLength).
-                changes: computeReseedChange(view.state.doc, insertText),
+                changes: reseedChange,
               }
             : {}),
           // Restore ONLY the main range, clamped to new doc bounds.
@@ -933,16 +938,24 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
       // Reconcile native folds that the minimal-span reseed REMAPPED. The diff maps
       // overlapping folds through the change (preserving them — PR #292), but an
       // external insert INTO a collapsed section can widen a mapped fold to swallow a
-      // newly-inserted sibling heading, hiding it until the user unfolds. Clamp any
-      // such over-wide fold back to its real foldable range. Only meaningful when the
-      // reseed actually changed the document (insertText !== null). This is a SEPARATE,
-      // display-only dispatch carrying NO `changes` — byte-identical round-trip, and a
-      // no-op for the updateListener's `docChanged`-gated edit-sync — so it behaves
-      // exactly like a user fold/unfold (hence NOT annotated as a hostDocumentReseed;
-      // it rewrites no document bytes). addToHistory.of(false) keeps the clamp out of
-      // undo. reconcileReseedFolds self-guards on a complete parse tree.
-      if (insertText !== null) {
-        const foldEffects = reconcileReseedFolds(view.state);
+      // newly-inserted sibling heading, hiding it until the user unfolds; and an edit
+      // that strips a folded heading's OWN marker can orphan its fold entirely (no
+      // canonical range left to clamp to). Only meaningful when the reseed actually
+      // changed the document (reseedChange !== null). This is a SEPARATE, display-only
+      // dispatch carrying NO `changes` — byte-identical round-trip, and a no-op for the
+      // updateListener's `docChanged`-gated edit-sync — so it behaves exactly like a
+      // user fold/unfold (hence NOT annotated as a hostDocumentReseed; it rewrites no
+      // document bytes). addToHistory.of(false) keeps the clamp out of undo.
+      // reconcileReseedFolds self-guards on a complete parse tree. The edited-span
+      // argument is in POST-change coordinates (reseedChange.from is unaffected by its
+      // own edit; the edit's far end shifts to reseedChange.from + insert.length) —
+      // reconcileReseedFolds uses it to gate the orphan-release path to folds whose OWN
+      // line the reseed actually touched, per its JSDoc.
+      if (reseedChange !== null) {
+        const foldEffects = reconcileReseedFolds(view.state, {
+          from: reseedChange.from,
+          to: reseedChange.from + reseedChange.insert.length,
+        });
         if (foldEffects.length > 0) {
           view.dispatch({
             annotations: [Transaction.addToHistory.of(false)],

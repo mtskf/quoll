@@ -1676,4 +1676,55 @@ describe("editor — external reseed preserves unrelated folds (r)", () => {
     const freshLine1 = view.state.doc.line(1);
     expect(foldable(view.state, freshLine1.from, freshLine1.to)).toEqual(range);
   });
+
+  it("(r8) a reseed that removes the heading marker on a folded line fully unfolds it (no clamp target)", () => {
+    const { handle, view } = mount();
+    const doc = "# One\n\nalpha\nbravo\n\n# Two\n\ncharlie";
+    handle.applyDocument(doc, true, 1);
+    ensureSyntaxTree(view.state, view.state.doc.length, 5000);
+    const line1 = view.state.doc.line(1);
+    const canonical = foldable(view.state, line1.from, line1.to);
+    if (!canonical) {
+      throw new Error("heading line should be foldable");
+    }
+    view.dispatch({ effects: foldEffect.of(canonical) });
+    expect(foldedCount(view)).toBe(1);
+
+    // External reseed strips the ATX marker: "# One" -> "One" (no longer a heading,
+    // so line 1 is no longer foldable at all).
+    const next = doc.replace("# One", "One");
+    handle.applyDocument(next, true, 2);
+
+    expect(view.state.sliceDoc()).toBe(next);
+    expect(foldedCount(view)).toBe(0); // fully released, not clamped to an empty range
+  });
+
+  it("(r9) clamping a fold that contains a nested child heading keeps the child but reveals an inserted sibling", () => {
+    const { handle, view } = mount();
+    const doc = "# One\n\n## Sub\n\nfoo\n\n# Two\n\nbar";
+    handle.applyDocument(doc, true, 1);
+    ensureSyntaxTree(view.state, view.state.doc.length, 5000);
+    const line1 = view.state.doc.line(1);
+    const canonical = foldable(view.state, line1.from, line1.to); // includes "## Sub"
+    if (!canonical) {
+      throw new Error("heading line should be foldable");
+    }
+    view.dispatch({ effects: foldEffect.of(canonical) });
+    expect(foldedCount(view)).toBe(1);
+
+    // External reseed inserts a same-level SIBLING "# New" after the child section,
+    // INTO One's folded body. Reconciliation must clamp so "# New" is revealed,
+    // while the child "## Sub" stays inside the fold.
+    const next = doc.replace("foo", "foo\n\n# New\n\ngamma");
+    handle.applyDocument(next, true, 2);
+    expect(view.state.sliceDoc()).toBe(next);
+
+    expect(foldedCount(view)).toBe(1);
+    const newPos = next.indexOf("# New");
+    const subPos = next.indexOf("## Sub");
+    const [range] = foldRanges(view);
+    expect(range.to).toBeLessThanOrEqual(newPos); // "# New" NOT concealed
+    expect(range.from).toBeLessThanOrEqual(subPos);
+    expect(range.to).toBeGreaterThan(subPos); // "## Sub" (child) STILL inside the fold
+  });
 });

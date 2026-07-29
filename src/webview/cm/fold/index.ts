@@ -921,22 +921,35 @@ function concealsHeadingBoundary(
  *  a minimal-span change (editor.ts#applyDocument → computeReseedChange). That diff
  *  deliberately maps overlapping folds THROUGH the change rather than dropping them
  *  (so an unrelated external touch never springs every fold open — the PR #292
- *  policy). The trade-off: an external insert INTO a collapsed section can WIDEN the
- *  mapped fold to swallow bytes it never meant to hide — most visibly a same-level
- *  sibling heading dropped inside a folded section (a formatter / git inserting
- *  `# New` into `# One`'s body), which then stays concealed until the user unfolds.
+ *  policy). Two distinct problems can result, and this walks every folded range to
+ *  fix both:
  *
- *  This walks every folded range and, for any that now extends PAST its own line's
- *  current `foldable()` section end AND whose excess span conceals a heading
- *  boundary, clamps it back to the real foldable range (or unfolds it when the line
- *  is no longer foldable at all). The two conditions together are precise:
- *    - `foldable()`'s `sectionEnd` already stops at the first same-or-higher heading,
- *      so a legitimately-nested CHILD heading stays INSIDE the canonical span and is
- *      never treated as concealed — only a genuine sibling/ancestor boundary that
- *      landed in the fold via the remap trips the check;
- *    - requiring a concealed heading (not merely `to > canonicalTo`) leaves benign
- *      over-wide remaps untouched — e.g. a hand/legacy fold whose end sits one
- *      char past the canonical section end, or a fold whose excess is plain prose.
+ *  1. Orphaned fold — the fold's OWN line is no longer `foldable()` at all (e.g. an
+ *     external edit stripped its heading marker). There is no canonical range left
+ *     to clamp back to, so the fold is released — but ONLY when `editedRange`
+ *     (the reseed's edit span, in POST-change coordinates) actually overlaps this
+ *     fold's line. Without that gate, a fold that was NEVER canonical to begin with
+ *     (e.g. hand-applied over a plain paragraph, which `foldable()` always excludes
+ *     — see the module header) would get sprung open by any unrelated edit anywhere
+ *     else in the document, violating the PR #292 policy this whole function exists
+ *     to uphold. Requiring the edit to touch the line is what makes this a targeted
+ *     response to a change ON that line, not a spurious spring-open.
+ *  2. Over-wide fold — the line is still foldable, but the mapped fold now extends
+ *     PAST its current `foldable()` section end AND the excess span conceals a
+ *     heading boundary (most visibly a same-level sibling heading dropped inside a
+ *     folded section — a formatter / git inserting `# New` into `# One`'s body,
+ *     which then stays concealed until the user unfolds). Clamp back to the real
+ *     foldable range instead. Unlike case 1, this is NOT gated on `editedRange`
+ *     touching the fold's own heading line — the inserted sibling lands inside the
+ *     section BODY, not on the heading line itself. The two conditions together are
+ *     already precise enough:
+ *       - `foldable()`'s `sectionEnd` already stops at the first same-or-higher
+ *         heading, so a legitimately-nested CHILD heading stays INSIDE the canonical
+ *         span and is never treated as concealed — only a genuine sibling/ancestor
+ *         boundary that landed in the fold via the remap trips the check;
+ *       - requiring a concealed heading (not merely `to > fresh.to`) leaves benign
+ *         over-wide remaps untouched — e.g. a hand/legacy fold whose end sits one
+ *         char past the canonical section end, or a fold whose excess is plain prose.
  *
  *  Guarded on `syntaxTreeAvailable`: `foldable()` and the heading walk read the
  *  syntax tree, and an incomplete post-reseed parse frontier would mis-report a
@@ -944,9 +957,11 @@ function concealsHeadingBoundary(
  *  effects — the mapped fold survives exactly as before (the pre-existing accepted
  *  behaviour), never a bad clamp. Returns the fold/unfold effects to dispatch (empty
  *  when nothing needs reconciling). View-layer only — no document change, so the
- *  round-trip stays byte-identical. Exported for the reseed-reconciliation test. */
+ *  round-trip stays byte-identical. Pinned indirectly by editor.test.ts's (r7)–(r9)
+ *  reseed tests (via applyDocument), not a direct import here. */
 export function reconcileReseedFolds(
-  state: EditorState
+  state: EditorState,
+  editedRange: { from: number; to: number }
 ): StateEffect<{ from: number; to: number }>[] {
   if (!syntaxTreeAvailable(state, state.doc.length)) {
     return [];
@@ -956,19 +971,22 @@ export function reconcileReseedFolds(
   foldedRanges(state).between(0, state.doc.length, (from, to) => {
     const line = state.doc.lineAt(from);
     const fresh = foldable(state, line.from, line.to);
-    // Canonical span end for this fold's own line: the real section/list end, or
-    // `from` (empty span) when the line is no longer foldable.
-    const canonicalTo = fresh ? fresh.to : from;
-    if (canonicalTo >= to) {
+    if (!fresh) {
+      // Orphaned — but only release when THIS line is what the reseed edited
+      // (touching test on possibly-zero-width ranges, both in post-change coords).
+      if (editedRange.from <= line.to && editedRange.to >= line.from) {
+        effects.push(unfoldEffect.of({ from, to }));
+      }
+      return;
+    }
+    if (fresh.to >= to) {
       return; // fold not wider than its canonical span — nothing was swallowed.
     }
-    if (!concealsHeadingBoundary(state, tree, canonicalTo, to)) {
+    if (!concealsHeadingBoundary(state, tree, fresh.to, to)) {
       return; // over-wide, but the excess hides no section boundary — leave it.
     }
     effects.push(unfoldEffect.of({ from, to }));
-    if (fresh) {
-      effects.push(foldEffect.of(fresh)); // clamp back to the real foldable range.
-    }
+    effects.push(foldEffect.of(fresh)); // clamp back to the real foldable range.
   });
   return effects;
 }
