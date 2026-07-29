@@ -73,6 +73,7 @@ import { createContextHandoffWiring } from "../handoff/context-handoff-wiring.js
 import { takeSwitchCaret } from "../handoff/editor-switch-caret.js";
 import { createRevealCaretSuppression } from "../handoff/reveal-caret-suppression.js";
 import { createImageWriteWiring } from "../image/image-write-wiring.js";
+import { buildExternalUri } from "../links/build-external-uri.js";
 import { handleOpenCodeReference } from "../links/handle-open-code-reference.js";
 import { handleOpenExternal } from "../links/handle-open-external.js";
 import { handleOpenLink } from "../links/handle-open-link.js";
@@ -468,15 +469,23 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
             ? this.harness.applyEditOverride(edit as WorkspaceEdit)
             : workspace.applyEdit(edit as WorkspaceEdit),
       },
-      // `openExternalOverride` (when set) bypasses Uri.parse so the open-external
-      // E2E test can pin the delegation contract without depending on the real
-      // `env` binding — the test process cannot spy on `env.openExternal` through
-      // the vscode module namespace. The override sees the gated href as a plain
-      // string; same surface as the production closure.
+      // The production closure builds the encoding-preserving `Uri` via
+      // `buildExternalUri` (WHATWG split + `Uri.from`, preserving `%2F`/`+`)
+      // and routes it to the override (tests) or the real `env.openExternal`.
+      // `openExternalOverride` (when set) receives that built `Uri`, so the
+      // open-external E2E pins the real handoff — the test process cannot spy on
+      // `env.openExternal` through the vscode module namespace.
       openExternal: (href) =>
         handleOpenExternal(href, {
-          openExternal:
-            this.harness?.openExternalOverride ?? ((url) => env.openExternal(Uri.parse(url))),
+          // Build the encoding-preserving Uri ONCE, then route it to the override
+          // (tests) or the real env.openExternal. Building BEFORE the override
+          // boundary means the E2E observes the exact Uri production opens — the
+          // old code built via Uri.parse INSIDE the fallback arm, so the override
+          // bypassed it and %2F/+ mangling went untested.
+          openExternal: (url) =>
+            (this.harness?.openExternalOverride ?? ((uri) => env.openExternal(uri)))(
+              buildExternalUri(url)
+            ),
           showError,
         }),
     });

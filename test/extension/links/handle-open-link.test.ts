@@ -106,6 +106,15 @@ describe("handleOpenLink", () => {
     expect(opened).toEqual([]);
   });
 
+  it("rejects a percent-encoded control byte that decodes to C0 (%01)", () => {
+    // Raw `./oth%01er.md` passes the FIRST isAllowedUrl (literal %,0,1); only the
+    // post-decode re-validation catches the decoded U+0001. Pins that guard as
+    // non-vacuous — removing it must turn this test red.
+    const { deps, opened } = makeDeps();
+    handleOpenLink("./oth%01er.md", deps);
+    expect(opened).toEqual([]);
+  });
+
   it("rejects a sibling dir that shares the doc-dir name as a prefix (no workspace)", () => {
     // /ws/notes vs /ws/notes-evil must NOT match on a bare prefix — guards the
     // trailing-slash normalisation in isWithinDir (without it, startsWith would
@@ -115,13 +124,41 @@ describe("handleOpenLink", () => {
     expect(opened).toEqual([]);
   });
 
-  it("does not traverse via percent-encoded separators (stays contained)", () => {
-    // `%2f` is literal (not a separator) through Uri.joinPath, so this resolves
-    // to a single literal filename INSIDE the doc dir — contained, never an
-    // escape. Pins the threat-model claim that encoded segments don't traverse.
+  it("decodes a percent-encoded space so my%20notes.md opens my notes.md", () => {
+    const { deps, opened } = makeDeps();
+    handleOpenLink("./my%20notes.md", deps);
+    expect(opened).toEqual(["/ws/notes/my notes.md"]);
+  });
+
+  it("decodes a percent-encoded space inside a subdirectory segment", () => {
+    const { deps, opened } = makeDeps();
+    handleOpenLink("./sub%20dir/my%20notes.md", deps);
+    expect(opened).toEqual(["/ws/notes/sub dir/my notes.md"]);
+  });
+
+  it("leaves a malformed percent-escape literal (no decode, still opens)", () => {
+    // decodeURIComponent throws on `%of`; we fall back to the raw form so a real
+    // file literally named `50%off.md` still opens (no regression vs pre-fix).
+    const { deps, opened } = makeDeps();
+    handleOpenLink("./50%off.md", deps);
+    expect(opened).toEqual(["/ws/notes/50%off.md"]);
+  });
+
+  it("rejects a decoded percent-encoded traversal (containment holds after decode)", () => {
+    // `..%2f..%2f` now decodes to `../../` and resolves to /secret.md — OUTSIDE
+    // the workspace — so containment (asserted on the resolved target AFTER
+    // decoding) rejects it. Pins that decoding does not reopen the traversal hole.
     const { deps, opened } = makeDeps();
     handleOpenLink("..%2f..%2fsecret.md", deps);
-    expect(opened).toEqual(["/ws/notes/..%2f..%2fsecret.md"]);
+    expect(opened).toEqual([]);
+  });
+
+  it("falls back to the raw form when a segment mixes a valid and invalid escape", () => {
+    // decodeURIComponent is all-or-nothing: %20 is NOT partially decoded when a
+    // later %off is malformed. Whole-string raw fallback → literal-named target.
+    const { deps, opened } = makeDeps();
+    handleOpenLink("./sub%20dir/50%off.md", deps);
+    expect(opened).toEqual(["/ws/notes/sub%20dir/50%off.md"]);
   });
 
   it("shows the failure toast when openWith rejects asynchronously", async () => {

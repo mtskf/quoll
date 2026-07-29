@@ -157,13 +157,14 @@ interface TestOverrides {
   webviewPostMessage: ((message: HostToWebview) => Thenable<boolean>) | null;
   /** When non-null, the panel's `case "open-external"` arm routes
    *  `handleOpenExternal`'s injected `openExternal` dep through this
-   *  instead of `(url) => env.openExternal(Uri.parse(url))`. The override
-   *  sees the already-allowlist-gated, post-decode href as a plain string
-   *  and is used by the open-external E2E test to pin the case arm's
-   *  delegation contract without depending on the real `env` binding
-   *  (which the test process cannot spy on through the vscode module
-   *  namespace). */
-  openExternal: ((url: string) => Thenable<boolean>) | null;
+   *  instead of `(uri) => env.openExternal(uri)`. The production closure
+   *  builds the encoding-preserving `Uri` via `buildExternalUri(href)`
+   *  BEFORE this override boundary, so the override sees the fully-built
+   *  `vscode.Uri` env.openExternal would open — letting the open-external
+   *  E2E assert the exact Uri (and its byte-exact `%2F`/`+` preservation)
+   *  without depending on the real `env` binding (which the test process
+   *  cannot spy on through the vscode module namespace). */
+  openExternal: ((uri: Uri) => Thenable<boolean>) | null;
   /** When non-null, the panel's `case "open-link"` arm routes
    *  `handleOpenLink`'s injected `openWith` dep through this instead of
    *  `(uri) => openInQuollEditor(uri, QuollEditorPanel.viewType)`. The
@@ -285,12 +286,12 @@ export class TestHarness {
 
   /** Read by the panel's `case "open-external"` arm to route the
    *  `openExternal` dep through a test override — see
-   *  `TestOverrides.openExternal`. */
-  get openExternalOverride(): ((url: string) => Thenable<boolean>) | null {
+   *  `TestOverrides.openExternal`. Receives the built `vscode.Uri`. */
+  get openExternalOverride(): ((uri: Uri) => Thenable<boolean>) | null {
     return this._overrides.openExternal;
   }
 
-  set openExternalOverride(override: ((url: string) => Thenable<boolean>) | null) {
+  set openExternalOverride(override: ((uri: Uri) => Thenable<boolean>) | null) {
     this._overrides.openExternal = override;
   }
 
