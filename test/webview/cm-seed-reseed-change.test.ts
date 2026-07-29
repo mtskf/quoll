@@ -33,6 +33,11 @@ describe("computeReseedChange — minimal single-span reseed change", () => {
     const next = splitToCmText("new heading\n\nbody\nmore");
     const change = computeReseedChange(old, next);
     expect(change.from).toBe(0);
+    // A prepend deletes nothing — the entire old doc is the common suffix, so
+    // `to` trims back to 0. Asserting `to` (not just `from` + round-trip) is what
+    // pins the suffix scan: round-trip reassembly alone cannot detect a
+    // non-minimal `to` because the extra span is absorbed into `insert`.
+    expect(change.to).toBe(0);
     expect(applyChange(old, change)).toBe(next.toString());
   });
 
