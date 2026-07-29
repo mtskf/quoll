@@ -62,7 +62,7 @@ import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 
-const DEFAULT_TODO = ".claude/docs/TODO.md";
+export const DEFAULT_TODO = ".claude/docs/TODO.md";
 
 // `gh` is unusable for the rest of this run (ENOENT / auth / rate limit).
 export class GhUnavailable extends Error {}
@@ -323,5 +323,3 @@ function main() {
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   main();
 }
-
-export { DEFAULT_TODO };
