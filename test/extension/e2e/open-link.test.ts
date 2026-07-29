@@ -71,4 +71,50 @@ describe("open-link", function () {
       "expected the host containment gate to drop an out-of-scope open-link"
     );
   });
+
+  it("decodes %20 in a relative link and resolves the space-named target", async () => {
+    const harness = await getHarness();
+    await openFixtureWithQuoll("link-source.md");
+    await harness.waitForEvent(isDocumentEvent, 8000);
+
+    const opened: string[] = [];
+    harness.openLinkOverride = (uri): Promise<unknown> => {
+      opened.push(uri.path);
+      return Promise.resolve(undefined);
+    };
+
+    const panel = harness.activePanel;
+    assert.ok(panel);
+    panel.simulateInbound({ protocol: PROTOCOL_VERSION, type: "open-link", href: "./my%20notes.md" });
+    await Promise.resolve();
+
+    assert.strictEqual(opened.length, 1);
+    assert.ok(
+      opened[0].endsWith("/my notes.md"),
+      `expected the decoded space-named target, got ${opened[0]}`
+    );
+  });
+
+  it("rejects a percent-encoded traversal after decoding (real Uri.joinPath)", async () => {
+    const harness = await getHarness();
+    await openFixtureWithQuoll("link-source.md");
+    await harness.waitForEvent(isDocumentEvent, 8000);
+
+    const opened: string[] = [];
+    harness.openLinkOverride = (uri): Promise<unknown> => {
+      opened.push(uri.path);
+      return Promise.resolve(undefined);
+    };
+
+    const panel = harness.activePanel;
+    assert.ok(panel);
+    panel.simulateInbound({
+      protocol: PROTOCOL_VERSION,
+      type: "open-link",
+      href: "..%2f..%2f..%2f..%2f..%2f..%2fetc%2fpasswd.md",
+    });
+    await Promise.resolve();
+
+    assert.deepStrictEqual(opened, [], "decoded ../ traversal must be dropped by containment");
+  });
 });

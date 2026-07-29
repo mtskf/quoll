@@ -9,12 +9,19 @@
 // rationale. In order it:
 //   - re-applies isAllowedUrl (rejects C0/DEL + protocol-relative //host — the
 //     SAME host-side re-validation handle-open-external.ts applies),
-//   - strips a trailing #fragment,
-//   - rejects a scheme-bearing / absolute / non-.md destination,
+//   - strips a trailing #fragment on the ENCODED form (a literal `#` in a name
+//     is `%23`, so URL-structural splitting must precede decode),
+//   - percent-decodes the destination ONCE (so `my%20notes.md` opens the real
+//     space-named file; malformed escapes fall back to the raw form), then
+//     re-applies isAllowedUrl to the DECODED form,
+//   - rejects a scheme-bearing / absolute / non-.md destination (on the decoded
+//     path),
 //   - resolves the remainder against THIS document's directory (host owns
 //     document.uri),
 //   - requires the resolved target to be inside a workspace folder OR (no
-//     workspace / escaped) inside the document's own directory subtree,
+//     workspace / escaped) inside the document's own directory subtree —
+//     containment on the resolved, decoded target is authoritative regardless
+//     of encoding, so decoding does not reopen the traversal hole,
 //   - opens it via the injected openWith (production: openInQuollEditor +
 //     QuollEditorPanel.viewType).
 //
@@ -66,10 +73,38 @@ export function handleOpenLink(href: string, deps: HandleOpenLinkDeps): void {
   }
 
   const hashIdx = href.indexOf("#");
-  const pathPart = hashIdx >= 0 ? href.slice(0, hashIdx) : href;
+  const encodedPath = hashIdx >= 0 ? href.slice(0, hashIdx) : href;
 
-  if (pathPart.length === 0) {
+  if (encodedPath.length === 0) {
     console.warn("[quoll] open-link dropped: empty path (fragment-only)", {
+      hrefPreview: sanitizeForLog(href),
+    });
+    return;
+  }
+
+  // Percent-decode ONCE so the standard `[notes](my%20notes.md)` form (what VS
+  // Code preview / GitHub / Obsidian emit) resolves to the real space-named
+  // file rather than a literal `%20`-named one. decodeURIComponent throws on a
+  // malformed escape (e.g. `50%off.md`) — fall back to the raw form so such a
+  // link still opens its literal-named file (no regression). decodeURIComponent
+  // is all-or-nothing, so a path mixing a valid and an invalid escape
+  // (`sub%20dir/50%off.md`) decodes to neither (whole-string fallback to raw),
+  // which merely surfaces the existing not-found toast — no security impact.
+  // Every structural guard below AND the containment check run on the DECODED
+  // path, so a decoded `../` traversal (`..%2f..%2f…`) resolves outside scope
+  // and is rejected by containment — decoding does not reopen the traversal hole.
+  let pathPart: string;
+  try {
+    pathPart = decodeURIComponent(encodedPath);
+  } catch {
+    pathPart = encodedPath;
+  }
+
+  // Re-apply the allowlist to the decoded form: catches C0/DEL bytes and
+  // protocol-relative `//host` that were hidden behind percent-escapes
+  // (`%01`, `%2f%2f…`) in the raw href.
+  if (!isAllowedUrl(pathPart)) {
+    console.warn("[quoll] open-link rejected: decoded path not in allowlist", {
       hrefPreview: sanitizeForLog(href),
     });
     return;
@@ -103,15 +138,11 @@ export function handleOpenLink(href: string, deps: HandleOpenLinkDeps): void {
   // Fail-closed containment: inside a workspace folder, OR (no workspace /
   // escaped the workspace) inside the document's own directory subtree.
   //
-  // Encoded segments do NOT traverse: decodeMarkdownDestination does not
-  // percent-decode and Uri.joinPath does not treat a literal `%2f`/`%5c` as a
-  // separator, so `..%2f..%2fx.md` resolves to a single literal (non-existent)
-  // filename INSIDE `dir` — never an escape. Containment is asserted on the
-  // resolved `target`, authoritative regardless of encoding. (The image-write
-  // gate in url-allowlist.ts decodes per segment because it validates absolute
-  // resolved URLs; this handler only joins relative segments onto `dir`, so the
-  // literal-separator property suffices.) A literal `%` is deliberately NOT
-  // rejected so a legitimate `%20`-in-filename link still opens.
+  // Containment runs on the DECODED, resolved `target`, so it is authoritative
+  // regardless of encoding. A decoded `../` traversal (`..%2f..%2fx.md` →
+  // `../../x.md`) resolves OUTSIDE `dir`/workspace and is rejected here —
+  // decoding before the join does not reopen the traversal hole, because the
+  // boundary is asserted on the resolved target, not on the raw string.
   //
   // A rejection here is log-only by design: the webview cannot evaluate
   // containment (it owns no path), so a containment-refused click is a normal
