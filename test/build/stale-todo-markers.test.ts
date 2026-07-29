@@ -176,7 +176,7 @@ describe("scanTodo — a number-only merged entry warns, never becomes stale", (
   });
 });
 
-describe("scanTodo — Finding 2: a taxonomy-external bug is rethrown, never swallowed", () => {
+describe("scanTodo — a taxonomy-external bug is rethrown, never swallowed", () => {
   it("propagates a raw TypeError out of the loop instead of reporting clean", () => {
     const text = todo(branchEntry("feat/x", "Boom"));
     const gh = () => {
@@ -186,7 +186,7 @@ describe("scanTodo — Finding 2: a taxonomy-external bug is rethrown, never swa
   });
 });
 
-describe("runScan — Finding 1: a bug becomes exit 2, never colliding with stale's exit 1", () => {
+describe("runScan — a bug becomes exit 2, never colliding with stale's exit 1", () => {
   it("maps a taxonomy-external error to exitCode 2 with an internal-error message", () => {
     const text = todo(branchEntry("feat/x", "Boom"));
     const { exitCode, err } = runScan(text, () => {
@@ -205,7 +205,7 @@ describe("runScan — Finding 1: a bug becomes exit 2, never colliding with stal
   });
 });
 
-describe("summarize — Finding 4 / honest partial-scan wording", () => {
+describe("summarize — honest partial-scan wording and exit codes", () => {
   it("says 'partial' and exits 0 when entries were skipped but none are stale", () => {
     const scan = {
       inflightCount: 2,
