@@ -26,6 +26,7 @@ import {
   GhUnavailable,
   ghExec,
   parseEntry,
+  parseInflight,
   resolveEntry,
   runScan,
   scanTodo,
@@ -168,6 +169,7 @@ describe("scanTodo — a number-only merged entry warns, never becomes stale", (
     const text = todo(numberEntry(7, "Number only"));
     const gh = makeGh({ view: { "7": { state: "MERGED", title: "shipped" } } });
     const scan = scanTodo(text, gh);
+    expect(scan.inflightCount).toBe(1);
     expect(scan.stale).toHaveLength(0);
     expect(scan.warnings).toHaveLength(1);
     expect(summarize(scan).exitCode).toBe(0);
@@ -291,5 +293,17 @@ describe("parseEntry — extracts branch / pr / title from every marker form", (
   });
   it("captures the **bold** title", () => {
     expect(parseEntry("- [ ] 🚧 **The title** (branch: b)").title).toBe("The title");
+  });
+});
+
+describe("parseInflight — selects only unchecked 🚧 lines, excludes the rest", () => {
+  it("selects an unchecked 🚧 line", () => {
+    expect(parseInflight("- [ ] 🚧 **A** (branch: x)")).toHaveLength(1);
+  });
+  it("excludes a CHECKED 🚧 line (done work is never in-flight)", () => {
+    expect(parseInflight("- [x] 🚧 **A** (branch: x)")).toHaveLength(0);
+  });
+  it("excludes an unchecked line WITHOUT the 🚧 glyph", () => {
+    expect(parseInflight("- [ ] **A** (branch: x)")).toHaveLength(0);
   });
 });
