@@ -85,7 +85,11 @@ describe("open-link", function () {
 
     const panel = harness.activePanel;
     assert.ok(panel);
-    panel.simulateInbound({ protocol: PROTOCOL_VERSION, type: "open-link", href: "./my%20notes.md" });
+    panel.simulateInbound({
+      protocol: PROTOCOL_VERSION,
+      type: "open-link",
+      href: "./my%20notes.md",
+    });
     await Promise.resolve();
 
     assert.strictEqual(opened.length, 1);

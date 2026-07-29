@@ -56,9 +56,7 @@ export function splitExternalUrl(href: string): ExternalUrlParts | null {
   // username OR password: `https://:pw@host` is valid (username === "",
   // password === "pw") and a username-only guard would drop the `:pw@`.
   const userinfo =
-    url.username || url.password
-      ? `${url.username}${url.password ? `:${url.password}` : ""}@`
-      : "";
+    url.username || url.password ? `${url.username}${url.password ? `:${url.password}` : ""}@` : "";
   return {
     scheme: url.protocol.replace(/:$/, ""),
     authority: userinfo + url.host,
