@@ -2,6 +2,12 @@
 
 All notable changes to Quoll are documented here.
 
+## 0.1.60 — 2026-07-29
+
+### Fixed
+
+- Pasting images into a single document is now capped at a generous total size per editing session, guarding against runaway disk use from a misbehaving source. The limit is far above any normal paste workflow; if it is ever reached, further image pastes are declined with a one-time notice and resume when you reopen the document.
+
 ## 0.1.59 — 2026-07-29
 
 ### Fixed
