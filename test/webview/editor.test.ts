@@ -1727,4 +1727,33 @@ describe("editor — external reseed preserves unrelated folds (r)", () => {
     expect(range.from).toBeLessThanOrEqual(subPos);
     expect(range.to).toBeGreaterThan(subPos); // "## Sub" (child) STILL inside the fold
   });
+
+  it("(r10) a reseed that deletes a folded section's BODY (heading kept) releases the orphaned fold", () => {
+    const { handle, view } = mount();
+    // "# One" is the LAST section; folding it then deleting its ENTIRE body leaves
+    // the heading with no foldable content (foldable() → null), so the mapped fold
+    // is ORPHANED. The reseed's common prefix swallows the heading line + its
+    // trailing newline, so the edit span starts BELOW the heading line — exactly the
+    // body-delete case the line-only orphan gate missed, which left a phantom fold
+    // pill on a heading that no longer folds.
+    const doc = "intro\n\n# One\n\nalpha\nbravo";
+    handle.applyDocument(doc, true, 1);
+    ensureSyntaxTree(view.state, view.state.doc.length, 5000);
+    const line = view.state.doc.line(3); // "# One"
+    const canonical = foldable(view.state, line.from, line.to);
+    if (!canonical) {
+      throw new Error("heading line should be foldable");
+    }
+    view.dispatch({ effects: foldEffect.of(canonical) });
+    expect(foldedCount(view)).toBe(1);
+
+    // External reseed deletes the whole body of "# One" (heading kept). The
+    // minimal-span diff is a pure deletion whose edited span starts after the
+    // heading line, so the line-only gate never sees the touch.
+    const next = "intro\n\n# One\n";
+    handle.applyDocument(next, true, 2);
+
+    expect(view.state.sliceDoc()).toBe(next);
+    expect(foldedCount(view)).toBe(0); // orphaned fold released, no phantom pill
+  });
 });

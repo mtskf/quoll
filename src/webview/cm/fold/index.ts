@@ -925,15 +925,20 @@ function concealsHeadingBoundary(
  *  fix both:
  *
  *  1. Orphaned fold — the fold's OWN line is no longer `foldable()` at all (e.g. an
- *     external edit stripped its heading marker). There is no canonical range left
- *     to clamp back to, so the fold is released — but ONLY when `editedRange`
- *     (the reseed's edit span, in POST-change coordinates) actually overlaps this
- *     fold's line. Without that gate, a fold that was NEVER canonical to begin with
- *     (e.g. hand-applied over a plain paragraph, which `foldable()` always excludes
- *     — see the module header) would get sprung open by any unrelated edit anywhere
- *     else in the document, violating the PR #292 policy this whole function exists
- *     to uphold. Requiring the edit to touch the line is what makes this a targeted
- *     response to a change ON that line, not a spurious spring-open.
+ *     external edit stripped its heading marker, or deleted the whole section body so
+ *     an empty heading no longer folds). There is no canonical range left to clamp
+ *     back to, so the fold is released — but ONLY when `editedRange` (the reseed's
+ *     edit span, in POST-change coordinates) actually touched this fold: either its
+ *     heading LINE or its collapsed SPAN. Without that gate, a fold that was NEVER
+ *     canonical to begin with (e.g. hand-applied over a plain paragraph, which
+ *     `foldable()` always excludes — see the module header) would get sprung open by
+ *     any unrelated edit anywhere else in the document, violating the PR #292 policy
+ *     this whole function exists to uphold. The SPAN test is what catches a body
+ *     delete: deleting a folded section's entire body trims the heading + its newline
+ *     into the change's common prefix, so the edited span starts BELOW the heading
+ *     line (the line test alone would miss it) yet still overlaps the collapsed span.
+ *     Requiring the edit to touch the fold's line OR span is what makes this a
+ *     targeted response to a change ON that fold, not a spurious spring-open.
  *  2. Over-wide fold — the line is still foldable, but the mapped fold now extends
  *     PAST its current `foldable()` section end AND the excess span conceals a
  *     heading boundary (most visibly a same-level sibling heading dropped inside a
@@ -972,9 +977,17 @@ export function reconcileReseedFolds(
     const line = state.doc.lineAt(from);
     const fresh = foldable(state, line.from, line.to);
     if (!fresh) {
-      // Orphaned — but only release when THIS line is what the reseed edited
-      // (touching test on possibly-zero-width ranges, both in post-change coords).
-      if (editedRange.from <= line.to && editedRange.to >= line.from) {
+      // Orphaned — release only when the reseed's edit actually touched THIS fold:
+      // either its heading LINE (marker stripped) OR its SPAN (body deleted). Both
+      // overlap tests are in POST-change coords on possibly-zero-width ranges.
+      // Requiring the edit to touch the fold (not fire on unrelated edits elsewhere)
+      // preserves the PR #292 never-spring-unrelated-folds policy, while catching the
+      // body-delete case the line-only gate missed: a full-body deletion trims the
+      // heading + its newline into the common prefix, so the edited span starts BELOW
+      // the heading line (touchesLine false) yet still overlaps the collapsed span.
+      const touchesLine = editedRange.from <= line.to && editedRange.to >= line.from;
+      const touchesFold = editedRange.from <= to && editedRange.to >= from;
+      if (touchesLine || touchesFold) {
         effects.push(unfoldEffect.of({ from, to }));
       }
       return;

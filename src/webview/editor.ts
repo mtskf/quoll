@@ -950,8 +950,20 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
       // argument is in POST-change coordinates (reseedChange.from is unaffected by its
       // own edit; the edit's far end shifts to reseedChange.from + insert.length) —
       // reconcileReseedFolds uses it to gate the orphan-release path to folds whose OWN
-      // line the reseed actually touched, per its JSDoc.
-      if (reseedChange !== null) {
+      // line OR span the reseed actually touched, per its JSDoc.
+      //
+      // Skip an EMPTY change (from === to AND no insert): computeReseedChange yields
+      // that iff the two docs are content-identical (a no-op reseed — e.g. EOL-only
+      // normalisation), so the fold structure is unchanged and there is nothing to
+      // reconcile. Skipping is also load-bearing, not just an optimisation: the
+      // orphan gate's span test is boundary-inclusive, so a zero-width edited span
+      // sitting on a fold's boundary would otherwise (mis)count as touching it and
+      // spring a still-valid fold open. Bailing on the empty change keeps the no-op
+      // reseed a true no-op for folds (pinned by (r5)).
+      if (
+        reseedChange !== null &&
+        (reseedChange.from !== reseedChange.to || reseedChange.insert.length > 0)
+      ) {
         const foldEffects = reconcileReseedFolds(view.state, {
           from: reseedChange.from,
           to: reseedChange.from + reseedChange.insert.length,
