@@ -1642,4 +1642,38 @@ describe("editor — external reseed preserves unrelated folds (r)", () => {
     // |delta| (the edit is inside, before the fold end).
     expect(foldRanges(view)).toEqual([{ from: foldFrom, to: foldTo + delta }]);
   });
+
+  it("(r7) a reseed that inserts a sibling heading INTO a folded section clamps the stale fold so the new heading is not hidden", () => {
+    const { handle, view } = mount();
+    const doc = "# One\n\nalpha\nbravo\n\n# Two\n\ncharlie";
+    handle.applyDocument(doc, true, 1);
+    // Fold "# One" at its CANONICAL range (what foldCode/the gutter would produce),
+    // so the fold matches foldable() exactly BEFORE the reseed remaps it.
+    ensureSyntaxTree(view.state, view.state.doc.length, 5000);
+    const line1 = view.state.doc.line(1); // "# One"
+    const canonical = foldable(view.state, line1.from, line1.to);
+    if (!canonical) {
+      throw new Error("heading line should be foldable");
+    }
+    view.dispatch({ effects: foldEffect.of(canonical) });
+    expect(foldedCount(view)).toBe(1);
+
+    // External reseed drops a same-level sibling heading INTO "# One"'s body (a
+    // formatter / git inserting a new section). The minimal-span diff maps the
+    // overlapping fold THROUGH the insert, so without reconciliation it widens to
+    // swallow "# New" — hiding the new section behind the stale fold.
+    const next = doc.replace("alpha", "alpha\n\n# New\n\ngamma");
+    handle.applyDocument(next, true, 2);
+    expect(view.state.sliceDoc()).toBe(next);
+
+    // The section is still collapsed (the fold is preserved, not sprung open)...
+    expect(foldedCount(view)).toBe(1);
+    // ...but clamped back to "# One"'s real section end, so "# New" is NOT concealed.
+    const newHeadingPos = next.indexOf("# New");
+    const [range] = foldRanges(view);
+    expect(range.to).toBeLessThanOrEqual(newHeadingPos);
+    // And the clamp lands exactly on the current foldable range for "# One".
+    const freshLine1 = view.state.doc.line(1);
+    expect(foldable(view.state, freshLine1.from, freshLine1.to)).toEqual(range);
+  });
 });

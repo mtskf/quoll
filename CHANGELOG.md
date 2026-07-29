@@ -2,6 +2,12 @@
 
 All notable changes to Quoll are documented here.
 
+## 0.1.62 — 2026-07-29
+
+### Fixed
+
+- A collapsed section no longer hides a heading that an external change (a formatter, git, or another editor) inserts inside it. The fold now shrinks back to its own section, so the newly-added section stays visible instead of being concealed until you unfold.
+
 ## 0.1.61 — 2026-07-29
 
 ### Fixed

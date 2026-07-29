@@ -35,7 +35,7 @@ import { fencedCodeEnterKeymap } from "./cm/fenced-code/fenced-code-enter-keymap
 import { quollCodeHighlighting } from "./cm/fenced-code/fenced-code-highlight-languages.js";
 import { fencedCodeLanguagePicker } from "./cm/fenced-code/fenced-code-language-picker.js";
 import { quollFloatingToolbarScroll } from "./cm/floating-toolbar-scroll.js";
-import { quollFolding } from "./cm/fold/index.js";
+import { quollFolding, reconcileReseedFolds } from "./cm/fold/index.js";
 import { runFormatDocument } from "./cm/format/format-document-command.js";
 import { frontmatterBlockField, frontmatterRevealKeymap } from "./cm/frontmatter/index.js";
 import { hostDocumentReseed } from "./cm/host-reseed.js";
@@ -930,6 +930,26 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
       }
       sync.onHostSnapshot(baseDocVersion, canWrite, externalEpoch, epochGeneration);
       setReadOnlyClass(canWrite);
+      // Reconcile native folds that the minimal-span reseed REMAPPED. The diff maps
+      // overlapping folds through the change (preserving them — PR #292), but an
+      // external insert INTO a collapsed section can widen a mapped fold to swallow a
+      // newly-inserted sibling heading, hiding it until the user unfolds. Clamp any
+      // such over-wide fold back to its real foldable range. Only meaningful when the
+      // reseed actually changed the document (insertText !== null). This is a SEPARATE,
+      // display-only dispatch carrying NO `changes` — byte-identical round-trip, and a
+      // no-op for the updateListener's `docChanged`-gated edit-sync — so it behaves
+      // exactly like a user fold/unfold (hence NOT annotated as a hostDocumentReseed;
+      // it rewrites no document bytes). addToHistory.of(false) keeps the clamp out of
+      // undo. reconcileReseedFolds self-guards on a complete parse tree.
+      if (insertText !== null) {
+        const foldEffects = reconcileReseedFolds(view.state);
+        if (foldEffects.length > 0) {
+          view.dispatch({
+            annotations: [Transaction.addToHistory.of(false)],
+            effects: foldEffects,
+          });
+        }
+      }
     },
     isIdentityTransition(externalEpoch, epochGeneration) {
       return sync.isIdentityTransition(externalEpoch, epochGeneration);
