@@ -69,4 +69,18 @@ describe("reconcileOpen (stateful, in-memory map)", () => {
     __clearSurfaceMemoryForTest();
     expect(__getRememberedSurfaceForTest("file:///a.md")).toBeUndefined();
   });
+
+  it("a text open beside a Quoll sibling OVERWRITES remembered 'quoll' with 'text' (surface-memory masking characterization)", () => {
+    // Surface-memory fact behind the surface-swap async-open union-pin (see
+    // host-rejects-edit-preserves-webview.test.ts + docs/LEARNING.md 2026-07-29):
+    // during a forward Quoll→text swap the source Quoll tab is still open when the
+    // target text tab opens, so hasSibling=true and reconcileOpen ADOPTS "text",
+    // overwriting the remembered "quoll" — regardless of whether the switch site's
+    // own noteSurface("text") ran. That is why a per-layer E2E cannot use surface
+    // memory to isolate the async-window re-check. This pins the local reconcileOpen
+    // transition only; it does NOT reproduce the live watcher event ordering.
+    noteSurface("file:///a.md", "quoll");
+    expect(reconcileOpen("file:///a.md", "text", true)).toBeNull();
+    expect(__getRememberedSurfaceForTest("file:///a.md")).toBe("text");
+  });
 });

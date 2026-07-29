@@ -494,6 +494,15 @@ describe("host-rejects-edit-preserves-webview", function () {
     // Quoll tab (draft not orphaned). The just-opened text tab is an accepted
     // harmless second view here, so this asserts only the data-loss invariant.
     await tick(800);
+    // Union-pin (deliberate): this asserts only the data-loss contract — the Quoll
+    // tab is retained so the draft is not orphaned — the accepted convention the
+    // sibling receipt-time / drain-time guard tests here also follow. It does NOT
+    // isolate the async-window re-check from the finalizeSurfaceSwap backstop: with
+    // the check deleted, the backstop still refuses the close (tab retained) and
+    // surface memory ends "text" either way (the restore watcher adopts the sibling
+    // text view — pinned by surface-memory.test.ts "surface-memory masking
+    // characterization"). Rationale + the early-stop/side-effect difference the
+    // suite intentionally leaves unpinned: docs/LEARNING.md 2026-07-29.
     const tabs = allTabs();
     assert.ok(
       tabs.some(customTab(uri)),
@@ -549,6 +558,12 @@ describe("host-rejects-edit-preserves-webview", function () {
     // re-check / point-of-no-return predicate must RETAIN the Quoll tab.
     await cmd;
     await tick(800);
+    // Union-pin (deliberate — symmetric with the webview async-open test above):
+    // asserts only the data-loss contract (Quoll tab retained). The command path is
+    // additionally unobservable through the harness — it refuses via
+    // window.showErrorMessage/showWarningMessage directly (no recordError), so even
+    // the notification difference is unpinnable here. Rationale: docs/LEARNING.md
+    // 2026-07-29.
     const tabs = allTabs();
     assert.ok(
       tabs.some(customTab(uri)),
