@@ -50,17 +50,22 @@
 import {
   codeFolding,
   foldAll,
+  foldable,
   foldCode,
+  foldEffect,
+  foldedRanges,
   foldGutter,
   syntaxTree,
   syntaxTreeAvailable,
   unfoldAll,
   unfoldCode,
+  unfoldEffect,
 } from "@codemirror/language";
 import {
   type EditorState,
   type Extension,
   type RangeSet,
+  type StateEffect,
   StateField,
   type Transaction,
 } from "@codemirror/state";
@@ -874,6 +879,130 @@ export const quollFoldKeymap: readonly KeyBinding[] = [
  *  test can assert by reference that the keymap is actually wired (not merely that
  *  the table exists). */
 export const quollFoldKeymapExtension: Extension = keymap.of(quollFoldKeymap);
+
+// ATX (`# …`) or Setext (`…\n===`) heading node of ANY level 1–6 — the fold-
+// boundary constructs whose appearance INSIDE a mapped fold means a section was
+// split. Distinct from HEADING_NODE above (H1–H3 only, gutter row-scale).
+const ANY_HEADING_NODE = /^(?:ATXHeading|SetextHeading)[1-6]$/;
+
+/** True when a heading LINE starts strictly inside `(lo, hi)`. Used to decide
+ *  whether the excess span of an over-wide mapped fold conceals a real section
+ *  boundary (see {@link reconcileReseedFolds}). Bounded iterate over the excess
+ *  span only — reseed is not a hot path, but this still avoids a whole-tree walk. */
+function concealsHeadingBoundary(
+  state: EditorState,
+  tree: ReturnType<typeof syntaxTree>,
+  lo: number,
+  hi: number
+): boolean {
+  let found = false;
+  tree.iterate({
+    from: lo,
+    to: hi,
+    enter: (node) => {
+      if (found) {
+        return false;
+      }
+      if (!ANY_HEADING_NODE.test(node.name)) {
+        return undefined;
+      }
+      const lineStart = state.doc.lineAt(node.from).from;
+      if (lineStart > lo && lineStart < hi) {
+        found = true;
+        return false;
+      }
+      return undefined;
+    },
+  });
+  return found;
+}
+
+/** Reconcile native fold ranges after an external reseed has REMAPPED them through
+ *  a minimal-span change (editor.ts#applyDocument → computeReseedChange). That diff
+ *  deliberately maps overlapping folds THROUGH the change rather than dropping them
+ *  (so an unrelated external touch never springs every fold open — the PR #292
+ *  policy). Two distinct problems can result, and this walks every folded range to
+ *  fix both:
+ *
+ *  1. Orphaned fold — the fold's OWN line is no longer `foldable()` at all (e.g. an
+ *     external edit stripped its heading marker, or deleted the whole section body so
+ *     an empty heading no longer folds). There is no canonical range left to clamp
+ *     back to, so the fold is released — but ONLY when `editedRange` (the reseed's
+ *     edit span, in POST-change coordinates) actually touched this fold: either its
+ *     heading LINE or its collapsed SPAN. Without that gate, a fold that was NEVER
+ *     canonical to begin with (e.g. hand-applied over a plain paragraph, which
+ *     `foldable()` always excludes — see the module header) would get sprung open by
+ *     any unrelated edit anywhere else in the document, violating the PR #292 policy
+ *     this whole function exists to uphold. The SPAN test is what catches a body
+ *     delete: deleting a folded section's entire body trims the heading + its newline
+ *     into the change's common prefix, so the edited span starts BELOW the heading
+ *     line (the line test alone would miss it) yet still overlaps the collapsed span.
+ *     Requiring the edit to touch the fold's line OR span is what makes this a
+ *     targeted response to a change ON that fold, not a spurious spring-open.
+ *  2. Over-wide fold — the line is still foldable, but the mapped fold now extends
+ *     PAST its current `foldable()` section end AND the excess span conceals a
+ *     heading boundary (most visibly a same-level sibling heading dropped inside a
+ *     folded section — a formatter / git inserting `# New` into `# One`'s body,
+ *     which then stays concealed until the user unfolds). Clamp back to the real
+ *     foldable range instead. Unlike case 1, this is NOT gated on `editedRange`
+ *     touching the fold's own heading line — the inserted sibling lands inside the
+ *     section BODY, not on the heading line itself. The two conditions together are
+ *     already precise enough:
+ *       - `foldable()`'s `sectionEnd` already stops at the first same-or-higher
+ *         heading, so a legitimately-nested CHILD heading stays INSIDE the canonical
+ *         span and is never treated as concealed — only a genuine sibling/ancestor
+ *         boundary that landed in the fold via the remap trips the check;
+ *       - requiring a concealed heading (not merely `to > fresh.to`) leaves benign
+ *         over-wide remaps untouched — e.g. a hand/legacy fold whose end sits one
+ *         char past the canonical section end, or a fold whose excess is plain prose.
+ *
+ *  Guarded on `syntaxTreeAvailable`: `foldable()` and the heading walk read the
+ *  syntax tree, and an incomplete post-reseed parse frontier would mis-report a
+ *  section end and could clamp WRONG. When the tree is not yet complete we return no
+ *  effects — the mapped fold survives exactly as before (the pre-existing accepted
+ *  behaviour), never a bad clamp. Returns the fold/unfold effects to dispatch (empty
+ *  when nothing needs reconciling). View-layer only — no document change, so the
+ *  round-trip stays byte-identical. Pinned indirectly by editor.test.ts's (r7)–(r9)
+ *  reseed tests (via applyDocument), not a direct import here. */
+export function reconcileReseedFolds(
+  state: EditorState,
+  editedRange: { from: number; to: number }
+): StateEffect<{ from: number; to: number }>[] {
+  if (!syntaxTreeAvailable(state, state.doc.length)) {
+    return [];
+  }
+  const tree = syntaxTree(state);
+  const effects: StateEffect<{ from: number; to: number }>[] = [];
+  foldedRanges(state).between(0, state.doc.length, (from, to) => {
+    const line = state.doc.lineAt(from);
+    const fresh = foldable(state, line.from, line.to);
+    if (!fresh) {
+      // Orphaned — release only when the reseed's edit actually touched THIS fold:
+      // either its heading LINE (marker stripped) OR its SPAN (body deleted). Both
+      // overlap tests are in POST-change coords on possibly-zero-width ranges.
+      // Requiring the edit to touch the fold (not fire on unrelated edits elsewhere)
+      // preserves the PR #292 never-spring-unrelated-folds policy, while catching the
+      // body-delete case the line-only gate missed: a full-body deletion trims the
+      // heading + its newline into the common prefix, so the edited span starts BELOW
+      // the heading line (touchesLine false) yet still overlaps the collapsed span.
+      const touchesLine = editedRange.from <= line.to && editedRange.to >= line.from;
+      const touchesFold = editedRange.from <= to && editedRange.to >= from;
+      if (touchesLine || touchesFold) {
+        effects.push(unfoldEffect.of({ from, to }));
+      }
+      return;
+    }
+    if (fresh.to >= to) {
+      return; // fold not wider than its canonical span — nothing was swallowed.
+    }
+    if (!concealsHeadingBoundary(state, tree, fresh.to, to)) {
+      return; // over-wide, but the excess hides no section boundary — leave it.
+    }
+    effects.push(unfoldEffect.of({ from, to }));
+    effects.push(foldEffect.of(fresh)); // clamp back to the real foldable range.
+  });
+  return effects;
+}
 
 /** The Quoll fold extension. Always on (no setting) — chevrons appear only on
  *  foldable lines. `headingFoldGutterLineClass` tags H1–H3 gutter lines so the

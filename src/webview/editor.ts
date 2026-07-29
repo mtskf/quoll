@@ -35,7 +35,7 @@ import { fencedCodeEnterKeymap } from "./cm/fenced-code/fenced-code-enter-keymap
 import { quollCodeHighlighting } from "./cm/fenced-code/fenced-code-highlight-languages.js";
 import { fencedCodeLanguagePicker } from "./cm/fenced-code/fenced-code-language-picker.js";
 import { quollFloatingToolbarScroll } from "./cm/floating-toolbar-scroll.js";
-import { quollFolding } from "./cm/fold/index.js";
+import { quollFolding, reconcileReseedFolds } from "./cm/fold/index.js";
 import { runFormatDocument } from "./cm/format/format-document-command.js";
 import { frontmatterBlockField, frontmatterRevealKeymap } from "./cm/frontmatter/index.js";
 import { hostDocumentReseed } from "./cm/host-reseed.js";
@@ -881,6 +881,11 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
       const insertText = needsReseed ? splitToCmText(rawText) : null;
       const newDocLength = insertText !== null ? insertText.length : view.state.doc.length;
       const prevMain = prevSelection?.main;
+      // Computed BEFORE dispatch (needs the PRE-change view.state.doc — see the
+      // helper's CRLF note). Reused below, post-dispatch, to derive the edited
+      // span in POST-change coordinates for reconcileReseedFolds's orphan gate.
+      const reseedChange =
+        insertText !== null ? computeReseedChange(view.state.doc, insertText) : null;
       seeding = true;
       try {
         view.dispatch({
@@ -896,7 +901,7 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
               EditorState.readOnly.of(!canWrite),
             ]),
           ],
-          ...(insertText !== null
+          ...(reseedChange !== null
             ? {
                 // Minimal single-span change (not a wholesale {0, doc.length}
                 // replace): CM maps every foldState range through the change, and
@@ -906,7 +911,7 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
                 // Operands are CM Text in LF-internal coords (view.state.doc, not
                 // the sliceDoc() render) — see the helper's CRLF note. insertText
                 // stays the pre-split snapshot Text (also feeds newDocLength).
-                changes: computeReseedChange(view.state.doc, insertText),
+                changes: reseedChange,
               }
             : {}),
           // Restore ONLY the main range, clamped to new doc bounds.
@@ -930,6 +935,46 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
       }
       sync.onHostSnapshot(baseDocVersion, canWrite, externalEpoch, epochGeneration);
       setReadOnlyClass(canWrite);
+      // Reconcile native folds that the minimal-span reseed REMAPPED. The diff maps
+      // overlapping folds through the change (preserving them — PR #292), but an
+      // external insert INTO a collapsed section can widen a mapped fold to swallow a
+      // newly-inserted sibling heading, hiding it until the user unfolds; and an edit
+      // that strips a folded heading's OWN marker can orphan its fold entirely (no
+      // canonical range left to clamp to). Only meaningful when the reseed actually
+      // changed the document (reseedChange !== null). This is a SEPARATE, display-only
+      // dispatch carrying NO `changes` — byte-identical round-trip, and a no-op for the
+      // updateListener's `docChanged`-gated edit-sync — so it behaves exactly like a
+      // user fold/unfold (hence NOT annotated as a hostDocumentReseed; it rewrites no
+      // document bytes). addToHistory.of(false) keeps the clamp out of undo.
+      // reconcileReseedFolds self-guards on a complete parse tree. The edited-span
+      // argument is in POST-change coordinates (reseedChange.from is unaffected by its
+      // own edit; the edit's far end shifts to reseedChange.from + insert.length) —
+      // reconcileReseedFolds uses it to gate the orphan-release path to folds whose OWN
+      // line OR span the reseed actually touched, per its JSDoc.
+      //
+      // Skip an EMPTY change (from === to AND no insert): computeReseedChange yields
+      // that iff the two docs are content-identical (a no-op reseed — e.g. EOL-only
+      // normalisation), so the fold structure is unchanged and there is nothing to
+      // reconcile. Skipping is also load-bearing, not just an optimisation: the
+      // orphan gate's span test is boundary-inclusive, so a zero-width edited span
+      // sitting on a fold's boundary would otherwise (mis)count as touching it and
+      // spring a still-valid fold open. Bailing on the empty change keeps the no-op
+      // reseed a true no-op for folds (pinned by (r5)).
+      if (
+        reseedChange !== null &&
+        (reseedChange.from !== reseedChange.to || reseedChange.insert.length > 0)
+      ) {
+        const foldEffects = reconcileReseedFolds(view.state, {
+          from: reseedChange.from,
+          to: reseedChange.from + reseedChange.insert.length,
+        });
+        if (foldEffects.length > 0) {
+          view.dispatch({
+            annotations: [Transaction.addToHistory.of(false)],
+            effects: foldEffects,
+          });
+        }
+      }
     },
     isIdentityTransition(externalEpoch, epochGeneration) {
       return sync.isIdentityTransition(externalEpoch, epochGeneration);
