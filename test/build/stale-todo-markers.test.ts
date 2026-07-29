@@ -252,6 +252,7 @@ describe("classifyGhError — ENOENT / auth / rate-limit → GhUnavailable, else
     expect(classifyGhError({ stderr: "API rate limit exceeded for user" })).toBeInstanceOf(
       GhUnavailable
     );
+    expect(classifyGhError({ stderr: "HTTP 401: Bad credentials" })).toBeInstanceOf(GhUnavailable);
   });
 
   it("classifies a one-off HTTP error as GhTransient", () => {

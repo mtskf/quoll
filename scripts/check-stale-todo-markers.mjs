@@ -38,8 +38,9 @@
 //
 // Error taxonomy (see `classifyGhError`):
 //  - GhUnavailable — `gh` is unusable for the REST of this run: not installed
-//    (ENOENT), not authenticated, or rate-limited. All three persist for the
-//    run, so re-trying every remaining entry is futile; the scan stops but
+//    (ENOENT), not authenticated (auth failure / HTTP 401 bad credentials), or
+//    rate-limited. All three persist for the run, so re-trying every remaining
+//    entry is futile; the scan stops but
 //    still RETURNS what it already found (a stale marker confirmed before a
 //    mid-scan auth expiry must not be silently discarded).
 //  - GhTransient — a genuinely per-entry failure (single 404, one-off network
@@ -74,7 +75,9 @@ export function classifyGhError(err) {
   const msg = `${err?.stderr ?? ""}${err?.message ?? ""}`;
   if (
     err?.code === "ENOENT" ||
-    /not logged|authentication|gh auth login|GH_TOKEN|rate limit/i.test(msg)
+    /not logged|authentication|gh auth login|GH_TOKEN|rate limit|bad credentials|HTTP 401/i.test(
+      msg
+    )
   ) {
     return new GhUnavailable(msg.trim() || String(err));
   }
