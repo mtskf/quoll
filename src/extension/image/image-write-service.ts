@@ -82,6 +82,14 @@ export async function handleImageWrite(
   // still leave a partial file, so counting the attempt keeps disk bounded). The
   // budget surfaces its own one-time warning, so this rejection just clears the
   // webview's pending entry.
+  //
+  // The charge brackets the WHOLE write (in the wiring, writeImage does an
+  // idempotent createDirectory then writeFile), so a pre-write setup failure is
+  // charged too even though it wrote no bytes. Accepted deliberately: reserving
+  // here keeps the budget-rejection path cleanly separate from I/O failures, and
+  // the over-charge is immaterial — createDirectory only fails on a broken FS,
+  // which blocks all pastes regardless of the cap (a persistent failure is not a
+  // budget problem), while a transient blip barely dents a 512 MiB ceiling.
   if (!deps.budget.reserve(decision.bytes.length)) {
     deps.postResult(requestId, null);
     return;
