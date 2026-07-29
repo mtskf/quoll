@@ -77,9 +77,17 @@ describe("resolveEntry — fix (a): reused branch prefers an OPEN PR", () => {
     expect(resolveEntry({ branch: "feat/x", pr: null }, gh).status).toBe("clean");
   });
 
-  it("prefers an OPEN PR regardless of how many merged PRs exist (no truncation dependency)", () => {
-    const manyMerged = Array.from({ length: 30 }, (_, i) => ({ number: i, title: `m${i}` }));
-    const gh = makeGh({ list: { "feat/x": { open: [{ number: 99 }], merged: manyMerged } } });
+  it("returns clean via the OPEN query without ever consulting merged (short-circuit)", () => {
+    const gh = makeGh({
+      list: {
+        "feat/x": {
+          open: [{ number: 99 }],
+          merged: () => {
+            throw new Error("merged query must not run when an OPEN PR exists");
+          },
+        },
+      },
+    });
     expect(resolveEntry({ branch: "feat/x", pr: null }, gh).status).toBe("clean");
   });
 
@@ -255,6 +263,14 @@ describe("classifyGhError — ENOENT / auth / rate-limit → GhUnavailable, else
       GhUnavailable
     );
     expect(classifyGhError({ stderr: "HTTP 401: Bad credentials" })).toBeInstanceOf(GhUnavailable);
+  });
+
+  it("classifies a bare HTTP 401 (no 'bad credentials' text) as GhUnavailable", () => {
+    expect(classifyGhError({ stderr: "gh: HTTP 401 Unauthorized" })).toBeInstanceOf(GhUnavailable);
+  });
+
+  it("classifies a 'Bad credentials' message (no HTTP status) as GhUnavailable", () => {
+    expect(classifyGhError({ stderr: "error: Bad credentials" })).toBeInstanceOf(GhUnavailable);
   });
 
   it("classifies a one-off HTTP error as GhTransient", () => {
