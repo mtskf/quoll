@@ -2,6 +2,12 @@
 
 All notable changes to Quoll are documented here.
 
+## 0.1.59 — 2026-07-29
+
+### Fixed
+
+- Links with percent-encoded characters now open correctly: a relative link like `[notes](my%20notes.md)` opens the space-named file, and external links containing `%2F` or `+` (GitLab-style API URLs, search queries) reach your browser unchanged instead of being silently altered.
+
 ## 0.1.58 — 2026-07-28
 
 ### Fixed
