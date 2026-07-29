@@ -153,4 +153,34 @@ describe("open-external", function () {
     // the browser. The old Uri.parse path would show `.../foo/bar/...?q=a+b`.
     assert.deepStrictEqual(calls, [raw], "expected the built Uri to preserve %2F and +");
   });
+
+  it("still reaches openExternal via the Uri.parse fallback when WHATWG rejects the href", async () => {
+    // "https://" passes isAllowedUrl (scheme-only check) but has no host, so
+    // `new URL()` throws inside splitExternalUrl — buildExternalUri falls back
+    // to `Uri.parse(href)` (see build-external-uri.ts's FALLBACK doc). This
+    // pins that the fallback does not throw synchronously and still reaches
+    // env.openExternal through handleOpenExternal's try/catch (review fix #6).
+    const harness = await getHarness();
+    await openFixtureWithQuoll("sample.md");
+    await harness.waitForEvent(isDocumentEvent, 8000);
+
+    const calls: string[] = [];
+    harness.openExternalOverride = async (uri: Uri): Promise<boolean> => {
+      calls.push(uri.toString(true));
+      return true;
+    };
+
+    const panel = harness.activePanel;
+    assert.ok(panel);
+    panel.simulateInbound({ protocol: PROTOCOL_VERSION, type: "open-external", href: "https://" });
+
+    await Promise.resolve();
+    await Promise.resolve();
+
+    assert.strictEqual(
+      calls.length,
+      1,
+      "expected the Uri.parse fallback to reach env.openExternal exactly once, without throwing"
+    );
+  });
 });

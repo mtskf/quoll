@@ -106,6 +106,15 @@ describe("handleOpenLink", () => {
     expect(opened).toEqual([]);
   });
 
+  it("rejects a percent-encoded control byte that decodes to C0 (%01)", () => {
+    // Raw `./oth%01er.md` passes the FIRST isAllowedUrl (literal %,0,1); only the
+    // post-decode re-validation catches the decoded U+0001. Pins that guard as
+    // non-vacuous — removing it must turn this test red.
+    const { deps, opened } = makeDeps();
+    handleOpenLink("./oth%01er.md", deps);
+    expect(opened).toEqual([]);
+  });
+
   it("rejects a sibling dir that shares the doc-dir name as a prefix (no workspace)", () => {
     // /ws/notes vs /ws/notes-evil must NOT match on a bare prefix — guards the
     // trailing-slash normalisation in isWithinDir (without it, startsWith would
@@ -142,6 +151,14 @@ describe("handleOpenLink", () => {
     const { deps, opened } = makeDeps();
     handleOpenLink("..%2f..%2fsecret.md", deps);
     expect(opened).toEqual([]);
+  });
+
+  it("falls back to the raw form when a segment mixes a valid and invalid escape", () => {
+    // decodeURIComponent is all-or-nothing: %20 is NOT partially decoded when a
+    // later %off is malformed. Whole-string raw fallback → literal-named target.
+    const { deps, opened } = makeDeps();
+    handleOpenLink("./sub%20dir/50%off.md", deps);
+    expect(opened).toEqual(["/ws/notes/sub%20dir/50%off.md"]);
   });
 
   it("shows the failure toast when openWith rejects asynchronously", async () => {

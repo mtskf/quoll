@@ -39,8 +39,8 @@ const OPENABLE_SCHEMES = new Set(["http", "https", "mailto"]);
 /** User-facing toast shown when a gated, launchable URL still fails to open.
  *  Covers all three post-gate failure modes symmetrically — a fulfilled
  *  `false` (the OS has no handler for the scheme), an async rejection
- *  (system browser missing, OS denial), and a synchronous throw (Uri.parse
- *  on malformed input). The specific cause goes to the host log; the toast
+ *  (system browser missing, OS denial), and a synchronous throw (buildExternalUri's
+ *  `Uri.parse` fallback on malformed input). The specific cause goes to the host log; the toast
  *  just tells the user the click did something. */
 const OPEN_EXTERNAL_FAILURE_MESSAGE =
   "Quoll: couldn't open the link. See the extension host log for details.";
@@ -105,11 +105,11 @@ export function handleOpenExternal(href: string, deps: HandleOpenExternalDeps): 
     });
     return;
   }
-  // Synchronous-throw guard (review fix #6): Uri.parse — called by the
-  // production deps closure `(url) => env.openExternal(Uri.parse(url))` —
-  // throws synchronously on inputs even non-strict mode rejects (rare
-  // post-isAllowedUrl, but defense in depth). Without try/catch, that
-  // throw escapes handleOpenExternal, breaks
+  // Synchronous-throw guard (review fix #6): the production deps closure
+  // `(url) => env.openExternal(buildExternalUri(url))` can throw synchronously
+  // — buildExternalUri's `Uri.parse` fallback arm rejects inputs even
+  // non-strict mode refuses (rare post-isAllowedUrl, but defense in depth).
+  // Without try/catch, that throw escapes handleOpenExternal, breaks
   // QuollEditorPanel.handleInbound's switch, and corrupts subsequent
   // inbound-message handling.
   //
