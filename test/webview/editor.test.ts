@@ -1,5 +1,13 @@
 // @vitest-environment happy-dom
-import { ensureSyntaxTree, foldable, foldEffect, foldedRanges } from "@codemirror/language";
+import {
+  codeFolding,
+  ensureSyntaxTree,
+  foldable,
+  foldEffect,
+  foldedRanges,
+  syntaxTreeAvailable,
+} from "@codemirror/language";
+import { EditorState } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MAX_CONTENT_LENGTH, PROTOCOL_VERSION } from "../../src/shared/protocol.js";
@@ -11,6 +19,7 @@ import {
 } from "../../src/webview/cm/decorations/block-style.js";
 import { editorPrefsField } from "../../src/webview/cm/editor-prefs.js";
 import { buildListHangIndent, listHangIndent } from "../../src/webview/cm/list/list-hang-indent.js";
+import { quollMarkdownLanguage } from "../../src/webview/cm/markdown.js";
 import { quollOpenExternalSink } from "../../src/webview/cm/open-external.js";
 import { type EditorHandle, mountEditor } from "../../src/webview/editor.js";
 import { type Action, initialState, type WebviewState } from "../../src/webview/state.js";
@@ -1755,5 +1764,72 @@ describe("editor — external reseed preserves unrelated folds (r)", () => {
 
     expect(view.state.sliceDoc()).toBe(next);
     expect(foldedCount(view)).toBe(0); // orphaned fold released, no phantom pill
+  });
+
+  it("(r11) a reseed into a folded region on a LARGE doc still reveals an inserted sibling (parse forced at the call site)", () => {
+    const { handle, view } = mount();
+    // A large trailing body so the parse frontier stays incomplete. `repeat` count
+    // is sized so the reseed's own bounded apply-parse does NOT reach EOF (see the
+    // incomplete-before assert) but the 500 ms call-site forceParsing does.
+    const bigTail = `\n\n${"filler paragraph body text.\n\n".repeat(6000)}`;
+    const doc = `# One\n\nalpha\nbravo\n\n# Two\n\ncharlie${bigTail}`;
+    handle.applyDocument(doc, true, 1);
+
+    // The live view's parse is genuinely INCOMPLETE — the whole point. We do NOT
+    // force-parse the live state here (Codex review #2): ensureSyntaxTree on the live
+    // view would complete its mutable parse context to EOF, so the reseed below would
+    // resume from a done context and parse to completion, making the bug irreproducible
+    // and this test vacuous.
+    expect(syntaxTreeAvailable(view.state, view.state.doc.length)).toBe(false);
+
+    // Canonical "# One" fold range comes from a SEPARATE, fully-parsed oracle state
+    // (same doc → same offsets) — never the live view. This is how we fold "# One" at
+    // its canonical range without touching the live view's parse context. (foldable
+    // reads syntaxTree(state); ensureSyntaxTree leaves that stale, so refresh the
+    // oracle with an empty update before reading foldable — same reason the call site
+    // uses forceParsing on the live view.)
+    let oracle = EditorState.create({
+      doc,
+      extensions: [quollMarkdownLanguage(), codeFolding()],
+    });
+    ensureSyntaxTree(oracle, oracle.doc.length, 5000);
+    oracle = oracle.update({}).state;
+    const oLine1 = oracle.doc.line(1); // "# One"
+    const canonical = foldable(oracle, oLine1.from, oLine1.to);
+    if (!canonical) {
+      throw new Error("oracle: heading line should be foldable");
+    }
+    view.dispatch({ effects: foldEffect.of(canonical) });
+    expect(foldedRanges(view.state).size).toBe(1);
+
+    // External reseed drops a same-level sibling into "# One"'s body. On this large
+    // doc the reseed's bounded apply parse leaves the frontier incomplete; without
+    // the call-site forceParsing, reconcileReseedFolds bails and "# New" stays
+    // concealed behind the stale (remapped, over-wide) fold.
+    postMessage.mockReset(); // ignore the seed traffic; watch the reseed only
+    const next = doc.replace("alpha", "alpha\n\n# New\n\ngamma");
+    handle.applyDocument(next, true, 2);
+    expect(view.state.sliceDoc()).toBe(next);
+
+    // The forced parse ran (frontier complete) AND the fold was clamped so the new
+    // sibling is revealed.
+    expect(syntaxTreeAvailable(view.state, view.state.doc.length)).toBe(true);
+    expect(foldedRanges(view.state).size).toBe(1);
+    const newHeadingPos = next.indexOf("# New");
+    let clampedTo = -1;
+    foldedRanges(view.state).between(0, view.state.doc.length, (_from, to) => {
+      clampedTo = to;
+    });
+    expect(clampedTo).toBeLessThanOrEqual(newHeadingPos); // "# New" NOT concealed
+
+    // Side-effect guard (Codex review #5/#7): the forced parse + reconcile are
+    // display-only — the forceParsing no-op dispatch and the addToHistory:false
+    // reconcile dispatch carry no doc change, so no edit must be posted (mirrors
+    // (r4)). flushPending() forces edit-sync to drain any pending/debounced edit NOW,
+    // so this also catches a regression that made the reconcile dispatch carry a real
+    // change (which would otherwise only surface after the 300 ms debounce, past a
+    // synchronous assert).
+    handle.flushPending();
+    expect(editPosts()).toEqual([]);
   });
 });

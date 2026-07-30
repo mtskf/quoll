@@ -7,6 +7,7 @@
 // guards inside edit-sync.ts handle re-entry.
 
 import { defaultKeymap, history, historyKeymap } from "@codemirror/commands";
+import { foldedRanges, forceParsing } from "@codemirror/language";
 import { highlightSelectionMatches, search, searchKeymap } from "@codemirror/search";
 import { Compartment, EditorState, Prec, Transaction } from "@codemirror/state";
 import { EditorView, keymap } from "@codemirror/view";
@@ -94,6 +95,22 @@ type Dispatch = (action: Action) => void;
 // and the pre-switch / teardown flush is the real correctness guarantee — this
 // window only trims the mid-move flood.
 const CARET_REPORT_DEBOUNCE_MS = 100;
+
+// Worst-case SYNCHRONOUS ceiling (ms) for the ONE forced complete parse before
+// reconciling folds after a reseed whose bounded apply-parse left the frontier
+// incomplete (large doc). NOT a free wait: ensureSyntaxTree's parse.work does not
+// yield the main thread. An already-parsed doc returns instantly (isDone → no
+// added jank, no extra dispatch), so this cost is only paid when a reseed left the
+// parse incomplete. Mirrors cm/outline/outline-panel.ts's PARSE_BUDGET_MS; kept at
+// 500 (not lowered) because the budget caps jank AND fix-coverage together —
+// lowering it would drop the fix for the mid-size docs this targets. On a
+// pathological multi-MB doc that exceeds it, forceParsing returns false and
+// reconcileReseedFolds' own syntaxTreeAvailable guard leaves the mapped fold as-is
+// (the pre-existing accepted behaviour). Unlike outline-open, reseed can fire
+// passively/repeatedly (external saves), so the caller only pays this when there
+// are active folds to reconcile (foldedRanges(...).size > 0 gate). See
+// .claude/docs/LEARNING.md.
+const RECONCILE_PARSE_BUDGET_MS = 500;
 
 export type EditorOptions = {
   parent: HTMLElement;
@@ -962,8 +979,31 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
       // reseed a true no-op for folds (pinned by (r5)).
       if (
         reseedChange !== null &&
-        (reseedChange.from !== reseedChange.to || reseedChange.insert.length > 0)
+        (reseedChange.from !== reseedChange.to || reseedChange.insert.length > 0) &&
+        // Only reconcile — and only pay for the forced parse — when there are active
+        // folds to reconcile. Folding is opt-in, so the overwhelming majority of
+        // reseeds have no folds and nothing to clamp; skipping keeps the whole-doc
+        // parse off the common no-fold reseed path (Codex review). foldedRanges is
+        // O(folds), cheap.
+        foldedRanges(view.state).size > 0
       ) {
+        // Force ONE bounded complete parse so reconcileReseedFolds' foldable() /
+        // heading walk read the WHOLE tree even when the reseed's bounded apply
+        // parse left the frontier incomplete (large / just-opened doc). forceParsing
+        // — NOT a bare ensureSyntaxTree — is required: its public contract is to
+        // force a bounded parse AND make the completed tree visible to
+        // syntaxTree(view.state) (which foldable() reads); a bare ensureSyntaxTree
+        // advances the parse context but leaves syntaxTree(state) stale (it would
+        // even report syntaxTreeAvailable === true while foldable still reads the old
+        // tree). Reseed is not a keystroke path, so this one-shot parse is acceptable
+        // (mirrors cm/outline/outline-panel.ts); an already-parsed doc returns
+        // instantly with no added parse or dispatch. We call reconcileReseedFolds
+        // even if forceParsing returns false (budget exhausted on a pathological
+        // multi-MB doc): its own syntaxTreeAvailable guard makes that a safe no-op
+        // that leaves the mapped fold untouched (the pre-existing accepted
+        // behaviour), and NOT gating here leaves room for a future retry/publication
+        // path. See .claude/docs/LEARNING.md.
+        forceParsing(view, view.state.doc.length, RECONCILE_PARSE_BUDGET_MS);
         const foldEffects = reconcileReseedFolds(view.state, {
           from: reseedChange.from,
           to: reseedChange.from + reseedChange.insert.length,

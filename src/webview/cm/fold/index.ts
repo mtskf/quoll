@@ -958,12 +958,19 @@ function concealsHeadingBoundary(
  *
  *  Guarded on `syntaxTreeAvailable`: `foldable()` and the heading walk read the
  *  syntax tree, and an incomplete post-reseed parse frontier would mis-report a
- *  section end and could clamp WRONG. When the tree is not yet complete we return no
- *  effects — the mapped fold survives exactly as before (the pre-existing accepted
- *  behaviour), never a bad clamp. Returns the fold/unfold effects to dispatch (empty
- *  when nothing needs reconciling). View-layer only — no document change, so the
- *  round-trip stays byte-identical. Pinned indirectly by editor.test.ts's (r7)–(r9)
- *  reseed tests (via applyDocument), not a direct import here. */
+ *  section end and could clamp WRONG. The caller (editor.ts#applyDocument) now
+ *  forces a bounded parse (`forceParsing(view, doc.length, RECONCILE_PARSE_BUDGET_MS)`,
+ *  which — unlike a bare `ensureSyntaxTree` — makes the completed tree visible to the
+ *  `syntaxTree(state)` that `foldable()` reads) immediately before this, so on a
+ *  normal reseed the tree IS complete here. This guard is the graceful-degradation
+ *  fallback for a pathological multi-MB doc whose forced parse exceeded its budget:
+ *  we return no effects and the mapped fold survives exactly as before (the
+ *  pre-existing accepted behaviour), never a bad clamp. Returns the fold/unfold
+ *  effects to dispatch (empty when nothing needs reconciling). View-layer only — no
+ *  document change, so the round-trip stays byte-identical. Pinned indirectly by
+ *  editor.test.ts's (r7)–(r11) reseed tests (via applyDocument), not a direct import
+ *  here, plus the incomplete-frontier unit test in
+ *  test/webview/cm/fold/reconcile-reseed-folds.test.ts. */
 export function reconcileReseedFolds(
   state: EditorState,
   editedRange: { from: number; to: number }
