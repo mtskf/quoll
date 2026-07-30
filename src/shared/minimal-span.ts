@@ -1,6 +1,6 @@
 // The prefix/suffix scan behind both minimal-edit seams: the host write path's
-// `minimalEditSpan` (src/extension/document-write/minimal-edit.ts, shipped #179,
-// Codex-fuzz-verified) and the webview reseed's `computeReseedChange`
+// `minimalEditSpan` (src/extension/document-write/minimal-edit.ts, fuzz-verified
+// by its property test) and the webview reseed's `computeReseedChange`
 // (src/webview/cm/seed.ts). Both reduce a whole-document replace to the smallest
 // single contiguous span by trimming the longest common prefix, then the longest
 // common suffix that does not reach back past that prefix. Extracted so a future
