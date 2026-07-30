@@ -70,4 +70,21 @@ describe("reconcileReseedFolds — incomplete post-reseed parse frontier", () =>
     const freshLine1 = clamped.doc.line(1);
     expect(foldable(clamped, freshLine1.from, freshLine1.to)).toEqual(range);
   });
+
+  it("leaves an over-wide fold untouched when the excess conceals no heading boundary", () => {
+    const doc = "# One\n\nalpha\n\nbravo\n\ncharlie\n\n# Two\n\ndelta";
+    let state = EditorState.create({
+      doc,
+      extensions: [quollMarkdownLanguage(), codeFolding()],
+    });
+    const line1 = state.doc.line(1);
+    const canonical = foldable(state, line1.from, line1.to);
+    if (!canonical) {
+      throw new Error("heading line should be foldable");
+    }
+    const overWide = { from: canonical.from, to: canonical.to + 1 };
+    state = state.update({ effects: foldEffect.of(overWide) }).state;
+
+    expect(reconcileReseedFolds(state, { from: 0, to: 0 })).toEqual([]);
+  });
 });
