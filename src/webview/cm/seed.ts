@@ -4,6 +4,7 @@
 // parity gate (test/markdown/round-trip.test.ts) — the two cannot drift.
 
 import { Text } from "@codemirror/state";
+import { commonAffixLengths } from "../../shared/minimal-span.js";
 
 /** Detect the document's line separator for the CodeMirror `lineSeparator`
  *  facet. A single CRLF anywhere ⇒ CRLF; absent any \r\n ⇒ LF.
@@ -64,21 +65,10 @@ export function computeReseedChange(
   const newStr = newDoc.toString();
   const oldLen = oldStr.length;
   const newLen = newStr.length;
-  const maxPrefix = Math.min(oldLen, newLen);
-  let prefix = 0;
-  while (prefix < maxPrefix && oldStr.charCodeAt(prefix) === newStr.charCodeAt(prefix)) {
-    prefix++;
-  }
-  // Suffix must not reach back past the prefix on either side (prevents a
-  // negative-length span when the two shared runs overlap, e.g. "aaa"->"aa").
-  const maxSuffix = maxPrefix - prefix;
-  let suffix = 0;
-  while (
-    suffix < maxSuffix &&
-    oldStr.charCodeAt(oldLen - 1 - suffix) === newStr.charCodeAt(newLen - 1 - suffix)
-  ) {
-    suffix++;
-  }
+  // Longest-common-prefix + suffix-trim (with the non-negative-span guard) is the
+  // shared core; the webview needs no CRLF snap because both operands are already
+  // LF-internal (see splitToCmText). `insert` is a sub-`Text` (no re-split).
+  const { prefix, suffix } = commonAffixLengths(oldStr, newStr);
   return {
     from: prefix,
     to: oldLen - suffix,
