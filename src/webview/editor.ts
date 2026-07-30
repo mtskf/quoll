@@ -1014,7 +1014,7 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
           // correlated to this budget-miss path. Mirrors the recoverable-
           // degradation console.warn convention in cm/image/*.
           console.warn(
-            "[quoll] reconcileReseedFolds: forced parse hit its budget; stale fold(s) left unreconciled"
+            "[quoll] reconcileReseedFolds: forced parse hit its budget; fold reconciliation skipped (a stale fold, if any, is left unreconciled)"
           );
         }
         const foldEffects = reconcileReseedFolds(view.state, {
