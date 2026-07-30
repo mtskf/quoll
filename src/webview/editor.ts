@@ -1003,7 +1003,20 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
         // that leaves the mapped fold untouched (the pre-existing accepted
         // behaviour), and NOT gating here leaves room for a future retry/publication
         // path. See .claude/docs/LEARNING.md.
-        forceParsing(view, view.state.doc.length, RECONCILE_PARSE_BUDGET_MS);
+        const parsed = forceParsing(view, view.state.doc.length, RECONCILE_PARSE_BUDGET_MS);
+        if (!parsed) {
+          // Dev-diagnostic (webview devtools only, never user-facing): the forced
+          // parse hit its budget on a pathological doc, so reconcileReseedFolds
+          // below will bail on its own syntaxTreeAvailable guard and any stale
+          // over-wide fold stays unreconciled (recoverable by unfolding — the
+          // Done-when's accepted no-op path). Logged so a future "inserted section
+          // stayed hidden behind a stale fold on a huge file" report can be
+          // correlated to this budget-miss path. Mirrors the recoverable-
+          // degradation console.warn convention in cm/image/*.
+          console.warn(
+            "[quoll] reconcileReseedFolds: forced parse hit its budget; stale fold(s) left unreconciled"
+          );
+        }
         const foldEffects = reconcileReseedFolds(view.state, {
           from: reseedChange.from,
           to: reseedChange.from + reseedChange.insert.length,
