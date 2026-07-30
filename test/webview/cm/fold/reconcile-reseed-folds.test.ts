@@ -82,7 +82,7 @@ describe("reconcileReseedFolds — incomplete post-reseed parse frontier", () =>
     if (!canonical) {
       throw new Error("heading line should be foldable");
     }
-    const overWide = { from: canonical.from, to: canonical.to + 1 };
+    const overWide = { from: canonical.from, to: canonical.to + 2 };
     state = state.update({ effects: foldEffect.of(overWide) }).state;
 
     expect(reconcileReseedFolds(state, { from: 0, to: 0 })).toEqual([]);
