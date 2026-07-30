@@ -6,24 +6,18 @@
 // Offsets are UTF-16 code units — the unit VS Code's TextDocument.positionAt /
 // Range use — so the panel maps {from,to} to Positions with no re-encoding. No
 // vscode import keeps this property-testable without a vscode runtime stub.
+//
+// The longest-common-prefix + suffix-trim core is shared with the webview reseed
+// via src/shared/minimal-span.ts; this seam adds only the host-side CRLF-bisection
+// snap on top (correctly absent webview-side, where inputs are LF-internal).
+import { commonAffixLengths } from "../../shared/minimal-span.js";
+
 export type MinimalEditSpan = { from: number; to: number; insert: string };
 
 export function minimalEditSpan(oldText: string, newText: string): MinimalEditSpan {
   const oldLen = oldText.length;
   const newLen = newText.length;
-  const maxPrefix = Math.min(oldLen, newLen);
-  let prefix = 0;
-  while (prefix < maxPrefix && oldText.charCodeAt(prefix) === newText.charCodeAt(prefix)) {
-    prefix++;
-  }
-  let suffix = 0;
-  const maxSuffix = maxPrefix - prefix;
-  while (
-    suffix < maxSuffix &&
-    oldText.charCodeAt(oldLen - 1 - suffix) === newText.charCodeAt(newLen - 1 - suffix)
-  ) {
-    suffix++;
-  }
+  let { prefix, suffix } = commonAffixLengths(oldText, newText);
   // VS Code normalizes the EOL of each inserted edit independently, so a span
   // boundary that bisects a CRLF (lands between a \r and its following \n) would
   // isolate a lone \r/\n and round-trip differently from a whole-document
