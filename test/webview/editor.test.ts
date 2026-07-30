@@ -1858,11 +1858,14 @@ describe("editor — external reseed preserves unrelated folds (r)", () => {
     // Keep a mocked clock that jumps 600 ms per read active for the WHOLE sequence
     // (seed → fold → reseed). Every parse budget check is Date.now-based, so each
     // expires on its first check: the seed's apply parse (20 ms budget) bails one
-    // chunk in — leaving the frontier incomplete — the fold dispatch's apply parse
-    // can't complete it either, and the reseed call-site forceParsing (500 ms budget)
-    // returns false, firing the budget-miss diagnostic. Deterministic regardless of
-    // machine speed / doc size (contrast (r11), which restores the clock so the same
-    // reseed forceParsing SUCCEEDS — this is that path's false branch).
+    // chunk in, leaving the frontier incomplete; the fold-only dispatch is
+    // non-docChanged, so LanguageState.apply early-returns without parsing (it does
+    // NOT advance or complete the tree); then the reseed's own docChanged apply
+    // (20 ms) and the call-site forceParsing (500 ms) both fail under the mocked
+    // clock, so forceParsing returns false and fires the budget-miss diagnostic.
+    // Deterministic regardless of machine speed / doc size (contrast (r11), which
+    // restores the clock so the same reseed forceParsing SUCCEEDS — this is that
+    // path's false branch).
     let virtualNow = Date.now();
     const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => (virtualNow += 600));
     try {
