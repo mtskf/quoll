@@ -1,5 +1,13 @@
 // @vitest-environment happy-dom
-import { ensureSyntaxTree, foldable, foldEffect, foldedRanges } from "@codemirror/language";
+import {
+  codeFolding,
+  ensureSyntaxTree,
+  foldable,
+  foldEffect,
+  foldedRanges,
+  syntaxTreeAvailable,
+} from "@codemirror/language";
+import { EditorState } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MAX_CONTENT_LENGTH, PROTOCOL_VERSION } from "../../src/shared/protocol.js";
@@ -11,6 +19,7 @@ import {
 } from "../../src/webview/cm/decorations/block-style.js";
 import { editorPrefsField } from "../../src/webview/cm/editor-prefs.js";
 import { buildListHangIndent, listHangIndent } from "../../src/webview/cm/list/list-hang-indent.js";
+import { quollMarkdownLanguage } from "../../src/webview/cm/markdown.js";
 import { quollOpenExternalSink } from "../../src/webview/cm/open-external.js";
 import { type EditorHandle, mountEditor } from "../../src/webview/editor.js";
 import { type Action, initialState, type WebviewState } from "../../src/webview/state.js";
@@ -1755,5 +1764,135 @@ describe("editor — external reseed preserves unrelated folds (r)", () => {
 
     expect(view.state.sliceDoc()).toBe(next);
     expect(foldedCount(view)).toBe(0); // orphaned fold released, no phantom pill
+  });
+
+  it("(r11) a reseed into a folded region on a LARGE doc still reveals an inserted sibling (parse forced at the call site)", () => {
+    const { handle, view } = mount();
+    // A large trailing body so the parse frontier stays incomplete. `repeat` count
+    // is sized so the reseed's own bounded apply-parse does NOT reach EOF (see the
+    // incomplete-before assert) but the 500 ms call-site forceParsing does.
+    const bigTail = `\n\n${"filler paragraph body text.\n\n".repeat(6000)}`;
+    const doc = `# One\n\nalpha\nbravo\n\n# Two\n\ncharlie${bigTail}`;
+    // Force the initial seed's parse frontier to stay INCOMPLETE deterministically,
+    // independent of machine speed: CM's apply() budget (Work.Apply = 20 ms wall
+    // clock, whole-doc since we transition from an empty doc) is checked against
+    // Date.now(), so advancing the mocked clock by >20 ms per call exhausts it on
+    // the first check. Restored immediately so the reseed below uses the real 500 ms
+    // forceParsing budget. (The sibling unit test gets determinism structurally via
+    // EditorState.create's min(3000) init cap; (r11) can't — it must exercise
+    // applyDocument's apply() path.)
+    let virtualNow = Date.now();
+    const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => (virtualNow += 30));
+    try {
+      handle.applyDocument(doc, true, 1);
+    } finally {
+      nowSpy.mockRestore();
+    }
+
+    // The live view's parse is genuinely INCOMPLETE — the whole point. We do NOT
+    // force-parse the live state here (Codex review #2): ensureSyntaxTree on the live
+    // view would complete its mutable parse context to EOF, so the reseed below would
+    // resume from a done context and parse to completion, making the bug irreproducible
+    // and this test vacuous.
+    expect(syntaxTreeAvailable(view.state, view.state.doc.length)).toBe(false);
+
+    // Canonical "# One" fold range comes from a SEPARATE, fully-parsed oracle state
+    // (same doc → same offsets) — never the live view. This is how we fold "# One" at
+    // its canonical range without touching the live view's parse context. (foldable
+    // reads syntaxTree(state); ensureSyntaxTree leaves that stale, so refresh the
+    // oracle with an empty update before reading foldable — same reason the call site
+    // uses forceParsing on the live view.)
+    let oracle = EditorState.create({
+      doc,
+      extensions: [quollMarkdownLanguage(), codeFolding()],
+    });
+    ensureSyntaxTree(oracle, oracle.doc.length, 5000);
+    oracle = oracle.update({}).state;
+    const oLine1 = oracle.doc.line(1); // "# One"
+    const canonical = foldable(oracle, oLine1.from, oLine1.to);
+    if (!canonical) {
+      throw new Error("oracle: heading line should be foldable");
+    }
+    view.dispatch({ effects: foldEffect.of(canonical) });
+    expect(foldedRanges(view.state).size).toBe(1);
+
+    // External reseed drops a same-level sibling into "# One"'s body. On this large
+    // doc the reseed's bounded apply parse leaves the frontier incomplete; without
+    // the call-site forceParsing, reconcileReseedFolds bails and "# New" stays
+    // concealed behind the stale (remapped, over-wide) fold.
+    postMessage.mockReset(); // ignore the seed traffic; watch the reseed only
+    const next = doc.replace("alpha", "alpha\n\n# New\n\ngamma");
+    handle.applyDocument(next, true, 2);
+    expect(view.state.sliceDoc()).toBe(next);
+
+    // The forced parse ran (frontier complete) AND the fold was clamped so the new
+    // sibling is revealed.
+    expect(syntaxTreeAvailable(view.state, view.state.doc.length)).toBe(true);
+    expect(foldedRanges(view.state).size).toBe(1);
+    const newHeadingPos = next.indexOf("# New");
+    let clampedTo = -1;
+    foldedRanges(view.state).between(0, view.state.doc.length, (_from, to) => {
+      clampedTo = to;
+    });
+    expect(clampedTo).toBeLessThanOrEqual(newHeadingPos); // "# New" NOT concealed
+
+    // Side-effect guard (Codex review #5/#7): the forced parse + reconcile are
+    // display-only — the forceParsing no-op dispatch and the addToHistory:false
+    // reconcile dispatch carry no doc change, so no edit must be posted (mirrors
+    // (r4)). flushPending() forces edit-sync to drain any pending/debounced edit NOW,
+    // so this also catches a regression that made the reconcile dispatch carry a real
+    // change (which would otherwise only surface after the 300 ms debounce, past a
+    // synchronous assert).
+    handle.flushPending();
+    expect(editPosts()).toEqual([]);
+  });
+
+  it("(r12) logs a dev diagnostic when the reseed forced parse misses its budget", () => {
+    const { handle, view } = mount();
+    // Same large-doc shape as (r11): a big trailing body keeps the parse frontier
+    // genuinely incomplete so the reseed's call-site forceParsing has real work to do.
+    const bigTail = `\n\n${"filler paragraph body text.\n\n".repeat(6000)}`;
+    const doc = `# One\n\nalpha\nbravo\n\n# Two\n\ncharlie${bigTail}`;
+
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    // Keep a mocked clock that jumps 600 ms per read active for the WHOLE sequence
+    // (seed → fold → reseed). Every parse budget check is Date.now-based, so each
+    // expires on its first check: the seed's apply parse (20 ms budget) bails one
+    // chunk in, leaving the frontier incomplete; the fold-only dispatch is
+    // non-docChanged, so LanguageState.apply early-returns without parsing (it does
+    // NOT advance or complete the tree); then the reseed's own docChanged apply
+    // (20 ms) and the call-site forceParsing (500 ms) both fail under the mocked
+    // clock, so forceParsing returns false and fires the budget-miss diagnostic.
+    // Deterministic regardless of machine speed / doc size (contrast (r11), which
+    // restores the clock so the same reseed forceParsing SUCCEEDS — this is that
+    // path's false branch).
+    let virtualNow = Date.now();
+    const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => (virtualNow += 600));
+    try {
+      handle.applyDocument(doc, true, 1);
+      // Precondition: the seed left the frontier genuinely incomplete (else
+      // forceParsing would return true instantly and this test would be vacuous).
+      expect(syntaxTreeAvailable(view.state, view.state.doc.length)).toBe(false);
+
+      // A fold must exist so the reseed reconcile block (and its forced parse) runs at
+      // all — foldedRanges(view.state).size > 0 is the gate. A hand-folded range is
+      // enough; this test pins the budget-miss log, not the clamp itself.
+      const line1 = view.state.doc.line(1); // "# One"
+      view.dispatch({ effects: foldEffect.of({ from: line1.to, to: doc.indexOf("# Two") }) });
+      expect(foldedRanges(view.state).size).toBe(1);
+
+      handle.applyDocument(doc.replace("alpha", "alpha\n\n# New\n\ngamma"), true, 2);
+    } finally {
+      nowSpy.mockRestore();
+    }
+
+    // The forced parse hit its budget (returned false) → the diagnostic fired. The
+    // frontier is STILL incomplete, corroborating that the forced parse did not finish
+    // (contrast (r11), where it completes and syntaxTreeAvailable flips to true).
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining("forced parse hit its budget; fold reconciliation skipped")
+    );
+    expect(syntaxTreeAvailable(view.state, view.state.doc.length)).toBe(false);
+    warnSpy.mockRestore();
   });
 });
