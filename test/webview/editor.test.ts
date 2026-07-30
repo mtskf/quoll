@@ -1773,7 +1773,21 @@ describe("editor — external reseed preserves unrelated folds (r)", () => {
     // incomplete-before assert) but the 500 ms call-site forceParsing does.
     const bigTail = `\n\n${"filler paragraph body text.\n\n".repeat(6000)}`;
     const doc = `# One\n\nalpha\nbravo\n\n# Two\n\ncharlie${bigTail}`;
-    handle.applyDocument(doc, true, 1);
+    // Force the initial seed's parse frontier to stay INCOMPLETE deterministically,
+    // independent of machine speed: CM's apply() budget (Work.Apply = 20 ms wall
+    // clock, whole-doc since we transition from an empty doc) is checked against
+    // Date.now(), so advancing the mocked clock by >20 ms per call exhausts it on
+    // the first check. Restored immediately so the reseed below uses the real 500 ms
+    // forceParsing budget. (The sibling unit test gets determinism structurally via
+    // EditorState.create's min(3000) init cap; (r11) can't — it must exercise
+    // applyDocument's apply() path.)
+    let virtualNow = Date.now();
+    const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => (virtualNow += 30));
+    try {
+      handle.applyDocument(doc, true, 1);
+    } finally {
+      nowSpy.mockRestore();
+    }
 
     // The live view's parse is genuinely INCOMPLETE — the whole point. We do NOT
     // force-parse the live state here (Codex review #2): ensureSyntaxTree on the live
