@@ -1889,7 +1889,9 @@ describe("editor — external reseed preserves unrelated folds (r)", () => {
     // The forced parse hit its budget (returned false) → the diagnostic fired. The
     // frontier is STILL incomplete, corroborating that the forced parse did not finish
     // (contrast (r11), where it completes and syntaxTreeAvailable flips to true).
-    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("forced parse hit its budget"));
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining("forced parse hit its budget; fold reconciliation skipped")
+    );
     expect(syntaxTreeAvailable(view.state, view.state.doc.length)).toBe(false);
     warnSpy.mockRestore();
   });
