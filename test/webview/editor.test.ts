@@ -1846,4 +1846,48 @@ describe("editor — external reseed preserves unrelated folds (r)", () => {
     handle.flushPending();
     expect(editPosts()).toEqual([]);
   });
+
+  it("(r12) logs a dev diagnostic when the reseed forced parse misses its budget", () => {
+    const { handle, view } = mount();
+    // Same large-doc shape as (r11): a big trailing body keeps the parse frontier
+    // genuinely incomplete so the reseed's call-site forceParsing has real work to do.
+    const bigTail = `\n\n${"filler paragraph body text.\n\n".repeat(6000)}`;
+    const doc = `# One\n\nalpha\nbravo\n\n# Two\n\ncharlie${bigTail}`;
+
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    // Keep a mocked clock that jumps 600 ms per read active for the WHOLE sequence
+    // (seed → fold → reseed). Every parse budget check is Date.now-based, so each
+    // expires on its first check: the seed's apply parse (20 ms budget) bails one
+    // chunk in — leaving the frontier incomplete — the fold dispatch's apply parse
+    // can't complete it either, and the reseed call-site forceParsing (500 ms budget)
+    // returns false, firing the budget-miss diagnostic. Deterministic regardless of
+    // machine speed / doc size (contrast (r11), which restores the clock so the same
+    // reseed forceParsing SUCCEEDS — this is that path's false branch).
+    let virtualNow = Date.now();
+    const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => (virtualNow += 600));
+    try {
+      handle.applyDocument(doc, true, 1);
+      // Precondition: the seed left the frontier genuinely incomplete (else
+      // forceParsing would return true instantly and this test would be vacuous).
+      expect(syntaxTreeAvailable(view.state, view.state.doc.length)).toBe(false);
+
+      // A fold must exist so the reseed reconcile block (and its forced parse) runs at
+      // all — foldedRanges(view.state).size > 0 is the gate. A hand-folded range is
+      // enough; this test pins the budget-miss log, not the clamp itself.
+      const line1 = view.state.doc.line(1); // "# One"
+      view.dispatch({ effects: foldEffect.of({ from: line1.to, to: doc.indexOf("# Two") }) });
+      expect(foldedRanges(view.state).size).toBe(1);
+
+      handle.applyDocument(doc.replace("alpha", "alpha\n\n# New\n\ngamma"), true, 2);
+    } finally {
+      nowSpy.mockRestore();
+    }
+
+    // The forced parse hit its budget (returned false) → the diagnostic fired. The
+    // frontier is STILL incomplete, corroborating that the forced parse did not finish
+    // (contrast (r11), where it completes and syntaxTreeAvailable flips to true).
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("forced parse hit its budget"));
+    expect(syntaxTreeAvailable(view.state, view.state.doc.length)).toBe(false);
+    warnSpy.mockRestore();
+  });
 });
