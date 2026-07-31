@@ -1275,6 +1275,21 @@ describe("quollOutline resizable width", () => {
     vi.advanceTimersByTime(200);
     expect(isOpen(host)).toBe(false);
   });
+
+  it("does not close the OVERLAY when a boundary pointerleave fires mid-drag (isResizing no-op)", () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const { host } = mount("# Alpha\n");
+    hoverToggle(host); // past the hover-intent delay — overlay is open, NOT pinned
+    expect(isOpen(host)).toBe(true);
+    const h = handleEl(host);
+    stubPointerCapture(h);
+    h.dispatchEvent(pd(260)); // drag starts → isResizing() true
+    h.dispatchEvent(pm(300));
+    leaveSidebar(host); // would arm a close; the isResizing() guard must suppress it
+    vi.advanceTimersByTime(1000); // well past the 150ms grace — still no close
+    expect(isOpen(host)).toBe(true);
+    h.dispatchEvent(pu(300)); // end the drag through the real accessor
+  });
 });
 
 // Keyboard resize (A11Y-07): the handle is a focusable WAI-ARIA window splitter.
