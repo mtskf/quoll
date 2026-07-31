@@ -96,6 +96,23 @@ describe("highlightMarkExtension", () => {
     expect(nodes("a ===x=== b")).toContain("Highlight[3,9)");
   });
 
+  // Code-exclusion invariant, asserted ABSOLUTELY (not via parity). The highlight
+  // rule is an INLINE rule, so `==x==` inside an inline code span or a fenced code
+  // block must NEVER produce a Highlight/HighlightMark node. highlight-parity.test.ts
+  // also feeds these inputs, but there BOTH parsers share highlightMarkExtension, so
+  // a regression that started emitting Highlight inside code (e.g. a flanking tweak)
+  // would pass parity identically — parity holds, invariant broken. Pinning it here
+  // against a fixed expectation makes that regression red.
+  it("emits NO Highlight/HighlightMark inside inline code or fenced code", () => {
+    expect(hasSpan("`==x==`", "Highlight")).toBe(false);
+    expect(hasSpan("`==x==`", "HighlightMark")).toBe(false);
+    expect(hasSpan("```\n==x==\n```\n", "Highlight")).toBe(false);
+    expect(hasSpan("```\n==x==\n```\n", "HighlightMark")).toBe(false);
+    // Non-vacuity guard: the SAME `==x==` source OUTSIDE code still highlights, so
+    // the false assertions above cannot pass merely because the rule stopped firing.
+    expect(hasSpan("==x==", "Highlight")).toBe(true);
+  });
+
   // Adjacency with the host's other inline extensions. `after: "Emphasis"`
   // orders the delimiter scan; confirm a highlight still forms when it wraps /
   // abuts Subscript, Superscript, and Emoji tokens.
