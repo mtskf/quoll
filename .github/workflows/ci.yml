@@ -12,7 +12,9 @@ permissions:
 
 concurrency:
   group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  # Cancel superseded PR runs, but let every main commit's run complete —
+  # each main commit must keep a finished check for bisects/reverts.
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
   build:
