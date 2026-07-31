@@ -31,7 +31,7 @@ const EXACT_SEMVER = /^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z][0-9A-Za-z.-]*)?$/;
 // SPDX packages (the analyzed directory / document root) do not and are skipped.
 function npmPackages(sbom) {
   const out = [];
-  for (const p of sbom.packages ?? []) {
+  for (const p of sbom?.packages ?? []) {
     const isNpm = (p.externalRefs ?? []).some(
       (r) =>
         r.referenceType === "purl" &&

@@ -18,6 +18,21 @@ const pkg = (name, version) => ({
   ],
 });
 
+// Non-npm SPDX package: a purl external ref whose type is npm-unrelated
+// (e.g. pypi). The discriminator in npmPackages() must skip it — so a
+// non-exact version here must NOT trip the exact-version check.
+const nonNpmPkg = (name, version, ecosystem = "pypi") => ({
+  name,
+  versionInfo: version,
+  externalRefs: [
+    {
+      referenceCategory: "PACKAGE-MANAGER",
+      referenceType: "purl",
+      referenceLocator: `pkg:${ecosystem}/${name}@${version}`,
+    },
+  ],
+});
+
 const dependencies = { "@codemirror/state": "^6.6.0", "@lezer/common": "^1.5.2" };
 const devDependencies = { vitest: "^3.0.0", "@types/node": "^22.0.0" };
 const requiredTransitive = ["style-mod", "crelt"];
@@ -127,5 +142,27 @@ describe("checkSbomScope", () => {
     const r = run([]);
     expect(r.ok).toBe(false);
     expect(r.npmCount).toBe(0);
+  });
+
+  it("treats a null sbom as a degenerate scan (no throw)", () => {
+    // A malformed/absent SBOM (`JSON.parse("null")` → null) must fail closed,
+    // not crash — the crash would bypass the CLI's exit-1 + `::error::` path.
+    const call = () =>
+      checkSbomScope({ sbom: null, dependencies, devDependencies, requiredTransitive });
+    expect(call).not.toThrow();
+    const r = call();
+    expect(r.ok).toBe(false);
+    expect(r.npmCount).toBe(0);
+  });
+
+  it("skips non-npm purl packages regardless of version shape", () => {
+    // A pypi package with a non-exact versionInfo: the purl discriminator must
+    // exclude it, so it neither counts toward npmCount nor trips the
+    // exact-version check. If the `pkg:npm/` discriminator were dropped, this
+    // package would be scanned as npm and its range version would fail.
+    const r = run([...goodPackages, nonNpmPkg("some-pylib", ">=1.2")]);
+    expect(r.ok).toBe(true);
+    expect(r.errors).toEqual([]);
+    expect(r.npmCount).toBe(4);
   });
 });

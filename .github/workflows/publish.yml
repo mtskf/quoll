@@ -142,7 +142,9 @@ jobs:
       # future refinement. The verify step below pins the guarantees this SBOM
       # must hold.
       #
-      # Ordering: this is the job's ONLY third-party action and still runs
+      # Ordering: this is the only third-party action on the build→package→attest
+      # critical path (pnpm/action-setup is a third-party action too, but runs
+      # earlier during setup, before any artifact exists), and it still runs
       # BEFORE Package .vsix, so audit-vsix (below) remains the last gate before
       # attest + publish — a compromised action here cannot mutate an
       # already-audited .vsix (none exists yet). It scans the staging tree, not
