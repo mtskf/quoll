@@ -105,6 +105,31 @@ describe("reconcileReseedFolds — incomplete post-reseed parse frontier", () =>
     expect(range).toEqual(canonical); // clamped back to the parent item's real span
   });
 
+  it("leaves an over-wide LIST fold untouched when the excess conceals no sibling item", () => {
+    // Negative-path mirror of the LIST-ITEM clamp test above: a folded `- parent`
+    // whose fold spills a couple of chars into trailing prose (no sibling ListItem
+    // in the excess) must be left alone — guarding the ListItem branch of
+    // concealsFoldableBoundary against spuriously firing on a benign over-wide list
+    // fold, symmetric with the heading negative test below.
+    const doc = "- parent\n  - a\n\nafter\n";
+    let state = EditorState.create({
+      doc,
+      extensions: [quollMarkdownLanguage(), codeFolding()],
+    });
+    ensureSyntaxTree(state, state.doc.length, 5_000);
+    state = state.update({}).state;
+
+    const line1 = state.doc.line(1); // "- parent"
+    const canonical = foldable(state, line1.from, line1.to);
+    if (!canonical) {
+      throw new Error("parent list item should be foldable");
+    }
+    const overWide = { from: canonical.from, to: Math.min(canonical.to + 2, doc.length) };
+    state = state.update({ effects: foldEffect.of(overWide) }).state;
+
+    expect(reconcileReseedFolds(state, { from: 0, to: 0 })).toEqual([]);
+  });
+
   it("leaves an over-wide fold untouched when the excess conceals no heading boundary", () => {
     const doc = "# One\n\nalpha\n\nbravo\n\ncharlie\n\n# Two\n\ndelta";
     let state = EditorState.create({
