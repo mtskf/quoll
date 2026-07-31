@@ -38,7 +38,9 @@ function npmPackages(sbom) {
         typeof r.referenceLocator === "string" &&
         r.referenceLocator.startsWith("pkg:npm/")
     );
-    if (isNpm) out.push({ name: p.name, version: p.versionInfo });
+    if (isNpm) {
+      out.push({ name: p.name, version: p.versionInfo });
+    }
   }
   return out;
 }
@@ -52,28 +54,33 @@ export function checkSbomScope({ sbom, dependencies, devDependencies, requiredTr
   //    to `path: .`, which re-includes the full node_modules): the root
   //    devDependency names then appear in the SBOM.
   const leaked = Object.keys(devDependencies ?? {}).filter((d) => names.has(d));
-  if (leaked.length) errors.push(`dev tooling leaked into SBOM: ${leaked.join(", ")}`);
+  if (leaked.length) {
+    errors.push(`dev tooling leaked into SBOM: ${leaked.join(", ")}`);
+  }
 
   // 2. Every declared runtime dependency present. Catches a degenerate scan
   //    (bare manifest → only the self-package survives).
   const missingDirect = Object.keys(dependencies ?? {}).filter((d) => !names.has(d));
-  if (missingDirect.length)
+  if (missingDirect.length) {
     errors.push(`declared runtime dependencies missing from SBOM: ${missingDirect.join(", ")}`);
+  }
 
   // 3. Known shipped transitive deps present — proves the SBOM captured the
   //    closure, not just top-level manifest entries.
   const missingTransitive = (requiredTransitive ?? []).filter((d) => !names.has(d));
-  if (missingTransitive.length)
+  if (missingTransitive.length) {
     errors.push(
       `known shipped transitive dependencies missing from SBOM: ${missingTransitive.join(", ")}`
     );
+  }
 
   // 4. Exact resolved versions only.
   const ranged = pkgs.filter((p) => !p.version || !EXACT_SEMVER.test(p.version));
-  if (ranged.length)
+  if (ranged.length) {
     errors.push(
       `non-exact versions in SBOM: ${ranged.map((p) => `${p.name}@${p.version}`).join(", ")}`
     );
+  }
 
   return { ok: errors.length === 0, errors, npmCount: pkgs.length };
 }
@@ -113,7 +120,9 @@ function main() {
   });
 
   if (!ok) {
-    for (const e of errors) console.error(`::error::verify-sbom-scope: ${e}`);
+    for (const e of errors) {
+      console.error(`::error::verify-sbom-scope: ${e}`);
+    }
     process.exit(1);
   }
   console.log(`verify-sbom-scope: OK — ${npmCount} npm packages, runtime-scoped, exact versions.`);
