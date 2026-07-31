@@ -42,7 +42,7 @@ function nearestBlockSibling(
   dir: "prevSibling" | "nextSibling"
 ): SyntaxNode | null {
   let s = node[dir];
-  while (s && s.name.endsWith("Mark")) {
+  while (s?.name.endsWith("Mark")) {
     s = s[dir];
   }
   return s;
