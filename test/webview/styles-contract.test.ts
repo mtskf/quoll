@@ -44,7 +44,9 @@ describe("styles.css — nascent-setext de-style", () => {
     )?.[1] ?? "";
 
   it("resets font-size to the body size with !important (beats the em heading size)", () => {
-    expect(rule).toMatch(/font-size\s*:\s*var\(--vscode-font-size\)\s*!important/);
+    expect(rule).toMatch(
+      /font-size\s*:\s*var\(--quoll-editor-font-size,\s*var\(--vscode-font-size\)\)\s*!important/
+    );
   });
 
   it("resets font-weight and colour to plain body text with !important", () => {
