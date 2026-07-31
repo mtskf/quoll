@@ -28,6 +28,17 @@ const CORPUS: Record<string, string> = {
   bulletThematicBreakPlus: "+ - -\n",
   bulletCollisionAmongSafe: "* good\n\n# separator\n\n* a\n* --\n",
   bulletDeepBlockquote: "> > * a\n> > - b\n",
+  // Nested collinear markers: `+ + +` is three NESTED (non-sibling, so each
+  // adjacencySafe) bullet lists whose combined rewrite collapses to `- - -`
+  // (a HorizontalRule). The combined backstop must keep this structure-safe.
+  bulletNestedCollinear: "+ + +\n",
+  bulletCollinearAmongSafe: "* x\n* y\n\n# s\n\n+ + +\n",
+  bulletSplitThematicBreak: "* a\n* --\n* b\n", // rewrite would SPLIT (list -> list+HR+list)
+  bulletItemChildThematicBreak: "* ---\n", // item child is a thematic break
+  bulletParaInterruptCollision: "para\n* --\n",
+  bulletEmptyMiddleItem: "* foo\n*\n* bar\n", // must NOT setext-flip
+  bulletTaskList: "* [ ] a\n* [x] b\n", // GFM task markers under ListMark
+  bulletSingleDashItem: "* -\n", // safe: `- -` is not a thematic break (2 dashes)
 };
 
 describe("parse identity (structure preserved, nesting-aware)", () => {

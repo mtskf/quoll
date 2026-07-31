@@ -52,8 +52,12 @@ export function bulletUnifyEdits(source: string, bulletLists: readonly BulletLis
   if (kept.length === 0) {
     return [];
   }
-  // Final combined check: covers the (rare) adjacency blind spot where two
-  // groups are each solo-safe but merge when applied together -> safe no-op.
+  // Final combined check: some solo-safe groups still collide when applied
+  // together — e.g. nested collinear markers `+ + +` (three non-sibling, each
+  // adjacencySafe lists) collapse to `- - -` (a HorizontalRule), or an adjacency
+  // blind spot lets two lists merge. In those cases drop the whole rewrite (safe
+  // no-op). This is deliberately conservative for such (rare) inputs: it never
+  // corrupts, though it may skip unrelated safe lists in the same document.
   if (structureSignature(applyEdits(source, kept)) !== baseSignature) {
     return [];
   }

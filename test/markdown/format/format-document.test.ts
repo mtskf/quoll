@@ -45,4 +45,21 @@ describe("formatDocument", () => {
       "- good\n\n# separator\n\n* a\n* --\n"
     );
   });
+  it("unifies list markers even under GFM task-list items", () => {
+    expect(formatDocument("* [ ] a\n* [x] b\n")).toBe("- [ ] a\n- [x] b\n");
+  });
+  it("unifies `* -` (its `- -` is not a thematic break)", () => {
+    expect(formatDocument("* -\n")).toBe("- -\n");
+  });
+  it("leaves a would-split list untouched (rewrite would insert a thematic break)", () => {
+    // `* a\n* --\n* b` -> `- a\n- --\n- b` splits one list into list+HR+list.
+    expect(formatDocument("* a\n* --\n* b\n")).toBe("* a\n* --\n* b\n");
+  });
+  it("no-ops safely on nested collinear markers that would collapse to a rule", () => {
+    // `+ + +` is three nested (each adjacencySafe) lists; unifying all collapses
+    // to `- - -` (a HorizontalRule), so the combined backstop drops the rewrite.
+    // Accepted conservative behaviour: the whole rule no-ops (never corrupts).
+    expect(formatDocument("+ + +\n")).toBe("+ + +\n");
+    expect(formatDocument("* x\n* y\n\n# s\n\n+ + +\n")).toBe("* x\n* y\n\n# s\n\n+ + +\n");
+  });
 });

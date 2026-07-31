@@ -18,6 +18,11 @@ const CORPUS = [
   "> * a\n> * b\n",
   "* --\n",
   "* good\n\n# separator\n\n* a\n* --\n",
+  "+ + +\n",
+  "* x\n* y\n\n# s\n\n+ + +\n",
+  "* a\n* --\n* b\n",
+  "* [ ] a\n* [x] b\n",
+  "* -\n",
 ];
 
 describe("formatDocument idempotence", () => {
