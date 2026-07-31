@@ -128,14 +128,17 @@ describe("computeReseedChange — minimal single-span reseed change", () => {
     //    and only ever refill in lockstep. A coupled-refill implementation
     //    produces the same span, so these do NOT pin the independent pa/pb
     //    refill (they are still useful multi-line coverage).
-    //  - Interior mid-line LENGTH change (bigInteriorGrow/Shrink): one line's
-    //    length differs while all later lines stay identical. The scan matches
-    //    the shared in-line prefix, then ONE cursor exhausts its line mid-scan
+    //  - Interior mid-line LENGTH change: one line's length differs while all
+    //    other lines stay identical, so ONE cursor exhausts its line mid-scan
     //    while the other still has characters left — the exact state the
     //    independent refill exists for. A coupled refill would skip the longer
-    //    line's remainder, re-align with the identical trailing lines, and
-    //    spuriously match to the end (a grossly non-minimal span). Only these
-    //    cases catch that bug, so they are the load-bearing regression guard.
+    //    line's remainder, re-align with the identical run of lines beyond it,
+    //    and spuriously match onward (a grossly non-minimal span). These are the
+    //    load-bearing regression guard, and the direction matters because
+    //    commonRunLength runs the SAME scan both ways: a change at the END of a
+    //    line (bigInteriorGrow/Shrink) exercises only the forward prefix scan's
+    //    independent refill; a change at the START of a line (bigInteriorHead*)
+    //    is needed to exercise the reverse suffix scan's independent refill.
     const rows = Array.from({ length: 300 }, (_, i) => `row ${i} text`);
     const bigBase = rows.join("\n");
     const bigInteriorInsert = [
@@ -149,10 +152,11 @@ describe("computeReseedChange — minimal single-span reseed change", () => {
       ...rows.slice(150),
     ].join("\n");
     const bigInteriorDelete = [...rows.slice(0, 150), ...rows.slice(160)].join("\n");
-    // Interior line 150 grows/shrinks while lines 151..299 stay identical, so a
-    // real common suffix spans the misaligned region (new longer than old, and
-    // the reverse). Both share the in-line prefix "row 150 text", forcing the
-    // one-cursor-exhausted-mid-line state.
+    // FORWARD-scan guard: line 150's TAIL changes while lines 151..299 stay
+    // identical, so the forward prefix scan matches the shared line head, then
+    // one cursor exhausts mid-line. Grow keeps the full "row 150 text" head and
+    // appends; shrink keeps only its first 3 chars ("row"). Either way one
+    // cursor is left mid-line while the other has exhausted its line.
     const bigInteriorGrow = [
       ...rows.slice(0, 150),
       `${rows[150]} EXTENDED TAIL CONTENT`,
@@ -161,6 +165,29 @@ describe("computeReseedChange — minimal single-span reseed change", () => {
     const bigInteriorShrink = [
       ...rows.slice(0, 150),
       rows[150].slice(0, 3),
+      ...rows.slice(151),
+    ].join("\n");
+    // REVERSE-scan guard: the FIRST line differs (so the common prefix is ~0,
+    // leaving the suffix scan a large cap to overmatch into) AND interior line
+    // 150's HEAD changes while lines 151..299 stay identical. The backward suffix
+    // scan matches the shared tail of line 150, then one cursor exhausts mid-line
+    // in the dir === -1 pass — the independent-refill state the tail-change cases
+    // above never reach in reverse (there the suffix scan diverges at the line's
+    // trailing edge). A reverse coupled refill skips the changed head and
+    // spuriously matches lines 149..1 back toward the differing first line, over-
+    // widening the deletion. (A pure interior head-change with an identical first
+    // line does NOT distinguish: the cap `maxPrefix - prefix` would then exactly
+    // equal the correct suffix, leaving no room to overmatch — verified.)
+    const revFirstLineBase = [
+      "ZZZ first",
+      ...rows.slice(1, 150),
+      rows[150],
+      ...rows.slice(151),
+    ].join("\n");
+    const revFirstLineHeadGrow = [
+      "QQQ first",
+      ...rows.slice(1, 150),
+      `HEAD EXTENSION ${rows[150]}`,
       ...rows.slice(151),
     ].join("\n");
     const cases: Array<[string, string]> = [
@@ -180,9 +207,11 @@ describe("computeReseedChange — minimal single-span reseed change", () => {
       [`prepended head\n${bigA}`, bigA],
       [bigBase, bigInteriorInsert],
       [bigBase, bigInteriorDelete],
-      [bigBase, bigInteriorGrow], // new line longer than old → old cursor exhausts first
-      [bigInteriorGrow, bigBase], // old line longer than new → new cursor exhausts first
-      [bigBase, bigInteriorShrink], // shorter, still shares the in-line prefix
+      [bigBase, bigInteriorGrow], // tail change, new longer → forward refill, old cursor exhausts first
+      [bigInteriorGrow, bigBase], // tail change, old longer → forward refill, new cursor exhausts first
+      [bigBase, bigInteriorShrink], // tail change, shorter, still shares the in-line head
+      [revFirstLineBase, revFirstLineHeadGrow], // head change, new longer → reverse refill, old cursor exhausts first
+      [revFirstLineHeadGrow, revFirstLineBase], // head change, old longer → reverse refill, new cursor exhausts first
     ];
     for (const [a, b] of cases) {
       const oldDoc = splitToCmText(a);
