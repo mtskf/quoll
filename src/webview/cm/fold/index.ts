@@ -885,11 +885,25 @@ export const quollFoldKeymapExtension: Extension = keymap.of(quollFoldKeymap);
 // split. Distinct from HEADING_NODE above (H1–H3 only, gutter row-scale).
 const ANY_HEADING_NODE = /^(?:ATXHeading|SetextHeading)[1-6]$/;
 
-/** True when a heading LINE starts strictly inside `(lo, hi)`. Used to decide
- *  whether the excess span of an over-wide mapped fold conceals a real section
- *  boundary (see {@link reconcileReseedFolds}). Bounded iterate over the excess
- *  span only — reseed is not a hot path, but this still avoids a whole-tree walk. */
-function concealsHeadingBoundary(
+/** True when a foldable-block boundary LINE starts strictly inside `(lo, hi)` —
+ *  i.e. the head line of a heading (any level) OR a list item, the two block kinds
+ *  `foldable()` recognises (see the module header: headings via the headerIndent
+ *  foldService, ListItem via lang-markdown's foldNodeProp; Blockquote / Paragraph /
+ *  code / Table are subtracted and never fold). Used to decide whether the excess
+ *  span of an over-wide mapped fold conceals a real block boundary (see
+ *  {@link reconcileReseedFolds}) — a sibling heading dropped into a folded section
+ *  OR a sibling list item dropped into a folded list. Bounded iterate over the
+ *  excess span only — reseed is not a hot path, but this still avoids a whole-tree
+ *  walk.
+ *
+ *  Soundness (mirrors the heading argument in reconcileReseedFolds): the excess
+ *  span begins at `lo = fresh.to`, the folded block's own canonical end. A heading's
+ *  `sectionEnd` stops at the first same-or-higher heading and a list item's node
+ *  ends at its own last line, so any nested CHILD (heading or list item) of the
+ *  folded block lies at/before `lo` and is excluded by `lineStart > lo`. Only a
+ *  genuine sibling/ancestor boundary that the remap widened the fold across starts
+ *  strictly inside `(lo, hi)`. */
+function concealsFoldableBoundary(
   state: EditorState,
   tree: ReturnType<typeof syntaxTree>,
   lo: number,
@@ -903,7 +917,7 @@ function concealsHeadingBoundary(
       if (found) {
         return false;
       }
-      if (!ANY_HEADING_NODE.test(node.name)) {
+      if (!ANY_HEADING_NODE.test(node.name) && node.name !== "ListItem") {
         return undefined;
       }
       const lineStart = state.doc.lineAt(node.from).from;
@@ -941,18 +955,21 @@ function concealsHeadingBoundary(
  *     targeted response to a change ON that fold, not a spurious spring-open.
  *  2. Over-wide fold — the line is still foldable, but the mapped fold now extends
  *     PAST its current `foldable()` section end AND the excess span conceals a
- *     heading boundary (most visibly a same-level sibling heading dropped inside a
- *     folded section — a formatter / git inserting `# New` into `# One`'s body,
- *     which then stays concealed until the user unfolds). Clamp back to the real
+ *     foldable-block boundary. The two block kinds `foldable()` recognises both hit
+ *     this: a same-level sibling HEADING dropped inside a folded section (a formatter
+ *     / git inserting `# New` into `# One`'s body) OR a sibling LIST ITEM dropped
+ *     into a folded list (`- sibling` landing after a folded `- parent`'s children) —
+ *     either then stays concealed until the user unfolds. Clamp back to the real
  *     foldable range instead. Unlike case 1, this is NOT gated on `editedRange`
- *     touching the fold's own heading line — the inserted sibling lands inside the
- *     section BODY, not on the heading line itself. The two conditions together are
+ *     touching the fold's own head line — the inserted sibling lands inside the
+ *     folded BODY, not on the head line itself. The two conditions together are
  *     already precise enough:
- *       - `foldable()`'s `sectionEnd` already stops at the first same-or-higher
- *         heading, so a legitimately-nested CHILD heading stays INSIDE the canonical
- *         span and is never treated as concealed — only a genuine sibling/ancestor
- *         boundary that landed in the fold via the remap trips the check;
- *       - requiring a concealed heading (not merely `to > fresh.to`) leaves benign
+ *       - `foldable()`'s section end already stops at the first same-or-higher
+ *         heading / the folded list item's own last line, so a legitimately-nested
+ *         CHILD (heading or list item) stays INSIDE the canonical span and is never
+ *         treated as concealed — only a genuine sibling/ancestor boundary that landed
+ *         in the fold via the remap trips the check;
+ *       - requiring a concealed boundary (not merely `to > fresh.to`) leaves benign
  *         over-wide remaps untouched — e.g. a hand/legacy fold whose end sits one
  *         char past the canonical section end, or a fold whose excess is plain prose.
  *
@@ -1002,8 +1019,8 @@ export function reconcileReseedFolds(
     if (fresh.to >= to) {
       return; // fold not wider than its canonical span — nothing was swallowed.
     }
-    if (!concealsHeadingBoundary(state, tree, fresh.to, to)) {
-      return; // over-wide, but the excess hides no section boundary — leave it.
+    if (!concealsFoldableBoundary(state, tree, fresh.to, to)) {
+      return; // over-wide, but the excess hides no block boundary — leave it.
     }
     effects.push(unfoldEffect.of({ from, to }));
     effects.push(foldEffect.of(fresh)); // clamp back to the real foldable range.

@@ -71,6 +71,40 @@ describe("reconcileReseedFolds — incomplete post-reseed parse frontier", () =>
     expect(foldable(clamped, freshLine1.from, freshLine1.to)).toEqual(range);
   });
 
+  it("clamps an over-wide fold whose excess conceals a sibling LIST ITEM", () => {
+    // A folded `- parent` (spanning its `  - a` child) whose remapped fold now
+    // extends across a top-level sibling `- sibling` — the list parallel of the
+    // heading case above. `foldable()` on `- parent` stops at the end of its own
+    // ListItem (before `- sibling`), so the excess conceals the sibling's marker
+    // line. Pins that the reconcile clamps a LIST boundary, not only a heading.
+    const doc = "- parent\n  - a\n- sibling\n  - b\n\nafter\n";
+    let state = EditorState.create({
+      doc,
+      extensions: [quollMarkdownLanguage(), codeFolding()],
+    });
+    ensureSyntaxTree(state, state.doc.length, 5_000);
+    state = state.update({}).state;
+    expect(syntaxTreeAvailable(state, state.doc.length)).toBe(true);
+
+    const line1 = state.doc.line(1); // "- parent"
+    const canonical = foldable(state, line1.from, line1.to);
+    if (!canonical) {
+      throw new Error("parent list item should be foldable");
+    }
+    // Remapped over-wide fold that swallowed the inserted sibling marker line.
+    const siblingPos = doc.indexOf("- sibling");
+    const overWide = { from: canonical.from, to: siblingPos + "- sibling".length };
+    state = state.update({ effects: foldEffect.of(overWide) }).state;
+
+    const editedRange = { from: siblingPos, to: siblingPos + "- sibling".length };
+    const effects = reconcileReseedFolds(state, editedRange);
+    expect(effects.length).toBe(2); // unfold(stale) + fold(fresh)
+    const clamped = state.update({ effects }).state;
+    const [range] = foldRanges(clamped);
+    expect(range.to).toBeLessThanOrEqual(siblingPos); // sibling no longer concealed
+    expect(range).toEqual(canonical); // clamped back to the parent item's real span
+  });
+
   it("leaves an over-wide fold untouched when the excess conceals no heading boundary", () => {
     const doc = "# One\n\nalpha\n\nbravo\n\ncharlie\n\n# Two\n\ndelta";
     let state = EditorState.create({
