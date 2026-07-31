@@ -32,16 +32,21 @@ describe("bulletUnifyEdits", () => {
     expect(run("* good\n\n# separator\n\n* a\n* --\n")).toBe(
       "- good\n\n# separator\n\n* a\n* --\n"
     ));
+  // Builds `safeListCount` heading-separated, collision-free bullet lists plus
+  // one final colliding list (`* --`), for exercising the MAX_PESSIMISTIC_GROUPS
+  // boundary (total groups = safeListCount + 1 collision).
+  const docWithGroups = (safeListCount: number) => {
+    const safe = Array.from({ length: safeListCount }, (_, i) => `# h${i}\n\n* item${i}\n`).join(
+      "\n"
+    );
+    return `${safe}\n# collide\n\n* --\n`;
+  };
   it("runs the pessimistic pass at exactly the group budget (boundary, not >)", () => {
     // 99 safe lists + 1 collision = 100 groups == MAX_PESSIMISTIC_GROUPS (not > it)
-    const safe = Array.from({ length: 99 }, (_, i) => `# h${i}\n\n* item${i}\n`).join("\n");
-    const src = `${safe}\n# collide\n\n* --\n`;
-    expect(edits(src).length).toBeGreaterThan(0); // within budget -> safe lists still unified
+    expect(edits(docWithGroups(99)).length).toBeGreaterThan(0); // within budget -> safe lists still unified
   });
   it("fails closed one past the group budget", () => {
     // 100 safe lists + 1 collision = 101 groups > MAX_PESSIMISTIC_GROUPS
-    const safe = Array.from({ length: 100 }, (_, i) => `# h${i}\n\n* item${i}\n`).join("\n");
-    const src = `${safe}\n# collide\n\n* --\n`;
-    expect(edits(src)).toEqual([]);
+    expect(edits(docWithGroups(100))).toEqual([]);
   });
 });
