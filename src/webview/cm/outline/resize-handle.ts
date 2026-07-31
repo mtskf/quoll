@@ -235,6 +235,9 @@ export function createResizeHandle(deps: ResizeHandleDeps): ResizeHandle {
   el.setAttribute("aria-controls", deps.sidebarId);
   el.setAttribute("aria-valuemin", String(MIN_WIDTH_PX));
   el.setAttribute("aria-valuemax", String(MAX_WIDTH_PX));
+  // A permanent tab stop is safe: styles.css gives the closed handle
+  // display:none, so it drops out of the tab order when the sidebar is closed —
+  // mirroring the inert sidebar (no phantom stop while the outline is shut).
   el.tabIndex = 0;
   // These handlers are module-local free functions (no `this`), so they bind
   // directly — no `(e) => fn(e)` forwarding wrapper needed.
