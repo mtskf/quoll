@@ -2,6 +2,12 @@
 
 All notable changes to Quoll are documented here.
 
+## 0.1.63 — 2026-07-31
+
+### Fixed
+
+- A collapsed list no longer hides a list item that an external change (a formatter, git, or another editor) inserts into it. As with headings, the fold now shrinks back to its own item, so the newly-added sibling stays visible instead of being concealed until you unfold.
+
 ## 0.1.62 — 2026-07-29
 
 ### Fixed

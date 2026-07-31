@@ -71,6 +71,65 @@ describe("reconcileReseedFolds — incomplete post-reseed parse frontier", () =>
     expect(foldable(clamped, freshLine1.from, freshLine1.to)).toEqual(range);
   });
 
+  it("clamps an over-wide fold whose excess conceals a sibling LIST ITEM", () => {
+    // A folded `- parent` (spanning its `  - a` child) whose remapped fold now
+    // extends across a top-level sibling `- sibling` — the list parallel of the
+    // heading case above. `foldable()` on `- parent` stops at the end of its own
+    // ListItem (before `- sibling`), so the excess conceals the sibling's marker
+    // line. Pins that the reconcile clamps a LIST boundary, not only a heading.
+    const doc = "- parent\n  - a\n- sibling\n  - b\n\nafter\n";
+    let state = EditorState.create({
+      doc,
+      extensions: [quollMarkdownLanguage(), codeFolding()],
+    });
+    ensureSyntaxTree(state, state.doc.length, 5_000);
+    state = state.update({}).state;
+    expect(syntaxTreeAvailable(state, state.doc.length)).toBe(true);
+
+    const line1 = state.doc.line(1); // "- parent"
+    const canonical = foldable(state, line1.from, line1.to);
+    if (!canonical) {
+      throw new Error("parent list item should be foldable");
+    }
+    // Remapped over-wide fold that swallowed the inserted sibling marker line.
+    const siblingPos = doc.indexOf("- sibling");
+    const overWide = { from: canonical.from, to: siblingPos + "- sibling".length };
+    state = state.update({ effects: foldEffect.of(overWide) }).state;
+
+    const editedRange = { from: siblingPos, to: siblingPos + "- sibling".length };
+    const effects = reconcileReseedFolds(state, editedRange);
+    expect(effects.length).toBe(2); // unfold(stale) + fold(fresh)
+    const clamped = state.update({ effects }).state;
+    const [range] = foldRanges(clamped);
+    expect(range.to).toBeLessThanOrEqual(siblingPos); // sibling no longer concealed
+    expect(range).toEqual(canonical); // clamped back to the parent item's real span
+  });
+
+  it("leaves an over-wide LIST fold untouched when the excess conceals no sibling item", () => {
+    // Negative-path mirror of the LIST-ITEM clamp test above: a folded `- parent`
+    // whose fold spills a couple of chars into trailing prose (no sibling ListItem
+    // in the excess) must be left alone — guarding the ListItem branch of
+    // concealsFoldableBoundary against spuriously firing on a benign over-wide list
+    // fold, symmetric with the heading negative test below.
+    const doc = "- parent\n  - a\n\nafter\n";
+    let state = EditorState.create({
+      doc,
+      extensions: [quollMarkdownLanguage(), codeFolding()],
+    });
+    ensureSyntaxTree(state, state.doc.length, 5_000);
+    state = state.update({}).state;
+
+    const line1 = state.doc.line(1); // "- parent"
+    const canonical = foldable(state, line1.from, line1.to);
+    if (!canonical) {
+      throw new Error("parent list item should be foldable");
+    }
+    const overWide = { from: canonical.from, to: Math.min(canonical.to + 2, doc.length) };
+    state = state.update({ effects: foldEffect.of(overWide) }).state;
+
+    expect(reconcileReseedFolds(state, { from: 0, to: 0 })).toEqual([]);
+  });
+
   it("leaves an over-wide fold untouched when the excess conceals no heading boundary", () => {
     const doc = "# One\n\nalpha\n\nbravo\n\ncharlie\n\n# Two\n\ndelta";
     let state = EditorState.create({
