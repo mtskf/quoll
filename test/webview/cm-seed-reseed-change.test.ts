@@ -119,14 +119,23 @@ describe("computeReseedChange — minimal single-span reseed change", () => {
     // Diverge deep inside the doc so both the common prefix and suffix span many
     // leaf chunks (a Text of this size is a multi-node tree, not one leaf).
     const bigB = bigA.replace("line 2000 alpha", "line 2000 BRAVO");
-    // bigA/bigB keep the line count fixed (an in-place word swap), so their
-    // TextLeaf chunk boundaries stay 1:1 aligned across the whole scan — that
-    // never exercises commonRunLength's independent pa/pb refill (each side
-    // only ever refills in lockstep with the other). The cases below add a
-    // genuinely multi-leaf tree (300 lines, well past the ~32-line leaf branch
-    // factor) where the interior line COUNT changes, so every leaf boundary
-    // past the edit point is offset between old and new — exactly the
-    // misalignment the independent refill exists to handle.
+    // `Text.iter()` yields ONE line (or one "\n") per step — not a whole
+    // TextLeaf block — so commonRunLength's "chunks" are individual lines. Two
+    // classes of multi-line edit exercise it differently:
+    //
+    //  - Whole-line insert/delete (bigInteriorInsert/Delete): the divergence
+    //    lands on a line boundary, so both cursors are at pa == pb == 0 there
+    //    and only ever refill in lockstep. A coupled-refill implementation
+    //    produces the same span, so these do NOT pin the independent pa/pb
+    //    refill (they are still useful multi-line coverage).
+    //  - Interior mid-line LENGTH change (bigInteriorGrow/Shrink): one line's
+    //    length differs while all later lines stay identical. The scan matches
+    //    the shared in-line prefix, then ONE cursor exhausts its line mid-scan
+    //    while the other still has characters left — the exact state the
+    //    independent refill exists for. A coupled refill would skip the longer
+    //    line's remainder, re-align with the identical trailing lines, and
+    //    spuriously match to the end (a grossly non-minimal span). Only these
+    //    cases catch that bug, so they are the load-bearing regression guard.
     const rows = Array.from({ length: 300 }, (_, i) => `row ${i} text`);
     const bigBase = rows.join("\n");
     const bigInteriorInsert = [
@@ -140,6 +149,20 @@ describe("computeReseedChange — minimal single-span reseed change", () => {
       ...rows.slice(150),
     ].join("\n");
     const bigInteriorDelete = [...rows.slice(0, 150), ...rows.slice(160)].join("\n");
+    // Interior line 150 grows/shrinks while lines 151..299 stay identical, so a
+    // real common suffix spans the misaligned region (new longer than old, and
+    // the reverse). Both share the in-line prefix "row 150 text", forcing the
+    // one-cursor-exhausted-mid-line state.
+    const bigInteriorGrow = [
+      ...rows.slice(0, 150),
+      `${rows[150]} EXTENDED TAIL CONTENT`,
+      ...rows.slice(151),
+    ].join("\n");
+    const bigInteriorShrink = [
+      ...rows.slice(0, 150),
+      rows[150].slice(0, 3),
+      ...rows.slice(151),
+    ].join("\n");
     const cases: Array<[string, string]> = [
       ["", ""],
       ["", "abc"],
@@ -157,6 +180,9 @@ describe("computeReseedChange — minimal single-span reseed change", () => {
       [`prepended head\n${bigA}`, bigA],
       [bigBase, bigInteriorInsert],
       [bigBase, bigInteriorDelete],
+      [bigBase, bigInteriorGrow], // new line longer than old → old cursor exhausts first
+      [bigInteriorGrow, bigBase], // old line longer than new → new cursor exhausts first
+      [bigBase, bigInteriorShrink], // shorter, still shares the in-line prefix
     ];
     for (const [a, b] of cases) {
       const oldDoc = splitToCmText(a);

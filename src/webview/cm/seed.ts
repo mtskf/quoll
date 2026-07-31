@@ -95,13 +95,16 @@ export function computeReseedChange(
 
 /** Count the leading (`dir` 1) or trailing (`dir` -1) UTF-16 code units shared
  *  by two CM `Text` docs, capped at `max`. Walks both trees chunk-by-chunk with
- *  `Text.iter(dir)` — the leaf strings are compared in place, so neither doc is
- *  flattened. Both operands are LF-internal (splitToCmText), so the yielded
- *  chunks plus the iterator's `\n` line breaks concatenate to exactly
- *  `toString()`; comparing the chunk streams is therefore identical to comparing
- *  the full strings. For `dir` -1 the iterator yields leaf chunks from last to
- *  first with each chunk's text in normal order, so each is compared from its
- *  own trailing edge. */
+ *  `Text.iter(dir)` — the strings it yields are compared in place, so neither
+ *  doc is flattened. `Text.iter` yields one line string (or one `"\n"` break)
+ *  per step — NOT a whole `TextLeaf` block — so a "chunk" here is a single line.
+ *  Both operands are LF-internal (splitToCmText), so those line strings plus the
+ *  `"\n"` breaks concatenate to exactly `toString()`; comparing the chunk
+ *  streams is therefore identical to comparing the full strings. `pa`/`pb` track
+ *  each side independently because a length-changed line leaves one cursor
+ *  mid-line while the other has already exhausted its line. For `dir` -1 the
+ *  iterator yields the lines from last to first with each string in normal
+ *  order, so each is compared from its own trailing edge. */
 function commonRunLength(a: Text, b: Text, max: number, dir: 1 | -1): number {
   const ia = a.iter(dir);
   const ib = b.iter(dir);
