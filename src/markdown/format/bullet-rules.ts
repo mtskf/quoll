@@ -27,6 +27,12 @@ const MAX_PESSIMISTIC_GROUPS = 100;
 
 export function bulletUnifyEdits(source: string, bulletLists: readonly BulletList[]): Edit[] {
   const baseSignature = structureSignature(source);
+  // The authoritative gate for every pass below: does applying `edits` leave the
+  // document's block structure (structureSignature) unchanged? A false result
+  // means the marker rewrite would merge/split a list or self-collide into a
+  // thematic break, so those edits must be dropped.
+  const preservesStructure = (edits: Edit[]): boolean =>
+    structureSignature(applyEdits(source, edits)) === baseSignature;
   const groups: Edit[][] = [];
   for (const list of bulletLists) {
     if (!list.adjacencySafe) {
@@ -48,7 +54,7 @@ export function bulletUnifyEdits(source: string, bulletLists: readonly BulletLis
   // Optimistic: whole-document rewrite preserves structure -> apply all.
   // applyEdits sorts internally, so passing the unsorted concat is fine.
   const all = groups.flat();
-  if (structureSignature(applyEdits(source, all)) === baseSignature) {
+  if (preservesStructure(all)) {
     return all;
   }
   // Collision present (optimistic failed). The pessimistic pass reparses once
@@ -62,7 +68,7 @@ export function bulletUnifyEdits(source: string, bulletLists: readonly BulletLis
   // Pessimistic: a collision exists; keep only groups that are safe in isolation.
   const kept: Edit[] = [];
   for (const groupEdits of groups) {
-    if (structureSignature(applyEdits(source, groupEdits)) === baseSignature) {
+    if (preservesStructure(groupEdits)) {
       kept.push(...groupEdits);
     }
   }
@@ -75,7 +81,7 @@ export function bulletUnifyEdits(source: string, bulletLists: readonly BulletLis
   // blind spot lets two lists merge. In those cases drop the whole rewrite (safe
   // no-op). This is deliberately conservative for such (rare) inputs: it never
   // corrupts, though it may skip unrelated safe lists in the same document.
-  if (structureSignature(applyEdits(source, kept)) !== baseSignature) {
+  if (!preservesStructure(kept)) {
     return [];
   }
   return kept;
