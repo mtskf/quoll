@@ -1,6 +1,26 @@
 import type { Text } from "@codemirror/state";
 import { describe, expect, it } from "vitest";
+import { commonAffixLengths } from "../../src/shared/minimal-span.js";
 import { computeReseedChange, splitToCmText } from "../../src/webview/cm/seed.js";
+
+// Reference span derived from the shared string core (the host write path's
+// authoritative, fuzz-verified scan). The Text-iterator scan inside
+// computeReseedChange must stay byte-for-byte in lockstep with this — the
+// parity test below is the mechanism that catches drift if either side's
+// prefix/suffix-cap logic changes.
+function deriveViaStringCore(
+  oldDoc: Text,
+  newDoc: Text
+): { from: number; to: number; insert: string } {
+  const oldStr = oldDoc.toString();
+  const newStr = newDoc.toString();
+  const { prefix, suffix } = commonAffixLengths(oldStr, newStr);
+  return {
+    from: prefix,
+    to: oldStr.length - suffix,
+    insert: newStr.slice(prefix, newStr.length - suffix),
+  };
+}
 
 // Apply the computed single-span change to `old` and assert it reproduces
 // `next` in CM's LF-internal coordinates — the contract the reseed relies on.
@@ -87,5 +107,69 @@ describe("computeReseedChange — minimal single-span reseed change", () => {
     expect(change.to).toBeLessThanOrEqual(old.length); // never exceeds doc.length
     expect(change.insert.toString()).toBe("Y");
     expect(applyChange(old, change)).toBe("x\ny\nz".replace("y", "Y"));
+  });
+
+  // The Text-iterator scan must produce exactly the span the shared string core
+  // would, across cases that exercise chunk boundaries (multi-leaf trees),
+  // surrogate splits, empty lines, and prefix/suffix overlap. Round-trip alone
+  // cannot catch a non-minimal span (it hides inside `insert`), so assert
+  // from/to/insert against the reference too.
+  it("stays byte-for-byte in lockstep with the shared string core", () => {
+    const bigA = `${Array.from({ length: 4000 }, (_, i) => `line ${i} alpha`).join("\n")}`;
+    // Diverge deep inside the doc so both the common prefix and suffix span many
+    // leaf chunks (a Text of this size is a multi-node tree, not one leaf).
+    const bigB = bigA.replace("line 2000 alpha", "line 2000 BRAVO");
+    const cases: Array<[string, string]> = [
+      ["", ""],
+      ["", "abc"],
+      ["abc", ""],
+      ["same", "same"],
+      ["aaa", "aa"],
+      ["aa", "aaa"],
+      ["a😀b", "a😃b"],
+      ["😀😀😀", "😀😃😀"],
+      ["line one\n\nline three", "line one\nline two\nline three"], // empty middle line
+      ["\n\n\n", "\n\nx\n"],
+      ["head\nbody\ntail", "head\nBODY\ntail"],
+      [bigA, bigB],
+      [bigA, `${bigA}\nappended tail`],
+      [`prepended head\n${bigA}`, bigA],
+    ];
+    for (const [a, b] of cases) {
+      const oldDoc = splitToCmText(a);
+      const newDoc = splitToCmText(b);
+      const change = computeReseedChange(oldDoc, newDoc);
+      const ref = deriveViaStringCore(oldDoc, newDoc);
+      expect({ from: change.from, to: change.to, insert: change.insert.toString() }).toEqual(ref);
+      expect(applyChange(oldDoc, change)).toBe(newDoc.toString());
+    }
+  });
+
+  it("never flattens either whole document to a string", () => {
+    // The reseed side is deliberately uncapped (host→webview content has no
+    // MAX_CONTENT_LENGTH), so a large external reseed must not transiently
+    // allocate two full-document strings. Guard the contract by failing if
+    // computeReseedChange calls `.toString()` on either operand.
+    const bigA = Array.from({ length: 4000 }, (_, i) => `line ${i} content`).join("\n");
+    const bigB = bigA.replace("line 2000 content", "line 2000 CHANGED");
+    const old = splitToCmText(bigA);
+    const next = splitToCmText(bigB);
+    const expected = next.toString();
+    let flattened = 0;
+    old.toString = () => {
+      flattened++;
+      return bigA;
+    };
+    next.toString = () => {
+      flattened++;
+      return bigB;
+    };
+    const change = computeReseedChange(old, next);
+    expect(flattened).toBe(0);
+    // Correctness still holds via the un-flattened path.
+    const oldStr = bigA;
+    expect(oldStr.slice(0, change.from) + change.insert.toString() + oldStr.slice(change.to)).toBe(
+      expected
+    );
   });
 });

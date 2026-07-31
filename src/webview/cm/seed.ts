@@ -4,7 +4,6 @@
 // parity gate (test/markdown/round-trip.test.ts) — the two cannot drift.
 
 import { Text } from "@codemirror/state";
-import { commonAffixLengths } from "../../shared/minimal-span.js";
 
 /** Detect the document's line separator for the CodeMirror `lineSeparator`
  *  facet. A single CRLF anywhere ⇒ CRLF; absent any \r\n ⇒ LF.
@@ -56,22 +55,98 @@ export function splitToCmText(rawText: string): Text {
  *  `newDoc` even if `from`/`to` fall inside a surrogate pair. No surrogate
  *  special-casing is required. `insert` is a sub-`Text` (no re-split). The change
  *  is empty (`from === to`, `insert.length === 0`) iff the two docs are
- *  content-identical. */
+ *  content-identical.
+ *
+ *  Memory: the prefix/suffix runs are scanned chunk-by-chunk over the two `Text`
+ *  trees via {@link commonRunLength} — neither document is flattened to a full
+ *  string. This matters because the host→webview content path is deliberately
+ *  uncapped (no `MAX_CONTENT_LENGTH`), so a large externally-changed file would
+ *  otherwise transiently hold both `Text` structures AND two full-document
+ *  strings. Only the divergent middle is ever materialised, as the `insert`
+ *  sub-`Text`. The scan mirrors the shared string core `commonAffixLengths`
+ *  (src/shared/minimal-span.ts) — same longest-common-prefix-then-capped-suffix
+ *  logic — and test/webview/cm-seed-reseed-change.test.ts pins the two in
+ *  lockstep. It cannot reuse that core directly: the core needs O(1) random
+ *  access (`charCodeAt`), which `Text` does not offer — its cheap primitive is
+ *  sequential chunk iteration, and reusing the core would mean flattening (the
+ *  allocation this avoids) or O(n log n) per-char slicing. */
 export function computeReseedChange(
   oldDoc: Text,
   newDoc: Text
 ): { from: number; to: number; insert: Text } {
-  const oldStr = oldDoc.toString();
-  const newStr = newDoc.toString();
-  const oldLen = oldStr.length;
-  const newLen = newStr.length;
-  // Longest-common-prefix + suffix-trim (with the non-negative-span guard) is the
-  // shared core; the webview needs no CRLF snap because both operands are already
-  // LF-internal (see splitToCmText). `insert` is a sub-`Text` (no re-split).
-  const { prefix, suffix } = commonAffixLengths(oldStr, newStr);
+  const oldLen = oldDoc.length;
+  const newLen = newDoc.length;
+  // Longest common prefix, naturally bounded by the shorter document.
+  const maxPrefix = Math.min(oldLen, newLen);
+  const prefix = commonRunLength(oldDoc, newDoc, maxPrefix, 1);
+  // Longest common suffix, capped at the code units the prefix has not already
+  // claimed — the non-negative-span guard (keeps `from <= to` when the shared
+  // prefix and suffix runs overlap, e.g. "aaa" -> "aa"). Mirrors
+  // commonAffixLengths' `maxSuffix = maxPrefix - prefix`.
+  const suffix = commonRunLength(oldDoc, newDoc, maxPrefix - prefix, -1);
+  // The webview needs no CRLF snap because both operands are already LF-internal
+  // (see splitToCmText). `insert` is a sub-`Text` (no re-split, no flatten).
   return {
     from: prefix,
     to: oldLen - suffix,
     insert: newDoc.slice(prefix, newLen - suffix),
   };
+}
+
+/** Count the leading (`dir` 1) or trailing (`dir` -1) UTF-16 code units shared
+ *  by two CM `Text` docs, capped at `max`. Walks both trees chunk-by-chunk with
+ *  `Text.iter(dir)` — the leaf strings are compared in place, so neither doc is
+ *  flattened. Both operands are LF-internal (splitToCmText), so the yielded
+ *  chunks plus the iterator's `\n` line breaks concatenate to exactly
+ *  `toString()`; comparing the chunk streams is therefore identical to comparing
+ *  the full strings. For `dir` -1 the iterator yields leaf chunks from last to
+ *  first with each chunk's text in normal order, so each is compared from its
+ *  own trailing edge. */
+function commonRunLength(a: Text, b: Text, max: number, dir: 1 | -1): number {
+  const ia = a.iter(dir);
+  const ib = b.iter(dir);
+  let sa = "";
+  let sb = "";
+  let pa = 0; // code units already consumed from `sa`'s scan edge
+  let pb = 0;
+  let matched = 0;
+  while (matched < max) {
+    if (pa >= sa.length) {
+      if (ia.next().done) {
+        break;
+      }
+      sa = ia.value;
+      pa = 0;
+      continue;
+    }
+    if (pb >= sb.length) {
+      if (ib.next().done) {
+        break;
+      }
+      sb = ib.value;
+      pb = 0;
+      continue;
+    }
+    const n = Math.min(sa.length - pa, sb.length - pb, max - matched);
+    let k = 0;
+    if (dir > 0) {
+      while (k < n && sa.charCodeAt(pa + k) === sb.charCodeAt(pb + k)) {
+        k++;
+      }
+    } else {
+      while (
+        k < n &&
+        sa.charCodeAt(sa.length - 1 - pa - k) === sb.charCodeAt(sb.length - 1 - pb - k)
+      ) {
+        k++;
+      }
+    }
+    matched += k;
+    pa += k;
+    pb += k;
+    if (k < n) {
+      break; // mismatch inside the overlap — done
+    }
+  }
+  return matched;
 }
