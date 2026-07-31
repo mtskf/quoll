@@ -1418,7 +1418,7 @@ html body {
  * bold/link while the heading size/colour still drop to body. */
 .quoll-setext-nascent-raw,
 .quoll-setext-nascent-raw * {
-  font-size: var(--vscode-font-size) !important;
+  font-size: var(--quoll-editor-font-size, var(--vscode-font-size)) !important;
   font-weight: 400 !important;
   color: var(--vscode-editor-foreground) !important;
 }
