@@ -165,6 +165,20 @@ jobs:
       - name: Verify SBOM is scoped to the shipped runtime
         run: node scripts/verify-sbom-scope.mjs sbom.spdx.json
 
+      # SHADOW (non-gating) reconciliation. Runs the opt-in --reconcile check
+      # against the same frozen prod staging tree the SBOM was generated from,
+      # comparing the attested SBOM's {name@version} set to the tree's real
+      # package manifests. `|| true` keeps it NON-gating: a mismatch prints to
+      # the run log but never fails a live publish. Purpose: collect evidence
+      # that the manifest-derived inventory equals what the pinned syft (v1.42.3)
+      # catalogs, on real staging trees, BEFORE promoting this to a gate.
+      # ENABLEMENT CRITERIA (do this to make it gating): once the log shows a
+      # clean reconcile across a release (no "unexpected"/"missing"/"version
+      # mismatch" lines), fold `--reconcile "$RUNNER_TEMP/sbom-src"` into the
+      # gating step above and delete this shadow step.
+      - name: Reconcile SBOM against staged install (shadow, non-gating)
+        run: node scripts/verify-sbom-scope.mjs sbom.spdx.json --reconcile "$RUNNER_TEMP/sbom-src" || true
+
       - name: Package .vsix
         run: pnpm exec vsce package --no-dependencies -o extension.vsix
 
