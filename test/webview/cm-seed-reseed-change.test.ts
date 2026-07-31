@@ -119,6 +119,27 @@ describe("computeReseedChange — minimal single-span reseed change", () => {
     // Diverge deep inside the doc so both the common prefix and suffix span many
     // leaf chunks (a Text of this size is a multi-node tree, not one leaf).
     const bigB = bigA.replace("line 2000 alpha", "line 2000 BRAVO");
+    // bigA/bigB keep the line count fixed (an in-place word swap), so their
+    // TextLeaf chunk boundaries stay 1:1 aligned across the whole scan — that
+    // never exercises commonRunLength's independent pa/pb refill (each side
+    // only ever refills in lockstep with the other). The cases below add a
+    // genuinely multi-leaf tree (300 lines, well past the ~32-line leaf branch
+    // factor) where the interior line COUNT changes, so every leaf boundary
+    // past the edit point is offset between old and new — exactly the
+    // misalignment the independent refill exists to handle.
+    const rows = Array.from({ length: 300 }, (_, i) => `row ${i} text`);
+    const bigBase = rows.join("\n");
+    const bigInteriorInsert = [
+      ...rows.slice(0, 150),
+      "extra 0",
+      "extra 1",
+      "extra 2",
+      "extra 3",
+      "extra 4",
+      "extra 5",
+      ...rows.slice(150),
+    ].join("\n");
+    const bigInteriorDelete = [...rows.slice(0, 150), ...rows.slice(160)].join("\n");
     const cases: Array<[string, string]> = [
       ["", ""],
       ["", "abc"],
@@ -134,6 +155,8 @@ describe("computeReseedChange — minimal single-span reseed change", () => {
       [bigA, bigB],
       [bigA, `${bigA}\nappended tail`],
       [`prepended head\n${bigA}`, bigA],
+      [bigBase, bigInteriorInsert],
+      [bigBase, bigInteriorDelete],
     ];
     for (const [a, b] of cases) {
       const oldDoc = splitToCmText(a);
