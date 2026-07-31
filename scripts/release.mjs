@@ -57,13 +57,26 @@ function localTagExists(tag) {
   return out.length > 0;
 }
 
+// Hard ceiling on the remote collision probe. The bound must hold for ANY
+// transport: origin is HTTPS today (the SSH ConnectTimeout below never
+// applies to it), so a real process timeout — not a transport-specific env
+// var — is what actually keeps `check` from hanging on a stalled network.
+const REMOTE_PROBE_TIMEOUT_MS = 5000;
+
 /**
  * Best-effort remote collision probe. Returns true / false, or null when the
- * remote is unreachable (offline, auth refusal). Non-fatal by design: origin
- * is reached over SSH and this machine's agent can intermittently refuse the
- * sign, so BatchMode + a short timeout keep `check` from ever hanging or
- * raising an approval prompt — a push would still fail fast on a real
- * collision, and publish.yml re-verifies the tag content.
+ * remote is unreachable (offline, auth refusal, or the probe timed out).
+ * Non-fatal by design — a push would still fail fast on a real collision, and
+ * publish.yml re-verifies the tag content.
+ *
+ * Anti-hang guards, defence in depth so `check` never blocks or prompts:
+ *   - `timeout` kills the git process after REMOTE_PROBE_TIMEOUT_MS regardless
+ *     of transport — the authoritative bound (origin is HTTPS, so the SSH
+ *     ConnectTimeout is not consulted for it).
+ *   - GIT_TERMINAL_PROMPT=0 makes an HTTPS credential prompt fail fast instead
+ *     of blocking on interactive input.
+ *   - GIT_SSH_COMMAND (BatchMode + ConnectTimeout) is a secondary guard that
+ *     only bites if origin is ever an SSH remote.
  */
 function remoteTagExists(tag) {
   try {
@@ -71,7 +84,13 @@ function remoteTagExists(tag) {
       cwd: repoRoot,
       encoding: "utf8",
       stdio: ["ignore", "pipe", "ignore"],
-      env: { ...process.env, GIT_SSH_COMMAND: "ssh -o BatchMode=yes -o ConnectTimeout=5" },
+      timeout: REMOTE_PROBE_TIMEOUT_MS,
+      killSignal: "SIGKILL",
+      env: {
+        ...process.env,
+        GIT_TERMINAL_PROMPT: "0",
+        GIT_SSH_COMMAND: "ssh -o BatchMode=yes -o ConnectTimeout=5",
+      },
     });
     return out.trim().length > 0;
   } catch {
