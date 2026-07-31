@@ -617,11 +617,23 @@ describe("attachTeardownListeners — perf onPageHide rides the after-init set",
     const { attachTeardownListeners } = await import("../../src/webview/shell.js");
     const winAdd = vi.spyOn(window, "addEventListener");
     const flushPending = vi.fn();
-    attachTeardownListeners({ onPageHide: null, flushPending, onVisibilityChange: vi.fn() });
-    // Only flushPending's pagehide listener is registered — no extra perf one.
-    const pagehideAdds = winAdd.mock.calls.filter(([type]) => type === "pagehide");
-    expect(pagehideAdds.length).toBe(1);
-    expect(pagehideAdds[0][1]).toBe(flushPending);
-    winAdd.mockRestore();
+    // Capture the remover and call it in a finally — otherwise this test would
+    // leak the flushPending/blur/visibilitychange listeners onto the shared
+    // happy-dom window/document (the exact add/remove asymmetry this fix guards
+    // against, in test code).
+    const remove = attachTeardownListeners({
+      onPageHide: null,
+      flushPending,
+      onVisibilityChange: vi.fn(),
+    });
+    try {
+      // Only flushPending's pagehide listener is registered — no extra perf one.
+      const pagehideAdds = winAdd.mock.calls.filter(([type]) => type === "pagehide");
+      expect(pagehideAdds.length).toBe(1);
+      expect(pagehideAdds[0][1]).toBe(flushPending);
+    } finally {
+      remove();
+      winAdd.mockRestore();
+    }
   });
 });

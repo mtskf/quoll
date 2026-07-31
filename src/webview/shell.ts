@@ -456,6 +456,14 @@ export function mountShell(root: HTMLElement, opts: ShellOptions): ShellHandle {
   // not a mount-time registration — so neither a ready-post throw nor a
   // mountEditor throw leaks it on the dead page. The single remover keeps add
   // and remove in lockstep.
+  //
+  // INVARIANT: attachTeardownListeners is the ONLY registration path for these
+  // listeners — never add a `window.addEventListener("pagehide"/"blur", …)` or
+  // `document.addEventListener("visibilitychange", …)` directly in mountShell.
+  // A stray mount-time registration would reintroduce the init-failure leak,
+  // and it is NOT unit-observable: onPageHide is compiled to null under
+  // QUOLL_PERF=false (every test build), so a perf-listener regression here can
+  // only be caught in a perf build / manual smoke. Keep the single call below.
   const removeTeardownListeners = attachTeardownListeners({
     onPageHide,
     flushPending,
