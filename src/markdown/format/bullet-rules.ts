@@ -16,6 +16,15 @@ import { applyEdits, type Edit } from "./edit.js";
 import { structureSignature } from "./parse-signature.js";
 import type { BulletList } from "./segment.js";
 
+// Upper bound on the pessimistic pass, which reparses the whole document once
+// per group (~3ms/group). Capping at 100 keeps the worst case ~0.3s so a
+// pathological document cannot block the synchronous Format Document command.
+// Collision-free documents never reach here — they finish on the optimistic
+// path (one extra parse) regardless of how many lists they have — so the cap
+// only bites documents that have very many separate bullet lists AND a
+// collision, which we then fail closed (a safe no-op).
+const MAX_PESSIMISTIC_GROUPS = 100;
+
 export function bulletUnifyEdits(source: string, bulletLists: readonly BulletList[]): Edit[] {
   const baseSignature = structureSignature(source);
   const groups: Edit[][] = [];
@@ -41,6 +50,14 @@ export function bulletUnifyEdits(source: string, bulletLists: readonly BulletLis
   const all = groups.flat();
   if (structureSignature(applyEdits(source, all)) === baseSignature) {
     return all;
+  }
+  // Collision present (optimistic failed). The pessimistic pass reparses once
+  // per group; cap it so a pathological document (very many separate bullet
+  // lists AND a collision) cannot block the synchronous Format Document command
+  // on O(groups × doc) parsing. Fail closed: skip unification for this document
+  // (a safe no-op — the collision-free optimistic path above is unaffected).
+  if (groups.length > MAX_PESSIMISTIC_GROUPS) {
+    return [];
   }
   // Pessimistic: a collision exists; keep only groups that are safe in isolation.
   const kept: Edit[] = [];

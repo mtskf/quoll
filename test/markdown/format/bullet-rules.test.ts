@@ -32,4 +32,14 @@ describe("bulletUnifyEdits", () => {
     expect(run("* good\n\n# separator\n\n* a\n* --\n")).toBe(
       "- good\n\n# separator\n\n* a\n* --\n"
     ));
+  it("fails closed (no-op) when a colliding document exceeds the pessimistic group budget", () => {
+    // >100 separate adjacency-safe bullet lists (heading-separated) + one collision.
+    const lists = Array.from({ length: 101 }, (_, i) => `# h${i}\n\n* item${i}\n`).join("\n");
+    const src = `${lists}\n# collide\n\n* --\n`;
+    expect(edits(src)).toEqual([]); // budget exceeded -> whole rule no-ops
+  });
+  it("still unifies a colliding document with few groups (within budget)", () => {
+    // sanity: below the budget, the pessimistic path still runs and skips only the collision
+    expect(run("* good\n\n# s\n\n* a\n* --\n")).toBe("- good\n\n# s\n\n* a\n* --\n");
+  });
 });
