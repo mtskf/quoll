@@ -48,6 +48,12 @@ describe("formatDocument", () => {
   it("unifies list markers even under GFM task-list items", () => {
     expect(formatDocument("* [ ] a\n* [x] b\n")).toBe("- [ ] a\n- [x] b\n");
   });
+  it("unifies a bullet list directly under a paragraph (no blank line)", () => {
+    expect(formatDocument("para\n* a\n* b\n")).toBe("para\n- a\n- b\n");
+  });
+  it("unifies a bullet list directly after an ordered list (no blank line)", () => {
+    expect(formatDocument("1. a\n* b\n")).toBe("1. a\n- b\n");
+  });
   it("unifies `* -` (its `- -` is not a thematic break)", () => {
     expect(formatDocument("* -\n")).toBe("- -\n");
   });

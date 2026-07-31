@@ -97,6 +97,16 @@ describe("classifyDocument", () => {
     expect(lists.every((l) => l.adjacencySafe === true)).toBe(true);
   });
 
+  it("treats a bullet list adjacent to a paragraph (no blank line) as adjacency-safe", () => {
+    const lists = classifyDocument("para\n* a\n* b\n").bulletLists;
+    expect(lists[0].adjacencySafe).toBe(true);
+  });
+
+  it("treats a bullet list adjacent to an ordered list (no blank line) as adjacency-safe", () => {
+    const lists = classifyDocument("1. a\n* b\n").bulletLists;
+    expect(lists[0].adjacencySafe).toBe(true);
+  });
+
   it("classifies nested adjacent bullet lists as adjacency-unsafe, outer as safe", () => {
     const lists = classifyDocument("- a\n  * x\n  - y\n").bulletLists;
     // outer (- a ...) is safe; the two nested (* x) / (- y) are adjacent -> unsafe
