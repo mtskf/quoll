@@ -519,3 +519,54 @@ describe("shell — teardown flush (close-without-save data loss)", () => {
     }
   });
 });
+
+describe("shell — init-failure teardown (no leaked pagehide listener)", () => {
+  // Pins the "an init failure never leaks a teardown listener on the dead page"
+  // contract asserted by the shell's own comments. The teardown listeners
+  // (flushPending's pagehide/blur, onVisibilityChange, and the perf
+  // onPageHide session-report listener) register ONLY after the ready-post
+  // succeeds, so a mount that throws mid-init must leave no pagehide listener
+  // pinning the dead shell/editor closures.
+  //
+  // Scope note: under the unit suite's QUOLL_PERF=false define (vitest.config
+  // .ts) the perf onPageHide listener is compiled out, so these tests exercise
+  // the surviving flushPending pagehide listener — the realistic regression
+  // surface (moving a teardown registration back above the ready-post throw).
+
+  it("propagates the ready-post throw, tears down the subscription, and registers no pagehide listener", async () => {
+    const winAdd = vi.spyOn(window, "addEventListener");
+    const { mountShell } = await import("../../src/webview/shell.js");
+    postMessage.mockImplementationOnce(() => {
+      throw new Error("synthetic ready-post failure");
+    });
+    // mountShell rethrows so index.ts can paint the init-error banner; `handle`
+    // is never assigned, so afterEach's dispose() does not run for this test.
+    expect(() => mountShell(container as HTMLElement, { nonce: "test-nonce" })).toThrow(
+      "synthetic ready-post failure"
+    );
+    // Host subscription torn down — no dangling handler on the dead page.
+    expect(subscribers.length).toBe(0);
+    // No pagehide listener registered during the failed init.
+    const pagehideAdds = winAdd.mock.calls.filter(([type]) => type === "pagehide");
+    expect(pagehideAdds.length).toBe(0);
+    winAdd.mockRestore();
+  });
+
+  it("registers the pagehide flush listener only after init succeeds and removes it on dispose", async () => {
+    const winAdd = vi.spyOn(window, "addEventListener");
+    const winRemove = vi.spyOn(window, "removeEventListener");
+    await mount();
+    // Init succeeded → the pagehide flush listener is now registered.
+    expect(winAdd.mock.calls.filter(([type]) => type === "pagehide").length).toBeGreaterThanOrEqual(
+      1
+    );
+    handle?.dispose();
+    handle = null;
+    // dispose() removes it symmetrically — no leak on teardown.
+    expect(
+      winRemove.mock.calls.filter(([type]) => type === "pagehide").length
+    ).toBeGreaterThanOrEqual(1);
+    winAdd.mockRestore();
+    winRemove.mockRestore();
+  });
+});

@@ -142,11 +142,13 @@ export function mountShell(root: HTMLElement, opts: ShellOptions): ShellHandle {
     }
   }
   // Best-effort session report when VS Code tears the webview down (a reload
-  // does NOT call shell.dispose). once:true + the latch above guard a double fire.
+  // does NOT call shell.dispose). once:true + the latch above guard a double
+  // fire. The listener is REGISTERED below — only AFTER init succeeds, next to
+  // the teardown-flush listeners — never at mount, so an init failure (the
+  // ready-post throw, or a mountEditor throw above — mountEditor runs outside
+  // the try) does not leak it on the dead init-error page; dispose() removes it
+  // symmetrically.
   const onPageHide = QUOLL_PERF ? (): void => reportSession() : null;
-  if (onPageHide) {
-    window.addEventListener("pagehide", onPageHide, { once: true });
-  }
   // Local: a dispatch BEFORE the editor mount (e.g. a same-tick re-entry,
   // not currently possible but defensive) must not crash; editor is
   // assigned before the first message can arrive (subscribe is wired
@@ -409,8 +411,15 @@ export function mountShell(root: HTMLElement, opts: ShellOptions): ShellHandle {
     throw postErr;
   }
 
-  // Register teardown-flush listeners now that init succeeded (see the const
+  // Register teardown listeners now that init succeeded (see the const
   // declarations above for the rationale + the no-leak-on-init-failure note).
+  // onPageHide (the perf session-report listener) registers here too — not at
+  // mount — so neither a ready-post throw nor a mountEditor throw leaks it on
+  // the dead page. Registered before flushPending to preserve the original
+  // fire order (perf report, then flush).
+  if (onPageHide) {
+    window.addEventListener("pagehide", onPageHide, { once: true });
+  }
   document.addEventListener("visibilitychange", onVisibilityChange);
   window.addEventListener("pagehide", flushPending);
   window.addEventListener("blur", flushPending);
