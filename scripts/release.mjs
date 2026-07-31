@@ -58,9 +58,11 @@ function localTagExists(tag) {
 }
 
 // Hard ceiling on the remote collision probe. The bound must hold for ANY
-// transport: origin is HTTPS today (the SSH ConnectTimeout below never
-// applies to it), so a real process timeout — not a transport-specific env
-// var — is what actually keeps `check` from hanging on a stalled network.
+// transport, so it is a real process timeout rather than a transport-specific
+// env var: origin is HTTPS and the project forbids reverting it to SSH (see
+// .claude/CLAUDE.md), so a git-over-SSH ConnectTimeout would be dead code here
+// — while this timeout keeps `check` from hanging even if the transport ever
+// changes.
 const REMOTE_PROBE_TIMEOUT_MS = 5000;
 
 /**
@@ -69,14 +71,11 @@ const REMOTE_PROBE_TIMEOUT_MS = 5000;
  * Non-fatal by design — a push would still fail fast on a real collision, and
  * publish.yml re-verifies the tag content.
  *
- * Anti-hang guards, defence in depth so `check` never blocks or prompts:
+ * Anti-hang guards so `check` never blocks or prompts:
  *   - `timeout` kills the git process after REMOTE_PROBE_TIMEOUT_MS regardless
- *     of transport — the authoritative bound (origin is HTTPS, so the SSH
- *     ConnectTimeout is not consulted for it).
+ *     of transport — the authoritative bound.
  *   - GIT_TERMINAL_PROMPT=0 makes an HTTPS credential prompt fail fast instead
  *     of blocking on interactive input.
- *   - GIT_SSH_COMMAND (BatchMode + ConnectTimeout) is a secondary guard that
- *     only bites if origin is ever an SSH remote.
  */
 function remoteTagExists(tag) {
   try {
@@ -86,11 +85,7 @@ function remoteTagExists(tag) {
       stdio: ["ignore", "pipe", "ignore"],
       timeout: REMOTE_PROBE_TIMEOUT_MS,
       killSignal: "SIGKILL",
-      env: {
-        ...process.env,
-        GIT_TERMINAL_PROMPT: "0",
-        GIT_SSH_COMMAND: "ssh -o BatchMode=yes -o ConnectTimeout=5",
-      },
+      env: { ...process.env, GIT_TERMINAL_PROMPT: "0" },
     });
     return out.trim().length > 0;
   } catch {
@@ -173,7 +168,7 @@ function runCheck() {
     );
   } else if (remote === null) {
     warnings.push(
-      `could not reach origin to check for a remote ${tag} (offline or SSH agent refusal) — a push would still fail fast on a real collision.`
+      `could not reach origin to check for a remote ${tag} (offline or the probe timed out) — a push would still fail fast on a real collision.`
     );
   }
 
