@@ -31,4 +31,18 @@ describe("formatDocument", () => {
     expect(formatDocument("")).toBe("");
     expect(formatDocumentEdits("")).toEqual([]);
   });
+  it("unifies safe bullet markers to - and leaves risky lists alone", () => {
+    expect(formatDocument("* a\n* b\n")).toBe("- a\n- b\n"); // safe -> unified
+    expect(formatDocument("+ a\n+ b\n")).toBe("- a\n- b\n"); // safe -> unified
+    expect(formatDocument("* a\n+ b\n")).toBe("* a\n+ b\n"); // adjacent -> untouched
+    expect(formatDocument("* a\n\n- b\n")).toBe("* a\n\n- b\n"); // blank-sep diff -> untouched
+    expect(formatDocument("> * a\n> - b\n")).toBe("> * a\n> - b\n"); // blockquote-adjacent -> untouched
+    expect(formatDocument("> * a\n> * b\n")).toBe("> - a\n> - b\n"); // blockquote-standalone -> unified
+    expect(formatDocument("* --\n")).toBe("* --\n"); // thematic-break collision -> untouched
+    expect(formatDocument("> > * a\n> > - b\n")).toBe("> > * a\n> > - b\n"); // deep-blockquote adjacent -> untouched
+    // per-list granularity: colliding list skipped, unrelated safe list unified
+    expect(formatDocument("* good\n\n# separator\n\n* a\n* --\n")).toBe(
+      "- good\n\n# separator\n\n* a\n* --\n"
+    );
+  });
 });

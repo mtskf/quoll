@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { applyEdits } from "../../../src/markdown/format/edit.js";
 import { bulletUnifyEdits } from "../../../src/markdown/format/bullet-rules.js";
+import { applyEdits } from "../../../src/markdown/format/edit.js";
 import { classifyDocument } from "../../../src/markdown/format/segment.js";
 
 const run = (s: string) => applyEdits(s, bulletUnifyEdits(s, classifyDocument(s).bulletLists));

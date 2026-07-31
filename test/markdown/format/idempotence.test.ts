@@ -10,6 +10,14 @@ const CORPUS = [
   "---\ntitle: x\n---\n\n1. a\n   1. x\n   1. y\n2. b\n",
   "<div>\n  raw   \n</div>\n",
   "no trailing newline",
+  "* a\n* b\n",
+  "+ a\n\n# h\n\n* b\n",
+  "* a\n+ b\n",
+  "* a\n  + x\n  - y\n",
+  "> * a\n> - b\n",
+  "> * a\n> * b\n",
+  "* --\n",
+  "* good\n\n# separator\n\n* a\n* --\n",
 ];
 
 describe("formatDocument idempotence", () => {
