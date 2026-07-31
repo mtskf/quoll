@@ -102,30 +102,66 @@ jobs:
       - name: Build (webview + extension + esbuild bundle)
         run: pnpm build
 
+      # Assemble the SHIPPED runtime dependency closure in a throwaway staging
+      # tree so the SBOM below reflects what actually ships, not the build-input
+      # graph. A prod-only frozen install yields a node_modules containing
+      # exactly the runtime closure at EXACT resolved versions; the lockfile is
+      # then removed so syft catalogs that node_modules (not the dev entries in
+      # the lock graph — and the residual hidden node_modules/.pnpm/lock.yaml is
+      # named `lock.yaml`, not `pnpm-lock.yaml`, so syft's pnpm-lock cataloger
+      # does not match it). Built in $RUNNER_TEMP (outside the workspace) so it
+      # can never be picked up by the package/audit/attest/publish steps, and it
+      # leaves the workspace node_modules intact — the Package step below still
+      # needs the dev-only vsce. package.json + pnpm-lock.yaml + pnpm-workspace.yaml
+      # (overrides + release-age cooldown) + .npmrc (hoist/registry policy) are
+      # all copied so --frozen-lockfile resolves identically to the real install.
+      - name: Assemble shipped runtime dependency tree (SBOM source)
+        run: |
+          STAGING="$RUNNER_TEMP/sbom-src"
+          rm -rf "$STAGING"
+          mkdir -p "$STAGING"
+          cp package.json pnpm-lock.yaml pnpm-workspace.yaml "$STAGING"/
+          if [ -f .npmrc ]; then cp .npmrc "$STAGING"/; fi
+          ( cd "$STAGING" && pnpm install --prod --frozen-lockfile --ignore-scripts )
+          rm -f "$STAGING/pnpm-lock.yaml"
+
       # Supply-chain transparency. Syft (v1.42.3, baked into the SHA-pinned
       # sbom-action release below; Dependabot bumps the action + its Syft
       # together — so we deliberately do NOT set `syft-version`, which would
-      # drift from that baked default) catalogs the build's dependency graph
-      # into an SPDX SBOM. This is the build-input graph (a superset that covers
-      # every component esbuild bundles into the shipped `dist/`), NOT a
-      # byte-for-byte manifest of the `--no-dependencies` .vsix. Runs only on tag
-      # pushes and never ships in the .vsix.
+      # drift from that baked default) catalogs the staging prod tree into an
+      # SPDX SBOM: the shipped runtime dependency closure at exact resolved
+      # versions, with devDependencies (vitest/biome/@types/*, etc.) excluded.
+      # That SBOM is bound to the .vsix digest by the Attest SBOM step below, so
+      # a consumer verifying the attestation sees only the shipped surface — no
+      # false-positive advisory matches against build-only tooling.
       #
-      # Ordered BEFORE packaging + the .vsix audit on purpose: this is the only
-      # third-party action in the job and shares the runner workspace, so keeping
-      # it ahead of the audit leaves that audit as the true last gate before the
-      # (first-party) attest + publish steps — a compromised action here cannot
-      # mutate an already-audited .vsix. It scans `path: .` (the dependency
-      # graph), so it does not need the packaged .vsix to exist. Release-asset
+      # Scope note: this lists the prod *dependency closure* — a conservative
+      # superset of the esbuild-bundled set (it also lists prod-transitive deps
+      # that get tree-shaken out). A byte-exact bundled SBOM would need a
+      # hand-rolled SPDX generator off the esbuild metafile; deferred as a
+      # future refinement. The verify step below pins the guarantees this SBOM
+      # must hold.
+      #
+      # Ordering: this is the job's ONLY third-party action and still runs
+      # BEFORE Package .vsix, so audit-vsix (below) remains the last gate before
+      # attest + publish — a compromised action here cannot mutate an
+      # already-audited .vsix (none exists yet). It scans the staging tree, not
+      # the workspace, so it does not need the packaged .vsix. Release-asset
       # upload is disabled — this job holds only `contents: read`; the SBOM is
       # kept as the sbom-action workflow artifact instead.
       - name: Generate SBOM (SPDX)
         uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
         with:
-          path: .
+          path: ${{ runner.temp }}/sbom-src
           format: spdx-json
           output-file: sbom.spdx.json
           upload-release-assets: false
+
+      # Gate: fail the release if the SBOM is not scoped to the shipped runtime
+      # (dev tooling leaked in, a declared/known-transitive runtime dep missing,
+      # or non-exact versions). Fail-safe — a misleading attestation never ships.
+      - name: Verify SBOM is scoped to the shipped runtime
+        run: node scripts/verify-sbom-scope.mjs sbom.spdx.json
 
       - name: Package .vsix
         run: pnpm exec vsce package --no-dependencies -o extension.vsix
