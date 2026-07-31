@@ -236,11 +236,13 @@ export function createResizeHandle(deps: ResizeHandleDeps): ResizeHandle {
   el.setAttribute("aria-valuemin", String(MIN_WIDTH_PX));
   el.setAttribute("aria-valuemax", String(MAX_WIDTH_PX));
   el.tabIndex = 0;
-  el.addEventListener("pointerdown", (e) => onResizePointerDown(e));
-  el.addEventListener("pointermove", (e) => onResizePointerMove(e));
-  el.addEventListener("pointerup", (e) => onResizePointerEnd(e));
-  el.addEventListener("pointercancel", (e) => onResizePointerEnd(e));
-  el.addEventListener("keydown", (e) => onResizeKeydown(e));
+  // These handlers are module-local free functions (no `this`), so they bind
+  // directly — no `(e) => fn(e)` forwarding wrapper needed.
+  el.addEventListener("pointerdown", onResizePointerDown);
+  el.addEventListener("pointermove", onResizePointerMove);
+  el.addEventListener("pointerup", onResizePointerEnd);
+  el.addEventListener("pointercancel", onResizePointerEnd);
+  el.addEventListener("keydown", onResizeKeydown);
   // The handle sits over the sidebar's right edge but is a host SIBLING, so
   // moving the pointer from the sidebar onto it fires the sidebar's
   // pointerleave (arming the hover-close) without any sidebar-child re-entry to
