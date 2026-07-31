@@ -24,6 +24,18 @@ export interface RescueContext {
   readonly writeInFlight: boolean;
   /** Another editor (e.g. the built-in text editor / a diff editor) still holds this document. */
   readonly hasSurvivingEditor: boolean;
+  /** Host write capability. INTENTIONALLY the same `canHostWrite` gate as the
+   *  reducer's primary write path (`file:` scheme + writable FS) — the rescue is
+   *  scoped to on-disk `file:` documents, NOT widened to every open-and-
+   *  applyEdit-capable scheme. A non-`file:` doc can only reach the panel via a
+   *  forced `vscode.openWith` / hot-exit restore (never `quoll.editWith`, which
+   *  `canEditWith` blocks) in a trusted, non-virtual workspace, and Quoll does
+   *  not activate in virtual/untrusted workspaces at all
+   *  (`capabilities.virtualWorkspaces/untrustedWorkspaces.supported = false`), so
+   *  the headline vscode-vfs/remote scenario is unreachable. Forking a wider gate
+   *  just for the rescue would mean Quoll refuses every normal write to a scheme
+   *  yet performs a rescue write there — a surprising asymmetry on a security-
+   *  sensitive write path. See docs/LEARNING.md (2026-07-31 non-file rescue scope). */
   readonly canWrite: boolean;
   /** Document text at dispose time (the reverted / on-disk bytes). */
   readonly currentContent: string;
@@ -38,6 +50,9 @@ export interface AliveRevertContext {
   /** A reducer applyEdit was in flight (write lock held). When true the
    *  rescue is skipped so it never races the in-flight apply's landing. */
   readonly writeInFlight: boolean;
+  /** Host write capability — the file-only `canHostWrite` gate. See the note on
+   *  `RescueContext.canWrite` above for why the rescue is not widened past
+   *  `file:` scheme. */
   readonly canWrite: boolean;
   /** Live document text now (the reverted / on-disk bytes). */
   readonly currentContent: string;
