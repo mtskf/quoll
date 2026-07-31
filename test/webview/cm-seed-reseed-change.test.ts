@@ -137,7 +137,7 @@ describe("computeReseedChange — minimal single-span reseed change", () => {
     //    load-bearing regression guard, and the direction matters because
     //    commonRunLength runs the SAME scan both ways: a change at the END of a
     //    line (bigInteriorGrow/Shrink) exercises only the forward prefix scan's
-    //    independent refill; a change at the START of a line (bigInteriorHead*)
+    //    independent refill; a change at the START of a line (revFirstLineHeadGrow)
     //    is needed to exercise the reverse suffix scan's independent refill.
     const rows = Array.from({ length: 300 }, (_, i) => `row ${i} text`);
     const bigBase = rows.join("\n");
