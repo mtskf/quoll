@@ -2,6 +2,12 @@
 
 All notable changes to Quoll are documented here.
 
+## 0.1.64 — 2026-07-31
+
+### Fixed
+
+- The stale-fold clamp (from 0.1.61–0.1.63) now reliably kicks in right after an external change, instead of occasionally missing on the very next update while the document was still being re-parsed.
+
 ## 0.1.63 — 2026-07-31
 
 ### Fixed
