@@ -2,6 +2,12 @@
 
 All notable changes to Quoll are documented here.
 
+## 0.1.65 — 2026-07-31
+
+### Fixed
+
+- Typing a lone `-`/`=` under a paragraph no longer shrinks that paragraph to the default font size when a non-default font-size preset is active.
+
 ## 0.1.64 — 2026-07-31
 
 ### Fixed
