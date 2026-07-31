@@ -570,3 +570,58 @@ describe("shell — init-failure teardown (no leaked pagehide listener)", () => 
     winRemove.mockRestore();
   });
 });
+
+describe("attachTeardownListeners — perf onPageHide rides the after-init set", () => {
+  // These pin the actual leak fix directly, independent of the QUOLL_PERF build
+  // flag: the mountShell integration tests above cannot observe the perf
+  // onPageHide listener because the unit config compiles it out (onPageHide is
+  // null when QUOLL_PERF=false). Driving the seam with an explicit non-null
+  // onPageHide exercises the branch that, in a perf build, must ride the
+  // after-init teardown set rather than a mount-time registration. If the fix
+  // regressed (onPageHide dropped from this set / registered elsewhere), the
+  // first test goes red.
+
+  it("registers onPageHide on pagehide (once) and the remover takes it back off", async () => {
+    const { attachTeardownListeners } = await import("../../src/webview/shell.js");
+    const winAdd = vi.spyOn(window, "addEventListener");
+    const winRemove = vi.spyOn(window, "removeEventListener");
+    const onPageHide = vi.fn();
+    const flushPending = vi.fn();
+    const remove = attachTeardownListeners({
+      onPageHide,
+      flushPending,
+      onVisibilityChange: vi.fn(),
+    });
+    // onPageHide is registered on pagehide with { once: true }.
+    const onPageHideAdds = winAdd.mock.calls.filter(
+      ([type, fn]) => type === "pagehide" && fn === onPageHide
+    );
+    expect(onPageHideAdds.length).toBe(1);
+    expect(onPageHideAdds[0][2]).toEqual({ once: true });
+    // Its fire order precedes flushPending's pagehide listener (perf report,
+    // then flush).
+    const pagehideFns = winAdd.mock.calls
+      .filter(([type]) => type === "pagehide")
+      .map(([, fn]) => fn);
+    expect(pagehideFns.indexOf(onPageHide)).toBeLessThan(pagehideFns.indexOf(flushPending));
+    // The remover unwinds onPageHide symmetrically.
+    remove();
+    expect(
+      winRemove.mock.calls.filter(([type, fn]) => type === "pagehide" && fn === onPageHide).length
+    ).toBe(1);
+    winAdd.mockRestore();
+    winRemove.mockRestore();
+  });
+
+  it("registers no perf pagehide listener when onPageHide is null (the QUOLL_PERF=false build)", async () => {
+    const { attachTeardownListeners } = await import("../../src/webview/shell.js");
+    const winAdd = vi.spyOn(window, "addEventListener");
+    const flushPending = vi.fn();
+    attachTeardownListeners({ onPageHide: null, flushPending, onVisibilityChange: vi.fn() });
+    // Only flushPending's pagehide listener is registered — no extra perf one.
+    const pagehideAdds = winAdd.mock.calls.filter(([type]) => type === "pagehide");
+    expect(pagehideAdds.length).toBe(1);
+    expect(pagehideAdds[0][1]).toBe(flushPending);
+    winAdd.mockRestore();
+  });
+});
