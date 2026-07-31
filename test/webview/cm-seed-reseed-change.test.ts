@@ -174,10 +174,13 @@ describe("computeReseedChange — minimal single-span reseed change", () => {
     // in the dir === -1 pass — the independent-refill state the tail-change cases
     // above never reach in reverse (there the suffix scan diverges at the line's
     // trailing edge). A reverse coupled refill skips the changed head and
-    // spuriously matches lines 149..1 back toward the differing first line, over-
-    // widening the deletion. (A pure interior head-change with an identical first
-    // line does NOT distinguish: the cap `maxPrefix - prefix` would then exactly
-    // equal the correct suffix, leaving no room to overmatch — verified.)
+    // spuriously matches lines 149..1 back toward the differing first line,
+    // collapsing the computed span down to a few chars at the very start while
+    // silently treating the un-verified "HEAD EXTENSION " text as matched suffix
+    // — a correctness bug (wrong reconstructed content), not just a non-minimal
+    // span. (A pure interior head-change with an identical first line does NOT
+    // distinguish: the cap `maxPrefix - prefix` would then exactly equal the
+    // correct suffix, leaving no room to overmatch — verified.)
     const revFirstLineBase = [
       "ZZZ first",
       ...rows.slice(1, 150),
