@@ -291,6 +291,25 @@ describe("reconcileSbomInventory", () => {
     expect(r.ok).toBe(false);
   });
 
+  it("skips non-npm SPDX packages (no-purl root + non-npm purl) via the npm discriminator", () => {
+    // A real SPDX doc carries a no-purl document-root package and may carry
+    // non-npm (e.g. pypi) entries. reconcileSbomInventory must skip both via
+    // npmPackages(); otherwise they'd be misclassified as "unexpected". Pins
+    // the discriminator: iterating sbom.packages directly makes this fail.
+    const r = reconcileSbomInventory({
+      sbom: sbomOf([
+        pkg("@codemirror/state", "6.6.0"),
+        pkg("@lezer/common", "1.5.2"),
+        pkg("crelt", "1.0.6"),
+        nonNpmPkg("some-pylib", ">=1.2"), // pypi purl → skipped
+        { name: "sbom-src", versionInfo: "NOASSERTION", externalRefs: [] }, // no purl → skipped
+      ]),
+      installed,
+    });
+    expect(r.ok).toBe(true);
+    expect(r.errors).toEqual([]);
+  });
+
   it("ignores the staging self-package at its exact version — syft emits the root manifest", () => {
     const r = reconcileSbomInventory({
       sbom: sbomOf([
