@@ -222,21 +222,13 @@ export function createResizeHandle(deps: ResizeHandleDeps): ResizeHandle {
     }
   }
 
-  // Resize handle: a host child (not a sidebar child) pinned to the sidebar's
-  // right edge via `left: var(--quoll-outline-sidebar-width)`. Dragging it
-  // rewrites that var inline on the host, which moves the sidebar edge, the
-  // pinned flex-basis, AND the handle together — one source of truth for the
-  // runtime width. Only interactive while the sidebar is open (CSS gates it).
   // Listeners live on the handle + pointer capture, so a release outside the
   // iframe still ends the drag (pointerup/pointercancel), and destroy() cleans
   // them up.
   const el = document.createElement("div");
   el.className = "quoll-outline-resize-handle";
-  // A focusable WAI-ARIA window splitter (role=separator): pointer drag AND
-  // keyboard (Arrow = nudge by RESIZE_STEP_PX, Home/End = min/max) both rewrite
-  // the width var. aria-value* report the live width to AT; aria-controls ties
-  // it to the sidebar it sizes. Only interactive while open (CSS gates display,
-  // so it drops out of the tab order when closed — matching the inert sidebar).
+  // WAI-ARIA window-splitter role wiring: aria-value* report the live width to
+  // AT; aria-controls ties the separator to the sidebar it sizes.
   el.setAttribute("role", "separator");
   el.setAttribute("aria-orientation", "vertical");
   el.setAttribute("aria-label", "Resize outline sidebar");
