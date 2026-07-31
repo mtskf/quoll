@@ -7,6 +7,7 @@
 // are the parser's Table nodes (filtered against protected ranges), NOT the
 // line-based parseAllTables (which absorbs interrupters / includes list
 // markers — see Decision Log).
+import type { SyntaxNode } from "@lezer/common";
 import { FENCE_LINE } from "../frontmatter.js";
 import { gfmParser } from "../gfm-parser.js";
 
@@ -21,14 +22,30 @@ const PROTECTED_NODES: ReadonlySet<string> = new Set([
 export type Range = { from: number; to: number };
 export type ListMarkInfo = { from: number; to: number; text: string };
 export type OrderedList = { marks: ListMarkInfo[] };
+export type BulletList = { marks: ListMarkInfo[]; adjacencySafe: boolean };
 export type DocClassification = {
   protectedRanges: Range[];
   tableRanges: Range[];
   orderedLists: OrderedList[];
+  bulletLists: BulletList[];
 };
 
 export function rangesIntersect(ranges: readonly Range[], from: number, to: number): boolean {
   return ranges.some((r) => r.from < to && from < r.to);
+}
+
+// The nearest sibling that is a real block, skipping syntactic *Mark nodes
+// (e.g. QuoteMark, which @lezer/markdown interleaves between a blockquote's
+// block children). Direction is "prevSibling" | "nextSibling".
+function nearestBlockSibling(
+  node: SyntaxNode,
+  dir: "prevSibling" | "nextSibling"
+): SyntaxNode | null {
+  let s = node[dir];
+  while (s && s.name.endsWith("Mark")) {
+    s = s[dir];
+  }
+  return s;
 }
 
 function frontmatterRange(source: string): Range | null {
@@ -50,6 +67,7 @@ export function classifyDocument(source: string): DocClassification {
   const protectedRanges: Range[] = [];
   const tableRanges: Range[] = [];
   const orderedLists: OrderedList[] = [];
+  const bulletLists: BulletList[] = [];
 
   const fm = frontmatterRange(source);
   if (fm) {
@@ -88,9 +106,39 @@ export function classifyDocument(source: string): DocClassification {
         }
         return true; // descend so nested ordered lists are visited
       }
+      if (node.name === "BulletList") {
+        if (rangesIntersect(protectedRanges, node.from, node.to)) {
+          return true; // still descend for nested lists outside the protected span
+        }
+        const marks: ListMarkInfo[] = [];
+        for (let item = node.node.firstChild; item; item = item.nextSibling) {
+          if (item.name !== "ListItem") {
+            continue;
+          }
+          const mark = item.firstChild;
+          if (mark && mark.name === "ListMark") {
+            marks.push({ from: mark.from, to: mark.to, text: source.slice(mark.from, mark.to) });
+          }
+        }
+        // A marker-char change is a CommonMark list boundary: a rewrite is
+        // adjacency-safe ONLY when no adjacent BLOCK sibling is another bullet
+        // list (else the two lists would merge / flip tight<->loose). Scan past
+        // *Mark nodes (QuoteMark inside a blockquote) so "> * a\n> - b" is
+        // correctly flagged unsafe. Non-bullet block neighbours (heading/
+        // paragraph/ordered list/none) can never merge with a bullet list. This
+        // is only the fast filter; per-list + combined structure-oracle gates in
+        // bulletUnifyEdits catch thematic-break self-collisions and blind spots.
+        const prev = nearestBlockSibling(node.node, "prevSibling");
+        const next = nearestBlockSibling(node.node, "nextSibling");
+        const adjacencySafe = prev?.name !== "BulletList" && next?.name !== "BulletList";
+        if (marks.length > 0) {
+          bulletLists.push({ marks, adjacencySafe });
+        }
+        return true; // descend so nested bullet lists are visited as their own groups
+      }
       return undefined;
     },
   });
 
-  return { protectedRanges, tableRanges, orderedLists };
+  return { protectedRanges, tableRanges, orderedLists, bulletLists };
 }
