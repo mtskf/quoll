@@ -48,9 +48,11 @@ function nearestBlockSibling(
   return s;
 }
 
-// The ListMark of each direct ListItem child (non-item children — e.g. loose-list
-// blank-line gaps — are skipped). Shared verbatim by the ordered- and bullet-list
-// branches below.
+// Collects the ListMark of each direct ListItem child of a list node. Any
+// non-ListItem child is skipped defensively — the configured @lezer/markdown
+// grammar interleaves no gap/blank-line nodes between items, so this guard is
+// simply robustness against any non-item child the tree might contain. Shared
+// by the ordered- and bullet-list branches below.
 function collectListMarks(list: SyntaxNode, source: string): ListMarkInfo[] {
   const marks: ListMarkInfo[] = [];
   for (let item = list.firstChild; item; item = item.nextSibling) {

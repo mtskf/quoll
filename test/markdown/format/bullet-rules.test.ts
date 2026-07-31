@@ -32,14 +32,16 @@ describe("bulletUnifyEdits", () => {
     expect(run("* good\n\n# separator\n\n* a\n* --\n")).toBe(
       "- good\n\n# separator\n\n* a\n* --\n"
     ));
-  it("fails closed (no-op) when a colliding document exceeds the pessimistic group budget", () => {
-    // >100 separate adjacency-safe bullet lists (heading-separated) + one collision.
-    const lists = Array.from({ length: 101 }, (_, i) => `# h${i}\n\n* item${i}\n`).join("\n");
-    const src = `${lists}\n# collide\n\n* --\n`;
-    expect(edits(src)).toEqual([]); // budget exceeded -> whole rule no-ops
+  it("runs the pessimistic pass at exactly the group budget (boundary, not >)", () => {
+    // 99 safe lists + 1 collision = 100 groups == MAX_PESSIMISTIC_GROUPS (not > it)
+    const safe = Array.from({ length: 99 }, (_, i) => `# h${i}\n\n* item${i}\n`).join("\n");
+    const src = `${safe}\n# collide\n\n* --\n`;
+    expect(edits(src).length).toBeGreaterThan(0); // within budget -> safe lists still unified
   });
-  it("still unifies a colliding document with few groups (within budget)", () => {
-    // sanity: below the budget, the pessimistic path still runs and skips only the collision
-    expect(run("* good\n\n# s\n\n* a\n* --\n")).toBe("- good\n\n# s\n\n* a\n* --\n");
+  it("fails closed one past the group budget", () => {
+    // 100 safe lists + 1 collision = 101 groups > MAX_PESSIMISTIC_GROUPS
+    const safe = Array.from({ length: 100 }, (_, i) => `# h${i}\n\n* item${i}\n`).join("\n");
+    const src = `${safe}\n# collide\n\n* --\n`;
+    expect(edits(src)).toEqual([]);
   });
 });

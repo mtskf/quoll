@@ -17,12 +17,13 @@ import { structureSignature } from "./parse-signature.js";
 import type { BulletList } from "./segment.js";
 
 // Upper bound on the pessimistic pass, which reparses the whole document once
-// per group (~3ms/group). Capping at 100 keeps the worst case ~0.3s so a
-// pathological document cannot block the synchronous Format Document command.
-// Collision-free documents never reach here — they finish on the optimistic
-// path (one extra parse) regardless of how many lists they have — so the cap
-// only bites documents that have very many separate bullet lists AND a
-// collision, which we then fail closed (a safe no-op).
+// per group. Capping at 100 bounds that pass to at most ~102 full-document
+// reparses so its cost no longer scales with the list count. Each reparse is
+// still O(document size), so this caps the list-count multiplier rather than
+// absolute time — for realistic documents that stays well under a second;
+// inputs above the cap fail closed (a safe no-op). Collision-free documents
+// never reach here (they finish on the optimistic single-parse path
+// regardless of list count).
 const MAX_PESSIMISTIC_GROUPS = 100;
 
 export function bulletUnifyEdits(source: string, bulletLists: readonly BulletList[]): Edit[] {
