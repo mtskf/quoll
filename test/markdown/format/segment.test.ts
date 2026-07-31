@@ -70,4 +70,80 @@ describe("classifyDocument", () => {
     expect(rangesIntersect(ranges, 8, 12)).toBe(true); // partial overlap
     expect(rangesIntersect(ranges, 0, 5)).toBe(false); // abutting, no overlap
   });
+
+  it("classifies a standalone bullet list as adjacency-safe", () => {
+    const src = "* a\n* b\n";
+    const lists = classifyDocument(src).bulletLists;
+    expect(lists.length).toBe(1);
+    expect(lists[0].adjacencySafe).toBe(true);
+    expect(lists[0].marks.map((m) => m.text)).toEqual(["*", "*"]);
+  });
+
+  it("marks adjacent (no-blank) different-marker bullet lists as adjacency-unsafe", () => {
+    const lists = classifyDocument("* a\n+ b\n").bulletLists;
+    expect(lists.length).toBe(2);
+    expect(lists.every((l) => l.adjacencySafe === false)).toBe(true);
+  });
+
+  it("marks blank-separated different-marker bullet lists as adjacency-unsafe", () => {
+    const lists = classifyDocument("* a\n\n- b\n").bulletLists;
+    expect(lists.length).toBe(2);
+    expect(lists.every((l) => l.adjacencySafe === false)).toBe(true);
+  });
+
+  it("treats bullet lists separated by a heading as adjacency-safe (not adjacent)", () => {
+    const lists = classifyDocument("* a\n\n# h\n\n- b\n").bulletLists;
+    expect(lists.length).toBe(2);
+    expect(lists.every((l) => l.adjacencySafe === true)).toBe(true);
+  });
+
+  it("treats a bullet list adjacent to a paragraph (no blank line) as adjacency-safe", () => {
+    const lists = classifyDocument("para\n* a\n* b\n").bulletLists;
+    expect(lists[0].adjacencySafe).toBe(true);
+  });
+
+  it("treats a bullet list adjacent to an ordered list (no blank line) as adjacency-safe", () => {
+    const lists = classifyDocument("1. a\n* b\n").bulletLists;
+    expect(lists[0].adjacencySafe).toBe(true);
+  });
+
+  it("classifies nested adjacent bullet lists as adjacency-unsafe, outer as safe", () => {
+    const lists = classifyDocument("- a\n  * x\n  - y\n").bulletLists;
+    // outer (- a ...) is safe; the two nested (* x) / (- y) are adjacent -> unsafe
+    const outer = lists.find(
+      (l) => l.marks.length === 1 && l.marks[0].text === "-" && l.adjacencySafe
+    );
+    expect(outer).toBeTruthy();
+    expect(lists.filter((l) => l.adjacencySafe === false).length).toBe(2);
+  });
+
+  it("marks blockquote-nested adjacent bullet lists as adjacency-unsafe (QuoteMark between)", () => {
+    // Blockquote(QuoteMark, BulletList, QuoteMark, BulletList): the raw sibling is
+    // a QuoteMark, so a naive immediate-sibling check would wrongly say "safe".
+    const lists = classifyDocument("> * a\n> - b\n").bulletLists;
+    expect(lists.length).toBe(2);
+    expect(lists.every((l) => l.adjacencySafe === false)).toBe(true);
+  });
+
+  it("marks blockquote bullet lists separated by a paragraph as adjacency-safe", () => {
+    const lists = classifyDocument("> * a\n>\n> text\n>\n> - b\n").bulletLists;
+    expect(lists.length).toBe(2);
+    expect(lists.every((l) => l.adjacencySafe === true)).toBe(true);
+  });
+
+  it("marks deeply-blockquoted adjacent bullet lists as adjacency-unsafe (2x QuoteMark)", () => {
+    // Blockquote(QuoteMark, Blockquote(QuoteMark, BulletList, QuoteMark, QuoteMark,
+    // BulletList)) — TWO consecutive QuoteMark nodes sit between the lists, so
+    // nearestBlockSibling must skip a run of marks, not just one. This asserts the
+    // classifier directly (the parse-identity corpus alone would pass even if the
+    // combined backstop merely returned []).
+    const lists = classifyDocument("> > * a\n> > - b\n").bulletLists;
+    expect(lists.length).toBe(2);
+    expect(lists.every((l) => l.adjacencySafe === false)).toBe(true);
+  });
+
+  it("excludes a bullet list inside frontmatter", () => {
+    const src = "---\n* a\n* b\n---\n\nbody\n";
+    expect(classifyDocument(src).bulletLists).toEqual([]);
+  });
 });
