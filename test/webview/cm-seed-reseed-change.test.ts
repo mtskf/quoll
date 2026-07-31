@@ -115,7 +115,7 @@ describe("computeReseedChange — minimal single-span reseed change", () => {
   // cannot catch a non-minimal span (it hides inside `insert`), so assert
   // from/to/insert against the reference too.
   it("stays byte-for-byte in lockstep with the shared string core", () => {
-    const bigA = `${Array.from({ length: 4000 }, (_, i) => `line ${i} alpha`).join("\n")}`;
+    const bigA = Array.from({ length: 4000 }, (_, i) => `line ${i} alpha`).join("\n");
     // Diverge deep inside the doc so both the common prefix and suffix span many
     // leaf chunks (a Text of this size is a multi-node tree, not one leaf).
     const bigB = bigA.replace("line 2000 alpha", "line 2000 BRAVO");
