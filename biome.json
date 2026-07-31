@@ -13,6 +13,7 @@
       "test/**/*.tsx",
       "*.json",
       "vitest.config.ts",
+      "vitest.browser.config.ts",
       "esbuild.config.mjs",
       "scripts/**/*.mjs",
       "test/extension/build.mjs"
