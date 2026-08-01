@@ -165,9 +165,9 @@ describe("quollVisibleEdgeRecovery — lifecycle + capture guards", () => {
     expect(dispatch).toHaveBeenCalledTimes(1); // kept snapshot restored now
   });
 
-  it("at the wait cap with still-ramping geometry, the heal dispatches but the good snapshot stays quarantined until the width settles", async () => {
+  it("at the wait cap with still-ramping geometry, the heal dispatches but the good snapshot stays quarantined — however long the ramp runs — until the width settles", async () => {
     stubVisibility();
-    const v = mount(20); // cap fires while the ramp is still running
+    const v = mount(6); // small cap: it fires while the ramp is still running
     scrollTick(v); // arm the good snapshot at stable width (500)
     await frames(2);
     const snap = vi.spyOn(v, "scrollSnapshot");
@@ -176,20 +176,45 @@ describe("quollVisibleEdgeRecovery — lifecycle + capture guards", () => {
     widthRamping = true; // width changes every read → stability never reached → cap
     setVisibility("visible");
     await until(() => dispatch.mock.calls.length > 0); // cap fired: heal dispatched
-    // The ramp continues well past the (2-frame) thaw window. A scroll now must
-    // NOT be captured — resuming rolling capture here would overwrite the good
-    // snapshot with one taken at degenerate mid-ramp geometry (the bug).
-    await frames(5);
+    // The ramp continues for far longer than maxWaitFrames (6). A scroll now
+    // must NOT be captured — resuming rolling capture here would overwrite the
+    // good snapshot with one taken at degenerate mid-ramp geometry (the bug),
+    // and the quarantine must NOT give up just because the ramp outran the cap.
+    await frames(14);
     scrollTick(v);
     await frames(2);
     expect(snap).not.toHaveBeenCalled(); // quarantined: no mid-ramp capture
-    // Width settles → the stability-gated thaw lifts the freeze → capture resumes.
+    // Width settles → the stability-gated watch lifts the freeze → capture resumes.
     widthRamping = false; // clientWidth pins to 500
     await until(() => {
       scrollTick(v);
       return snap.mock.calls.length > 0;
     });
     expect(snap).toHaveBeenCalled();
+  });
+
+  it("a hidden edge during the cap-path quarantine cancels the watch, keeps the freeze, and the kept snapshot serves the next edge", async () => {
+    stubVisibility();
+    const v = mount(20);
+    scrollTick(v); // arm the good snapshot at stable width (500)
+    await frames(2);
+    const snap = vi.spyOn(v, "scrollSnapshot");
+    const dispatch = vi.spyOn(v, "dispatch");
+    setVisibility("hidden");
+    widthRamping = true; // never settles → cap → quarantine (thawWhenStable watching)
+    setVisibility("visible");
+    await until(() => dispatch.mock.calls.length > 0); // cap fired: quarantine active
+    // A hidden edge lands mid-quarantine: cancelWait() ends the watch and the
+    // freeze persists — a scroll during the flap must not be captured.
+    setVisibility("hidden");
+    scrollTick(v);
+    await frames(3);
+    expect(snap).not.toHaveBeenCalled(); // frozen persisted through the flap
+    // Next visible edge with settled width re-dispatches the kept good snapshot.
+    widthRamping = false;
+    setVisibility("visible");
+    await until(() => dispatch.mock.calls.length === 2);
+    expect(dispatch).toHaveBeenCalledTimes(2);
   });
 
   it("destroy cancels the wait loop and the queued capture (no late dispatch/measure/snapshot)", async () => {

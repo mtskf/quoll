@@ -40,10 +40,10 @@
 //         but NOT stability) and overwrite the good pre-hide snapshot with one
 //         anchored to degenerate mid-ramp geometry, so the recovery poisons its
 //         own state under sustained resize + CPU load. Instead we QUARANTINE the
-//         snapshot: keep the freeze until the width is stable for STABLE_FRAMES
-//         (thawWhenStable()), bounded by maxWaitFrames — past which the freeze is
-//         left in place (snapshot preserved for the next edge) rather than
-//         resuming capture at unstable geometry.
+//         snapshot: keep the freeze and WATCH until the width is stable for
+//         STABLE_FRAMES (thawWhenStable()), however long the ramp runs, then
+//         resume capture. A hidden edge or destroy() ends the watch with the
+//         freeze (and the kept snapshot) intact for the next visible edge.
 // Note ScrollTarget.clip() clamps to the doc length at application time, so
 // even a stale snapshot cannot throw — mapping is about position correctness.
 // Pure view chrome: no document mutation, no write-lock, no protocol message.
@@ -73,6 +73,14 @@ const STABLE_FRAMES = 3;
 /** Frames the freeze outlives the restore dispatch (see header). Overridable
  *  for tests only — the thaw branches are frame-races at the default. */
 const DEFAULT_THAW_FRAMES = 2;
+
+/** Advance the consecutive-stable-frame counter for one width sample: reset to
+ *  0 on a zero or changed width, otherwise increment. Shared by the visible-edge
+ *  wait (beginWait) and the cap-path quarantine (thawWhenStable) so the two
+ *  decision points can never silently disagree on what "settled" means. */
+function nextStableCount(width: number, lastWidth: number, stable: number): number {
+  return width > 0 && width === lastWidth ? stable + 1 : 0;
+}
 
 class VisibleEdgeRecovery implements PluginValue {
   /** Last good scroll snapshot (rolling; mapped through doc changes). */
@@ -165,7 +173,7 @@ class VisibleEdgeRecovery implements PluginValue {
       this.waitFrame = 0;
       frames += 1;
       const width = this.view.scrollDOM.clientWidth;
-      stable = width > 0 && width === lastWidth ? stable + 1 : 0;
+      stable = nextStableCount(width, lastWidth, stable);
       lastWidth = width;
       const settled = stable >= STABLE_FRAMES;
       if (settled || frames >= this.maxWaitFrames) {
@@ -185,8 +193,9 @@ class VisibleEdgeRecovery implements PluginValue {
   }
 
   /** Dispatch the snapshot (when geometry is live) — restoring the correct
-   *  document line to the viewport top — and force a measure at the now-settled
-   *  geometry, which collapses the stale viewport-sized .cm-gap so content
+   *  document line to the viewport top — and force a measure at the CURRENT
+   *  geometry (settled, or — on the cap paths below — not; requestMeasure() is
+   *  unconditional), which collapses the stale viewport-sized .cm-gap so content
    *  renders (the "text disappeared" symptom). NOTE: requestMeasure() only
    *  re-measures the VIEWPORT; the height oracle's inflated OFF-SCREEN estimate
    *  is not rebuilt here (CM 6.43.0 exposes no full-heightmap-rebuild call short
@@ -251,29 +260,28 @@ class VisibleEdgeRecovery implements PluginValue {
    *  stability, so a scroll fired by the continuing ramp would overwrite the
    *  good pre-hide snapshot with one anchored to degenerate mid-ramp geometry —
    *  the recovery poisoning its own state under sustained resize + CPU load.
-   *  So keep frozen (and the good snapshot) until clientWidth is live and stable
-   *  for STABLE_FRAMES. Rides the shared waitFrame slot, so a hidden edge cancels
-   *  it and the freeze persists, exactly like thaw(). Bounded by maxWaitFrames:
-   *  if geometry never settles within the budget we LEAVE the freeze in place
-   *  (preserving the good snapshot, the module's conservative give-up stance) —
-   *  rolling capture then stays parked until the next visible edge re-runs
-   *  beginWait/restore and thaws cleanly. */
+   *  So keep frozen (and the good snapshot) and WATCH until clientWidth is live
+   *  and stable for STABLE_FRAMES, however long the ramp runs, then thaw. Unlike
+   *  beginWait there is deliberately NO frame cap: nothing user-visible is
+   *  blocked here (the heal already dispatched), so capping the watch would only
+   *  strand rolling capture at the pre-hide position — a later hidden→visible
+   *  cycle would then restore a snapshot the user has since scrolled away from.
+   *  Capture must resume the instant geometry is trustworthy and not before.
+   *  Rides the shared waitFrame slot, so a hidden edge (cancelWait) or destroy()
+   *  ends the watch with the freeze — and the kept snapshot — intact for the
+   *  next visible edge; a real resize always settles, so the watch terminates in
+   *  practice. */
   private thawWhenStable(): void {
-    let frames = 0;
     let lastWidth = -1;
     let stable = 0;
     const tick = (): void => {
       this.waitFrame = 0;
-      frames += 1;
       const width = this.view.scrollDOM.clientWidth;
-      stable = width > 0 && width === lastWidth ? stable + 1 : 0;
+      stable = nextStableCount(width, lastWidth, stable);
       lastWidth = width;
       if (stable >= STABLE_FRAMES) {
         this.frozen = false; // geometry finally steady: safe to roll again
         return;
-      }
-      if (frames >= this.maxWaitFrames) {
-        return; // never settled: keep frozen + the good snapshot for next edge
       }
       this.waitFrame = requestAnimationFrame(tick);
     };
