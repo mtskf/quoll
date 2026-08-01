@@ -41,9 +41,12 @@
 //         anchored to degenerate mid-ramp geometry, so the recovery poisons its
 //         own state under sustained resize + CPU load. Instead we QUARANTINE the
 //         snapshot: keep the freeze and WATCH until the width is stable for
-//         STABLE_FRAMES (thawWhenStable()), however long the ramp runs, then
-//         resume capture. A hidden edge or destroy() ends the watch with the
-//         freeze (and the kept snapshot) intact for the next visible edge.
+//         STABLE_FRAMES (thawWhenStable()), then resume capture. The watch is
+//         bounded by maxWaitFrames (never an unbounded rAF); on expiry we stop
+//         and LEAVE the freeze and the kept snapshot in place, so the next
+//         visible edge can still restore the pre-hide position. A hidden edge
+//         cancels the watch and keeps the freeze for that next edge; destroy()
+//         also cancels it but tears the instance down — there is no next edge.
 // Note ScrollTarget.clip() clamps to the doc length at application time, so
 // even a stale snapshot cannot throw — mapping is about position correctness.
 // Pure view chrome: no document mutation, no write-lock, no protocol message.
@@ -259,29 +262,38 @@ class VisibleEdgeRecovery implements PluginValue {
    *  capture yet: refreshSnapshot() guards on clientWidth>0 but not on
    *  stability, so a scroll fired by the continuing ramp would overwrite the
    *  good pre-hide snapshot with one anchored to degenerate mid-ramp geometry —
-   *  the recovery poisoning its own state under sustained resize + CPU load.
-   *  So keep frozen (and the good snapshot) and WATCH until clientWidth is live
-   *  and stable for STABLE_FRAMES, however long the ramp runs, then thaw. Unlike
-   *  beginWait there is deliberately NO frame cap: nothing user-visible is
-   *  blocked here (the heal already dispatched), so capping the watch would only
-   *  strand rolling capture at the pre-hide position — a later hidden→visible
-   *  cycle would then restore a snapshot the user has since scrolled away from.
-   *  Capture must resume the instant geometry is trustworthy and not before.
-   *  Rides the shared waitFrame slot, so a hidden edge (cancelWait) or destroy()
-   *  ends the watch with the freeze — and the kept snapshot — intact for the
-   *  next visible edge; a real resize always settles, so the watch terminates in
-   *  practice. */
+   *  the recovery poisoning its own state under sustained resize + CPU load. So
+   *  keep frozen (and the good snapshot) and watch until clientWidth is live and
+   *  stable for STABLE_FRAMES, then thaw. BOUNDED by maxWaitFrames so this can
+   *  never become an unbounded rAF: if geometry still hasn't settled after the
+   *  budget we stop polling and LEAVE the freeze — and the kept snapshot — in
+   *  place (the module's conservative give-up stance), so rolling capture stays
+   *  parked until the next visible edge re-runs beginWait/restore and thaws
+   *  cleanly, with the pre-hide position still available to restore. We KEEP,
+   *  not invalidate, the snapshot on expiry: the common case is a webview that
+   *  was simply dead/narrow for the whole budget and then recovers, where
+   *  restoring the pre-hide position is exactly the win; the residual case (the
+   *  user scrolled somewhere new during a never-settling frozen window and a
+   *  later edge restores the old spot) is rare and clip-safe. Rides the shared
+   *  waitFrame slot: a hidden edge (cancelWait) keeps the freeze for the next
+   *  visible edge; destroy() (also cancelWait) instead tears the instance down —
+   *  there is no next edge to serve, the loop is simply cancelled. */
   private thawWhenStable(): void {
+    let frames = 0;
     let lastWidth = -1;
     let stable = 0;
     const tick = (): void => {
       this.waitFrame = 0;
+      frames += 1;
       const width = this.view.scrollDOM.clientWidth;
       stable = nextStableCount(width, lastWidth, stable);
       lastWidth = width;
       if (stable >= STABLE_FRAMES) {
         this.frozen = false; // geometry finally steady: safe to roll again
         return;
+      }
+      if (frames >= this.maxWaitFrames) {
+        return; // never settled within the budget: keep the freeze + snapshot
       }
       this.waitFrame = requestAnimationFrame(tick);
     };
