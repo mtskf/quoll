@@ -12,11 +12,19 @@ import { quollVisibleEdgeRecovery } from "../../src/webview/cm/visible-edge-reco
 let view: EditorView | undefined;
 let visState: DocumentVisibilityState = "visible";
 let width = 0;
+/** When true, clientWidth returns a fresh value on every read, so the wait
+ *  loop's `width === lastWidth` stability check can never accumulate — it
+ *  simulates the pinned-outline splitview width-ramp that never settles within
+ *  the frame budget (the cap-path scenario). */
+let widthRamping = false;
+let widthReads = 0;
 
 afterEach(() => {
   view?.destroy();
   view = undefined;
   delete (document as { visibilityState?: unknown }).visibilityState;
+  widthRamping = false;
+  widthReads = 0;
   vi.restoreAllMocks();
 });
 
@@ -44,7 +52,15 @@ function mount(maxWaitFrames: number, thawFrames = 2): EditorView {
   });
   Object.defineProperty(view.scrollDOM, "clientWidth", {
     configurable: true,
-    get: () => width,
+    // While ramping, every read returns a fresh non-zero value so the wait
+    // loop never sees STABLE_FRAMES consecutive equal widths (mid-ramp cap).
+    get: (): number => {
+      if (!widthRamping) {
+        return width;
+      }
+      widthReads += 1;
+      return 400 + widthReads;
+    },
   });
   return view;
 }
@@ -147,6 +163,33 @@ describe("quollVisibleEdgeRecovery — lifecycle + capture guards", () => {
     setVisibility("visible");
     await frames(12); // wait (≈4) + thaw with margin
     expect(dispatch).toHaveBeenCalledTimes(1); // kept snapshot restored now
+  });
+
+  it("at the wait cap with still-ramping geometry, the heal dispatches but the good snapshot stays quarantined until the width settles", async () => {
+    stubVisibility();
+    const v = mount(20); // cap fires while the ramp is still running
+    scrollTick(v); // arm the good snapshot at stable width (500)
+    await frames(2);
+    const snap = vi.spyOn(v, "scrollSnapshot");
+    const dispatch = vi.spyOn(v, "dispatch");
+    setVisibility("hidden");
+    widthRamping = true; // width changes every read → stability never reached → cap
+    setVisibility("visible");
+    await until(() => dispatch.mock.calls.length > 0); // cap fired: heal dispatched
+    // The ramp continues well past the (2-frame) thaw window. A scroll now must
+    // NOT be captured — resuming rolling capture here would overwrite the good
+    // snapshot with one taken at degenerate mid-ramp geometry (the bug).
+    await frames(5);
+    scrollTick(v);
+    await frames(2);
+    expect(snap).not.toHaveBeenCalled(); // quarantined: no mid-ramp capture
+    // Width settles → the stability-gated thaw lifts the freeze → capture resumes.
+    widthRamping = false; // clientWidth pins to 500
+    await until(() => {
+      scrollTick(v);
+      return snap.mock.calls.length > 0;
+    });
+    expect(snap).toHaveBeenCalled();
   });
 
   it("destroy cancels the wait loop and the queued capture (no late dispatch/measure/snapshot)", async () => {
