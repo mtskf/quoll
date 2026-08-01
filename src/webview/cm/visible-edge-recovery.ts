@@ -28,11 +28,25 @@
 //     (not just non-zero) before restoring — restoring mid-ramp would re-anchor
 //     to an intermediate degenerate width. At the cap with dead geometry the
 //     dispatch is skipped and the snapshot KEPT for the next visible edge.
-//   - the freeze lifts TWO FRAMES after the restore (same waitFrame slot, so
-//     a hidden edge during the thaw cancels it and stays frozen): CM applies
-//     a snapshot scroll on its next measure, not synchronously in dispatch,
-//     and that programmatic scroll echo must not be re-captured while the
-//     heightmap may still be settling.
+//   - how the freeze lifts depends on WHY the wait ended:
+//       · SETTLED (width stable): lift TWO FRAMES after the restore (thaw()).
+//         CM applies the snapshot scroll on its next measure, not synchronously
+//         in dispatch, and that programmatic scroll echo must not be re-captured
+//         while the heightmap may still be settling. Two frames is enough here
+//         because the echo does not move clientWidth.
+//       · FRAME CAP with UNSETTLED geometry (width still ramping, or dead): the
+//         two-frame thaw is NOT enough — if the ramp keeps going after the thaw,
+//         a scroll it fires would hit refreshSnapshot (which guards clientWidth>0
+//         but NOT stability) and overwrite the good pre-hide snapshot with one
+//         anchored to degenerate mid-ramp geometry, so the recovery poisons its
+//         own state under sustained resize + CPU load. Instead we QUARANTINE the
+//         snapshot: keep the freeze and WATCH until the width is stable for
+//         STABLE_FRAMES (thawWhenStable()), then resume capture. The watch is
+//         bounded by maxWaitFrames (never an unbounded rAF); on expiry we stop
+//         and LEAVE the freeze and the kept snapshot in place, so the next
+//         visible edge can still restore the pre-hide position. A hidden edge
+//         cancels the watch and keeps the freeze for that next edge; destroy()
+//         also cancels it but tears the instance down — there is no next edge.
 // Note ScrollTarget.clip() clamps to the doc length at application time, so
 // even a stale snapshot cannot throw — mapping is about position correctness.
 // Pure view chrome: no document mutation, no write-lock, no protocol message.
@@ -62,6 +76,14 @@ const STABLE_FRAMES = 3;
 /** Frames the freeze outlives the restore dispatch (see header). Overridable
  *  for tests only — the thaw branches are frame-races at the default. */
 const DEFAULT_THAW_FRAMES = 2;
+
+/** Advance the consecutive-stable-frame counter for one width sample: reset to
+ *  0 on a zero or changed width, otherwise increment. Shared by the visible-edge
+ *  wait (beginWait) and the cap-path quarantine (thawWhenStable) so the two
+ *  decision points can never silently disagree on what "settled" means. */
+function nextStableCount(width: number, lastWidth: number, stable: number): number {
+  return width > 0 && width === lastWidth ? stable + 1 : 0;
+}
 
 class VisibleEdgeRecovery implements PluginValue {
   /** Last good scroll snapshot (rolling; mapped through doc changes). */
@@ -154,10 +176,11 @@ class VisibleEdgeRecovery implements PluginValue {
       this.waitFrame = 0;
       frames += 1;
       const width = this.view.scrollDOM.clientWidth;
-      stable = width > 0 && width === lastWidth ? stable + 1 : 0;
+      stable = nextStableCount(width, lastWidth, stable);
       lastWidth = width;
-      if (stable >= STABLE_FRAMES || frames >= this.maxWaitFrames) {
-        this.restore(width > 0);
+      const settled = stable >= STABLE_FRAMES;
+      if (settled || frames >= this.maxWaitFrames) {
+        this.restore(width > 0, settled);
         return;
       }
       this.waitFrame = requestAnimationFrame(tick);
@@ -173,8 +196,9 @@ class VisibleEdgeRecovery implements PluginValue {
   }
 
   /** Dispatch the snapshot (when geometry is live) — restoring the correct
-   *  document line to the viewport top — and force a measure at the now-settled
-   *  geometry, which collapses the stale viewport-sized .cm-gap so content
+   *  document line to the viewport top — and force a measure at the CURRENT
+   *  geometry (settled, or — on the cap paths below — not; requestMeasure() is
+   *  unconditional), which collapses the stale viewport-sized .cm-gap so content
    *  renders (the "text disappeared" symptom). NOTE: requestMeasure() only
    *  re-measures the VIEWPORT; the height oracle's inflated OFF-SCREEN estimate
    *  is not rebuilt here (CM 6.43.0 exposes no full-heightmap-rebuild call short
@@ -184,9 +208,12 @@ class VisibleEdgeRecovery implements PluginValue {
    *  CM's own design, and the pre-existing "scrolling fixes it" the user saw.
    *  The user-visible win: content is at the right place immediately, not blank.
    *  Skipping with dead geometry KEEPS the snapshot so the next visible edge can
-   *  retry. Ends by scheduling the thaw (the freeze must outlive the restore's
-   *  own scroll echo — see header). */
-  private restore(live: boolean): void {
+   *  retry. Ends by scheduling the thaw appropriate to WHY we stopped waiting:
+   *  `settled` (geometry stable) uses the short fixed thaw that just outlives
+   *  the restore's own scroll echo; a frame-cap stop with UNSETTLED geometry
+   *  (live-but-still-ramping OR dead) instead quarantines the snapshot via
+   *  thawWhenStable() — see header + that method. */
+  private restore(live: boolean, settled: boolean): void {
     if (live && this.snapshot) {
       // A scroll effect is pure view state: no doc change, no undo entry, no
       // edit-sync post (docChanged=false on the resulting update). Dispatch
@@ -203,12 +230,18 @@ class VisibleEdgeRecovery implements PluginValue {
       );
     }
     this.view.requestMeasure();
-    this.thaw();
+    if (settled) {
+      this.thaw();
+    } else {
+      this.thawWhenStable();
+    }
   }
 
-  /** Lift the freeze thawFrames after the restore. Rides the same waitFrame
-   *  slot as beginWait, so a hidden edge mid-thaw cancels it and the freeze
-   *  (and the kept snapshot) persists for the next visible edge. */
+  /** Lift the freeze thawFrames after a SETTLED restore. Rides the same
+   *  waitFrame slot as beginWait, so a hidden edge mid-thaw cancels it and the
+   *  freeze (and the kept snapshot) persists for the next visible edge. Safe
+   *  because geometry is already stable: the only scroll it must outlive is the
+   *  restore's own programmatic echo, which does not move clientWidth. */
   private thaw(): void {
     let frames = 0;
     const tick = (): void => {
@@ -217,6 +250,50 @@ class VisibleEdgeRecovery implements PluginValue {
       if (frames >= this.thawFrames) {
         this.frozen = false;
         return;
+      }
+      this.waitFrame = requestAnimationFrame(tick);
+    };
+    this.waitFrame = requestAnimationFrame(tick);
+  }
+
+  /** Lift the freeze only once geometry has actually SETTLED — the cap-path
+   *  quarantine. We reached restore at the frame cap with the width still
+   *  ramping (or dead), so we dispatched the heal but must NOT resume rolling
+   *  capture yet: refreshSnapshot() guards on clientWidth>0 but not on
+   *  stability, so a scroll fired by the continuing ramp would overwrite the
+   *  good pre-hide snapshot with one anchored to degenerate mid-ramp geometry —
+   *  the recovery poisoning its own state under sustained resize + CPU load. So
+   *  keep frozen (and the good snapshot) and watch until clientWidth is live and
+   *  stable for STABLE_FRAMES, then thaw. BOUNDED by maxWaitFrames so this can
+   *  never become an unbounded rAF: if geometry still hasn't settled after the
+   *  budget we stop polling and LEAVE the freeze — and the kept snapshot — in
+   *  place (the module's conservative give-up stance), so rolling capture stays
+   *  parked until the next visible edge re-runs beginWait/restore and thaws
+   *  cleanly, with the pre-hide position still available to restore. We KEEP,
+   *  not invalidate, the snapshot on expiry: the common case is a webview that
+   *  was simply dead/narrow for the whole budget and then recovers, where
+   *  restoring the pre-hide position is exactly the win; the residual case (the
+   *  user scrolled somewhere new during a never-settling frozen window and a
+   *  later edge restores the old spot) is rare and clip-safe. Rides the shared
+   *  waitFrame slot: a hidden edge (cancelWait) keeps the freeze for the next
+   *  visible edge; destroy() (also cancelWait) instead tears the instance down —
+   *  there is no next edge to serve, the loop is simply cancelled. */
+  private thawWhenStable(): void {
+    let frames = 0;
+    let lastWidth = -1;
+    let stable = 0;
+    const tick = (): void => {
+      this.waitFrame = 0;
+      frames += 1;
+      const width = this.view.scrollDOM.clientWidth;
+      stable = nextStableCount(width, lastWidth, stable);
+      lastWidth = width;
+      if (stable >= STABLE_FRAMES) {
+        this.frozen = false; // geometry finally steady: safe to roll again
+        return;
+      }
+      if (frames >= this.maxWaitFrames) {
+        return; // never settled within the budget: keep the freeze + snapshot
       }
       this.waitFrame = requestAnimationFrame(tick);
     };
