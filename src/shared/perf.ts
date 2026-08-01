@@ -11,6 +11,18 @@
 // `if (QUOLL_PERF)`, which esbuild folds + dead-codes in production. perfRecord
 // stays ungated so the unit suite exercises the aggregation regardless of the
 // flag (vitest defines QUOLL_PERF=false).
+//
+// TESTING CONVENTION for `if (QUOLL_PERF)`-gated code (standing decision):
+// every test build defines QUOLL_PERF=false, so gated branches fold to no-op /
+// null and are NOT unit-observable. We do NOT maintain a dedicated
+// `QUOLL_PERF=true` vitest project. Instead, when a perf gate sits next to a
+// load-bearing invariant, extract that invariant into a QUOLL_PERF-agnostic
+// seam that takes the perf callback as a `(() => void) | null` argument, and
+// unit-test the non-null branch directly (canonical example:
+// `attachTeardownListeners` in src/webview/shell.ts, PR #305). The residual
+// call-site wiring of the ternary is dev-only (its only failure mode is a
+// missing perf log line) and is covered by manual smoke in a perf build.
+// Full reasoning + when to revisit: .claude/docs/LEARNING.md (2026-08-01 entry).
 
 /** Per-stage rolled-up timing, all in milliseconds. */
 export type StageSummary = {
