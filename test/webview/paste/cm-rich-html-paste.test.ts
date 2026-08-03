@@ -63,11 +63,11 @@ describe("richHtmlPaste — handler", () => {
     expect(view.state.doc.toString()).toBe("# Title\n\n**hi**\n");
     view.destroy();
   });
-  it("blank-line separates a fragment pasted mid-content", () => {
+  it("blank-line separates a converted fragment pasted mid-content", () => {
     const view = mount("helloworld");
     view.dispatch({ selection: { anchor: 5 } });
-    firePaste(view, { html: "<p>mid</p>", text: "mid" });
-    expect(view.state.doc.toString()).toBe("hello\n\nmid\n\nworld");
+    firePaste(view, { html: "<p><strong>mid</strong></p>", text: "mid" });
+    expect(view.state.doc.toString()).toBe("hello\n\n**mid**\n\nworld");
     view.destroy();
   });
   it("composes prose + table on a mixed fragment", () => {
@@ -98,7 +98,7 @@ describe("richHtmlPaste — handler", () => {
   });
   it("swallows a rich paste in a read-only editor without inserting", () => {
     const view = mount("", false);
-    const event = firePaste(view, { html: "<p>hi</p>", text: "hi" });
+    const event = firePaste(view, { html: "<p><strong>hi</strong></p>", text: "hi" });
     expect(event.defaultPrevented).toBe(true);
     expect(view.state.doc.toString()).toBe("");
     view.destroy();
@@ -215,6 +215,81 @@ describe("richHtmlPaste — handler", () => {
     const event = firePaste(view, { html: "<p>   </p>" }); // whitespace-only, no text
     expect(event.defaultPrevented).toBe(true); // we consume it (not a defer) → reliable
     expect(view.state.doc.toString()).toBe("```\nfoo\n```"); // selection untouched
+    view.destroy();
+  });
+});
+
+describe("richHtmlPaste — plain-text-like fragments defer", () => {
+  // The reported bug: a plain Markdown checklist copied out of a text editor
+  // arrives with a presentational `text/html` flavour. Converting it escaped the
+  // user's own markers and merged the blank-line-separated items.
+  const CHECKLIST_HTML =
+    '<div style="color:#ccc"><div><span>- [ ] first</span></div><br>' +
+    "<div><span>- [ ] second</span></div></div>";
+  const CHECKLIST_PLAIN = "- [ ] first\n\n- [ ] second";
+
+  it("inserts the clipboard's plain text verbatim, unescaped and unmerged", () => {
+    const view = mount("");
+    firePaste(view, { html: CHECKLIST_HTML, text: CHECKLIST_PLAIN });
+    expect(view.state.doc.toString()).toBe(CHECKLIST_PLAIN);
+    view.destroy();
+  });
+
+  it("still converts when the fragment carries real Markdown syntax", () => {
+    const view = mount("");
+    const event = firePaste(view, {
+      html: "<p>Hello <strong>bold</strong> - [ ] not a task</p>",
+      text: "Hello bold - [ ] not a task",
+    });
+    expect(event.defaultPrevented).toBe(true);
+    // The deliberate escaping is intact: the stray task marker stays literal.
+    expect(view.state.doc.toString()).toBe("Hello **bold** - \\[ \\] not a task\n");
+    view.destroy();
+  });
+
+  it("converts a syntax-free fragment when there is no text/plain to fall back to", () => {
+    const view = mount("");
+    const event = firePaste(view, { html: "<p>only html</p>" });
+    expect(event.defaultPrevented).toBe(true);
+    expect(view.state.doc.toString()).toBe("only html\n");
+    view.destroy();
+  });
+
+  it("pastes text that merely LOOKS like Markdown as Markdown (accepted trade-off)", () => {
+    // Deliberate, and the sharpest edge of this design — see "The objection" in
+    // the plan. A `<p>` holding literal `# Release notes` is not rich content, so
+    // the user's own bytes go in verbatim and the heading activates, exactly as it
+    // already does when the source app attaches no `text/html` flavour at all.
+    // Change this expectation only with a matching decision record.
+    const view = mount("");
+    firePaste(view, { html: "<p># Release notes</p>", text: "# Release notes" });
+    expect(view.state.doc.toString()).toBe("# Release notes");
+    view.destroy();
+  });
+
+  it("stays inert in a read-only editor on the defer path too", () => {
+    // The defer returns BEFORE the handler's own canWrite() check, so read-only
+    // safety on this path is inherited from CM's builtin paste handler, which
+    // early-returns on view.state.readOnly. That is only sound because
+    // EditorState.readOnly / EditorView.editable (the `editableComp` compartment
+    // in editor.ts) are reconfigured from the SAME `canWrite` wire value that
+    // feeds opts.canWrite() — see the identical note in html-table-paste.ts.
+    // Pin it, so decoupling the two shows up as a red test rather than a
+    // read-only document silently accepting a paste.
+    const view = mount("", false);
+    firePaste(view, { html: CHECKLIST_HTML, text: CHECKLIST_PLAIN });
+    expect(view.state.doc.toString()).toBe("");
+    view.destroy();
+  });
+
+  it("inserts a plain-text-shaped fragment inline at the caret, without block framing", () => {
+    // Deliberate behaviour change (see "Behaviour change" below): block framing
+    // is for CONVERTED rich content. A clipboard that is really just the word
+    // "mid" must land where the caret is, exactly as a no-`text/html` paste does.
+    const view = mount("helloworld");
+    view.dispatch({ selection: { anchor: 5 } });
+    firePaste(view, { html: "<p>mid</p>", text: "mid" });
+    expect(view.state.doc.toString()).toBe("hellomidworld");
     view.destroy();
   });
 });

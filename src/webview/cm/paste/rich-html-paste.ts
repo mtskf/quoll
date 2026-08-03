@@ -66,10 +66,37 @@ export function richHtmlPaste(opts: { canWrite: () => boolean }): Extension {
           event.preventDefault();
           return true;
         }
-        const md = htmlToMarkdown(html);
-        if (md === null) {
+        const converted = htmlToMarkdown(html);
+        if (converted === null) {
           return false; // nothing convertible / cap breached → defer to plain paste
         }
+        // The conversion emitted escaped text and line structure only — no
+        // emphasis / link / code / heading / list / quote / table / rule. The
+        // `text/html` flavour therefore carries nothing the `text/plain` flavour
+        // does not, while the conversion's deliberate escaping (which exists so
+        // that text inside GENUINELY rich content cannot activate a construct the
+        // user did not author) would mangle Markdown the user wrote by hand:
+        // `- [ ]` becomes `\- \[ \]`. Defer so CM's default paste inserts the
+        // clipboard's own bytes — byte-identical to typing them, so the "pasted
+        // text never activates a construct hand-typed text would not" invariant
+        // still holds. Requires a non-empty plain fallback: CM's core paste reads
+        // `text/plain` || `text/uri-list`, and doPaste("") would replace a
+        // non-empty selection with nothing.
+        // Read-only needs no check HERE: this returns before the canWrite() gate
+        // below, and CM's builtin paste handler early-returns on
+        // `view.state.readOnly`. That is sound because EditorState.readOnly /
+        // EditorView.editable (editor.ts's `editableComp`) are reconfigured from
+        // the same `canWrite` wire value that drives opts.canWrite(), so the two
+        // cannot diverge — the same invariant html-table-paste.ts relies on.
+        if (!converted.emittedMarkdownSyntax) {
+          const plain =
+            event.clipboardData?.getData("text/plain") ||
+            event.clipboardData?.getData("text/uri-list");
+          if (plain) {
+            return false;
+          }
+        }
+        const md = converted.markdown;
         event.preventDefault();
         if (!opts.canWrite()) {
           return true; // read-only: swallow, no fallback insert (mirrors siblings)
