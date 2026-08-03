@@ -56,6 +56,12 @@ class CapExceeded extends Error {}
 interface Ctx {
   nodes: number; // element visits
   outLen: number; // cumulative emitted Markdown length (incremental output cap)
+  // Did the walk emit Markdown SYNTAX (as opposed to escaped text + line
+  // structure)? Recorded at the emitting site rather than sniffed from the
+  // output string, because escaped text can legitimately contain any marker
+  // byte. The handler uses it to decide that a `text/html` flavour carried
+  // nothing the clipboard's `text/plain` does not already carry.
+  rich: boolean;
 }
 
 function bump(ctx: Ctx): void {
@@ -189,6 +195,16 @@ function wrapEmphasis(inner: string, marker: string): string {
   return `${inner.slice(0, start)}${marker}${inner.slice(start, end)}${marker}${inner.slice(end)}`;
 }
 
+/** Record that an emphasis wrapper actually emitted markers. `wrapEmphasis`
+ *  returns its input unchanged when the span is all-whitespace / `<br>`-only, and
+ *  that degenerate case emits no syntax — so compare rather than assume. */
+function markSyntax(ctx: Ctx, inner: string, wrapped: string): string {
+  if (wrapped !== inner) {
+    ctx.rich = true;
+  }
+  return wrapped;
+}
+
 /** Serialise inline content (children of a block) to a Markdown fragment. Text is
  *  whitespace-collapsed + escaped; recognised inline elements wrap their
  *  serialised children; unknown inline elements recurse transparently. `depth`
@@ -214,22 +230,27 @@ function serializeInline(node: Node, depth: number, ctx: Ctx): string {
   }
   if (tag === "CODE") {
     // Inline <code> (a <code> child of <pre> is handled by the block path).
+    ctx.rich = true;
     return count(ctx, inlineCode(collapseWs(el.textContent ?? "")));
   }
   const inner = serializeChildrenInline(el, depth + 1, ctx); // leaves counted within
   switch (tag) {
     case "STRONG":
     case "B":
-      return wrapEmphasis(inner, "**");
+      return markSyntax(ctx, inner, wrapEmphasis(inner, "**"));
     case "EM":
     case "I":
-      return wrapEmphasis(inner, "*");
+      return markSyntax(ctx, inner, wrapEmphasis(inner, "*"));
     case "A": {
       const href = el.getAttribute("href") ?? "";
       // Link text on one line (a newline in the label would break the link).
       const label = inner.replace(/\n/g, " ");
       // Only the wrapping syntax is uncounted (O(1)); the label leaves are counted.
-      return isAllowedUrl(href) ? `[${label}](${markdownDestination(href)})` : label;
+      if (!isAllowedUrl(href)) {
+        return label; // rejected destination → bare label, no syntax emitted
+      }
+      ctx.rich = true;
+      return `[${label}](${markdownDestination(href)})`;
     }
     default:
       return inner; // span/font/unknown inline → transparent
@@ -410,6 +431,7 @@ function serializeBlocks(parent: Element, depth: number, ctx: Ctx): string[] {
       flushInline();
       const text = collapseWs(serializeChildrenInline(el, depth, ctx)).trim();
       if (text !== "") {
+        ctx.rich = true;
         push(`${"#".repeat(HEADINGS[tag])} ${text}`);
       }
     } else if (tag === "P") {
@@ -418,16 +440,22 @@ function serializeBlocks(parent: Element, depth: number, ctx: Ctx): string[] {
       if (text !== "") {
         push(text);
       }
-    } else if (tag === "UL" || tag === "OL") {
+    } else if (tag === "UL" || tag === "OL" || tag === "MENU") {
       flushInline();
-      push(serializeList(el, depth, ctx));
+      const list = serializeList(el, depth, ctx);
+      if (list !== "") {
+        ctx.rich = true;
+        push(list);
+      }
     } else if (tag === "PRE") {
       flushInline();
       // <pre> body is a non-inline leaf (verbatim, never through serializeInline)
       // → count it explicitly.
+      ctx.rich = true;
       push(count(ctx, fenceCode((el.textContent ?? "").replace(/\n$/, ""), codeLang(el))));
     } else if (tag === "BLOCKQUOTE") {
       flushInline();
+      ctx.rich = true;
       push(prefixLines(serializeBlocks(el, depth + 1, ctx).join("\n\n"), "> "));
     } else if (tag === "TABLE") {
       flushInline();
@@ -442,9 +470,11 @@ function serializeBlocks(parent: Element, depth: number, ctx: Ctx): string[] {
       }
       // Table GFM is the amplification leaf (colspan/rowspan expansion, built
       // outside this walk's budget) → count it explicitly to abort early.
+      ctx.rich = true;
       push(count(ctx, gfm));
     } else if (tag === "HR") {
       flushInline();
+      ctx.rich = true;
       push("---");
     } else if (tag === "BR") {
       inlineRun.push(el); // a stray <br> between blocks joins the inline run
@@ -464,7 +494,16 @@ function serializeBlocks(parent: Element, depth: number, ctx: Ctx): string[] {
   return blocks;
 }
 
-export function htmlToMarkdown(html: string): string | null {
+/** Result of converting a clipboard `text/html` fragment. `emittedMarkdownSyntax` is
+ *  false when the walk produced escaped text and line structure only — i.e. the
+ *  HTML flavour carried nothing the clipboard's `text/plain` does not already
+ *  carry, so the caller may prefer the plain text verbatim. */
+export interface HtmlToMarkdownResult {
+  markdown: string;
+  emittedMarkdownSyntax: boolean;
+}
+
+export function htmlToMarkdown(html: string): HtmlToMarkdownResult | null {
   if (html.length > MAX_HTML_INPUT_CHARS) {
     return null;
   }
@@ -478,7 +517,7 @@ export function htmlToMarkdown(html: string): string | null {
     return null;
   }
   try {
-    const ctx: Ctx = { nodes: 0, outLen: 0 };
+    const ctx: Ctx = { nodes: 0, outLen: 0, rich: false };
     const out = serializeBlocks(body, 0, ctx).join("\n\n").trim();
     // The incremental `count` cap already aborts amplification mid-build; this
     // final check is a cheap backstop against uncounted wrapper growth (list /
@@ -486,7 +525,7 @@ export function htmlToMarkdown(html: string): string | null {
     if (out === "" || out.length > MAX_OUTPUT_CHARS) {
       return null;
     }
-    return out;
+    return { markdown: out, emittedMarkdownSyntax: ctx.rich };
   } catch {
     // ANY error (cap sentinel, stack overflow, unexpected) → defer to plain paste.
     return null;
