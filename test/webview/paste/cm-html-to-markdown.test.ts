@@ -358,3 +358,76 @@ describe("htmlToMarkdown — emittedMarkdownSyntax discriminator", () => {
     expect(htmlToMarkdown("   ")).toBeNull();
   });
 });
+
+describe("htmlToMarkdown — block separators", () => {
+  it("keeps sibling <div> lines as separate blocks", () => {
+    // A <div> is block-level even when it holds only inline children; folding it
+    // into the inline run merged the lines.
+    expect(htmlToMarkdown("<div><span>one</span></div><div><span>two</span></div>")?.markdown).toBe(
+      "one\n\ntwo"
+    );
+  });
+
+  it("treats a run of 2+ <br> as a block separator, not a hard break", () => {
+    expect(htmlToMarkdown("one<br><br>two")?.markdown).toBe("one\n\ntwo");
+  });
+
+  it("keeps a single <br> as a hard break", () => {
+    expect(htmlToMarkdown("one<br>two")?.markdown).toBe("one\\\ntwo");
+  });
+
+  it("emits nothing for a <br>-only block instead of a stray backslash", () => {
+    expect(htmlToMarkdown("<p>one</p><p><br></p><p>two</p>")?.markdown).toBe("one\n\ntwo");
+  });
+
+  it("drops a <br> separating two block-level siblings", () => {
+    expect(
+      htmlToMarkdown("<div><span>one</span></div><br><div><span>two</span></div>")?.markdown
+    ).toBe("one\n\ntwo");
+  });
+
+  it("preserves rich structure across separated blocks", () => {
+    expect(
+      htmlToMarkdown("<div><strong>one</strong></div><br><div><em>two</em></div>")?.markdown
+    ).toBe("**one**\n\n*two*");
+  });
+
+  it("keeps a <br> run together when whitespace pretty-printing separates it", () => {
+    // Real clipboard HTML is pretty-printed; the newline between the two breaks
+    // must not demote the run to two single hard breaks.
+    expect(htmlToMarkdown("one<br>\n<br>two")?.markdown).toBe("one\n\ntwo");
+  });
+
+  it("splits a <br> run inside a single paragraph into separate blocks", () => {
+    // The `<p>` branch shares pushInlineBlocks, so an email-style `a<br><br>b`
+    // paragraph splits too — pin it, since only the bare top-level shape is
+    // covered above.
+    expect(htmlToMarkdown("<p>a<br><br>b</p>")?.markdown).toBe("a\n\nb");
+  });
+
+  it("keeps whitespace around a LONE <br> (only a 2+ run is a separator)", () => {
+    // The lone break stays inline, so the whitespace buffered while deciding
+    // whether a second break followed must come back with it — not be eaten.
+    expect(htmlToMarkdown("one<br>\ntwo")?.markdown).toBe("one\\\n two");
+  });
+
+  it("serialises <menu> as a list, not a collapsed inline run", () => {
+    expect(htmlToMarkdown("<menu><li>one</li><li>two</li></menu>")?.markdown).toBe("- one\n- two");
+  });
+
+  it("gives a non-obvious block container its own block", () => {
+    // The block-level set is not just DIV — an omitted tag folds back into the
+    // inline run, which is the bug this task fixes.
+    expect(htmlToMarkdown("<details>one</details><address>two</address>")?.markdown).toBe(
+      "one\n\ntwo"
+    );
+  });
+
+  it("does NOT split a <br> run nested inside an emphasis span", () => {
+    // The run belongs to the span's inline content, so it stays a hard break —
+    // splitting the serialised string here would tear `**x` from `y**`. Markdown
+    // cannot express a paragraph break inside emphasis; keeping the span intact
+    // is the lesser evil and is the shape the O(n) hoist test also relies on.
+    expect(htmlToMarkdown("<p><strong>x<br><br>y</strong>z</p>")?.markdown).toBe("**x\\\n\\\ny**z");
+  });
+});

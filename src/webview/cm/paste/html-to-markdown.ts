@@ -267,7 +267,16 @@ function serializeChildrenInline(el: Element, depth: number, ctx: Ctx): string {
 
 const HEADINGS: Record<string, number> = { H1: 1, H2: 2, H3: 3, H4: 4, H5: 5, H6: 6 };
 
-const BLOCK_CHILD_TAGS = new Set([
+/** Elements that are block-level in HTML. (Named BLOCK_LEVEL_TAGS, not
+ *  BLOCK_TAGS, to stay distinct from the unrelated `BLOCK_TAGS` local to
+ *  html-table-to-gfm.ts — this module does not import it, but the two files are
+ *  read side by side.) Used for two questions: (a) is THIS
+ *  element a block (so it must not be folded into a sibling inline run — a
+ *  `<div>` holding only a `<span>` is still its own line), and (b) does an
+ *  unknown element carry block children (so it must recurse rather than
+ *  flatten). The explicitly-handled tags (P / UL / OL / PRE / BLOCKQUOTE /
+ *  TABLE / HR / H1-6) are listed too because (b) still asks about them. */
+const BLOCK_LEVEL_TAGS = new Set([
   "P",
   "UL",
   "OL",
@@ -278,6 +287,26 @@ const BLOCK_CHILD_TAGS = new Set([
   "DIV",
   "SECTION",
   "ARTICLE",
+  "MAIN",
+  "ASIDE",
+  "HEADER",
+  "FOOTER",
+  "NAV",
+  "FIGURE",
+  "FIGCAPTION",
+  "ADDRESS",
+  "DL",
+  "DT",
+  "DD",
+  "DETAILS",
+  "SUMMARY",
+  "DIALOG",
+  "FIELDSET",
+  "LEGEND",
+  "FORM",
+  "HGROUP",
+  "MENU",
+  "SEARCH",
   "H1",
   "H2",
   "H3",
@@ -285,6 +314,12 @@ const BLOCK_CHILD_TAGS = new Set([
   "H5",
   "H6",
 ]);
+
+// The list is the HTML block-level container set, not a hand-picked subset: an
+// omitted block tag silently folds back into the inline run — the exact bug this
+// task fixes — so err toward listing a tag. Omission is the only failure mode; a
+// wrongly-listed inline tag would merely give it its own line. Add to this set
+// rather than introducing a second one.
 
 /** Direct element children of `el` whose tagName is `tag`. */
 function directChildrenByTag(el: Element, tag: string): Element[] {
@@ -381,6 +416,88 @@ function serializeList(list: Element, depth: number, ctx: Ctx): string {
   return items.join("\n");
 }
 
+/** The hard-break token `serializeInline` emits for `<br>`: a backslash
+ *  immediately followed by a newline. Text nodes cannot contribute a newline
+ *  (`collapseWs` collapses every whitespace run to a space, `<pre>` never takes
+ *  the inline path, and an `<a>` label has its newlines replaced), so a `\n` in
+ *  an inline fragment ALWAYS comes from a `<br>` and always carries its own
+ *  leading backslash — matching the two-character token is unambiguous. */
+const HARD_BREAK = "\\\n";
+
+function isBr(node: Node): boolean {
+  return node.nodeType === ELEMENT_NODE && (node as Element).tagName === "BR";
+}
+
+/** A text node holding only whitespace. Transparent inside a `<br>` run — real
+ *  clipboard HTML pretty-prints `<br>\n<br>`, and that newline must not break the
+ *  run into two single breaks. */
+function isBlankText(node: Node): boolean {
+  return node.nodeType === TEXT_NODE && (node.textContent ?? "").trim() === "";
+}
+
+/** Split sibling inline nodes at runs of 2+ `<br>` — HTML's idiom for a blank
+ *  line, i.e. a BLOCK separator rather than two hard breaks (which rendered as a
+ *  line holding nothing but the escaping backslash). Splitting the NODE list
+ *  rather than the serialised string is what keeps a `<br>` nested inside an
+ *  emphasis span invisible here: it belongs to that span's inline content, and a
+ *  string-level split would tear `**foo` from `bar**`. Single breaks stay in
+ *  their segment and remain hard breaks. Linear in the node count. */
+function splitInlineSegments(nodes: Node[]): Node[][] {
+  const segments: Node[][] = [];
+  let current: Node[] = [];
+  // Pending holds a candidate run — the `<br>`s AND any whitespace-only text
+  // between them, in document order. Whitespace is buffered rather than dropped
+  // on sight: if the run turns out to be a LONE break it stays inline, and its
+  // neighbouring whitespace must go back into the segment with it (dropping it
+  // would silently eat a space that the old code emitted).
+  let pending: Node[] = [];
+  let breaks = 0;
+  const settle = (): void => {
+    if (breaks >= 2) {
+      segments.push(current); // 2+ breaks: end this block, drop the whole run
+      current = [];
+    } else {
+      current.push(...pending); // a lone break (plus its whitespace) stays inline
+    }
+    pending = [];
+    breaks = 0;
+  };
+  for (const node of nodes) {
+    if (isBr(node)) {
+      pending.push(node);
+      breaks++;
+    } else if (breaks > 0 && isBlankText(node)) {
+      pending.push(node); // whitespace inside a run — buffered, not dropped
+    } else {
+      settle();
+      current.push(node);
+    }
+  }
+  settle();
+  segments.push(current);
+  return segments;
+}
+
+/** Serialise sibling inline nodes into the blocks they represent and push each.
+ *  Shared by the inline-run flush and the `<p>` branch so both split on `<br>`
+ *  runs and both drop content-free segments. */
+function pushInlineBlocks(nodes: Node[], depth: number, ctx: Ctx, push: (s: string) => void): void {
+  for (const segment of splitInlineSegments(nodes)) {
+    const raw = segment.map((nd) => serializeInline(nd, depth, ctx)).join("");
+    // A segment whose only content is hard breaks / whitespace — a lone `<br>`
+    // between two blocks, or `<p><br></p>` — is not content. Test it on the
+    // UNTRIMMED string: `trim()` strips the token's newline first, leaving a bare
+    // `\` that looks like content and used to be emitted as its own block.
+    if (raw.split(HARD_BREAK).join("").trim() === "") {
+      continue;
+    }
+    const text = escapeMarkers(raw).trim();
+    if (text !== "") {
+      push(text);
+    }
+  }
+}
+
 /** Serialise the block-level children of `parent` (body / li / blockquote / an
  *  unknown block) to an array of block strings (no trailing separators). A run of
  *  inline/text nodes coalesces into one paragraph (per-line marker-escaped);
@@ -404,12 +521,9 @@ function serializeBlocks(parent: Element, depth: number, ctx: Ctx): string[] {
     if (inlineRun.length === 0) {
       return;
     }
-    const raw = inlineRun.map((nd) => serializeInline(nd, depth, ctx)).join("");
+    const nodes = inlineRun;
     inlineRun = [];
-    const text = escapeMarkers(raw).trim();
-    if (text !== "") {
-      push(text);
-    }
+    pushInlineBlocks(nodes, depth, ctx, push);
   };
 
   for (const child of Array.from(parent.childNodes)) {
@@ -436,10 +550,7 @@ function serializeBlocks(parent: Element, depth: number, ctx: Ctx): string[] {
       }
     } else if (tag === "P") {
       flushInline();
-      const text = escapeMarkers(serializeChildrenInline(el, depth, ctx)).trim();
-      if (text !== "") {
-        push(text);
-      }
+      pushInlineBlocks(Array.from(el.childNodes), depth, ctx, push);
     } else if (tag === "UL" || tag === "OL" || tag === "MENU") {
       flushInline();
       const list = serializeList(el, depth, ctx);
@@ -479,8 +590,12 @@ function serializeBlocks(parent: Element, depth: number, ctx: Ctx): string[] {
     } else if (tag === "BR") {
       inlineRun.push(el); // a stray <br> between blocks joins the inline run
     } else {
-      const hasBlockChild = Array.from(el.children).some((c) => BLOCK_CHILD_TAGS.has(c.tagName));
-      if (hasBlockChild) {
+      const hasBlockChild = Array.from(el.children).some((c) => BLOCK_LEVEL_TAGS.has(c.tagName));
+      if (BLOCK_LEVEL_TAGS.has(tag) || hasBlockChild) {
+        // Block-level, or an unknown element wrapping blocks: its children are
+        // their own blocks. A block-level element with only inline children still
+        // becomes ONE block (its own line) — folding it into the surrounding
+        // inline run is what merged `<div>`-per-line clipboard fragments.
         flushInline();
         for (const b of serializeBlocks(el, depth + 1, ctx)) {
           push(b);
