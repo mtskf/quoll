@@ -82,8 +82,11 @@ function setVisibility(state: DocumentVisibilityState): void {
 
 function mount(maxWaitFrames: number, thawFrames = 2): EditorView {
   // Install the stub BEFORE constructing the view so the recovery's RO is the
-  // stub. CM's own RO is also stubbed but harmless — lateSettleObserver filters
-  // by target (scrollDOM), which CM's ancestor observers never include.
+  // stub. CM's own DOMObserver ALSO constructs a ResizeObserver that observes
+  // scrollDOM directly (@codemirror/view's resizeScroll) and never disconnects
+  // it for the life of the view — so tests that inspect the RO log must call
+  // resetObserverLog() after mount to drop that entry, or lateSettleObserver()
+  // can match CM's own observer instead of (or after) the recovery's.
   globalThis.ResizeObserver = StubResizeObserver as unknown as typeof ResizeObserver;
   width = 500;
   view = new EditorView({
@@ -377,13 +380,21 @@ describe("quollVisibleEdgeRecovery — lifecycle + capture guards", () => {
     const readsAtDestroy = widthReads;
     entry?.cb([], {} as ResizeObserver); // a late browser callback races destroy
     await frames(6);
+    // widthReads is the DISCRIMINATING check for the destroyed guard: a resumed
+    // watch reads clientWidth each frame. dispatch/measure/snap are unreachable
+    // from the RO callback path regardless (they live only in restore()), so
+    // they guard against unrelated regressions, not this guard specifically.
+    expect(widthReads).toBe(readsAtDestroy); // guard bailed: no new watch, no polling
     expect(dispatch).not.toHaveBeenCalled();
     expect(measure).not.toHaveBeenCalled();
     expect(snap).not.toHaveBeenCalled();
-    expect(widthReads).toBe(readsAtDestroy); // guard bailed: no new watch, no polling
   });
 
-  it("a ResizeObserver callback that arrives after a successful thaw does not re-freeze or re-capture", async () => {
+  it("a ResizeObserver callback that arrives after a successful thaw is a no-op (frozen already false, observer disconnected)", async () => {
+    // Scope note: at the point the stale callback fires here, `frozen` is already
+    // false and `resizeObserver` is already null, so the `!frozen` guard clause
+    // alone forces the bail — this test pins the post-thaw no-op, NOT the identity
+    // clause. The identity clause's load-bearing case is pinned by the next test.
     stubVisibility();
     const v = mount(6);
     scrollTick(v); // arm the good snapshot at stable width (500)
@@ -402,7 +413,7 @@ describe("quollVisibleEdgeRecovery — lifecycle + capture guards", () => {
       return snap.mock.calls.length > 0; // capture resumed = thawed
     });
     const callsAfterThaw = snap.mock.calls.length;
-    // Fire the SAME (now stale) callback again: identity + !frozen guard must bail.
+    // Fire the SAME (now stale) callback again: post-thaw `!frozen` guard bails.
     entry?.cb([], {} as ResizeObserver);
     await frames(4);
     scrollTick(v); // one legitimate capture is fine…
@@ -410,6 +421,44 @@ describe("quollVisibleEdgeRecovery — lifecycle + capture guards", () => {
     // …but the stale callback started no extra watch, so no runaway/extra behaviour.
     expect(snap.mock.calls.length).toBeGreaterThanOrEqual(callsAfterThaw);
     expect(lateSettleObserver(v)).toBeUndefined(); // stayed disconnected after thaw
+  });
+
+  it("a stale callback from a SUPERSEDED earlier-episode observer is inert while a NEW episode is frozen (identity guard is load-bearing here)", async () => {
+    // The one scenario where `this.resizeObserver !== observer` is the ONLY guard
+    // clause that bails: a straggling callback from episode A's observer fires
+    // while episode B is legitimately frozen (destroyed=false, visible, frozen=true
+    // all hold for B). If the identity check were removed, A's callback would
+    // restart the shared settle-watch mid-B and poll clientWidth.
+    stubVisibility();
+    const v = mount(6);
+    scrollTick(v); // arm a snapshot
+    await frames(2);
+    resetObserverLog(); // ignore CM's baseline RO; track only the recovery's
+    const snap = vi.spyOn(v, "scrollSnapshot");
+    // Episode A: quarantine caps (width never settles) → observer A attaches.
+    setVisibility("hidden");
+    widthRamping = true;
+    setVisibility("visible");
+    await until(() => lateSettleObserver(v) !== undefined);
+    const entryA = lateSettleObserver(v); // capture A before it is superseded
+    // Supersede to episode B WITHOUT letting A's callback fire: a hidden edge
+    // disconnects A (freeze persists), then a visible edge starts a fresh wait
+    // that also caps unsettled → observer B attaches, frozen === true again.
+    setVisibility("hidden"); // stopObservingLateSettle → A disconnected, resizeObserver=null
+    setVisibility("visible"); // beginWait → new quarantine (B)
+    await until(() => {
+      const cur = lateSettleObserver(v);
+      return cur !== undefined && cur !== entryA; // B attached and is distinct from A
+    });
+    await frames(4); // let B's own watch cap and go idle
+    const readsBeforeStale = widthReads;
+    entryA?.cb([], {} as ResizeObserver); // straggling A callback fires mid-B
+    await frames(6);
+    // Identity guard bailed: A did not restart the watch, so no width polling and
+    // B's live observer is untouched.
+    expect(widthReads).toBe(readsBeforeStale);
+    expect(lateSettleObserver(v)).not.toBe(entryA); // B is still the live observer
+    expect(snap).not.toHaveBeenCalled(); // still frozen: no capture from the stale cb
   });
 
   it("destroy cancels the wait loop and the queued capture (no late dispatch/measure/snapshot)", async () => {

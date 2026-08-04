@@ -109,7 +109,10 @@ class VisibleEdgeRecovery implements PluginValue {
   private waitFrame = 0;
   /** rAF-coalescing flag for the rolling capture. */
   private captureQueued = false;
-  /** Guards the queued capture frame against view.destroy() racing it. */
+  /** Guards state-changing async callbacks against view.destroy() racing them:
+   *  the queued rolling-capture rAF frame (refreshSnapshot) and the late-settle
+   *  ResizeObserver callback (observeLateSettle), so a callback the browser
+   *  delivers after teardown is inert. */
   private destroyed = false;
   /** Connected only during the post-expiry late-settle watch (observeLateSettle);
    *  null whenever we are not observing. */
@@ -355,7 +358,23 @@ class VisibleEdgeRecovery implements PluginValue {
    *  is alive, we are visible, and still frozen (mirrors the `disposed` guard in
    *  cm/decorations/prose-space-metric.ts). */
   private observeLateSettle(): void {
-    if (this.resizeObserver || typeof ResizeObserver === "undefined") {
+    // Already observing, or the invariant "observer non-null only while frozen"
+    // would be violated — bail. Asserting `frozen` here makes that invariant
+    // self-enforcing at the attachment site rather than relying solely on the
+    // callback's post-hoc `!frozen` bail + call-order discipline.
+    if (this.resizeObserver || !this.frozen) {
+      return;
+    }
+    if (typeof ResizeObserver === "undefined") {
+      // Layout-free / older-webview host: no late-settle watch is possible, so
+      // the freeze stays parked until the next visible edge. Trace it like the
+      // file's other consequential skip branches (see restore()) so a silently
+      // parked session is diagnosable in the perf build.
+      if (QUOLL_PERF) {
+        console.debug(
+          "[quoll] visible-edge-recovery: late-settle watch unavailable (no ResizeObserver) — freeze parked until the next visible edge"
+        );
+      }
       return;
     }
     const observer = new ResizeObserver(() => {
