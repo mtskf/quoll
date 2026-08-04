@@ -288,6 +288,33 @@ describe("htmlToMarkdown — block constructs", () => {
   it("nests lists tightly with marker-width indentation", () => {
     expect(convert("<ul><li>a<ul><li>b</li></ul></li></ul>")).toBe("- a\n  - b");
   });
+  it.each([
+    // A sibling-nested list/div/p (invalid HTML but widespread in legacy CMS output;
+    // the browser serialises it into the clipboard) is content serializeList's LI-only
+    // walk would silently drop from an INSERTED conversion. Refuse the whole conversion
+    // (the TABLE branch's policy) so the handler defers to plain paste, which keeps it.
+    ["a sibling-nested <ul>", "<ul><li>a</li><ul><li>b</li></ul></ul>"],
+    ["a sibling-nested <ol>", "<ol><li>a</li><ol><li>b</li></ol></ol>"],
+    ["a sibling <div>", "<ul><li>a</li><div>b</div></ul>"],
+    ["a sibling <p>", "<ul><li>a</li><p>b</p></ul>"],
+  ])("returns null rather than drop %s from a list", (_label, html) => {
+    expect(convert(html)).toBeNull();
+  });
+  it("keeps converting when a bare <br> sits between list items (contentless)", () => {
+    // A <br> between <li>s is presentational spacing, carries no prose, and is what the
+    // LI-only walk already dropped — so it must NOT trip the non-<li>-child throw.
+    expect(convert("<ul><li>a</li><br><li>b</li></ul>")).toBe("- a\n- b");
+  });
+  it("does not flip the flag for a list item whose only block is a text-free grid", () => {
+    // The per-<li> hasVisibleContent guard (KEPT, now SKIP_TAGS-aware) skips the
+    // style-only <li>, so the list is empty and its unconditional push(list, true)
+    // never runs — the flag stays false and the checklist defers, unescaped.
+    const result = htmlToMarkdown(
+      "<div>- [ ] task</div><ul><li><table><tr><td><style>.c{}</style></td></tr></table></li></ul>"
+    );
+    expect(result?.emittedMarkdownSyntax).toBe(false);
+    expect(result?.markdown).toBe("\\- \\[ \\] task");
+  });
   it("unwraps a single <p> inside a list item", () => {
     expect(convert("<ul><li><p>a</p></li></ul>")).toBe("- a");
   });

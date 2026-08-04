@@ -680,6 +680,23 @@ function serializeList(list: Element, depth: number, ctx: Ctx): string {
   if (depth > MAX_DEPTH) {
     throw new CapExceeded();
   }
+  // serializeList walks direct `<li>` only. A non-`<li>` element child that carries
+  // content — a sibling-nested `<ul>`/`<ol>` (invalid HTML but widespread in legacy
+  // CMS and hand-written markup), or a stray `<div>`/`<p>` — would be dropped
+  // silently from an INSERTED conversion. Refuse the whole conversion (the TABLE
+  // branch's policy) so the handler defers to plain paste, which keeps everything.
+  // Gated on `hasVisibleContent`, so a contentless separator between items — a bare
+  // `<br>`/`<hr>`, the amateur/legacy spacing idiom the LI-only walk already dropped
+  // — does not degrade the fragment. SKIP_TAGS children carry no prose either.
+  for (const child of Array.from(list.children)) {
+    if (
+      child.tagName !== "LI" &&
+      !SKIP_TAGS.has(child.tagName) &&
+      hasVisibleContent(child)
+    ) {
+      throw new CapExceeded();
+    }
+  }
   const ordered = list.tagName === "OL";
   let n = ordered ? Number.parseInt(list.getAttribute("start") ?? "1", 10) : 0;
   // Clamp `start` into the ListMark-recognisable range [0, MAX_LIST_NUMBER] (the
@@ -697,7 +714,10 @@ function serializeList(list: Element, depth: number, ctx: Ctx): string {
   for (const li of directChildrenByTag(list, "LI")) {
     bump(ctx); // before the emptiness test, so a fragment of 100k empty <li>s still caps
     // An EMPTY <li> is not an item — the leftover bullet a contenteditable keeps
-    // after the user clears its text, which arrives as `<li></li>` or `<li><br></li>`.
+    // after the user clears its text (`<li></li>`, `<li><br></li>`). Load-bearing and
+    // now SKIP_TAGS-aware: it also skips a `<li>` whose only block is a text-free grid
+    // (`<li><table><style></li>`), so the list stays empty and the branch's
+    // unconditional `push(list, true)` never flips the flag for an invisible bullet.
     if (!hasVisibleContent(li)) {
       continue;
     }
