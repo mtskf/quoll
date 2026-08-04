@@ -59,9 +59,11 @@ interface Ctx {
   // Did the walk emit Markdown SYNTAX (as opposed to escaped text + line
   // structure)? Recorded at the emitting site rather than sniffed from the
   // output string, because escaped text can legitimately contain any marker
-  // byte. The handler uses it to decide that a `text/html` flavour carried
-  // nothing the clipboard's `text/plain` does not already carry.
-  rich: boolean;
+  // byte. The handler uses it to choose between this conversion and the
+  // clipboard's own `text/plain` bytes. Block-level writes go through
+  // `serializeBlocks`' `push`, which takes the fact as a REQUIRED argument;
+  // only the inline leaves below assign it directly.
+  emittedMarkdownSyntax: boolean;
 }
 
 function bump(ctx: Ctx): void {
@@ -200,7 +202,7 @@ function wrapEmphasis(inner: string, marker: string): string {
  *  that degenerate case emits no syntax — so compare rather than assume. */
 function markSyntax(ctx: Ctx, inner: string, wrapped: string): string {
   if (wrapped !== inner) {
-    ctx.rich = true;
+    ctx.emittedMarkdownSyntax = true;
   }
   return wrapped;
 }
@@ -230,7 +232,7 @@ function serializeInline(node: Node, depth: number, ctx: Ctx): string {
   }
   if (tag === "CODE") {
     // Inline <code> (a <code> child of <pre> is handled by the block path).
-    ctx.rich = true;
+    ctx.emittedMarkdownSyntax = true;
     return count(ctx, inlineCode(collapseWs(el.textContent ?? "")));
   }
   const inner = serializeChildrenInline(el, depth + 1, ctx); // leaves counted within
@@ -249,7 +251,7 @@ function serializeInline(node: Node, depth: number, ctx: Ctx): string {
       if (!isAllowedUrl(href)) {
         return label; // rejected destination → bare label, no syntax emitted
       }
-      ctx.rich = true;
+      ctx.emittedMarkdownSyntax = true;
       return `[${label}](${markdownDestination(href)})`;
     }
     default:
@@ -481,7 +483,12 @@ function splitInlineSegments(nodes: Node[]): Node[][] {
 /** Serialise sibling inline nodes into the blocks they represent and push each.
  *  Shared by the inline-run flush and the `<p>` branch so both split on `<br>`
  *  runs and both drop content-free segments. */
-function pushInlineBlocks(nodes: Node[], depth: number, ctx: Ctx, push: (s: string) => void): void {
+function pushInlineBlocks(
+  nodes: Node[],
+  depth: number,
+  ctx: Ctx,
+  push: (s: string, syntax: boolean) => void
+): void {
   for (const segment of splitInlineSegments(nodes)) {
     const raw = segment.map((nd) => serializeInline(nd, depth, ctx)).join("");
     // A segment whose only content is hard breaks / whitespace — a lone `<br>`
@@ -493,7 +500,10 @@ function pushInlineBlocks(nodes: Node[], depth: number, ctx: Ctx, push: (s: stri
     }
     const text = escapeMarkers(raw).trim();
     if (text !== "") {
-      push(text);
+      // `false`: a paragraph is escaped text, never syntax. Any syntax INSIDE it
+      // (emphasis, a link, inline code) was recorded by `serializeInline` at the
+      // leaf that emitted it, not here.
+      push(text, false);
     }
   }
 }
@@ -508,12 +518,22 @@ function serializeBlocks(parent: Element, depth: number, ctx: Ctx): string[] {
     throw new CapExceeded();
   }
   const blocks: string[] = [];
-  // Plain push: output is counted at its LEAF source (see `count`), never at these
-  // aggregating pushes, so nested list/blockquote wrappers don't re-count already-
-  // counted content. The two NON-inline leaves (table GFM, <pre> body) are counted
+  // `syntax` is REQUIRED (no default, not optional): a new block branch cannot
+  // compile without stating whether it emits Markdown syntax, so the flag can no
+  // longer be forgotten — nor set for a branch that ends up emitting nothing,
+  // which is how one empty <blockquote> used to defeat the caller's defer. Same
+  // discipline as `count`: the fact is recorded by the funnel every block goes
+  // through, not by a free-standing assignment beside it.
+  //
+  // Output is counted at its LEAF source (see `count`), never at these aggregating
+  // pushes, so nested list/blockquote wrappers don't re-count already-counted
+  // content. The two NON-inline leaves (table GFM, <pre> body) are counted
   // explicitly in their branches below; everything else here is inline-derived
   // (already counted) or an O(1) marker/prefix.
-  const push = (s: string): void => {
+  const push = (s: string, syntax: boolean): void => {
+    if (syntax) {
+      ctx.emittedMarkdownSyntax = true;
+    }
     blocks.push(s);
   };
   let inlineRun: Node[] = [];
@@ -545,8 +565,7 @@ function serializeBlocks(parent: Element, depth: number, ctx: Ctx): string[] {
       flushInline();
       const text = collapseWs(serializeChildrenInline(el, depth, ctx)).trim();
       if (text !== "") {
-        ctx.rich = true;
-        push(`${"#".repeat(HEADINGS[tag])} ${text}`);
+        push(`${"#".repeat(HEADINGS[tag])} ${text}`, true);
       }
     } else if (tag === "P") {
       flushInline();
@@ -555,32 +574,29 @@ function serializeBlocks(parent: Element, depth: number, ctx: Ctx): string[] {
       flushInline();
       const list = serializeList(el, depth, ctx);
       if (list !== "") {
-        ctx.rich = true;
-        push(list);
+        push(list, true);
       }
     } else if (tag === "PRE") {
       flushInline();
       // <pre> body is a non-inline leaf (verbatim, never through serializeInline)
       // → count it explicitly. Guarded like HEADINGS / UL: an EMPTY container is
-      // not rich content, and flipping ctx.rich for one would defeat the caller's
+      // not rich content, and pushing one as syntax would defeat the caller's
       // no-syntax defer — a content-free <pre>/<blockquote> is exactly the wrapper
       // mail clients leave behind in an otherwise plain fragment, so an unguarded
-      // flag re-escapes the user's hand-typed Markdown.
+      // push re-escapes the user's hand-typed Markdown.
       const body = (el.textContent ?? "").replace(/\n$/, "");
       // The asymmetry with BLOCKQUOTE below is deliberate: `<pre>  </pre>` DOES
       // emit a fence, because a code block is whitespace-significant and those two
       // spaces are content. A whitespace-only <blockquote> is caught instead by its
       // inner serialisation trimming to "". Do not "fix" this by trimming `body`.
       if (body !== "") {
-        ctx.rich = true;
-        push(count(ctx, fenceCode(body, codeLang(el))));
+        push(count(ctx, fenceCode(body, codeLang(el))), true);
       }
     } else if (tag === "BLOCKQUOTE") {
       flushInline();
       const quoted = serializeBlocks(el, depth + 1, ctx).join("\n\n");
       if (quoted !== "") {
-        ctx.rich = true;
-        push(prefixLines(quoted, "> "));
+        push(prefixLines(quoted, "> "), true);
       }
     } else if (tag === "TABLE") {
       flushInline();
@@ -595,12 +611,10 @@ function serializeBlocks(parent: Element, depth: number, ctx: Ctx): string[] {
       }
       // Table GFM is the amplification leaf (colspan/rowspan expansion, built
       // outside this walk's budget) → count it explicitly to abort early.
-      ctx.rich = true;
-      push(count(ctx, gfm));
+      push(count(ctx, gfm), true);
     } else if (tag === "HR") {
       flushInline();
-      ctx.rich = true;
-      push("---");
+      push("---", true);
     } else if (tag === "BR") {
       inlineRun.push(el); // a stray <br> between blocks joins the inline run
     } else {
@@ -612,7 +626,10 @@ function serializeBlocks(parent: Element, depth: number, ctx: Ctx): string[] {
         // inline run is what merged `<div>`-per-line clipboard fragments.
         flushInline();
         for (const b of serializeBlocks(el, depth + 1, ctx)) {
-          push(b);
+          // `false`: these blocks were already emitted by the nested walk, which
+          // shares this `ctx` and recorded their richness through its own `push`.
+          // Passing `true` here would relabel a plain <div> of text as syntax.
+          push(b, false);
         }
       } else {
         inlineRun.push(el);
@@ -652,7 +669,7 @@ export function htmlToMarkdown(html: string): HtmlToMarkdownResult | null {
     return null;
   }
   try {
-    const ctx: Ctx = { nodes: 0, outLen: 0, rich: false };
+    const ctx: Ctx = { nodes: 0, outLen: 0, emittedMarkdownSyntax: false };
     const out = serializeBlocks(body, 0, ctx).join("\n\n").trim();
     // The incremental `count` cap already aborts amplification mid-build; this
     // final check is a cheap backstop against uncounted wrapper growth (list /
@@ -660,7 +677,7 @@ export function htmlToMarkdown(html: string): HtmlToMarkdownResult | null {
     if (out === "" || out.length > MAX_OUTPUT_CHARS) {
       return null;
     }
-    return { markdown: out, emittedMarkdownSyntax: ctx.rich };
+    return { markdown: out, emittedMarkdownSyntax: ctx.emittedMarkdownSyntax };
   } catch {
     // ANY error (cap sentinel, stack overflow, unexpected) → defer to plain paste.
     return null;
