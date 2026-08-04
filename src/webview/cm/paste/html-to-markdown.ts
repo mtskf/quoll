@@ -179,8 +179,9 @@ function escapeMarkers(text: string): string {
  *  node, so it is fidelity-first. U+00A0 needs no clause — it IS `\s`.
  *
  *  EMPTINESS is a SEPARATE question, answered by `blankAfterInvisible`, which strips
- *  the FULL zero-width class (joiners included) because a lone joiner is visually
- *  empty even though a joiner WITHIN text is load-bearing. Splitting the two is what
+ *  the whole Default_Ignorable property (the joiners included, plus bidi marks and
+ *  variation selectors) because a lone one is visually empty even though a joiner WITHIN
+ *  text is load-bearing. Splitting the two is what
  *  lets output keep joiners while `hasVisibleContent` still rejects a contenteditable's
  *  emptied block — the leftover container (`<h1>&#8203;</h1>`, `<h1>&#8205;</h1>`) the
  *  emptiness guard exists to reject, which `String.prototype.trim()` does not strip. */
@@ -188,17 +189,18 @@ function collapseWs(text: string): string {
   return text.replace(/[\u200B\u2060\uFEFF]/g, "").replace(/\s+/g, " ");
 }
 
-/** Emptiness normaliser: strip the FULL zero-width class plus the invisible/ignorable
- *  formatting chars in the regex below (U+00AD SOFT HYPHEN, the joiners, U+FE00–FE0F
- *  VARIATION SELECTORs, U+2060 WORD JOINER, U+FEFF), collapse whitespace, trim, and
- *  report whether nothing visible remains. Distinct from `collapseWs` (the emit path,
- *  which PRESERVES joiners and variation selectors for fidelity): a lone one reads as
- *  blank here so an otherwise-empty container holding only one cannot flip
+/** Emptiness normaliser: strip the invisible/ignorable formatting chars — the whole
+ *  Unicode Default_Ignorable_Code_Point property (U+00AD SOFT HYPHEN, the zero-width
+ *  joiners ZWSP/ZWNJ/ZWJ, U+FE00–FE0F VARIATION SELECTORs, the bidi marks/isolates
+ *  LRM/RLM/ALM + U+2066–2069, WJ, BOM, and any future format char) — collapse whitespace,
+ *  trim, and report whether nothing visible remains. Distinct from `collapseWs` (the emit
+ *  path, which PRESERVES joiners and variation selectors for fidelity): a lone one reads
+ *  as blank here so an otherwise-empty container holding only one cannot flip
  *  `emittedMarkdownSyntax`. THE single answer to "is this text visually empty" — routed
  *  through by every emptiness decision in this module: `hasVisibleContent`, the table
- *  per-cell richness check, `emphasize`'s gate, the CODE/A/PRE/heading residue guards,
- *  and the inline-run blank-text / non-`<li>` list-child checks — so none grows its own
- *  rule. */
+ *  per-cell richness check, `emphasize`'s gate, the CODE/A/PRE/heading/blockquote/
+ *  list-item residue guards, and the inline-run blank-text / non-`<li>` list-child
+ *  checks — so none grows its own rule. */
 function blankAfterInvisible(text: string): boolean {
   return (
     text
@@ -448,14 +450,17 @@ function serializeInline(node: Node, depth: number, ctx: Ctx): string {
     // holding nothing. Body is read through `skipTagsText` so a `<style>`/`<textarea>`
     // beside the code contributes nothing, then `collapseWs` (emit path) collapses it.
     const body = collapseWs(skipTagsText(el));
-    // Both terms load-bearing, and both KEPT:
-    //  - `!hasVisibleContent(el)` is the full-strip emptiness gate. `body` is
-    //    collapseWs'd (emit path), which PRESERVES joiners, so a lone-joiner
-    //    `<code>&#8205;</code>` survives into `body`; only the predicate rejects it.
-    //  - `blankAfterInvisible(body)` is the residue: when the predicate passes on its
-    //    `<hr>` clause (`<code> <hr> </code>`) the body is whitespace with nothing to
-    //    fence. The SAME full-strip rule, not `.trim()` — the emit-path collapse leaves
-    //    a joiner (`<code><hr>&#8205;</code>`) that `.trim()` would let through.
+    // `blankAfterInvisible(body)` is the SUFFICIENT gate; `!hasVisibleContent(el)` is a
+    // redundant-after-X3 defensive twin, KEPT for CODE↔A symmetry (not load-bearing here).
+    //  - `blankAfterInvisible(body)` (the residue) rejects everything that must return
+    //    "": a lone-joiner `<code>&#8205;</code>` (the emit-path collapseWs preserves
+    //    joiners, so `body` keeps it — full-strip, not `.trim()`, is what rejects it) AND
+    //    the `<hr>`-clause case (`<code> <hr> </code>` / `<code><hr>&#8205;</code>`) where
+    //    the predicate passes on its `<hr>` clause but the body has nothing to fence.
+    //  - `!hasVisibleContent(el)` cannot fire where the residue does not: whenever it is
+    //    true (blankAfterInvisible(skipTagsText) AND no `<hr>`), `body` is a collapseWs
+    //    subset of that same text, so blankAfterInvisible(body) already holds. A clean
+    //    subset — kept for consistency with A (whose twin IS empirically load-bearing).
     if (!hasVisibleContent(el) || blankAfterInvisible(body)) {
       return "";
     }
@@ -493,14 +498,19 @@ function serializeInline(node: Node, depth: number, ctx: Ctx): string {
       // which rides along beside otherwise plain text. Same treatment as the other
       // empty containers: label only (here, the empty string), no syntax flag.
       //
-      // Both terms load-bearing: `!hasVisibleContent(el)` is the full-strip emptiness
-      // gate (SKIP_TAGS-aware — `label` from serializeChildrenInline already drops
-      // SKIP_TAGS, but the predicate is what rejects a lone joiner or a whitespace-only
-      // label the emit path preserved); `blankAfterInvisible(label)` is the residue for
-      // when the predicate passes on its `<hr>` clause (`<a href> <hr> </a>`) and the
-      // label has nothing to link. The SAME full-strip rule, not `.trim()` — a joiner
-      // label (`<a href><hr>&#8205;</a>`) that `.trim()` would leave non-empty reads as
-      // blank here, so no link is emitted.
+      // `blankAfterInvisible(label)` is the primary gate; `!hasVisibleContent(el)` is a
+      // redundant-after-X3 defensive twin, KEPT — and here (unlike CODE) empirically so,
+      // not merely for symmetry.
+      //  - `blankAfterInvisible(label)` (the residue) rejects a link with nothing to show:
+      //    an empty `<a>` / tracking pixel (`<a href><img src="p.gif"></a>` → label ""), a
+      //    lone-joiner or whitespace-only label the emit path preserved, and the
+      //    `<hr>`-clause case (`<a href> <hr> </a>` / `<a href><hr>&#8205;</a>`). The SAME
+      //    full-strip rule, not `.trim()` — a joiner label that `.trim()` would leave
+      //    non-empty reads as blank here.
+      //  - `!hasVisibleContent(el)` backs it up: `label` is a SERIALIZED string
+      //    (serializeChildrenInline), a different derivation from the predicate's
+      //    `skipTagsText`, so there is no clean subset proof as there is for CODE — the
+      //    twin is empirical belt-and-braces on the source element.
       if (!hasVisibleContent(el) || blankAfterInvisible(label)) {
         return label;
       }
