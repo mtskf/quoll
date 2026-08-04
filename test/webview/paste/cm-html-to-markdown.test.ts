@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 import { markdownLanguage } from "@codemirror/lang-markdown";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { validateMarkdownForWrite } from "../../../src/markdown/validate-for-write.js";
 import { htmlToMarkdown } from "../../../src/webview/cm/paste/html-to-markdown.js";
 
@@ -128,6 +128,13 @@ describe("htmlToMarkdown — inline constructs", () => {
   it("converts an allowlisted link", () => {
     expect(convert('<p><a href="https://x.com">t</a></p>')).toBe("[t](https://x.com)");
   });
+  it("folds a <br> inside a link label to a space, leaving no stray backslash", () => {
+    // A label cannot span lines, so the hard break collapses — but it must go as a
+    // WHOLE token. Removing only its newline left `[a\ b](…)`, and a backslash
+    // before a space is not a CommonMark escape, so the user saw it in the label.
+    expect(convert('<p><a href="https://x.com">a<br>b</a></p>')).toBe("[a b](https://x.com)");
+  });
+
   it("degrades a disallowed-scheme link to its plain text", () => {
     expect(convert('<p><a href="javascript:alert(1)">t</a></p>')).toBe("t");
   });
@@ -365,11 +372,40 @@ describe("htmlToMarkdown — emittedMarkdownSyntax discriminator", () => {
     expect(result?.markdown).toBe("\\- \\[ \\] task");
   });
 
-  it("is true for a whitespace-only <pre> (code is whitespace-significant)", () => {
-    // Deliberate asymmetry with the whitespace-only <blockquote> above: those two
-    // spaces ARE code content, so the fence is real syntax. Pins the "do not trim
-    // the <pre> body" note in html-to-markdown.ts.
-    expect(htmlToMarkdown("<div>- [ ] task</div><pre>  </pre>")?.emittedMarkdownSyntax).toBe(true);
+  it.each([
+    ["spaces only", "<pre>  </pre>"],
+    ["newline + indentation", "<pre>\n   \n</pre>"],
+    ["blank lines only", "<pre>\n\n</pre>"],
+  ])("is false for a whitespace-only <pre> (%s)", (_label, pre) => {
+    // The richness DECISION is trim-based, so a content-free <pre> joins the empty
+    // containers above: no fence is emitted and the user's hand-typed `- [ ]`
+    // survives unescaped. The multi-line shapes are how this regressed — a guard
+    // that stripped one trailing newline read "\n   \n" as content, flipped the
+    // flag, and re-escaped the checklist this PR exists to fix.
+    //
+    // Whitespace-significance is an OUTPUT concern only, and is pinned separately
+    // by "emits a real <pre> body verbatim" below. The two must not be conflated:
+    // deciding on the trimmed body does NOT license trimming what gets emitted.
+    const result = htmlToMarkdown(`<div>- [ ] task</div>${pre}`);
+    expect(result?.emittedMarkdownSyntax).toBe(false);
+    expect(result?.markdown).toBe("\\- \\[ \\] task");
+  });
+
+  it("is true for a <pre> holding real code", () => {
+    // The positive half of the guard above. Without it, making EVERY <pre>
+    // non-rich would satisfy the whitespace cases and fenced code would silently
+    // stop counting as Markdown syntax.
+    const result = htmlToMarkdown("<div>- [ ] task</div><pre>x</pre>");
+    expect(result?.emittedMarkdownSyntax).toBe(true);
+    expect(result?.markdown).toBe("\\- \\[ \\] task\n\n```\nx\n```");
+  });
+
+  it("emits a real <pre> body verbatim, without trimming its whitespace", () => {
+    // Code is whitespace-significant: once the <pre> has content, leading
+    // indentation and interior blank lines are part of it and must survive.
+    expect(htmlToMarkdown("<pre>  indented\n\n  tail\n</pre>")?.markdown).toBe(
+      "```\n  indented\n\n  tail\n```"
+    );
   });
 
   it("is false for a link whose href is not allowlisted (label only, no syntax)", () => {
@@ -385,6 +421,22 @@ describe("htmlToMarkdown — emittedMarkdownSyntax discriminator", () => {
 
   it("still returns null when there is nothing convertible", () => {
     expect(htmlToMarkdown("   ")).toBeNull();
+  });
+
+  it("degrades a cap breach to null SILENTLY (the sentinel is the expected path)", () => {
+    // The caller can consume a `null` (rich-html-paste.ts swallows one to protect a
+    // selection), so an unexpected throw in the walk must leave a console trace or
+    // it presents as "the paste did nothing". A cap breach is NOT that case: it is
+    // the designed degradation for oversized/too-deep input and must stay quiet, or
+    // every large paste would warn. Pins the discrimination, not just the return.
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const tooDeep = `${"<div>".repeat(40)}x${"</div>".repeat(40)}`;
+      expect(htmlToMarkdown(tooDeep)).toBeNull();
+      expect(warn).not.toHaveBeenCalled();
+    } finally {
+      warn.mockRestore();
+    }
   });
 });
 

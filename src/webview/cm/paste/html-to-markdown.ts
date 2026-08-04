@@ -276,8 +276,12 @@ function serializeInline(node: Node, depth: number, ctx: Ctx): string {
       return emphasize(ctx, inner, "*");
     case "A": {
       const href = el.getAttribute("href") ?? "";
-      // Link text on one line (a newline in the label would break the link).
-      const label = inner.replace(/\n/g, " ");
+      // Link text on one line (a newline in the label would break the link). Fold
+      // the whole HARD_BREAK token, not just its `\n`: dropping the newline alone
+      // strands the escaping backslash mid-label (`[a\ b](…)`), and a backslash
+      // before a space is not a CommonMark escape — it renders literally. Same
+      // token-as-one-unit rule as trimSegmentEdges and wrapEmphasis.
+      const label = inner.split(HARD_BREAK).join(" ").replace(/\n/g, " ");
       // Only the wrapping syntax is uncounted (O(1)); the label leaves are counted.
       if (!isAllowedUrl(href)) {
         return label; // rejected destination → bare label, no syntax emitted
@@ -680,11 +684,18 @@ function serializeBlocks(parent: Element, depth: number, ctx: Ctx): string[] {
       // mail clients leave behind in an otherwise plain fragment, so an unguarded
       // push re-escapes the user's hand-typed Markdown.
       const body = (el.textContent ?? "").replace(/\n$/, "");
-      // The asymmetry with BLOCKQUOTE below is deliberate: `<pre>  </pre>` DOES
-      // emit a fence, because a code block is whitespace-significant and those two
-      // spaces are content. A whitespace-only <blockquote> is caught instead by its
-      // inner serialisation trimming to "". Do not "fix" this by trimming `body`.
-      if (body !== "") {
+      // Two SEPARATE concerns, deliberately answered differently:
+      //  - the richness DECISION is trim-based. A <pre> holding only whitespace is
+      //    an empty container, not code — including the pretty-printed
+      //    `<pre>\n   \n</pre>` and `<pre>\n\n</pre>` that real clipboard HTML
+      //    carries, which a "strip one trailing newline" test still called content.
+      //    No producer means a blank line as code, and calling one rich defeats the
+      //    caller's no-syntax defer and re-escapes the user's hand-typed Markdown.
+      //  - what gets EMITTED is verbatim. Whitespace-significance lives here and
+      //    only here: once a <pre> holds real code, its body keeps every leading
+      //    space and interior blank line. Do not "tidy" this by emitting
+      //    `body.trim()` — that is the mistake this split exists to prevent.
+      if (body.trim() !== "") {
         push(count(ctx, fenceCode(body, codeLang(el))), true);
       }
     } else if (tag === "BLOCKQUOTE") {
@@ -780,8 +791,21 @@ export function htmlToMarkdown(html: string): HtmlToMarkdownResult | null {
       return null;
     }
     return { markdown: out, emittedMarkdownSyntax: ctx.emittedMarkdownSyntax };
-  } catch {
-    // ANY error (cap sentinel, stack overflow, unexpected) → defer to plain paste.
+  } catch (err) {
+    // ANY error still degrades to `null` — the caller always has a safe path. But
+    // `null` is no longer only a defer: rich-html-paste.ts CONSUMES it to protect a
+    // selection, so an unexpected throw in this walk would present to the user as
+    // "the paste did nothing" and leave no trace anywhere. Split the two:
+    // CapExceeded is the EXPECTED degradation (input too large / deep / wide, an
+    // unrenderable table) and stays silent; anything else is a bug here and gets a
+    // console entry, as image-paste.ts already does for its own dropped inputs.
+    //
+    // Log the error ONLY. The source HTML and the converted Markdown must never be
+    // logged: that is clipboard content, which can be anything the user copied —
+    // credentials, private documents — whereas an internal error's text is ours.
+    if (!(err instanceof CapExceeded)) {
+      console.warn("[quoll] rich paste: HTML→Markdown conversion failed", err);
+    }
     return null;
   }
 }
