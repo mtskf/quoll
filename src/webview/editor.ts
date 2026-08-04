@@ -791,11 +791,15 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
         // (bold/italic, headings, nested lists, links, code, blockquotes, tables via
         // the shared table core) is inserted through the normal edit pipeline.
         // Prec.high, registered AFTER the table / URL / list handlers (they keep
-        // their fast paths) and BEFORE imagePaste. Ordering before imagePaste is
-        // safe because every path that would consume the event here first exempts a
-        // clipboard carrying an image file item (hasImageFileItem) — NOT because an
-        // image copy lacks a text/html flavour; copying an image out of a web page
-        // carries both. Non-convertible → return false, plain paste runs.
+        // their fast paths) and BEFORE imagePaste. That ordering is safe for the two
+        // paths where this handler SWALLOWS a paste (in-code, null conversion): both
+        // exempt a clipboard carrying an image file item (hasImageFileItem) — NOT
+        // because an image copy lacks a text/html flavour; copying an image out of a
+        // web page carries both. The insert path does NOT exempt it: a fragment that
+        // emits real Markdown syntax is inserted here even when an image rides along,
+        // and imagePaste never runs. Accepted because a "Copy image" clipboard's HTML
+        // is a bare <img>, which converts to nothing → null → the exempted path.
+        // Non-convertible → return false, plain paste runs.
         richHtmlPaste({ canWrite: () => opts.getState().canWrite }),
         // Paste/drop image ingestion: capture image files, post image-write, and
         // insert the relative link at a position-mapped anchor on the host's

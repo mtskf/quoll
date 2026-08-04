@@ -8,14 +8,16 @@
 // own bytes. Neither commands it — what the caller does depends on what else the
 // clipboard carries, so do not assume either output string is unreachable:
 //  - `null` — nothing convertible (empty walk, cap breached, parse error). The
-//    caller normally defers, but with no plain/uri fallback over a non-empty
-//    selection it SWALLOWS the event instead (deferring would let CM's
-//    `doPaste("")` delete the selection) — no paste of any kind happens.
+//    caller normally defers, but when NOTHING can absorb the defer — no plain/uri
+//    fallback, no image file item for imagePaste — over a non-empty selection it
+//    SWALLOWS the event instead (deferring would let CM's `doPaste("")` delete the
+//    selection) — no paste of any kind happens.
 //  - `emittedMarkdownSyntax === false` — the walk produced escaped text and line
 //    structure only. The conversion is valid Markdown, but the caller prefers the
-//    clipboard's own `text/plain` bytes over this module's escaped rendering —
-//    ONLY when such a fallback exists. With no fallback it inserts this module's
-//    output after all, so the escaped rendering is a live path, not dead code.
+//    clipboard's own `text/plain` bytes over this module's escaped rendering — or
+//    lets imagePaste have the event when an image file rides along. Only when
+//    NEITHER exists does it insert this module's output after all, so the escaped
+//    rendering is a live path, not dead code.
 //    This is the dominant path for clipboards that carry a merely presentational
 //    HTML flavour. See the `HtmlToMarkdownResult` docblock at the bottom.
 //
@@ -39,6 +41,11 @@
 //    hand would come back as `\- \[ \]` — which is why the caller defers on
 //    `emittedMarkdownSyntax === false`. The invariant still holds there: the
 //    clipboard's own bytes are inserted verbatim, exactly as typing them would.
+//  - Whether a container is EMPTY is asked once, of the source element, by
+//    `hasTextContent` — never re-derived from a branch's own rendered output,
+//    which is what six separate branches got wrong (an empty list renders `-`,
+//    not ``). Every container branch routes through it before pushing a block or
+//    setting `emittedMarkdownSyntax`; `<hr>` and `<table>` opt out explicitly.
 //  - Never throws to the handler: caps throw an internal sentinel (`CapExceeded`);
 //    `htmlToMarkdown` wraps the whole walk in a try/catch that returns `null` for
 //    ANY thrown value, so the handler always has a safe defer-to-plain-paste path.

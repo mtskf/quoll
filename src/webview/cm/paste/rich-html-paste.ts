@@ -8,20 +8,25 @@
 // AFTER committing to insert, read-only swallow, and one dispatch through the
 // normal edit-sync → host write-lock → validateMarkdownForWrite pipeline.
 //
-// What a defer actually reaches: this handler is registered AFTER htmlTablePaste /
-// pasteUrlOverSelection / listReindentPaste and BEFORE imagePaste (editor.ts), and
-// CM runs same-precedence handlers in extension order, stopping at the first that
-// returns true. So by the time control arrives here those three have already
-// declined, and deferring hands the event to imagePaste and then to CM's default
-// plain-text paste — nobody else.
+// What a defer actually reaches: CM runs handlers in precedence order — within one
+// precedence, in extension order — stopping at the first that returns true. This
+// handler is Prec.high and registered AFTER htmlTablePaste / pasteUrlOverSelection /
+// listReindentPaste (same precedence → extension order decides); imagePaste is at
+// DEFAULT precedence, so it runs after every Prec.high handler regardless of where
+// its line sits in editor.ts. So by the time control arrives here those three have
+// already declined, and deferring hands the event to imagePaste and then to CM's
+// default plain-text paste — nobody else.
 //
-// It deviates from that sibling on three of its four defer sites: `!html` is the
-// shared one, while caret/selection in code, a null conversion, and a conversion
-// that emitted no syntax have no counterpart in html-table-paste.ts. Every site
-// that can fire over a non-empty selection first requires something for CM to fall
-// back to (or an image file item for imagePaste to act on), because its own defer
+// Two of its four defer sites are shared with that sibling — `!html` and a null
+// conversion (`gfm === null` there). What deviates: the caret/selection-in-code
+// guard, the no-syntax defer, and the data-loss guard wrapped around the
+// null-conversion defer — none of which html-table-paste.ts has. Of those, the
+// three that could instead CONSUME the event first require something for CM to fall
+// back to (or an image file item for imagePaste to act on), because their own defer
 // would otherwise delete the selection — see canDeferWithoutDataLoss, which the two
 // consume branches share, and hasPlainFallback / hasImageFileItem underneath it.
+// The `!html` defer is unconditional: with no HTML flavour this handler has nothing
+// to insert either, so CM's own fallback behaviour is the whole story there.
 
 import { type Extension, Prec } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
@@ -74,9 +79,11 @@ function hasPlainFallback(event: ClipboardEvent): boolean {
  *  (which also matches a copied PDF) — "cannot miss a file item" is the wrong
  *  property; not over-matching is the one that protects the document.
  *
- *  With no `items` at all the answer is false. That is the safe side: false routes
- *  to consuming the event, which leaves the document intact, whereas a wrong true
- *  routes to the deletion above. */
+ *  With no `items` at all the answer is false. That is the safe side: at the two
+ *  consume branches false falls back to swallowing the event, which leaves the
+ *  document intact (at the no-syntax defer it falls back to inserting this
+ *  conversion — also non-destructive), whereas a wrong true routes to the deletion
+ *  above. */
 function hasImageFileItem(event: ClipboardEvent): boolean {
   const items = event.clipboardData?.items;
   if (!items) {
@@ -110,14 +117,16 @@ function pasteWouldBeDropped(event: ClipboardEvent): boolean {
  *   - an image file item — imagePaste consumes the event first, so CM core never
  *     runs; and consuming HERE would starve the only handler that can perform that
  *     paste, leaving the document untouched;
- *   - an empty selection — `doPaste("")` at a bare caret is a no-op, so consuming
- *     would swallow the event to protect nothing.
+ *   - an empty MAIN selection — `doPaste("")` at a bare caret is a no-op, so
+ *     consuming would swallow the event to protect nothing. Only the main range is
+ *     tested: under multi-cursor a non-empty SECONDARY range would still be cleared
+ *     by CM's replaceSelection(""). Accepted, mirroring html-table-paste.ts's
+ *     collapse-to-main — a rich paste under multi-cursor is degenerate anyway.
  *
  *  Both consume branches below (in-code paste, null conversion) need exactly this
  *  test, so they share it rather than restating it: the two must not drift, since
- *  each one's `false` answer is a decision to swallow a paste. The third defer
- *  site (a conversion that emitted no syntax) deliberately does NOT use it — see
- *  the comment there. */
+ *  each one's `false` answer is a decision to swallow a paste. The no-syntax defer
+ *  site deliberately does NOT use it — see the comment there. */
 function canDeferWithoutDataLoss(event: ClipboardEvent, from: number, to: number): boolean {
   return !pasteWouldBeDropped(event) || from === to;
 }
@@ -226,6 +235,17 @@ export function richHtmlPaste(opts: { canWrite: () => boolean }): Extension {
         ) {
           return false;
         }
+        // NO image-file exemption here, unlike the two consume branches above, and
+        // deliberately so. This path INSERTS the conversion, so exempting would mean
+        // deferring — handing imagePaste an event whose text this handler has no way
+        // to pass along, and the prose would be dropped to paste the bitmap alone.
+        // On a clipboard carrying both (Word / Outlook copying a paragraph with an
+        // embedded picture) keeping the prose is the smaller loss. The dominant
+        // image clipboard is unaffected: "Copy image" carries a bare <img>, which
+        // converts to null and takes the exempted branch above. Carrying fallback
+        // text into imagePaste would remove the trade-off entirely; that is a
+        // protocol change, tracked separately. Pinned by "inserts a syntax-bearing
+        // conversion even when an image file rides along".
         const md = converted.markdown;
         event.preventDefault();
         if (!opts.canWrite()) {

@@ -176,6 +176,24 @@ describe("richHtmlPaste — handler", () => {
     view.destroy();
   });
 
+  it("inserts a syntax-bearing conversion even when an image file rides along", () => {
+    // The one consuming path that does NOT exempt an image file item, pinned
+    // deliberately rather than left to be discovered. A clipboard carrying BOTH
+    // real Markdown syntax and a bitmap (Word / Outlook copying a paragraph with an
+    // embedded picture) can only keep one of them here: this handler has no way to
+    // hand imagePaste the converted text, so deferring would drop the prose
+    // entirely and paste the image alone. Keeping the prose is the smaller loss,
+    // and the dominant image clipboard ("Copy image") is unaffected — its HTML is a
+    // bare <img>, which converts to null and takes the exempted path instead.
+    // Carrying the text through to imagePaste is tracked separately; change this
+    // expectation only with that design in hand.
+    const { view, seen } = mountWithNextHandler("", { consume: true });
+    firePaste(view, { html: "<p><strong>bold</strong></p>", files: IMAGE_FILE });
+    expect(seen.reachedNextHandler).toBe(false);
+    expect(view.state.doc.toString()).toBe("**bold**\n");
+    view.destroy();
+  });
+
   it("still converts a rich fragment when the caret is outside any code block", () => {
     // Same markdown-aware mount, but the caret sits in prose: rich conversion is
     // unchanged (guard is a no-op outside code).
