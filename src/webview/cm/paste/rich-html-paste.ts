@@ -30,6 +30,29 @@ function blockSuffix(after: string): string {
   return after.startsWith("\n") ? "\n" : "\n\n";
 }
 
+/** Would CM's own paste handler insert anything if this handler deferred?
+ *
+ *  CM core runs `doPaste(view, getData("text/plain") || getData("text/uri-list"))`,
+ *  and `doPaste("")` dispatches an empty insert over the selection — i.e. deleting
+ *  it. EVERY defer path that can fire over a non-empty selection must therefore
+ *  check this first and consume the event itself instead of deferring into that
+ *  deletion. Written once so a change in CM's fallback order is found once. */
+function hasPlainFallback(event: ClipboardEvent): boolean {
+  const data = event.clipboardData;
+  return !!data && (!!data.getData("text/plain") || !!data.getData("text/uri-list"));
+}
+
+/** Does the clipboard carry a file item (a copied image, typically)? Such a paste
+ *  belongs to imagePaste, which is registered AFTER this handler (editor.ts), so
+ *  consuming the event here would stop a genuine image paste from ever reaching
+ *  it — the document would simply be left untouched. `files.length` is a
+ *  deliberate proxy for imagePaste's own `items[].kind === "file"` scan: it is the
+ *  cheaper check, it cannot miss a file item, and the optional chaining keeps it
+ *  working against clipboard doubles that implement only `getData`. */
+function hasFileItem(event: ClipboardEvent): boolean {
+  return (event.clipboardData?.files?.length ?? 0) > 0;
+}
+
 export function richHtmlPaste(opts: { canWrite: () => boolean }): Extension {
   return Prec.high(
     EditorView.domEventHandlers({
@@ -52,15 +75,10 @@ export function richHtmlPaste(opts: { canWrite: () => boolean }): Extension {
         // md===null defer below and let CM's doPaste("") delete a non-empty code
         // selection.
         if (caretInCode(view.state, from) || caretInCode(view.state, to)) {
-          // Defer to plain-text paste so the raw text lands verbatim, structure intact.
-          // Only defer when a plain-text/uri fallback exists: CM's core paste falls back
-          // to getData("text/plain") || getData("text/uri-list"), and doPaste("") would
-          // replace a non-empty selection with nothing — deleting selected code. With an
-          // HTML-only clipboard, consume the event without converting or deleting.
-          const hasPlainFallback =
-            !!event.clipboardData?.getData("text/plain") ||
-            !!event.clipboardData?.getData("text/uri-list");
-          if (hasPlainFallback) {
+          // Defer to plain-text paste so the raw text lands verbatim, structure
+          // intact — but only when there is something to fall back to, or CM's
+          // doPaste("") would delete the selected code (see hasPlainFallback).
+          if (hasPlainFallback(event)) {
             return false;
           }
           event.preventDefault();
@@ -68,7 +86,18 @@ export function richHtmlPaste(opts: { canWrite: () => boolean }): Extension {
         }
         const converted = htmlToMarkdown(html);
         if (converted === null) {
-          return false; // nothing convertible / cap breached → defer to plain paste
+          // Nothing convertible (whitespace-only, cap breached, parse error) → the
+          // clipboard's own bytes are the best available paste. Same requirement as
+          // the caretInCode branch above: with no plain fallback and a real
+          // selection, deferring hands CM a doPaste("") that replaces the selection
+          // with nothing — an HTML-only clipboard (a remote <img>, say) would
+          // silently delete the user's text. Consume the event instead, unless a
+          // file item means imagePaste still has a real paste to perform.
+          if (!hasPlainFallback(event) && !hasFileItem(event) && from !== to) {
+            event.preventDefault();
+            return true;
+          }
+          return false; // defer to plain paste / imagePaste
         }
         // The conversion emitted escaped text and line structure only — no
         // emphasis / link / code / heading / list / quote / table / rule. The
@@ -78,9 +107,8 @@ export function richHtmlPaste(opts: { canWrite: () => boolean }): Extension {
         // `- [ ]` becomes `\- \[ \]`. Defer so CM's default paste inserts the
         // clipboard's own bytes — byte-identical to typing them, so the "pasted
         // text never activates a construct hand-typed text would not" invariant
-        // still holds. Requires a non-empty plain fallback: CM's core paste reads
-        // `text/plain` || `text/uri-list`, and doPaste("") would replace a
-        // non-empty selection with nothing.
+        // still holds. Requires a plain fallback to defer into, for the reason
+        // hasPlainFallback documents.
         //
         // What this deliberately gives up: the `text/html` flavour is NOT
         // strictly redundant here. LINE STRUCTURE is real information only it
@@ -100,13 +128,8 @@ export function richHtmlPaste(opts: { canWrite: () => boolean }): Extension {
         // EditorView.editable (editor.ts's `editableComp`) are reconfigured from
         // the same `canWrite` wire value that drives opts.canWrite(), so the two
         // cannot diverge — the same invariant html-table-paste.ts relies on.
-        if (!converted.emittedMarkdownSyntax) {
-          const plain =
-            event.clipboardData?.getData("text/plain") ||
-            event.clipboardData?.getData("text/uri-list");
-          if (plain) {
-            return false;
-          }
+        if (!converted.emittedMarkdownSyntax && hasPlainFallback(event)) {
+          return false;
         }
         const md = converted.markdown;
         event.preventDefault();

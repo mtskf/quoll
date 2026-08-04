@@ -192,6 +192,49 @@ describe("richHtmlPaste — handler", () => {
     view.destroy();
   });
 
+  it("consumes an HTML-only unconvertible paste over a selection without deleting it", () => {
+    // Not code — ordinary prose. htmlToMarkdown returns null for an <img>-only
+    // fragment (nothing convertible), and deferring would hand CM core
+    // doPaste(view, "") with no text/plain and no text/uri-list, replacing the
+    // selection with nothing. Copying a remote image out of a web page produces
+    // exactly this clipboard, so the loss is silent and reachable.
+    const view = mount("keep-this");
+    view.dispatch({ selection: { anchor: 0, head: 9 } }); // whole doc selected
+    const event = firePaste(view, { html: '<img src="https://example.com/a.png">' });
+    expect(event.defaultPrevented).toBe(true);
+    expect(view.state.doc.toString()).toBe("keep-this");
+    view.destroy();
+  });
+
+  it("still defers an HTML-only unconvertible paste at a bare caret", () => {
+    // With nothing selected there is nothing to destroy, so the handler must NOT
+    // over-consume — the handlers after it (imagePaste in the real editor) still
+    // need their turn at the same clipboard. defaultPrevented is useless as a defer
+    // signal here (CM core runs and preventDefaults on its own), so observe the
+    // deferral directly: a sentinel handler standing in for imagePaste runs only if
+    // this one returned false. Pins the `from !== to` half of the guard.
+    let reachedNextHandler = false;
+    const view = new EditorView({
+      state: EditorState.create({
+        doc: "keep-this",
+        extensions: [
+          richHtmlPaste({ canWrite: () => true }),
+          EditorView.domEventHandlers({
+            paste: () => {
+              reachedNextHandler = true;
+              return false;
+            },
+          }),
+        ],
+      }),
+    });
+    view.dispatch({ selection: { anchor: 4 } });
+    firePaste(view, { html: '<img src="https://example.com/a.png">' });
+    expect(reachedNextHandler).toBe(true);
+    expect(view.state.doc.toString()).toBe("keep-this");
+    view.destroy();
+  });
+
   it("defers to CM's uri-list fallback for an in-code paste with no text/plain", () => {
     // hasPlainFallback is also true for text/uri-list (mirrors CM core's own
     // getData("text/plain") || getData("text/uri-list")). With no text/plain but a
