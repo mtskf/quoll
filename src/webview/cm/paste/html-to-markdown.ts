@@ -503,6 +503,7 @@ const BLOCK_LEVEL_TAGS = new Set([
   "TABLE",
   "HR",
   "DIV",
+  "CENTER",
   "SECTION",
   "ARTICLE",
   "MAIN",

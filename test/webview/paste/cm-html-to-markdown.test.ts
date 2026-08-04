@@ -917,6 +917,15 @@ describe("htmlToMarkdown — block separators", () => {
     );
   });
 
+  it("keeps sibling <center> blocks separate (the original merged-lines bug)", () => {
+    // <center> is block-level and ubiquitous in email/newsletter HTML; omitting it
+    // from BLOCK_LEVEL_TAGS folded consecutive sections into one word-glued line. A
+    // heading makes the fragment rich, so the glued output was actually inserted.
+    expect(
+      htmlToMarkdown("<h1>T</h1><center>one</center><center>two</center>")?.markdown
+    ).toBe("# T\n\none\n\ntwo");
+  });
+
   it("keeps a <br> run together across a comment (Word/Outlook clipboard HTML)", () => {
     // The `<p>` caller used to pass raw childNodes while the inline-run caller
     // pre-filtered, so the same markup split differently depending on its parent.
