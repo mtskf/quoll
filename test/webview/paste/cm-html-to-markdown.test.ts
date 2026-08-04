@@ -472,11 +472,14 @@ describe("htmlToMarkdown — emittedMarkdownSyntax discriminator", () => {
     // `trim()` does not strip it. The emphasis row is the one that could NOT be
     // settled by patching the emptiness predicate — `emphasize` never consults it —
     // which is why the normalisation lives on the shared text path instead.
-    // <pre> and inline <code> are the two branches with no residue guard behind
-    // them — they emit `el.textContent` directly — so these two rows are what
-    // observe the emptiness predicate itself normalising its input. The heading and
-    // list rows below would stay green on the predicate alone (their residue guards
-    // absorb the zero width); they pin the outcome, not the mechanism.
+    // Which rows OBSERVE the full-strip predicate (vs. their own residue guard):
+    //  - <pre> ZWSP observes it: the <pre> residue reads a VERBATIM body and `.trim()`
+    //    cannot strip U+200B, so only `blankAfterInvisible` (the predicate) rejects it.
+    //  - <code> ZWSP does NOT: the <code> body is `collapseWs`'d, which itself strips
+    //    U+200B, so its residue settles the row — an outcome pin, like heading/list.
+    //  - the lone-JOINER rows (code, and the heading joiner row further below) DO
+    //    observe the predicate: the emit path PRESERVES joiners, so the residue keeps
+    //    the joiner and only the full-strip predicate (via the KEPT disjunct) rejects it.
     ["<pre> holding only a zero-width space", `<div>- [ ] task</div><pre>${ZWSP}</pre>`],
     [
       "code span holding only a zero-width space",
@@ -505,9 +508,10 @@ describe("htmlToMarkdown — emittedMarkdownSyntax discriminator", () => {
       "emphasis span holding only a zero-width space",
       `<div>- [ ] task</div><p><strong>${ZWSP}</strong></p>`,
     ],
-    // The already-correct neighbour, previously unpinned in either direction: a
-    // non-breaking space is invisible-ish too and must keep the same answer, so a
-    // future edit cannot change one boundary while believing it moved the other.
+    // A non-breaking space is invisible-ish too and must keep the same answer. This is
+    // an OUTCOME pin only, not a mechanism observer: `String.trim()` strips U+00A0, so
+    // both the predicate and every residue guard reject it — no mutation of the
+    // collapseWs-vs-trim boundary can turn this row red (only the ZWSP/joiner rows can).
     ["heading holding only a non-breaking space", `<div>- [ ] task</div><h1>${NBSP}</h1>`],
     // A LONE joiner is visually empty even though the emit path preserves joiners
     // inside real text (the ZWJ-emoji fidelity fix). Emptiness is a SEPARATE
@@ -761,6 +765,23 @@ describe("htmlToMarkdown — emittedMarkdownSyntax discriminator", () => {
     // The other half: ONLY an explicit `normal`/`400` cancels. Treating any styled
     // <b> as cancelled would stop Docs' real bold converting at all.
     const result = htmlToMarkdown('<p><b style="font-weight:700;color:red">x</b></p>');
+    expect(result?.markdown).toBe("**x**");
+    expect(result?.emittedMarkdownSyntax).toBe(true);
+  });
+
+  it("treats font-weight:400 as the numeric spelling of normal", () => {
+    // `400` is the numeric spelling of `normal` and a common producer form of the Docs
+    // wrapper; without it in EMPHASIS_CANCELLED_BY a styled-away <b> reads as bold.
+    const result = htmlToMarkdown('<p><b style="font-weight:400">- [ ] x</b></p>');
+    expect(result?.markdown).toBe("\\- \\[ \\] x");
+    expect(result?.emittedMarkdownSyntax).toBe(false);
+  });
+
+  it("does not read a vendor-prefixed property as the cancelling declaration", () => {
+    // The `(?:^|;)` boundary keeps the match to a WHOLE declaration, so a
+    // `-webkit-font-weight:normal` cannot masquerade as `font-weight:normal` and
+    // silently stop genuinely-bold text from converting.
+    const result = htmlToMarkdown('<p><b style="-webkit-font-weight:normal">x</b></p>');
     expect(result?.markdown).toBe("**x**");
     expect(result?.emittedMarkdownSyntax).toBe(true);
   });
