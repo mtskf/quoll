@@ -132,8 +132,6 @@ describe("visible-edge recovery — real-chromium contract", () => {
     expect(deep).toBeGreaterThan(1000);
     const lineDeep = lineNumberAtViewportTop(m.view); // where the rolling snapshot is armed
 
-    const snap = vi.spyOn(m.view, "scrollSnapshot");
-
     // Hidden → visible while the width RAMPS in 2-frame steps: within a step the width
     // is equal for at most 2 frames and every step is strictly wider, so the
     // consecutive-stable counter never reaches STABLE_FRAMES (3). beginWait caps at
@@ -156,7 +154,10 @@ describe("visible-edge recovery — real-chromium contract", () => {
     // reaches STABLE_FRAMES → the freeze lifts and rolling capture RESUMES, with NO
     // second visibility edge. Poll: scroll to the very top each frame until a capture
     // lands (proves the resume). Pre-fix the freeze is parked here forever → red.
-    snap.mockClear();
+    // Spy installed here (not earlier): scrollSnapshot() is a fresh property
+    // lookup on every call (visible-edge-recovery.ts), so this only needs to
+    // predate the resumed capture we're asserting on.
+    const snap = vi.spyOn(m.view, "scrollSnapshot");
     await until(() => {
       m.view.scrollDOM.scrollTop = 0;
       m.view.scrollDOM.dispatchEvent(new Event("scroll"));
