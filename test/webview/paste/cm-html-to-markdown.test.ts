@@ -403,6 +403,18 @@ describe("htmlToMarkdown — emittedMarkdownSyntax discriminator", () => {
       "link whose label lives entirely in a <style>",
       '<div>- [ ] task</div><p><a href="https://x.test"><style>.c{}</style></a></p>',
     ],
+    // ...and at the two branches that already had the residue guard but never had it
+    // OBSERVED: mutating either `text !== ""` / `quoted !== ""` away left the whole
+    // suite green. Unpinned, a future edit reading the predicate as the single
+    // emptiness answer deletes them as redundant and ships `# ` / `>` as syntax.
+    [
+      "heading whose text lives entirely in a <style>",
+      "<div>- [ ] task</div><h1><style>a{}</style></h1>",
+    ],
+    [
+      "blockquote whose text lives entirely in a <style>",
+      "<div>- [ ] task</div><blockquote><style>a{}</style></blockquote>",
+    ],
     // The zero-width class: U+200B is what a contenteditable (Notion / Slack /
     // Quill / ProseMirror) leaves behind in a block the user has emptied, and
     // `trim()` does not strip it. The emphasis row is the one that could NOT be
