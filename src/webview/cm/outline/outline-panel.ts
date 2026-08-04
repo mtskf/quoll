@@ -40,6 +40,7 @@ import { requireQuollEditorHost } from "../editor-host.js";
 import { DEFAULT_EDITOR_PREFS, editorPrefsField } from "../editor-prefs.js";
 import { extractOutline, type OutlineHeading } from "./build-outline.js";
 import { createChevronIcon, createMenuIcon, createPinIcon, createSettingsIcon } from "./icons.js";
+import { createTreeNav, type RowRef, type TreeNav } from "./keyboard-tree.js";
 import { createResizeHandle, DEFAULT_WIDTH_PX, type ResizeHandle } from "./resize-handle.js";
 import { createSettingsPopover, type SettingsPopover } from "./settings-popover.js";
 import { quollUpdateConfigSink } from "./update-config-sink.js";
@@ -97,17 +98,6 @@ const HOVER_OPEN_DELAY_MS = 120;
 export const OUTLINE_OPEN_CLASS = "quoll-outline-open";
 export const OUTLINE_PINNED_CLASS = "quoll-outline-pinned";
 
-/** A rendered outline row + its structural facts, for post-render visibility
- *  updates that never rebuild the DOM (collapse toggles reuse these refs). The
- *  `li` IS the focusable tree node (roving tabindex); the twistie is an
- *  aria-hidden decorative chevron and the item span is display-only. */
-interface RowRef {
-  heading: OutlineHeading;
-  hasChildren: boolean;
-  li: HTMLLIElement;
-  twistie: HTMLSpanElement | null;
-}
-
 class OutlinePanel implements PluginValue {
   private readonly host: HTMLElement;
   private readonly toggleEl: HTMLButtonElement;
@@ -115,6 +105,14 @@ class OutlinePanel implements PluginValue {
   private readonly pinEl: HTMLButtonElement;
   private readonly listEl: HTMLElement;
   private readonly resizeHandle: ResizeHandle;
+  /** The keyboard-tree navigator: sole owner of the rendered rows + the roving
+   *  tab stop + the focused-row offset. The panel builds rows in renderList and
+   *  hands them over (setRows); reads them back through treeNav.rows for its own
+   *  visibility / active passes; and routes every tab-stop / focus-restore call
+   *  through it. collapsedFroms stays panel-owned — treeNav only reads it via the
+   *  isCollapsed dep and asks the panel to change it via toggleCollapse — so no
+   *  field is mutated from both modules. */
+  private readonly treeNav: TreeNav;
   private readonly settingsToggleEl: HTMLButtonElement;
   private readonly footerEl: HTMLElement;
   /** Visually-hidden `aria-live=polite` region. `updateActive` writes the active
@@ -137,20 +135,6 @@ class OutlinePanel implements PluginValue {
    *  never persisted (no protocol / storage). Pruned on each rebuild to parent
    *  headings that still exist, so it never grows unbounded. */
   private readonly collapsedFroms = new Set<number>();
-  /** Rendered rows for post-render visibility refresh (see refreshVisibility). */
-  private rows: RowRef[] = [];
-  /** `from` of the row that currently holds `tabindex="0"` — the single tab stop
-   *  into the tree (roving tabindex). All other visible rows are `tabindex="-1"`,
-   *  reachable only via the arrow-key handlers. Null while the list is empty. */
-  private tabbableFrom: number | null = null;
-  /** `from` of the row a keyboard user last focused, kept in the CURRENT
-   *  document's coordinate space by the same `u.changes.mapPos` remap as
-   *  `collapsedFroms` / `lastAnnouncedFrom` (see `update()`). Set on `focusin`
-   *  (`onRowFocusIn`) and read — only while focus is still live inside the tree —
-   *  by `focusedRowFrom()` so a rebuild re-homes focus onto that exact heading
-   *  even when an edit shifted its offset. A stale value (focus since moved to the
-   *  editor) is harmless: the live-focus gate in `focusedRowFrom()` ignores it. */
-  private pendingFocusedFrom: number | null = null;
   /** Signature of the last rendered list; null forces the first render. */
   private renderedSignature: string | null = null;
   private rebuildTimer: ReturnType<typeof setTimeout> | null = null;
@@ -283,11 +267,6 @@ class OutlinePanel implements PluginValue {
     // aria-labelledby) so sighted and AT users get the same string.
     this.listEl.setAttribute("role", "tree");
     this.listEl.setAttribute("aria-labelledby", titleEl.id);
-    // Keyboard tree model (WAI-ARIA tree-view pattern): one delegated handler on
-    // the list — focus lives on a row <li> (roving tabindex), so every arrow /
-    // Home / End / Enter keydown bubbles here. Delegation survives every rebuild
-    // (the list element persists; only its rows are replaced).
-    this.listEl.addEventListener("keydown", (e) => this.onListKeydown(e));
     // Focusing a tree row makes the SR announce its treeitem — i.e. that section.
     // Keep the announcement baseline in sync with whatever row holds focus (Tab-in,
     // roving arrow nav, click) via this one delegated `focusin` (it bubbles), so
@@ -342,6 +321,19 @@ class OutlinePanel implements PluginValue {
     // a11y order matches the visual left-to-right order.
     this.host.insertBefore(this.sidebarEl, this.host.firstChild);
     this.host.appendChild(this.toggleEl);
+
+    // Keyboard-tree navigator: owns the rendered rows + roving tab stop + focused
+    // offset, and binds its own keydown handler on listEl. It reaches back into
+    // the panel only through these typed deps — reading collapse state and asking
+    // the panel to toggle it (collapse stays panel-owned), jumping the caret, and
+    // taking focus back when the tree empties.
+    this.treeNav = createTreeNav({
+      listEl: this.listEl,
+      isCollapsed: (from) => this.collapsedFroms.has(from),
+      toggleCollapse: (from) => this.toggleCollapse(from),
+      jumpTo: (heading) => this.jumpTo(heading),
+      focusEditor: () => this.view.focus(),
+    });
 
     // Resize handle: a host child (not a sidebar child) pinned to the sidebar's
     // right edge. It owns all runtime-width state + persistence (resize-handle.ts)
@@ -409,13 +401,13 @@ class OutlinePanel implements PluginValue {
       if (this.lastAnnouncedFrom !== null) {
         this.lastAnnouncedFrom = u.changes.mapPos(this.lastAnnouncedFrom, 1);
       }
-      // …and the focused row's offset, so a rebuild triggered by an edit that
-      // shifts the focused heading (e.g. an external / programmatic edit landing
-      // BEFORE it while a keyboard user is in the tree) re-homes focus onto that
-      // same heading, not the first-visible-row fallback. Same assoc +1 pattern.
-      if (this.pendingFocusedFrom !== null) {
-        this.pendingFocusedFrom = u.changes.mapPos(this.pendingFocusedFrom, 1);
-      }
+      // …and the focused row's offset (owned by treeNav), so a rebuild triggered
+      // by an edit that shifts the focused heading (e.g. an external / programmatic
+      // edit landing BEFORE it while a keyboard user is in the tree) re-homes focus
+      // onto that same heading, not the first-visible-row fallback. Assoc +1 (follow
+      // the heading, not text inserted at its start) — the mapper stays panel-side so
+      // treeNav never imports a CodeMirror type.
+      this.treeNav.remapFocus((from) => u.changes.mapPos(from, 1));
     }
     if (!this.open) {
       return;
@@ -721,10 +713,10 @@ class OutlinePanel implements PluginValue {
       // a rebuild that fires while a keyboard user is navigating the tree (a
       // background reparse, or the debounced edit rebuild) removes the focused
       // row and drops focus to <body>. Capture focus first, restore it after.
-      const focusedFrom = this.focusedRowFrom();
+      const focusedFrom = this.treeNav.focusedRowFrom();
       this.renderedSignature = signature;
       this.renderList();
-      this.restoreRowFocus(focusedFrom);
+      this.treeNav.restoreRowFocus(focusedFrom);
     }
     // A rebuild is structural (open, an edit, or the parser catching up), never a
     // caret navigation — so it re-baselines the announcer silently rather than
@@ -736,8 +728,8 @@ class OutlinePanel implements PluginValue {
 
   private renderList(): void {
     this.listEl.textContent = "";
-    this.rows = [];
     if (this.headings.length === 0) {
+      this.treeNav.setRows([]);
       const empty = document.createElement("li");
       empty.className = "quoll-outline-empty";
       // Not a tree node — neutralise the implicit listitem role so the empty
@@ -756,6 +748,7 @@ class OutlinePanel implements PluginValue {
         this.collapsedFroms.delete(from);
       }
     }
+    const rows: RowRef[] = [];
     this.headings.forEach((heading, i) => {
       const li = document.createElement("li");
       li.className = "quoll-outline-row";
@@ -806,13 +799,14 @@ class OutlinePanel implements PluginValue {
       li.appendChild(label);
 
       this.listEl.appendChild(li);
-      this.rows.push({ heading, hasChildren: hasChildren[i], li, twistie });
+      rows.push({ heading, hasChildren: hasChildren[i], li, twistie });
     });
+    this.treeNav.setRows(rows);
     this.refreshVisibility();
     // Seed the roving tab stop at the first visible row; updateActive (called
     // right after in rebuild) re-homes it onto the caret's heading when the list
     // is not focused, so Tab enters the tree at the current location.
-    this.setTabbable(this.firstVisibleFrom());
+    this.treeNav.setTabbable(this.treeNav.firstVisibleFrom());
   }
 
   /** hasChildren[i] ⇔ the next heading is deeper (its subtree starts under i). */
@@ -833,193 +827,16 @@ class OutlinePanel implements PluginValue {
     // Capture DOM focus BEFORE hiding rows: refreshVisibility can hide the very
     // row that holds keyboard focus (a pointer collapse of an ancestor while a
     // descendant li was focused), and the browser then blurs it to <body>.
-    const focusedFrom = this.focusedRowFrom();
+    const focusedFrom = this.treeNav.focusedRowFrom();
     this.refreshVisibility();
     // A collapse can hide the row that held the tab stop (e.g. a pointer collapse
     // of an ancestor while a descendant was tabbable) — re-home it so the tree
     // never keeps its only tab stop on a `display:none` row.
-    this.ensureTabbableVisible();
+    this.treeNav.ensureTabbableVisible();
     // …and if that row actually held focus, move focus with it so a keyboard
     // user is never stranded on <body> (the roving tab stop alone is silent).
-    this.restoreRowFocus(focusedFrom);
+    this.treeNav.restoreRowFocus(focusedFrom);
     this.updateActive();
-  }
-
-  // ── Roving tabindex + keyboard tree navigation (WAI-ARIA tree-view) ──────────
-
-  /** `from` of the first visible row, or null when none are visible. */
-  private firstVisibleFrom(): number | null {
-    const row = this.rows.find((r) => !r.li.hidden);
-    return row !== undefined ? row.heading.from : null;
-  }
-
-  /** Promote exactly one row to `tabindex="0"` (the sole tab stop into the tree);
-   *  demote the rest to `-1`. Null clears every row to `-1` (empty list). */
-  private setTabbable(from: number | null): void {
-    this.tabbableFrom = from;
-    for (const row of this.rows) {
-      row.li.tabIndex = row.heading.from === from ? 0 : -1;
-    }
-  }
-
-  /** If the tab stop landed on a now-hidden (or removed) row, move it to the
-   *  first visible row so Tab always reaches a real, visible node. */
-  private ensureTabbableVisible(): void {
-    if (this.tabbableFrom === null) {
-      return;
-    }
-    const row = this.rows.find((r) => r.heading.from === this.tabbableFrom);
-    if (row === undefined || row.li.hidden) {
-      this.setTabbable(this.firstVisibleFrom());
-    }
-  }
-
-  /** `from` of the row that currently holds DOM focus, or null when focus is not
-   *  on a tree row. Read BEFORE a mutation that may hide (refreshVisibility) or
-   *  replace (renderList) rows, so `restoreRowFocus` can re-home focus onto the
-   *  equivalent surviving row — a hidden or removed focused row otherwise strands
-   *  DOM focus on `<body>` (the browser blurs it), silently breaking keyboard
-   *  navigation. Two guards, both essential:
-   *   - the LIVE `activeElement` check keeps this null whenever focus is NOT in
-   *     the tree (typing in the editor with the sidebar open), so restore is a
-   *     no-op and never pulls focus INTO the tree unbidden;
-   *   - the value comes from `pendingFocusedFrom` (set on `focusin`, remapped
-   *     through edits in `update()`), NOT from stale `this.rows` — so an edit
-   *     that shifted the focused heading's offset still yields its CURRENT `from`
-   *     and restore matches it exactly rather than falling to the first row. */
-  private focusedRowFrom(): number | null {
-    if (!this.listEl.contains(document.activeElement)) {
-      return null;
-    }
-    return this.pendingFocusedFrom;
-  }
-
-  /** Re-home focus after a mutation that may have hidden or replaced the focused
-   *  row. Prefers the same heading (by `from`) when it survived and is visible;
-   *  otherwise the nearest visible row above its old position (for a collapse,
-   *  the collapsed ancestor); then the first visible row when the heading vanished
-   *  entirely (a rebuild dropped it); and finally the editor when the tree is now
-   *  empty — so focus is never left stranded on `<body>`. No-op when `from` is
-   *  null (focus was not on a row) so it never steals focus into the tree. */
-  private restoreRowFocus(from: number | null): void {
-    if (from === null) {
-      return;
-    }
-    const idx = this.rows.findIndex((r) => r.heading.from === from);
-    if (idx !== -1 && !this.rows[idx].li.hidden) {
-      this.focusRow(this.rows[idx]); // same heading survived & is visible
-      return;
-    }
-    if (idx !== -1) {
-      for (let i = idx - 1; i >= 0; i--) {
-        if (!this.rows[i].li.hidden) {
-          this.focusRow(this.rows[i]); // nearest visible ancestor / predecessor
-          return;
-        }
-      }
-    }
-    const first = this.rows.find((r) => !r.li.hidden);
-    if (first !== undefined) {
-      this.focusRow(first);
-      return;
-    }
-    // The tree is now empty (every heading removed): nothing inside it can hold
-    // focus, so hand focus back to the editor rather than stranding it on <body>,
-    // mirroring setOpen's hadOutlineFocus rescue on close.
-    this.view.focus();
-  }
-
-  /** Move the tab stop to a row and focus it — the shared move for every
-   *  arrow-key / Home / End navigation. */
-  private focusRow(row: RowRef): void {
-    this.setTabbable(row.heading.from);
-    row.li.focus();
-  }
-
-  /** Focus the nearest visible row in `dir` from `idx` (no wrap). */
-  private focusRelative(idx: number, dir: 1 | -1): void {
-    for (let i = idx + dir; i >= 0 && i < this.rows.length; i += dir) {
-      if (!this.rows[i].li.hidden) {
-        this.focusRow(this.rows[i]);
-        return;
-      }
-    }
-  }
-
-  private onListKeydown(e: KeyboardEvent): void {
-    const target = e.target as HTMLElement | null;
-    const li = target?.closest<HTMLLIElement>(".quoll-outline-row") ?? null;
-    if (li === null) {
-      return;
-    }
-    const idx = this.rows.findIndex((r) => r.li === li);
-    if (idx === -1) {
-      return;
-    }
-    const row = this.rows[idx];
-    switch (e.key) {
-      case "ArrowDown":
-        e.preventDefault();
-        this.focusRelative(idx, 1);
-        break;
-      case "ArrowUp":
-        e.preventDefault();
-        this.focusRelative(idx, -1);
-        break;
-      case "Home":
-        e.preventDefault();
-        this.focusRelative(-1, 1); // first visible: scan forward from before row 0
-        break;
-      case "End":
-        e.preventDefault();
-        this.focusRelative(this.rows.length, -1); // last visible: scan back from the end
-        break;
-      case "ArrowRight":
-        e.preventDefault();
-        this.onArrowRight(idx, row);
-        break;
-      case "ArrowLeft":
-        e.preventDefault();
-        this.onArrowLeft(idx, row);
-        break;
-      case "Enter":
-        e.preventDefault();
-        this.jumpTo(row.heading);
-        break;
-      default:
-        // Everything else (incl. Escape, handled by the sidebar) bubbles on.
-        break;
-    }
-  }
-
-  /** Right: expand a collapsed parent (focus stays); on an already-expanded
-   *  parent, dive to the first child; a leaf does nothing. */
-  private onArrowRight(idx: number, row: RowRef): void {
-    if (!row.hasChildren) {
-      return;
-    }
-    if (this.collapsedFroms.has(row.heading.from)) {
-      this.toggleCollapse(row.heading.from); // expand in place; re-homes focus itself
-    } else {
-      // Expanded ⇒ the next row is this parent's first child (build order).
-      this.focusRelative(idx, 1);
-    }
-  }
-
-  /** Left: collapse an expanded parent (focus stays); otherwise climb to the
-   *  parent row (nearest shallower visible ancestor). */
-  private onArrowLeft(idx: number, row: RowRef): void {
-    if (row.hasChildren && !this.collapsedFroms.has(row.heading.from)) {
-      this.toggleCollapse(row.heading.from); // collapse in place; re-homes focus itself
-      return;
-    }
-    const depth = row.heading.depth;
-    for (let i = idx - 1; i >= 0; i--) {
-      if (!this.rows[i].li.hidden && this.rows[i].heading.depth < depth) {
-        this.focusRow(this.rows[i]);
-        return;
-      }
-    }
   }
 
   /** Walk the flat rows with a depth stack: any row deeper than the shallowest
@@ -1028,7 +845,7 @@ class OutlinePanel implements PluginValue {
    *  toggle. */
   private refreshVisibility(): void {
     let collapseDepth: number | null = null; // depth of the hiding ancestor, or null
-    for (const row of this.rows) {
+    for (const row of this.treeNav.rows) {
       const depth = row.heading.depth;
       if (collapseDepth !== null && depth <= collapseDepth) {
         collapseDepth = null; // exited the collapsed subtree
@@ -1087,11 +904,11 @@ class OutlinePanel implements PluginValue {
     // row — we keep the nearest visible ancestor lit rather than auto-expanding
     // (auto-expand would undo a deliberate collapse on every caret move).
     if (activeFrom !== null) {
-      const idx = this.rows.findIndex((r) => r.heading.from === activeFrom);
-      if (idx !== -1 && this.rows[idx].li.hidden) {
+      const idx = this.treeNav.rows.findIndex((r) => r.heading.from === activeFrom);
+      if (idx !== -1 && this.treeNav.rows[idx].li.hidden) {
         for (let i = idx - 1; i >= 0; i--) {
-          if (!this.rows[i].li.hidden) {
-            activeFrom = this.rows[i].heading.from;
+          if (!this.treeNav.rows[i].li.hidden) {
+            activeFrom = this.treeNav.rows[i].heading.from;
             break;
           }
         }
@@ -1115,7 +932,7 @@ class OutlinePanel implements PluginValue {
     // has tabbed in and is arrow-navigating, the keyboard owns the tab stop and a
     // caret-driven move must not yank it out from under them.
     if (!this.listEl.contains(document.activeElement)) {
-      this.setTabbable(activeFrom ?? this.firstVisibleFrom());
+      this.treeNav.setTabbable(activeFrom ?? this.treeNav.firstVisibleFrom());
     }
     if (caretDriven || this.announceTimer !== null) {
       // Caret-driven, OR a structural rebuild that arrived while a cue was still
@@ -1150,13 +967,13 @@ class OutlinePanel implements PluginValue {
     if (!li) {
       return;
     }
-    const row = this.rows.find((r) => r.li === li);
+    const row = this.treeNav.rows.find((r) => r.li === li);
     if (row !== undefined) {
       this.lastAnnouncedFrom = row.heading.from;
       // Track the focused row so a later rebuild can re-home focus onto this exact
       // heading; update() keeps it in the current doc's coordinate space. (This is
       // the sole writer — the value is read only while focus is live in the tree.)
-      this.pendingFocusedFrom = row.heading.from;
+      this.treeNav.noteFocusedRow(row.heading.from);
       // Cancel a pending live cue ONLY when this focused row IS that cue's target:
       // then the treeitem announcement covers the very section the cue would speak,
       // so firing it too (if focus returns to the editor before the debounce) would
