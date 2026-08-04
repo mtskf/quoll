@@ -388,7 +388,7 @@ describe("htmlToMarkdown — emittedMarkdownSyntax discriminator", () => {
       "blockquote holding only an empty list",
       "<div>- [ ] task</div><blockquote><ul><li></li></ul></blockquote>",
     ],
-    // The one shape hasTextContent alone cannot settle: the <li> HAS text, but all
+    // The one shape hasVisibleContent alone cannot settle: the <li> HAS text, but all
     // of it lives in a SKIP_TAGS subtree that serialisation drops. Pins the second,
     // narrower guard inside serializeListItem — without it the item falls back to a
     // bare `-` marker and the list is pushed as syntax again.
@@ -436,7 +436,7 @@ describe("htmlToMarkdown — emittedMarkdownSyntax discriminator", () => {
     //
     // Every one of these renders to something NON-EMPTY when its branch decides
     // emptiness on its own output ("-", "1.\n2.", "``", "[](url)", "# \\"), which is
-    // why the decision belongs to hasTextContent on the SOURCE element and not to
+    // why the decision belongs to hasVisibleContent on the SOURCE element and not to
     // per-branch string tests. The container must also emit NO block.
     const result = htmlToMarkdown(html);
     expect(result?.emittedMarkdownSyntax).toBe(false);
@@ -460,7 +460,7 @@ describe("htmlToMarkdown — emittedMarkdownSyntax discriminator", () => {
     // The other half of the guard above: making every container non-rich would
     // satisfy the empty cases and silently stop rich clipboards converting at all.
     // <hr> is the one construct that carries no text yet is real syntax, so its row
-    // is what would catch a future edit routing it through hasTextContent. The
+    // is what would catch a future edit routing it through hasVisibleContent. The
     // <table> row does NOT pin that — its cell holds "c", so it passes the
     // predicate either way; what it pins is that a table with cell TEXT stays rich.
     // The text-free grid, which is the shape the predicate actually decides, has
@@ -521,7 +521,7 @@ describe("htmlToMarkdown — emittedMarkdownSyntax discriminator", () => {
   });
 
   it("does not advance the ordinal over an <li> that serialises away", () => {
-    // The sibling of the empty-<li> skip below: this item PASSES hasTextContent (its
+    // The sibling of the empty-<li> skip below: this item PASSES hasVisibleContent (its
     // text lives in a SKIP_TAGS subtree) and is dropped one gate later, by
     // serializeListItem. Both skips must leave the numbering alone; advancing inside
     // the marker expression honoured only the first and emitted `1. a` / `3. b`.
