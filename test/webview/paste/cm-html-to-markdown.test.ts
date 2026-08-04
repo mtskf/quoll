@@ -499,6 +499,95 @@ describe("htmlToMarkdown — emittedMarkdownSyntax discriminator", () => {
   });
 });
 
+describe("htmlToMarkdown — expected degradation vs. reportable fault", () => {
+  // Every failure in this module returns the SAME `null`, and the caller logs one
+  // outcome for all of them ("unconvertible HTML-only clipboard dropped"), which
+  // blames the user's clipboard. The console line is therefore the only thing that
+  // separates "this input is too big / not convertible" from "this module or its
+  // environment is broken" — a dev-visible signal with two sides, so both are
+  // pinned here, the way cm-table-fallback-warn.test.ts pins its fallback warning.
+  //
+  // Not asserted: the message text. What is contractual is WHETHER a fault leaves a
+  // trace, not its wording.
+  const withWarnSpy = (body: (warn: ReturnType<typeof vi.spyOn>) => void): void => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      body(warn);
+    } finally {
+      warn.mockRestore();
+      vi.unstubAllGlobals();
+    }
+  };
+
+  it.each([
+    ["input over the size cap", "x".repeat(3 * 1024 * 1024)],
+    ["nothing convertible at all", "   "],
+    ["a fragment past the depth cap", `${"<div>".repeat(40)}x${"</div>".repeat(40)}`],
+  ])("stays silent for %s (expected degradation)", (_label, html) => {
+    withWarnSpy((warn) => {
+      expect(htmlToMarkdown(html)).toBeNull();
+      expect(warn).not.toHaveBeenCalled();
+    });
+  });
+
+  it("warns when DOMParser itself throws", () => {
+    // DOMParser is a platform global and text/html parsing does not throw on
+    // malformed input, so a throw here is an environment or converter fault. It
+    // used to be a bare `return null`, indistinguishable from an unconvertible
+    // clipboard and invisible everywhere.
+    withWarnSpy((warn) => {
+      vi.stubGlobal(
+        "DOMParser",
+        class {
+          parseFromString(): Document {
+            throw new Error("parser exploded");
+          }
+        }
+      );
+      expect(htmlToMarkdown("<p>x</p>")).toBeNull();
+      expect(warn).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it("warns when the parsed document has no body", () => {
+    withWarnSpy((warn) => {
+      vi.stubGlobal(
+        "DOMParser",
+        class {
+          parseFromString(): { body: null } {
+            return { body: null };
+          }
+        }
+      );
+      expect(htmlToMarkdown("<p>x</p>")).toBeNull();
+      expect(warn).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it("warns when the walk throws something that is not a cap breach", () => {
+    // The third fault site, and the one the CapExceeded discrimination is about:
+    // the walk's catch must tell its own sentinel apart from a real bug. A body
+    // whose childNodes getter throws reaches serializeBlocks and blows up there.
+    withWarnSpy((warn) => {
+      const body = {
+        get childNodes(): never {
+          throw new TypeError("boom");
+        },
+      };
+      vi.stubGlobal(
+        "DOMParser",
+        class {
+          parseFromString(): { body: unknown } {
+            return { body };
+          }
+        }
+      );
+      expect(htmlToMarkdown("<p>x</p>")).toBeNull();
+      expect(warn).toHaveBeenCalledTimes(1);
+    });
+  });
+});
+
 describe("htmlToMarkdown — block separators", () => {
   it("keeps sibling <div> lines as separate blocks", () => {
     // A <div> is block-level even when it holds only inline children; folding it
