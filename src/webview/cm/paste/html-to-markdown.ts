@@ -1,8 +1,16 @@
-// Pure converter: an HTML `text/html` clipboard fragment → an equivalent
-// Markdown string, or `null` when there is nothing convertible (the caller then
-// falls back to normal paste). No dependency, no side effects — `DOMParser` is a
-// webview/browser global (happy-dom provides it under test), so this stays inside
-// Quoll's supply-chain default-deny.
+// Pure converter: an HTML `text/html` clipboard fragment → `{ markdown,
+// emittedMarkdownSyntax }`, or `null` when there is nothing convertible. No
+// dependency, no side effects — `DOMParser` is a webview/browser global
+// (happy-dom provides it under test), so this stays inside Quoll's supply-chain
+// default-deny.
+//
+// TWO output channels, both of which send the caller to plain-text paste:
+//  - `null` — nothing convertible (empty walk, cap breached, parse error).
+//  - `emittedMarkdownSyntax === false` — the walk produced escaped text and line
+//    structure only. The conversion is valid Markdown, but the caller prefers the
+//    clipboard's own `text/plain` bytes over this module's escaped rendering.
+//    This is the dominant path for clipboards that carry a merely presentational
+//    HTML flavour. See the `HtmlToMarkdownResult` docblock at the bottom.
 //
 // Design notes (why each choice, so a future edit doesn't regress it):
 //  - Structure is read via an EXPLICIT direct-child walk (Array.from(childNodes)),
@@ -19,7 +27,11 @@
 //    has it escaped to stay literal — safety over fidelity, matching escapeCell:
 //    it may curtail the bare autolink but can never activate an unintended
 //    construct. Pasted text therefore never activates a construct that the same
-//    text typed by hand would not.
+//    text typed by hand would not. NOTE this escaping is precisely what makes the
+//    conversion unusable for a syntax-free fragment — Markdown the user typed by
+//    hand would come back as `\- \[ \]` — which is why the caller defers on
+//    `emittedMarkdownSyntax === false`. The invariant still holds there: the
+//    clipboard's own bytes are inserted verbatim, exactly as typing them would.
 //  - Never throws to the handler: caps throw an internal sentinel (`CapExceeded`);
 //    `htmlToMarkdown` wraps the whole walk in a try/catch that returns `null` for
 //    ANY thrown value, so the handler always has a safe defer-to-plain-paste path.
@@ -584,9 +596,13 @@ function pushInlineBlocks(
 
 /** Serialise the block-level children of `parent` (body / li / blockquote / an
  *  unknown block) to an array of block strings (no trailing separators). A run of
- *  inline/text nodes coalesces into one paragraph (per-line marker-escaped);
- *  recognised block elements map to Markdown; unknown elements carrying block
- *  children recurse, else fold into the inline run. */
+ *  inline/text nodes is SPLIT at runs of 2+ `<br>` and yields one paragraph per
+ *  segment (per-line marker-escaped, content-free segments dropped) — it does not
+ *  coalesce into a single paragraph. Recognised block elements map to Markdown.
+ *  Any BLOCK_LEVEL_TAGS element recurses into its own block(s) — including one
+ *  holding nothing but inline children, which is what keeps `<div>`-per-line
+ *  fragments on separate lines — as does an unknown element carrying block
+ *  children; everything else folds into the inline run. */
 function serializeBlocks(parent: Element, depth: number, ctx: Ctx): string[] {
   if (depth > MAX_DEPTH) {
     throw new CapExceeded();
@@ -725,8 +741,13 @@ function serializeBlocks(parent: Element, depth: number, ctx: Ctx): string[] {
  *  practice mirror their block structure into `text/plain`. See the defer site in
  *  rich-html-paste.ts. */
 export interface HtmlToMarkdownResult {
-  markdown: string;
-  emittedMarkdownSyntax: boolean;
+  /** NEVER the empty string — `htmlToMarkdown` returns `null` instead. The
+   *  consumer relies on this: it dispatches `blockPrefix + markdown + blockSuffix`
+   *  AFTER calling preventDefault(), so an empty `markdown` would replace a
+   *  non-empty selection with blank-line separators alone — a silent deletion.
+   *  Keep the `out === ""` early return in place. */
+  readonly markdown: string;
+  readonly emittedMarkdownSyntax: boolean;
 }
 
 export function htmlToMarkdown(html: string): HtmlToMarkdownResult | null {

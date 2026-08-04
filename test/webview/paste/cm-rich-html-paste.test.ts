@@ -290,6 +290,18 @@ describe("richHtmlPaste — plain-text-like fragments defer", () => {
     view.destroy();
   });
 
+  it("defers to CM's uri-list fallback when a syntax-free fragment has no text/plain", () => {
+    // hasPlainFallback mirrors CM core's own getData("text/plain") ||
+    // getData("text/uri-list"). The other tests here all supply text/plain, so
+    // without this one the uri-list clause could be deleted from this defer and
+    // the suite would stay green (the sole existing uri-list test covers the
+    // caretInCode site instead).
+    const view = mount("");
+    firePaste(view, { html: "<div>example.com</div>", uriList: "https://example.com" });
+    expect(view.state.doc.toString()).toBe("https://example.com");
+    view.destroy();
+  });
+
   it("converts a syntax-free fragment when there is no text/plain to fall back to", () => {
     const view = mount("");
     const event = firePaste(view, { html: "<p>only html</p>" });
@@ -328,12 +340,15 @@ describe("richHtmlPaste — plain-text-like fragments defer", () => {
   it("stays inert in a read-only editor on the defer path too", () => {
     // The defer returns BEFORE the handler's own canWrite() check, so read-only
     // safety on this path is inherited from CM's builtin paste handler, which
-    // early-returns on view.state.readOnly. That is only sound because
-    // EditorState.readOnly / EditorView.editable (the `editableComp` compartment
-    // in editor.ts) are reconfigured from the SAME `canWrite` wire value that
-    // feeds opts.canWrite() — see the identical note in html-table-paste.ts.
-    // Pin it, so decoupling the two shows up as a red test rather than a
-    // read-only document silently accepting a paste.
+    // early-returns on view.state.readOnly.
+    //
+    // What this test does NOT pin: the EditorState.readOnly ↔ opts.canWrite
+    // coupling that makes the inheritance sound. `mount` derives both from one
+    // flag, so a divergence between them is not constructible here and this test
+    // would stay green if they came apart. That coupling is owned by the
+    // `editableComp` reconfiguration in editor.ts and belongs with it. What this
+    // DOES pin is the end state a user can observe: a read-only document does not
+    // accept a deferred paste.
     const view = mount("", false);
     firePaste(view, { html: CHECKLIST_HTML, text: CHECKLIST_PLAIN });
     expect(view.state.doc.toString()).toBe("");
