@@ -532,6 +532,34 @@ describe("htmlToMarkdown — emittedMarkdownSyntax discriminator", () => {
       `<div>- [ ] task</div><div><code><span>${ZWJ}<hr></span></code></div>`,
     ],
     ["<pre> whose body is a joiner beside an <hr>", `<div>- [ ] task</div><pre><hr>${ZWJ}</pre>`],
+    // BURIED <hr> + joiner in a blockquote / list item. An <hr> two inline wrappers deep
+    // (or inside a SKIP_TAGS subtree like <select>) makes hasVisibleContent pass on its
+    // <hr> clause, yet the buried hr serialises to nothing, leaving only the lone joiner.
+    // The blockquote/list-item residues used to gate on `!== ""` (not the full-strip
+    // rule), so that joiner was wrapped + flagged. Both now route through
+    // blankAfterInvisible, closing the unification's last two gaps. The h1-buried row is
+    // the control that already passed (its residue was already on the rule) — a
+    // regression guard, proving the blockquote/list branches were the only gap.
+    [
+      "blockquote whose visible content is a buried <hr> beside a joiner",
+      `<div>- [ ] task</div><blockquote><span><span><hr></span></span>${ZWJ}</blockquote>`,
+    ],
+    [
+      "blockquote whose <hr> is buried in a SKIP_TAGS subtree beside a joiner",
+      `<div>- [ ] task</div><blockquote><select><hr></select>${ZWJ}</blockquote>`,
+    ],
+    [
+      "list item whose visible content is a buried <hr> beside a joiner",
+      `<div>- [ ] task</div><ul><li><span><span><hr></span></span>${ZWJ}</li></ul>`,
+    ],
+    [
+      "ordered list item whose visible content is a buried <hr> beside a joiner",
+      `<div>- [ ] task</div><ol><li><span><span><hr></span></span>${ZWJ}</li></ol>`,
+    ],
+    [
+      "heading whose visible content is a buried <hr> beside a joiner",
+      `<div>- [ ] task</div><h1><span><span><hr></span></span>${ZWJ}</h1>`,
+    ],
     ["heading holding only a zero-width space", `<div>- [ ] task</div><h1>${ZWSP}</h1>`],
     ["list item holding only a zero-width space", `<div>- [ ] task</div><ul><li>${ZWSP}</li></ul>`],
     [
@@ -654,6 +682,28 @@ describe("htmlToMarkdown — emittedMarkdownSyntax discriminator", () => {
     const result = htmlToMarkdown(`<div>- [ ] task</div>${rich}`);
     expect(result?.emittedMarkdownSyntax).toBe(true);
     expect(result?.markdown).toBe(expected);
+  });
+
+  it.each([
+    // The W3 controls: when the <hr> is a DIRECT child (blockquote) or under a SINGLE
+    // wrapper routing it to the block path (list item), it emits `---` and the trailing
+    // joiner survives as a residue block — so the wrapper stays RICH. This is the
+    // over-reach guard for the buried-<hr> fix above: the residue rule must reject a
+    // joiner-ONLY body without also swallowing a body that also carries a real `---`.
+    [
+      "a blockquote whose <hr> renders beside a trailing joiner",
+      `<blockquote><hr>${ZWJ}</blockquote>`,
+      `> ---\n>\n> ${ZWJ}`,
+    ],
+    [
+      "a list item whose <hr> renders beside a trailing joiner",
+      `<ul><li><span><hr></span>${ZWJ}</li></ul>`,
+      `- ---\n\n  ${ZWJ}`,
+    ],
+  ])("keeps %s rich (the residue rule must not swallow a real ---)", (_label, rich, expected) => {
+    const result = htmlToMarkdown(`<div>- [ ] task</div>${rich}`);
+    expect(result?.emittedMarkdownSyntax).toBe(true);
+    expect(result?.markdown).toBe(`\\- \\[ \\] task\n\n${expected}`);
   });
 
   it.each([

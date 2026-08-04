@@ -702,14 +702,21 @@ function codeLang(pre: Element): string {
 function serializeListItem(li: Element, marker: string, depth: number, ctx: Ctx): string {
   const blocks = serializeBlocks(li, depth + 1, ctx);
   const indent = " ".repeat(marker.length);
-  if (blocks.length === 0) {
-    // No marker for an item with no blocks. `serializeList` has already refused
-    // the empty <li>s via hasVisibleContent, so what reaches here is an item whose
-    // text lives entirely in a SKIP_TAGS subtree (`<li><style>…</style></li>`) —
-    // a different question (did serialisation keep anything?) than the one
-    // hasVisibleContent answers, not a second answer to it. Returning `marker` here
-    // is what emitted the bare `-` that made an empty bullet look like rich
-    // content; the caller drops the empty string.
+  if (
+    blocks.length === 0 ||
+    blocks.every((b) => blankAfterInvisible(b.split(HARD_BREAK).join(" ")))
+  ) {
+    // No marker for an item whose blocks are all visually empty. `serializeList` has
+    // already refused the empty <li>s via hasVisibleContent, so what reaches here is an
+    // item whose blocks serialised to nothing readable — text living entirely in a
+    // SKIP_TAGS subtree (`<li><style>…</style></li>`, → no blocks), or a lone joiner left
+    // by a buried <hr> that satisfied the predicate's <hr> clause but serialised away
+    // (`<li><span><span><hr></span></span>‍</li>`). A different question (did
+    // serialisation keep anything readable?) than the one hasVisibleContent answers, on
+    // the SAME full-strip `blankAfterInvisible` rule as the HEADINGS/PRE/blockquote
+    // residues. Returning `marker` here is what emitted the bare `-` that made an empty
+    // bullet look like rich content; `serializeList`'s `item === ""` skip then drops it
+    // WITHOUT advancing the ordinal.
     return "";
   }
   const first = blocks[0]
@@ -1073,12 +1080,15 @@ function serializeBlocks(parent: Element, depth: number, ctx: Ctx): string[] {
     } else if (tag === "BLOCKQUOTE") {
       flushInline();
       // The quote wrapper mail clients leave behind in an otherwise plain reply.
-      // hasVisibleContent is the decision; `quoted !== ""` then guards the residue a
-      // non-empty source can still serialise away to (a SKIP_TAGS-only subtree),
-      // exactly as at HEADINGS.
+      // hasVisibleContent is the decision; the residue guard then rejects what a
+      // non-empty source can still serialise down to — a SKIP_TAGS-only subtree (→ "")
+      // or a lone joiner left by a buried <hr> that satisfied the predicate's <hr> clause
+      // but serialised to nothing. The SAME full-strip `blankAfterInvisible` rule as the
+      // HEADINGS/PRE residues (HARD_BREAK folded to a space first), not `!== ""`, which
+      // let a preserved joiner through as `> ‍`.
       if (hasVisibleContent(el)) {
         const quoted = serializeBlocks(el, depth + 1, ctx).join("\n\n");
-        if (quoted !== "") {
+        if (!blankAfterInvisible(quoted.split(HARD_BREAK).join(" "))) {
           push(prefixLines(quoted, "> "), true);
         }
       }
