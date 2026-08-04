@@ -627,9 +627,7 @@ describe("htmlToMarkdown — emittedMarkdownSyntax discriminator", () => {
     // The emitted GFM still carries the invisible byte (harmless), but the richness
     // verdict full-strips it — otherwise a contenteditable-residue ZWSP in a spacer
     // cell would flip the flag, the exact bug this PR closes.
-    const result = htmlToMarkdown(
-      `<div>- [ ] task</div><table><tr><td>${ZWSP}</td></tr></table>`
-    );
+    const result = htmlToMarkdown(`<div>- [ ] task</div><table><tr><td>${ZWSP}</td></tr></table>`);
     expect(result?.emittedMarkdownSyntax).toBe(false);
   });
 
@@ -637,7 +635,11 @@ describe("htmlToMarkdown — emittedMarkdownSyntax discriminator", () => {
     // Real cell/caption text made ONLY of table-grammar characters (`-`, `:`) is still
     // content — a regex on the flattened grid could not tell it from structure and
     // would DEFER, losing a real table to the plain flavour.
-    ["a cell holding only a dash", "<table><tr><td>-</td></tr></table>", "\\- \\[ \\] task\n\n| - |\n| --- |"],
+    [
+      "a cell holding only a dash",
+      "<table><tr><td>-</td></tr></table>",
+      "\\- \\[ \\] task\n\n| - |\n| --- |",
+    ],
     [
       "a caption holding only a colon",
       "<table><caption>:</caption><tr><td></td></tr></table>",
@@ -784,6 +786,20 @@ describe("htmlToMarkdown — emittedMarkdownSyntax discriminator", () => {
     const result = htmlToMarkdown('<p><b style="-webkit-font-weight:normal">x</b></p>');
     expect(result?.markdown).toBe("**x**");
     expect(result?.emittedMarkdownSyntax).toBe(true);
+  });
+
+  it("does not bold an emphasis span holding only a lone joiner", () => {
+    // Emphasis is the one flag-recording branch that does not route through
+    // hasVisibleContent, so once the emit path preserves joiners a `<strong>` wrapping
+    // only a ZWJ would emit `**‍**` and flip the flag — the invisible-container bug.
+    // The emptiness rule (blankAfterInvisible) in emphasize() rejects it.
+    const zwj = htmlToMarkdown(`<div>- [ ] task</div><p><strong>${ZWJ}</strong></p>`);
+    expect(zwj?.emittedMarkdownSyntax).toBe(false);
+    expect(zwj?.markdown).not.toContain("**");
+    // Fidelity guard: a joiner WITHIN visible text still bolds, joiner preserved.
+    const emoji = htmlToMarkdown(`<p><strong>👨${ZWJ}👩${ZWJ}👧</strong></p>`);
+    expect(emoji?.markdown).toBe(`**👨${ZWJ}👩${ZWJ}👧**`);
+    expect(emoji?.emittedMarkdownSyntax).toBe(true);
   });
 
   it("is false for an emphasis span that wraps nothing (all whitespace)", () => {
@@ -969,9 +985,9 @@ describe("htmlToMarkdown — block separators", () => {
     // <center> is block-level and ubiquitous in email/newsletter HTML; omitting it
     // from BLOCK_LEVEL_TAGS folded consecutive sections into one word-glued line. A
     // heading makes the fragment rich, so the glued output was actually inserted.
-    expect(
-      htmlToMarkdown("<h1>T</h1><center>one</center><center>two</center>")?.markdown
-    ).toBe("# T\n\none\n\ntwo");
+    expect(htmlToMarkdown("<h1>T</h1><center>one</center><center>two</center>")?.markdown).toBe(
+      "# T\n\none\n\ntwo"
+    );
   });
 
   it("keeps a <br> run together across a comment (Word/Outlook clipboard HTML)", () => {

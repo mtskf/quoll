@@ -312,8 +312,20 @@ function wrapEmphasis(inner: string, marker: string): string {
  *  `wrapEmphasis` returns its input unchanged when the span is all-whitespace /
  *  `<br>`-only, and that degenerate case emits no syntax — so compare rather than
  *  assume. Wrapping and recording are one call so they cannot be given different
- *  inputs. */
+ *  inputs.
+ *
+ *  This is where emphasis consults the emptiness rule: emphasis does NOT route
+ *  through `hasVisibleContent(el)`, but a VISUALLY EMPTY span must still not become
+ *  `**…**` and flip the flag. `wrapEmphasis` already returns `inner` for a
+ *  whitespace-/`<br>`-only span, but the emit path preserves joiners, so a lone-joiner
+ *  span (`<strong>&#8205;</strong>`) reaches here with non-hoistable `inner`.
+ *  `blankAfterInvisible` (the same full-strip predicate the containers use) rejects it,
+ *  returning `inner` transparently — like a `<span>` — with no markers and no flag,
+ *  while a joiner WITHIN visible text (`<strong>👨‍👩‍👧</strong>`) still bolds. */
 function emphasize(ctx: Ctx, inner: string, marker: string): string {
+  if (blankAfterInvisible(inner)) {
+    return inner;
+  }
   const wrapped = wrapEmphasis(inner, marker);
   if (wrapped !== inner) {
     ctx.emittedMarkdownSyntax = true;
