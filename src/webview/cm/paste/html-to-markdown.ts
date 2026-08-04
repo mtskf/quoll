@@ -4,11 +4,18 @@
 // (happy-dom provides it under test), so this stays inside Quoll's supply-chain
 // default-deny.
 //
-// TWO output channels, both of which send the caller to plain-text paste:
-//  - `null` — nothing convertible (empty walk, cap breached, parse error).
+// TWO output channels, both of which INVITE the caller to prefer the clipboard's
+// own bytes. Neither commands it — what the caller does depends on what else the
+// clipboard carries, so do not assume either output string is unreachable:
+//  - `null` — nothing convertible (empty walk, cap breached, parse error). The
+//    caller normally defers, but with no plain/uri fallback over a non-empty
+//    selection it SWALLOWS the event instead (deferring would let CM's
+//    `doPaste("")` delete the selection) — no paste of any kind happens.
 //  - `emittedMarkdownSyntax === false` — the walk produced escaped text and line
 //    structure only. The conversion is valid Markdown, but the caller prefers the
-//    clipboard's own `text/plain` bytes over this module's escaped rendering.
+//    clipboard's own `text/plain` bytes over this module's escaped rendering —
+//    ONLY when such a fallback exists. With no fallback it inserts this module's
+//    output after all, so the escaped rendering is a live path, not dead code.
 //    This is the dominant path for clipboards that carry a merely presentational
 //    HTML flavour. See the `HtmlToMarkdownResult` docblock at the bottom.
 //
@@ -224,13 +231,20 @@ function emphasize(ctx: Ctx, inner: string, marker: string): string {
 
 /** The hard-break token `serializeInline` emits for `<br>`: a backslash
  *  immediately followed by a newline. Declared here, above its emitting site, so
- *  the token and the `pushInlineBlocks` logic that matches it cannot drift apart.
+ *  the token and the `trimSegmentEdges` scan that matches it cannot drift apart.
+ *
+ *  ⚠️ Two OTHER places match the same two characters WITHOUT referencing this
+ *  constant, because they are declared above it: `wrapEmphasis` (its edge-hoisting
+ *  scans, which compare `"\\"` and `"\n"` index by index) and the `<a>` branch of
+ *  `serializeInline` (which splits the label on the token). Change the token here
+ *  and you must change all three — the anti-drift guarantee this declaration site
+ *  offers is a convention, not something the compiler enforces.
  *
  *  A `\n` in an inline fragment ALWAYS comes from a `<br>` and always carries its
  *  own leading backslash, so matching the two-character token is unambiguous.
  *  That holds because EVERY text node on the inline path goes through
- *  `collapseWs`, which turns each whitespace run into a single space, and an
- *  `<a>` label has its newlines replaced. Note the reason is `collapseWs`, NOT
+ *  `collapseWs`, which turns each whitespace run into a single space. Note the
+ *  reason is `collapseWs`, NOT
  *  "`<pre>` is handled elsewhere": only DIRECT children are block-tested, so a
  *  `<pre>` under an inline ancestor (`<em><span><pre>a\nb</pre></span></em>`)
  *  does reach `serializeInline` — its body simply arrives as a text node and
@@ -527,9 +541,13 @@ function splitInlineSegments(nodes: Node[]): Node[][] {
  *  paragraphs, which is exactly this shape.
  *
  *  Known gap, deliberately not closed here: an EMPTY INLINE ELEMENT
- *  (`a<br><span></span><br>b`) still splits the run, and does so on BOTH callers
- *  — it is a shared limitation, not the caller asymmetry above. Recognising it
- *  needs a serialise-then-test pass rather than a node filter. */
+ *  (`a<br><span></span><br>b`) still INTERRUPTS the `<br>` run, so the two breaks
+ *  are never seen as the 2+ run that would split the block. They settle as two
+ *  lone hard breaks in ONE paragraph — i.e. a line holding nothing but the
+ *  escaping backslash, the artefact the neighbouring comments describe, not an
+ *  extra block. It does so on BOTH callers — a shared limitation, not the caller
+ *  asymmetry above. Recognising it needs a serialise-then-test pass rather than a
+ *  node filter. */
 function contributesNothing(node: Node): boolean {
   if (node.nodeType === TEXT_NODE) {
     return false;
@@ -617,12 +635,14 @@ function serializeBlocks(parent: Element, depth: number, ctx: Ctx): string[] {
     throw new CapExceeded();
   }
   const blocks: string[] = [];
-  // `syntax` is REQUIRED (no default, not optional): a new block branch cannot
-  // compile without stating whether it emits Markdown syntax, so the flag can no
-  // longer be forgotten — nor set for a branch that ends up emitting nothing,
-  // which is how one empty <blockquote> used to defeat the caller's defer. Same
-  // discipline as `count`: the fact is recorded by the funnel every block goes
-  // through, not by a free-standing assignment beside it.
+  // `syntax` is REQUIRED (no default, not optional), so a branch that goes through
+  // `push` cannot compile without stating whether it emits Markdown syntax — TS
+  // rejects a bare `push(s)`. That is the whole of the guarantee: `blocks` is a
+  // plain array in this same scope, so `blocks.push(s)` also compiles and would
+  // emit the block while silently leaving the flag false. Route every block
+  // through `push`; never write to `blocks` directly. Same discipline as `count`:
+  // the fact is recorded by the funnel, not by a free-standing assignment beside
+  // it — which is how one empty <blockquote> used to defeat the caller's defer.
   //
   // Output is counted at its LEAF source (see `count`), never at these aggregating
   // pushes, so nested list/blockquote wrappers don't re-count already-counted
