@@ -189,11 +189,13 @@ export function createImagePasteDrop(opts: {
     for (const file of files.slice(0, MAX_IMAGES_PER_EVENT)) {
       if (file.size === 0) {
         // The only refusal in this loop that used to be silent, and the one with the
-        // widest blast radius: `isIngestibleImageItem` never looks at size, so
-        // richHtmlPaste has already DEFERRED on this item; this handler then
-        // preventDefaults for the event, skips every file and returns true. The
-        // paste is fully consumed, nothing is inserted, and CM's plain-text fallback
-        // is suppressed too — a paste that vanishes with no trace anywhere.
+        // widest blast radius. `handle` is shared by the paste and drop paths: on the
+        // PASTE path `isIngestibleImageItem` never looks at size, so richHtmlPaste has
+        // already deferred on this item; on the DROP path there is no such upstream.
+        // Either way this handler then preventDefaults for the event, skips every file
+        // and returns true — the event is fully consumed, nothing is inserted, and (on
+        // paste) CM's plain-text fallback is suppressed too: a paste that vanishes with
+        // no trace anywhere.
         //
         // Deliberately NOT hoisted into `isIngestibleImageItem`: the per-event
         // aggregate cap below is order-dependent and cannot live in a per-item

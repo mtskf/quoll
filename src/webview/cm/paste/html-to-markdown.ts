@@ -44,23 +44,26 @@
 //    exactly as typing them would. It is NOT unconditional: when nothing downstream
 //    can absorb the defer (an HTML-only clipboard) the caller inserts this escaped
 //    rendering after all, because the alternative is a paste that does nothing.
-//  - Whether a container is EMPTY is asked once, of the source element, by
-//    `hasVisibleContent` — never re-derived from a branch's own rendered output,
-//    which is what six separate branches got wrong (an empty list renders `-`,
-//    not ``). Every branch that sets `emittedMarkdownSyntax` from a container
-//    routes through it — on that container, or (for `<ul>`/`<ol>`) on each `<li>`
-//    the list is composed of. Three classes deliberately do not, each for its own
-//    reason, and none of them is covered by the predicate — do not assume
-//    otherwise when changing them:
-//     · `<hr>` opts out. A void element: the predicate would answer "empty" for
-//       every one, and thematic breaks would stop converting altogether.
-//     · `<table>` emits its grid unconditionally and takes only its RICHNESS from
-//       the predicate — the one branch where those two answers differ.
-//     · `<strong>`/`<b>`/`<em>`/`<i>` never consult it. Their flag comes from
-//       `emphasize`, which records whether markers were actually WRITTEN — and
-//       `wrapEmphasis` writes none when the span holds nothing but spaces and
-//       `<br>` tokens, which is all an empty one holds once `collapseWs` has
-//       deleted the zero-width class.
+//  - Whether a container is visually EMPTY is decided by ONE rule —
+//    `blankAfterInvisible` (full-strip zero-width + whitespace), measured over
+//    SKIP_TAGS-filtered text (`skipTagsText`) — never re-derived from a branch's own
+//    rendered output, which is what six separate branches got wrong (an empty list
+//    renders `-`, not ``). Most branches reach that rule through `hasVisibleContent(el)`,
+//    which wraps it and adds the `<hr>` clause: every container branch that sets
+//    `emittedMarkdownSyntax` routes through `hasVisibleContent` — on that container, or
+//    (for `<ul>`/`<ol>`) on each `<li>`. Three branches decide emptiness by the SAME
+//    rule but deliberately WITHOUT calling `hasVisibleContent(el)`, each for its own
+//    reason — do not assume otherwise when changing them:
+//     · `<hr>` opts out of the rule entirely. A void element: the predicate would
+//       answer "empty" for every one, and thematic breaks would stop converting.
+//     · `<table>` emits its grid unconditionally and takes its RICHNESS from a PER-CELL
+//       `blankAfterInvisible(skipTagsText(cell))` check (td/th/caption), NOT from
+//       `hasVisibleContent(el)` — whose `<hr>` clause would call an `<hr>`-only spacer
+//       cell rich. The one branch where "emit this" and "this is rich" differ.
+//     · `<strong>`/`<b>`/`<em>`/`<i>` set their flag in `emphasize`, which consults
+//       `blankAfterInvisible` on the emitted `inner` (so a lone-joiner span is not
+//       bolded) but never calls `hasVisibleContent(el)`. `wrapEmphasis` additionally
+//       hoists spaces/`<br>` edges out of the markers.
 //    A block pushed with `syntax: false` — a paragraph, or the blocks a nested
 //    walk already recorded for itself — needs none of this: it cannot flip the
 //    flag, so its own "did anything render" test cannot defeat the caller's defer.
@@ -562,8 +565,9 @@ const BLOCK_LEVEL_TAGS = new Set([
  *  and every branch that sets `emittedMarkdownSyntax` from a container routes
  *  through it FIRST — on that container, or (for `<ul>`/`<ol>`) on each `<li>` the
  *  list is composed of. Not "every branch below": `CODE` and `A` are declared above
- *  this point, and the emphasis tags never consult it at all — the module header
- *  lists the three non-users and why each one is safe. An empty container that sets
+ *  this point yet still route through it; `<table>` and the emphasis tags decide
+ *  emptiness by the same `blankAfterInvisible` rule but do NOT call this function —
+ *  the module header lists those three and why each is safe. An empty container that sets
  *  the flag defeats the caller's no-syntax defer and re-escapes Markdown the user
  *  typed by hand (`- [ ]` → `\- \[ \]`) — the bug this whole guard exists to stop.
  *
@@ -573,27 +577,28 @@ const BLOCK_LEVEL_TAGS = new Set([
  *  safe precisely because an `<hr>` holds nothing: it has no empty-vs-full variant,
  *  so there is no wrong answer for the predicate to give.
  *
- *  `<table>` used to be a second opt-out, on two claims that were both false. A
- *  table is NOT inherently content-free — it has exactly the empty-vs-full variant
- *  an `<hr>` lacks, and the empty one (a spacer/layout grid) is what Outlook and
- *  newsletter HTML emit beside real prose. And `tableElementToGfm` does NOT
- *  separately protect against it: it returns `null` only for a table with no cells
- *  AT ALL, never for a table whose cells are merely empty. The TABLE branch now
- *  emits its grid unconditionally but takes its RICHNESS from this predicate; see
- *  the comment there for why those two answers differ only for a table.
+ *  `<table>` is NOT gated by this predicate: the TABLE branch emits its grid
+ *  UNCONDITIONALLY and reads richness from a per-cell `blankAfterInvisible` check, so
+ *  a text-free spacer grid at top level is emitted (not rich). But a table NESTED in
+ *  a predicate-gated container inherits THAT container's verdict — a text-free table
+ *  inside a `<blockquote>`/`<li>` makes the wrapper read empty here and is dropped
+ *  outright (`<blockquote><table>empty</table></blockquote>` → nothing), where the
+ *  same table at top level emits its grid. That asymmetry is deliberate: the lost
+ *  artefact is a text-free grid, and the alternative — a `querySelector("table")`
+ *  clause — would re-open the content-loss direction the `<hr>` clause exists to
+ *  close. See the TABLE branch comment for the per-cell richness rule.
  *
  *  Visible content is TEXT — measured through `skipTagsText` (SKIP_TAGS excluded) and
  *  the full-strip `blankAfterInvisible`, so neither whitespace, the zero-width class,
- *  nor `<style>`/`<textarea>` text counts — OR an `<hr>`, and `<hr>` ONLY. That second clause
- *  is not a tag list creeping in through the back door: an `<hr>` is the one
- *  text-free source element this converter turns into something a READER SEES, so
- *  it is exactly the set the text test would otherwise miss, and it is the same
- *  single exception the opt-out above already makes — stated once instead of twice.
- *  The other text-free elements stay out on purpose, each for its own reason: an
- *  `<img>` renders in a browser but serialises to NOTHING here, so counting it
- *  would push an empty wrapper; a lone `<br>` IS the emptied-block residue this
- *  guard exists to reject; and a text-free `<table>` is the spacer grid the TABLE
- *  branch already declines to call rich.
+ *  nor `<style>`/`<textarea>` text counts — OR an `<hr>`, and `<hr>` ONLY. That second
+ *  clause is not a tag list creeping in through the back door: an `<hr>` is the one
+ *  text-free element whose OWN branch depends on this predicate to survive — a
+ *  text-free `<table>` also renders something a reader sees, but its branch emits
+ *  unconditionally and consults the predicate only via a container wrapper, so it
+ *  needs no clause here. The other text-free elements stay out on purpose, each for
+ *  its own reason: an `<img>` renders in a browser but serialises to NOTHING here, so
+ *  counting it would push an empty wrapper; and a lone `<br>` IS the emptied-block
+ *  residue this guard exists to reject.
  *
  *  Without that clause a container whose only child is an `<hr>` —
  *  `<blockquote><hr></blockquote>`, `<li><hr></li>` — read as empty and was dropped
@@ -879,13 +884,10 @@ function pushInlineBlocks(
   for (const segment of splitInlineSegments(contributing)) {
     const serialized = segment.map((nd) => serializeInline(nd, depth, ctx)).join("");
     const raw = trimSegmentEdges(serialized);
-    // After edge-trimming, a segment whose only content was hard breaks and
-    // whitespace — a lone `<br>` between two blocks, or `<p><br></p>` — is exactly
-    // empty, and any surviving break has real content on both sides.
-    if (raw === "") {
-      continue;
-    }
     const text = escapeMarkers(raw).trim();
+    // A segment that edge-trimmed to nothing — a lone `<br>` between two blocks, or
+    // `<p><br></p>` — falls out here: `escapeMarkers("") === ""`, so `text` is empty
+    // and nothing is pushed. Any surviving break has real content on both sides.
     if (text !== "") {
       // `false`: a paragraph is escaped text, never syntax. Any syntax INSIDE it
       // (emphasis, a link, inline code) was recorded by `serializeInline` at the
@@ -1052,11 +1054,10 @@ function serializeBlocks(parent: Element, depth: number, ctx: Ctx): string[] {
       //    paste that something else (a heading, say) already made rich.
       //  - RICH only when a CELL holds visible content: a layout/spacer grid — the
       //    default output of Outlook, mail signatures and newsletter HTML, riding
-      //    beside ordinary prose — shows a reader nothing, and calling it rich
-      //    defeats the caller's no-syntax defer and re-escapes Markdown the user
-      //    typed by hand (`- [ ]` → `\- \[ \]`), the bug this whole guard exists to
-      //    stop. A text-free grid loses nothing by not being rich: the handler then
-      //    defers and the clipboard's own bytes carry the grid as tab-separated text.
+      //    beside ordinary prose — shows a reader nothing, so calling it rich would
+      //    defeat the no-syntax defer (the recurring bug this guard exists to stop). A
+      //    text-free grid loses nothing by not being rich: the handler defers and the
+      //    clipboard's own bytes carry the grid as tab-separated text.
       // Richness is read PER CELL (td/th/caption), through the same emptiness rule
       // the predicate uses (`blankAfterInvisible(skipTagsText(cell))`) — NOT from
       // hasVisibleContent(el), whose `<hr>` clause would call an `<hr>`-only spacer
@@ -1071,11 +1072,8 @@ function serializeBlocks(parent: Element, depth: number, ctx: Ctx): string[] {
       push(count(ctx, gfm), tableIsRich);
     } else if (tag === "HR") {
       flushInline();
-      // OPT-OUT from hasVisibleContent (see its docblock): an <hr> is inherently
-      // content-free — it is a void element, so the predicate would say "empty" for
-      // EVERY one of them and the thematic break would stop converting altogether.
-      // Safe precisely because it holds nothing: there is no empty-vs-full variant
-      // of an <hr>, so there is no wrong answer for the predicate to give.
+      // OPT-OUT from hasVisibleContent — a void element has no empty-vs-full variant,
+      // so there is no wrong answer for the predicate to give (rationale in its docblock).
       push("---", true);
     } else if (tag === "BR") {
       inlineRun.push(el); // a stray <br> between blocks joins the inline run
