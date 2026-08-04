@@ -14,6 +14,8 @@ const convert = (html: string): string | null => htmlToMarkdown(html)?.markdown 
 // drop it without anyone noticing the test stopped testing anything.
 const ZWSP = String.fromCharCode(0x200b); // U+200B ZERO WIDTH SPACE
 const NBSP = String.fromCharCode(0xa0); // U+00A0 NO-BREAK SPACE
+const ZWJ = String.fromCharCode(0x200d); // U+200D ZERO WIDTH JOINER (load-bearing: emoji glue)
+const ZWNJ = String.fromCharCode(0x200c); // U+200C ZERO WIDTH NON-JOINER (load-bearing: orthography)
 
 /** True when `md` parses (under Quoll's shipped GFM parser) to a tree containing a
  *  node named `name` — used to prove a converted construct actually renders as the
@@ -167,6 +169,21 @@ describe("htmlToMarkdown — inline constructs", () => {
     // run (the other way to neutralise it) would insert a gap between two letters
     // that touch in the source — the emptiness fix must not cost text fidelity.
     expect(convert(`<p>a${ZWSP}b</p>`)).toBe("ab");
+  });
+  it("preserves U+200D (ZWJ) that glues an emoji sequence, through rich markup", () => {
+    // The emit path must NOT strip joiners — deleting U+200D splits a family emoji
+    // into three separate people, permanently, on disk. Landing it through a heading
+    // and a bold run proves the fidelity holds where the flag is set (rich → inserted).
+    const family = `👨${ZWJ}👩${ZWJ}👧`;
+    const dev = `👩${ZWJ}💻`;
+    expect(convert(`<h1>${family}</h1>`)).toBe(`# ${family}`);
+    expect(convert(`<p><strong>${dev}</strong></p>`)).toBe(`**${dev}**`);
+  });
+  it("preserves U+200C (ZWNJ) required by Persian orthography, through rich markup", () => {
+    // U+200C is required orthography — stripping it misspells the word. Persian می‌روم
+    // ("I go") becomes میروم without it.
+    const word = `می${ZWNJ}روم`;
+    expect(convert(`<h2>${word}</h2>`)).toBe(`## ${word}`);
   });
   it("collapses a text-node newline to a space (no indented code, no smuggled marker)", () => {
     expect(convert("<p>a\n    - b</p>")).toBe("a - b");
@@ -440,6 +457,12 @@ describe("htmlToMarkdown — emittedMarkdownSyntax discriminator", () => {
     // non-breaking space is invisible-ish too and must keep the same answer, so a
     // future edit cannot change one boundary while believing it moved the other.
     ["heading holding only a non-breaking space", `<div>- [ ] task</div><h1>${NBSP}</h1>`],
+    // A LONE joiner is visually empty even though the emit path preserves joiners
+    // inside real text (the ZWJ-emoji fidelity fix). Emptiness is a SEPARATE
+    // full-strip question — this row is green today and stays green only while the
+    // predicate keeps stripping joiners; it goes red if the emit-path narrowing ever
+    // leaks into the emptiness normaliser.
+    ["heading holding only a zero-width joiner", `<div>- [ ] task</div><h1>${ZWJ}</h1>`],
   ])("is false for an %s (an empty container is not rich content)", (_label, html) => {
     // The wrapper mail clients leave behind in quoted HTML, the empty bullet a
     // contenteditable leaves behind, the tracking pixel a marketing mail wraps in a

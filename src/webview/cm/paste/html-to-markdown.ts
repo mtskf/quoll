@@ -163,20 +163,73 @@ function escapeMarkers(text: string): string {
  *  reads verbatim, so an interior newline cannot form indented code or smuggle an
  *  unescaped line start; real breaks come only from `<br>` and block structure.
  *
- *  The zero-width class (U+200B ZERO WIDTH SPACE, U+200C/200D joiners, U+2060 word
- *  joiner, U+FEFF) is deleted rather than folded into the whitespace run: these
- *  characters occupy no width, so turning one into a space would insert a gap
- *  between two letters that touch. U+00A0 needs no clause — it IS `\s`, and that is
- *  the shape this follows: ONE place decides what counts as invisible, so
- *  `hasVisibleContent`, `emphasize` and the heading/list residue guards all inherit
- *  the same answer instead of each growing its own test. That matters because
- *  U+200B is what a contenteditable (Notion / Slack / Quill / ProseMirror) leaves
- *  in a block the user has emptied — i.e. precisely the leftover container the
- *  emptiness guard exists to reject — and `String.prototype.trim()` does not strip
- *  it. Without this, `<h1>&#8203;</h1>` counted as content and flipped
- *  `emittedMarkdownSyntax`, re-escaping the user's hand-typed Markdown. */
+ *  Deletes ONLY the width-less SPACING class — U+200B ZERO WIDTH SPACE, U+2060 WORD
+ *  JOINER, U+FEFF — because these occupy no width, so folding one into a space would
+ *  insert a gap between two letters that touch. U+200C ZERO WIDTH NON-JOINER and
+ *  U+200D ZERO WIDTH JOINER are DELIBERATELY PRESERVED here: they are also width-less
+ *  but they carry meaning — U+200D glues emoji ZWJ sequences (a family / profession /
+ *  flag emoji), U+200C is required orthography in Persian and Indic scripts — so
+ *  deleting them on the emit path corrupts real text on disk (a family emoji splits
+ *  into three people; a Persian word loses a letter). This runs on EVERY emitted text
+ *  node, so it is fidelity-first. U+00A0 needs no clause — it IS `\s`.
+ *
+ *  EMPTINESS is a SEPARATE question, answered by `blankAfterInvisible`, which strips
+ *  the FULL zero-width class (joiners included) because a lone joiner is visually
+ *  empty even though a joiner WITHIN text is load-bearing. Splitting the two is what
+ *  lets output keep joiners while `hasVisibleContent` still rejects a contenteditable's
+ *  emptied block — the leftover container (`<h1>&#8203;</h1>`, `<h1>&#8205;</h1>`) the
+ *  emptiness guard exists to reject, which `String.prototype.trim()` does not strip. */
 function collapseWs(text: string): string {
-  return text.replace(/[\u200B-\u200D\u2060\uFEFF]/g, "").replace(/\s+/g, " ");
+  return text.replace(/[\u200B\u2060\uFEFF]/g, "").replace(/\s+/g, " ");
+}
+
+/** Emptiness normaliser: strip the FULL zero-width class (U+200B ZERO WIDTH SPACE,
+ *  U+200C/200D joiners, U+2060 WORD JOINER, U+FEFF), collapse whitespace, trim, and
+ *  report whether nothing visible remains. Distinct from `collapseWs` (the emit path,
+ *  which PRESERVES joiners for fidelity): a lone joiner reads as blank here so an
+ *  otherwise-empty container holding only one cannot flip `emittedMarkdownSyntax`. The
+ *  single answer to "is this text visually empty", shared by `hasVisibleContent` and
+ *  the table per-cell richness check, so neither grows its own rule. */
+function blankAfterInvisible(text: string): boolean {
+  return text.replace(/[\u200B-\u200D\u2060\uFEFF]/g, "").replace(/\s+/g, " ").trim() === "";
+}
+
+/** Concatenate every descendant text node of `el` VERBATIM, skipping `SKIP_TAGS`
+ *  subtrees (whose text is not prose and must never enter output or count as visible).
+ *  Explicit-stack DFS, the same shape as `collectCellText` in html-table-to-gfm.ts.
+ *  Used by the ONE emptiness predicate (so `<style>`/`<textarea>` text no longer reads
+ *  as visible) and by the two branches that emit a body from `textContent` rather than
+ *  `serializeInline` \u2014 `<pre>` (verbatim) and inline `<code>` (then `collapseWs`'d) \u2014 so
+ *  SKIP_TAGS text cannot leak into a fenced / inline-code body. */
+function skipTagsText(el: Element): string {
+  const parts: string[] = [];
+  const stack: Node[] = [];
+  const seed = el.childNodes;
+  for (let i = seed.length - 1; i >= 0; i--) {
+    stack.push(seed[i]);
+  }
+  while (stack.length > 0) {
+    const node = stack.pop();
+    if (node === undefined) {
+      continue;
+    }
+    if (node.nodeType === TEXT_NODE) {
+      parts.push(node.textContent ?? "");
+      continue;
+    }
+    if (node.nodeType !== ELEMENT_NODE) {
+      continue;
+    }
+    const child = node as Element;
+    if (SKIP_TAGS.has(child.tagName)) {
+      continue;
+    }
+    const kids = child.childNodes;
+    for (let i = kids.length - 1; i >= 0; i--) {
+      stack.push(kids[i]);
+    }
+  }
+  return parts.join("");
 }
 
 /** Write `url` (already `isAllowedUrl`-approved) as a CommonMark link destination
@@ -518,8 +571,9 @@ const BLOCK_LEVEL_TAGS = new Set([
  *  emits its grid unconditionally but takes its RICHNESS from this predicate; see
  *  the comment there for why those two answers differ only for a table.
  *
- *  Visible content is TEXT — normalised by `collapseWs`, so neither whitespace nor
- *  the zero-width class counts — OR an `<hr>`, and `<hr>` ONLY. That second clause
+ *  Visible content is TEXT — measured through `skipTagsText` (SKIP_TAGS excluded) and
+ *  the full-strip `blankAfterInvisible`, so neither whitespace, the zero-width class,
+ *  nor `<style>`/`<textarea>` text counts — OR an `<hr>`, and `<hr>` ONLY. That second clause
  *  is not a tag list creeping in through the back door: an `<hr>` is the one
  *  text-free source element this converter turns into something a READER SEES, so
  *  it is exactly the set the text test would otherwise miss, and it is the same
@@ -539,11 +593,12 @@ const BLOCK_LEVEL_TAGS = new Set([
  *  one of the live collections this module avoids (header design notes). It is
  *  evaluated only when the text test already said "no". */
 function hasVisibleContent(el: Element): boolean {
-  // Through `collapseWs`, not straight to `trim()`: `trim()` strips U+00A0 but NOT
-  // the zero-width class, so a contenteditable's emptied block (`<h1>&#8203;</h1>`)
-  // read as content. Sharing the text path's own normaliser is what keeps that
-  // answer identical here and at `emphasize` — see the `collapseWs` docblock.
-  return collapseWs(el.textContent ?? "").trim() !== "" || el.querySelector("hr") !== null;
+  // TEXT term through `skipTagsText` (so `<style>`/`<textarea>` text no reader sees is
+  // excluded) + `blankAfterInvisible` (full-strip: `trim()` alone strips U+00A0 but not
+  // the zero-width class, so a contenteditable's emptied block `<h1>&#8203;</h1>` or a
+  // lone joiner `<h1>&#8205;</h1>` would read as content). The `<hr>` clause is
+  // UNCHANGED — it is what keeps `<blockquote><hr>` / `<li><hr>` emitting `---`.
+  return !blankAfterInvisible(skipTagsText(el)) || el.querySelector("hr") !== null;
 }
 
 /** Direct element children of `el` whose tagName is `tag`. */
