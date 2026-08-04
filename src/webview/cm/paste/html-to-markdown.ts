@@ -181,10 +181,10 @@ function escapeMarkers(text: string): string {
  *  EMPTINESS is a SEPARATE question, answered by `blankAfterInvisible`, which strips
  *  the whole Default_Ignorable property (the joiners included, plus bidi marks and
  *  variation selectors) because a lone one is visually empty even though a joiner WITHIN
- *  text is load-bearing. Splitting the two is what
- *  lets output keep joiners while `hasVisibleContent` still rejects a contenteditable's
- *  emptied block — the leftover container (`<h1>&#8203;</h1>`, `<h1>&#8205;</h1>`) the
- *  emptiness guard exists to reject, which `String.prototype.trim()` does not strip. */
+ *  text is load-bearing. Splitting the two is what lets output keep joiners while
+ *  `hasVisibleContent` still rejects a contenteditable's emptied block — the leftover
+ *  container (`<h1>&#8203;</h1>`, `<h1>&#8205;</h1>`) the emptiness guard exists to
+ *  reject, which `String.prototype.trim()` does not strip. */
 function collapseWs(text: string): string {
   return text.replace(/[\u200B\u2060\uFEFF]/g, "").replace(/\s+/g, " ");
 }
