@@ -80,8 +80,13 @@ describe("htmlToMarkdown — inline constructs", () => {
     expect(parsesToNode(md, "StrongEmphasis")).toBe(false);
   });
   it("hoists a <br> off BOTH edges of an emphasis span", () => {
+    // Both breaks are hoisted OUTSIDE the markers (that is what keeps them
+    // pairable). The leading one then sits at the start of the paragraph segment,
+    // where pushInlineBlocks drops it — it would otherwise render as a line
+    // holding nothing but the escaping backslash. The trailing one has "bar"
+    // after it, so it stays a real hard break.
     const md = convert("<p><strong><br>foo<br></strong>bar</p>") as string;
-    expect(md).toBe("\\\n**foo**\\\nbar");
+    expect(md).toBe("**foo**\\\nbar");
     expect(parsesToNode(md, "StrongEmphasis")).toBe(true);
   });
   it("hoists a mixed space+<br> run at one edge (spans a token-type switch)", () => {
@@ -445,6 +450,46 @@ describe("htmlToMarkdown — block separators", () => {
     expect(htmlToMarkdown("<details>one</details><address>two</address>")?.markdown).toBe(
       "one\n\ntwo"
     );
+  });
+
+  it("keeps a <br> run together across a comment (Word/Outlook clipboard HTML)", () => {
+    // The `<p>` caller used to pass raw childNodes while the inline-run caller
+    // pre-filtered, so the same markup split differently depending on its parent.
+    expect(htmlToMarkdown("<p>a<br><!--[if !supportLists]--><br>b</p>")?.markdown).toBe("a\n\nb");
+    expect(htmlToMarkdown("a<br><!--[if !supportLists]--><br>b")?.markdown).toBe("a\n\nb");
+  });
+
+  it("keeps a <br> run together across a SKIP_TAGS element", () => {
+    expect(htmlToMarkdown("<p>a<br><style>x{}</style><br>b</p>")?.markdown).toBe("a\n\nb");
+  });
+
+  it("drops a trailing <br> instead of stranding its backslash", () => {
+    // Browsers append a <br> to close the last line of a contenteditable block.
+    // Trimming the token as a unit is what stops the `\` surviving alone.
+    expect(htmlToMarkdown("<p>a<br></p><p>b</p>")?.markdown).toBe("a\n\nb");
+    expect(htmlToMarkdown("<p>one<br></p>")?.markdown).toBe("one");
+  });
+
+  it("drops a leading <br> instead of stranding its backslash", () => {
+    expect(htmlToMarkdown("<p><br>one</p>")?.markdown).toBe("one");
+  });
+
+  it("still keeps an INTERIOR lone <br> as a hard break", () => {
+    // Edge-trimming must not touch a break with content on both sides — that is
+    // the hard break the converter is supposed to emit.
+    expect(htmlToMarkdown("<p>a<br>b</p>")?.markdown).toBe("a\\\nb");
+  });
+
+  it("gives a stray <li> its own block (a copy that starts mid-list)", () => {
+    // Bare top-level <li>s used to fold into one inline run and come out glued
+    // together with no separator at all.
+    expect(htmlToMarkdown("<li>a</li><li>b</li>")?.markdown).toBe("a\n\nb");
+  });
+
+  it("still renders <li>s inside a list as list items, not stray blocks", () => {
+    // serializeList consumes them directly, so adding LI to the block-level set
+    // must not change list rendering.
+    expect(htmlToMarkdown("<ul><li>a</li><li>b</li></ul>")?.markdown).toBe("- a\n- b");
   });
 
   it("does NOT split a <br> run nested inside an emphasis span", () => {

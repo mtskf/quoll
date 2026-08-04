@@ -207,6 +207,22 @@ function markSyntax(ctx: Ctx, inner: string, wrapped: string): string {
   return wrapped;
 }
 
+/** The hard-break token `serializeInline` emits for `<br>`: a backslash
+ *  immediately followed by a newline. Declared here, above its emitting site, so
+ *  the token and the `pushInlineBlocks` logic that matches it cannot drift apart.
+ *
+ *  A `\n` in an inline fragment ALWAYS comes from a `<br>` and always carries its
+ *  own leading backslash, so matching the two-character token is unambiguous.
+ *  That holds because EVERY text node on the inline path goes through
+ *  `collapseWs`, which turns each whitespace run into a single space, and an
+ *  `<a>` label has its newlines replaced. Note the reason is `collapseWs`, NOT
+ *  "`<pre>` is handled elsewhere": only DIRECT children are block-tested, so a
+ *  `<pre>` under an inline ancestor (`<em><span><pre>a\nb</pre></span></em>`)
+ *  does reach `serializeInline` — its body simply arrives as a text node and
+ *  loses its newlines like any other. Do not skip `collapseWs` anywhere on the
+ *  inline path on the assumption that `<pre>` cannot appear there. */
+const HARD_BREAK = "\\\n";
+
 /** Serialise inline content (children of a block) to a Markdown fragment. Text is
  *  whitespace-collapsed + escaped; recognised inline elements wrap their
  *  serialised children; unknown inline elements recurse transparently. `depth`
@@ -228,7 +244,7 @@ function serializeInline(node: Node, depth: number, ctx: Ctx): string {
   }
   bump(ctx);
   if (tag === "BR") {
-    return count(ctx, "\\\n"); // hard break (backslash form survives trimming)
+    return count(ctx, HARD_BREAK); // hard break (backslash form survives trimming)
   }
   if (tag === "CODE") {
     // Inline <code> (a <code> child of <pre> is handled by the block path).
@@ -315,9 +331,19 @@ const BLOCK_LEVEL_TAGS = new Set([
   "H4",
   "H5",
   "H6",
+  // Block-level but normally consumed by its parent handler: `serializeList`
+  // walks `directChildrenByTag(list, "LI")`, so an <li> inside a ul/ol/menu never
+  // reaches the tag dispatch that reads this set. Listed anyway for the STRAY
+  // case — a fragment whose top level is bare <li>s, the ordinary result of a
+  // copy that starts mid-list — which otherwise folded into one inline run and
+  // came out glued together with no separator at all.
+  "LI",
 ]);
 
-// The list is the HTML block-level container set, not a hand-picked subset: an
+// Aim for the HTML block-level container set, minus containers whose parent
+// handler always consumes them: TR / TD / TH / THEAD / TBODY / TFOOT and
+// CAPTION are deliberately absent, because a stray one is only reachable outside
+// a <table>, where it carries no table meaning and folding is harmless. An
 // omitted block tag silently folds back into the inline run — the exact bug this
 // task fixes — so err toward listing a tag. Omission is the only failure mode; a
 // wrongly-listed inline tag would merely give it its own line. Add to this set
@@ -418,14 +444,6 @@ function serializeList(list: Element, depth: number, ctx: Ctx): string {
   return items.join("\n");
 }
 
-/** The hard-break token `serializeInline` emits for `<br>`: a backslash
- *  immediately followed by a newline. Text nodes cannot contribute a newline
- *  (`collapseWs` collapses every whitespace run to a space, `<pre>` never takes
- *  the inline path, and an `<a>` label has its newlines replaced), so a `\n` in
- *  an inline fragment ALWAYS comes from a `<br>` and always carries its own
- *  leading backslash — matching the two-character token is unambiguous. */
-const HARD_BREAK = "\\\n";
-
 function isBr(node: Node): boolean {
   return node.nodeType === ELEMENT_NODE && (node as Element).tagName === "BR";
 }
@@ -480,6 +498,63 @@ function splitInlineSegments(nodes: Node[]): Node[][] {
   return segments;
 }
 
+/** Nodes that serialise to nothing, dropped BEFORE segmentation: comments / PIs
+ *  and `SKIP_TAGS` subtrees. Without this the two callers of
+ *  `splitInlineSegments` see different node universes — `serializeBlocks`'
+ *  inline-run path already `continue`s on both, but the `<p>` branch passes raw
+ *  `childNodes` — so `<p>a<br><!--x--><br>b</p>` split into two hard breaks while
+ *  the same markup at top level split into blocks. Word / Outlook clipboard HTML
+ *  puts conditional comments (`<!--[if !supportLists]-->`) between breaks inside
+ *  paragraphs, which is exactly this shape.
+ *
+ *  Known gap, deliberately not closed here: an EMPTY INLINE ELEMENT
+ *  (`a<br><span></span><br>b`) still splits the run, and does so on BOTH callers
+ *  — it is a shared limitation, not the caller asymmetry above. Recognising it
+ *  needs a serialise-then-test pass rather than a node filter. */
+function contributesNothing(node: Node): boolean {
+  if (node.nodeType === TEXT_NODE) {
+    return false;
+  }
+  if (node.nodeType !== ELEMENT_NODE) {
+    return true; // comment / PI / CDATA
+  }
+  return SKIP_TAGS.has((node as Element).tagName);
+}
+
+/** Strip hard breaks and spaces from BOTH ends of a segment's serialised form,
+ *  taking the `HARD_BREAK` token as one unit. A plain `trim()` removes the
+ *  token's `\n` first and strands its `\`, so a segment that merely starts or
+ *  ends with a `<br>` — the trailing break browsers append to close the last line
+ *  of a contenteditable block, `<p>a<br></p>` — rendered a visible backslash.
+ *  Interior breaks are untouched: a lone `<br>` between content stays a hard
+ *  break. Two linear index scans, matching `wrapEmphasis`' approach. */
+function trimSegmentEdges(raw: string): string {
+  let start = 0;
+  let end = raw.length;
+  while (start < end) {
+    if (raw[start] === " ") {
+      start += 1;
+    } else if (raw.startsWith(HARD_BREAK, start)) {
+      start += HARD_BREAK.length;
+    } else {
+      break;
+    }
+  }
+  while (end > start) {
+    if (raw[end - 1] === " ") {
+      end -= 1;
+    } else if (
+      end - HARD_BREAK.length >= start &&
+      raw.startsWith(HARD_BREAK, end - HARD_BREAK.length)
+    ) {
+      end -= HARD_BREAK.length;
+    } else {
+      break;
+    }
+  }
+  return raw.slice(start, end);
+}
+
 /** Serialise sibling inline nodes into the blocks they represent and push each.
  *  Shared by the inline-run flush and the `<p>` branch so both split on `<br>`
  *  runs and both drop content-free segments. */
@@ -489,13 +564,12 @@ function pushInlineBlocks(
   ctx: Ctx,
   push: (s: string, syntax: boolean) => void
 ): void {
-  for (const segment of splitInlineSegments(nodes)) {
-    const raw = segment.map((nd) => serializeInline(nd, depth, ctx)).join("");
-    // A segment whose only content is hard breaks / whitespace — a lone `<br>`
-    // between two blocks, or `<p><br></p>` — is not content. Test it on the
-    // UNTRIMMED string: `trim()` strips the token's newline first, leaving a bare
-    // `\` that looks like content and used to be emitted as its own block.
-    if (raw.split(HARD_BREAK).join("").trim() === "") {
+  for (const segment of splitInlineSegments(nodes.filter((n) => !contributesNothing(n)))) {
+    const raw = trimSegmentEdges(segment.map((nd) => serializeInline(nd, depth, ctx)).join(""));
+    // After edge-trimming, a segment whose only content was hard breaks and
+    // whitespace — a lone `<br>` between two blocks, or `<p><br></p>` — is exactly
+    // empty, and any surviving break has real content on both sides.
+    if (raw === "") {
       continue;
     }
     const text = escapeMarkers(raw).trim();
