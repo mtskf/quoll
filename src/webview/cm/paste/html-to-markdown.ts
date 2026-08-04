@@ -1004,22 +1004,30 @@ function serializeBlocks(parent: Element, depth: number, ctx: Ctx): string[] {
         // (as tab-separated text) AND the surrounding prose.
         throw new CapExceeded();
       }
-      // The ONE branch where "emit this" and "this is rich" have different answers,
-      // so it is the one branch that passes the predicate's verdict to `push`
-      // instead of a literal. Both halves are load-bearing:
+      // The ONE branch where "emit this" and "this is rich" have different answers.
+      // Both halves are load-bearing:
       //  - EMIT unconditionally: a grid is structure no other flavour of the
       //    fragment expresses, so skipping it would drop the table out of a mixed
       //    paste that something else (a heading, say) already made rich.
-      //  - RICH only when its cells hold text: a layout/spacer grid — the default
-      //    output of Outlook, mail signatures and newsletter HTML, riding beside
-      //    ordinary prose — shows a reader nothing, and calling it rich defeats the
-      //    caller's no-syntax defer and re-escapes Markdown the user typed by hand
-      //    (`- [ ]` → `\- \[ \]`), the bug this whole guard exists to stop. A
-      //    text-free grid loses nothing by not being rich: the handler then defers
-      //    and the clipboard's own bytes carry the grid as tab-separated text.
+      //  - RICH only when a CELL holds visible content: a layout/spacer grid — the
+      //    default output of Outlook, mail signatures and newsletter HTML, riding
+      //    beside ordinary prose — shows a reader nothing, and calling it rich
+      //    defeats the caller's no-syntax defer and re-escapes Markdown the user
+      //    typed by hand (`- [ ]` → `\- \[ \]`), the bug this whole guard exists to
+      //    stop. A text-free grid loses nothing by not being rich: the handler then
+      //    defers and the clipboard's own bytes carry the grid as tab-separated text.
+      // Richness is read PER CELL (td/th/caption), through the same emptiness rule
+      // the predicate uses (`blankAfterInvisible(skipTagsText(cell))`) — NOT from
+      // hasVisibleContent(el), whose `<hr>` clause would call an `<hr>`-only spacer
+      // cell rich, and NOT from a regex on the flattened `gfm` string, which cannot
+      // tell a real cell of only `-`/`:` from the table's own grammar. No `<hr>`
+      // clause here: an `<hr>` in a cell renders to nothing in GFM.
       // Table GFM is the amplification leaf (colspan/rowspan expansion, built
       // outside this walk's budget) → count it explicitly to abort early.
-      push(count(ctx, gfm), hasVisibleContent(el));
+      const tableIsRich = Array.from(el.querySelectorAll("td, th, caption")).some(
+        (cell) => !blankAfterInvisible(skipTagsText(cell))
+      );
+      push(count(ctx, gfm), tableIsRich);
     } else if (tag === "HR") {
       flushInline();
       // OPT-OUT from hasVisibleContent (see its docblock): an <hr> is inherently

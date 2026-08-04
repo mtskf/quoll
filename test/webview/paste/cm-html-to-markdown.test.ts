@@ -553,6 +553,46 @@ describe("htmlToMarkdown — emittedMarkdownSyntax discriminator", () => {
     expect(result?.markdown).toBe("\\- \\[ \\] task\n\n|  |  |\n| --- | --- |");
   });
 
+  it.each([
+    // Richness comes from what the CELLS hold, not the flattened grid string and not
+    // hasVisibleContent(el) (whose <hr> clause would call an <hr>-only cell rich). An
+    // <hr> in a cell renders to nothing in GFM, and a <style> is a non-user tag — both
+    // are spacer cells. `<td><hr>` is the row that REGRESSED to rich on the predicate's
+    // hr clause; `<style>` was already handled by the SKIP_TAGS-aware predicate.
+    ["an <hr>-only cell", "<table><tr><td><hr></td></tr></table>"],
+    ["a <style>-only cell", "<table><tr><td><style>.c{}</style></td></tr></table>"],
+  ])("does not call %s rich (spacer grid), but still emits its grid", (_label, table) => {
+    const result = htmlToMarkdown(`<div>- [ ] task</div>${table}`);
+    expect(result?.emittedMarkdownSyntax).toBe(false);
+    expect(result?.markdown).toBe("\\- \\[ \\] task\n\n|  |\n| --- |");
+  });
+
+  it("does not call a zero-width-only cell rich (collectCellText does not strip it)", () => {
+    // The emitted GFM still carries the invisible byte (harmless), but the richness
+    // verdict full-strips it — otherwise a contenteditable-residue ZWSP in a spacer
+    // cell would flip the flag, the exact bug this PR closes.
+    const result = htmlToMarkdown(
+      `<div>- [ ] task</div><table><tr><td>${ZWSP}</td></tr></table>`
+    );
+    expect(result?.emittedMarkdownSyntax).toBe(false);
+  });
+
+  it.each([
+    // Real cell/caption text made ONLY of table-grammar characters (`-`, `:`) is still
+    // content — a regex on the flattened grid could not tell it from structure and
+    // would DEFER, losing a real table to the plain flavour.
+    ["a cell holding only a dash", "<table><tr><td>-</td></tr></table>", "\\- \\[ \\] task\n\n| - |\n| --- |"],
+    [
+      "a caption holding only a colon",
+      "<table><caption>:</caption><tr><td></td></tr></table>",
+      "\\- \\[ \\] task\n\n:\n\n|  |\n| --- |",
+    ],
+  ])("keeps %s as a rich table", (_label, table, expected) => {
+    const result = htmlToMarkdown(`<div>- [ ] task</div>${table}`);
+    expect(result?.emittedMarkdownSyntax).toBe(true);
+    expect(result?.markdown).toBe(expected);
+  });
+
   it("keeps a text-free grid in the output when the fragment is rich for another reason", () => {
     // The other half: emitting is not the same question as being rich. Skipping the
     // grid outright (rather than only declining to call it rich) would silently drop
