@@ -20,7 +20,8 @@
 // that emitted no syntax have no counterpart in html-table-paste.ts. Every site
 // that can fire over a non-empty selection first requires something for CM to fall
 // back to (or an image file item for imagePaste to act on), because its own defer
-// would otherwise delete the selection — see hasPlainFallback / hasImageFileItem.
+// would otherwise delete the selection — see canDeferWithoutDataLoss, which the two
+// consume branches share, and hasPlainFallback / hasImageFileItem underneath it.
 
 import { type Extension, Prec } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
@@ -84,6 +85,28 @@ function hasImageFileItem(event: ClipboardEvent): boolean {
   );
 }
 
+/** May this handler defer without risking the user's text?
+ *
+ *  A defer hands the event to imagePaste and then to CM core, and CM core runs
+ *  `doPaste("")` when the clipboard has no plain/uri bytes — which over a
+ *  non-empty selection replaces it with nothing. Three independent things make a
+ *  defer harmless:
+ *   - a plain / uri-list fallback — CM core inserts those bytes instead of nothing;
+ *   - an image file item — imagePaste consumes the event first, so CM core never
+ *     runs; and consuming HERE would starve the only handler that can perform that
+ *     paste, leaving the document untouched;
+ *   - an empty selection — `doPaste("")` at a bare caret is a no-op, so consuming
+ *     would swallow the event to protect nothing.
+ *
+ *  Both consume branches below (in-code paste, null conversion) need exactly this
+ *  test, so they share it rather than restating it: the two must not drift, since
+ *  each one's `false` answer is a decision to swallow a paste. The third defer
+ *  site (a conversion that emitted no syntax) deliberately does NOT use it — see
+ *  the comment there. */
+function canDeferWithoutDataLoss(event: ClipboardEvent, from: number, to: number): boolean {
+  return hasPlainFallback(event) || hasImageFileItem(event) || from === to;
+}
+
 export function richHtmlPaste(opts: { canWrite: () => boolean }): Extension {
   return Prec.high(
     EditorView.domEventHandlers({
@@ -107,14 +130,12 @@ export function richHtmlPaste(opts: { canWrite: () => boolean }): Extension {
         // path through this handler than a convertible one over the same code.
         if (caretInCode(view.state, from) || caretInCode(view.state, to)) {
           // Defer to plain-text paste so the raw text lands verbatim, structure
-          // intact — but only when there is something to fall back to, or CM's
-          // doPaste("") would delete the selected code (see hasPlainFallback).
-          // The other two exemptions are the same ones the `converted === null`
-          // branch below carries, for the same reasons: an image file item means
-          // imagePaste has a real paste to perform and consuming here would starve
-          // it, and at a bare caret there is no selection for doPaste("") to
-          // destroy — so consuming would swallow the event to protect nothing.
-          if (hasPlainFallback(event) || hasImageFileItem(event) || from === to) {
+          // intact — but only when deferring cannot cost the user anything. With no
+          // plain fallback, no image item and a real selection, deferring hands CM a
+          // doPaste("") that would delete the selected code, so consume instead.
+          // canDeferWithoutDataLoss holds the reasoning for all three exemptions;
+          // the `converted === null` branch below needs the same test and shares it.
+          if (canDeferWithoutDataLoss(event, from, to)) {
             return false;
           }
           console.warn("[quoll] rich paste: HTML-only clipboard dropped over a code selection");
@@ -125,12 +146,11 @@ export function richHtmlPaste(opts: { canWrite: () => boolean }): Extension {
         if (converted === null) {
           // Nothing convertible (whitespace-only, cap breached, parse error) → the
           // clipboard's own bytes are the best available paste. Same requirement as
-          // the caretInCode branch above: with no plain fallback and a real
-          // selection, deferring hands CM a doPaste("") that replaces the selection
-          // with nothing — an HTML-only clipboard (a remote <img>, say) would
-          // silently delete the user's text. Consume the event instead, unless an
-          // image file item means imagePaste still has a real paste to perform.
-          if (!hasPlainFallback(event) && !hasImageFileItem(event) && from !== to) {
+          // the caretInCode branch above, hence the same test: with nothing to defer
+          // into and a real selection, deferring hands CM a doPaste("") that replaces
+          // the selection with nothing — an HTML-only clipboard (a remote <img>, say)
+          // would silently delete the user's text. Consume the event instead.
+          if (!canDeferWithoutDataLoss(event, from, to)) {
             console.warn("[quoll] rich paste: unconvertible HTML-only clipboard dropped");
             event.preventDefault();
             return true;
@@ -148,6 +168,15 @@ export function richHtmlPaste(opts: { canWrite: () => boolean }): Extension {
         // still holds. Requires a plain fallback to defer into, for the reason
         // hasPlainFallback documents.
         //
+        // An image file item is the second thing this defer can land in: imagePaste
+        // consumes the event and performs the paste itself, so unlike a bare defer
+        // it can never reach CM's doPaste(""). Without this clause a syntax-free
+        // fragment arriving BESIDE a copied image (a caption <div>, no text/plain)
+        // was converted and consumed here, and the image was never pasted at all.
+        // Deliberately NOT canDeferWithoutDataLoss: an empty selection is no reason
+        // to defer here, because NOT deferring inserts this conversion rather than
+        // consuming the event — there is no swallowed paste to avoid.
+        //
         // What this deliberately gives up: the `text/html` flavour is NOT
         // strictly redundant here. LINE STRUCTURE is real information only it
         // carries — a `<br>` hard break arrives as whatever the plain flavour
@@ -160,17 +189,13 @@ export function richHtmlPaste(opts: { canWrite: () => boolean }): Extension {
         // Markdown the user typed by hand is the worse failure. Pinned by "loses
         // a lone <br> hard break to the plain fallback" in
         // cm-rich-html-paste.test.ts; change either only with a decision record.
+        //
         // Read-only needs no check HERE: this returns before the canWrite() gate
         // below, and CM's builtin paste handler early-returns on
         // `view.state.readOnly`. That is sound because EditorState.readOnly /
         // EditorView.editable (editor.ts's `editableComp`) are reconfigured from
         // the same `canWrite` wire value that drives opts.canWrite(), so the two
         // cannot diverge — the same invariant html-table-paste.ts relies on.
-        // An image file item is the second thing this defer can land in: imagePaste
-        // consumes the event and performs the paste itself, so unlike a bare defer
-        // it can never reach CM's doPaste(""). Without this clause a syntax-free
-        // fragment arriving BESIDE a copied image (a caption <div>, no text/plain)
-        // was converted and consumed here, and the image was never pasted at all.
         if (
           !converted.emittedMarkdownSyntax &&
           (hasPlainFallback(event) || hasImageFileItem(event))

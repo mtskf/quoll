@@ -231,25 +231,25 @@ function emphasize(ctx: Ctx, inner: string, marker: string): string {
 
 /** The hard-break token `serializeInline` emits for `<br>`: a backslash
  *  immediately followed by a newline. Declared here, above its emitting site, so
- *  the token and the `trimSegmentEdges` scan that matches it cannot drift apart.
+ *  that site, the `trimSegmentEdges` scan and the `<a>` label fold all read the
+ *  same token and cannot drift apart.
  *
- *  ⚠️ Two OTHER places match the same two characters WITHOUT referencing this
- *  constant, because they are declared above it: `wrapEmphasis` (its edge-hoisting
- *  scans, which compare `"\\"` and `"\n"` index by index) and the `<a>` branch of
- *  `serializeInline` (which splits the label on the token). Change the token here
- *  and you must change all three — the anti-drift guarantee this declaration site
- *  offers is a convention, not something the compiler enforces.
+ *  ⚠️ ONE place matches the same two characters WITHOUT referencing this constant:
+ *  `wrapEmphasis`, declared above it, whose edge-hoisting scans compare `"\\"` and
+ *  `"\n"` index by index. Change the token here and you must change those scans
+ *  too — the anti-drift guarantee this declaration site offers covers its three
+ *  referencing sites only, by convention, not by anything the compiler enforces.
  *
  *  A `\n` in an inline fragment ALWAYS comes from a `<br>` and always carries its
  *  own leading backslash, so matching the two-character token is unambiguous.
  *  That holds because EVERY text node on the inline path goes through
  *  `collapseWs`, which turns each whitespace run into a single space. Note the
- *  reason is `collapseWs`, NOT
- *  "`<pre>` is handled elsewhere": only DIRECT children are block-tested, so a
- *  `<pre>` under an inline ancestor (`<em><span><pre>a\nb</pre></span></em>`)
- *  does reach `serializeInline` — its body simply arrives as a text node and
- *  loses its newlines like any other. Do not skip `collapseWs` anywhere on the
- *  inline path on the assumption that `<pre>` cannot appear there. */
+ *  reason is `collapseWs`, NOT "`<pre>` is handled elsewhere": only DIRECT
+ *  children are block-tested, so a `<pre>` under an inline ancestor
+ *  (`<em><span><pre>a\nb</pre></span></em>`) does reach `serializeInline` — its
+ *  body simply arrives as a text node and loses its newlines like any other. Do
+ *  not skip `collapseWs` anywhere on the inline path on the assumption that
+ *  `<pre>` cannot appear there. */
 const HARD_BREAK = "\\\n";
 
 /** Serialise inline content (children of a block) to a Markdown fragment. Text is
@@ -294,7 +294,10 @@ function serializeInline(node: Node, depth: number, ctx: Ctx): string {
       // the whole HARD_BREAK token, not just its `\n`: dropping the newline alone
       // strands the escaping backslash mid-label (`[a\ b](…)`), and a backslash
       // before a space is not a CommonMark escape — it renders literally. Same
-      // token-as-one-unit rule as trimSegmentEdges and wrapEmphasis.
+      // token-as-one-unit rule as trimSegmentEdges and wrapEmphasis. The second
+      // sweep has nothing left to find while the HARD_BREAK docblock's invariant
+      // holds (every inline `\n` arrives as part of the token); it stays as the
+      // unconditional guarantee that no newline can reach a link label.
       const label = inner.split(HARD_BREAK).join(" ").replace(/\n/g, " ");
       // Only the wrapping syntax is uncounted (O(1)); the label leaves are counted.
       if (!isAllowedUrl(href)) {
