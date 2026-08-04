@@ -245,6 +245,14 @@ describe("htmlToMarkdown — block constructs", () => {
   it("converts headings h1..h6", () => {
     expect(convert("<h1>A</h1><h3>B</h3>")).toBe("# A\n\n### B");
   });
+  it("folds a <br> inside a heading to a space, leaving no stray backslash", () => {
+    // A heading is single-line; a `<br>` must fold to a space as a WHOLE token —
+    // collapseWs alone eats the token's `\n` but leaves its escaping `\`, so a
+    // trailing-`<br>` heading (what contenteditables produce) rendered `# a\`.
+    expect(convert("<h1>a<br></h1>")).toBe("# a");
+    expect(convert("<h2>Sub<br>title</h2>")).toBe("## Sub title");
+    expect(convert("<h1><br>a</h1>")).toBe("# a");
+  });
   it("separates paragraphs with a blank line", () => {
     expect(convert("<p>a</p><p>b</p>")).toBe("a\n\nb");
   });

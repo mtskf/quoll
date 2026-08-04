@@ -927,7 +927,13 @@ function serializeBlocks(parent: Element, depth: number, ctx: Ctx): string[] {
       // lone HARD_BREAK, whose `\` survives collapseWs+trim and used to be pushed
       // as `# \`. hasVisibleContent settles it on the source instead.
       if (hasVisibleContent(el)) {
-        const text = collapseWs(serializeChildrenInline(el, depth, ctx)).trim();
+        // Fold the HARD_BREAK token to a space BEFORE collapsing — a heading is
+        // single-line, and collapseWs alone eats the token's `\n` but strands its
+        // escaping `\` (`<h1>a<br></h1>` → `# a\`). Same whole-token fold the `<a>`
+        // label uses.
+        const text = collapseWs(
+          serializeChildrenInline(el, depth, ctx).split(HARD_BREAK).join(" ")
+        ).trim();
         // Can still come out empty when every child was a SKIP_TAGS subtree
         // (`<h1><style>…</style></h1>`): textContent counts that text, serialisation
         // drops it. A different question from the one above, not a second answer.
