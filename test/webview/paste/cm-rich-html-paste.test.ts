@@ -4,6 +4,7 @@ import { EditorState } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import { describe, expect, it } from "vitest";
 import { richHtmlPaste } from "../../../src/webview/cm/paste/rich-html-paste.js";
+import { type ClipboardFlavours, firePasteAt, IMAGE_FILE } from "../helpers/clipboard-double.js";
 
 function mount(doc: string, canWrite = true) {
   return new EditorView({
@@ -29,14 +30,6 @@ function mountMd(doc: string, canWrite = true) {
     }),
   });
 }
-
-/** One clipboard file item. `type` is the MIME type. OMITTING `file` yields a real
- *  File; stating it explicitly as `null` OR `undefined` models the item whose
- *  `getAsFile()` yields nothing — a shape that matches on kind+type yet imagePaste
- *  still declines (its `if (file)` test), so the handler must not treat it as an
- *  image. Both falsy spellings are constructible because the handler's own test has
- *  to reject both to stay a subset of imagePaste's. */
-type FileItemSpec = { type: string; file?: File | null | undefined };
 
 /** Mount a sentinel paste handler AFTER richHtmlPaste, exactly where imagePaste
  *  sits in the real editor (editor.ts), so a defer is observable directly:
@@ -68,44 +61,16 @@ function mountWithNextHandler(doc: string, opts: { consume?: boolean } = {}) {
   return { view, seen };
 }
 
-function firePaste(
-  view: EditorView,
-  data: { html?: string; text?: string; uriList?: string; files?: FileItemSpec[] }
-): Event {
-  const store = new Map<string, string>();
-  if (data.html !== undefined) {
-    store.set("text/html", data.html);
-  }
-  if (data.text !== undefined) {
-    store.set("text/plain", data.text);
-  }
-  if (data.uriList !== undefined) {
-    store.set("text/uri-list", data.uriList);
-  }
-  // `items` is the source of truth — it is what BOTH imagePaste's imageFilesFrom
-  // and the handler's hasImageFileItem scan — and `files` is derived from it, the
-  // way a real DataTransfer relates the two. Both default to an empty collection
-  // rather than being left undefined, so what a test exercises is the kind/type/
-  // getAsFile scan itself and never the predicate's optional chaining.
-  const specs = data.files ?? [];
-  const items = specs.map((spec) => ({
-    kind: "file" as const,
-    type: spec.type,
-    // `"file" in spec`, not `spec.file === undefined`: the latter cannot tell an
-    // omitted key from an explicit `file: undefined`, which is one of the two
-    // no-File shapes this helper has to be able to construct.
-    getAsFile: () => ("file" in spec ? spec.file : new File([""], "f", { type: spec.type })),
-  }));
-  const files = items.map((item) => item.getAsFile()).filter((f): f is File => !!f);
-  const event = new Event("paste", { bubbles: true, cancelable: true });
-  Object.defineProperty(event, "clipboardData", {
-    value: { getData: (t: string) => store.get(t) ?? "", items, files },
-  });
-  view.contentDOM.dispatchEvent(event);
-  return event;
-}
+// `items` is the source of truth — it is what BOTH imagePaste's imageFilesFrom and
+// this handler's hasImageFileItem scan, through the one shared
+// `isIngestibleImageItem`. `files` is derived from it, the way a real DataTransfer
+// relates the two. Both default to an empty collection rather than being left
+// undefined, so what a test exercises is the kind/type/getAsFile scan itself and
+// never the predicate's optional chaining. The double is shared with the imagePaste
+// suite so neither side's can drift from the other's — helpers/clipboard-double.ts.
+const firePaste = (view: EditorView, data: ClipboardFlavours): Event =>
+  firePasteAt(view.contentDOM, data);
 
-const IMAGE_FILE: FileItemSpec[] = [{ type: "image/png" }];
 const REMOTE_IMG_HTML = '<img src="https://example.com/a.png">';
 
 describe("richHtmlPaste — handler", () => {
@@ -344,12 +309,13 @@ describe("richHtmlPaste — handler", () => {
   });
 
   it("consumes an unconvertible HTML-only paste whose image item returns undefined", () => {
-    // The same shape one step further out: imagePaste's own scan keeps a file with
+    // The same shape one step further out: imagePaste keeps a file with
     // `if (file)`, so it declines an UNDEFINED getAsFile() exactly as it declines a
-    // null one. A `!== null` test here matches where imagePaste does not — the
-    // handler would defer, imagePaste would decline, and CM's doPaste("") would
-    // empty the selection. The subset direction is what protects the document, so
-    // both falsy spellings have to be rejected.
+    // null one. This handler shipped a `!== null` restatement that matched where
+    // imagePaste does not — it deferred, imagePaste declined, and CM's doPaste("")
+    // emptied the selection. Sharing isIngestibleImageItem is what makes that
+    // unconstructible; this is the document-level observation of it, and
+    // cm-image-paste.test.ts pins the same shape at the predicate.
     const view = mount("keep-this");
     view.dispatch({ selection: { anchor: 0, head: 9 } });
     const event = firePaste(view, {

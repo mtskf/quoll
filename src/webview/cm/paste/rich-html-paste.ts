@@ -31,6 +31,11 @@
 import { type Extension, Prec } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 
+// Cross-directory into cm/image/ deliberately: the "is this an image item"
+// question belongs to the handler that ingests them, and borrowing its definition
+// is what keeps this handler's defer set from drifting wider (see
+// hasImageFileItem). No cycle — nothing under cm/image/ imports cm/paste/.
+import { isIngestibleImageItem } from "../image/image-paste.js";
 import { caretInCode } from "../list/list-tree.js";
 import { htmlToMarkdown } from "./html-to-markdown.js";
 
@@ -68,30 +73,30 @@ function hasPlainFallback(event: ClipboardEvent): boolean {
  *  an event here would starve the only handler that can perform the paste and the
  *  document would simply be left untouched.
  *
- *  This test MUST stay a SUBSET of imagePaste's own `imageFilesFrom` scan
- *  (image-paste.ts) — same three conditions, in the same order: `kind === "file"`,
- *  an `image/` type, and a TRUTHY `getAsFile()`. Truthy, not `!== null`: the scan
- *  it must not out-match keeps the file with `if (file)`, so an `undefined` return
- *  is declined there and has to be declined here too. A looser test is not a
- *  conservative approximation, it is data loss: this handler would defer into a
- *  handler that declines, and CM's core `doPaste("")` then replaces the selection
- *  with nothing. Do NOT relax it back to a cheaper proxy such as `files.length`
- *  (which also matches a copied PDF) — "cannot miss a file item" is the wrong
- *  property; not over-matching is the one that protects the document.
+ *  The membership test is IMPORTED, not restated: `isIngestibleImageItem` is
+ *  imagePaste's own definition of what it ingests, so this handler cannot defer on
+ *  a wider set than that handler accepts. It used to restate the conditions, and a
+ *  restatement that over-matches is not a conservative approximation — it is data
+ *  loss: this handler defers, imagePaste declines, and CM's core `doPaste("")`
+ *  replaces the selection with nothing. Two restatements shipped into review
+ *  (`files.length`, which also matches a copied PDF; then `getAsFile() !== null`,
+ *  which lets an `undefined` return through) before the definition was shared.
+ *  "Cannot miss a file item" is the wrong property to optimise for; not
+ *  over-matching is the one that protects the document — and sharing the
+ *  definition is what makes over-matching unconstructible rather than merely
+ *  forbidden by a comment.
  *
- *  With no `items` at all the answer is false. That is the safe side: at the two
- *  consume branches false falls back to swallowing the event, which leaves the
- *  document intact (at the no-syntax defer it falls back to inserting this
- *  conversion — also non-destructive), whereas a wrong true routes to the deletion
- *  above. */
+ *  What stays local here is only the CLIPBOARD-shaped part: with no `items` at all
+ *  the answer is false. That is the safe side: at the two consume branches false
+ *  falls back to swallowing the event, which leaves the document intact (at the
+ *  no-syntax defer it falls back to inserting this conversion — also
+ *  non-destructive), whereas a wrong true routes to the deletion above. */
 function hasImageFileItem(event: ClipboardEvent): boolean {
   const items = event.clipboardData?.items;
   if (!items) {
     return false;
   }
-  return Array.from(items).some(
-    (item) => item.kind === "file" && item.type.startsWith("image/") && !!item.getAsFile()
-  );
+  return Array.from(items).some(isIngestibleImageItem);
 }
 
 /** Can NOTHING downstream insert this clipboard? No plain / uri-list bytes for CM
