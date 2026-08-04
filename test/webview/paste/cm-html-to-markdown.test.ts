@@ -762,6 +762,47 @@ describe("htmlToMarkdown — emittedMarkdownSyntax discriminator", () => {
   });
 
   it.each([
+    // A text-free spacer grid stays non-rich at TOP LEVEL (the tests just above), but a
+    // WRAPPER — blockquote / li — used to relabel that same grid RICH: hasVisibleContent
+    // passes on the buried `<hr>`'s clause, the nested walk emits the grid with
+    // `syntax:false`, and the wrapper residue then read the grid's `|`/`-` bytes as
+    // non-blank and pushed `true`. The wrapper's richness is COMPOSITIONAL — it asks the
+    // child walk (did anything push `syntax:true`?), not the emitted grid string — so all
+    // of these defer, unescaped, exactly as the top-level grid does. `<td><hr>` is dropped
+    // by collectCellText; `<select><hr>` is a SKIP_TAGS subtree; both leave the wrapper
+    // text-free with only structural grid punctuation.
+    [
+      "a blockquote wrapping an <hr>-in-<td> spacer grid",
+      "<blockquote><table><tr><td><hr></td></tr></table></blockquote>",
+      "\\- \\[ \\] task\n\n> |  |\n> | --- |",
+    ],
+    [
+      "a list item wrapping an <hr>-in-<td> spacer grid",
+      "<ul><li><table><tr><td><hr></td></tr></table></li></ul>",
+      "\\- \\[ \\] task\n\n- |  |\n  | --- |",
+    ],
+    [
+      "a blockquote wrapping an nbsp spacer grid beside a <select><hr>",
+      "<blockquote><table><tr><td>&nbsp;</td><td>&nbsp;</td></tr></table><select><hr></select></blockquote>",
+      "\\- \\[ \\] task\n\n> |  |  |\n> | --- | --- |",
+    ],
+    [
+      "a blockquote wrapping a spacer grid beside a span-buried <hr>",
+      "<blockquote><span><span><hr></span></span><table><tr><td></td></tr></table></blockquote>",
+      "\\- \\[ \\] task\n\n> |  |\n> | --- |",
+    ],
+    [
+      "a doubly-nested blockquote wrapping an <hr>-in-<td> spacer grid",
+      "<blockquote><blockquote><table><tr><td><hr></td></tr></table></blockquote></blockquote>",
+      "\\- \\[ \\] task\n\n> > |  |\n> > | --- |",
+    ],
+  ])("does not relabel %s rich (compositional wrapper richness), but still emits its grid", (_label, wrapped, expected) => {
+    const result = htmlToMarkdown(`<div>- [ ] task</div>${wrapped}`);
+    expect(result?.emittedMarkdownSyntax).toBe(false);
+    expect(result?.markdown).toBe(expected);
+  });
+
+  it.each([
     // Real cell/caption text made ONLY of table-grammar characters (`-`, `:`) is still
     // content — a regex on the flattened grid could not tell it from structure and
     // would DEFER, losing a real table to the plain flavour.

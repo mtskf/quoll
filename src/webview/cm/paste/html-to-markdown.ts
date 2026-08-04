@@ -1052,9 +1052,20 @@ function serializeBlocks(parent: Element, depth: number, ctx: Ctx): string[] {
       // the outer predicate could never be false while any item survived — it was
       // provably unable to change an outcome, and a guard that cannot fire is a
       // guard nobody can reason about.
+      //
+      // Richness is COMPOSITIONAL, exactly as for BLOCKQUOTE: a list item wrapping a
+      // text-free spacer grid + buried `<hr>` serialises the grid (`syntax:false`) but
+      // is non-empty, so `push(list, true)` used to relabel it rich. Capture the whole
+      // walk's flag contribution (any rich item makes the list rich) and push the list's
+      // own text term OR that child richness. Whole-list capture is equivalent to
+      // per-item and simpler.
+      const before = ctx.emittedMarkdownSyntax;
+      ctx.emittedMarkdownSyntax = false;
       const list = serializeList(el, depth, ctx);
+      const childRich = ctx.emittedMarkdownSyntax;
+      ctx.emittedMarkdownSyntax = before || childRich;
       if (list !== "") {
-        push(list, true);
+        push(list, !blankAfterInvisible(skipTagsText(el)) || childRich);
       }
     } else if (tag === "PRE") {
       flushInline();
@@ -1097,9 +1108,22 @@ function serializeBlocks(parent: Element, depth: number, ctx: Ctx): string[] {
       // HEADINGS/PRE residues (HARD_BREAK folded to a space first), not `!== ""`, which
       // let a preserved joiner through as `> ‍`.
       if (hasVisibleContent(el)) {
+        // Richness is COMPOSITIONAL — ask the child walk, not the emitted string. A
+        // text-free spacer `<table>` (pushed `syntax:false` by the TABLE branch's
+        // per-cell rule) wrapped here with a buried `<hr>` passes hasVisibleContent on
+        // the `<hr>` clause, so the grid IS serialised; its `|`/`-` bytes then make the
+        // residue non-blank. Reading `true` off that would relabel rich exactly what the
+        // TABLE branch ruled not-rich. Capture the child's own flag contribution across
+        // the nested walk (reset → serialise → read → restore `before || childRich`, a
+        // MONOTONE restore that survives nesting because each level ORs its own `before`
+        // back in), and push the quote's own text term OR that child richness.
+        const before = ctx.emittedMarkdownSyntax;
+        ctx.emittedMarkdownSyntax = false;
         const quoted = serializeBlocks(el, depth + 1, ctx).join("\n\n");
+        const childRich = ctx.emittedMarkdownSyntax;
+        ctx.emittedMarkdownSyntax = before || childRich;
         if (!blankAfterInvisible(quoted.split(HARD_BREAK).join(" "))) {
-          push(prefixLines(quoted, "> "), true);
+          push(prefixLines(quoted, "> "), !blankAfterInvisible(skipTagsText(el)) || childRich);
         }
       }
     } else if (tag === "TABLE") {
