@@ -339,8 +339,32 @@ describe("htmlToMarkdown — emittedMarkdownSyntax discriminator", () => {
     ["thematic break", "<p>a</p><hr><p>b</p>"],
     ["table", "<table><tr><td>x</td></tr></table>"],
     ["allowed link", '<p><a href="https://example.com">x</a></p>'],
+    ["menu list", "<menu><li>x</li></menu>"],
   ])("is true for %s", (_label, html) => {
     expect(htmlToMarkdown(html)?.emittedMarkdownSyntax).toBe(true);
+  });
+
+  it.each([
+    ["empty blockquote", "<div>- [ ] task</div><blockquote></blockquote>"],
+    ["whitespace-only blockquote", "<div>- [ ] task</div><blockquote>  </blockquote>"],
+    ["empty pre", "<div>- [ ] task</div><pre></pre>"],
+    ["empty heading", "<div>- [ ] task</div><h1></h1>"],
+    ["empty list", "<div>- [ ] task</div><ul></ul>"],
+  ])("is false for an %s (an empty container is not rich content)", (_label, html) => {
+    // The wrapper mail clients leave behind in quoted HTML. Flipping the flag for
+    // one would defeat the handler's no-syntax defer and re-escape the user's own
+    // markers — the bug this PR exists to fix. The container must also emit NO
+    // block: no stray `>`, no empty fence, no bare `#`.
+    const result = htmlToMarkdown(html);
+    expect(result?.emittedMarkdownSyntax).toBe(false);
+    expect(result?.markdown).toBe("\\- \\[ \\] task");
+  });
+
+  it("is true for a whitespace-only <pre> (code is whitespace-significant)", () => {
+    // Deliberate asymmetry with the whitespace-only <blockquote> above: those two
+    // spaces ARE code content, so the fence is real syntax. Pins the "do not trim
+    // the <pre> body" note in html-to-markdown.ts.
+    expect(htmlToMarkdown("<div>- [ ] task</div><pre>  </pre>")?.emittedMarkdownSyntax).toBe(true);
   });
 
   it("is false for a link whose href is not allowlisted (label only, no syntax)", () => {

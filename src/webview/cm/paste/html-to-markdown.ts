@@ -561,13 +561,27 @@ function serializeBlocks(parent: Element, depth: number, ctx: Ctx): string[] {
     } else if (tag === "PRE") {
       flushInline();
       // <pre> body is a non-inline leaf (verbatim, never through serializeInline)
-      // → count it explicitly.
-      ctx.rich = true;
-      push(count(ctx, fenceCode((el.textContent ?? "").replace(/\n$/, ""), codeLang(el))));
+      // → count it explicitly. Guarded like HEADINGS / UL: an EMPTY container is
+      // not rich content, and flipping ctx.rich for one would defeat the caller's
+      // no-syntax defer — a content-free <pre>/<blockquote> is exactly the wrapper
+      // mail clients leave behind in an otherwise plain fragment, so an unguarded
+      // flag re-escapes the user's hand-typed Markdown.
+      const body = (el.textContent ?? "").replace(/\n$/, "");
+      // The asymmetry with BLOCKQUOTE below is deliberate: `<pre>  </pre>` DOES
+      // emit a fence, because a code block is whitespace-significant and those two
+      // spaces are content. A whitespace-only <blockquote> is caught instead by its
+      // inner serialisation trimming to "". Do not "fix" this by trimming `body`.
+      if (body !== "") {
+        ctx.rich = true;
+        push(count(ctx, fenceCode(body, codeLang(el))));
+      }
     } else if (tag === "BLOCKQUOTE") {
       flushInline();
-      ctx.rich = true;
-      push(prefixLines(serializeBlocks(el, depth + 1, ctx).join("\n\n"), "> "));
+      const quoted = serializeBlocks(el, depth + 1, ctx).join("\n\n");
+      if (quoted !== "") {
+        ctx.rich = true;
+        push(prefixLines(quoted, "> "));
+      }
     } else if (tag === "TABLE") {
       flushInline();
       const gfm = tableElementToGfm(el);
