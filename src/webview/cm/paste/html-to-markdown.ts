@@ -203,9 +203,9 @@ function collapseWs(text: string): string {
  *  as blank here so an otherwise-empty container holding only one cannot flip
  *  `emittedMarkdownSyntax`. THE single answer to "is this text visually empty" — routed
  *  through by every emptiness decision in this module: `hasVisibleContent`, the table
- *  per-cell richness check, `emphasize`'s gate, the CODE/A/PRE/heading/blockquote/
- *  list-item residue guards, and the inline-run blank-text / non-`<li>` list-child
- *  checks — so none grows its own rule. */
+ *  per-cell and blockquote/list wrapper own-text richness checks, `emphasize`'s gate,
+ *  the CODE/A/PRE/heading/blockquote/list-item residue guards, and the inline-run
+ *  blank-text / non-`<li>` list-child checks — so none grows its own rule. */
 function blankAfterInvisible(text: string): boolean {
   return (
     text
