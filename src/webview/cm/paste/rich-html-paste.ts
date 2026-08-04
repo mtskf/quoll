@@ -72,16 +72,28 @@ export function richHtmlPaste(opts: { canWrite: () => boolean }): Extension {
         }
         // The conversion emitted escaped text and line structure only — no
         // emphasis / link / code / heading / list / quote / table / rule. The
-        // `text/html` flavour therefore carries nothing the `text/plain` flavour
-        // does not, while the conversion's deliberate escaping (which exists so
-        // that text inside GENUINELY rich content cannot activate a construct the
-        // user did not author) would mangle Markdown the user wrote by hand:
+        // conversion's deliberate escaping (which exists so that text inside
+        // GENUINELY rich content cannot activate a construct the user did not
+        // author) would mangle Markdown the user wrote by hand:
         // `- [ ]` becomes `\- \[ \]`. Defer so CM's default paste inserts the
         // clipboard's own bytes — byte-identical to typing them, so the "pasted
         // text never activates a construct hand-typed text would not" invariant
         // still holds. Requires a non-empty plain fallback: CM's core paste reads
         // `text/plain` || `text/uri-list`, and doPaste("") would replace a
         // non-empty selection with nothing.
+        //
+        // What this deliberately gives up: the `text/html` flavour is NOT
+        // strictly redundant here. LINE STRUCTURE is real information only it
+        // carries — a `<br>` hard break arrives as whatever the plain flavour
+        // spells (typically a soft `\n`, which renders as a space) instead of the
+        // `\`-escaped hard break the conversion would have written, and
+        // `<div>`-per-line blocking survives only as far as the plain flavour
+        // mirrors it. That is an empirical bet on clipboard producers — in
+        // practice they emit a `text/plain` that mirrors their own block
+        // structure — not a logical identity, and it is taken because re-escaping
+        // Markdown the user typed by hand is the worse failure. Pinned by "loses
+        // a lone <br> hard break to the plain fallback" in
+        // cm-rich-html-paste.test.ts; change either only with a decision record.
         // Read-only needs no check HERE: this returns before the canWrite() gate
         // below, and CM's builtin paste handler early-returns on
         // `view.state.readOnly`. That is sound because EditorState.readOnly /

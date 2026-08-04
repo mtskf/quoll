@@ -623,10 +623,16 @@ function serializeBlocks(parent: Element, depth: number, ctx: Ctx): string[] {
   return blocks;
 }
 
-/** Result of converting a clipboard `text/html` fragment. `emittedMarkdownSyntax` is
- *  false when the walk produced escaped text and line structure only — i.e. the
- *  HTML flavour carried nothing the clipboard's `text/plain` does not already
- *  carry, so the caller may prefer the plain text verbatim. */
+/** Result of converting a clipboard `text/html` fragment.
+ *
+ *  `emittedMarkdownSyntax` is false when the walk produced escaped text and line
+ *  structure only — no emphasis / link / code / heading / list / quote / table /
+ *  rule. It does NOT mean the HTML flavour was redundant: line structure (a
+ *  `<br>` hard break, `<div>`-per-line blocking) is information only that flavour
+ *  carries, and the caller's defer trades it away — deliberately, because escaped
+ *  output would corrupt Markdown the user typed by hand, and because producers in
+ *  practice mirror their block structure into `text/plain`. See the defer site in
+ *  rich-html-paste.ts. */
 export interface HtmlToMarkdownResult {
   markdown: string;
   emittedMarkdownSyntax: boolean;

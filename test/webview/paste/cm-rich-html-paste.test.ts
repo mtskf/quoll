@@ -267,6 +267,21 @@ describe("richHtmlPaste — plain-text-like fragments defer", () => {
     view.destroy();
   });
 
+  it("loses a lone <br> hard break to the plain fallback (accepted trade-off)", () => {
+    // The second edge of the same design. A <br> is line structure, not Markdown
+    // syntax, so a syntax-free fragment still defers and the clipboard's own bytes
+    // win: before this defer existed the converter inserted "a\\\nb" (a Markdown
+    // HARD break); now the plain flavour's "a\nb" lands, which renders as "a b".
+    // We accept the softened break rather than re-escaping hand-written Markdown —
+    // setting the richness flag on <br> would send the reported bug straight back,
+    // since the checklist fragment above is <br>-separated.
+    // Change this expectation only with a matching decision record.
+    const view = mount("");
+    firePaste(view, { html: "<div>a<br>b</div>", text: "a\nb" });
+    expect(view.state.doc.toString()).toBe("a\nb");
+    view.destroy();
+  });
+
   it("stays inert in a read-only editor on the defer path too", () => {
     // The defer returns BEFORE the handler's own canWrite() check, so read-only
     // safety on this path is inherited from CM's builtin paste handler, which
