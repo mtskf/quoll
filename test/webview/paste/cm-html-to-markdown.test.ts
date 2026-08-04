@@ -491,6 +491,16 @@ describe("htmlToMarkdown — emittedMarkdownSyntax discriminator", () => {
     expect(result?.markdown).toBe("# Title\n\n|  |\n| --- |");
   });
 
+  it("does not advance the ordinal over an <li> that serialises away", () => {
+    // The sibling of the empty-<li> skip below: this item PASSES hasTextContent (its
+    // text lives in a SKIP_TAGS subtree) and is dropped one gate later, by
+    // serializeListItem. Both skips must leave the numbering alone; advancing inside
+    // the marker expression honoured only the first and emitted `1. a` / `3. b`.
+    const result = htmlToMarkdown("<ol><li>a</li><li><style>x{}</style></li><li>b</li></ol>");
+    expect(result?.markdown).toBe("1. a\n2. b");
+    expect(result?.emittedMarkdownSyntax).toBe(true);
+  });
+
   it("drops only the empty items from a mixed list, without advancing the ordinal", () => {
     // An empty <li> is not an item, so it must not consume a number either —
     // otherwise a contenteditable's leftover bullet renumbers everything after it.

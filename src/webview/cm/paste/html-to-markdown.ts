@@ -599,16 +599,22 @@ function serializeList(list: Element, depth: number, ctx: Ctx): string {
     bump(ctx); // before the emptiness test, so a fragment of 100k empty <li>s still caps
     // An EMPTY <li> is not an item — the leftover bullet a contenteditable keeps
     // after the user clears its text, which arrives as `<li></li>` or `<li><br></li>`.
-    // Skipping it BEFORE the marker is computed also keeps `n` from advancing over
-    // an ordinal that is never emitted, so the surviving items stay 1., 2., …
     if (!hasTextContent(li)) {
       continue;
     }
-    const marker = ordered ? `${Math.min(n++, MAX_LIST_NUMBER)}. ` : "- ";
+    const marker = ordered ? `${Math.min(n, MAX_LIST_NUMBER)}. ` : "- ";
     const item = serializeListItem(li, marker, depth, ctx);
-    if (item !== "") {
-      items.push(item);
+    if (item === "") {
+      continue;
     }
+    items.push(item);
+    // `n` advances only for an item that was actually PUSHED, so neither skip can
+    // consume an ordinal that is never emitted and the surviving items stay 1., 2.,
+    // … The two skips reject different things — no text at all vs. text that lived
+    // entirely in a SKIP_TAGS subtree and serialised away — and advancing inside the
+    // marker expression honoured only the first, renumbering everything after a
+    // `<li><style>…</style></li>`. Keep the increment here, after both gates.
+    n++;
   }
   return items.join("\n");
 }
