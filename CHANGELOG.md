@@ -2,6 +2,13 @@
 
 All notable changes to Quoll are documented here.
 
+## 0.1.66 — 2026-08-04
+
+### Fixed
+
+- Pasting plain Markdown you copied from somewhere else — a checklist, a list, a heading — now lands exactly as you copied it, instead of arriving with a backslash in front of every `-`, `[`, and `]` and its blank lines squashed away. Pasting genuinely formatted text (bold, links, headings, tables) is unchanged: stray Markdown characters inside it are still neutralised so they stay literal.
+- Converted rich paste no longer merges separate lines together: content laid out as separate blocks stays on separate lines, and a blank line between them survives instead of turning into a stray `\`.
+
 ## 0.1.65 — 2026-07-31
 
 ### Fixed

@@ -68,17 +68,43 @@ export const pendingImageAnchors = StateField.define<readonly PendingAnchor[]>({
   },
 });
 
+/** The single definition of "this clipboard item is an image this module will
+ *  ingest". EXPORTED because richHtmlPaste (paste/rich-html-paste.ts) must defer
+ *  to this handler on exactly this set and no wider: it runs FIRST, so deferring
+ *  on a SUPERSET means this handler then declines, CM core falls through to
+ *  `doPaste("")`, and the user's selection is replaced with nothing.
+ *
+ *  That handler used to restate the conditions instead of borrowing them, and TWO
+ *  separate over-matches shipped into review before this became one definition:
+ *  `files.length > 0` (which also matches a copied PDF), then
+ *  `getAsFile() !== null` (which lets an `undefined` return through, where the
+ *  `if (file)` below rejects it). A comment saying "MUST stay a SUBSET" is not a
+ *  mechanism; one shared function is. Do NOT re-inline these conditions on either
+ *  side — a caller that needs a NARROWER set should intersect this predicate with
+ *  its own extra test, so the shared floor stays shared.
+ *
+ *  `kind === "file"` is first as a short-circuit matching the DOM contract; per
+ *  spec a non-file item's `getAsFile()` already returns null, so it is
+ *  belt-and-braces rather than the load-bearing condition. */
+export function isIngestibleImageItem(item: DataTransferItem): boolean {
+  return item.kind === "file" && item.type.startsWith("image/") && !!item.getAsFile();
+}
+
 function imageFilesFrom(dt: DataTransfer | null): File[] {
   if (!dt) {
     return [];
   }
   const files: File[] = [];
   for (const item of Array.from(dt.items)) {
-    if (item.kind === "file" && item.type.startsWith("image/")) {
-      const file = item.getAsFile();
-      if (file) {
-        files.push(file);
-      }
+    // Built FROM the shared predicate, not beside it: an acceptance change made
+    // here without going through `isIngestibleImageItem` is exactly the drift that
+    // deletes a selection over in richHtmlPaste.
+    if (!isIngestibleImageItem(item)) {
+      continue;
+    }
+    const file = item.getAsFile(); // non-null by the predicate; the check narrows the type
+    if (file) {
+      files.push(file);
     }
   }
   return files;
@@ -162,6 +188,22 @@ export function createImagePasteDrop(opts: {
     let totalBytes = 0;
     for (const file of files.slice(0, MAX_IMAGES_PER_EVENT)) {
       if (file.size === 0) {
+        // The only refusal in this loop that used to be silent, and the one with the
+        // widest blast radius. `handle` is shared by the paste and drop paths: on the
+        // PASTE path `isIngestibleImageItem` never looks at size, so richHtmlPaste has
+        // already deferred on this item; on the DROP path there is no such upstream.
+        // Either way this handler then preventDefaults for the event, skips every file
+        // and returns true — the event is fully consumed, nothing is inserted, and (on
+        // paste) CM's plain-text fallback is suppressed too: a paste that vanishes with
+        // no trace anywhere.
+        //
+        // Deliberately NOT hoisted into `isIngestibleImageItem`: the per-event
+        // aggregate cap below is order-dependent and cannot live in a per-item
+        // membership predicate at all, so hoisting the size refusals would only make
+        // the shared floor LOOK like imagePaste's acceptance set while still not
+        // being it. The predicate's honest contract is "this item is an image
+        // candidate"; refusals belong here, and here every one of them warns.
+        console.warn("[quoll] dropped empty image file (zero bytes)");
         continue;
       }
       if (estimatedBase64Length(file.size) > MAX_IMAGE_DATA_LENGTH) {
