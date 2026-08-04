@@ -710,16 +710,29 @@ function serializeList(list: Element, depth: number, ctx: Ctx): string {
   if (depth > MAX_DEPTH) {
     throw new CapExceeded();
   }
-  // serializeList walks direct `<li>` only. A non-`<li>` element child that carries
+  // serializeList walks direct `<li>` only. A non-`<li>` direct child that carries
   // content — a sibling-nested `<ul>`/`<ol>` (invalid HTML but widespread in legacy
-  // CMS and hand-written markup), or a stray `<div>`/`<p>` — would be dropped
-  // silently from an INSERTED conversion. Refuse the whole conversion (the TABLE
-  // branch's policy) so the handler defers to plain paste, which keeps everything.
-  // Gated on `hasVisibleContent`, so a contentless separator between items — a bare
-  // `<br>`/`<hr>`, the amateur/legacy spacing idiom the LI-only walk already dropped
-  // — does not degrade the fragment. SKIP_TAGS children carry no prose either.
-  for (const child of Array.from(list.children)) {
-    if (child.tagName !== "LI" && !SKIP_TAGS.has(child.tagName) && hasVisibleContent(child)) {
+  // CMS and hand-written markup), a stray `<div>`/`<p>`, or a bare TEXT node
+  // (`<ul>prefix<li>a</li></ul>`) — would be dropped silently from an INSERTED
+  // conversion. Refuse the whole conversion (the TABLE branch's policy) so the handler
+  // defers to plain paste, which keeps everything. Walk `childNodes`, not `children`,
+  // so a visible direct text node is seen and not just element siblings. Emptiness is
+  // the SAME full-strip rule everywhere: a contentless separator between items — a bare
+  // `<br>`/`<hr>` element or the whitespace real clipboard HTML pretty-prints between
+  // `<li>`s — does not degrade the fragment. SKIP_TAGS children and comments carry no
+  // prose either.
+  for (const child of Array.from(list.childNodes)) {
+    if (child.nodeType === TEXT_NODE) {
+      if (!blankAfterInvisible(child.textContent ?? "")) {
+        throw new CapExceeded();
+      }
+      continue;
+    }
+    if (child.nodeType !== ELEMENT_NODE) {
+      continue; // comment / PI carries nothing
+    }
+    const el = child as Element;
+    if (el.tagName !== "LI" && !SKIP_TAGS.has(el.tagName) && hasVisibleContent(el)) {
       throw new CapExceeded();
     }
   }

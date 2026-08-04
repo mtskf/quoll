@@ -297,8 +297,18 @@ describe("htmlToMarkdown — block constructs", () => {
     ["a sibling-nested <ol>", "<ol><li>a</li><ol><li>b</li></ol></ol>"],
     ["a sibling <div>", "<ul><li>a</li><div>b</div></ul>"],
     ["a sibling <p>", "<ul><li>a</li><p>b</p></ul>"],
+    // A direct TEXT node with visible content — the LI-only walk read `list.children`
+    // (elements), so this was never seen and its text was dropped from an INSERTED
+    // conversion. Iterate `list.childNodes` and defer, both leading and trailing.
+    ["a leading text node", "<ul>prefix<li>a</li></ul>"],
+    ["a trailing text node", "<ul><li>a</li>tail</ul>"],
   ])("returns null rather than drop %s from a list", (_label, html) => {
     expect(convert(html)).toBeNull();
+  });
+  it("keeps converting when whitespace text separates the list items (pretty-printing)", () => {
+    // The defer must fire only on VISIBLE direct text — the whitespace real clipboard
+    // HTML pretty-prints between `<li>`s carries no prose and must stay convertible.
+    expect(convert("<ul>\n  <li>a</li>\n</ul>")).toBe("- a");
   });
   it("keeps converting when a bare <br> sits between list items (contentless)", () => {
     // A <br> between <li>s is presentational spacing, carries no prose, and is what the
