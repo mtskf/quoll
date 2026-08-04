@@ -16,6 +16,7 @@ const ZWSP = String.fromCharCode(0x200b); // U+200B ZERO WIDTH SPACE
 const NBSP = String.fromCharCode(0xa0); // U+00A0 NO-BREAK SPACE
 const ZWJ = String.fromCharCode(0x200d); // U+200D ZERO WIDTH JOINER (load-bearing: emoji glue)
 const ZWNJ = String.fromCharCode(0x200c); // U+200C ZERO WIDTH NON-JOINER (load-bearing: orthography)
+const WJ = String.fromCharCode(0x2060); // U+2060 WORD JOINER (load-bearing: no-break glue)
 const SHY = String.fromCharCode(0x00ad); // U+00AD SOFT HYPHEN (invisible unless line-wrapped)
 const VS16 = String.fromCharCode(0xfe0f); // U+FE0F VARIATION SELECTOR-16 (emoji presentation)
 const HEART = String.fromCharCode(0x2764); // U+2764 HEAVY BLACK HEART (base for ❤️)
@@ -595,8 +596,14 @@ describe("htmlToMarkdown — emittedMarkdownSyntax discriminator", () => {
     // chars that are NOT in the Default_Ignorable property, so `\p{DI}` alone let a lone
     // one flip the flag. blankAfterInvisible now strips `\p{DI} ∪ \p{Cf}` — the whole
     // format+ignorable class — so a heading holding only one reads empty.
-    ["heading holding only an interlinear anchor (U+FFF9)", "<div>- [ ] task</div><h1>&#xFFF9;</h1>"],
-    ["heading holding only an interlinear separator (U+FFFA)", "<div>- [ ] task</div><h1>&#xFFFA;</h1>"],
+    [
+      "heading holding only an interlinear anchor (U+FFF9)",
+      "<div>- [ ] task</div><h1>&#xFFF9;</h1>",
+    ],
+    [
+      "heading holding only an interlinear separator (U+FFFA)",
+      "<div>- [ ] task</div><h1>&#xFFFA;</h1>",
+    ],
   ])("is false for an %s (an empty container is not rich content)", (_label, html) => {
     // The wrapper mail clients leave behind in quoted HTML, the empty bullet a
     // contenteditable leaves behind, the tracking pixel a marketing mail wraps in a
@@ -1022,6 +1029,26 @@ describe("htmlToMarkdown — emittedMarkdownSyntax discriminator", () => {
     const result = htmlToMarkdown(`<p><strong>co${SHY}op</strong></p>`);
     expect(result?.markdown).toBe(`**co${SHY}op**`);
     expect(result?.emittedMarkdownSyntax).toBe(true);
+  });
+
+  it("keeps a word joiner in the OUTPUT when it sits within real content", () => {
+    // collapseWs (the emit path) must PRESERVE U+2060 WORD JOINER — it carries no-break
+    // semantics (glue between two glyphs), so dropping it corrupts real text. Only
+    // blankAfterInvisible (the emptiness path) strips it, which is why the lone-WJ
+    // container below still defers. `<strong>A⁠B</strong>` bolds as `**A⁠B**` with the
+    // byte intact — the mirror of the SHY / VS16 fidelity pins above.
+    const result = htmlToMarkdown(`<p><strong>A${WJ}B</strong></p>`);
+    expect(result?.markdown).toBe(`**A${WJ}B**`);
+    expect(result?.emittedMarkdownSyntax).toBe(true);
+  });
+
+  it("still defers a container holding only a word joiner (emptiness strips it)", () => {
+    // The other side of the split: WJ survives on OUTPUT, but a heading holding ONLY one
+    // is still visually empty. blankAfterInvisible strips it (Default_Ignorable), so
+    // hasVisibleContent gates the heading and the flag stays false.
+    const result = htmlToMarkdown(`<div>- [ ] task</div><h1>${WJ}</h1>`);
+    expect(result?.emittedMarkdownSyntax).toBe(false);
+    expect(result?.markdown).toBe("\\- \\[ \\] task");
   });
 
   it("does not bold an emphasis span holding only a bidi mark (ALM)", () => {

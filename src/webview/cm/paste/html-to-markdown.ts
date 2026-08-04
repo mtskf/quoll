@@ -168,15 +168,17 @@ function escapeMarkers(text: string): string {
  *  reads verbatim, so an interior newline cannot form indented code or smuggle an
  *  unescaped line start; real breaks come only from `<br>` and block structure.
  *
- *  Deletes ONLY the width-less SPACING class — U+200B ZERO WIDTH SPACE, U+2060 WORD
- *  JOINER, U+FEFF — because these occupy no width, so folding one into a space would
- *  insert a gap between two letters that touch. U+200C ZERO WIDTH NON-JOINER and
- *  U+200D ZERO WIDTH JOINER are DELIBERATELY PRESERVED here: they are also width-less
- *  but they carry meaning — U+200D glues emoji ZWJ sequences (a family / profession /
- *  flag emoji), U+200C is required orthography in Persian and Indic scripts — so
- *  deleting them on the emit path corrupts real text on disk (a family emoji splits
- *  into three people; a Persian word loses a letter). This runs on EVERY emitted text
- *  node, so it is fidelity-first. U+00A0 needs no clause — it IS `\s`.
+ *  Deletes ONLY the pure width-less SPACING class — U+200B ZERO WIDTH SPACE and U+FEFF
+ *  (BOM / zero-width no-break space) — because these occupy no width AND carry no glue
+ *  semantics, so folding one into a space would insert a gap between two letters that
+ *  touch. U+200C ZERO WIDTH NON-JOINER, U+200D ZERO WIDTH JOINER, and U+2060 WORD JOINER
+ *  are DELIBERATELY PRESERVED here: they are also width-less but they carry meaning —
+ *  U+200D glues emoji ZWJ sequences (a family / profession / flag emoji), U+200C is
+ *  required orthography in Persian and Indic scripts, and U+2060 is a no-break joiner
+ *  that keeps two glyphs from separating — so deleting them on the emit path corrupts
+ *  real text on disk (a family emoji splits into three people; a Persian word loses a
+ *  letter; a no-break pair comes apart). This runs on EVERY emitted text node, so it is
+ *  fidelity-first. U+00A0 needs no clause — it IS `\s`.
  *
  *  EMPTINESS is a SEPARATE question, answered by `blankAfterInvisible`, which strips
  *  the whole Default_Ignorable property (the joiners included, plus bidi marks and
@@ -186,7 +188,7 @@ function escapeMarkers(text: string): string {
  *  container (`<h1>&#8203;</h1>`, `<h1>&#8205;</h1>`) the emptiness guard exists to
  *  reject, which `String.prototype.trim()` does not strip. */
 function collapseWs(text: string): string {
-  return text.replace(/[\u200B\u2060\uFEFF]/g, "").replace(/\s+/g, " ");
+  return text.replace(/[\u200B\uFEFF]/g, "").replace(/\s+/g, " ");
 }
 
 /** Emptiness normaliser: strip the invisible/ignorable formatting chars — the whole
