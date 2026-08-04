@@ -202,10 +202,10 @@ function collapseWs(text: string): string {
 function blankAfterInvisible(text: string): boolean {
   return (
     text
-      // Invisible / ignorable formatting chars \u2014 extend as found, NOT the full Unicode
-      // Default_Ignorable set (unbounded). U+00AD SOFT HYPHEN and U+FE00\u2013FE0F VARIATION
+      // Invisible / ignorable formatting chars — extend as found, NOT the full Unicode
+      // Default_Ignorable set (unbounded). U+00AD SOFT HYPHEN and U+FE00–FE0F VARIATION
       // SELECTORs join the original zero-width class here on the EMPTINESS path ONLY;
-      // `collapseWs` (the OUTPUT path) must NOT strip them \u2014 VS16 is load-bearing in
+      // `collapseWs` (the OUTPUT path) must NOT strip them — VS16 is load-bearing in
       // emoji presentation (`\u2764\uFE0F` = U+2764 U+FE0F).
       .replace(/\u00AD|[\u200B-\u200D\u2060\uFEFF]|[\uFE00-\uFE0F]/g, "")
       .replace(/\s+/g, " ")
@@ -219,8 +219,8 @@ function blankAfterInvisible(text: string): boolean {
  *  Four callers: the `hasVisibleContent` emptiness predicate and the table PER-CELL
  *  richness check both feed it to `blankAfterInvisible` (so `<style>`/`<textarea>` text
  *  no reader sees never counts as visible), and the two branches that emit a body from
- *  `textContent` rather than `serializeInline` \u2014 `<pre>` (verbatim) and inline `<code>`
- *  (then `collapseWs`'d) \u2014 read through it so SKIP_TAGS text cannot leak into a fenced /
+ *  `textContent` rather than `serializeInline` — `<pre>` (verbatim) and inline `<code>`
+ *  (then `collapseWs`'d) — read through it so SKIP_TAGS text cannot leak into a fenced /
  *  inline-code body. */
 function skipTagsText(el: Element): string {
   const parts: string[] = [];
