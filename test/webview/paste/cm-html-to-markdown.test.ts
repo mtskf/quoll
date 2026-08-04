@@ -469,9 +469,10 @@ describe("htmlToMarkdown — emittedMarkdownSyntax discriminator", () => {
       '<div>- [ ] task</div><p><a href="https://x.test"><style>.c{}</style></a></p>',
     ],
     // ...and at the two branches that already had the residue guard but never had it
-    // OBSERVED: mutating either `text !== ""` / `quoted !== ""` away left the whole
-    // suite green. Unpinned, a future edit reading the predicate as the single
-    // emptiness answer deletes them as redundant and ships `# ` / `>` as syntax.
+    // OBSERVED: mutating either the heading `!blankAfterInvisible(text)` or the
+    // blockquote `quoted !== ""` residue away left the whole suite green. Unpinned, a
+    // future edit reading the predicate as the single emptiness answer deletes them as
+    // redundant and ships `# ` / `>` as syntax.
     [
       "heading whose text lives entirely in a <style>",
       "<div>- [ ] task</div><h1><style>a{}</style></h1>",
@@ -485,14 +486,18 @@ describe("htmlToMarkdown — emittedMarkdownSyntax discriminator", () => {
     // `trim()` does not strip it. The emphasis row is the one that could NOT be
     // settled by patching the emptiness predicate — `emphasize` never consults it —
     // which is why the normalisation lives on the shared text path instead.
-    // Which rows OBSERVE the full-strip predicate (vs. their own residue guard):
-    //  - <pre> ZWSP observes it: the <pre> residue reads a VERBATIM body and `.trim()`
-    //    cannot strip U+200B, so only `blankAfterInvisible` (the predicate) rejects it.
-    //  - <code> ZWSP does NOT: the <code> body is `collapseWs`'d, which itself strips
-    //    U+200B, so its residue settles the row — an outcome pin, like heading/list.
-    //  - the lone-JOINER rows (code, and the heading joiner row further below) DO
-    //    observe the predicate: the emit path PRESERVES joiners, so the residue keeps
-    //    the joiner and only the full-strip predicate (via the KEPT disjunct) rejects it.
+    // After cycle 7 EVERY emptiness check — the `hasVisibleContent` predicate AND each
+    // branch's residue — is the one full-strip `blankAfterInvisible` rule, so these rows
+    // no longer split into "observes the predicate" vs "settled by a `.trim()` residue".
+    // What still varies is whether the EMIT path handed the check a stripped or a
+    // preserved byte:
+    //  - <pre>/heading ZWSP: `hasVisibleContent` (full-strip) rejects the container
+    //    before its residue runs — a verbatim body never reaches the residue for ZWSP.
+    //  - <code> ZWSP: `collapseWs` already stripped U+200B, so the body is ""
+    //    regardless — an outcome pin, like heading/list.
+    //  - the lone-JOINER rows (code here, heading below, and the hr-clause rows): the
+    //    emit path PRESERVES joiners, so only a full-strip check rejects them — now the
+    //    predicate AND the residue alike, which is what cycle 7 converged.
     ["<pre> holding only a zero-width space", `<div>- [ ] task</div><pre>${ZWSP}</pre>`],
     [
       "code span holding only a zero-width space",
@@ -505,7 +510,7 @@ describe("htmlToMarkdown — emittedMarkdownSyntax discriminator", () => {
       `<div>- [ ] task</div><div><code>${ZWJ}</code></div>`,
     ],
     // Predicate passes on the `<hr>` clause, but the body / label is whitespace — the
-    // residue `.trim()` is what stops an emitted `` ` ` `` / `[  ](url)`. The `<hr>` is
+    // full-strip residue is what stops an emitted `` ` ` `` / `[  ](url)`. The `<hr>` is
     // wrapped so it is not a DIRECT child of `<code>` (which would block-walk the code).
     [
       "code span whose body is whitespace beside an <hr>",
@@ -534,9 +539,10 @@ describe("htmlToMarkdown — emittedMarkdownSyntax discriminator", () => {
       `<div>- [ ] task</div><p><strong>${ZWSP}</strong></p>`,
     ],
     // A non-breaking space is invisible-ish too and must keep the same answer. This is
-    // an OUTCOME pin only, not a mechanism observer: `String.trim()` strips U+00A0, so
-    // both the predicate and every residue guard reject it — no mutation of the
-    // collapseWs-vs-trim boundary can turn this row red (only the ZWSP/joiner rows can).
+    // an OUTCOME pin only, not a mechanism observer: U+00A0 is `\s`, so every full-strip
+    // check (predicate and residue alike, both collapse + trim whitespace) rejects it —
+    // no mutation of the collapseWs-vs-emptiness boundary can turn this row red (only the
+    // ZWSP/joiner rows, whose byte survives collapseWs, can).
     ["heading holding only a non-breaking space", `<div>- [ ] task</div><h1>${NBSP}</h1>`],
     // A LONE joiner is visually empty even though the emit path preserves joiners
     // inside real text (the ZWJ-emoji fidelity fix). Emptiness is a SEPARATE
@@ -573,7 +579,9 @@ describe("htmlToMarkdown — emittedMarkdownSyntax discriminator", () => {
     // stays false. Standalone rather than an it.each row because the <a> branch
     // degrades to its LABEL text (unlike CODE, which returns ""), so the joiner
     // survives as invisible text — the markdown is not exactly the task.
-    const result = htmlToMarkdown('<div>- [ ] task</div><p><a href="https://x.test">&#8205;</a></p>');
+    const result = htmlToMarkdown(
+      '<div>- [ ] task</div><p><a href="https://x.test">&#8205;</a></p>'
+    );
     expect(result?.emittedMarkdownSyntax).toBe(false);
     expect(result?.markdown).not.toContain("](");
   });

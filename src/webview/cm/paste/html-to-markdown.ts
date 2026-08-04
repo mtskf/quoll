@@ -51,9 +51,10 @@
 //    renders `-`, not ``). Most branches reach that rule through `hasVisibleContent(el)`,
 //    which wraps it and adds the `<hr>` clause: every container branch that sets
 //    `emittedMarkdownSyntax` routes through `hasVisibleContent` — on that container, or
-//    (for `<ul>`/`<ol>`) on each `<li>`. Three branches decide emptiness by the SAME
-//    rule but deliberately WITHOUT calling `hasVisibleContent(el)`, each for its own
-//    reason — do not assume otherwise when changing them:
+//    (for `<ul>`/`<ol>`) on each `<li>`. Three branches set their flag WITHOUT calling
+//    `hasVisibleContent(el)`, each for its own reason — and only TWO of them decide
+//    emptiness by the same `blankAfterInvisible` rule; the third (`<hr>`) opts out of
+//    the emptiness question entirely. Do not assume otherwise when changing them:
 //     · `<hr>` opts out of the rule entirely. A void element: the predicate would
 //       answer "empty" for every one, and thematic breaks would stop converting.
 //     · `<table>` emits its grid unconditionally and takes its RICHNESS from a PER-CELL
@@ -61,9 +62,10 @@
 //       `hasVisibleContent(el)` — whose `<hr>` clause would call an `<hr>`-only spacer
 //       cell rich. The one branch where "emit this" and "this is rich" differ.
 //     · `<strong>`/`<b>`/`<em>`/`<i>` set their flag in `emphasize`, which consults
-//       `blankAfterInvisible` on the emitted `inner` (so a lone-joiner span is not
-//       bolded) but never calls `hasVisibleContent(el)`. `wrapEmphasis` additionally
-//       hoists spaces/`<br>` edges out of the markers.
+//       `blankAfterInvisible` on the emitted `inner` — HARD_BREAK folded to a space
+//       first, so neither a lone-joiner nor a joiner-plus-`<br>` span is bolded — but
+//       never calls `hasVisibleContent(el)`. `wrapEmphasis` additionally hoists
+//       spaces/`<br>` edges out of the markers.
 //    A block pushed with `syntax: false` — a paragraph, or the blocks a nested
 //    walk already recorded for itself — needs none of this: it cannot flip the
 //    flag, so its own "did anything render" test cannot defeat the caller's defer.
@@ -186,13 +188,17 @@ function collapseWs(text: string): string {
   return text.replace(/[\u200B\u2060\uFEFF]/g, "").replace(/\s+/g, " ");
 }
 
-/** Emptiness normaliser: strip the FULL zero-width class (U+200B ZERO WIDTH SPACE,
- *  U+200C/200D joiners, U+2060 WORD JOINER, U+FEFF), collapse whitespace, trim, and
+/** Emptiness normaliser: strip the FULL zero-width class plus the invisible/ignorable
+ *  formatting chars in the regex below (U+00AD SOFT HYPHEN, the joiners, U+FE00–FE0F
+ *  VARIATION SELECTORs, U+2060 WORD JOINER, U+FEFF), collapse whitespace, trim, and
  *  report whether nothing visible remains. Distinct from `collapseWs` (the emit path,
- *  which PRESERVES joiners for fidelity): a lone joiner reads as blank here so an
- *  otherwise-empty container holding only one cannot flip `emittedMarkdownSyntax`. The
- *  single answer to "is this text visually empty", shared by `hasVisibleContent` and
- *  the table per-cell richness check, so neither grows its own rule. */
+ *  which PRESERVES joiners and variation selectors for fidelity): a lone one reads as
+ *  blank here so an otherwise-empty container holding only one cannot flip
+ *  `emittedMarkdownSyntax`. THE single answer to "is this text visually empty" — routed
+ *  through by every emptiness decision in this module: `hasVisibleContent`, the table
+ *  per-cell richness check, `emphasize`'s gate, the CODE/A/PRE/heading residue guards,
+ *  and the inline-run blank-text / non-`<li>` list-child checks — so none grows its own
+ *  rule. */
 function blankAfterInvisible(text: string): boolean {
   return (
     text
@@ -210,10 +216,12 @@ function blankAfterInvisible(text: string): boolean {
 /** Concatenate every descendant text node of `el` VERBATIM, skipping `SKIP_TAGS`
  *  subtrees (whose text is not prose and must never enter output or count as visible).
  *  Explicit-stack DFS, the same shape as `collectCellText` in html-table-to-gfm.ts.
- *  Used by the ONE emptiness predicate (so `<style>`/`<textarea>` text no longer reads
- *  as visible) and by the two branches that emit a body from `textContent` rather than
- *  `serializeInline` \u2014 `<pre>` (verbatim) and inline `<code>` (then `collapseWs`'d) \u2014 so
- *  SKIP_TAGS text cannot leak into a fenced / inline-code body. */
+ *  Four callers: the `hasVisibleContent` emptiness predicate and the table PER-CELL
+ *  richness check both feed it to `blankAfterInvisible` (so `<style>`/`<textarea>` text
+ *  no reader sees never counts as visible), and the two branches that emit a body from
+ *  `textContent` rather than `serializeInline` \u2014 `<pre>` (verbatim) and inline `<code>`
+ *  (then `collapseWs`'d) \u2014 read through it so SKIP_TAGS text cannot leak into a fenced /
+ *  inline-code body. */
 function skipTagsText(el: Element): string {
   const parts: string[] = [];
   const stack: Node[] = [];
@@ -331,7 +339,8 @@ function wrapEmphasis(inner: string, marker: string): string {
  *  through `hasVisibleContent(el)`, but a VISUALLY EMPTY span must still not become
  *  `**…**` and flip the flag. `wrapEmphasis` already returns `inner` for a
  *  whitespace-/`<br>`-only span, but the emit path preserves joiners, so a lone-joiner
- *  span (`<strong>&#8205;</strong>`) reaches here with non-hoistable `inner`.
+ *  span (`<strong>&#8205;</strong>`) — or a joiner-plus-`<br>` span, once the HARD_BREAK
+ *  token is folded to a space (see the body) — reaches here with non-hoistable `inner`.
  *  `blankAfterInvisible` (the same full-strip predicate the containers use) rejects it,
  *  returning `inner` transparently — like a `<span>` — with no markers and no flag,
  *  while a joiner WITHIN visible text (`<strong>👨‍👩‍👧</strong>`) still bolds. */
@@ -585,7 +594,8 @@ const BLOCK_LEVEL_TAGS = new Set([
  *  list is composed of. Not "every branch below": `CODE` and `A` are declared above
  *  this point yet still route through it; `<table>` and the emphasis tags decide
  *  emptiness by the same `blankAfterInvisible` rule but do NOT call this function —
- *  the module header lists those three and why each is safe. An empty container that sets
+ *  the module header lists those two (plus `<hr>`, which opts out of the emptiness rule
+ *  entirely) and why each is safe. An empty container that sets
  *  the flag defeats the caller's no-syntax defer and re-escapes Markdown the user
  *  typed by hand (`- [ ]` → `\- \[ \]`) — the bug this whole guard exists to stop.
  *
@@ -1195,7 +1205,8 @@ export function htmlToMarkdown(html: string): HtmlToMarkdownResult | null {
     // selection, so an unexpected throw in this walk would present to the user as
     // "the paste did nothing" and leave no trace anywhere. Split the two:
     // CapExceeded is the EXPECTED degradation (input too large / deep / wide, an
-    // unrenderable table) and stays silent; anything else is a bug here and gets a
+    // unrenderable table, or a list with a non-`<li>` direct child — element or text
+    // node — carrying visible content) and stays silent; anything else is a bug here and gets a
     // console entry, as image-paste.ts already does for its own dropped inputs.
     //
     // Log the error ONLY. The source HTML and the converted Markdown must never be
