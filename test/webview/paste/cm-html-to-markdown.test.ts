@@ -565,6 +565,19 @@ describe("htmlToMarkdown — emittedMarkdownSyntax discriminator", () => {
     expect(result?.markdown).toBe("\\- \\[ \\] task");
   });
 
+  it("does not link a label holding only a zero-width joiner", () => {
+    // The mirror of the CODE lone-joiner row, on the <a> branch: the emit path
+    // preserves joiners, so a `<a href>&#8205;</a>` reaches the branch with a
+    // non-empty label. `!hasVisibleContent(el)` (no <hr>, joiner-only text) and the
+    // full-strip residue both reject it, so no `[‍](url)` is emitted and the flag
+    // stays false. Standalone rather than an it.each row because the <a> branch
+    // degrades to its LABEL text (unlike CODE, which returns ""), so the joiner
+    // survives as invisible text — the markdown is not exactly the task.
+    const result = htmlToMarkdown('<div>- [ ] task</div><p><a href="https://x.test">&#8205;</a></p>');
+    expect(result?.emittedMarkdownSyntax).toBe(false);
+    expect(result?.markdown).not.toContain("](");
+  });
+
   it("does not link a label that is a joiner beside an <hr>", () => {
     // The <a> residue in its own test, not the shared it.each: unlike CODE/heading/PRE
     // (which return `""` when empty), the <a> branch degrades to its LABEL text, so a
