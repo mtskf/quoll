@@ -209,10 +209,13 @@ function wrapEmphasis(inner: string, marker: string): string {
   return `${inner.slice(0, start)}${marker}${inner.slice(start, end)}${marker}${inner.slice(end)}`;
 }
 
-/** Record that an emphasis wrapper actually emitted markers. `wrapEmphasis`
- *  returns its input unchanged when the span is all-whitespace / `<br>`-only, and
- *  that degenerate case emits no syntax — so compare rather than assume. */
-function markSyntax(ctx: Ctx, inner: string, wrapped: string): string {
+/** `wrapEmphasis`, recording on `ctx` whether markers were actually emitted.
+ *  `wrapEmphasis` returns its input unchanged when the span is all-whitespace /
+ *  `<br>`-only, and that degenerate case emits no syntax — so compare rather than
+ *  assume. Wrapping and recording are one call so they cannot be given different
+ *  inputs. */
+function emphasize(ctx: Ctx, inner: string, marker: string): string {
+  const wrapped = wrapEmphasis(inner, marker);
   if (wrapped !== inner) {
     ctx.emittedMarkdownSyntax = true;
   }
@@ -267,10 +270,10 @@ function serializeInline(node: Node, depth: number, ctx: Ctx): string {
   switch (tag) {
     case "STRONG":
     case "B":
-      return markSyntax(ctx, inner, wrapEmphasis(inner, "**"));
+      return emphasize(ctx, inner, "**");
     case "EM":
     case "I":
-      return markSyntax(ctx, inner, wrapEmphasis(inner, "*"));
+      return emphasize(ctx, inner, "*");
     case "A": {
       const href = el.getAttribute("href") ?? "";
       // Link text on one line (a newline in the label would break the link).
@@ -305,7 +308,16 @@ const HEADINGS: Record<string, number> = { H1: 1, H2: 2, H3: 3, H4: 4, H5: 5, H6
  *  `<div>` holding only a `<span>` is still its own line), and (b) does an
  *  unknown element carry block children (so it must recurse rather than
  *  flatten). The explicitly-handled tags (P / UL / OL / PRE / BLOCKQUOTE /
- *  TABLE / HR / H1-6) are listed too because (b) still asks about them. */
+ *  TABLE / HR / H1-6) are listed too because (b) still asks about them.
+ *
+ *  Membership policy: aim for the HTML block-level container set, minus
+ *  containers whose parent handler always consumes them — TR / TD / TH / THEAD /
+ *  TBODY / TFOOT and CAPTION are deliberately absent, because a stray one is only
+ *  reachable outside a <table>, where it carries no table meaning and folding is
+ *  harmless. An omitted block tag silently folds back into the inline run — the
+ *  exact bug this task fixes — so err toward listing a tag. Omission is the only
+ *  failure mode; a wrongly-listed inline tag would merely give it its own line.
+ *  Add to this set rather than introducing a second one. */
 const BLOCK_LEVEL_TAGS = new Set([
   "P",
   "UL",
@@ -351,15 +363,6 @@ const BLOCK_LEVEL_TAGS = new Set([
   // came out glued together with no separator at all.
   "LI",
 ]);
-
-// Aim for the HTML block-level container set, minus containers whose parent
-// handler always consumes them: TR / TD / TH / THEAD / TBODY / TFOOT and
-// CAPTION are deliberately absent, because a stray one is only reachable outside
-// a <table>, where it carries no table meaning and folding is harmless. An
-// omitted block tag silently folds back into the inline run — the exact bug this
-// task fixes — so err toward listing a tag. Omission is the only failure mode; a
-// wrongly-listed inline tag would merely give it its own line. Add to this set
-// rather than introducing a second one.
 
 /** Direct element children of `el` whose tagName is `tag`. */
 function directChildrenByTag(el: Element, tag: string): Element[] {
@@ -484,7 +487,7 @@ function splitInlineSegments(nodes: Node[]): Node[][] {
   // would silently eat a space that the old code emitted).
   let pending: Node[] = [];
   let breaks = 0;
-  const settle = (): void => {
+  const settlePendingBreaks = (): void => {
     if (breaks >= 2) {
       segments.push(current); // 2+ breaks: end this block, drop the whole run
       current = [];
@@ -501,11 +504,11 @@ function splitInlineSegments(nodes: Node[]): Node[][] {
     } else if (breaks > 0 && isBlankText(node)) {
       pending.push(node); // whitespace inside a run — buffered, not dropped
     } else {
-      settle();
+      settlePendingBreaks();
       current.push(node);
     }
   }
-  settle();
+  settlePendingBreaks();
   segments.push(current);
   return segments;
 }
@@ -576,8 +579,10 @@ function pushInlineBlocks(
   ctx: Ctx,
   push: (s: string, syntax: boolean) => void
 ): void {
-  for (const segment of splitInlineSegments(nodes.filter((n) => !contributesNothing(n)))) {
-    const raw = trimSegmentEdges(segment.map((nd) => serializeInline(nd, depth, ctx)).join(""));
+  const contributing = nodes.filter((n) => !contributesNothing(n));
+  for (const segment of splitInlineSegments(contributing)) {
+    const serialized = segment.map((nd) => serializeInline(nd, depth, ctx)).join("");
+    const raw = trimSegmentEdges(serialized);
     // After edge-trimming, a segment whose only content was hard breaks and
     // whitespace — a lone `<br>` between two blocks, or `<p><br></p>` — is exactly
     // empty, and any surviving break has real content on both sides.
@@ -708,8 +713,10 @@ function serializeBlocks(parent: Element, depth: number, ctx: Ctx): string[] {
     } else if (tag === "BR") {
       inlineRun.push(el); // a stray <br> between blocks joins the inline run
     } else {
-      const hasBlockChild = Array.from(el.children).some((c) => BLOCK_LEVEL_TAGS.has(c.tagName));
-      if (BLOCK_LEVEL_TAGS.has(tag) || hasBlockChild) {
+      const startsOwnBlock =
+        BLOCK_LEVEL_TAGS.has(tag) ||
+        Array.from(el.children).some((c) => BLOCK_LEVEL_TAGS.has(c.tagName));
+      if (startsOwnBlock) {
         // Block-level, or an unknown element wrapping blocks: its children are
         // their own blocks. A block-level element with only inline children still
         // becomes ONE block (its own line) — folding it into the surrounding
