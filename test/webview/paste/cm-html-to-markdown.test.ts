@@ -503,6 +503,11 @@ describe("htmlToMarkdown — emittedMarkdownSyntax discriminator", () => {
     ["an <img>, which serialises to nothing here", '<blockquote><img src="p.gif"></blockquote>'],
     // And the two branches that emit `el.textContent` directly need their own
     // residue check, or the <hr> clause hands them a container with nothing to emit.
+    // These two rows are NOT a general ruling that a container holding an <hr> may
+    // be dropped — the block above pins the opposite for <blockquote> and <li>, and
+    // that is the direction a future predicate redesign should extend. They are
+    // narrower: a fence and a code span emit TEXT, and there is no text here, so
+    // the alternative is an empty ``` `` ``` / an empty fence, not a rule.
     ["an <hr>, which a <pre> cannot fence", "<pre><hr></pre>"],
     ["an <hr>, which an inline <code> cannot fence", "<div><code><span><hr></span></code></div>"],
   ])("still drops a container holding only %s", (_label, rich) => {
