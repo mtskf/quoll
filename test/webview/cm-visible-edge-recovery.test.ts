@@ -19,12 +19,51 @@ let width = 0;
 let widthRamping = false;
 let widthReads = 0;
 
+// Capture the late-settle ResizeObserver so the test can fire its callback
+// deterministically (happy-dom has no layout engine, so a real RO never fires).
+// CM's EditorView also constructs a ResizeObserver on the scroller's ancestors,
+// so record only observers that actually observe our scrollDOM.
+type ROEntry = { cb: ResizeObserverCallback; targets: Element[] };
+let roEntries: ROEntry[] = [];
+const realResizeObserver = globalThis.ResizeObserver;
+class StubResizeObserver {
+  private readonly entry: ROEntry;
+  constructor(cb: ResizeObserverCallback) {
+    this.entry = { cb, targets: [] };
+    roEntries.push(this.entry);
+  }
+  observe(el: Element): void {
+    this.entry.targets.push(el);
+  }
+  unobserve(): void {}
+  disconnect(): void {
+    this.entry.targets = [];
+  }
+}
+
+/** The RO the recovery attached to scrollDOM (last one observing it), or
+ *  undefined if none is currently observing. */
+function lateSettleObserver(v: EditorView): ROEntry | undefined {
+  return [...roEntries].reverse().find((e) => e.targets.includes(v.scrollDOM));
+}
+
+/** Drop CM's own baseline ResizeObserver(s) from the log. CM's EditorView
+ *  observes scrollDOM too and stays connected, so without this lateSettleObserver
+ *  would match CM's observer — both before the recovery attaches (skewing the
+ *  no-poll probe) and after it disconnects (never reading undefined). Call after
+ *  arming + a couple frames (CM's RO is created by then), before the hide/show. */
+function resetObserverLog(): void {
+  roEntries = [];
+}
+
 afterEach(() => {
   view?.destroy();
   view = undefined;
   delete (document as { visibilityState?: unknown }).visibilityState;
   widthRamping = false;
   widthReads = 0;
+  globalThis.ResizeObserver = realResizeObserver;
+  roEntries = [];
   vi.restoreAllMocks();
 });
 
@@ -42,6 +81,10 @@ function setVisibility(state: DocumentVisibilityState): void {
 }
 
 function mount(maxWaitFrames: number, thawFrames = 2): EditorView {
+  // Install the stub BEFORE constructing the view so the recovery's RO is the
+  // stub. CM's own RO is also stubbed but harmless — lateSettleObserver filters
+  // by target (scrollDOM), which CM's ancestor observers never include.
+  globalThis.ResizeObserver = StubResizeObserver as unknown as typeof ResizeObserver;
   width = 500;
   view = new EditorView({
     parent: document.body,
@@ -256,6 +299,117 @@ describe("quollVisibleEdgeRecovery — lifecycle + capture guards", () => {
     setVisibility("visible");
     await until(() => dispatch.mock.calls.length === 2);
     expect(dispatch).toHaveBeenCalledTimes(2);
+  });
+
+  it("resumes rolling capture on a LATE geometry settle after the quarantine cap — no visibility edge needed", async () => {
+    stubVisibility();
+    const v = mount(6); // small budget: beginWait cap + thawWhenStable cap fire fast
+    scrollTick(v); // arm the good snapshot at stable width (500)
+    await frames(2);
+    resetObserverLog(); // ignore CM's baseline RO; track only the recovery's
+    const snap = vi.spyOn(v, "scrollSnapshot");
+    const dispatch = vi.spyOn(v, "dispatch");
+    setVisibility("hidden");
+    widthRamping = true; // never settles within the budget → quarantine → its cap expires
+    setVisibility("visible");
+    await until(() => dispatch.mock.calls.length > 0); // heal dispatched at the cap
+    // Quarantine cap expires with unsettled geometry → the ResizeObserver attaches.
+    await until(() => lateSettleObserver(v) !== undefined);
+    // Geometry settles just AFTER the budget, within the SAME visible session.
+    widthRamping = false; // clientWidth pins to 500
+    // A late resize fires → the bounded settle-check restarts → thaws once stable.
+    lateSettleObserver(v)?.cb([], {} as ResizeObserver);
+    await until(() => {
+      scrollTick(v);
+      return snap.mock.calls.length > 0;
+    });
+    expect(snap).toHaveBeenCalled(); // capture resumed WITHOUT another visibility edge
+    expect(lateSettleObserver(v)).toBeUndefined(); // observer disconnected after thaw
+  });
+
+  it("after the quarantine cap the observer sits dormant — no resize means no capture and no width polling", async () => {
+    stubVisibility();
+    const v = mount(6);
+    scrollTick(v); // arm the good snapshot
+    await frames(2);
+    resetObserverLog(); // ignore CM's baseline RO; track only the recovery's
+    const snap = vi.spyOn(v, "scrollSnapshot");
+    const dispatch = vi.spyOn(v, "dispatch");
+    setVisibility("hidden");
+    widthRamping = true; // never settles → quarantine → cap → observer attaches, goes dormant
+    setVisibility("visible");
+    await until(() => lateSettleObserver(v) !== undefined); // cap fired: observer attached
+    // Let the initial quarantine watch finish capping, then snapshot the read count.
+    await frames(4);
+    const readsWhenDormant = widthReads;
+    // No resize callback fires. If a leaked rAF were still polling, widthReads
+    // would climb across these frames (widthRamping bumps it on every read).
+    await frames(10);
+    expect(widthReads).toBe(readsWhenDormant); // dormant: nothing polls clientWidth
+    scrollTick(v);
+    await frames(2);
+    expect(snap).not.toHaveBeenCalled(); // frozen held: no thaw, no capture
+    // A later visible edge with settled geometry still restores the KEPT snapshot.
+    widthRamping = false;
+    setVisibility("hidden"); // disconnects the observer, keeps the freeze
+    expect(lateSettleObserver(v)).toBeUndefined();
+    setVisibility("visible");
+    await until(() => dispatch.mock.calls.length >= 2); // heal + kept-snapshot restore
+    expect(dispatch.mock.calls.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it("a ResizeObserver callback that arrives after destroy() is inert (no dispatch/measure/snapshot, no width poll)", async () => {
+    stubVisibility();
+    const v = mount(6);
+    scrollTick(v); // arm a snapshot
+    await frames(2);
+    resetObserverLog(); // ignore CM's baseline RO; track only the recovery's
+    setVisibility("hidden");
+    widthRamping = true; // never settles → quarantine → cap → observer attaches
+    setVisibility("visible");
+    await until(() => lateSettleObserver(v) !== undefined);
+    const entry = lateSettleObserver(v); // capture BEFORE destroy disconnects it
+    const dispatch = vi.spyOn(v, "dispatch");
+    const measure = vi.spyOn(v, "requestMeasure");
+    const snap = vi.spyOn(v, "scrollSnapshot");
+    v.destroy();
+    view = undefined; // afterEach must not destroy twice (CM destroy is not idempotent)
+    const readsAtDestroy = widthReads;
+    entry?.cb([], {} as ResizeObserver); // a late browser callback races destroy
+    await frames(6);
+    expect(dispatch).not.toHaveBeenCalled();
+    expect(measure).not.toHaveBeenCalled();
+    expect(snap).not.toHaveBeenCalled();
+    expect(widthReads).toBe(readsAtDestroy); // guard bailed: no new watch, no polling
+  });
+
+  it("a ResizeObserver callback that arrives after a successful thaw does not re-freeze or re-capture", async () => {
+    stubVisibility();
+    const v = mount(6);
+    scrollTick(v); // arm the good snapshot at stable width (500)
+    await frames(2);
+    resetObserverLog(); // ignore CM's baseline RO; track only the recovery's
+    const snap = vi.spyOn(v, "scrollSnapshot");
+    setVisibility("hidden");
+    widthRamping = true; // quarantine → cap → observer attaches
+    setVisibility("visible");
+    await until(() => lateSettleObserver(v) !== undefined);
+    const entry = lateSettleObserver(v); // capture before the thaw disconnects it
+    widthRamping = false; // width settles → the RO-driven watch thaws
+    entry?.cb([], {} as ResizeObserver);
+    await until(() => {
+      scrollTick(v);
+      return snap.mock.calls.length > 0; // capture resumed = thawed
+    });
+    const callsAfterThaw = snap.mock.calls.length;
+    // Fire the SAME (now stale) callback again: identity + !frozen guard must bail.
+    entry?.cb([], {} as ResizeObserver);
+    await frames(4);
+    scrollTick(v); // one legitimate capture is fine…
+    await frames(2);
+    // …but the stale callback started no extra watch, so no runaway/extra behaviour.
+    expect(snap.mock.calls.length).toBeGreaterThanOrEqual(callsAfterThaw);
+    expect(lateSettleObserver(v)).toBeUndefined(); // stayed disconnected after thaw
   });
 
   it("destroy cancels the wait loop and the queued capture (no late dispatch/measure/snapshot)", async () => {

@@ -101,4 +101,15 @@ describe("visible-edge recovery — real-chromium contract", () => {
     });
     expect(biggestUncoveredHole(m.view.scrollDOM)).toBeLessThan(60);
   });
+
+  // NOTE: the post-cap LATE-SETTLE RESUME contract (a quarantine-expiry ResizeObserver
+  // that resumes rolling capture when geometry settles late in the same visible
+  // session) is pinned in the unit suite (test/webview/cm-visible-edge-recovery.test.ts
+  // — "resumes rolling capture on a LATE geometry settle…" + the dormant/stale-callback
+  // guards), which drives the ResizeObserver via an injectable stub. A real-browser
+  // version was prototyped here but is inherently imprecise: forcing the quarantine
+  // path needs a tiny maxWaitFrames, which also degrades the restore precision of the
+  // measurement handoffs themselves (both cap before settling), so it can't assert the
+  // viewport-top line to the ±2 tolerance the other contracts use. It is verified
+  // manually via `pnpm preview` instead; the unit tests are the authoritative pins.
 });
