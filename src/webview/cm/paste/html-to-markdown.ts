@@ -204,16 +204,24 @@ function collapseWs(text: string): string {
 function blankAfterInvisible(text: string): boolean {
   return (
     text
-      // Invisible / ignorable formatting chars stripped by the Unicode
-      // Default_Ignorable_Code_Point PROPERTY, not a hand-enumerated list: one bounded,
-      // self-updating class covers the zero-width joiners (ZWSP/ZWNJ/ZWJ/WJ/BOM), U+00AD
-      // SOFT HYPHEN, the U+FE00–FE0F VARIATION SELECTORs, the bidi marks/isolates
-      // (LRM/RLM/ALM, U+2066–2069) and any future format char — every char that reads
-      // as blank. It matches NONE of letter/space/NBSP/heart/emoji/hyphen/CJK. This is the
-      // EMPTINESS path ONLY; `collapseWs` (the OUTPUT path) must NOT strip these — VS16 is
-      // load-bearing in emoji presentation (`❤️` = U+2764 U+FE0F), joiners glue
-      // emoji/orthography, and the bidi marks order real mixed-direction text.
-      .replace(/\p{Default_Ignorable_Code_Point}/gu, "")
+      // Invisible / ignorable formatting chars stripped by the UNION of two Unicode
+      // properties — `\p{Default_Ignorable_Code_Point} ∪ \p{Cf}` (Format) — not a
+      // hand-enumerated list: two bounded, self-updating classes that together cover the
+      // zero-width joiners (ZWSP/ZWNJ/ZWJ/WJ/BOM), U+00AD SOFT HYPHEN, the U+FE00–FE0F
+      // VARIATION SELECTORs, the bidi marks/isolates (LRM/RLM/ALM, U+2066–2069), the
+      // interlinear annotation controls U+FFF9–FFFB (`Cf` but NOT Default_Ignorable — the
+      // reason `\p{Cf}` is unioned in), and any future format/ignorable char — every char
+      // that reads as blank. It matches NONE of letter/space/NBSP/heart/emoji/hyphen/CJK.
+      // Written as ALTERNATION (`A|B`), not a `[…]` char class, so biome's
+      // noMisleadingCharacterClass does not flag the property escapes.
+      //   BOUNDARY: this is the format+ignorable class and stops there. A glyph that
+      // merely RENDERS blank but is a SYMBOL — e.g. U+2800 BRAILLE PATTERN BLANK — is
+      // CONTENT, deliberately excluded: stripping symbol categories would be the
+      // unbounded direction this predicate's design forbids.
+      //   This is the EMPTINESS path ONLY; `collapseWs` (the OUTPUT path) must NOT strip
+      // these — VS16 is load-bearing in emoji presentation (`❤️` = U+2764 U+FE0F), joiners
+      // glue emoji/orthography, and the bidi marks order real mixed-direction text.
+      .replace(/\p{Default_Ignorable_Code_Point}|\p{Cf}/gu, "")
       .replace(/\s+/g, " ")
       .trim() === ""
   );

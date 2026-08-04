@@ -591,6 +591,12 @@ describe("htmlToMarkdown — emittedMarkdownSyntax discriminator", () => {
     ["heading holding only a left-to-right mark (LRM)", "<div>- [ ] task</div><h1>&#x200E;</h1>"],
     ["heading holding only a right-to-left mark (RLM)", "<div>- [ ] task</div><h1>&#x200F;</h1>"],
     ["heading holding only a bidi isolate (LRI)", "<div>- [ ] task</div><h1>&#x2066;</h1>"],
+    // Interlinear annotation controls (U+FFF9 ANCHOR, U+FFFA SEPARATOR) are `Cf` format
+    // chars that are NOT in the Default_Ignorable property, so `\p{DI}` alone let a lone
+    // one flip the flag. blankAfterInvisible now strips `\p{DI} ∪ \p{Cf}` — the whole
+    // format+ignorable class — so a heading holding only one reads empty.
+    ["heading holding only an interlinear anchor (U+FFF9)", "<div>- [ ] task</div><h1>&#xFFF9;</h1>"],
+    ["heading holding only an interlinear separator (U+FFFA)", "<div>- [ ] task</div><h1>&#xFFFA;</h1>"],
   ])("is false for an %s (an empty container is not rich content)", (_label, html) => {
     // The wrapper mail clients leave behind in quoted HTML, the empty bullet a
     // contenteditable leaves behind, the tracking pixel a marketing mail wraps in a
@@ -1027,6 +1033,17 @@ describe("htmlToMarkdown — emittedMarkdownSyntax discriminator", () => {
     const alm = htmlToMarkdown("<div>- [ ] task</div><p><strong>&#x061C;</strong></p>");
     expect(alm?.emittedMarkdownSyntax).toBe(false);
     expect(alm?.markdown).not.toContain("**");
+  });
+
+  it("does not bold an emphasis span holding only an interlinear terminator (U+FFFB)", () => {
+    // The interlinear annotation terminator is a `Cf` format char that is NOT in the
+    // Default_Ignorable property, so `\p{DI}` alone would let a `<strong>` wrapping only
+    // one through emphasize's gate and emit `**￻**`, flipping the flag. The `\p{DI} ∪
+    // \p{Cf}` union rejects it — the emphasis branch never routes through
+    // hasVisibleContent, so the union must reach it here.
+    const term = htmlToMarkdown("<div>- [ ] task</div><p><strong>&#xFFFB;</strong></p>");
+    expect(term?.emittedMarkdownSyntax).toBe(false);
+    expect(term?.markdown).not.toContain("**");
   });
 
   it("is false for an emphasis span that wraps nothing (all whitespace)", () => {
