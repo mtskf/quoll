@@ -770,7 +770,11 @@ function serializeBlocks(parent: Element, depth: number, ctx: Ctx): string[] {
       // A list of nothing but empty <li>s renders as `-` / `1.\n2.` — non-empty
       // output, which is why `list !== ""` alone let it through. serializeList
       // drops those items via hasTextContent, so an all-empty list now really does
-      // come back as the empty string and the test below is its composition.
+      // come back as the empty string and the test below is its composition. The
+      // outer call is this branch's own routing through the predicate, kept for the
+      // uniformity its docblock asks for; `list !== ""` would now suffice on its
+      // own, and the two agree BECAUSE both descend from the one predicate — not
+      // because this branch re-derived emptiness a second way.
       if (hasTextContent(el)) {
         const list = serializeList(el, depth, ctx);
         if (list !== "") {

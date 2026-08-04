@@ -24,7 +24,9 @@
 // three that could instead CONSUME the event first require something for CM to fall
 // back to (or an image file item for imagePaste to act on), because their own defer
 // would otherwise delete the selection — see canDeferWithoutDataLoss, which the two
-// consume branches share, and hasPlainFallback / hasImageFileItem underneath it.
+// consume branches share, and pasteWouldBeDropped beneath it: the ONE place "can
+// anything downstream insert this clipboard" is answered, over hasPlainFallback /
+// hasImageFileItem. All three sites ask it through that funnel.
 // The `!html` defer is unconditional: with no HTML flavour this handler has nothing
 // to insert either, so CM's own fallback behaviour is the whole story there.
 
@@ -211,9 +213,16 @@ export function richHtmlPaste(opts: { canWrite: () => boolean }): Extension {
         // it can never reach CM's doPaste(""). Without this clause a syntax-free
         // fragment arriving BESIDE a copied image (a caption <div>, no text/plain)
         // was converted and consumed here, and the image was never pasted at all.
-        // Deliberately NOT canDeferWithoutDataLoss: an empty selection is no reason
-        // to defer here, because NOT deferring inserts this conversion rather than
-        // consuming the event — there is no swallowed paste to avoid.
+        // Both landing places are ONE question, asked through the one funnel:
+        // `!pasteWouldBeDropped(event)` IS "a plain fallback or an image file item
+        // exists", so a future third absorber is added there and this site follows.
+        // Spelling the disjunction out here instead would be a second answer to the
+        // question canDeferWithoutDataLoss already asks — the drift this file's
+        // shared predicates exist to remove.
+        //
+        // Deliberately NOT canDeferWithoutDataLoss itself: an empty selection is no
+        // reason to defer here, because NOT deferring inserts this conversion rather
+        // than consuming the event — there is no swallowed paste to avoid.
         //
         // What this deliberately gives up: the `text/html` flavour is NOT
         // strictly redundant here. LINE STRUCTURE is real information only it
@@ -234,10 +243,7 @@ export function richHtmlPaste(opts: { canWrite: () => boolean }): Extension {
         // EditorView.editable (editor.ts's `editableComp`) are reconfigured from
         // the same `canWrite` wire value that drives opts.canWrite(), so the two
         // cannot diverge — the same invariant html-table-paste.ts relies on.
-        if (
-          !converted.emittedMarkdownSyntax &&
-          (hasPlainFallback(event) || hasImageFileItem(event))
-        ) {
+        if (!converted.emittedMarkdownSyntax && !pasteWouldBeDropped(event)) {
           return false;
         }
         // NO image-file exemption here, unlike the two consume branches above, and
