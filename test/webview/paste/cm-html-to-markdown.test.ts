@@ -966,6 +966,17 @@ describe("htmlToMarkdown — emittedMarkdownSyntax discriminator", () => {
     expect(heart?.emittedMarkdownSyntax).toBe(true);
   });
 
+  it("keeps a soft hyphen in the OUTPUT when it sits within real content", () => {
+    // collapseWs (the emit path) must PRESERVE U+00AD — only blankAfterInvisible (the
+    // emptiness path) strips it. A soft hyphen inside a word is load-bearing (it marks a
+    // legal line-break point), so `<strong>co­op</strong>` bolds as `**co­op**` with the
+    // byte intact — the mirror of the VS16 heart fidelity pin above. Goes red only under
+    // a mutation widening collapseWs to strip SHY.
+    const result = htmlToMarkdown(`<p><strong>co${SHY}op</strong></p>`);
+    expect(result?.markdown).toBe(`**co${SHY}op**`);
+    expect(result?.emittedMarkdownSyntax).toBe(true);
+  });
+
   it("does not bold an emphasis span holding only a bidi mark (ALM)", () => {
     // The Arabic Letter Mark (U+061C) is an invisible Default_Ignorable format char the
     // hand-enumerated strip set missed. emphasize's `blankAfterInvisible` gate, now
