@@ -2,12 +2,17 @@
 
 All notable changes to Quoll are documented here.
 
-## 0.1.66 — 2026-08-04
+## 0.1.66 — 2026-08-05
+
+### Added
+
+- Format Document now gives your bullet lists one consistent marker, rewriting `*` and `+` items to `-`. Lists where that change would alter how the document reads — merging with a neighbouring list, or turning an item into a horizontal rule — are left exactly as you wrote them.
 
 ### Fixed
 
 - Pasting plain Markdown you copied from somewhere else — a checklist, a list, a heading — now lands exactly as you copied it, instead of arriving with a backslash in front of every `-`, `[`, and `]` and its blank lines squashed away. Pasting genuinely formatted text (bold, links, headings, tables) is unchanged: stray Markdown characters inside it are still neutralised so they stay literal.
 - Converted rich paste no longer merges separate lines together: content laid out as separate blocks stays on separate lines, and a blank line between them survives instead of turning into a stray `\`.
+- Switching back to a Quoll tab no longer occasionally lands you at the wrong scroll position when the editor was resized while hidden — for example with the outline pinned open. Your place is now restored once the layout has settled, including when it settles late.
 
 ## 0.1.65 — 2026-07-31
 
