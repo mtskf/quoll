@@ -65,7 +65,9 @@ function hasPlainFallback(event: ClipboardEvent): boolean {
  *
  *  This test MUST stay a SUBSET of imagePaste's own `imageFilesFrom` scan
  *  (image-paste.ts) — same three conditions, in the same order: `kind === "file"`,
- *  an `image/` type, and a non-null `getAsFile()`. A looser test is not a
+ *  an `image/` type, and a TRUTHY `getAsFile()`. Truthy, not `!== null`: the scan
+ *  it must not out-match keeps the file with `if (file)`, so an `undefined` return
+ *  is declined there and has to be declined here too. A looser test is not a
  *  conservative approximation, it is data loss: this handler would defer into a
  *  handler that declines, and CM's core `doPaste("")` then replaces the selection
  *  with nothing. Do NOT relax it back to a cheaper proxy such as `files.length`
@@ -81,7 +83,7 @@ function hasImageFileItem(event: ClipboardEvent): boolean {
     return false;
   }
   return Array.from(items).some(
-    (item) => item.kind === "file" && item.type.startsWith("image/") && item.getAsFile() !== null
+    (item) => item.kind === "file" && item.type.startsWith("image/") && !!item.getAsFile()
   );
 }
 

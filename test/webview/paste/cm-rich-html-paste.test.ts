@@ -30,10 +30,13 @@ function mountMd(doc: string, canWrite = true) {
   });
 }
 
-/** One clipboard file item. `type` is the MIME type; `file: null` models the item
- *  whose `getAsFile()` yields nothing — a shape that matches on kind+type yet
- *  imagePaste still declines, so the handler must not treat it as an image. */
-type FileItemSpec = { type: string; file?: File | null };
+/** One clipboard file item. `type` is the MIME type. OMITTING `file` yields a real
+ *  File; stating it explicitly as `null` OR `undefined` models the item whose
+ *  `getAsFile()` yields nothing — a shape that matches on kind+type yet imagePaste
+ *  still declines (its `if (file)` test), so the handler must not treat it as an
+ *  image. Both falsy spellings are constructible because the handler's own test has
+ *  to reject both to stay a subset of imagePaste's. */
+type FileItemSpec = { type: string; file?: File | null | undefined };
 
 /** Mount a sentinel paste handler AFTER richHtmlPaste, exactly where imagePaste
  *  sits in the real editor (editor.ts), so a defer is observable directly:
@@ -88,10 +91,12 @@ function firePaste(
   const items = specs.map((spec) => ({
     kind: "file" as const,
     type: spec.type,
-    getAsFile: () =>
-      spec.file === undefined ? new File([""], "f", { type: spec.type }) : spec.file,
+    // `"file" in spec`, not `spec.file === undefined`: the latter cannot tell an
+    // omitted key from an explicit `file: undefined`, which is one of the two
+    // no-File shapes this helper has to be able to construct.
+    getAsFile: () => ("file" in spec ? spec.file : new File([""], "f", { type: spec.type })),
   }));
-  const files = items.map((item) => item.getAsFile()).filter((f) => f !== null);
+  const files = items.map((item) => item.getAsFile()).filter((f): f is File => !!f);
   const event = new Event("paste", { bubbles: true, cancelable: true });
   Object.defineProperty(event, "clipboardData", {
     value: { getData: (t: string) => store.get(t) ?? "", items, files },
@@ -314,6 +319,24 @@ describe("richHtmlPaste — handler", () => {
     const event = firePaste(view, {
       html: REMOTE_IMG_HTML,
       files: [{ type: "image/png", file: null }],
+    });
+    expect(event.defaultPrevented).toBe(true);
+    expect(view.state.doc.toString()).toBe("keep-this");
+    view.destroy();
+  });
+
+  it("consumes an unconvertible HTML-only paste whose image item returns undefined", () => {
+    // The same shape one step further out: imagePaste's own scan keeps a file with
+    // `if (file)`, so it declines an UNDEFINED getAsFile() exactly as it declines a
+    // null one. A `!== null` test here matches where imagePaste does not — the
+    // handler would defer, imagePaste would decline, and CM's doPaste("") would
+    // empty the selection. The subset direction is what protects the document, so
+    // both falsy spellings have to be rejected.
+    const view = mount("keep-this");
+    view.dispatch({ selection: { anchor: 0, head: 9 } });
+    const event = firePaste(view, {
+      html: REMOTE_IMG_HTML,
+      files: [{ type: "image/png", file: undefined }],
     });
     expect(event.defaultPrevented).toBe(true);
     expect(view.state.doc.toString()).toBe("keep-this");
