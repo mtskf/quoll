@@ -139,13 +139,27 @@ function escapeMarkers(text: string): string {
     .replace(/^(\s*)(\d{1,9})([.)])(\s|$)/gm, "$1$2\\$3$4");
 }
 
-/** Collapse all whitespace runs (incl. newlines) to a single space — HTML's own
- *  inline whitespace behaviour. Applied to TEXT NODES only (never to `<pre>`,
- *  which the block path reads verbatim) so an interior newline cannot form
- *  indented code or smuggle an unescaped line start; real breaks come only from
- *  `<br>` and block structure. */
+/** Normalise a run of SOURCE text to what a reader actually sees: drop the
+ *  zero-width characters, then collapse all whitespace runs (incl. newlines) to a
+ *  single space — HTML's own inline whitespace behaviour. Applied to text nodes
+ *  and to the emptiness predicate, never to a `<pre>` BODY, which the block path
+ *  reads verbatim, so an interior newline cannot form indented code or smuggle an
+ *  unescaped line start; real breaks come only from `<br>` and block structure.
+ *
+ *  The zero-width class (U+200B ZERO WIDTH SPACE, U+200C/200D joiners, U+2060 word
+ *  joiner, U+FEFF) is deleted rather than folded into the whitespace run: these
+ *  characters occupy no width, so turning one into a space would insert a gap
+ *  between two letters that touch. U+00A0 needs no clause — it IS `\s`, and that is
+ *  the shape this follows: ONE place decides what counts as invisible, so
+ *  `hasTextContent`, `emphasize` and the heading/list residue guards all inherit
+ *  the same answer instead of each growing its own test. That matters because
+ *  U+200B is what a contenteditable (Notion / Slack / Quill / ProseMirror) leaves
+ *  in a block the user has emptied — i.e. precisely the leftover container the
+ *  emptiness guard exists to reject — and `String.prototype.trim()` does not strip
+ *  it. Without this, `<h1>&#8203;</h1>` counted as content and flipped
+ *  `emittedMarkdownSyntax`, re-escaping the user's hand-typed Markdown. */
 function collapseWs(text: string): string {
-  return text.replace(/\s+/g, " ");
+  return text.replace(/[\u200B-\u200D\u2060\uFEFF]/g, "").replace(/\s+/g, " ");
 }
 
 /** Write `url` (already `isAllowedUrl`-approved) as a CommonMark link destination
@@ -436,7 +450,11 @@ const BLOCK_LEVEL_TAGS = new Set([
  *  Known limit of deciding on text: a container whose only child is an `<hr>`
  *  (`<blockquote><hr></blockquote>`) reads as empty and is dropped. */
 function hasTextContent(el: Element): boolean {
-  return (el.textContent ?? "").trim() !== "";
+  // Through `collapseWs`, not straight to `trim()`: `trim()` strips U+00A0 but NOT
+  // the zero-width class, so a contenteditable's emptied block (`<h1>&#8203;</h1>`)
+  // read as content. Sharing the text path's own normaliser is what keeps that
+  // answer identical here and at `emphasize` — see the `collapseWs` docblock.
+  return collapseWs(el.textContent ?? "").trim() !== "";
 }
 
 /** Direct element children of `el` whose tagName is `tag`. */

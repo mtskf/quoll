@@ -9,6 +9,12 @@ import { htmlToMarkdown } from "../../../src/webview/cm/paste/html-to-markdown.j
 // block below.
 const convert = (html: string): string | null => htmlToMarkdown(html)?.markdown ?? null;
 
+// Built from code points, never pasted in as literal characters: an invisible byte
+// sitting in a fixture cannot be reviewed, and an editor or a copy/paste edit can
+// drop it without anyone noticing the test stopped testing anything.
+const ZWSP = String.fromCharCode(0x200b); // U+200B ZERO WIDTH SPACE
+const NBSP = String.fromCharCode(0xa0); // U+00A0 NO-BREAK SPACE
+
 /** True when `md` parses (under Quoll's shipped GFM parser) to a tree containing a
  *  node named `name` — used to prove a converted construct actually renders as the
  *  intended Markdown node (emphasis pairs, a marker is a real ListMark) rather than
@@ -155,6 +161,12 @@ describe("htmlToMarkdown — inline constructs", () => {
   it("escapes a block-start marker smuggled onto a line after <br>", () => {
     // The core security property: a marker on ANY line — not just line 1 — is escaped.
     expect(convert("<p>a<br>- b</p>")).toBe("a\\\n\\- b");
+  });
+  it("deletes a zero-width character instead of collapsing it to a space", () => {
+    // U+200B has no width, so `a<ZWSP>b` reads "ab". Folding it into the whitespace
+    // run (the other way to neutralise it) would insert a gap between two letters
+    // that touch in the source — the emptiness fix must not cost text fidelity.
+    expect(convert(`<p>a${ZWSP}b</p>`)).toBe("ab");
   });
   it("collapses a text-node newline to a space (no indented code, no smuggled marker)", () => {
     expect(convert("<p>a\n    - b</p>")).toBe("a - b");
@@ -384,6 +396,31 @@ describe("htmlToMarkdown — emittedMarkdownSyntax discriminator", () => {
       "list item holding only a <style>",
       "<div>- [ ] task</div><ul><li><style>a{}</style></li></ul>",
     ],
+    // The zero-width class: U+200B is what a contenteditable (Notion / Slack /
+    // Quill / ProseMirror) leaves behind in a block the user has emptied, and
+    // `trim()` does not strip it. The emphasis row is the one that could NOT be
+    // settled by patching the emptiness predicate — `emphasize` never consults it —
+    // which is why the normalisation lives on the shared text path instead.
+    // <pre> and inline <code> are the two branches with no residue guard behind
+    // them — they emit `el.textContent` directly — so these two rows are what
+    // observe the emptiness predicate itself normalising its input. The heading and
+    // list rows below would stay green on the predicate alone (their residue guards
+    // absorb the zero width); they pin the outcome, not the mechanism.
+    ["<pre> holding only a zero-width space", `<div>- [ ] task</div><pre>${ZWSP}</pre>`],
+    [
+      "code span holding only a zero-width space",
+      `<div>- [ ] task</div><div><code>${ZWSP}</code></div>`,
+    ],
+    ["heading holding only a zero-width space", `<div>- [ ] task</div><h1>${ZWSP}</h1>`],
+    ["list item holding only a zero-width space", `<div>- [ ] task</div><ul><li>${ZWSP}</li></ul>`],
+    [
+      "emphasis span holding only a zero-width space",
+      `<div>- [ ] task</div><p><strong>${ZWSP}</strong></p>`,
+    ],
+    // The already-correct neighbour, previously unpinned in either direction: a
+    // non-breaking space is invisible-ish too and must keep the same answer, so a
+    // future edit cannot change one boundary while believing it moved the other.
+    ["heading holding only a non-breaking space", `<div>- [ ] task</div><h1>${NBSP}</h1>`],
   ])("is false for an %s (an empty container is not rich content)", (_label, html) => {
     // The wrapper mail clients leave behind in quoted HTML, the empty bullet a
     // contenteditable leaves behind, the tracking pixel a marketing mail wraps in a
