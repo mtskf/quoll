@@ -87,6 +87,19 @@ function hasImageFileItem(event: ClipboardEvent): boolean {
   );
 }
 
+/** Can NOTHING downstream insert this clipboard? No plain / uri-list bytes for CM
+ *  core, no image file item for imagePaste — so whatever this handler decides at a
+ *  branch that will not insert the conversion, the paste produces nothing: consume
+ *  and it is swallowed here; defer and CM's `doPaste("")` is a no-op at a caret or
+ *  a deletion over a selection. THIS is the condition a diagnostic belongs on. The
+ *  warnings used to sit on the consume decision instead, which tracked "did we
+ *  protect the selection" rather than "did the paste vanish" — and so said nothing
+ *  at all for the bare-caret case, the one where the user sees a paste do nothing
+ *  and has no trace to look at. */
+function pasteWouldBeDropped(event: ClipboardEvent): boolean {
+  return !hasPlainFallback(event) && !hasImageFileItem(event);
+}
+
 /** May this handler defer without risking the user's text?
  *
  *  A defer hands the event to imagePaste and then to CM core, and CM core runs
@@ -106,7 +119,7 @@ function hasImageFileItem(event: ClipboardEvent): boolean {
  *  site (a conversion that emitted no syntax) deliberately does NOT use it — see
  *  the comment there. */
 function canDeferWithoutDataLoss(event: ClipboardEvent, from: number, to: number): boolean {
-  return hasPlainFallback(event) || hasImageFileItem(event) || from === to;
+  return !pasteWouldBeDropped(event) || from === to;
 }
 
 export function richHtmlPaste(opts: { canWrite: () => boolean }): Extension {
@@ -137,10 +150,15 @@ export function richHtmlPaste(opts: { canWrite: () => boolean }): Extension {
           // doPaste("") that would delete the selected code, so consume instead.
           // canDeferWithoutDataLoss holds the reasoning for all three exemptions;
           // the `converted === null` branch below needs the same test and shares it.
+          // Warn on the DROP, not on the consume: at a bare caret this branch
+          // defers and CM's doPaste("") does nothing, which is just as silent for
+          // the user and just as puzzling. See pasteWouldBeDropped.
+          if (pasteWouldBeDropped(event)) {
+            console.warn("[quoll] rich paste: HTML-only clipboard dropped over code");
+          }
           if (canDeferWithoutDataLoss(event, from, to)) {
             return false;
           }
-          console.warn("[quoll] rich paste: HTML-only clipboard dropped over a code selection");
           event.preventDefault();
           return true;
         }
@@ -152,8 +170,12 @@ export function richHtmlPaste(opts: { canWrite: () => boolean }): Extension {
           // into and a real selection, deferring hands CM a doPaste("") that replaces
           // the selection with nothing — an HTML-only clipboard (a remote <img>, say)
           // would silently delete the user's text. Consume the event instead.
-          if (!canDeferWithoutDataLoss(event, from, to)) {
+          // Same split as the branch above: the warning follows the dropped paste,
+          // not the consume decision.
+          if (pasteWouldBeDropped(event)) {
             console.warn("[quoll] rich paste: unconvertible HTML-only clipboard dropped");
+          }
+          if (!canDeferWithoutDataLoss(event, from, to)) {
             event.preventDefault();
             return true;
           }

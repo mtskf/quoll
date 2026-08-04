@@ -877,15 +877,24 @@ export interface HtmlToMarkdownResult {
 
 export function htmlToMarkdown(html: string): HtmlToMarkdownResult | null {
   if (html.length > MAX_HTML_INPUT_CHARS) {
-    return null;
+    return null; // expected degradation for oversized input — silent, like CapExceeded
   }
   let body: Element | null;
   try {
     body = new DOMParser().parseFromString(html, "text/html").body;
-  } catch {
+  } catch (err) {
+    // Same policy as the walk's catch at the bottom, applied here because the two
+    // returns are indistinguishable to the caller: `null` makes rich-html-paste.ts
+    // log "unconvertible HTML-only clipboard dropped", which pins the blame on what
+    // the user copied. DOMParser is a platform global and `text/html` parsing does
+    // not throw on malformed input, so a throw here is an environment/converter
+    // fault and must leave its own trace. Error only — never the HTML, which is
+    // clipboard content and can be anything the user copied.
+    console.warn("[quoll] rich paste: HTML parse failed", err);
     return null;
   }
   if (!body) {
+    console.warn("[quoll] rich paste: parsed HTML document has no body");
     return null;
   }
   try {
