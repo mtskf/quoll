@@ -447,6 +447,23 @@ describe("htmlToMarkdown — emittedMarkdownSyntax discriminator", () => {
       "code span holding only a zero-width space",
       `<div>- [ ] task</div><div><code>${ZWSP}</code></div>`,
     ],
+    // A lone joiner: emit preserves joiners, so the residue body keeps it — only the
+    // full-strip predicate (via the KEPT `!hasVisibleContent` disjunct) rejects it.
+    [
+      "code span holding only a zero-width joiner",
+      `<div>- [ ] task</div><div><code>${ZWJ}</code></div>`,
+    ],
+    // Predicate passes on the `<hr>` clause, but the body / label is whitespace — the
+    // residue `.trim()` is what stops an emitted `` ` ` `` / `[  ](url)`. The `<hr>` is
+    // wrapped so it is not a DIRECT child of `<code>` (which would block-walk the code).
+    [
+      "code span whose body is whitespace beside an <hr>",
+      "<div>- [ ] task</div><div><code><span> <hr> </span></code></div>",
+    ],
+    [
+      "link whose label is whitespace beside an <hr>",
+      '<div>- [ ] task</div><p><a href="https://x.test"> <hr> </a></p>',
+    ],
     ["heading holding only a zero-width space", `<div>- [ ] task</div><h1>${ZWSP}</h1>`],
     ["list item holding only a zero-width space", `<div>- [ ] task</div><ul><li>${ZWSP}</li></ul>`],
     [
@@ -646,6 +663,21 @@ describe("htmlToMarkdown — emittedMarkdownSyntax discriminator", () => {
     const result = htmlToMarkdown("<div>- [ ] task</div><pre>x</pre>");
     expect(result?.emittedMarkdownSyntax).toBe(true);
     expect(result?.markdown).toBe("\\- \\[ \\] task\n\n```\nx\n```");
+  });
+
+  it("does not leak SKIP_TAGS text into an inline <code> body", () => {
+    // The body is read through skipTagsText, so a <style>/<textarea> sitting beside the
+    // real code contributes nothing — only the visible `y` is fenced, never the CSS the
+    // user never saw or copied.
+    const result = htmlToMarkdown("<div><code><style>.c{}</style>y</code></div>");
+    expect(result?.markdown).toBe("`y`");
+    expect(result?.emittedMarkdownSyntax).toBe(true);
+  });
+
+  it("does not leak SKIP_TAGS text into a fenced <pre> body", () => {
+    const result = htmlToMarkdown("<pre><style>.c{}</style>y</pre>");
+    expect(result?.markdown).toBe("```\ny\n```");
+    expect(result?.emittedMarkdownSyntax).toBe(true);
   });
 
   it("emits a real <pre> body verbatim, without trimming its whitespace", () => {

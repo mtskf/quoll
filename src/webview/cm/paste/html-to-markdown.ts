@@ -401,16 +401,17 @@ function serializeInline(node: Node, depth: number, ctx: Ctx): string {
   if (tag === "CODE") {
     // Inline <code> (a <code> child of <pre> is handled by the block path). An
     // EMPTY one renders as the two-backtick `` — non-empty output from a container
-    // holding nothing — so the emptiness question goes to hasVisibleContent, and no
-    // flag is set when it says no.
-    const body = collapseWs(el.textContent ?? "");
-    // `body === ""` is the second, DIFFERENT question the other containers ask after
-    // the predicate — did what this branch EMITS survive? — and it is what keeps the
-    // predicate's `<hr>` clause honest here: an `<hr>` nested in a `<code>` is
-    // visible content by that clause yet contributes no code, and an inline `<code>`
-    // has nothing to fence. Emitted on the same normalised body the test read, so
-    // the two cannot disagree.
-    if (!hasVisibleContent(el) || body === "") {
+    // holding nothing. Body is read through `skipTagsText` so a `<style>`/`<textarea>`
+    // beside the code contributes nothing, then `collapseWs` (emit path) collapses it.
+    const body = collapseWs(skipTagsText(el));
+    // Both terms load-bearing, and both KEPT:
+    //  - `!hasVisibleContent(el)` is the full-strip emptiness gate. `body` is
+    //    collapseWs'd (emit path), which PRESERVES joiners, so a lone-joiner
+    //    `<code>&#8205;</code>` survives into `body`; only the predicate rejects it.
+    //  - `body.trim() === ""` is the residue: when the predicate passes on its `<hr>`
+    //    clause (`<code> <hr> </code>`) the body is whitespace with nothing to fence.
+    //    `.trim()`, not `=== ""`, because the emit-path collapse leaves a space.
+    if (!hasVisibleContent(el) || body.trim() === "") {
       return "";
     }
     ctx.emittedMarkdownSyntax = true;
@@ -447,17 +448,14 @@ function serializeInline(node: Node, depth: number, ctx: Ctx): string {
       // which rides along beside otherwise plain text. Same treatment as the other
       // empty containers: label only (here, the empty string), no syntax flag.
       //
-      // `label === ""` is the second, DIFFERENT question — did serialisation keep
-      // anything? — that HEADINGS (`text !== ""`), BLOCKQUOTE (`quoted !== ""`) and
-      // serializeListItem (`blocks.length === 0`) each ask after the predicate, and
-      // that this branch was alone in not asking. It is not a second answer to
-      // emptiness: hasVisibleContent reads `el.textContent`, which counts text inside
-      // SKIP_TAGS subtrees, while the label comes from serializeChildrenInline,
-      // which drops them. `<a href="…"><style>.c{}</style></a>` sits in the gap
-      // between those two projections and emitted an invisible `[](url)` WITH the
-      // flag set — the same defer-defeating bug, through the one branch missing the
-      // pattern.
-      if (!hasVisibleContent(el) || label === "") {
+      // Both terms load-bearing: `!hasVisibleContent(el)` is the full-strip emptiness
+      // gate (SKIP_TAGS-aware — `label` from serializeChildrenInline already drops
+      // SKIP_TAGS, but the predicate is what rejects a lone joiner or a whitespace-only
+      // label the emit path preserved); `label.trim() === ""` is the residue for when
+      // the predicate passes on its `<hr>` clause (`<a href> <hr> </a>`) and the label
+      // is whitespace with nothing to link. `.trim()`, not `=== ""`, because the label
+      // can carry a collapsed space.
+      if (!hasVisibleContent(el) || label.trim() === "") {
         return label;
       }
       ctx.emittedMarkdownSyntax = true;
@@ -972,12 +970,16 @@ function serializeBlocks(parent: Element, depth: number, ctx: Ctx): string[] {
       //    space and interior blank line. Do not "tidy" this by emitting
       //    `body.trim()` — that is the mistake this split exists to prevent.
       if (hasVisibleContent(el)) {
-        const body = (el.textContent ?? "").replace(/\n$/, "");
-        // Residue guard, the same second question HEADINGS and BLOCKQUOTE ask: a
-        // `<pre><hr></pre>` satisfies the predicate through its `<hr>` clause yet has
-        // no code to fence. This TESTS the body for emptiness; it does not trim what
-        // is emitted, which the paragraph above forbids.
-        if (body !== "") {
+        // Body read through `skipTagsText` (SKIP_TAGS-aware) so a `<style>`/`<textarea>`
+        // beside real code does not leak into the fence — verbatim otherwise (no
+        // collapse), keeping whitespace-significance. Only the trailing newline the
+        // browser appends is dropped.
+        const body = skipTagsText(el).replace(/\n$/, "");
+        // Residue guard: a `<pre><hr></pre>` (or a SKIP_TAGS-only `<pre>`) satisfies the
+        // predicate through its `<hr>` clause yet has no code to fence. This TESTS the
+        // body for emptiness (`.trim()`, since the emit path preserves interior
+        // whitespace); it does NOT trim what is emitted, which the paragraph above forbids.
+        if (body.trim() !== "") {
           push(count(ctx, fenceCode(body, codeLang(el))), true);
         }
       }
