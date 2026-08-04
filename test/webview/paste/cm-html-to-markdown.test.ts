@@ -415,12 +415,36 @@ describe("htmlToMarkdown — emittedMarkdownSyntax discriminator", () => {
   ])("stays true for %s beside the same plain text (the emptiness guard must not over-reach)", (_label, rich, expected) => {
     // The other half of the guard above: making every container non-rich would
     // satisfy the empty cases and silently stop rich clipboards converting at all.
-    // <hr> and <table> are the two constructs that carry no text yet are real
-    // syntax — they are deliberately NOT routed through hasTextContent, and these
-    // rows are what would catch a future edit that routes them through it.
+    // <hr> is the one construct that carries no text yet is real syntax, so its row
+    // is what would catch a future edit routing it through hasTextContent. The
+    // <table> row does NOT pin that — its cell holds "c", so it passes the
+    // predicate either way; what it pins is that a table with cell TEXT stays rich.
+    // The text-free grid, which is the shape the predicate actually decides, has
+    // its own two tests below.
     const result = htmlToMarkdown(`<div>- [ ] task</div>${rich}`);
     expect(result?.emittedMarkdownSyntax).toBe(true);
     expect(result?.markdown).toBe(expected);
+  });
+
+  it("does not call a text-free spacer table rich, but still emits its grid", () => {
+    // A layout/spacer grid — Outlook, mail signatures, newsletter HTML — riding
+    // beside the user's own prose. Counting it as rich defeats the handler's
+    // no-syntax defer and re-escapes the hand-typed markers, the bug this PR
+    // exists to fix. The grid is still emitted so the sibling case below keeps it.
+    const result = htmlToMarkdown(
+      "<div>- [ ] task</div><table><tr><td></td><td></td></tr></table>"
+    );
+    expect(result?.emittedMarkdownSyntax).toBe(false);
+    expect(result?.markdown).toBe("\\- \\[ \\] task\n\n|  |  |\n| --- | --- |");
+  });
+
+  it("keeps a text-free grid in the output when the fragment is rich for another reason", () => {
+    // The other half: emitting is not the same question as being rich. Skipping the
+    // grid outright (rather than only declining to call it rich) would silently drop
+    // it out of a fragment that converts anyway.
+    const result = htmlToMarkdown("<h1>Title</h1><table><tr><td></td></tr></table>");
+    expect(result?.emittedMarkdownSyntax).toBe(true);
+    expect(result?.markdown).toBe("# Title\n\n|  |\n| --- |");
   });
 
   it("drops only the empty items from a mixed list, without advancing the ordinal", () => {

@@ -45,7 +45,8 @@
 //    `hasTextContent` — never re-derived from a branch's own rendered output,
 //    which is what six separate branches got wrong (an empty list renders `-`,
 //    not ``). Every container branch routes through it before pushing a block or
-//    setting `emittedMarkdownSyntax`; `<hr>` and `<table>` opt out explicitly.
+//    setting `emittedMarkdownSyntax`; `<hr>` opts out explicitly, and `<table>`
+//    emits unconditionally while taking only its RICHNESS from the predicate.
 //  - Never throws to the handler: caps throw an internal sentinel (`CapExceeded`);
 //    `htmlToMarkdown` wraps the whole walk in a try/catch that returns `null` for
 //    ANY thrown value, so the handler always has a safe defer-to-plain-paste path.
@@ -417,18 +418,23 @@ const BLOCK_LEVEL_TAGS = new Set([
  *  defeats the caller's no-syntax defer and re-escapes Markdown the user typed by
  *  hand (`- [ ]` → `\- \[ \]`) — the bug this whole guard exists to stop.
  *
- *  TWO deliberate opt-outs, stated here rather than left implicit at their
- *  branches: `<hr>` and `<table>` are inherently content-free — an `<hr>` has no
- *  text at all and a table's meaning is its GRID, not its cells' prose — yet both
- *  are genuine Markdown syntax. Their branches therefore do NOT consult this
- *  predicate; `<table>` is separately protected because `tableElementToGfm`
- *  returns `null` for a degenerate table, which aborts the whole conversion.
+ *  ONE deliberate opt-out, stated here rather than left implicit at its branch:
+ *  `<hr>`. It is a void element, so this predicate would answer "empty" for EVERY
+ *  one of them and thematic breaks would stop converting altogether — and that is
+ *  safe precisely because an `<hr>` holds nothing: it has no empty-vs-full variant,
+ *  so there is no wrong answer for the predicate to give.
  *
- *  Known limit of deciding on text: a container whose ONLY child is one of those
- *  two (`<blockquote><hr></blockquote>`) reads as empty and is dropped. No
- *  clipboard producer emits that shape, and buying it back would mean teaching
- *  this predicate about tag names — i.e. re-deriving the answer a second way,
- *  which is precisely the failure mode it exists to remove. */
+ *  `<table>` used to be a second opt-out, on two claims that were both false. A
+ *  table is NOT inherently content-free — it has exactly the empty-vs-full variant
+ *  an `<hr>` lacks, and the empty one (a spacer/layout grid) is what Outlook and
+ *  newsletter HTML emit beside real prose. And `tableElementToGfm` does NOT
+ *  separately protect against it: it returns `null` only for a table with no cells
+ *  AT ALL, never for a table whose cells are merely empty. The TABLE branch now
+ *  emits its grid unconditionally but takes its RICHNESS from this predicate; see
+ *  the comment there for why those two answers differ only for a table.
+ *
+ *  Known limit of deciding on text: a container whose only child is an `<hr>`
+ *  (`<blockquote><hr></blockquote>`) reads as empty and is dropped. */
 function hasTextContent(el: Element): boolean {
   return (el.textContent ?? "").trim() !== "";
 }
@@ -815,10 +821,6 @@ function serializeBlocks(parent: Element, depth: number, ctx: Ctx): string[] {
       }
     } else if (tag === "TABLE") {
       flushInline();
-      // OPT-OUT from hasTextContent (see its docblock): a table's meaning is its
-      // GRID, not its cells' prose, so text is the wrong emptiness test here. The
-      // guard it would provide is already stronger below — tableElementToGfm
-      // returns null for a degenerate/empty table, which aborts the conversion.
       const gfm = tableElementToGfm(el);
       if (gfm === null) {
         // A table we cannot render (its own row/col/cell cap breached, or a
@@ -828,9 +830,22 @@ function serializeBlocks(parent: Element, depth: number, ctx: Ctx): string[] {
         // (as tab-separated text) AND the surrounding prose.
         throw new CapExceeded();
       }
+      // The ONE branch where "emit this" and "this is rich" have different answers,
+      // so it is the one branch that passes the predicate's verdict to `push`
+      // instead of a literal. Both halves are load-bearing:
+      //  - EMIT unconditionally: a grid is structure no other flavour of the
+      //    fragment expresses, so skipping it would drop the table out of a mixed
+      //    paste that something else (a heading, say) already made rich.
+      //  - RICH only when its cells hold text: a layout/spacer grid — the default
+      //    output of Outlook, mail signatures and newsletter HTML, riding beside
+      //    ordinary prose — shows a reader nothing, and calling it rich defeats the
+      //    caller's no-syntax defer and re-escapes Markdown the user typed by hand
+      //    (`- [ ]` → `\- \[ \]`), the bug this whole guard exists to stop. A
+      //    text-free grid loses nothing by not being rich: the handler then defers
+      //    and the clipboard's own bytes carry the grid as tab-separated text.
       // Table GFM is the amplification leaf (colspan/rowspan expansion, built
       // outside this walk's budget) → count it explicitly to abort early.
-      push(count(ctx, gfm), true);
+      push(count(ctx, gfm), hasTextContent(el));
     } else if (tag === "HR") {
       flushInline();
       // OPT-OUT from hasTextContent (see its docblock): an <hr> is inherently
