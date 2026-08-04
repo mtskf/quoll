@@ -470,6 +470,35 @@ describe("htmlToMarkdown — emittedMarkdownSyntax discriminator", () => {
     expect(result?.markdown).toBe(expected);
   });
 
+  it.each([
+    ["a blockquote", "<blockquote><hr></blockquote>", "\\- \\[ \\] task\n\n> ---"],
+    ["a list item", "<ul><li><hr></li></ul>", "\\- \\[ \\] task\n\n- ---"],
+  ])("keeps %s whose only child is an <hr> (a source with no text still renders)", (_label, rich, expected) => {
+    // The predicate's other failure direction: deciding on TEXT alone dropped these
+    // outright — content loss, and for an HTML-only clipboard nothing downstream
+    // carries the rule. `<hr>` is the one construct this converter emits from a
+    // source element with no text of its own, so it is the whole of the exception.
+    const result = htmlToMarkdown(`<div>- [ ] task</div>${rich}`);
+    expect(result?.emittedMarkdownSyntax).toBe(true);
+    expect(result?.markdown).toBe(expected);
+  });
+
+  it.each([
+    // The clause must stay narrow. An <img> RENDERS in a browser but serialises to
+    // nothing here, so counting it as visible would push an empty wrapper — the
+    // over-flagging failure this guard exists to stop, re-entering through the fix
+    // for the opposite one.
+    ["an <img>, which serialises to nothing here", '<blockquote><img src="p.gif"></blockquote>'],
+    // And the two branches that emit `el.textContent` directly need their own
+    // residue check, or the <hr> clause hands them a container with nothing to emit.
+    ["an <hr>, which a <pre> cannot fence", "<pre><hr></pre>"],
+    ["an <hr>, which an inline <code> cannot fence", "<div><code><span><hr></span></code></div>"],
+  ])("still drops a container holding only %s", (_label, rich) => {
+    const result = htmlToMarkdown(`<div>- [ ] task</div>${rich}`);
+    expect(result?.emittedMarkdownSyntax).toBe(false);
+    expect(result?.markdown).toBe("\\- \\[ \\] task");
+  });
+
   it("does not call a text-free spacer table rich, but still emits its grid", () => {
     // A layout/spacer grid — Outlook, mail signatures, newsletter HTML — riding
     // beside the user's own prose. Counting it as rich defeats the handler's
