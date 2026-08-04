@@ -109,10 +109,12 @@ class VisibleEdgeRecovery implements PluginValue {
   private waitFrame = 0;
   /** rAF-coalescing flag for the rolling capture. */
   private captureQueued = false;
-  /** Guards state-changing async callbacks against view.destroy() racing them:
-   *  the queued rolling-capture rAF frame (refreshSnapshot) and the late-settle
-   *  ResizeObserver callback (observeLateSettle), so a callback the browser
-   *  delivers after teardown is inert. */
+  /** Guards the two capture/watch entry points against view.destroy() racing
+   *  them: the scroll handler's refreshSnapshot() and the late-settle
+   *  ResizeObserver callback (observeLateSettle). The latter is the genuine
+   *  async race — the browser can deliver a queued RO callback after teardown;
+   *  refreshSnapshot() runs synchronously off the scroll event, so its check is
+   *  belt-and-suspenders. Either way, a post-destroy invocation is inert. */
   private destroyed = false;
   /** Connected only during the post-expiry late-settle watch (observeLateSettle);
    *  null whenever we are not observing. */

@@ -382,8 +382,9 @@ describe("quollVisibleEdgeRecovery — lifecycle + capture guards", () => {
     await frames(6);
     // widthReads is the DISCRIMINATING check for the destroyed guard: a resumed
     // watch reads clientWidth each frame. dispatch/measure/snap are unreachable
-    // from the RO callback path regardless (they live only in restore()), so
-    // they guard against unrelated regressions, not this guard specifically.
+    // from the RO callback's runSettleWatch path regardless (dispatch/measure
+    // live in restore(); scrollSnapshot lives in refreshSnapshot()), so they
+    // guard against unrelated regressions, not this guard specifically.
     expect(widthReads).toBe(readsAtDestroy); // guard bailed: no new watch, no polling
     expect(dispatch).not.toHaveBeenCalled();
     expect(measure).not.toHaveBeenCalled();
