@@ -194,7 +194,12 @@ function collapseWs(text: string): string {
  *  single answer to "is this text visually empty", shared by `hasVisibleContent` and
  *  the table per-cell richness check, so neither grows its own rule. */
 function blankAfterInvisible(text: string): boolean {
-  return text.replace(/[\u200B-\u200D\u2060\uFEFF]/g, "").replace(/\s+/g, " ").trim() === "";
+  return (
+    text
+      .replace(/[\u200B-\u200D\u2060\uFEFF]/g, "")
+      .replace(/\s+/g, " ")
+      .trim() === ""
+  );
 }
 
 /** Concatenate every descendant text node of `el` VERBATIM, skipping `SKIP_TAGS`
@@ -706,11 +711,7 @@ function serializeList(list: Element, depth: number, ctx: Ctx): string {
   // `<br>`/`<hr>`, the amateur/legacy spacing idiom the LI-only walk already dropped
   // — does not degrade the fragment. SKIP_TAGS children carry no prose either.
   for (const child of Array.from(list.children)) {
-    if (
-      child.tagName !== "LI" &&
-      !SKIP_TAGS.has(child.tagName) &&
-      hasVisibleContent(child)
-    ) {
+    if (child.tagName !== "LI" && !SKIP_TAGS.has(child.tagName) && hasVisibleContent(child)) {
       throw new CapExceeded();
     }
   }
