@@ -196,7 +196,12 @@ function collapseWs(text: string): string {
 function blankAfterInvisible(text: string): boolean {
   return (
     text
-      .replace(/[\u200B-\u200D\u2060\uFEFF]/g, "")
+      // Invisible / ignorable formatting chars \u2014 extend as found, NOT the full Unicode
+      // Default_Ignorable set (unbounded). U+00AD SOFT HYPHEN and U+FE00\u2013FE0F VARIATION
+      // SELECTORs join the original zero-width class here on the EMPTINESS path ONLY;
+      // `collapseWs` (the OUTPUT path) must NOT strip them \u2014 VS16 is load-bearing in
+      // emoji presentation (`\u2764\uFE0F` = U+2764 U+FE0F).
+      .replace(/\u00AD|[\u200B-\u200D\u2060\uFEFF]|[\uFE00-\uFE0F]/g, "")
       .replace(/\s+/g, " ")
       .trim() === ""
   );

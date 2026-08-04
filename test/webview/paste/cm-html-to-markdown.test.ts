@@ -16,6 +16,9 @@ const ZWSP = String.fromCharCode(0x200b); // U+200B ZERO WIDTH SPACE
 const NBSP = String.fromCharCode(0xa0); // U+00A0 NO-BREAK SPACE
 const ZWJ = String.fromCharCode(0x200d); // U+200D ZERO WIDTH JOINER (load-bearing: emoji glue)
 const ZWNJ = String.fromCharCode(0x200c); // U+200C ZERO WIDTH NON-JOINER (load-bearing: orthography)
+const SHY = String.fromCharCode(0x00ad); // U+00AD SOFT HYPHEN (invisible unless line-wrapped)
+const VS16 = String.fromCharCode(0xfe0f); // U+FE0F VARIATION SELECTOR-16 (emoji presentation)
+const HEART = String.fromCharCode(0x2764); // U+2764 HEAVY BLACK HEART (base for ❤️)
 
 /** True when `md` parses (under Quoll's shipped GFM parser) to a tree containing a
  *  node named `name` — used to prove a converted construct actually renders as the
@@ -541,6 +544,12 @@ describe("htmlToMarkdown — emittedMarkdownSyntax discriminator", () => {
     // predicate keeps stripping joiners; it goes red if the emit-path narrowing ever
     // leaks into the emptiness normaliser.
     ["heading holding only a zero-width joiner", `<div>- [ ] task</div><h1>${ZWJ}</h1>`],
+    // Soft hyphen and variation selectors are invisible/ignorable formatting chars
+    // outside the original zero-width strip set — extending blankAfterInvisible to
+    // cover them keeps a lone one from flipping the flag. hasVisibleContent gates the
+    // heading, so it emits nothing (no residue paragraph).
+    ["heading holding only a soft hyphen", `<div>- [ ] task</div><h1>${SHY}</h1>`],
+    ["heading holding only a variation selector", `<div>- [ ] task</div><h1>${VS16}</h1>`],
   ])("is false for an %s (an empty container is not rich content)", (_label, html) => {
     // The wrapper mail clients leave behind in quoted HTML, the empty bullet a
     // contenteditable leaves behind, the tracking pixel a marketing mail wraps in a
@@ -854,6 +863,21 @@ describe("htmlToMarkdown — emittedMarkdownSyntax discriminator", () => {
     const real = htmlToMarkdown("<p><strong>x<br></strong></p>");
     expect(real?.markdown).toBe("**x**");
     expect(real?.emittedMarkdownSyntax).toBe(true);
+  });
+
+  it("does not bold an emphasis span holding only a soft hyphen, and keeps VS16 in real content", () => {
+    // A soft hyphen is an invisible/ignorable formatting char now inside
+    // blankAfterInvisible's strip set, so a `<strong>` wrapping only one no longer
+    // emits `**­**` and flips the flag.
+    const shy = htmlToMarkdown(`<div>- [ ] task</div><p><strong>${SHY}</strong></p>`);
+    expect(shy?.emittedMarkdownSyntax).toBe(false);
+    expect(shy?.markdown).not.toContain("**");
+    // Fidelity: VS16 is stripped only in the EMPTINESS test, never on the OUTPUT path —
+    // an emoji whose presentation depends on it (❤️ = U+2764 U+FE0F) still bolds with
+    // the selector intact.
+    const heart = htmlToMarkdown(`<p><strong>${HEART}${VS16}</strong></p>`);
+    expect(heart?.markdown).toBe(`**${HEART}${VS16}**`);
+    expect(heart?.emittedMarkdownSyntax).toBe(true);
   });
 
   it("is false for an emphasis span that wraps nothing (all whitespace)", () => {
