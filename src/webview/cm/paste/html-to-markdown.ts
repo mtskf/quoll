@@ -45,7 +45,8 @@
 //    can absorb the defer (an HTML-only clipboard) the caller inserts this escaped
 //    rendering after all, because the alternative is a paste that does nothing.
 //  - Whether a container is visually EMPTY is decided by ONE rule —
-//    `blankAfterInvisible` (full-strip zero-width + whitespace), measured over
+//    `blankAfterInvisible` (full-strip of the `\p{DI} ∪ \p{Cf}` format+ignorable class +
+//    whitespace), measured over
 //    SKIP_TAGS-filtered text (`skipTagsText`) — never re-derived from a branch's own
 //    rendered output, which is what six separate branches got wrong (an empty list
 //    renders `-`, not ``). Most branches reach that rule through `hasVisibleContent(el)`,
@@ -181,9 +182,10 @@ function escapeMarkers(text: string): string {
  *  fidelity-first. U+00A0 needs no clause — it IS `\s`.
  *
  *  EMPTINESS is a SEPARATE question, answered by `blankAfterInvisible`, which strips
- *  the whole Default_Ignorable property (the joiners included, plus bidi marks and
- *  variation selectors) because a lone one is visually empty even though a joiner WITHIN
- *  text is load-bearing. Splitting the two is what lets output keep joiners while
+ *  the `\p{Default_Ignorable_Code_Point} ∪ \p{Cf}` union (the joiners included, plus bidi
+ *  marks, variation selectors and the interlinear controls) because a lone one is visually
+ *  empty even though a joiner WITHIN text is load-bearing. Splitting the two is what lets
+ *  output keep joiners while
  *  `hasVisibleContent` still rejects a contenteditable's emptied block — the leftover
  *  container (`<h1>&#8203;</h1>`, `<h1>&#8205;</h1>`) the emptiness guard exists to
  *  reject, which `String.prototype.trim()` does not strip. */
@@ -191,12 +193,13 @@ function collapseWs(text: string): string {
   return text.replace(/[\u200B\uFEFF]/g, "").replace(/\s+/g, " ");
 }
 
-/** Emptiness normaliser: strip the invisible/ignorable formatting chars — the whole
- *  Unicode Default_Ignorable_Code_Point property (U+00AD SOFT HYPHEN, the zero-width
- *  joiners ZWSP/ZWNJ/ZWJ, U+FE00–FE0F VARIATION SELECTORs, the bidi marks/isolates
- *  LRM/RLM/ALM + U+2066–2069, WJ, BOM, and any future format char) — collapse whitespace,
- *  trim, and report whether nothing visible remains. Distinct from `collapseWs` (the emit
- *  path, which PRESERVES joiners and variation selectors for fidelity): a lone one reads
+/** Emptiness normaliser: strip the invisible/ignorable formatting chars — the
+ *  `\p{Default_Ignorable_Code_Point} ∪ \p{Cf}` (Format) union (U+00AD SOFT HYPHEN, the
+ *  zero-width joiners ZWSP/ZWNJ/ZWJ/WJ, U+FE00–FE0F VARIATION SELECTORs, the bidi
+ *  marks/isolates LRM/RLM/ALM + U+2066–2069, the interlinear controls U+FFF9–FFFB, BOM,
+ *  and any future format/ignorable char) — collapse whitespace, trim, and report whether
+ *  nothing visible remains. Distinct from `collapseWs` (the emit path, which PRESERVES
+ *  joiners — WJ included — and variation selectors for fidelity): a lone one reads
  *  as blank here so an otherwise-empty container holding only one cannot flip
  *  `emittedMarkdownSyntax`. THE single answer to "is this text visually empty" — routed
  *  through by every emptiness decision in this module: `hasVisibleContent`, the table
@@ -460,8 +463,10 @@ function serializeInline(node: Node, depth: number, ctx: Ctx): string {
     // holding nothing. Body is read through `skipTagsText` so a `<style>`/`<textarea>`
     // beside the code contributes nothing, then `collapseWs` (emit path) collapses it.
     const body = collapseWs(skipTagsText(el));
-    // `blankAfterInvisible(body)` is the SUFFICIENT gate; `!hasVisibleContent(el)` is a
-    // redundant-after-X3 defensive twin, KEPT for CODE↔A symmetry (not load-bearing here).
+    // `blankAfterInvisible(body)` is the SUFFICIENT / PRIMARY gate; `!hasVisibleContent(el)`
+    // is a REDUNDANT twin — a proven subset, not empirically load-bearing — KEPT for
+    // CODE↔A consistency + defense-in-depth (should collapseWs ever leave a visible char in
+    // a body its source counted blank).
     //  - `blankAfterInvisible(body)` (the residue) rejects everything that must return
     //    "": a lone-joiner `<code>&#8205;</code>` (the emit-path collapseWs preserves
     //    joiners, so `body` keeps it — full-strip, not `.trim()`, is what rejects it) AND
@@ -470,7 +475,7 @@ function serializeInline(node: Node, depth: number, ctx: Ctx): string {
     //  - `!hasVisibleContent(el)` cannot fire where the residue does not: whenever it is
     //    true (blankAfterInvisible(skipTagsText) AND no `<hr>`), `body` is a collapseWs
     //    subset of that same text, so blankAfterInvisible(body) already holds. A clean
-    //    subset — kept for consistency with A (whose twin IS empirically load-bearing).
+    //    subset proof — the twin can never be the sole gate that fires.
     if (!hasVisibleContent(el) || blankAfterInvisible(body)) {
       return "";
     }
@@ -508,19 +513,22 @@ function serializeInline(node: Node, depth: number, ctx: Ctx): string {
       // which rides along beside otherwise plain text. Same treatment as the other
       // empty containers: label only (here, the empty string), no syntax flag.
       //
-      // `blankAfterInvisible(label)` is the primary gate; `!hasVisibleContent(el)` is a
-      // redundant-after-X3 defensive twin, KEPT — and here (unlike CODE) empirically so,
-      // not merely for symmetry.
+      // `blankAfterInvisible(label)` is the SUFFICIENT / PRIMARY gate; `!hasVisibleContent(el)`
+      // is a REDUNDANT twin — KEPT for CODE↔A consistency + defense-in-depth, NOT empirically
+      // load-bearing.
       //  - `blankAfterInvisible(label)` (the residue) rejects a link with nothing to show:
       //    an empty `<a>` / tracking pixel (`<a href><img src="p.gif"></a>` → label ""), a
       //    lone-joiner or whitespace-only label the emit path preserved, and the
       //    `<hr>`-clause case (`<a href> <hr> </a>` / `<a href><hr>&#8205;</a>`). The SAME
       //    full-strip rule, not `.trim()` — a joiner label that `.trim()` would leave
       //    non-empty reads as blank here.
-      //  - `!hasVisibleContent(el)` backs it up: `label` is a SERIALIZED string
-      //    (serializeChildrenInline), a different derivation from the predicate's
-      //    `skipTagsText`, so there is no clean subset proof as there is for CODE — the
-      //    twin is empirical belt-and-braces on the source element.
+      //  - `!hasVisibleContent(el)` cannot fire where the residue does not: `label` is a
+      //    different derivation (serializeChildrenInline, not `skipTagsText`), so there is
+      //    no byte-level subset proof as there is for CODE — but by case analysis, whenever
+      //    the twin is true (skipTagsText blank AND no `<hr>`), every inline leaf under it
+      //    serialises from that same blank source to DI/whitespace-only bytes, so the label
+      //    is blank too and the residue already holds. Belt-and-braces on the source, never
+      //    the sole gate that fires.
       if (!hasVisibleContent(el) || blankAfterInvisible(label)) {
         return label;
       }
@@ -638,7 +646,11 @@ const BLOCK_LEVEL_TAGS = new Set([
  *  same table at top level emits its grid. That asymmetry is deliberate: the lost
  *  artefact is a text-free grid, and the alternative — a `querySelector("table")`
  *  clause — would re-open the content-loss direction the `<hr>` clause exists to
- *  close. See the TABLE branch comment for the per-cell richness rule.
+ *  close. See the TABLE branch comment for the per-cell richness rule. (When something
+ *  ELSE keeps the wrapper alive here — its own text, or a buried `<hr>` satisfying the
+ *  clause below — the nested text-free grid IS emitted, but the wrapper's COMPOSITIONAL
+ *  richness keeps it non-rich, matching the top-level grid; see the BLOCKQUOTE / list
+ *  branches.)
  *
  *  Visible content is TEXT — measured through `skipTagsText` (SKIP_TAGS excluded) and
  *  the full-strip `blankAfterInvisible`, so neither whitespace, the zero-width class,
@@ -801,8 +813,8 @@ function serializeList(list: Element, depth: number, ctx: Ctx): string {
     // An EMPTY <li> is not an item — the leftover bullet a contenteditable keeps
     // after the user clears its text (`<li></li>`, `<li><br></li>`). Load-bearing and
     // now SKIP_TAGS-aware: it also skips a `<li>` whose only block is a text-free grid
-    // (`<li><table><style></li>`), so the list stays empty and the branch's
-    // unconditional `push(list, true)` never flips the flag for an invisible bullet.
+    // (`<li><table><style></li>`), so the list stays empty and the empty string it
+    // returns keeps the `list !== ""` gate from ever pushing an invisible bullet.
     if (!hasVisibleContent(li)) {
       continue;
     }
