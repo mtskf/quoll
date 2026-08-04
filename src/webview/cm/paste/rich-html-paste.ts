@@ -4,17 +4,23 @@
 // perfectly and still not be inserted — see the third defer below.
 //
 // Follows html-table-paste.ts — Prec.high, defer (return false WITHOUT
-// preventDefault so pasteUrlOverSelection / listReindentPaste / imagePaste / CM's
-// default plain-text paste still run), preventDefault only AFTER committing to
-// insert, read-only swallow, and one dispatch through the normal edit-sync → host
-// write-lock → validateMarkdownForWrite pipeline. It sits AFTER the table / URL /
-// list handlers and BEFORE imagePaste (see editor.ts).
+// preventDefault so the handlers after this one still run), preventDefault only
+// AFTER committing to insert, read-only swallow, and one dispatch through the
+// normal edit-sync → host write-lock → validateMarkdownForWrite pipeline.
 //
-// It deviates from that sibling in one way: there are THREE defer conditions —
-// caret/selection in code, a null conversion, and a conversion that emitted no
-// syntax — and the last has no counterpart in html-table-paste.ts. Every one that
-// can fire over a non-empty selection first requires something for CM to fall
-// back to, or its own defer would delete the selection (see hasPlainFallback).
+// What a defer actually reaches: this handler is registered AFTER htmlTablePaste /
+// pasteUrlOverSelection / listReindentPaste and BEFORE imagePaste (editor.ts), and
+// CM runs same-precedence handlers in extension order, stopping at the first that
+// returns true. So by the time control arrives here those three have already
+// declined, and deferring hands the event to imagePaste and then to CM's default
+// plain-text paste — nobody else.
+//
+// It deviates from that sibling on three of its four defer sites: `!html` is the
+// shared one, while caret/selection in code, a null conversion, and a conversion
+// that emitted no syntax have no counterpart in html-table-paste.ts. Every site
+// that can fire over a non-empty selection first requires something for CM to fall
+// back to (or an image file item for imagePaste to act on), because its own defer
+// would otherwise delete the selection — see hasPlainFallback / hasImageFileItem.
 
 import { type Extension, Prec } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
@@ -51,15 +57,31 @@ function hasPlainFallback(event: ClipboardEvent): boolean {
   return !!data && (!!data.getData("text/plain") || !!data.getData("text/uri-list"));
 }
 
-/** Does the clipboard carry a file item (a copied image, typically)? Such a paste
- *  belongs to imagePaste, which is registered AFTER this handler (editor.ts), so
- *  consuming the event here would stop a genuine image paste from ever reaching
- *  it — the document would simply be left untouched. `files.length` is a
- *  deliberate proxy for imagePaste's own `items[].kind === "file"` scan: it is the
- *  cheaper check, it cannot miss a file item, and the optional chaining keeps it
- *  working against clipboard doubles that implement only `getData`. */
-function hasFileItem(event: ClipboardEvent): boolean {
-  return (event.clipboardData?.files?.length ?? 0) > 0;
+/** Does the clipboard carry an image file item — one imagePaste will actually act
+ *  on? imagePaste is registered AFTER this handler (editor.ts), so consuming such
+ *  an event here would starve the only handler that can perform the paste and the
+ *  document would simply be left untouched.
+ *
+ *  This test MUST stay a SUBSET of imagePaste's own `imageFilesFrom` scan
+ *  (image-paste.ts) — same three conditions, in the same order: `kind === "file"`,
+ *  an `image/` type, and a non-null `getAsFile()`. A looser test is not a
+ *  conservative approximation, it is data loss: this handler would defer into a
+ *  handler that declines, and CM's core `doPaste("")` then replaces the selection
+ *  with nothing. Do NOT relax it back to a cheaper proxy such as `files.length`
+ *  (which also matches a copied PDF) — "cannot miss a file item" is the wrong
+ *  property; not over-matching is the one that protects the document.
+ *
+ *  With no `items` at all the answer is false. That is the safe side: false routes
+ *  to consuming the event, which leaves the document intact, whereas a wrong true
+ *  routes to the deletion above. */
+function hasImageFileItem(event: ClipboardEvent): boolean {
+  const items = event.clipboardData?.items;
+  if (!items) {
+    return false;
+  }
+  return Array.from(items).some(
+    (item) => item.kind === "file" && item.type.startsWith("image/") && item.getAsFile() !== null
+  );
 }
 
 export function richHtmlPaste(opts: { canWrite: () => boolean }): Extension {
@@ -87,9 +109,15 @@ export function richHtmlPaste(opts: { canWrite: () => boolean }): Extension {
           // Defer to plain-text paste so the raw text lands verbatim, structure
           // intact — but only when there is something to fall back to, or CM's
           // doPaste("") would delete the selected code (see hasPlainFallback).
-          if (hasPlainFallback(event)) {
+          // The other two exemptions are the same ones the `converted === null`
+          // branch below carries, for the same reasons: an image file item means
+          // imagePaste has a real paste to perform and consuming here would starve
+          // it, and at a bare caret there is no selection for doPaste("") to
+          // destroy — so consuming would swallow the event to protect nothing.
+          if (hasPlainFallback(event) || hasImageFileItem(event) || from === to) {
             return false;
           }
+          console.warn("[quoll] rich paste: HTML-only clipboard dropped over a code selection");
           event.preventDefault();
           return true;
         }
@@ -100,9 +128,10 @@ export function richHtmlPaste(opts: { canWrite: () => boolean }): Extension {
           // the caretInCode branch above: with no plain fallback and a real
           // selection, deferring hands CM a doPaste("") that replaces the selection
           // with nothing — an HTML-only clipboard (a remote <img>, say) would
-          // silently delete the user's text. Consume the event instead, unless a
-          // file item means imagePaste still has a real paste to perform.
-          if (!hasPlainFallback(event) && !hasFileItem(event) && from !== to) {
+          // silently delete the user's text. Consume the event instead, unless an
+          // image file item means imagePaste still has a real paste to perform.
+          if (!hasPlainFallback(event) && !hasImageFileItem(event) && from !== to) {
+            console.warn("[quoll] rich paste: unconvertible HTML-only clipboard dropped");
             event.preventDefault();
             return true;
           }
@@ -137,7 +166,15 @@ export function richHtmlPaste(opts: { canWrite: () => boolean }): Extension {
         // EditorView.editable (editor.ts's `editableComp`) are reconfigured from
         // the same `canWrite` wire value that drives opts.canWrite(), so the two
         // cannot diverge — the same invariant html-table-paste.ts relies on.
-        if (!converted.emittedMarkdownSyntax && hasPlainFallback(event)) {
+        // An image file item is the second thing this defer can land in: imagePaste
+        // consumes the event and performs the paste itself, so unlike a bare defer
+        // it can never reach CM's doPaste(""). Without this clause a syntax-free
+        // fragment arriving BESIDE a copied image (a caption <div>, no text/plain)
+        // was converted and consumed here, and the image was never pasted at all.
+        if (
+          !converted.emittedMarkdownSyntax &&
+          (hasPlainFallback(event) || hasImageFileItem(event))
+        ) {
           return false;
         }
         const md = converted.markdown;

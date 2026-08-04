@@ -30,9 +30,44 @@ function mountMd(doc: string, canWrite = true) {
   });
 }
 
+/** One clipboard file item. `type` is the MIME type; `file: null` models the item
+ *  whose `getAsFile()` yields nothing — a shape that matches on kind+type yet
+ *  imagePaste still declines, so the handler must not treat it as an image. */
+type FileItemSpec = { type: string; file?: File | null };
+
+/** Mount a sentinel paste handler AFTER richHtmlPaste, exactly where imagePaste
+ *  sits in the real editor (editor.ts), so a defer is observable directly:
+ *  `defaultPrevented` cannot distinguish a defer from a consume, because CM core
+ *  runs on a defer and preventDefaults on its own. `consume: true` models
+ *  imagePaste ACCEPTING the event (preventDefault + return true); the default
+ *  models it declining, leaving CM core to handle the paste. */
+function mountWithNextHandler(doc: string, opts: { consume?: boolean } = {}) {
+  const seen = { reachedNextHandler: false };
+  const view = new EditorView({
+    state: EditorState.create({
+      doc,
+      extensions: [
+        markdown(),
+        richHtmlPaste({ canWrite: () => true }),
+        EditorView.domEventHandlers({
+          paste: (event) => {
+            seen.reachedNextHandler = true;
+            if (opts.consume) {
+              event.preventDefault();
+              return true;
+            }
+            return false;
+          },
+        }),
+      ],
+    }),
+  });
+  return { view, seen };
+}
+
 function firePaste(
   view: EditorView,
-  data: { html?: string; text?: string; uriList?: string }
+  data: { html?: string; text?: string; uriList?: string; files?: FileItemSpec[] }
 ): Event {
   const store = new Map<string, string>();
   if (data.html !== undefined) {
@@ -44,13 +79,29 @@ function firePaste(
   if (data.uriList !== undefined) {
     store.set("text/uri-list", data.uriList);
   }
+  // `items` is the source of truth — it is what BOTH imagePaste's imageFilesFrom
+  // and the handler's hasImageFileItem scan — and `files` is derived from it, the
+  // way a real DataTransfer relates the two. Both default to an empty collection
+  // rather than being left undefined, so what a test exercises is the kind/type/
+  // getAsFile scan itself and never the predicate's optional chaining.
+  const specs = data.files ?? [];
+  const items = specs.map((spec) => ({
+    kind: "file" as const,
+    type: spec.type,
+    getAsFile: () =>
+      spec.file === undefined ? new File([""], "f", { type: spec.type }) : spec.file,
+  }));
+  const files = items.map((item) => item.getAsFile()).filter((f) => f !== null);
   const event = new Event("paste", { bubbles: true, cancelable: true });
   Object.defineProperty(event, "clipboardData", {
-    value: { getData: (t: string) => store.get(t) ?? "" },
+    value: { getData: (t: string) => store.get(t) ?? "", items, files },
   });
   view.contentDOM.dispatchEvent(event);
   return event;
 }
+
+const IMAGE_FILE: FileItemSpec[] = [{ type: "image/png" }];
+const REMOTE_IMG_HTML = '<img src="https://example.com/a.png">';
 
 describe("richHtmlPaste — handler", () => {
   it("converts a rich HTML fragment and consumes the event", () => {
@@ -235,6 +286,79 @@ describe("richHtmlPaste — handler", () => {
     view.destroy();
   });
 
+  it("consumes an unconvertible HTML-only paste carrying a NON-image file over a selection", () => {
+    // The file item belongs to no handler: imagePaste accepts only kind === "file"
+    // AND an image/ type, so it declines a PDF and hands the event back to CM core,
+    // whose doPaste("") — there is no text/plain — replaces the selection with
+    // nothing. The proxy that decides whether to defer must therefore be a SUBSET
+    // of imagePaste's own scan; when it was `files.length > 0` this exact clipboard
+    // emptied the document.
+    const view = mount("keep-this");
+    view.dispatch({ selection: { anchor: 0, head: 9 } }); // whole doc selected
+    const event = firePaste(view, {
+      html: REMOTE_IMG_HTML,
+      files: [{ type: "application/pdf" }],
+    });
+    expect(event.defaultPrevented).toBe(true);
+    expect(view.state.doc.toString()).toBe("keep-this");
+    view.destroy();
+  });
+
+  it("consumes an unconvertible HTML-only paste whose image item yields no File", () => {
+    // Matches on kind + type, but getAsFile() returns null, so imageFilesFrom skips
+    // it and imagePaste declines exactly as it does for the PDF above. Deferring on
+    // kind + type alone would leave this one clipboard shape still routing into
+    // doPaste("") — the same over-match, one step narrower.
+    const view = mount("keep-this");
+    view.dispatch({ selection: { anchor: 0, head: 9 } });
+    const event = firePaste(view, {
+      html: REMOTE_IMG_HTML,
+      files: [{ type: "image/png", file: null }],
+    });
+    expect(event.defaultPrevented).toBe(true);
+    expect(view.state.doc.toString()).toBe("keep-this");
+    view.destroy();
+  });
+
+  it("defers an unconvertible HTML-only paste over a selection when an image file rides along", () => {
+    // The mirror image of the two above: imagePaste WILL act on this clipboard, so
+    // consuming here would starve the only handler that can perform the paste and
+    // the image would be silently dropped. Deferring is safe over a selection
+    // precisely because imagePaste consumes the event itself.
+    const { view, seen } = mountWithNextHandler("keep-this", { consume: true });
+    view.dispatch({ selection: { anchor: 0, head: 9 } });
+    firePaste(view, { html: REMOTE_IMG_HTML, files: IMAGE_FILE });
+    expect(seen.reachedNextHandler).toBe(true);
+    expect(view.state.doc.toString()).toBe("keep-this");
+    view.destroy();
+  });
+
+  it("defers an image-file paste over a selection inside a code block", () => {
+    // The caretInCode consume branch needs the same image exemption as the
+    // null-conversion branch: without it, pasting a copied image while code was
+    // selected was preventDefault'd here and never reached imagePaste — the paste
+    // left no trace at all.
+    const { view, seen } = mountWithNextHandler("```\nfoo\n```", { consume: true });
+    view.dispatch({ selection: { anchor: 4, head: 7 } }); // selects "foo"
+    firePaste(view, { html: REMOTE_IMG_HTML, files: IMAGE_FILE });
+    expect(seen.reachedNextHandler).toBe(true);
+    expect(view.state.doc.toString()).toBe("```\nfoo\n```");
+    view.destroy();
+  });
+
+  it("still defers an HTML-only paste at a bare caret inside a code block", () => {
+    // The guard's whole justification is "deferring would delete the selection",
+    // which is vacuous at a caret: CM's doPaste("") with nothing selected is a
+    // no-op. Consuming there would swallow the event to protect nothing, and the
+    // handlers after this one would never get their turn at the same clipboard.
+    const { view, seen } = mountWithNextHandler("```\nfoo\n```");
+    view.dispatch({ selection: { anchor: 5 } }); // bare caret inside "foo"
+    firePaste(view, { html: "<h1>Title</h1>" }); // no text/plain at all
+    expect(seen.reachedNextHandler).toBe(true);
+    expect(view.state.doc.toString()).toBe("```\nfoo\n```");
+    view.destroy();
+  });
+
   it("defers to CM's uri-list fallback for an in-code paste with no text/plain", () => {
     // hasPlainFallback is also true for text/uri-list (mirrors CM core's own
     // getData("text/plain") || getData("text/uri-list")). With no text/plain but a
@@ -275,6 +399,29 @@ describe("richHtmlPaste — plain-text-like fragments defer", () => {
     const view = mount("");
     firePaste(view, { html: CHECKLIST_HTML, text: CHECKLIST_PLAIN });
     expect(view.state.doc.toString()).toBe(CHECKLIST_PLAIN);
+    view.destroy();
+  });
+
+  it("inserts the clipboard's plain text over a non-empty selection", () => {
+    // Select-then-paste-over is the dominant way the reported bug is met, and the
+    // observation it makes — the selection is REPLACED by the plain bytes, not
+    // preserved and not escaped — is one no caret-based test can make.
+    const view = mount("old-text");
+    view.dispatch({ selection: { anchor: 0, head: 8 } }); // whole doc selected
+    firePaste(view, { html: CHECKLIST_HTML, text: CHECKLIST_PLAIN });
+    expect(view.state.doc.toString()).toBe(CHECKLIST_PLAIN);
+    view.destroy();
+  });
+
+  it("defers a syntax-free fragment that arrives with an image file and no text/plain", () => {
+    // A caption <div> beside a copied image. Converting and consuming here (the
+    // behaviour before the image exemption) starved imagePaste and dropped the
+    // image; deferring keeps the image, at the cost of the caption text — the same
+    // trade the <br> case below makes, and the one the user can actually see.
+    const { view, seen } = mountWithNextHandler("", { consume: true });
+    firePaste(view, { html: "<div>caption</div>", files: IMAGE_FILE });
+    expect(seen.reachedNextHandler).toBe(true);
+    expect(view.state.doc.toString()).toBe("");
     view.destroy();
   });
 
