@@ -189,17 +189,17 @@ export function createImagePasteDrop(opts: {
     for (const file of files.slice(0, MAX_IMAGES_PER_EVENT)) {
       if (file.size === 0) {
         // The only refusal in this loop that used to be silent, and the one with the
-        // widest blast radius: `isIngestibleImageItem` accepts any File, so
+        // widest blast radius: `isIngestibleImageItem` never looks at size, so
         // richHtmlPaste has already DEFERRED on this item; this handler then
         // preventDefaults for the event, skips every file and returns true. The
         // paste is fully consumed, nothing is inserted, and CM's plain-text fallback
         // is suppressed too — a paste that vanishes with no trace anywhere.
         //
-        // Deliberately NOT hoisted into `isIngestibleImageItem`: the two refusals
-        // below (the transfer ceiling, the per-event aggregate cap) cannot live in a
-        // per-item membership predicate, so moving one of three there would only
-        // make the shared floor LOOK like imagePaste's acceptance set while still
-        // not being it. The predicate's honest contract is "this item is an image
+        // Deliberately NOT hoisted into `isIngestibleImageItem`: the per-event
+        // aggregate cap below is order-dependent and cannot live in a per-item
+        // membership predicate at all, so hoisting the size refusals would only make
+        // the shared floor LOOK like imagePaste's acceptance set while still not
+        // being it. The predicate's honest contract is "this item is an image
         // candidate"; refusals belong here, and here every one of them warns.
         console.warn("[quoll] dropped empty image file (zero bytes)");
         continue;

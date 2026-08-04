@@ -488,8 +488,10 @@ describe("htmlToMarkdown — emittedMarkdownSyntax discriminator", () => {
   ])("keeps %s whose only child is an <hr> (a source with no text still renders)", (_label, rich, expected) => {
     // The predicate's other failure direction: deciding on TEXT alone dropped these
     // outright — content loss, and for an HTML-only clipboard nothing downstream
-    // carries the rule. `<hr>` is the one construct this converter emits from a
-    // source element with no text of its own, so it is the whole of the exception.
+    // carries the rule. `<hr>` is the one text-free source element this converter
+    // turns into something a reader SEES, so it is the whole of the exception — a
+    // text-free <table> also emits from no text, and stays outside the clause
+    // deliberately (the spacer-grid tests below).
     const result = htmlToMarkdown(`<div>- [ ] task</div>${rich}`);
     expect(result?.emittedMarkdownSyntax).toBe(true);
     expect(result?.markdown).toBe(expected);

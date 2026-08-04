@@ -224,10 +224,10 @@ export function richHtmlPaste(opts: { canWrite: () => boolean }): Extension {
         //
         // ⚠️ They are NOT interchangeable outcomes, only interchangeable answers to
         // "can the EVENT be absorbed". imagePaste calls preventDefault()
-        // unconditionally once it sees a file (image-paste.ts), and CM's dispatcher
-        // breaks the handler chain on defaultPrevented, so with an image item
-        // present CM's builtin plain-text paste NEVER runs — even when a text/plain
-        // flavour also exists. So on an image clipboard this defer trades the prose
+        // unconditionally once it sees an ingestible image item (image-paste.ts),
+        // and CM's dispatcher breaks the handler chain on defaultPrevented, so with
+        // an image item present CM's builtin plain-text paste NEVER runs — even when
+        // a text/plain flavour also exists. So on an image clipboard this defer trades the prose
         // away for the bitmap; it does not get both. Deferring is still right (the
         // escaped rendering would corrupt hand-typed Markdown), and the caption loss
         // is the tracked "no-syntax + image → caption lost" trade whose real fix is

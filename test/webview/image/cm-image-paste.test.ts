@@ -157,7 +157,7 @@ describe("imagePaste — clipboard ingestion", () => {
 
   it("leaves a trace when it drops a zero-byte image", () => {
     // The one clipboard shape where declining is invisible from the document: the
-    // shared predicate accepts any File, so richHtmlPaste has already deferred; this
+    // shared predicate never looks at size, so richHtmlPaste has already deferred; this
     // handler preventDefaults, skips the file and returns true. Nothing is inserted
     // and CM's plain-text fallback is suppressed, so the console line is the only
     // evidence the paste ever happened. Its two sibling refusals already warn.

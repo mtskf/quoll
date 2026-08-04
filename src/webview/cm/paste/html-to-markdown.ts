@@ -47,18 +47,23 @@
 //  - Whether a container is EMPTY is asked once, of the source element, by
 //    `hasVisibleContent` — never re-derived from a branch's own rendered output,
 //    which is what six separate branches got wrong (an empty list renders `-`,
-//    not ``). Every branch that pushes a BLOCK, or that sets
-//    `emittedMarkdownSyntax` from the CONTAINER ITSELF, routes through it. Three
-//    classes deliberately do not, each for its own reason, and none of them is
-//    covered by the predicate — do not assume otherwise when changing them:
+//    not ``). Every branch that sets `emittedMarkdownSyntax` from a container
+//    routes through it — on that container, or (for `<ul>`/`<ol>`) on each `<li>`
+//    the list is composed of. Three classes deliberately do not, each for its own
+//    reason, and none of them is covered by the predicate — do not assume
+//    otherwise when changing them:
 //     · `<hr>` opts out. A void element: the predicate would answer "empty" for
 //       every one, and thematic breaks would stop converting altogether.
 //     · `<table>` emits its grid unconditionally and takes only its RICHNESS from
 //       the predicate — the one branch where those two answers differ.
 //     · `<strong>`/`<b>`/`<em>`/`<i>` never consult it. Their flag comes from
-//       `emphasize`, which records whether markers were actually written, and
-//       their emptiness is settled upstream instead — by `collapseWs`, which drops
-//       whitespace and the zero-width class before `wrapEmphasis` ever sees them.
+//       `emphasize`, which records whether markers were actually WRITTEN — and
+//       `wrapEmphasis` writes none when the span holds nothing but spaces and
+//       `<br>` tokens, which is all an empty one holds once `collapseWs` has
+//       deleted the zero-width class.
+//    A block pushed with `syntax: false` — a paragraph, or the blocks a nested
+//    walk already recorded for itself — needs none of this: it cannot flip the
+//    flag, so its own "did anything render" test cannot defeat the caller's defer.
 //  - Never throws to the handler: caps throw an internal sentinel (`CapExceeded`);
 //    `htmlToMarkdown` wraps the whole walk in a try/catch that returns `null` for
 //    ANY thrown value, so the handler always has a safe defer-to-plain-paste path.
@@ -490,13 +495,13 @@ const BLOCK_LEVEL_TAGS = new Set([
  *  and a `<br>`-only heading a stray `\` — so a per-branch "is the render empty"
  *  test has to re-derive a different wrong answer each time. Three review cycles
  *  found six such branches wrong; this is the one place that question is answered,
- *  and every branch that pushes a block, or sets `emittedMarkdownSyntax` from the
- *  container itself, routes through it FIRST. Not "every branch below": `CODE` and
- *  `A` are declared above this point, and the emphasis tags never consult it at all
- *  — the module header lists the three non-users and why each one is safe. An empty
- *  container that sets the flag
- *  defeats the caller's no-syntax defer and re-escapes Markdown the user typed by
- *  hand (`- [ ]` → `\- \[ \]`) — the bug this whole guard exists to stop.
+ *  and every branch that sets `emittedMarkdownSyntax` from a container routes
+ *  through it FIRST — on that container, or (for `<ul>`/`<ol>`) on each `<li>` the
+ *  list is composed of. Not "every branch below": `CODE` and `A` are declared above
+ *  this point, and the emphasis tags never consult it at all — the module header
+ *  lists the three non-users and why each one is safe. An empty container that sets
+ *  the flag defeats the caller's no-syntax defer and re-escapes Markdown the user
+ *  typed by hand (`- [ ]` → `\- \[ \]`) — the bug this whole guard exists to stop.
  *
  *  ONE deliberate opt-out, stated here rather than left implicit at its branch:
  *  `<hr>`. It is a void element, so this predicate would answer "empty" for EVERY
@@ -515,13 +520,15 @@ const BLOCK_LEVEL_TAGS = new Set([
  *
  *  Visible content is TEXT — normalised by `collapseWs`, so neither whitespace nor
  *  the zero-width class counts — OR an `<hr>`, and `<hr>` ONLY. That second clause
- *  is not a tag list creeping in through the back door: `<hr>` is the one construct
- *  this converter emits from a source element that has no text at all, so it is
- *  exactly the set the text test would otherwise miss, and it is the same single
- *  exception the opt-out above already makes — stated once instead of twice.
- *  `<img>` is the case that proves the clause must stay this narrow: it renders in
- *  a browser but serialises to NOTHING here, so counting it would push an empty
- *  wrapper. So does a text-free `<table>`, deliberately — see the TABLE branch.
+ *  is not a tag list creeping in through the back door: an `<hr>` is the one
+ *  text-free source element this converter turns into something a READER SEES, so
+ *  it is exactly the set the text test would otherwise miss, and it is the same
+ *  single exception the opt-out above already makes — stated once instead of twice.
+ *  The other text-free elements stay out on purpose, each for its own reason: an
+ *  `<img>` renders in a browser but serialises to NOTHING here, so counting it
+ *  would push an empty wrapper; a lone `<br>` IS the emptied-block residue this
+ *  guard exists to reject; and a text-free `<table>` is the spacer grid the TABLE
+ *  branch already declines to call rich.
  *
  *  Without that clause a container whose only child is an `<hr>` —
  *  `<blockquote><hr></blockquote>`, `<li><hr></li>` — read as empty and was dropped
@@ -648,10 +655,11 @@ function serializeList(list: Element, depth: number, ctx: Ctx): string {
     items.push(item);
     // `n` advances only for an item that was actually PUSHED, so neither skip can
     // consume an ordinal that is never emitted and the surviving items stay 1., 2.,
-    // … The two skips reject different things — no text at all vs. text that lived
-    // entirely in a SKIP_TAGS subtree and serialised away — and advancing inside the
-    // marker expression honoured only the first, renumbering everything after a
-    // `<li><style>…</style></li>`. Keep the increment here, after both gates.
+    // … The two skips reject different things — nothing visible at all vs. text
+    // that lived entirely in a SKIP_TAGS subtree and serialised away — and
+    // advancing inside the marker expression honoured only the first, renumbering
+    // everything after a `<li><style>…</style></li>`. Keep the increment here,
+    // after both gates.
     n++;
   }
   return items.join("\n");
