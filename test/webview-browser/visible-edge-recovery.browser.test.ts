@@ -168,14 +168,22 @@ describe("visible-edge recovery — real-chromium contract", () => {
 
     // Behavioural payoff (why this is a BROWSER test, not just a real-RO unit test):
     // the RESUMED snapshot — the top position captured after the late settle — is what
-    // a later hidden→visible edge restores, NOT the stale deep anchor a parked freeze
-    // would have kept. Width is stable at 680, so this edge settles and restores precisely.
+    // a later hidden→visible edge restores. Width is stable at 680, so this edge settles
+    // and restores precisely.
+    const midpoint = Math.floor((lineTop + lineDeep) / 2);
     setVisibility("hidden");
     await raf();
     await raf();
+    // While FROZEN, shove the scroller back down to the deep position. The snapshot is
+    // pinned at the top (frozen → this scroll is not captured), so the restore must
+    // actively bring the viewport back up — without this perturbation the viewport is
+    // already at the top and the predicate below would pass before restore() even runs
+    // (a no-op restore would look identical). Poll for CM to render the deep viewport
+    // (rAF-driven measure), which also pins that the perturbation genuinely took effect.
+    m.view.scrollDOM.scrollTop = deep;
+    await until(() => lineNumberAtViewportTop(m.view) > midpoint); // perturbed: predicate now FALSE
     setVisibility("visible");
-    const midpoint = Math.floor((lineTop + lineDeep) / 2);
-    await until(() => lineNumberAtViewportTop(m.view) < midpoint);
+    await until(() => lineNumberAtViewportTop(m.view) < midpoint); // restore pulls it back to the top
     expect(lineNumberAtViewportTop(m.view)).toBeLessThan(midpoint);
     expect(biggestUncoveredHole(m.view.scrollDOM)).toBeLessThan(60); // and no blank hole
   });
