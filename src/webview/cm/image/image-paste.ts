@@ -74,9 +74,9 @@ export const pendingImageAnchors = StateField.define<readonly PendingAnchor[]>({
  *  on a SUPERSET means this handler then declines, CM core falls through to
  *  `doPaste("")`, and the user's selection is replaced with nothing.
  *
- *  That handler used to restate the conditions instead of borrowing them, and
- *  three separate over-matches shipped into review before this became one
- *  definition: `files.length > 0` (which also matches a copied PDF), then
+ *  That handler used to restate the conditions instead of borrowing them, and TWO
+ *  separate over-matches shipped into review before this became one definition:
+ *  `files.length > 0` (which also matches a copied PDF), then
  *  `getAsFile() !== null` (which lets an `undefined` return through, where the
  *  `if (file)` below rejects it). A comment saying "MUST stay a SUBSET" is not a
  *  mechanism; one shared function is. Do NOT re-inline these conditions on either

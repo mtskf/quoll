@@ -39,14 +39,26 @@
 //    text typed by hand would not. NOTE this escaping is precisely what makes the
 //    conversion unusable for a syntax-free fragment — Markdown the user typed by
 //    hand would come back as `\- \[ \]` — which is why the caller defers on
-//    `emittedMarkdownSyntax === false`. The invariant still holds there: the
-//    clipboard's own bytes are inserted verbatim, exactly as typing them would.
+//    `emittedMarkdownSyntax === false`. On an ordinary clipboard, one carrying a
+//    safe plain fallback, that defer inserts the clipboard's own bytes verbatim,
+//    exactly as typing them would. It is NOT unconditional: when nothing downstream
+//    can absorb the defer (an HTML-only clipboard) the caller inserts this escaped
+//    rendering after all, because the alternative is a paste that does nothing.
 //  - Whether a container is EMPTY is asked once, of the source element, by
 //    `hasVisibleContent` — never re-derived from a branch's own rendered output,
 //    which is what six separate branches got wrong (an empty list renders `-`,
-//    not ``). Every container branch routes through it before pushing a block or
-//    setting `emittedMarkdownSyntax`; `<hr>` opts out explicitly, and `<table>`
-//    emits unconditionally while taking only its RICHNESS from the predicate.
+//    not ``). Every branch that pushes a BLOCK, or that sets
+//    `emittedMarkdownSyntax` from the CONTAINER ITSELF, routes through it. Three
+//    classes deliberately do not, each for its own reason, and none of them is
+//    covered by the predicate — do not assume otherwise when changing them:
+//     · `<hr>` opts out. A void element: the predicate would answer "empty" for
+//       every one, and thematic breaks would stop converting altogether.
+//     · `<table>` emits its grid unconditionally and takes only its RICHNESS from
+//       the predicate — the one branch where those two answers differ.
+//     · `<strong>`/`<b>`/`<em>`/`<i>` never consult it. Their flag comes from
+//       `emphasize`, which records whether markers were actually written, and
+//       their emptiness is settled upstream instead — by `collapseWs`, which drops
+//       whitespace and the zero-width class before `wrapEmphasis` ever sees them.
 //  - Never throws to the handler: caps throw an internal sentinel (`CapExceeded`);
 //    `htmlToMarkdown` wraps the whole walk in a try/catch that returns `null` for
 //    ANY thrown value, so the handler always has a safe defer-to-plain-paste path.
@@ -478,8 +490,11 @@ const BLOCK_LEVEL_TAGS = new Set([
  *  and a `<br>`-only heading a stray `\` — so a per-branch "is the render empty"
  *  test has to re-derive a different wrong answer each time. Three review cycles
  *  found six such branches wrong; this is the one place that question is answered,
- *  and every container branch below routes through it BEFORE deciding to push a
- *  block or to set `emittedMarkdownSyntax`. An empty container that sets the flag
+ *  and every branch that pushes a block, or sets `emittedMarkdownSyntax` from the
+ *  container itself, routes through it FIRST. Not "every branch below": `CODE` and
+ *  `A` are declared above this point, and the emphasis tags never consult it at all
+ *  — the module header lists the three non-users and why each one is safe. An empty
+ *  container that sets the flag
  *  defeats the caller's no-syntax defer and re-escapes Markdown the user typed by
  *  hand (`- [ ]` → `\- \[ \]`) — the bug this whole guard exists to stop.
  *
@@ -865,18 +880,17 @@ function serializeBlocks(parent: Element, depth: number, ctx: Ctx): string[] {
     } else if (tag === "UL" || tag === "OL" || tag === "MENU") {
       flushInline();
       // A list of nothing but empty <li>s renders as `-` / `1.\n2.` — non-empty
-      // output, which is why `list !== ""` alone let it through. serializeList
-      // drops those items via hasVisibleContent, so an all-empty list now really does
-      // come back as the empty string and the test below is its composition. The
-      // outer call is this branch's own routing through the predicate, kept for the
-      // uniformity its docblock asks for; `list !== ""` would now suffice on its
-      // own, and the two agree BECAUSE both descend from the one predicate — not
-      // because this branch re-derived emptiness a second way.
-      if (hasVisibleContent(el)) {
-        const list = serializeList(el, depth, ctx);
-        if (list !== "") {
-          push(list, true);
-        }
+      // output, which is why `list !== ""` alone used to let it through.
+      // serializeList now applies hasVisibleContent per <li>, so an all-empty list
+      // really does come back as the empty string and this test is its composition,
+      // not a second answer to emptiness. There is deliberately no outer
+      // hasVisibleContent(el) call: an <li>'s content is a subset of its list's, so
+      // the outer predicate could never be false while any item survived — it was
+      // provably unable to change an outcome, and a guard that cannot fire is a
+      // guard nobody can reason about.
+      const list = serializeList(el, depth, ctx);
+      if (list !== "") {
+        push(list, true);
       }
     } else if (tag === "PRE") {
       flushInline();
@@ -1007,9 +1021,12 @@ export function htmlToMarkdown(html: string): HtmlToMarkdownResult | null {
     body = new DOMParser().parseFromString(html, "text/html").body;
   } catch (err) {
     // Same policy as the walk's catch at the bottom, applied here because the two
-    // returns are indistinguishable to the caller: `null` makes rich-html-paste.ts
-    // log "unconvertible HTML-only clipboard dropped", which pins the blame on what
-    // the user copied. DOMParser is a platform global and `text/html` parsing does
+    // returns are indistinguishable to the caller: on a clipboard where the paste
+    // would be dropped, `null` makes rich-html-paste.ts log "unconvertible HTML-only
+    // clipboard dropped", which pins the blame on what the user copied — and on an
+    // ordinary clipboard, one that carries a `text/plain` flavour to defer into, it
+    // logs nothing at all and this warn is the ONLY trace. Either way the trace has
+    // to be left here. DOMParser is a platform global and `text/html` parsing does
     // not throw on malformed input, so a throw here is an environment/converter
     // fault and must leave its own trace. Error only — never the HTML, which is
     // clipboard content and can be anything the user copied.
