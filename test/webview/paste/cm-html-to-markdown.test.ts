@@ -396,6 +396,13 @@ describe("htmlToMarkdown — emittedMarkdownSyntax discriminator", () => {
       "list item holding only a <style>",
       "<div>- [ ] task</div><ul><li><style>a{}</style></li></ul>",
     ],
+    // The same shape at the <a> branch, which was the one container serialising its
+    // children without a "did serialisation keep anything" gate behind the
+    // predicate: textContent counts the <style> text, the label does not.
+    [
+      "link whose label lives entirely in a <style>",
+      '<div>- [ ] task</div><p><a href="https://x.test"><style>.c{}</style></a></p>',
+    ],
     // The zero-width class: U+200B is what a contenteditable (Notion / Slack /
     // Quill / ProseMirror) leaves behind in a block the user has emptied, and
     // `trim()` does not strip it. The emphasis row is the one that could NOT be

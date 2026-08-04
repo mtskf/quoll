@@ -369,7 +369,18 @@ function serializeInline(node: Node, depth: number, ctx: Ctx): string {
       // is a marketing mail's tracking pixel (`<a href="…"><img src="p.gif"></a>`),
       // which rides along beside otherwise plain text. Same treatment as the other
       // empty containers: label only (here, the empty string), no syntax flag.
-      if (!hasTextContent(el)) {
+      //
+      // `label === ""` is the second, DIFFERENT question — did serialisation keep
+      // anything? — that HEADINGS (`text !== ""`), BLOCKQUOTE (`quoted !== ""`) and
+      // serializeListItem (`blocks.length === 0`) each ask after the predicate, and
+      // that this branch was alone in not asking. It is not a second answer to
+      // emptiness: hasTextContent reads `el.textContent`, which counts text inside
+      // SKIP_TAGS subtrees, while the label comes from serializeChildrenInline,
+      // which drops them. `<a href="…"><style>.c{}</style></a>` sits in the gap
+      // between those two projections and emitted an invisible `[](url)` WITH the
+      // flag set — the same defer-defeating bug, through the one branch missing the
+      // pattern.
+      if (!hasTextContent(el) || label === "") {
         return label;
       }
       ctx.emittedMarkdownSyntax = true;
