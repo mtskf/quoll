@@ -276,7 +276,13 @@ function serializeInline(node: Node, depth: number, ctx: Ctx): string {
     return count(ctx, HARD_BREAK); // hard break (backslash form survives trimming)
   }
   if (tag === "CODE") {
-    // Inline <code> (a <code> child of <pre> is handled by the block path).
+    // Inline <code> (a <code> child of <pre> is handled by the block path). An
+    // EMPTY one renders as the two-backtick `` — non-empty output from a container
+    // holding nothing — so the emptiness question goes to hasTextContent, and no
+    // flag is set when it says no.
+    if (!hasTextContent(el)) {
+      return "";
+    }
     ctx.emittedMarkdownSyntax = true;
     return count(ctx, inlineCode(collapseWs(el.textContent ?? "")));
   }
@@ -302,6 +308,14 @@ function serializeInline(node: Node, depth: number, ctx: Ctx): string {
       // Only the wrapping syntax is uncounted (O(1)); the label leaves are counted.
       if (!isAllowedUrl(href)) {
         return label; // rejected destination → bare label, no syntax emitted
+      }
+      // An EMPTY <a> renders as `[](url)` — a link the reader cannot see or click,
+      // and non-empty output from a container holding nothing. The commonest source
+      // is a marketing mail's tracking pixel (`<a href="…"><img src="p.gif"></a>`),
+      // which rides along beside otherwise plain text. Same treatment as the other
+      // empty containers: label only (here, the empty string), no syntax flag.
+      if (!hasTextContent(el)) {
+        return label;
       }
       ctx.emittedMarkdownSyntax = true;
       return `[${label}](${markdownDestination(href)})`;
@@ -385,6 +399,33 @@ const BLOCK_LEVEL_TAGS = new Set([
   "LI",
 ]);
 
+/** Does this container hold anything a reader would see? Decided on the SOURCE
+ *  element, never on the rendered Markdown: a rendered EMPTY container is not the
+ *  empty string — a list renders `-`, a code span ``` `` ```, a link `[](url)`,
+ *  and a `<br>`-only heading a stray `\` — so a per-branch "is the render empty"
+ *  test has to re-derive a different wrong answer each time. Three review cycles
+ *  found six such branches wrong; this is the one place that question is answered,
+ *  and every container branch below routes through it BEFORE deciding to push a
+ *  block or to set `emittedMarkdownSyntax`. An empty container that sets the flag
+ *  defeats the caller's no-syntax defer and re-escapes Markdown the user typed by
+ *  hand (`- [ ]` → `\- \[ \]`) — the bug this whole guard exists to stop.
+ *
+ *  TWO deliberate opt-outs, stated here rather than left implicit at their
+ *  branches: `<hr>` and `<table>` are inherently content-free — an `<hr>` has no
+ *  text at all and a table's meaning is its GRID, not its cells' prose — yet both
+ *  are genuine Markdown syntax. Their branches therefore do NOT consult this
+ *  predicate; `<table>` is separately protected because `tableElementToGfm`
+ *  returns `null` for a degenerate table, which aborts the whole conversion.
+ *
+ *  Known limit of deciding on text: a container whose ONLY child is one of those
+ *  two (`<blockquote><hr></blockquote>`) reads as empty and is dropped. No
+ *  clipboard producer emits that shape, and buying it back would mean teaching
+ *  this predicate about tag names — i.e. re-deriving the answer a second way,
+ *  which is precisely the failure mode it exists to remove. */
+function hasTextContent(el: Element): boolean {
+  return (el.textContent ?? "").trim() !== "";
+}
+
 /** Direct element children of `el` whose tagName is `tag`. */
 function directChildrenByTag(el: Element, tag: string): Element[] {
   return Array.from(el.children).filter((c) => c.tagName === tag);
@@ -439,7 +480,14 @@ function serializeListItem(li: Element, marker: string, depth: number, ctx: Ctx)
   const blocks = serializeBlocks(li, depth + 1, ctx);
   const indent = " ".repeat(marker.length);
   if (blocks.length === 0) {
-    return marker.trimEnd();
+    // No marker for an item with no blocks. `serializeList` has already refused
+    // the empty <li>s via hasTextContent, so what reaches here is an item whose
+    // text lives entirely in a SKIP_TAGS subtree (`<li><style>…</style></li>`) —
+    // a different question (did serialisation keep anything?) than the one
+    // hasTextContent answers, not a second answer to it. Returning `marker` here
+    // is what emitted the bare `-` that made an empty bullet look like rich
+    // content; the caller drops the empty string.
+    return "";
   }
   const first = blocks[0]
     .split("\n")
@@ -473,9 +521,19 @@ function serializeList(list: Element, depth: number, ctx: Ctx): string {
   }
   const items: string[] = [];
   for (const li of directChildrenByTag(list, "LI")) {
-    bump(ctx);
+    bump(ctx); // before the emptiness test, so a fragment of 100k empty <li>s still caps
+    // An EMPTY <li> is not an item — the leftover bullet a contenteditable keeps
+    // after the user clears its text, which arrives as `<li></li>` or `<li><br></li>`.
+    // Skipping it BEFORE the marker is computed also keeps `n` from advancing over
+    // an ordinal that is never emitted, so the surviving items stay 1., 2., …
+    if (!hasTextContent(li)) {
+      continue;
+    }
     const marker = ordered ? `${Math.min(n++, MAX_LIST_NUMBER)}. ` : "- ";
-    items.push(serializeListItem(li, marker, depth, ctx));
+    const item = serializeListItem(li, marker, depth, ctx);
+    if (item !== "") {
+      items.push(item);
+    }
   }
   return items.join("\n");
 }
@@ -685,50 +743,71 @@ function serializeBlocks(parent: Element, depth: number, ctx: Ctx): string[] {
 
     if (HEADINGS[tag]) {
       flushInline();
-      const text = collapseWs(serializeChildrenInline(el, depth, ctx)).trim();
-      if (text !== "") {
-        push(`${"#".repeat(HEADINGS[tag])} ${text}`, true);
+      // `<h1><br></h1>` — a contenteditable's emptied heading — serialises to the
+      // lone HARD_BREAK, whose `\` survives collapseWs+trim and used to be pushed
+      // as `# \`. hasTextContent settles it on the source instead.
+      if (hasTextContent(el)) {
+        const text = collapseWs(serializeChildrenInline(el, depth, ctx)).trim();
+        // Can still come out empty when every child was a SKIP_TAGS subtree
+        // (`<h1><style>…</style></h1>`): textContent counts that text, serialisation
+        // drops it. A different question from the one above, not a second answer.
+        if (text !== "") {
+          push(`${"#".repeat(HEADINGS[tag])} ${text}`, true);
+        }
       }
     } else if (tag === "P") {
       flushInline();
       pushInlineBlocks(Array.from(el.childNodes), depth, ctx, push);
     } else if (tag === "UL" || tag === "OL" || tag === "MENU") {
       flushInline();
-      const list = serializeList(el, depth, ctx);
-      if (list !== "") {
-        push(list, true);
+      // A list of nothing but empty <li>s renders as `-` / `1.\n2.` — non-empty
+      // output, which is why `list !== ""` alone let it through. serializeList
+      // drops those items via hasTextContent, so an all-empty list now really does
+      // come back as the empty string and the test below is its composition.
+      if (hasTextContent(el)) {
+        const list = serializeList(el, depth, ctx);
+        if (list !== "") {
+          push(list, true);
+        }
       }
     } else if (tag === "PRE") {
       flushInline();
       // <pre> body is a non-inline leaf (verbatim, never through serializeInline)
-      // → count it explicitly. Guarded like HEADINGS / UL: an EMPTY container is
-      // not rich content, and pushing one as syntax would defeat the caller's
-      // no-syntax defer — a content-free <pre>/<blockquote> is exactly the wrapper
-      // mail clients leave behind in an otherwise plain fragment, so an unguarded
-      // push re-escapes the user's hand-typed Markdown.
-      const body = (el.textContent ?? "").replace(/\n$/, "");
+      // → count it explicitly.
       // Two SEPARATE concerns, deliberately answered differently:
-      //  - the richness DECISION is trim-based. A <pre> holding only whitespace is
-      //    an empty container, not code — including the pretty-printed
-      //    `<pre>\n   \n</pre>` and `<pre>\n\n</pre>` that real clipboard HTML
-      //    carries, which a "strip one trailing newline" test still called content.
-      //    No producer means a blank line as code, and calling one rich defeats the
-      //    caller's no-syntax defer and re-escapes the user's hand-typed Markdown.
+      //  - the richness DECISION is hasTextContent, shared with every other
+      //    container. A <pre> holding only whitespace is an empty container, not
+      //    code — including the pretty-printed `<pre>\n   \n</pre>` and
+      //    `<pre>\n\n</pre>` that real clipboard HTML carries, which a "strip one
+      //    trailing newline" test still called content. No producer means a blank
+      //    line as code, and calling one rich defeats the caller's no-syntax defer
+      //    and re-escapes the user's hand-typed Markdown.
       //  - what gets EMITTED is verbatim. Whitespace-significance lives here and
       //    only here: once a <pre> holds real code, its body keeps every leading
       //    space and interior blank line. Do not "tidy" this by emitting
       //    `body.trim()` — that is the mistake this split exists to prevent.
-      if (body.trim() !== "") {
+      if (hasTextContent(el)) {
+        const body = (el.textContent ?? "").replace(/\n$/, "");
         push(count(ctx, fenceCode(body, codeLang(el))), true);
       }
     } else if (tag === "BLOCKQUOTE") {
       flushInline();
-      const quoted = serializeBlocks(el, depth + 1, ctx).join("\n\n");
-      if (quoted !== "") {
-        push(prefixLines(quoted, "> "), true);
+      // The quote wrapper mail clients leave behind in an otherwise plain reply.
+      // hasTextContent is the decision; `quoted !== ""` then guards the residue a
+      // non-empty source can still serialise away to (a SKIP_TAGS-only subtree),
+      // exactly as at HEADINGS.
+      if (hasTextContent(el)) {
+        const quoted = serializeBlocks(el, depth + 1, ctx).join("\n\n");
+        if (quoted !== "") {
+          push(prefixLines(quoted, "> "), true);
+        }
       }
     } else if (tag === "TABLE") {
       flushInline();
+      // OPT-OUT from hasTextContent (see its docblock): a table's meaning is its
+      // GRID, not its cells' prose, so text is the wrong emptiness test here. The
+      // guard it would provide is already stronger below — tableElementToGfm
+      // returns null for a degenerate/empty table, which aborts the conversion.
       const gfm = tableElementToGfm(el);
       if (gfm === null) {
         // A table we cannot render (its own row/col/cell cap breached, or a
@@ -743,6 +822,11 @@ function serializeBlocks(parent: Element, depth: number, ctx: Ctx): string[] {
       push(count(ctx, gfm), true);
     } else if (tag === "HR") {
       flushInline();
+      // OPT-OUT from hasTextContent (see its docblock): an <hr> is inherently
+      // content-free — it is a void element, so the predicate would say "empty" for
+      // EVERY one of them and the thematic break would stop converting altogether.
+      // Safe precisely because it holds nothing: there is no empty-vs-full variant
+      // of an <hr>, so there is no wrong answer for the predicate to give.
       push("---", true);
     } else if (tag === "BR") {
       inlineRun.push(el); // a stray <br> between blocks joins the inline run

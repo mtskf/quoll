@@ -362,14 +362,73 @@ describe("htmlToMarkdown — emittedMarkdownSyntax discriminator", () => {
     ["empty pre", "<div>- [ ] task</div><pre></pre>"],
     ["empty heading", "<div>- [ ] task</div><h1></h1>"],
     ["empty list", "<div>- [ ] task</div><ul></ul>"],
+    ["list of one empty item", "<div>- [ ] task</div><ul><li></li></ul>"],
+    ["ordered list of empty items", "<div>- [ ] task</div><ol><li></li><li></li></ol>"],
+    ["list item holding only a <br>", "<div>- [ ] task</div><ul><li><br></li></ul>"],
+    ["heading holding only a <br>", "<div>- [ ] task</div><h1><br></h1>"],
+    ["empty inline code span", "<div>- [ ] task</div><div><code></code></div>"],
+    ["link with an empty label", '<div>- [ ] task</div><p><a href="https://t.co/x"></a></p>'],
+    [
+      "link wrapping only a tracking pixel",
+      '<div>- [ ] task</div><p><a href="https://t.co/x"><img src="p.gif"></a></p>',
+    ],
+    [
+      "blockquote holding only an empty list",
+      "<div>- [ ] task</div><blockquote><ul><li></li></ul></blockquote>",
+    ],
+    // The one shape hasTextContent alone cannot settle: the <li> HAS text, but all
+    // of it lives in a SKIP_TAGS subtree that serialisation drops. Pins the second,
+    // narrower guard inside serializeListItem — without it the item falls back to a
+    // bare `-` marker and the list is pushed as syntax again.
+    [
+      "list item holding only a <style>",
+      "<div>- [ ] task</div><ul><li><style>a{}</style></li></ul>",
+    ],
   ])("is false for an %s (an empty container is not rich content)", (_label, html) => {
-    // The wrapper mail clients leave behind in quoted HTML. Flipping the flag for
-    // one would defeat the handler's no-syntax defer and re-escape the user's own
-    // markers — the bug this PR exists to fix. The container must also emit NO
-    // block: no stray `>`, no empty fence, no bare `#`.
+    // The wrapper mail clients leave behind in quoted HTML, the empty bullet a
+    // contenteditable leaves behind, the tracking pixel a marketing mail wraps in a
+    // link. Flipping the flag for one would defeat the handler's no-syntax defer and
+    // re-escape the user's own markers — the bug this PR exists to fix.
+    //
+    // Every one of these renders to something NON-EMPTY when its branch decides
+    // emptiness on its own output ("-", "1.\n2.", "``", "[](url)", "# \\"), which is
+    // why the decision belongs to hasTextContent on the SOURCE element and not to
+    // per-branch string tests. The container must also emit NO block.
     const result = htmlToMarkdown(html);
     expect(result?.emittedMarkdownSyntax).toBe(false);
     expect(result?.markdown).toBe("\\- \\[ \\] task");
+  });
+
+  it.each([
+    ["a list with real items", "<ul><li>a</li></ul>", "\\- \\[ \\] task\n\n- a"],
+    ["a <pre> holding real code", "<pre>x</pre>", "\\- \\[ \\] task\n\n```\nx\n```"],
+    ["a heading with text", "<h1>T</h1>", "\\- \\[ \\] task\n\n# T"],
+    ["a code span with content", "<div><code>x</code></div>", "\\- \\[ \\] task\n\n`x`"],
+    [
+      "a link with a label",
+      '<p><a href="https://example.com">x</a></p>',
+      "\\- \\[ \\] task\n\n[x](https://example.com)",
+    ],
+    ["a thematic break", "<hr>", "\\- \\[ \\] task\n\n---"],
+    ["a table", "<table><tr><td>c</td></tr></table>", "\\- \\[ \\] task\n\n| c |\n| --- |"],
+    ["a blockquote with text", "<blockquote>q</blockquote>", "\\- \\[ \\] task\n\n> q"],
+  ])("stays true for %s beside the same plain text (the emptiness guard must not over-reach)", (_label, rich, expected) => {
+    // The other half of the guard above: making every container non-rich would
+    // satisfy the empty cases and silently stop rich clipboards converting at all.
+    // <hr> and <table> are the two constructs that carry no text yet are real
+    // syntax — they are deliberately NOT routed through hasTextContent, and these
+    // rows are what would catch a future edit that routes them through it.
+    const result = htmlToMarkdown(`<div>- [ ] task</div>${rich}`);
+    expect(result?.emittedMarkdownSyntax).toBe(true);
+    expect(result?.markdown).toBe(expected);
+  });
+
+  it("drops only the empty items from a mixed list, without advancing the ordinal", () => {
+    // An empty <li> is not an item, so it must not consume a number either —
+    // otherwise a contenteditable's leftover bullet renumbers everything after it.
+    const result = htmlToMarkdown("<ol><li>a</li><li></li><li>b</li></ol>");
+    expect(result?.markdown).toBe("1. a\n2. b");
+    expect(result?.emittedMarkdownSyntax).toBe(true);
   });
 
   it.each([
