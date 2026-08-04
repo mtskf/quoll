@@ -102,6 +102,20 @@ export function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+/** Poll a condition once per frame; throw past the cap so a hang fails loud
+ *  instead of silently timing out the whole test. Frame-based (not wall-clock)
+ *  so it scales with rAF throttling under headless CI, matching the recovery
+ *  plugin's frame-based wait/thaw budgets. Mirrors the unit suite's helper. */
+export async function until(cond: () => boolean, capFrames = 120): Promise<void> {
+  for (let i = 0; i < capFrames; i += 1) {
+    if (cond()) {
+      return;
+    }
+    await frames(1);
+  }
+  throw new Error("condition not reached within frame cap");
+}
+
 /** Biggest vertical hole in the scroller's visible area not covered by any
  *  rendered .cm-content child (lines or widgets; CM's .cm-gap placeholders
  *  paint nothing, so they are excluded). A healthy viewport has ~0; the
