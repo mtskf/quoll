@@ -155,6 +155,26 @@ describe("imagePaste — clipboard ingestion", () => {
     view.destroy();
   });
 
+  it("leaves a trace when it drops a zero-byte image", () => {
+    // The one clipboard shape where declining is invisible from the document: the
+    // shared predicate accepts any File, so richHtmlPaste has already deferred; this
+    // handler preventDefaults, skips the file and returns true. Nothing is inserted
+    // and CM's plain-text fallback is suppressed, so the console line is the only
+    // evidence the paste ever happened. Its two sibling refusals already warn.
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const { view } = mount("ab");
+      const empty = new File([], "f", { type: "image/png" });
+      const event = firePasteAt(view.contentDOM, { files: [{ type: "image/png", file: empty }] });
+      expect(event.defaultPrevented).toBe(true);
+      expect(view.state.field(pendingImageAnchors).length).toBe(0);
+      expect(warn).toHaveBeenCalledTimes(1);
+      view.destroy();
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
   it("swallows an image paste on a read-only doc without queueing an anchor", () => {
     const { view } = mount("ab", false);
     const event = firePasteAt(view.contentDOM, { files: IMAGE_FILE });
