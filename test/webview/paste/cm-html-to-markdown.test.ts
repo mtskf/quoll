@@ -556,6 +556,13 @@ describe("htmlToMarkdown — emittedMarkdownSyntax discriminator", () => {
     // heading, so it emits nothing (no residue paragraph).
     ["heading holding only a soft hyphen", `<div>- [ ] task</div><h1>${SHY}</h1>`],
     ["heading holding only a variation selector", `<div>- [ ] task</div><h1>${VS16}</h1>`],
+    // Bidi controls (LRM/RLM) and a bidi isolate (LRI) are invisible Default_Ignorable
+    // format chars the hand-enumerated strip set missed — each new one used to need
+    // another cycle. `blankAfterInvisible` now strips the whole Default_Ignorable
+    // PROPERTY, so a heading holding only one reads empty and hasVisibleContent gates it.
+    ["heading holding only a left-to-right mark (LRM)", "<div>- [ ] task</div><h1>&#x200E;</h1>"],
+    ["heading holding only a right-to-left mark (RLM)", "<div>- [ ] task</div><h1>&#x200F;</h1>"],
+    ["heading holding only a bidi isolate (LRI)", "<div>- [ ] task</div><h1>&#x2066;</h1>"],
   ])("is false for an %s (an empty container is not rich content)", (_label, html) => {
     // The wrapper mail clients leave behind in quoted HTML, the empty bullet a
     // contenteditable leaves behind, the tracking pixel a marketing mail wraps in a
@@ -597,6 +604,14 @@ describe("htmlToMarkdown — emittedMarkdownSyntax discriminator", () => {
     );
     expect(result?.emittedMarkdownSyntax).toBe(false);
     expect(result?.markdown).not.toContain("](");
+  });
+
+  it("does not over-defer a real list because an invisible bidi mark sits beside its items", () => {
+    // A bidi mark (LRM) as a bare text-node child of `<ul>` used to be seen as a
+    // non-`<li>` direct child carrying content, so serializeList aborted the whole
+    // conversion (→ null → over-defer). blankAfterInvisible now strips the whole
+    // Default_Ignorable property, so the mark reads blank and the real item converts.
+    expect(convert("<ul>&#x200E;<li>x</li></ul>")).toBe("- x");
   });
 
   it.each([
@@ -899,6 +914,17 @@ describe("htmlToMarkdown — emittedMarkdownSyntax discriminator", () => {
     const heart = htmlToMarkdown(`<p><strong>${HEART}${VS16}</strong></p>`);
     expect(heart?.markdown).toBe(`**${HEART}${VS16}**`);
     expect(heart?.emittedMarkdownSyntax).toBe(true);
+  });
+
+  it("does not bold an emphasis span holding only a bidi mark (ALM)", () => {
+    // The Arabic Letter Mark (U+061C) is an invisible Default_Ignorable format char the
+    // hand-enumerated strip set missed. emphasize's `blankAfterInvisible` gate, now
+    // stripping the whole Default_Ignorable property, rejects a `<strong>` wrapping only
+    // one, so no `**‏**` is emitted and the flag stays false — the emphasis branch never
+    // routes through hasVisibleContent, so this is where the property must reach it.
+    const alm = htmlToMarkdown("<div>- [ ] task</div><p><strong>&#x061C;</strong></p>");
+    expect(alm?.emittedMarkdownSyntax).toBe(false);
+    expect(alm?.markdown).not.toContain("**");
   });
 
   it("is false for an emphasis span that wraps nothing (all whitespace)", () => {

@@ -202,12 +202,16 @@ function collapseWs(text: string): string {
 function blankAfterInvisible(text: string): boolean {
   return (
     text
-      // Invisible / ignorable formatting chars — extend as found, NOT the full Unicode
-      // Default_Ignorable set (unbounded). U+00AD SOFT HYPHEN and U+FE00–FE0F VARIATION
-      // SELECTORs join the original zero-width class here on the EMPTINESS path ONLY;
-      // `collapseWs` (the OUTPUT path) must NOT strip them — VS16 is load-bearing in
-      // emoji presentation (`\u2764\uFE0F` = U+2764 U+FE0F).
-      .replace(/\u00AD|[\u200B-\u200D\u2060\uFEFF]|[\uFE00-\uFE0F]/g, "")
+      // Invisible / ignorable formatting chars stripped by the Unicode
+      // Default_Ignorable_Code_Point PROPERTY, not a hand-enumerated list: one bounded,
+      // self-updating class covers the zero-width joiners (ZWSP/ZWNJ/ZWJ/WJ/BOM), U+00AD
+      // SOFT HYPHEN, the U+FE00–FE0F VARIATION SELECTORs, the bidi marks/isolates
+      // (LRM/RLM/ALM, U+2066–2069) and any future format char — every char that reads
+      // as blank. It matches NONE of letter/space/NBSP/heart/emoji/hyphen/CJK. This is the
+      // EMPTINESS path ONLY; `collapseWs` (the OUTPUT path) must NOT strip these — VS16 is
+      // load-bearing in emoji presentation (`❤️` = U+2764 U+FE0F), joiners glue
+      // emoji/orthography, and the bidi marks order real mixed-direction text.
+      .replace(/\p{Default_Ignorable_Code_Point}/gu, "")
       .replace(/\s+/g, " ")
       .trim() === ""
   );
