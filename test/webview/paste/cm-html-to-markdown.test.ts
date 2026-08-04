@@ -502,6 +502,18 @@ describe("htmlToMarkdown — emittedMarkdownSyntax discriminator", () => {
       "link whose label is whitespace beside an <hr>",
       '<div>- [ ] task</div><p><a href="https://x.test"> <hr> </a></p>',
     ],
+    // A LONE JOINER beside an <hr>: `hasVisibleContent` passes on its `<hr>` clause,
+    // and the emit path preserves joiners, so the residue body/text keeps the joiner.
+    // Only routing the residue through the full-strip predicate (not `.trim()`, which
+    // leaves the zero-width class) rejects it. The <hr> is a direct child of the
+    // heading/<pre> (consumed inline / read as verbatim body) and span-wrapped inside
+    // the inline <code> so the code stays on the inline path.
+    ["heading whose text is a joiner beside an <hr>", `<div>- [ ] task</div><h1><hr>${ZWJ}</h1>`],
+    [
+      "code span whose body is a joiner beside an <hr>",
+      `<div>- [ ] task</div><div><code><span>${ZWJ}<hr></span></code></div>`,
+    ],
+    ["<pre> whose body is a joiner beside an <hr>", `<div>- [ ] task</div><pre><hr>${ZWJ}</pre>`],
     ["heading holding only a zero-width space", `<div>- [ ] task</div><h1>${ZWSP}</h1>`],
     ["list item holding only a zero-width space", `<div>- [ ] task</div><ul><li>${ZWSP}</li></ul>`],
     [
@@ -532,6 +544,19 @@ describe("htmlToMarkdown — emittedMarkdownSyntax discriminator", () => {
     const result = htmlToMarkdown(html);
     expect(result?.emittedMarkdownSyntax).toBe(false);
     expect(result?.markdown).toBe("\\- \\[ \\] task");
+  });
+
+  it("does not link a label that is a joiner beside an <hr>", () => {
+    // The <a> residue in its own test, not the shared it.each: unlike CODE/heading/PRE
+    // (which return `""` when empty), the <a> branch degrades to its LABEL text, so a
+    // joiner label survives as invisible text rather than vanishing — the markdown is
+    // not exactly the task. What must hold is that NO link syntax is emitted and the
+    // flag stays false; the `.trim()` residue let the joiner through the <hr> clause.
+    const result = htmlToMarkdown(
+      '<div>- [ ] task</div><p><a href="https://x.test"><hr>&#8205;</a></p>'
+    );
+    expect(result?.emittedMarkdownSyntax).toBe(false);
+    expect(result?.markdown).not.toContain("](");
   });
 
   it.each([

@@ -434,10 +434,11 @@ function serializeInline(node: Node, depth: number, ctx: Ctx): string {
     //  - `!hasVisibleContent(el)` is the full-strip emptiness gate. `body` is
     //    collapseWs'd (emit path), which PRESERVES joiners, so a lone-joiner
     //    `<code>&#8205;</code>` survives into `body`; only the predicate rejects it.
-    //  - `body.trim() === ""` is the residue: when the predicate passes on its `<hr>`
-    //    clause (`<code> <hr> </code>`) the body is whitespace with nothing to fence.
-    //    `.trim()`, not `=== ""`, because the emit-path collapse leaves a space.
-    if (!hasVisibleContent(el) || body.trim() === "") {
+    //  - `blankAfterInvisible(body)` is the residue: when the predicate passes on its
+    //    `<hr>` clause (`<code> <hr> </code>`) the body is whitespace with nothing to
+    //    fence. The SAME full-strip rule, not `.trim()` — the emit-path collapse leaves
+    //    a joiner (`<code><hr>&#8205;</code>`) that `.trim()` would let through.
+    if (!hasVisibleContent(el) || blankAfterInvisible(body)) {
       return "";
     }
     ctx.emittedMarkdownSyntax = true;
@@ -477,11 +478,12 @@ function serializeInline(node: Node, depth: number, ctx: Ctx): string {
       // Both terms load-bearing: `!hasVisibleContent(el)` is the full-strip emptiness
       // gate (SKIP_TAGS-aware — `label` from serializeChildrenInline already drops
       // SKIP_TAGS, but the predicate is what rejects a lone joiner or a whitespace-only
-      // label the emit path preserved); `label.trim() === ""` is the residue for when
-      // the predicate passes on its `<hr>` clause (`<a href> <hr> </a>`) and the label
-      // is whitespace with nothing to link. `.trim()`, not `=== ""`, because the label
-      // can carry a collapsed space.
-      if (!hasVisibleContent(el) || label.trim() === "") {
+      // label the emit path preserved); `blankAfterInvisible(label)` is the residue for
+      // when the predicate passes on its `<hr>` clause (`<a href> <hr> </a>`) and the
+      // label has nothing to link. The SAME full-strip rule, not `.trim()` — a joiner
+      // label (`<a href><hr>&#8205;</a>`) that `.trim()` would leave non-empty reads as
+      // blank here, so no link is emitted.
+      if (!hasVisibleContent(el) || blankAfterInvisible(label)) {
         return label;
       }
       ctx.emittedMarkdownSyntax = true;
@@ -767,11 +769,13 @@ function isBr(node: Node): boolean {
   return node.nodeType === ELEMENT_NODE && (node as Element).tagName === "BR";
 }
 
-/** A text node holding only whitespace. Transparent inside a `<br>` run — real
- *  clipboard HTML pretty-prints `<br>\n<br>`, and that newline must not break the
- *  run into two single breaks. */
+/** A text node holding nothing visible — whitespace or the zero-width class,
+ *  decided by the SAME full-strip rule as every other emptiness check. Transparent
+ *  inside a `<br>` run — real clipboard HTML pretty-prints `<br>\n<br>`, and that
+ *  newline (or a stray zero-width byte) must not break the run into two single
+ *  breaks. */
 function isBlankText(node: Node): boolean {
-  return node.nodeType === TEXT_NODE && (node.textContent ?? "").trim() === "";
+  return node.nodeType === TEXT_NODE && blankAfterInvisible(node.textContent ?? "");
 }
 
 /** Split sibling inline nodes at runs of 2+ `<br>` — HTML's idiom for a blank
@@ -976,10 +980,12 @@ function serializeBlocks(parent: Element, depth: number, ctx: Ctx): string[] {
         const text = collapseWs(
           serializeChildrenInline(el, depth, ctx).split(HARD_BREAK).join(" ")
         ).trim();
-        // Can still come out empty when every child was a SKIP_TAGS subtree
-        // (`<h1><style>…</style></h1>`): textContent counts that text, serialisation
-        // drops it. A different question from the one above, not a second answer.
-        if (text !== "") {
+        // Residue guard, the SAME full-strip rule as the predicate: `text` can still
+        // be empty when every child was a SKIP_TAGS subtree (`<h1><style>…</style></h1>`)
+        // — textContent counts that text, serialisation drops it — or blank-but-nonempty
+        // when the predicate passed on its `<hr>` clause and the emit path preserved a
+        // joiner (`<h1><hr>&#8205;</h1>`), which `text !== ""` would let through as `# ‍`.
+        if (!blankAfterInvisible(text)) {
           push(`${"#".repeat(HEADINGS[tag])} ${text}`, true);
         }
       }
@@ -1025,9 +1031,10 @@ function serializeBlocks(parent: Element, depth: number, ctx: Ctx): string[] {
         const body = skipTagsText(el).replace(/\n$/, "");
         // Residue guard: a `<pre><hr></pre>` (or a SKIP_TAGS-only `<pre>`) satisfies the
         // predicate through its `<hr>` clause yet has no code to fence. This TESTS the
-        // body for emptiness (`.trim()`, since the emit path preserves interior
-        // whitespace); it does NOT trim what is emitted, which the paragraph above forbids.
-        if (body.trim() !== "") {
+        // body for emptiness through the SAME full-strip rule as the predicate — not
+        // `.trim()`, which would leave a preserved joiner (`<pre><hr>&#8205;</pre>`) —
+        // and it does NOT trim what is emitted, which the paragraph above forbids.
+        if (!blankAfterInvisible(body)) {
           push(count(ctx, fenceCode(body, codeLang(el))), true);
         }
       }
