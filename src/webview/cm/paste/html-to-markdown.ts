@@ -251,6 +251,37 @@ function emphasize(ctx: Ctx, inner: string, marker: string): string {
   return wrapped;
 }
 
+/** The inline-style declarations that cancel the emphasis a tag implies, keyed by
+ *  the property each tag is about. `400` is the numeric spelling of `normal`;
+ *  `font-style` has no numeric form, so it lists only the keyword. Deliberately NOT
+ *  a general numeric-weight comparison — `font-weight: 300` on a `<b>` is not a
+ *  producer idiom, and a weight parser here would be the "teach the predicate more
+ *  cases" direction this file has been burned by. `(?:^|;)` is what keeps the match
+ *  to a whole declaration, so a vendor-prefixed `-webkit-font-weight` cannot
+ *  satisfy it. */
+const EMPHASIS_CANCELLED_BY = {
+  "font-weight": /(?:^|;)\s*font-weight\s*:\s*(?:normal|400)\b/i,
+  "font-style": /(?:^|;)\s*font-style\s*:\s*normal\b/i,
+} as const;
+
+/** Does this `<b>`/`<strong>` (resp. `<i>`/`<em>`) style away the emphasis its tag
+ *  implies? Google Docs wraps EVERY clipboard copy in
+ *  `<b style="font-weight:normal" id="docs-internal-guid-…">`. A whole-block copy
+ *  puts `<p>`s inside that wrapper, so the block walk recurses and never reaches
+ *  the emphasis case; a PARTIAL-LINE selection puts only `<span>`s there, folds
+ *  into the inline run and lands on `B` below — which is how `- [ ] buy milk`
+ *  copied out of Docs came back as `**\- \[ \] buy milk**`: bold that exists
+ *  nowhere in the source, plus the flag that defeats the caller's no-syntax defer.
+ *
+ *  Stated once for all four tags rather than special-casing the Docs `id`: the rule
+ *  is "styled-away emphasis is not emphasis", and other producers emit the shape
+ *  too. Reads the style ATTRIBUTE, never `el.style` / `getComputedStyle` — happy-dom's
+ *  CSSOM silently drops values (two standing repo memories), so a CSSOM read would
+ *  be behaviour no unit test could pin. */
+function styleCancelsEmphasis(el: Element, prop: keyof typeof EMPHASIS_CANCELLED_BY): boolean {
+  return EMPHASIS_CANCELLED_BY[prop].test(el.getAttribute("style") ?? "");
+}
+
 /** The hard-break token `serializeInline` emits for `<br>`: a backslash
  *  immediately followed by a newline. Declared here, above its emitting site, so
  *  that site, the `trimSegmentEdges` scan and the `<a>` label fold all read the
@@ -310,12 +341,14 @@ function serializeInline(node: Node, depth: number, ctx: Ctx): string {
   }
   const inner = serializeChildrenInline(el, depth + 1, ctx); // leaves counted within
   switch (tag) {
+    // A tag whose own style cancels it is transparent, exactly like an unknown
+    // inline element: no markers, no flag. See styleCancelsEmphasis.
     case "STRONG":
     case "B":
-      return emphasize(ctx, inner, "**");
+      return styleCancelsEmphasis(el, "font-weight") ? inner : emphasize(ctx, inner, "**");
     case "EM":
     case "I":
-      return emphasize(ctx, inner, "*");
+      return styleCancelsEmphasis(el, "font-style") ? inner : emphasize(ctx, inner, "*");
     case "A": {
       const href = el.getAttribute("href") ?? "";
       // Link text on one line (a newline in the label would break the link). Fold

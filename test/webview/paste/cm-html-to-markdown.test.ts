@@ -534,6 +534,42 @@ describe("htmlToMarkdown — emittedMarkdownSyntax discriminator", () => {
     expect(result?.emittedMarkdownSyntax).toBe(false);
   });
 
+  it("is false for a Google Docs wrapper whose style cancels its own <b>", () => {
+    // Google Docs wraps EVERY copy in `<b style="font-weight:normal" id="docs-internal-guid-…">`.
+    // A whole-block copy puts <p>s inside it and recursion never reaches the
+    // emphasis case; a PARTIAL-LINE selection puts only <span>s there, so the
+    // wrapper folds into the inline run — and a checklist copied that way came back
+    // as `**\- \[ \] buy milk**`: bold that is nowhere in the source, plus the flag
+    // that defeats the handler's no-syntax defer.
+    const result = htmlToMarkdown(
+      '<p><b style="font-weight:normal" id="docs-internal-guid-x"><span>- [ ] buy milk</span></b></p>'
+    );
+    expect(result?.markdown).toBe("\\- \\[ \\] buy milk");
+    expect(result?.emittedMarkdownSyntax).toBe(false);
+  });
+
+  it("is false for an <i> whose style cancels it (the same rule, other property)", () => {
+    const result = htmlToMarkdown('<p><i style="font-style:normal">x</i></p>');
+    expect(result?.markdown).toBe("x");
+    expect(result?.emittedMarkdownSyntax).toBe(false);
+  });
+
+  it("finds the cancelling declaration after other properties in the style attribute", () => {
+    // Pins the declaration-boundary match: producers do not put the property first,
+    // and the spacing around `:` varies.
+    const result = htmlToMarkdown('<p><b style="color:red; font-weight: normal">x</b></p>');
+    expect(result?.markdown).toBe("x");
+    expect(result?.emittedMarkdownSyntax).toBe(false);
+  });
+
+  it("stays true for a styled <b> that is still bold", () => {
+    // The other half: ONLY an explicit `normal`/`400` cancels. Treating any styled
+    // <b> as cancelled would stop Docs' real bold converting at all.
+    const result = htmlToMarkdown('<p><b style="font-weight:700;color:red">x</b></p>');
+    expect(result?.markdown).toBe("**x**");
+    expect(result?.emittedMarkdownSyntax).toBe(true);
+  });
+
   it("is false for an emphasis span that wraps nothing (all whitespace)", () => {
     const result = htmlToMarkdown("<p>a<strong> </strong>b</p>");
     expect(result?.emittedMarkdownSyntax).toBe(false);
