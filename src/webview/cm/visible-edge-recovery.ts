@@ -40,13 +40,24 @@
 //         but NOT stability) and overwrite the good pre-hide snapshot with one
 //         anchored to degenerate mid-ramp geometry, so the recovery poisons its
 //         own state under sustained resize + CPU load. Instead we QUARANTINE the
-//         snapshot: keep the freeze and WATCH until the width is stable for
-//         STABLE_FRAMES (thawWhenStable()), then resume capture. The watch is
-//         bounded by maxWaitFrames (never an unbounded rAF); on expiry we stop
-//         and LEAVE the freeze and the kept snapshot in place, so the next
-//         visible edge can still restore the pre-hide position. A hidden edge
-//         cancels the watch and keeps the freeze for that next edge; destroy()
-//         also cancels it but tears the instance down — there is no next edge.
+//         snapshot: keep the freeze and WATCH (bounded rAF, never unbounded)
+//         until the width is stable for STABLE_FRAMES (thawWhenStable() →
+//         runSettleWatch()), then resume capture. If that budget expires with
+//         geometry STILL unsettled we do NOT merely park until the next visible
+//         edge: geometry can settle just AFTER the budget within the SAME visible
+//         session, and a scroll the user then makes would be lost (frozen), so a
+//         later edge would restore a stale anchor. So on expiry we attach a
+//         ResizeObserver to scrollDOM (observeLateSettle()) and let any LATE
+//         resize restart the same bounded settle-check — event-driven, so a
+//         dead/never-firing/zero-width geometry polls NOTHING while idle (the
+//         "no unbounded rAF" invariant). We KEEP, not invalidate, the snapshot on
+//         every give-up path, so a dead-then-recover blip still restores the
+//         pre-hide position. The observer's callback is state-guarded (a queued
+//         callback that fires after teardown/thaw is inert), and the observer
+//         lives ONLY during this post-expiry window: a hidden edge (cancelWait +
+//         stopObservingLateSettle) drops the watch and keeps the freeze for the
+//         next edge; the next visible edge (beginWait) and destroy() also
+//         disconnect it — beginWait supersedes, destroy tears the instance down.
 // Note ScrollTarget.clip() clamps to the doc length at application time, so
 // even a stale snapshot cannot throw — mapping is about position correctness.
 // Pure view chrome: no document mutation, no write-lock, no protocol message.
@@ -98,8 +109,16 @@ class VisibleEdgeRecovery implements PluginValue {
   private waitFrame = 0;
   /** rAF-coalescing flag for the rolling capture. */
   private captureQueued = false;
-  /** Guards the queued capture frame against view.destroy() racing it. */
+  /** Guards the two capture/watch entry points against view.destroy() racing
+   *  them: the scroll handler's refreshSnapshot() and the late-settle
+   *  ResizeObserver callback (observeLateSettle). The latter is the genuine
+   *  async race — the browser can deliver a queued RO callback after teardown;
+   *  refreshSnapshot() runs synchronously off the scroll event, so its check is
+   *  belt-and-suspenders. Either way, a post-destroy invocation is inert. */
   private destroyed = false;
+  /** Connected only during the post-expiry late-settle watch (observeLateSettle);
+   *  null whenever we are not observing. */
+  private resizeObserver: ResizeObserver | null = null;
   private readonly doc: Document;
 
   private readonly onScroll = (): void => {
@@ -125,6 +144,7 @@ class VisibleEdgeRecovery implements PluginValue {
     if (this.doc.visibilityState === "hidden") {
       this.frozen = true;
       this.cancelWait(); // also cancels an in-flight thaw → freeze persists
+      this.stopObservingLateSettle(); // a resize while hidden must not thaw us
       return;
     }
     this.beginWait();
@@ -169,6 +189,7 @@ class VisibleEdgeRecovery implements PluginValue {
    *  capped at maxWaitFrames, then restore. */
   private beginWait(): void {
     this.cancelWait();
+    this.stopObservingLateSettle(); // a prior cycle's late-settle watch is superseded
     let frames = 0;
     let lastWidth = -1;
     let stable = 0;
@@ -192,6 +213,17 @@ class VisibleEdgeRecovery implements PluginValue {
     if (this.waitFrame !== 0) {
       cancelAnimationFrame(this.waitFrame);
       this.waitFrame = 0;
+    }
+  }
+
+  /** Disconnect the late-settle ResizeObserver (idempotent). Kept SEPARATE from
+   *  cancelWait() on purpose: cancelWait() runs at the START of every settle
+   *  watch, and disconnecting there would kill the very observer that drives the
+   *  resize-triggered recheck. */
+  private stopObservingLateSettle(): void {
+    if (this.resizeObserver) {
+      this.resizeObserver.disconnect();
+      this.resizeObserver = null;
     }
   }
 
@@ -256,29 +288,39 @@ class VisibleEdgeRecovery implements PluginValue {
     this.waitFrame = requestAnimationFrame(tick);
   }
 
-  /** Lift the freeze only once geometry has actually SETTLED — the cap-path
-   *  quarantine. We reached restore at the frame cap with the width still
-   *  ramping (or dead), so we dispatched the heal but must NOT resume rolling
-   *  capture yet: refreshSnapshot() guards on clientWidth>0 but not on
-   *  stability, so a scroll fired by the continuing ramp would overwrite the
-   *  good pre-hide snapshot with one anchored to degenerate mid-ramp geometry —
-   *  the recovery poisoning its own state under sustained resize + CPU load. So
-   *  keep frozen (and the good snapshot) and watch until clientWidth is live and
-   *  stable for STABLE_FRAMES, then thaw. BOUNDED by maxWaitFrames so this can
-   *  never become an unbounded rAF: if geometry still hasn't settled after the
-   *  budget we stop polling and LEAVE the freeze — and the kept snapshot — in
-   *  place (the module's conservative give-up stance), so rolling capture stays
-   *  parked until the next visible edge re-runs beginWait/restore and thaws
-   *  cleanly, with the pre-hide position still available to restore. We KEEP,
-   *  not invalidate, the snapshot on expiry: the common case is a webview that
-   *  was simply dead/narrow for the whole budget and then recovers, where
-   *  restoring the pre-hide position is exactly the win; the residual case (the
-   *  user scrolled somewhere new during a never-settling frozen window and a
-   *  later edge restores the old spot) is rare and clip-safe. Rides the shared
-   *  waitFrame slot: a hidden edge (cancelWait) keeps the freeze for the next
-   *  visible edge; destroy() (also cancelWait) instead tears the instance down —
-   *  there is no next edge to serve, the loop is simply cancelled. */
+  /** Cap-path quarantine. We reached restore at the frame cap with the width
+   *  still ramping (or dead), dispatched the heal, and must NOT resume rolling
+   *  capture yet: refreshSnapshot() guards on clientWidth>0 but not on stability,
+   *  so a scroll fired by the continuing ramp would overwrite the good pre-hide
+   *  snapshot with one anchored to degenerate mid-ramp geometry — the recovery
+   *  poisoning its own state under sustained resize + CPU load. So keep frozen
+   *  (and the good snapshot) and watch until the width is live and stable for
+   *  STABLE_FRAMES, then thaw. BOUNDED by maxWaitFrames — never an unbounded rAF.
+   *  On expiry we do NOT merely park until the next visible edge: geometry can
+   *  settle just AFTER the budget within the SAME visible session, and a scroll
+   *  the user then makes would be dropped (frozen), so a later edge would restore
+   *  a stale anchor. Instead observeLateSettle() attaches a ResizeObserver and
+   *  lets any late resize restart this SAME bounded watch — event-driven, so a
+   *  dead/never-firing/zero-width geometry polls nothing while idle. We KEEP, not
+   *  invalidate, the snapshot on every give-up path: the common case is a webview
+   *  that was dead/narrow for the whole budget and then recovers, where restoring
+   *  the pre-hide position is exactly the win; the residual (user scrolled
+   *  somewhere new during a never-settling window and a later edge restores the
+   *  old spot) is rare and clip-safe. */
   private thawWhenStable(): void {
+    this.runSettleWatch(() => this.observeLateSettle());
+  }
+
+  /** Bounded rAF watch for a settled width, shared by the initial cap-path
+   *  quarantine (thawWhenStable) and each resize-triggered recheck
+   *  (observeLateSettle). On STABLE_FRAMES consecutive live-and-equal widths it
+   *  lifts the freeze and stops observing; at the frame cap (never an unbounded
+   *  rAF) it runs `onExpiry` and returns, leaving the freeze — and the kept
+   *  snapshot — in place. Rides the shared waitFrame slot: cancelWait() (hidden
+   *  edge / next visible edge / destroy) stops the rAF; a hidden edge keeps the
+   *  freeze for the next edge, destroy() tears the instance down. */
+  private runSettleWatch(onExpiry: () => void): void {
+    this.cancelWait();
     let frames = 0;
     let lastWidth = -1;
     let stable = 0;
@@ -290,19 +332,72 @@ class VisibleEdgeRecovery implements PluginValue {
       lastWidth = width;
       if (stable >= STABLE_FRAMES) {
         this.frozen = false; // geometry finally steady: safe to roll again
+        this.stopObservingLateSettle();
         return;
       }
       if (frames >= this.maxWaitFrames) {
-        return; // never settled within the budget: keep the freeze + snapshot
+        onExpiry();
+        return;
       }
       this.waitFrame = requestAnimationFrame(tick);
     };
     this.waitFrame = requestAnimationFrame(tick);
   }
 
+  /** Post-expiry event-driven resume: watch scrollDOM for a LATE geometry settle
+   *  after the quarantine budget ran out. Idempotent; the `typeof` guard degrades
+   *  gracefully on layout-free / older-webview hosts (there the freeze stays
+   *  parked until the next visible edge — the pre-change behaviour). Each resize
+   *  restarts the bounded settle-check (runSettleWatch); if it caps again we stay
+   *  observing for the next resize (no polling while idle). runSettleWatch lifts
+   *  the freeze and disconnects us once the width is stable. ResizeObserver
+   *  delivers one initial callback on observe(), which just runs an immediate
+   *  settle-check — covering a width that settled exactly at the budget edge.
+   *  The callback is STATE-GUARDED: disconnect() does not retract an
+   *  already-queued browser callback, so a stale one (fired after a hidden edge /
+   *  destroy() / successful thaw) must not start a new watch. Capture `observer`
+   *  in the closure and bail unless it is still the live observer, the instance
+   *  is alive, we are visible, and still frozen (mirrors the `disposed` guard in
+   *  cm/decorations/prose-space-metric.ts). */
+  private observeLateSettle(): void {
+    // Already observing, or the invariant "observer non-null only while frozen"
+    // would be violated — bail. Asserting `frozen` here makes that invariant
+    // self-enforcing at the attachment site rather than relying solely on the
+    // callback's post-hoc `!frozen` bail + call-order discipline.
+    if (this.resizeObserver || !this.frozen) {
+      return;
+    }
+    if (typeof ResizeObserver === "undefined") {
+      // Layout-free / older-webview host: no late-settle watch is possible, so
+      // the freeze stays parked until the next visible edge. Trace it like the
+      // file's other consequential skip branches (see restore()) so a silently
+      // parked session is diagnosable in the perf build.
+      if (QUOLL_PERF) {
+        console.debug(
+          "[quoll] visible-edge-recovery: late-settle watch unavailable (no ResizeObserver) — freeze parked until the next visible edge"
+        );
+      }
+      return;
+    }
+    const observer = new ResizeObserver(() => {
+      if (
+        this.destroyed ||
+        this.resizeObserver !== observer ||
+        this.doc.visibilityState !== "visible" ||
+        !this.frozen
+      ) {
+        return;
+      }
+      this.runSettleWatch(() => {});
+    });
+    this.resizeObserver = observer;
+    observer.observe(this.view.scrollDOM);
+  }
+
   destroy(): void {
     this.destroyed = true;
     this.cancelWait();
+    this.stopObservingLateSettle();
     this.view.scrollDOM.removeEventListener("scroll", this.onScroll);
     this.doc.removeEventListener("visibilitychange", this.onVisibilityChange);
   }
