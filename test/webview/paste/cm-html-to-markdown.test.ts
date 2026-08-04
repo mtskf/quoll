@@ -802,6 +802,25 @@ describe("htmlToMarkdown — emittedMarkdownSyntax discriminator", () => {
     expect(emoji?.emittedMarkdownSyntax).toBe(true);
   });
 
+  it("does not bold an emphasis span holding only a joiner and a <br>", () => {
+    // emphasize's emptiness gate tests the RAW serialized `inner`, whose `<br>`
+    // HARD_BREAK token (`\\\n`) leaves a backslash that survives full-strip + trim —
+    // so a `<strong>` wrapping only a joiner + `<br>` slipped past the gate and
+    // emitted `**‍**`, flipping the flag (the invisible-container bug, one <br> short
+    // of the lone-joiner case). Folding HARD_BREAK to a space before the gate (as the
+    // <a> label does) closes it. Both orderings of joiner and break.
+    const trailing = htmlToMarkdown(`<div>- [ ] task</div><p><strong>${ZWJ}<br></strong></p>`);
+    expect(trailing?.emittedMarkdownSyntax).toBe(false);
+    expect(trailing?.markdown).not.toContain("**");
+    const leading = htmlToMarkdown(`<div>- [ ] task</div><p><strong><br>${ZWJ}</strong></p>`);
+    expect(leading?.emittedMarkdownSyntax).toBe(false);
+    expect(leading?.markdown).not.toContain("**");
+    // Fidelity guard: real content plus a trailing <br> still bolds (the <br> hoisted).
+    const real = htmlToMarkdown("<p><strong>x<br></strong></p>");
+    expect(real?.markdown).toBe("**x**");
+    expect(real?.emittedMarkdownSyntax).toBe(true);
+  });
+
   it("is false for an emphasis span that wraps nothing (all whitespace)", () => {
     const result = htmlToMarkdown("<p>a<strong> </strong>b</p>");
     expect(result?.emittedMarkdownSyntax).toBe(false);

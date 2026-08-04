@@ -331,7 +331,13 @@ function wrapEmphasis(inner: string, marker: string): string {
  *  returning `inner` transparently — like a `<span>` — with no markers and no flag,
  *  while a joiner WITHIN visible text (`<strong>👨‍👩‍👧</strong>`) still bolds. */
 function emphasize(ctx: Ctx, inner: string, marker: string): string {
-  if (blankAfterInvisible(inner)) {
+  // Fold HARD_BREAK tokens to a space before the emptiness gate, the same
+  // whole-token fold the `<a>` label uses. A `<br>` contributes no bold content
+  // (like whitespace / the zero-width class), but its token's escaping `\` survives
+  // `blankAfterInvisible`'s full-strip + trim — so a span of only a joiner + `<br>`
+  // (`<strong>&#8205;<br></strong>`) would otherwise pass the gate and wrap the
+  // residual joiner into `**‍**`, flipping the flag.
+  if (blankAfterInvisible(inner.split(HARD_BREAK).join(" "))) {
     return inner;
   }
   const wrapped = wrapEmphasis(inner, marker);
