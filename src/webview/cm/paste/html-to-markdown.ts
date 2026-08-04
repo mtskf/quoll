@@ -979,6 +979,25 @@ function pushInlineBlocks(
   }
 }
 
+/** Run a nested block walk with its OWN richness flag, isolated from the parent's,
+ *  and hand the wrapper both the serialised text and the child's contribution.
+ *  Save the parent's `emittedMarkdownSyntax`, reset to false so `run` records only its
+ *  own richness, capture that as `childRich`, then restore `before || childRich` — a
+ *  MONOTONE restore: the parent keeps any richness it already had AND inherits the
+ *  child's, and because each nesting level ORs its own `before` back in, the invariant
+ *  survives arbitrary depth. This is what lets a not-rich spacer grid wrapped in a
+ *  quote / list stay non-rich (matching the top-level grid) instead of the wrapper
+ *  relabelling itself rich off the grid's `|`/`-` bytes: the caller ORs `childRich`
+ *  into the flag it pushes rather than reading richness back off the emitted string. */
+function captureChildSyntax(ctx: Ctx, run: () => string): { text: string; childRich: boolean } {
+  const before = ctx.emittedMarkdownSyntax;
+  ctx.emittedMarkdownSyntax = false;
+  const text = run();
+  const childRich = ctx.emittedMarkdownSyntax;
+  ctx.emittedMarkdownSyntax = before || childRich;
+  return { text, childRich };
+}
+
 /** Serialise the block-level children of `parent` (body / li / blockquote / an
  *  unknown block) to an array of block strings (no trailing separators). A run of
  *  inline/text nodes is SPLIT at runs of 2+ `<br>` and yields one paragraph per
@@ -1077,15 +1096,13 @@ function serializeBlocks(parent: Element, depth: number, ctx: Ctx): string[] {
       //
       // Richness is COMPOSITIONAL, exactly as for BLOCKQUOTE: a list item wrapping a
       // text-free spacer grid + buried `<hr>` serialises the grid (`syntax:false`) but
-      // is non-empty, so `push(list, true)` used to relabel it rich. Capture the whole
-      // walk's flag contribution (any rich item makes the list rich) and push the list's
-      // own text term OR that child richness. Whole-list capture is equivalent to
-      // per-item and simpler.
-      const before = ctx.emittedMarkdownSyntax;
-      ctx.emittedMarkdownSyntax = false;
-      const list = serializeList(el, depth, ctx);
-      const childRich = ctx.emittedMarkdownSyntax;
-      ctx.emittedMarkdownSyntax = before || childRich;
+      // is non-empty, so `push(list, true)` used to relabel it rich. `captureChildSyntax`
+      // isolates the whole walk's flag contribution (any rich item makes the list rich)
+      // via a monotone restore (see its note); push the list's own text term OR that
+      // child richness. Whole-list capture is equivalent to per-item and simpler.
+      const { text: list, childRich } = captureChildSyntax(ctx, () =>
+        serializeList(el, depth, ctx)
+      );
       if (list !== "") {
         push(list, !blankAfterInvisible(skipTagsText(el)) || childRich);
       }
@@ -1135,15 +1152,12 @@ function serializeBlocks(parent: Element, depth: number, ctx: Ctx): string[] {
         // per-cell rule) wrapped here with a buried `<hr>` passes hasVisibleContent on
         // the `<hr>` clause, so the grid IS serialised; its `|`/`-` bytes then make the
         // residue non-blank. Reading `true` off that would relabel rich exactly what the
-        // TABLE branch ruled not-rich. Capture the child's own flag contribution across
-        // the nested walk (reset → serialise → read → restore `before || childRich`, a
-        // MONOTONE restore that survives nesting because each level ORs its own `before`
-        // back in), and push the quote's own text term OR that child richness.
-        const before = ctx.emittedMarkdownSyntax;
-        ctx.emittedMarkdownSyntax = false;
-        const quoted = serializeBlocks(el, depth + 1, ctx).join("\n\n");
-        const childRich = ctx.emittedMarkdownSyntax;
-        ctx.emittedMarkdownSyntax = before || childRich;
+        // TABLE branch ruled not-rich. `captureChildSyntax` isolates the child's own flag
+        // contribution across the nested walk (monotone restore, see its note); push the
+        // quote's own text term OR that child richness.
+        const { text: quoted, childRich } = captureChildSyntax(ctx, () =>
+          serializeBlocks(el, depth + 1, ctx).join("\n\n")
+        );
         if (!blankAfterInvisible(quoted.split(HARD_BREAK).join(" "))) {
           push(prefixLines(quoted, "> "), !blankAfterInvisible(skipTagsText(el)) || childRich);
         }
