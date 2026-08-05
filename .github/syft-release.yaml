@@ -1,0 +1,26 @@
+# Syft configuration for the release SBOM (publish.yml, "Generate SBOM (SPDX)").
+#
+# WHY THIS FILE EXISTS — syft splits its JavaScript catalogers by source type:
+#
+#   javascript-package-cataloger  (**/package.json)     -> tagged installed + IMAGE
+#   javascript-lock-cataloger     (**/pnpm-lock.yaml)   -> tagged declared  + DIRECTORY
+#
+# (see internal/task/package_tasks.go upstream). A DIRECTORY scan therefore runs
+# only the lock cataloger by default. Our SBOM source is a prod-only staging tree
+# whose lockfile is deliberately deleted — we want the INSTALLED closure, not the
+# dev-inclusive lock graph — so the default directory cataloger set has nothing
+# left to read and emits an SBOM with zero npm packages. (Observed on the v0.1.66
+# tag: the SBOM contained only the directory root plus github-actions entries
+# picked up from `.github/workflows/` files that `@codemirror/*` ships inside its
+# own tarballs. verify-sbom-scope.mjs caught it and failed the release closed.)
+#
+# `+name` ADDS to the default set rather than replacing it, so every other
+# default directory cataloger keeps running; we only switch the package.json
+# cataloger back on. Because the staging tree is installed with `--prod`, the
+# package.json files it walks ARE exactly the shipped runtime closure — build-only
+# tooling is never on disk to be cataloged.
+#
+# Pinned alongside the sbom-action SHA in publish.yml: if that action (and the
+# syft it bakes in) is bumped, re-confirm these cataloger names and tags upstream.
+select-catalogers:
+  - "+javascript-package-cataloger"
