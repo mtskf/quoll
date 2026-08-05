@@ -19,7 +19,7 @@ import { dirname, extname, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import esbuild from "esbuild";
 import { createBuildConfigs } from "../../esbuild.config.mjs";
-import { bodyThemeAttrs, themeVarsCss } from "./vscode-theme-palettes.mjs";
+import { bodyThemeAttrs, THEME_KINDS, themeVarsCss } from "./vscode-theme-palettes.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(__dirname, "..", "..");
@@ -109,14 +109,28 @@ function escapeScript(js) {
   return String(js).replace(/<\/(script)/gi, "<\\/$1");
 }
 
-// The wire ThemeKind vocabulary (mirrors THEME_KINDS in src/shared/protocol.ts).
-// The preview seeds the real webview via a hand-rolled `document` message, so
-// its theme value must be one the shell's boundary validator accepts — an
-// unknown value would drop the seed WHOLE and render an empty editor.
-const THEME_KINDS = ["dark", "light", "hc-dark", "hc-light"];
-
+// Why the theme value is checked at all: the preview seeds the real webview via
+// a hand-rolled `document` message, so its theme must be one the shell's boundary
+// validator accepts — an unknown value would drop the seed WHOLE and render an
+// empty editor. THEME_KINDS is imported (never hand-copied) from the palettes
+// module, which test/build/theme-palettes.test.ts pins equal to protocol.ts:
+// serve.mjs cannot import the TS wire enum directly, and that one hop is what
+// keeps this vocabulary from drifting from the tables it selects.
+//
+// An ABSENT theme defaults (a config need not name one); a SUPPLIED unmapped
+// theme throws. Clamping the latter to light IS the A11Y-08b failure — it sits
+// upstream of the a11y probe's one fatal gate, which would then report a
+// light-palette measurement under an hc-* label and exit 0. With a throw no page
+// renders at all (createPreviewServer's per-request catch returns a 500 first),
+// so there is no seed to drop; loadConfig re-imports the config per request, so
+// fixing the typo and refreshing recovers without a restart.
 function normaliseConfig(cfg) {
-  const theme = THEME_KINDS.includes(cfg.theme) ? cfg.theme : "light";
+  const theme = cfg.theme ?? "light";
+  if (!THEME_KINDS.includes(theme)) {
+    throw new Error(
+      `preview: unknown theme ${JSON.stringify(theme)} (known: ${THEME_KINDS.join(", ")})`
+    );
+  }
   const variations =
     Array.isArray(cfg.variations) && cfg.variations.length > 0
       ? cfg.variations
@@ -153,7 +167,7 @@ async function renderInstance(cfg, index) {
   const template = await readFile(templatePath, "utf8");
   // Host-shaped <body> stamping: the real webview host sets the theme class +
   // data-vscode-theme-kind, and Quoll's stylesheet keeps compatibility selectors
-  // for them. Both values come from a fixed switch over an already-clamped
+  // for them. Both values come from a fixed switch over an already-validated
   // cfg.theme, so escapeHtml below is defence-in-depth — it keeps the attribute
   // injection safe if that switch ever gains a dynamic arm, not because these
   // literals need escaping today.

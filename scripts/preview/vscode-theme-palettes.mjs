@@ -16,15 +16,34 @@
 //         <app>/Contents/Resources/app/extensions/theme-defaults/themes/hc_black.json
 //       (hc_light.json overrides nothing relevant → Light High Contrast is pure
 //        registry defaults.)
+//     TWO of the HC tokens live OUTSIDE the `registerColor(...)` call shape — search
+//     for these where they actually are, not in workbench.desktop.main.js:
+//       gitDecoration-addedResourceForeground → <app>/…/app/extensions/git/package.json,
+//         `contributes.colors` (note the key names there are `highContrast` /
+//         `highContrastLight`, not `hcDark` / `hcLight`)
+//       terminal-ansiGreen → the ANSI defaults table in workbench.desktop.main.js
+//         (`"terminal.ansiGreen":{index:2,defaults:{…}}`), not a registerColor call
 //   • LIGHT / DARK are APPROXIMATIONS of Default Light+ / Dark+, carried over
 //     unchanged from the template's older stub block; they were never re-derived
-//     against the installed build. Known drift at the time of writing:
-//     list-activeSelectionBackground dark (#094771 vs registry #04395E),
-//     textCodeBlock-background (both kinds), terminal-ansiGreen light (#00bc00 vs
-//     #107C10), testing-iconPassed light (#388a34 vs #73c991), and
-//     editorHoverWidget-border light (#c8c8c8 vs the transparent(foreground, .2)
-//     alias). Left as-is deliberately — refreshing them is separate work with its
-//     own contrast fallout; this note exists so nobody reads them as measured.
+//     against the installed build. The drift KNOWN as of 2026-08-05 — NOT known to
+//     be exhaustive, since 30 of the 82 light/dark token-kind pairs resolve through
+//     registry aliases that have not all been re-derived:
+//       list-activeSelectionBackground dark (#094771 vs registry #04395E)
+//       textCodeBlock-background (both kinds)
+//       terminal-ansiGreen light (#00bc00 vs #107C10)
+//       testing-iconPassed light (#388a34 vs #73c991)
+//       editorHoverWidget-border light + dark, and editorWidget-border both
+//         (vs the transparent(foreground, .2) alias)
+//       editorError-foreground light (#cd3131 vs #E51400)
+//       editorInfo-foreground both (vs {light:#0063d3, dark:#59a4f9})
+//       charts-blue both (bare alias of editorInfo.foreground)
+//     ⚠️ ALIASES are the trap here: editorHoverWidget.border is a bare alias of
+//     editorWidget.border and charts.red of editorError.foreground, so the table
+//     currently carries ONE registry colour under TWO values — charts-red #e51400
+//     (correct) beside editorError-foreground #cd3131 (stale), which no real host
+//     can produce. Alias arms must be refreshed together.
+//     Left as-is deliberately — refreshing them is separate work with its own
+//     contrast fallout; this note exists so nobody reads them as measured.
 // When checking a value: VS Code resolves a colour as (theme file override) >
 // (colorRegistry default), so a registry-only citation is NOT evidence of drift —
 // check extensions/theme-defaults/themes/{light,dark}_vs.json first.
@@ -44,12 +63,19 @@
 // sideBarSectionHeader-foreground, toolbar-activeBackground,
 // editor-findMatchBackground, editor-findMatchHighlightBackground,
 // editor-selectionHighlightBackground) are unstubbed for every themeKind today
-// and stay that way. Each has a working var(--x, fallback) at its use site with
-// ONE known exception: button-hoverBackground is reached only through
-// `var(--vscode-button-secondaryHoverBackground, var(--vscode-button-hoverBackground))`
-// (cm/theme.ts, `.cm-panel.cm-search .cm-button:hover`) — a two-level chain whose
-// terminal arm is itself unstubbed, with no literal behind it, so that one hover
-// surface renders unset in the harness (cosmetic, dev-only).
+// and stay that way. Each has a working var(--x, fallback) at its use site, with
+// two chains worth knowing about:
+//   • button-hoverBackground — reached only through
+//     `var(--vscode-button-secondaryHoverBackground, var(--vscode-button-hoverBackground))`
+//     (cm/theme.ts, `.cm-panel.cm-search .cm-button:hover`): a two-level chain whose
+//     terminal arm is itself unstubbed with no literal behind it, so that hover
+//     surface renders unset HERE but not in a real host (registry hcDark =
+//     button.background). A genuine harness divergence — cosmetic, dev-only.
+//   • toolbar-activeBackground — falls back to list-activeSelectionBackground
+//     (styles.css), which HC_DARK omits because the registry hcDark default is null,
+//     so it renders unset under hc-dark. But a real hc-dark host emits neither
+//     variable either, so this one is FAITHFUL, not a harness gap. Do NOT "fix" it by
+//     stubbing the token — that would break the registry-null omit rule below.
 
 // Theme-independent: fonts (the nested-list indent is measured at runtime from the
 // proportional font's space advance — see prose-space-metric.ts — so these must stay

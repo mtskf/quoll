@@ -14,12 +14,15 @@
 // They pin the contract, not the colour values — provenance/drift of individual
 // tokens is documented in the module and is deliberately not asserted here.
 //
-// @ts-nocheck — importing a plain .mjs with no bundled types; vitest runs this
-// transpile-only and tsc does not include test/build/ in `pnpm compile`.
+// No file-level @ts-nocheck: the only untyped thing here is the plain .mjs import
+// (suppressed on that line alone), and blanketing the file would also un-check the
+// typed `src/shared/protocol` import below — the one cross-boundary contract these
+// tests assert on, and the one whose rename should not wait for vitest to surface.
 import { readFileSync } from "node:fs";
 
 import { describe, expect, it } from "vitest";
 
+// @ts-expect-error — plain .mjs with no bundled types; vitest transpiles it.
 import {
   bodyThemeAttrs,
   PALETTES,
@@ -29,6 +32,8 @@ import {
 import { THEME_KINDS as WIRE_THEME_KINDS } from "../../src/shared/protocol";
 
 const stylesCss = readFileSync(new URL("../../src/webview/styles.css", import.meta.url), "utf8");
+// Live rules only — see the comment-strip rationale at the selector assertions below.
+const liveCss = stylesCss.replace(/\/\*[\s\S]*?\*\//g, "");
 
 const UNKNOWN_KIND = "hc-darkk"; // a plausible typo, not a wild string
 
@@ -39,13 +44,33 @@ describe("vscode-theme-palettes — themeKind vocabulary", () => {
     expect([...THEME_KINDS].sort()).toEqual([...WIRE_THEME_KINDS].sort());
   });
 
-  it("derives THEME_KINDS from the tables themselves", () => {
-    expect(THEME_KINDS).toEqual(Object.keys(PALETTES));
+  it("every advertised kind has its own populated table (no kind advertised without a palette)", () => {
+    // NOT `toEqual(Object.keys(PALETTES))`: THEME_KINDS *is* that expression, so
+    // such an assertion restates the implementation and cannot go red. The property
+    // that matters is that each advertised kind resolves to a real table.
+    for (const kind of THEME_KINDS) {
+      expect(Object.keys(PALETTES[kind]).length).toBeGreaterThan(20);
+    }
   });
 
   it("renders a DISTINCT :root block per kind (no kind proxies another)", () => {
     const emitted = THEME_KINDS.map(themeVarsCss);
     expect(new Set(emitted).size).toBe(THEME_KINDS.length);
+  });
+
+  it("no dark-side kind proxies the light palette on the tokens the fatal gate reads", () => {
+    // Block-level distinctness above is satisfied by any ONE differing token, so a
+    // palette that is 95% light values still passes — exactly the `{...LIGHT}` spread
+    // hazard the module warns about. The frontmatter colour the a11y gate measures is
+    // color-mix(descriptionForeground 90%, editor-foreground) composited over
+    // editor-background, so a spread would collapse precisely these three.
+    // Asserted as a DIRECTION, not blanket distinctness: hc-light legitimately shares
+    // light's white canvas, so "all four distinct" would be a false invariant.
+    for (const token of ["descriptionForeground", "editor-foreground", "editor-background"]) {
+      for (const kind of ["dark", "hc-dark"]) {
+        expect(PALETTES[kind][token]).not.toBe(PALETTES.light[token]);
+      }
+    }
   });
 });
 
@@ -103,10 +128,14 @@ describe("vscode-theme-palettes — <body> compat stamps match the stylesheet", 
       for (const cls of className.split(/\s+/).filter(Boolean)) {
         // Boundary-guarded: `vscode-high-contrast` is a prefix of
         // `vscode-high-contrast-light`, so a bare substring test would pass on
-        // the wrong selector.
-        expect(stylesCss).toMatch(new RegExp(`body\\.${cls}(?![\\w-])`));
+        // the wrong selector. Comments are stripped FIRST because styles.css
+        // documents these selectors in prose (`body.vscode-high-contrast*`) and a
+        // whole-file match is satisfied by that literal alone — `*` is not [\w-], so
+        // the boundary guard does not stop it, and deleting the live rule left both
+        // HC cases green. Same precedent as styles-contract.test.ts.
+        expect(liveCss).toMatch(new RegExp(`body\\.${cls}(?![\\w-])`));
       }
-      expect(stylesCss).toContain(`body[data-vscode-theme-kind="${dataThemeKind}"]`);
+      expect(liveCss).toContain(`body[data-vscode-theme-kind="${dataThemeKind}"]`);
     });
   }
 });
