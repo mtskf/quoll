@@ -181,8 +181,13 @@ export const quollCmLinePaddingTheme = EditorView.theme(cmLinePaddingThemeSpec);
 // 3.80 → 4.49 (depth-2) and 3.22 → 3.81 (depth-3) in light — improved by this
 // change, still BELOW AA. Dark (5.48 / 4.75), hc-light (5.66 / 5.25) and hc-dark
 // (10.24 / 8.95) all clear. Tracked separately as A11Y-13 — do NOT close that gap
-// by retuning the depth mixes here, which would also move the base panel that every
-// nested quote sits on.
+// by retuning the depth mixes here: `.cm-line.quoll-blockquote-depth-2/-3` only
+// override `backgroundColor`, and only on NESTED lines (blockquoteDepthClass
+// returns null below depth 2, block-style.ts), so a depth-1 line never carries
+// either class and the base panel is untouched by that lever — the cost of
+// retuning the mixes is a weaker nesting cue (the deeper bands would read closer
+// to the base panel), not a moved base panel. What DOES move the base panel is
+// retuning QUOTE_INK itself, since depth-1 and every nested line share it.
 //
 // CONCRETE FALLBACKS (not a nested `var()` chain) because color-mix cannot take
 // `inherit`, and a nested fallback is invisible to happy-dom's CSSOM. They keep the

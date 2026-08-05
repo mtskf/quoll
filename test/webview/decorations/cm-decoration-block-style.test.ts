@@ -42,14 +42,12 @@ describe("theme.ts — quollHighlightSpec navy+green token contract (palette ref
   it("paints quoted text with the AA-nudged quote ink, not a bare descriptionForeground", () => {
     // A11Y-10: the bare host descriptionForeground (#717171 in Default Light+)
     // lands at 4.44:1 on the #f1f4fc quote panel, under AA 4.5:1; the fix mixes it
-    // 10% toward the editor foreground. Full rationale + the measured per-theme
-    // ratios live on QUOTE_INK in src/webview/cm/theme.ts — do not restate them here.
-    // Read this as the assertion that covers what the READER sees: @lezer/markdown
-    // maps `"Blockquote/...": tags.quote` and Lezer's `/...` is Mode.Inherit, so the
-    // `quote` tag reaches every descendant of a quote (not just the `>` marker) and
-    // a span's own colour beats the line colour it sits on. The sibling
-    // `.cm-line.quoll-blockquote` assertion below pins the SAME string for a
-    // different reason (see it).
+    // 10% toward the editor foreground. Full rationale, the Lezer Mode.Inherit
+    // mechanism, and the measured per-theme ratios all live on QUOTE_INK in
+    // src/webview/cm/theme.ts — do not restate them here. This assertion is the one
+    // that covers what the READER actually sees (the span, not the line); the
+    // sibling `.cm-line.quoll-blockquote` assertion below pins the SAME string for
+    // a different reason (see it).
     // `toBe`, not `toMatch(/--vscode-descriptionForeground/)`: the token name still
     // appears inside the mix, so a name match would stay green on the un-nudged
     // colour. Pinning the whole formula is what makes a revert go red.
@@ -1403,20 +1401,28 @@ describe("theme.ts — callout admonition per-type rules", () => {
     expect(base?.backgroundColor).toBeUndefined();
   });
 
-  it("no callout rule overrides `color` — callouts keep inheriting QUOTE_INK from .quoll-blockquote", () => {
-    // A11Y-10 depends on this: a callout has no ink of its own, it takes the
-    // AA-nudged QUOTE_INK off .quoll-blockquote (the base rule paints only the accent
-    // bar, the per-type rules only the accent custom property). A future per-type
-    // recolour that added `color` here would silently reintroduce the pre-A11Y-10
-    // 4.44:1 failure for callouts alone — and the `a11y:probe` sample that would
-    // catch it is dev-only and non-CI. Swept over EVERY callout selector rather than
-    // a hand-listed few, so a newly added rule is covered without editing this test.
+  it("no callout rule overrides `color` — the callout LINE keeps the .quoll-blockquote QUOTE_INK", () => {
+    // This guards the LINE's own `color`, not what the reader sees. @lezer/markdown's
+    // `"Blockquote/...": tags.quote` is Mode.Inherit, reaching every descendant span
+    // inside a quote, and an element's own colour always beats one inherited from an
+    // ancestor — so the visible text is already pinned by the t.quote span assertion
+    // above and stays QUOTE_INK regardless of what a callout LINE rule sets. What
+    // WOULD break is `pnpm a11y:probe`'s `calloutFirstLine` sample, which reads
+    // `.cm-line.quoll-callout`'s OWN computed colour, not the span inside it: a stray
+    // `color` here would silently desync that probe sample from what is actually on
+    // screen — and the sample is report-only (dev-only, non-CI; only the frontmatter
+    // sample is fatal there), so nothing would flag the drift. Swept over EVERY
+    // callout selector rather than a hand-listed few, so a newly added rule is
+    // covered without editing this test.
     // REVERT-CHECK: adding any `color` to any callout rule turns this red.
     const calloutRules = Object.entries(spec).filter(([sel]) => sel.includes("quoll-callout"));
     // Non-vacuity: the sweep must actually be seeing the rules it guards (base +
-    // five types + the two marker rules).
+    // five types + the two marker rules = 8 today, per blockStyleThemeSpec). This is
+    // a FLOOR, not an exact-list pin: a future callout type only grows the count (the
+    // sweep stays green without editing this test), while any EXISTING rule silently
+    // dropping out of the spec pulls the count below 8 and turns this red.
     expect(calloutRules.map(([sel]) => sel)).toContain(".cm-line.quoll-callout");
-    expect(calloutRules.length).toBeGreaterThanOrEqual(6);
+    expect(calloutRules.length).toBeGreaterThanOrEqual(8);
     for (const [sel, rule] of calloutRules) {
       expect(rule.color, `${sel} must not set its own color`).toBeUndefined();
     }
