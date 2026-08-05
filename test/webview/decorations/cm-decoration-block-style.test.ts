@@ -1402,12 +1402,11 @@ describe("theme.ts — callout admonition per-type rules", () => {
   });
 
   it("no callout rule overrides `color` — the callout LINE keeps the .quoll-blockquote QUOTE_INK", () => {
-    // This guards the LINE's own `color`, not what the reader sees. @lezer/markdown's
-    // `"Blockquote/...": tags.quote` is Mode.Inherit, reaching every descendant span
-    // inside a quote, and an element's own colour always beats one inherited from an
-    // ancestor — so the visible text is already pinned by the t.quote span assertion
-    // above and stays QUOTE_INK regardless of what a callout LINE rule sets. What
-    // WOULD break is `pnpm a11y:probe`'s `calloutFirstLine` sample, which reads
+    // This guards the LINE's own `color`, not what the reader sees: the t.quote span
+    // wins over the line it sits on, so visible text is already pinned by the
+    // quoted-text assertion above and stays QUOTE_INK whatever a callout LINE rule
+    // sets (mechanism: QUOTE_INK in src/webview/cm/theme.ts). What WOULD break is
+    // `pnpm a11y:probe`'s `calloutFirstLine` sample, which reads
     // `.cm-line.quoll-callout`'s OWN computed colour, not the span inside it: a stray
     // `color` here would silently desync that probe sample from what is actually on
     // screen — and the sample is report-only (dev-only, non-CI; only the frontmatter
