@@ -5,8 +5,9 @@
 #   javascript-package-cataloger  (**/package.json)     -> tagged installed + IMAGE
 #   javascript-lock-cataloger     (**/pnpm-lock.yaml)   -> tagged declared  + DIRECTORY
 #
-# (see internal/task/package_tasks.go upstream). A DIRECTORY scan therefore runs
-# only the lock cataloger by default. Our SBOM source is a prod-only staging tree
+# (see internal/task/package_tasks.go upstream). A DIRECTORY scan therefore runs,
+# OF THE TWO JS CATALOGERS, only the lock one by default — every other default
+# directory cataloger is unaffected. Our SBOM source is a prod-only staging tree
 # whose lockfile is deliberately deleted — we want the INSTALLED closure, not the
 # dev-inclusive lock graph — so the default directory cataloger set has nothing
 # left to read and emits an SBOM with zero npm packages. (Observed on the v0.1.66
