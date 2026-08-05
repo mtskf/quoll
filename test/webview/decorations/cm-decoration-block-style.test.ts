@@ -39,6 +39,28 @@ describe("theme.ts — quollHighlightSpec navy+green token contract (palette ref
     expect(String(byTag(t.heading4)?.color)).toMatch(/--quoll-accent-blue/);
   });
 
+  it("paints quoted text with the AA-nudged quote ink, not a bare descriptionForeground", () => {
+    // A11Y-10: the bare host descriptionForeground (#717171 in Default Light+)
+    // lands at 4.44:1 on the #f1f4fc quote panel, under AA 4.5:1; the fix mixes it
+    // 10% toward the editor foreground. Full rationale, the Lezer Mode.Inherit
+    // mechanism, and the measured per-theme ratios all live on QUOTE_INK in
+    // src/webview/cm/theme.ts — do not restate them here. This assertion is the one
+    // that covers what the READER actually sees (the span, not the line); the
+    // sibling `.cm-line.quoll-blockquote` assertion below pins the SAME string for
+    // a different reason (see it).
+    // `toBe`, not `toMatch(/--vscode-descriptionForeground/)`: the token name still
+    // appears inside the mix, so a name match would stay green on the un-nudged
+    // colour. Pinning the whole formula is what makes a revert go red.
+    // The value is duplicated as a literal rather than imported from theme.ts, so a
+    // source edit cannot move the expectation with it — same precedent as the
+    // frontmatter A11Y-08 assertion in styles-contract.test.ts. `a11y:probe` is
+    // dev-only and non-CI, so these unit tests are the sole CI guard — and they pin
+    // the FORMULA, not a resolved ratio (numeric contrast gate: A11Y-14).
+    expect(String(byTag(t.quote)?.color)).toBe(
+      "color-mix(in srgb, var(--vscode-descriptionForeground, #616161) 90%, var(--vscode-editor-foreground, #000))"
+    );
+  });
+
   it("colours links/urls with --quoll-accent-green", () => {
     expect(String(byTag(t.link)?.color)).toMatch(/--quoll-accent-green/);
     expect(String(byTag(t.url)?.color)).toMatch(/--quoll-accent-green/);
@@ -963,7 +985,18 @@ describe("block-style — theme spec contract", () => {
     // colour (re-adding the rule) turns this assertion red.
     expect(bq.borderLeft).toBe("var(--quoll-column-inset-left, 6px) solid transparent");
     expect(bq.backgroundColor).toMatch(/--quoll-surface-fill/);
-    expect(bq.color).toMatch(/--vscode-descriptionForeground/);
+    // A11Y-10: muted, but AA-muted — the bare descriptionForeground passthrough
+    // this used to assert was 4.44:1 in light (under 4.5:1), so a `toMatch` on the
+    // token name alone would stay green on the un-nudged colour. Pin the mix. This
+    // LINE-level colour is mostly invisible to the reader (the `t.quote` span in
+    // front of it wins — see the quoted-text assertion above), but it is exactly
+    // what `pnpm a11y:probe`'s `calloutFirstLine` sample measures: it reads
+    // `.cm-line.quoll-callout`'s OWN computed colour, so this value drifting from
+    // the `t.quote` one would quietly stop the probe reflecting what is on screen.
+    // Hence the identical string (rationale + measured ratios: QUOTE_INK in theme.ts).
+    expect(bq.color).toBe(
+      "color-mix(in srgb, var(--vscode-descriptionForeground, #616161) 90%, var(--vscode-editor-foreground, #000))"
+    );
   });
 
   it("blockquote + fenced fill insets to the body-text column via a transparent border + background-clip (not margin)", () => {
@@ -1366,6 +1399,33 @@ describe("theme.ts — callout admonition per-type rules", () => {
     expect(base?.boxShadow).toBe("inset 2px 0 0 0 var(--quoll-callout-accent)");
     expect(base?.borderLeftColor).toBeUndefined();
     expect(base?.backgroundColor).toBeUndefined();
+  });
+
+  it("no callout rule overrides `color` — the callout LINE keeps the .quoll-blockquote QUOTE_INK", () => {
+    // This guards the LINE's own `color`, not what the reader sees: `t.quote` spans
+    // the whole quoted line (not just the `>` glyph) and a span's colour beats the
+    // line's, so visible text is already pinned by the quoted-text assertion above
+    // and stays QUOTE_INK whatever a callout LINE rule sets (why: QUOTE_INK in
+    // src/webview/cm/theme.ts). What WOULD break is
+    // `pnpm a11y:probe`'s `calloutFirstLine` sample, which reads
+    // `.cm-line.quoll-callout`'s OWN computed colour, not the span inside it: a stray
+    // `color` here would silently desync that probe sample from what is actually on
+    // screen — and the sample is report-only (dev-only, non-CI; only the frontmatter
+    // sample is fatal there), so nothing would flag the drift. Swept over EVERY
+    // callout selector rather than a hand-listed few, so a newly added rule is
+    // covered without editing this test.
+    // REVERT-CHECK: adding any `color` to any callout rule turns this red.
+    const calloutRules = Object.entries(spec).filter(([sel]) => sel.includes("quoll-callout"));
+    // Non-vacuity: the sweep must actually be seeing the rules it guards (base +
+    // five types + the two marker rules = 8 today, per blockStyleThemeSpec). This is
+    // a FLOOR, not an exact-list pin: a future callout type only grows the count (the
+    // sweep stays green without editing this test), while any EXISTING rule silently
+    // dropping out of the spec pulls the count below 8 and turns this red.
+    expect(calloutRules.map(([sel]) => sel)).toContain(".cm-line.quoll-callout");
+    expect(calloutRules.length).toBeGreaterThanOrEqual(8);
+    for (const [sel, rule] of calloutRules) {
+      expect(rule.color, `${sel} must not set its own color`).toBeUndefined();
+    }
   });
 
   it("each type sets its own accent colour custom property (no emoji icon)", () => {
