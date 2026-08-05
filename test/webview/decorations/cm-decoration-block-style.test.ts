@@ -39,18 +39,24 @@ describe("theme.ts — quollHighlightSpec navy+green token contract (palette ref
     expect(String(byTag(t.heading4)?.color)).toMatch(/--quoll-accent-blue/);
   });
 
-  it("paints quote GLYPHS with the AA-nudged quote ink, not a bare descriptionForeground", () => {
+  it("paints quoted text with the AA-nudged quote ink, not a bare descriptionForeground", () => {
     // A11Y-10: the bare host descriptionForeground (#717171 in Default Light+)
     // lands at 4.44:1 on the #f1f4fc quote panel, under AA 4.5:1. The fix mixes it
     // 10% toward the editor foreground (monotonic: darkens on light / lightens on
-    // dark), measured at 5.24 light / 6.16 dark / 6.06 hc-light / 10.89 hc-dark.
-    // THIS entry is the one that paints the visible glyphs — the sibling
-    // `.cm-line.quoll-blockquote` assertion below covers the line-level colour, and
-    // the two must not drift apart (`pnpm a11y:probe` samples the LINE, so fixing
-    // only that one would move the probe's number without moving what the reader
-    // sees). Pin the exact formula: a revert to the bare passthrough goes red.
+    // dark), measured on the depth-1 base panel at 5.24 light / 6.16 dark /
+    // 6.06 hc-light / 10.89 hc-dark (nested depths stay below AA in light — A11Y-13).
+    // THIS entry paints essentially ALL visible text in a quoted line, not just the
+    // `>` marker: @lezer/markdown maps `"Blockquote/...": tags.quote` and Lezer's
+    // `/...` is Mode.Inherit, so the `quote` tag reaches every descendant, and a
+    // span's own colour beats the line's inherited one. The sibling
+    // `.cm-line.quoll-blockquote` assertion below pins the SAME value for a
+    // different reason — `pnpm a11y:probe`'s `calloutFirstLine` sample reads that
+    // LINE element's own computed colour — so a drift there would stop the probe
+    // reflecting what the reader sees even though nothing on screen would change.
+    // Pin the exact formula: a revert to the bare passthrough goes red.
     // Same precedent as the frontmatter A11Y-08 assertion in styles-contract.test.ts;
-    // the probe is dev-only and non-CI, so unit tests are the sole CI guard.
+    // the probe is dev-only and non-CI, so unit tests are the sole CI guard — and
+    // they pin the FORMULA, not a resolved ratio (numeric contrast gate: A11Y-14).
     expect(String(byTag(t.quote)?.color)).toBe(
       "color-mix(in srgb, var(--vscode-descriptionForeground, #616161) 90%, var(--vscode-editor-foreground, #000))"
     );
@@ -982,8 +988,11 @@ describe("block-style — theme spec contract", () => {
     expect(bq.backgroundColor).toMatch(/--quoll-surface-fill/);
     // A11Y-10: muted, but AA-muted — the bare descriptionForeground passthrough
     // this used to assert was 4.44:1 in light (under 4.5:1), so a `toMatch` on the
-    // token name alone would stay green on the un-nudged colour. Pin the mix
-    // (rationale + the four measured ratios on the quote-glyph assertion above).
+    // token name alone would stay green on the un-nudged colour. Pin the mix. This
+    // LINE-level colour is mostly invisible to the reader (the `t.quote` span in
+    // front of it wins — see the quoted-text assertion above), but it is exactly
+    // what `pnpm a11y:probe`'s `calloutFirstLine` sample measures, so it has to
+    // carry the identical value (rationale + the measured ratios: same assertion).
     expect(bq.color).toBe(
       "color-mix(in srgb, var(--vscode-descriptionForeground, #616161) 90%, var(--vscode-editor-foreground, #000))"
     );
@@ -1389,6 +1398,19 @@ describe("theme.ts — callout admonition per-type rules", () => {
     expect(base?.boxShadow).toBe("inset 2px 0 0 0 var(--quoll-callout-accent)");
     expect(base?.borderLeftColor).toBeUndefined();
     expect(base?.backgroundColor).toBeUndefined();
+  });
+
+  it("no callout rule overrides `color` — callouts keep inheriting QUOTE_INK from .quoll-blockquote", () => {
+    // A11Y-10 depends on this: a callout has no ink of its own, it takes the
+    // AA-nudged QUOTE_INK off .quoll-blockquote (per-type rules set only the accent
+    // custom property). A future per-type recolour that added `color` here would
+    // silently reintroduce the pre-A11Y-10 4.44:1 failure for callouts alone —
+    // and the `a11y:probe` sample that would catch it is dev-only and non-CI.
+    // REVERT-CHECK: adding any `color` to a callout rule turns this red.
+    expect(spec[".cm-line.quoll-callout"]?.color).toBeUndefined();
+    for (const type of ["note", "tip", "important", "warning", "caution"] as const) {
+      expect(spec[`.cm-line.quoll-callout-${type}`]?.color).toBeUndefined();
+    }
   });
 
   it("each type sets its own accent colour custom property (no emoji icon)", () => {

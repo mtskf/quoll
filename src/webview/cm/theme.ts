@@ -159,8 +159,10 @@ export const cmLinePaddingThemeSpec = {
 
 export const quollCmLinePaddingTheme = EditorView.theme(cmLinePaddingThemeSpec);
 
-// Muted ink for quoted prose (plain blockquotes AND callouts — a callout has no
-// colour of its own, it reuses the blockquote panel wholesale).
+// Muted ink for quoted prose (plain blockquotes AND callouts — a callout inherits
+// the blockquote panel's fill, column alignment and TEXT colour wholesale; the only
+// thing unique to a callout is its per-type left accent bar, painted separately
+// below via --quoll-callout-accent).
 //
 // A11Y-10 (AA contrast floor): the BARE host descriptionForeground is #717171 in
 // Default Light+, which lands at 4.44:1 on the --quoll-surface-fill quote panel
@@ -172,14 +174,34 @@ export const quollCmLinePaddingTheme = EditorView.theme(cmLinePaddingThemeSpec);
 // ever rises — measured 4.44 → 5.24 (light), 5.70 → 6.16 (dark), 5.47 → 6.06
 // (hc-light), 9.96 → 10.89 (hc-dark) via `pnpm a11y:probe` —
 // while the ink stays host-theme-adaptive and visibly quieter than body prose.
-// Concrete fallbacks (not a nested `var()` chain) because color-mix cannot take
-// `inherit`, and a nested fallback is invisible to happy-dom's CSSOM.
 //
-// ONE const, TWO use sites, deliberately: the quote GLYPHS are painted by the
-// `t.quote` highlight span below, while the `.cm-line.quoll-blockquote` rule
-// colours everything on the line that carries no quote tag. Changing only one of
-// them moves the probe's number without moving what the reader sees (the probe
-// samples the line; the glyphs live in the span), so they must not drift apart.
+// SCOPE of those ratios: they are the depth-1 BASE panel. A nested `> >` / `> > >`
+// line mixes the fill a further 7% / 14% toward the editor foreground (the
+// -depth-2/-3 rules below), and against those darker fills the same ink measures
+// 4.49 (depth-2) / 3.81 (depth-3) in light — still BELOW AA. This change improves
+// them (3.80 / 3.22 on the bare passthrough) without clearing AA there; dark
+// (5.48 / 4.75), hc-light (5.66 / 5.25) and hc-dark (10.24 / 8.95) all clear.
+// Tracked separately as A11Y-13 — do NOT close that gap by retuning the depth
+// mixes here, which would also move the base panel every nested quote sits on.
+//
+// Concrete fallbacks (not a nested `var()` chain) because color-mix cannot take
+// `inherit`, and a nested fallback is invisible to happy-dom's CSSOM. They keep the
+// mix well-formed when ONE token is missing; they assume host var injection already
+// succeeded and are NOT a defence against VS Code injecting no --vscode-* at all
+// (both absent ⇒ a fixed, non-adaptive grey — the same trade-off already accepted
+// for A11Y-08's frontmatter card, styles.css .quoll-frontmatter-block).
+//
+// ONE const, TWO use sites, kept in sync — NOT because they paint disjoint content.
+// `@lezer/markdown` maps `"Blockquote/...": tags.quote`, and Lezer's `/...` is
+// Mode.Inherit, so the `quote` tag reaches EVERY descendant inside a quote — the
+// `>` marker, plain prose, emphasis, links, all of it. An element's own colour
+// always beats one inherited from an ancestor, so the `t.quote` entry below paints
+// essentially all visible quoted text and `.cm-line.quoll-blockquote`'s copy paints
+// almost nothing the reader sees. It still has to track QUOTE_INK exactly because
+// `pnpm a11y:probe`'s `calloutFirstLine` sample reads `.cm-line.quoll-callout`'s OWN
+// computed colour, not the span inside it: a drift here would silently stop the
+// probe reflecting the colour the reader actually sees, while nothing on screen
+// changed.
 const QUOTE_INK =
   "color-mix(in srgb, var(--vscode-descriptionForeground, #616161) 90%, var(--vscode-editor-foreground, #000))";
 
