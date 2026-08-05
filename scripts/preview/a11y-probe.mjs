@@ -17,6 +17,23 @@
 //      reachability — actual keyboard-driven navigation is the ⏸ HUMAN half.
 //   3. Contrast — WCAG 2.x contrast ratio of each widget's CSS text color
 //      (`color`) against its effective (ancestor-walked) background, per theme.
+//      Both sides are COMPOSITED first: WCAG is defined on composited colours, and
+//      VS Code's `descriptionForeground` is `rgba(foreground, 0.7)` in dark and both
+//      HC kinds, so treating alpha as opaque would report a ratio the user never
+//      sees — on exactly the token this audit is about. Ancestor-accumulated CSS
+//      `opacity` is folded in for the same reason (the resting controls render at
+//      0.6). Backdrops are `background-color` only: a gradient cannot be rasterised
+//      here, so samples with one painted beneath them (detected by hit-test, since
+//      the fenced header band is a sibling, not an ancestor) print an explicit
+//      caveat rather than a number that looks exact. A SECOND known limit has no
+//      detector: accumulated `opacity` is applied to the foreground only, while
+//      `effectiveBg` composites ancestor `background-color`s at full strength. CSS
+//      composites an `opacity < 1` group — text AND any background layers inside it
+//      — as one unit, so the two models agree only while every layer effectiveBg
+//      uses lies OUTSIDE every dimmed group. That holds exactly today (all three
+//      sampled controls rest on `transparent`, and the one dimming rule,
+//      `.quoll-editor.read-only`, is unreachable from this harness — the template
+//      hard-codes `canWrite: true`), and it is an invariant nothing enforces.
 //      HC themes included. This only measures rendered text color; it cannot
 //      assess box/border affordances (e.g. a checkbox's own border), so a
 //      sample against such a widget is a text-color proxy, not a true
@@ -27,10 +44,12 @@
 // <button>, role=checkbox + aria-checked, th[scope=col], the copy button's
 // standalone aria-live region, etc.) so a future change that strips them fails
 // loudly. Contrast is REPORTED with a per-sample pass/flag against the WCAG
-// threshold (4.5:1 text, 3:1 non-text UI) but is non-fatal — theme-var resolution
+// threshold (4.5:1 text, 3:1 non-text UI) and is non-fatal — theme-var resolution
 // in a bare browser is not identical to a real VS Code host, so contrast numbers
-// inform the audit note rather than gate CI. VoiceOver/announcement behaviour is
-// NOT covered here (that is the ⏸ HUMAN half of the audit).
+// inform the audit note rather than gate CI. The ONE exception is the frontmatter
+// card, which IS gated (see `frontmatter-text-contrast` below).
+// VoiceOver/announcement behaviour is NOT covered here (that is the ⏸ HUMAN half
+// of the audit).
 //
 // Failure model mirrors visual-smoke.mjs: in-page collectors never throw on a
 // missing element; thrown navigation/evaluate errors are caught in Node and
@@ -42,13 +61,19 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright";
 import { buildWebviewBundle, createPreviewServer } from "./serve.mjs";
+import { THEME_KINDS } from "./vscode-theme-palettes.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const fixturePath = resolve(__dirname, "fixtures/a11y-audit.md");
 
-// All four themeKinds the wire supports (see serve.mjs THEME_KINDS). hc-* drive
-// the standalone `.hc-theme` CSS path — the HC-contrast half of the audit.
-const THEMES = ["light", "dark", "hc-light", "hc-dark"];
+// Every themeKind the harness can render, DERIVED from the palette tables (which
+// test/build/theme-palettes.test.ts pins equal to the wire enum) rather than
+// hand-copied: this list decides which kinds the fatal contrast gate runs for, so
+// a dropped kind would silently narrow the audit with nothing going red. hc-*
+// drive the standalone `.hc-theme` CSS path — the HC-contrast half of the audit.
+// (Deliberately NOT the same choice as visual-smoke.mjs's THEMES, which is a
+// chosen 2-kind subset rather than this enum.)
+const THEMES = THEME_KINDS;
 
 const STUB_PNG = Buffer.from(
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==",
@@ -94,6 +119,12 @@ function collectInPage(theme) {
     const [r, g, b, a = 1] = parts;
     return { r, g, b, a };
   };
+  // A regex match is not a parse: `color(srgb 1 0 0 / none)` yields a=NaN and the
+  // space-separated `rgb(30 30 30 / 0.5)` form yields undefined g/b. Both are
+  // non-null, so a `!c` guard passes them through — the NaN alpha then reads as
+  // "fully transparent" and the layer is skipped SILENTLY, which is the exact
+  // branch the throws below exist to close.
+  const isParsed = (c) => Boolean(c) && [c.r, c.g, c.b, c.a].every(Number.isFinite);
   const lin = (c) => {
     const v = c / 255;
     return v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4;
@@ -105,31 +136,159 @@ function collectInPage(theme) {
     const [hi, lo] = L1 >= L2 ? [L1, L2] : [L2, L1];
     return (hi + 0.05) / (lo + 0.05);
   };
-  // Effective background: walk ancestors until a non-transparent bg is found;
-  // fall back to the document background.
+  // Composite `top` (may be translucent) over the opaque `bottom`. Straight
+  // source-over in sRGB — the same operation the compositor performs, which is
+  // what WCAG contrast is defined against.
+  const over = (top, bottom) => ({
+    r: top.r * top.a + bottom.r * (1 - top.a),
+    g: top.g * top.a + bottom.g * (1 - top.a),
+    b: top.b * top.a + bottom.b * (1 - top.a),
+    a: 1,
+  });
+  // Does this computed style paint an image (in practice a gradient)? Shared by the
+  // two halves of the same known limit — the ancestor walk below and the hit-test in
+  // `paintedOverImage` — so both stay on one definition of "an image is involved".
+  const hasBgImage = (cs) => Boolean(cs.backgroundImage) && cs.backgroundImage !== "none";
+  // Effective background: walk ancestors compositing every translucent layer over
+  // the one behind it, stopping at the first OPAQUE layer. A translucent panel over
+  // a dark page is not the panel's nominal colour, and treating it as such
+  // overstates contrast — the failure mode this whole probe exists to catch.
+  // (The walk now includes <html>, which carries a real
+  // `background-color: var(--vscode-editor-background)` rule the old
+  // stop-at-documentElement loop could never see.)
+  //
+  // Returns `{ color, ignoredImage }`. `ignoredImage` records the KNOWN LIMIT of
+  // this model: only `background-color` participates, so any `background-image`
+  // (gradient) on the chain is invisible to it. See `paintedOverImage` below for
+  // the other half of the same limit — the backdrop is not always an ancestor.
   const effectiveBg = (el) => {
+    const layers = [];
+    let ignoredImage = false;
     let node = el;
-    while (node && node !== document.documentElement) {
-      const bg = parseRGB(getComputedStyle(node).backgroundColor);
-      if (bg && bg.a > 0) {
-        return bg;
+    while (node) {
+      const cs = getComputedStyle(node);
+      if (hasBgImage(cs)) {
+        ignoredImage = true;
+      }
+      const raw = cs.backgroundColor;
+      const bg = parseRGB(raw);
+      if (!isParsed(bg)) {
+        // Asymmetric with the foreground path on purpose is what we are FIXING:
+        // an unparseable layer used to fall through the same branch as a fully
+        // transparent one, yielding a confidently wrong ratio that never reached
+        // the exit code. Throw instead — run()'s per-theme catch converts it into
+        // a named `setup` failure.
+        throw new Error(
+          `a11y-probe: unparseable backgroundColor ${JSON.stringify(raw)} on ` +
+            `<${node.tagName.toLowerCase()}> while measuring contrast`
+        );
+      }
+      if (bg.a > 0) {
+        layers.push(bg);
+        if (bg.a >= 1) {
+          break;
+        }
       }
       node = node.parentElement;
     }
-    const docBg = parseRGB(getComputedStyle(document.body).backgroundColor);
-    return docBg && docBg.a > 0 ? docBg : { r: 255, g: 255, b: 255, a: 1 };
-  };
-  const contrastOf = (el) => {
-    if (!el) {
-      return null;
+    // Bottom-most opaque canvas: the last layer if it is opaque, else white
+    // (a browser's default canvas).
+    let composed =
+      layers.length > 0 && layers[layers.length - 1].a >= 1
+        ? layers.pop()
+        : { r: 255, g: 255, b: 255, a: 1 };
+    for (let i = layers.length - 1; i >= 0; i--) {
+      composed = over(layers[i], composed);
     }
+    return { color: composed, ignoredImage };
+  };
+  // Effective element opacity: CSS `opacity` composites the whole element against
+  // its backdrop AFTER the text colour is resolved, so a 0.6 control is dimmer than
+  // its `color` alone says. It must be accumulated over ANCESTORS, not read off the
+  // sampled element: the language picker carries its opacity on the label WRAPPER
+  // while the sampled node is the inner <select>
+  // (fenced-code-language-picker-widget.ts), so an element-only read misses it.
+  const effectiveOpacity = (el) => {
+    let acc = 1;
+    for (let node = el; node; node = node.parentElement) {
+      const o = Number.parseFloat(getComputedStyle(node).opacity);
+      acc *= Number.isFinite(o) ? o : 1;
+    }
+    return acc;
+  };
+  const rgbStr = (c) => `rgb(${[c.r, c.g, c.b].map((v) => Math.round(v)).join(" ")})`;
+  // Is anything painted UNDER this sample a gradient the colour model above cannot
+  // see? Hit-test the sample's centre rather than only walking ancestors, because
+  // the backdrop is frequently NOT an ancestor: the fenced-code header band is a
+  // `linear-gradient` on a SIBLING `.cm-line` (cm/theme.ts) with the copy button /
+  // language picker absolutely positioned over it — verified, the ancestor chain
+  // for those controls contains no gradient at all. Under HC the band's
+  // background-color is additionally `transparent` (styles.css), so the walk
+  // composites those controls against the editor canvas instead of the surface the
+  // user sees.
+  //
+  // Rasterising a gradient is out of scope (it needs real pixel sampling). Making
+  // the limit VISIBLE on the affected sample is the honest alternative — a
+  // silently-wrong ratio is the class of bug this probe exists to expose.
+  //
+  // Returns true | false | "unknown". The third state is load-bearing:
+  // `elementsFromPoint` returns an EMPTY list for a point outside the visual
+  // viewport, which is NOT the same answer as "nothing painted here". Reporting it
+  // as `false` silently drops the caveat on any sample below the fold — and the
+  // ancestor chain does not cover for it, because for this geometry the gradient is
+  // on a SIBLING. Today's 1400px viewport leaves the sampled controls ~570px of
+  // headroom, so ordinary fixture growth would remove the caveat with nothing going
+  // red. A zero-sized rect is left hit-testable on purpose: a degenerate rect still
+  // has a valid centre point and hit-tests correctly (measured).
+  const paintedOverImage = (el) => {
+    const r = el.getBoundingClientRect();
+    const cx = r.left + r.width / 2;
+    const cy = r.top + r.height / 2;
+    if (cx < 0 || cy < 0 || cx > window.innerWidth || cy > window.innerHeight) {
+      return "unknown";
+    }
+    return document.elementsFromPoint(cx, cy).some((node) => hasBgImage(getComputedStyle(node)));
+  };
+  // Returns `{ contrast, contrastNote, backdropVerified }`. A null `contrast` means
+  // the computed `color` did not parse (live risk — the frontmatter token is a
+  // `color-mix()`); the "sample vanished" case is reported by the CALLER, which is
+  // the only place that still has the distinction. A non-null contrast may still
+  // carry a note, and `backdropVerified` is the STRUCTURED form of it: false
+  // whenever the backdrop model is known not to describe what was rendered. Gates
+  // read that flag, never the note text, so adding a diagnostic note can never
+  // silently turn fatal.
+  const measureContrast = (el) => {
     const cs = getComputedStyle(el);
     const fg = parseRGB(cs.color);
-    if (!fg) {
-      return null;
+    if (!isParsed(fg)) {
+      return {
+        contrast: null,
+        contrastNote: `computed color ${JSON.stringify(cs.color)} did not parse`,
+        backdropVerified: false,
+      };
     }
-    const bg = effectiveBg(el);
-    return Math.round(ratio(fg, bg) * 100) / 100;
+    const { color: bg, ignoredImage } = effectiveBg(el);
+    const painted = paintedOverImage(el);
+    // Text alpha < 1 blends with what is behind the glyph. The muted frontmatter
+    // token is exactly this case under dark + both HC kinds (descriptionForeground
+    // is rgba(foreground, 0.7) there), so skipping this step reports a contrast the
+    // user never sees. Element opacity dims the same way and is folded in here too.
+    const alpha = fg.a * effectiveOpacity(el);
+    const gradientBeneath = ignoredImage || painted === true;
+    let contrastNote = null;
+    if (gradientBeneath) {
+      contrastNote =
+        "measured against backgroundColor only; a gradient painted beneath this sample was ignored";
+    } else if (painted === "unknown") {
+      contrastNote =
+        "backdrop NOT verified — the sample lies outside the viewport, so the hit-test could not " +
+        "run; a gradient beneath it would be invisible to this measurement";
+    }
+    return {
+      contrast: Math.round(ratio(over({ ...fg, a: alpha }, bg), bg) * 100) / 100,
+      contrastNote,
+      backdropVerified: !gradientBeneath && painted === false,
+    };
   };
 
   // aria-labelledby is a whitespace-separated IDREF list (ARIA spec), not a
@@ -227,7 +386,7 @@ function collectInPage(theme) {
           tabindex: el.getAttribute("tabindex"),
           ariaChecked: el.getAttribute("aria-checked"),
           ariaExpanded: el.getAttribute("aria-expanded"),
-          contrast: contrastOf(el),
+          ...measureContrast(el),
         }
       : null;
 
@@ -257,7 +416,7 @@ function collectInPage(theme) {
     })),
     calloutFirstLine: (() => {
       const c = document.querySelector(".cm-line.quoll-callout");
-      return c ? { contrast: contrastOf(c) } : null;
+      return c ? measureContrast(c) : null;
     })(),
     outlineToggle: describe(document.querySelector(".quoll-outline-toggle")),
     bodyLink: describe(document.querySelector(".cm-content a")),
@@ -337,6 +496,50 @@ function collectInPage(theme) {
       inventory.tableHeaderCells.every((th) => th.scope === "col"),
     `tableHeaderCells=${JSON.stringify(inventory.tableHeaderCells)}`
   );
+  // The ONLY contrast sample that is fatal. Every other ratio stays report-only
+  // (bare-browser resolution still is not a real host), but the frontmatter card is
+  // a SHIPPED a11y remediation (A11Y-08: the muted token was mixed toward
+  // editor-foreground to clear AA) and, since the harness now carries the real
+  // per-themeKind VS Code palettes (vscode-theme-palettes.mjs), its inputs are
+  // authored values rather than a light-theme proxy. A regression here is exactly
+  // the thing A11Y-08b was opened to notice.
+  //
+  // `null` fails too, and it has TWO causes — the sample vanished (reported by the
+  // caller-side note below), OR its computed `color` did not parse (a live risk:
+  // the token is a `color-mix()`). Those, plus a genuine below-threshold ratio and
+  // an unverified backdrop, are four different bugs, so the message below carries
+  // `contrastNote` + the measured inputs to tell them apart.
+  const frontmatterInputs = (() => {
+    if (!frontmatterEl) {
+      return "n/a";
+    }
+    const cs = getComputedStyle(frontmatterEl);
+    // Deliberately NOT gated on the foreground parsing: the backdrop is computed
+    // independently of `color`, and an unparseable foreground is precisely when a
+    // reviewer needs to see what it was being measured against. effectiveBg's throw
+    // is the intended fail-loud path and already reaches the exit code.
+    const bg = effectiveBg(frontmatterEl).color;
+    return `color=${cs.color} effectiveOpacity=${effectiveOpacity(frontmatterEl)} bg=${rgbStr(bg)}`;
+  })();
+  const frontmatterSample = inventory.frontmatter;
+  let frontmatterNote = " [.quoll-frontmatter-block not present in the rendered DOM]";
+  if (frontmatterSample) {
+    frontmatterNote = frontmatterSample.contrastNote ? ` [${frontmatterSample.contrastNote}]` : "";
+  }
+  add(
+    "frontmatter-text-contrast",
+    typeof frontmatterSample?.contrast === "number" &&
+      frontmatterSample.contrast >= 4.5 &&
+      // An unverified backdrop means the ratio was measured against something other
+      // than what rendered. An unreliable input must not green-light the one fatal
+      // gate — same rule as null: it is not evidence of passing. Gating on the
+      // STRUCTURED flag rather than on note text keeps future diagnostic wording
+      // from silently becoming fatal.
+      frontmatterSample.backdropVerified,
+    `frontmatter contrast=${frontmatterSample?.contrast ?? "n/a"} (AA normal text 4.5:1)` +
+      `${frontmatterNote} inputs: ${frontmatterInputs};` +
+      ` palette: scripts/preview/vscode-theme-palettes.mjs`
+  );
   add(
     "thematic-break-separator",
     inventory.thematicBreak?.role === "separator",
@@ -366,7 +569,21 @@ async function run() {
         await page.route("https://example.com/**", (route) =>
           route.fulfill({ status: 200, contentType: "image/png", body: STUB_PNG })
         );
-        await page.goto(`http://127.0.0.1:${port}/instance?v=0`, { waitUntil: "load" });
+        const resp = await page.goto(`http://127.0.0.1:${port}/instance?v=0`, {
+          waitUntil: "load",
+        });
+        // The preview server reports its own failures as a 500 body (serve.mjs's
+        // per-request catch). goto() resolves on ANY status, so without this the body
+        // — which carries the real cause, e.g. an unmapped themeKind — is discarded
+        // and the failure degrades into a 15s selector timeout pointing at
+        // CodeMirror. Thrown into the existing per-theme catch as a named `setup`
+        // failure; no new try/catch, no change to the documented failure model.
+        if (!resp?.ok()) {
+          const body = resp ? await resp.text() : "";
+          throw new Error(
+            `preview server returned ${resp?.status() ?? "no response"}: ${body.slice(0, 500)}`
+          );
+        }
         await page.waitForSelector(".cm-content", { timeout: 15000 });
         await page.waitForSelector(".quoll-table-block", { timeout: 15000 });
 
@@ -408,30 +625,36 @@ async function run() {
     });
     console.log("\n  Contrast (ratio : threshold flag):");
     const contrastSamples = [
-      ["copyButton", t.inventory.copyButton?.contrast, UI_MIN],
-      ["collapseToggle", t.inventory.collapseToggle?.contrast, UI_MIN],
-      ["languagePicker", t.inventory.languagePicker?.contrast, UI_MIN],
-      ["frontmatter", t.inventory.frontmatter?.contrast, TEXT_MIN],
-      ["bodyLink", t.inventory.bodyLink?.contrast, TEXT_MIN],
-      ["callout", t.inventory.calloutFirstLine?.contrast, TEXT_MIN],
+      ["copyButton", t.inventory.copyButton, UI_MIN],
+      ["collapseToggle", t.inventory.collapseToggle, UI_MIN],
+      ["languagePicker", t.inventory.languagePicker, UI_MIN],
+      ["frontmatter", t.inventory.frontmatter, TEXT_MIN],
+      ["bodyLink", t.inventory.bodyLink, TEXT_MIN],
+      ["callout", t.inventory.calloutFirstLine, TEXT_MIN],
       [
         "taskCheckbox (text-color proxy, not box/border affordance)",
-        t.inventory.taskCheckboxes?.[0]?.contrast,
+        t.inventory.taskCheckboxes?.[0],
         UI_MIN,
       ],
     ];
-    for (const [name, ratio, min] of contrastSamples) {
+    // The caveat is printed inline rather than folded into the number: a sample
+    // whose backdrop includes an un-rasterised gradient is not a measurement, and
+    // silently rounding that away is the class of bug this probe exists to expose.
+    for (const [name, sample, min] of contrastSamples) {
+      const ratio = sample?.contrast;
+      const suffix = sample?.contrastNote ? `  — ${sample.contrastNote}` : "";
       if (ratio == null) {
-        console.log(`    ${name}: n/a`);
+        console.log(`    ${name}: n/a${suffix}`);
         continue;
       }
-      console.log(`    ${name}: ${ratio}:1  ${ratio >= min ? "✅" : `⚠️ below ${min}:1`}`);
+      console.log(`    ${name}: ${ratio}:1  ${ratio >= min ? "✅" : `⚠️ below ${min}:1`}${suffix}`);
     }
   }
 
   const failures = allChecks.filter((c) => !c.pass);
   console.log(
-    `\n  Baseline semantics checks — ${allChecks.length} run, ${failures.length} failed\n`
+    `\n  Baseline checks (semantics + the frontmatter contrast gate) — ` +
+      `${allChecks.length} run, ${failures.length} failed\n`
   );
   for (const c of allChecks) {
     console.log(`  ${c.pass ? "✅" : "❌"} [${c.theme}] ${c.name}: ${c.msg}`);
