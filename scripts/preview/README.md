@@ -62,7 +62,7 @@ every request, so CSS tweaks show immediately.
 ```js
 export default {
   doc: "test/markdown/fixtures/nested-lists.md", // repo-root-relative; or `content: "..."`
-  theme: "light",                                 // "light" | "dark"
+  theme: "light",                                 // "light" | "dark" | "hc-light" | "hc-dark"
   variations: [
     { label: "baseline", css: "" },
     { label: "wider gap", css: ".cm-content { letter-spacing: 0.02em; }" },
@@ -94,10 +94,15 @@ The page stubs the VS Code webview runtime just enough to boot the real bundle:
 ## The `--vscode-*` stubbing caveat
 
 Real webviews inherit a large set of `--vscode-*` CSS custom properties. In a
-plain browser they don't exist, so `preview.template.html` stubs every one the
-bundle references (light values on `:root`, dark overrides on `html.dark-theme`).
+plain browser they don't exist, so `serve.mjs` emits the ACTIVE themeKind's full
+palette into `preview.template.html`'s `:root` from
+`scripts/preview/vscode-theme-palettes.mjs` (all four kinds — `light`, `dark`,
+`hc-light`, `hc-dark` — authored separately, with HC values taken verbatim from
+the installed VS Code build). `<body>` also carries the host-shaped
+`vscode-*` theme class plus `data-vscode-theme-kind`, mirroring what the real
+webview host stamps.
 **`--vscode-font-family` / `--vscode-font-size` must be realistic**: the
 nested-list indent is measured at runtime from the proportional font's space
 advance (`prose-space-metric.ts`), so a wrong font misrepresents indent geometry.
 If VS Code's real values drift or the bundle references a new `--vscode-*` var,
-update the stub block in `preview.template.html`.
+update the relevant palette in `vscode-theme-palettes.mjs`.

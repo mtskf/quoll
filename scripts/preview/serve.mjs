@@ -19,6 +19,7 @@ import { dirname, extname, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import esbuild from "esbuild";
 import { createBuildConfigs } from "../../esbuild.config.mjs";
+import { bodyThemeAttrs, themeVarsCss } from "./vscode-theme-palettes.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(__dirname, "..", "..");
@@ -150,9 +151,17 @@ async function renderInstance(cfg, index) {
   const variation = cfg.variations[index] ?? cfg.variations[0];
   const label = variation.label ?? `variation ${index}`;
   const template = await readFile(templatePath, "utf8");
+  // Host-shaped <body> stamping: the real webview host sets the theme class +
+  // data-vscode-theme-kind, and Quoll's stylesheet keeps compatibility selectors
+  // for them. Both values come from a fixed switch (never user text), so they need
+  // no escaping beyond what normaliseConfig already guarantees about cfg.theme.
+  const bodyAttrs = bodyThemeAttrs(cfg.theme);
   return template
     .replaceAll("{{DOC_JSON}}", jsStringLiteral(cfg.content))
     .replaceAll("{{THEME_KIND}}", JSON.stringify(cfg.theme))
+    .replaceAll("{{THEME_VARS}}", escapeStyle(themeVarsCss(cfg.theme)))
+    .replaceAll("{{BODY_CLASS}}", escapeHtml(bodyAttrs.className))
+    .replaceAll("{{BODY_THEME_KIND}}", escapeHtml(bodyAttrs.themeKind))
     .replaceAll("{{LABEL}}", escapeHtml(label))
     .replaceAll("{{VARIATION_CSS}}", escapeStyle(variation.css ?? ""))
     .replaceAll("{{VARIATION_JS}}", escapeScript(variation.js ?? ""));
