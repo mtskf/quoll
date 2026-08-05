@@ -153,15 +153,17 @@ async function renderInstance(cfg, index) {
   const template = await readFile(templatePath, "utf8");
   // Host-shaped <body> stamping: the real webview host sets the theme class +
   // data-vscode-theme-kind, and Quoll's stylesheet keeps compatibility selectors
-  // for them. Both values come from a fixed switch (never user text), so they need
-  // no escaping beyond what normaliseConfig already guarantees about cfg.theme.
+  // for them. Both values come from a fixed switch over an already-clamped
+  // cfg.theme, so escapeHtml below is defence-in-depth — it keeps the attribute
+  // injection safe if that switch ever gains a dynamic arm, not because these
+  // literals need escaping today.
   const bodyAttrs = bodyThemeAttrs(cfg.theme);
   return template
     .replaceAll("{{DOC_JSON}}", jsStringLiteral(cfg.content))
     .replaceAll("{{THEME_KIND}}", JSON.stringify(cfg.theme))
     .replaceAll("{{THEME_VARS}}", escapeStyle(themeVarsCss(cfg.theme)))
     .replaceAll("{{BODY_CLASS}}", escapeHtml(bodyAttrs.className))
-    .replaceAll("{{BODY_THEME_KIND}}", escapeHtml(bodyAttrs.themeKind))
+    .replaceAll("{{BODY_THEME_KIND}}", escapeHtml(bodyAttrs.dataThemeKind))
     .replaceAll("{{LABEL}}", escapeHtml(label))
     .replaceAll("{{VARIATION_CSS}}", escapeStyle(variation.css ?? ""))
     .replaceAll("{{VARIATION_JS}}", escapeScript(variation.js ?? ""));

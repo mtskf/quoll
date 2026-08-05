@@ -260,9 +260,10 @@ describe("styles.css — frontmatter metadata block (C8a)", () => {
     // (monotonic: darkens on light / lightens on dark) so contrast clears the
     // floor while staying host-theme-adaptive. Pin the exact formula so a future
     // edit that reverts to the bare passthrough (or changes the mix) goes red —
-    // `pnpm a11y:probe` is dev-only, non-CI, and non-fatal, so unit tests are the
-    // sole automated guard. Same precedent as the --quoll-selection-fill color-mix
-    // assertion below.
+    // `pnpm a11y:probe` does gate this sample (its `frontmatter-text-contrast`
+    // check is fatal) but is dev-only and non-CI, so unit tests remain the sole
+    // automated guard that runs in CI. Same precedent as the
+    // --quoll-selection-fill color-mix assertion below.
     const rule = css.match(/\.quoll-frontmatter-block\s*\{([^}]*)\}/s)?.[1] ?? "";
     expect(rule).toMatch(
       /color\s*:\s*color-mix\(\s*in srgb,\s*var\(--vscode-descriptionForeground,\s*#616161\)\s*90%,\s*var\(--vscode-editor-foreground,\s*#000\)\s*\)/

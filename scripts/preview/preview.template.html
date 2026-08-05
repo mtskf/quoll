@@ -18,12 +18,14 @@
 
     <!--
       The webview CSS leans on --vscode-* custom properties that only exist inside a
-      real VS Code webview. serve.mjs substitutes the ACTIVE themeKind's full palette
-      here from scripts/preview/vscode-theme-palettes.mjs (one authored table per
-      themeKind, values taken verbatim from the installed VS Code build). Only the
-      active theme is emitted — there is no light-block + override-block cascade, so
-      a themeKind can never silently inherit another's palette (that bug is exactly
-      what made the a11y probe's High Contrast numbers a light-theme proxy).
+      real VS Code webview. serve.mjs substitutes the ACTIVE themeKind's palette here
+      from scripts/preview/vscode-theme-palettes.mjs (one standalone table per
+      themeKind — the HC pair verbatim from the installed VS Code build, light/dark
+      older approximations of Default Light+/Dark+; see that module's PROVENANCE
+      block, and note it stubs only the tokens listed there, not every --vscode-*).
+      Only the active theme is emitted — there is no light-block + override-block
+      cascade, so a themeKind can never silently inherit another's palette (that bug
+      is exactly what made the a11y probe's High Contrast numbers a light-theme proxy).
       --vscode-font-* MUST stay realistic: the nested-list indent is measured at
       runtime from the proportional font's space advance (prose-space-metric.ts), so
       a wrong font misrepresents indent geometry.

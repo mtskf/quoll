@@ -1,4 +1,4 @@
-// The four REAL VS Code themeKind palettes for the preview harness.
+// One VS Code palette per themeKind for the preview harness.
 //
 // WHY this is a data module and not four hand-written CSS blocks in the template:
 // the harness previously stubbed only `:root` (light) + `html.dark-theme`, which
@@ -7,13 +7,27 @@
 // measurement (A11Y-08b). One table per themeKind makes "a themeKind has no
 // palette" impossible to express.
 //
-// PROVENANCE — every HC value is taken verbatim from the installed VS Code build:
-//   colorRegistry defaults:
-//     <app>/Contents/Resources/app/out/vs/workbench/workbench.desktop.main.js
-//     (`registerColor(id, { dark, light, hcDark, hcLight })`)
-//   Dark High Contrast theme overrides:
-//     <app>/Contents/Resources/app/extensions/theme-defaults/themes/hc_black.json
-//   (hc_light.json overrides nothing relevant → Light High Contrast is pure registry defaults.)
+// PROVENANCE — it DIFFERS per themeKind; do not read the HC claim as covering all four:
+//   • HC_DARK / HC_LIGHT are verbatim from the installed VS Code build:
+//       colorRegistry defaults:
+//         <app>/Contents/Resources/app/out/vs/workbench/workbench.desktop.main.js
+//         (`registerColor(id, { dark, light, hcDark, hcLight })`)
+//       Dark High Contrast theme overrides:
+//         <app>/Contents/Resources/app/extensions/theme-defaults/themes/hc_black.json
+//       (hc_light.json overrides nothing relevant → Light High Contrast is pure
+//        registry defaults.)
+//   • LIGHT / DARK are APPROXIMATIONS of Default Light+ / Dark+, carried over
+//     unchanged from the template's older stub block; they were never re-derived
+//     against the installed build. Known drift at the time of writing:
+//     list-activeSelectionBackground dark (#094771 vs registry #04395E),
+//     textCodeBlock-background (both kinds), terminal-ansiGreen light (#00bc00 vs
+//     #107C10), testing-iconPassed light (#388a34 vs #73c991), and
+//     editorHoverWidget-border light (#c8c8c8 vs the transparent(foreground, .2)
+//     alias). Left as-is deliberately — refreshing them is separate work with its
+//     own contrast fallout; this note exists so nobody reads them as measured.
+// When checking a value: VS Code resolves a colour as (theme file override) >
+// (colorRegistry default), so a registry-only citation is NOT evidence of drift —
+// check extensions/theme-defaults/themes/{light,dark}_vs.json first.
 // Aliases are expanded here (e.g. descriptionForeground = transparent(foreground, 0.7),
 // editorWidget.border = contrastBorder under HC) because CSS custom properties are
 // a flat namespace — the alias graph lives in the registry, not in the emitted vars.
@@ -21,16 +35,21 @@
 // A token that is DELIBERATELY absent under a themeKind (registry default `null`)
 // must be OMITTED, not set to `transparent`: a real host emits no variable at all,
 // so the stylesheet's `var(--x, fallback)` fallback is what renders. Reproducing
-// the absence is what keeps the harness honest about those fallbacks.
+// the absence is what keeps the harness honest about those fallbacks. Every gap
+// between tables below is that rule being applied, not an oversight.
 //
 // SCOPE: the tables below cover the tokens the template already stubbed, NOT
-// every --vscode-* the webview reads. Roughly fifteen tokens (button-secondary*,
+// every --vscode-* the webview reads. A dozen-plus tokens (button-secondary*,
 // button-hoverBackground, input-*, menu-*, sideBar-background,
 // sideBarSectionHeader-foreground, toolbar-activeBackground,
-// editor-findMatchBackground, editor-selectionHighlightBackground) are unstubbed
-// for every themeKind today and stay that way — each has a working
-// var(--x, fallback) at its use site. "Verbatim" describes the provenance of the
-// values present, not table completeness.
+// editor-findMatchBackground, editor-findMatchHighlightBackground,
+// editor-selectionHighlightBackground) are unstubbed for every themeKind today
+// and stay that way. Each has a working var(--x, fallback) at its use site with
+// ONE known exception: button-hoverBackground is reached only through
+// `var(--vscode-button-secondaryHoverBackground, var(--vscode-button-hoverBackground))`
+// (cm/theme.ts, `.cm-panel.cm-search .cm-button:hover`) — a two-level chain whose
+// terminal arm is itself unstubbed, with no literal behind it, so that one hover
+// surface renders unset in the harness (cosmetic, dev-only).
 
 // Theme-independent: fonts (the nested-list indent is measured at runtime from the
 // proportional font's space advance — see prose-space-metric.ts — so these must stay
@@ -47,7 +66,9 @@ const LIGHT = {
   descriptionForeground: "#717171",
   errorForeground: "#a1260d",
   focusBorder: "#0090f1",
-  contrastBorder: "transparent",
+  // No `contrastBorder` here or in DARK ON PURPOSE: the registry default is
+  // `null` under both non-HC kinds and no theme file overrides it, so a real
+  // light/dark host emits no such variable (see the omit rule above).
   "widget-border": "#d4d4d4",
   "panel-border": "rgba(128, 128, 128, 0.35)",
   "icon-foreground": "#424242",
@@ -87,13 +108,19 @@ const LIGHT = {
   "gitDecoration-addedResourceForeground": "#587c0c",
 };
 
+// Standalone, NOT `{ ...LIGHT, … }`: a spread is the same cross-themeKind cascade
+// this module exists to remove, just relocated from CSS into JS — a token added to
+// LIGHT would silently land in DARK carrying the light value while correctly
+// missing from both HC tables. The three tokens that are genuinely registry-identical
+// with light (panel-border, button-foreground, list-activeSelectionForeground) are
+// repeated here on purpose.
 const DARK = {
-  ...LIGHT,
   foreground: "#cccccc",
   descriptionForeground: "rgba(204, 204, 204, 0.7)",
   errorForeground: "#f48771",
   focusBorder: "#007fd4",
   "widget-border": "#303031",
+  "panel-border": "rgba(128, 128, 128, 0.35)",
   "icon-foreground": "#c5c5c5",
   "toolbar-hoverBackground": "rgba(90, 93, 94, 0.31)",
   "editor-background": "#1e1e1e",
@@ -112,7 +139,9 @@ const DARK = {
   "editorHoverWidget-foreground": "#cccccc",
   "editorHoverWidget-border": "#454545",
   "button-background": "#0e639c",
+  "button-foreground": "#ffffff",
   "list-activeSelectionBackground": "#094771",
+  "list-activeSelectionForeground": "#ffffff",
   "list-hoverBackground": "#2a2d2e",
   "textLink-foreground": "#3794ff",
   "textLink-activeForeground": "#3794ff",
@@ -131,6 +160,8 @@ const DARK = {
 
 // Dark High Contrast. hc_black.json overrides editor.background/foreground/
 // selectionBackground; everything else is the registry hcDark default.
+// Absent ON PURPOSE (registry hcDark default is null, so a real host emits nothing):
+// toolbar-hoverBackground, list-activeSelectionBackground, list-activeSelectionForeground.
 const HC_DARK = {
   foreground: "#FFFFFF",
   descriptionForeground: "rgba(255, 255, 255, 0.7)",
@@ -174,6 +205,9 @@ const HC_DARK = {
 };
 
 // Light High Contrast. hc_light.json overrides nothing relevant → pure registry hcLight.
+// Absent ON PURPOSE (registry hcLight default is null): toolbar-hoverBackground,
+// list-activeSelectionForeground. list-activeSelectionBackground IS present here
+// because hcLight alone gives it a value (transparent(#0F4A85, .1)).
 const HC_LIGHT = {
   foreground: "#292929",
   descriptionForeground: "rgba(41, 41, 41, 0.7)",
@@ -217,15 +251,36 @@ const HC_LIGHT = {
   "gitDecoration-addedResourceForeground": "#374E06",
 };
 
-const PALETTES = { light: LIGHT, dark: DARK, "hc-dark": HC_DARK, "hc-light": HC_LIGHT };
+export const PALETTES = { light: LIGHT, dark: DARK, "hc-dark": HC_DARK, "hc-light": HC_LIGHT };
+
+/** The themeKinds this module can render, derived from the tables themselves so
+ * there is no second hand-maintained list to drift. */
+export const THEME_KINDS = Object.keys(PALETTES);
 
 /**
- * The `:root { … }` block for one themeKind. Unknown kinds fall back to light,
- * mirroring serve.mjs's normaliseConfig (an unknown theme must never render an
- * unstyled page).
+ * Both exported functions FAIL LOUD on an unmapped themeKind rather than
+ * substituting light. A silent light substitution is precisely the A11Y-08b bug
+ * (HC rendered with the light palette and nothing said so), and the frontmatter
+ * contrast check is now fatal — an unmapped kind would otherwise report a green
+ * AA number measured against the wrong palette. Throwing composes with the
+ * existing failure model: serve.mjs's per-request try/catch turns it into a
+ * visible 500, and a11y-probe.mjs's per-theme catch turns it into a named
+ * `setup` failure that reaches the exit code.
  */
+function paletteFor(themeKind) {
+  const palette = PALETTES[themeKind];
+  if (!palette) {
+    throw new Error(
+      `vscode-theme-palettes: no palette for themeKind "${themeKind}" ` +
+        `(known: ${THEME_KINDS.join(", ")})`
+    );
+  }
+  return palette;
+}
+
+/** The `:root { … }` block for one themeKind. Throws on an unknown kind. */
 export function themeVarsCss(themeKind) {
-  const palette = PALETTES[themeKind] ?? LIGHT;
+  const palette = paletteFor(themeKind);
   const decls = Object.entries({ ...FONTS, ...palette })
     .map(([token, value]) => `        --vscode-${token}: ${value};`)
     .join("\n");
@@ -240,19 +295,32 @@ export function themeVarsCss(themeKind) {
  * backwards compatibility, and sets body.dataset.vscodeThemeKind = activeTheme).
  * Quoll's stylesheet keeps `body.vscode-high-contrast*` selectors as
  * defence-in-depth, so the harness must supply them to exercise that path.
+ *
+ * `dataThemeKind` is DOM vocabulary (`vscode-high-contrast`), deliberately named
+ * apart from the wire-vocabulary `themeKind` parameter (`hc-dark`) — the seed
+ * message needs the wire value and the <body> stamp needs this one.
+ *
+ * Unknown kinds throw for the same reason themeVarsCss does: falling through to
+ * the light class would silently stop exercising the HC compat selectors this
+ * function exists to exercise.
  */
 export function bodyThemeAttrs(themeKind) {
   switch (themeKind) {
+    case "light":
+      return { className: "vscode-light", dataThemeKind: "vscode-light" };
     case "dark":
-      return { className: "vscode-dark", themeKind: "vscode-dark" };
+      return { className: "vscode-dark", dataThemeKind: "vscode-dark" };
     case "hc-dark":
-      return { className: "vscode-high-contrast", themeKind: "vscode-high-contrast" };
+      return { className: "vscode-high-contrast", dataThemeKind: "vscode-high-contrast" };
     case "hc-light":
       return {
         className: "vscode-high-contrast-light vscode-high-contrast",
-        themeKind: "vscode-high-contrast-light",
+        dataThemeKind: "vscode-high-contrast-light",
       };
     default:
-      return { className: "vscode-light", themeKind: "vscode-light" };
+      throw new Error(
+        `vscode-theme-palettes: no <body> stamp for themeKind "${themeKind}" ` +
+          `(known: ${THEME_KINDS.join(", ")})`
+      );
   }
 }
