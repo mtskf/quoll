@@ -39,8 +39,9 @@
 // threshold (4.5:1 text, 3:1 non-text UI) and is non-fatal — theme-var resolution
 // in a bare browser is not identical to a real VS Code host, so contrast numbers
 // inform the audit note rather than gate CI. The ONE exception is the frontmatter
-// card, which IS gated (see `frontmatter-text-contrast` below). VoiceOver/announcement behaviour is
-// NOT covered here (that is the ⏸ HUMAN half of the audit).
+// card, which IS gated (see `frontmatter-text-contrast` below).
+// VoiceOver/announcement behaviour is NOT covered here (that is the ⏸ HUMAN half
+// of the audit).
 //
 // Failure model mirrors visual-smoke.mjs: in-page collectors never throw on a
 // missing element; thrown navigation/evaluate errors are caught in Node and
@@ -124,6 +125,10 @@ function collectInPage(theme) {
     b: top.b * top.a + bottom.b * (1 - top.a),
     a: 1,
   });
+  // Does this computed style paint an image (in practice a gradient)? Shared by the
+  // two halves of the same known limit — the ancestor walk below and the hit-test in
+  // `paintedOverImage` — so both stay on one definition of "an image is involved".
+  const hasBgImage = (cs) => Boolean(cs.backgroundImage) && cs.backgroundImage !== "none";
   // Effective background: walk ancestors compositing every translucent layer over
   // the one behind it, stopping at the first OPAQUE layer. A translucent panel over
   // a dark page is not the panel's nominal colour, and treating it as such
@@ -142,7 +147,7 @@ function collectInPage(theme) {
     let node = el;
     while (node) {
       const cs = getComputedStyle(node);
-      if (cs.backgroundImage && cs.backgroundImage !== "none") {
+      if (hasBgImage(cs)) {
         ignoredImage = true;
       }
       const raw = cs.backgroundColor;
@@ -210,10 +215,9 @@ function collectInPage(theme) {
     if (r.width === 0 || r.height === 0) {
       return false; // nothing to hit-test; ancestor-chain detection still applies
     }
-    return document.elementsFromPoint(r.left + r.width / 2, r.top + r.height / 2).some((node) => {
-      const bi = getComputedStyle(node).backgroundImage;
-      return Boolean(bi) && bi !== "none";
-    });
+    return document
+      .elementsFromPoint(r.left + r.width / 2, r.top + r.height / 2)
+      .some((node) => hasBgImage(getComputedStyle(node)));
   };
   // Returns `{ contrast, contrastNote }`. A null `contrast` has TWO causes and the
   // note says which: the element was absent, or its computed `color` did not parse
@@ -471,12 +475,16 @@ function collectInPage(theme) {
     const bg = parseRGB(cs.color) ? effectiveBg(frontmatterEl).color : null;
     return `color=${cs.color} effectiveOpacity=${effectiveOpacity(frontmatterEl)} bg=${bg ? rgbStr(bg) : "n/a"}`;
   })();
+  const frontmatterSample = inventory.frontmatter;
+  const frontmatterNote = frontmatterSample?.contrastNote
+    ? ` [${frontmatterSample.contrastNote}]`
+    : "";
   add(
     "frontmatter-text-contrast",
-    typeof inventory.frontmatter?.contrast === "number" && inventory.frontmatter.contrast >= 4.5,
-    `frontmatter contrast=${inventory.frontmatter?.contrast ?? "n/a"} (AA normal text 4.5:1)` +
-      `${inventory.frontmatter?.contrastNote ? ` [${inventory.frontmatter.contrastNote}]` : ""}` +
-      ` inputs: ${frontmatterInputs}; palette: scripts/preview/vscode-theme-palettes.mjs`
+    typeof frontmatterSample?.contrast === "number" && frontmatterSample.contrast >= 4.5,
+    `frontmatter contrast=${frontmatterSample?.contrast ?? "n/a"} (AA normal text 4.5:1)` +
+      `${frontmatterNote} inputs: ${frontmatterInputs};` +
+      ` palette: scripts/preview/vscode-theme-palettes.mjs`
   );
   add(
     "thematic-break-separator",
@@ -566,10 +574,9 @@ async function run() {
     // silently rounding that away is the class of bug this probe exists to expose.
     for (const [name, sample, min] of contrastSamples) {
       const ratio = sample?.contrast;
-      const note = sample?.contrastNote;
-      const suffix = note ? `  — ${note}` : "";
+      const suffix = sample?.contrastNote ? `  — ${sample.contrastNote}` : "";
       if (ratio == null) {
-        console.log(`    ${name}: n/a${note ? `  — ${note}` : ""}`);
+        console.log(`    ${name}: n/a${suffix}`);
         continue;
       }
       console.log(`    ${name}: ${ratio}:1  ${ratio >= min ? "✅" : `⚠️ below ${min}:1`}${suffix}`);
