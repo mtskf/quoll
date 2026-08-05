@@ -39,6 +39,23 @@ describe("theme.ts — quollHighlightSpec navy+green token contract (palette ref
     expect(String(byTag(t.heading4)?.color)).toMatch(/--quoll-accent-blue/);
   });
 
+  it("paints quote GLYPHS with the AA-nudged quote ink, not a bare descriptionForeground", () => {
+    // A11Y-10: the bare host descriptionForeground (#717171 in Default Light+)
+    // lands at 4.44:1 on the #f1f4fc quote panel, under AA 4.5:1. The fix mixes it
+    // 10% toward the editor foreground (monotonic: darkens on light / lightens on
+    // dark), measured at 5.24 light / 6.16 dark / 6.06 hc-light / 10.89 hc-dark.
+    // THIS entry is the one that paints the visible glyphs — the sibling
+    // `.cm-line.quoll-blockquote` assertion below covers the line-level colour, and
+    // the two must not drift apart (`pnpm a11y:probe` samples the LINE, so fixing
+    // only that one would move the probe's number without moving what the reader
+    // sees). Pin the exact formula: a revert to the bare passthrough goes red.
+    // Same precedent as the frontmatter A11Y-08 assertion in styles-contract.test.ts;
+    // the probe is dev-only and non-CI, so unit tests are the sole CI guard.
+    expect(String(byTag(t.quote)?.color)).toBe(
+      "color-mix(in srgb, var(--vscode-descriptionForeground, #616161) 90%, var(--vscode-editor-foreground, #000))"
+    );
+  });
+
   it("colours links/urls with --quoll-accent-green", () => {
     expect(String(byTag(t.link)?.color)).toMatch(/--quoll-accent-green/);
     expect(String(byTag(t.url)?.color)).toMatch(/--quoll-accent-green/);
@@ -963,7 +980,13 @@ describe("block-style — theme spec contract", () => {
     // colour (re-adding the rule) turns this assertion red.
     expect(bq.borderLeft).toBe("var(--quoll-column-inset-left, 6px) solid transparent");
     expect(bq.backgroundColor).toMatch(/--quoll-surface-fill/);
-    expect(bq.color).toMatch(/--vscode-descriptionForeground/);
+    // A11Y-10: muted, but AA-muted — the bare descriptionForeground passthrough
+    // this used to assert was 4.44:1 in light (under 4.5:1), so a `toMatch` on the
+    // token name alone would stay green on the un-nudged colour. Pin the mix
+    // (rationale + the four measured ratios on the quote-glyph assertion above).
+    expect(bq.color).toBe(
+      "color-mix(in srgb, var(--vscode-descriptionForeground, #616161) 90%, var(--vscode-editor-foreground, #000))"
+    );
   });
 
   it("blockquote + fenced fill insets to the body-text column via a transparent border + background-clip (not margin)", () => {

@@ -159,6 +159,30 @@ export const cmLinePaddingThemeSpec = {
 
 export const quollCmLinePaddingTheme = EditorView.theme(cmLinePaddingThemeSpec);
 
+// Muted ink for quoted prose (plain blockquotes AND callouts — a callout has no
+// colour of its own, it reuses the blockquote panel wholesale).
+//
+// A11Y-10 (AA contrast floor): the BARE host descriptionForeground is #717171 in
+// Default Light+, which lands at 4.44:1 on the --quoll-surface-fill quote panel
+// (#f1f4fc) — under the 4.5:1 AA normal-text threshold. This has always been the
+// value; it is a long-standing shortfall, not a regression (see the 2026-08-05
+// note in docs/a11y-audit/). Nudge it 10% toward the editor FOREGROUND, exactly as
+// A11Y-08 did for the frontmatter card (styles.css .quoll-frontmatter-block): the
+// mix is monotonic — it darkens on light and lightens on dark, so contrast only
+// ever rises — measured 4.44 → 5.24 (light), 5.70 → 6.16 (dark), 5.47 → 6.06
+// (hc-light), 9.96 → 10.89 (hc-dark) via `pnpm a11y:probe` —
+// while the ink stays host-theme-adaptive and visibly quieter than body prose.
+// Concrete fallbacks (not a nested `var()` chain) because color-mix cannot take
+// `inherit`, and a nested fallback is invisible to happy-dom's CSSOM.
+//
+// ONE const, TWO use sites, deliberately: the quote GLYPHS are painted by the
+// `t.quote` highlight span below, while the `.cm-line.quoll-blockquote` rule
+// colours everything on the line that carries no quote tag. Changing only one of
+// them moves the probe's number without moving what the reader sees (the probe
+// samples the line; the glyphs live in the span), so they must not drift apart.
+const QUOTE_INK =
+  "color-mix(in srgb, var(--vscode-descriptionForeground, #616161) 90%, var(--vscode-editor-foreground, #000))";
+
 // Markdown token styling. Lezer tags → CSS. Heading sizes give the
 // Notion-ish hierarchy without rich nodes; the syntax marks stay
 // visible (no reveal in C1).
@@ -245,7 +269,7 @@ export const quollHighlightSpec: TagStyle[] = [
   // underline supplied elsewhere; colour is the accent).
   { tag: t.link, color: "var(--quoll-accent-green, var(--vscode-textLink-foreground))" },
   { tag: t.url, color: "var(--quoll-accent-green, var(--vscode-textLink-foreground))" },
-  { tag: t.quote, color: "var(--vscode-descriptionForeground)" },
+  { tag: t.quote, color: QUOTE_INK },
 ];
 
 const quollHighlight = HighlightStyle.define(quollHighlightSpec);
@@ -462,8 +486,8 @@ export const blockStyleThemeSpec = {
   // the fill's edges.
   ".cm-line.quoll-blockquote": {
     // The subtle navy fill alone affords "this is a quote"; text stays muted
-    // (descriptionForeground) since a quote is secondary. (The former green
-    // left rule was removed 2026-07-01 — the fill carries the affordance.)
+    // (QUOTE_INK) since a quote is secondary. (The former green left rule was
+    // removed 2026-07-01 — the fill carries the affordance.)
     backgroundColor: "var(--quoll-surface-fill, transparent)",
     // Body-text-column alignment (2026-07-01 overflow re-report; SHARED contract
     // for .quoll-fenced-code and .quoll-fenced-collapse-bar). The navy fill is a
@@ -497,7 +521,7 @@ export const blockStyleThemeSpec = {
     backgroundClip: "padding-box",
     paddingLeft: "var(--quoll-block-pad-x, 16px)",
     paddingRight: "var(--quoll-block-pad-x, 16px)",
-    color: "var(--vscode-descriptionForeground, var(--vscode-editor-foreground))",
+    color: QUOTE_INK,
   },
   // Round the top corners on the opening quote line, mirroring the fenced-code panel
   // — same shared elliptical corner spec (blockEdgeCorner). Real-pixel geometry is
