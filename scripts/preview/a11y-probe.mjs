@@ -17,6 +17,10 @@
 //      reachability — actual keyboard-driven navigation is the ⏸ HUMAN half.
 //   3. Contrast — WCAG 2.x contrast ratio of each widget's CSS text color
 //      (`color`) against its effective (ancestor-walked) background, per theme.
+//      Both sides are COMPOSITED first: WCAG is defined on composited colours, and
+//      VS Code's `descriptionForeground` is `rgba(foreground, 0.7)` in dark and both
+//      HC kinds, so treating alpha as opaque would report a ratio the user never
+//      sees — on exactly the token this audit is about.
 //      HC themes included. This only measures rendered text color; it cannot
 //      assess box/border affordances (e.g. a checkbox's own border), so a
 //      sample against such a widget is a text-color proxy, not a true
@@ -27,9 +31,10 @@
 // <button>, role=checkbox + aria-checked, th[scope=col], the copy button's
 // standalone aria-live region, etc.) so a future change that strips them fails
 // loudly. Contrast is REPORTED with a per-sample pass/flag against the WCAG
-// threshold (4.5:1 text, 3:1 non-text UI) but is non-fatal — theme-var resolution
+// threshold (4.5:1 text, 3:1 non-text UI) and is non-fatal — theme-var resolution
 // in a bare browser is not identical to a real VS Code host, so contrast numbers
-// inform the audit note rather than gate CI. VoiceOver/announcement behaviour is
+// inform the audit note rather than gate CI. The ONE exception is the frontmatter
+// card, which IS gated (see `frontmatter-text-contrast` below). VoiceOver/announcement behaviour is
 // NOT covered here (that is the ⏸ HUMAN half of the audit).
 //
 // Failure model mirrors visual-smoke.mjs: in-page collectors never throw on a
@@ -105,19 +110,45 @@ function collectInPage(theme) {
     const [hi, lo] = L1 >= L2 ? [L1, L2] : [L2, L1];
     return (hi + 0.05) / (lo + 0.05);
   };
-  // Effective background: walk ancestors until a non-transparent bg is found;
-  // fall back to the document background.
+  // Composite `top` (may be translucent) over the opaque `bottom`. Straight
+  // source-over in sRGB — the same operation the compositor performs, which is
+  // what WCAG contrast is defined against.
+  const over = (top, bottom) => ({
+    r: top.r * top.a + bottom.r * (1 - top.a),
+    g: top.g * top.a + bottom.g * (1 - top.a),
+    b: top.b * top.a + bottom.b * (1 - top.a),
+    a: 1,
+  });
+  // Effective background: walk ancestors compositing every translucent layer over
+  // the one behind it, stopping at the first OPAQUE layer. A translucent panel over
+  // a dark page is not the panel's nominal colour, and treating it as such
+  // overstates contrast — the failure mode this whole probe exists to catch.
+  // (The walk now includes <html>, which carries a real
+  // `background-color: var(--vscode-editor-background)` rule the old
+  // stop-at-documentElement loop could never see.)
   const effectiveBg = (el) => {
+    const layers = [];
     let node = el;
-    while (node && node !== document.documentElement) {
+    while (node) {
       const bg = parseRGB(getComputedStyle(node).backgroundColor);
       if (bg && bg.a > 0) {
-        return bg;
+        layers.push(bg);
+        if (bg.a >= 1) {
+          break;
+        }
       }
       node = node.parentElement;
     }
-    const docBg = parseRGB(getComputedStyle(document.body).backgroundColor);
-    return docBg && docBg.a > 0 ? docBg : { r: 255, g: 255, b: 255, a: 1 };
+    // Bottom-most opaque canvas: the last layer if it is opaque, else white
+    // (a browser's default canvas).
+    let composed =
+      layers.length > 0 && layers[layers.length - 1].a >= 1
+        ? layers.pop()
+        : { r: 255, g: 255, b: 255, a: 1 };
+    for (let i = layers.length - 1; i >= 0; i--) {
+      composed = over(layers[i], composed);
+    }
+    return composed;
   };
   const contrastOf = (el) => {
     if (!el) {
@@ -129,7 +160,11 @@ function collectInPage(theme) {
       return null;
     }
     const bg = effectiveBg(el);
-    return Math.round(ratio(fg, bg) * 100) / 100;
+    // Text alpha < 1 blends with what is behind the glyph. The muted frontmatter
+    // token is exactly this case under dark + both HC kinds (descriptionForeground
+    // is rgba(foreground, 0.7) there), so skipping this step reports a contrast the
+    // user never sees.
+    return Math.round(ratio(over(fg, bg), bg) * 100) / 100;
   };
 
   // aria-labelledby is a whitespace-separated IDREF list (ARIA spec), not a
@@ -336,6 +371,19 @@ function collectInPage(theme) {
     inventory.tableHeaderCells.length >= 1 &&
       inventory.tableHeaderCells.every((th) => th.scope === "col"),
     `tableHeaderCells=${JSON.stringify(inventory.tableHeaderCells)}`
+  );
+  // The ONLY contrast sample that is fatal. Every other ratio stays report-only
+  // (bare-browser resolution still is not a real host), but the frontmatter card is
+  // a SHIPPED a11y remediation (A11Y-08: the muted token was mixed toward
+  // editor-foreground to clear AA) and, since the harness now carries the real
+  // per-themeKind VS Code palettes (vscode-theme-palettes.mjs), its inputs are
+  // authored values rather than a light-theme proxy. A regression here is exactly
+  // the thing A11Y-08b was opened to notice. `null` fails too: it means the sample
+  // vanished, not that it passed.
+  add(
+    "frontmatter-text-contrast",
+    typeof inventory.frontmatter?.contrast === "number" && inventory.frontmatter.contrast >= 4.5,
+    `frontmatter contrast=${inventory.frontmatter?.contrast ?? "n/a"} (AA normal text 4.5:1)`
   );
   add(
     "thematic-break-separator",
