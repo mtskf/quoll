@@ -1402,10 +1402,11 @@ describe("theme.ts — callout admonition per-type rules", () => {
   });
 
   it("no callout rule overrides `color` — the callout LINE keeps the .quoll-blockquote QUOTE_INK", () => {
-    // This guards the LINE's own `color`, not what the reader sees: the t.quote span
-    // wins over the line it sits on, so visible text is already pinned by the
-    // quoted-text assertion above and stays QUOTE_INK whatever a callout LINE rule
-    // sets (mechanism: QUOTE_INK in src/webview/cm/theme.ts). What WOULD break is
+    // This guards the LINE's own `color`, not what the reader sees: `t.quote` spans
+    // the whole quoted line (not just the `>` glyph) and a span's colour beats the
+    // line's, so visible text is already pinned by the quoted-text assertion above
+    // and stays QUOTE_INK whatever a callout LINE rule sets (why: QUOTE_INK in
+    // src/webview/cm/theme.ts). What WOULD break is
     // `pnpm a11y:probe`'s `calloutFirstLine` sample, which reads
     // `.cm-line.quoll-callout`'s OWN computed colour, not the span inside it: a stray
     // `color` here would silently desync that probe sample from what is actually on
