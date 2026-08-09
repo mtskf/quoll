@@ -12,6 +12,16 @@ https://example.com autolink for link-contrast sampling.
 
 > [!NOTE]
 > A callout blockquote — display-only accent border + tint (HC-contrast sample).
+>
+> > Depth two in callout, an A11Y-13 contrast sample.
+> >
+> > > Depth three in callout, an A11Y-13 contrast sample.
+
+> A plain nested quote for the A11Y-13 depth samples.
+>
+> > Depth two plain, an A11Y-13 contrast sample.
+>
+> > > Depth three plain, an A11Y-13 contrast sample.
 
 | Col A | Col B |
 | :--- | ---: |

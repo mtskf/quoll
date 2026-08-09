@@ -56,8 +56,14 @@ describe("theme.ts — quollHighlightSpec navy+green token contract (palette ref
     // frontmatter A11Y-08 assertion in styles-contract.test.ts. `a11y:probe` is
     // dev-only and non-CI, so these unit tests are the sole CI guard — and they pin
     // the FORMULA, not a resolved ratio (numeric contrast gate: A11Y-14).
+    // A11Y-13: the mix PERCENTAGE is a custom property, not a literal. Custom
+    // properties inherit, so a nested `> >` line declaring its own
+    // `--quoll-quote-ink-mix` makes THIS one string resolve darker inside that line
+    // without a second colour constant — that is the whole depth mechanism. The
+    // `, 90%` fallback is therefore load-bearing rather than defensive: a depth-1
+    // quote line declares no variable at all and must land on 90%.
     expect(String(byTag(t.quote)?.color)).toBe(
-      "color-mix(in srgb, var(--vscode-descriptionForeground, #616161) 90%, var(--vscode-editor-foreground, #000))"
+      "color-mix(in srgb, var(--vscode-descriptionForeground, #616161) var(--quoll-quote-ink-mix, 90%), var(--vscode-editor-foreground, #000))"
     );
   });
 
@@ -79,17 +85,48 @@ describe("theme.ts — quollHighlightSpec navy+green token contract (palette ref
     expect(String(mono?.boxShadow)).toContain("--quoll-surface-fill");
   });
 
-  it("nested-quote depth-2/-3 rules deepen ONLY the fill (color-mix over the base)", () => {
+  it("nested-quote depth-2/-3 rules deepen the fill AND darken the ink by the same step", () => {
     const spec = blockStyleThemeSpec as Record<string, Record<string, string>>;
     const d2 = spec[".cm-line.quoll-blockquote-depth-2"];
     const d3 = spec[".cm-line.quoll-blockquote-depth-3"];
-    // Both exist and touch ONLY backgroundColor (border/padding/radius stay on
-    // the base .quoll-blockquote rule, which both classes co-apply).
-    expect(Object.keys(d2 ?? {})).toEqual(["backgroundColor"]);
-    expect(Object.keys(d3 ?? {})).toEqual(["backgroundColor"]);
+    // A11Y-13: each level moves BOTH the fill and the quote ink 7 points further
+    // toward the editor foreground. Nothing else — border/padding/radius, and
+    // `color` itself, all stay on the base .quoll-blockquote rule, which both
+    // classes co-apply. The key SET is pinned so a third property cannot sneak in;
+    // the key ORDER deliberately is not, since it carries no CSS meaning here and
+    // pinning it would turn a harmless reordering red.
+    expect(Object.keys(d2 ?? {}).sort()).toEqual(["--quoll-quote-ink-mix", "backgroundColor"]);
+    expect(Object.keys(d3 ?? {}).sort()).toEqual(["--quoll-quote-ink-mix", "backgroundColor"]);
     // color-mix over the surface fill toward the foreground; -3 is the deeper mix.
     expect(d2?.backgroundColor).toMatch(/color-mix.*--quoll-surface-fill.*7%/);
     expect(d3?.backgroundColor).toMatch(/color-mix.*--quoll-surface-fill.*14%/);
+    // The ink override is what closes A11Y-13: the deeper fill alone left the
+    // shared depth-1 ink at 4.49 (depth-2) / 3.81 (depth-3) in light, both under
+    // AA 4.5:1. These percentages are measured, load-bearing numbers (the
+    // per-theme ratios live on QUOTE_INK in src/webview/cm/theme.ts), and they are
+    // the SAME 7-point step as the fill above.
+    expect(d2?.["--quoll-quote-ink-mix"]).toBe("83%");
+    expect(d3?.["--quoll-quote-ink-mix"]).toBe("76%");
+    // Monotonic: a deeper level is a strictly smaller percentage of the muted
+    // token, i.e. ink strictly closer to the editor foreground. Pinned as an
+    // ordering (not just two literals) so a future retune cannot invert the ramp
+    // while both assertions above are updated to still-plausible values.
+    const pct = (v: string | undefined) => Number.parseFloat(String(v));
+    expect(pct(d3?.["--quoll-quote-ink-mix"])).toBeLessThan(pct(d2?.["--quoll-quote-ink-mix"]));
+    expect(pct(d2?.["--quoll-quote-ink-mix"])).toBeLessThan(90);
+  });
+
+  it("depth 4+ reuses the depth-3 class, so fill AND ink plateau together", () => {
+    // blockquoteDepthClass clamps at BLOCKQUOTE_MAX_DEPTH (asserted directly in the
+    // depth-class tests below), so a `> > > >` line is painted by the depth-3 rule
+    // and inherits that rule's fill AND its --quoll-quote-ink-mix. Because one rule
+    // carries both, they can only ever plateau together. What this pins is the
+    // absence of a depth-4 rule: adding one that deepens the fill without the
+    // matching ink step would reintroduce A11Y-13 at depth 4, and would turn this red.
+    expect(blockquoteDepthClass(4)).toBe("quoll-blockquote-depth-3");
+    expect(blockquoteDepthClass(9)).toBe("quoll-blockquote-depth-3");
+    const spec = blockStyleThemeSpec as Record<string, Record<string, string>>;
+    expect(spec[".cm-line.quoll-blockquote-depth-4"]).toBeUndefined();
   });
 });
 
@@ -995,7 +1032,7 @@ describe("block-style — theme spec contract", () => {
     // the `t.quote` one would quietly stop the probe reflecting what is on screen.
     // Hence the identical string (rationale + measured ratios: QUOTE_INK in theme.ts).
     expect(bq.color).toBe(
-      "color-mix(in srgb, var(--vscode-descriptionForeground, #616161) 90%, var(--vscode-editor-foreground, #000))"
+      "color-mix(in srgb, var(--vscode-descriptionForeground, #616161) var(--quoll-quote-ink-mix, 90%), var(--vscode-editor-foreground, #000))"
     );
   });
 
@@ -1410,8 +1447,9 @@ describe("theme.ts — callout admonition per-type rules", () => {
     // `pnpm a11y:probe`'s `calloutFirstLine` sample, which reads
     // `.cm-line.quoll-callout`'s OWN computed colour, not the span inside it: a stray
     // `color` here would silently desync that probe sample from what is actually on
-    // screen — and the sample is report-only (dev-only, non-CI; only the frontmatter
-    // sample is fatal there), so nothing would flag the drift. Swept over EVERY
+    // screen — and THAT sample is report-only (dev-only, non-CI; the fatal ones are
+    // the frontmatter card and the four A11Y-13 nested-quote samples, which read
+    // spans rather than this line), so nothing would flag the drift. Swept over EVERY
     // callout selector rather than a hand-listed few, so a newly added rule is
     // covered without editing this test.
     // REVERT-CHECK: adding any `color` to any callout rule turns this red.
@@ -1425,6 +1463,17 @@ describe("theme.ts — callout admonition per-type rules", () => {
     expect(calloutRules.length).toBeGreaterThanOrEqual(8);
     for (const [sel, rule] of calloutRules) {
       expect(rule.color, `${sel} must not set its own color`).toBeUndefined();
+      // A11Y-13 sibling contract, same sweep and same revert-check shape. A nested
+      // `> >` line inside a `[!NOTE]` callout carries BOTH quoll-callout and
+      // quoll-blockquote-depth-2 (block-style.ts pushes the depth class and the
+      // callout class in the same pass). If a callout rule pinned the ink mix it
+      // would collide with the depth rule at equal two-class specificity, and the
+      // nested ink would stop tracking its depth — silently reopening A11Y-13
+      // inside callouts only.
+      expect(
+        rule["--quoll-quote-ink-mix"],
+        `${sel} must not pin the quote ink mix (it would override the depth step)`
+      ).toBeUndefined();
     }
   });
 
