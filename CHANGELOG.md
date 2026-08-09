@@ -2,6 +2,13 @@
 
 All notable changes to Quoll are documented here.
 
+## 0.1.68 — 2026-08-09
+
+### Fixed
+
+- "Quoll: Format Document" now tells you to open a Markdown file in the Quoll editor when none is active, instead of appearing to do nothing.
+- The Command Palette no longer lists "Quoll: Format Selection", which could never do anything from there. The formatting shortcuts inside the editor (bold, italic, code, strikethrough, link) are unchanged.
+
 ## 0.1.67 — 2026-08-09
 
 ### Fixed

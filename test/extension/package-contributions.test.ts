@@ -26,6 +26,29 @@ describe("package.json contributions — quoll.toggleEditor", () => {
   });
 });
 
+describe("package.json contributions — Command Palette visibility", () => {
+  const paletteMenus = (pkg.contributes.menus.commandPalette ?? []) as Array<{
+    command: string;
+    when: string;
+  }>;
+
+  it("hides quoll.format from the palette (it is meaningless without an args value)", () => {
+    // Every quoll.format invocation carries an `args` action; only the five
+    // keybindings supply one. A palette entry could therefore never do
+    // anything, so it must not be offered.
+    const entry = paletteMenus.find((m) => m.command === "quoll.format");
+    expect(entry).toBeDefined();
+    expect(entry?.when).toBe("false");
+  });
+
+  it("keeps quoll.formatDocument in the palette (it is the command's only entry point)", () => {
+    // No keybinding contributes it, so hiding it would strand the feature. It
+    // stays discoverable and explains itself when no Quoll panel is active.
+    const entry = paletteMenus.find((m) => m.command === "quoll.formatDocument");
+    expect(entry).toBeUndefined();
+  });
+});
+
 interface CommandContribution {
   command: string;
   title: string;

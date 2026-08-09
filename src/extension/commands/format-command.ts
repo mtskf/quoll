@@ -15,14 +15,16 @@
 // The active poster is set/cleared by the panel on its active edge (a custom
 // editor provider hands out no registry, so the active panel registers itself).
 
-import { commands, type Disposable } from "vscode";
+import { commands, type Disposable, window } from "vscode";
 import type { FormatCommandMessage } from "../../shared/protocol.js";
+import { showSafely } from "../surface/show-safely.js";
 import { createActivePoster } from "./active-poster.js";
 
 export type FormatAction = FormatCommandMessage["action"];
 export type FormatPoster = (action: FormatAction) => void;
 
-const KNOWN: ReadonlySet<string> = new Set(["bold", "italic", "code", "strike", "link"]);
+const KNOWN_ACTIONS = ["bold", "italic", "code", "strike", "link"] as const;
+const KNOWN: ReadonlySet<string> = new Set(KNOWN_ACTIONS);
 
 // Identity-guarded single-slot latch (see active-poster.ts): a panel losing
 // focus after another already became active must not wipe the new poster.
@@ -40,13 +42,39 @@ export function normalizeFormatAction(arg: unknown): FormatAction | null {
   return typeof arg === "string" && KNOWN.has(arg) ? (arg as FormatAction) : null;
 }
 
+/** Command body, exported as the unit-test seam (the registration itself needs
+ *  a live host). Both failure arms used to fall off the end of the handler with
+ *  no post, no log and no toast, which is indistinguishable from "the chord
+ *  never reached the extension" — every silent exit now says what to do. */
+export function runFormatCommand(arg: unknown): void {
+  const action = normalizeFormatAction(arg);
+  if (action === null) {
+    // Only the five keybindings supply `args`, so an argument-less invocation
+    // means a hand-written keybinding (package.json hides this command from the
+    // Command Palette, where an argument can never be supplied).
+    showSafely(
+      window.showInformationMessage(
+        `Quoll: this command needs an action argument — one of ${KNOWN_ACTIONS.join(", ")}.`
+      ),
+      "showInformationMessage"
+    );
+    return;
+  }
+  const post = registry.get();
+  if (post === null) {
+    showSafely(
+      window.showInformationMessage(
+        "Quoll: open a Markdown file in the Quoll editor to format a selection."
+      ),
+      "showInformationMessage"
+    );
+    return;
+  }
+  post(action);
+}
+
 export function registerFormatCommand(): Disposable {
-  return commands.registerCommand("quoll.format", (arg: unknown) => {
-    const action = normalizeFormatAction(arg);
-    if (action !== null) {
-      registry.get()?.(action);
-    }
-  });
+  return commands.registerCommand("quoll.format", runFormatCommand);
 }
 
 /** Test seam — do not use in production code. */
