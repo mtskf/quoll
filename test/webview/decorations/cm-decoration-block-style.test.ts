@@ -54,8 +54,8 @@ describe("theme.ts — quollHighlightSpec navy+green token contract (palette ref
     // The value is duplicated as a literal rather than imported from theme.ts, so a
     // source edit cannot move the expectation with it — same precedent as the
     // frontmatter A11Y-08 assertion in styles-contract.test.ts. `a11y:probe` is
-    // dev-only and non-CI, so these unit tests are the sole CI guard — and this one
-    // pins the FORMULA. The resolved RATIO is a separate CI check as of A11Y-14
+    // dev-only and non-CI, so the CI guard is unit tests only — and THIS one pins
+    // the FORMULA. The resolved RATIO is a separate CI check as of A11Y-14
     // (cm-quote-ink-contrast.test.ts resolves this same string against the shared
     // palette table and fails under 4.5:1); the two are complementary, since a
     // formula that clears AA while reverting the mechanism still has to go red here.
