@@ -290,8 +290,9 @@ describe("effect-executor runApplyEdit (wrapper mapping)", () => {
   // `pendingApplyBaseVersion` on `applyEditSettled` and nowhere else but
   // dispose), so BOTH promise arms must reach `dispatch`. execute-write documents
   // its reads as non-throwing but takes them OUTSIDE its try blocks, so a seam
-  // that breaks that assumption rejects the whole pipeline — previously swallowed
-  // by the bare `void ….then(onFulfilled)` and the lock was held for the session.
+  // that breaks that assumption rejects the whole pipeline — previously left
+  // unhandled by the bare `void ….then(onFulfilled)` (`void` discards the promise
+  // reference, it does not catch) and the lock was held for the session.
   it("pipeline rejection (settle-time read throws) STILL settles, as a non-ok outcome", async () => {
     const dispatch = await runApply({
       readCanonical: () => {
@@ -353,6 +354,36 @@ describe("effect-executor runApplyEdit (wrapper mapping)", () => {
         outcome: expect.objectContaining({ kind: "rejected", message: "unknown error" }),
       })
     );
+  });
+
+  // The REJECTION arm's opposite constraint: it must NOT read `canWrite` at all.
+  // That seam is itself a candidate throw source, so touching it on the recovery
+  // path would strand the lock exactly as the missing arm did. The test above
+  // drives a healthy pipeline, so it only ever exercises the fulfilment arm's
+  // guarded read — nothing pinned the rejection arm's hard-coded `false` until
+  // here. `not.toHaveBeenCalled()` is the load-bearing assertion: a refactor that
+  // unified the two arms behind `readCanWrite()` would still produce
+  // `canWrite: false` (the guard swallows the throw) and go unnoticed.
+  it("rejection arm settles without ever reading canWrite, even when canWrite ALSO throws", async () => {
+    const canWrite = vi.fn(() => {
+      throw new Error("boom-canWrite");
+    });
+    const dispatch = await runApply(
+      {
+        readCanonical: () => {
+          throw new Error("boom-settle");
+        },
+      },
+      { canWrite }
+    );
+    expect(dispatch).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "applyEditSettled",
+        outcome: expect.objectContaining({ kind: "rejected", message: "boom-settle" }),
+        canWrite: false,
+      })
+    );
+    expect(canWrite).not.toHaveBeenCalled();
   });
 
   // `canWrite` is an FS/config read in the FULFILMENT arm; an `onRejected`

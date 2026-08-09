@@ -123,9 +123,22 @@ export type HostSessionEvent =
       // stash drain can re-run the FULL decideEdit gates (canWrite + canonical
       // current text) AND the epoch foreign-bytes check (site 2). Since S3a the
       // canonical settled content is read on EVERY settlement (the epoch verify
-      // is unconditional — no skip-unless-stash), so `currentContent` is always
-      // the canonical settled document, never "" (the pre-S3a empty-when-no-stash
-      // optimisation is gone; restoring it would drop the epoch verify).
+      // is unconditional — no skip-unless-stash), so `currentContent` is the
+      // canonical settled document (the pre-S3a empty-when-no-stash optimisation
+      // is gone; restoring it would drop the epoch verify).
+      // ONE EXCEPTION: the executor's pipeline-rejection arm settles with
+      // `""`/`""` because the read seams themselves are what threw — it has no
+      // trustworthy snapshot to send and MUST NOT re-read (that would strand the
+      // lock on the recovery path). The two empties are PAIRED deliberately: for
+      // a non-ok outcome the foreign-bytes check below compares `currentContent`
+      // against `preApplyContent`, so equal empties mean "nothing foreign
+      // intervened" and no epoch bump. That makes the check vacuous on this one
+      // path — safe today because `canDrain` separately requires an `ok` outcome,
+      // so the empties can never reach `decideEdit`. The pairing is LOAD-BEARING:
+      // filling in real bytes on only one side would flip `foreignAtSettle`, bump
+      // the epoch, and the resulting reseed would invalidate the webview's replay
+      // buffer — silently dropping the very keystrokes the failure toast tells
+      // the user to retry.
       readonly canWrite: boolean;
       readonly currentContent: string;
       // Canonical pre-apply document snapshot (the executor's `oldText`,

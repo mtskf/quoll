@@ -23,8 +23,10 @@
 // the pipeline-rejection arm) — the core is the decision authority and needs the
 // settlement to drain a stashed last-keystroke edit (the
 // "type-one-more-char-then-close" data-loss race). For the same reason BOTH
-// promise arms of the settlement must reach `dispatch`: it is the only event
-// that releases the host write lock.
+// promise arms of the settlement must reach `dispatch`: on the live path
+// `applyEditSettled` is the only event that releases the host write lock (the
+// core's `disposed` arm also clears `pendingApplyBaseVersion`, but that fires
+// only on teardown, so it cannot rescue a panel the user is still typing into).
 
 import type { MarkdownError } from "../../markdown/errors.js";
 import { perfNow, perfRecord, perfReport } from "../../shared/perf.js";
@@ -257,11 +259,14 @@ export function createEffectExecutor(deps: EffectExecutorDeps): EffectExecutor {
     }
   };
 
-  // Best-effort error → message for a settlement toast. Guarded because BOTH
-  // settlement arms below must be non-throwing: a rejection value can be an
-  // exotic object whose `message` getter or `toString` throws, and that throw
-  // would escape the `.then` and strand the write lock — the very failure this
-  // module's settlement guards exist to prevent.
+  // Best-effort error → message for a settlement toast. Guarded because a
+  // rejection value can be an exotic object whose `message` getter or `toString`
+  // throws, and that throw would escape the `.then` and strand the write lock —
+  // the very failure this module's settlement guards exist to prevent. This is
+  // NOT a blanket "both arms are non-throwing" guarantee: `toApplyEditOutcome`
+  // and the fulfilment arm's `deps.dispatch` are deliberately left unwrapped
+  // (swallowing a reducer bug would hide it). The rejection arm's `dispatch` IS
+  // wrapped, but only to recover the user-visible toast — see that arm.
   const errorMessage = (err: unknown): string => {
     try {
       return err instanceof Error ? err.message : String(err);
@@ -270,14 +275,26 @@ export function createEffectExecutor(deps: EffectExecutorDeps): EffectExecutor {
     }
   };
 
-  // `canWrite` is an FS/config read (not a document read) and is the one
-  // genuine throw source in the settlement's fulfilment arm. A throw there
-  // escapes the `.then` (an `onRejected` sibling does NOT catch its own
+  // `canWrite` is an FS/config read (not a document read) and is the principal
+  // throw source in the settlement's fulfilment arm (`toApplyEditOutcome`'s
+  // exhaustiveness guard also throws from the same object literal, but it is
+  // unreachable for the closed tag union `execute-write.ts` produces). A throw
+  // here escapes the `.then` (an `onRejected` sibling does NOT catch its own
   // `onFulfilled`) and strands the write lock forever, so read it defensively.
-  // Assume NOT writable on a throw: `canWrite` only re-gates the stash drain, so
-  // a false negative merely defers that drain to the next edit, whereas
-  // optimistically claiming writability would let the reducer replay a write we
-  // could not confirm is permitted.
+  // Assume NOT writable on a throw. That is a real trade-off, not a free win:
+  // `canDrain` does NOT consult `canWrite`, so a false negative still runs the
+  // drain, `decideEdit` then returns `readonly`, and the core's `readonly` arm
+  // drops the stash WITHOUT a showError. While the panel is alive the keystroke
+  // survives regardless — the webview's single-flight replay buffer
+  // (`webview/cm/edit-sync.ts`) still holds it and re-posts after the reseed.
+  // Post-dispose the stash is the only carrier and that keystroke is lost. That
+  // loss is PRE-EXISTING and NOT introduced by this fallback — the identical
+  // drop happens for a genuine read-only flip mid-flight, and it is strictly
+  // better than the behaviour this arm replaced (an unguarded throw stranded the
+  // lock, losing that keystroke AND every later edit for the session). Tracked
+  // as its own TODO. The alternative here is worse: optimistically claiming
+  // writability would let the reducer replay a write we could not confirm is
+  // permitted.
   const readCanWrite = (): boolean => {
     try {
       return deps.canWrite();
@@ -316,7 +333,8 @@ export function createEffectExecutor(deps: EffectExecutorDeps): EffectExecutor {
       // documents `readText` / `readCanonical` / `readVersion` / `canonicalize` as
       // non-throwing, but they sit OUTSIDE its try blocks (pre-apply snapshot +
       // `settle()`), so a seam that breaks that assumption rejects the whole
-      // pipeline. Without this arm the rejection is swallowed by `void`,
+      // pipeline. Without this arm the rejection is left UNHANDLED by `void`
+      // (`void` does not catch — it only discards the promise reference),
       // `applyEditSettled` never fires, and `pendingApplyBaseVersion` — which ONLY
       // this event clears (host-session-core `applyEditSettled`; dispose is the
       // sole other path) — stays held for the session: every later inbound edit is
@@ -335,13 +353,41 @@ export function createEffectExecutor(deps: EffectExecutorDeps): EffectExecutor {
       // `false` rather than reading it.
       (err: unknown) => {
         console.error("[quoll] verified write pipeline rejected; releasing the write lock", err);
-        deps.dispatch({
-          type: "applyEditSettled",
-          outcome: { kind: "rejected", message: errorMessage(err) },
-          canWrite: false,
-          currentContent: "",
-          preApplyContent: "",
-        });
+        const message = errorMessage(err);
+        try {
+          deps.dispatch({
+            type: "applyEditSettled",
+            outcome: { kind: "rejected", message },
+            canWrite: false,
+            currentContent: "",
+            preApplyContent: "",
+          });
+        } catch (dispatchErr) {
+          // CORRELATED FAILURE. `settlementEffects` orders the reseed FIRST and
+          // the toast SECOND, and `runEffects`'s `postDocument` case calls
+          // `buildSeedDocument` unguarded — which in production bottoms out in
+          // `canonicalDocumentText(document)`, the SAME seam whose throw produced
+          // this rejection. So the arm that exists to tell the user "Failed to
+          // save" reliably re-runs the broken read and loses the toast to an
+          // unhandled rejection. The lock itself is already released (the panel's
+          // `step` commits the new state BEFORE running effects), so only the
+          // user-visible half needs rescuing: re-raise the toast here, with the
+          // same text `settlementEffects` would have produced. `showError` is the
+          // LAST effect in that list, so a throw can only come from something
+          // that ran before it — this cannot double-toast.
+          // NOTE the fulfilment arm has the same postDoc→showError exposure, but
+          // that ordering predates this change → tracked separately, not widened
+          // here (1 PR = 1 purpose).
+          console.error("[quoll] applyEdit rejection settlement threw; recovering the toast", {
+            uri: deps.uriString(),
+            cause: dispatchErr,
+          });
+          try {
+            deps.showError(`Failed to save: ${message}`);
+          } catch (toastErr) {
+            console.error("[quoll] showError threw during settlement recovery", toastErr);
+          }
+        }
       }
     );
   };
