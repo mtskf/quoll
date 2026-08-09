@@ -271,12 +271,16 @@ export function createRevertRescueWiring(deps: RevertRescueWiringDeps): RevertRe
         // exists to prevent. Treat it as the failure family does: the restore did
         // not land, so log, toast, and let the alive path reseed via onFailure.
         //
-        // Two structurally different throw sources land here: (a) a genuine
-        // pre-settle pipeline rejection (the case this arm's comment above
-        // describes), and (b) the `.then` handler's own exhaustiveness-guard
-        // throw (the `default: never` case), which fires AFTER a successful
-        // settle — compile-time unreachable under normal TS builds, but the log
-        // text must not claim "before settling" for it.
+        // Throws reach this arm from two different points in the pipeline:
+        // (a) a genuine PRE-SETTLE rejection (the case the paragraph above
+        // describes), and (b) anything the `.then` handler throws AFTER a
+        // successful settle. Family (b) is deliberately not enumerated as a
+        // closed set — it is every unguarded call reachable from a switch case:
+        // the exhaustiveness guard's `default: never` throw (compile-time
+        // unreachable under normal TS builds) AND the diverged arm's
+        // `deps.isDisposed()` check and `console.warn`, which sit outside
+        // `runGuarded`. So the log text must stay silent about WHEN the throw
+        // happened — a (b)-family throw did not fail "before settling".
         console.error("[quoll] revert-rescue: restore pipeline failed", err);
         reportRestoreFailure(err instanceof Error ? err.message : String(err), onFailure);
       });
