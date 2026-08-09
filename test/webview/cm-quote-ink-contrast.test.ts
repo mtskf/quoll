@@ -548,9 +548,15 @@ function carriesTag(entry: { tag: Tag | readonly Tag[] }, tag: Tag): boolean {
  * merely add italics; it strips the quote colour outright.
  *
  * So this read is deliberately NOT qualified by "declares a colour". Under
- * last-write-wins the last `t.quote` entry is the only one that paints, and if it
- * declares no colour then nothing paints QUOTE_INK at all — throwing at module load is
- * the correct report. Qualifying the filter would skip past it to an earlier entry and
+ * last-write-wins the last `t.quote` entry is the only one that reaches a span, so if it
+ * declares no colour the `t.quote` span carries no colour class at all. That regression
+ * is SILENT on screen: quoted prose falls back to `.cm-line.quoll-blockquote`'s copy of
+ * QUOTE_INK (pinned by the first test below) and looks unchanged. What breaks is the
+ * tokens carrying their OWN colour — t.link / t.url — which stop being overridden inside
+ * a quote and repaint quoted links accent green: light depth-3 measures 3.99:1, sub-AA,
+ * the same regression the order pin below exists to prevent. Throwing at module load is
+ * therefore the correct report — the span this file measures no longer carries the
+ * colour — while qualifying the filter would skip past that entry to an earlier one and
  * measure a colour no span receives, turning a loud failure into twelve confident wrong
  * numbers: the one failure shape this file's header says it exists to refuse.
  * Spelled `filter(…).at(-1)` rather than `findLast` because this program compiles
@@ -562,8 +568,9 @@ function specColor(tag: Tag, what: string): string {
   if (typeof color !== "string") {
     throw new Error(
       `quote-ink contrast: quollHighlightSpec declares no string color for ${what} — the ` +
-        "entry was removed or renamed in src/webview/cm/theme.ts, or a later entry for the " +
-        "same tag silenced it (tagHighlighter's tag->class map is last-write-wins)"
+        "entry was removed, renamed, or lost its `color` in src/webview/cm/theme.ts, or a " +
+        "later entry for the same tag silenced it (tagHighlighter's tag->class map is " +
+        "last-write-wins)"
     );
   }
   return color;
@@ -681,16 +688,20 @@ describe("quote ink resolves above the AA floor on every shipped palette (A11Y-1
 
   it("carries exactly one t.quote entry, which is the precondition specColor's read assumes", () => {
     // specColor takes the last matching entry, colour or not (its docblock explains why
-    // that qualifier is deliberately absent). That models CSS precedence — but while the
-    // tag appears ONCE, that read and the simpler `.find`
+    // that qualifier is deliberately absent, and why for a REPEATED tag the last entry
+    // wins by tagHighlighter's last-write-wins map rather than by CSS precedence). But
+    // while the tag appears ONCE, that read and the simpler `.find`
     // it replaced are indistinguishable, and a revert to `.find` passes every other
     // assertion in this file while silently measuring the wrong entry the moment a
     // second one appears. So pin the PRECONDITION rather than the mechanism.
     //
     // A second t.quote entry deserves a red on its own account, colour or no colour:
     // tagHighlighter's `tag.id -> class` map is last-write-wins, so the two do not
-    // compose — the later entry silences the earlier one completely, stripping the quote
-    // colour from every quoted span rather than adding to it. (Restated here on purpose,
+    // compose — the later entry silences the earlier one completely, so a colourless one
+    // leaves the quoted span with no colour class of its own rather than adding to it.
+    // Quoted prose still reads right (it inherits `.cm-line.quoll-blockquote`'s copy of
+    // QUOTE_INK), which is exactly what makes this silent; quoted LINKS lose the override
+    // and repaint accent green at 3.99:1. (Restated here on purpose,
     // though specColor's docblock says the same thing ~140 lines up: this is THE
     // assertion a reader is tempted to relax — "it's only italics, widen the pin" — and
     // a guard whose reason lives one cross-reference away gets relaxed by whoever does
@@ -701,9 +712,10 @@ describe("quote ink resolves above the AA floor on every shipped palette (A11Y-1
       quollHighlightSpec.filter((e) => carriesTag(e, t.quote)),
       "exactly one quollHighlightSpec entry may carry t.quote; tagHighlighter's tag->class " +
         "map is last-write-wins, so a second entry silences the first outright — including a " +
-        "colourless one, which would strip QUOTE_INK and let accent tokens repaint quoted " +
-        "links. Merge the styling into the single entry; do not relax this pin to let a " +
-        "colourless duplicate pass"
+        "colourless one, which drops the quote colour off the span and lets accent tokens " +
+        "repaint quoted links sub-AA (quoted prose still inherits QUOTE_INK from the line " +
+        "rule, so nothing looks wrong). Merge the styling into the single entry; do not " +
+        "relax this pin to let a colourless duplicate pass"
     ).toHaveLength(1);
   });
 
