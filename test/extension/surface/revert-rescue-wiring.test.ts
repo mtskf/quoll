@@ -46,6 +46,12 @@ type Wired = {
    *  fails while the host tears down) — used to pin that each settlement dep is
    *  guarded individually, so a throwing toast never swallows the reseed. */
   showErrorThrows: { value: boolean };
+  /** Make the injected dispatchDocumentChanged throw AFTER recording (models a
+   *  reducer dispatch that fails while the host tears down) — used to pin that
+   *  BOTH the diverged-arm dispatch and a throwing onFailure closure (which
+   *  itself calls dispatchDocumentChanged) stay individually guarded, same
+   *  pattern as showErrorThrows above. */
+  dispatchThrows: { value: boolean };
 };
 
 function wire(): Wired {
@@ -56,6 +62,7 @@ function wire(): Wired {
   const dispatched: number[] = [];
   const showErrors: string[] = [];
   const showErrorThrows = { value: false };
+  const dispatchThrows = { value: false };
   let onDocChange: (() => void) | null = null;
   let onTabClose: (() => void) | null = null;
 
@@ -65,7 +72,12 @@ function wire(): Wired {
     isWriteLockHeld: () => writeLock.held,
     canWrite: () => true,
     hasSurvivingEditor: () => survivingFlag.value,
-    dispatchDocumentChanged: (v) => dispatched.push(v),
+    dispatchDocumentChanged: (v) => {
+      dispatched.push(v);
+      if (dispatchThrows.value) {
+        throw new Error("dispatch failed");
+      }
+    },
     showError: (m) => {
       showErrors.push(m);
       if (showErrorThrows.value) {
@@ -97,6 +109,7 @@ function wire(): Wired {
     dispatched,
     showErrors,
     showErrorThrows,
+    dispatchThrows,
   };
 }
 
@@ -400,6 +413,31 @@ describe("createRevertRescueWiring — alive tab-close rescue", () => {
     expect(t.dispatched).not.toContain(7); // never the pre-apply version
   });
 
+  // The diverged arm wraps its dispatchDocumentChanged call in runGuarded
+  // specifically so a throwing reducer dispatch cannot fall through to the
+  // shared `.catch`, which would fire a spurious "could not restore" toast for
+  // an apply that DID land (contradicting the log-only diverged decision). This
+  // pins that guard: without it, the throw escapes the diverged case, the `.then`
+  // handler rejects, and the `.catch` toasts a failure for a successful apply.
+  it("alive DIVERGED whose dispatch THROWS stays log-only — no toast, no unhandled rejection (guard pins)", async () => {
+    const t = wire();
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    t.doc.version = 7;
+    t.dispatchThrows.value = true; // the reducer dispatch itself throws
+    vi.spyOn(workspace, "applyEdit").mockImplementation(async () => {
+      t.doc.version = 8;
+      return true;
+    });
+    armRevert(t);
+    t.fireTabClose();
+    await flush();
+
+    expect(warnSpy).toHaveBeenCalledOnce(); // diverged log still fired
+    expect(errSpy).toHaveBeenCalled(); // the dispatch throw was logged by runGuarded
+    expect(t.showErrors).toEqual([]); // MUST NOT fall through to the .catch toast
+  });
+
   it("on restore FAILURE (applyEdit resolves false) shows an error AND reseeds via onFailure", async () => {
     const t = wire();
     vi.spyOn(workspace, "applyEdit").mockResolvedValue(false);
@@ -411,6 +449,27 @@ describe("createRevertRescueWiring — alive tab-close rescue", () => {
     expect(t.showErrors.length).toBe(1);
     // onFailure reseeds the webview to the real doc via a documentChanged dispatch.
     expect(t.dispatched).toContain(42);
+  });
+
+  // reportRestoreFailure guards onFailure individually (runGuarded("onFailure",
+  // onFailure)) so a throwing onFailure — the alive-path closure re-enters the
+  // reducer via dispatchDocumentChanged, which can itself throw — cannot escape
+  // into the chained `.catch`, which would re-invoke reportRestoreFailure a
+  // second time (a duplicate/garbled toast) with no further catch on that second
+  // call. This pins that guard: without it, showErrors would grow to 2.
+  it("a THROWING onFailure does not duplicate the toast or escape as an unhandled rejection", async () => {
+    const t = wire();
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    vi.spyOn(workspace, "applyEdit").mockResolvedValue(false); // applyRefused → failure family
+    armRevert(t);
+    // fireTabClose's onFailure closure calls deps.dispatchDocumentChanged — make
+    // THAT throw so onFailure itself throws.
+    t.dispatchThrows.value = true;
+    t.fireTabClose();
+    await flush();
+
+    expect(t.showErrors.length).toBe(1); // NOT duplicated by a second reportRestoreFailure pass
+    expect(errSpy).toHaveBeenCalled(); // the onFailure throw was logged by runGuarded, not rethrown
   });
 
   it("on restore REJECTION (applyEdit throws) shows an error", async () => {

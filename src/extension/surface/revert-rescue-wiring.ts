@@ -272,7 +272,14 @@ export function createRevertRescueWiring(deps: RevertRescueWiringDeps): RevertRe
         // failed restore as a successful one — the exact silent loss this rescue
         // exists to prevent. Treat it as the failure family does: the restore did
         // not land, so log, toast, and let the alive path reseed via onFailure.
-        console.error("[quoll] revert-rescue: restore pipeline rejected before settling", err);
+        //
+        // Two structurally different throw sources land here: (a) a genuine
+        // pre-settle pipeline rejection (the case this arm's comment above
+        // describes), and (b) the `.then` handler's own exhaustiveness-guard
+        // throw (the `default: never` case), which fires AFTER a successful
+        // settle — compile-time unreachable under normal TS builds, but the log
+        // text must not claim "before settling" for it.
+        console.error("[quoll] revert-rescue: restore pipeline failed", err);
         reportRestoreFailure(errorText(err), onFailure);
       });
   };
