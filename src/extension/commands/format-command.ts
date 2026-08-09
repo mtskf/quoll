@@ -23,28 +23,18 @@
 // editor provider hands out no registry, so the active panel registers itself).
 
 import { commands, type Disposable, window } from "vscode";
-import type { FormatCommandMessage } from "../../shared/protocol.js";
+import { FORMAT_ACTIONS, type FormatAction } from "../../shared/protocol.js";
 import { showSafely } from "../surface/show-safely.js";
 import { createActivePoster } from "./active-poster.js";
 
-export type FormatAction = FormatCommandMessage["action"];
 export type FormatPoster = (action: FormatAction) => void;
 
-// `satisfies` pins one direction only: every entry here IS a FormatAction, so a
-// typo fails `pnpm compile` instead of becoming a silently-unreachable action.
-// It does NOT pin the other direction — a sixth action added to FormatAction in
-// protocol.ts and forgotten here still compiles (tracked separately; deriving
-// the list from one shared source is the real fix).
-const KNOWN_ACTIONS = [
-  "bold",
-  "italic",
-  "code",
-  "strike",
-  "link",
-] as const satisfies readonly FormatAction[];
-
+// Both the guard below and the toast's "one of …" list read the protocol's
+// FORMAT_ACTIONS directly, so this command can never know a different action set
+// than the wire does — the drift that let a valid action be rejected here as
+// unknown is now unrepresentable rather than merely tested for.
 function isFormatAction(value: unknown): value is FormatAction {
-  return typeof value === "string" && (KNOWN_ACTIONS as readonly string[]).includes(value);
+  return typeof value === "string" && (FORMAT_ACTIONS as readonly string[]).includes(value);
 }
 
 // Identity-guarded single-slot latch (see active-poster.ts): a panel losing
@@ -82,7 +72,7 @@ export function runFormatCommand(arg: unknown): void {
         ? `"${arg}" is not a recognized action`
         : "this command needs a string action argument";
     showSafely(
-      window.showInformationMessage(`Quoll: ${detail} — one of ${KNOWN_ACTIONS.join(", ")}.`),
+      window.showInformationMessage(`Quoll: ${detail} — one of ${FORMAT_ACTIONS.join(", ")}.`),
       "showInformationMessage"
     );
     return;

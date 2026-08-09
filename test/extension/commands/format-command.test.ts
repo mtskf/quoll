@@ -8,6 +8,7 @@ import {
   runFormatCommand,
   setActiveFormatPoster,
 } from "../../../src/extension/commands/format-command.js";
+import { FORMAT_ACTIONS } from "../../../src/shared/protocol.js";
 
 /** Hand the module-singleton registry back empty, whatever the test left in it
  *  (the identity guard means only the currently-active poster can clear it). */
@@ -19,8 +20,12 @@ function releaseActivePoster(): void {
 }
 
 describe("normalizeFormatAction", () => {
-  it("accepts the five known actions", () => {
-    for (const a of ["bold", "italic", "code", "strike", "link"]) {
+  // Iterating the protocol's own list (rather than a copy) is what makes this
+  // non-vacuous for a SIXTH action: the case appears here the moment the action
+  // set grows, so a guard that silently rejects it fails this test.
+  it("accepts every protocol format action", () => {
+    expect(FORMAT_ACTIONS.length).toBeGreaterThan(0);
+    for (const a of FORMAT_ACTIONS) {
       expect(normalizeFormatAction(a)).toBe(a);
     }
   });

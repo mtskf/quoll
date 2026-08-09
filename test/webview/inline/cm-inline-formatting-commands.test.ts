@@ -1,9 +1,9 @@
 import { EditorSelection, EditorState } from "@codemirror/state";
 import { describe, expect, it } from "vitest";
+import type { FormatAction } from "../../../src/shared/protocol.js";
 import {
   computeInlineFormat,
   computeLinkWrap,
-  type FormatAction,
 } from "../../../src/webview/cm/inline/inline-formatting-commands.js";
 
 // NO Markdown language extension: detection is pure string matching, so the

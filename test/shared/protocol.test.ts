@@ -4,6 +4,7 @@ import {
   buildFormatCommandMessage,
   buildFormatDocumentMessage,
   buildSwitchToTextMessage,
+  FORMAT_ACTIONS,
   isHostToWebview,
   isWebviewToHost,
   MAX_CONTENT_LENGTH,
@@ -1189,7 +1190,11 @@ describe("format-command message", () => {
   });
 
   it("accepts every action", () => {
-    for (const a of ["bold", "italic", "code", "strike", "link"] as const) {
+    // Derived from FORMAT_ACTIONS so the wire validator is checked against the
+    // same list the builder's type comes from — a new action cannot be added to
+    // the union while the validator's Set silently keeps rejecting it.
+    expect(FORMAT_ACTIONS.length).toBeGreaterThan(0);
+    for (const a of FORMAT_ACTIONS) {
       expect(isHostToWebview(buildFormatCommandMessage(a))).toBe(true);
     }
   });
