@@ -1199,6 +1199,15 @@ describe("format-command message", () => {
     }
   });
 
+  it("is exactly the five actions the wire/keybindings currently support", () => {
+    // Deliberately duplicates the literal list (not derived from FORMAT_ACTIONS):
+    // the derived loop above only catches drift in the *consuming* logic
+    // (validator/builder out of sync with the array), not corruption of the
+    // array's own contents (a dropped/typo'd/duplicated action). This is the
+    // one place that pins the actual values.
+    expect(FORMAT_ACTIONS).toEqual(["bold", "italic", "code", "strike", "link"]);
+  });
+
   it("rejects an unknown action", () => {
     expect(
       isHostToWebview({ protocol: PROTOCOL_VERSION, type: "format-command", action: "underline" })

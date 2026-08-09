@@ -341,7 +341,8 @@ export type ImageWriteResultMessage = Envelope & {
  *  (`test/extension/e2e/types.ts`, pinned by `AssertEqual<HostToWebview, …>`)
  *  both fail `pnpm compile` until they account for it. That is the point — the
  *  sites that need real work are the ones that break. A new action also wants a
- *  `quoll.format` keybinding entry in package.json, which no type can enforce. */
+ *  `quoll.format` keybinding entry AND its title-string action list in
+ *  package.json — neither is enforced by any type or test. */
 export const FORMAT_ACTIONS = ["bold", "italic", "code", "strike", "link"] as const;
 export type FormatAction = (typeof FORMAT_ACTIONS)[number];
 
