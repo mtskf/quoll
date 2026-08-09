@@ -259,28 +259,32 @@ export function createRevertRescueWiring(deps: RevertRescueWiringDeps): RevertRe
         }
       })
       .catch((err: unknown) => {
-        // REJECTION ARM. This pipeline is fire-and-forget on the data-loss rescue
-        // path and, on dispose, runs while the document is tearing down — so a
-        // rejection is reachable: `executeDocumentWrite`'s pre-apply `readText` /
-        // `canonicalize` and its settle-time `readCanonical` / `readVersion` run
-        // OUTSIDE its own try blocks (that module's documented assumption that
-        // they do not throw holds for a LIVE document, not a disposing one), plus
-        // anything the handler above rethrows. Without this arm such a throw would
-        // be an unhandled rejection: no toast, no reseed, and the user reads a
-        // failed restore as a successful one — the exact silent loss this rescue
-        // exists to prevent. Treat it as the failure family does: the restore did
-        // not land, so log, toast, and let the alive path reseed via onFailure.
+        // REJECTION ARM. Without it a throw here is an unhandled rejection: no
+        // toast, no reseed, and the user reads a failed restore as a successful
+        // one — the exact silent loss this rescue exists to prevent. Treat it as
+        // the failure family does: the restore did not land, so log, toast, and
+        // let the alive path reseed via onFailure.
         //
-        // Throws reach this arm from two different points in the pipeline:
-        // (a) a genuine PRE-SETTLE rejection (the case the paragraph above
-        // describes), and (b) anything the `.then` handler throws AFTER a
-        // successful settle. Family (b) is deliberately not enumerated as a
-        // closed set — it is every unguarded call reachable from a switch case:
-        // the exhaustiveness guard's `default: never` throw (compile-time
-        // unreachable under normal TS builds) AND the diverged arm's
-        // `deps.isDisposed()` check and `console.warn`, which sit outside
-        // `runGuarded`. So the log text must stay silent about WHEN the throw
-        // happened — a (b)-family throw did not fail "before settling".
+        // Two arrival points feed this arm, split by whether `executeDocumentWrite`
+        // ever resolved. (Careful: "settle" is `execute-write`'s word for its
+        // post-apply verification READ, not for the promise resolving. The split
+        // below is about the PROMISE, so it deliberately avoids that word.)
+        //
+        //   (a) `executeDocumentWrite` REJECTED, so the `.then` handler never ran.
+        //       Reachable because that module runs `readText` / `canonicalize` and
+        //       its verification reads `readCanonical` / `readVersion` OUTSIDE its
+        //       own try blocks — its documented assumption that they do not throw
+        //       holds for a LIVE document, not one tearing down under us at dispose.
+        //   (b) `executeDocumentWrite` RESOLVED and the `.then` handler itself threw.
+        //       NOT a closed set, by design: it is every unguarded call reachable
+        //       from a switch case. Today that means the exhaustiveness guard's
+        //       `default: never` throw (compile-time unreachable under normal TS
+        //       builds) and the diverged arm's `deps.isDisposed()` check and
+        //       `console.warn`, which sit outside `runGuarded` — but a case that
+        //       later grows an unguarded call joins (b) without touching this note.
+        //
+        // Hence the log text says only THAT the restore failed, never WHEN: a
+        // (b)-family throw happened after a perfectly good write.
         console.error("[quoll] revert-rescue: restore pipeline failed", err);
         reportRestoreFailure(err instanceof Error ? err.message : String(err), onFailure);
       });
