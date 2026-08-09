@@ -46,8 +46,11 @@
 // loudly. Contrast is REPORTED with a per-sample pass/flag against the WCAG
 // threshold (4.5:1 text, 3:1 non-text UI) and is non-fatal — theme-var resolution
 // in a bare browser is not identical to a real VS Code host, so contrast numbers
-// inform the audit note rather than gate CI. The ONE exception is the frontmatter
-// card, which IS gated (see `frontmatter-text-contrast` below).
+// inform the audit note rather than gate CI. TWO sets of samples are the exception
+// and ARE gated, both because they are shipped a11y remediations whose regression
+// this probe exists to notice: the frontmatter card (`frontmatter-text-contrast`,
+// A11Y-08) and the four nested quote-ink samples (`nested-quote-text-contrast-*`,
+// A11Y-13). Gated HERE still means dev-only — this script does not run in CI.
 // VoiceOver/announcement behaviour is NOT covered here (that is the ⏸ HUMAN half
 // of the audit).
 //
@@ -291,6 +294,35 @@ function collectInPage(theme) {
     };
   };
 
+  // The element that actually paints a quote line's prose. CodeMirror wraps
+  // highlighted text in generated-class spans, so the reader-visible colour lives
+  // on the span, not on the `.cm-line` — and for the nested-quote samples that
+  // distinction is the whole point: A11Y-13's mechanism is a custom property
+  // declared on the LINE and re-resolved by the SPAN, so measuring the line would
+  // confirm the declaration while leaving the inheritance — the part that can
+  // actually break — unmeasured. (`calloutFirstLine` below still reads its line;
+  // that sample predates this and is a proxy held true by a unit test.)
+  //
+  // The span is found by a MARKER SUBSTRING from the fixture rather than by "the
+  // longest span". Picking by length silently measures whatever happens to be
+  // biggest, so a fixture that later grew a long link, emphasis run, or inline code
+  // on one of these lines would move the sample onto a differently-coloured element
+  // and let a real regression pass while printing a healthy-looking ratio. Returning
+  // null when the marker is absent is the fail-loud alternative — the nested-quote
+  // gate treats null as a failure, so a fixture edit that breaks a sample is
+  // reported rather than absorbed. (This is why those fixture lines must stay free
+  // of inline markup: the marker has to land inside one span.)
+  const quoteInkSpan = (selector, marker) => {
+    const line = document.querySelector(selector);
+    if (!line) {
+      return null;
+    }
+    const span = [...line.querySelectorAll("span")].find((s) =>
+      (s.textContent || "").includes(marker)
+    );
+    return span ? measureContrast(span) : null;
+  };
+
   // aria-labelledby is a whitespace-separated IDREF list (ARIA spec), not a
   // single ID — resolve each token and join the referenced elements' text.
   const labelledByText = (el) => {
@@ -418,6 +450,28 @@ function collectInPage(theme) {
       const c = document.querySelector(".cm-line.quoll-callout");
       return c ? measureContrast(c) : null;
     })(),
+    // A11Y-13: nested-quote ink, measured on the SPAN (see quoteInkSpan). Four
+    // samples because a nested line inside a callout is a different cascade from a
+    // plain one — block-style.ts pushes the callout class and the depth class in
+    // the same pass, so those lines carry both at equal two-class specificity. The
+    // `:not(.quoll-callout)` / `.quoll-callout` split is what stops the two cases
+    // aliasing onto whichever happens to come first in the document.
+    quoteDepth2: quoteInkSpan(
+      ".cm-line.quoll-blockquote-depth-2:not(.quoll-callout)",
+      "Depth two plain"
+    ),
+    quoteDepth3: quoteInkSpan(
+      ".cm-line.quoll-blockquote-depth-3:not(.quoll-callout)",
+      "Depth three plain"
+    ),
+    calloutDepth2: quoteInkSpan(
+      ".cm-line.quoll-callout.quoll-blockquote-depth-2",
+      "Depth two in callout"
+    ),
+    calloutDepth3: quoteInkSpan(
+      ".cm-line.quoll-callout.quoll-blockquote-depth-3",
+      "Depth three in callout"
+    ),
     outlineToggle: describe(document.querySelector(".quoll-outline-toggle")),
     bodyLink: describe(document.querySelector(".cm-content a")),
   };
@@ -540,6 +594,40 @@ function collectInPage(theme) {
       `${frontmatterNote} inputs: ${frontmatterInputs};` +
       ` palette: scripts/preview/vscode-theme-palettes.mjs`
   );
+  // The SECOND fatal contrast gate, and fatal for the same reason as the
+  // frontmatter card: nested-quote ink is a SHIPPED a11y remediation (A11Y-13 — the
+  // depth rules step `--quoll-quote-ink-mix` down alongside the fill), and the
+  // defect it fixes is precisely one this probe could NOT see until the fixture
+  // gained nested depths. Leaving it report-only would re-open that blind spot on
+  // the very code path that was blind.
+  //
+  // Same gate shape as frontmatter, so the same four bugs stay distinguishable: a
+  // null sample (the fixture lost its nested quote, or a marker no longer lands in
+  // one span), an unparseable colour, an unverified backdrop (e.g. the block
+  // drifted below the fold), and a genuine sub-AA ratio. The message carries each
+  // sample's own note + ratio for that reason.
+  //
+  // This does NOT promote the probe to a CI gate and does NOT resolve A11Y-14: CI
+  // still pins the FORMULA (cm-decoration-block-style.test.ts), never a resolved
+  // number. Fatal-here / formula-in-CI is the split A11Y-08 already shipped for the
+  // frontmatter card — this is that precedent applied a second time, deliberately.
+  for (const [label, sample] of [
+    ["depth-2", inventory.quoteDepth2],
+    ["depth-3", inventory.quoteDepth3],
+    ["callout-depth-2", inventory.calloutDepth2],
+    ["callout-depth-3", inventory.calloutDepth3],
+  ]) {
+    let nestedNote = " [no quote-ink span found for this depth in the rendered DOM]";
+    if (sample) {
+      nestedNote = sample.contrastNote ? ` [${sample.contrastNote}]` : "";
+    }
+    add(
+      `nested-quote-text-contrast-${label}`,
+      typeof sample?.contrast === "number" && sample.contrast >= 4.5 && sample.backdropVerified,
+      `nested quote ${label} contrast=${sample?.contrast ?? "n/a"} (AA normal text 4.5:1)` +
+        `${nestedNote}; palette: scripts/preview/vscode-theme-palettes.mjs`
+    );
+  }
   add(
     "thematic-break-separator",
     inventory.thematicBreak?.role === "separator",
@@ -631,6 +719,10 @@ async function run() {
       ["frontmatter", t.inventory.frontmatter, TEXT_MIN],
       ["bodyLink", t.inventory.bodyLink, TEXT_MIN],
       ["callout", t.inventory.calloutFirstLine, TEXT_MIN],
+      ["quote depth-2 (nested, span)", t.inventory.quoteDepth2, TEXT_MIN],
+      ["quote depth-3 (nested, span)", t.inventory.quoteDepth3, TEXT_MIN],
+      ["callout depth-2 (nested, span)", t.inventory.calloutDepth2, TEXT_MIN],
+      ["callout depth-3 (nested, span)", t.inventory.calloutDepth3, TEXT_MIN],
       [
         "taskCheckbox (text-color proxy, not box/border affordance)",
         t.inventory.taskCheckboxes?.[0],
@@ -653,7 +745,7 @@ async function run() {
 
   const failures = allChecks.filter((c) => !c.pass);
   console.log(
-    `\n  Baseline checks (semantics + the frontmatter contrast gate) — ` +
+    `\n  Baseline checks (semantics + the frontmatter and nested-quote contrast gates) — ` +
       `${allChecks.length} run, ${failures.length} failed\n`
   );
   for (const c of allChecks) {
