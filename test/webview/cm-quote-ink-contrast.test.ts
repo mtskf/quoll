@@ -698,9 +698,11 @@ describe("quote ink resolves above the AA floor on every shipped palette (A11Y-1
     // `{ tag: [t.quote, …], … }` is one entry, not zero.
     expect(
       quollHighlightSpec.filter((e) => carriesTag(e, t.quote)),
-      "quollHighlightSpec must carry exactly ONE t.quote entry: a second one does not " +
-        "add to the first, it REPLACES it (last-write-wins), stripping the quote colour. " +
-        "Merge the styling into the single entry instead of relaxing this pin"
+      "exactly one quollHighlightSpec entry may carry t.quote; tagHighlighter's tag->class " +
+        "map is last-write-wins, so a second entry silences the first outright — including a " +
+        "colourless one, which would strip QUOTE_INK and let accent tokens repaint quoted " +
+        "links. Merge the styling into the single entry; do not relax this pin to let a " +
+        "colourless duplicate pass"
     ).toHaveLength(1);
   });
 
