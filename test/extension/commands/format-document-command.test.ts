@@ -1,8 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { window } from "vscode"; // vitest-aliased to test/extension/vscode-stub.ts
+import { commands, window } from "vscode"; // vitest-aliased to test/extension/vscode-stub.ts
 import {
   __getActiveDocPosterForTest,
   clearActiveDocFormatPoster,
+  registerFormatDocumentCommand,
   runFormatDocumentCommand,
   setActiveDocFormatPoster,
 } from "../../../src/extension/commands/format-document-command.js";
@@ -49,5 +50,21 @@ describe("runFormatDocumentCommand — the arm that used to be silent", () => {
 
     expect(info).toHaveBeenCalledTimes(1);
     expect(String(info.mock.calls[0]?.[0])).toMatch(/Quoll/);
+  });
+});
+
+describe("command registration", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("wires quoll.formatDocument to runFormatDocumentCommand", () => {
+    // Palette-only command: this id is the single string standing between the
+    // package.json contribution and the handler.
+    const spy = vi.spyOn(commands, "registerCommand");
+
+    registerFormatDocumentCommand();
+
+    expect(spy).toHaveBeenCalledWith("quoll.formatDocument", runFormatDocumentCommand);
   });
 });

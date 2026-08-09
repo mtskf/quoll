@@ -12,6 +12,13 @@
 // webview focus). The command forwards the action to the ACTIVE panel's webview,
 // which runs the actual CodeMirror transaction. No document mutation happens here.
 //
+// Only the five keybindings ever supply `args`, so package.json also hides this
+// command from the Command Palette (menus.commandPalette, when: "false") — a
+// palette invocation can never carry an argument and would be meaningless.
+// See runFormatCommand() for the remaining reachable no-argument paths (e.g. a
+// user's own keybindings.json) and how they now report themselves instead of
+// silently no-op'ing.
+//
 // The active poster is set/cleared by the panel on its active edge (a custom
 // editor provider hands out no registry, so the active panel registers itself).
 
@@ -23,8 +30,22 @@ import { createActivePoster } from "./active-poster.js";
 export type FormatAction = FormatCommandMessage["action"];
 export type FormatPoster = (action: FormatAction) => void;
 
-const KNOWN_ACTIONS = ["bold", "italic", "code", "strike", "link"] as const;
-const KNOWN: ReadonlySet<string> = new Set(KNOWN_ACTIONS);
+// `satisfies` pins one direction only: every entry here IS a FormatAction, so a
+// typo fails `pnpm compile` instead of becoming a silently-unreachable action.
+// It does NOT pin the other direction — a sixth action added to FormatAction in
+// protocol.ts and forgotten here still compiles (tracked separately; deriving
+// the list from one shared source is the real fix).
+const KNOWN_ACTIONS = [
+  "bold",
+  "italic",
+  "code",
+  "strike",
+  "link",
+] as const satisfies readonly FormatAction[];
+
+function isFormatAction(value: string): value is FormatAction {
+  return (KNOWN_ACTIONS as readonly string[]).includes(value);
+}
 
 // Identity-guarded single-slot latch (see active-poster.ts): a panel losing
 // focus after another already became active must not wipe the new poster.
@@ -39,7 +60,7 @@ export function clearActiveFormatPoster(poster: FormatPoster): void {
 }
 
 export function normalizeFormatAction(arg: unknown): FormatAction | null {
-  return typeof arg === "string" && KNOWN.has(arg) ? (arg as FormatAction) : null;
+  return typeof arg === "string" && isFormatAction(arg) ? arg : null;
 }
 
 /** Command body, exported as the unit-test seam (the registration itself needs
@@ -49,13 +70,16 @@ export function normalizeFormatAction(arg: unknown): FormatAction | null {
 export function runFormatCommand(arg: unknown): void {
   const action = normalizeFormatAction(arg);
   if (action === null) {
-    // Only the five keybindings supply `args`, so an argument-less invocation
-    // means a hand-written keybinding (package.json hides this command from the
-    // Command Palette, where an argument can never be supplied).
+    // Two different mistakes, two different fixes: a hand-written keybinding
+    // with no `args` at all vs. one carrying a misspelt/unsupported action.
+    // (The Command Palette can reach neither — package.json hides this command
+    // there, since a palette invocation can never supply an argument.)
+    const detail =
+      arg === undefined
+        ? "this command needs an action argument"
+        : `"${String(arg)}" is not a recognized action`;
     showSafely(
-      window.showInformationMessage(
-        `Quoll: this command needs an action argument — one of ${KNOWN_ACTIONS.join(", ")}.`
-      ),
+      window.showInformationMessage(`Quoll: ${detail} — one of ${KNOWN_ACTIONS.join(", ")}.`),
       "showInformationMessage"
     );
     return;
