@@ -1199,12 +1199,17 @@ describe("format-command message", () => {
     }
   });
 
-  it("is exactly the five actions the wire/keybindings currently support", () => {
+  it("is exactly the five actions the protocol currently defines", () => {
     // Deliberately duplicates the literal list (not derived from FORMAT_ACTIONS):
     // the derived loop above only catches drift in the *consuming* logic
     // (validator/builder out of sync with the array), not corruption of the
     // array's own contents (a dropped/typo'd/duplicated action). This is the
     // one place that pins the actual values.
+    //
+    // Scope note: this pins the TypeScript array only. package.json's keybinding
+    // `args` and the command title enumerate the same actions in plain JSON and
+    // are checked by nothing — see the FORMAT_ACTIONS JSDoc. Do not read this
+    // test's name as covering them.
     expect(FORMAT_ACTIONS).toEqual(["bold", "italic", "code", "strike", "link"]);
   });
 
