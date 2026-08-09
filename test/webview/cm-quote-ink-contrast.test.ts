@@ -22,13 +22,26 @@
 // the four shipped palettes it reproduces every ratio recorded in theme.ts's
 // QUOTE_INK comment — light 5.24 / 5.06 / 4.85 exactly (depth 1 / 2 / 3), and
 // dark, hc-light, hc-dark to within ~0.06 (the alpha-carrying palettes, where
-// Chromium composites through more 8-bit steps than this does). That bound is
-// deliberately stated at FULL precision: the worst cell is hc-dark depth-1, which
-// resolves to 10.8381 here against the probe's recorded 10.89 — a delta of 0.052,
-// so a tighter-sounding "within 0.05" would be false. (The recorded figures are
-// themselves 2dp, so the real delta is only pinned to ±0.005 either way.) It also
-// reproduces the PRE-fix 4.44 that A11Y-10 was opened for, which is what the
-// non-vacuity test at the bottom pins. Those numbers are provenance, not
+// Chromium composites through more 8-bit steps than this does). The worst cell is
+// hc-dark depth-1, which resolves to 10.8381 here against the probe's RECORDED
+// 10.89 — a delta of 0.052 measured against a 2dp figure, so the recorded data does
+// not support a tighter-sounding "within 0.05". (The underlying delta is itself only
+// pinned to ±0.005 either way, which is why the bound is quoted as "~0.06".)
+//
+// WHY THAT RESIDUAL DOES NOT MOVE THE FLOOR OFF 4.5. Measured, it ran the SAFE way:
+// all nine alpha-carrying cells read LOWER here than the probe, and the opaque light
+// palette matches its recorded 2dp figures exactly. Do not read that as a guarantee —
+// the residual is Chromium quantising color-mix results to 8 bits, so the rounding
+// direction is data-dependent and a fifth palette could land the other way. What
+// bounds the risk is the deviation's SIZE, not its sign: 0.052 sits inside a single
+// quantisation step (one LSB on a near-white channel over a black backdrop moves the
+// ratio by up to ~0.08). So the floor stays the standard 4.5. Padding it to
+// "4.5 + model error" would assert a threshold no standard backs and turn a palette
+// Chromium renders at 4.52 — compliant — red, and on a compliance gate a false red is
+// the more corrosive failure.
+//
+// The model also reproduces the PRE-fix 4.44 that A11Y-10 was opened for, which is
+// what the non-vacuity test at the bottom pins. Those numbers are provenance, not
 // assertions: pinning them would turn every deliberate palette retune red for no
 // accessibility reason. The contract asserted here is the AA threshold itself.
 //
@@ -41,12 +54,18 @@
 //     own draft of this test cited #1e1e1e as Default Light+ editor.foreground,
 //     where the real value is #000000 via light_vs.json);
 //   • --quoll-surface-fill — parsed out of the shipped styles.css theme blocks.
-// The one NON-colour input that is restated rather than read is
-// THEME_BLOCK_SELECTOR below (themeKind → the class shell.ts puts on the
-// document): shell.ts applies it in code, so there is no table to import. That
-// restatement is safe because it is fail-LOUD — a renamed theme class makes
-// surfaceFillFor's "exactly one block" guard throw rather than quietly measure the
-// wrong theme block, which is the only failure shape this file cares about.
+// The NON-colour inputs ARE restated rather than read, because each is a KEY used to
+// look source up and not a value copied out of it: THEME_BLOCK_SELECTOR (themeKind →
+// the class shell.ts puts on the document — shell.ts applies it in code, so there is
+// no table to import), PANEL_SELECTORS (the `.cm-line.quoll-blockquote*` keys into
+// blockStyleThemeSpec) and REQUIRED_TOKENS (the palette keys). Stated as a CATEGORY
+// rather than a count deliberately: an earlier revision of this header claimed "the
+// ONE non-colour input", and the very commit that wrote it added two more. All of
+// them are safe for one reason — they are fail-LOUD. A renamed theme class trips
+// surfaceFillFor's "exactly one block" guard, a renamed selector trips
+// quoteInkRatio's "declares no backgroundColor" guard, a renamed token trips
+// varsFor's "is missing" guard. None can quietly measure the wrong thing, which is
+// the only failure shape this file cares about.
 // Anything the resolver cannot parse THROWS. A future formula shape that this
 // slice does not model must go red, never resolve to a confident wrong number.
 import { readFileSync } from "node:fs";
@@ -220,6 +239,24 @@ function parseRgbFunction(text: string): Rgba | null {
   if (a < 0 || a > 1) {
     throw new Error(`quote-ink contrast: rgb() alpha ${a} outside 0..1 in ${text}`);
   }
+  // The channels get the same treatment as alpha, and for the same reason: the regex
+  // above admits a sign and an unbounded magnitude, CSS CLAMPS both ends, and an
+  // unclamped channel hands relativeLuminance a `v` outside 0..1 — finite, so nothing
+  // downstream catches it, and the reported ratio is fabricated in the dangerous
+  // direction (`rgb(300, 0, 0)` on black reports 7.16:1 where Chromium paints
+  // `#ff0000` at 5.25:1). Bounding alpha alone would leave the three components that
+  // dominate the luminance unguarded, and leave the next reader assuming otherwise.
+  for (const [name, channel] of [
+    ["r", r],
+    ["g", g],
+    ["b", b],
+  ] as const) {
+    if (channel < 0 || channel > 255) {
+      throw new Error(
+        `quote-ink contrast: rgb() ${name} channel ${channel} outside 0..255 in ${text}`
+      );
+    }
+  }
   return { r, g, b, a };
 }
 
@@ -244,19 +281,39 @@ function resolveColorMix(text: string, vars: Vars): Rgba | null {
   // leave that term weightless, silently mixing 50/50 and reporting a ratio for a
   // colour nothing renders (caught by the non-vacuity test at the bottom of this
   // file — which is why it is there).
-  const term = (part: string): { color: string; weight: number | null } => {
+  const term = (part: string, which: string): { color: string; weight: number | null } => {
     const tokens = splitTopLevelSpace(part);
     if (tokens.length < 2) {
       return { color: part.trim(), weight: null };
     }
     const last = tokens[tokens.length - 1];
+    const percentage = resolvePercentage(last, vars);
+    // CSS CLAMPS a color-mix percentage to 0..100; resolvePercentage's regex carries no
+    // upper bound, so a `--quoll-quote-ink-mix: 120%` would give this model a weight of
+    // 1.2 against its partner's -0.2 and EXTRAPOLATE past the term instead of
+    // interpolating between the two — a ratio for a colour no browser paints. The gap is
+    // one-sided: that regex admits no sign, so a negative weight cannot get this far.
+    // Bounded HERE, at the single place a weight is produced, rather than in each of the
+    // branches below: where BOTH percentages are given, the sum guard already forces each
+    // into 0..1, so a per-branch check would be dead code exactly there.
+    // (Measured, `120%` lowers the ratio on all four shipped palettes, because term B is
+    // `editor-foreground`, the canvas's maximum-contrast colour by construction, so
+    // extrapolating away from it can only lose contrast. That makes today's direction a
+    // false RED, but the remedy is the same one this file applies everywhere: refuse to
+    // report a number for a form CSS would have resolved differently.)
+    if (percentage > 100) {
+      throw new Error(
+        `quote-ink contrast: color-mix ${which} percentage ${percentage}% exceeds 100% ` +
+          `(CSS clamps it; extrapolating past a term is not modelled) in ${text}`
+      );
+    }
     return {
       color: tokens.slice(0, -1).join(" "),
-      weight: resolvePercentage(last, vars) / 100,
+      weight: percentage / 100,
     };
   };
-  const a = term(first);
-  const b = term(second);
+  const a = term(first, "first-term");
+  const b = term(second, "second-term");
   // CSS normalises omitted/partial percentages; the two forms shipped here are
   // "A p%, B" and "A, B q%", both of which reduce to p and 1 - p.
   let wa: number;
@@ -392,9 +449,15 @@ function surfaceFillFor(themeKind: string): string {
 /**
  * The three `--vscode-*` tokens the formulas here consume. All three have non-null
  * registry defaults in every themeKind, so a real host always emits them and an
- * absence from the TABLE is a table bug — a silent one, because QUOTE_INK carries
- * concrete `#616161` / `#000` fallbacks, so the run would measure a fixed grey on a
- * fixed black and report a confident ratio for a colour no host renders.
+ * absence from the TABLE is a table bug. The failure SHAPE differs per token, which is
+ * why this is a list checked up front rather than one representative case:
+ * `descriptionForeground` degrades SILENTLY (QUOTE_INK's `#616161` fallback renders
+ * and a confident ratio is reported for a colour no host produces),
+ * `editor-foreground` degrades silently at depth-1 only (QUOTE_INK's `#000` fallback)
+ * and throws at depth-2/-3, whose fills dereference it with no fallback arm, and
+ * `editor-background` always throws deep inside resolveVar without naming the palette.
+ * Assert all three here so the silent case cannot happen and the loud ones point at
+ * the table instead of at the resolver.
  *
  * Do NOT extend this list to other tokens. The palette module omits tokens whose
  * registry default IS null; a real host emits nothing for those, so reaching the
@@ -425,11 +488,12 @@ function varsFor(themeKind: string, palette: unknown = PALETTES[themeKind]): Var
   // (e.g. `editor-foreground`), matching what the harness emits into :root. A
   // token the palette OMITS is omitted on purpose (the registry default is null,
   // so a real host emits nothing either) and must therefore reach its CSS
-  // fallback — which is what leaving it out of this map does. A non-STRING value is
-  // the same silent failure wearing the other hat: `Object.entries` keeps the key,
-  // so the Map holds it, `vars.get()` returns undefined and resolveVar cannot tell
-  // it from an absent token — it takes the CSS fallback arm and measures a colour
-  // no host produces. Omit is the supported way to say "this host emits nothing".
+  // fallback — which is what leaving it out of this map does. A non-STRING value is the
+  // OTHER hat the same table bug wears, and it fails differently: the Map holds the
+  // non-string, `vars.get()` returns it (so resolveVar's absent-token arm is never
+  // taken) and resolveColor dies on `expr.trim()` with a TypeError naming nothing —
+  // loud, but pointing at the resolver instead of at the table. Reject it here so the
+  // message names the palette. Omit is the supported way to say "this host emits nothing".
   return new Map(
     Object.entries(table).map(([token, value]) => {
       if (typeof value !== "string") {
@@ -446,15 +510,21 @@ function varsFor(themeKind: string, palette: unknown = PALETTES[themeKind]): Var
 
 /**
  * A colour off `quollHighlightSpec`, or a loud failure. `String(entry?.color)`
- * would turn a removed or renamed entry into the seven-character string
- * `"undefined"`, which does go red — but three steps later, inside the resolver
+ * would turn a removed or renamed entry into the literal string `"undefined"`,
+ * which does go red — but three steps later, inside the resolver
  * ("cannot resolve colour \"undefined\""), pointing the next reader at CSS parsing
  * instead of at the missing spec entry that actually broke.
+ *
+ * The LAST match, not the first: HighlightStyle.define emits its rules in spec order
+ * and later entries take CSS precedence (the same rule the order pin below asserts),
+ * so where a tag appears twice the EARLIER entry is the one that does not paint.
+ * Spelled `filter(…).at(-1)` rather than `findLast` because this program compiles
+ * against `lib: es2022`, where `Array.prototype.findLast` (ES2023) is not declared.
  */
 function specColor(tag: Tag, what: string): string {
-  const entry = quollHighlightSpec.find((e) =>
-    Array.isArray(e.tag) ? e.tag.includes(tag) : e.tag === tag
-  );
+  const entry = quollHighlightSpec
+    .filter((e) => (Array.isArray(e.tag) ? e.tag.includes(tag) : e.tag === tag))
+    .at(-1);
   const color = entry?.color;
   if (typeof color !== "string") {
     throw new Error(
@@ -469,15 +539,11 @@ const blockSpec = blockStyleThemeSpec as Record<string, Record<string, string>>;
 const QUOTE_INK = specColor(t.quote, "t.quote");
 const BASE_RULE = blockSpec[".cm-line.quoll-blockquote"];
 
-type PanelLevel = { label?: string; fill?: string; inkMix?: string };
-
 /**
- * The three panel levels a quote line can render at, read off the theme spec.
- * Depth 4+ is deliberately absent: blockquoteDepthClass clamps at
- * BLOCKQUOTE_MAX_DEPTH, so deeper lines reuse the depth-3 rule (pinned in
- * cm-decoration-block-style.test.ts). Each level pairs the fill the ink sits on
- * with the `--quoll-quote-ink-mix` that level declares — an added depth rule that
- * deepens the fill without its ink step would land here as a sub-AA number.
+ * The three panel levels a quote line can render at, as (label, CM selector) pairs;
+ * `quoteInkRatio` reads each one's fill and ink mix off the theme spec. Depth 4+ is
+ * deliberately absent: blockquoteDepthClass clamps at BLOCKQUOTE_MAX_DEPTH, so deeper
+ * lines reuse the depth-3 rule (pinned in cm-decoration-block-style.test.ts).
  */
 const PANEL_SELECTORS = [
   { label: "depth-1 (base panel)", selector: ".cm-line.quoll-blockquote" },
@@ -486,56 +552,55 @@ const PANEL_SELECTORS = [
 ] as const;
 
 /**
- * BOTH halves of every level are READ from the spec, depth-1 included — the point
- * of deriving all three identically is that there is nowhere left to write a
- * hardcode. The base rule declares no `--quoll-quote-ink-mix` today, so depth-1's
- * is `undefined` and QUOTE_INK's inline `90%` fallback is what renders; writing
- * that `undefined` in by hand would look equivalent and is not. Depth-1 is the one
- * level that can silently disagree with theme.ts, and the disagreement runs the
- * WRONG way: a declared mix weights descriptionForeground higher, i.e. lighter ink
- * and a LOWER ratio, while a hardcoded level would keep measuring 90% and report
- * green against a panel the browser paints sub-AA.
- *
- * `spec` is a parameter rather than a closed-over constant so that read can be
- * observed — with today's spec the two implementations are indistinguishable.
- */
-function panelLevels(spec: Record<string, Record<string, string>>): PanelLevel[] {
-  return PANEL_SELECTORS.map(({ label, selector }) => ({
-    label,
-    fill: spec[selector]?.backgroundColor,
-    inkMix: spec[selector]?.["--quoll-quote-ink-mix"],
-  }));
-}
-
-const PANEL_LEVELS = panelLevels(blockSpec);
-
-/**
  * The ratio a reader sees for quoted prose at one panel level under one palette.
  * The ink is composited over the panel and the panel over the editor canvas,
  * because WCAG contrast is defined on COMPOSITED colours and both the HC surface
  * fill and three of the four `descriptionForeground` values carry alpha —
  * treating those as opaque would report a ratio nobody sees, on exactly the token
  * this check is about.
+ *
+ * BOTH halves of the level — the fill the ink sits on and the
+ * `--quoll-quote-ink-mix` step that level declares — are read from `spec` HERE,
+ * inside the measured function, so there is no pre-built level array for a later
+ * edit to turn back into a literal. That matters most at depth-1: the base rule
+ * declares no `--quoll-quote-ink-mix` today, so its mix is `undefined` and
+ * QUOTE_INK's inline `90%` fallback is what renders, and a hand-written `undefined`
+ * would look equivalent while failing the WRONG way. A mix declared later weights
+ * descriptionForeground higher, i.e. lighter ink and a LOWER ratio, so a restated
+ * level would keep measuring 90% and report green against a panel the browser paints
+ * sub-AA. An added depth rule that deepens the fill without its ink step lands here
+ * as a sub-AA number for the same reason.
+ *
+ * `spec` is a defaulted parameter so that read is OBSERVABLE: against the shipped
+ * spec a real read and a restatement are indistinguishable, which is precisely what
+ * makes the restatement dangerous. The non-vacuity test injects a spec that does
+ * declare a depth-1 mix and asserts the RATIO moves, rather than asserting a shape.
  */
-function quoteInkRatio(themeKind: string, level: PanelLevel): number {
+function quoteInkRatio(
+  themeKind: string,
+  level: { label: string; selector: string },
+  spec: Record<string, Record<string, string>> = blockSpec
+): number {
+  const fill = spec[level.selector]?.backgroundColor;
+  const inkMix = spec[level.selector]?.["--quoll-quote-ink-mix"];
   const vars = new Map(varsFor(themeKind));
   vars.set("--quoll-surface-fill", surfaceFillFor(themeKind));
-  if (level.inkMix !== undefined) {
-    vars.set("--quoll-quote-ink-mix", level.inkMix);
+  if (inkMix !== undefined) {
+    vars.set("--quoll-quote-ink-mix", inkMix);
   }
-  if (level.fill === undefined) {
+  if (fill === undefined) {
     // Name the LEVEL, not the themeKind: the fill comes from blockStyleThemeSpec,
     // which is keyed by CM selector and has no themeKind dimension at all, so a
     // per-palette message would send the next reader off to the palette table for a
     // selector that vanished from theme.ts.
     throw new Error(
       "quote-ink contrast: blockStyleThemeSpec declares no backgroundColor for " +
-        `${level.label ?? "(unlabelled level)"} — check the .cm-line.quoll-blockquote* ` +
-        "selectors in src/webview/cm/theme.ts"
+        `${level.label} — check the .cm-line.quoll-blockquote* selectors in ` +
+        "src/webview/cm/theme.ts"
     );
   }
   const canvas = resolveColor("var(--vscode-editor-background)", vars);
-  const panel = compositeOver(resolveColor(level.fill, vars), canvas);
+  const panel = compositeOver(resolveColor(fill, vars), canvas);
   const ink = compositeOver(resolveColor(QUOTE_INK, vars), panel);
   return contrastRatio(ink, panel);
 }
@@ -550,15 +615,37 @@ describe("quote ink resolves above the AA floor on every shipped palette (A11Y-1
     // what lets every ratio below be computed from a single string.
     expect(QUOTE_INK).toContain("color-mix(");
     expect(BASE_RULE?.color).toBe(QUOTE_INK);
-    // …and that QUOTE_INK is the colour that WINS on quoted links and headings,
-    // which rides on nothing but this array's ORDER. @lezer/highlight concatenates
-    // an inherited tag class onto the node's OWN class and emits ONE span (so there
-    // is no ancestor/descendant cascade to appeal to), and HighlightStyle.define
-    // emits its rules in spec order with LATER entries taking precedence. Move
-    // `t.quote` off the end and the accent tokens repaint quoted links: light
-    // depth-3 `--quoll-accent-green` on that panel measures 3.99:1, sub-AA, and
-    // every generated case below stays green because they only resolve QUOTE_INK.
-    expect(quollHighlightSpec.at(-1)?.tag).toBe(t.quote);
+  });
+
+  it("keeps t.quote LAST, which is what makes QUOTE_INK win inside a quote", () => {
+    // Its own `it`: this fails for an entirely different reason than the formula pin
+    // above — someone appending a spec entry, not someone editing one copy of
+    // QUOTE_INK — and since `expect` throws, sharing one block would mean a formula
+    // failure stopped this from running at all.
+    //
+    // @lezer/highlight concatenates an inherited tag class onto the node's OWN class
+    // and emits ONE span (so there is no ancestor/descendant cascade to appeal to),
+    // and HighlightStyle.define emits its rules in spec order with LATER entries
+    // taking precedence. Move `t.quote` off the end and the accent tokens repaint
+    // quoted links: light depth-3 `--quoll-accent-green` on that panel measures
+    // 3.99:1, sub-AA, and every generated case below stays green because they only
+    // resolve QUOTE_INK.
+    //
+    // Read array-aware, the way specColor reads: the spec legitimately carries array
+    // tags (theme.ts groups t.heading4-6 that way), so a future last entry of
+    // `{ tag: [t.quote, …], … }` still holds this contract. A bare
+    // `expect(…at(-1)?.tag).toBe(t.quote)` would reject it with an "expected [ Tag ]
+    // to be Tag" identity failure — a false red whose message invites exactly the edit
+    // (move t.quote off the end) that this pin exists to prevent.
+    const lastTag = quollHighlightSpec.at(-1)?.tag;
+    const lastCarriesQuote = Array.isArray(lastTag)
+      ? lastTag.includes(t.quote)
+      : lastTag === t.quote;
+    expect(
+      lastCarriesQuote,
+      "t.quote must stay the LAST quollHighlightSpec entry (later rules win in " +
+        "HighlightStyle.define); moving it lets accent tokens repaint quoted links sub-AA"
+    ).toBe(true);
   });
 
   it("actually generated a case per themeKind and panel level", () => {
@@ -568,11 +655,11 @@ describe("quote ink resolves above the AA floor on every shipped palette (A11Y-1
     // here (test/build/theme-palettes.test.ts pins that list equal to the wire
     // vocabulary), so a fifth palette widens the sweep instead of going unmeasured.
     expect(THEME_KINDS.length).toBeGreaterThanOrEqual(4);
-    expect(PANEL_LEVELS.length).toBe(3);
+    expect(PANEL_SELECTORS.length).toBe(3);
   });
 
   for (const themeKind of THEME_KINDS) {
-    for (const level of PANEL_LEVELS) {
+    for (const level of PANEL_SELECTORS) {
       it(`clears ${AA_NORMAL_TEXT}:1 in ${themeKind} at ${level.label}`, () => {
         const ratio = quoteInkRatio(themeKind, level);
         // The measured ratio rides in the failure message the way the probe reports
@@ -589,15 +676,28 @@ describe("quote ink resolves above the AA floor on every shipped palette (A11Y-1
 });
 
 describe("the AA check is non-vacuous", () => {
-  it("goes red for the un-nudged ink this remediation replaced", () => {
+  it("goes red for the un-nudged ink this remediation replaced, injected through the spec read", () => {
     // `--quoll-quote-ink-mix: 100%` is the bare host descriptionForeground — the
-    // pre-A11Y-10 colour, which measured 4.44:1 on the light quote panel. If this
-    // computed >= 4.5 the whole file would be measuring something other than the
-    // mix, and every green assertion above would be worthless.
-    const bare = quoteInkRatio("light", { fill: BASE_RULE?.backgroundColor, inkMix: "100%" });
-    expect(bare).toBeLessThan(AA_NORMAL_TEXT);
-    const shipped = quoteInkRatio("light", PANEL_LEVELS[0]);
-    expect(shipped).toBeGreaterThan(bare);
+    // pre-A11Y-10 colour, which measured 4.44:1 on the light quote panel. One
+    // measurement pinning two contracts, because they are the same fact seen twice:
+    //
+    //  • the AA check is NON-VACUOUS — a genuinely sub-AA mix does drive the reported
+    //    ratio under the floor, so the green cases above are measuring the mix and not
+    //    something else that happens to clear 4.5;
+    //  • depth-1's mix is READ from the theme spec, not restated in this file — the
+    //    injection reaches the ratio only through quoteInkRatio's own lookup, so a
+    //    level array rebuilt as a literal here would keep measuring the `90%` fallback
+    //    and leave the first assertion green.
+    //
+    // Asserting the RATIO rather than the shape of a level object is what makes the
+    // second contract stick: against the shipped spec a real read and a restatement
+    // produce identical objects, which is exactly what makes the restatement dangerous.
+    const withBaseMix = {
+      ...blockSpec,
+      ".cm-line.quoll-blockquote": { ...BASE_RULE, "--quoll-quote-ink-mix": "100%" },
+    };
+    expect(quoteInkRatio("light", PANEL_SELECTORS[0], withBaseMix)).toBeLessThan(AA_NORMAL_TEXT);
+    expect(quoteInkRatio("light", PANEL_SELECTORS[0])).toBeGreaterThanOrEqual(AA_NORMAL_TEXT);
   });
 
   it("refuses to guess at a colour form it does not model", () => {
@@ -622,12 +722,26 @@ describe("the AA check is non-vacuous", () => {
     expect(() => resolveColor("rgb(0, 0)", new Map())).toThrow(
       /expected 3 or 4 rgb\(\) components/
     );
+    // Out-of-range CHANNELS are the same trap as out-of-range alpha and the more
+    // dangerous direction: CSS clamps `rgb(-5, 300, 0)` to `rgb(0, 255, 0)` while an
+    // unclamped model extrapolates the luminance and reports a ratio ABOVE what the
+    // browser paints.
+    expect(() => resolveColor("rgb(-5, 300, 0)", new Map())).toThrow(/outside 0\.\.255/);
     // A two-percentage color-mix() also scales the RESULT alpha by sum/100, which
     // this slice does not model — reject rather than return the normalised-only
     // (wrong) alpha.
     expect(() =>
       resolveColor("color-mix(in srgb, #ffffff 20%, transparent 20%)", new Map())
     ).toThrow(/do not sum to 100%/);
+    // A single percentage over 100% extrapolates PAST the term instead of
+    // interpolating; CSS clamps it. Both term positions carry the bound, since the
+    // shipped formulas weight term A (QUOTE_INK) and term B (the depth fills).
+    expect(() => resolveColor("color-mix(in srgb, #000 120%, #fff)", new Map())).toThrow(
+      /first-term percentage 120% exceeds 100%/
+    );
+    expect(() => resolveColor("color-mix(in srgb, #000, #fff 120%)", new Map())).toThrow(
+      /second-term percentage 120% exceeds 100%/
+    );
     // Source-over here is the short form that assumes an opaque backdrop, and both
     // backdrops come from data rather than from construction.
     expect(() =>
@@ -637,31 +751,14 @@ describe("the AA check is non-vacuous", () => {
 });
 
 describe("the inputs are read from source, not restated", () => {
-  it("reads every panel level's fill AND ink mix off the theme spec, depth-1 included", () => {
-    // Today's base rule declares no `--quoll-quote-ink-mix`, so a hardcoded
-    // `undefined` and a real read are indistinguishable against the shipped spec —
-    // which is exactly what makes the hardcode dangerous. Feed a spec that DOES
-    // declare one: only a real read carries it through.
-    const withBaseMix = {
-      ...blockSpec,
-      ".cm-line.quoll-blockquote": { ...BASE_RULE, "--quoll-quote-ink-mix": "55%" },
-    };
-    expect(panelLevels(withBaseMix)[0]?.inkMix).toBe("55%");
-    // And the shipped spec still yields no depth-1 mix, i.e. the `90%` fallback in
-    // QUOTE_INK is what the base panel actually renders (the A11Y-13 mechanism).
-    expect(PANEL_LEVELS[0]?.inkMix).toBeUndefined();
-    expect(PANEL_LEVELS.map((level) => level.fill)).not.toContain(undefined);
-  });
-
   it("names the missing SELECTOR, not the palette, when a level loses its fill", () => {
     // The fill is keyed by CM selector with no themeKind dimension, so a message
-    // naming the palette would send the reader to the wrong file.
-    expect(() => quoteInkRatio("light", { label: "depth-9 (synthetic)" })).toThrow(
-      /depth-9 \(synthetic\)/
-    );
-    expect(() => quoteInkRatio("light", { label: "depth-9 (synthetic)" })).toThrow(
-      /quoll-blockquote/
-    );
+    // naming the palette would send the reader to the wrong file. (The depth-1 read
+    // itself is pinned end-to-end by the non-vacuity test above, which injects a spec
+    // and asserts the ratio moves.)
+    const missing = { label: "depth-9 (synthetic)", selector: ".cm-line.quoll-blockquote-depth-9" };
+    expect(() => quoteInkRatio("light", missing)).toThrow(/depth-9 \(synthetic\)/);
+    expect(() => quoteInkRatio("light", missing)).toThrow(/quoll-blockquote/);
   });
 
   it("fails loudly when quollHighlightSpec loses the entry it is measuring", () => {
@@ -671,13 +768,32 @@ describe("the inputs are read from source, not restated", () => {
     expect(() => specColor(t.comment, "t.comment")).toThrow(/declares no string color/);
   });
 
-  it("rejects a palette table that would silently degrade into CSS fallbacks", () => {
-    // Both holes lead to the same place: resolveVar cannot distinguish "token
-    // absent" from "token present but unusable", so it takes the fallback arm and
-    // measures QUOTE_INK's literal #616161 on #000 — a colour no host renders.
-    expect(() =>
-      varsFor("synthetic", { descriptionForeground: "#717171", "editor-foreground": "#000000" })
-    ).toThrow(/is missing editor-background/);
+  it("rejects every hole in the palette table, whatever shape its failure would take", () => {
+    // ONE CASE PER `REQUIRED_TOKENS` ENTRY, not one representative: a single
+    // missing-token case pins only the entry it omits, so the list could be trimmed to
+    // that entry alone and stay green — silently unguarding `descriptionForeground`,
+    // the token this whole file measures and the only one whose absence is SILENT
+    // rather than merely badly reported.
+    const complete: Record<string, string> = {
+      descriptionForeground: "#717171",
+      "editor-foreground": "#000000",
+      "editor-background": "#ffffff",
+    };
+    for (const token of REQUIRED_TOKENS) {
+      const { [token]: _omitted, ...withHole } = complete;
+      expect(() => varsFor("synthetic", withHole), `missing ${token}`).toThrow(
+        new RegExp(`is missing ${token}`)
+      );
+    }
+    // …and the list itself, since the loop above narrows with it.
+    expect(REQUIRED_TOKENS).toEqual([
+      "descriptionForeground",
+      "editor-foreground",
+      "editor-background",
+    ]);
+    // The other hat the same table bug wears: present, but not a colour string. That
+    // one already fails loudly without this guard — inside resolveColor's
+    // `expr.trim()`, naming neither the palette nor the token.
     expect(() =>
       varsFor("synthetic", {
         descriptionForeground: "#717171",
