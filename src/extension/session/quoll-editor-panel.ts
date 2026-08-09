@@ -422,7 +422,10 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
         (
           this.harness?.webviewPostMessageOverride ?? ((mm) => webviewPanel.webview.postMessage(mm))
         )(m),
-      recordEvent: (m) => this.harness?.recordEvent(m),
+      // Stamp the sending panel's URI: the harness keeps ONE event stream for
+      // every panel, so an e2e that opens two panels can otherwise only count
+      // posts, not tell which webview a command reached.
+      recordEvent: (m) => this.harness?.recordEvent(m, document.uri.toString()),
       showError,
       canWrite: canWriteNow,
       buildSeedDocument: (docVersion, externalEpoch, epochGeneration) =>

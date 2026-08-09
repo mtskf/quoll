@@ -1,8 +1,12 @@
+import * as fs from "node:fs/promises";
+import * as os from "node:os";
 import * as path from "node:path";
 import * as vscode from "vscode";
 import type {
   DocumentMessageShape,
   EditorConfigMessageShape,
+  FormatCommandMessageShape,
+  PanelControlsShape,
   RecordedEventShape,
   TestHarnessShape,
   ThemeMessageShape,
@@ -127,6 +131,64 @@ export function isEditorConfigEvent(
   e: RecordedEventShape
 ): e is RecordedEventShape & { message: EditorConfigMessageShape } {
   return e.message.type === "editor-config";
+}
+
+// Type-guard for outbound format-command messages. Mirrors isEditorConfigEvent
+// so a dispatch test's narrowing flows through to message.action — without it
+// `.action` resolves through RecordedEventShape's `Record<string, unknown>` and
+// a renamed field (or a typo at the assertion) only fails at runtime.
+export function isFormatCommandEvent(
+  e: RecordedEventShape
+): e is RecordedEventShape & { message: FormatCommandMessageShape } {
+  return e.message.type === "format-command";
+}
+
+// Poll `predicate` until true, or throw naming what was awaited. Lives here
+// rather than in each test file: three suites had drifted byte-identical copies,
+// so a change to the wait semantics had to be made three times.
+export async function pollUntil(
+  predicate: () => boolean,
+  label: string,
+  timeoutMs = 8000
+): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    if (predicate()) {
+      return;
+    }
+    if (Date.now() >= deadline) {
+      throw new Error(`timed out waiting for ${label}`);
+    }
+    await tick(50);
+  }
+}
+
+/** Open a temp `.md` in Quoll and return the NEWLY-registered panel controls.
+ *  `previous` guards the second open of a two-panel run: poll until activePanel
+ *  becomes distinct from it, so the caller never captures the older panel. */
+export async function openTempQuoll(
+  harness: TestHarnessShape,
+  content: string,
+  slug: string,
+  previous: PanelControlsShape | null = null
+): Promise<{ uri: vscode.Uri; file: string; panel: PanelControlsShape }> {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), `quoll-e2e-${slug}-`));
+  const file = path.join(dir, `${slug}.md`);
+  await fs.writeFile(file, content);
+  const uri = vscode.Uri.file(file);
+
+  await vscode.commands.executeCommand("vscode.openWith", uri, VIEW_TYPE);
+  const deadline = Date.now() + 8000;
+  for (;;) {
+    const panel = harness.activePanel;
+    if (panel && panel !== previous) {
+      return { uri, file, panel };
+    }
+    if (Date.now() >= deadline) {
+      throw new Error(`panel for ${slug} did not register a distinct activePanel`);
+    }
+    await tick(50);
+  }
 }
 
 // Externally-settled promise. An applyEditOverride that returns

@@ -36,6 +36,13 @@ import type { HostToWebview, WebviewToHost } from "../shared/protocol.js";
 export interface RecordedEvent {
   readonly message: HostToWebview;
   readonly timestamp: number;
+  /** Document URI of the panel that sent this message. `events` is ONE stream
+   *  shared by every open panel, so without this a two-panel test can only
+   *  count posts, never tell which webview received one — a command routed to
+   *  the wrong (inactive) panel would look identical to the correct routing.
+   *  Optional because the recorder is also driven from tests that construct a
+   *  bare TestHarness with no panel behind it. */
+  readonly uri?: string;
 }
 
 export interface RecordedInbound {
@@ -371,8 +378,8 @@ export class TestHarness {
     return this._lastError;
   }
 
-  recordEvent(message: HostToWebview): void {
-    const entry: RecordedEvent = { message, timestamp: Date.now() };
+  recordEvent(message: HostToWebview, uri?: string): void {
+    const entry: RecordedEvent = { message, timestamp: Date.now(), uri };
     this._events.push(entry);
     for (let i = this._eventWaiters.length - 1; i >= 0; i--) {
       const w = this._eventWaiters[i];

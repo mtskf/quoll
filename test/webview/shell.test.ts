@@ -424,10 +424,9 @@ describe("shell — format-command routing", () => {
   it("routes a format-command message to the editor and marks the selection", async () => {
     // The webview end of the `quoll.format` chord path: message arm -> the
     // editor handle -> a real CodeMirror transaction producing bold markers.
-    // The host end (executeCommand -> active poster -> the post) is pinned by
-    // test/extension/e2e/format-command-dispatch.test.ts, which deliberately
-    // stops at the wire — the Electron test host's webview never holds document
-    // focus, so the focus-guarded inline format can only mutate bytes here.
+    // The host end is pinned by test/extension/e2e/format-command-dispatch.test.ts,
+    // which explains (at its top) why it deliberately stops at the wire instead
+    // of asserting document text.
     // Reverting shell.ts's `case "format-command"` leaves "word" unmarked.
     await mount();
     deliver(buildDocument({ docVersion: 1, content: "word\n" }));
