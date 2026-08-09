@@ -1447,8 +1447,9 @@ describe("theme.ts — callout admonition per-type rules", () => {
     // `pnpm a11y:probe`'s `calloutFirstLine` sample, which reads
     // `.cm-line.quoll-callout`'s OWN computed colour, not the span inside it: a stray
     // `color` here would silently desync that probe sample from what is actually on
-    // screen — and the sample is report-only (dev-only, non-CI; only the frontmatter
-    // sample is fatal there), so nothing would flag the drift. Swept over EVERY
+    // screen — and THAT sample is report-only (dev-only, non-CI; the fatal ones are
+    // the frontmatter card and the four A11Y-13 nested-quote samples, which read
+    // spans rather than this line), so nothing would flag the drift. Swept over EVERY
     // callout selector rather than a hand-listed few, so a newly added rule is
     // covered without editing this test.
     // REVERT-CHECK: adding any `color` to any callout rule turns this red.
