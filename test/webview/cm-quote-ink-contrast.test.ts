@@ -680,8 +680,9 @@ describe("quote ink resolves above the AA floor on every shipped palette (A11Y-1
   });
 
   it("carries exactly one t.quote entry, which is the precondition specColor's read assumes", () => {
-    // specColor takes the last matching entry that declares a colour. That models CSS
-    // precedence — but while the tag appears ONCE, that read and the simpler `.find`
+    // specColor takes the last matching entry, colour or not (its docblock explains why
+    // that qualifier is deliberately absent). That models CSS precedence — but while the
+    // tag appears ONCE, that read and the simpler `.find`
     // it replaced are indistinguishable, and a revert to `.find` passes every other
     // assertion in this file while silently measuring the wrong entry the moment a
     // second one appears. So pin the PRECONDITION rather than the mechanism.
