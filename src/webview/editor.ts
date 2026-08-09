@@ -13,6 +13,7 @@ import { Compartment, EditorState, Prec, Transaction } from "@codemirror/state";
 import { EditorView, keymap } from "@codemirror/view";
 import { perfNow, perfRecord } from "../shared/perf.js";
 import {
+  type FormatAction,
   type LintDiagnosticWire,
   MAX_CONTENT_LENGTH,
   PROTOCOL_VERSION,
@@ -41,10 +42,7 @@ import { runFormatDocument } from "./cm/format/format-document-command.js";
 import { frontmatterBlockField, frontmatterRevealKeymap } from "./cm/frontmatter/index.js";
 import { hostDocumentReseed } from "./cm/host-reseed.js";
 import { createImagePasteDrop, imageBlockField, quollResourceBaseUri } from "./cm/image/index.js";
-import {
-  type FormatAction,
-  runFormatCommand as runInlineFormat,
-} from "./cm/inline/inline-formatting-commands.js";
+import { runFormatCommand as runInlineFormat } from "./cm/inline/inline-formatting-commands.js";
 import { quollLinkClickHandler } from "./cm/link-handlers.js";
 import { quollLintFixKeymap } from "./cm/lint/apply-fix.js";
 import { quollLintGutter } from "./cm/lint/gutter.js";

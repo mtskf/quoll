@@ -4,6 +4,7 @@ import {
   buildFormatCommandMessage,
   buildFormatDocumentMessage,
   buildSwitchToTextMessage,
+  FORMAT_ACTIONS,
   isHostToWebview,
   isWebviewToHost,
   MAX_CONTENT_LENGTH,
@@ -1189,9 +1190,27 @@ describe("format-command message", () => {
   });
 
   it("accepts every action", () => {
-    for (const a of ["bold", "italic", "code", "strike", "link"] as const) {
+    // Derived from FORMAT_ACTIONS so the wire validator is checked against the
+    // same list the builder's type comes from — a new action cannot be added to
+    // the union while the validator's Set silently keeps rejecting it.
+    expect(FORMAT_ACTIONS.length).toBeGreaterThan(0);
+    for (const a of FORMAT_ACTIONS) {
       expect(isHostToWebview(buildFormatCommandMessage(a))).toBe(true);
     }
+  });
+
+  it("is exactly the five actions the protocol currently defines", () => {
+    // Deliberately duplicates the literal list (not derived from FORMAT_ACTIONS):
+    // the derived loop above only catches drift in the *consuming* logic
+    // (validator/builder out of sync with the array), not corruption of the
+    // array's own contents (a dropped/typo'd/duplicated action). This is the
+    // one place that pins the actual values.
+    //
+    // Scope note: this pins the TypeScript array only. package.json's keybinding
+    // `args` and the command title enumerate the same actions in plain JSON and
+    // are checked by nothing — see the FORMAT_ACTIONS JSDoc. Do not read this
+    // test's name as covering them.
+    expect(FORMAT_ACTIONS).toEqual(["bold", "italic", "code", "strike", "link"]);
   });
 
   it("rejects an unknown action", () => {

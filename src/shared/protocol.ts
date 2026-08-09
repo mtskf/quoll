@@ -327,28 +327,38 @@ export type ImageWriteResultMessage = Envelope & {
   requestId: string;
 } & ({ ok: true; relativePath: string } | { ok: false; relativePath?: undefined });
 
+/** The inline-formatting action set — the SINGLE SOURCE OF TRUTH for it.
+ *  Everything downstream derives from this array rather than restating it:
+ *  `FormatAction` below, the wire validator's `FORMAT_ACTION_SET`, the host
+ *  command's argument guard + its "one of …" toast
+ *  (`src/extension/commands/format-command.ts`), and the webview's dispatch
+ *  (`src/webview/cm/inline/inline-formatting-commands.ts`). Restating the list
+ *  anywhere is what let an action exist on the wire while `normalizeFormatAction`
+ *  still rejected it — a silent no-op the type-checker could not see.
+ *
+ *  Adding an action here is deliberately NOT free: the webview's `MARKERS`
+ *  record (keyed by `Exclude<FormatAction, "link">`) and the E2E wire mirror
+ *  (`test/extension/e2e/types.ts`, pinned by `AssertEqual<HostToWebview, …>`)
+ *  both fail `pnpm compile` until they account for it. That is the point — the
+ *  sites that need real work are the ones that break. A new action also wants a
+ *  `quoll.format` keybinding entry AND its title-string action list in
+ *  package.json — neither is enforced by any type or test. */
+export const FORMAT_ACTIONS = ["bold", "italic", "code", "strike", "link"] as const;
+export type FormatAction = (typeof FORMAT_ACTIONS)[number];
+
 /** Host→webview instruction to run an inline-formatting command on the
  *  active selection. Sent by the `quoll.format` command (bound to a
  *  keybinding scoped to the active Quoll editor) to the active panel's
  *  webview, which performs the actual CodeMirror transaction — no document
- *  mutation happens on the host side. `action` is an inline union (NOT
- *  imported from the webview) to keep this module import-free. */
+ *  mutation happens on the host side. */
 export type FormatCommandMessage = Envelope & {
   type: "format-command";
-  action: "bold" | "italic" | "code" | "strike" | "link";
+  action: FormatAction;
 };
 
-const FORMAT_COMMAND_ACTIONS: ReadonlySet<string> = new Set([
-  "bold",
-  "italic",
-  "code",
-  "strike",
-  "link",
-]);
+const FORMAT_ACTION_SET: ReadonlySet<string> = new Set(FORMAT_ACTIONS);
 
-export function buildFormatCommandMessage(
-  action: FormatCommandMessage["action"]
-): FormatCommandMessage {
+export function buildFormatCommandMessage(action: FormatAction): FormatCommandMessage {
   return { protocol: PROTOCOL_VERSION, type: "format-command", action };
 }
 
@@ -736,7 +746,7 @@ export function isHostToWebview(value: unknown): value is HostToWebview {
     case "caret-apply":
       return isCaretCoordinate(v.line) && isCaretCoordinate(v.character);
     case "format-command":
-      return typeof v.action === "string" && FORMAT_COMMAND_ACTIONS.has(v.action);
+      return typeof v.action === "string" && FORMAT_ACTION_SET.has(v.action);
     case "format-document":
       return true; // no payload beyond the validated envelope/protocol
     default:
