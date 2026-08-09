@@ -175,10 +175,11 @@ function parseHex(text: string): Rgba | null {
   if (!long) {
     return null;
   }
+  const [, r, g, b] = long;
   return {
-    r: Number.parseInt(long[1], 16),
-    g: Number.parseInt(long[2], 16),
-    b: Number.parseInt(long[3], 16),
+    r: Number.parseInt(r, 16),
+    g: Number.parseInt(g, 16),
+    b: Number.parseInt(b, 16),
     a: 1,
   };
 }
@@ -301,17 +302,11 @@ function resolveColor(expr: string, vars: Vars): Rgba {
   if (text === "transparent") {
     return { r: 0, g: 0, b: 0, a: 0 };
   }
-  const mixed = resolveColorMix(text, vars);
-  if (mixed !== null) {
-    return mixed;
+  const parsed = resolveColorMix(text, vars) ?? parseHex(text) ?? parseRgbFunction(text);
+  if (parsed === null) {
+    throw new Error(`quote-ink contrast: cannot resolve colour ${JSON.stringify(expr)}`);
   }
-  return (
-    parseHex(text) ??
-    parseRgbFunction(text) ??
-    (() => {
-      throw new Error(`quote-ink contrast: cannot resolve colour ${JSON.stringify(expr)}`);
-    })()
-  );
+  return parsed;
 }
 
 /** Composite a possibly-translucent `top` over an opaque `bottom` (source-over). */
@@ -386,7 +381,8 @@ function surfaceFillFor(themeKind: string): string {
         `--quoll-surface-fill in styles.css, found ${blocks.length}`
     );
   }
-  const decl = /--quoll-surface-fill:\s*([^;]+);/.exec(blocks[0][2]);
+  const [, , body] = blocks[0];
+  const decl = /--quoll-surface-fill:\s*([^;]+);/.exec(body);
   if (!decl) {
     throw new Error(`quote-ink contrast: no --quoll-surface-fill value in the "${selector}" block`);
   }
@@ -448,18 +444,18 @@ function varsFor(themeKind: string, palette: unknown = PALETTES[themeKind]): Var
   );
 }
 
-const byTag = (tag: Tag) =>
-  quollHighlightSpec.find((e) => (Array.isArray(e.tag) ? e.tag.includes(tag) : e.tag === tag));
-
 /**
- * A colour off `quollHighlightSpec`, or a loud failure. `String(byTag(…)?.color)`
+ * A colour off `quollHighlightSpec`, or a loud failure. `String(entry?.color)`
  * would turn a removed or renamed entry into the seven-character string
  * `"undefined"`, which does go red — but three steps later, inside the resolver
  * ("cannot resolve colour \"undefined\""), pointing the next reader at CSS parsing
  * instead of at the missing spec entry that actually broke.
  */
 function specColor(tag: Tag, what: string): string {
-  const color = byTag(tag)?.color;
+  const entry = quollHighlightSpec.find((e) =>
+    Array.isArray(e.tag) ? e.tag.includes(tag) : e.tag === tag
+  );
+  const color = entry?.color;
   if (typeof color !== "string") {
     throw new Error(
       `quote-ink contrast: quollHighlightSpec declares no string color for ${what} — the ` +
@@ -544,7 +540,7 @@ function quoteInkRatio(themeKind: string, level: PanelLevel): number {
   return contrastRatio(ink, panel);
 }
 
-const THEME_KINDS = Object.keys(PALETTES) as string[];
+const THEME_KINDS: string[] = Object.keys(PALETTES);
 
 describe("quote ink resolves above the AA floor on every shipped palette (A11Y-14)", () => {
   it("measures the ONE formula both use sites carry", () => {
