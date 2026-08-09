@@ -299,15 +299,16 @@ function resolveColorMix(text: string, vars: Vars): Rgba | null {
     // (Measured, `120%` lowers the ratio in all twelve cells of the four shipped
     // palettes, which makes today's direction a false RED. Two different mechanisms
     // produce it, so read that as what THESE palettes do rather than as a property of
-    // the form. Only the opaque light palette fits the tempting story that term B is
-    // the canvas's maximum-contrast colour: `#000000` on `#ffffff` is 21:1, so
-    // extrapolating away from it does lose contrast. The other three do not — dark's
-    // `#d4d4d4` on `#1e1e1e` is 11.25:1 where white would give 16.68:1, and hc-light's
-    // `#292929` on white is 14.55:1 against black's 21:1. There the direction comes
-    // from premultiplied alpha instead: at `120%` dark depth-1's ink alpha falls
-    // 0.73 → 0.64, and that loss dominates the channel move. Either way the remedy is
-    // the one this file applies everywhere: refuse to report a number for a form CSS
-    // would have resolved differently.)
+    // the form. Two palettes fit the tempting story that term B is the canvas's
+    // maximum-contrast colour — light's `#000000` on `#ffffff` and hc-dark's `#FFFFFF`
+    // on `#000000` are both 21:1, so extrapolating away from term B does lose contrast.
+    // The other two do not: dark's `#d4d4d4` on `#1e1e1e` is 11.25:1 where white would
+    // give 16.67:1, and hc-light's `#292929` on white is 14.55:1 against black's 21:1.
+    // What actually carries the direction on the three alpha-carrying palettes is
+    // premultiplied alpha — at `120%` dark depth-1's ink alpha falls 0.73 → 0.64, and
+    // on hc-dark and hc-light both terms share identical channels, so alpha is the ONLY
+    // thing that moves. Either way the remedy is the one this file applies everywhere:
+    // refuse to report a number for a form CSS would have resolved differently.)
     if (percentage > 100) {
       throw new Error(
         `quote-ink contrast: color-mix ${which} percentage ${percentage}% exceeds 100% ` +
@@ -534,27 +535,35 @@ function carriesTag(entry: { tag: Tag | readonly Tag[] }, tag: Tag): boolean {
  * ("cannot resolve colour \"undefined\""), pointing the next reader at CSS parsing
  * instead of at the missing spec entry that actually broke.
  *
- * The LAST match, not the first: HighlightStyle.define emits its rules in spec order
- * and later entries take CSS precedence (the same rule the order pin below asserts),
- * so where a tag appears twice the EARLIER entry is the one that does not paint.
- * Qualified by "that DECLARES a colour", because carrying the tag and painting a
- * colour are different things: HighlightStyle.define emits one class per entry and
- * @lezer/highlight unions them onto one span, so an orthogonal-styling split like
- * `{ tag: t.quote, fontStyle: "italic" }` is legitimate and contributes no colour at
- * all. An unqualified last-match read would pick it up, find no colour and throw AT
- * MODULE LOAD — before any test runs — blaming a removal that did not happen.
+ * The LAST match, not the first: for a node carrying two DIFFERENT tags (a link inside
+ * a quote), @lezer/highlight concatenates both classes onto one span and
+ * HighlightStyle.define emits its rules in spec order, so the later entry wins the
+ * cascade — the same rule the order pin below asserts.
+ *
+ * Same-tag duplicates are a different mechanism, and a harsher one: tagHighlighter
+ * builds its `tag.id -> class` map LAST-WRITE-WINS (@lezer/highlight/dist/index.js), so
+ * a second `t.quote` entry does not layer onto the first — it REPLACES it, and the
+ * earlier entry's rule is emitted into the stylesheet attached to nothing. An
+ * "orthogonal" split like `{ tag: t.quote, fontStyle: "italic" }` therefore does NOT
+ * merely add italics; it strips the quote colour outright.
+ *
+ * So this read is deliberately NOT qualified by "declares a colour". Under
+ * last-write-wins the last `t.quote` entry is the only one that paints, and if it
+ * declares no colour then nothing paints QUOTE_INK at all — throwing at module load is
+ * the correct report. Qualifying the filter would skip past it to an earlier entry and
+ * measure a colour no span receives, turning a loud failure into twelve confident wrong
+ * numbers: the one failure shape this file's header says it exists to refuse.
  * Spelled `filter(…).at(-1)` rather than `findLast` because this program compiles
  * against `lib: es2022`, where `Array.prototype.findLast` (ES2023) is not declared.
  */
 function specColor(tag: Tag, what: string): string {
-  const entry = quollHighlightSpec
-    .filter((e) => carriesTag(e, tag) && typeof e.color === "string")
-    .at(-1);
+  const entry = quollHighlightSpec.filter((e) => carriesTag(e, tag)).at(-1);
   const color = entry?.color;
   if (typeof color !== "string") {
     throw new Error(
       `quote-ink contrast: quollHighlightSpec declares no string color for ${what} — the ` +
-        "entry was removed or renamed in src/webview/cm/theme.ts"
+        "entry was removed or renamed in src/webview/cm/theme.ts, or a later entry for the " +
+        "same tag silenced it (tagHighlighter's tag->class map is last-write-wins)"
     );
   }
   return color;
@@ -677,11 +686,22 @@ describe("quote ink resolves above the AA floor on every shipped palette (A11Y-1
     // assertion in this file while silently measuring the wrong entry the moment a
     // second one appears. So pin the PRECONDITION rather than the mechanism.
     //
-    // A second t.quote entry deserves a red on its own account: whichever read is in
-    // place, one of the two entries is then painting something nothing here measures.
+    // A second t.quote entry deserves a red on its own account, colour or no colour:
+    // tagHighlighter's `tag.id -> class` map is last-write-wins, so the two do not
+    // compose — the later entry silences the earlier one completely, stripping the quote
+    // colour from every quoted span rather than adding to it. (Restated here on purpose,
+    // though specColor's docblock says the same thing ~140 lines up: this is THE
+    // assertion a reader is tempted to relax — "it's only italics, widen the pin" — and
+    // a guard whose reason lives one cross-reference away gets relaxed by whoever does
+    // not follow it. Deliberate duplication; do not "de-duplicate" it away.)
     // Array-aware for the same reason as the order pin above — a grouped
     // `{ tag: [t.quote, …], … }` is one entry, not zero.
-    expect(quollHighlightSpec.filter((e) => carriesTag(e, t.quote))).toHaveLength(1);
+    expect(
+      quollHighlightSpec.filter((e) => carriesTag(e, t.quote)),
+      "quollHighlightSpec must carry exactly ONE t.quote entry: a second one does not " +
+        "add to the first, it REPLACES it (last-write-wins), stripping the quote colour. " +
+        "Merge the styling into the single entry instead of relaxing this pin"
+    ).toHaveLength(1);
   });
 
   it("actually generated a case per themeKind and panel level", () => {
