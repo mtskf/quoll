@@ -296,11 +296,18 @@ function resolveColorMix(text: string, vars: Vars): Rgba | null {
     // Bounded HERE, at the single place a weight is produced, rather than in each of the
     // branches below: where BOTH percentages are given, the sum guard already forces each
     // into 0..1, so a per-branch check would be dead code exactly there.
-    // (Measured, `120%` lowers the ratio on all four shipped palettes, because term B is
-    // `editor-foreground`, the canvas's maximum-contrast colour by construction, so
-    // extrapolating away from it can only lose contrast. That makes today's direction a
-    // false RED, but the remedy is the same one this file applies everywhere: refuse to
-    // report a number for a form CSS would have resolved differently.)
+    // (Measured, `120%` lowers the ratio in all twelve cells of the four shipped
+    // palettes, which makes today's direction a false RED. Two different mechanisms
+    // produce it, so read that as what THESE palettes do rather than as a property of
+    // the form. Only the opaque light palette fits the tempting story that term B is
+    // the canvas's maximum-contrast colour: `#000000` on `#ffffff` is 21:1, so
+    // extrapolating away from it does lose contrast. The other three do not — dark's
+    // `#d4d4d4` on `#1e1e1e` is 11.25:1 where white would give 16.68:1, and hc-light's
+    // `#292929` on white is 14.55:1 against black's 21:1. There the direction comes
+    // from premultiplied alpha instead: at `120%` dark depth-1's ink alpha falls
+    // 0.73 → 0.64, and that loss dominates the channel move. Either way the remedy is
+    // the one this file applies everywhere: refuse to report a number for a form CSS
+    // would have resolved differently.)
     if (percentage > 100) {
       throw new Error(
         `quote-ink contrast: color-mix ${which} percentage ${percentage}% exceeds 100% ` +
@@ -509,6 +516,18 @@ function varsFor(themeKind: string, palette: unknown = PALETTES[themeKind]): Var
 }
 
 /**
+ * Does a spec entry carry `tag`? Array-aware, because the spec legitimately groups
+ * tags (`{ tag: [t.heading4, t.heading5, t.heading6], … }` in theme.ts). Extracted
+ * rather than written inline at each of its three call sites — `specColor`, the
+ * t.quote-LAST pin and the count pin all depend on reading membership the SAME way,
+ * and a copy that drifted to a bare `===` would go falsely red the day a future
+ * `{ tag: [t.quote, …], … }` ships.
+ */
+function carriesTag(entry: { tag: Tag | readonly Tag[] }, tag: Tag): boolean {
+  return Array.isArray(entry.tag) ? entry.tag.includes(tag) : entry.tag === tag;
+}
+
+/**
  * A colour off `quollHighlightSpec`, or a loud failure. `String(entry?.color)`
  * would turn a removed or renamed entry into the literal string `"undefined"`,
  * which does go red — but three steps later, inside the resolver
@@ -518,12 +537,18 @@ function varsFor(themeKind: string, palette: unknown = PALETTES[themeKind]): Var
  * The LAST match, not the first: HighlightStyle.define emits its rules in spec order
  * and later entries take CSS precedence (the same rule the order pin below asserts),
  * so where a tag appears twice the EARLIER entry is the one that does not paint.
+ * Qualified by "that DECLARES a colour", because carrying the tag and painting a
+ * colour are different things: HighlightStyle.define emits one class per entry and
+ * @lezer/highlight unions them onto one span, so an orthogonal-styling split like
+ * `{ tag: t.quote, fontStyle: "italic" }` is legitimate and contributes no colour at
+ * all. An unqualified last-match read would pick it up, find no colour and throw AT
+ * MODULE LOAD — before any test runs — blaming a removal that did not happen.
  * Spelled `filter(…).at(-1)` rather than `findLast` because this program compiles
  * against `lib: es2022`, where `Array.prototype.findLast` (ES2023) is not declared.
  */
 function specColor(tag: Tag, what: string): string {
   const entry = quollHighlightSpec
-    .filter((e) => (Array.isArray(e.tag) ? e.tag.includes(tag) : e.tag === tag))
+    .filter((e) => carriesTag(e, tag) && typeof e.color === "string")
     .at(-1);
   const color = entry?.color;
   if (typeof color !== "string") {
@@ -631,21 +656,32 @@ describe("quote ink resolves above the AA floor on every shipped palette (A11Y-1
     // 3.99:1, sub-AA, and every generated case below stays green because they only
     // resolve QUOTE_INK.
     //
-    // Read array-aware, the way specColor reads: the spec legitimately carries array
-    // tags (theme.ts groups t.heading4-6 that way), so a future last entry of
+    // Read through carriesTag, the way specColor reads: the spec legitimately carries
+    // array tags (theme.ts groups t.heading4-6 that way), so a future last entry of
     // `{ tag: [t.quote, …], … }` still holds this contract. A bare
     // `expect(…at(-1)?.tag).toBe(t.quote)` would reject it with an "expected [ Tag ]
     // to be Tag" identity failure — a false red whose message invites exactly the edit
     // (move t.quote off the end) that this pin exists to prevent.
-    const lastTag = quollHighlightSpec.at(-1)?.tag;
-    const lastCarriesQuote = Array.isArray(lastTag)
-      ? lastTag.includes(t.quote)
-      : lastTag === t.quote;
+    const last = quollHighlightSpec.at(-1);
     expect(
-      lastCarriesQuote,
+      last !== undefined && carriesTag(last, t.quote),
       "t.quote must stay the LAST quollHighlightSpec entry (later rules win in " +
         "HighlightStyle.define); moving it lets accent tokens repaint quoted links sub-AA"
     ).toBe(true);
+  });
+
+  it("carries exactly one t.quote entry, which is the precondition specColor's read assumes", () => {
+    // specColor takes the last matching entry that declares a colour. That models CSS
+    // precedence — but while the tag appears ONCE, that read and the simpler `.find`
+    // it replaced are indistinguishable, and a revert to `.find` passes every other
+    // assertion in this file while silently measuring the wrong entry the moment a
+    // second one appears. So pin the PRECONDITION rather than the mechanism.
+    //
+    // A second t.quote entry deserves a red on its own account: whichever read is in
+    // place, one of the two entries is then painting something nothing here measures.
+    // Array-aware for the same reason as the order pin above — a grouped
+    // `{ tag: [t.quote, …], … }` is one entry, not zero.
+    expect(quollHighlightSpec.filter((e) => carriesTag(e, t.quote))).toHaveLength(1);
   });
 
   it("actually generated a case per themeKind and panel level", () => {
@@ -685,9 +721,11 @@ describe("the AA check is non-vacuous", () => {
     //    ratio under the floor, so the green cases above are measuring the mix and not
     //    something else that happens to clear 4.5;
     //  • depth-1's mix is READ from the theme spec, not restated in this file — the
-    //    injection reaches the ratio only through quoteInkRatio's own lookup, so a
-    //    level array rebuilt as a literal here would keep measuring the `90%` fallback
-    //    and leave the first assertion green.
+    //    injection reaches the ratio only through quoteInkRatio's own lookup, so an
+    //    edit that rebuilt the level as a literal (the shape this file used to carry)
+    //    would ignore the injected spec, keep measuring the `90%` fallback at 5.24 and
+    //    turn this assertion RED. That is the point: the restatement is only ever
+    //    invisible against the SHIPPED spec.
     //
     // Asserting the RATIO rather than the shape of a level object is what makes the
     // second contract stick — a shape assertion cannot, for the reason recorded on
