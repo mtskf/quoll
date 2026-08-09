@@ -72,21 +72,25 @@ const settled = (over: Partial<Extract<HostSessionEvent, { type: "applyEditSettl
     ...over,
   }) as const;
 
+// The ack Document, located by TYPE rather than by index. Tests that assert the
+// reseed's STAMPED IDENTITY (version + epoch pair) care about the effect, not
+// its position — the non-ok ordering is a separate contract, named by
+// `expectToastBeforeReseed`.
+const reseedIn = (effects: readonly HostSessionEffect[]) =>
+  effects.find((e) => e.type === "postDocument");
+
 // The non-ok settlement ORDER contract, asserted by INTENT rather than by the
-// literal array shape above: a failed save emits its `showError` BEFORE the ack
+// literal array shape: a failed save emits its `showError` BEFORE the ack
 // `postDocument`. The reseed is the effect most likely to unwind the executor's
 // effect loop — in production `buildSeedDocument` bottoms out in the same
 // canonical-read seam whose throw produces a `rejected` outcome — so a toast
 // ordered after it would be lost exactly when the user most needs it. Pinning
-// the relative index (not just the array) makes a reorder fail with the reason
-// named instead of as an opaque array diff.
-// The ack Document, located by TYPE rather than by index. Tests that assert the
-// reseed's STAMPED IDENTITY (version + epoch pair) care about the effect, not
-// its position — the non-ok ordering is a separate contract, pinned in exactly
-// one place by `expectToastBeforeReseed`.
-const reseedIn = (effects: readonly HostSessionEffect[]) =>
-  effects.find((e) => e.type === "postDocument");
-
+// the relative index alongside the literal arrays makes a reorder fail with the
+// reason named instead of as an opaque array diff.
+// ⚠️ CALL THIS BEFORE the whole-array/positional assertions at each site. Those
+// assertions also encode the order, so vitest aborts the test on their diff
+// first and this helper never runs — leaving exactly the opaque failure it
+// exists to replace.
 const expectToastBeforeReseed = (effects: readonly HostSessionEffect[]): void => {
   const toast = effects.findIndex((e) => e.type === "showError");
   const reseed = effects.findIndex((e) => e.type === "postDocument");
@@ -281,6 +285,7 @@ describe("host-session-core: applyEditSettled", () => {
   it("refused → release lock, logWarn(heldBase) + showError(fsPath) + postDocument", () => {
     const r = core.transition(locked, settled({ outcome: { kind: "refused" } }));
     expect(r.state.pendingApplyBaseVersion).toBeNull();
+    expectToastBeforeReseed(r.effects);
     expect(r.effects[0]).toMatchObject({
       type: "logWarn",
       detail: { uri: ctx.uriString, baseDocVersion: 1 },
@@ -290,7 +295,6 @@ describe("host-session-core: applyEditSettled", () => {
       message: `Quoll could not save ${ctx.fsPath}. Reload the file or try again.`,
     });
     expect(r.effects[2]).toEqual(pDoc(1));
-    expectToastBeforeReseed(r.effects);
   });
   it.each([
     "constructThrew",
@@ -299,8 +303,8 @@ describe("host-session-core: applyEditSettled", () => {
   ] as const)("%s → release lock, showError(message) + postDocument", (kind) => {
     const r = core.transition(locked, settled({ outcome: { kind, message: "boom" } }));
     expect(r.state.pendingApplyBaseVersion).toBeNull();
-    expect(r.effects).toEqual([{ type: "showError", message: "Failed to save: boom" }, pDoc(1)]);
     expectToastBeforeReseed(r.effects);
+    expect(r.effects).toEqual([{ type: "showError", message: "Failed to save: boom" }, pDoc(1)]);
   });
   it("settle after dispose → no effects, state unchanged", () => {
     const disposed = base({ disposed: true, pendingApplyBaseVersion: null });
@@ -732,11 +736,11 @@ describe("host-session-core: traces", () => {
       settled({ outcome: { kind: "constructThrew", message: "lineAt blew up" } })
     );
     expect(batches[0]).toEqual([{ type: "applyEdit", content: "good", baseDocVersion: 1 }]);
+    expectToastBeforeReseed(batches[1]);
     expect(batches[1]).toEqual([
       { type: "showError", message: "Failed to save: lineAt blew up" },
       pDoc(1),
     ]);
-    expectToastBeforeReseed(batches[1]);
     expect(state.pendingApplyBaseVersion).toBeNull();
   });
 

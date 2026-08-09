@@ -261,13 +261,18 @@ export function createEffectExecutor(deps: EffectExecutorDeps): EffectExecutor {
 
   // Best-effort error → message for a settlement toast. Guarded because a
   // rejection value can be an exotic object whose `message` getter or `toString`
-  // throws, and that throw would escape the `.then` and strand the write lock —
-  // the very failure this module's settlement guards exist to prevent. This is
-  // NOT a blanket "both arms are non-throwing" guarantee: `toApplyEditOutcome`
-  // and the fulfilment arm's `deps.dispatch` are deliberately left unwrapped
-  // (swallowing a reducer bug would hide it). The rejection arm's `dispatch` IS
-  // wrapped, but only so a throwing settlement effect is logged instead of
-  // becoming an unhandled rejection — see that arm.
+  // throws, and this runs while BUILDING the settlement event. An unguarded
+  // throw here would abort that build, so `applyEditSettled` — the event that
+  // releases the write lock — would never be dispatched: the very failure this
+  // module's settlement guards exist to prevent. (It is evaluated inside the
+  // rejection arm's `try`, so such a throw would be logged rather than escaping
+  // as an unhandled rejection — but a log is not a released lock, which is why
+  // the guard belongs HERE, at the source, and not on the catch.) This is NOT a
+  // blanket "both arms are non-throwing" guarantee: `toApplyEditOutcome` and the
+  // fulfilment arm's `deps.dispatch` are deliberately left unwrapped (swallowing
+  // a reducer bug would hide it). The rejection arm's `dispatch` IS wrapped, but
+  // only so a throwing settlement EFFECT is logged instead of becoming an
+  // unhandled rejection — see that arm.
   const errorMessage = (err: unknown): string => {
     try {
       return err instanceof Error ? err.message : String(err);
