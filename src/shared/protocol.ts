@@ -358,9 +358,7 @@ export type FormatCommandMessage = Envelope & {
 
 const FORMAT_ACTION_SET: ReadonlySet<string> = new Set(FORMAT_ACTIONS);
 
-export function buildFormatCommandMessage(
-  action: FormatCommandMessage["action"]
-): FormatCommandMessage {
+export function buildFormatCommandMessage(action: FormatAction): FormatCommandMessage {
   return { protocol: PROTOCOL_VERSION, type: "format-command", action };
 }
 
