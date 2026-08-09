@@ -153,6 +153,38 @@ export function createRevertRescueWiring(deps: RevertRescueWiringDeps): RevertRe
     apply: (edit) => workspace.applyEdit(edit as WorkspaceEdit),
   };
 
+  // Every dep the restore settlement invokes is itself a candidate throw source
+  // (showError → a window API, dispatchDocumentChanged → the reducer, onFailure →
+  // a reseed), and the settlement runs fire-and-forget — at dispose, while the
+  // panel and document are tearing down. So each call runs INDIVIDUALLY guarded:
+  // one throwing dep must neither suppress the others nor escape as an unhandled
+  // rejection (which is exactly how a failed restore starts reading as a success).
+  const runGuarded = (what: string, run: () => void): void => {
+    try {
+      run();
+    } catch (err) {
+      console.error(`[quoll] revert-rescue: ${what} threw during restore settlement`, err);
+    }
+  };
+
+  const errorText = (err: unknown): string => (err instanceof Error ? err.message : String(err));
+
+  // Terminal handling for a restore that did NOT land — shared by the failure
+  // family and the rejection arm. Toast first (the user-facing signal is the one
+  // guarantee that must survive), then let the ALIVE path reseed via `onFailure`
+  // (the dispose path passes none — the panel is gone, nothing to reseed).
+  const reportRestoreFailure = (detail: string | undefined, onFailure?: () => void): void => {
+    const suffix = detail ? `: ${detail}` : "";
+    runGuarded("showError", () =>
+      deps.showError(
+        `Quoll could not restore your unsaved changes after closing the editor${suffix}`
+      )
+    );
+    if (onFailure) {
+      runGuarded("onFailure", onFailure);
+    }
+  };
+
   // Restore reverted-away dirty bytes through the verified write executor.
   // Shared by the dispose-time rescue and the alive-panel (text-tab-close)
   // rescue. Per-outcome policy (Plan S6, finding #8), mapping the tagged outcome
@@ -171,60 +203,78 @@ export function createRevertRescueWiring(deps: RevertRescueWiringDeps): RevertRe
   //                none — the panel is gone, nothing to reseed). The rescue has
   //                no per-kind handling to preserve, so the four collapse into one
   //                family (the message carries any error detail for triage).
+  //   - the pipeline REJECTING outright (the `.catch` arm) → same treatment as the
+  //                failure family: the restore did not land. See the arm's comment.
   const applyRestoreEdit = (content: string, onFailure?: () => void): void => {
-    void executeDocumentWrite(writeAdapter, content).then((outcome) => {
-      switch (outcome.tag) {
-        case "applied":
-          return;
-        case "diverged":
-          // applyEdit landed but the document holds OTHER bytes. Alive: converge
-          // by resyncing the webview to the authoritative doc (silent — a
-          // divergence with an ok apply is NOT a save failure; it is often a
-          // legitimate successor edit that landed between the RPC settling and
-          // this `.then`, and toasting would false-alarm normal typing).
-          //
-          // Dispose path (isDisposed): log only — NO toast. Deliberate, and it is
-          // NOT the silent-loss the failure family is: the apply DID land bytes
-          // into a SURVIVING, on-screen, undoable text editor (the doc outlives
-          // the panel — that is the whole reason the rescue ran, and decideOnDispose
-          // gates the rescue on hasSurvivingEditor), so the state is visible +
-          // undoable per the dispose-guard philosophy. Only a restore that did NOT
-          // land (refused/threw → reverted disk bytes = real loss) toasts on dispose.
-          //
-          // DECISION (Plan S6 review residual, PR #264 — Codex HIGH/97 and Fable
-          // both acknowledged as plan-conformant): a user-facing signal on this
-          // path is DELIBERATELY DECLINED, log-only is the accepted terminal state.
-          // The dominant diverged cause is a legitimate successor edit landing in
-          // the surviving editor between the RPC settling and this `.then`, so a
-          // toast/warning would false-alarm normal typing — and there is no
-          // recoverable loss it could avert: per plan I5 this layer is bounded
-          // post-hoc DETECTION + convergence, NOT prevention, and on dispose there
-          // is no webview left to converge. The revert-rescue-wiring dispose-path
-          // pin asserts this stays warn-only (no toast, no resync).
-          console.warn(
-            "[quoll] revert-rescue: restore diverged after apply (racing successor edit or stale-offset splice); converging via resync"
-          );
-          if (!deps.isDisposed()) {
-            deps.dispatchDocumentChanged(outcome.settledVersion);
+    void executeDocumentWrite(writeAdapter, content)
+      .then((outcome) => {
+        switch (outcome.tag) {
+          case "applied":
+            return;
+          case "diverged":
+            // applyEdit landed but the document holds OTHER bytes. Alive: converge
+            // by resyncing the webview to the authoritative doc (silent — a
+            // divergence with an ok apply is NOT a save failure; it is often a
+            // legitimate successor edit that landed between the RPC settling and
+            // this `.then`, and toasting would false-alarm normal typing).
+            //
+            // Dispose path (isDisposed): log only — NO toast. Deliberate, and it is
+            // NOT the silent-loss the failure family is: the apply DID land bytes
+            // into a SURVIVING, on-screen, undoable text editor (the doc outlives
+            // the panel — that is the whole reason the rescue ran, and decideOnDispose
+            // gates the rescue on hasSurvivingEditor), so the state is visible +
+            // undoable per the dispose-guard philosophy. Only a restore that did NOT
+            // land (refused/threw → reverted disk bytes = real loss) toasts on dispose.
+            //
+            // DECISION (Plan S6 review residual, PR #264 — Codex HIGH/97 and Fable
+            // both acknowledged as plan-conformant): a user-facing signal on this
+            // path is DELIBERATELY DECLINED, log-only is the accepted terminal state.
+            // The dominant diverged cause is a legitimate successor edit landing in
+            // the surviving editor between the RPC settling and this `.then`, so a
+            // toast/warning would false-alarm normal typing — and there is no
+            // recoverable loss it could avert: per plan I5 this layer is bounded
+            // post-hoc DETECTION + convergence, NOT prevention, and on dispose there
+            // is no webview left to converge. The revert-rescue-wiring dispose-path
+            // pin asserts this stays warn-only (no toast, no resync).
+            console.warn(
+              "[quoll] revert-rescue: restore diverged after apply (racing successor edit or stale-offset splice); converging via resync"
+            );
+            if (!deps.isDisposed()) {
+              // Guarded: a throwing reducer dispatch must not fall through to the
+              // `.catch` below, which would toast "could not restore" for an apply
+              // that DID land — contradicting the log-only diverged decision above.
+              runGuarded("documentChanged dispatch", () =>
+                deps.dispatchDocumentChanged(outcome.settledVersion)
+              );
+            }
+            return;
+          case "applyRefused":
+          case "applyThrew":
+          case "applyRejected":
+          case "buildThrew":
+            reportRestoreFailure(outcome.message, onFailure);
+            return;
+          default: {
+            const _exhaustive: never = outcome.tag;
+            throw new Error(`[quoll] unhandled DocumentWriteTag: ${String(_exhaustive)}`);
           }
-          return;
-        case "applyRefused":
-        case "applyThrew":
-        case "applyRejected":
-        case "buildThrew": {
-          const detail = outcome.message ? `: ${outcome.message}` : "";
-          deps.showError(
-            `Quoll could not restore your unsaved changes after closing the editor${detail}`
-          );
-          onFailure?.();
-          return;
         }
-        default: {
-          const _exhaustive: never = outcome.tag;
-          throw new Error(`[quoll] unhandled DocumentWriteTag: ${String(_exhaustive)}`);
-        }
-      }
-    });
+      })
+      .catch((err: unknown) => {
+        // REJECTION ARM. This pipeline is fire-and-forget on the data-loss rescue
+        // path and, on dispose, runs while the document is tearing down — so a
+        // rejection is reachable: `executeDocumentWrite`'s pre-apply `readText` /
+        // `canonicalize` and its settle-time `readCanonical` / `readVersion` run
+        // OUTSIDE its own try blocks (that module's documented assumption that
+        // they do not throw holds for a LIVE document, not a disposing one), plus
+        // anything the handler above rethrows. Without this arm such a throw would
+        // be an unhandled rejection: no toast, no reseed, and the user reads a
+        // failed restore as a successful one — the exact silent loss this rescue
+        // exists to prevent. Treat it as the failure family does: the restore did
+        // not land, so log, toast, and let the alive path reseed via onFailure.
+        console.error("[quoll] revert-rescue: restore pipeline rejected before settling", err);
+        reportRestoreFailure(errorText(err), onFailure);
+      });
   };
 
   // Alive-panel analogue of the dispose-time revert-rescue. Called from BOTH
