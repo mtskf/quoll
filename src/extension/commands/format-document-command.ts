@@ -16,6 +16,7 @@ export function setActiveDocFormatPoster(poster: DocFormatPoster): void {
 export function clearActiveDocFormatPoster(poster: DocFormatPoster): void {
   registry.clear(poster);
 }
+
 /** Command body, exported as the unit-test seam. Palette-only and unscoped, so
  *  it is reachable with no Quoll panel active; the optional call this replaces
  *  turned that case into a silent no-op. */

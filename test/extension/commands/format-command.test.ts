@@ -9,6 +9,15 @@ import {
   setActiveFormatPoster,
 } from "../../../src/extension/commands/format-command.js";
 
+/** Hand the module-singleton registry back empty, whatever the test left in it
+ *  (the identity guard means only the currently-active poster can clear it). */
+function releaseActivePoster(): void {
+  const active = __getActivePosterForTest();
+  if (active !== null) {
+    clearActiveFormatPoster(active);
+  }
+}
+
 describe("normalizeFormatAction", () => {
   it("accepts the five known actions", () => {
     for (const a of ["bold", "italic", "code", "strike", "link"]) {
@@ -26,12 +35,7 @@ describe("active poster tracker", () => {
   // Every describe owns its own cleanup of the module-singleton registry, so no
   // block's result depends on where it sits in the file (the identity-guard test
   // below deliberately leaves `b` set).
-  afterEach(() => {
-    const active = __getActivePosterForTest();
-    if (active !== null) {
-      clearActiveFormatPoster(active);
-    }
-  });
+  afterEach(releaseActivePoster);
 
   it("set then clear (same identity) removes it", () => {
     const p = vi.fn();
@@ -59,10 +63,7 @@ describe("runFormatCommand — the arms that used to be silent", () => {
   });
 
   afterEach(() => {
-    const active = __getActivePosterForTest();
-    if (active !== null) {
-      clearActiveFormatPoster(active);
-    }
+    releaseActivePoster();
     vi.restoreAllMocks();
   });
 

@@ -43,8 +43,8 @@ const KNOWN_ACTIONS = [
   "link",
 ] as const satisfies readonly FormatAction[];
 
-function isFormatAction(value: string): value is FormatAction {
-  return (KNOWN_ACTIONS as readonly string[]).includes(value);
+function isFormatAction(value: unknown): value is FormatAction {
+  return typeof value === "string" && (KNOWN_ACTIONS as readonly string[]).includes(value);
 }
 
 // Identity-guarded single-slot latch (see active-poster.ts): a panel losing
@@ -60,7 +60,7 @@ export function clearActiveFormatPoster(poster: FormatPoster): void {
 }
 
 export function normalizeFormatAction(arg: unknown): FormatAction | null {
-  return typeof arg === "string" && isFormatAction(arg) ? arg : null;
+  return isFormatAction(arg) ? arg : null;
 }
 
 /** Command body, exported as the unit-test seam (the registration itself needs
