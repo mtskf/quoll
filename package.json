@@ -27,7 +27,7 @@
     "gfm",
     "MEO"
   ],
-  "version": "0.1.67",
+  "version": "0.1.68",
   "publisher": "mtskf",
   "type": "module",
   "engines": {
@@ -97,6 +97,12 @@
           "command": "quoll.reopenInTextEditor",
           "group": "navigation",
           "when": "activeCustomEditorId == 'quoll.editMarkdown'"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "quoll.format",
+          "when": "false"
         }
       ]
     },
