@@ -6,6 +6,7 @@ import { describe, expect, it } from "vitest";
 import {
   createDrainingDispatcher,
   createHostSessionCore,
+  type HostSessionEffect,
   type HostSessionEvent,
   type HostSessionState,
   isWriteLockHeld,
@@ -70,6 +71,33 @@ const settled = (over: Partial<Extract<HostSessionEvent, { type: "applyEditSettl
     preApplyContent: "cur",
     ...over,
   }) as const;
+
+// The ack Document, located by TYPE rather than by index. Tests that assert the
+// reseed's STAMPED IDENTITY (version + epoch pair) care about the effect, not
+// its position — the non-ok ordering is a separate contract, named by
+// `expectToastBeforeReseed`.
+const reseedIn = (effects: readonly HostSessionEffect[]) =>
+  effects.find((e) => e.type === "postDocument");
+
+// The non-ok settlement ORDER contract, asserted by INTENT rather than by the
+// literal array shape: a failed save emits its `showError` BEFORE the ack
+// `postDocument`. The reseed is the effect most likely to unwind the executor's
+// effect loop — in production `buildSeedDocument` bottoms out in the same
+// canonical-read seam whose throw produces a `rejected` outcome — so a toast
+// ordered after it would be lost exactly when the user most needs it. Pinning
+// the relative index alongside the literal arrays makes a reorder fail with the
+// reason named instead of as an opaque array diff.
+// ⚠️ CALL THIS BEFORE the whole-array/positional assertions at each site. Those
+// assertions also encode the order, so vitest aborts the test on their diff
+// first and this helper never runs — leaving exactly the opaque failure it
+// exists to replace.
+const expectToastBeforeReseed = (effects: readonly HostSessionEffect[]): void => {
+  const toast = effects.findIndex((e) => e.type === "showError");
+  const reseed = effects.findIndex((e) => e.type === "postDocument");
+  expect(toast).toBeGreaterThanOrEqual(0);
+  expect(reseed).toBeGreaterThanOrEqual(0);
+  expect(toast).toBeLessThan(reseed);
+};
 
 describe("host-session-core: ready/seed", () => {
   it("ready (no lock, no rejection) → postDocument(v1), rejection none", () => {
@@ -254,27 +282,29 @@ describe("host-session-core: applyEditSettled", () => {
     expect(r.state.rejection).toEqual({ kind: "none" });
     expect(r.effects).toEqual([pDoc(2)]);
   });
-  it("refused → release lock, postDocument + logWarn(heldBase) + showError(fsPath)", () => {
+  it("refused → release lock, logWarn(heldBase) + showError(fsPath) + postDocument", () => {
     const r = core.transition(locked, settled({ outcome: { kind: "refused" } }));
     expect(r.state.pendingApplyBaseVersion).toBeNull();
-    expect(r.effects[0]).toEqual(pDoc(1));
-    expect(r.effects[1]).toMatchObject({
+    expectToastBeforeReseed(r.effects);
+    expect(r.effects[0]).toMatchObject({
       type: "logWarn",
       detail: { uri: ctx.uriString, baseDocVersion: 1 },
     });
-    expect(r.effects[2]).toEqual({
+    expect(r.effects[1]).toEqual({
       type: "showError",
       message: `Quoll could not save ${ctx.fsPath}. Reload the file or try again.`,
     });
+    expect(r.effects[2]).toEqual(pDoc(1));
   });
   it.each([
     "constructThrew",
     "applyThrew",
     "rejected",
-  ] as const)("%s → release lock, postDocument + showError(message)", (kind) => {
+  ] as const)("%s → release lock, showError(message) + postDocument", (kind) => {
     const r = core.transition(locked, settled({ outcome: { kind, message: "boom" } }));
     expect(r.state.pendingApplyBaseVersion).toBeNull();
-    expect(r.effects).toEqual([pDoc(1), { type: "showError", message: "Failed to save: boom" }]);
+    expectToastBeforeReseed(r.effects);
+    expect(r.effects).toEqual([{ type: "showError", message: "Failed to save: boom" }, pDoc(1)]);
   });
   it("settle after dispose → no effects, state unchanged", () => {
     const disposed = base({ disposed: true, pendingApplyBaseVersion: null });
@@ -352,7 +382,7 @@ describe("host-session-core: applyEditSettled drain", () => {
       settled({ outcome: { kind: "refused" }, currentContent: "edit1", preApplyContent: "edit1" })
     );
     expect(r.state.pendingEdit).toBeNull();
-    expect(r.effects[0]).toEqual(pDoc(1));
+    expect(reseedIn(r.effects)).toEqual(pDoc(1));
     expect(r.effects.some((e) => e.type === "showError")).toBe(true);
     expect(r.effects.some((e) => e.type === "applyEdit")).toBe(false);
   });
@@ -683,7 +713,7 @@ describe("host-session-core: traces", () => {
     // The refused arm reseeds from released.lastAppliedDocVersion — which MUST be
     // the version the deferred documentChanged recorded (2), not the pre-apply 1.
     // A regression that drops the version update in the deferred path reddens here.
-    expect(batches[2][0]).toEqual(pDoc(2));
+    expect(reseedIn(batches[2])).toEqual(pDoc(2));
     expect(state.pendingApplyBaseVersion).toBeNull();
     expect(state.lastAppliedDocVersion).toBe(2);
   });
@@ -706,9 +736,10 @@ describe("host-session-core: traces", () => {
       settled({ outcome: { kind: "constructThrew", message: "lineAt blew up" } })
     );
     expect(batches[0]).toEqual([{ type: "applyEdit", content: "good", baseDocVersion: 1 }]);
+    expectToastBeforeReseed(batches[1]);
     expect(batches[1]).toEqual([
-      pDoc(1),
       { type: "showError", message: "Failed to save: lineAt blew up" },
+      pDoc(1),
     ]);
     expect(state.pendingApplyBaseVersion).toBeNull();
   });
@@ -1021,7 +1052,7 @@ describe("host-session-core: externalEpoch (S3a)", () => {
       })
     );
     expect(r.state.externalEpoch).toBe(0);
-    expect(r.effects[0]).toEqual(pDoc(1));
+    expect(reseedIn(r.effects)).toEqual(pDoc(1));
   });
 
   it("ok-but-mismatch settlement (external won under the lock) → epoch++", () => {
@@ -1053,7 +1084,7 @@ describe("host-session-core: externalEpoch (S3a)", () => {
       })
     );
     expect(r.state.externalEpoch).toBe(0);
-    expect(r.effects[0]).toEqual(pDoc(1));
+    expect(reseedIn(r.effects)).toEqual(pDoc(1));
   });
 
   it("non-ok settlement with foreign bytes (doc diverged from the pre-apply snapshot) → epoch++", () => {
@@ -1073,7 +1104,7 @@ describe("host-session-core: externalEpoch (S3a)", () => {
     // A foreign edit raced the FAILED apply — comparing against inFlightContent
     // would have MISSED this (the apply never landed "target").
     expect(r.state.externalEpoch).toBe(1);
-    expect(r.effects[0]).toEqual(pDoc(1, 1));
+    expect(reseedIn(r.effects)).toEqual(pDoc(1, 1));
   });
 
   // --- S6: divergedAfterApply annotation (finding #7) ---
