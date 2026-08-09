@@ -70,14 +70,17 @@ export function normalizeFormatAction(arg: unknown): FormatAction | null {
 export function runFormatCommand(arg: unknown): void {
   const action = normalizeFormatAction(arg);
   if (action === null) {
-    // Two different mistakes, two different fixes: a hand-written keybinding
-    // with no `args` at all vs. one carrying a misspelt/unsupported action.
+    // Split on what the user can act on, which is whether they typed an action
+    // at all: a misspelt one gets quoted back, while anything that is not a
+    // string (`args` omitted, or hand-edited to null / a number / a nested
+    // object) is the same "you still owe us an action" mistake — and naming
+    // those with String() would only ever print "[object Object]".
     // (The Command Palette can reach neither — package.json hides this command
     // there, since a palette invocation can never supply an argument.)
     const detail =
-      arg === undefined
-        ? "this command needs an action argument"
-        : `"${String(arg)}" is not a recognized action`;
+      typeof arg === "string"
+        ? `"${arg}" is not a recognized action`
+        : "this command needs a string action argument";
     showSafely(
       window.showInformationMessage(`Quoll: ${detail} — one of ${KNOWN_ACTIONS.join(", ")}.`),
       "showInformationMessage"

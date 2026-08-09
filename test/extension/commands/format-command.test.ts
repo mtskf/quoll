@@ -88,8 +88,28 @@ describe("runFormatCommand — the arms that used to be silent", () => {
     runFormatCommand(undefined);
 
     expect(info).toHaveBeenCalledTimes(1);
-    expect(String(info.mock.calls[0]?.[0])).toMatch(/needs an action argument/);
+    expect(String(info.mock.calls[0]?.[0])).toMatch(/needs a string action argument/);
     expect(String(info.mock.calls[0]?.[0])).toMatch(/bold/);
+  });
+
+  it.each([
+    ["null", null],
+    ["a nested object", { action: "bold" }],
+    ["a number", 42],
+  ])("treats %s in `args` as a missing action, never as a misspelt one", (_label, arg) => {
+    // A hand-edited keybindings.json can put anything in `args`. Routing these
+    // through the misspelt-action wording used to print the value with String(),
+    // so an object arrived as the useless "[object Object]".
+    setActiveFormatPoster(vi.fn());
+    const info = vi.spyOn(window, "showInformationMessage");
+
+    runFormatCommand(arg);
+
+    expect(info).toHaveBeenCalledTimes(1);
+    const message = String(info.mock.calls[0]?.[0]);
+    expect(message).toMatch(/needs a string action argument/);
+    expect(message).not.toMatch(/is not a recognized action/);
+    expect(message).not.toMatch(/object Object/);
   });
 
   it("names the offending value when the argument is not a known action", () => {
