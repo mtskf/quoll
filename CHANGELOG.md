@@ -2,6 +2,12 @@
 
 All notable changes to Quoll are documented here.
 
+## 0.1.67 — 2026-08-09
+
+### Fixed
+
+- Quoted text in the light theme now meets accessibility contrast guidelines, including nested blockquotes and callouts that were still too faint at deeper nesting levels.
+
 ## 0.1.66 — 2026-08-05
 
 ### Added
