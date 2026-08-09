@@ -194,13 +194,22 @@ export const quollCmLinePaddingTheme = EditorView.theme(cmLinePaddingThemeSpec);
 // bring its own ink step (pinned by cm-decoration-block-style.test.ts).
 //
 // MEASURED, not derived — `pnpm a11y:probe` over the four shipped palettes, on the
-// SPAN the reader actually sees (light): depth-2 4.49 → PENDING, depth-3
-// 3.81 → PENDING; dark PENDING, hc-light PENDING, hc-dark PENDING. The direction of
-// travel is toward `editor-foreground`, which is LIGHT in dark/hc-dark and DARK in
-// hc-light, so each step is EXPECTED to help in every kind — but `color-mix()` is
-// not linear in contrast ratio and each palette sits differently against its own
-// surface, so treat these as the numbers that were measured, NOT as a proof that a
-// future palette rises. Re-run the probe when a palette changes.
+// SPAN the reader actually sees. depth-2 / depth-3, before → after:
+//   light    4.49 → 5.06   3.81 → 4.85     (the AA failure this closes)
+//   dark     5.48 → 5.74   4.75 → 5.18
+//   hc-light 5.66 → 6.03   5.25 → 5.91
+//   hc-dark 10.24 → 10.79  8.95 → 9.83
+// The depth-1 base is untouched by construction and measured unchanged (5.24 /
+// 6.16 / 6.06 / 10.89). A nested line INSIDE a callout measures identical to a
+// plain one at the same depth, which is the callout rules adding no fill and no
+// colour of their own (pinned by cm-decoration-block-style.test.ts).
+//
+// The direction of travel is toward `editor-foreground`, which is LIGHT in
+// dark/hc-dark and DARK in hc-light, so each step is EXPECTED to help in every
+// kind — but `color-mix()` is not linear in contrast ratio and each palette sits
+// differently against its own surface, so treat the table as the numbers that were
+// measured, NOT as a proof that a future palette rises. Re-run the probe when a
+// palette changes.
 //
 // STILL do NOT close a nested-contrast gap by retuning the depth FILL mixes:
 // `.cm-line.quoll-blockquote-depth-2/-3` apply only on NESTED lines
