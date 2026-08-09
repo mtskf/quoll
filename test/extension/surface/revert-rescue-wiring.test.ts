@@ -10,13 +10,20 @@ const flush = (): Promise<void> => new Promise((resolve) => setImmediate(resolve
 // A minimal fake TextDocument: getText returns the current mutable buffer, version
 // is a settable counter, positionAt returns a stub position (offsets are not
 // asserted — the WorkspaceEdit build is exercised by e2e). isDirty is settable.
+// `getTextThrows` models the document tearing down mid-restore (the dispose-time
+// rescue's real hazard): every subsequent read — including the executor's
+// settle-time canonical read — throws, rejecting the restore pipeline.
 function makeDoc() {
   return {
     text: "DISK",
     version: 1,
     isDirty: false,
+    getTextThrows: false,
     uri: { scheme: "file", toString: () => "file:///doc.md" },
     getText(): string {
+      if (this.getTextThrows) {
+        throw new Error("document is gone");
+      }
       return this.text;
     },
     positionAt(offset: number): unknown {
@@ -35,6 +42,16 @@ type Wired = {
   survivingFlag: { value: boolean };
   dispatched: number[];
   showErrors: string[];
+  /** Make the injected showError throw AFTER recording (models a window API that
+   *  fails while the host tears down) — used to pin that each settlement dep is
+   *  guarded individually, so a throwing toast never swallows the reseed. */
+  showErrorThrows: { value: boolean };
+  /** Make the injected dispatchDocumentChanged throw AFTER recording (models a
+   *  reducer dispatch that fails while the host tears down) — used to pin that
+   *  BOTH the diverged-arm dispatch and a throwing onFailure closure (which
+   *  itself calls dispatchDocumentChanged) stay individually guarded, same
+   *  pattern as showErrorThrows above. */
+  dispatchThrows: { value: boolean };
 };
 
 function wire(): Wired {
@@ -44,6 +61,8 @@ function wire(): Wired {
   const survivingFlag = { value: true };
   const dispatched: number[] = [];
   const showErrors: string[] = [];
+  const showErrorThrows = { value: false };
+  const dispatchThrows = { value: false };
   let onDocChange: (() => void) | null = null;
   let onTabClose: (() => void) | null = null;
 
@@ -53,8 +72,18 @@ function wire(): Wired {
     isWriteLockHeld: () => writeLock.held,
     canWrite: () => true,
     hasSurvivingEditor: () => survivingFlag.value,
-    dispatchDocumentChanged: (v) => dispatched.push(v),
-    showError: (m) => showErrors.push(m),
+    dispatchDocumentChanged: (v) => {
+      dispatched.push(v);
+      if (dispatchThrows.value) {
+        throw new Error("dispatch failed");
+      }
+    },
+    showError: (m) => {
+      showErrors.push(m);
+      if (showErrorThrows.value) {
+        throw new Error("toast failed");
+      }
+    },
     subscribeDocumentChange: (cb) => {
       onDocChange = cb;
       return () => {
@@ -79,6 +108,8 @@ function wire(): Wired {
     survivingFlag,
     dispatched,
     showErrors,
+    showErrorThrows,
+    dispatchThrows,
   };
 }
 
@@ -91,6 +122,17 @@ function armRevert(t: Wired): void {
   t.doc.text = "DISK";
   t.doc.isDirty = false;
   t.fireDocChange();
+}
+
+// Mock applyEdit so the RPC resolves OK but the document dies while it is in
+// flight: every later read — including the executor's settle-time canonical read,
+// which runs OUTSIDE its try blocks — throws, so the restore pipeline REJECTS.
+// The shared arrangement for the rejection-arm tests.
+function mockApplyThenKillDocument(t: Wired): void {
+  vi.spyOn(workspace, "applyEdit").mockImplementation(async () => {
+    t.doc.getTextThrows = true;
+    return true;
+  });
 }
 
 describe("createRevertRescueWiring — dispose rescue", () => {
@@ -195,6 +237,27 @@ describe("createRevertRescueWiring — dispose rescue", () => {
     expect(warnSpy).toHaveBeenCalledOnce(); // diverged log fired
     expect(t.showErrors).toEqual([]); // NO toast — an ok apply is not "save failed"
     expect(t.dispatched).toEqual([]); // NO resync — disposed, no webview to converge
+  });
+
+  // The rejection arm on the path it exists for: the dispose-time rescue runs
+  // while the document is tearing down, so the executor's settle-time reads can
+  // throw. That must surface as a failed restore (toast), not vanish into an
+  // unhandled rejection that reads as a successful one.
+  it("dispose-path settle-time THROW (pipeline rejects) still toasts the failed restore", async () => {
+    const t = wire();
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    mockApplyThenKillDocument(t);
+    armRevert(t);
+
+    t.writeLock.held = false;
+    t.wiring.prepareDispose();
+    t.disposedFlag.value = true;
+    t.wiring.rescueOnDispose();
+    await flush();
+
+    expect(errSpy).toHaveBeenCalled();
+    expect(t.showErrors.length).toBe(1);
+    expect(t.dispatched).toEqual([]); // dispose path never reseeds (no onFailure)
   });
 
   it("skips loudly (no rescue) when rescueOnDispose is called WITHOUT prepareDispose (call-order guard)", async () => {
@@ -358,6 +421,31 @@ describe("createRevertRescueWiring — alive tab-close rescue", () => {
     expect(t.dispatched).not.toContain(7); // never the pre-apply version
   });
 
+  // The diverged arm wraps its dispatchDocumentChanged call in runGuarded
+  // specifically so a throwing reducer dispatch cannot fall through to the
+  // shared `.catch`, which would fire a spurious "could not restore" toast for
+  // an apply that DID land (contradicting the log-only diverged decision). This
+  // pins that guard: without it, the throw escapes the diverged case, the `.then`
+  // handler rejects, and the `.catch` toasts a failure for a successful apply.
+  it("alive DIVERGED whose dispatch THROWS stays log-only — no toast, no unhandled rejection (guard pins)", async () => {
+    const t = wire();
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    t.doc.version = 7;
+    t.dispatchThrows.value = true; // the reducer dispatch itself throws
+    vi.spyOn(workspace, "applyEdit").mockImplementation(async () => {
+      t.doc.version = 8;
+      return true;
+    });
+    armRevert(t);
+    t.fireTabClose();
+    await flush();
+
+    expect(warnSpy).toHaveBeenCalledOnce(); // diverged log still fired
+    expect(errSpy).toHaveBeenCalled(); // the dispatch throw was logged by runGuarded
+    expect(t.showErrors).toEqual([]); // MUST NOT fall through to the .catch toast
+  });
+
   it("on restore FAILURE (applyEdit resolves false) shows an error AND reseeds via onFailure", async () => {
     const t = wire();
     vi.spyOn(workspace, "applyEdit").mockResolvedValue(false);
@@ -371,6 +459,27 @@ describe("createRevertRescueWiring — alive tab-close rescue", () => {
     expect(t.dispatched).toContain(42);
   });
 
+  // reportRestoreFailure guards onFailure individually (runGuarded("onFailure",
+  // onFailure)) so a throwing onFailure — the alive-path closure re-enters the
+  // reducer via dispatchDocumentChanged, which can itself throw — cannot escape
+  // into the chained `.catch`, which would re-invoke reportRestoreFailure a
+  // second time (a duplicate/garbled toast) with no further catch on that second
+  // call. This pins that guard: without it, showErrors would grow to 2.
+  it("a THROWING onFailure does not duplicate the toast or escape as an unhandled rejection", async () => {
+    const t = wire();
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    vi.spyOn(workspace, "applyEdit").mockResolvedValue(false); // applyRefused → failure family
+    armRevert(t);
+    // fireTabClose's onFailure closure calls deps.dispatchDocumentChanged — make
+    // THAT throw so onFailure itself throws.
+    t.dispatchThrows.value = true;
+    t.fireTabClose();
+    await flush();
+
+    expect(t.showErrors.length).toBe(1); // NOT duplicated by a second reportRestoreFailure pass
+    expect(errSpy).toHaveBeenCalled(); // the onFailure throw was logged by runGuarded, not rethrown
+  });
+
   it("on restore REJECTION (applyEdit throws) shows an error", async () => {
     const t = wire();
     vi.spyOn(workspace, "applyEdit").mockRejectedValue(new Error("boom"));
@@ -380,6 +489,40 @@ describe("createRevertRescueWiring — alive tab-close rescue", () => {
 
     expect(t.showErrors.length).toBe(1);
     expect(t.showErrors[0]).toContain("boom");
+  });
+
+  // REJECTION ARM. The restore pipeline is fire-and-forget on the data-loss path,
+  // and its settle-time reads run outside the executor's own try blocks — so a
+  // document torn down while the applyEdit RPC is in flight rejects the whole
+  // pipeline. Without a rejection arm that becomes an unhandled rejection: no
+  // toast, no reseed, and the user reads a failed restore as a successful one.
+  it("on a settle-time THROW (pipeline rejects) shows an error AND reseeds via onFailure", async () => {
+    const t = wire();
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    t.doc.version = 42;
+    mockApplyThenKillDocument(t);
+    armRevert(t);
+    t.fireTabClose();
+    await flush();
+
+    expect(errSpy).toHaveBeenCalled(); // the rejection is logged, not swallowed
+    expect(t.showErrors.length).toBe(1);
+    expect(t.showErrors[0]).toContain("document is gone"); // detail carried for triage
+    expect(t.dispatched).toContain(42); // alive path still reseeds
+  });
+
+  it("a THROWING showError in the rejection arm still lets onFailure reseed (deps guarded individually)", async () => {
+    const t = wire();
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    t.doc.version = 42;
+    t.showErrorThrows.value = true; // the toast itself fails
+    mockApplyThenKillDocument(t);
+    armRevert(t);
+    t.fireTabClose();
+    await flush();
+
+    expect(t.showErrors.length).toBe(1); // the toast was attempted
+    expect(t.dispatched).toContain(42); // and its throw did NOT swallow the reseed
   });
 
   it("skips the alive rescue when already disposed", async () => {
