@@ -209,7 +209,14 @@ export const quollCmLinePaddingTheme = EditorView.theme(cmLinePaddingThemeSpec);
 // kind — but `color-mix()` is not linear in contrast ratio and each palette sits
 // differently against its own surface, so treat the table as the numbers that were
 // measured, NOT as a proof that a future palette rises. Re-run the probe when a
-// palette changes.
+// palette changes — CI does NOT make that instruction obsolete. What CI gained in
+// A11Y-14 is narrower than it sounds: test/webview/cm-quote-ink-contrast.test.ts
+// resolves this formula over the FOUR palettes transcribed in
+// scripts/preview/vscode-theme-palettes.mjs and asserts each result clears the 4.5
+// AA floor. It does not re-verify the table above — a retune that moves every
+// ratio while staying over 4.5 leaves these numbers stale and CI green — and it
+// cannot see a host at all, so a VS Code release or a third-party theme that
+// changes descriptionForeground is still visible only to the probe.
 //
 // STILL do NOT close a nested-contrast gap by retuning the depth FILL mixes:
 // `.cm-line.quoll-blockquote-depth-2/-3` apply only on NESTED lines
@@ -229,10 +236,19 @@ export const quollCmLinePaddingTheme = EditorView.theme(cmLinePaddingThemeSpec);
 // ONE const, TWO use sites, kept in sync — NOT because they paint disjoint content.
 // `@lezer/markdown` maps `"Blockquote/...": tags.quote`, and Lezer's `/...` is
 // Mode.Inherit, so the `quote` tag reaches EVERY descendant inside a quote — the
-// `>` marker, plain prose, emphasis, links, all of it. An element's own colour
-// always beats one inherited from an ancestor, so the `t.quote` entry below paints
-// essentially all visible quoted text and `.cm-line.quoll-blockquote`'s copy paints
-// almost nothing the reader sees. That copy still has to track QUOTE_INK exactly,
+// `>` marker, plain prose, emphasis, links, all of it. There is no ancestor cascade
+// involved: @lezer/highlight CONCATENATES the inherited tag class onto the node's
+// own class and emits ONE span, so a link inside a quote is a single element
+// carrying both classes, and which colour lands is decided by RULE ORDER —
+// HighlightStyle.define emits its rules in spec order and documents that later
+// entries take CSS precedence. `{ tag: t.quote, … }` is therefore kept LAST in
+// quollHighlightSpec deliberately: that position is load-bearing, not incidental.
+// Move it and the accent tokens repaint quoted links and headings (light depth-3
+// green measures 3.99:1, sub-AA), so the order is pinned by
+// test/webview/cm-quote-ink-contrast.test.ts. Being last is what makes the
+// `t.quote` entry below paint essentially all visible quoted text, leaving
+// `.cm-line.quoll-blockquote`'s copy painting almost nothing the reader sees. That
+// copy still has to track QUOTE_INK exactly,
 // because `pnpm a11y:probe`'s `calloutFirstLine` sample reads `.cm-line.quoll-callout`'s
 // OWN computed colour, not the span inside it: a drift here would silently stop the
 // probe reflecting the colour the reader actually sees, while nothing on screen
