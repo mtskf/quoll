@@ -690,8 +690,8 @@ describe("the AA check is non-vacuous", () => {
     //    and leave the first assertion green.
     //
     // Asserting the RATIO rather than the shape of a level object is what makes the
-    // second contract stick: against the shipped spec a real read and a restatement
-    // produce identical objects, which is exactly what makes the restatement dangerous.
+    // second contract stick — a shape assertion cannot, for the reason recorded on
+    // quoteInkRatio's `spec` parameter.
     const withBaseMix = {
       ...blockSpec,
       ".cm-line.quoll-blockquote": { ...BASE_RULE, "--quoll-quote-ink-mix": "100%" },
