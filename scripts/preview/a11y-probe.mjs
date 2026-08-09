@@ -607,10 +607,14 @@ function collectInPage(theme) {
   // drifted below the fold), and a genuine sub-AA ratio. The message carries each
   // sample's own note + ratio for that reason.
   //
-  // This does NOT promote the probe to a CI gate and does NOT resolve A11Y-14: CI
-  // still pins the FORMULA (cm-decoration-block-style.test.ts), never a resolved
-  // number. Fatal-here / formula-in-CI is the split A11Y-08 already shipped for the
-  // frontmatter card — this is that precedent applied a second time, deliberately.
+  // This does NOT promote the probe to a CI gate — it stays dev-only, the split
+  // A11Y-08 already shipped for the frontmatter card, applied a second time
+  // deliberately. What HAS changed since (A11Y-14) is the CI side: quote-ink ratios
+  // are now also computed in `pnpm test:unit` by
+  // test/webview/cm-quote-ink-contrast.test.ts, which resolves the same formula over
+  // the same palette tables as pure maths. The two are complementary rather than
+  // redundant — that unit check cannot see the cascade or the DOM, so a rule that
+  // stops applying or a span that stops inheriting is still visible ONLY here.
   for (const [label, sample] of [
     ["depth-2", inventory.quoteDepth2],
     ["depth-3", inventory.quoteDepth3],

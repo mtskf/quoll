@@ -209,7 +209,9 @@ export const quollCmLinePaddingTheme = EditorView.theme(cmLinePaddingThemeSpec);
 // kind — but `color-mix()` is not linear in contrast ratio and each palette sits
 // differently against its own surface, so treat the table as the numbers that were
 // measured, NOT as a proof that a future palette rises. Re-run the probe when a
-// palette changes.
+// palette changes — though a palette or mix that drops any of these under AA now
+// also fails in CI, where test/webview/cm-quote-ink-contrast.test.ts re-derives
+// them from this formula and the shared palette table (A11Y-14).
 //
 // STILL do NOT close a nested-contrast gap by retuning the depth FILL mixes:
 // `.cm-line.quoll-blockquote-depth-2/-3` apply only on NESTED lines
