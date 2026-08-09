@@ -286,6 +286,128 @@ describe("effect-executor runApplyEdit (wrapper mapping)", () => {
     );
   });
 
+  // Settlement is the write lock's ONLY release valve (host-session-core clears
+  // `pendingApplyBaseVersion` on `applyEditSettled` and nowhere else but
+  // dispose), so BOTH promise arms must reach `dispatch`. execute-write documents
+  // its reads as non-throwing but takes them OUTSIDE its try blocks, so a seam
+  // that breaks that assumption rejects the whole pipeline — previously left
+  // unhandled by the bare `void ….then(onFulfilled)` (`void` discards the promise
+  // reference, it does not catch) and the lock was held for the session.
+  it("pipeline rejection (settle-time read throws) STILL settles, as a non-ok outcome", async () => {
+    const dispatch = await runApply({
+      readCanonical: () => {
+        throw new Error("boom-settle");
+      },
+    });
+    expect(dispatch).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "applyEditSettled",
+        outcome: expect.objectContaining({ kind: "rejected", message: "boom-settle" }),
+        // Empty snapshots are SAFE only because the outcome is non-ok: `canDrain`
+        // requires `ok` so they never reach `decideEdit`, and the non-ok
+        // foreign-bytes check compares these two against each other (equal → no
+        // spurious epoch bump).
+        currentContent: "",
+        preApplyContent: "",
+        canWrite: false,
+      })
+    );
+  });
+
+  it("pipeline rejection settles EVEN when disposed (stash-drain safety)", async () => {
+    const dispatch = await runApply(
+      {
+        readText: () => {
+          throw new Error("boom-read");
+        },
+      },
+      { isDisposed: () => true }
+    );
+    expect(dispatch).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "applyEditSettled",
+        outcome: expect.objectContaining({ kind: "rejected" }),
+      })
+    );
+  });
+
+  // The rejection arm must not itself throw — a throw there strands the lock
+  // exactly as the missing arm did. A rejection value whose `message` getter
+  // throws is the degenerate case the guarded stringifier covers.
+  it("rejection arm survives an error whose message getter throws", async () => {
+    const hostile = {
+      get message() {
+        throw new Error("nope");
+      },
+      toString() {
+        throw new Error("nope");
+      },
+    };
+    const dispatch = await runApply({
+      readCanonical: () => {
+        throw hostile;
+      },
+    });
+    expect(dispatch).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "applyEditSettled",
+        outcome: expect.objectContaining({ kind: "rejected", message: "unknown error" }),
+      })
+    );
+  });
+
+  // The REJECTION arm's opposite constraint: it must NOT read `canWrite` at all.
+  // That seam is itself a candidate throw source, so touching it on the recovery
+  // path would strand the lock exactly as the missing arm did. The settled VALUE
+  // is already pinned above ("pipeline rejection … STILL settles" asserts
+  // `canWrite: false`); what is NOT observable from a value is whether the seam
+  // was CONSULTED. `expect(canWrite).not.toHaveBeenCalled()` is therefore the
+  // load-bearing assertion here: a refactor that routed this arm through
+  // `readCanWrite()` would still emit `canWrite: false` (its guard swallows the
+  // throw) and every value assertion would stay green.
+  it("rejection arm settles without ever reading canWrite, even when canWrite ALSO throws", async () => {
+    const canWrite = vi.fn(() => {
+      throw new Error("boom-canWrite");
+    });
+    const dispatch = await runApply(
+      {
+        readCanonical: () => {
+          throw new Error("boom-settle");
+        },
+      },
+      { canWrite }
+    );
+    expect(dispatch).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "applyEditSettled",
+        outcome: expect.objectContaining({ kind: "rejected", message: "boom-settle" }),
+        canWrite: false,
+      })
+    );
+    expect(canWrite).not.toHaveBeenCalled();
+  });
+
+  // `canWrite` is an FS/config read in the FULFILMENT arm; an `onRejected`
+  // sibling never catches its own `onFulfilled`, so an unguarded throw here
+  // strands the lock too. Settle anyway, conservatively read-only.
+  it("canWrite throwing does not strand the settlement (assumes read-only)", async () => {
+    const dispatch = await runApply(
+      { readVersion: () => 8 },
+      {
+        canWrite: () => {
+          throw new Error("boom-canWrite");
+        },
+      }
+    );
+    expect(dispatch).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "applyEditSettled",
+        outcome: { kind: "ok", documentVersion: 8 },
+        canWrite: false,
+      })
+    );
+  });
+
   // Contract: the wrapper maps from the OUTCOME and does not re-read the
   // document. For an ok settlement the executor reads the settled version once
   // (inside verify); the wrapper must NOT read it again (a re-read could observe

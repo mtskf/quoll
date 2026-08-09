@@ -123,9 +123,29 @@ export type HostSessionEvent =
       // stash drain can re-run the FULL decideEdit gates (canWrite + canonical
       // current text) AND the epoch foreign-bytes check (site 2). Since S3a the
       // canonical settled content is read on EVERY settlement (the epoch verify
-      // is unconditional — no skip-unless-stash), so `currentContent` is always
-      // the canonical settled document, never "" (the pre-S3a empty-when-no-stash
-      // optimisation is gone; restoring it would drop the epoch verify).
+      // is unconditional — no skip-unless-stash), so `currentContent` is the
+      // canonical settled document (the pre-S3a empty-when-no-stash optimisation
+      // is gone; restoring it would drop the epoch verify).
+      // ONE EXCEPTION: the executor's pipeline-rejection arm settles with
+      // `""`/`""` because the read seams themselves are what threw — it has no
+      // trustworthy snapshot to send and MUST NOT re-read (that would strand the
+      // lock on the recovery path). The two empties are PAIRED deliberately: for
+      // a non-ok outcome the foreign-bytes check below compares `currentContent`
+      // against `preApplyContent`, so equal empties mean "nothing foreign
+      // intervened" and no epoch bump. The pairing is LOAD-BEARING: filling in
+      // real bytes on only one side would flip `foreignAtSettle`, bump the epoch,
+      // and the resulting reseed would invalidate the webview's replay buffer —
+      // silently dropping the very keystrokes the failure toast tells the user to
+      // retry.
+      // ACCEPTED RESIDUAL RISK: with both sides empty the foreign-bytes check is
+      // VACUOUS on this path, so a foreign edit that raced the failed apply is
+      // NOT detected here and the epoch does not advance. The webview therefore
+      // keeps its replay buffer live and can re-post over that foreign edit on
+      // the user's retry. This is deliberate — the alternative (re-reading the
+      // document to get honest bytes) goes through the seam that just threw and
+      // strands the write lock, which is strictly worse. Note this is about the
+      // EPOCH only; the empties reaching `decideEdit` is separately impossible
+      // because `canDrain` requires an `ok` outcome.
       readonly canWrite: boolean;
       readonly currentContent: string;
       // Canonical pre-apply document snapshot (the executor's `oldText`,
@@ -263,6 +283,19 @@ const postDoc = (s: HostSessionState, docVersion: number): HostSessionEffect => 
 // Extracted so the applyEditSettled arm can SUPPRESS these wholesale when
 // disposed (the webview is gone) and REPLACE them with drain effects when a
 // stash drains.
+//
+// ORDER IS LOAD-BEARING on every non-ok arm: the failure `showError` comes
+// BEFORE the ack `postDocument`. The two are independent surfaces — `showError`
+// is a VS Code window toast, `postDocument` a webview-bound message — so there
+// is no coupling to respect (the "Document before edit-rejected" constraint on
+// `postRejectedDraft` is a different pair, both webview-bound and read by the
+// same webview reducer). Toast-first matters because the reseed is the effect
+// MOST likely to unwind `runEffects`: `buildSeedDocument` bottoms out in
+// `canonicalDocumentText(document)`, the very seam whose throw produces a
+// `rejected` outcome, so on that correlated failure the reseed re-runs the
+// broken read and throws. Emitted second, the toast — the only user-visible
+// signal that the save failed — would go down with it. `ok` has no toast to
+// order, so its single effect is unchanged.
 function settlementEffects(
   outcome: ApplyEditOutcome,
   settled: HostSessionState,
@@ -274,7 +307,6 @@ function settlementEffects(
       return [postDoc(settled, settled.lastAppliedDocVersion)];
     case "refused":
       return [
-        postDoc(settled, settled.lastAppliedDocVersion),
         {
           type: "logWarn",
           message: "[quoll] applyEdit returned false",
@@ -284,13 +316,14 @@ function settlementEffects(
           type: "showError",
           message: `Quoll could not save ${context.fsPath}. Reload the file or try again.`,
         },
+        postDoc(settled, settled.lastAppliedDocVersion),
       ];
     case "constructThrew":
     case "applyThrew":
     case "rejected":
       return [
-        postDoc(settled, settled.lastAppliedDocVersion),
         { type: "showError", message: `Failed to save: ${outcome.message}` },
+        postDoc(settled, settled.lastAppliedDocVersion),
       ];
     default: {
       const _exhaustive: never = outcome;
