@@ -124,6 +124,17 @@ function armRevert(t: Wired): void {
   t.fireDocChange();
 }
 
+// Mock applyEdit so the RPC resolves OK but the document dies while it is in
+// flight: every later read — including the executor's settle-time canonical read,
+// which runs OUTSIDE its try blocks — throws, so the restore pipeline REJECTS.
+// The shared arrangement for the rejection-arm tests.
+function mockApplyThenKillDocument(t: Wired): void {
+  vi.spyOn(workspace, "applyEdit").mockImplementation(async () => {
+    t.doc.getTextThrows = true;
+    return true;
+  });
+}
+
 describe("createRevertRescueWiring — dispose rescue", () => {
   afterEach(() => {
     vi.restoreAllMocks();
@@ -235,10 +246,7 @@ describe("createRevertRescueWiring — dispose rescue", () => {
   it("dispose-path settle-time THROW (pipeline rejects) still toasts the failed restore", async () => {
     const t = wire();
     const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
-    vi.spyOn(workspace, "applyEdit").mockImplementation(async () => {
-      t.doc.getTextThrows = true; // the document dies with the RPC in flight
-      return true;
-    });
+    mockApplyThenKillDocument(t);
     armRevert(t);
 
     t.writeLock.held = false;
@@ -492,12 +500,7 @@ describe("createRevertRescueWiring — alive tab-close rescue", () => {
     const t = wire();
     const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     t.doc.version = 42;
-    // The apply resolves ok, but the document dies before the executor's
-    // settle-time canonical read → executeDocumentWrite rejects.
-    vi.spyOn(workspace, "applyEdit").mockImplementation(async () => {
-      t.doc.getTextThrows = true;
-      return true;
-    });
+    mockApplyThenKillDocument(t);
     armRevert(t);
     t.fireTabClose();
     await flush();
@@ -513,10 +516,7 @@ describe("createRevertRescueWiring — alive tab-close rescue", () => {
     vi.spyOn(console, "error").mockImplementation(() => {});
     t.doc.version = 42;
     t.showErrorThrows.value = true; // the toast itself fails
-    vi.spyOn(workspace, "applyEdit").mockImplementation(async () => {
-      t.doc.getTextThrows = true;
-      return true;
-    });
+    mockApplyThenKillDocument(t);
     armRevert(t);
     t.fireTabClose();
     await flush();

@@ -167,8 +167,6 @@ export function createRevertRescueWiring(deps: RevertRescueWiringDeps): RevertRe
     }
   };
 
-  const errorText = (err: unknown): string => (err instanceof Error ? err.message : String(err));
-
   // Terminal handling for a restore that did NOT land — shared by the failure
   // family and the rejection arm. Toast first (the user-facing signal is the one
   // guarantee that must survive), then let the ALIVE path reseed via `onFailure`
@@ -243,7 +241,7 @@ export function createRevertRescueWiring(deps: RevertRescueWiringDeps): RevertRe
               // Guarded: a throwing reducer dispatch must not fall through to the
               // `.catch` below, which would toast "could not restore" for an apply
               // that DID land — contradicting the log-only diverged decision above.
-              runGuarded("documentChanged dispatch", () =>
+              runGuarded("dispatchDocumentChanged", () =>
                 deps.dispatchDocumentChanged(outcome.settledVersion)
               );
             }
@@ -280,7 +278,7 @@ export function createRevertRescueWiring(deps: RevertRescueWiringDeps): RevertRe
         // settle — compile-time unreachable under normal TS builds, but the log
         // text must not claim "before settling" for it.
         console.error("[quoll] revert-rescue: restore pipeline failed", err);
-        reportRestoreFailure(errorText(err), onFailure);
+        reportRestoreFailure(err instanceof Error ? err.message : String(err), onFailure);
       });
   };
 
