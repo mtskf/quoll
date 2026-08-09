@@ -175,19 +175,40 @@ export const quollCmLinePaddingTheme = EditorView.theme(cmLinePaddingThemeSpec);
 // visibly quieter than body prose. Measured via `pnpm a11y:probe`: 4.44 → 5.24
 // (light), 5.70 → 6.16 (dark), 5.47 → 6.06 (hc-light), 9.96 → 10.89 (hc-dark).
 //
-// SCOPE of those ratios: they are the depth-1 BASE panel. A nested `> >` / `> > >`
-// line mixes the fill a further 7% / 14% toward the editor foreground (the
-// -depth-2/-3 rules below), and against those darker fills the same ink measures
-// 3.80 → 4.49 (depth-2) and 3.22 → 3.81 (depth-3) in light — improved by this
-// change, still BELOW AA. Dark (5.48 / 4.75), hc-light (5.66 / 5.25) and hc-dark
-// (10.24 / 8.95) all clear. Tracked separately as A11Y-13 — do NOT close that gap
-// by retuning the depth mixes here: `.cm-line.quoll-blockquote-depth-2/-3` only
-// override `backgroundColor`, and only on NESTED lines (blockquoteDepthClass
-// returns null below depth 2, block-style.ts), so a depth-1 line never carries
-// either class and the base panel is untouched by that lever — the cost of
-// retuning the mixes is a weaker nesting cue (the deeper bands would read closer
-// to the base panel), not a moved base panel. What DOES move the base panel is
-// retuning QUOTE_INK itself, since depth-1 and every nested line share it.
+// SCOPE of those ratios: they are the depth-1 BASE panel, which is what the `90%`
+// FALLBACK below encodes. A nested `> >` / `> > >` line mixes the fill a further
+// 7% / 14% toward the editor foreground (the -depth-2/-3 rules below), and against
+// those darker fills the shared depth-1 ink measured 4.49 (depth-2) and 3.81
+// (depth-3) in light — both under AA.
+//
+// A11Y-13 closes that by making the mix PERCENTAGE an inherited custom property:
+// each depth rule steps `--quoll-quote-ink-mix` down by the same 7 points as its
+// own fill (90 → 83 → 76), so the ink tracks the fill level for level. Custom
+// properties inherit, so the `t.quote` span INSIDE a nested line re-resolves this
+// one formula at its own depth — no per-depth colour constant, and no specificity
+// fight with the generated highlight class. (Carrying a custom property on a
+// `.cm-line` rule is the established shape here: the callout type rules already
+// set `--quoll-callout-accent`.) Depth 4+ needs no rule of its own —
+// blockquoteDepthClass clamps at BLOCKQUOTE_MAX_DEPTH, so deeper lines reuse the
+// depth-3 class and its fill and ink plateau TOGETHER. A future depth-4 fill MUST
+// bring its own ink step (pinned by cm-decoration-block-style.test.ts).
+//
+// MEASURED, not derived — `pnpm a11y:probe` over the four shipped palettes, on the
+// SPAN the reader actually sees (light): depth-2 4.49 → PENDING, depth-3
+// 3.81 → PENDING; dark PENDING, hc-light PENDING, hc-dark PENDING. The direction of
+// travel is toward `editor-foreground`, which is LIGHT in dark/hc-dark and DARK in
+// hc-light, so each step is EXPECTED to help in every kind — but `color-mix()` is
+// not linear in contrast ratio and each palette sits differently against its own
+// surface, so treat these as the numbers that were measured, NOT as a proof that a
+// future palette rises. Re-run the probe when a palette changes.
+//
+// STILL do NOT close a nested-contrast gap by retuning the depth FILL mixes:
+// `.cm-line.quoll-blockquote-depth-2/-3` apply only on NESTED lines
+// (blockquoteDepthClass returns null below depth 2, block-style.ts), so a depth-1
+// line never carries either class and the base panel is untouched by that lever —
+// the cost of retuning the mixes is a weaker nesting cue (the deeper bands would
+// read closer to the base panel), not a moved base panel. What DOES move the base
+// panel is retuning the `90%` fallback itself, since depth-1 falls back to it.
 //
 // CONCRETE FALLBACKS (not a nested `var()` chain) because color-mix cannot take
 // `inherit`, and a nested fallback is invisible to happy-dom's CSSOM. They keep the
@@ -208,7 +229,7 @@ export const quollCmLinePaddingTheme = EditorView.theme(cmLinePaddingThemeSpec);
 // probe reflecting the colour the reader actually sees, while nothing on screen
 // changed.
 const QUOTE_INK =
-  "color-mix(in srgb, var(--vscode-descriptionForeground, #616161) 90%, var(--vscode-editor-foreground, #000))";
+  "color-mix(in srgb, var(--vscode-descriptionForeground, #616161) var(--quoll-quote-ink-mix, 90%), var(--vscode-editor-foreground, #000))";
 
 // Markdown token styling. Lezer tags → CSS. Heading sizes give the
 // Notion-ish hierarchy without rich nodes; the syntax marks stay
@@ -586,10 +607,12 @@ export const blockStyleThemeSpec = {
   ".cm-line.quoll-blockquote-depth-2": {
     backgroundColor:
       "color-mix(in srgb, var(--quoll-surface-fill, transparent), var(--vscode-editor-foreground) 7%)",
+    "--quoll-quote-ink-mix": "83%",
   },
   ".cm-line.quoll-blockquote-depth-3": {
     backgroundColor:
       "color-mix(in srgb, var(--quoll-surface-fill, transparent), var(--vscode-editor-foreground) 14%)",
+    "--quoll-quote-ink-mix": "76%",
   },
   // Callout admonitions (classification in decorations/callout.ts). An OUTERMOST
   // blockquote whose first line is `[!TYPE]` carries `quoll-callout
