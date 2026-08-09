@@ -358,12 +358,13 @@ describe("effect-executor runApplyEdit (wrapper mapping)", () => {
 
   // The REJECTION arm's opposite constraint: it must NOT read `canWrite` at all.
   // That seam is itself a candidate throw source, so touching it on the recovery
-  // path would strand the lock exactly as the missing arm did. The test above
-  // drives a healthy pipeline, so it only ever exercises the fulfilment arm's
-  // guarded read — nothing pinned the rejection arm's hard-coded `false` until
-  // here. `not.toHaveBeenCalled()` is the load-bearing assertion: a refactor that
-  // unified the two arms behind `readCanWrite()` would still produce
-  // `canWrite: false` (the guard swallows the throw) and go unnoticed.
+  // path would strand the lock exactly as the missing arm did. The settled VALUE
+  // is already pinned above ("pipeline rejection … STILL settles" asserts
+  // `canWrite: false`); what is NOT observable from a value is whether the seam
+  // was CONSULTED. `expect(canWrite).not.toHaveBeenCalled()` is therefore the
+  // load-bearing assertion here: a refactor that routed this arm through
+  // `readCanWrite()` would still emit `canWrite: false` (its guard swallows the
+  // throw) and every value assertion would stay green.
   it("rejection arm settles without ever reading canWrite, even when canWrite ALSO throws", async () => {
     const canWrite = vi.fn(() => {
       throw new Error("boom-canWrite");

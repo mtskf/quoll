@@ -266,7 +266,8 @@ export function createEffectExecutor(deps: EffectExecutorDeps): EffectExecutor {
   // NOT a blanket "both arms are non-throwing" guarantee: `toApplyEditOutcome`
   // and the fulfilment arm's `deps.dispatch` are deliberately left unwrapped
   // (swallowing a reducer bug would hide it). The rejection arm's `dispatch` IS
-  // wrapped, but only to recover the user-visible toast — see that arm.
+  // wrapped, but only so a throwing settlement effect is logged instead of
+  // becoming an unhandled rejection — see that arm.
   const errorMessage = (err: unknown): string => {
     try {
       return err instanceof Error ? err.message : String(err);
@@ -353,40 +354,37 @@ export function createEffectExecutor(deps: EffectExecutorDeps): EffectExecutor {
       // `false` rather than reading it.
       (err: unknown) => {
         console.error("[quoll] verified write pipeline rejected; releasing the write lock", err);
-        const message = errorMessage(err);
         try {
           deps.dispatch({
             type: "applyEditSettled",
-            outcome: { kind: "rejected", message },
+            outcome: { kind: "rejected", message: errorMessage(err) },
             canWrite: false,
             currentContent: "",
             preApplyContent: "",
           });
         } catch (dispatchErr) {
-          // CORRELATED FAILURE. `settlementEffects` orders the reseed FIRST and
-          // the toast SECOND, and `runEffects`'s `postDocument` case calls
-          // `buildSeedDocument` unguarded — which in production bottoms out in
-          // `canonicalDocumentText(document)`, the SAME seam whose throw produced
-          // this rejection. So the arm that exists to tell the user "Failed to
-          // save" reliably re-runs the broken read and loses the toast to an
-          // unhandled rejection. The lock itself is already released (the panel's
-          // `step` commits the new state BEFORE running effects), so only the
-          // user-visible half needs rescuing: re-raise the toast here, with the
-          // same text `settlementEffects` would have produced. `showError` is the
-          // LAST effect in that list, so a throw can only come from something
-          // that ran before it — this cannot double-toast.
-          // NOTE the fulfilment arm has the same postDoc→showError exposure, but
-          // that ordering predates this change → tracked separately, not widened
-          // here (1 PR = 1 purpose).
-          console.error("[quoll] applyEdit rejection settlement threw; recovering the toast", {
-            uri: deps.uriString(),
-            cause: dispatchErr,
-          });
-          try {
-            deps.showError(`Failed to save: ${message}`);
-          } catch (toastErr) {
-            console.error("[quoll] showError threw during settlement recovery", toastErr);
-          }
+          // CORRELATED FAILURE. The settlement's own effects can throw on this
+          // path: `runEffects`'s `postDocument` case calls `buildSeedDocument`
+          // unguarded, and in production that bottoms out in
+          // `canonicalDocumentText(document)` — the SAME seam whose throw
+          // produced this rejection. Two halves are already safe without any
+          // rescue here: the write lock (the panel's `step` commits the new state
+          // BEFORE running effects) and the user-visible toast
+          // (`settlementEffects` emits `showError` BEFORE the reseed for every
+          // non-ok outcome — see the ORDER note there; that is why this catch does
+          // NOT re-raise a toast and cannot double-toast).
+          // NOT rescued: the panel's `step` calls `editSettledBarrier.settle(...)`
+          // AFTER `runEffects`, and that is its only settle site, so this throw
+          // skips it. Side-channel thunks deferred behind the barrier (handoff /
+          // switch-to-text) are then neither dropped per the failed-apply contract
+          // nor drained — they run at the NEXT settle, against a document this
+          // edit never landed in. Pre-existing panel-lifecycle gap, tracked
+          // separately (fixing it means a try/finally in `step`).
+          // Log only, and deliberately WITHOUT `deps.uriString()`: this catch is
+          // the last line of defence, and that injected seam could throw too —
+          // which would turn the log into an unhandled rejection. The cause's
+          // stack is the triage payload.
+          console.error("[quoll] applyEdit rejection settlement effects threw", dispatchErr);
         }
       }
     );

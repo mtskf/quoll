@@ -74,8 +74,9 @@ function harness() {
     // `applyEditSeam.readCanonical` → the same function), so a seam that breaks
     // the settle-time read breaks the reseed too. A harness that reads a plain
     // `doc.text` here would decouple the two and hide the correlated failure:
-    // `settlementEffects` emits the reseed BEFORE the toast, so a throwing
-    // reseed takes the "Failed to save" notification down with it.
+    // the settlement's reseed throws mid-`runEffects`, and whether the user still
+    // hears about the failed save then depends entirely on `settlementEffects`
+    // putting the toast BEFORE the reseed.
     buildSeedDocument: (docVersion, externalEpoch, epochGeneration) => {
       seedBuilds.push(`v${docVersion}`);
       if (failSettle) {
@@ -175,17 +176,21 @@ describe("applyEdit settlement: a rejected write pipeline releases the host writ
     //
     // The subject here is deliberately narrow — that a second write is ATTEMPTED
     // at all. It does NOT settle cleanly: `apply` is a stub that never mutates
-    // `doc`, so at edit #2 the settle-time canonical read still returns "" while
-    // the intended content is "ab" → the write pipeline tags the outcome
-    // `diverged` (an ok apply whose landed bytes differ), the core bumps
-    // `externalEpoch` and logs the divergence. Making the fake actually apply
-    // would NOT fix that: a non-ok settlement leaves `lastAppliedDocVersion` at 1
-    // while `doc.version` advances to 2, so `type()`'s base no longer matches and
-    // `decideEdit`'s strict `!==` rejects edit #2 as `stale` before it ever
-    // reaches `build` — the write would stop being attempted, which is the very
-    // thing this test exists to observe. A faithful harness would have to track
-    // the version the fake webview last acked; that is a bigger change than the
-    // regression is worth pinning.
+    // `doc`, so at edit #2 the pre-apply text is still "" and the settle-time
+    // canonical read returns "" while the intended content is "ab" → the write
+    // pipeline tags the outcome `diverged` (an ok apply whose landed bytes
+    // differ), the core bumps `externalEpoch` and logs the divergence.
+    //
+    // That stub is also why the probe reads `["a", "ab"]` and not `["a", "b"]`:
+    // `build` records the minimal SPAN's insert, which is computed against the
+    // (never-updated) pre-apply text. A fake that actually applied would record
+    // the delta "b" instead — and if it also advanced `doc.version` the way VS
+    // Code does, edit #2 would stop being attempted at all: a non-ok settlement
+    // leaves `lastAppliedDocVersion` at 1 (which is what `type()` sends as its
+    // base, standing in for the version the fake webview last acked) while the
+    // live version resyncs to 2, so `decideEdit` would rule it `stale` before
+    // reaching `build`. A faithful harness therefore has to model the webview's
+    // acked version too — a bigger change than this regression is worth pinning.
     h.armSettleFailure(false);
     h.type("ab");
     await flushSettle();
@@ -195,13 +200,14 @@ describe("applyEdit settlement: a rejected write pipeline releases the host writ
   });
 
   // The toast is the ONLY user-visible signal that a save failed, and the
-  // rejection arm's own recovery is what puts it at risk: `settlementEffects`
-  // orders the reseed first, and that reseed re-runs the broken read. Without a
-  // guard around the settlement dispatch the reseed throws, `runEffects` unwinds
-  // before reaching the `showError` effect, and the rejection is left unhandled —
-  // the lock is released (state is committed before effects run) but the user is
-  // told nothing, which is the silent-failure mode this whole file exists to
-  // prevent.
+  // settlement's own reseed is what puts it at risk: `buildSeedDocument` re-runs
+  // the broken read and throws, unwinding `runEffects` part-way through the
+  // effect list. This pins the ORDER that makes the toast survive that —
+  // `settlementEffects` emits `showError` BEFORE `postDocument` on every non-ok
+  // outcome, so the notification is already out when the reseed blows up. Order
+  // them the other way and the lock is still released (state is committed before
+  // effects run) but the user is told nothing: the silent-failure mode this whole
+  // file exists to prevent.
   it("still reports the failure when the reseed throws on the same broken seam", async () => {
     const h = harness();
 
@@ -220,12 +226,16 @@ describe("applyEdit settlement: a rejected write pipeline releases the host writ
 
   // The rejection arm settles with a PAIRED `""`/`""` (`currentContent` /
   // `preApplyContent`) because the read seams are what threw. That pairing is
-  // load-bearing and only observable with a stash waiting: the non-ok
-  // foreign-bytes check compares the two against each other, so equal empties
-  // mean "nothing foreign intervened" and the epoch must NOT advance. Filling in
-  // real bytes on one side only would bump it, and the reseed that follows would
-  // invalidate the webview's replay buffer — dropping the very keystrokes the
-  // toast tells the user to retry.
+  // load-bearing: the non-ok foreign-bytes check compares the two against each
+  // other, so equal empties mean "nothing foreign intervened" and the epoch must
+  // NOT advance. Filling in real bytes on one side only would bump it, and the
+  // reseed that follows would invalidate the webview's replay buffer — dropping
+  // the very keystrokes the toast tells the user to retry.
+  //
+  // The stash is not what makes the epoch check observable (`foreignAtSettle`
+  // never reads it) — it is here to drive the OTHER half of the same settlement:
+  // the release path with a stash present, which must drop the undrainable
+  // keystroke, clear the lock, and still surface exactly one toast.
   it("a stash waiting at a rejected settlement is released without a spurious epoch bump", async () => {
     const h = harness();
 
