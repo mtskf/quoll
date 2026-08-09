@@ -286,6 +286,96 @@ describe("effect-executor runApplyEdit (wrapper mapping)", () => {
     );
   });
 
+  // Settlement is the write lock's ONLY release valve (host-session-core clears
+  // `pendingApplyBaseVersion` on `applyEditSettled` and nowhere else but
+  // dispose), so BOTH promise arms must reach `dispatch`. execute-write documents
+  // its reads as non-throwing but takes them OUTSIDE its try blocks, so a seam
+  // that breaks that assumption rejects the whole pipeline — previously swallowed
+  // by the bare `void ….then(onFulfilled)` and the lock was held for the session.
+  it("pipeline rejection (settle-time read throws) STILL settles, as a non-ok outcome", async () => {
+    const dispatch = await runApply({
+      readCanonical: () => {
+        throw new Error("boom-settle");
+      },
+    });
+    expect(dispatch).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "applyEditSettled",
+        outcome: expect.objectContaining({ kind: "rejected", message: "boom-settle" }),
+        // Empty snapshots are SAFE only because the outcome is non-ok: `canDrain`
+        // requires `ok` so they never reach `decideEdit`, and the non-ok
+        // foreign-bytes check compares these two against each other (equal → no
+        // spurious epoch bump).
+        currentContent: "",
+        preApplyContent: "",
+        canWrite: false,
+      })
+    );
+  });
+
+  it("pipeline rejection settles EVEN when disposed (stash-drain safety)", async () => {
+    const dispatch = await runApply(
+      {
+        readText: () => {
+          throw new Error("boom-read");
+        },
+      },
+      { isDisposed: () => true }
+    );
+    expect(dispatch).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "applyEditSettled",
+        outcome: expect.objectContaining({ kind: "rejected" }),
+      })
+    );
+  });
+
+  // The rejection arm must not itself throw — a throw there strands the lock
+  // exactly as the missing arm did. A rejection value whose `message` getter
+  // throws is the degenerate case the guarded stringifier covers.
+  it("rejection arm survives an error whose message getter throws", async () => {
+    const hostile = {
+      get message() {
+        throw new Error("nope");
+      },
+      toString() {
+        throw new Error("nope");
+      },
+    };
+    const dispatch = await runApply({
+      readCanonical: () => {
+        throw hostile;
+      },
+    });
+    expect(dispatch).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "applyEditSettled",
+        outcome: expect.objectContaining({ kind: "rejected", message: "unknown error" }),
+      })
+    );
+  });
+
+  // `canWrite` is an FS/config read in the FULFILMENT arm; an `onRejected`
+  // sibling never catches its own `onFulfilled`, so an unguarded throw here
+  // strands the lock too. Settle anyway, conservatively read-only.
+  it("canWrite throwing does not strand the settlement (assumes read-only)", async () => {
+    const dispatch = await runApply(
+      { readVersion: () => 8 },
+      {
+        canWrite: () => {
+          throw new Error("boom-canWrite");
+        },
+      }
+    );
+    expect(dispatch).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "applyEditSettled",
+        outcome: { kind: "ok", documentVersion: 8 },
+        canWrite: false,
+      })
+    );
+  });
+
   // Contract: the wrapper maps from the OUTCOME and does not re-read the
   // document. For an ok settlement the executor reads the settled version once
   // (inside verify); the wrapper must NOT read it again (a re-read could observe
