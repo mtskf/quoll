@@ -514,10 +514,10 @@ describe("imagePaste — the image-write post", () => {
 
 describe("imagePaste — per-event caps", () => {
   // The two SIZE caps are decided from `file.size` BEFORE the read; the COUNT cap
-  // is decided from a file's INDEX, outside the loop entirely — which is why it is
-  // the one cap that emits no warn. Either way nothing is read, so the pending
-  // anchor count is the complete observable and these tests can stay synchronous —
-  // hence `stubReadThatNeverCompletes` throughout.
+  // is decided from `files.length` before the loop runs at all, so its warn names a
+  // number of discarded files rather than one file. Either way nothing is read, so
+  // the pending anchor count is the complete observable and these tests can stay
+  // synchronous — hence `stubReadThatNeverCompletes` throughout.
 
   it("drops a grossly oversized image before reading it", () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
@@ -619,19 +619,39 @@ describe("imagePaste — per-event caps", () => {
     view.destroy();
   });
 
-  it("ingests at most 16 files from one event", () => {
+  it("ingests at most 16 files from one event, and says how many it dropped", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     stubReadThatNeverCompletes();
     const { view } = mount("ab");
-    // One byte each, so the count cap is the only thing that can bite.
-    const files = Array.from({ length: 17 }, () => ({ type: "image/png" }));
+    // One byte each, so the count cap is the only thing that can bite. Twenty
+    // rather than the minimal 17 so the reported COUNT (4) is distinguishable from
+    // both the overflow-of-one case and from any hard-coded number.
+    const files = Array.from({ length: 20 }, () => ({ type: "image/png" }));
     firePasteAt(view.contentDOM, { files });
 
     expect(view.state.field(pendingImageAnchors).length).toBe(16);
-    // KNOWN GAP, recorded rather than blessed as contract: the overflow is sliced
-    // off OUTSIDE the loop, so files 17+ are discarded with no warn anywhere —
-    // dropping 20 images inserts 16 and tells the user nothing. Deliberately NOT
-    // asserted as `expect(warn).not.toHaveBeenCalled()`, so adding that warn to
-    // production later fixes the gap without breaking this test.
+    // The refusal this cap used to make silently: the overflow is discarded whole,
+    // so without a line here dropping 20 images inserts 16 and tells the user
+    // nothing, anywhere. Pinned by TEXT like the other three refusals (a warn COUNT
+    // would make them interchangeable), and the dropped count is pinned too because
+    // it is the only part of the message a reader can act on.
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("count cap"));
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("dropped 4 image"));
+    view.destroy();
+  });
+
+  it("stays silent about the count cap on an event that fits exactly", () => {
+    // The boundary `>` vs `>=`: at exactly 16 files nothing is discarded, so a warn
+    // here would cry wolf on every full-but-legal paste. No other test in this file
+    // sits on the cap, so without this one `>=` ships green.
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    stubReadThatNeverCompletes();
+    const { view } = mount("ab");
+    const files = Array.from({ length: 16 }, () => ({ type: "image/png" }));
+    firePasteAt(view.contentDOM, { files });
+
+    expect(view.state.field(pendingImageAnchors).length).toBe(16);
+    expect(warn).not.toHaveBeenCalled();
     view.destroy();
   });
 });
