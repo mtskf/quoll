@@ -3,6 +3,9 @@ import { EditorView } from "@codemirror/view";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { type HostToWebview, PROTOCOL_VERSION } from "../../src/shared/protocol.js";
+import { EDITOR_PREF_CSS_VARS, editorPrefToCssValue } from "../../src/webview/cm/editor-prefs.js";
+import { addPendingAnchor } from "../../src/webview/cm/image/image-paste.js";
+import { proseLintEnabled } from "../../src/webview/cm/lint/index.js";
 
 // shell.ts integration tests (post C3 React-free shell). Replaces the
 // React-era app.test.ts + persistence.test.ts. The shell mounts as a
@@ -99,6 +102,15 @@ function deliver(message: HostToWebview): void {
   for (const handler of subscribers) {
     handler(message);
   }
+}
+
+function mountedView(): EditorView {
+  const mountEl = (container as HTMLElement).querySelector(".quoll-editor") as HTMLElement;
+  const view = EditorView.findFromDOM(mountEl);
+  if (!view) {
+    throw new Error("EditorView not found via findFromDOM");
+  }
+  return view;
 }
 
 describe("shell — Ready handshake ordering", () => {
@@ -449,6 +461,211 @@ describe("shell — format-command routing", () => {
     // The post back to the host is edit-sync's debounced job (300 ms), pinned by
     // test/webview/cm-edit-sync.test.ts for every doc change — not re-asserted
     // here, where a timer wait would only add flake.
+  });
+});
+
+describe("shell — editor-config routing", () => {
+  it("routes every editor-config field to its own applied outcome", async () => {
+    // This pins two separate risks under one `editor-config` delivery pipeline:
+    //
+    // 1. The 4-field editor-prefs mapping (fontFamily/fontSize/lineHeight/
+    //    contentWidth): the shell hand-copies `message.{...}` into one object
+    //    literal passed to `editor.setEditorPrefs`. A same-field-name swap
+    //    here is NOT a silent risk: each field's type is a distinct string
+    //    literal union (protocol.ts EDITOR_PREF_ENUMS), and for every one of
+    //    the 6 field pairs neither union is a subset of the other, so `tsc`
+    //    rejects a swap with TS2322 (verified by hand: swapping
+    //    fontSize↔lineHeight in shell.ts breaks `pnpm compile` with exactly
+    //    that error). What the type system can't catch is a dropped
+    //    `editor?.set*` call — asserting the applied CSS custom property (the
+    //    outcome, not "was setEditorPrefs called") is what makes a dropped
+    //    route red. Expected values are derived from editorPrefToCssValue
+    //    rather than hand-written, so this test cannot drift from the preset
+    //    table. Every id below is deliberately NON-default: a default id
+    //    makes the applier REMOVE the var, which would leave a dropped route
+    //    indistinguishable from a routed one.
+    //
+    // 2. The 3 boolean siblings (lintGutter/proseLint/spellcheck →
+    //    setLintGutter/setProseLint/setSpellcheck): unlike the 4 pref fields
+    //    above, these are all bare `boolean`, so a swap type-checks. The
+    //    second `deliver` below (with a comment on the fixture design) is
+    //    what makes each of the 3 possible swaps red.
+    await mount();
+    deliver(buildDocument({ docVersion: 1, content: "word\n" }));
+
+    const view = mountedView();
+    const cssVar = (key: keyof typeof EDITOR_PREF_CSS_VARS): string =>
+      view.dom.style.getPropertyValue(EDITOR_PREF_CSS_VARS[key]);
+    // Baseline: nothing applied yet, so a test that never delivered the message
+    // could not pass by accident.
+    expect(cssVar("quoll.editor.fontSize")).toBe("");
+    expect(view.contentDOM.getAttribute("spellcheck")).toBe("true");
+    expect(view.dom.querySelector(".quoll-lint-gutter")).toBeNull();
+    expect(view.state.facet(proseLintEnabled)).toBe(false);
+
+    // The 4 pref fields are identical in both deliveries below; only the
+    // booleans vary (see the fixture-design note on the second delivery).
+    const prefs = {
+      fontFamily: "sans",
+      fontSize: "large",
+      lineHeight: "roomy",
+      contentWidth: "narrow",
+    } as const;
+
+    deliver({
+      protocol: PROTOCOL_VERSION,
+      type: "editor-config",
+      lintGutter: true,
+      proseLint: true,
+      spellcheck: false,
+      ...prefs,
+    });
+
+    expect(cssVar("quoll.editor.fontFamily")).toBe(
+      editorPrefToCssValue("quoll.editor.fontFamily", prefs.fontFamily)
+    );
+    expect(cssVar("quoll.editor.fontSize")).toBe(
+      editorPrefToCssValue("quoll.editor.fontSize", prefs.fontSize)
+    );
+    expect(cssVar("quoll.editor.lineHeight")).toBe(
+      editorPrefToCssValue("quoll.editor.lineHeight", prefs.lineHeight)
+    );
+    expect(cssVar("quoll.editor.contentWidth")).toBe(
+      editorPrefToCssValue("quoll.editor.contentWidth", prefs.contentWidth)
+    );
+    expect(view.contentDOM.getAttribute("spellcheck")).toBe("false");
+    expect(view.dom.querySelector(".quoll-lint-gutter")).not.toBeNull();
+    expect(view.state.facet(proseLintEnabled)).toBe(true);
+
+    // Second delivery with a DIFFERENT boolean combination. One delivery
+    // alone can't distinguish all 3 possible pairwise swaps among
+    // lintGutter/proseLint/spellcheck: each field only has 2 possible values,
+    // so in any single message some pair is bound to share a value, and
+    // swapping two fields that hold the SAME value in that message is a
+    // no-op there. The combination below is chosen so every pair differs in
+    // at least one of the two deliveries:
+    //   field        | delivery 1 | delivery 2
+    //   lintGutter   |    true    |   false
+    //   proseLint    |    true    |    true
+    //   spellcheck   |   false    |    true
+    // lintGutter/proseLint only differ in delivery 2 (both true in delivery
+    // 1); lintGutter/spellcheck differ in both; proseLint/spellcheck only
+    // differ in delivery 1 (both true in delivery 2). So swapping any one
+    // pair changes at least one applied outcome in at least one delivery.
+    // A wholly DROPPED setter is caught by delivery 1 alone, whichever of the
+    // three it is: every delivery-1 value differs from that setter's default
+    // (gutter false→true, prose false→true, spellcheck true→false), so a
+    // dropped call leaves the default in place and delivery 1 goes red — and
+    // no setter's same-value no-op guard can absorb that, because each
+    // delivery-1 value is a real change away from the default. It is also why
+    // proseLint may stay true here: delivery 1 already pinned that route, so
+    // delivery 2's prose push being a guard no-op costs this test nothing.
+    deliver({
+      protocol: PROTOCOL_VERSION,
+      type: "editor-config",
+      lintGutter: false,
+      proseLint: true,
+      spellcheck: true,
+      ...prefs,
+    });
+
+    expect(view.contentDOM.getAttribute("spellcheck")).toBe("true");
+    expect(view.dom.querySelector(".quoll-lint-gutter")).toBeNull();
+    expect(view.state.facet(proseLintEnabled)).toBe(true);
+  });
+});
+
+describe("shell — HostToWebview exhaustiveness guard", () => {
+  it("throws on an unknown message type (fail loud, not silent drop)", async () => {
+    // Mirrors the reducer's exhaustiveness guard (state.test.ts). The default
+    // arm is unreachable by type — HostToWebview is a closed union — so the
+    // cast is necessary to exercise the runtime guard at all. `deliver()`
+    // calls the subscribeToHost handler synchronously (this test file's
+    // handler shim bypasses the isHostToWebview wire-boundary validator,
+    // which would normally reject an unknown type before it ever reaches the
+    // switch), so the throw happens synchronously inside deliver() and
+    // `expect(() => ...).toThrow` catches it directly.
+    await mount();
+    const unknown = {
+      protocol: PROTOCOL_VERSION,
+      type: "no-such-message",
+    } as unknown as HostToWebview;
+
+    expect(() => deliver(unknown)).toThrow(/unhandled HostToWebview: no-such-message/);
+  });
+});
+
+describe("shell — image-write-result routing", () => {
+  // The anchors are seeded with addPendingAnchor rather than a synthesized
+  // paste: the paste path is already pinned by
+  // test/webview/image/cm-image-paste.test.ts, and driving it here would need a
+  // FileReader stub whose failure modes have nothing to do with the route under
+  // test.
+  const seedAnchor = (view: EditorView, requestId: string, anchor: number): void => {
+    view.dispatch({ effects: addPendingAnchor.of({ requestId, anchor }) });
+  };
+
+  it("routes ok:true to an insert at the matching requestId's anchor", async () => {
+    await mount();
+    deliver(buildDocument({ docVersion: 1, content: "alpha\n" }));
+    const view = mountedView();
+    // Two pending anchors so the requestId is load-bearing: passing the wrong id
+    // (or ignoring it) resolves the wrong anchor and the insert lands at 0.
+    seedAnchor(view, "req-a", 0);
+    seedAnchor(view, "req-b", 6);
+
+    deliver({
+      protocol: PROTOCOL_VERSION,
+      type: "image-write-result",
+      requestId: "req-b",
+      ok: true,
+      relativePath: "./assets/shot.png",
+    });
+
+    expect(view.state.doc.toString()).toBe("alpha\n![](./assets/shot.png)\n");
+  });
+
+  it("routes ok:false to a null path — nothing is inserted", async () => {
+    // The ternary `message.ok ? message.relativePath : null` is the whole arm.
+    // Inverted, ok:true would pass null (previous test goes red) and ok:false
+    // would pass `undefined` — which resolve() does NOT treat as a rejection
+    // (`relativePath === null`), so it would insert `![](undefined)` here.
+    await mount();
+    deliver(buildDocument({ docVersion: 1, content: "alpha\n" }));
+    const view = mountedView();
+    seedAnchor(view, "req-a", 6);
+
+    deliver({
+      protocol: PROTOCOL_VERSION,
+      type: "image-write-result",
+      requestId: "req-a",
+      ok: false,
+    });
+
+    expect(view.state.doc.toString()).toBe("alpha\n");
+  });
+});
+
+describe("shell — caret-apply routing", () => {
+  it("routes caret-apply to the selection offset for {line, character}", async () => {
+    // A pure side channel: the arm moves the caret and touches nothing else.
+    // The fixture's line index and character offset are DIFFERENT numbers on
+    // lines of unequal length, so transposing them in the shell's object literal
+    // (the one mistake the wire's two same-typed `number` fields allow) resolves
+    // to a different offset and this goes red.
+    await mount();
+    deliver(buildDocument({ docVersion: 1, content: "alpha\nbravo charlie\ndelta\n" }));
+    const view = mountedView();
+    const docBefore = view.state.doc.toString();
+    expect(view.state.selection.main.head).toBe(0); // seed caret — not already at the target
+
+    deliver({ protocol: PROTOCOL_VERSION, type: "caret-apply", line: 1, character: 3 });
+
+    // line 1 ("bravo charlie") starts at offset 6 → 6 + 3.
+    expect(view.state.selection.main.head).toBe(9);
+    expect(view.state.selection.main.empty).toBe(true);
+    // Selection-only: the handoff must never mutate the document.
+    expect(view.state.doc.toString()).toBe(docBefore);
   });
 });
 
