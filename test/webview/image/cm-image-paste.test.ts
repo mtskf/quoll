@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import { EditorState } from "@codemirror/state";
+import { EditorState, type Extension, StateField } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -25,14 +25,31 @@ import {
   makeClipboardData,
 } from "../helpers/clipboard-double.js";
 
-function mount(doc: string, canWrite = true) {
+function mount(doc: string, canWrite = true, extras: Extension = []) {
   const post = vi.fn<(message: WebviewToHost) => void>();
   const paste = createImagePasteDrop({ canWrite: () => canWrite, post });
   const view = new EditorView({
-    state: EditorState.create({ doc, extensions: [paste.extension] }),
+    state: EditorState.create({ doc, extensions: [paste.extension, extras] }),
   });
   return { view, paste, post };
 }
+
+/** A StateField that throws when it sees the insert — the unrelated-extension failure
+ *  resolve()'s dispatch catch is really for. A StateField and not a ViewPlugin because
+ *  CM treats the two oppositely: `PluginInstance.update` catches plugin exceptions and
+ *  routes them to `logException`, so a plugin can never reach that catch, while a field
+ *  throws out of transaction construction and does. (Quoll's block widgets are fields
+ *  for unrelated reasons — see the block-widget StateField rule — so this is the shape
+ *  its own extensions would fail in.) */
+const throwingField = StateField.define<null>({
+  create: () => null,
+  update(value, tr) {
+    if (tr.docChanged) {
+      throw new Error("unrelated widget field blew up");
+    }
+    return value;
+  },
+});
 
 // No hand-written `m is ImageWriteMessage` on the filter: TypeScript takes a written
 // predicate on trust and never checks it against the body, so a wrong one compiles.
@@ -255,6 +272,50 @@ describe("resolve", () => {
     paste.resolve(view, "2", "./assets/y.png");
     expect(view.state.doc.toString()).toBe("a\n![](./assets/y.png)\nb");
     expect(view.state.field(pendingImageAnchors)).toEqual([]);
+    view.destroy();
+  });
+
+  it("blames the dispatch, not the anchor, when an unrelated field throws on the insert", () => {
+    // The case the "dispatch threw" label exists for, with a real extension rather than
+    // a stubbed dispatch: a StateField unrelated to image paste throws while CM builds
+    // the insert transaction. The anchor is perfectly valid here, so labelling this
+    // "stale anchor" would send whoever reads the log after a position bug that does
+    // not exist.
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    const { view, paste } = mount("ab", true, throwingField);
+    view.dispatch({ effects: addPendingAnchor.of({ requestId: "1", anchor: 1 }) });
+
+    expect(() => paste.resolve(view, "1", "./assets/x.png")).not.toThrow();
+    const [[label]] = error.mock.calls as [[string]];
+    expect(label).toBe("[quoll] pasted image link insert failed: dispatch threw");
+    // Still retired, so the orphaned file stays idempotent on a re-paste.
+    expect(view.state.field(pendingImageAnchors)).toEqual([]);
+    view.destroy();
+  });
+
+  it("reports the PRE-insert doc length even when the throw lands after CM commits", () => {
+    // `ViewState.update` assigns `view.state` as its first statement, before the DOM
+    // work that can throw — so a failure can arrive with the insert already applied.
+    // Reproduced at that exact seam by letting the real dispatch run and then throwing.
+    // Read at log time, `docLength` would be 23 here and 2 on the stale-anchor path:
+    // the same field name meaning pre-insert or post-insert depending on which failure
+    // occurred, which is worse than useless to someone reading it cold.
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    const { view, paste } = mount("ab");
+    view.dispatch({ effects: addPendingAnchor.of({ requestId: "1", anchor: 1 }) });
+    const realDispatch = view.dispatch.bind(view);
+    vi.spyOn(view, "dispatch").mockImplementation((...specs: Parameters<typeof realDispatch>) => {
+      realDispatch(...specs);
+      throw new Error("field blew up after the state was committed");
+    });
+
+    expect(() => paste.resolve(view, "1", "./assets/x.png")).not.toThrow();
+    const [[, context]] = error.mock.calls as [[string, { docLength: number }]];
+    expect(context.docLength).toBe(2); // "ab" — what the anchor was measured against
+    // The insert really did land, which is precisely why the length must be captured
+    // beforehand: `view.state.doc` is 23 chars by the time the catch runs.
+    expect(view.state.doc.toString()).toBe("a\n![](./assets/x.png)\nb");
+    expect(view.state.doc.length).toBe(23);
     view.destroy();
   });
 

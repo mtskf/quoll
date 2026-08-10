@@ -136,11 +136,15 @@ export function createImagePasteDrop(opts: {
   // `EditorView.update` early-returns on `this.destroyed` (measured; see the
   // "swallows a clearPending dispatch that fails after the view was destroyed"
   // test) — so this catch pins the contract against a future CM regression rather
-  // than handling a hazard that reproduces today. It stays silent by design: the
-  // caller has already logged, and a torn-down view has no state left to leak.
-  // The transaction carries effects only, so `pendingImageAnchors`' update() (which
-  // just filters) is the sole state work it can provoke — unlike resolve()'s insert,
-  // there are no `changes` here to drive the widget/fold/lint fields that can throw.
+  // than handling a hazard that reproduces today. It stays silent by design, and not
+  // because callers log first (several of them deliberately do not): a destroyed view
+  // has taken the pending state and the editor surface down with it, so there is no
+  // outcome left for a reader to act on. Whether the paste itself deserved a log is
+  // each caller's call, made before it gets here.
+  // Every StateField still runs on this transaction — CM re-evaluates them all, not
+  // just the ones an effect names. What makes it the safer dispatch is the absence of
+  // `changes`: the widget/fold/lint fields see an unchanged doc and stay dormant,
+  // whereas resolve()'s insert is what drives them through real work.
   const clearPending = (view: EditorView, requestId: string): void => {
     try {
       view.dispatch({ effects: removePendingAnchor.of(requestId) });
@@ -300,13 +304,21 @@ export function createImagePasteDrop(opts: {
     // image, at what anchor, or how far that anchor sat from the end of the doc. The
     // context is identical between the two, so it is built in one place; only the
     // label (which of the two failures this is) varies per call site.
+    //
+    // `docLength` is snapshotted HERE rather than read at log time, so that both call
+    // sites report the same thing: the length the anchor was measured against. The
+    // dispatch catch must not re-read it, because a throw can land on either side of
+    // the state commit — `ViewState.update` assigns `this.state` (what `view.state`
+    // returns) as its FIRST statement, before `docView.update` runs — so a re-read
+    // would mean pre-insert on one path and post-insert on the other, under one name.
+    const docLengthBeforeInsert = view.state.doc.length;
     const logInsertFailure = (label: string, err: unknown): void => {
       console.error(`[quoll] pasted image link insert failed: ${label}`, {
         err,
         requestId,
         anchor,
         relativePath,
-        docLength: view.state.doc.length,
+        docLength: docLengthBeforeInsert,
       });
     };
     let line: ReturnType<typeof view.state.doc.lineAt>;
@@ -336,12 +348,14 @@ export function createImagePasteDrop(opts: {
         scrollIntoView: true,
       });
     } catch (err) {
-      // Deliberately NOT labelled "stale anchor": `EditorView.update` runs
-      // `updatePlugins` / `docView.update` inside its own try whose finally only
-      // resets updateState (only updateListener callbacks get logException), so a
-      // throw from ANY unrelated field or plugin processing this insert — widgets,
-      // fold, table, lint — surfaces right here. Naming the dispatch instead of the
-      // anchor keeps that case from sending the next reader after the wrong bug.
+      // Deliberately NOT labelled "stale anchor": this catch is not only about the
+      // anchor. Building the transaction runs every StateField, and `EditorView.update`
+      // then runs `docView.update` unguarded — so an unrelated field throwing on this
+      // insert (block widgets are StateFields here by design, as are fold and lint)
+      // surfaces at exactly this line. ViewPlugins are the one thing that does NOT:
+      // `PluginInstance.update` catches those itself and routes them to `logException`
+      // ("CodeMirror plugin crashed"), so a plugin failure never reaches us. Naming the
+      // dispatch rather than the anchor keeps the next reader off the wrong scent.
       logInsertFailure("dispatch threw", err);
       clearPending(view, requestId);
     }
