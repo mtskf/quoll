@@ -132,10 +132,19 @@ export function createImagePasteDrop(opts: {
   const sessionNonce = crypto.randomUUID();
 
   // Dispatch guarded against a view torn down mid-round-trip (tab closed between
-  // FileReader start and callback) — CM throws on dispatch to a destroyed view.
-  // The catch is intentionally scoped to THIS hazard: `pendingImageAnchors`'
-  // update() only filters/maps and cannot throw, so nothing else legitimately
-  // surfaces here.
+  // FileReader start and callback). CM 6.43 does NOT actually throw there —
+  // `EditorView.update` early-returns on `this.destroyed` (measured; see the
+  // "swallows a clearPending dispatch that fails after the view was destroyed"
+  // test) — so this catch pins the contract against a future CM regression rather
+  // than handling a hazard that reproduces today. It stays silent by design, and not
+  // because callers log first (several of them deliberately do not): a destroyed view
+  // has taken the pending state and the editor surface down with it, so there is no
+  // outcome left for a reader to act on. Whether the paste itself deserved a log is
+  // each caller's call, made before it gets here.
+  // Every StateField still runs on this transaction — CM re-evaluates them all, not
+  // just the ones an effect names. What makes it the safer dispatch is the absence of
+  // `changes`: the widget/fold/lint fields see an unchanged doc and stay dormant,
+  // whereas resolve()'s insert is what drives them through real work.
   const clearPending = (view: EditorView, requestId: string): void => {
     try {
       view.dispatch({ effects: removePendingAnchor.of(requestId) });
@@ -278,23 +287,78 @@ export function createImagePasteDrop(opts: {
       return;
     }
     const anchor = pending.anchor;
-    const line = view.state.doc.lineAt(anchor);
+    // Both failure paths below share one recovery, because by the time resolve() runs
+    // the host has ALREADY written the image into the workspace: swallowing either one
+    // costs the user a stray asset file with no link and no trace, and — because
+    // `removePendingAnchor` rides the very dispatch that can fail — a leaked entry
+    // pinning a now-meaningless anchor, which makes a re-paste look like a duplicate.
+    // So each catch logs and then clears the anchor on its OWN dispatch, which cannot
+    // carry the same hazard (effects only, no positions; clearPending absorbs the
+    // torn-down-view case). The resulting orphaned file is exactly what a wholesale
+    // reseed already produces, and beats inserting at a position we could not verify.
+    //
+    // They are kept as two try blocks rather than one because they fail for unrelated
+    // reasons and only a precise log can tell them apart afterwards. Each logs the
+    // context the sibling handler in `list/list-indent-keymap.ts` established as the
+    // house style for a dispatch failure — a bare `err` does not say WHICH pending
+    // image, at what anchor, or how far that anchor sat from the end of the doc. The
+    // context is identical between the two, so it is built in one place; only the
+    // label (which of the two failures this is) varies per call site.
+    //
+    // `docLength` is snapshotted HERE rather than read at log time, so that both call
+    // sites report the same thing: the length the anchor was measured against. The
+    // dispatch catch must not re-read it, because a throw can land on either side of
+    // the state commit — `ViewState.update` assigns `this.state` (what `view.state`
+    // returns) as its FIRST statement, before `docView.update` runs — so a re-read
+    // would mean pre-insert on one path and post-insert on the other, under one name.
+    const docLengthBeforeInsert = view.state.doc.length;
+    const logInsertFailure = (label: string, err: unknown): void => {
+      console.error(`[quoll] pasted image link insert failed: ${label}`, {
+        err,
+        requestId,
+        anchor,
+        relativePath,
+        docLength: docLengthBeforeInsert,
+      });
+    };
+    let line: ReturnType<typeof view.state.doc.lineAt>;
+    try {
+      line = view.state.doc.lineAt(anchor);
+    } catch (err) {
+      // Position lookup, not the edit: `lineAt` throws a RangeError on an anchor left
+      // stale past the doc end, and it runs BEFORE the dispatch is even built — which
+      // is why it needs its own guard. Wrapped only around the dispatch, this escaped
+      // into the shell's message handler.
+      logInsertFailure("stale anchor", err);
+      clearPending(view, requestId);
+      return;
+    }
     // Standalone block: break onto its own line when mid-line; always close with
     // a newline so the read-path renders it as a block image. Multiple images
     // from one event insert in completion order (see Design notes).
     const prefix = anchor === line.from ? "" : "\n";
     const insert = `${prefix}![](${relativePath})\n`;
-    // resolve runs synchronously from the shell's `editor?.` null-guarded handler
-    // (view alive), but guard the dispatch for symmetry with the async paths.
     try {
+      // resolve runs synchronously from the shell's `editor?.` null-guarded handler
+      // (view alive), but guard the dispatch for symmetry with the async paths.
       view.dispatch({
         changes: { from: anchor, insert },
         selection: { anchor: anchor + insert.length },
         effects: removePendingAnchor.of(requestId),
         scrollIntoView: true,
       });
-    } catch {
-      // view torn down between the shell null-check and here — no-op.
+    } catch (err) {
+      // Deliberately NOT labelled "stale anchor": this catch is not only about the
+      // anchor. Building the transaction runs every StateField, and `EditorView.update`
+      // then runs `docView.update` unguarded — so an unrelated field throwing on this
+      // insert (block widgets are StateFields here by design, as are fold and lint)
+      // surfaces at exactly this line. What never reaches us is anything CM catches on
+      // our behalf and hands to `logException`: ViewPlugin updates and updateListener
+      // callbacks both — so a failure in edit-sync, which rides a listener, shows up in
+      // the console under CM's own label and not this one. Naming the dispatch rather
+      // than the anchor keeps the next reader off the wrong scent.
+      logInsertFailure("dispatch threw", err);
+      clearPending(view, requestId);
     }
   };
 
