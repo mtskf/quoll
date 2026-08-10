@@ -1,3 +1,8 @@
+// The model's `readonly` contract — what keeps makeTable's cell-count check
+// true past construction — is pinned in test/extension/types-equality.test.ts
+// ("table model type pins"), not here: no tsconfig type-checks test/markdown,
+// so a type-level assertion in this file would be erased by vitest's
+// transpile-only path and never fail.
 import { describe, expect, it } from "vitest";
 import type { CellRaw, DelimiterRow, Row } from "../../../src/markdown/table/model.js";
 import { makeTable } from "../../../src/markdown/table/model.js";
