@@ -200,6 +200,55 @@ describe("resolve", () => {
     expect(view.state.doc.toString()).toBe("ab");
     expect(view.state.field(pendingImageAnchors)).toEqual([{ requestId: "1", anchor: 1 }]);
   });
+
+  it("logs and clears the anchor when the insert throws on a stale position", () => {
+    // The failure the whole guard exists for, raised WITHOUT a mock: an anchor past
+    // the doc end makes `doc.lineAt` throw a real RangeError. It throws BEFORE the
+    // dispatch, which is why the guard cannot sit around the dispatch alone — there
+    // it escapes into the shell's message handler instead.
+    //
+    // Everything asserted here is downstream of one fact: the host has ALREADY
+    // written the image by the time resolve runs. So a failure must leave a LOUD
+    // orphan (logged, no pending entry) rather than a silent one — a leaked entry
+    // pins a dead anchor and makes the user's re-paste read as a duplicate.
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    const { view, paste } = mount("ab");
+    view.dispatch({ effects: addPendingAnchor.of({ requestId: "1", anchor: 99 }) });
+
+    expect(() => paste.resolve(view, "1", "./assets/x.png")).not.toThrow();
+    expect(error.mock.calls).toEqual([
+      ["[quoll] failed to insert pasted image link", expect.any(RangeError)],
+    ]);
+    expect(view.state.doc.toString()).toBe("ab");
+    expect(view.state.field(pendingImageAnchors)).toEqual([]);
+    view.destroy();
+  });
+
+  it("still logs when even the clearing dispatch fails after a teardown", () => {
+    // The other end of the same guard: the view dies between the shell's null-check
+    // and the dispatch, so BOTH the insert and the follow-up clear throw. The anchor
+    // then dies with the view (clearPending swallows it), so the log is the only
+    // observable left — and it is the one that must survive, since without it a
+    // half-completed paste leaves no trace anywhere.
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    const { view, paste } = mount("ab");
+    view.dispatch({ effects: addPendingAnchor.of({ requestId: "1", anchor: 1 }) });
+    // Raised deliberately: CM 6.43 does not throw on dispatch to a destroyed view
+    // (see the clearPending test below for the measurement). The contract is pinned
+    // for the future, not for today's CM.
+    const dispatch = vi.spyOn(view, "dispatch").mockImplementation(() => {
+      throw new Error("dispatch on a destroyed view");
+    });
+
+    expect(() => paste.resolve(view, "1", "./assets/x.png")).not.toThrow();
+    expect(error.mock.calls).toEqual([
+      ["[quoll] failed to insert pasted image link", expect.any(Error)],
+    ]);
+    // Twice: the insert, then the clear it attempts anyway. One call would mean the
+    // catch returned without trying to clear.
+    expect(dispatch).toHaveBeenCalledTimes(2);
+    view.destroy();
+  });
 });
 
 describe("isIngestibleImageItem", () => {
