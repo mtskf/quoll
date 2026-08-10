@@ -56,6 +56,9 @@ const pngFile = (): File => new File([PNG_BYTES], "shot.png", { type: "image/png
 const decodeBase64 = (data: string): Uint8Array =>
   Uint8Array.from(atob(data), (c) => c.charCodeAt(0));
 
+/** Every cap in this suite is expressed in MiB, as the production thresholds are. */
+const MIB = 1024 * 1024;
+
 /** A file that REPORTS `bytes` while its content stays one byte. Both size caps are
  *  decided from `file.size` before the FileReader ever runs, so allocating a real
  *  10–15 MiB buffer per file would only slow the suite down. */
@@ -85,6 +88,12 @@ function stubFileReader(drive: (reader: StubFileReader) => void): void {
   driveRead = drive;
   vi.stubGlobal("FileReader", StubFileReader);
 }
+
+/** Install a reader that starts but never completes — the form every test wants
+ *  when its whole observable is the SYNCHRONOUS pending anchor. Deliberate rather
+ *  than incidental: a read that never finishes cannot outlive `view.destroy()` and
+ *  post into a torn-down view. */
+const stubReadThatNeverCompletes = () => stubFileReader(() => {});
 
 /** happy-dom has no layout engine, so `view.posAtCoords` reaches through an
  *  undefined client rect and THROWS at SOME coordinates rather than returning a
@@ -357,7 +366,7 @@ describe("imagePaste — the image-write post", () => {
     // id, so a late image-write-result from the PREVIOUS session resolves this
     // session's anchor and writes the wrong image path into the document. Two live
     // instances is the only way to observe the nonce at all.
-    stubFileReader(() => {});
+    stubReadThatNeverCompletes();
     const first = mount("ab");
     const second = mount("ab");
     firePasteAt(first.view.contentDOM, { files: IMAGE_FILE });
@@ -464,9 +473,7 @@ describe("imagePaste — per-event caps", () => {
   // version of this note said every cap here reads `file.size` — it does not, and
   // that difference is exactly why the count cap emits no warn.) Either way nothing
   // is read, so the pending anchor count is the complete observable and these tests
-  // can stay synchronous. The stub reader never completes, which is deliberate: it
-  // keeps a real async read from outliving `view.destroy()`.
-  const stubReadThatNeverCompletes = () => stubFileReader(() => {});
+  // can stay synchronous — hence `stubReadThatNeverCompletes` throughout.
 
   it("drops a grossly oversized image before reading it", () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
@@ -475,7 +482,7 @@ describe("imagePaste — per-event caps", () => {
     // 5 MiB past the reject threshold puts it 1 MiB past the transfer ceiling
     // (reject + 4 MiB of headroom), i.e. into the band the webview drops itself
     // rather than forwarding for a precise host-side toast.
-    const huge = sizedImageFile(MAX_IMAGE_BYTES + 5 * 1024 * 1024);
+    const huge = sizedImageFile(MAX_IMAGE_BYTES + 5 * MIB);
     firePasteAt(view.contentDOM, { files: [{ type: "image/png", file: huge }] });
 
     expect(view.state.field(pendingImageAnchors).length).toBe(0);
@@ -491,7 +498,7 @@ describe("imagePaste — per-event caps", () => {
     // toast into a console.warn nobody sees.
     stubReadThatNeverCompletes();
     const { view } = mount("ab");
-    const slightlyOver = sizedImageFile(MAX_IMAGE_BYTES + 1024 * 1024);
+    const slightlyOver = sizedImageFile(MAX_IMAGE_BYTES + MIB);
     firePasteAt(view.contentDOM, { files: [{ type: "image/png", file: slightlyOver }] });
 
     expect(view.state.field(pendingImageAnchors).length).toBe(1);
@@ -510,10 +517,9 @@ describe("imagePaste — per-event caps", () => {
     // would exceed the 40 MiB cap, and the trailing 1 MiB file would still FIT.
     // Production documents `break`, so that trailing file must NOT be queued: with
     // `continue` the count is 5. Uniform sizes cannot tell the two apart.
-    const mib = 1024 * 1024;
     const files = [10, 10, 10, 9, 10, 1].map((size) => ({
       type: "image/png",
-      file: sizedImageFile(size * mib),
+      file: sizedImageFile(size * MIB),
     }));
     firePasteAt(view.contentDOM, { files });
 
@@ -563,7 +569,7 @@ describe("imagePaste — drop and dragover", () => {
   });
 
   it("ingests an image drop at the dropped-at position", () => {
-    stubFileReader(() => {});
+    stubReadThatNeverCompletes();
     const { view } = mount("ab");
     const posAtCoords = stubDropPos(view, 2);
     view.dispatch({ selection: { anchor: 0 } });
@@ -579,7 +585,7 @@ describe("imagePaste — drop and dragover", () => {
   });
 
   it("falls back to the selection head when the drop point maps to no position", () => {
-    stubFileReader(() => {});
+    stubReadThatNeverCompletes();
     const { view } = mount("abcd");
     stubDropPos(view, null);
     view.dispatch({ selection: { anchor: 3 } });
