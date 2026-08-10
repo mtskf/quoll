@@ -297,7 +297,18 @@ export function createImagePasteDrop(opts: {
     // reasons and only a precise log can tell them apart afterwards. Each logs the
     // context the sibling handler in `list/list-indent-keymap.ts` established as the
     // house style for a dispatch failure — a bare `err` does not say WHICH pending
-    // image, at what anchor, or how far that anchor sat from the end of the doc.
+    // image, at what anchor, or how far that anchor sat from the end of the doc. The
+    // context is identical between the two, so it is built in one place; only the
+    // label (which of the two failures this is) varies per call site.
+    const logInsertFailure = (label: string, err: unknown): void => {
+      console.error(`[quoll] pasted image link insert failed: ${label}`, {
+        err,
+        requestId,
+        anchor,
+        relativePath,
+        docLength: view.state.doc.length,
+      });
+    };
     let line: ReturnType<typeof view.state.doc.lineAt>;
     try {
       line = view.state.doc.lineAt(anchor);
@@ -306,13 +317,7 @@ export function createImagePasteDrop(opts: {
       // stale past the doc end, and it runs BEFORE the dispatch is even built — which
       // is why it needs its own guard. Wrapped only around the dispatch, this escaped
       // into the shell's message handler.
-      console.error("[quoll] pasted image link insert failed: stale anchor", {
-        err,
-        requestId,
-        anchor,
-        relativePath,
-        docLength: view.state.doc.length,
-      });
+      logInsertFailure("stale anchor", err);
       clearPending(view, requestId);
       return;
     }
@@ -337,13 +342,7 @@ export function createImagePasteDrop(opts: {
       // throw from ANY unrelated field or plugin processing this insert — widgets,
       // fold, table, lint — surfaces right here. Naming the dispatch instead of the
       // anchor keeps that case from sending the next reader after the wrong bug.
-      console.error("[quoll] pasted image link insert failed: dispatch threw", {
-        err,
-        requestId,
-        anchor,
-        relativePath,
-        docLength: view.state.doc.length,
-      });
+      logInsertFailure("dispatch threw", err);
       clearPending(view, requestId);
     }
   };
