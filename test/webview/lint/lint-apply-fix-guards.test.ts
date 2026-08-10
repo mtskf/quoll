@@ -18,8 +18,11 @@
 //    one and the valid fix is required to land, or transactions are counted.
 //
 // 2. Do not assume CodeMirror rejects an invalid change set. Measured against the
-//    pinned @codemirror/state, only an out-of-range or inverted range throws.
-//    Unsorted and overlapping specs are ACCEPTED (mapped and composed), and a
+//    pinned @codemirror/state, the throwing cases are an out-of-range endpoint, an
+//    inverted range, and a NaN endpoint — that last via a changeset-length mismatch
+//    rather than range validation, and note the malformed guard never catches NaN
+//    (every comparison against it is false), so the selection filter is what drops
+//    it. Unsorted and overlapping specs are ACCEPTED (mapped and composed), and a
 //    collapsed delete is dropped while the transaction still dispatches. So the
 //    sort and the overlap skip are not crash prevention — they define the
 //    first-wins semantics, and dropping them produces a successful dispatch with
@@ -177,6 +180,16 @@ describe("overlap guard and sort", () => {
     // losing "cd".
     stubFixes({ from: 6, to: 8, insert: "" }, { from: 2, to: 4, insert: "" });
     expect(apply()).toEqual({ applied: true, doc: "abefij\n", dispatches: 1 });
+  });
+
+  it("prefers the shorter of two equal-start fixes (the sort's tiebreak)", () => {
+    // Equal `from`, emitted longest-first. The `a.to - b.to` tiebreak orders [2,4)
+    // ahead of [2,6), so the minimal fix is accepted and first-wins skips the
+    // longer one. Without the tiebreak the sort is stable, emission order stands,
+    // and "cdef" would go instead of "cd" — a different first-wins winner rather
+    // than a throw, which is why only a byte assertion catches it.
+    stubFixes({ from: 2, to: 6, insert: "" }, { from: 2, to: 4, insert: "" });
+    expect(apply()).toEqual({ applied: true, doc: "abefghij\n", dispatches: 1 });
   });
 });
 

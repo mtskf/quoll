@@ -40,8 +40,12 @@ type Fix = { from: number; to: number; insert: string };
  *  span of any selection range, as a sorted, non-overlapping change set.
  *  Iterating findings (not spans) yields each fix at most once, so a
  *  multi-cursor selection on one line never duplicates a change; the sort +
- *  first-wins overlap skip keep the change set valid for `dispatch` even if a
- *  future rule emits unordered or overlapping fixes. Pure (calls the engine);
+ *  first-wins overlap skip make the outcome deterministic if a future rule emits
+ *  unordered or overlapping fixes. That is a semantics choice, NOT crash
+ *  prevention — `dispatch` accepts unsorted and overlapping specs (it maps and
+ *  composes them), so dropping either would quietly apply both of two conflicting
+ *  fixes instead of the first, rather than failing loudly. Only the range guard
+ *  below stands between a malformed fix and a throw. Pure (calls the engine);
  *  may throw if the engine throws — the caller catches. */
 function collectFreshFixesForSelection(state: EditorState): Fix[] {
   // Pass the live prose-gate so the fix path stays consistent with the displayed
