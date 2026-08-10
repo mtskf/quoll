@@ -239,6 +239,24 @@ describe("linkReveal — the clickable marker tracks actionability", () => {
     expect(clickableCount(`see [t](${long}) end`)).toBe(0);
   });
 
+  // Percent-encoded structure. The host applies its absolute / backslash /
+  // scheme checks to the PERCENT-DECODED path (handle-open-link.ts), so a
+  // destination that only looks relative before decoding is dropped there —
+  // after the webview has already posted and preventDefault'd, which eats the
+  // caret move too. These are the worst dead clicks of the set, and the
+  // pointer must not promise them.
+  it("does NOT mark a percent-encoded absolute path", () => {
+    expect(clickableCount("see [t](%2Fetc.md) end")).toBe(0);
+  });
+
+  it("does NOT mark a percent-encoded backslash path", () => {
+    expect(clickableCount("see [t](%5Cfoo.md) end")).toBe(0);
+  });
+
+  it("does NOT mark a percent-encoded protocol-relative path", () => {
+    expect(clickableCount("see [t](%2F%2Fhost.md) end")).toBe(0);
+  });
+
   it("does NOT mark a protocol-relative destination", () => {
     // isAllowedUrl rejects `//host/path` — it looks schemeless but the URL
     // parser resolves it as a remote origin.

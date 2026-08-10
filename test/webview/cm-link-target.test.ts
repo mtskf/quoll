@@ -25,6 +25,31 @@ describe("classifyLinkTarget", () => {
     });
   });
 
+  // The structural rules must be applied to the PERCENT-DECODED path, because
+  // that is the form the host judges (handle-open-link.ts). Judging the raw
+  // string instead made these classify as `workspace` — pointer cursor, post,
+  // preventDefault — and the host then dropped them, eating the caret move too.
+  it("applies the absolute / backslash / scheme rules to the percent-decoded path", () => {
+    expect(classifyLinkTarget("%2Fetc.md")).toEqual({ kind: "no-action" });
+    expect(classifyLinkTarget("%5Cfoo.md")).toEqual({ kind: "no-action" });
+    expect(classifyLinkTarget("%2F%2Fhost.md")).toEqual({ kind: "no-action" });
+    expect(classifyLinkTarget("http%3A%2F%2Fexample.com%2Fx.md")).toEqual({ kind: "no-action" });
+  });
+
+  it("percent-decodes a legitimate escaped path, and falls back on a malformed one", () => {
+    // `my%20notes.md` must still route — the decode exists to make the ordinary
+    // escaped form work, not merely to reject things.
+    expect(classifyLinkTarget("my%20notes.md")).toEqual({
+      kind: "workspace",
+      href: "my%20notes.md",
+    });
+    // A malformed escape throws inside decodeURIComponent; the host falls back
+    // to the raw form so the link still resolves to its literal-named file, and
+    // this side must agree. This catch is also what keeps the module total —
+    // decodeURIComponent is the one throwing primitive here.
+    expect(classifyLinkTarget("50%off.md")).toEqual({ kind: "workspace", href: "50%off.md" });
+  });
+
   it("classifies the schemeless fall-through as no-action", () => {
     // The class this PR exists for: ordinary Markdown Quoll does not route.
     expect(classifyLinkTarget("#section")).toEqual({ kind: "no-action" });
@@ -69,11 +94,14 @@ describe("classifyLinkTarget", () => {
 });
 
 // Totality is a hard contract, not a nicety: this function runs inside
-// DecorationProvider.build(), the orchestrator registers ONE ViewPlugin for all
-// providers, and CodeMirror permanently deactivates a plugin that throws
-// (@codemirror/view PluginInstance.update → logException → deactivate). A throw
-// here would silently strip EVERY decoration in the editor until a reload, so
-// the contract is pinned rather than trusted. Deliberately NOT solved with a
+// DecorationProvider.build(), the orchestrator drives every INLINE decoration
+// provider from a single shared ViewPlugin, and CodeMirror permanently
+// deactivates a plugin that throws (@codemirror/view PluginInstance.update →
+// logException → deactivate). A throw here would silently strip the whole
+// inline reveal layer — emphasis, inline code, links — until a reload. (Block
+// widgets are StateFields and some constructs own their ViewPlugin, so those
+// survive; the blast radius is the shared plugin, not the editor entire.) The
+// contract is pinned rather than trusted. Deliberately NOT solved with a
 // try/catch at the call site: that would convert a future real bug into a
 // silently-missing cursor. Fail loudly in CI instead of quietly in production.
 describe("classifyLinkTarget — totality (never throws)", () => {

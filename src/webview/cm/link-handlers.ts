@@ -6,13 +6,17 @@
 //   - handleLinkMouseDown(event, view, host) + quollLinkClickHandler():
 //     extracted mousedown helper + the Extension factory that wires it.
 //
-// Why a single file: the three exports share a small private surface (the
-// URL-extract, the boundary-inclusive selection helper, the warn policy).
-// Splitting would either duplicate them or thread them through a fourth
-// module. What this file no longer owns is the CLASSIFICATION of a
-// destination — that moved to ./link-target.js so the click handler and the
-// `quoll-link-clickable` decoration decide "does this act?" from one
-// predicate instead of two drifting copies.
+// Why a single file: the three exports form one interaction surface —
+// handleLinkMouseDown exists only to feed tryOpenLinkAt, and
+// quollLinkClickHandler only to wire it into CodeMirror — and they share the
+// boundary-inclusive selection guard and the warn policy below. Splitting
+// would thread a one-line delegation through a fourth module.
+//
+// What this file no longer owns is the CLASSIFICATION of a destination: that
+// moved to ./link-target.js so the click handler and the
+// `quoll-link-clickable` decoration decide "does this act?" from one predicate
+// instead of two drifting copies. This file keeps the LOGGING policy on top of
+// that verdict.
 
 import { syntaxTree } from "@codemirror/language";
 import type { EditorState } from "@codemirror/state";

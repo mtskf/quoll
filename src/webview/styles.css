@@ -354,12 +354,17 @@ html body {
     color: var(--vscode-descriptionForeground, var(--vscode-editor-foreground));
   }
 
-  /* Clickable inline link content (C4b). Caret-out: the link's inline
-   * content range carries this class so the mouse cursor signals "I'm
-   * clickable". Caret-in: the marker is dropped (the user is editing the
-   * link source), so the standard text-cursor returns. The pointer cursor
-   * is the only state delta — link COLOUR is already supplied by
-   * cm/theme.ts via the t.link Lezer tag, so we don't redeclare it here. */
+  /* Clickable inline link content (C4b). Caret-out AND the destination is one
+   * a click actually acts on: the link's inline content range carries this
+   * class so the mouse cursor signals "I'm clickable". A destination Quoll
+   * does not route (a fragment, a relative non-.md path, a blocked scheme) is
+   * deliberately left WITHOUT this class — the pointer is a promise, and those
+   * clicks do nothing (see cm/link-target.ts). Caret-in: the marker is dropped
+   * for every link (the user is editing the link source), so the standard
+   * text-cursor returns. The pointer cursor is the only state delta — link
+   * COLOUR is already supplied by cm/theme.ts via the t.link Lezer tag, so we
+   * don't redeclare it here, which is why an unroutable link still LOOKS like
+   * a link. */
   .quoll-link-clickable {
     cursor: pointer;
   }

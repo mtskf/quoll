@@ -15,11 +15,19 @@
 // over the link's inline content range (`[text]` interior — the substring
 // between `[` and `]`) IF a click on the destination would DO something.
 // Actionability is decided by cm/link-target.ts, the same classifier
-// cm/link-handlers.ts gates the click on, so the pointer cursor means exactly
-// "this link acts". Before that gate existed, a fragment (`[x](#sec)`) or a
-// relative non-.md link (`[x](./photo.png)`) rendered identically to a working
-// link and then did nothing. In REVEALED state the marker drops for every link
-// (user is editing, not clicking).
+// cm/link-handlers.ts gates the click on, so the pointer cursor means "the
+// webview will act on this click". Before that gate existed, a fragment
+// (`[x](#sec)`) or a relative non-.md link (`[x](./photo.png)`) rendered
+// identically to a working link and then did nothing. In REVEALED state the
+// marker drops for every link (user is editing, not clicking).
+//
+// Read that promise at its true strength — it is NOT "this link opens". The
+// webview owns no path, so it cannot evaluate host-side containment: a
+// relative `.md` target resolving outside the workspace still classifies as
+// actionable, still gets a pointer, and is dropped log-only by the host
+// (links/handle-open-link.ts) after preventDefault has already eaten the caret
+// move. Closing that one needs a host→webview rejection channel, not a cursor
+// change.
 //
 // Reveal-trigger range is the OUTER Link node range (mirror of
 // inline-mark-reveal). Click-to-open behaviour is wired separately in

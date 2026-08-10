@@ -9,11 +9,16 @@
 // so the affordance cannot drift from the behaviour again.
 //
 // TOTALITY IS A HARD CONTRACT — this module must never throw. It runs inside
-// DecorationProvider.build(); the orchestrator registers ONE ViewPlugin for
-// every provider, and CodeMirror's PluginInstance.update catches a plugin
-// throw and then deactivates the plugin PERMANENTLY. A throw here would strip
-// every decoration in the editor — links, emphasis, tables, headings — until
-// the user reloads the window, with only a console.error to show for it.
+// DecorationProvider.build(), and the orchestrator drives EVERY inline
+// decoration provider from a SINGLE shared ViewPlugin. CodeMirror's
+// PluginInstance.update catches a plugin throw and then deactivates that
+// plugin PERMANENTLY, so a throw here does not just drop the link marker: it
+// takes down every provider sharing that plugin — the inline syntax reveals
+// (emphasis, inline code, links) and this clickable marker — until the user
+// reloads the window, with only a console.error to show for it. Block widgets
+// (tables, images, frontmatter) are StateFields and constructs like
+// heading-rhythm ship their own ViewPlugins, so those survive — the blast
+// radius is "all inline reveal", not literally every decoration.
 // test/webview/cm-link-target.test.ts pins this against a hostile matrix.
 // Keep it to string/regex/Set work: no `new URL()`, no JSON.parse, no
 // unguarded String.fromCodePoint. (url-decode.ts's `decodableCodePoint` guard
@@ -37,9 +42,9 @@
 // schemeOf helper below are mirrored in
 // src/extension/links/handle-open-external.ts (host arm) and MUST behave
 // identically. Both sides' hostile-URL matrices
-// (test/extension/handle-open-external.test.ts and
-// test/webview/cm-link-handlers.test.ts + cm-link-target.test.ts) red on
-// drift. A shared host+webview module remains rejected as scope creep — the
+// (test/extension/links/handle-open-external.test.ts and
+// test/webview/cm-link-handlers.test.ts + cm-link-target.test.ts +
+// test/webview/decorations/cm-link-integration.test.ts) red on drift. A shared host+webview module remains rejected as scope creep — the
 // duplication is ~10 LOC on each side of a process boundary, and collapsing it
 // would add a third module to the C9b deletion footprint. This extraction is
 // therefore single-source-of-truth WITHIN the webview, not across the boundary.
@@ -60,7 +65,7 @@ const OPENABLE_SCHEMES = new Set(["http", "https", "mailto"]);
  *    - javascript / vbscript / data / blob / file / about — the scheme families
  *      the render gate and the write validator exist to stop. Naming them turns
  *      "this link does nothing" into "this link was blocked, and here is why". */
-const LOGGABLE_SCHEMES = new Set([
+const LOGGABLE_SCHEMES = [
   "http",
   "https",
   "mailto",
@@ -70,7 +75,15 @@ const LOGGABLE_SCHEMES = new Set([
   "blob",
   "file",
   "about",
-]);
+] as const;
+
+/** Every string `schemeToken` can ever hold. A literal union, not `string`, so
+ *  the NO-URL POLICY is checked by tsc rather than asserted in prose: an
+ *  attempt to put an href-derived value on the `blocked` arm reds with TS2322
+ *  at the assignment, instead of relying on a reviewer noticing. This is the
+ *  difference between "enforced" and "documented" — the header claims the
+ *  former, so the type has to earn it. */
+type LoggableSchemeToken = (typeof LOGGABLE_SCHEMES)[number] | "(none)" | "(unrecognised)";
 
 /** Lowercase-first scheme extract. Same regex shape as isAllowedUrl and the
  *  host arm — see the DRIFT WARNING above. Module-private on purpose: the only
@@ -93,12 +106,17 @@ function schemeOf(url: string): string | null {
  *  triage weight; the token only sharpens it. `null` renders as "(none)" so a
  *  protocol-relative / control-character reject stays distinguishable from a
  *  blocked scheme. */
-function schemeTokenForLog(scheme: string | null): string {
+function schemeTokenForLog(scheme: string | null): LoggableSchemeToken {
   if (scheme === null) {
     return "(none)";
   }
-  // `schemeOf` lowercases before matching, so membership is case-exact here.
-  return LOGGABLE_SCHEMES.has(scheme) ? scheme : "(unrecognised)";
+  // `.find` rather than a Set `.has`: `has` narrows nothing, so the result
+  // would have to be returned as the untyped input string — which is exactly
+  // the href-derived value this function exists to keep out of logs. `find`
+  // returns the matched LITERAL from the table, so what leaves here provably
+  // came from the table and not from the input. `schemeOf` lowercases before
+  // matching, so membership is case-exact.
+  return LOGGABLE_SCHEMES.find((s) => s === scheme) ?? "(unrecognised)";
 }
 
 /** What a decoded destination resolves to. `external` and `workspace` are the
@@ -110,28 +128,68 @@ export type LinkTarget =
   | { readonly kind: "external"; readonly href: string }
   | { readonly kind: "workspace"; readonly href: string }
   | { readonly kind: "oversize"; readonly length: number }
-  | { readonly kind: "blocked"; readonly schemeToken: string }
+  | { readonly kind: "blocked"; readonly schemeToken: LoggableSchemeToken }
   | { readonly kind: "unopenable-scheme"; readonly scheme: string }
   | { readonly kind: "no-action" };
 
 /** True when `decoded` is a schemeless, NON-ABSOLUTE destination whose path
- *  (after stripping a trailing #fragment) ends in `.md` (case-insensitive) —
- *  i.e. a relative in-workspace Markdown link eligible for the `open-link`
- *  page-to-page path. Caller has already confirmed `schemeOf(decoded) === null`.
+ *  (after stripping a trailing #fragment AND percent-decoding) ends in `.md`
+ *  (case-insensitive) — i.e. a relative in-workspace Markdown link eligible for
+ *  the `open-link` page-to-page path. Caller has already confirmed
+ *  `schemeOf(decoded) === null`.
+ *
+ *  MUST mirror `handleOpenLink`'s structural gate, and specifically must apply
+ *  it to the PERCENT-DECODED path, because that is the form the host judges.
+ *  Checking only the raw form makes `[x](%2Fetc.md)` look like an ordinary
+ *  relative `.md` link here while the host decodes it to `/etc.md` and drops it
+ *  as absolute — and since this side already posted, `preventDefault` has fired,
+ *  so that click loses its caret move too. That is the exact dead click this
+ *  module exists to stop the cursor from promising, so the two sides have to
+ *  agree about which STRING they are judging, not merely about the rules
+ *  (Codex Conf 99). `%5C…` and `%2F%2F…` are the same mismatch.
+ *
  *  The absolute-path reject stops an absolute link from being CONSUMED here
  *  (which would swallow the caret move) even though the host would drop it. The
- *  host (`handleOpenLink`) re-derives + re-validates all of this — this is the
- *  webview-side half of the defense-in-depth gate. */
+ *  host re-derives + re-validates all of this — this is the webview-side half of
+ *  the defense-in-depth gate, not a substitute for it. */
 function relativeMarkdownTarget(decoded: string): boolean {
+  // Split the fragment on the ENCODED form: a literal `#` in a filename is
+  // `%23`, so URL-structural splitting must precede percent-decoding. Mirrors
+  // handleOpenLink.
+  const hashIdx = decoded.indexOf("#");
+  const encodedPath = hashIdx >= 0 ? decoded.slice(0, hashIdx) : decoded;
+  if (encodedPath.length === 0) {
+    return false;
+  }
+  // Percent-decode ONCE so `my%20notes.md` is judged as the real space-named
+  // file. decodeURIComponent throws on a malformed escape (`50%off.md`) — fall
+  // back to the raw form exactly as the host does, so such a link keeps
+  // resolving to its literal-named file. The try/catch is the host's documented
+  // fallback, NOT a swallowed bug: it is what keeps this module total (see the
+  // header's totality contract), since decodeURIComponent is the one throwing
+  // primitive in this file.
+  let pathPart: string;
+  try {
+    pathPart = decodeURIComponent(encodedPath);
+  } catch {
+    pathPart = encodedPath;
+  }
+  // Re-apply the allowlist to the DECODED form: catches C0/DEL bytes and
+  // protocol-relative `//host` that were hidden behind percent-escapes.
+  if (!isAllowedUrl(pathPart)) {
+    return false;
+  }
+  // isAllowedUrl accepts mailto:/http: — but open-link targets are schemeless.
+  if (schemeOf(pathPart) !== null) {
+    return false;
+  }
   // Reject absolute `/…` and ANY backslash (markdown paths use `/`; a `\` is a
   // separator under real Uri.joinPath but not the test stub — reject it so the
   // host containment check is separator-agnostic). Mirrors handleOpenLink.
-  if (decoded.startsWith("/") || decoded.includes("\\")) {
+  if (pathPart.startsWith("/") || pathPart.includes("\\")) {
     return false;
   }
-  const hashIdx = decoded.indexOf("#");
-  const pathPart = hashIdx >= 0 ? decoded.slice(0, hashIdx) : decoded;
-  return pathPart.length > 0 && /\.md$/i.test(pathPart);
+  return /\.md$/i.test(pathPart);
 }
 
 /** Classify an already-decoded link destination. Gate ORDER is load-bearing and
@@ -198,5 +256,23 @@ export function classifyLinkTarget(decoded: string): LinkTarget {
  *  existence (see the fragment TODO). What the naming buys is that the arm
  *  joins without renaming a shared predicate, not that no consumer changes. */
 export function isActionableLinkTarget(target: LinkTarget): boolean {
-  return target.kind === "external" || target.kind === "workspace";
+  return ACTIONABLE_BY_KIND[target.kind];
 }
+
+/** Why a lookup table rather than `kind === "external" || kind === "workspace"`:
+ *  the switch in tryOpenLinkAt is exhaustiveness-checked (TS2366), but a boolean
+ *  `||` chain is not — a seventh arm would compile green here and silently
+ *  answer `false`. The realistic sequence is the one this module's header
+ *  advertises: someone adds a fragment arm, the compiler forces them to handle
+ *  it in tryOpenLinkAt, they never touch this predicate, and the result is a
+ *  link that ACTS but shows no pointer cursor — the exact inverse of the bug
+ *  this module was written to fix. A `Record<LinkTarget["kind"], …>` reds with
+ *  TS2741 the moment the union grows, so the two halves cannot drift. */
+const ACTIONABLE_BY_KIND: Record<LinkTarget["kind"], boolean> = {
+  external: true,
+  workspace: true,
+  oversize: false,
+  blocked: false,
+  "unopenable-scheme": false,
+  "no-action": false,
+};
