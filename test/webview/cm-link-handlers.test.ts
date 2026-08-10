@@ -358,14 +358,15 @@ describe("tryOpenLinkAt — MAX_HREF_LENGTH guard", () => {
   });
 });
 
-// The three "dead click" bails (allowlist reject, oversize href,
-// non-openable scheme) each swallow the click with no host message. Without
-// a log line, a user reporting "this link does nothing" leaves no trace to
-// triage — `openExternalSinkFor` (src/webview/cm/open-external.ts) already
-// warns on the same allowlist condition. These tests pin the warn AND the
-// no-URL policy: the message must never carry the href (mirrors the sink,
-// which logs the condition only).
-describe("tryOpenLinkAt — dead-click bails warn", () => {
+// Invariant: any gate-reject bail in tryOpenLinkAt — declining to open and,
+// unlike a true "dead click" (open-external.ts, handle-open-link.ts),
+// NOT consuming the click via preventDefault — logs a console.warn under
+// the `[quoll]` prefix so a "this link does nothing" report has a triage
+// trail, mirroring `openExternalSinkFor`'s warn (open-external.ts) for the
+// allowlist condition the two share. These tests pin that invariant AND the
+// no-URL policy: the warn's detail must never carry the href or any slice
+// of it.
+describe("tryOpenLinkAt — gate-reject bails warn", () => {
   function warnFor(doc: string, marker: string): { calls: unknown[][]; handled: boolean } {
     const state = stateOf(doc);
     const posted: unknown[] = [];
@@ -380,10 +381,23 @@ describe("tryOpenLinkAt — dead-click bails warn", () => {
     }
   }
 
-  it("warns when the URL is not in the allowlist", () => {
+  it("warns with the rejected URL's scheme when the URL is not in the allowlist", () => {
     const { calls, handled } = warnFor("see [t](javascript:alert(1))", "[t]");
     expect(handled).toBe(false);
-    expect(calls).toEqual([["[quoll] link click dropped: URL not in allowlist"]]);
+    expect(calls).toEqual([
+      ["[quoll] link not opened: URL not in allowlist", { scheme: "javascript" }],
+    ]);
+    // The scheme token is safe to log; the URL body ("alert(1)") is not.
+    expect(JSON.stringify(calls)).not.toContain("alert(1)");
+  });
+
+  it('warns with scheme "(none)" when the rejected URL carries no scheme', () => {
+    const { calls, handled } = warnFor("see [t](//evil.example/x)", "[t]");
+    expect(handled).toBe(false);
+    expect(calls).toEqual([
+      ["[quoll] link not opened: URL not in allowlist", { scheme: "(none)" }],
+    ]);
+    expect(JSON.stringify(calls)).not.toContain("evil.example");
   });
 
   it("warns when the URL exceeds MAX_HREF_LENGTH, without logging the URL", async () => {
@@ -392,7 +406,7 @@ describe("tryOpenLinkAt — dead-click bails warn", () => {
     const { calls, handled } = warnFor(`see [t](https://x/${padding})`, "[t]");
     expect(handled).toBe(false);
     expect(calls).toHaveLength(1);
-    expect(calls[0]?.[0]).toBe("[quoll] link click dropped: URL exceeds MAX_HREF_LENGTH");
+    expect(calls[0]?.[0]).toBe("[quoll] link not opened: URL exceeds MAX_HREF_LENGTH");
     // Length + cap are safe to log; the URL itself is not.
     expect(calls[0]?.[1]).toEqual({ length: MAX_HREF_LENGTH + 10, max: MAX_HREF_LENGTH });
     expect(JSON.stringify(calls)).not.toContain(padding.slice(0, 32));
@@ -400,9 +414,9 @@ describe("tryOpenLinkAt — dead-click bails warn", () => {
 
   // The non-openable-scheme bail is UNREACHABLE through the real gate:
   // url-allowlist's ALLOWED_URL_SCHEMES and link-handlers' OPENABLE_SCHEMES
-  // are both {http, https, mailto}, so any scheme-bearing URL that survives
-  // isAllowedUrl is launchable by construction. The branch exists as drift
-  // insurance (same rationale as the host arm's mirror in
+  // are the same set by construction, so any scheme-bearing URL that
+  // survives isAllowedUrl is launchable by construction. The branch exists
+  // as drift insurance (same rationale as the host arm's mirror in
   // src/extension/links/handle-open-external.ts), so pin it by simulating
   // the drift: stub isAllowedUrl to accept everything and feed an `ftp:` URL.
   it("warns when an allowlisted URL carries a non-openable scheme (simulated drift)", async () => {
@@ -418,7 +432,7 @@ describe("tryOpenLinkAt — dead-click bails warn", () => {
         expect(linkHandlers.tryOpenLinkAt(stateOf(doc), posOf(doc, "[t]") + 1, host)).toBe(false);
         expect(posted).toEqual([]);
         expect(warnSpy.mock.calls.map((c) => [...c])).toEqual([
-          ["[quoll] link click dropped: scheme not in OPENABLE_SCHEMES", { scheme: "ftp" }],
+          ["[quoll] link not opened: scheme not in OPENABLE_SCHEMES", { scheme: "ftp" }],
         ]);
       } finally {
         warnSpy.mockRestore();

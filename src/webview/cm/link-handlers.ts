@@ -77,22 +77,28 @@ function postToHost(host: LinkOpenHost, message: WebviewToHost): boolean {
   return safePostMessage(host, message, "link-open");
 }
 
-/** Log a bail that consumes a click without opening anything ("dead click"),
- *  under the `[quoll]` grep prefix so a "this link does nothing" report has a
- *  triage trail. Mirrors `openExternalSinkFor`'s warn (open-external.ts) for
- *  the allowlist condition the two share.
+/** Log a bail where tryOpenLinkAt declines to open the link and returns
+ *  false. The click itself is NOT consumed here — none of these bails call
+ *  preventDefault, so the click falls through to CodeMirror's default caret
+ *  placement. This is distinct from the "dead click" terminology used
+ *  elsewhere in the codebase (open-external.ts, handle-open-link.ts): there,
+ *  preventDefault has already fired before the sink runs, so a failure
+ *  there truly consumes the click with no effect. Logged under the
+ *  `[quoll]` grep prefix so a "this link does nothing" report has a triage
+ *  trail. Mirrors `openExternalSinkFor`'s warn (open-external.ts) for the
+ *  allowlist condition the two share.
  *
  *  NO-URL POLICY (do not relax): `detail` carries only derived, bounded facts
  *  — a length, a scheme token — never the href or any slice of it. The
  *  webview console is user-visible surface and the URL can be hostile or
  *  private; the host arm sanitises before it logs a preview, and this side has
  *  no sanitiser, so it logs no URL at all. */
-function warnDeadClick(reason: string, detail?: Record<string, unknown>): void {
+function warnLinkNotOpened(reason: string, detail?: Record<string, unknown>): void {
   if (detail === undefined) {
-    console.warn(`[quoll] link click dropped: ${reason}`);
+    console.warn(`[quoll] link not opened: ${reason}`);
     return;
   }
-  console.warn(`[quoll] link click dropped: ${reason}`, detail);
+  console.warn(`[quoll] link not opened: ${reason}`, detail);
 }
 
 function selectionIntersects(state: EditorState, from: number, to: number): boolean {
@@ -128,7 +134,10 @@ function selectionIntersects(state: EditorState, from: number, to: number): bool
  *      schemeless non-.md relative → falls through to a caret move).
  *  The security invariant is "post-only-when-safe-and-launchable-or-a-
  *  relative-.md-target" — the return value is a caller-convenience signal
- *  for preventDefault. */
+ *  for preventDefault. The gate-reject bails (oversize href, allowlist
+ *  reject, non-openable scheme) additionally log a console.warn via
+ *  `warnLinkNotOpened` for triage; the other false-returning branches are
+ *  ordinary UI states and stay silent. */
 export function tryOpenLinkAt(state: EditorState, pos: number, host: LinkOpenHost): boolean {
   const tree = syntaxTree(state);
   let node = tree.resolveInner(pos, 0);
@@ -163,19 +172,32 @@ export function tryOpenLinkAt(state: EditorState, pos: number, host: LinkOpenHos
   // would silently reject on shape, leaving the user with a no-op click
   // AND a suppressed caret move (preventDefault fired).
   if (decoded.length > MAX_HREF_LENGTH) {
-    warnDeadClick("URL exceeds MAX_HREF_LENGTH", { length: decoded.length, max: MAX_HREF_LENGTH });
+    warnLinkNotOpened("URL exceeds MAX_HREF_LENGTH", {
+      length: decoded.length,
+      max: MAX_HREF_LENGTH,
+    });
     return false;
   }
+  // scheme is derived ahead of the isAllowedUrl check so the allowlist-reject
+  // warn below can carry it as a triage token. This is safe to call on a
+  // NOT-YET-validated (possibly hostile) string: schemeOf's regex
+  // (`^([a-z][a-z0-9+.-]*):`) only ever returns a bounded lowercase-token
+  // match or null — it cannot echo back C0/DEL bytes or any other slice of
+  // the URL body (e.g. a leading C0 byte, as in `java\nscript:...`, fails
+  // the anchored match entirely and yields null → logged as "(none)").
+  const scheme = schemeOf(decoded);
   // Defense layer 1 (webview-side): isAllowedUrl + openable-scheme gate.
   // Layer 2 (host-side handler) re-applies isAllowedUrl + an
   // OPENABLE_SCHEMES check on its end. Both must pass — defense in depth.
   // Both sides import isAllowedUrl from the same `markdown/url-allowlist`
   // module so the gate's identity cannot drift.
   if (!isAllowedUrl(decoded)) {
-    warnDeadClick("URL not in allowlist");
+    // scheme detail mirrors the host arm's precedent (handle-open-external.ts
+    // `scheme: scheme ?? "(none)"`) so a triage report can distinguish a
+    // blocked scheme from a protocol-relative or control-character reject.
+    warnLinkNotOpened("URL not in allowlist", { scheme: scheme ?? "(none)" });
     return false;
   }
-  const scheme = schemeOf(decoded);
   if (scheme !== null) {
     // Scheme-bearing: only http/https/mailto are launchable externally.
     if (!OPENABLE_SCHEMES.has(scheme)) {
@@ -183,7 +205,7 @@ export function tryOpenLinkAt(state: EditorState, pos: number, host: LinkOpenHos
       // scheme surviving isAllowedUrl is launchable) — kept as drift
       // insurance, so the warn doubles as the runtime drift signal. Same
       // rationale as the host arm's mirror branch.
-      warnDeadClick("scheme not in OPENABLE_SCHEMES", { scheme });
+      warnLinkNotOpened("scheme not in OPENABLE_SCHEMES", { scheme });
       return false;
     }
     return postToHost(host, { protocol: PROTOCOL_VERSION, type: "open-external", href: decoded });
