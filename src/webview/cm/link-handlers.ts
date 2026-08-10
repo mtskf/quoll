@@ -1,115 +1,43 @@
 // Link interaction surface for the CodeMirror editor:
 //   - tryOpenLinkAt(state, pos, host): a pure helper that resolves a
-//     position to a Link node and, if the URL is safe and launchable,
-//     posts an OpenExternalMessage to the host.
+//     position to a Link node and, when the destination is actionable, posts
+//     the matching message to the host — `open-external` for a launchable
+//     http/https/mailto URL, `open-link` for a relative `.md` target.
 //   - handleLinkMouseDown(event, view, host) + quollLinkClickHandler():
 //     extracted mousedown helper + the Extension factory that wires it.
 //
-// Why a single file: the three exports share a small private surface
-// (the URL-extract + scheme check, the shared OPENABLE_SCHEMES set, the
-// boundary-inclusive selection helper). Splitting would either duplicate
-// the helpers or thread them through a fourth module.
+// Why a single file: the three exports form one call chain —
+// quollLinkClickHandler wires handleLinkMouseDown into CodeMirror, which
+// exists only to feed tryOpenLinkAt — so splitting them would thread a
+// one-line delegation through a fourth module for no gain. (They do NOT share
+// helpers: selectionIntersects, warnLinkNotOpened and postToHost each have
+// exactly one caller, tryOpenLinkAt.)
+//
+// What this file no longer owns is the CLASSIFICATION of a destination: that
+// moved to ./link-target.js so the click handler and the
+// `quoll-link-clickable` decoration decide "does this act?" from one predicate
+// instead of two drifting copies. This file keeps the LOGGING policy on top of
+// that verdict.
 
 import { syntaxTree } from "@codemirror/language";
 import type { EditorState } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 
-import { isAllowedUrl } from "../../markdown/url-allowlist.js";
 import { decodeMarkdownDestination } from "../../markdown/url-decode.js";
 import { MAX_HREF_LENGTH, PROTOCOL_VERSION, type WebviewToHost } from "../../shared/protocol.js";
 import { type PostMessageHost, safePostMessage } from "../safe-post-message.js";
+import { classifyLinkTarget } from "./link-target.js";
 
 // --- Click-to-open helper ---
 //
-// DRIFT WARNING (review fix #9 + R2-4): the SAME OPENABLE_SCHEMES set +
-// schemeOf helper lives in src/extension/handle-open-external.ts (host
-// arm). The two MUST behave identically. The host-side
-// test/extension/handle-open-external.test.ts pins the host arm's
-// unsafe-URL matrix; the webview-side
-// test/webview/cm-link-handlers.test.ts + cm-link-integration.test.ts
-// pin this side's matrix. Both matrices cover the same hostile-URL
-// attack-scenario set (most rows are byte-identical; the two C0-bypass
-// rows — inline `java&#10;script:...` and trailing `...example.com&#10;`
-// — deliberately differ by protocol design — this side ships the raw
-// entity form `&#10;` while the host arm receives the post-decode
-// literal `\n`), so a drift on either side reds CI on that side. A
-// shared module is rejected as scope creep (10 LOC ×2 is cheaper than
-// a third file in the C9b deletion footprint).
+// DRIFT WARNING: the classification cascade (OPENABLE_SCHEMES, schemeOf, the
+// relative-.md arm) lives in ./link-target.js now — see that module's header
+// for the drift contract against src/extension/links/handle-open-external.ts
+// (host arm).
 
 /** Alias of the safe-post-message host shape (not the full Host singleton),
  *  so tests can pass a thin spy without importing the full host module. */
 export type LinkOpenHost = PostMessageHost;
-
-const OPENABLE_SCHEMES = new Set(["http", "https", "mailto"]);
-
-function schemeOf(url: string): string | null {
-  // Same lowercase-first regex shape used by isAllowedUrl + the host arm.
-  const match = /^([a-z][a-z0-9+.-]*):/.exec(url.toLowerCase());
-  return match ? match[1] : null;
-}
-
-/** The schemes `schemeTokenForLog` will name on the PRE-validation path — the
- *  fixed set of in-file literals the NO-URL POLICY (see `warnLinkNotOpened`)
- *  requires the token to be PICKED from, so an unvalidated href can only SELECT
- *  a member, never contribute bytes to one. Two groups, both earning their
- *  triage keep:
- *    - http / https / mailto — allowlisted schemes. Reaching the
- *      allowlist-reject warn with one of these says the reject had a NON-scheme
- *      cause (a C0/DEL byte in the destination is the usual one), which is the
- *      single most useful thing that warn can tell a reporter.
- *    - javascript / vbscript / data / blob / file / about — the scheme families
- *      the render gate and the write validator exist to stop. Naming them turns
- *      "this link does nothing" into "this link was blocked, and here is why". */
-const LOGGABLE_SCHEMES = new Set([
-  "http",
-  "https",
-  "mailto",
-  "javascript",
-  "vbscript",
-  "data",
-  "blob",
-  "file",
-  "about",
-]);
-
-/** Render a scheme for `warnLinkNotOpened`'s `detail` under the NO-URL POLICY.
- *  Mandatory on the PRE-validation path: `schemeOf`'s anchored regex bounds the
- *  token's ALPHABET but NOT its LENGTH, and — the reason a length cap was not
- *  enough — a SHORT pre-colon run is still href bytes: a destination such as
- *  `MyVault-Passw0rd.notes:entry` would echo a private fragment verbatim under
- *  any cap. So this classifies instead of truncating: a known scheme is named,
- *  anything else collapses to "(unrecognised)", and nothing varies with length
- *  (there is no threshold to widen). "URL not in allowlist" already carries the
- *  triage weight; the token only sharpens it. `null` renders as "(none)" so a
- *  protocol-relative / control-character reject stays distinguishable from a
- *  blocked scheme. */
-function schemeTokenForLog(scheme: string | null): string {
-  if (scheme === null) {
-    return "(none)";
-  }
-  // `schemeOf` lowercases before matching, so membership is case-exact here.
-  return LOGGABLE_SCHEMES.has(scheme) ? scheme : "(unrecognised)";
-}
-
-/** True when `decoded` is a schemeless, NON-ABSOLUTE destination whose path
- *  (after stripping a trailing #fragment) ends in `.md` (case-insensitive) —
- *  i.e. a relative in-workspace Markdown link eligible for the `open-link`
- *  page-to-page path. Caller has already confirmed `schemeOf(decoded) === null`.
- *  The absolute-path reject stops an absolute link from being CONSUMED here
- *  (which would swallow the caret move) even though the host would drop it. The
- *  host (`handleOpenLink`) re-derives + re-validates all of this — this is the
- *  webview-side half of the defense-in-depth gate. */
-function relativeMarkdownTarget(decoded: string): boolean {
-  // Reject absolute `/…` and ANY backslash (markdown paths use `/`; a `\` is a
-  // separator under real Uri.joinPath but not the test stub — reject it so the
-  // host containment check is separator-agnostic). Mirrors handleOpenLink.
-  if (decoded.startsWith("/") || decoded.includes("\\")) {
-    return false;
-  }
-  const hashIdx = decoded.indexOf("#");
-  const pathPart = hashIdx >= 0 ? decoded.slice(0, hashIdx) : decoded;
-  return pathPart.length > 0 && /\.md$/i.test(pathPart);
-}
 
 /** Post a webview→host message, swallowing a transport throw (panel dispose
  *  mid-click, structured-clone edge cases) under the [quoll] grep prefix and
@@ -130,16 +58,13 @@ function postToHost(host: LinkOpenHost, message: WebviewToHost): boolean {
  *  warn (open-external.ts) for the allowlist condition the two share.
  *
  *  NO-URL POLICY (do not relax): no value in `detail` may carry bytes that came
- *  from the href. Each one is either a NUMBER derived from it (a length) or a
- *  string PICKED from a set of literals declared in source — `LOGGABLE_SCHEMES`
- *  below, or, for the post-allowlist drift branch that logs its scheme raw,
- *  `ALLOWED_URL_SCHEMES` in markdown/url-allowlist.ts — so what this warn can
- *  print is enumerable by reading those sets, whatever the href was. A slice of
- *  the href, however short or however "safe-looking" its character class, is
- *  not a derived fact and does not qualify. The webview
- *  console is user-visible surface and the destination can be hostile or merely
- *  private; the host arm sanitises before it logs a preview, this side has no
- *  sanitiser, so it echoes nothing. */
+ *  from the href. ENFORCED in ./link-target.js rather than upheld by each call
+ *  site here: every string field a `LinkTarget` rejection arm carries is already
+ *  PICKED from a set of source literals (that module's header names them) — so
+ *  this function's callers can pass any rejection-arm field through. The webview
+ *  console is user-visible surface and the destination can be hostile or
+ *  merely private; the host arm sanitises before it logs a preview, this side
+ *  has no sanitiser, so it echoes nothing. */
 function warnLinkNotOpened(reason: string, detail: Record<string, unknown>): void {
   console.warn(`[quoll] link not opened: ${reason}`, detail);
 }
@@ -179,8 +104,11 @@ function selectionIntersects(state: EditorState, from: number, to: number): bool
  *  relative-.md-target" — the return value is a caller-convenience signal
  *  for preventDefault. The gate-reject bails (oversize href, allowlist
  *  reject, non-openable scheme) additionally log a console.warn via
- *  `warnLinkNotOpened` for triage; the other false-returning branches are
- *  ordinary UI states and stay silent. */
+ *  `warnLinkNotOpened` for triage. The remaining false-returning branches are
+ *  silent: the pre-classification ones (not a Link, reference-form,
+ *  caret-in-link) are ordinary UI states, and the `no-action` arm is
+ *  deliberately silent because `decorations/link-reveal.ts` withholds the
+ *  pointer cursor for that class. */
 export function tryOpenLinkAt(state: EditorState, pos: number, host: LinkOpenHost): boolean {
   const tree = syntaxTree(state);
   let node = tree.resolveInner(pos, 0);
@@ -210,62 +138,45 @@ export function tryOpenLinkAt(state: EditorState, pos: number, host: LinkOpenHos
   }
   const raw = state.sliceDoc(urlNode.from, urlNode.to);
   const decoded = decodeMarkdownDestination(raw);
-  // MAX_HREF_LENGTH guard (review fix #5): mirror the host's protocol
-  // validator. Without this, an oversize href would post and the host
-  // would silently reject on shape, leaving the user with a no-op click
-  // AND a suppressed caret move (preventDefault fired).
-  if (decoded.length > MAX_HREF_LENGTH) {
-    warnLinkNotOpened("URL exceeds MAX_HREF_LENGTH", {
-      length: decoded.length,
-      max: MAX_HREF_LENGTH,
-    });
-    return false;
-  }
-  // Hoisted above the isAllowedUrl gate so the allowlist-reject warn below can
-  // carry the scheme as a triage token. `decoded` is NOT YET validated here —
-  // the only gate it has passed is the length check above — so `scheme` is
-  // still attacker- or author-chosen href bytes at this point.
-  const scheme = schemeOf(decoded);
-  // Defense layer 1 (webview-side): isAllowedUrl + openable-scheme gate.
-  // Layer 2 (host-side handler) re-applies isAllowedUrl + an
-  // OPENABLE_SCHEMES check on its end. Both must pass — defense in depth.
-  // Both sides import isAllowedUrl from the same `markdown/url-allowlist`
-  // module so the gate's identity cannot drift.
-  if (!isAllowedUrl(decoded)) {
-    // Classified (see schemeTokenForLog) because this is the PRE-validation
-    // path. Deliberately not a copy of either host-arm branch: the host's own
-    // allowlist-reject branch logs a sanitised, 64-capped `hrefPreview` and no
-    // scheme at all, and its bare `scheme ?? "(none)"` shape belongs to the
-    // POST-allowlist "dropped: scheme not in OPENABLE_SCHEMES" branch — mirrored
-    // below, where the token needs no classifying.
-    warnLinkNotOpened("URL not in allowlist", { scheme: schemeTokenForLog(scheme) });
-    return false;
-  }
-  if (scheme !== null) {
-    // Scheme-bearing: only http/https/mailto are launchable externally.
-    if (!OPENABLE_SCHEMES.has(scheme)) {
-      // Unreachable while ALLOWED_URL_SCHEMES ⊇ OPENABLE_SCHEMES (any
-      // scheme surviving isAllowedUrl is launchable) — kept as drift
-      // insurance, so the warn doubles as the runtime drift signal. Same
-      // rationale as the host arm's mirror branch. Logged RAW, not through
-      // schemeTokenForLog: post-allowlist the token is already an element of
-      // ALLOWED_URL_SCHEMES — a set of literals in url-allowlist.ts — so the
-      // POLICY's "PICKED from a fixed set" already holds, and naming the
-      // drifted scheme is the only thing this branch exists to say.
-      // Classifying would print "(unrecognised)" for exactly the case worth
-      // reporting.
-      warnLinkNotOpened("scheme not in OPENABLE_SCHEMES", { scheme });
+  // This switch adds only the LOGGING policy on top of the classifier — every
+  // field below is already NO-URL-POLICY-safe by construction (see
+  // link-target.ts's header).
+  const target = classifyLinkTarget(decoded);
+  switch (target.kind) {
+    case "external":
+      return postToHost(host, {
+        protocol: PROTOCOL_VERSION,
+        type: "open-external",
+        href: target.href,
+      });
+    case "workspace":
+      return postToHost(host, { protocol: PROTOCOL_VERSION, type: "open-link", href: target.href });
+    case "oversize":
+      warnLinkNotOpened("URL exceeds MAX_HREF_LENGTH", {
+        length: target.length,
+        max: MAX_HREF_LENGTH,
+      });
       return false;
-    }
-    return postToHost(host, { protocol: PROTOCOL_VERSION, type: "open-external", href: decoded });
+    case "blocked":
+      // Deliberately not a copy of either host-arm branch: the host's
+      // allowlist-reject branch logs a sanitised, 64-capped hrefPreview and no
+      // scheme at all, and its bare `scheme ?? "(none)"` shape belongs to the
+      // POST-allowlist branch mirrored below.
+      warnLinkNotOpened("URL not in allowlist", { scheme: target.schemeToken });
+      return false;
+    case "unopenable-scheme":
+      warnLinkNotOpened("scheme not in OPENABLE_SCHEMES", { scheme: target.scheme });
+      return false;
+    case "no-action":
+      // Fragments, absolute paths, non-.md relatives: ordinary Markdown Quoll
+      // does not route. Silent BY DESIGN — a warn here would fire on every
+      // table-of-contents click and drown the three real signals above. The
+      // dead-click affordance is fixed at its source instead:
+      // decorations/link-reveal.ts withholds the pointer cursor for exactly
+      // this class (isActionableLinkTarget), so the click never looked
+      // available and there is nothing to explain.
+      return false;
   }
-  // Schemeless: a relative `.md` link opens IN-EDITOR via the host (phase-1
-  // page-to-page). Everything else schemeless (fragments, absolute paths,
-  // non-.md relatives) falls through to a caret move.
-  if (relativeMarkdownTarget(decoded)) {
-    return postToHost(host, { protocol: PROTOCOL_VERSION, type: "open-link", href: decoded });
-  }
-  return false;
 }
 
 // --- Mousedown wiring ---
