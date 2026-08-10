@@ -70,27 +70,28 @@ describe("tryOpenCodeRefAt", () => {
 });
 
 describe("handleCodeRefMouseDown", () => {
+  const DOC = "see `src/foo.ts:42` end";
+  const REF_POS = DOC.indexOf("foo");
+
+  type MockMouseEvent = MouseEvent & { preventDefault: ReturnType<typeof vi.fn> };
+
   // Mock EditorView shaped for handleCodeRefMouseDown: the helper reads only
   // `view.state` (for tryOpenCodeRefAt) and `view.posAtCoords` (coord → pos).
   // happy-dom has no layout, so a real view's posAtCoords cannot resolve a
   // meaningful position — the stub is what makes the mouse path testable at all.
-  // Same seam as cm-link-handlers.test.ts's makeMockView.
+  // Same seam as cm-link-handlers.test.ts's makeMockView. It is a spy, not a bare
+  // arrow, so the coordinates handed to it can be asserted (see the second test).
   function makeMockView(state: EditorState, pos: number | null): EditorView {
-    return { state, posAtCoords: () => pos } as unknown as EditorView;
+    return { state, posAtCoords: vi.fn(() => pos) } as unknown as EditorView;
   }
-  function makeMockEvent(button: number): MouseEvent & {
-    preventDefault: ReturnType<typeof vi.fn>;
-  } {
+  function makeMockEvent(button: number): MockMouseEvent {
     return {
       button,
       clientX: 100,
       clientY: 50,
       preventDefault: vi.fn(),
-    } as unknown as MouseEvent & { preventDefault: ReturnType<typeof vi.fn> };
+    } as unknown as MockMouseEvent;
   }
-
-  const DOC = "see `src/foo.ts:42` end";
-  const REF_POS = DOC.indexOf("foo");
 
   it("opens the reference on a left-click and swallows the event", () => {
     const host = { postMessage: vi.fn() };
@@ -112,14 +113,13 @@ describe("handleCodeRefMouseDown", () => {
     // event's own coords is what makes the click land where the user clicked, and
     // the literal `false` selects the imprecise overload: precise mode returns
     // null for a click in a line's padding, which would silently drop the
-    // near-miss clicks this affordance is meant to accept. A stub that ignored
-    // its arguments would let both regressions through unseen.
+    // near-miss clicks this affordance is meant to accept. A stub that did not
+    // record its arguments would let both regressions through unseen.
     const host = { postMessage: vi.fn() };
-    const posAtCoords = vi.fn((_coords: { x: number; y: number }, _precise: false) => REF_POS);
-    const view = { state: stateFor(DOC), posAtCoords } as unknown as EditorView;
     const event = makeMockEvent(/* left */ 0);
+    const view = makeMockView(stateFor(DOC), REF_POS);
     expect(handleCodeRefMouseDown(event, view, host as never)).toBe(true);
-    expect(posAtCoords).toHaveBeenCalledWith({ x: 100, y: 50 }, false);
+    expect(view.posAtCoords).toHaveBeenCalledWith({ x: 100, y: 50 }, false);
   });
 
   it("forwards the resolved position exactly (a reference's edges do not open)", () => {
