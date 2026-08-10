@@ -95,3 +95,35 @@ export function firePasteAt(target: EventTarget, data: ClipboardFlavours): Event
   target.dispatchEvent(event);
   return event;
 }
+
+/** Dispatch a synthetic `drop` at `target`. `Event` rather than `DragEvent` for the
+ *  same reason as `firePasteAt`: happy-dom's DragEvent has a read-only
+ *  `dataTransfer`, and its `clientX`/`clientY` cannot be set from the constructor
+ *  either.
+ *
+ *  ⚠️ The production drop handler calls `view.posAtCoords`, which THROWS under
+ *  happy-dom (no layout engine) instead of returning a position. Every caller must
+ *  stub it — including read-only cases, where letting it throw makes the gate
+ *  assertion vacuous. See cm-image-paste.test.ts's `stubDropPos`. */
+export function fireDropAt(
+  target: EventTarget,
+  data: ClipboardFlavours,
+  coords: { x: number; y: number } = { x: 0, y: 0 }
+): Event {
+  const event = new Event("drop", { bubbles: true, cancelable: true });
+  Object.defineProperty(event, "dataTransfer", { value: makeClipboardData(data) });
+  Object.defineProperty(event, "clientX", { value: coords.x });
+  Object.defineProperty(event, "clientY", { value: coords.y });
+  target.dispatchEvent(event);
+  return event;
+}
+
+/** Dispatch a synthetic `dragover` at `target`. The handler under test reads only
+ *  `dataTransfer.types`, which `makeClipboardData` reports as a real DataTransfer
+ *  does (a "Files" entry whenever any file item is present). */
+export function fireDragOverAt(target: EventTarget, data: ClipboardFlavours): Event {
+  const event = new Event("dragover", { bubbles: true, cancelable: true });
+  Object.defineProperty(event, "dataTransfer", { value: makeClipboardData(data) });
+  target.dispatchEvent(event);
+  return event;
+}
