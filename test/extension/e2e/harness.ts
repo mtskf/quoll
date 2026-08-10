@@ -143,9 +143,11 @@ export function isFormatCommandEvent(
   return e.message.type === "format-command";
 }
 
-// Poll `predicate` until true, or throw naming what was awaited. Lives here
-// rather than in each test file: three suites had drifted byte-identical copies,
-// so a change to the wait semantics had to be made three times.
+// Poll `predicate` until true, or throw naming what was awaited. Lives here so
+// new suites stop adding a private copy of the same loop. NOTE the older suites
+// have NOT been folded in yet: format-document-active-edge and
+// status-bar-active-edge still carry byte-identical local copies, so a change to
+// the wait semantics here does not reach them (that dedupe is its own change).
 export async function pollUntil(
   predicate: () => boolean,
   label: string,
