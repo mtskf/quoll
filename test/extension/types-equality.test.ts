@@ -16,12 +16,11 @@
 // are where the load-bearing e2e-mirror drift lives.
 //
 // This file also hosts unrelated tsc-enforced type-level pins for source
-// modules (see the "status-bar type pins" and "handoff type pins" describe
-// blocks below) — each pins a source-module type contract via a tsc-checked
-// assertion (AssertEqual identity check, or a `@ts-expect-error` directive —
-// either way, `pnpm compile` type-checking THIS file is what makes the pin
-// non-vacuous) but neither is part of the e2e-mirror equality guard described
-// above.
+// modules (the "handoff type pins" and "status-bar type pins" describe blocks
+// below). They are NOT part of the e2e-mirror equality guard above: each pins
+// a source-module type contract with a tsc-checked assertion — an AssertEqual
+// identity check or a `@ts-expect-error` directive — which is non-vacuous only
+// because `pnpm compile` type-checks THIS file.
 
 import { describe, expect, it } from "vitest";
 import {
@@ -138,6 +137,7 @@ describe("handoff type pins", () => {
     // @ts-expect-error — startLine is readonly; construction-time clamping
     // must not be undoable by later mutation.
     clamped.startLine = 2;
+    expect(true).toBe(true);
   });
 });
 

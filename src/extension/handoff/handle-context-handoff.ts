@@ -232,20 +232,19 @@ function clampLine(line: number, lineCount: number): number {
  *  that mints the brand; keep it here so every consumer provably gets a
  *  clamped, ordered range).
  *
- *  `lineCount` must be read from the LIVE document, AFTER any save: a save
- *  participant (format-on-save) can add or remove lines, and the clamp has to
- *  bound the range to the file the @-mention actually resolves against. The
- *  floor of 1 covers an empty document — line 1 always exists. */
+ *  `lineCount` must come from the LIVE document, read AFTER any save — see
+ *  deps.getLineCount for why. The floor of 1 covers an empty document: line 1
+ *  always exists. */
 export function clampHandoffSelection(
   payload: HandleContextHandoffPayload,
   lineCount: number
 ): HandoffRevealSelection {
-  const a = clampLine(payload.startLine, lineCount);
-  const b = clampLine(payload.endLine, lineCount);
+  const clampedStart = clampLine(payload.startLine, lineCount);
+  const clampedEnd = clampLine(payload.endLine, lineCount);
   return {
     hasSelection: payload.hasSelection,
-    startLine: Math.min(a, b),
-    endLine: Math.max(a, b),
+    startLine: Math.min(clampedStart, clampedEnd),
+    endLine: Math.max(clampedStart, clampedEnd),
   } as HandoffRevealSelection;
 }
 
