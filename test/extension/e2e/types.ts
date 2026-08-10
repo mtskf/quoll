@@ -208,8 +208,9 @@ export interface RecordedEventShape {
   readonly message: { type: string } & Record<string, unknown>;
   readonly timestamp: number;
   /** Sending panel's document URI (see TestHarness.RecordedEvent) — the only
-   *  panel identity on a stream every panel shares. */
-  readonly uri?: string;
+   *  panel identity on a stream every panel shares. Mandatory there, so
+   *  mandatory here: a routing assertion must never compare two `undefined`s. */
+  readonly uri: string;
 }
 
 export interface RecordedInboundShape {

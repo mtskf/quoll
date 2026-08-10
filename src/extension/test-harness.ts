@@ -40,9 +40,11 @@ export interface RecordedEvent {
    *  shared by every open panel, so without this a two-panel test can only
    *  count posts, never tell which webview received one — a command routed to
    *  the wrong (inactive) panel would look identical to the correct routing.
-   *  Optional because the recorder is also driven from tests that construct a
-   *  bare TestHarness with no panel behind it. */
-  readonly uri?: string;
+   *  REQUIRED, not optional: every post originates from a panel, and an
+   *  omitted stamp would land as `undefined` and let a routing assertion pass
+   *  by comparing `undefined` against `undefined`. Keeping it mandatory makes
+   *  that regression a compile error at the one call site instead. */
+  readonly uri: string;
 }
 
 export interface RecordedInbound {
@@ -378,7 +380,7 @@ export class TestHarness {
     return this._lastError;
   }
 
-  recordEvent(message: HostToWebview, uri?: string): void {
+  recordEvent(message: HostToWebview, uri: string): void {
     const entry: RecordedEvent = { message, timestamp: Date.now(), uri };
     this._events.push(entry);
     for (let i = this._eventWaiters.length - 1; i >= 0; i--) {

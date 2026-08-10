@@ -73,7 +73,7 @@ describe("format-command-dispatch", function () {
     // Two panels open, B active: one invocation must reach B's webview and only
     // B's — the single-slot active poster, not a broadcast and not a stale
     // registration left behind by A.
-    const a = await openTempQuoll(harness, "hello a\n", "cmda");
+    const a = await openTempQuoll(harness, "hello a\n", "cmda", null);
     files.push(a.file);
     const b = await openTempQuoll(harness, "hello b\n", "cmdb", a.panel);
     files.push(b.file);
@@ -98,15 +98,12 @@ describe("format-command-dispatch", function () {
 
     const posts = harness.events.filter(isFormatCommandEvent);
     assert.strictEqual(posts.length, 1, "exactly one webview must receive the action");
+    // One post whose stamp is B's URI already implies A received none, so that
+    // is not asserted separately — it could not fail on its own.
     assert.strictEqual(
       posts[0].uri,
       b.uri.toString(),
       "the action must go to the ACTIVE panel (B), not the inactive one"
-    );
-    assert.strictEqual(
-      posts.filter((p) => p.uri === a.uri.toString()).length,
-      0,
-      "the inactive panel must receive nothing"
     );
     assert.strictEqual(posts[0].message.action, "bold", "the action must ride the wire verbatim");
     assert.strictEqual(
@@ -118,11 +115,13 @@ describe("format-command-dispatch", function () {
 
   it("posts nothing when no Quoll panel is open (the toast arm, not a stale poster)", async () => {
     const harness = await getHarness();
-    // Assert the premise rather than trusting afterEach ordering: a leftover or
-    // still-disposing panel would let the negative assertion below pass for the
-    // wrong reason (mirrors open-external.test.ts's `assert.ok(panel)` guard).
-    assert.strictEqual(harness.activePanel, null, "no panel must be active before this test runs");
-
+    // No `assert(harness.activePanel === null)` premise check here: `reset()`
+    // (via cleanupBetweenTests) nulls `_activePanel` unconditionally, so such an
+    // assertion would be true by construction and could never observe the
+    // still-disposing panel it appears to guard against. The zero-post
+    // assertion below is the real pin — it rides the panel's dispose-time
+    // `clearActiveFormatPoster`, which the vitest suite cannot reach (it only
+    // ever starts from an already-empty registry).
     await vscode.commands.executeCommand("quoll.format", "bold");
     await tick(300);
     assert.strictEqual(

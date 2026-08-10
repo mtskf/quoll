@@ -167,12 +167,16 @@ export async function pollUntil(
 
 /** Open a temp `.md` in Quoll and return the NEWLY-registered panel controls.
  *  `previous` guards the second open of a two-panel run: poll until activePanel
- *  becomes distinct from it, so the caller never captures the older panel. */
+ *  becomes distinct from it, so the caller never captures the older panel.
+ *  Deliberately NOT defaulted — a caller who forgets it on a second open would
+ *  silently get the first panel back, so the compiler asks every time (the
+ *  sibling suites' private copies require it for the same reason). Pass `null`
+ *  explicitly for the first open. */
 export async function openTempQuoll(
   harness: TestHarnessShape,
   content: string,
   slug: string,
-  previous: PanelControlsShape | null = null
+  previous: PanelControlsShape | null
 ): Promise<{ uri: vscode.Uri; file: string; panel: PanelControlsShape }> {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), `quoll-e2e-${slug}-`));
   const file = path.join(dir, `${slug}.md`);
