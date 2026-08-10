@@ -16,9 +16,12 @@
 // are where the load-bearing e2e-mirror drift lives.
 //
 // This file also hosts unrelated tsc-enforced type-level pins for source
-// modules (see the "status-bar type pins" describe block below) — they reuse
-// the same AssertEqual-runs-under-`pnpm compile` mechanism but are NOT part of
-// the e2e-mirror equality guard described above.
+// modules (see the "status-bar type pins" and "handoff type pins" describe
+// blocks below) — each pins a source-module type contract via a tsc-checked
+// assertion (AssertEqual identity check, or a `@ts-expect-error` directive —
+// either way, `pnpm compile` type-checking THIS file is what makes the pin
+// non-vacuous) but neither is part of the e2e-mirror equality guard described
+// above.
 
 import { describe, expect, it } from "vitest";
 import {
@@ -122,6 +125,19 @@ describe("handoff type pins", () => {
       1
     );
     expect(clamped).toEqual({ hasSelection: true, startLine: 1, endLine: 1 });
+  });
+
+  it("keeps HandoffRevealSelection's data fields readonly", () => {
+    // The brand alone only proves an instance was minted through
+    // clampHandoffSelection — it says nothing about the fields staying
+    // clamped afterwards. Revert-check: drop `readonly` from
+    // HandoffRevealSelection's data fields and the directive below becomes
+    // unused → tsc errors (TS2578) at this file, which `pnpm compile`
+    // type-checks.
+    const clamped = clampHandoffSelection({ hasSelection: true, startLine: 1, endLine: 1 }, 1);
+    // @ts-expect-error — startLine is readonly; construction-time clamping
+    // must not be undoable by later mutation.
+    clamped.startLine = 2;
   });
 });
 

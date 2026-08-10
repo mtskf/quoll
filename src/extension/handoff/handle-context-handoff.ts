@@ -118,9 +118,9 @@ declare const handoffRevealSelectionBrand: unique symbol;
  *  point. Pinned by the handoff type pins in
  *  test/extension/types-equality.test.ts. */
 export type HandoffRevealSelection = {
-  hasSelection: boolean;
-  startLine: number;
-  endLine: number;
+  readonly hasSelection: boolean;
+  readonly startLine: number;
+  readonly endLine: number;
   readonly [handoffRevealSelectionBrand]: true;
 };
 
