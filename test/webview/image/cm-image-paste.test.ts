@@ -184,11 +184,21 @@ describe("resolve", () => {
     expect(view.state.field(pendingImageAnchors).length).toBe(0);
   });
 
-  it("ignores an unknown requestId", () => {
+  it("ignores an unknown requestId while another anchor is still pending", () => {
+    // The anchor seeded here is what makes this a test of the ID MATCH rather than
+    // of the empty-queue case: on an empty field `find(...)` and `[0]` are both
+    // undefined, so the guard reads as "correct" while ignoring the requestId
+    // entirely. This is the terminus of the sessionNonce design — a late reply from
+    // a previous webview session must be a no-op, not a resolve of whatever anchor
+    // happens to be first in the queue, which would write one image's path onto
+    // another image's position.
     const { view, paste } = mount("ab");
+    view.dispatch({ effects: addPendingAnchor.of({ requestId: "1", anchor: 1 }) });
     paste.resolve(view, "nope", "./assets/x.png");
+    // The document is the hazard itself; the surviving entry is the other half —
+    // the real anchor must still be waiting for its own reply.
     expect(view.state.doc.toString()).toBe("ab");
-    expect(view.state.field(pendingImageAnchors).length).toBe(0);
+    expect(view.state.field(pendingImageAnchors)).toEqual([{ requestId: "1", anchor: 1 }]);
   });
 });
 
@@ -257,6 +267,23 @@ describe("imagePaste — clipboard ingestion", () => {
     // describe.)
     expect(view.state.field(pendingImageAnchors)).toEqual([
       { requestId: expect.any(String), anchor: 1 },
+    ]);
+    view.destroy();
+  });
+
+  it("derives the paste anchor from the head of a FORWARD selection too", () => {
+    // A second FIXTURE rather than a second assertion on the one above, because no
+    // single selection shape can separate `head` from both of its neighbours: CM
+    // derives `from = min(anchor, head)`, so on the backwards selection above
+    // `from === head === 1` and a regression to `.from` reads identically there.
+    // Forward is the shape where all three diverge — anchor/from 1, head/to 4 — so
+    // only here does `.from` produce the wrong anchor. (Drop's twin is below.)
+    stubReadThatNeverCompletes();
+    const { view } = mount("abcd");
+    view.dispatch({ selection: { anchor: 1, head: 4 } });
+    firePasteAt(view.contentDOM, { files: IMAGE_FILE, text: "x" });
+    expect(view.state.field(pendingImageAnchors)).toEqual([
+      { requestId: expect.any(String), anchor: 4 },
     ]);
     view.destroy();
   });
@@ -547,7 +574,7 @@ describe("imagePaste — per-event caps", () => {
     view.destroy();
   });
 
-  it("refuses the file that lands exactly ON the aggregate byte cap", () => {
+  it("accepts the file that lands exactly ON the aggregate byte cap (pins > over >=)", () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     stubReadThatNeverCompletes();
     const { view } = mount("ab");
@@ -649,6 +676,43 @@ describe("imagePaste — drop and dragover", () => {
     // `.anchor` (4) can pass.
     expect(view.state.field(pendingImageAnchors)).toEqual([
       { requestId: expect.any(String), anchor: 1 },
+    ]);
+    view.destroy();
+  });
+
+  it("falls back to the head of a FORWARD selection too", () => {
+    // The drop-side twin of the forward-selection paste test: this fallback reads
+    // `selection.main.head` at its own call site, so it needs its own forward
+    // fixture to separate `head` (4) from `from` (1) — see that test for why one
+    // selection shape cannot cover both aliases.
+    stubReadThatNeverCompletes();
+    const { view } = mount("abcd");
+    stubDropPos(view, null);
+    view.dispatch({ selection: { anchor: 1, head: 4 } });
+
+    fireDropAt(view.contentDOM, { files: IMAGE_FILE });
+
+    expect(view.state.field(pendingImageAnchors)).toEqual([
+      { requestId: expect.any(String), anchor: 4 },
+    ]);
+    view.destroy();
+  });
+
+  it("ingests a drop at doc position 0 rather than falling back to the selection head", () => {
+    // Position 0 is the ONLY drop point at which `pos ?? head` and `pos || head`
+    // disagree: `||` reads a valid position 0 as absent and falls back to the
+    // selection head, silently moving an image dropped at the very start of the
+    // document down to wherever the caret was. Every other stubbed position in this
+    // file is truthy or null, where the two operators agree.
+    stubReadThatNeverCompletes();
+    const { view } = mount("abcd");
+    stubDropPos(view, 0);
+    view.dispatch({ selection: { anchor: 3 } });
+
+    fireDropAt(view.contentDOM, { files: IMAGE_FILE });
+
+    expect(view.state.field(pendingImageAnchors)).toEqual([
+      { requestId: expect.any(String), anchor: 0 },
     ]);
     view.destroy();
   });
