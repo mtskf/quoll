@@ -380,6 +380,15 @@ describe("tryOpenLinkAt — gate-reject bails warn", () => {
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
     try {
       const handled = open(state, posOf(doc, marker) + 1, host);
+      // Structural backstop: tryOpenLinkAt returns true ONLY when it posted, so
+      // a bail must post nothing and an open must post exactly one message.
+      // Asserted here (not only at the call sites) so a gate-reject test added
+      // later inherits the invariant instead of having to remember it.
+      if (handled) {
+        expect(posted).toHaveLength(1);
+      } else {
+        expect(posted).toEqual([]);
+      }
       return { warnings: warnSpy.mock.calls.map((c) => [...c]), handled, posted };
     } finally {
       warnSpy.mockRestore();
@@ -405,6 +414,29 @@ describe("tryOpenLinkAt — gate-reject bails warn", () => {
       ["[quoll] link not opened: URL not in allowlist", { scheme: "(none)" }],
     ]);
     expect(JSON.stringify(warnings)).not.toContain("evil.example");
+  });
+
+  it("logs only a length when the rejected URL's scheme token is overlong", async () => {
+    const { MAX_HREF_LENGTH } = await import("../../src/shared/protocol.js");
+    // `schemeOf`'s regex bounds the ALPHABET of the pre-colon run, not its
+    // LENGTH: a crafted `<thousands of scheme-legal chars>:` destination reaches
+    // the allowlist-reject warn with the whole run as `scheme`. Size the href to
+    // land EXACTLY on MAX_HREF_LENGTH so the earlier length gate cannot fire —
+    // this test must exercise the allowlist-reject branch, not that one.
+    const token = "a".repeat(MAX_HREF_LENGTH - 2);
+    const href = `${token}:x`;
+    expect(href.length).toBe(MAX_HREF_LENGTH);
+    const { warnings, handled, posted } = clickLink(`see [t](${href})`, "[t]");
+    expect(handled).toBe(false);
+    expect(posted).toEqual([]);
+    expect(warnings).toEqual([
+      ["[quoll] link not opened: URL not in allowlist", { scheme: `(overlong:${token.length})` }],
+    ]);
+    // The NO-URL POLICY assertion proper: not one byte of the token may appear.
+    expect(JSON.stringify(warnings)).not.toContain(token);
+    // 33 = one past the implementation's 32-char cap — catches a partial leak
+    // (e.g. a `slice(0, 64)` "fix") that the whole-token check above would miss.
+    expect(JSON.stringify(warnings)).not.toContain("a".repeat(33));
   });
 
   it("warns when the URL exceeds MAX_HREF_LENGTH, without logging the URL", async () => {

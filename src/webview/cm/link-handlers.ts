@@ -48,6 +48,28 @@ function schemeOf(url: string): string | null {
   return match ? match[1] : null;
 }
 
+/** Cap on the scheme token this file is willing to log. Why 32: every scheme
+ *  that carries triage meaning (http, https, mailto, javascript, vbscript,
+ *  data, file, vscode, ftp …) is ~10 chars and the longest IANA-registered
+ *  scheme is ~36, so a "scheme" longer than this is not a scheme — it is
+ *  payload, and only its length may be logged. (The host arm's 64 caps a
+ *  *sanitised href preview*; this side logs no href bytes at all, so there is
+ *  no reason to match that number.) */
+const MAX_LOGGED_SCHEME_LENGTH = 32;
+
+/** Render a scheme for `warnLinkNotOpened`'s `detail` under the NO-URL POLICY.
+ *  Callers on the PRE-validation path must use this: `schemeOf` bounds the
+ *  alphabet of the pre-colon run but not its length, so the raw token can be a
+ *  multi-kilobyte slice of a hostile (or merely private) href. */
+function schemeTokenForLog(scheme: string | null): string {
+  if (scheme === null) {
+    // Keeps a protocol-relative / control-character reject distinguishable
+    // from a blocked scheme in a triage report.
+    return "(none)";
+  }
+  return scheme.length > MAX_LOGGED_SCHEME_LENGTH ? `(overlong:${scheme.length})` : scheme;
+}
+
 /** True when `decoded` is a schemeless, NON-ABSOLUTE destination whose path
  *  (after stripping a trailing #fragment) ends in `.md` (case-insensitive) —
  *  i.e. a relative in-workspace Markdown link eligible for the `open-link`
@@ -173,11 +195,13 @@ export function tryOpenLinkAt(state: EditorState, pos: number, host: LinkOpenHos
     return false;
   }
   // Hoisted above the isAllowedUrl gate so the allowlist-reject warn below can
-  // carry the scheme as a triage token. Safe on this NOT-YET-validated
-  // (possibly hostile) string: schemeOf's anchored regex
-  // (`^([a-z][a-z0-9+.-]*):`) yields either a bounded lowercase token or null,
-  // so it can never echo back C0/DEL bytes or any other slice of the URL body
-  // (`java\nscript:...` fails the anchor entirely → null).
+  // carry the scheme as a triage token. Note what this token is and is NOT:
+  // schemeOf's anchored regex (`^([a-z][a-z0-9+.-]*):`) bounds the ALPHABET
+  // (lowercase URL-scheme characters only, so no C0/DEL byte can echo back —
+  // `java\nscript:...` fails the anchor entirely → null) but NOT the LENGTH.
+  // On this NOT-YET-validated (possibly hostile) string the pre-colon run can
+  // be up to MAX_HREF_LENGTH long — the only gate it has passed is the length
+  // check above — so it MUST go through schemeTokenForLog before it is logged.
   const scheme = schemeOf(decoded);
   // Defense layer 1 (webview-side): isAllowedUrl + openable-scheme gate.
   // Layer 2 (host-side handler) re-applies isAllowedUrl + an
@@ -185,10 +209,14 @@ export function tryOpenLinkAt(state: EditorState, pos: number, host: LinkOpenHos
   // Both sides import isAllowedUrl from the same `markdown/url-allowlist`
   // module so the gate's identity cannot drift.
   if (!isAllowedUrl(decoded)) {
-    // `scheme ?? "(none)"` mirrors the host arm (handle-open-external.ts) so a
-    // triage report can distinguish a blocked scheme from a protocol-relative
-    // or control-character reject.
-    warnLinkNotOpened("URL not in allowlist", { scheme: scheme ?? "(none)" });
+    // This is the PRE-validation path, so the token is capped (see
+    // schemeTokenForLog). It deliberately does NOT copy either host-arm branch:
+    // the host's own allowlist-reject branch logs a sanitised, 64-capped
+    // `hrefPreview` and no scheme at all, while the bare `scheme ?? "(none)"`
+    // shape lives in its POST-allowlist "dropped: scheme not in
+    // OPENABLE_SCHEMES" branch, where the token is enumerable by construction.
+    // Nothing has enumerated this one yet — hence the cap.
+    warnLinkNotOpened("URL not in allowlist", { scheme: schemeTokenForLog(scheme) });
     return false;
   }
   if (scheme !== null) {
