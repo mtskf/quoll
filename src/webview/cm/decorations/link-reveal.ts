@@ -13,9 +13,13 @@
 //     and `(`).
 // Additionally, when HIDDEN, emits a Decoration.mark "quoll-link-clickable"
 // over the link's inline content range (`[text]` interior — the substring
-// between `[` and `]`). CSS gives this `cursor: pointer` so the user sees
-// the link is openable; in REVEALED state the marker drops (user is
-// editing, not clicking).
+// between `[` and `]`) IF a click on the destination would DO something.
+// Actionability is decided by cm/link-target.ts, the same classifier
+// cm/link-handlers.ts gates the click on, so the pointer cursor means exactly
+// "this link acts". Before that gate existed, a fragment (`[x](#sec)`) or a
+// relative non-.md link (`[x](./photo.png)`) rendered identically to a working
+// link and then did nothing. In REVEALED state the marker drops for every link
+// (user is editing, not clicking).
 //
 // Reveal-trigger range is the OUTER Link node range (mirror of
 // inline-mark-reveal). Click-to-open behaviour is wired separately in
@@ -23,6 +27,8 @@
 
 import { Decoration, type DecorationSet } from "@codemirror/view";
 
+import { decodeMarkdownDestination } from "../../../markdown/url-decode.js";
+import { classifyLinkTarget, isActionableLinkTarget } from "../link-target.js";
 import { buildSortedRangeSet } from "../sorted-range-set.js";
 
 import { HIDE, intersectsAnySelection, REVEAL_MARK } from "./shared.js";
@@ -102,15 +108,36 @@ export const linkReveal: DecorationProvider = {
             }
           } while (sub2.nextSibling());
           // Emit the clickable marker over [contentStart, contentEnd) when
-          // HIDDEN and the content range is non-empty AND inside the
-          // visible window.
+          // HIDDEN, the content range is non-empty, it is inside the visible
+          // window, AND a click on the destination would actually DO something.
+          // The last condition is what keeps the pointer cursor honest: a
+          // non-actionable destination (fragment, relative non-.md, absolute
+          // path) or a blocked one used to render identically to a working link
+          // and then no-op on click. `classifyLinkTarget` is the SAME function
+          // link-handlers.ts gates the click on, so cursor and behaviour cannot
+          // disagree.
+          //
+          // Cost: one doc slice + decode + classify per VISIBLE link whose marks
+          // are hidden — placed last in the && chain so it runs only for links
+          // that would otherwise get the marker, and bounded by the visible
+          // range like every other walk in this provider.
+          //
+          // NOT wrapped in try/catch on purpose: classifyLinkTarget is total by
+          // contract (pinned in test/webview/cm-link-target.test.ts). Catching
+          // here would turn a future totality regression into a silently
+          // missing cursor instead of a loud CI failure.
           if (
             !revealed &&
             contentStart !== null &&
             contentEnd !== null &&
             contentStart < contentEnd &&
             contentStart < range.to &&
-            range.from < contentEnd
+            range.from < contentEnd &&
+            isActionableLinkTarget(
+              classifyLinkTarget(
+                decodeMarkdownDestination(ctx.state.doc.sliceString(urlChild.from, urlChild.to))
+              )
+            )
           ) {
             out.push({ from: contentStart, to: contentEnd, deco: CLICKABLE });
           }

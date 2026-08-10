@@ -193,3 +193,51 @@ describe("linkReveal — inline link form [text](url)", () => {
     }
   });
 });
+
+describe("linkReveal — the clickable marker tracks actionability", () => {
+  // The pointer cursor is a promise that the click does something. These pin
+  // the equivalence: marker present ⟺ tryOpenLinkAt acts on the click.
+  function clickableCount(doc: string): number {
+    // Caret at 0 with the doc prefixed by "see " keeps every link HIDDEN
+    // (caret-in would drop the marker for an unrelated reason and the
+    // assertion would pass vacuously).
+    const built = linkReveal.build(ctx(doc, EditorSelection.single(0)));
+    return decosOf(built).filter((d) => d.kind === "clickable").length;
+  }
+
+  it("marks a routable https link", () => {
+    expect(clickableCount("see [t](https://example.com) end")).toBe(1);
+  });
+
+  it("marks a routable relative .md link", () => {
+    expect(clickableCount("see [t](./notes.md) end")).toBe(1);
+  });
+
+  it("does NOT mark a fragment link", () => {
+    expect(clickableCount("see [t](#section) end")).toBe(0);
+  });
+
+  it("does NOT mark a relative non-.md link", () => {
+    expect(clickableCount("see [t](./photo.png) end")).toBe(0);
+  });
+
+  it("does NOT mark an absolute path link", () => {
+    expect(clickableCount("see [t](/abs.md) end")).toBe(0);
+  });
+
+  it("does NOT mark a blocked scheme", () => {
+    expect(clickableCount("see [t](javascript:alert(1)) end")).toBe(0);
+  });
+
+  it("still HIDES the syntax marks of a non-actionable link", () => {
+    // Only the cursor changes. The link still renders as prose — withholding
+    // the marker must not leak `(#section)` back into the rendered text.
+    const built = linkReveal.build(ctx("see [t](#section) end", EditorSelection.single(0)));
+    expect(decosOf(built).filter((d) => d.kind === "hide").length).toBe(5);
+  });
+
+  it("decodes the destination before classifying", () => {
+    // Raw slice `https\://example.com`; only the decoded form is actionable.
+    expect(clickableCount("see [t](https\\://example.com) end")).toBe(1);
+  });
+});
