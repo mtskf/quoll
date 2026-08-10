@@ -77,6 +77,24 @@ function postToHost(host: LinkOpenHost, message: WebviewToHost): boolean {
   return safePostMessage(host, message, "link-open");
 }
 
+/** Log a bail that consumes a click without opening anything ("dead click"),
+ *  under the `[quoll]` grep prefix so a "this link does nothing" report has a
+ *  triage trail. Mirrors `openExternalSinkFor`'s warn (open-external.ts) for
+ *  the allowlist condition the two share.
+ *
+ *  NO-URL POLICY (do not relax): `detail` carries only derived, bounded facts
+ *  — a length, a scheme token — never the href or any slice of it. The
+ *  webview console is user-visible surface and the URL can be hostile or
+ *  private; the host arm sanitises before it logs a preview, and this side has
+ *  no sanitiser, so it logs no URL at all. */
+function warnDeadClick(reason: string, detail?: Record<string, unknown>): void {
+  if (detail === undefined) {
+    console.warn(`[quoll] link click dropped: ${reason}`);
+    return;
+  }
+  console.warn(`[quoll] link click dropped: ${reason}`, detail);
+}
+
 function selectionIntersects(state: EditorState, from: number, to: number): boolean {
   // Boundary-inclusive — mirror of linkReveal's intersectsAnySelection so
   // the click contract is symmetric with the visual REVEAL state. A
@@ -145,6 +163,7 @@ export function tryOpenLinkAt(state: EditorState, pos: number, host: LinkOpenHos
   // would silently reject on shape, leaving the user with a no-op click
   // AND a suppressed caret move (preventDefault fired).
   if (decoded.length > MAX_HREF_LENGTH) {
+    warnDeadClick("URL exceeds MAX_HREF_LENGTH", { length: decoded.length, max: MAX_HREF_LENGTH });
     return false;
   }
   // Defense layer 1 (webview-side): isAllowedUrl + openable-scheme gate.
@@ -153,12 +172,18 @@ export function tryOpenLinkAt(state: EditorState, pos: number, host: LinkOpenHos
   // Both sides import isAllowedUrl from the same `markdown/url-allowlist`
   // module so the gate's identity cannot drift.
   if (!isAllowedUrl(decoded)) {
+    warnDeadClick("URL not in allowlist");
     return false;
   }
   const scheme = schemeOf(decoded);
   if (scheme !== null) {
     // Scheme-bearing: only http/https/mailto are launchable externally.
     if (!OPENABLE_SCHEMES.has(scheme)) {
+      // Unreachable while ALLOWED_URL_SCHEMES ⊇ OPENABLE_SCHEMES (any
+      // scheme surviving isAllowedUrl is launchable) — kept as drift
+      // insurance, so the warn doubles as the runtime drift signal. Same
+      // rationale as the host arm's mirror branch.
+      warnDeadClick("scheme not in OPENABLE_SCHEMES", { scheme });
       return false;
     }
     return postToHost(host, { protocol: PROTOCOL_VERSION, type: "open-external", href: decoded });
