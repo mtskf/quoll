@@ -76,8 +76,11 @@ export function makeClipboardData(data: ClipboardFlavours): {
   return {
     // Exact-type lookup only: the legacy aliases a real DataTransfer resolves
     // ("Text" → text/plain, "URL" → text/uri-list) are NOT mapped. CM's builtin drop
-    // handler reads "Text", so it sees nothing here — cm-image-paste.test.ts's
-    // text-only drop test states the baseline that rests on this.
+    // handler reads "Text", so it sees nothing here and declines a text-only drop;
+    // a real browser would resolve the alias and consume that drop instead. This is
+    // the canonical statement of that caveat — cm-image-paste.test.ts's text-only
+    // drop test rests on the `defaultPrevented === false` baseline it produces, so
+    // making this spec-accurate flips that baseline.
     getData: (type: string) => store.get(type) ?? "",
     // Cast at the boundary only: these doubles implement the three members the
     // production scans read (kind / type / getAsFile), not the whole interface.

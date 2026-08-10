@@ -610,13 +610,12 @@ describe("imagePaste — drop and dragover", () => {
     // observable: nothing CM does with a text drop reaches this document, so only
     // `defaultPrevented` can tell decline from consume.
     //
-    // ⚠️ The `false` baseline depends on the double. CM's builtin drop handler reads
+    // ⚠️ The `false` baseline depends on the double: CM's builtin drop handler reads
     // the LEGACY alias `dataTransfer.getData("Text")`, which `makeClipboardData`
-    // stores as "text/plain" and does not answer, so CM declines too. A real browser
-    // maps "Text" onto text/plain and would consume this drop. Making the double
-    // spec-accurate therefore flips this baseline for a reason unrelated to
-    // imagePaste — the mutant it exists to kill (consuming every non-image drop)
-    // flips it to `true` either way.
+    // deliberately does not answer (canonical note: on its `getData`), so CM declines
+    // too. That much is a property of the double, not of imagePaste — but the mutant
+    // this test exists to kill (consuming every non-image drop) flips it to `true`
+    // either way.
     const { view } = mount("ab");
     expect(fireDropAt(view.contentDOM, { text: "x" }).defaultPrevented).toBe(false);
     view.destroy();
