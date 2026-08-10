@@ -549,6 +549,33 @@ describe("imagePaste — per-event caps", () => {
     view.destroy();
   });
 
+  it("skips — rather than stops at — a per-file refusal, so later images still land", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    stubReadThatNeverCompletes();
+    const { view } = mount("ab");
+    // The twin of the aggregate-cap test below, and the reason it takes its own
+    // fixture: `handle()` has THREE refusals, and only the aggregate one is meant to
+    // `break`. The two per-file ones must `continue` so one bad file does not
+    // discard the rest of the paste. Every other refusal test here is a single-file
+    // fixture, where `continue` and `break` are indistinguishable — a valid file
+    // has to sit BEHIND a refused one for the difference to become observable.
+    const empty = new File([], "f", { type: "image/png" });
+    firePasteAt(view.contentDOM, {
+      files: [
+        { type: "image/png", file: empty }, // refused: zero bytes
+        { type: "image/png", file: sizedImageFile(MAX_IMAGE_BYTES + 5 * MIB) }, // refused: over the ceiling
+        { type: "image/png" }, // 1 byte — must still be ingested
+      ],
+    });
+
+    expect(view.state.field(pendingImageAnchors).length).toBe(1);
+    // Both refusals are named, so the two branches stay distinguishable from each
+    // other as well as from the aggregate cap.
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("zero bytes"));
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("exceeds transfer ceiling"));
+    view.destroy();
+  });
+
   it("stops — rather than skips — at the per-event aggregate byte cap", () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     stubReadThatNeverCompletes();
