@@ -35,6 +35,15 @@ const serializeError: MarkdownError = {
   message: "Frontmatter body contains a bare `---` line",
 };
 
+// Type-level equality check. `Readonly<T>` is a homomorphic mapped type, so
+// `Equals<T, Readonly<T>>` is `true` only when every field of T is ALREADY
+// readonly (adding `readonly` to an already-readonly field is a no-op; adding
+// it to a mutable one changes the type, so the two sides diverge and this
+// resolves to `false`). Distributes over union types (e.g. `Action`) because
+// homomorphic mapped types distribute when applied to a union.
+type Equals<X, Y> =
+  (<T>() => T extends X ? 1 : 2) extends <T>() => T extends Y ? 1 : 2 ? true : false;
+
 describe("reducer — content not in state", () => {
   it("WebviewState type does not expose a `content` field at the boundary", () => {
     // Compile-time + runtime check: enumerate keys and assert `content` is
@@ -393,5 +402,20 @@ describe("reducer — purity", () => {
       initialState.ready = true;
     }).toThrow(TypeError);
     expect(initialState.ready).toBe(false);
+  });
+});
+
+describe("reducer — readonly compile-time pin", () => {
+  it("every WebviewState and Action field is readonly at compile time", () => {
+    // Type-level pin (compile-time, not runtime): unlike the single-field
+    // `@ts-expect-error` above, this covers ALL fields of WebviewState and
+    // ALL variants/fields of Action in one place, and automatically covers
+    // any field added later — no per-field update needed when the shape
+    // grows. If any field (existing or future) loses its `readonly`
+    // modifier, `Equals<>` resolves to `false` and assigning it to a `true`-
+    // typed const fails `pnpm compile` / `tsc -p test/webview`.
+    const stateAllReadonly: Equals<WebviewState, Readonly<WebviewState>> = true;
+    const actionAllReadonly: Equals<Action, Readonly<Action>> = true;
+    expect(stateAllReadonly && actionAllReadonly).toBe(true);
   });
 });
