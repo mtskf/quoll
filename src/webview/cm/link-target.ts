@@ -13,12 +13,13 @@
 // decoration provider from a SINGLE shared ViewPlugin. CodeMirror's
 // PluginInstance.update catches a plugin throw and then deactivates that
 // plugin PERMANENTLY, so a throw here does not just drop the link marker: it
-// takes down every provider sharing that plugin — the inline syntax reveals
-// (emphasis, inline code, links) and this clickable marker — until the user
-// reloads the window, with only a console.error to show for it. Block widgets
-// (tables, images, frontmatter) are StateFields and constructs like
-// heading-rhythm ship their own ViewPlugins, so those survive — the blast
-// radius is "all inline reveal", not literally every decoration.
+// takes down EVERY provider in `decorations/index.ts`'s syntaxRevealProviders
+// — headings, blockquotes, emphasis, links, task checkboxes, bullet markers,
+// fenced code, thematic breaks, setext, code refs — until the user reloads the
+// window, with only a console.error to show for it. Block widgets (tables,
+// images, frontmatter) are StateFields and survive, so the blast radius is
+// "the whole inline reveal layer" rather than literally every decoration —
+// which is a distinction about scope, not about severity.
 // test/webview/cm-link-target.test.ts pins this against a hostile matrix.
 // Keep it to string/regex/Set work: no `new URL()`, no JSON.parse, no
 // unguarded String.fromCodePoint. (url-decode.ts's `decodableCodePoint` guard

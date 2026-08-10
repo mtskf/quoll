@@ -6,11 +6,12 @@
 //   - handleLinkMouseDown(event, view, host) + quollLinkClickHandler():
 //     extracted mousedown helper + the Extension factory that wires it.
 //
-// Why a single file: the three exports form one interaction surface —
-// handleLinkMouseDown exists only to feed tryOpenLinkAt, and
-// quollLinkClickHandler only to wire it into CodeMirror — and they share the
-// boundary-inclusive selection guard and the warn policy below. Splitting
-// would thread a one-line delegation through a fourth module.
+// Why a single file: the three exports form one call chain —
+// quollLinkClickHandler wires handleLinkMouseDown into CodeMirror, which
+// exists only to feed tryOpenLinkAt — so splitting them would thread a
+// one-line delegation through a fourth module for no gain. (They do NOT share
+// helpers: selectionIntersects, warnLinkNotOpened and postToHost each have
+// exactly one caller, tryOpenLinkAt.)
 //
 // What this file no longer owns is the CLASSIFICATION of a destination: that
 // moved to ./link-target.js so the click handler and the
