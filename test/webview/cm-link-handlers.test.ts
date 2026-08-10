@@ -358,6 +358,194 @@ describe("tryOpenLinkAt — MAX_HREF_LENGTH guard", () => {
   });
 });
 
+// Invariant: every gate-reject bail in tryOpenLinkAt emits exactly one
+// `[quoll] link not opened: …` warn so a "this link does nothing" report has a
+// triage trail (rationale + why this is NOT a "dead click" live on
+// `warnLinkNotOpened` in src/webview/cm/link-handlers.ts). These tests pin the
+// message shape AND the NO-URL POLICY: the detail must never carry the href or
+// any slice of it.
+describe("tryOpenLinkAt — gate-reject bails warn", () => {
+  /** Click the link at `marker` and report everything the call did: its return
+   *  value, the messages posted, and the console.warn calls. `open` is
+   *  injectable so the simulated-drift test below can drive a re-imported
+   *  module through the same seam. */
+  function clickLink(
+    doc: string,
+    marker: string,
+    open: typeof tryOpenLinkAt = tryOpenLinkAt
+  ): { warnings: unknown[][]; handled: boolean; posted: unknown[] } {
+    const state = stateOf(doc);
+    const posted: unknown[] = [];
+    const host = { postMessage: (m: unknown) => posted.push(m) };
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    try {
+      const handled = open(state, posOf(doc, marker) + 1, host);
+      // Structural backstop: tryOpenLinkAt returns true ONLY when it posted, so
+      // a bail must post nothing and an open must post exactly one message.
+      // Asserted here (not only at the call sites) so a gate-reject test added
+      // later inherits the invariant instead of having to remember it.
+      if (handled) {
+        expect(posted).toHaveLength(1);
+      } else {
+        expect(posted).toEqual([]);
+      }
+      return { warnings: warnSpy.mock.calls.map((c) => [...c]), handled, posted };
+    } finally {
+      warnSpy.mockRestore();
+    }
+  }
+
+  it("warns with the rejected URL's scheme when the URL is not in the allowlist", () => {
+    const { warnings, handled, posted } = clickLink("see [t](javascript:alert(1))", "[t]");
+    expect(handled).toBe(false);
+    expect(posted).toEqual([]);
+    expect(warnings).toEqual([
+      ["[quoll] link not opened: URL not in allowlist", { scheme: "javascript" }],
+    ]);
+    // The scheme token is safe to log; the URL body ("alert(1)") is not.
+    expect(JSON.stringify(warnings)).not.toContain("alert(1)");
+  });
+
+  it('warns with scheme "(none)" when the rejected URL carries no scheme', () => {
+    const { warnings, handled, posted } = clickLink("see [t](//evil.example/x)", "[t]");
+    expect(handled).toBe(false);
+    expect(posted).toEqual([]);
+    expect(warnings).toEqual([
+      ["[quoll] link not opened: URL not in allowlist", { scheme: "(none)" }],
+    ]);
+    expect(JSON.stringify(warnings)).not.toContain("evil.example");
+  });
+
+  it("collapses an unknown scheme token to an opaque marker (kilobyte-scale run)", async () => {
+    const { MAX_HREF_LENGTH } = await import("../../src/shared/protocol.js");
+    // `schemeOf`'s regex bounds the ALPHABET of the pre-colon run, not its
+    // LENGTH: a crafted `<thousands of scheme-legal chars>:` destination reaches
+    // the allowlist-reject warn with the whole run as `scheme`. Size the href to
+    // land EXACTLY on MAX_HREF_LENGTH so the earlier length gate cannot fire —
+    // this test must exercise the allowlist-reject branch, not that one.
+    const token = "a".repeat(MAX_HREF_LENGTH - 2);
+    const href = `${token}:x`;
+    expect(href.length).toBe(MAX_HREF_LENGTH);
+    const { warnings, handled, posted } = clickLink(`see [t](${href})`, "[t]");
+    expect(handled).toBe(false);
+    expect(posted).toEqual([]);
+    expect(warnings).toEqual([
+      ["[quoll] link not opened: URL not in allowlist", { scheme: "(unrecognised)" }],
+    ]);
+    // The NO-URL POLICY assertion proper: not one byte of the token may appear.
+    expect(JSON.stringify(warnings)).not.toContain(token);
+    // …and no PREFIX of it either — catches a truncating "fix" (`slice(0, n)`)
+    // that the whole-token check above would sail straight past.
+    expect(JSON.stringify(warnings)).not.toContain("aa");
+  });
+
+  // The reason a length cap was not the fix (review cycle 3): a short pre-colon
+  // run is still href bytes. This destination is 28 chars — comfortably under
+  // any plausible cap — and every one of them is the author's private business.
+  it("collapses a short but private-looking scheme token to an opaque marker", () => {
+    const href = "MyVault-Passw0rd.notes:entry";
+    const { warnings, handled, posted } = clickLink(`see [t](${href})`, "[t]");
+    expect(handled).toBe(false);
+    expect(posted).toEqual([]);
+    expect(warnings).toEqual([
+      ["[quoll] link not opened: URL not in allowlist", { scheme: "(unrecognised)" }],
+    ]);
+    // Check the lowercased form too: `schemeOf` lowercases before matching, so a
+    // leak would surface as `myvault-passw0rd.notes`, which an as-written
+    // substring check on the original spelling would miss.
+    const logged = JSON.stringify(warnings);
+    for (const secret of [href, href.toLowerCase(), "MyVault", "myvault", "Passw0rd", "entry"]) {
+      expect(logged).not.toContain(secret);
+    }
+  });
+
+  // Length must not re-enter the decision by any door. Every leak this file has
+  // shipped was a length rule that looked safe, so the classification has to
+  // hold at the one size no "short tokens are fine" shortcut can sit below: the
+  // shortest token the scheme grammar admits at all. Passing this can only be
+  // done by classifying, never by measuring.
+  it("collapses an unrecognised scheme token of the shortest possible length", () => {
+    const { warnings, handled, posted } = clickLink("see [t](a:entry)", "[t]");
+    expect(handled).toBe(false);
+    expect(posted).toEqual([]);
+    expect(warnings).toEqual([
+      ["[quoll] link not opened: URL not in allowlist", { scheme: "(unrecognised)" }],
+    ]);
+  });
+
+  // Triage value must survive the classification: these are the schemes the
+  // render gate and write validator exist to block, so a blocked-link report is
+  // only actionable while the warn still names them. Pins LOGGABLE_SCHEMES
+  // against being quietly emptied "for safety".
+  it.each([
+    ["javascript", "javascript:alert(1)"],
+    ["vbscript", "vbscript:msgbox"],
+    ["data", "data:text/html,<script>alert(1)</script>"],
+    ["blob", "blob:https://example.com/uuid"],
+    ["file", "file:///etc/passwd"],
+    ["about", "about:blank"],
+  ])("still names the known dangerous scheme %s", (scheme, href) => {
+    const { warnings, handled, posted } = clickLink(`see [t](${href})`, "[t]");
+    expect(handled).toBe(false);
+    expect(posted).toEqual([]);
+    expect(warnings).toEqual([["[quoll] link not opened: URL not in allowlist", { scheme }]]);
+  });
+
+  it("warns when the URL exceeds MAX_HREF_LENGTH, without logging the URL", async () => {
+    const { MAX_HREF_LENGTH } = await import("../../src/shared/protocol.js");
+    const padding = "a".repeat(MAX_HREF_LENGTH);
+    const { warnings, handled, posted } = clickLink(`see [t](https://x/${padding})`, "[t]");
+    expect(handled).toBe(false);
+    expect(posted).toEqual([]);
+    // Length + cap are safe to log; the URL itself is not. `https://x/` is the
+    // 10 chars the padded path adds to.
+    expect(warnings).toEqual([
+      [
+        "[quoll] link not opened: URL exceeds MAX_HREF_LENGTH",
+        { length: MAX_HREF_LENGTH + 10, max: MAX_HREF_LENGTH },
+      ],
+    ]);
+    expect(JSON.stringify(warnings)).not.toContain(padding.slice(0, 32));
+  });
+
+  // The non-openable-scheme bail is UNREACHABLE through the real gate:
+  // url-allowlist's ALLOWED_URL_SCHEMES and link-handlers' OPENABLE_SCHEMES
+  // are the same set by construction, so any scheme-bearing URL that
+  // survives isAllowedUrl is launchable by construction. The branch exists
+  // as drift insurance (same rationale as the host arm's mirror in
+  // src/extension/links/handle-open-external.ts), so pin it by simulating
+  // the drift: stub isAllowedUrl to accept everything and feed an `ftp:` URL.
+  it("warns when an allowlisted URL carries a non-openable scheme (simulated drift)", async () => {
+    vi.resetModules();
+    vi.doMock("../../src/markdown/url-allowlist.js", () => ({ isAllowedUrl: () => true }));
+    try {
+      const { tryOpenLinkAt: openWithEverythingAllowlisted } = await import(
+        "../../src/webview/cm/link-handlers.js"
+      );
+      const { warnings, handled, posted } = clickLink(
+        "see [t](ftp://example.com/file)",
+        "[t]",
+        openWithEverythingAllowlisted
+      );
+      expect(handled).toBe(false);
+      expect(posted).toEqual([]);
+      expect(warnings).toEqual([
+        ["[quoll] link not opened: scheme not in OPENABLE_SCHEMES", { scheme: "ftp" }],
+      ]);
+    } finally {
+      vi.doUnmock("../../src/markdown/url-allowlist.js");
+      vi.resetModules();
+    }
+  });
+
+  it("does not warn on the open path", () => {
+    const { warnings, handled, posted } = clickLink("see [t](https://example.com)", "[t]");
+    expect(handled).toBe(true);
+    expect(posted).toHaveLength(1);
+    expect(warnings).toEqual([]);
+  });
+});
+
 // Review-cycle 1 (C2): `host.postMessage` is the only sync-throw site in
 // tryOpenLinkAt and was previously unguarded. Asymmetric with
 // `postEditMessage` in src/webview/editor.ts which wraps the same call in
