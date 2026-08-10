@@ -1116,3 +1116,107 @@ describe("cm edit-sync — epoch-bounded buffers (S3b)", () => {
     expect(s.sync.isIdentityTransition(0, 111)).toBe(false); // before any snapshot
   });
 });
+
+// A readonly hard drop is the one outcome in this module that DISCARDS the
+// user's bytes rather than deferring their replay, so all three sites must
+// leave a trace — the same contract the stale-buffer drop in replayIfNeeded
+// already honours. Each test drives the site through its production entry
+// point and asserts the warn fired without the document text in the payload
+// (a drop trace must never become a content leak).
+describe("cm edit-sync — readonly hard drops are traced", () => {
+  const SECRET = "SECRET-BYTES"; // 12 chars — distinctive enough to grep the payload for
+  type WarnSpy = { mock: { calls: unknown[][] } };
+  const warnArgs = (spy: WarnSpy) =>
+    spy.mock.calls.filter((c) => String(c[0]).includes("under readonly"));
+  const expectNoContentLeak = (spy: WarnSpy) => {
+    expect(JSON.stringify(warnArgs(spy))).not.toContain(SECRET);
+  };
+
+  it("warns when trySend hard-drops a change typed under readonly", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const s = setup();
+      s.sync.onHostSnapshot(1, false); // readonly
+      s.type(SECRET);
+      expect(s.posted).toEqual([]);
+      expect(warnArgs(warn)).toEqual([
+        [
+          expect.stringContaining("under readonly"),
+          { site: "trySend", hadBuffer: false, droppedLength: SECRET.length },
+        ],
+      ]);
+      expectNoContentLeak(warn);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("warns when cancelPendingFlush hard-drops the in-window keystroke", () => {
+    // The real timer path (no scheduleFlush override) is required: the capture
+    // branch only runs while a debounce timer is live.
+    vi.useFakeTimers();
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      let doc = "seed";
+      const sync = createEditSync({ getDoc: () => doc, post: () => true });
+      sync.onHostSnapshot(1, false); // readonly
+      doc = SECRET;
+      sync.onLocalChange(); // schedules the flush; still inside the window
+      sync.cancelPendingFlush(); // host Document interrupts → readonly hard drop
+      expect(warnArgs(warn)).toEqual([
+        [
+          expect.stringContaining("under readonly"),
+          { site: "cancelPendingFlush", hadBuffer: false, droppedLength: SECRET.length },
+        ],
+      ]);
+      expectNoContentLeak(warn);
+    } finally {
+      warn.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
+  it("warns when flush hard-drops pending bytes at teardown under readonly", () => {
+    vi.useFakeTimers();
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      let doc = "seed";
+      const posted: string[] = [];
+      const sync = createEditSync({
+        getDoc: () => doc,
+        post: (content) => {
+          posted.push(content);
+          return true;
+        },
+      });
+      sync.onHostSnapshot(1, false); // readonly
+      doc = SECRET;
+      sync.onLocalChange();
+      sync.flush();
+      expect(posted).toEqual([]);
+      expect(warnArgs(warn)).toEqual([
+        [
+          expect.stringContaining("under readonly"),
+          { site: "flush", hadBuffer: false, droppedLength: SECRET.length },
+        ],
+      ]);
+      expectNoContentLeak(warn);
+    } finally {
+      warn.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
+  it("stays silent when nothing is pending — a no-op flush is not a drop", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const s = setup();
+      s.sync.onHostSnapshot(1, false); // readonly, nothing typed
+      s.sync.flush(); // content === null → genuine no-op
+      s.sync.cancelPendingFlush(); // no live timer → no capture, no drop
+      expect(warnArgs(warn)).toEqual([]);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+});

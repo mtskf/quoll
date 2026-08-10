@@ -321,6 +321,25 @@ export function createEditSync(opts: EditSyncOptions): EditSync {
     }
   };
 
+  // Trace for the three readonly HARD DROP sites (trySend / cancelPendingFlush
+  // / flush). Those are the only paths in this module that DISCARD content
+  // rather than declining to replay it, so each one leaves a record — symmetric
+  // with the stale-buffer drop in replayIfNeeded. Each site is reached only
+  // when something is genuinely pending (trySend and cancelPendingFlush run off
+  // a real doc change; flush returns early when `content === null`), so the
+  // warn is unconditional: gating it on `buffered !== null` would stay silent
+  // for the COMMON case — a keystroke still inside the debounce window, with
+  // the buffer already nulled by the previous post — which is exactly the drop
+  // worth seeing. `hadBuffer` distinguishes the two. Length only: buffered
+  // document bytes must never reach the console.
+  const warnReadonlyDrop = (site: string, dropped: string): void => {
+    console.warn("[quoll] dropping local change under readonly (hard drop)", {
+      site,
+      hadBuffer: buffered !== null,
+      droppedLength: dropped.length,
+    });
+  };
+
   const clearTimer = (): void => {
     if (timer !== null) {
       clearTimeout(timer);
@@ -350,6 +369,7 @@ export function createEditSync(opts: EditSyncOptions): EditSync {
     // below mirrors this contract (the `seeded && !canWrite` branch
     // nulls the buffer for the same reason).
     if (!canWrite) {
+      warnReadonlyDrop("trySend", buffered?.content ?? opts.getDoc());
       buffered = null;
       return;
     }
@@ -519,6 +539,7 @@ export function createEditSync(opts: EditSyncOptions): EditSync {
       // case.
       if (timer !== null) {
         if (seeded && !canWrite) {
+          warnReadonlyDrop("cancelPendingFlush", buffered?.content ?? opts.getDoc());
           buffered = null; // readonly hard drop
         } else {
           buffered = stampBuffer(opts.getDoc());
@@ -545,6 +566,7 @@ export function createEditSync(opts: EditSyncOptions): EditSync {
         return; // nothing pending — genuine no-op
       }
       if (!canWrite) {
+        warnReadonlyDrop("flush", content); // `content` is non-null past the guard above
         buffered = null; // readonly hard drop (mirrors trySend)
         return;
       }
