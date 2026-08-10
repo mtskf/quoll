@@ -104,6 +104,15 @@ function deliver(message: HostToWebview): void {
   }
 }
 
+function mountedView(): EditorView {
+  const mountEl = (container as HTMLElement).querySelector(".quoll-editor") as HTMLElement;
+  const view = EditorView.findFromDOM(mountEl);
+  if (!view) {
+    throw new Error("EditorView not found via findFromDOM");
+  }
+  return view;
+}
+
 describe("shell — Ready handshake ordering", () => {
   it("subscribes to host before posting ready", async () => {
     await mount();
@@ -484,17 +493,24 @@ describe("shell — editor-config routing", () => {
     await mount();
     deliver(buildDocument({ docVersion: 1, content: "word\n" }));
 
-    const mountEl = (container as HTMLElement).querySelector(".quoll-editor") as HTMLElement;
-    const view = EditorView.findFromDOM(mountEl);
-    if (!view) {
-      throw new Error("EditorView not found via findFromDOM");
-    }
+    const view = mountedView();
+    const cssVar = (key: keyof typeof EDITOR_PREF_CSS_VARS): string =>
+      view.dom.style.getPropertyValue(EDITOR_PREF_CSS_VARS[key]);
     // Baseline: nothing applied yet, so a test that never delivered the message
     // could not pass by accident.
-    expect(view.dom.style.getPropertyValue(EDITOR_PREF_CSS_VARS["quoll.editor.fontSize"])).toBe("");
+    expect(cssVar("quoll.editor.fontSize")).toBe("");
     expect(view.contentDOM.getAttribute("spellcheck")).toBe("true");
     expect(view.dom.querySelector(".quoll-lint-gutter")).toBeNull();
     expect(view.state.facet(proseLintEnabled)).toBe(false);
+
+    // The 4 pref fields are identical in both deliveries below; only the
+    // booleans vary (see the fixture-design note on the second delivery).
+    const prefs = {
+      fontFamily: "sans",
+      fontSize: "large",
+      lineHeight: "roomy",
+      contentWidth: "narrow",
+    } as const;
 
     deliver({
       protocol: PROTOCOL_VERSION,
@@ -502,25 +518,20 @@ describe("shell — editor-config routing", () => {
       lintGutter: true,
       proseLint: true,
       spellcheck: false,
-      fontFamily: "sans",
-      fontSize: "large",
-      lineHeight: "roomy",
-      contentWidth: "narrow",
+      ...prefs,
     });
 
-    const cssVar = (key: keyof typeof EDITOR_PREF_CSS_VARS): string =>
-      view.dom.style.getPropertyValue(EDITOR_PREF_CSS_VARS[key]);
     expect(cssVar("quoll.editor.fontFamily")).toBe(
-      editorPrefToCssValue("quoll.editor.fontFamily", "sans")
+      editorPrefToCssValue("quoll.editor.fontFamily", prefs.fontFamily)
     );
     expect(cssVar("quoll.editor.fontSize")).toBe(
-      editorPrefToCssValue("quoll.editor.fontSize", "large")
+      editorPrefToCssValue("quoll.editor.fontSize", prefs.fontSize)
     );
     expect(cssVar("quoll.editor.lineHeight")).toBe(
-      editorPrefToCssValue("quoll.editor.lineHeight", "roomy")
+      editorPrefToCssValue("quoll.editor.lineHeight", prefs.lineHeight)
     );
     expect(cssVar("quoll.editor.contentWidth")).toBe(
-      editorPrefToCssValue("quoll.editor.contentWidth", "narrow")
+      editorPrefToCssValue("quoll.editor.contentWidth", prefs.contentWidth)
     );
     expect(view.contentDOM.getAttribute("spellcheck")).toBe("false");
     expect(view.dom.querySelector(".quoll-lint-gutter")).not.toBeNull();
@@ -551,10 +562,7 @@ describe("shell — editor-config routing", () => {
       lintGutter: false,
       proseLint: true,
       spellcheck: true,
-      fontFamily: "sans",
-      fontSize: "large",
-      lineHeight: "roomy",
-      contentWidth: "narrow",
+      ...prefs,
     });
 
     expect(view.contentDOM.getAttribute("spellcheck")).toBe("true");
@@ -591,14 +599,6 @@ describe("shell — image-write-result routing", () => {
   // test.
   const seedAnchor = (view: EditorView, requestId: string, anchor: number): void => {
     view.dispatch({ effects: addPendingAnchor.of({ requestId, anchor }) });
-  };
-  const mountedView = (): EditorView => {
-    const mountEl = (container as HTMLElement).querySelector(".quoll-editor") as HTMLElement;
-    const view = EditorView.findFromDOM(mountEl);
-    if (!view) {
-      throw new Error("EditorView not found via findFromDOM");
-    }
-    return view;
   };
 
   it("routes ok:true to an insert at the matching requestId's anchor", async () => {
@@ -651,11 +651,7 @@ describe("shell — caret-apply routing", () => {
     // to a different offset and this goes red.
     await mount();
     deliver(buildDocument({ docVersion: 1, content: "alpha\nbravo charlie\ndelta\n" }));
-    const mountEl = (container as HTMLElement).querySelector(".quoll-editor") as HTMLElement;
-    const view = EditorView.findFromDOM(mountEl);
-    if (!view) {
-      throw new Error("EditorView not found via findFromDOM");
-    }
+    const view = mountedView();
     const docBefore = view.state.doc.toString();
     expect(view.state.selection.main.head).toBe(0); // seed caret — not already at the target
 
