@@ -131,10 +131,12 @@ function postToHost(host: LinkOpenHost, message: WebviewToHost): boolean {
  *
  *  NO-URL POLICY (do not relax): no value in `detail` may carry bytes that came
  *  from the href. Each one is either a NUMBER derived from it (a length) or a
- *  string PICKED from a fixed set of literals declared in this file — so what
- *  this warn can print is enumerable by reading the file, whatever the href
- *  was. A slice of the href, however short or however "safe-looking" its
- *  character class, is not a derived fact and does not qualify. The webview
+ *  string PICKED from a set of literals declared in source — `LOGGABLE_SCHEMES`
+ *  below, or, for the post-allowlist drift branch that logs its scheme raw,
+ *  `ALLOWED_URL_SCHEMES` in markdown/url-allowlist.ts — so what this warn can
+ *  print is enumerable by reading those sets, whatever the href was. A slice of
+ *  the href, however short or however "safe-looking" its character class, is
+ *  not a derived fact and does not qualify. The webview
  *  console is user-visible surface and the destination can be hostile or merely
  *  private; the host arm sanitises before it logs a preview, this side has no
  *  sanitiser, so it echoes nothing. */
