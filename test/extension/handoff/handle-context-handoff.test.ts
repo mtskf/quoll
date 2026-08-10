@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   buildContextReference,
   CLAUDE_INSERT_AT_MENTIONED_COMMAND,
+  clampHandoffSelection,
   type HandoffRevealSelection,
   handleContextHandoff,
 } from "../../../src/extension/handoff/handle-context-handoff.js";
@@ -47,6 +48,59 @@ describe("buildContextReference", () => {
     const ref = buildContextReference(`a${controls}b.md`, true, 3, 3);
     expect(ref).toBe("@ab.md#L3");
     expect(hasControlChar(ref)).toBe(false);
+  });
+});
+
+describe("clampHandoffSelection", () => {
+  // The SOLE construction point for HandoffRevealSelection (the branded
+  // "clamped + ordered" contract revealForMention indexes lines with). The
+  // type-level half of the guard — a raw payload is not assignable — lives in
+  // test/extension/types-equality.test.ts, which `pnpm compile` type-checks.
+  it("clamps an out-of-range line down to the live line count", () => {
+    expect(clampHandoffSelection({ hasSelection: true, startLine: 1, endLine: 99 }, 10)).toEqual({
+      hasSelection: true,
+      startLine: 1,
+      endLine: 10,
+    });
+  });
+
+  it("orders a reversed selection after clamping", () => {
+    expect(clampHandoffSelection({ hasSelection: true, startLine: 99, endLine: 2 }, 10)).toEqual({
+      hasSelection: true,
+      startLine: 2,
+      endLine: 10,
+    });
+  });
+
+  it("clamps a below-range line up to 1 (lines are 1-based)", () => {
+    expect(clampHandoffSelection({ hasSelection: true, startLine: 0, endLine: -4 }, 10)).toEqual({
+      hasSelection: true,
+      startLine: 1,
+      endLine: 1,
+    });
+  });
+
+  it("floors the upper bound at 1 for an empty document", () => {
+    // lineCount 0 must not produce a 0 line — a document always has line 1.
+    expect(clampHandoffSelection({ hasSelection: true, startLine: 3, endLine: 7 }, 0)).toEqual({
+      hasSelection: true,
+      startLine: 1,
+      endLine: 1,
+    });
+  });
+
+  it("collapses a non-finite line to the lower bound", () => {
+    expect(
+      clampHandoffSelection({ hasSelection: true, startLine: Number.NaN, endLine: 4 }, 10)
+    ).toEqual({ hasSelection: true, startLine: 1, endLine: 4 });
+  });
+
+  it("carries hasSelection through untouched", () => {
+    expect(clampHandoffSelection({ hasSelection: false, startLine: 99, endLine: 99 }, 10)).toEqual({
+      hasSelection: false,
+      startLine: 10,
+      endLine: 10,
+    });
   });
 });
 
