@@ -44,10 +44,11 @@
 // identically. Both sides' hostile-URL matrices
 // (test/extension/links/handle-open-external.test.ts and
 // test/webview/cm-link-handlers.test.ts + cm-link-target.test.ts +
-// test/webview/decorations/cm-link-integration.test.ts) red on drift. A shared host+webview module remains rejected as scope creep — the
-// duplication is ~10 LOC on each side of a process boundary, and collapsing it
-// would add a third module to the C9b deletion footprint. This extraction is
-// therefore single-source-of-truth WITHIN the webview, not across the boundary.
+// test/webview/decorations/cm-link-integration.test.ts) red on drift. A shared
+// host+webview module remains rejected as scope creep — the duplication is ~10
+// LOC on each side of a process boundary, and collapsing it would add a third
+// module to the C9b deletion footprint. This extraction is therefore
+// single-source-of-truth WITHIN the webview, not across the boundary.
 
 import { isAllowedUrl } from "../../markdown/url-allowlist.js";
 import { MAX_HREF_LENGTH } from "../../shared/protocol.js";
@@ -80,16 +81,13 @@ const LOGGABLE_SCHEMES = [
 /** Every string `schemeToken` can ever hold. A literal union, not `string`, so
  *  the NO-URL POLICY is checked by tsc rather than asserted in prose: an
  *  attempt to put an href-derived value on the `blocked` arm reds with TS2322
- *  at the assignment, instead of relying on a reviewer noticing. This is the
- *  difference between "enforced" and "documented" — the header claims the
- *  former, so the type has to earn it. */
+ *  at the assignment, instead of relying on a reviewer noticing. */
 type LoggableSchemeToken = (typeof LOGGABLE_SCHEMES)[number] | "(none)" | "(unrecognised)";
 
 /** Lowercase-first scheme extract. Same regex shape as isAllowedUrl and the
- *  host arm — see the DRIFT WARNING above. Module-private on purpose: the only
- *  callers are below, and every CONSUMER wants the classified token, not a raw
- *  pre-colon run of href bytes. Exporting it would hand out the one value the
- *  NO-URL POLICY exists to keep out of logs. */
+ *  host arm — see the DRIFT WARNING above. Module-private on purpose: exporting
+ *  it would hand consumers the raw pre-colon run of href bytes, the one value
+ *  the NO-URL POLICY exists to keep out of logs. */
 function schemeOf(url: string): string | null {
   const match = /^([a-z][a-z0-9+.-]*):/.exec(url.toLowerCase());
   return match ? match[1] : null;
@@ -239,26 +237,6 @@ export function classifyLinkTarget(decoded: string): LinkTarget {
   return { kind: "no-action" };
 }
 
-/** True for exactly the arms a click ACTS on. Consumers: the click handler
- *  (act, or fall through to a caret move) and the reveal decoration (pointer
- *  cursor, or leave the text cursor). Keeping the predicate here rather than at
- *  each call site is the whole point of the module — the cursor and the click
- *  read the same boolean.
- *
- *  Named for the INTENT ("a click does something") rather than the mechanism
- *  ("posts to the host"), even though every actionable arm posts today. A
- *  future in-document fragment scroll would act WITHOUT posting; under a
- *  post-shaped name it would have to either lie or force a rename of a shared
- *  predicate. Adding such an arm needs no new pointer-cursor WIRING — the
- *  cursor already reads this predicate — but note it is not free: a fragment
- *  is actionable only if its heading exists, and this module stays a pure
- *  string→verdict function with no document context, so the consumer resolves
- *  existence (see the fragment TODO). What the naming buys is that the arm
- *  joins without renaming a shared predicate, not that no consumer changes. */
-export function isActionableLinkTarget(target: LinkTarget): boolean {
-  return ACTIONABLE_BY_KIND[target.kind];
-}
-
 /** Why a lookup table rather than `kind === "external" || kind === "workspace"`:
  *  the switch in tryOpenLinkAt is exhaustiveness-checked (TS2366), but a boolean
  *  `||` chain is not — a seventh arm would compile green here and silently
@@ -276,3 +254,22 @@ const ACTIONABLE_BY_KIND: Record<LinkTarget["kind"], boolean> = {
   "unopenable-scheme": false,
   "no-action": false,
 };
+
+/** True for exactly the arms a click ACTS on. Consumers: the click handler
+ *  (act, or fall through to a caret move) and the reveal decoration (pointer
+ *  cursor, or leave the text cursor). Keeping the predicate here rather than at
+ *  each call site is the whole point of the module — the cursor and the click
+ *  read the same boolean.
+ *
+ *  Named for the INTENT ("a click does something") rather than the mechanism
+ *  ("posts to the host"), even though every actionable arm posts today. A
+ *  future in-document fragment scroll would act WITHOUT posting; under a
+ *  post-shaped name it would have to either lie or force a rename of a shared
+ *  predicate. Such an arm needs no new pointer-cursor WIRING — the cursor
+ *  already reads this predicate — but it is not free: a fragment is actionable
+ *  only if its heading exists, and this module stays a pure string→verdict
+ *  function with no document context, so the consumer resolves existence (see
+ *  the fragment TODO). */
+export function isActionableLinkTarget(target: LinkTarget): boolean {
+  return ACTIONABLE_BY_KIND[target.kind];
+}

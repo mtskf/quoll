@@ -57,12 +57,10 @@ function postToHost(host: LinkOpenHost, message: WebviewToHost): boolean {
  *  warn (open-external.ts) for the allowlist condition the two share.
  *
  *  NO-URL POLICY (do not relax): no value in `detail` may carry bytes that came
- *  from the href. This is now ENFORCED in ./link-target.js rather than upheld
- *  by each call site here: every string field a `LinkTarget` rejection arm
- *  carries is already PICKED from a set of literals declared in that module
- *  (`LOGGABLE_SCHEMES`), or, for the post-allowlist drift branch, from
- *  `ALLOWED_URL_SCHEMES` in markdown/url-allowlist.ts — so this function's
- *  callers can pass any field of a rejection arm straight through. The webview
+ *  from the href. ENFORCED in ./link-target.js rather than upheld by each call
+ *  site here: every string field a `LinkTarget` rejection arm carries is already
+ *  PICKED from a set of source literals (that module's header names them) — so
+ *  this function's callers can pass any rejection-arm field through. The webview
  *  console is user-visible surface and the destination can be hostile or
  *  merely private; the host arm sanitises before it logs a preview, this side
  *  has no sanitiser, so it echoes nothing. */
@@ -139,10 +137,9 @@ export function tryOpenLinkAt(state: EditorState, pos: number, host: LinkOpenHos
   }
   const raw = state.sliceDoc(urlNode.from, urlNode.to);
   const decoded = decodeMarkdownDestination(raw);
-  // Classification lives in link-target.ts so this handler and the
-  // `quoll-link-clickable` decoration cannot disagree about what a click does.
-  // This switch adds only the LOGGING policy on top of it — every field below
-  // is already NO-URL-POLICY-safe by construction (see that module's header).
+  // This switch adds only the LOGGING policy on top of the classifier — every
+  // field below is already NO-URL-POLICY-safe by construction (see
+  // link-target.ts's header).
   const target = classifyLinkTarget(decoded);
   switch (target.kind) {
     case "external":

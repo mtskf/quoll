@@ -117,13 +117,10 @@ export const linkReveal: DecorationProvider = {
           } while (sub2.nextSibling());
           // Emit the clickable marker over [contentStart, contentEnd) when
           // HIDDEN, the content range is non-empty, it is inside the visible
-          // window, AND a click on the destination would actually DO something.
-          // The last condition is what keeps the pointer cursor honest: a
-          // non-actionable destination (fragment, relative non-.md, absolute
-          // path) or a blocked one used to render identically to a working link
-          // and then no-op on click. `classifyLinkTarget` is the SAME function
-          // link-handlers.ts gates the click on, so cursor and behaviour cannot
-          // disagree.
+          // window, AND a click on the destination would actually DO something
+          // (the honest-pointer contract in the header). `classifyLinkTarget` is
+          // the SAME function link-handlers.ts gates the click on, so cursor and
+          // behaviour cannot disagree.
           //
           // Cost: one doc slice + decode + classify per VISIBLE link whose marks
           // are hidden — placed last in the && chain so it runs only for links
