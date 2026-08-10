@@ -9,14 +9,27 @@
 // set. The module-level `vi.mock` here would also blind the real-rule suite, so
 // that suite stays in its own (unmocked) file.
 //
-// NON-VACUITY: "returns false, doc unchanged" is a vacuous assertion here — it is
-// exactly what the fail-open catch produces when a guard is missing and `dispatch`
-// throws on the invalid change set. So each test asserts a signal the catch cannot
-// fake: the malformed/overlap/sort cases pair the bad fix with a VALID one and
-// require the valid fix to land, and the collapsed case counts transactions (an
-// unguarded no-op change still dispatches and still returns true). Every test below
-// was verified red against both removal AND over-broadening of its guard.
-import { EditorSelection, EditorState } from "@codemirror/state";
+// NON-VACUITY — two traps, both load-bearing:
+//
+// 1. Do not assert "returns false, doc unchanged". Removing the malformed-range
+//    guard makes CodeMirror throw, and the fail-open catch turns that throw into
+//    exactly that result — indistinguishable from the guard doing its job. Tests
+//    here assert a signal the catch cannot fake: a bad fix is paired with a VALID
+//    one and the valid fix is required to land, or transactions are counted.
+//
+// 2. Do not assume CodeMirror rejects an invalid change set. Measured against the
+//    pinned @codemirror/state, only an out-of-range or inverted range throws.
+//    Unsorted and overlapping specs are ACCEPTED (mapped and composed), and a
+//    collapsed delete is dropped while the transaction still dispatches. So the
+//    sort and the overlap skip are not crash prevention — they define the
+//    first-wins semantics, and dropping them produces a successful dispatch with
+//    the wrong bytes. That is what the byte assertions below catch, not a throw.
+//    Getting this backwards invites a future "CM handles it anyway" cleanup that
+//    would silently swap first-wins for sequential composition.
+//
+// Each guard has a test that goes red when the guard is removed; the boundary
+// guards additionally have one that goes red when the comparison is broadened.
+import { EditorSelection, EditorState, type Extension } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { LintDiagnostic } from "../../../src/webview/cm/lint/types.js";
@@ -33,10 +46,12 @@ vi.mock("../../../src/webview/cm/lint/engine.js", async (importOriginal) => ({
 }));
 
 const { applyLintFixAtSelection } = await import("../../../src/webview/cm/lint/apply-fix.js");
+const { proseLintEnabled } = await import("../../../src/webview/cm/lint/extension.js");
 
-// 11 chars: "abcdefghij" (line 1, span [0,10]) + "\n". A caret at 0 puts every
-// offset used below inside the in-scope line span, so each test exercises the
-// change-set loop rather than the selection filter.
+// 11 chars: "abcdefghij" (line 1, span [0,10]) + "\n". With a caret at 0 every fix
+// stubbed below — including the deliberately out-of-range ones — still intersects
+// that span under the half-open overlap test in apply-fix.ts, so the selection
+// filter never drops it and the change-set loop is what actually runs.
 const DOC = "abcdefghij\n";
 
 type FixSpec = { from: number; to: number; insert: string };
@@ -62,13 +77,18 @@ function stubFixes(...fixes: FixSpec[]): void {
 /** Run the command against a caret-at-0 view and report what it did. The
  *  transaction count separates "skipped the fix" from "dispatched a change that
  *  happens to alter no bytes" — the collapsed-delete guard's whole point. */
-function apply(): { applied: boolean; doc: string; dispatches: number } {
+function apply(extras: Extension[] = []): { applied: boolean; doc: string; dispatches: number } {
   let dispatches = 0;
   const view = new EditorView({
     state: EditorState.create({
       doc: DOC,
       selection: EditorSelection.cursor(0),
-      extensions: [EditorView.updateListener.of(() => (dispatches += 1))],
+      extensions: [
+        EditorView.updateListener.of(() => {
+          dispatches += 1;
+        }),
+        ...extras,
+      ],
     }),
     parent: document.body,
   });
@@ -118,8 +138,10 @@ describe("malformed-fix guard", () => {
 describe("collapsed-delete guard", () => {
   it("returns false without dispatching when the only fix is a zero-length delete", () => {
     stubFixes({ from: 5, to: 5, insert: "" });
-    // Without the guard this dispatches a no-op transaction and returns true,
-    // making Mod-. claim the chord for a change that alters nothing.
+    // CodeMirror drops such a spec itself, but the transaction still fires — so
+    // without the guard this returns true and Mod-. claims the chord for a change
+    // that alters nothing. The bytes are identical either way; the transaction
+    // count is the only signal that separates the two.
     expect(apply()).toEqual({ applied: false, doc: DOC, dispatches: 0 });
   });
 
@@ -134,21 +156,47 @@ describe("collapsed-delete guard", () => {
 describe("overlap guard and sort", () => {
   it("keeps the first of two overlapping fixes and drops the second", () => {
     stubFixes({ from: 2, to: 6, insert: "" }, { from: 4, to: 8, insert: "" });
-    // First-wins: "cdef" goes, "ghij" stays.
+    // First-wins: "cdef" goes, "ghij" stays. Without the skip CodeMirror composes
+    // both specs rather than throwing, deleting through to 8 — a successful
+    // dispatch with the wrong bytes.
     expect(apply()).toEqual({ applied: true, doc: "abghij\n", dispatches: 1 });
   });
 
   it("applies both of two abutting fixes (touching is not overlapping)", () => {
     // Pins `f.from < lastTo` rather than `<=`: a fix starting exactly where the
-    // previous one ended is a valid neighbour.
+    // previous one ended is a valid neighbour. Both stubbed fixes are valid and
+    // both must land.
     stubFixes({ from: 2, to: 4, insert: "" }, { from: 4, to: 6, insert: "" });
     expect(apply()).toEqual({ applied: true, doc: "abghij\n", dispatches: 1 });
   });
 
   it("sorts unordered fixes into an ascending change set", () => {
-    // Emitted back-to-front. Unsorted, CodeMirror rejects the change set.
+    // Emitted back-to-front, both valid. CodeMirror would accept them unsorted,
+    // so the sort is pinned through the overlap skip instead: unsorted, `lastTo`
+    // becomes 8 from the [6,8) fix and the earlier [2,4) fix is mis-skipped,
+    // losing "cd".
     stubFixes({ from: 6, to: 8, insert: "" }, { from: 2, to: 4, insert: "" });
     expect(apply()).toEqual({ applied: true, doc: "abefij\n", dispatches: 1 });
+  });
+});
+
+describe("prose gate passthrough", () => {
+  // The re-lint forwards the live facet: `lintMarkdown(doc, { prose: facet })`.
+  // No prose rule emits a fix yet, so the unmocked suite cannot observe this
+  // argument at all — a dropped `{ prose }` would leave a future prose fix
+  // invisible to Mod-. while its underline showed, with a green suite. This spy
+  // is the only place that contract can be pinned.
+  it("forwards the prose gate to the engine (off by default)", () => {
+    stubFixes({ from: 5, to: 6, insert: "" });
+    apply();
+    expect(lintMarkdown).toHaveBeenCalledWith(DOC, { prose: false });
+  });
+
+  it("forwards prose: true when the facet is on", () => {
+    // Reads the facet rather than hard-coding false.
+    stubFixes({ from: 5, to: 6, insert: "" });
+    apply([proseLintEnabled.of(true)]);
+    expect(lintMarkdown).toHaveBeenCalledWith(DOC, { prose: true });
   });
 });
 
@@ -157,12 +205,41 @@ describe("fail-open catch", () => {
     lintMarkdown.mockImplementation(() => {
       throw new Error("boom");
     });
-    // Without the catch the throw escapes the command into CodeMirror's keymap
-    // handler and this call rejects.
+    // Without the catch the throw propagates out of the command — into
+    // CodeMirror's keymap dispatch in production.
     expect(apply()).toEqual({ applied: false, doc: DOC, dispatches: 0 });
     expect(consoleError).toHaveBeenCalledWith(
       "[quoll] applyLintFixAtSelection failed",
       expect.any(Error)
     );
+  });
+
+  it("returns false and logs when the dispatch pipeline itself throws", () => {
+    // The catch spans the dispatch too, and that arm is unreachable from any fix
+    // descriptor once the guards hold: an out-of-range one is rejected by the
+    // guards, NaN by the selection filter ahead of them, and a non-string insert
+    // does not make CodeMirror throw at all. Its real trigger is the extension
+    // pipeline a production dispatch runs, so pin it there.
+    stubFixes({ from: 5, to: 6, insert: "" });
+    const throwingPipeline = EditorState.transactionExtender.of(() => {
+      throw new Error("pipeline boom");
+    });
+    expect(apply([throwingPipeline])).toEqual({ applied: false, doc: DOC, dispatches: 0 });
+    expect(consoleError).toHaveBeenCalledWith(
+      "[quoll] applyLintFixAtSelection failed",
+      expect.any(Error)
+    );
+  });
+
+  it("forwards a non-Error throw to the log verbatim", () => {
+    // `catch (err)` hands err straight to console.error with no property access,
+    // so a thrown string must survive unchanged. Pins that against a future
+    // "improve the log" edit reaching for err.message.
+    lintMarkdown.mockImplementation(() => {
+      // biome-ignore lint/style/useThrowOnlyError: the non-Error throw is the point
+      throw "boom";
+    });
+    expect(apply()).toEqual({ applied: false, doc: DOC, dispatches: 0 });
+    expect(consoleError).toHaveBeenCalledWith("[quoll] applyLintFixAtSelection failed", "boom");
   });
 });
