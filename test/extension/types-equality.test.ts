@@ -21,6 +21,11 @@
 // the e2e-mirror equality guard described above.
 
 import { describe, expect, it } from "vitest";
+import {
+  clampHandoffSelection,
+  type HandleContextHandoffPayload,
+  type HandoffRevealSelection,
+} from "../../src/extension/handoff/handle-context-handoff";
 import type { EndOfLineValue } from "../../src/extension/status-bar";
 import type { PanelControls } from "../../src/extension/test-harness";
 import type {
@@ -85,6 +90,38 @@ describe("e2e/types mirror equality", () => {
     const _drift: PanelControlsShape = _src;
     void _drift;
     expect(true).toBe(true);
+  });
+});
+
+describe("handoff type pins", () => {
+  it("rejects a raw handoff payload where a clamped HandoffRevealSelection is required", () => {
+    // HandoffRevealSelection's "clamped + ordered against the live line count"
+    // contract used to be documentation-only: the type was structurally
+    // identical to the untrusted HandleContextHandoffPayload, so the raw
+    // payload could be passed straight to revealForMention, whose
+    // implementation calls document.lineAt(endLine - 1) with no re-clamp.
+    // The brand makes clampHandoffSelection the only construction point.
+    //
+    // Lives here (not in the handoff unit test) for the reason spelled out in
+    // the status-bar pin below: this file is the one test program `pnpm
+    // compile` type-checks, so a @ts-expect-error here is non-vacuous.
+    // Revert-check: drop the brand from HandoffRevealSelection and the
+    // directive below becomes unused → tsc errors on it.
+    const raw = {} as unknown as HandleContextHandoffPayload;
+    // @ts-expect-error — a raw payload is not a clamped selection.
+    const _drift: HandoffRevealSelection = raw;
+    void _drift;
+    expect(true).toBe(true);
+  });
+
+  it("accepts the clamp helper's result as a HandoffRevealSelection", () => {
+    // The other half of the pin: the sole construction point must still
+    // produce the branded type (a brand nobody can build is useless).
+    const clamped: HandoffRevealSelection = clampHandoffSelection(
+      { hasSelection: true, startLine: 1, endLine: 1 },
+      1
+    );
+    expect(clamped).toEqual({ hasSelection: true, startLine: 1, endLine: 1 });
   });
 });
 

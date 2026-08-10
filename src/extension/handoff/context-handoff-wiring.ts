@@ -31,7 +31,7 @@ import {
 } from "vscode";
 import type { EditSettledBarrier } from "../session/edit-settled-barrier.js";
 import { handleCodexContextHandoff } from "./handle-codex-context-handoff.js";
-import { handleContextHandoff } from "./handle-context-handoff.js";
+import { type HandoffRevealSelection, handleContextHandoff } from "./handle-context-handoff.js";
 import {
   decideRevealInvariant,
   planRevealTabClose,
@@ -123,9 +123,10 @@ export function createContextHandoffWiring(deps: ContextHandoffWiringDeps): Cont
   //           tab — no delta, nothing to close, and without (b) the pane
   //           stays switched to the raw text editor (the live ⌘⌥K bug
   //           pinned by e2e context-handoff-reveal-cleanup.test.ts).
-  // Selection mapping (payload lines are 1-based, clamped + ordered by
-  // handleContextHandoff before this is called, with no await in between —
-  // lineAt cannot go out of range):
+  // Selection mapping (lines are 1-based; the branded HandoffRevealSelection
+  // parameter is only constructible via clampHandoffSelection, so the range is
+  // clamped + ordered against the live document by construction, and no await
+  // sits between that clamp and this call — lineAt cannot go out of range):
   //   - no selection → empty selection at (0,0) → Claude Code emits the
   //     whole-file `@rel` form.
   //   - selection → (start-1, 0) .. (end-1, endLineLength). The end
@@ -135,11 +136,9 @@ export function createContextHandoffWiring(deps: ContextHandoffWiringDeps): Cont
   //     selection and wrongly emit the whole-file form. Edge: a single-line
   //     handoff on an EMPTY line unavoidably degrades to the whole-file
   //     mention — accepted.
-  const revealForMention = async (selection: {
-    hasSelection: boolean;
-    startLine: number;
-    endLine: number;
-  }): Promise<() => Thenable<void>> => {
+  const revealForMention = async (
+    selection: HandoffRevealSelection
+  ): Promise<() => Thenable<void>> => {
     const uriString = document.uri.toString();
     const isThisDocTextTab = (tab: Tab): boolean =>
       tab.input instanceof TabInputText && tab.input.uri.toString() === uriString;
