@@ -112,9 +112,11 @@ describe("handleCodeRefMouseDown", () => {
     // already covers — so pin both halves of the posAtCoords call. Passing the
     // event's own coords is what makes the click land where the user clicked, and
     // the literal `false` selects the imprecise overload: precise mode returns
-    // null for a click in a line's padding, which would silently drop the
-    // near-miss clicks this affordance is meant to accept. A stub that did not
-    // record its arguments would let both regressions through unseen.
+    // null when the clicked block falls outside the rendered viewport (CM 6.43
+    // virtualises long documents), so in a long file a click could resolve to
+    // nothing instead of opening. Imprecise mode estimates a position instead.
+    // A stub that did not record its arguments would let both regressions
+    // through unseen.
     const host = { postMessage: vi.fn() };
     const event = makeMockEvent(/* left */ 0);
     const view = makeMockView(stateFor(DOC), REF_POS);
