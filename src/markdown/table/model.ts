@@ -71,8 +71,8 @@ export interface DelimiterRow {
  * enforced at construction by {@link makeTable} — the sanctioned way to build
  * a `Table`, which throws on a mismatch. On parse input a mismatch is not an
  * error but a non-table: `parseTable` pre-checks and returns null per GFM/Lezer
- * before reaching the factory, so the throw backstops future structural callers
- * (the row/column ops) and logic errors, not parse input.
+ * before reaching the factory, so on that path the throw is only a backstop —
+ * which construction sites it actually gates is spelled out at {@link makeTable}.
  *
  * Body rows MAY differ in cell count from `delimiter.cells.length`: the parser
  * does not pad/truncate and `makeTable` does not constrain them.
@@ -111,16 +111,16 @@ export interface Table {
  * structurally rather than by parsing — the row/column ops this model exists to
  * carry — it is the primary gate.
  *
- * The arrays are stored uncopied, which the parameter types make safe to state:
- * `readonly` in, `readonly` out. One hole is left open by that: a caller that
- * keeps its own mutable reference to an array it passed in can still mutate what
- * the model aliases. Copying the arrays here WOULD close it — the cell-count
- * invariant reads only `length`, so even a shallow copy of each `cells` array
- * would do — but the only production construction site drops its locals on
- * return, so the hole has no way to be reached and the copy would cost an
- * allocation per parse for nothing. Revisit if a construction site appears that
- * retains its arrays. (The unit test also calls this factory directly, with
- * throwaway fixtures it never mutates afterwards.)
+ * The arrays are stored uncopied — `readonly` in, `readonly` out, so the
+ * returned model exposes no way to write into them. One hole is left open by
+ * that: a caller that keeps its own mutable reference to an array it passed in
+ * can still mutate what the model aliases. Copying the arrays here WOULD close
+ * it — the cell-count invariant reads only `length`, so even a shallow copy of
+ * each `cells` array would do — but the only production construction site drops
+ * its locals on return, so the hole has no way to be reached and the copy would
+ * cost an allocation per parse for nothing. Revisit if a construction site
+ * appears that retains its arrays. (The unit test also calls this factory
+ * directly, with throwaway fixtures it never mutates afterwards.)
  *
  * Body `rows` are intentionally unconstrained: GFM/Lezer never pads or truncates
  * ragged body rows, so neither does this factory (see {@link Table}).
