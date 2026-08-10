@@ -216,10 +216,44 @@ describe("resolve", () => {
     view.dispatch({ effects: addPendingAnchor.of({ requestId: "1", anchor: 99 }) });
 
     expect(() => paste.resolve(view, "1", "./assets/x.png")).not.toThrow();
+    // The label is asserted, not just the fact of a log: the sibling dispatch failure
+    // logs from the same function with the same recovery, and only the message tells
+    // a maintainer which of the two they are looking at.
     expect(error.mock.calls).toEqual([
-      ["[quoll] failed to insert pasted image link", expect.any(RangeError)],
+      [
+        "[quoll] pasted image link insert failed: stale anchor",
+        {
+          err: expect.any(RangeError),
+          requestId: "1",
+          anchor: 99,
+          relativePath: "./assets/x.png",
+          docLength: 2,
+        },
+      ],
     ]);
     expect(view.state.doc.toString()).toBe("ab");
+    expect(view.state.field(pendingImageAnchors)).toEqual([]);
+    view.destroy();
+  });
+
+  it("clears only the failing anchor, leaving a second pending image intact", () => {
+    // With one seeded anchor, "cleared the failing requestId" and "cleared everything"
+    // are the same observable — and one paste event routinely mints several requestIds
+    // (see the pair test above). Two anchors are what make the scoping visible: a
+    // regression to a wholesale clear on any insert failure would silently drop the
+    // OTHER image's still-valid pending link, turning one bad paste into two.
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    const { view, paste } = mount("ab");
+    view.dispatch({ effects: addPendingAnchor.of({ requestId: "1", anchor: 99 }) });
+    view.dispatch({ effects: addPendingAnchor.of({ requestId: "2", anchor: 1 }) });
+
+    expect(() => paste.resolve(view, "1", "./assets/x.png")).not.toThrow();
+    expect(error).toHaveBeenCalledTimes(1);
+    expect(view.state.field(pendingImageAnchors)).toEqual([{ requestId: "2", anchor: 1 }]);
+    // The survivor is still resolvable — the failed sibling neither consumed nor
+    // corrupted it.
+    paste.resolve(view, "2", "./assets/y.png");
+    expect(view.state.doc.toString()).toBe("a\n![](./assets/y.png)\nb");
     expect(view.state.field(pendingImageAnchors)).toEqual([]);
     view.destroy();
   });
@@ -241,8 +275,20 @@ describe("resolve", () => {
     });
 
     expect(() => paste.resolve(view, "1", "./assets/x.png")).not.toThrow();
+    // "dispatch threw", NOT "stale anchor": the anchor here is perfectly valid, and
+    // this same catch is where an unrelated field/plugin throwing on the insert lands.
+    // Mislabelling it would send whoever reads the log after the wrong subsystem.
     expect(error.mock.calls).toEqual([
-      ["[quoll] failed to insert pasted image link", expect.any(Error)],
+      [
+        "[quoll] pasted image link insert failed: dispatch threw",
+        {
+          err: expect.any(Error),
+          requestId: "1",
+          anchor: 1,
+          relativePath: "./assets/x.png",
+          docLength: 2,
+        },
+      ],
     ]);
     // Twice: the insert, then the clear it attempts anyway. One call would mean the
     // catch returned without trying to clear.

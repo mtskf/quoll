@@ -132,10 +132,15 @@ export function createImagePasteDrop(opts: {
   const sessionNonce = crypto.randomUUID();
 
   // Dispatch guarded against a view torn down mid-round-trip (tab closed between
-  // FileReader start and callback) — CM throws on dispatch to a destroyed view.
-  // The catch is intentionally scoped to THIS hazard: `pendingImageAnchors`'
-  // update() only filters/maps and cannot throw, so nothing else legitimately
-  // surfaces here.
+  // FileReader start and callback). CM 6.43 does NOT actually throw there —
+  // `EditorView.update` early-returns on `this.destroyed` (measured; see the
+  // "swallows a clearPending dispatch that fails after the view was destroyed"
+  // test) — so this catch pins the contract against a future CM regression rather
+  // than handling a hazard that reproduces today. It stays silent by design: the
+  // caller has already logged, and a torn-down view has no state left to leak.
+  // The transaction carries effects only, so `pendingImageAnchors`' update() (which
+  // just filters) is the sole state work it can provoke — unlike resolve()'s insert,
+  // there are no `changes` here to drive the widget/fold/lint fields that can throw.
   const clearPending = (view: EditorView, requestId: string): void => {
     try {
       view.dispatch({ effects: removePendingAnchor.of(requestId) });
@@ -278,17 +283,45 @@ export function createImagePasteDrop(opts: {
       return;
     }
     const anchor = pending.anchor;
-    // The guard spans the whole insert, not just the dispatch: an anchor stale past
-    // the doc end makes `lineAt` throw BEFORE the dispatch is even built, so a catch
-    // wrapped around the dispatch alone lets that RangeError escape into the shell's
-    // message handler. Both ends fail the same way and are handled the same way.
+    // Both failure paths below share one recovery, because by the time resolve() runs
+    // the host has ALREADY written the image into the workspace: swallowing either one
+    // costs the user a stray asset file with no link and no trace, and — because
+    // `removePendingAnchor` rides the very dispatch that can fail — a leaked entry
+    // pinning a now-meaningless anchor, which makes a re-paste look like a duplicate.
+    // So each catch logs and then clears the anchor on its OWN dispatch, which cannot
+    // carry the same hazard (effects only, no positions; clearPending absorbs the
+    // torn-down-view case). The resulting orphaned file is exactly what a wholesale
+    // reseed already produces, and beats inserting at a position we could not verify.
+    //
+    // They are kept as two try blocks rather than one because they fail for unrelated
+    // reasons and only a precise log can tell them apart afterwards. Each logs the
+    // context the sibling handler in `list/list-indent-keymap.ts` established as the
+    // house style for a dispatch failure — a bare `err` does not say WHICH pending
+    // image, at what anchor, or how far that anchor sat from the end of the doc.
+    let line: ReturnType<typeof view.state.doc.lineAt>;
     try {
-      const line = view.state.doc.lineAt(anchor);
-      // Standalone block: break onto its own line when mid-line; always close with
-      // a newline so the read-path renders it as a block image. Multiple images
-      // from one event insert in completion order (see Design notes).
-      const prefix = anchor === line.from ? "" : "\n";
-      const insert = `${prefix}![](${relativePath})\n`;
+      line = view.state.doc.lineAt(anchor);
+    } catch (err) {
+      // Position lookup, not the edit: `lineAt` throws a RangeError on an anchor left
+      // stale past the doc end, and it runs BEFORE the dispatch is even built — which
+      // is why it needs its own guard. Wrapped only around the dispatch, this escaped
+      // into the shell's message handler.
+      console.error("[quoll] pasted image link insert failed: stale anchor", {
+        err,
+        requestId,
+        anchor,
+        relativePath,
+        docLength: view.state.doc.length,
+      });
+      clearPending(view, requestId);
+      return;
+    }
+    // Standalone block: break onto its own line when mid-line; always close with
+    // a newline so the read-path renders it as a block image. Multiple images
+    // from one event insert in completion order (see Design notes).
+    const prefix = anchor === line.from ? "" : "\n";
+    const insert = `${prefix}![](${relativePath})\n`;
+    try {
       // resolve runs synchronously from the shell's `editor?.` null-guarded handler
       // (view alive), but guard the dispatch for symmetry with the async paths.
       view.dispatch({
@@ -298,16 +331,19 @@ export function createImagePasteDrop(opts: {
         scrollIntoView: true,
       });
     } catch (err) {
-      // By the time resolve() runs the host has ALREADY written the image into the
-      // workspace, so a swallowed failure here costs the user a stray asset file with
-      // no link and no trace — and, because `removePendingAnchor` rides the SAME
-      // dispatch that just failed, a leaked pending entry that pins a now-meaningless
-      // anchor and makes a re-paste look like a duplicate. Log it, then clear the
-      // anchor on its own dispatch (which cannot carry the same hazard: it has no
-      // positions, and clearPending swallows the torn-down-view case). The orphaned
-      // file is the same outcome a wholesale reseed produces, and is preferred over
-      // inserting at a position we could not verify.
-      console.error("[quoll] failed to insert pasted image link", err);
+      // Deliberately NOT labelled "stale anchor": `EditorView.update` runs
+      // `updatePlugins` / `docView.update` inside its own try whose finally only
+      // resets updateState (only updateListener callbacks get logException), so a
+      // throw from ANY unrelated field or plugin processing this insert — widgets,
+      // fold, table, lint — surfaces right here. Naming the dispatch instead of the
+      // anchor keeps that case from sending the next reader after the wrong bug.
+      console.error("[quoll] pasted image link insert failed: dispatch threw", {
+        err,
+        requestId,
+        anchor,
+        relativePath,
+        docLength: view.state.doc.length,
+      });
       clearPending(view, requestId);
     }
   };
