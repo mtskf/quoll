@@ -358,58 +358,70 @@ describe("tryOpenLinkAt — MAX_HREF_LENGTH guard", () => {
   });
 });
 
-// Invariant: any gate-reject bail in tryOpenLinkAt — declining to open and,
-// unlike a true "dead click" (open-external.ts, handle-open-link.ts),
-// NOT consuming the click via preventDefault — logs a console.warn under
-// the `[quoll]` prefix so a "this link does nothing" report has a triage
-// trail, mirroring `openExternalSinkFor`'s warn (open-external.ts) for the
-// allowlist condition the two share. These tests pin that invariant AND the
-// no-URL policy: the warn's detail must never carry the href or any slice
-// of it.
+// Invariant: every gate-reject bail in tryOpenLinkAt emits exactly one
+// `[quoll] link not opened: …` warn so a "this link does nothing" report has a
+// triage trail (rationale + why this is NOT a "dead click" live on
+// `warnLinkNotOpened` in src/webview/cm/link-handlers.ts). These tests pin the
+// message shape AND the NO-URL POLICY: the detail must never carry the href or
+// any slice of it.
 describe("tryOpenLinkAt — gate-reject bails warn", () => {
-  function warnFor(doc: string, marker: string): { calls: unknown[][]; handled: boolean } {
+  /** Click the link at `marker` and report everything the call did: its return
+   *  value, the messages posted, and the console.warn calls. `open` is
+   *  injectable so the simulated-drift test below can drive a re-imported
+   *  module through the same seam. */
+  function clickLink(
+    doc: string,
+    marker: string,
+    open: typeof tryOpenLinkAt = tryOpenLinkAt
+  ): { warnings: unknown[][]; handled: boolean; posted: unknown[] } {
     const state = stateOf(doc);
     const posted: unknown[] = [];
     const host = { postMessage: (m: unknown) => posted.push(m) };
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
     try {
-      const handled = tryOpenLinkAt(state, posOf(doc, marker) + 1, host);
-      expect(posted).toEqual([]);
-      return { calls: warnSpy.mock.calls.map((c) => [...c]), handled };
+      const handled = open(state, posOf(doc, marker) + 1, host);
+      return { warnings: warnSpy.mock.calls.map((c) => [...c]), handled, posted };
     } finally {
       warnSpy.mockRestore();
     }
   }
 
   it("warns with the rejected URL's scheme when the URL is not in the allowlist", () => {
-    const { calls, handled } = warnFor("see [t](javascript:alert(1))", "[t]");
+    const { warnings, handled, posted } = clickLink("see [t](javascript:alert(1))", "[t]");
     expect(handled).toBe(false);
-    expect(calls).toEqual([
+    expect(posted).toEqual([]);
+    expect(warnings).toEqual([
       ["[quoll] link not opened: URL not in allowlist", { scheme: "javascript" }],
     ]);
     // The scheme token is safe to log; the URL body ("alert(1)") is not.
-    expect(JSON.stringify(calls)).not.toContain("alert(1)");
+    expect(JSON.stringify(warnings)).not.toContain("alert(1)");
   });
 
   it('warns with scheme "(none)" when the rejected URL carries no scheme', () => {
-    const { calls, handled } = warnFor("see [t](//evil.example/x)", "[t]");
+    const { warnings, handled, posted } = clickLink("see [t](//evil.example/x)", "[t]");
     expect(handled).toBe(false);
-    expect(calls).toEqual([
+    expect(posted).toEqual([]);
+    expect(warnings).toEqual([
       ["[quoll] link not opened: URL not in allowlist", { scheme: "(none)" }],
     ]);
-    expect(JSON.stringify(calls)).not.toContain("evil.example");
+    expect(JSON.stringify(warnings)).not.toContain("evil.example");
   });
 
   it("warns when the URL exceeds MAX_HREF_LENGTH, without logging the URL", async () => {
     const { MAX_HREF_LENGTH } = await import("../../src/shared/protocol.js");
     const padding = "a".repeat(MAX_HREF_LENGTH);
-    const { calls, handled } = warnFor(`see [t](https://x/${padding})`, "[t]");
+    const { warnings, handled, posted } = clickLink(`see [t](https://x/${padding})`, "[t]");
     expect(handled).toBe(false);
-    expect(calls).toHaveLength(1);
-    expect(calls[0]?.[0]).toBe("[quoll] link not opened: URL exceeds MAX_HREF_LENGTH");
-    // Length + cap are safe to log; the URL itself is not.
-    expect(calls[0]?.[1]).toEqual({ length: MAX_HREF_LENGTH + 10, max: MAX_HREF_LENGTH });
-    expect(JSON.stringify(calls)).not.toContain(padding.slice(0, 32));
+    expect(posted).toEqual([]);
+    // Length + cap are safe to log; the URL itself is not. `https://x/` is the
+    // 10 chars the padded path adds to.
+    expect(warnings).toEqual([
+      [
+        "[quoll] link not opened: URL exceeds MAX_HREF_LENGTH",
+        { length: MAX_HREF_LENGTH + 10, max: MAX_HREF_LENGTH },
+      ],
+    ]);
+    expect(JSON.stringify(warnings)).not.toContain(padding.slice(0, 32));
   });
 
   // The non-openable-scheme bail is UNREACHABLE through the real gate:
@@ -423,20 +435,19 @@ describe("tryOpenLinkAt — gate-reject bails warn", () => {
     vi.resetModules();
     vi.doMock("../../src/markdown/url-allowlist.js", () => ({ isAllowedUrl: () => true }));
     try {
-      const linkHandlers = await import("../../src/webview/cm/link-handlers.js");
-      const doc = "see [t](ftp://example.com/file)";
-      const posted: unknown[] = [];
-      const host = { postMessage: (m: unknown) => posted.push(m) };
-      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
-      try {
-        expect(linkHandlers.tryOpenLinkAt(stateOf(doc), posOf(doc, "[t]") + 1, host)).toBe(false);
-        expect(posted).toEqual([]);
-        expect(warnSpy.mock.calls.map((c) => [...c])).toEqual([
-          ["[quoll] link not opened: scheme not in OPENABLE_SCHEMES", { scheme: "ftp" }],
-        ]);
-      } finally {
-        warnSpy.mockRestore();
-      }
+      const { tryOpenLinkAt: openWithEverythingAllowlisted } = await import(
+        "../../src/webview/cm/link-handlers.js"
+      );
+      const { warnings, handled, posted } = clickLink(
+        "see [t](ftp://example.com/file)",
+        "[t]",
+        openWithEverythingAllowlisted
+      );
+      expect(handled).toBe(false);
+      expect(posted).toEqual([]);
+      expect(warnings).toEqual([
+        ["[quoll] link not opened: scheme not in OPENABLE_SCHEMES", { scheme: "ftp" }],
+      ]);
     } finally {
       vi.doUnmock("../../src/markdown/url-allowlist.js");
       vi.resetModules();
@@ -444,16 +455,10 @@ describe("tryOpenLinkAt — gate-reject bails warn", () => {
   });
 
   it("does not warn on the open path", () => {
-    const doc = "see [t](https://example.com)";
-    const state = stateOf(doc);
-    const host = { postMessage: () => undefined };
-    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
-    try {
-      expect(tryOpenLinkAt(state, posOf(doc, "[t]") + 1, host)).toBe(true);
-      expect(warnSpy).not.toHaveBeenCalled();
-    } finally {
-      warnSpy.mockRestore();
-    }
+    const { warnings, handled, posted } = clickLink("see [t](https://example.com)", "[t]");
+    expect(handled).toBe(true);
+    expect(posted).toHaveLength(1);
+    expect(warnings).toEqual([]);
   });
 });
 

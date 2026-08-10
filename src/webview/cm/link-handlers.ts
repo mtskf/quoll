@@ -77,27 +77,21 @@ function postToHost(host: LinkOpenHost, message: WebviewToHost): boolean {
   return safePostMessage(host, message, "link-open");
 }
 
-/** Log a bail where tryOpenLinkAt declines to open the link and returns
- *  false. The click itself is NOT consumed here — none of these bails call
- *  preventDefault, so the click falls through to CodeMirror's default caret
- *  placement. This is distinct from the "dead click" terminology used
- *  elsewhere in the codebase (open-external.ts, handle-open-link.ts): there,
- *  preventDefault has already fired before the sink runs, so a failure
- *  there truly consumes the click with no effect. Logged under the
- *  `[quoll]` grep prefix so a "this link does nothing" report has a triage
- *  trail. Mirrors `openExternalSinkFor`'s warn (open-external.ts) for the
- *  allowlist condition the two share.
+/** Log a gate-reject bail: tryOpenLinkAt declines to open and returns false.
+ *  This is NOT a "dead click" in the sense open-external.ts /
+ *  handle-open-link.ts use the term — those run AFTER preventDefault has
+ *  fired, so their failure truly consumes the click; none of these bails
+ *  call preventDefault, so the click falls through to CodeMirror's default
+ *  caret placement. Warned under the `[quoll]` grep prefix so a "this link
+ *  does nothing" report has a triage trail — mirrors `openExternalSinkFor`'s
+ *  warn (open-external.ts) for the allowlist condition the two share.
  *
  *  NO-URL POLICY (do not relax): `detail` carries only derived, bounded facts
  *  — a length, a scheme token — never the href or any slice of it. The
  *  webview console is user-visible surface and the URL can be hostile or
  *  private; the host arm sanitises before it logs a preview, and this side has
  *  no sanitiser, so it logs no URL at all. */
-function warnLinkNotOpened(reason: string, detail?: Record<string, unknown>): void {
-  if (detail === undefined) {
-    console.warn(`[quoll] link not opened: ${reason}`);
-    return;
-  }
+function warnLinkNotOpened(reason: string, detail: Record<string, unknown>): void {
   console.warn(`[quoll] link not opened: ${reason}`, detail);
 }
 
@@ -178,13 +172,12 @@ export function tryOpenLinkAt(state: EditorState, pos: number, host: LinkOpenHos
     });
     return false;
   }
-  // scheme is derived ahead of the isAllowedUrl check so the allowlist-reject
-  // warn below can carry it as a triage token. This is safe to call on a
-  // NOT-YET-validated (possibly hostile) string: schemeOf's regex
-  // (`^([a-z][a-z0-9+.-]*):`) only ever returns a bounded lowercase-token
-  // match or null — it cannot echo back C0/DEL bytes or any other slice of
-  // the URL body (e.g. a leading C0 byte, as in `java\nscript:...`, fails
-  // the anchored match entirely and yields null → logged as "(none)").
+  // Hoisted above the isAllowedUrl gate so the allowlist-reject warn below can
+  // carry the scheme as a triage token. Safe on this NOT-YET-validated
+  // (possibly hostile) string: schemeOf's anchored regex
+  // (`^([a-z][a-z0-9+.-]*):`) yields either a bounded lowercase token or null,
+  // so it can never echo back C0/DEL bytes or any other slice of the URL body
+  // (`java\nscript:...` fails the anchor entirely → null).
   const scheme = schemeOf(decoded);
   // Defense layer 1 (webview-side): isAllowedUrl + openable-scheme gate.
   // Layer 2 (host-side handler) re-applies isAllowedUrl + an
@@ -192,9 +185,9 @@ export function tryOpenLinkAt(state: EditorState, pos: number, host: LinkOpenHos
   // Both sides import isAllowedUrl from the same `markdown/url-allowlist`
   // module so the gate's identity cannot drift.
   if (!isAllowedUrl(decoded)) {
-    // scheme detail mirrors the host arm's precedent (handle-open-external.ts
-    // `scheme: scheme ?? "(none)"`) so a triage report can distinguish a
-    // blocked scheme from a protocol-relative or control-character reject.
+    // `scheme ?? "(none)"` mirrors the host arm (handle-open-external.ts) so a
+    // triage report can distinguish a blocked scheme from a protocol-relative
+    // or control-character reject.
     warnLinkNotOpened("URL not in allowlist", { scheme: scheme ?? "(none)" });
     return false;
   }
