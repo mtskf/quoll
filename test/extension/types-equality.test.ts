@@ -16,11 +16,12 @@
 // are where the load-bearing e2e-mirror drift lives.
 //
 // This file also hosts unrelated tsc-enforced type-level pins for source
-// modules (the "handoff type pins" and "status-bar type pins" describe blocks
-// below). They are NOT part of the e2e-mirror equality guard above: each pins
-// a source-module type contract with a tsc-checked assertion — an AssertEqual
-// identity check or a `@ts-expect-error` directive — which is non-vacuous only
-// because `pnpm compile` type-checks THIS file.
+// modules (the "handoff type pins", "table model type pins", and "status-bar
+// type pins" describe blocks below). They are NOT part of the e2e-mirror
+// equality guard above: each pins a source-module type contract with a
+// tsc-checked assertion — an AssertEqual identity check or a
+// `@ts-expect-error` directive — which is non-vacuous only because
+// `pnpm compile` type-checks THIS file.
 
 import { describe, expect, it } from "vitest";
 import {
@@ -30,6 +31,7 @@ import {
 } from "../../src/extension/handoff/handle-context-handoff";
 import type { EndOfLineValue } from "../../src/extension/status-bar";
 import type { PanelControls } from "../../src/extension/test-harness";
+import type { Cell, DelimiterCell, DelimiterRow, Row, Table } from "../../src/markdown/table/model";
 import type {
   DocumentMessage,
   EditMessage,
@@ -138,6 +140,46 @@ describe("handoff type pins", () => {
     // must not be undoable by later mutation.
     clamped.startLine = 2;
     expect(true).toBe(true);
+  });
+});
+
+describe("table model type pins", () => {
+  it("keeps every field and array of the GFM table model readonly", () => {
+    // makeTable's header/delimiter cell-count check is a CONSTRUCTION-time
+    // gate; it only stays true afterwards if nothing can write into the model
+    // it returned. `readonly` throughout is what makes that hold, and these
+    // assertions are what keep it from being dropped silently.
+    //
+    // Lives here for the reason the status-bar pin spells out: no tsconfig
+    // type-checks test/markdown, so the same assertion next to the model's own
+    // unit test would be erased by vitest's transpile-only path and never fail.
+    //
+    // `Readonly<T>` is homomorphic, so `AssertEqual<T, Readonly<T>>` holds only
+    // when EVERY field of T is already readonly — including fields added later,
+    // which a per-field `@ts-expect-error` would stop covering the moment the
+    // shape grows. Revert-check: drop `readonly` from any single field below
+    // and its assertion resolves to `false`, failing the `= true` assignment.
+    const _table: AssertEqual<Table, Readonly<Table>> = true;
+    const _row: AssertEqual<Row, Readonly<Row>> = true;
+    const _cell: AssertEqual<Cell, Readonly<Cell>> = true;
+    const _delimiterRow: AssertEqual<DelimiterRow, Readonly<DelimiterRow>> = true;
+    const _delimiterCell: AssertEqual<DelimiterCell, Readonly<DelimiterCell>> = true;
+    // Readonly<T> is SHALLOW: it freezes the `cells` field but not the array it
+    // holds, so the collections need their own pins. A mutable `Row[]` is not
+    // structurally equal to `readonly Row[]` (it carries push/splice/index-set).
+    const _rows: AssertEqual<Table["rows"], readonly Row[]> = true;
+    const _cells: AssertEqual<Row["cells"], readonly Cell[]> = true;
+    const _delimiterCells: AssertEqual<DelimiterRow["cells"], readonly DelimiterCell[]> = true;
+    expect(
+      _table &&
+        _row &&
+        _cell &&
+        _delimiterRow &&
+        _delimiterCell &&
+        _rows &&
+        _cells &&
+        _delimiterCells
+    ).toBe(true);
   });
 });
 
