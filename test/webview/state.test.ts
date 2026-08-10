@@ -380,4 +380,18 @@ describe("reducer — purity", () => {
     const s: typeof initialState = initialState;
     expect(s).toBe(initialState);
   });
+
+  it("initialState is frozen, so a stray write cannot poison later mounts", () => {
+    // `initialState` is a module-level singleton every shell aliases at mount
+    // (shell.ts `let state: WebviewState = initialState`). Both halves of the
+    // guard are pinned here: the `@ts-expect-error` fails the BUILD if the
+    // `readonly` modifiers are dropped (the directive becomes unused), and the
+    // throw fails this TEST if the `Object.freeze` is dropped.
+    expect(Object.isFrozen(initialState)).toBe(true);
+    expect(() => {
+      // @ts-expect-error — WebviewState fields are readonly by design.
+      initialState.ready = true;
+    }).toThrow(TypeError);
+    expect(initialState.ready).toBe(false);
+  });
 });
