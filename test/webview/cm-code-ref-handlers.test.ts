@@ -105,6 +105,39 @@ describe("handleCodeRefMouseDown", () => {
     expect(event.preventDefault).toHaveBeenCalled();
   });
 
+  it("resolves the click at the event's coordinates, in imprecise mode", () => {
+    // The coordinate hand-off is the one job this handler does on its own —
+    // everything downstream belongs to tryOpenCodeRefAt, which the describe above
+    // already covers — so pin both halves of the posAtCoords call. Passing the
+    // event's own coords is what makes the click land where the user clicked, and
+    // the literal `false` selects the imprecise overload: precise mode returns
+    // null for a click in a line's padding, which would silently drop the
+    // near-miss clicks this affordance is meant to accept. A stub that ignored
+    // its arguments would let both regressions through unseen.
+    const host = { postMessage: vi.fn() };
+    const posAtCoords = vi.fn((_coords: { x: number; y: number }, _precise: false) => REF_POS);
+    const view = { state: stateFor(DOC), posAtCoords } as unknown as EditorView;
+    const event = makeMockEvent(/* left */ 0);
+    expect(handleCodeRefMouseDown(event, view, host as never)).toBe(true);
+    expect(posAtCoords).toHaveBeenCalledWith({ x: 100, y: 50 }, false);
+  });
+
+  it("forwards the resolved position exactly (a reference's edges do not open)", () => {
+    // Side-0 resolution enters InlineCode only strictly inside its 4..19 span, so
+    // the opening backtick (4) and the offset just past the closing one (19) must
+    // not open, while 5..18 do. That asymmetry is what makes this pin the seam
+    // between posAtCoords and tryOpenCodeRefAt: a +1 slip turns pos 4 into an
+    // open, a -1 slip turns pos 19 into one. Mid-token samples see neither.
+    const host = { postMessage: vi.fn() };
+    for (const pos of [DOC.indexOf("`"), DOC.lastIndexOf("`") + 1]) {
+      const event = makeMockEvent(/* left */ 0);
+      const view = makeMockView(stateFor(DOC), pos);
+      expect(handleCodeRefMouseDown(event, view, host as never)).toBe(false);
+      expect(event.preventDefault).not.toHaveBeenCalled();
+    }
+    expect(host.postMessage).not.toHaveBeenCalled();
+  });
+
   it("ignores a right-click on a reference (never hijacks the context menu)", () => {
     const host = { postMessage: vi.fn() };
     const event = makeMockEvent(/* right */ 2);
@@ -142,9 +175,11 @@ describe("handleCodeRefMouseDown", () => {
     // guard cannot be falsified through this handler's contract — deleting it
     // outright leaves every case below still returning false, because
     // resolveInner clamps an out-of-range pos to a doc boundary that never
-    // resolves into InlineCode (verified by mutation). It stays as a type-level
-    // necessity (posAtCoords is `number | null`) plus defence in depth, so do not
-    // "strengthen" this into a guard assertion — it would be permanently vacuous.
+    // resolves into InlineCode (verified by mutation). Nor is it type-mandated:
+    // the `precise: false` overload is typed `number`, not `number | null`, and
+    // clamps to [0, doc.length] at runtime, so the guard — null arm included — is
+    // pure defence in depth against an upstream contract change. Do not
+    // "strengthen" this into a guard assertion; it would be permanently vacuous.
     const bare = "`src/foo.ts:42`"; // nothing but the reference: the widest target
     const host = { postMessage: vi.fn() };
     for (const pos of [null, -1, bare.length + 1]) {
