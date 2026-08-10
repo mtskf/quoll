@@ -85,10 +85,11 @@ export function makeClipboardData(data: ClipboardFlavours): {
   };
 }
 
-/** Dispatch a synthetic `paste` at `target` and return the event, so a caller can
- *  assert on `defaultPrevented`. `Event`, not `ClipboardEvent`: happy-dom's
- *  ClipboardEvent has a read-only `clipboardData`, so the property is defined onto
- *  a plain cancellable Event instead. */
+/** Dispatch a synthetic `paste` at `target` and return the event. `Event`, not
+ *  `ClipboardEvent` — but NOT because `clipboardData` is read-only: happy-dom's
+ *  ClipboardEvent constructor assigns it from the event init, so it is writable
+ *  there. The plain-Event route is chosen so paste and drop are built the same way,
+ *  and because `drop` genuinely has no alternative (see `fireDropAt`). */
 export function firePasteAt(target: EventTarget, data: ClipboardFlavours): Event {
   const event = new Event("paste", { bubbles: true, cancelable: true });
   Object.defineProperty(event, "clipboardData", { value: makeClipboardData(data) });
@@ -96,15 +97,18 @@ export function firePasteAt(target: EventTarget, data: ClipboardFlavours): Event
   return event;
 }
 
-/** Dispatch a synthetic `drop` at `target`. `Event` rather than `DragEvent` for the
- *  same reason as `firePasteAt`: happy-dom's DragEvent has a read-only
- *  `dataTransfer`, and its `clientX`/`clientY` cannot be set from the constructor
- *  either.
+/** Dispatch a synthetic `drop` at `target`. `Event` rather than `DragEvent` because
+ *  happy-dom has no DragEvent IMPLEMENTATION at all: `BrowserWindow.js` exposes the
+ *  bare alias `DragEvent = Event`. So it is not that `dataTransfer` is read-only —
+ *  there is no `dataTransfer` (nor `clientX`/`clientY`) to set, from the constructor
+ *  or anywhere else. Defining the three properties onto a cancellable Event is the
+ *  only route until happy-dom ships a real DragEvent.
  *
- *  ⚠️ The production drop handler calls `view.posAtCoords`, which THROWS under
- *  happy-dom (no layout engine) instead of returning a position. Every caller must
- *  stub it — including read-only cases, where letting it throw makes the gate
- *  assertion vacuous. See cm-image-paste.test.ts's `stubDropPos`. */
+ *  ⚠️ The production drop handler calls `view.posAtCoords`, which under happy-dom
+ *  (no layout engine) THROWS at SOME coordinates instead of returning a position —
+ *  the `{0,0}` default below among them, while e.g. `{12,34}` returns one. Every
+ *  caller must stub it — including read-only cases, where letting it throw makes
+ *  the gate assertion vacuous. See cm-image-paste.test.ts's `stubDropPos`. */
 export function fireDropAt(
   target: EventTarget,
   data: ClipboardFlavours,

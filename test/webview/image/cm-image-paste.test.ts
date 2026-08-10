@@ -4,6 +4,7 @@ import { EditorView } from "@codemirror/view";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
+  type ImageWriteMessage,
   isWebviewToHost,
   MAX_IMAGE_BYTES,
   PROTOCOL_VERSION,
@@ -32,8 +33,6 @@ function mount(doc: string, canWrite = true) {
   });
   return { view, paste, post };
 }
-
-type ImageWriteMessage = Extract<WebviewToHost, { type: "image-write" }>;
 
 function imageWrites(post: ReturnType<typeof mount>["post"]): ImageWriteMessage[] {
   return post.mock.calls
@@ -70,7 +69,9 @@ function sizedImageFile(bytes: number): File {
 // chosen outcome — including outcomes a real FileReader will not produce on demand
 // (onerror, a non-string result). It implements exactly the four members production
 // touches; a fuller fake would only be more surface to drift.
-class StubFileReader {
+class StubFileReader
+  implements Pick<FileReader, "result" | "onload" | "onerror" | "readAsDataURL">
+{
   result: string | ArrayBuffer | null = null;
   onload: (() => void) | null = null;
   onerror: (() => void) | null = null;
@@ -85,14 +86,16 @@ function stubFileReader(drive: (reader: StubFileReader) => void): void {
   vi.stubGlobal("FileReader", StubFileReader);
 }
 
-/** happy-dom has no layout engine, so `view.posAtCoords` THROWS rather than
- *  returning a position — the drop handler cannot run at all without this stub.
- *  Applied to READ-ONLY drops too, and that is the point: with the `canWrite()`
- *  gate deleted the handler falls through to `posAtCoords`, which would throw and
- *  queue no anchor, so an unstubbed read-only test would stay green for entirely
- *  the wrong reason. */
+/** happy-dom has no layout engine, so `view.posAtCoords` reaches through an
+ *  undefined client rect and THROWS at SOME coordinates rather than returning a
+ *  position — `fireDropAt`'s default `{0,0}` among them (measured; `{12,34}` on
+ *  these same mounts returns a position, so this is coordinate-dependent, not
+ *  "always throws"). Applied to READ-ONLY drops too, and that is the point: with
+ *  the `canWrite()` gate deleted the handler falls through to `posAtCoords`, which
+ *  at the default coords would throw and queue no anchor, so an unstubbed read-only
+ *  test would stay green for entirely the wrong reason. */
 function stubDropPos(view: EditorView, pos: number | null) {
-  return vi.spyOn(view, "posAtCoords").mockReturnValue(pos as number);
+  return vi.spyOn(view, "posAtCoords").mockReturnValue(pos);
 }
 
 afterEach(() => {
@@ -102,11 +105,19 @@ afterEach(() => {
 });
 
 describe("pendingImageAnchors", () => {
-  it("maps an anchor through an intervening insertion", () => {
+  it("maps an anchor through insertions, staying AFTER text inserted at it", () => {
     const { view } = mount("hello");
-    view.dispatch({ effects: addPendingAnchor.of({ requestId: "1", anchor: 5 }) });
+    const anchorOne = () =>
+      view.state.field(pendingImageAnchors).find((p) => p.requestId === "1")?.anchor;
+    view.dispatch({ effects: addPendingAnchor.of({ requestId: "1", anchor: 2 }) });
     view.dispatch({ changes: { from: 0, insert: "XX" } });
-    expect(view.state.field(pendingImageAnchors).find((p) => p.requestId === "1")?.anchor).toBe(7);
+    expect(anchorOne()).toBe(4);
+    // Association 1, and the second assertion is what pins it: an insertion landing
+    // EXACTLY on the anchor must leave the anchor after it. With -1 the anchor stays
+    // put, so a keystroke at the caret while the host round-trip is in flight would
+    // land the image link above the character the user just typed.
+    view.dispatch({ changes: { from: 4, insert: "YY" } });
+    expect(anchorOne()).toBe(6);
   });
 
   it("keeps anchors on a same-content reseed but clears them on a wholesale reseed", () => {
@@ -128,7 +139,22 @@ describe("resolve", () => {
     view.dispatch({ effects: addPendingAnchor.of({ requestId: "1", anchor: 1 }) });
     paste.resolve(view, "1", "./assets/x.png");
     expect(view.state.doc.toString()).toBe("a\n![](./assets/x.png)\nb");
+    // The caret ends up PAST the inserted block, so typing continues below the
+    // image rather than in front of it.
+    expect(view.state.selection.main.head).toBe(22);
     expect(view.state.field(pendingImageAnchors).length).toBe(0);
+  });
+
+  it("inserts at a line start without prepending a blank line", () => {
+    // The other branch of the mid-line ternary, and the only one every other test
+    // here misses (they all anchor at 1). A regression to an unconditional "\n"
+    // silently prepends a blank line to every image pasted at a line start — byte
+    // noise invisible in the WYSIWYG surface, found only in `git diff`.
+    const { view, paste } = mount("ab");
+    view.dispatch({ effects: addPendingAnchor.of({ requestId: "1", anchor: 0 }) });
+    paste.resolve(view, "1", "./assets/x.png");
+    expect(view.state.doc.toString()).toBe("![](./assets/x.png)\nab");
+    expect(view.state.selection.main.head).toBe(20);
   });
 
   it("does NOT insert on a read-only doc at resolve time (clears pending)", () => {
@@ -206,10 +232,16 @@ describe("imagePaste — clipboard ingestion", () => {
   // "imagePaste passed and CM handled it" (repo convention — see
   // cm-list-reindent-paste.test.ts). An anchor is queued SYNCHRONOUSLY when a file
   // is submitted; the image-write post itself rides an async FileReader.
-  it("ingests a paste carrying an image file, even beside text flavours", () => {
-    const { view } = mount("ab");
+  it("ingests a paste carrying an image file beside text flavours, at the selection head", () => {
+    const { view } = mount("abcd");
+    view.dispatch({ selection: { anchor: 3 } });
     firePasteAt(view.contentDOM, { files: IMAGE_FILE, html: "<p>x</p>", text: "x" });
-    expect(view.state.field(pendingImageAnchors).length).toBe(1);
+    // The anchor's VALUE, not just its existence: the paste path derives it from
+    // the selection head, and the selection is driven off 0 so a hard-coded 0
+    // cannot pass. (The drop path's twin assertion is in the drop describe.)
+    expect(view.state.field(pendingImageAnchors)).toEqual([
+      { requestId: expect.any(String), anchor: 3 },
+    ]);
     view.destroy();
   });
 
@@ -240,27 +272,25 @@ describe("imagePaste — clipboard ingestion", () => {
     // shared predicate never looks at size, so richHtmlPaste has already deferred; this
     // handler preventDefaults, skips the file and returns true. Nothing is inserted
     // and CM's plain-text fallback is suppressed, so the console line is the only
-    // evidence the paste ever happened. Its two sibling refusals already warn.
+    // evidence the paste ever happened. Its two sibling refusals already warn — and
+    // all three are asserted by TEXT, because a warn COUNT makes the three
+    // interchangeable and a swapped refusal would go unnoticed.
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-    try {
-      const { view } = mount("ab");
-      const empty = new File([], "f", { type: "image/png" });
-      const event = firePasteAt(view.contentDOM, { files: [{ type: "image/png", file: empty }] });
-      expect(event.defaultPrevented).toBe(true);
-      expect(view.state.field(pendingImageAnchors).length).toBe(0);
-      expect(warn).toHaveBeenCalledTimes(1);
-      view.destroy();
-    } finally {
-      warn.mockRestore();
-    }
+    const { view } = mount("ab");
+    const empty = new File([], "f", { type: "image/png" });
+    firePasteAt(view.contentDOM, { files: [{ type: "image/png", file: empty }] });
+    expect(view.state.field(pendingImageAnchors).length).toBe(0);
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("zero bytes"));
+    view.destroy();
   });
 
   it("swallows an image paste on a read-only doc without queueing an anchor", () => {
     const { view } = mount("ab", false);
-    const event = firePasteAt(view.contentDOM, { files: IMAGE_FILE });
-    // Here defaultPrevented IS meaningful: with no text/plain there is nothing for
-    // CM core to insert, so the only handler that could have prevented is this one.
-    expect(event.defaultPrevented).toBe(true);
+    firePasteAt(view.contentDOM, { files: IMAGE_FILE });
+    // NOT observed on defaultPrevented — see the note in the drop describe. This
+    // comment used to claim the opposite ("with no text/plain there is nothing for
+    // CM core to insert"); that is false twice over — CM's builtin never inspects
+    // the text flavours, and returns true immediately when the state is read-only.
     expect(view.state.field(pendingImageAnchors).length).toBe(0);
     view.destroy();
   });
@@ -296,8 +326,9 @@ describe("imagePaste — the image-write post", () => {
     view.destroy();
   });
 
-  it("mints a distinct requestId per file in a multi-image paste", async () => {
-    const { view, post } = mount("ab");
+  it("mints a distinct requestId per file and resolves the pair in completion order", async () => {
+    const { view, paste, post } = mount("ab");
+    view.dispatch({ selection: { anchor: 1 } });
     firePasteAt(view.contentDOM, {
       files: [
         { type: "image/png", file: pngFile() },
@@ -309,7 +340,33 @@ describe("imagePaste — the image-write post", () => {
     const ids = imageWrites(post).map((m) => m.requestId);
     expect(new Set(ids).size).toBe(2);
     expect(anchorIds(view).sort()).toEqual([...ids].sort());
+    // Both anchors start on the same position, so the ORDER is decided by the
+    // mapping: resolving the first maps the second anchor past the text just
+    // inserted (association 1), landing the pair in completion order instead of
+    // stacking in reverse. The second lands on a line start, so it also exercises
+    // resolve()'s no-leading-newline branch from the far side.
+    paste.resolve(view, ids[0], "./assets/one.png");
+    paste.resolve(view, ids[1], "./assets/two.png");
+    expect(view.state.doc.toString()).toBe("a\n![](./assets/one.png)\n![](./assets/two.png)\nb");
     view.destroy();
+  });
+
+  it("mints requestIds that cannot collide across webview sessions", () => {
+    // Each createImagePasteDrop is one webview session, and its counter restarts
+    // from zero. Without the per-session nonce both sessions mint the same first
+    // id, so a late image-write-result from the PREVIOUS session resolves this
+    // session's anchor and writes the wrong image path into the document. Two live
+    // instances is the only way to observe the nonce at all.
+    stubFileReader(() => {});
+    const first = mount("ab");
+    const second = mount("ab");
+    firePasteAt(first.view.contentDOM, { files: IMAGE_FILE });
+    firePasteAt(second.view.contentDOM, { files: IMAGE_FILE });
+
+    expect(anchorIds(first.view)).toHaveLength(1);
+    expect(anchorIds(second.view)).not.toEqual(anchorIds(first.view));
+    first.view.destroy();
+    second.view.destroy();
   });
 
   it.each([
@@ -341,74 +398,127 @@ describe("imagePaste — the image-write post", () => {
     expect(post).not.toHaveBeenCalled();
     expect(view.state.field(pendingImageAnchors).length).toBe(0);
     // There is no webview toast channel for this path, so the console line is the
-    // only trace a failed read leaves anywhere.
-    expect(error).toHaveBeenCalledTimes(1);
+    // only trace a failed read leaves anywhere. Pinned by TEXT, not by count:
+    // happy-dom swallows an exception thrown inside a domEventHandler and surfaces
+    // it as exactly one console.error too, so a count cannot tell this log from a
+    // crash, nor from the transport failure below.
+    expect(error).toHaveBeenCalledWith("[quoll] failed to read pasted image");
     view.destroy();
   });
 
   it("clears the pending anchor when the post is refused by the transport", async () => {
     const error = vi.spyOn(console, "error").mockImplementation(() => {});
-    const paste = createImagePasteDrop({
-      canWrite: () => true,
-      post: () => {
-        throw new Error("panel disposed mid-post");
-      },
-    });
-    const view = new EditorView({
-      state: EditorState.create({ doc: "ab", extensions: [paste.extension] }),
+    // mount()'s own `post` spy, not a hand-rolled EditorView: createImagePasteDrop
+    // captures it via opts.post, so mockImplementation reaches the same closure —
+    // and a future change to mount() cannot silently skip this test.
+    const { view, post } = mount("ab");
+    post.mockImplementation(() => {
+      throw new Error("panel disposed mid-post");
     });
     firePasteAt(view.contentDOM, { files: [{ type: "image/png", file: pngFile() }] });
 
     // safePostMessage swallows the throw and reports false; the anchor must not
-    // outlive a message the host never received.
-    await vi.waitFor(() => expect(error).toHaveBeenCalled());
+    // outlive a message the host never received. Observed through the post call
+    // AND the log text — the only combination that separates this path from a read
+    // failure and from a crashed handler.
+    await vi.waitFor(() => expect(post).toHaveBeenCalledTimes(1));
+    expect(error).toHaveBeenCalledWith(
+      "[quoll] postMessage(image-write) failed",
+      expect.any(Error)
+    );
     expect(view.state.field(pendingImageAnchors).length).toBe(0);
     view.destroy();
+  });
+
+  it("swallows a clearPending dispatch that fails after the view was destroyed", () => {
+    const readers: StubFileReader[] = [];
+    stubFileReader((reader) => {
+      readers.push(reader);
+    });
+    const { view, post } = mount("ab");
+    firePasteAt(view.contentDOM, { files: IMAGE_FILE });
+    expect(view.state.field(pendingImageAnchors).length).toBe(1);
+
+    view.destroy();
+    // CM 6.43 does NOT throw on dispatch to a destroyed view — EditorView.update
+    // early-returns on `this.destroyed` (measured: no throw, and the state update is
+    // even applied). So destroying alone cannot exercise clearPending's catch; the
+    // throw is raised DELIBERATELY here to pin the contract itself. Do not read this
+    // as "CM throws": the point is the future, where a real browser or a CM bump
+    // that restores the throw must not turn a tab closed mid-read into an
+    // unhandled rejection escaping the FileReader callback.
+    const dispatch = vi.spyOn(view, "dispatch").mockImplementation(() => {
+      throw new Error("dispatch on a destroyed view");
+    });
+    const reader = readers[0];
+    reader.result = "not-a-data-url"; // no comma to split on → clearPending
+    expect(() => reader.onload?.()).not.toThrow();
+    expect(dispatch).toHaveBeenCalledTimes(1);
+    expect(post).not.toHaveBeenCalled();
   });
 });
 
 describe("imagePaste — per-event caps", () => {
-  // Every cap here is decided from `file.size` BEFORE the read, so the pending
-  // anchor count is the complete observable and these tests can stay synchronous.
-  // The stub reader never completes, which is deliberate: it keeps a real async
-  // read from outliving `view.destroy()`.
+  // The two SIZE caps are decided from `file.size` BEFORE the read; the COUNT cap
+  // is decided from a file's INDEX, and outside the loop entirely. (An earlier
+  // version of this note said every cap here reads `file.size` — it does not, and
+  // that difference is exactly why the count cap emits no warn.) Either way nothing
+  // is read, so the pending anchor count is the complete observable and these tests
+  // can stay synchronous. The stub reader never completes, which is deliberate: it
+  // keeps a real async read from outliving `view.destroy()`.
   const stubReadThatNeverCompletes = () => stubFileReader(() => {});
 
   it("drops a grossly oversized image before reading it", () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     stubReadThatNeverCompletes();
-    const { view, post } = mount("ab");
+    const { view } = mount("ab");
     // 5 MiB past the reject threshold puts it 1 MiB past the transfer ceiling
     // (reject + 4 MiB of headroom), i.e. into the band the webview drops itself
     // rather than forwarding for a precise host-side toast.
     const huge = sizedImageFile(MAX_IMAGE_BYTES + 5 * 1024 * 1024);
-    const event = firePasteAt(view.contentDOM, { files: [{ type: "image/png", file: huge }] });
+    firePasteAt(view.contentDOM, { files: [{ type: "image/png", file: huge }] });
 
     expect(view.state.field(pendingImageAnchors).length).toBe(0);
-    expect(post).not.toHaveBeenCalled();
-    expect(warn).toHaveBeenCalledTimes(1);
-    // Still consumed: on a drop this is what stops the browser navigating to the
-    // file, and skipping every file must not turn the event back over to CM.
-    expect(event.defaultPrevented).toBe(true);
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("exceeds transfer ceiling"));
     view.destroy();
   });
 
-  it("stops at the per-event aggregate byte cap", () => {
+  it("still forwards an image inside the transfer-headroom band", () => {
+    // The band ABOVE the reject threshold but below the transfer ceiling has to
+    // reach the host, which answers with a precise too-large toast — protocol.ts
+    // sizes MAX_IMAGE_DATA_LENGTH from the ceiling for exactly this reason. Gating
+    // on MAX_IMAGE_BYTES instead would silently drop the whole band, degrading that
+    // toast into a console.warn nobody sees.
+    stubReadThatNeverCompletes();
+    const { view } = mount("ab");
+    const slightlyOver = sizedImageFile(MAX_IMAGE_BYTES + 1024 * 1024);
+    firePasteAt(view.contentDOM, { files: [{ type: "image/png", file: slightlyOver }] });
+
+    expect(view.state.field(pendingImageAnchors).length).toBe(1);
+    view.destroy();
+  });
+
+  it("stops — rather than skips — at the per-event aggregate byte cap", () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     stubReadThatNeverCompletes();
     const { view } = mount("ab");
-    // Each file clears the per-file ceiling on its own, so only the aggregate can
+    // Every file clears the per-file ceiling on its own, so only the aggregate can
     // refuse any of them — the cap that exists so a multi-file drop cannot queue
     // 16 × the transfer ceiling of base64 at once.
-    const files = Array.from({ length: 5 }, () => ({
+    //
+    // Sizes are deliberately MIXED. 10+10+10+9 reaches 39 MiB, the fifth 10 MiB file
+    // would exceed the 40 MiB cap, and the trailing 1 MiB file would still FIT.
+    // Production documents `break`, so that trailing file must NOT be queued: with
+    // `continue` the count is 5. Uniform sizes cannot tell the two apart.
+    const mib = 1024 * 1024;
+    const files = [10, 10, 10, 9, 10, 1].map((size) => ({
       type: "image/png",
-      file: sizedImageFile(MAX_IMAGE_BYTES),
+      file: sizedImageFile(size * mib),
     }));
     firePasteAt(view.contentDOM, { files });
 
-    // 4 × 10 MiB reaches the 40 MiB cap exactly; the fifth would exceed it.
     expect(view.state.field(pendingImageAnchors).length).toBe(4);
-    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("aggregate byte cap"));
     view.destroy();
   });
 
@@ -420,6 +530,11 @@ describe("imagePaste — per-event caps", () => {
     firePasteAt(view.contentDOM, { files });
 
     expect(view.state.field(pendingImageAnchors).length).toBe(16);
+    // KNOWN GAP, recorded rather than blessed as contract: the overflow is sliced
+    // off OUTSIDE the loop, so files 17+ are discarded with no warn anywhere —
+    // dropping 20 images inserts 16 and tells the user nothing. Deliberately NOT
+    // asserted as `expect(warn).not.toHaveBeenCalled()`, so adding that warn to
+    // production later fixes the gap without breaking this test.
     view.destroy();
   });
 });
@@ -429,6 +544,15 @@ describe("imagePaste — drop and dragover", () => {
   // owns its own read-only gate, its own preventDefault (the one that stops the
   // browser navigating away from the document to the dropped file) and its own
   // anchor derivation.
+  //
+  // None of that is observed on `defaultPrevented`. Measured on a bare EditorView
+  // carrying NO imagePaste extension, a file drop and a file paste BOTH come back
+  // `defaultPrevented === true`: CM's builtin `handlers.drop` returns true for any
+  // dataTransfer carrying files and `handlers.paste` for any truthy clipboardData
+  // (immediately so when read-only), and `runHandlers` preventDefaults on a true
+  // return. The assertion therefore cannot fail; this handler's own preventDefault
+  // is observable only in a real browser, so pin the anchors instead. `dragover` is
+  // the exception and the only defaultPrevented assertion left here: bare, it is false.
   it("preventDefaults a file drag so the drop event can fire, and leaves other drags alone", () => {
     const { view } = mount("ab");
     // Without the preventDefault the browser never fires `drop` at all, so this is
@@ -444,9 +568,8 @@ describe("imagePaste — drop and dragover", () => {
     const posAtCoords = stubDropPos(view, 2);
     view.dispatch({ selection: { anchor: 0 } });
 
-    const event = fireDropAt(view.contentDOM, { files: IMAGE_FILE }, { x: 12, y: 34 });
+    fireDropAt(view.contentDOM, { files: IMAGE_FILE }, { x: 12, y: 34 });
 
-    expect(event.defaultPrevented).toBe(true);
     // The drop point, NOT the selection head (0) — pinned by driving them apart.
     expect(posAtCoords).toHaveBeenCalledWith({ x: 12, y: 34 });
     expect(view.state.field(pendingImageAnchors)).toEqual([
@@ -470,17 +593,24 @@ describe("imagePaste — drop and dragover", () => {
   });
 
   it("swallows an image drop on a read-only doc without queueing an anchor", () => {
-    stubFileReader(() => {});
+    // The read is driven to COMPLETION, unlike the neighbouring drop tests, and
+    // that is what gives the `post` assertion teeth: with the `canWrite()` gate
+    // deleted the file is submitted, this reader runs to onload and posts. Against
+    // a never-completing read, `post` is unreachable and the assertion cannot fail.
+    stubFileReader((reader) => {
+      reader.result = "data:image/png;base64,AAAA";
+      reader.onload?.();
+    });
     const { view, post } = mount("ab", false);
     // Stubbed so that deleting the `canWrite()` gate makes this test FAIL rather
     // than pass for the wrong reason — see stubDropPos.
     stubDropPos(view, 1);
 
-    const event = fireDropAt(view.contentDOM, { files: IMAGE_FILE });
+    fireDropAt(view.contentDOM, { files: IMAGE_FILE });
 
-    // Consumed either way: a read-only document must still not hand the file to the
-    // browser to open. What must not happen is any write traffic.
-    expect(event.defaultPrevented).toBe(true);
+    // A read-only document must still not hand the file to the browser to open
+    // (that is the drop handler's preventDefault, not observable here — see the
+    // note above). What IS observable is that no write traffic leaves the webview.
     expect(view.state.field(pendingImageAnchors).length).toBe(0);
     expect(post).not.toHaveBeenCalled();
     view.destroy();
