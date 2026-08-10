@@ -132,7 +132,9 @@ export type EditSync = {
    *  the snapshot back as an echo Edit. (A `seeding` flag alone would
    *  only suppress the listener, not an already-scheduled flush.)
    *  Captures the latest doc into the buffer BEFORE clearing the timer,
-   *  so an in-debounce-window keystroke is not lost. */
+   *  so an in-debounce-window keystroke is not lost — UNLESS the doc is
+   *  currently readonly, in which case the captured keystroke is a HARD
+   *  DROP (see `warnReadonlyDrop`), mirroring `trySend`. */
   cancelPendingFlush: () => void;
   /** Drop any held pre-ack buffer. Distinct from `cancelPendingFlush`
    *  (which captures the latest doc into the buffer before clearing the
@@ -321,6 +323,35 @@ export function createEditSync(opts: EditSyncOptions): EditSync {
     }
   };
 
+  // Trace for the three readonly HARD DROP sites (trySend / cancelPendingFlush
+  // / flush). Those are the only paths in this module that DISCARD content
+  // rather than declining to replay it, so each one leaves a record — symmetric
+  // with the stale-buffer drop in replayIfNeeded. Each site is reached only
+  // when something is genuinely pending (trySend and cancelPendingFlush run off
+  // a real doc change; flush returns early when `content === null`), so the
+  // warn is unconditional: gating it on `buffered !== null` would stay silent
+  // for the COMMON case — a keystroke still inside the debounce window, with
+  // the buffer already nulled by the previous post — which is exactly the drop
+  // worth seeing.
+  //
+  // Reports BOTH `liveLength` and `bufferedLength` — never picks one via `??`.
+  // On the common path (no reseed in between) the live doc already contains
+  // everything the buffer held, so the buffer alone under-reports the loss.
+  // But a buffer that survived a host reseed (replayIfNeeded's `!canWrite`
+  // guard returns without nulling it) holds bytes the host has never seen,
+  // while the live doc at that point is just what the host already has —
+  // so the live doc alone under-reports too. Neither value is authoritative
+  // in every reachable state, so both are read straight from closure state
+  // and reported side by side; callers get no `??` to pick the wrong one.
+  // Length only: buffered document bytes must never reach the console.
+  const warnReadonlyDrop = (site: "trySend" | "cancelPendingFlush" | "flush"): void => {
+    console.warn("[quoll] dropping local change under readonly (hard drop)", {
+      site,
+      liveLength: opts.getDoc().length,
+      bufferedLength: buffered?.content.length ?? null,
+    });
+  };
+
   const clearTimer = (): void => {
     if (timer !== null) {
       clearTimeout(timer);
@@ -350,6 +381,7 @@ export function createEditSync(opts: EditSyncOptions): EditSync {
     // below mirrors this contract (the `seeded && !canWrite` branch
     // nulls the buffer for the same reason).
     if (!canWrite) {
+      warnReadonlyDrop("trySend");
       buffered = null;
       return;
     }
@@ -519,6 +551,7 @@ export function createEditSync(opts: EditSyncOptions): EditSync {
       // case.
       if (timer !== null) {
         if (seeded && !canWrite) {
+          warnReadonlyDrop("cancelPendingFlush");
           buffered = null; // readonly hard drop
         } else {
           buffered = stampBuffer(opts.getDoc());
@@ -545,6 +578,7 @@ export function createEditSync(opts: EditSyncOptions): EditSync {
         return; // nothing pending — genuine no-op
       }
       if (!canWrite) {
+        warnReadonlyDrop("flush");
         buffered = null; // readonly hard drop (mirrors trySend)
         return;
       }

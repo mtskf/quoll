@@ -185,6 +185,16 @@ export function createImagePasteDrop(opts: {
   // in-cap image; returns true so the event stays handled even when every file
   // is gross-oversized (stops the browser navigating to a dropped file).
   const handle = (view: EditorView, files: File[], anchor: number): boolean => {
+    // Warned OUTSIDE the loop because this refusal is a property of the EVENT, not
+    // of any one file: the overflow is discarded whole, so the loop never meets the
+    // files it drops and could only ever report "and some more". Stated up front,
+    // with the exact count, it is the one refusal a reader can act on directly.
+    if (files.length > MAX_IMAGES_PER_EVENT) {
+      const dropped = files.length - MAX_IMAGES_PER_EVENT;
+      console.warn(
+        `[quoll] dropped ${dropped} image(s) (per-event count cap of ${MAX_IMAGES_PER_EVENT} reached)`
+      );
+    }
     let totalBytes = 0;
     for (const file of files.slice(0, MAX_IMAGES_PER_EVENT)) {
       if (file.size === 0) {
@@ -202,7 +212,8 @@ export function createImagePasteDrop(opts: {
         // membership predicate at all, so hoisting the size refusals would only make
         // the shared floor LOOK like imagePaste's acceptance set while still not
         // being it. The predicate's honest contract is "this item is an image
-        // candidate"; refusals belong here, and here every one of them warns.
+        // candidate"; refusals belong in `handle`, and every one of them warns —
+        // this loop's three plus the per-event count cap above it.
         console.warn("[quoll] dropped empty image file (zero bytes)");
         continue;
       }

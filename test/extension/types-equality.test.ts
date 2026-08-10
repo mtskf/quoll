@@ -16,11 +16,18 @@
 // are where the load-bearing e2e-mirror drift lives.
 //
 // This file also hosts unrelated tsc-enforced type-level pins for source
-// modules (see the "status-bar type pins" describe block below) — they reuse
-// the same AssertEqual-runs-under-`pnpm compile` mechanism but are NOT part of
-// the e2e-mirror equality guard described above.
+// modules (the "handoff type pins" and "status-bar type pins" describe blocks
+// below). They are NOT part of the e2e-mirror equality guard above: each pins
+// a source-module type contract with a tsc-checked assertion — an AssertEqual
+// identity check or a `@ts-expect-error` directive — which is non-vacuous only
+// because `pnpm compile` type-checks THIS file.
 
 import { describe, expect, it } from "vitest";
+import {
+  clampHandoffSelection,
+  type HandleContextHandoffPayload,
+  type HandoffRevealSelection,
+} from "../../src/extension/handoff/handle-context-handoff";
 import type { EndOfLineValue } from "../../src/extension/status-bar";
 import type { PanelControls } from "../../src/extension/test-harness";
 import type {
@@ -84,6 +91,52 @@ describe("e2e/types mirror equality", () => {
     const _src = {} as unknown as PanelControls;
     const _drift: PanelControlsShape = _src;
     void _drift;
+    expect(true).toBe(true);
+  });
+});
+
+describe("handoff type pins", () => {
+  it("rejects a raw handoff payload where a clamped HandoffRevealSelection is required", () => {
+    // HandoffRevealSelection's "clamped + ordered against the live line count"
+    // contract used to be documentation-only: the type was structurally
+    // identical to the untrusted HandleContextHandoffPayload, so the raw
+    // payload could be passed straight to revealForMention, whose
+    // implementation calls document.lineAt(endLine - 1) with no re-clamp.
+    // The brand makes clampHandoffSelection the only construction point.
+    //
+    // Lives here (not in the handoff unit test) for the reason spelled out in
+    // the status-bar pin below: this file is the one test program `pnpm
+    // compile` type-checks, so a @ts-expect-error here is non-vacuous.
+    // Revert-check: drop the brand from HandoffRevealSelection and the
+    // directive below becomes unused → tsc errors on it.
+    const raw = {} as unknown as HandleContextHandoffPayload;
+    // @ts-expect-error — a raw payload is not a clamped selection.
+    const _drift: HandoffRevealSelection = raw;
+    void _drift;
+    expect(true).toBe(true);
+  });
+
+  it("accepts the clamp helper's result as a HandoffRevealSelection", () => {
+    // The other half of the pin: the sole construction point must still
+    // produce the branded type (a brand nobody can build is useless).
+    const clamped: HandoffRevealSelection = clampHandoffSelection(
+      { hasSelection: true, startLine: 1, endLine: 1 },
+      1
+    );
+    expect(clamped).toEqual({ hasSelection: true, startLine: 1, endLine: 1 });
+  });
+
+  it("keeps HandoffRevealSelection's data fields readonly", () => {
+    // The brand alone only proves an instance was minted through
+    // clampHandoffSelection — it says nothing about the fields staying
+    // clamped afterwards. Revert-check: drop `readonly` from
+    // HandoffRevealSelection's data fields and the directive below becomes
+    // unused → tsc errors (TS2578) at this file, which `pnpm compile`
+    // type-checks.
+    const clamped = clampHandoffSelection({ hasSelection: true, startLine: 1, endLine: 1 }, 1);
+    // @ts-expect-error — startLine is readonly; construction-time clamping
+    // must not be undoable by later mutation.
+    clamped.startLine = 2;
     expect(true).toBe(true);
   });
 });
