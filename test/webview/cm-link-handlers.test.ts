@@ -416,7 +416,7 @@ describe("tryOpenLinkAt — gate-reject bails warn", () => {
     expect(JSON.stringify(warnings)).not.toContain("evil.example");
   });
 
-  it("logs only a length when the rejected URL's scheme token is overlong", async () => {
+  it("collapses an unknown scheme token to an opaque marker (kilobyte-scale run)", async () => {
     const { MAX_HREF_LENGTH } = await import("../../src/shared/protocol.js");
     // `schemeOf`'s regex bounds the ALPHABET of the pre-colon run, not its
     // LENGTH: a crafted `<thousands of scheme-legal chars>:` destination reaches
@@ -430,13 +430,51 @@ describe("tryOpenLinkAt — gate-reject bails warn", () => {
     expect(handled).toBe(false);
     expect(posted).toEqual([]);
     expect(warnings).toEqual([
-      ["[quoll] link not opened: URL not in allowlist", { scheme: `(overlong:${token.length})` }],
+      ["[quoll] link not opened: URL not in allowlist", { scheme: "(unrecognised)" }],
     ]);
     // The NO-URL POLICY assertion proper: not one byte of the token may appear.
     expect(JSON.stringify(warnings)).not.toContain(token);
-    // 33 = one past the implementation's 32-char cap — catches a partial leak
-    // (e.g. a `slice(0, 64)` "fix") that the whole-token check above would miss.
-    expect(JSON.stringify(warnings)).not.toContain("a".repeat(33));
+    // …and no PREFIX of it either — catches a truncating "fix" (`slice(0, n)`)
+    // that the whole-token check above would sail straight past.
+    expect(JSON.stringify(warnings)).not.toContain("aa");
+  });
+
+  // The reason a length cap was not the fix (review cycle 3): a short pre-colon
+  // run is still href bytes. This destination is 28 chars — comfortably under
+  // any plausible cap — and every one of them is the author's private business.
+  it("collapses a short but private-looking scheme token to an opaque marker", () => {
+    const href = "MyVault-Passw0rd.notes:entry";
+    const { warnings, handled, posted } = clickLink(`see [t](${href})`, "[t]");
+    expect(handled).toBe(false);
+    expect(posted).toEqual([]);
+    expect(warnings).toEqual([
+      ["[quoll] link not opened: URL not in allowlist", { scheme: "(unrecognised)" }],
+    ]);
+    // Check the lowercased form too: `schemeOf` lowercases before matching, so a
+    // leak would surface as `myvault-passw0rd.notes`, which an as-written
+    // substring check on the original spelling would miss.
+    const logged = JSON.stringify(warnings);
+    for (const secret of [href, href.toLowerCase(), "MyVault", "myvault", "Passw0rd", "entry"]) {
+      expect(logged).not.toContain(secret);
+    }
+  });
+
+  // Triage value must survive the classification: these are the schemes the
+  // render gate and write validator exist to block, so a blocked-link report is
+  // only actionable while the warn still names them. Pins LOGGABLE_SCHEMES
+  // against being quietly emptied "for safety".
+  it.each([
+    ["javascript", "javascript:alert(1)"],
+    ["vbscript", "vbscript:msgbox"],
+    ["data", "data:text/html,<script>alert(1)</script>"],
+    ["blob", "blob:https://example.com/uuid"],
+    ["file", "file:///etc/passwd"],
+    ["about", "about:blank"],
+  ])("still names the known dangerous scheme %s", (scheme, href) => {
+    const { warnings, handled, posted } = clickLink(`see [t](${href})`, "[t]");
+    expect(handled).toBe(false);
+    expect(posted).toEqual([]);
+    expect(warnings).toEqual([["[quoll] link not opened: URL not in allowlist", { scheme }]]);
   });
 
   it("warns when the URL exceeds MAX_HREF_LENGTH, without logging the URL", async () => {
