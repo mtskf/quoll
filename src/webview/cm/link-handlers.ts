@@ -1,14 +1,18 @@
 // Link interaction surface for the CodeMirror editor:
 //   - tryOpenLinkAt(state, pos, host): a pure helper that resolves a
-//     position to a Link node and, if the URL is safe and launchable,
-//     posts an OpenExternalMessage to the host.
+//     position to a Link node and, when the destination is actionable, posts
+//     the matching message to the host — `open-external` for a launchable
+//     http/https/mailto URL, `open-link` for a relative `.md` target.
 //   - handleLinkMouseDown(event, view, host) + quollLinkClickHandler():
 //     extracted mousedown helper + the Extension factory that wires it.
 //
-// Why a single file: the three exports share a small private surface
-// (the URL-extract + scheme check, the shared OPENABLE_SCHEMES set, the
-// boundary-inclusive selection helper). Splitting would either duplicate
-// the helpers or thread them through a fourth module.
+// Why a single file: the three exports share a small private surface (the
+// URL-extract, the boundary-inclusive selection helper, the warn policy).
+// Splitting would either duplicate them or thread them through a fourth
+// module. What this file no longer owns is the CLASSIFICATION of a
+// destination — that moved to ./link-target.js so the click handler and the
+// `quoll-link-clickable` decoration decide "does this act?" from one
+// predicate instead of two drifting copies.
 
 import { syntaxTree } from "@codemirror/language";
 import type { EditorState } from "@codemirror/state";
