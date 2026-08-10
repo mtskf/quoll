@@ -18,11 +18,14 @@
 // link → reveal → user edits). The host handler refuses to launch them.
 //
 // DRIFT WARNING (review fix #9 + R2-4): the SAME OPENABLE_SCHEMES set +
-// schemeOf helper lives in src/webview/cm/link-handlers.ts. The two MUST
-// behave identically (any drift opens a fail-open hole on the host
-// side). The host-side test/extension/handle-open-external.test.ts pins
+// schemeOf helper lives in src/webview/cm/link-target.ts (it moved there
+// from cm/link-handlers.ts when classification was extracted so the click
+// handler and the pointer-cursor decoration could share one predicate). The
+// two MUST behave identically (any drift opens a fail-open hole on the host
+// side). The host-side test/extension/links/handle-open-external.test.ts pins
 // this arm's unsafe-URL matrix; the webview-side
-// test/webview/cm-link-handlers.test.ts + cm-link-integration.test.ts
+// test/webview/cm-link-handlers.test.ts + cm-link-target.test.ts +
+// test/webview/decorations/cm-link-integration.test.ts
 // pin the webview arm's matrix. Both matrices cover the same hostile-URL
 // attack-scenario set (most rows are byte-identical; the two C0-bypass
 // rows — inline `java&#10;script:...` and trailing `...example.com&#10;`

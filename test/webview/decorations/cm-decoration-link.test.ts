@@ -2,6 +2,7 @@ import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
 import { EditorSelection, EditorState } from "@codemirror/state";
 import type { DecorationSet } from "@codemirror/view";
 import { describe, expect, it } from "vitest";
+import { MAX_HREF_LENGTH } from "../../../src/shared/protocol.js";
 import { linkReveal } from "../../../src/webview/cm/decorations/link-reveal.js";
 import type { BuildContext } from "../../../src/webview/cm/decorations/types.js";
 import { fullTree } from "../helpers/full-tree.js";
@@ -191,5 +192,86 @@ describe("linkReveal — inline link form [text](url)", () => {
       expect(d.from).toBeGreaterThanOrEqual(0);
       expect(d.to).toBeLessThanOrEqual(14);
     }
+  });
+});
+
+describe("linkReveal — the clickable marker tracks actionability", () => {
+  // The pointer cursor is a promise that the click does something. These pin
+  // the equivalence: marker present ⟺ tryOpenLinkAt acts on the click.
+  function clickableCount(doc: string): number {
+    // Caret at 0 with the doc prefixed by "see " keeps every link HIDDEN
+    // (caret-in would drop the marker for an unrelated reason and the
+    // assertion would pass vacuously).
+    const built = linkReveal.build(ctx(doc, EditorSelection.single(0)));
+    return decosOf(built).filter((d) => d.kind === "clickable").length;
+  }
+
+  it("marks a routable https link", () => {
+    expect(clickableCount("see [t](https://example.com) end")).toBe(1);
+  });
+
+  it("marks a routable relative .md link", () => {
+    expect(clickableCount("see [t](./notes.md) end")).toBe(1);
+  });
+
+  it("does NOT mark a fragment link", () => {
+    expect(clickableCount("see [t](#section) end")).toBe(0);
+  });
+
+  it("does NOT mark a relative non-.md link", () => {
+    expect(clickableCount("see [t](./photo.png) end")).toBe(0);
+  });
+
+  it("does NOT mark an absolute path link", () => {
+    expect(clickableCount("see [t](/abs.md) end")).toBe(0);
+  });
+
+  it("does NOT mark a blocked scheme", () => {
+    expect(clickableCount("see [t](javascript:alert(1)) end")).toBe(0);
+  });
+
+  // The remaining two rejection classes. They route through the same shared
+  // classifier as the cases above, so they "should" pass by construction —
+  // which is exactly the reasoning that lets a class silently regress when
+  // someone later special-cases one arm. Pin the observable instead.
+  it("does NOT mark an oversize destination", () => {
+    const long = `https://example.com/${"a".repeat(MAX_HREF_LENGTH)}`;
+    expect(clickableCount(`see [t](${long}) end`)).toBe(0);
+  });
+
+  // Percent-encoded structure. The host applies its absolute / backslash /
+  // scheme checks to the PERCENT-DECODED path (handle-open-link.ts), so a
+  // destination that only looks relative before decoding is dropped there —
+  // after the webview has already posted and preventDefault'd, which eats the
+  // caret move too. These are the worst dead clicks of the set, and the
+  // pointer must not promise them.
+  it("does NOT mark a percent-encoded absolute path", () => {
+    expect(clickableCount("see [t](%2Fetc.md) end")).toBe(0);
+  });
+
+  it("does NOT mark a percent-encoded backslash path", () => {
+    expect(clickableCount("see [t](%5Cfoo.md) end")).toBe(0);
+  });
+
+  it("does NOT mark a percent-encoded protocol-relative path", () => {
+    expect(clickableCount("see [t](%2F%2Fhost.md) end")).toBe(0);
+  });
+
+  it("does NOT mark a protocol-relative destination", () => {
+    // isAllowedUrl rejects `//host/path` — it looks schemeless but the URL
+    // parser resolves it as a remote origin.
+    expect(clickableCount("see [t](//evil.example.com/x) end")).toBe(0);
+  });
+
+  it("still HIDES the syntax marks of a non-actionable link", () => {
+    // Only the cursor changes. The link still renders as prose — withholding
+    // the marker must not leak `(#section)` back into the rendered text.
+    const built = linkReveal.build(ctx("see [t](#section) end", EditorSelection.single(0)));
+    expect(decosOf(built).filter((d) => d.kind === "hide").length).toBe(5);
+  });
+
+  it("decodes the destination before classifying", () => {
+    // Raw slice `https\://example.com`; only the decoded form is actionable.
+    expect(clickableCount("see [t](https\\://example.com) end")).toBe(1);
   });
 });
