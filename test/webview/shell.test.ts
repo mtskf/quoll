@@ -457,18 +457,30 @@ describe("shell — format-command routing", () => {
 
 describe("shell — editor-config routing", () => {
   it("routes every editor-config field to its own applied outcome", async () => {
-    // The worst case this pins is the 4-field editor-prefs mapping: the shell
-    // hand-copies `message.{fontFamily,fontSize,lineHeight,contentWidth}` into
-    // one object literal, so a field-for-field swap type-checks whenever the two
-    // fields' unions are both strings. Asserting the CSS custom properties (the
-    // applied outcome, not "setter was called") makes any swap red: the values
-    // are per-field distinct, so e.g. fontSize↔lineHeight lands "1.9" on
-    // --quoll-editor-font-size and the calc() on --quoll-editor-line-height.
-    // Expected values are derived from editorPrefToCssValue rather than
-    // hand-written, so this test cannot drift from the preset table.
-    // Every id below is deliberately NON-default: a default id makes the applier
-    // REMOVE the var, which would leave a dropped route indistinguishable from a
-    // routed one.
+    // This pins two separate risks under one `editor-config` delivery pipeline:
+    //
+    // 1. The 4-field editor-prefs mapping (fontFamily/fontSize/lineHeight/
+    //    contentWidth): the shell hand-copies `message.{...}` into one object
+    //    literal passed to `editor.setEditorPrefs`. A same-field-name swap
+    //    here is NOT a silent risk: each field's type is a distinct string
+    //    literal union (protocol.ts EDITOR_PREF_ENUMS), and for every one of
+    //    the 6 field pairs neither union is a subset of the other, so `tsc`
+    //    rejects a swap with TS2322 (verified by hand: swapping
+    //    fontSize↔lineHeight in shell.ts breaks `pnpm compile` with exactly
+    //    that error). What the type system can't catch is a dropped
+    //    `editor?.set*` call — asserting the applied CSS custom property (the
+    //    outcome, not "was setEditorPrefs called") is what makes a dropped
+    //    route red. Expected values are derived from editorPrefToCssValue
+    //    rather than hand-written, so this test cannot drift from the preset
+    //    table. Every id below is deliberately NON-default: a default id
+    //    makes the applier REMOVE the var, which would leave a dropped route
+    //    indistinguishable from a routed one.
+    //
+    // 2. The 3 boolean siblings (lintGutter/proseLint/spellcheck →
+    //    setLintGutter/setProseLint/setSpellcheck): unlike the 4 pref fields
+    //    above, these are all bare `boolean`, so a swap type-checks. The
+    //    second `deliver` below (with a comment on the fixture design) is
+    //    what makes each of the 3 possible swaps red.
     await mount();
     deliver(buildDocument({ docVersion: 1, content: "word\n" }));
 
@@ -510,11 +522,64 @@ describe("shell — editor-config routing", () => {
     expect(cssVar("quoll.editor.contentWidth")).toBe(
       editorPrefToCssValue("quoll.editor.contentWidth", "narrow")
     );
-    // The three boolean siblings ride the same arm and each has a distinct
-    // observable, so dropping any ONE of the four `editor?.set*` calls is red.
     expect(view.contentDOM.getAttribute("spellcheck")).toBe("false");
     expect(view.dom.querySelector(".quoll-lint-gutter")).not.toBeNull();
     expect(view.state.facet(proseLintEnabled)).toBe(true);
+
+    // Second delivery with a DIFFERENT boolean combination. One delivery
+    // alone can't distinguish all 3 possible pairwise swaps among
+    // lintGutter/proseLint/spellcheck: each field only has 2 possible values,
+    // so in any single message some pair is bound to share a value, and
+    // swapping two fields that hold the SAME value in that message is a
+    // no-op there. The combination below is chosen so every pair differs in
+    // at least one of the two deliveries:
+    //   field        | delivery 1 | delivery 2
+    //   lintGutter   |    true    |   false
+    //   proseLint    |    true    |    true
+    //   spellcheck   |   false    |    true
+    // lintGutter/proseLint only differ in delivery 2 (both true in delivery
+    // 1); lintGutter/spellcheck differ in both; proseLint/spellcheck only
+    // differ in delivery 1 (both true in delivery 2). So swapping any one
+    // pair changes at least one applied outcome in at least one delivery.
+    // Every field also transitions to a different value than delivery 1 (or
+    // stays but was already exercised going false→true→false on gutter and
+    // true→false→true on spellcheck across the whole test), so no same-value
+    // no-op guard on the setters can absorb a route being dropped.
+    deliver({
+      protocol: PROTOCOL_VERSION,
+      type: "editor-config",
+      lintGutter: false,
+      proseLint: true,
+      spellcheck: true,
+      fontFamily: "sans",
+      fontSize: "large",
+      lineHeight: "roomy",
+      contentWidth: "narrow",
+    });
+
+    expect(view.contentDOM.getAttribute("spellcheck")).toBe("true");
+    expect(view.dom.querySelector(".quoll-lint-gutter")).toBeNull();
+    expect(view.state.facet(proseLintEnabled)).toBe(true);
+  });
+});
+
+describe("shell — HostToWebview exhaustiveness guard", () => {
+  it("throws on an unknown message type (fail loud, not silent drop)", async () => {
+    // Mirrors the reducer's exhaustiveness guard (state.test.ts). The default
+    // arm is unreachable by type — HostToWebview is a closed union — so the
+    // cast is necessary to exercise the runtime guard at all. `deliver()`
+    // calls the subscribeToHost handler synchronously (this test file's
+    // handler shim bypasses the isHostToWebview wire-boundary validator,
+    // which would normally reject an unknown type before it ever reaches the
+    // switch), so the throw happens synchronously inside deliver() and
+    // `expect(() => ...).toThrow` catches it directly.
+    await mount();
+    const unknown = {
+      protocol: PROTOCOL_VERSION,
+      type: "no-such-message",
+    } as unknown as HostToWebview;
+
+    expect(() => deliver(unknown)).toThrow(/unhandled HostToWebview: no-such-message/);
   });
 });
 
