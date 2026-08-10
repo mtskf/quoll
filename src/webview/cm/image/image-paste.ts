@@ -352,10 +352,11 @@ export function createImagePasteDrop(opts: {
       // anchor. Building the transaction runs every StateField, and `EditorView.update`
       // then runs `docView.update` unguarded — so an unrelated field throwing on this
       // insert (block widgets are StateFields here by design, as are fold and lint)
-      // surfaces at exactly this line. ViewPlugins are the one thing that does NOT:
-      // `PluginInstance.update` catches those itself and routes them to `logException`
-      // ("CodeMirror plugin crashed"), so a plugin failure never reaches us. Naming the
-      // dispatch rather than the anchor keeps the next reader off the wrong scent.
+      // surfaces at exactly this line. What never reaches us is anything CM catches on
+      // our behalf and hands to `logException`: ViewPlugin updates and updateListener
+      // callbacks both — so a failure in edit-sync, which rides a listener, shows up in
+      // the console under CM's own label and not this one. Naming the dispatch rather
+      // than the anchor keeps the next reader off the wrong scent.
       logInsertFailure("dispatch threw", err);
       clearPending(view, requestId);
     }
