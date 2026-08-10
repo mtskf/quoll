@@ -420,6 +420,38 @@ describe("shell — format-document routing", () => {
   });
 });
 
+describe("shell — format-command routing", () => {
+  it("routes a format-command message to the editor and marks the selection", async () => {
+    // The webview end of the `quoll.format` chord path: message arm -> the
+    // editor handle -> a real CodeMirror transaction producing bold markers.
+    // The host end is pinned by test/extension/e2e/format-command-dispatch.test.ts,
+    // which explains (at its top) why it deliberately stops at the wire instead
+    // of asserting document text.
+    // Reverting shell.ts's `case "format-command"` leaves "word" unmarked.
+    await mount();
+    deliver(buildDocument({ docVersion: 1, content: "word\n" }));
+
+    const mountEl = (container as HTMLElement).querySelector(".quoll-editor") as HTMLElement;
+    const view = EditorView.findFromDOM(mountEl);
+    if (!view) {
+      throw new Error("EditorView not found via findFromDOM");
+    }
+    view.dispatch({ selection: { anchor: 0, head: 4 } });
+    // Stub the guard's input rather than calling view.focus(): a real focus()
+    // fires a selectionchange that happy-dom flushes back through CodeMirror's
+    // DOMObserver mid-test. Same technique (and reason) as
+    // test/webview/inline/cm-inline-formatting-run-command.test.ts.
+    Object.defineProperty(view, "hasFocus", { get: () => true, configurable: true });
+
+    deliver({ protocol: PROTOCOL_VERSION, type: "format-command", action: "bold" });
+
+    expect(view.state.doc.toString()).toBe("**word**\n");
+    // The post back to the host is edit-sync's debounced job (300 ms), pinned by
+    // test/webview/cm-edit-sync.test.ts for every doc change — not re-asserted
+    // here, where a timer wait would only add flake.
+  });
+});
+
 describe("shell — relative image read-path seam (shell → editor → facet)", () => {
   it("resolves a relative image src against the injected resourceBaseUri", async () => {
     // End-to-end passthrough of the read-path spine: mountShell({resourceBaseUri})
