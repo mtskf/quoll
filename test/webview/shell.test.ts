@@ -555,10 +555,11 @@ describe("shell — editor-config routing", () => {
     // A wholly DROPPED setter is caught by delivery 1 alone, whichever of the
     // three it is: every delivery-1 value differs from that setter's default
     // (gutter false→true, prose false→true, spellcheck true→false), so a
-    // dropped call leaves the default in place and delivery 1 goes red. That
-    // is also why proseLint may stay true here — delivery 1 already pinned it —
-    // and why the same-value no-op guards on setLintGutter/setSpellcheck
-    // cannot absorb a drop: each delivery-1 value is a real change.
+    // dropped call leaves the default in place and delivery 1 goes red — and
+    // no setter's same-value no-op guard can absorb that, because each
+    // delivery-1 value is a real change away from the default. It is also why
+    // proseLint may stay true here: delivery 1 already pinned that route, so
+    // delivery 2's prose push being a guard no-op costs this test nothing.
     deliver({
       protocol: PROTOCOL_VERSION,
       type: "editor-config",
