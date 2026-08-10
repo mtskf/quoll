@@ -459,20 +459,18 @@ describe("tryOpenLinkAt — gate-reject bails warn", () => {
     }
   });
 
-  // Length must not re-enter the decision by any door. The two cases above are
-  // long enough (8190 and 22 chars) that a reintroduced "short tokens are fine"
-  // shortcut would keep them both green while leaking everything below its
-  // threshold — the shape of every leak this file has already shipped once. This
-  // token is shorter than the shortest member of LOGGABLE_SCHEMES, so the only
-  // way to pass it is to classify rather than measure.
-  it("collapses an unrecognised scheme token shorter than any known scheme", () => {
-    const { warnings, handled, posted } = clickLink("see [t](zz9:entry)", "[t]");
+  // Length must not re-enter the decision by any door. Every leak this file has
+  // shipped was a length rule that looked safe, so the classification has to
+  // hold at the one size no "short tokens are fine" shortcut can sit below: the
+  // shortest token the scheme grammar admits at all. Passing this can only be
+  // done by classifying, never by measuring.
+  it("collapses an unrecognised scheme token of the shortest possible length", () => {
+    const { warnings, handled, posted } = clickLink("see [t](a:entry)", "[t]");
     expect(handled).toBe(false);
     expect(posted).toEqual([]);
     expect(warnings).toEqual([
       ["[quoll] link not opened: URL not in allowlist", { scheme: "(unrecognised)" }],
     ]);
-    expect(JSON.stringify(warnings)).not.toContain("zz9");
   });
 
   // Triage value must survive the classification: these are the schemes the
