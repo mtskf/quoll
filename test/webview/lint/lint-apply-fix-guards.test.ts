@@ -57,19 +57,13 @@ const { proseLintEnabled } = await import("../../../src/webview/cm/lint/extensio
 // filter never drops it and the change-set loop is what actually runs.
 const DOC = "abcdefghij\n";
 
-type FixSpec = { from: number; to: number; insert: string };
+type FixSpec = NonNullable<LintDiagnostic["fix"]>;
 
-/** A fixable diagnostic carrying `fix` verbatim. `from`/`to`/`severity`/`code`
- *  are inert here — only `fix` reaches the change-set loop. */
+/** A fixable diagnostic carrying `fix` verbatim. `from`/`to`/`severity`/`code` are
+ *  inert here — the change-set loop reads only `d.fix` — so they are fixed at 0
+ *  rather than derived from it, which would imply a validation that does not exist. */
 function diag(fix: FixSpec): LintDiagnostic {
-  return {
-    from: Math.max(0, fix.from),
-    to: Math.max(0, fix.from),
-    severity: "warning",
-    code: "no-trailing-spaces",
-    message: "stub",
-    fix,
-  };
+  return { from: 0, to: 0, severity: "warning", code: "no-trailing-spaces", message: "stub", fix };
 }
 
 /** Stub the engine's return for the next apply call. */
