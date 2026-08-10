@@ -34,10 +34,11 @@ function mount(doc: string, canWrite = true) {
   return { view, paste, post };
 }
 
+// No hand-written `m is ImageWriteMessage` on the filter: TypeScript takes a written
+// predicate on trust and never checks it against the body, so a wrong one compiles.
+// Left off, TS infers the narrowing and the declared return type verifies it.
 function imageWrites(post: ReturnType<typeof mount>["post"]): ImageWriteMessage[] {
-  return post.mock.calls
-    .map(([message]) => message)
-    .filter((m): m is ImageWriteMessage => m.type === "image-write");
+  return post.mock.calls.map(([message]) => message).filter((m) => m.type === "image-write");
 }
 
 const anchorIds = (view: EditorView): string[] =>
@@ -56,7 +57,8 @@ const pngFile = (): File => new File([PNG_BYTES], "shot.png", { type: "image/png
 const decodeBase64 = (data: string): Uint8Array =>
   Uint8Array.from(atob(data), (c) => c.charCodeAt(0));
 
-/** Every cap in this suite is expressed in MiB, as the production thresholds are. */
+/** The unit the production SIZE thresholds are expressed in. (The per-event COUNT
+ *  cap is a number of files, not a byte size — see the per-event caps describe.) */
 const MIB = 1024 * 1024;
 
 /** A file that REPORTS `bytes` while its content stays one byte. Both size caps are
@@ -235,21 +237,26 @@ describe("imagePaste — clipboard ingestion", () => {
   // it, and richHtmlPaste would be deferring into a handler that no longer accepts
   // what it was promised.
   //
-  // Observed on pendingImageAnchors, not on defaultPrevented: CM's own builtin
-  // paste handler runs after this one on a decline and preventDefaults for its own
-  // plain-text insert, so defaultPrevented cannot tell "imagePaste took it" from
-  // "imagePaste passed and CM handled it" (repo convention — see
-  // cm-list-reindent-paste.test.ts). An anchor is queued SYNCHRONOUSLY when a file
-  // is submitted; the image-write post itself rides an async FileReader.
+  // Two observables, and each covers what the other cannot. An anchor is queued
+  // SYNCHRONOUSLY when a file is submitted, so it pins ingestion (the async post
+  // rides a FileReader and is pinned in the next describe). But an anchor count of
+  // 0 is equally true of a decline and of a consume-without-ingesting, so every
+  // decline test also asserts the DOCUMENT: on a decline CM core's builtin paste
+  // handler runs next and inserts the text flavour; on a consume it never runs.
+  // `defaultPrevented` separates neither — CM's builtin returns true for any truthy
+  // clipboardData and `runHandlers` preventDefaults on a true return, so it is true
+  // with or without this extension.
   it("ingests a paste carrying an image file beside text flavours, at the selection head", () => {
+    stubReadThatNeverCompletes();
     const { view } = mount("abcd");
-    view.dispatch({ selection: { anchor: 3 } });
+    view.dispatch({ selection: { anchor: 4, head: 1 } });
     firePasteAt(view.contentDOM, { files: IMAGE_FILE, html: "<p>x</p>", text: "x" });
     // The anchor's VALUE, not just its existence: the paste path derives it from
-    // the selection head, and the selection is driven off 0 so a hard-coded 0
-    // cannot pass. (The drop path's twin assertion is in the drop describe.)
+    // the selection HEAD, and the selection is backwards and non-empty so neither a
+    // hard-coded 0 nor `.anchor` (4) can pass. (The drop path's twin is in the drop
+    // describe.)
     expect(view.state.field(pendingImageAnchors)).toEqual([
-      { requestId: expect.any(String), anchor: 3 },
+      { requestId: expect.any(String), anchor: 1 },
     ]);
     view.destroy();
   });
@@ -264,43 +271,55 @@ describe("imagePaste — clipboard ingestion", () => {
     // rather than a preference: on these clipboards nothing downstream performs the
     // paste, so richHtmlPaste must NOT defer into them.
     const { view } = mount("ab");
-    firePasteAt(view.contentDOM, { files, text: "x" });
+    firePasteAt(view.contentDOM, { files, text: "ZZ" });
     expect(view.state.field(pendingImageAnchors).length).toBe(0);
+    // Declined, not consumed. The caret sits at 0, so CM core's insert of the text
+    // flavour is the difference: a handler that preventDefaults and returns true
+    // here leaves the doc "ab" — the "every text paste silently vanishes"
+    // regression this module exists to avoid.
+    expect(view.state.doc.toString()).toBe("ZZab");
     view.destroy();
   });
 
   it("declines a text-only paste (its kind:'string' items are not files)", () => {
     const { view } = mount("ab");
-    firePasteAt(view.contentDOM, { html: "<p>x</p>", text: "x" });
+    firePasteAt(view.contentDOM, { html: "<p>x</p>", text: "ZZ" });
     expect(view.state.field(pendingImageAnchors).length).toBe(0);
+    expect(view.state.doc.toString()).toBe("ZZab");
     view.destroy();
   });
 
   it("leaves a trace when it drops a zero-byte image", () => {
     // The one clipboard shape where declining is invisible from the document: the
-    // shared predicate never looks at size, so richHtmlPaste has already deferred; this
-    // handler preventDefaults, skips the file and returns true. Nothing is inserted
-    // and CM's plain-text fallback is suppressed, so the console line is the only
-    // evidence the paste ever happened. Its two sibling refusals already warn — and
-    // all three are asserted by TEXT, because a warn COUNT makes the three
-    // interchangeable and a swapped refusal would go unnoticed.
+    // shared predicate never looks at size, so richHtmlPaste has already deferred;
+    // this handler preventDefaults, skips the file and returns true. Nothing is
+    // inserted and CM's plain-text fallback is suppressed, so the console line is
+    // the only evidence the paste ever happened. All three refusals in the loop are
+    // asserted by TEXT, because a warn COUNT makes them interchangeable and a
+    // swapped refusal would go unnoticed.
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const { view } = mount("ab");
     const empty = new File([], "f", { type: "image/png" });
-    firePasteAt(view.contentDOM, { files: [{ type: "image/png", file: empty }] });
+    firePasteAt(view.contentDOM, { files: [{ type: "image/png", file: empty }], text: "ZZ" });
     expect(view.state.field(pendingImageAnchors).length).toBe(0);
     expect(warn).toHaveBeenCalledWith(expect.stringContaining("zero bytes"));
+    // The suppression itself: the text flavour does NOT reach the document. Recorded
+    // rather than pinned — the handler's unconditional `preventDefault` runs before
+    // every refusal, so no mutation of the refusals can flip this line.
+    expect(view.state.doc.toString()).toBe("ab");
     view.destroy();
   });
 
   it("swallows an image paste on a read-only doc without queueing an anchor", () => {
     const { view } = mount("ab", false);
-    firePasteAt(view.contentDOM, { files: IMAGE_FILE });
-    // NOT observed on defaultPrevented — see the note in the drop describe. This
-    // comment used to claim the opposite ("with no text/plain there is nothing for
-    // CM core to insert"); that is false twice over — CM's builtin never inspects
-    // the text flavours, and returns true immediately when the state is read-only.
+    firePasteAt(view.contentDOM, { files: IMAGE_FILE, text: "ZZ" });
+    // The anchor count is the pinning assertion: delete the `canWrite()` gate and
+    // the file is submitted, queueing one. The doc records the rest of the contract
+    // — the event is consumed, so CM's plain-text fallback never runs. (`mount(doc,
+    // false)` gates createImagePasteDrop only; it does not set EditorState.readOnly,
+    // so CM's own read-only short-circuit is not what produces this.)
     expect(view.state.field(pendingImageAnchors).length).toBe(0);
+    expect(view.state.doc.toString()).toBe("ab");
     view.destroy();
   });
 });
@@ -407,11 +426,11 @@ describe("imagePaste — the image-write post", () => {
     expect(post).not.toHaveBeenCalled();
     expect(view.state.field(pendingImageAnchors).length).toBe(0);
     // There is no webview toast channel for this path, so the console line is the
-    // only trace a failed read leaves anywhere. Pinned by TEXT, not by count:
-    // happy-dom swallows an exception thrown inside a domEventHandler and surfaces
-    // it as exactly one console.error too, so a count cannot tell this log from a
-    // crash, nor from the transport failure below.
-    expect(error).toHaveBeenCalledWith("[quoll] failed to read pasted image");
+    // only trace a failed read leaves anywhere. Pinned as the COMPLETE call list,
+    // by text AND by exhaustion: CodeMirror swallows an exception thrown inside a
+    // domEventHandler (`bindHandler` → `logException`) and reports it as a further
+    // console.error, which a text-only `toHaveBeenCalledWith` would not notice.
+    expect(error.mock.calls).toEqual([["[quoll] failed to read pasted image"]]);
     view.destroy();
   });
 
@@ -427,14 +446,13 @@ describe("imagePaste — the image-write post", () => {
     firePasteAt(view.contentDOM, { files: [{ type: "image/png", file: pngFile() }] });
 
     // safePostMessage swallows the throw and reports false; the anchor must not
-    // outlive a message the host never received. Observed through the post call
-    // AND the log text — the only combination that separates this path from a read
-    // failure and from a crashed handler.
+    // outlive a message the host never received. Observed through the post call AND
+    // the complete console.error list — the combination that separates this path
+    // from a read failure and from a crash logged after it.
     await vi.waitFor(() => expect(post).toHaveBeenCalledTimes(1));
-    expect(error).toHaveBeenCalledWith(
-      "[quoll] postMessage(image-write) failed",
-      expect.any(Error)
-    );
+    expect(error.mock.calls).toEqual([
+      ["[quoll] postMessage(image-write) failed", expect.any(Error)],
+    ]);
     expect(view.state.field(pendingImageAnchors).length).toBe(0);
     view.destroy();
   });
@@ -469,11 +487,10 @@ describe("imagePaste — the image-write post", () => {
 
 describe("imagePaste — per-event caps", () => {
   // The two SIZE caps are decided from `file.size` BEFORE the read; the COUNT cap
-  // is decided from a file's INDEX, and outside the loop entirely. (An earlier
-  // version of this note said every cap here reads `file.size` — it does not, and
-  // that difference is exactly why the count cap emits no warn.) Either way nothing
-  // is read, so the pending anchor count is the complete observable and these tests
-  // can stay synchronous — hence `stubReadThatNeverCompletes` throughout.
+  // is decided from a file's INDEX, outside the loop entirely — which is why it is
+  // the one cap that emits no warn. Either way nothing is read, so the pending
+  // anchor count is the complete observable and these tests can stay synchronous —
+  // hence `stubReadThatNeverCompletes` throughout.
 
   it("drops a grossly oversized image before reading it", () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
@@ -513,13 +530,33 @@ describe("imagePaste — per-event caps", () => {
     // refuse any of them — the cap that exists so a multi-file drop cannot queue
     // 16 × the transfer ceiling of base64 at once.
     //
-    // Sizes are deliberately MIXED. 10+10+10+9 reaches 39 MiB, the fifth 10 MiB file
-    // would exceed the 40 MiB cap, and the trailing 1 MiB file would still FIT.
-    // Production documents `break`, so that trailing file must NOT be queued: with
-    // `continue` the count is 5. Uniform sizes cannot tell the two apart.
+    // Sizes are deliberately MIXED, and that is this test's whole job. 10+10+10+9
+    // reaches 39 MiB, the fifth 10 MiB file would exceed the 40 MiB cap, and the
+    // trailing 1 MiB file would still FIT. Production documents `break`, so that
+    // trailing file must NOT be queued: with `continue` the count is 5. The
+    // uniform-size test below owns the other half — the exact boundary — because no
+    // running total here lands ON the cap. Neither fixture can do both.
     const files = [10, 10, 10, 9, 10, 1].map((size) => ({
       type: "image/png",
       file: sizedImageFile(size * MIB),
+    }));
+    firePasteAt(view.contentDOM, { files });
+
+    expect(view.state.field(pendingImageAnchors).length).toBe(4);
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("aggregate byte cap"));
+    view.destroy();
+  });
+
+  it("refuses the file that lands exactly ON the aggregate byte cap", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    stubReadThatNeverCompletes();
+    const { view } = mount("ab");
+    // Five files of exactly MAX_IMAGE_BYTES: the fourth brings the running total to
+    // 30 + 10 = 40 MiB, exactly the cap. `>` accepts it (4 queued), `>=` refuses it
+    // (3) — the comparison the mixed fixture above cannot see.
+    const files = Array.from({ length: 5 }, () => ({
+      type: "image/png",
+      file: sizedImageFile(MAX_IMAGE_BYTES),
     }));
     firePasteAt(view.contentDOM, { files });
 
@@ -551,20 +588,37 @@ describe("imagePaste — drop and dragover", () => {
   // browser navigating away from the document to the dropped file) and its own
   // anchor derivation.
   //
-  // None of that is observed on `defaultPrevented`. Measured on a bare EditorView
-  // carrying NO imagePaste extension, a file drop and a file paste BOTH come back
-  // `defaultPrevented === true`: CM's builtin `handlers.drop` returns true for any
-  // dataTransfer carrying files and `handlers.paste` for any truthy clipboardData
-  // (immediately so when read-only), and `runHandlers` preventDefaults on a true
-  // return. The assertion therefore cannot fail; this handler's own preventDefault
-  // is observable only in a real browser, so pin the anchors instead. `dragover` is
-  // the exception and the only defaultPrevented assertion left here: bare, it is false.
+  // `defaultPrevented` discriminates here, but only for events CM's builtin does
+  // NOT already claim. Measured on a bare EditorView carrying no imagePaste
+  // extension: a FILE-carrying drop is already `true` (CM's `handlers.drop` returns
+  // true for any dataTransfer with files, and `runHandlers` preventDefaults on a
+  // true return), so the file-drop tests below pin anchors instead. A TEXT-ONLY
+  // drop is `false`, and that is the entire observable of the decline path — the
+  // drop handler returns before its own preventDefault on that branch. `dragover`
+  // is bare-false the same way.
   it("preventDefaults a file drag so the drop event can fire, and leaves other drags alone", () => {
     const { view } = mount("ab");
     // Without the preventDefault the browser never fires `drop` at all, so this is
     // load-bearing rather than cosmetic.
     expect(fireDragOverAt(view.contentDOM, { files: IMAGE_FILE }).defaultPrevented).toBe(true);
     expect(fireDragOverAt(view.contentDOM, { text: "x" }).defaultPrevented).toBe(false);
+    view.destroy();
+  });
+
+  it("declines a drop carrying no image, leaving the event to CM", () => {
+    // The drop-side mirror of the paste decline tests, and it needs a different
+    // observable: nothing CM does with a text drop reaches this document, so only
+    // `defaultPrevented` can tell decline from consume.
+    //
+    // ⚠️ The `false` baseline depends on the double. CM's builtin drop handler reads
+    // the LEGACY alias `dataTransfer.getData("Text")`, which `makeClipboardData`
+    // stores as "text/plain" and does not answer, so CM declines too. A real browser
+    // maps "Text" onto text/plain and would consume this drop. Making the double
+    // spec-accurate therefore flips this baseline for a reason unrelated to
+    // imagePaste — the mutant it exists to kill (consuming every non-image drop)
+    // flips it to `true` either way.
+    const { view } = mount("ab");
+    expect(fireDropAt(view.contentDOM, { text: "x" }).defaultPrevented).toBe(false);
     view.destroy();
   });
 
@@ -588,12 +642,14 @@ describe("imagePaste — drop and dragover", () => {
     stubReadThatNeverCompletes();
     const { view } = mount("abcd");
     stubDropPos(view, null);
-    view.dispatch({ selection: { anchor: 3 } });
+    view.dispatch({ selection: { anchor: 4, head: 1 } });
 
     fireDropAt(view.contentDOM, { files: IMAGE_FILE });
 
+    // The HEAD of a backwards non-empty selection, so neither a hard-coded 0 nor
+    // `.anchor` (4) can pass.
     expect(view.state.field(pendingImageAnchors)).toEqual([
-      { requestId: expect.any(String), anchor: 3 },
+      { requestId: expect.any(String), anchor: 1 },
     ]);
     view.destroy();
   });

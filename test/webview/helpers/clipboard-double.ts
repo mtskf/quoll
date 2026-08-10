@@ -74,6 +74,10 @@ export function makeClipboardData(data: ClipboardFlavours): {
 
   const files = fileItems.map((item) => item.getAsFile()).filter((f): f is File => !!f);
   return {
+    // Exact-type lookup only: the legacy aliases a real DataTransfer resolves
+    // ("Text" → text/plain, "URL" → text/uri-list) are NOT mapped. CM's builtin drop
+    // handler reads "Text", so it sees nothing here — cm-image-paste.test.ts's
+    // text-only drop test states the baseline that rests on this.
     getData: (type: string) => store.get(type) ?? "",
     // Cast at the boundary only: these doubles implement the three members the
     // production scans read (kind / type / getAsFile), not the whole interface.
@@ -85,11 +89,10 @@ export function makeClipboardData(data: ClipboardFlavours): {
   };
 }
 
-/** Dispatch a synthetic `paste` at `target` and return the event. `Event`, not
- *  `ClipboardEvent` — but NOT because `clipboardData` is read-only: happy-dom's
- *  ClipboardEvent constructor assigns it from the event init, so it is writable
- *  there. The plain-Event route is chosen so paste and drop are built the same way,
- *  and because `drop` genuinely has no alternative (see `fireDropAt`). */
+/** Dispatch a synthetic `paste` at `target` and return the event. A plain `Event`
+ *  with `clipboardData` defined onto it, so paste and drop are built the same way;
+ *  happy-dom's ClipboardEvent would accept `clipboardData` from its init, but `drop`
+ *  has no such route (see `fireDropAt`) and uniformity is worth more here. */
 export function firePasteAt(target: EventTarget, data: ClipboardFlavours): Event {
   const event = new Event("paste", { bubbles: true, cancelable: true });
   Object.defineProperty(event, "clipboardData", { value: makeClipboardData(data) });
@@ -98,11 +101,11 @@ export function firePasteAt(target: EventTarget, data: ClipboardFlavours): Event
 }
 
 /** Dispatch a synthetic `drop` at `target`. `Event` rather than `DragEvent` because
- *  happy-dom has no DragEvent IMPLEMENTATION at all: `BrowserWindow.js` exposes the
- *  bare alias `DragEvent = Event`. So it is not that `dataTransfer` is read-only —
- *  there is no `dataTransfer` (nor `clientX`/`clientY`) to set, from the constructor
- *  or anywhere else. Defining the three properties onto a cancellable Event is the
- *  only route until happy-dom ships a real DragEvent.
+ *  happy-dom has no DragEvent implementation at all — `BrowserWindow.js` exposes the
+ *  bare alias `DragEvent = Event`, which carries no `dataTransfer`, `clientX` or
+ *  `clientY` to set from the constructor or anywhere else. Defining the three
+ *  properties onto a cancellable Event is the only route until happy-dom ships a
+ *  real DragEvent.
  *
  *  ⚠️ The production drop handler calls `view.posAtCoords`, which under happy-dom
  *  (no layout engine) THROWS at SOME coordinates instead of returning a position —
