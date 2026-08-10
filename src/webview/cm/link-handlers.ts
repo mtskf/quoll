@@ -48,10 +48,11 @@ function schemeOf(url: string): string | null {
   return match ? match[1] : null;
 }
 
-/** The schemes `schemeTokenForLog` will name on the PRE-validation path. Every
- *  member is a literal written here, so what that warn can print is enumerable
- *  by reading this file — an unvalidated href can only SELECT a member, never
- *  contribute bytes to one. Two groups, both earning their triage keep:
+/** The schemes `schemeTokenForLog` will name on the PRE-validation path — the
+ *  fixed set of in-file literals the NO-URL POLICY (see `warnLinkNotOpened`)
+ *  requires the token to be PICKED from, so an unvalidated href can only SELECT
+ *  a member, never contribute bytes to one. Two groups, both earning their
+ *  triage keep:
  *    - http / https / mailto — allowlisted schemes. Reaching the
  *      allowlist-reject warn with one of these says the reject had a NON-scheme
  *      cause (a C0/DEL byte in the destination is the usual one), which is the
@@ -220,10 +221,8 @@ export function tryOpenLinkAt(state: EditorState, pos: number, host: LinkOpenHos
   }
   // Hoisted above the isAllowedUrl gate so the allowlist-reject warn below can
   // carry the scheme as a triage token. `decoded` is NOT YET validated here —
-  // the only gate it has passed is the length check above, so this value is
-  // still attacker- or author-chosen href bytes and MUST go through
-  // schemeTokenForLog (which classifies rather than forwards) before it is
-  // logged.
+  // the only gate it has passed is the length check above — so `scheme` is
+  // still attacker- or author-chosen href bytes at this point.
   const scheme = schemeOf(decoded);
   // Defense layer 1 (webview-side): isAllowedUrl + openable-scheme gate.
   // Layer 2 (host-side handler) re-applies isAllowedUrl + an
@@ -234,10 +233,9 @@ export function tryOpenLinkAt(state: EditorState, pos: number, host: LinkOpenHos
     // Classified (see schemeTokenForLog) because this is the PRE-validation
     // path. Deliberately not a copy of either host-arm branch: the host's own
     // allowlist-reject branch logs a sanitised, 64-capped `hrefPreview` and no
-    // scheme at all, while the bare `scheme ?? "(none)"` shape lives in its
-    // POST-allowlist "dropped: scheme not in OPENABLE_SCHEMES" branch, where the
-    // token is enumerable by construction. Nothing upstream enumerates this one,
-    // so LOGGABLE_SCHEMES enumerates it here instead.
+    // scheme at all, and its bare `scheme ?? "(none)"` shape belongs to the
+    // POST-allowlist "dropped: scheme not in OPENABLE_SCHEMES" branch — mirrored
+    // below, where the token needs no classifying.
     warnLinkNotOpened("URL not in allowlist", { scheme: schemeTokenForLog(scheme) });
     return false;
   }
@@ -247,12 +245,13 @@ export function tryOpenLinkAt(state: EditorState, pos: number, host: LinkOpenHos
       // Unreachable while ALLOWED_URL_SCHEMES ⊇ OPENABLE_SCHEMES (any
       // scheme surviving isAllowedUrl is launchable) — kept as drift
       // insurance, so the warn doubles as the runtime drift signal. Same
-      // rationale as the host arm's mirror branch.
-      // Raw, NOT schemeTokenForLog: post-allowlist the token is already an
-      // element of ALLOWED_URL_SCHEMES — a set of literals in url-allowlist.ts
-      // — so it is enumerable without help, and naming the drifted scheme is
-      // the only thing this branch exists to say. Classifying would print
-      // "(unrecognised)" for exactly the case worth reporting.
+      // rationale as the host arm's mirror branch. Logged RAW, not through
+      // schemeTokenForLog: post-allowlist the token is already an element of
+      // ALLOWED_URL_SCHEMES — a set of literals in url-allowlist.ts — so the
+      // POLICY's "PICKED from a fixed set" already holds, and naming the
+      // drifted scheme is the only thing this branch exists to say.
+      // Classifying would print "(unrecognised)" for exactly the case worth
+      // reporting.
       warnLinkNotOpened("scheme not in OPENABLE_SCHEMES", { scheme });
       return false;
     }
