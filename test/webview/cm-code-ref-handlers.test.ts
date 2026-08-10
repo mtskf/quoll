@@ -6,6 +6,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   CODE_REF_OPEN_KEY,
   handleCodeRefClick,
+  handleCodeRefMouseDown,
   openCodeRefAtCaretCommand,
   tryOpenCodeRefAt,
 } from "../../src/webview/cm/code-ref/code-ref-handlers.js";
@@ -65,6 +66,103 @@ describe("tryOpenCodeRefAt", () => {
     expect(host.postMessage).toHaveBeenCalledWith(
       expect.objectContaining({ type: "open-code-reference", path: "src/foo.ts", line: 42 })
     );
+  });
+});
+
+describe("handleCodeRefMouseDown", () => {
+  // Mock EditorView shaped for handleCodeRefMouseDown: the helper reads only
+  // `view.state` (for tryOpenCodeRefAt) and `view.posAtCoords` (coord → pos).
+  // happy-dom has no layout, so a real view's posAtCoords cannot resolve a
+  // meaningful position — the stub is what makes the mouse path testable at all.
+  // Same seam as cm-link-handlers.test.ts's makeMockView.
+  function makeMockView(state: EditorState, pos: number | null): EditorView {
+    return { state, posAtCoords: () => pos } as unknown as EditorView;
+  }
+  function makeMockEvent(button: number): MouseEvent & {
+    preventDefault: ReturnType<typeof vi.fn>;
+  } {
+    return {
+      button,
+      clientX: 100,
+      clientY: 50,
+      preventDefault: vi.fn(),
+    } as unknown as MouseEvent & { preventDefault: ReturnType<typeof vi.fn> };
+  }
+
+  const DOC = "see `src/foo.ts:42` end";
+  const REF_POS = DOC.indexOf("foo");
+
+  it("opens the reference on a left-click and swallows the event", () => {
+    const host = { postMessage: vi.fn() };
+    const event = makeMockEvent(/* left */ 0);
+    const view = makeMockView(stateFor(DOC), REF_POS);
+    expect(handleCodeRefMouseDown(event, view, host as never)).toBe(true);
+    expect(host.postMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ type: "open-code-reference", path: "src/foo.ts", line: 42 })
+    );
+    // preventDefault only on the taken path — otherwise the click would not
+    // reposition the caret on a plain (non-reference) mousedown.
+    expect(event.preventDefault).toHaveBeenCalled();
+  });
+
+  it("ignores a right-click on a reference (never hijacks the context menu)", () => {
+    const host = { postMessage: vi.fn() };
+    const event = makeMockEvent(/* right */ 2);
+    const view = makeMockView(stateFor(DOC), REF_POS);
+    expect(handleCodeRefMouseDown(event, view, host as never)).toBe(false);
+    expect(host.postMessage).not.toHaveBeenCalled();
+    // A preventDefault here would suppress the browser context menu.
+    expect(event.preventDefault).not.toHaveBeenCalled();
+  });
+
+  it("ignores a middle-click on a reference", () => {
+    const host = { postMessage: vi.fn() };
+    const event = makeMockEvent(/* middle */ 1);
+    const view = makeMockView(stateFor(DOC), REF_POS);
+    expect(handleCodeRefMouseDown(event, view, host as never)).toBe(false);
+    expect(host.postMessage).not.toHaveBeenCalled();
+    expect(event.preventDefault).not.toHaveBeenCalled();
+  });
+
+  it("defers while the selection intersects the reference (click lands mid-edit)", () => {
+    // The mouse path takes tryOpenCodeRefAt's default
+    // `deferWhenSelectionIntersects: true`, so a click on a reference the caret is
+    // already inside repositions the caret instead of navigating away.
+    const host = { postMessage: vi.fn() };
+    const event = makeMockEvent(/* left */ 0);
+    const view = makeMockView(stateFor(DOC, REF_POS), REF_POS);
+    expect(handleCodeRefMouseDown(event, view, host as never)).toBe(false);
+    expect(host.postMessage).not.toHaveBeenCalled();
+    expect(event.preventDefault).not.toHaveBeenCalled();
+  });
+
+  it("never posts or throws for a null / out-of-range position", () => {
+    // Scope note: this pins the OUTCOME (no post, no preventDefault, no throw),
+    // NOT the `pos === null || pos < 0 || pos > doc.length` guard itself. That
+    // guard cannot be falsified through this handler's contract — deleting it
+    // outright leaves every case below still returning false, because
+    // resolveInner clamps an out-of-range pos to a doc boundary that never
+    // resolves into InlineCode (verified by mutation). It stays as a type-level
+    // necessity (posAtCoords is `number | null`) plus defence in depth, so do not
+    // "strengthen" this into a guard assertion — it would be permanently vacuous.
+    const bare = "`src/foo.ts:42`"; // nothing but the reference: the widest target
+    const host = { postMessage: vi.fn() };
+    for (const pos of [null, -1, bare.length + 1]) {
+      const event = makeMockEvent(/* left */ 0);
+      const view = makeMockView(stateFor(bare), pos);
+      expect(handleCodeRefMouseDown(event, view, host as never)).toBe(false);
+      expect(event.preventDefault).not.toHaveBeenCalled();
+    }
+    expect(host.postMessage).not.toHaveBeenCalled();
+  });
+
+  it("leaves a left-click outside any reference to CodeMirror", () => {
+    const host = { postMessage: vi.fn() };
+    const event = makeMockEvent(/* left */ 0);
+    const view = makeMockView(stateFor(DOC), 1); // inside "see"
+    expect(handleCodeRefMouseDown(event, view, host as never)).toBe(false);
+    expect(host.postMessage).not.toHaveBeenCalled();
+    expect(event.preventDefault).not.toHaveBeenCalled();
   });
 });
 
