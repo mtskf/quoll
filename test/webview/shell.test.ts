@@ -3,6 +3,9 @@ import { EditorView } from "@codemirror/view";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { type HostToWebview, PROTOCOL_VERSION } from "../../src/shared/protocol.js";
+import { EDITOR_PREF_CSS_VARS, editorPrefToCssValue } from "../../src/webview/cm/editor-prefs.js";
+import { addPendingAnchor } from "../../src/webview/cm/image/image-paste.js";
+import { proseLintEnabled } from "../../src/webview/cm/lint/index.js";
 
 // shell.ts integration tests (post C3 React-free shell). Replaces the
 // React-era app.test.ts + persistence.test.ts. The shell mounts as a
@@ -449,6 +452,155 @@ describe("shell — format-command routing", () => {
     // The post back to the host is edit-sync's debounced job (300 ms), pinned by
     // test/webview/cm-edit-sync.test.ts for every doc change — not re-asserted
     // here, where a timer wait would only add flake.
+  });
+});
+
+describe("shell — editor-config routing", () => {
+  it("routes every editor-config field to its own applied outcome", async () => {
+    // The worst case this pins is the 4-field editor-prefs mapping: the shell
+    // hand-copies `message.{fontFamily,fontSize,lineHeight,contentWidth}` into
+    // one object literal, so a field-for-field swap type-checks whenever the two
+    // fields' unions are both strings. Asserting the CSS custom properties (the
+    // applied outcome, not "setter was called") makes any swap red: the values
+    // are per-field distinct, so e.g. fontSize↔lineHeight lands "1.9" on
+    // --quoll-editor-font-size and the calc() on --quoll-editor-line-height.
+    // Expected values are derived from editorPrefToCssValue rather than
+    // hand-written, so this test cannot drift from the preset table.
+    // Every id below is deliberately NON-default: a default id makes the applier
+    // REMOVE the var, which would leave a dropped route indistinguishable from a
+    // routed one.
+    await mount();
+    deliver(buildDocument({ docVersion: 1, content: "word\n" }));
+
+    const mountEl = (container as HTMLElement).querySelector(".quoll-editor") as HTMLElement;
+    const view = EditorView.findFromDOM(mountEl);
+    if (!view) {
+      throw new Error("EditorView not found via findFromDOM");
+    }
+    // Baseline: nothing applied yet, so a test that never delivered the message
+    // could not pass by accident.
+    expect(view.dom.style.getPropertyValue(EDITOR_PREF_CSS_VARS["quoll.editor.fontSize"])).toBe("");
+    expect(view.contentDOM.getAttribute("spellcheck")).toBe("true");
+    expect(view.dom.querySelector(".quoll-lint-gutter")).toBeNull();
+    expect(view.state.facet(proseLintEnabled)).toBe(false);
+
+    deliver({
+      protocol: PROTOCOL_VERSION,
+      type: "editor-config",
+      lintGutter: true,
+      proseLint: true,
+      spellcheck: false,
+      fontFamily: "sans",
+      fontSize: "large",
+      lineHeight: "roomy",
+      contentWidth: "narrow",
+    });
+
+    const cssVar = (key: keyof typeof EDITOR_PREF_CSS_VARS): string =>
+      view.dom.style.getPropertyValue(EDITOR_PREF_CSS_VARS[key]);
+    expect(cssVar("quoll.editor.fontFamily")).toBe(
+      editorPrefToCssValue("quoll.editor.fontFamily", "sans")
+    );
+    expect(cssVar("quoll.editor.fontSize")).toBe(
+      editorPrefToCssValue("quoll.editor.fontSize", "large")
+    );
+    expect(cssVar("quoll.editor.lineHeight")).toBe(
+      editorPrefToCssValue("quoll.editor.lineHeight", "roomy")
+    );
+    expect(cssVar("quoll.editor.contentWidth")).toBe(
+      editorPrefToCssValue("quoll.editor.contentWidth", "narrow")
+    );
+    // The three boolean siblings ride the same arm and each has a distinct
+    // observable, so dropping any ONE of the four `editor?.set*` calls is red.
+    expect(view.contentDOM.getAttribute("spellcheck")).toBe("false");
+    expect(view.dom.querySelector(".quoll-lint-gutter")).not.toBeNull();
+    expect(view.state.facet(proseLintEnabled)).toBe(true);
+  });
+});
+
+describe("shell — image-write-result routing", () => {
+  // The anchors are seeded with addPendingAnchor rather than a synthesized
+  // paste: the paste path is already pinned by
+  // test/webview/image/cm-image-paste.test.ts, and driving it here would need a
+  // FileReader stub whose failure modes have nothing to do with the route under
+  // test.
+  const seedAnchor = (view: EditorView, requestId: string, anchor: number): void => {
+    view.dispatch({ effects: addPendingAnchor.of({ requestId, anchor }) });
+  };
+  const mountedView = (): EditorView => {
+    const mountEl = (container as HTMLElement).querySelector(".quoll-editor") as HTMLElement;
+    const view = EditorView.findFromDOM(mountEl);
+    if (!view) {
+      throw new Error("EditorView not found via findFromDOM");
+    }
+    return view;
+  };
+
+  it("routes ok:true to an insert at the matching requestId's anchor", async () => {
+    await mount();
+    deliver(buildDocument({ docVersion: 1, content: "alpha\n" }));
+    const view = mountedView();
+    // Two pending anchors so the requestId is load-bearing: passing the wrong id
+    // (or ignoring it) resolves the wrong anchor and the insert lands at 0.
+    seedAnchor(view, "req-a", 0);
+    seedAnchor(view, "req-b", 6);
+
+    deliver({
+      protocol: PROTOCOL_VERSION,
+      type: "image-write-result",
+      requestId: "req-b",
+      ok: true,
+      relativePath: "./assets/shot.png",
+    });
+
+    expect(view.state.doc.toString()).toBe("alpha\n![](./assets/shot.png)\n");
+  });
+
+  it("routes ok:false to a null path — nothing is inserted", async () => {
+    // The ternary `message.ok ? message.relativePath : null` is the whole arm.
+    // Inverted, ok:true would pass null (previous test goes red) and ok:false
+    // would pass `undefined` — which resolve() does NOT treat as a rejection
+    // (`relativePath === null`), so it would insert `![](undefined)` here.
+    await mount();
+    deliver(buildDocument({ docVersion: 1, content: "alpha\n" }));
+    const view = mountedView();
+    seedAnchor(view, "req-a", 6);
+
+    deliver({
+      protocol: PROTOCOL_VERSION,
+      type: "image-write-result",
+      requestId: "req-a",
+      ok: false,
+    });
+
+    expect(view.state.doc.toString()).toBe("alpha\n");
+  });
+});
+
+describe("shell — caret-apply routing", () => {
+  it("routes caret-apply to the selection offset for {line, character}", async () => {
+    // A pure side channel: the arm moves the caret and touches nothing else.
+    // The fixture's line index and character offset are DIFFERENT numbers on
+    // lines of unequal length, so transposing them in the shell's object literal
+    // (the one mistake the wire's two same-typed `number` fields allow) resolves
+    // to a different offset and this goes red.
+    await mount();
+    deliver(buildDocument({ docVersion: 1, content: "alpha\nbravo charlie\ndelta\n" }));
+    const mountEl = (container as HTMLElement).querySelector(".quoll-editor") as HTMLElement;
+    const view = EditorView.findFromDOM(mountEl);
+    if (!view) {
+      throw new Error("EditorView not found via findFromDOM");
+    }
+    const docBefore = view.state.doc.toString();
+    expect(view.state.selection.main.head).toBe(0); // seed caret — not already at the target
+
+    deliver({ protocol: PROTOCOL_VERSION, type: "caret-apply", line: 1, character: 3 });
+
+    // line 1 ("bravo charlie") starts at offset 6 → 6 + 3.
+    expect(view.state.selection.main.head).toBe(9);
+    expect(view.state.selection.main.empty).toBe(true);
+    // Selection-only: the handoff must never mutate the document.
+    expect(view.state.doc.toString()).toBe(docBefore);
   });
 });
 
