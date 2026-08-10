@@ -71,18 +71,21 @@ export interface DelimiterRow {
  * enforced at construction by {@link makeTable} — the sanctioned way to build
  * a `Table`, which throws on a mismatch. On parse input a mismatch is not an
  * error but a non-table: `parseTable` pre-checks and returns null per GFM/Lezer
- * before reaching the factory, so the throw backstops the structure column ops
- * (and future logic errors), not parse input.
+ * before reaching the factory, so the throw backstops future structural callers
+ * (the row/column ops) and logic errors, not parse input.
  *
  * Body rows MAY differ in cell count from `delimiter.cells.length`: the parser
  * does not pad/truncate and `makeTable` does not constrain them.
  *
  * Every field of the model — this interface, {@link Row}, {@link Cell},
  * {@link DelimiterRow}, {@link DelimiterCell}, and the arrays they hold — is
- * `readonly`, so a construction-time check stays true for the value's whole
- * lifetime instead of only its first instant. A parsed `Table` is a snapshot of
- * a source range: edits go through the document (widget dispatch → `edit-sync`
- * → re-parse), never by writing into a model a consumer happens to hold.
+ * `readonly`, so nothing can write through the model's own types: a
+ * construction-time check is not undone one statement later. That is a
+ * type-level guarantee, not a runtime one — it does not survive a cast, and it
+ * does not reach an array the caller still holds a mutable reference to (see
+ * {@link makeTable}). A parsed `Table` is a snapshot of a source range: edits go
+ * through the document (widget dispatch → `edit-sync` → re-parse), never by
+ * writing into a model a consumer happens to hold.
  */
 export interface Table {
   readonly header: Row;
@@ -95,21 +98,29 @@ export interface Table {
 /**
  * Construct a {@link Table}, enforcing the GFM rule that the header and
  * delimiter rows carry the SAME number of cells. TypeScript can express that
- * the counts never CHANGE — the model is `readonly` throughout, so writing
+ * neither count changes through the model — it is `readonly` throughout, so
  * `table.header.cells.push(…)` is a compile error — but not that the two counts
  * RELATE, so a hand-rolled object literal typed as `Table` can still be born
  * with `header.cells.length !== delimiter.cells.length`, yielding a table whose
  * `tableAlign[col]` is `undefined` and whose columns misalign at render.
- * Construction is therefore the one moment the invariant can break, and routing
+ * Construction is therefore where the invariant has to be checked, and routing
  * every `Table` construction through this factory makes that latent corruption a
- * loud build-time throw: the structure column ops rely on it directly, while
- * `parseTable` pre-screens mismatches as non-tables (returns null) before
- * constructing, so there the throw is a redundant backstop.
+ * loud throw. Today `parseTable` is the only production caller and it pre-screens
+ * mismatches as non-tables (returns null) before constructing, so the throw is a
+ * redundant backstop there; for a future construction site that builds a table
+ * structurally rather than by parsing — the row/column ops this model exists to
+ * carry — it is the primary gate.
  *
  * The arrays are stored uncopied, which the parameter types make safe to state:
- * `readonly` in, `readonly` out. Copying would not close the remaining hole
- * anyway — a caller holding the original mutable array could still mutate it —
- * and the sole construction site (`parseTable`) drops its locals on return.
+ * `readonly` in, `readonly` out. One hole is left open by that: a caller that
+ * keeps its own mutable reference to an array it passed in can still mutate what
+ * the model aliases. Copying the arrays here WOULD close it — the cell-count
+ * invariant reads only `length`, so even a shallow copy of each `cells` array
+ * would do — but the only production construction site drops its locals on
+ * return, so the hole has no way to be reached and the copy would cost an
+ * allocation per parse for nothing. Revisit if a construction site appears that
+ * retains its arrays. (The unit test also calls this factory directly, with
+ * throwaway fixtures it never mutates afterwards.)
  *
  * Body `rows` are intentionally unconstrained: GFM/Lezer never pads or truncates
  * ragged body rows, so neither does this factory (see {@link Table}).
