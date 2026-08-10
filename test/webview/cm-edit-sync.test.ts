@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, type MockInstance, vi } from "vitest";
 import { createEditSync } from "../../src/webview/cm/edit-sync.js";
 
 type Posted = { content: string; baseDocVersion: number };
@@ -1125,7 +1125,7 @@ describe("cm edit-sync — epoch-bounded buffers (S3b)", () => {
 // (a drop trace must never become a content leak).
 describe("cm edit-sync — readonly hard drops are traced", () => {
   const SECRET = "SECRET-BYTES"; // 12 chars — distinctive enough to grep the payload for
-  type WarnSpy = { mock: { calls: unknown[][] } };
+  type WarnSpy = MockInstance<typeof console.warn>;
   const warnArgs = (spy: WarnSpy) =>
     spy.mock.calls.filter((c) => String(c[0]).includes("under readonly"));
   const expectNoContentLeak = (spy: WarnSpy) => {
@@ -1142,7 +1142,7 @@ describe("cm edit-sync — readonly hard drops are traced", () => {
       expect(warnArgs(warn)).toEqual([
         [
           expect.stringContaining("under readonly"),
-          { site: "trySend", hadBuffer: false, droppedLength: SECRET.length },
+          { site: "trySend", liveLength: SECRET.length, bufferedLength: null },
         ],
       ]);
       expectNoContentLeak(warn);
@@ -1166,7 +1166,7 @@ describe("cm edit-sync — readonly hard drops are traced", () => {
       expect(warnArgs(warn)).toEqual([
         [
           expect.stringContaining("under readonly"),
-          { site: "cancelPendingFlush", hadBuffer: false, droppedLength: SECRET.length },
+          { site: "cancelPendingFlush", liveLength: SECRET.length, bufferedLength: null },
         ],
       ]);
       expectNoContentLeak(warn);
@@ -1197,7 +1197,7 @@ describe("cm edit-sync — readonly hard drops are traced", () => {
       expect(warnArgs(warn)).toEqual([
         [
           expect.stringContaining("under readonly"),
-          { site: "flush", hadBuffer: false, droppedLength: SECRET.length },
+          { site: "flush", liveLength: SECRET.length, bufferedLength: null },
         ],
       ]);
       expectNoContentLeak(warn);
@@ -1215,6 +1215,51 @@ describe("cm edit-sync — readonly hard drops are traced", () => {
       s.sync.flush(); // content === null → genuine no-op
       s.sync.cancelPendingFlush(); // no live timer → no capture, no drop
       expect(warnArgs(warn)).toEqual([]);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("stays silent when a normal writable edit is posted (not a drop)", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const s = setup();
+      s.sync.onHostSnapshot(1, true); // writable
+      s.type(SECRET);
+      expect(s.posted).toEqual([{ content: SECRET, baseDocVersion: 1 }]);
+      expect(warnArgs(warn)).toEqual([]);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("reports liveLength and bufferedLength as DISTINCT values when a buffer survives a readonly reseed", () => {
+    // Reachability (per the module's warnReadonlyDrop comment): a buffer
+    // stashed under single-flight survives a readonly Document because
+    // replayIfNeeded's `!canWrite` guard returns WITHOUT nulling it — so by
+    // the time a further readonly keystroke hits trySend's hard-drop branch,
+    // the held buffer and the live doc disagree. Picking either one via `??`
+    // would under-report the loss; this pins that both are reported, and
+    // that they are genuinely different numbers (not a coincidental match).
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const s = setup();
+      s.sync.onHostSnapshot(1, true); // seed, writable
+      s.type("aa"); // posts "aa" at v1, editInFlight = true
+      s.type("aaa"); // single-flight: stashed into buffered (len 3), not posted
+      expect(s.posted.length).toBe(1);
+      s.sync.onHostSnapshot(2, false); // readonly ack; canWrite flips false
+      s.sync.onReducerCommit(false); // editInFlight clears; replayIfNeeded holds
+      // the buffer under !canWrite WITHOUT nulling it (buffered is still "aaa")
+      s.type("aaaaa"); // trySend's readonly branch fires: doc is now "aaaaa" (len 5)
+      expect(s.posted.length).toBe(1); // no new post — still a hard drop
+      expect(warnArgs(warn)).toEqual([
+        [
+          expect.stringContaining("under readonly"),
+          { site: "trySend", liveLength: 5, bufferedLength: 3 },
+        ],
+      ]);
+      expectNoContentLeak(warn);
     } finally {
       warn.mockRestore();
     }
