@@ -552,10 +552,13 @@ describe("shell — editor-config routing", () => {
     // 1); lintGutter/spellcheck differ in both; proseLint/spellcheck only
     // differ in delivery 1 (both true in delivery 2). So swapping any one
     // pair changes at least one applied outcome in at least one delivery.
-    // Every field also transitions to a different value than delivery 1 (or
-    // stays but was already exercised going false→true→false on gutter and
-    // true→false→true on spellcheck across the whole test), so no same-value
-    // no-op guard on the setters can absorb a route being dropped.
+    // A wholly DROPPED setter is caught by delivery 1 alone, whichever of the
+    // three it is: every delivery-1 value differs from that setter's default
+    // (gutter false→true, prose false→true, spellcheck true→false), so a
+    // dropped call leaves the default in place and delivery 1 goes red. That
+    // is also why proseLint may stay true here — delivery 1 already pinned it —
+    // and why the same-value no-op guards on setLintGutter/setSpellcheck
+    // cannot absorb a drop: each delivery-1 value is a real change.
     deliver({
       protocol: PROTOCOL_VERSION,
       type: "editor-config",
