@@ -14,12 +14,14 @@
 // Additionally, when HIDDEN, emits a Decoration.mark "quoll-link-clickable"
 // over the link's inline content range (`[text]` interior — the substring
 // between `[` and `]`) IF a click on the destination would DO something.
-// Actionability is decided by cm/link-target.ts, the same classifier
-// cm/link-handlers.ts gates the click on, so the pointer cursor means "the
-// webview will act on this click". Before that gate existed, a fragment
-// (`[x](#sec)`) or a relative non-.md link (`[x](./photo.png)`) rendered
-// identically to a working link and then did nothing. In REVEALED state the
-// marker drops for every link (user is editing, not clicking).
+// Actionability is decided in two stages — cm/link-target.ts classifies the
+// destination string, cm/link-resolve.ts answers the part that depends on THIS
+// document (does a `#slug` name a real heading?) — and cm/link-handlers.ts
+// gates the click on that same pair, so the pointer cursor means "the webview
+// will act on this click". Before that gate existed, a relative non-.md link
+// (`[x](./photo.png)`) rendered identically to a working link and then did
+// nothing. In REVEALED state the marker drops for every link (user is editing,
+// not clicking).
 //
 // Read that promise at its true strength — it is NOT "this link opens". The
 // webview owns no path, so it cannot evaluate host-side containment: a
