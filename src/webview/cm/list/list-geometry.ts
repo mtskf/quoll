@@ -24,9 +24,14 @@
 // in `blockquotePrefixCols` without importing the separate `@codemirror/state`
 // `countColumn` utility directly.
 //
-// See .claude/plans/2026-06-21-unified-list-geometry-resolver.md for the
-// model derivation (CM's `paddingLeft + min(0, textIndent)` first-line
-// mapping) and the worked INDENT/PAD invariant table.
+// Geometry model: CodeMirror maps a line's first-line indent to
+// `paddingLeft + min(0, textIndent)`, so every column this module resolves is
+// expressed in that pair — `pad` is the continuation (hang) column fed to
+// `padding-inline-start`, and `indent` the magnitude of the NEGATIVE
+// `text-indent` that pulls the first line back onto its marker (see the style
+// list-hang-indent.ts builds). The resolvers above are the single source for
+// both; the columns they return are pinned by the list-hang / task-marker
+// tests rather than by a prose derivation.
 
 import type { syntaxTree } from "@codemirror/language";
 import { countColumn, type EditorState } from "@codemirror/state";

@@ -568,9 +568,11 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
         // marks on the row). Block widgets MUST come from a StateField.
         calloutMarkerConcealField,
         // Copy-code button: a selection-independent ViewPlugin emitting one
-        // inline point widget at each top-level fenced block's open line; the
-        // button copies the code body via navigator.clipboard. Display-only
-        // (byte-identical round-trip) and absent in read-only mode.
+        // inline point widget at each visible fenced block's open line — top-level
+        // AND blockquote-/list-nested, per the shared open-line enumerator this
+        // and the language picker both route through; the button copies the code
+        // body via navigator.clipboard. Display-only (byte-identical round-trip)
+        // and absent in read-only mode.
         fencedCodeCopyButton,
         // Language picker: a selection-independent ViewPlugin emitting one inline
         // point widget per fenced block's open line; its <select> rewrites the
@@ -584,8 +586,10 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
         // not a ViewPlugin. Display-only (byte-identical round-trip). Does NOT
         // contribute to quollBlockReplaceZones — the zone is non-atomic and the
         // caret reaches concealed lines via auto-expand (fold parity), not the
-        // generic block-zone arrow keymap. Top-level blocks only (same gate as the
-        // copy button above).
+        // generic block-zone arrow keymap. Top-level blocks only — a STRICTLY
+        // NARROWER gate than the copy button / language picker above: this field
+        // walks the tree itself and descends only through the Document root, so
+        // a blockquote- or list-nested fence is never collapsible.
         fencedCodeCollapseField,
         // Bounded Table-node skeleton — precedes tableBlockField so buildAll
         // reads it via state.field() instead of a per-keystroke full walk.

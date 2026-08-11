@@ -1,6 +1,6 @@
 // Host-side gate for webview "open-link" requests — phase-1 page-to-page
 // navigation. Pure-function design (deps injected) so it unit-tests without a
-// live VS Code host, mirroring src/extension/handle-open-external.ts.
+// live VS Code host, mirroring src/extension/links/handle-open-external.ts.
 //
 // The webview owns NO path: it posts only the decoded relative destination
 // string (post decodeMarkdownDestination). This handler re-derives everything

@@ -30,8 +30,12 @@
  *   - No imports beyond TypeScript itself. No `vscode`, no `react`, no DOM.
  *     Both sides of the bridge consume it; either-side-only dependencies break
  *     the other side's build.
- *   - Validators are hand-rolled. A 4 KB module beats a 40 KB dependency for
- *     four discriminated unions.
+ *   - Validators are hand-rolled, and stay so as the module grows. It is the
+ *     single wire contract for two discriminated unions — `HostToWebview` and
+ *     `WebviewToHost` — and most of its bytes are the per-variant JSDoc pinning
+ *     each field's provenance and bounds, not validator boilerplate a schema
+ *     library would absorb. A dependency here would also break the no-imports
+ *     rule above, since BOTH sides of the bridge consume this module.
  */
 
 export const PROTOCOL_VERSION = 1;
@@ -104,7 +108,7 @@ export const MAX_LINT_COORDINATE = 0x7fffffff;
 
 /** Hard cap on a pasted/dropped image's DECODED byte length — the reject
  *  threshold. 10 MiB bounds abuse while covering screenshots/photos. Authoritative
- *  enforcement is host-side after base64 decode (src/extension/image-ingest.ts). */
+ *  enforcement is host-side after base64 decode (src/extension/image/image-ingest.ts). */
 export const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
 
 /** Transfer headroom above the reject threshold. A *slightly* oversized image
@@ -216,7 +220,7 @@ export function isThemeKind(value: unknown): value is ThemeKind {
  *  Document carries no `reason` discriminator. The validator ignores
  *  unknown extra fields (forward-compat) and `buildDocumentMessage` is
  *  pinned by the key-set test in
- *  test/extension/document-message.test.ts to never emit `reason`.
+ *  test/extension/session/document-message.test.ts to never emit `reason`.
  *  Host and webview always ship together in one `.vsix`, so the wire
  *  never holds mismatched peers and `PROTOCOL_VERSION` does not need to
  *  bump for this shape.

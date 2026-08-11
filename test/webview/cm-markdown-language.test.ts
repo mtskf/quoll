@@ -4,7 +4,7 @@
 // src/webview/cm/markdown.ts) against the upstream markdown() wrapper it
 // replaces. The pre-existing suites do NOT cover the direct build:
 // cm-decoration-integration mounts markdown({ base }); cm-fold-delegation
-// likewise. These four contracts are what the refactor must preserve:
+// likewise. These three contracts are what the refactor must preserve:
 //   1. markdownLanguage.isActiveAt is true on the built language — proves the
 //      reused markdownLanguage.data facet (markdownKeymap's commands early-return
 //      without it, since isActiveAt compares the languageDataProp facet identity,

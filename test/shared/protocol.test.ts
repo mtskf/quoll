@@ -164,7 +164,7 @@ describe("isHostToWebview — document", () => {
     // The validator never branches on `reason`; an inbound document with a
     // legacy reason payload is accepted unchanged (and the webview never
     // reads it). Pinning the new host emitter side is done in
-    // test/extension/document-message.test.ts via Object.keys(...).sort().
+    // test/extension/session/document-message.test.ts via Object.keys(...).sort().
     for (const reason of ["init", "revive", "external", "accepted", "anything"]) {
       expect(isHostToWebview({ ...validDocument(), reason })).toBe(true);
     }

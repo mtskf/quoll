@@ -50,7 +50,10 @@ export type ApplyEditSeam = DocumentWriteAdapter;
 
 export interface EffectExecutorDeps {
   isDisposed: () => boolean;
-  /** drainSnapshot (pendingEdit) + sendEditRejected warn log (lastAppliedDocVersion). */
+  /** Read for the `sendEditRejected` delivery-refused warn log
+   *  (`lastAppliedDocVersion`) — the executor's only state read. The stash
+   *  drain reads `pendingEdit` inside the core's `applyEditSettled` arm, not
+   *  through here. */
   getState: () => HostSessionState;
   /** document.uri.toString() — for the sendEditRejected delivery-refused warn
    *  payload, kept byte-identical. */

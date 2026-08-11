@@ -2,8 +2,8 @@
 // pieces live in status-bar.ts (formatters + StatusBarController) and
 // caret-handoff.ts (clampCaret) and editor-switch-caret.ts (the module-level
 // switch-caret store); this module owns the VS Code wiring AROUND them — the
-// StatusBarController instance, the three per-panel mutable locals
-// (lastKnownCaret / lastKnownSelectedChars / wasActive), applyCaretToTextEditor,
+// StatusBarController instance, the per-panel mutable locals declared at the
+// top of createCaretHandoffWiring, applyCaretToTextEditor,
 // the onDidChangeTextEditorSelection + onDidChangeActiveTextEditor caret
 // trackers, the active-edge half of onDidChangeViewState (status-bar show/hide +
 // caret-apply), and the switchCaret one-shot restore. It imports vscode
@@ -15,9 +15,11 @@
 // onDidChangeViewState's `viewStateVisible` resync dispatch — is INJECTED
 // (dispatchViewStateVisible) so the factory owns the whole handler while the
 // reducer dispatch stays the panel's; the webview `caret-apply` post is likewise
-// injected (postCaretApply). The three mutable locals are function-scoped (one
-// per createCaretHandoffWiring call = one per panel), NEVER module-level — a
-// top-level `let` would share caret state across every open document.
+// injected (postCaretApply). EVERY mutable local in this factory is
+// function-scoped (one per createCaretHandoffWiring call = one per panel),
+// NEVER module-level — a top-level `let` would share caret/selection/count
+// state across every open document. The invariant is over the whole set: a
+// local added to that block inherits it without amending this comment.
 //
 // The vscode-free pieces stay pinned by status-bar.test.ts / caret-handoff.test.ts
 // / editor-switch-caret.test.ts; the end-to-end behaviour by the

@@ -112,11 +112,11 @@ export interface PanelControls {
    *  that the recorder fired (received) and that the validator dropped
    *  it (no Document reply). */
   rawSimulate(raw: unknown): void;
-  /** The three recording status-bar items this panel's controller drives,
-   *  in native left-to-right order (caret, eol, language). Populated only
-   *  under the harness — the panel builds them via `newStatusBarItem` and
-   *  hands the trio through here so a test observes show/hide/dispose PER
-   *  panel (window.createStatusBarItem is otherwise unobservable). */
+  /** The four recording status-bar items this panel's controller drives, in
+   *  native left-to-right order (caret, eol, language, count). Populated only
+   *  under the harness — the panel builds them via `newStatusBarItem` and hands
+   *  the set through here so a test observes show/hide/dispose PER panel
+   *  (window.createStatusBarItem is otherwise unobservable). */
   readonly statusBarItems: readonly FakeStatusBarItem[];
 }
 
@@ -408,9 +408,9 @@ export class TestHarness {
 
   /** Build a recording status-bar item for a panel opened under the harness.
    *  The panel routes `window.createStatusBarItem` through this when a harness
-   *  is present (production keeps the real call) and exposes the returned trio
+   *  is present (production keeps the real call) and exposes the returned items
    *  on its `PanelControls.statusBarItems`. Stateless per call — attribution is
-   *  the panel's job (it groups the three items it built), so this holds no
+   *  the panel's job (it groups the four items it built), so this holds no
    *  per-item registry to clear in `reset()`. */
   newStatusBarItem(alignment: number | undefined, priority: number | undefined): FakeStatusBarItem {
     return new FakeStatusBarItem(alignment, priority);
