@@ -260,9 +260,9 @@ function computeMerged(view: EditorView, providers: readonly DecorationProvider[
       // above and plugin-decoration-legality.ts's header for the exact route).
       // Checked per provider and BEFORE the join, so the failure is attributed
       // to the provider that caused it and the others keep their decorations.
-      // `view.state.doc` is what the providers built against: `ctx.state` was
-      // assigned from `view.state` above and nothing awaits in between.
-      const illegal = findPluginIllegalDecoration(built, view.state.doc);
+      // Judged against `ctx.state.doc` — the very document this provider was
+      // handed, so the line bounds the check reads are the ones it built to.
+      const illegal = findPluginIllegalDecoration(built, ctx.state.doc);
       if (illegal !== null) {
         throw new TypeError(
           `DecorationProvider.build() returned ${illegal}, which CodeMirror refuses from a ViewPlugin. ` +

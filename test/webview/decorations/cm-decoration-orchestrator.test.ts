@@ -1,7 +1,13 @@
 // @vitest-environment happy-dom
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
 import { forceParsing, syntaxTree } from "@codemirror/language";
-import { Compartment, EditorSelection, EditorState, type Extension } from "@codemirror/state";
+import {
+  Compartment,
+  EditorSelection,
+  EditorState,
+  type Extension,
+  type Range,
+} from "@codemirror/state";
 import {
   Decoration,
   type DecorationSet,
@@ -529,24 +535,18 @@ describe("decoration orchestrator — provider build() throw containment", () =>
     vi.restoreAllMocks();
   });
 
-  /** Count only OUR log lines. CodeMirror's own logException falls back through
+  /** Only OUR log lines. CodeMirror's own logException falls back through
    *  exceptionSink → window.onerror → console.error, so whether it reaches
    *  console.error at all is environment-dependent under happy-dom — asserting
    *  on the TOTAL console.error count would be flaky. */
-  function quollErrorCount(): number {
+  function quollErrorCalls(): unknown[][] {
     return errorSpy.mock.calls.filter(
       (call) => typeof call[0] === "string" && call[0].startsWith("[quoll]")
-    ).length;
+    );
   }
 
-  /** The first `[quoll]` log line's arguments. `logProviderFailure` logs a
-   *  GENERIC first argument and passes the error object third, so the count
-   *  above cannot tell "contained because the set was illegal" from "contained
-   *  because the detector itself threw" — this is what discriminates. */
-  function quollErrorArgs(): unknown[] {
-    return errorSpy.mock.calls.filter(
-      (call) => typeof call[0] === "string" && call[0].startsWith("[quoll]")
-    )[0] as unknown[];
+  function quollErrorCount(): number {
+    return quollErrorCalls().length;
   }
 
   it("keeps every other provider's decorations when one provider's build() throws", () => {
@@ -764,6 +764,11 @@ describe("decoration orchestrator — provider build() throw containment", () =>
     }
   }
 
+  /** A block widget at `pos` — the shape CodeMirror refuses from a plugin. */
+  function blockWidget(pos: number): Range<Decoration> {
+    return Decoration.widget({ widget: new BlockStub(), block: true }).range(pos);
+  }
+
   it("contains a provider emitting a BLOCK decoration (CodeMirror forbids it from a plugin)", () => {
     // A well-formed RangeSet passes the instanceof check, so only a legality
     // check catches this. CodeMirror rejects it later, inside TileUpdate.emit's
@@ -772,8 +777,7 @@ describe("decoration orchestrator — provider build() throw containment", () =>
     // deactivate(): it escapes view.dispatch() into our own caller and aborts
     // the update mid-flight.
     const bad: DecorationProvider = {
-      build: () =>
-        Decoration.set([Decoration.widget({ widget: new BlockStub(), block: true }).range(0)]),
+      build: () => Decoration.set([blockWidget(0)]),
     };
     const good = markProvider("survivor");
     const view = mount([createSyntaxReveal([bad, good])], "hello world");
@@ -786,11 +790,14 @@ describe("decoration orchestrator — provider build() throw containment", () =>
       expect(decorationClasses(view)).toContain("survivor");
       expect(quollErrorCount()).toBe(1);
       // …and that the ONE log is this failure, not the detector falling over.
-      // The range and the "ship it as a StateField" instruction are the whole
+      // `logProviderFailure` logs a GENERIC first argument and passes the error
+      // object third, so the count alone cannot tell "contained because the set
+      // was illegal" from "contained because the detector itself threw". The
+      // range and the "ship it as a StateField" instruction are the whole
       // diagnostic value of the thrown message, and nothing else pins them.
-      const logged = quollErrorArgs()[2];
-      expect(String((logged as Error).message)).toContain("a block decoration at 0..0");
-      expect(String((logged as Error).message)).toContain("quollBlockReplaceZones");
+      const logged = quollErrorCalls()[0][2] as Error;
+      expect(logged.message).toContain("a block decoration at 0..0");
+      expect(logged.message).toContain("quollBlockReplaceZones");
     } finally {
       view.destroy();
     }
@@ -824,10 +831,7 @@ describe("decoration orchestrator — provider build() throw containment", () =>
     const bad: DecorationProvider = {
       build: () =>
         Decoration.set(
-          [
-            Decoration.mark({ class: "overlapped" }).range(0, 10),
-            Decoration.widget({ widget: new BlockStub(), block: true }).range(5),
-          ],
+          [Decoration.mark({ class: "overlapped" }).range(0, 10), blockWidget(5)],
           true
         ),
     };
@@ -866,12 +870,8 @@ describe("decoration orchestrator — provider build() throw containment", () =>
       const view = mount([], doc, [plugin(set)]);
       view.destroy();
     }
-    expect(() =>
-      mount([], doc, [
-        plugin(
-          Decoration.set([Decoration.widget({ widget: new BlockStub(), block: true }).range(0)])
-        ),
-      ])
-    ).toThrow(/may not be specified via plugins/);
+    expect(() => mount([], doc, [plugin(Decoration.set([blockWidget(0)]))])).toThrow(
+      /may not be specified via plugins/
+    );
   });
 });

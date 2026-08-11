@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import { Text } from "@codemirror/state";
+import { type Range, Text } from "@codemirror/state";
 import { Decoration, WidgetType } from "@codemirror/view";
 import { describe, expect, it } from "vitest";
 
@@ -12,6 +12,12 @@ class Stub extends WidgetType {
   eq(): boolean {
     return true;
   }
+}
+
+/** A block widget at `pos` — the zero-length shape a ViewPlugin may never
+ *  emit. `block: true` is the load-bearing bit, so it is spelled once. */
+function blockWidget(pos: number): Range<Decoration> {
+  return Decoration.widget({ widget: new Stub(), block: true }).range(pos);
 }
 
 // Lines: 0..5, 6..11, 12..17. Length 17.
@@ -62,7 +68,7 @@ describe("findPluginIllegalDecoration — legal sets", () => {
     // This is the ONLY test that holds `cursor.from <= docEnd` in place: without
     // that clause the walk returns "a block decoration at 25..25" and drops a
     // provider CodeMirror accepted.
-    const set = Decoration.set([Decoration.widget({ widget: new Stub(), block: true }).range(25)]);
+    const set = Decoration.set([blockWidget(25)]);
     expect(findPluginIllegalDecoration(set, doc)).toBeNull();
   });
 
@@ -78,7 +84,7 @@ describe("findPluginIllegalDecoration — legal sets", () => {
 
 describe("findPluginIllegalDecoration — illegal sets", () => {
   it("rejects a BLOCK widget (a ZERO-LENGTH point)", () => {
-    const set = Decoration.set([Decoration.widget({ widget: new Stub(), block: true }).range(6)]);
+    const set = Decoration.set([blockWidget(6)]);
     expect(findPluginIllegalDecoration(set, doc)).toBe("a block decoration at 6..6");
   });
 
@@ -104,7 +110,7 @@ describe("findPluginIllegalDecoration — illegal sets", () => {
   });
 
   it("rejects a block widget at the very end of the document", () => {
-    const set = Decoration.set([Decoration.widget({ widget: new Stub(), block: true }).range(17)]);
+    const set = Decoration.set([blockWidget(17)]);
     expect(findPluginIllegalDecoration(set, doc)).toBe("a block decoration at 17..17");
   });
 
@@ -118,9 +124,7 @@ describe("findPluginIllegalDecoration — illegal sets", () => {
   it("rejects a negative-start replace that crosses a line break once clamped", () => {
     // spans visits this as 0..8, crossing the newline at 5 — CM throws.
     const set = Decoration.set([Decoration.replace({}).range(-1, 8)]);
-    expect(findPluginIllegalDecoration(set, doc)).toBe(
-      "a decoration at a negative position -1..8"
-    );
+    expect(findPluginIllegalDecoration(set, doc)).toBe("a decoration at a negative position -1..8");
   });
 
   it("rejects a negative-start BLOCK replace", () => {
@@ -137,7 +141,6 @@ describe("findPluginIllegalDecoration — illegal sets", () => {
     const set = Decoration.set([Decoration.replace({}).range(-1, 3)]);
     expect(findPluginIllegalDecoration(set, doc)).toBe("a decoration at a negative position -1..3");
   });
-
 });
 
 describe("findPluginIllegalDecoration — ranges the cursor never yields", () => {
@@ -163,10 +166,7 @@ describe("findPluginIllegalDecoration — LAYERED sets (the regression that matt
 
   it("rejects a block widget that spilled into a second layer", () => {
     const set = Decoration.set(
-      [
-        Decoration.mark({ class: "m" }).range(0, 10),
-        Decoration.widget({ widget: new Stub(), block: true }).range(5),
-      ],
+      [Decoration.mark({ class: "m" }).range(0, 10), blockWidget(5)],
       true
     );
     expect(findPluginIllegalDecoration(set, doc)).toBe("a block decoration at 5..5");
@@ -192,7 +192,7 @@ describe("findPluginIllegalDecoration — ordering", () => {
         Decoration.replace({}).range(0, 2),
         Decoration.replace({}).range(6, 8),
         Decoration.replace({}).range(12, 14),
-        Decoration.widget({ widget: new Stub(), block: true }).range(15),
+        blockWidget(15),
       ],
       true
     );
