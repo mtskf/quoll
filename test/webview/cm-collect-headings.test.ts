@@ -150,6 +150,17 @@ describe("headingSlugSource", () => {
     expect(slugOf('# A [link](b "Title")')).toBe("a-link");
   });
 
+  it("drops a processing instruction alongside the other raw-HTML forms", () => {
+    expect(slugOf("# A <?php x ?> B")).toBe("a-b");
+  });
+
+  it("does NOT decode entities — a known, documented parity gap", () => {
+    // GitHub resolves `&amp;` to `&` and then drops it as punctuation. Dropping
+    // the Entity node instead would swallow `&eacute;`, which GitHub keeps.
+    // Pinned so the gap is a decision on record rather than a surprise.
+    expect(slugOf("# A &amp; B")).toBe("a-amp-b");
+  });
+
   it("drops an HTML comment, matching GitHub rather than Quoll's rendering", () => {
     // The one place the exclusion set follows GitHub over "what Quoll hides":
     // nothing conceals a comment in the editor, but GitHub's anchor omits it.

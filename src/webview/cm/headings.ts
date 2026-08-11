@@ -76,11 +76,18 @@ export function headingText(raw: string): string {
  *  `# A <em>x</em> B` is `a-x-b` on GitHub and an anchor a reader copies from
  *  GitHub has to resolve here.
  *
+ *  Parity is close, not exact: HTML ENTITIES are not decoded, so `# A &amp; B`
+ *  slugs `a-amp-b` where GitHub resolves the entity first and drops the `&` as
+ *  punctuation. Dropping `Entity` wholesale would be no better — it would also
+ *  swallow `&eacute;`, which GitHub keeps as a letter — so the honest fix is
+ *  decoding, and that is not worth carrying for a shape this rare.
+ *
  *  Membership measured against the real Lezer GFM tree: `HeaderMark` covers the
  *  opener AND the closing `#` run (which is why headingSlugSource needs no ATX
  *  regex), `LinkMark` covers `[`, `]`, `(`, `)` and an image's `![`, `LinkTitle`
- *  is the `"tooltip"` tail of `[x](u "tooltip")`, and `Comment` is an HTML
- *  comment. Content-bearing wrappers (`Link`, `Image`, `StrongEmphasis`,
+ *  is the `"tooltip"` tail of `[x](u "tooltip")`, and `Comment` /
+ *  `ProcessingInstruction` are the raw-HTML forms (`<!-- … -->`, `<? … ?>`)
+ *  GitHub omits from an anchor. Content-bearing wrappers (`Link`, `Image`, `StrongEmphasis`,
  *  `InlineCode`, `Autolink`, …) are absent on purpose: excluding a wrapper would
  *  delete the text it wraps.
  *
@@ -102,6 +109,7 @@ const SLUG_EXCLUDED_NODES = new Set([
   "StrikethroughMark",
   "HTMLTag",
   "Comment",
+  "ProcessingInstruction",
 ]);
 
 /** The two node names under which a `URL` is a link/image DESTINATION. Anywhere
