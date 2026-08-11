@@ -24,8 +24,10 @@ const MAX_TOTAL_IMAGE_BYTES_PER_EVENT = 4 * MAX_IMAGE_BYTES; // 40 MiB
 
 type PendingAnchor = { requestId: string; anchor: number };
 
-// Exported for unit tests (test/webview/cm-image-paste.test.ts) to seed/inspect
-// pending anchors without driving real DOM paste/drop events.
+// `addPendingAnchor` is exported so unit tests can seed pending anchors without driving
+// real DOM paste/drop events — test/webview/image/cm-image-paste.test.ts and
+// test/webview/shell.test.ts both do. `removePendingAnchor` is exported as the paired half
+// of the same effect API; nothing outside this module dispatches it today.
 export const addPendingAnchor = StateEffect.define<PendingAnchor>();
 export const removePendingAnchor = StateEffect.define<string>(); // requestId
 
@@ -189,10 +191,16 @@ export function createImagePasteDrop(opts: {
     reader.readAsDataURL(file);
   };
 
-  // Caller contract: invoked only with files.length > 0 AND canWrite() === true,
-  // after the caller has already preventDefault'd the event. Submits each
-  // in-cap image; returns true so the event stays handled even when every file
-  // is gross-oversized (stops the browser navigating to a dropped file).
+  // Caller contract: invoked only with files.length > 0 AND canWrite() === true, after the
+  // caller has already preventDefault'd the event. Submits each in-cap image.
+  //
+  // The unconditional `true` states intent; it is not the mechanism. What actually stops
+  // the browser navigating to a dropped file is the caller's preventDefault. Under CM 6.43
+  // the return value is unobservable from here: `InputState.runHandlers` reacts to a truthy
+  // handler by calling `event.preventDefault()` (already called) and breaking the handler
+  // loop — which its own `if (event.defaultPrevented) break` would do on the next iteration
+  // regardless. Kept as belt-and-braces, and because it is the honest answer to "did this
+  // handler own the event?" on the branch where every file was refused.
   const handle = (view: EditorView, files: File[], anchor: number): boolean => {
     // Warned OUTSIDE the loop because this refusal is a property of the EVENT, not
     // of any one file: the overflow is discarded whole, so the loop never meets the
