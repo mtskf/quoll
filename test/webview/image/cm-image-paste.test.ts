@@ -230,6 +230,36 @@ describe("resolve", () => {
     view.destroy();
   });
 
+  it("warns when a wholesale reseed cleared the anchor before the host replied", () => {
+    // The commonest way this fires, and the expensive one: the host reseeds the
+    // document mid round-trip, `pendingImageAnchors` drops every anchor (it cannot
+    // map them through a wholesale replace), and the reply then arrives with the
+    // image ALREADY WRITTEN into the workspace. Nothing is inserted — correct, vs.
+    // guessing a position — but before this warn the file was left in the workspace
+    // with no link and no line anywhere naming it.
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const { view, paste } = mount("ab");
+    view.dispatch({ effects: addPendingAnchor.of({ requestId: "1", anchor: 1 }) });
+    // A real wholesale reseed: annotated AND doc-changing, which is the exact pair
+    // the field's update() requires before it clears (a no-op reseed keeps anchors).
+    view.dispatch({
+      changes: { from: 0, to: view.state.doc.length, insert: "fresh" },
+      annotations: hostDocumentReseed.of(true),
+    });
+    expect(view.state.field(pendingImageAnchors)).toEqual([]);
+
+    paste.resolve(view, "1", "./assets/x.png");
+
+    expect(view.state.doc.toString()).toBe("fresh"); // nothing inserted
+    expect(warn.mock.calls).toEqual([
+      [
+        "[quoll] image-write result had no pending anchor; no link inserted",
+        { requestId: "1", relativePath: "./assets/x.png" },
+      ],
+    ]);
+    view.destroy();
+  });
+
   it("ignores an unknown requestId while another anchor is still pending", () => {
     // The anchor seeded here is what makes this a test of the ID MATCH rather than
     // of the empty-queue case: on an empty field `find(...)` and `[0]` are both
@@ -238,6 +268,7 @@ describe("resolve", () => {
     // a previous webview session must be a no-op, not a resolve of whatever anchor
     // happens to be first in the queue, which would write one image's path onto
     // another image's position.
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const { view, paste } = mount("ab");
     view.dispatch({ effects: addPendingAnchor.of({ requestId: "1", anchor: 1 }) });
     paste.resolve(view, "nope", "./assets/x.png");
@@ -245,6 +276,15 @@ describe("resolve", () => {
     // the real anchor must still be waiting for its own reply.
     expect(view.state.doc.toString()).toBe("ab");
     expect(view.state.field(pendingImageAnchors)).toEqual([{ requestId: "1", anchor: 1 }]);
+    // A stale reply from a previous webview session lands here too, so the same
+    // warn covers it: the message names the OUTCOME (no anchor, no link) rather
+    // than guessing which of the two causes produced it.
+    expect(warn.mock.calls).toEqual([
+      [
+        "[quoll] image-write result had no pending anchor; no link inserted",
+        { requestId: "nope", relativePath: "./assets/x.png" },
+      ],
+    ]);
   });
 
   it("logs and clears the anchor when the insert throws on a stale position", () => {

@@ -40,12 +40,15 @@ export const pendingImageAnchors = StateField.define<readonly PendingAnchor[]>({
     // A host reseed that ACTUALLY replaces the doc (wholesale 0..len) collapses
     // mapped anchors to the replace boundary (≈EOF). Drop all pending anchors —
     // the file is still written but the link is not inserted (orphan, idempotent
-    // on re-paste), which is correct vs. inserting at a wrong spot. BUT a
-    // same-content reseed (applyDocument with needsReseed=false: a version/
-    // canWrite-only ack) carries the annotation WITHOUT a doc change — positions
-    // are unchanged, so anchors must be KEPT (else a paste + keep-typing whose
-    // edit acks mid-round-trip would silently lose its image link). Gate the
-    // clear on tr.docChanged.
+    // on re-paste), which is correct vs. inserting at a wrong spot. That orphan is
+    // NOT silent: the reply still arrives, finds no anchor, and resolve() warns
+    // with the path — which is why this clear does no logging of its own (it runs
+    // inside a StateField update, has no relativePath to report, and would fire per
+    // anchor rather than per outcome). BUT a same-content reseed (applyDocument
+    // with needsReseed=false: a version/canWrite-only ack) carries the annotation
+    // WITHOUT a doc change — positions are unchanged, so anchors must be KEPT (else
+    // a paste + keep-typing whose edit acks mid-round-trip would silently lose its
+    // image link). Gate the clear on tr.docChanged.
     // Note: a reseed transaction never also carries addPendingAnchor — paste and
     // reseed always dispatch separately — so early-returning here (skipping the
     // effects loop below) cannot drop a freshly-added anchor.
@@ -301,7 +304,22 @@ export function createImagePasteDrop(opts: {
   const resolve = (view: EditorView, requestId: string, relativePath: string | null): void => {
     const pending = view.state.field(pendingImageAnchors).find((p) => p.requestId === requestId);
     if (!pending) {
-      return; // unknown / duplicate / already-resolved / cleared by a reseed
+      // unknown / duplicate / already-resolved / cleared by a reseed. The last of
+      // those is the common one and the one with a cost: a wholesale reseed drops
+      // every anchor (it cannot map them through a full-document replace), and by
+      // the time the reply lands the host has ALREADY written the image. Not
+      // inserting is right — the position could not be verified — but the file then
+      // sits in the workspace with nothing pointing at it, so the outcome is named
+      // here. `relativePath` is what makes the line actionable: it IS the orphan (or
+      // `null`, which tells the reader nothing was written and the host toasted).
+      // The message states the outcome rather than the cause: a late reply from a
+      // previous webview session (the sessionNonce case) reaches this same branch
+      // and is indistinguishable from here.
+      console.warn("[quoll] image-write result had no pending anchor; no link inserted", {
+        requestId,
+        relativePath,
+      });
+      return;
     }
     if (relativePath === null) {
       // Host refused BEFORE writing anything, and it has already told the user:
