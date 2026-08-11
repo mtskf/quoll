@@ -1,7 +1,8 @@
 // @vitest-environment happy-dom
+import { defaultKeymap } from "@codemirror/commands";
 import { markdown } from "@codemirror/lang-markdown";
-import { EditorSelection, EditorState } from "@codemirror/state";
-import { EditorView } from "@codemirror/view";
+import { EditorSelection, EditorState, Prec } from "@codemirror/state";
+import { EditorView, keymap, runScopeHandlers } from "@codemirror/view";
 import { describe, expect, it, vi } from "vitest";
 import {
   CODE_REF_OPEN_KEY,
@@ -9,6 +10,7 @@ import {
   handleCodeRefMouseDown,
   openCodeRefAtCaretCommand,
   quollCodeRefClickHandler,
+  quollCodeRefKeymap,
   tryOpenCodeRefAt,
 } from "../../src/webview/cm/code-ref/code-ref-handlers.js";
 import { codeRefReveal } from "../../src/webview/cm/code-ref/code-ref-reveal.js";
@@ -273,9 +275,103 @@ describe("handleCodeRefClick", () => {
 describe("CODE_REF_OPEN_KEY", () => {
   it("is the Mod-Enter chord", () => {
     // Pin the chord string (the single source of truth for the keymap binding).
-    // The real platform-resolved binding is exercised in manual smoke; happy-dom's
-    // CM platform detection makes a synthetic-key runScopeHandlers test flaky.
+    // The chord's platform-resolved dispatch — and the precedence contest it wins
+    // against defaultKeymap — is exercised by the "quollCodeRefKeymap precedence"
+    // suite below.
     expect(CODE_REF_OPEN_KEY).toBe("Mod-Enter");
+  });
+});
+
+describe("quollCodeRefKeymap precedence", () => {
+  // Executes the Prec.high claim in code-ref-handlers.ts. The rest of this file
+  // calls openCodeRefAtCaretCommand(host)(view) directly, which proves the command
+  // works but never proves it BEATS anyone — drop Prec.high and every other test
+  // here stays green.
+  //
+  // The competitor is the real `defaultKeymap`, which binds Mod-Enter to
+  // `insertBlankLine` today, so this pins the actual production contest rather than
+  // a stand-in (and turns red if upstream ever drops that binding, which is worth
+  // knowing). It is registered FIRST, mirroring editor.ts (defaultKeymap at the
+  // keymap.of([...defaultKeymap, ...historyKeymap]) mount, quollCodeRefKeymap far
+  // below it): equal-precedence keymaps resolve in registration order, so without
+  // Prec.high the default would win.
+  function precedenceView(doc: string, caret: number, host: unknown): EditorView {
+    const parent = document.createElement("div");
+    document.body.appendChild(parent);
+    return new EditorView({
+      state: EditorState.create({
+        doc,
+        selection: EditorSelection.cursor(caret),
+        extensions: [
+          Prec.default(keymap.of(defaultKeymap)),
+          markdown(),
+          quollCodeRefKeymap(host as never),
+        ],
+      }),
+      parent,
+    });
+  }
+
+  /** Press the chord under BOTH platform normalisations of `Mod-` (Meta on mac,
+   *  Ctrl elsewhere) and return how many presses were claimed. CM resolves `Mod-`
+   *  once, from a platform probe that happy-dom answers non-deterministically, so a
+   *  single-variant press is flaky (memory
+   *  `[[quoll-cm-keymap-test-runscopehandlers-platform-flaky]]`). Exactly one variant
+   *  matches on any platform — the count assertion in each case pins that, so the
+   *  pair can never silently degrade into "neither fired, nothing was tested". The
+   *  non-matching variant resolves to NOTHING rather than falling back to
+   *  defaultKeymap's plain `Enter`: CM's base-name fallback is gated on `isChar`,
+   *  and "Enter" is not a single code point (@codemirror/view runHandlers).
+   *  Sibling copy: `pressBothModVariants` in test/webview/lint/lint-apply-fix.test.ts
+   *  — keep the two in step until one is extracted into a shared helper. */
+  function pressBothModVariants(view: EditorView): number {
+    return [{ ctrlKey: true }, { metaKey: true }]
+      .map((mods) =>
+        runScopeHandlers(
+          view,
+          new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true, ...mods }),
+          "editor"
+        )
+      )
+      .filter(Boolean).length;
+  }
+
+  it("opens the reference before defaultKeymap's Mod-Enter can insert a blank line", () => {
+    const doc = "see `src/foo.ts:42` end";
+    const host = { postMessage: vi.fn() };
+    const view = precedenceView(doc, doc.indexOf("foo"), host);
+    try {
+      expect(pressBothModVariants(view)).toBe(1);
+      expect(host.postMessage).toHaveBeenCalledTimes(1);
+      expect(host.postMessage).toHaveBeenCalledWith(
+        expect.objectContaining({ type: "open-code-reference", path: "src/foo.ts", line: 42 })
+      );
+      // Byte-identical: insertBlankLine never ran. Without Prec.high this is where
+      // the ablation lands — the doc gains a line and nothing is posted.
+      expect(view.state.sliceDoc()).toBe(doc);
+    } finally {
+      view.destroy();
+    }
+  });
+
+  it("falls through to insertBlankLine when the caret is not in a reference", () => {
+    // The other half of the contract: winning the race is not the same as owning the
+    // chord. `src/foo.ts` here is bare prose, not inline code, so the command returns
+    // false and Mod-Enter must reach the default.
+    const doc = "plain src/foo.ts text";
+    const host = { postMessage: vi.fn() };
+    const view = precedenceView(doc, 2, host);
+    try {
+      expect(pressBothModVariants(view)).toBe(1);
+      expect(host.postMessage).not.toHaveBeenCalled();
+      // Assert the MUTATION, not merely "nothing was posted": that is what separates
+      // "fell through to the default" from "no binding ran at all". Line count rather
+      // than byte equality — insertBlankLine is newlineAndIndent(true), which inserts
+      // `["", indentString(...)]`, so the new line may carry indentation.
+      expect(view.state.doc.lines).toBe(2);
+    } finally {
+      view.destroy();
+    }
   });
 });
 

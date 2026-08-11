@@ -289,7 +289,10 @@ describe("quollLintFixKeymap precedence", () => {
    *  single-variant press is flaky (memory
    *  `[[quoll-cm-keymap-test-runscopehandlers-platform-flaky]]`). Exactly one variant
    *  matches on any platform — the count assertion below pins that, so the pair can
-   *  never silently degrade into "neither fired, nothing was tested". */
+   *  never silently degrade into "neither fired, nothing was tested".
+   *  Sibling copy: `pressBothModVariants` in test/webview/cm-code-ref-handlers.test.ts
+   *  (same helper, `Mod-Enter`) — keep the two in step until one is extracted into a
+   *  shared helper. */
   function pressBothModVariants(view: EditorView): number {
     return [{ ctrlKey: true }, { metaKey: true }]
       .map((mods) =>
