@@ -17,17 +17,19 @@
 // EditorState, no Tree, no callbacks in this file.
 //
 // TOTALITY IS A HARD CONTRACT — this module must never throw. It runs inside
-// DecorationProvider.build(), and the orchestrator drives EVERY inline
-// decoration provider from a SINGLE shared ViewPlugin. CodeMirror's
-// PluginInstance.update catches a plugin throw and then deactivates that
-// plugin PERMANENTLY, so a throw here does not just drop the link marker: it
-// takes down EVERY provider in `decorations/index.ts`'s syntaxRevealProviders
-// — headings, blockquotes, emphasis, links, task checkboxes, bullet markers,
-// fenced code, thematic breaks, setext, code refs — until the user reloads the
-// window, with only a console.error to show for it. Block widgets (tables,
-// images, frontmatter) are StateFields and survive, so the blast radius is
-// "the whole inline reveal layer" rather than literally every decoration —
-// which is a distinction about scope, not about severity.
+// DecorationProvider.build(), which the orchestrator drives for EVERY inline
+// decoration provider from a SINGLE shared ViewPlugin.
+//
+// The orchestrator now CONTAINS a provider throw (decorations/orchestrator.ts,
+// `computeMerged`): a failing provider degrades to contributing nothing for
+// that build and the others stay live, instead of CodeMirror deactivating the
+// shared plugin permanently and reverting the whole inline reveal layer to raw
+// Markdown until the user reloads the window. That containment does NOT relax
+// this contract — it makes a violation QUIETER (one deduped console.error and
+// a missing link marker, rather than an obviously dead editor), which raises
+// the value of the direct unit pins below rather than lowering it. They call
+// this module straight, bypassing the guard, so a totality regression stays a
+// RED TEST.
 // test/webview/cm-link-target.test.ts pins this against a hostile matrix.
 // Keep it to string/regex/Set work: no `new URL()`, no JSON.parse, no
 // unguarded String.fromCodePoint. (url-decode.ts's `decodableCodePoint` guard

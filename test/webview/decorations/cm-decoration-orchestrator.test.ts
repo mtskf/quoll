@@ -3,7 +3,7 @@ import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
 import { forceParsing, syntaxTree } from "@codemirror/language";
 import { Compartment, EditorSelection, EditorState, type Extension } from "@codemirror/state";
 import { Decoration, type DecorationSet, EditorView } from "@codemirror/view";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   createSyntaxReveal,
@@ -512,6 +512,16 @@ describe("decoration orchestrator — provider build() throw containment", () =>
   // fresh provider object literal. Sharing a fixture would make the log-count
   // assertions order-dependent.
 
+  // Backstop for the console.error spies: `mount()` runs OUTSIDE each test's
+  // try/finally, so on exactly the regression class these tests exist to catch
+  // — a provider poisoning the accumulator until EditorView's constructor
+  // throws — the inline `spy.mockRestore()` never runs and the leaked spy
+  // corrupts the NEXT test's log count. That turns one clean localised failure
+  // into a confusing cascade on an unrelated assertion.
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
   it("keeps every other provider's decorations when one provider's build() throws", () => {
     // A throw from ANY provider propagates out of the single shared
     // orchestrator ViewPlugin, and CodeMirror's PluginInstance.update responds
@@ -655,6 +665,63 @@ describe("decoration orchestrator — provider build() throw containment", () =>
       }
       expect(builds).toBe(6);
       expect(quollErrorCount(spy)).toBe(5);
+    } finally {
+      view.destroy();
+      spy.mockRestore();
+    }
+  });
+
+  it("contains a hostile error value that makes the LOGGING path itself throw", () => {
+    // The reporting path runs inside the catch, so if IT throws, the exception
+    // escapes computeMerged and lands on the permanent deactivate() — the guard
+    // becoming the very crash it exists to prevent. `Object.create(null)` has no
+    // prototype and therefore no primitive conversion, so `String(err)` throws
+    // "Cannot convert object to primitive value" (and `err instanceof Error` is
+    // false, so that is the branch taken).
+    const hostile: DecorationProvider = {
+      build: () => {
+        throw Object.create(null);
+      },
+    };
+    const good: DecorationProvider = {
+      build: () => Decoration.set([Decoration.mark({ class: "survivor" }).range(0, 5)]),
+    };
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const view = mount([createSyntaxReveal([hostile, good])], "hello world");
+    try {
+      expect(decorationClasses(view)).toContain("survivor");
+      view.dispatch({ changes: { from: 0, insert: "x" } });
+      expect(decorationClasses(view)).toContain("survivor");
+      // Contained AND still diagnosed: failureSignature degrades to a
+      // placeholder rather than letting the outer catch swallow the report,
+      // and the placeholder dedupes like any other signature (one line, not
+      // one per build).
+      expect(quollErrorCount(spy)).toBe(1);
+    } finally {
+      view.destroy();
+      spy.mockRestore();
+    }
+  });
+
+  it("contains a NON-OBJECT provider entry (the dedup WeakMap key would throw)", () => {
+    // A plausible future edit to syntaxRevealProviders — `flag && codeRefReveal`
+    // — leaves `false` in the array. `p.build(ctx)` throws first, which the
+    // guard catches; the interesting part is the reporting path, where
+    // WeakMap.set(false, …) throws "Invalid value used as weak map key". Only
+    // the try/catch AROUND logProviderFailure covers this — normalising the
+    // error message cannot, since the throw is not about the error value.
+    const good: DecorationProvider = {
+      build: () => Decoration.set([Decoration.mark({ class: "survivor" }).range(0, 5)]),
+    };
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const view = mount(
+      [createSyntaxReveal([false as unknown as DecorationProvider, good])],
+      "hello world"
+    );
+    try {
+      expect(decorationClasses(view)).toContain("survivor");
+      view.dispatch({ changes: { from: 0, insert: "x" } });
+      expect(decorationClasses(view)).toContain("survivor");
     } finally {
       view.destroy();
       spy.mockRestore();
