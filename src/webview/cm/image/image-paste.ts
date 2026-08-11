@@ -26,10 +26,13 @@ type PendingAnchor = { requestId: string; anchor: number };
 
 // `addPendingAnchor` is exported so unit tests can seed pending anchors without driving
 // real DOM paste/drop events — test/webview/image/cm-image-paste.test.ts and
-// test/webview/shell.test.ts both do. `removePendingAnchor` is exported as the paired half
-// of the same effect API; nothing outside this module dispatches it today.
+// test/webview/shell.test.ts both do. Its paired half is deliberately NOT exported: the
+// only dispatchers are clearPending() and resolve()'s insert, both in this file, and the
+// field below matches on the effect object itself, not on its visibility. Tests observe a
+// removal through `pendingImageAnchors` (the outcome) rather than by dispatching the
+// effect, so widening this back to `export` needs a real out-of-module dispatcher first.
 export const addPendingAnchor = StateEffect.define<PendingAnchor>();
-export const removePendingAnchor = StateEffect.define<string>(); // requestId
+const removePendingAnchor = StateEffect.define<string>(); // requestId
 
 /** Tracks in-flight image-write anchors and maps each through doc changes so the
  *  link lands at the right place after the async host round-trip. Exported for
