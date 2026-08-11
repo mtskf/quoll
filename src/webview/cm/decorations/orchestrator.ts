@@ -134,6 +134,49 @@ export function createSyntaxReveal(providers: readonly DecorationProvider[]): Ex
   );
 }
 
+/** Distinct failure signatures already logged, per provider.
+ *
+ *  Keyed by provider identity AND normalised message, because deduping on
+ *  identity alone would silence a genuinely NEW regression for the rest of the
+ *  session once a provider had failed once for an unrelated earlier cause —
+ *  recreating this guard's own failure mode one layer down. `WeakMap` so
+ *  test-constructed providers impose no retention. */
+const loggedBuildFailures = new WeakMap<DecorationProvider, Set<string>>();
+
+/** Cap per provider. Messages are provider-authored and not a finite set, so
+ *  the signature set needs a bound regardless of normalisation. */
+const MAX_LOGGED_SIGNATURES_PER_PROVIDER = 5;
+
+/** Digit runs collapse so that ONE bug reported at many positions counts as one
+ *  signature. Without this the cap defeats itself: a `RangeError` from
+ *  `doc.lineAt(pos)` embeds the position, so a failure that follows the caret
+ *  would mint a fresh signature per keystroke and exhaust the cap within
+ *  seconds — silencing the provider before any unrelated second failure could
+ *  ever log. */
+function failureSignature(err: unknown): string {
+  const raw = err instanceof Error ? err.message : String(err);
+  return raw.replace(/\d+/g, "#");
+}
+
+function logProviderFailure(provider: DecorationProvider, index: number, err: unknown): void {
+  let seen = loggedBuildFailures.get(provider);
+  if (!seen) {
+    seen = new Set();
+    loggedBuildFailures.set(provider, seen);
+  }
+  const signature = failureSignature(err);
+  if (seen.has(signature) || seen.size >= MAX_LOGGED_SIGNATURES_PER_PROVIDER) {
+    return;
+  }
+  seen.add(signature);
+  console.error(
+    "[quoll] decoration provider build() failed; its decorations are skipped for this build. " +
+      `Further distinct failures from this provider are logged up to ${MAX_LOGGED_SIGNATURES_PER_PROVIDER} signatures.`,
+    { providerIndex: index },
+    err
+  );
+}
+
 function computeMerged(view: EditorView, providers: readonly DecorationProvider[]): DecorationSet {
   const buildStart = QUOLL_PERF ? perfNow() : 0;
   const tree = syntaxTree(view.state);
@@ -144,8 +187,41 @@ function computeMerged(view: EditorView, providers: readonly DecorationProvider[
     tree,
   };
   let inline: DecorationSet = Decoration.none;
-  for (const p of providers) {
-    inline = RangeSet.join([inline, p.build(ctx)]);
+  // CONTAINMENT (do not remove): every provider runs inside the ONE orchestrator
+  // ViewPlugin, and CodeMirror's PluginInstance.update catches a throw from
+  // either the constructor or update path, calls logException, then
+  // deactivate()s the plugin PERMANENTLY (spec/value nulled, no reconstruction
+  // path). One bad provider would therefore revert EVERY inline decoration —
+  // headings, emphasis, links, tables, images — to raw Markdown until the user
+  // reloads the window, with only a console.error they will never see. So a
+  // failing provider degrades to "contributes nothing this build" and the rest
+  // stay live. `inline` is reassigned only on the success path, so a failure
+  // preserves what earlier providers already contributed.
+  //
+  // ⚠️ Do NOT push try/catch down into the providers instead. A totality
+  // regression inside a provider must stay a RED TEST, not become a silently
+  // missing decoration — see cm/link-target.ts's "TOTALITY IS A HARD CONTRACT"
+  // header and cm/link-resolve.ts's buildSlugIndex guard.
+  for (const [index, p] of providers.entries()) {
+    try {
+      const built = p.build(ctx);
+      // Validate BEFORE the join: RangeSet.join([acc, built]) starts from
+      // `result = built` and only enters its merge loop while
+      // `acc != RangeSet.empty`, so with an empty accumulator a null/undefined
+      // return is passed through UNTHROWN. That poisons `inline`, and then
+      // either the NEXT provider's join throws (blaming an innocent provider
+      // and losing its output too) or `this.decorations = null` reaches
+      // CodeMirror, which throws when it reads the facet — OUTSIDE this guard,
+      // landing on the very deactivate() above.
+      if (!(built instanceof RangeSet)) {
+        throw new TypeError(
+          `DecorationProvider.build() must return a DecorationSet, got ${built === null ? "null" : typeof built}`
+        );
+      }
+      inline = RangeSet.join([inline, built]);
+    } catch (err) {
+      logProviderFailure(p, index, err);
+    }
   }
   const blockZones = view.state.facet(quollBlockReplaceZones);
   const syntaxZones = view.state.facet(quollSyntaxExclusionZones);

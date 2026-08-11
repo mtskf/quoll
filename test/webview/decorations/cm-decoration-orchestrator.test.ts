@@ -3,7 +3,7 @@ import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
 import { forceParsing, syntaxTree } from "@codemirror/language";
 import { Compartment, EditorSelection, EditorState, type Extension } from "@codemirror/state";
 import { Decoration, type DecorationSet, EditorView } from "@codemirror/view";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import {
   createSyntaxReveal,
@@ -472,6 +472,218 @@ describe("multi-cursor arbitration regression", () => {
       expect(hides.length).toBeGreaterThanOrEqual(1); // >
     } finally {
       view.destroy();
+    }
+  });
+});
+
+// --- provider build() throw containment ------------------------------------
+
+/** Every decoration class currently published through the EditorView.decorations
+ *  facet — i.e. what the user would actually see rendered. */
+function decorationClasses(view: EditorView): string[] {
+  const out: string[] = [];
+  for (const source of view.state.facet(EditorView.decorations)) {
+    const set = typeof source === "function" ? source(view) : source;
+    const iter = set.iter();
+    while (iter.value !== null) {
+      const cls = (iter.value.spec as { class?: string }).class;
+      if (cls) {
+        out.push(cls);
+      }
+      iter.next();
+    }
+  }
+  return out;
+}
+
+/** Count only OUR log lines. CodeMirror's own logException falls back through
+ *  exceptionSink → window.onerror → console.error, so whether it reaches
+ *  console.error at all is environment-dependent under happy-dom — asserting on
+ *  the TOTAL console.error count would be flaky. */
+function quollErrorCount(spy: { mock: { calls: unknown[][] } }): number {
+  return spy.mock.calls.filter(
+    (call) => typeof call[0] === "string" && call[0].startsWith("[quoll]")
+  ).length;
+}
+
+describe("decoration orchestrator — provider build() throw containment", () => {
+  // NOTE: the orchestrator's log-dedup state is module-level and vitest keeps
+  // module state across tests in a file, so EVERY test below constructs its OWN
+  // fresh provider object literal. Sharing a fixture would make the log-count
+  // assertions order-dependent.
+
+  it("keeps every other provider's decorations when one provider's build() throws", () => {
+    // A throw from ANY provider propagates out of the single shared
+    // orchestrator ViewPlugin, and CodeMirror's PluginInstance.update responds
+    // by deactivate()-ing it PERMANENTLY (spec/value nulled, no reconstruction
+    // path) — taking down every inline decoration in the editor until the
+    // window is reloaded. The guard must contain the throw to its own provider.
+    let throwingCalls = 0;
+    const throwing: DecorationProvider = {
+      build: () => {
+        throwingCalls += 1;
+        throw new Error("provider exploded");
+      },
+    };
+    const good: DecorationProvider = {
+      build: () => Decoration.set([Decoration.mark({ class: "survivor" }).range(0, 5)]),
+    };
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const view = mount([createSyntaxReveal([throwing, good])], "hello world");
+    try {
+      expect(decorationClasses(view)).toContain("survivor");
+      const before = throwingCalls;
+      view.dispatch({ changes: { from: 0, insert: "x" } });
+      // Still rebuilding after the throw ⇒ the plugin was NOT deactivated. The
+      // guard skips the failing provider's OUTPUT; it does not disable it.
+      expect(throwingCalls).toBe(before + 1);
+      expect(decorationClasses(view)).toContain("survivor");
+    } finally {
+      view.destroy();
+      spy.mockRestore();
+    }
+  });
+
+  it("keeps decorations accumulated BEFORE the throwing provider (order-independence)", () => {
+    const good: DecorationProvider = {
+      build: () => Decoration.set([Decoration.mark({ class: "earlier" }).range(0, 5)]),
+    };
+    const throwing: DecorationProvider = {
+      build: () => {
+        throw new Error("provider exploded");
+      },
+    };
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const view = mount([createSyntaxReveal([good, throwing])], "hello world");
+    try {
+      expect(decorationClasses(view)).toContain("earlier");
+      view.dispatch({ changes: { from: 0, insert: "x" } });
+      expect(decorationClasses(view)).toContain("earlier");
+    } finally {
+      view.destroy();
+      spy.mockRestore();
+    }
+  });
+
+  it("contains a provider that RETURNS a non-RangeSet instead of throwing", () => {
+    // RangeSet.join([acc, built]) starts from `result = built` and only enters
+    // its merge loop while `acc != RangeSet.empty`. With an EMPTY accumulator
+    // (first provider, or every earlier provider returned none) a null return
+    // is passed straight through UNTHROWN — poisoning `inline`, which then
+    // either makes the NEXT provider's join throw (blaming an innocent
+    // provider) or reaches `this.decorations = null` and throws when CodeMirror
+    // reads the facet, OUTSIDE the guard. So the guard must validate the
+    // returned value, not merely catch throws.
+    const bad: DecorationProvider = {
+      build: () => null as unknown as DecorationSet,
+    };
+    const good: DecorationProvider = {
+      build: () => Decoration.set([Decoration.mark({ class: "survivor" }).range(0, 5)]),
+    };
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    // `bad` FIRST, so the accumulator is Decoration.none — the passthrough case.
+    const view = mount([createSyntaxReveal([bad, good])], "hello world");
+    try {
+      expect(decorationClasses(view)).toContain("survivor");
+      view.dispatch({ changes: { from: 0, insert: "x" } });
+      expect(decorationClasses(view)).toContain("survivor");
+    } finally {
+      view.destroy();
+      spy.mockRestore();
+    }
+  });
+
+  it("logs a repeated IDENTICAL failure only once", () => {
+    // computeMerged runs on every keystroke and caret move — an un-deduped log
+    // would flood the console for as long as the document keeps the construct.
+    const throwing: DecorationProvider = {
+      build: () => {
+        throw new Error("same failure every time");
+      },
+    };
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const view = mount([createSyntaxReveal([throwing])], "hello world");
+    try {
+      view.dispatch({ changes: { from: 0, insert: "x" } });
+      view.dispatch({ changes: { from: 0, insert: "y" } });
+      expect(quollErrorCount(spy)).toBe(1);
+    } finally {
+      view.destroy();
+      spy.mockRestore();
+    }
+  });
+
+  it("logs again when the SAME provider fails for a DIFFERENT reason", () => {
+    // Deduping on provider identity alone would silence a genuinely new
+    // regression for the rest of the session once the provider had failed once
+    // for any earlier, unrelated cause. This pins the dedup KEY.
+    let builds = 0;
+    const throwing: DecorationProvider = {
+      build: () => {
+        builds += 1;
+        throw new Error(builds <= 2 ? "alpha failure" : "beta failure");
+      },
+    };
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const view = mount([createSyntaxReveal([throwing])], "hello world");
+    try {
+      view.dispatch({ changes: { from: 0, insert: "x" } }); // build 2 — alpha again
+      view.dispatch({ changes: { from: 0, insert: "y" } }); // build 3 — beta
+      expect(quollErrorCount(spy)).toBe(2);
+    } finally {
+      view.destroy();
+      spy.mockRestore();
+    }
+  });
+
+  it("caps how many distinct failures one provider may log", () => {
+    // Messages are provider-authored and not a finite set, so the per-provider
+    // signature set is bounded. Six failures differing along a NON-digit axis
+    // (normalisation cannot merge them) must yield exactly the cap, 5.
+    let builds = 0;
+    const throwing: DecorationProvider = {
+      build: () => {
+        builds += 1;
+        throw new Error(`fail ${"ABCDEF"[Math.min(builds - 1, 5)]}`);
+      },
+    };
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const view = mount([createSyntaxReveal([throwing])], "hello world");
+    try {
+      for (const ch of ["a", "b", "c", "d", "e"]) {
+        view.dispatch({ changes: { from: 0, insert: ch } });
+      }
+      expect(builds).toBe(6);
+      expect(quollErrorCount(spy)).toBe(5);
+    } finally {
+      view.destroy();
+      spy.mockRestore();
+    }
+  });
+
+  it("collapses position-varying instances of ONE bug into a single log", () => {
+    // The cap is only safe because signatures are digit-normalised. A
+    // RangeError from doc.lineAt(pos) embeds the position, so one caret-
+    // following bug would otherwise mint a fresh signature per keystroke and
+    // eat the whole cap within seconds — silencing the provider before any
+    // genuinely unrelated failure could ever log.
+    let builds = 0;
+    const throwing: DecorationProvider = {
+      build: () => {
+        builds += 1;
+        throw new RangeError(`Position ${builds * 37} out of range`);
+      },
+    };
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const view = mount([createSyntaxReveal([throwing])], "hello world");
+    try {
+      view.dispatch({ changes: { from: 0, insert: "x" } });
+      view.dispatch({ changes: { from: 0, insert: "y" } });
+      expect(builds).toBeGreaterThanOrEqual(3);
+      expect(quollErrorCount(spy)).toBe(1);
+    } finally {
+      view.destroy();
+      spy.mockRestore();
     }
   });
 });
