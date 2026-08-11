@@ -139,13 +139,22 @@ export function createImagePasteDrop(opts: {
   // Dispatch guarded against a view torn down mid-round-trip (tab closed between
   // FileReader start and callback). CM 6.43 does NOT actually throw there —
   // `EditorView.update` early-returns on `this.destroyed` (measured; see the
-  // "swallows a clearPending dispatch that fails after the view was destroyed"
-  // test) — so this catch pins the contract against a future CM regression rather
-  // than handling a hazard that reproduces today. It stays silent by design, and not
-  // because callers log first (several of them deliberately do not): a destroyed view
-  // has taken the pending state and the editor surface down with it, so there is no
-  // outcome left for a reader to act on. Whether the paste itself deserved a log is
-  // each caller's call, made before it gets here.
+  // "logs — but does not rethrow — a clearPending dispatch that fails after
+  // teardown" test) — so this catch pins the contract against a future CM
+  // regression rather than handling a hazard that reproduces today.
+  //
+  // It no longer stays silent. The catch was justified by "a destroyed view has
+  // taken the pending state and the editor surface down with it, so there is no
+  // outcome left for a reader to act on" — true of a destroyed view, but that is
+  // NOT the only thing that can throw here. `view.dispatch` runs every StateField
+  // in the editor, so an unrelated field throwing during an image-resolve dispatch
+  // lands in this catch on a perfectly live view, where the pending entry then
+  // survives and makes a re-paste look like a duplicate. Under today's CM the
+  // destroyed-view case cannot even reach the catch (the measurement above), so
+  // in practice a line printed from here means the OTHER cause — exactly the one
+  // that was invisible. Whether the paste itself deserved a log is still each
+  // caller's call, made before it gets here; this line reports only the failure of
+  // the clear.
   // Every StateField still runs on this transaction — CM re-evaluates them all, not
   // just the ones an effect names. What makes it the safer dispatch is the absence of
   // `changes`: the widget/fold/lint fields see an unchanged doc and stay dormant,
@@ -153,8 +162,8 @@ export function createImagePasteDrop(opts: {
   const clearPending = (view: EditorView, requestId: string): void => {
     try {
       view.dispatch({ effects: removePendingAnchor.of(requestId) });
-    } catch {
-      // view destroyed mid-round-trip — pending state dies with it.
+    } catch (err) {
+      console.error("[quoll] failed to clear a pending image anchor", { err, requestId });
     }
   };
 

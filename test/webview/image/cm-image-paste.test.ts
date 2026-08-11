@@ -381,6 +381,14 @@ describe("resolve", () => {
     expect(() => paste.resolve(view, "1", "./assets/x.png")).not.toThrow();
     const [[, context]] = error.mock.calls as [[string, { docLength: number }]];
     expect(context.docLength).toBe(2); // "ab" — what the anchor was measured against
+    // This mock throws on EVERY dispatch, so the follow-up clear throws too and
+    // reports itself. Pinned here — not because this test is about the clear, but
+    // because destructuring only the first call would let that second line change
+    // or vanish unnoticed from the one test that silently emits it.
+    expect(error.mock.calls.map(([label]) => label)).toEqual([
+      "[quoll] pasted image link insert failed: dispatch threw",
+      "[quoll] failed to clear a pending image anchor",
+    ]);
     // The insert really did land, which is precisely why the length must be captured
     // beforehand: `view.state.doc` is 23 chars by the time the catch runs.
     expect(view.state.doc.toString()).toBe("a\n![](./assets/x.png)\nb");
@@ -419,6 +427,10 @@ describe("resolve", () => {
           docLength: 2,
         },
       ],
+      // The follow-up clear throws too — same dead view — and says so. Before this
+      // second line the recovery attempt failed in silence, so the log claimed a
+      // cleared anchor that was never cleared.
+      ["[quoll] failed to clear a pending image anchor", { err: expect.any(Error), requestId: "1" }],
     ]);
     // Twice: the insert, then the clear it attempts anyway. One call would mean the
     // catch returned without trying to clear.
@@ -734,7 +746,12 @@ describe("imagePaste — the image-write post", () => {
     view.destroy();
   });
 
-  it("swallows a clearPending dispatch that fails after the view was destroyed", () => {
+  it("logs — but does not rethrow — a clearPending dispatch that fails after teardown", () => {
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    // Muted, not asserted: getting to clearPending goes through the empty-base64
+    // arm, whose warn is pinned by the `it.each` above. Nothing to add here — this
+    // spy exists only to keep that line out of the suite output.
+    vi.spyOn(console, "warn").mockImplementation(() => {});
     const readers: StubFileReader[] = [];
     stubFileReader((reader) => {
       readers.push(reader);
@@ -759,6 +776,12 @@ describe("imagePaste — the image-write post", () => {
     expect(() => reader.onload?.()).not.toThrow();
     expect(dispatch).toHaveBeenCalledTimes(1);
     expect(post).not.toHaveBeenCalled();
+    // Swallowed for the CALLER (nothing escapes into the FileReader callback), but
+    // no longer swallowed for the READER. Pinned as the complete list so the line
+    // cannot be quietly dropped back to a bare `catch {}`.
+    expect(error.mock.calls).toEqual([
+      ["[quoll] failed to clear a pending image anchor", { err: expect.any(Error), requestId: expect.any(String) }],
+    ]);
   });
 });
 
