@@ -121,6 +121,27 @@ export function resetStubEditorListeners(): void {
   stubActiveTextEditorListeners.length = 0;
 }
 
+// Capturable listener registry for window.tabGroups.onDidChangeTabs — the event
+// surface-restore-watcher.test.ts fires synthetically to drive the watcher's
+// per-URI in-flight guard (no live tab model under vitest). Same shape as
+// stubActiveTextEditorListeners above: the returned disposable really
+// unregisters, and resetStubTabListeners clears the registry between tests so a
+// torn-down watcher's stale listener never leaks across cases. Additive + inert
+// for every other unit test (nothing else fires it, and the previous stub's
+// no-op-disposable contract is preserved).
+type TabChangeListener = (e: unknown) => void;
+const stubTabChangeListeners: TabChangeListener[] = [];
+
+export function fireTabChange(e: unknown): void {
+  for (const cb of [...stubTabChangeListeners]) {
+    cb(e);
+  }
+}
+
+export function resetStubTabListeners(): void {
+  stubTabChangeListeners.length = 0;
+}
+
 export const window = {
   get activeTextEditor(): unknown {
     return undefined;
@@ -145,9 +166,17 @@ export const window = {
   tabGroups: {
     activeTabGroup: { activeTab: undefined as unknown },
     all: [] as unknown[],
-    onDidChangeTabs: (_listener: (e: unknown) => void) => ({
-      dispose: (): void => undefined,
-    }),
+    onDidChangeTabs: (listener: TabChangeListener) => {
+      stubTabChangeListeners.push(listener);
+      return {
+        dispose: (): void => {
+          const i = stubTabChangeListeners.indexOf(listener);
+          if (i >= 0) {
+            stubTabChangeListeners.splice(i, 1);
+          }
+        },
+      };
+    },
   },
 };
 
