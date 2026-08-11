@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
-import { EditorSelection, EditorState } from "@codemirror/state";
-import { EditorView } from "@codemirror/view";
+import { EditorSelection, EditorState, Prec } from "@codemirror/state";
+import { type Command, EditorView, keymap, runScopeHandlers } from "@codemirror/view";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   applyLintFixAtSelection,
@@ -256,6 +256,82 @@ describe("applyLintFixAtSelection", () => {
       expect(applyLintFixAtSelection(view)).toBe(true);
       expect(view.state.sliceDoc()).toBe("a\n\n```\n\n\ncode\n```\n");
     } finally {
+      view.destroy();
+    }
+  });
+});
+
+describe("quollLintFixKeymap precedence", () => {
+  // Pins the Prec.high claim in apply-fix.ts: Quoll's Mod-. must be tried before a
+  // competing Mod-. binding at default precedence (the stand-in for one being added
+  // to upstream's defaultKeymap). The competitor is registered FIRST, so at equal
+  // precedence it would win by registration order — dropping Prec.high turns the
+  // first case red (competitor called, doc untrimmed).
+  function precedenceView(doc: string, competitor: Command): EditorView {
+    return new EditorView({
+      state: EditorState.create({
+        doc,
+        selection: EditorSelection.cursor(0),
+        extensions: [
+          Prec.default(keymap.of([{ key: LINT_FIX_KEY, run: competitor }])),
+          markdown({ base: markdownLanguage }),
+          quollLint(),
+          quollLintFixKeymap(),
+        ],
+      }),
+      parent: document.body,
+    });
+  }
+
+  /** Press the chord under BOTH platform normalisations of `Mod-` (Meta on mac,
+   *  Ctrl elsewhere) and return how many presses were claimed. CM resolves `Mod-`
+   *  once, from a platform probe that happy-dom answers non-deterministically, so a
+   *  single-variant press is flaky (memory
+   *  `[[quoll-cm-keymap-test-runscopehandlers-platform-flaky]]`). Exactly one variant
+   *  matches on any platform — the count assertion below pins that, so the pair can
+   *  never silently degrade into "neither fired, nothing was tested". */
+  function pressBothModVariants(view: EditorView): number {
+    return [{ ctrlKey: true }, { metaKey: true }]
+      .map((mods) =>
+        runScopeHandlers(
+          view,
+          new KeyboardEvent("keydown", { key: ".", bubbles: true, cancelable: true, ...mods }),
+          "editor"
+        )
+      )
+      .filter(Boolean).length;
+  }
+
+  it("runs the fix command before a competing default-precedence Mod-. binding", () => {
+    const competitor = vi.fn<Command>(() => true);
+    const view = precedenceView("foo \n", competitor);
+    try {
+      expect(pressBothModVariants(view)).toBe(1);
+      expect(competitor).not.toHaveBeenCalled();
+      expect(view.state.sliceDoc()).toBe("foo\n"); // Quoll's command claimed the chord
+    } finally {
+      view.destroy();
+    }
+  });
+
+  it("falls through to the competing binding when nothing is fixable", () => {
+    // The other half of the contract: winning the race is not the same as owning the
+    // chord. Returning false on a clean line hands Mod-. to whoever is next.
+    const consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const competitor = vi.fn<Command>(() => true);
+    const view = precedenceView("clean\n", competitor);
+    try {
+      expect(pressBothModVariants(view)).toBe(1);
+      expect(competitor).toHaveBeenCalledTimes(1);
+      expect(view.state.sliceDoc()).toBe("clean\n"); // byte-identical
+      // The fall-through must be a decision, not a swallowed failure: this command
+      // fails open, so a throw produces the same false / no-dispatch / unchanged-doc
+      // observation as "nothing was fixable". The log is what tells them apart.
+      expect(consoleErrorSpy).not.toHaveBeenCalled();
+    } finally {
+      // Restore before destroying: the spy is a global mutation, so undoing it must not
+      // depend on teardown that can throw.
+      consoleErrorSpy.mockRestore();
       view.destroy();
     }
   });
