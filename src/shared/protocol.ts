@@ -319,9 +319,16 @@ export type EditRejectedMessage = Envelope & {
 
 /** Host→webview result of an `image-write` request. `ok` is true only when the
  *  host validated, sniffed, and wrote the file; `relativePath` (present iff ok)
- *  is the document-relative markdown destination the webview inserts. On
- *  rejection the host surfaces a human-readable toast itself, so the failure arm
- *  carries no reason string — the webview only clears its pending entry. */
+ *  is the document-relative markdown destination the webview inserts. The failure
+ *  arm carries no reason string: the host usually surfaces its own toast, and the
+ *  webview clears the pending entry either way.
+ *
+ *  "Usually" is load-bearing: this arm is NOT reliably reported to the user, and
+ *  ok:false is not even reliably a refusal. So the webview logs it independently
+ *  rather than trusting it — the cases, and why they are indistinguishable from
+ *  here, are set out at that call site (`cm/image/image-paste.ts`, resolve()).
+ *  Widening this arm with a reason enum would be a protocol change; do not add
+ *  one for logging alone. */
 export type ImageWriteResultMessage = Envelope & {
   type: "image-write-result";
   requestId: string;

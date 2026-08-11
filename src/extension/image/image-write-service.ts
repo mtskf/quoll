@@ -80,8 +80,11 @@ export async function handleImageWrite(
   // fire-and-forget writes can't each overshoot the cap. The charge is not
   // refunded on failure (see SessionVolumeBudget.reserve — a failed write can
   // still leave a partial file, so counting the attempt keeps disk bounded). The
-  // budget surfaces its own one-time warning, so this rejection just clears the
-  // webview's pending entry.
+  // budget surfaces its own one-time warning, so this rejection shows the user
+  // nothing of its own. That is precisely why the webview logs its side of the
+  // failure arm instead of assuming a toast was shown (see the note on
+  // ImageWriteResultMessage): after the first crossing, this is the one reject
+  // path with no user-facing trace at all.
   //
   // The charge brackets the WHOLE write (in the wiring, writeImage does an
   // idempotent createDirectory then writeFile), so a pre-write setup failure is

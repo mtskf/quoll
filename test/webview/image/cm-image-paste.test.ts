@@ -89,12 +89,16 @@ function sizedImageFile(bytes: number): File {
 
 // A FileReader stand-in, installed per test, so the async read can be driven to a
 // chosen outcome — including outcomes a real FileReader will not produce on demand
-// (onerror, a non-string result). It implements exactly the four members production
+// (onerror, a non-string result). It implements exactly the five members production
 // touches; a fuller fake would only be more surface to drift.
 class StubFileReader
-  implements Pick<FileReader, "result" | "onload" | "onerror" | "readAsDataURL">
+  implements Pick<FileReader, "result" | "error" | "onload" | "onerror" | "readAsDataURL">
 {
   result: string | ArrayBuffer | null = null;
+  // The one member of the real FileReader contract this stub grew for the
+  // onerror path: `reader.error` is the ONLY description of the failure the
+  // browser gives us, and the handler must pass it on rather than discard it.
+  error: DOMException | null = null;
   onload: (() => void) | null = null;
   onerror: (() => void) | null = null;
   readAsDataURL(): void {
@@ -185,20 +189,109 @@ describe("resolve", () => {
     expect(view.state.selection.main.head).toBe(20);
   });
 
-  it("does NOT insert on a read-only doc at resolve time (clears pending)", () => {
+  it("warns — the file is already on disk — when the doc goes read-only mid round-trip", () => {
+    // The costly half of the branch this test's sibling below shares with it: the
+    // host has ALREADY written the image by the time resolve runs, so a read-only
+    // flip here leaves a file in the workspace with no link and (before this warn)
+    // nothing anywhere naming it. `relativePath` is carried because it is the only
+    // way to find that orphan afterwards; it is a workspace-relative path the host
+    // itself chose, not clipboard content.
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const { view, paste } = mount("ab", false);
     view.dispatch({ effects: addPendingAnchor.of({ requestId: "1", anchor: 1 }) });
     paste.resolve(view, "1", "./assets/x.png");
     expect(view.state.doc.toString()).toBe("ab");
     expect(view.state.field(pendingImageAnchors).length).toBe(0);
+    expect(warn.mock.calls).toEqual([
+      [
+        "[quoll] pasted image written but not linked: document went read-only mid round-trip",
+        { requestId: "1", relativePath: "./assets/x.png" },
+      ],
+    ]);
+    view.destroy();
   });
 
-  it("does NOT insert when the host rejected (relativePath null)", () => {
+  it("reports a non-completing host write WITHOUT the orphan wording (relativePath null)", () => {
+    // The other arm, and the reason the branch is split rather than sharing one
+    // warn: the two are opposites. Here nothing was linked because the host said
+    // no; there is no path to report, so the message must not borrow the sibling's
+    // "written but not linked" wording — a reader chasing an orphan file would find
+    // nothing. Asserted as the COMPLETE list precisely to pin that separation:
+    // collapsing the two arms back into one shared warn goes red here.
+    //
+    // This arm was briefly silent, on the theory that the host had already toasted
+    // and left nothing behind. Both halves are false in cases the wire cannot tell
+    // apart (a repeat session-cap rejection shows the user nothing — `warned`
+    // latches in image-write-budget.ts; a write-failure rejection can leave a
+    // partial file — `workspace.fs.writeFile` is not atomic), and `ok:false` on the
+    // wire carries no reason to distinguish them by.
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const { view, paste } = mount("ab");
     view.dispatch({ effects: addPendingAnchor.of({ requestId: "1", anchor: 1 }) });
     paste.resolve(view, "1", null);
     expect(view.state.doc.toString()).toBe("ab");
     expect(view.state.field(pendingImageAnchors).length).toBe(0);
+    // "did not complete", not "refused": `ok:false` also carries the write-FAILURE
+    // case, where the host accepted the write and the filesystem lost. Pinning the
+    // exact string keeps the message reason-neutral — naming a cause the wire never
+    // sent is the overclaim this whole arm was rewritten to stop making.
+    expect(warn.mock.calls).toEqual([
+      ["[quoll] image write did not complete on the host; no link inserted", { requestId: "1" }],
+    ]);
+    view.destroy();
+  });
+
+  it("warns when a wholesale reseed cleared the anchor before the host replied", () => {
+    // The commonest way this fires, and the expensive one: the host reseeds the
+    // document mid round-trip, `pendingImageAnchors` drops every anchor (it cannot
+    // map them through a wholesale replace), and the reply then arrives with the
+    // image ALREADY WRITTEN into the workspace. Nothing is inserted — correct, vs.
+    // guessing a position — but before this warn the file was left in the workspace
+    // with no link and no line anywhere naming it.
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const { view, paste } = mount("ab");
+    view.dispatch({ effects: addPendingAnchor.of({ requestId: "1", anchor: 1 }) });
+    // A real wholesale reseed: annotated AND doc-changing, which is the exact pair
+    // the field's update() requires before it clears (a no-op reseed keeps anchors).
+    view.dispatch({
+      changes: { from: 0, to: view.state.doc.length, insert: "fresh" },
+      annotations: hostDocumentReseed.of(true),
+    });
+    expect(view.state.field(pendingImageAnchors)).toEqual([]);
+
+    paste.resolve(view, "1", "./assets/x.png");
+
+    expect(view.state.doc.toString()).toBe("fresh"); // nothing inserted
+    expect(warn.mock.calls).toEqual([
+      [
+        "[quoll] image-write result had no pending anchor; no link inserted",
+        { requestId: "1", relativePath: "./assets/x.png" },
+      ],
+    ]);
+    view.destroy();
+  });
+
+  it("still warns when the anchor is gone AND the host sent no path", () => {
+    // The corner where the two vanished-trace cases meet, and the only combination
+    // the other tests leave open: a reseed cleared the anchor AND the reply carries
+    // `relativePath: null`. It is worth its own test because the obvious "tidy-up"
+    // here — skip the log when there is no path to report, since nothing was written
+    // — is wrong twice over: a null reply can follow a failed write that already left
+    // a partial file, and the host's own message is not guaranteed (a repeat
+    // session-cap rejection shows the user nothing). With no anchor and no path, this
+    // line is the entire remaining trace of the paste. An early return added above
+    // the warn passes every other test in this file; it goes red here.
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const { view, paste } = mount("ab");
+    paste.resolve(view, "gone", null);
+    expect(view.state.doc.toString()).toBe("ab");
+    expect(warn.mock.calls).toEqual([
+      [
+        "[quoll] image-write result had no pending anchor; no link inserted",
+        { requestId: "gone", relativePath: null },
+      ],
+    ]);
+    view.destroy();
   });
 
   it("ignores an unknown requestId while another anchor is still pending", () => {
@@ -209,6 +302,7 @@ describe("resolve", () => {
     // a previous webview session must be a no-op, not a resolve of whatever anchor
     // happens to be first in the queue, which would write one image's path onto
     // another image's position.
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const { view, paste } = mount("ab");
     view.dispatch({ effects: addPendingAnchor.of({ requestId: "1", anchor: 1 }) });
     paste.resolve(view, "nope", "./assets/x.png");
@@ -216,6 +310,15 @@ describe("resolve", () => {
     // the real anchor must still be waiting for its own reply.
     expect(view.state.doc.toString()).toBe("ab");
     expect(view.state.field(pendingImageAnchors)).toEqual([{ requestId: "1", anchor: 1 }]);
+    // A stale reply from a previous webview session lands here too, so the same
+    // warn covers it: the message names the OUTCOME (no anchor, no link) rather
+    // than guessing which of the two causes produced it.
+    expect(warn.mock.calls).toEqual([
+      [
+        "[quoll] image-write result had no pending anchor; no link inserted",
+        { requestId: "nope", relativePath: "./assets/x.png" },
+      ],
+    ]);
   });
 
   it("logs and clears the anchor when the insert throws on a stale position", () => {
@@ -312,6 +415,14 @@ describe("resolve", () => {
     expect(() => paste.resolve(view, "1", "./assets/x.png")).not.toThrow();
     const [[, context]] = error.mock.calls as [[string, { docLength: number }]];
     expect(context.docLength).toBe(2); // "ab" — what the anchor was measured against
+    // This mock throws on EVERY dispatch, so the follow-up clear throws too and
+    // reports itself. Pinned here — not because this test is about the clear, but
+    // because destructuring only the first call would let that second line change
+    // or vanish unnoticed from the one test that silently emits it.
+    expect(error.mock.calls.map(([label]) => label)).toEqual([
+      "[quoll] pasted image link insert failed: dispatch threw",
+      "[quoll] failed to clear a pending image anchor",
+    ]);
     // The insert really did land, which is precisely why the length must be captured
     // beforehand: `view.state.doc` is 23 chars by the time the catch runs.
     expect(view.state.doc.toString()).toBe("a\n![](./assets/x.png)\nb");
@@ -322,9 +433,10 @@ describe("resolve", () => {
   it("still logs when even the clearing dispatch fails after a teardown", () => {
     // The other end of the same guard: the view dies between the shell's null-check
     // and the dispatch, so BOTH the insert and the follow-up clear throw. The anchor
-    // then dies with the view (clearPending swallows it), so the log is the only
-    // observable left — and it is the one that must survive, since without it a
-    // half-completed paste leaves no trace anywhere.
+    // then dies with the view, and clearPending no longer swallows that second
+    // failure — it logs it too. So BOTH console.error entries are pinned below: the
+    // logs are the only observable left, and a recovery attempt that failed must not
+    // read like one that succeeded.
     const error = vi.spyOn(console, "error").mockImplementation(() => {});
     const { view, paste } = mount("ab");
     view.dispatch({ effects: addPendingAnchor.of({ requestId: "1", anchor: 1 }) });
@@ -349,6 +461,13 @@ describe("resolve", () => {
           relativePath: "./assets/x.png",
           docLength: 2,
         },
+      ],
+      // The follow-up clear throws too — same dead view — and says so. Before this
+      // second line the recovery attempt failed in silence, so the log claimed a
+      // cleared anchor that was never cleared.
+      [
+        "[quoll] failed to clear a pending image anchor",
+        { err: expect.any(Error), requestId: "1" },
       ],
     ]);
     // Twice: the insert, then the clear it attempts anyway. One call would mean the
@@ -581,10 +700,23 @@ describe("imagePaste — the image-write post", () => {
   });
 
   it.each([
-    ["a non-string result", new ArrayBuffer(8)],
-    ["a data URL whose base64 payload is empty", "data:image/png;base64,"],
-    ["a result with no comma to split on", "not-a-data-url"],
-  ])("clears the pending anchor without posting on %s", (_label, result) => {
+    [
+      "a non-string result",
+      new ArrayBuffer(8),
+      "[quoll] dropped pasted image (FileReader returned a non-string result)",
+    ],
+    [
+      "a data URL whose base64 payload is empty",
+      "data:image/png;base64,",
+      "[quoll] dropped pasted image (data URL carried no base64 payload)",
+    ],
+    [
+      "a result with no comma to split on",
+      "not-a-data-url",
+      "[quoll] dropped pasted image (data URL carried no base64 payload)",
+    ],
+  ])("clears the pending anchor without posting on %s", (_label, result, expectedWarn) => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     stubFileReader((reader) => {
       reader.result = result;
       reader.onload?.();
@@ -597,23 +729,42 @@ describe("imagePaste — the image-write post", () => {
     // so a missing clear leaks it and the next reseed-free resolve could land an
     // unrelated image link on it.
     expect(view.state.field(pendingImageAnchors).length).toBe(0);
+    // Every one of these three refuses a paste on a WRITABLE doc: no post, no file,
+    // nothing inserted, and (before these warns) no trace — the same vanishing act
+    // the zero-byte case was fixed for. Per-case rather than a shared assertion, so
+    // that collapsing the two messages into one generic string goes red here.
+    //
+    // `requestId` is matched by shape, not value: it embeds a per-session
+    // `crypto.randomUUID()` nonce, so pinning the literal would pin the nonce. What
+    // must not regress is that the field is THERE — one paste event can start
+    // several concurrent reads, and a bare message could not say which one died.
+    expect(warn.mock.calls).toEqual([[expectedWarn, { requestId: expect.any(String) }]]);
     view.destroy();
   });
 
-  it("clears the pending anchor and logs when the read itself fails", () => {
+  it("clears the pending anchor and logs the browser's error when the read fails", () => {
     const error = vi.spyOn(console, "error").mockImplementation(() => {});
-    stubFileReader((reader) => reader.onerror?.());
+    const readError = new DOMException("boom", "NotReadableError");
+    stubFileReader((reader) => {
+      reader.error = readError;
+      reader.onerror?.();
+    });
     const { view, post } = mount("ab");
     firePasteAt(view.contentDOM, { files: IMAGE_FILE });
 
     expect(post).not.toHaveBeenCalled();
     expect(view.state.field(pendingImageAnchors).length).toBe(0);
     // There is no webview toast channel for this path, so the console line is the
-    // only trace a failed read leaves anywhere. Pinned as the COMPLETE call list,
-    // by text AND by exhaustion: CodeMirror swallows an exception thrown inside a
-    // domEventHandler (`bindHandler` → `logException`) and reports it as a further
-    // console.error, which a text-only `toHaveBeenCalledWith` would not notice.
-    expect(error.mock.calls).toEqual([["[quoll] failed to read pasted image"]]);
+    // only trace a failed read leaves anywhere — and `reader.error` is the only
+    // description of WHY the browser failed. Discarding it (the shape this test
+    // replaced) left "failed to read" with nothing to act on. Pinned as the
+    // COMPLETE call list, by text AND by exhaustion: CodeMirror swallows an
+    // exception thrown inside a domEventHandler (`bindHandler` → `logException`)
+    // and reports it as a further console.error, which a text-only
+    // `toHaveBeenCalledWith` would not notice.
+    expect(error.mock.calls).toEqual([
+      ["[quoll] failed to read pasted image", { err: readError, requestId: expect.any(String) }],
+    ]);
     view.destroy();
   });
 
@@ -640,7 +791,12 @@ describe("imagePaste — the image-write post", () => {
     view.destroy();
   });
 
-  it("swallows a clearPending dispatch that fails after the view was destroyed", () => {
+  it("logs — but does not rethrow — a clearPending dispatch that fails after teardown", () => {
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    // Muted, not asserted: getting to clearPending goes through the empty-base64
+    // arm, whose warn is pinned by the `it.each` above. Nothing to add here — this
+    // spy exists only to keep that line out of the suite output.
+    vi.spyOn(console, "warn").mockImplementation(() => {});
     const readers: StubFileReader[] = [];
     stubFileReader((reader) => {
       readers.push(reader);
@@ -665,6 +821,15 @@ describe("imagePaste — the image-write post", () => {
     expect(() => reader.onload?.()).not.toThrow();
     expect(dispatch).toHaveBeenCalledTimes(1);
     expect(post).not.toHaveBeenCalled();
+    // Swallowed for the CALLER (nothing escapes into the FileReader callback), but
+    // no longer swallowed for the READER. Pinned as the complete list so the line
+    // cannot be quietly dropped back to a bare `catch {}`.
+    expect(error.mock.calls).toEqual([
+      [
+        "[quoll] failed to clear a pending image anchor",
+        { err: expect.any(Error), requestId: expect.any(String) },
+      ],
+    ]);
   });
 });
 
