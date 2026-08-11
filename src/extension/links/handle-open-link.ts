@@ -30,16 +30,16 @@
 // backslash, `.md`) is mirrored webview-side — by relativeMarkdownTarget, plus
 // classifyLinkTarget, which dispatches a scheme-bearing destination down the
 // open-external path before relativeMarkdownTarget ever sees it (that shape
-// difference, same verdict, is written up in test/fixtures/
-// open-link-destinations.ts). A destination those gates refuse is never posted
-// as an `open-link` AT ALL, so reaching one of the arms below means the two
-// copies of the cascade have DRIFTED (build mismatch, one-sided change, forged
-// poster) — not that a user clicked something. Those stay log-only, like
-// handle-open-external.ts; a toast there would address a user who never
-// clicked. CONTAINMENT is the one gate the webview provably cannot run (it owns
-// no path), so a containment refusal is a normal, reachable outcome of clicking
-// a real link — and it gets a toast, because there the silence is the bug
-// rather than the posture. See the containment arm below.
+// difference, same verdict, is written up in
+// test/fixtures/open-link-destinations.ts). A destination those gates refuse is
+// never posted as an `open-link` AT ALL, so reaching one of the arms below
+// means the two copies of the cascade have DRIFTED (build mismatch, one-sided
+// change, forged poster) — not that a user clicked something. Those stay
+// log-only, like handle-open-external.ts; a toast there would address a user
+// who never clicked. CONTAINMENT is the one gate the webview provably cannot
+// run (it owns no path), so a containment refusal is a normal, reachable
+// outcome of clicking a real link — and it gets a toast, because there the
+// silence is the bug rather than the posture. See the containment arm below.
 
 import type { Uri } from "vscode";
 import { isAllowedUrl } from "../../markdown/url-allowlist.js";
