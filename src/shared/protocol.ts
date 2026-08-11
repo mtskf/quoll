@@ -108,7 +108,7 @@ export const MAX_LINT_COORDINATE = 0x7fffffff;
 
 /** Hard cap on a pasted/dropped image's DECODED byte length — the reject
  *  threshold. 10 MiB bounds abuse while covering screenshots/photos. Authoritative
- *  enforcement is host-side after base64 decode (src/extension/image-ingest.ts). */
+ *  enforcement is host-side after base64 decode (src/extension/image/image-ingest.ts). */
 export const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
 
 /** Transfer headroom above the reject threshold. A *slightly* oversized image
