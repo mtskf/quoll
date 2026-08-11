@@ -70,6 +70,16 @@ describe("open-link", function () {
       [],
       "expected the host containment gate to drop an out-of-scope open-link"
     );
+    // Dropped, but NOT silently: the webview already promised this click
+    // (containment is the one gate it cannot run), so the refusal owes the user
+    // a toast. The unit suite pins the message on the pure function; this pins
+    // that the panel actually wires `showError` into that arm — the toast
+    // reaches the real host surface the harness records.
+    const refusal = await harness.waitForError((msg) => msg.includes("points outside"), 5000);
+    assert.ok(
+      !refusal.includes("passwd"),
+      `the refusal toast must not echo the untrusted destination, got ${refusal}`
+    );
   });
 
   it("decodes %20 in a relative link and resolves the space-named target", async () => {

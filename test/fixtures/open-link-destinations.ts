@@ -212,7 +212,9 @@ export type OpenLinkContainmentCase = Omit<OpenLinkCase, "hostRoutes">;
  *  Each passes the whole structural cascade, so the webview classifies it as
  *  `workspace`, promises the pointer cursor, posts, and `preventDefault`s. The
  *  host then resolves it and finds it OUTSIDE both the workspace folder and the
- *  document's own directory subtree, and drops it (log-only).
+ *  document's own directory subtree, and drops it — with a refusal toast (see
+ *  OPEN_LINK_OUT_OF_SCOPE_MESSAGE in handle-open-link.ts); every other reject
+ *  arm in that cascade stays log-only.
  *
  *  This is the intended split of responsibility: containment is asserted on the
  *  RESOLVED target, and only the host owns `document.uri`. Pinning the

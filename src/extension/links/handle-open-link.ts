@@ -25,9 +25,21 @@
 //   - opens it via the injected openWith (production: openInQuollEditor +
 //     QuollEditorPanel.viewType).
 //
-// Security-gate rejections are log-only (console.warn under [quoll]); a
-// user-visible toast is reserved for a genuine open FAILURE (openWith
-// rejects/throws) — identical posture to handle-open-external.ts.
+// Which rejections the user hears about, and why exactly one of them does:
+// every STRUCTURAL gate below (allowlist, empty path, scheme, absolute/
+// backslash, `.md`) is mirrored webview-side — by relativeMarkdownTarget, plus
+// classifyLinkTarget, which dispatches a scheme-bearing destination down the
+// open-external path before relativeMarkdownTarget ever sees it (that shape
+// difference, same verdict, is written up in
+// test/fixtures/open-link-destinations.ts). A destination those gates refuse is
+// never posted as an `open-link` AT ALL, so reaching one of the arms below
+// means the two copies of the cascade have DRIFTED (build mismatch, one-sided
+// change, forged poster) — not that a user clicked something. Those stay
+// log-only, like handle-open-external.ts; a toast there would address a user
+// who never clicked. CONTAINMENT is the one gate the webview provably cannot
+// run (it owns no path), so a containment refusal is a normal, reachable
+// outcome of clicking a real link — and it gets a toast, because there the
+// silence is the bug rather than the posture. See the containment arm below.
 
 import type { Uri } from "vscode";
 import { isAllowedUrl } from "../../markdown/url-allowlist.js";
@@ -37,6 +49,22 @@ import { isWithinDir } from "./within-dir.js";
  *  (openWith rejects/throws). Mirrors OPEN_EXTERNAL_FAILURE_MESSAGE. */
 const OPEN_LINK_FAILURE_MESSAGE =
   "Quoll: couldn't open the linked file. See the extension host log for details.";
+
+/** User-facing toast when a well-formed relative `.md` link resolves OUTSIDE
+ *  both the workspace and the document's own directory subtree.
+ *
+ *  Deliberately says only that the destination is out of scope: it is silent on
+ *  whether anything exists there, so it cannot be used to probe the filesystem
+ *  outside the workspace. That preserves this module's "refuse without
+ *  confirming the escape" posture while still telling the user their click was
+ *  seen and declined — the two are not in tension, because the containment
+ *  verdict is derivable from the link text the user is already looking at,
+ *  whereas existence is not. Names no path (the destination is untrusted
+ *  webview-supplied text; echoing it back into a toast would render attacker-
+ *  chosen content in host chrome — the log line carries the sanitised preview
+ *  instead). */
+const OPEN_LINK_OUT_OF_SCOPE_MESSAGE =
+  "Quoll: that link points outside this workspace and the document's folder — it wasn't opened.";
 
 /** Sanitize an untrusted href for logging (C0/DEL → '?', truncate). Mirrors
  *  handle-open-external.ts's sanitizeForLog. */
@@ -56,7 +84,9 @@ export type HandleOpenLinkDeps = {
    *  The viewType is bound by the caller so this module never names it. */
   openWith: (uri: Uri) => Thenable<unknown>;
   /** The panel's hoisted showError closure (harness-recorded + rejection-safe)
-   *  — NOT a bare window.showErrorMessage. Surfaces the failure toast. */
+   *  — NOT a bare window.showErrorMessage. Surfaces the two user-visible
+   *  outcomes: the open FAILURE toast and the containment REFUSAL toast (see
+   *  the containment check below). */
   showError: (message: string) => void;
 };
 
@@ -144,16 +174,33 @@ export function handleOpenLink(href: string, deps: HandleOpenLinkDeps): void {
   // decoding before the join does not reopen the traversal hole, because the
   // boundary is asserted on the resolved target, not on the raw string.
   //
-  // A rejection here is log-only by design: the webview cannot evaluate
-  // containment (it owns no path), so a containment-refused click is a normal
-  // reachable outcome for out-of-workspace user content. The webview has already
-  // preventDefault'd, so such a click neither navigates nor moves the caret nor
-  // toasts — an accepted phase-1 trade-off (refusing to confirm an escape is the
-  // safer default; a recovery `open-link-rejected` channel is deferred).
+  // THE ONE REJECTION THAT TOASTS — see this module's header for why this arm,
+  // and only this arm, is a reachable outcome of a real click. What follows from
+  // that is local: the webview has already promised the click (pointer cursor)
+  // and consumed it (preventDefault, which eats the caret move) by the time the
+  // host sees the escape, so a log-only drop produces NOTHING the user can
+  // perceive — no navigation, no caret move, no toast, nothing in the webview
+  // console. That silence was an accepted phase-1 trade-off; it is now paid off
+  // with a toast, which is the smaller half of the deferred design fork:
+  //
+  //   toast (chosen)  — one host-side string, no wire change. Tells the user
+  //     both THAT the click was declined and WHY.
+  //   `open-link-rejected` channel (declined) — a new host→webview message plus
+  //     validator, reducer arm, per-click pending state webview-side, and a
+  //     re-clamp of the stashed position against a document that may have moved
+  //     on. It buys back the suppressed caret move, but a caret landing in the
+  //     link text a round-trip later communicates no REASON, so the toast would
+  //     be wanted anyway — the channel is strictly additional machinery on top
+  //     of the fix, not an alternative to it. Left undone deliberately; revisit
+  //     only if the caret loss (not the silence) is what users report.
+  //
+  // The message is generic on purpose — see OPEN_LINK_OUT_OF_SCOPE_MESSAGE for
+  // why saying "out of scope" leaks nothing that the link text does not already.
   if (!deps.isInWorkspace(target) && !isWithinDir(target, dir)) {
     console.warn("[quoll] open-link dropped: target outside workspace/document dir", {
       hrefPreview: sanitizeForLog(href),
     });
+    deps.showError(OPEN_LINK_OUT_OF_SCOPE_MESSAGE);
     return;
   }
 
