@@ -211,7 +211,7 @@ describe("resolve", () => {
     view.destroy();
   });
 
-  it("reports the host's refusal WITHOUT the orphan wording (relativePath null)", () => {
+  it("reports a non-completing host write WITHOUT the orphan wording (relativePath null)", () => {
     // The other arm, and the reason the branch is split rather than sharing one
     // warn: the two are opposites. Here nothing was linked because the host said
     // no; there is no path to report, so the message must not borrow the sibling's
@@ -231,8 +231,12 @@ describe("resolve", () => {
     paste.resolve(view, "1", null);
     expect(view.state.doc.toString()).toBe("ab");
     expect(view.state.field(pendingImageAnchors).length).toBe(0);
+    // "did not complete", not "refused": `ok:false` also carries the write-FAILURE
+    // case, where the host accepted the write and the filesystem lost. Pinning the
+    // exact string keeps the message reason-neutral — naming a cause the wire never
+    // sent is the overclaim this whole arm was rewritten to stop making.
     expect(warn.mock.calls).toEqual([
-      ["[quoll] host refused the image write; no link inserted", { requestId: "1" }],
+      ["[quoll] image write did not complete on the host; no link inserted", { requestId: "1" }],
     ]);
     view.destroy();
   });
@@ -262,6 +266,29 @@ describe("resolve", () => {
       [
         "[quoll] image-write result had no pending anchor; no link inserted",
         { requestId: "1", relativePath: "./assets/x.png" },
+      ],
+    ]);
+    view.destroy();
+  });
+
+  it("still warns when the anchor is gone AND the host sent no path", () => {
+    // The corner where the two vanished-trace cases meet, and the only combination
+    // the other tests leave open: a reseed cleared the anchor AND the reply carries
+    // `relativePath: null`. It is worth its own test because the obvious "tidy-up"
+    // here — skip the log when there is no path to report, since nothing was written
+    // — is wrong twice over: a null reply can follow a failed write that already left
+    // a partial file, and the host's own message is not guaranteed (a repeat
+    // session-cap rejection shows the user nothing). With no anchor and no path, this
+    // line is the entire remaining trace of the paste. An early return added above
+    // the warn passes every other test in this file; it goes red here.
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const { view, paste } = mount("ab");
+    paste.resolve(view, "gone", null);
+    expect(view.state.doc.toString()).toBe("ab");
+    expect(warn.mock.calls).toEqual([
+      [
+        "[quoll] image-write result had no pending anchor; no link inserted",
+        { requestId: "gone", relativePath: null },
       ],
     ]);
     view.destroy();
@@ -735,7 +762,9 @@ describe("imagePaste — the image-write post", () => {
     // exception thrown inside a domEventHandler (`bindHandler` → `logException`)
     // and reports it as a further console.error, which a text-only
     // `toHaveBeenCalledWith` would not notice.
-    expect(error.mock.calls).toEqual([["[quoll] failed to read pasted image", readError]]);
+    expect(error.mock.calls).toEqual([
+      ["[quoll] failed to read pasted image", { err: readError, requestId: expect.any(String) }],
+    ]);
     view.destroy();
   });
 

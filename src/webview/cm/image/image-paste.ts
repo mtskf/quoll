@@ -219,7 +219,11 @@ export function createImagePasteDrop(opts: {
       // file moved/permissions) from the rest. It is metadata about the read, not
       // image content, so it is safe to log. Matches the policy in
       // `paste/html-to-markdown.ts`, which logs its caught `err` for the same reason.
-      console.error("[quoll] failed to read pasted image", reader.error);
+      // Carried in the `{ err, requestId }` shape the rest of this file uses, for the
+      // reason its siblings above do: concurrent reads from one paste event are only
+      // tellable apart by requestId, and this is the arm most likely to hit several
+      // at once (a batch dropped from a folder that then moves).
+      console.error("[quoll] failed to read pasted image", { err: reader.error, requestId });
       clearPending(view, requestId);
     };
     reader.readAsDataURL(file);
@@ -356,18 +360,26 @@ export function createImagePasteDrop(opts: {
       // duplicated line in a console nobody reads costs nothing, while trusting a
       // toast we cannot verify was shown loses the refusal entirely. No
       // `relativePath` to carry — there is no path on this arm.
-      console.warn("[quoll] host refused the image write; no link inserted", { requestId });
+      //
+      // The wording says "did not complete" rather than "refused" BECAUSE of the
+      // second bullet above: on the write-failure arm the host did not refuse at all
+      // — it accepted, tried, and the filesystem lost. Naming a cause the wire never
+      // sent would be the same overclaim this comment exists to retract.
+      console.warn("[quoll] image write did not complete on the host; no link inserted", {
+        requestId,
+      });
       clearPending(view, requestId);
       return;
     }
     if (!opts.canWrite()) {
       // Split out from the arm above because the two are opposites, not variants:
       // here the write SUCCEEDED and the host said so, then the document flipped
-      // read-only before the link could be inserted. The image sits in the
-      // workspace with nothing pointing at it, and — unlike the null arm — no toast
-      // was ever shown for it. `relativePath` is the only handle on that orphan, so
-      // it is logged (a host-chosen workspace-relative path, never image content).
-      // The insert itself must still not happen: edit-sync would drop it.
+      // read-only before the link could be inserted. The host has no reason to have
+      // said anything — from its side this write went fine — so unlike the arm above
+      // there is not even a toast that MIGHT have been shown. The image sits in the
+      // workspace with nothing pointing at it, and `relativePath` is the only handle
+      // on that orphan, so it is logged (a host-chosen workspace-relative path, never
+      // image content). The insert itself must still not happen: edit-sync would drop it.
       console.warn(
         "[quoll] pasted image written but not linked: document went read-only mid round-trip",
         { requestId, relativePath }
