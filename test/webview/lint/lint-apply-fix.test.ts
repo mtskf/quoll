@@ -329,8 +329,10 @@ describe("quollLintFixKeymap precedence", () => {
       // observation as "nothing was fixable". The log is what tells them apart.
       expect(consoleErrorSpy).not.toHaveBeenCalled();
     } finally {
-      view.destroy();
+      // Restore before destroying: the spy is a global mutation, so undoing it must not
+      // depend on teardown that can throw.
       consoleErrorSpy.mockRestore();
+      view.destroy();
     }
   });
 });
