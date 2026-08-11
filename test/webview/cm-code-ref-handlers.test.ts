@@ -284,8 +284,8 @@ describe("quollCodeRefClickHandler", () => {
   // handlers directly, which leaves the binding itself — `mousedown`→mousedown
   // handler, `click`→click handler — unpinned. Either mutation of it keeps every
   // other test in the suite green:
-  //   - swap the two keys → each event gets resolved through the WRONG seam (the
-  //     mouse path would resolve by DOM target, the AT path by coordinates)
+  //   - swap the two keys → each event reaches the WRONG handler, so an AT click
+  //     gets resolved by coordinates and a mousedown is refused outright
   //   - drop either key → that trigger silently stops opening references at all
   // What neither mutation does is double-post, despite the tempting symmetry of
   // the two gates (measured, not reasoned): with the keys swapped a real mousedown
