@@ -15,7 +15,7 @@
 //   - `deco.block` is forbidden outright, and
 //   - a replace may not end past the end of the line its start sits on.
 
-import { RangeSet, type Text } from "@codemirror/state";
+import type { Text } from "@codemirror/state";
 import type { DecorationSet } from "@codemirror/view";
 
 /** Inspect `built` for a decoration a ViewPlugin may not emit.
@@ -36,51 +36,66 @@ import type { DecorationSet } from "@codemirror/view";
  *  maxPoint is -1, and such a gate would wave it through while CodeMirror still
  *  throws. Do not reintroduce it.
  *
- *  `RangeSet.spans` with `minPointSize: 0` is the public API that gets this
- *  right AND is cheaper than a raw `iter()` walk:
- *   - it admits layers by their OWN maxPoint, which is accurate per layer, so
- *     point-free layers are skipped wholesale and spilled points are still
- *     visited;
- *   - the cursor yields only point values, so marks never reach the callback;
- *   - zero-length points are included, which is what catches block widgets;
- *   - it clips to the [0, doc.length] query window, so ranges running past the
- *     end of the document are seen exactly as CodeMirror's own emit() sees them
- *     rather than over-rejected — and `from` is a valid document position by
- *     construction, so `doc.lineAt` below can never be handed one out of range.
+ *  `iter()` is layer-complete and is what makes this correct: it walks EVERY
+ *  layer (`HeapCursor` defaults to `minPoint: -1`, so no layer is filtered out)
+ *  and yields ranges by ascending `from` across layers. The rejected `maxPoint`
+ *  gate above is what was layer-blind, not the cursor.
+ *
+ *  `RangeSet.spans(…, minPointSize: 0)` is the other correct option — it yields
+ *  only points and clips to the query window for free — and it was measured
+ *  head-to-head against this walk on real provider output (400-line document, 10
+ *  providers, 2080 ranges, 1839 points). It lost: a spans guard cost ~76 µs per
+ *  build, and spans with an EMPTY callback still cost ~42 µs, where this entire
+ *  walk costs ~33 µs. Since this runs on every keystroke the cheaper walk wins,
+ *  and the two things spans gave for free are reproduced explicitly below.
+ *  Numbers + method: .claude/docs/PERF-log.md.
  */
 export function findPluginIllegalDecoration(built: DecorationSet, doc: Text): string | null {
-  let found: string | null = null;
-  RangeSet.spans(
-    [built],
-    0,
-    doc.length,
-    {
-      span: () => {},
-      point: (from, to, value) => {
-        // RangeSet.spans has no early exit, so the walk runs to completion once
-        // an offender is found. Guarding here keeps "first offender in document
-        // order" true and reduces the rest of the walk to a null check.
-        if (found !== null) {
-          return;
+  // Reproduces the clipping `RangeSet.spans` would have applied. CodeMirror's
+  // own check runs inside a spans walk bounded by the document, so a decoration
+  // running past the end is judged on its clipped extent — flagging it whole
+  // would reject a provider CodeMirror was perfectly happy with. A point
+  // sitting exactly AT `doc.length` is still visited (spans visits it too),
+  // which is what keeps a block widget at the very end catchable.
+  const docEnd = doc.length;
+  // Cached bounds of the line the last sized point started on. The cursor yields
+  // ranges by ascending `from`, and providers emit several concealed markers per
+  // line (both `**` of a bold span, a link's brackets and its target), so this
+  // turns one O(log n) doc.lineAt per sized point into roughly one per line —
+  // measured at ~4.6 points per line on a realistic document, and those lineAt
+  // calls were the walk's dominant cost before the cache existed. The empty
+  // range (-1, -2) can never satisfy the containment test below, so the first
+  // sized point refreshes it.
+  let lineFrom = -1;
+  let lineTo = -2;
+  const cursor = built.iter();
+  while (cursor.value !== null) {
+    const deco = cursor.value;
+    // Marks are not points and can trip neither rule, so they cost one boolean.
+    if (deco.point && cursor.from <= docEnd) {
+      // `block` is PointDecoration's own field — MarkDecoration and
+      // LineDecoration do not have it, so this identifies the class CodeMirror
+      // checks without an instanceof against a non-exported constructor. NOT
+      // `deco.spec.block`: specs carry arbitrary extra properties, and a stray
+      // `block: true` on a mark or line spec must not condemn a legal provider.
+      if ((deco as unknown as { block?: unknown }).block === true) {
+        return `a block decoration at ${cursor.from}..${cursor.to}`;
+      }
+      // Zero-length points (inline widgets, line decorations) can never reach
+      // past their own line, so only sized points pay for the lineAt lookup.
+      const to = cursor.to < docEnd ? cursor.to : docEnd;
+      if (to > cursor.from) {
+        if (cursor.from < lineFrom || cursor.from > lineTo) {
+          const line = doc.lineAt(cursor.from);
+          lineFrom = line.from;
+          lineTo = line.to;
         }
-        // `block` is PointDecoration's own field — MarkDecoration and
-        // LineDecoration do not have it, so this identifies the class
-        // CodeMirror checks without an instanceof against a non-exported
-        // constructor. NOT `deco.spec.block`: specs carry arbitrary extra
-        // properties, and a stray `block: true` on a mark or line spec must not
-        // condemn a legal provider.
-        if ((value as { block?: unknown }).block === true) {
-          found = `a block decoration at ${from}..${to}`;
-          return;
+        if (to > lineTo) {
+          return `a decoration replacing a line break at ${cursor.from}..${cursor.to}`;
         }
-        // Zero-length points (inline widgets, line decorations) can never reach
-        // past their own line, so only sized points pay for the lineAt lookup.
-        if (to > from && to > doc.lineAt(from).to) {
-          found = `a decoration replacing a line break at ${from}..${to}`;
-        }
-      },
-    },
-    0
-  );
-  return found;
+      }
+    }
+    cursor.next();
+  }
+  return null;
 }
