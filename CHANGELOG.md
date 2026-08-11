@@ -134,6 +134,7 @@ All notable changes to Quoll are documented here.
 - Task checkboxes can now be toggled from the keyboard: press `Cmd/Ctrl+L` with the caret on a task line.
 
 ### Changed
+- correct stale comments across host, webview, and build config (#349)
 
 - Accessibility polish across the outline sidebar and editor chrome: the outline settings popover now behaves as a proper dialog for assistive tech, the hover outline overlay closes when keyboard focus leaves it, the outline tree announces the document's title, the pinned outline's resize divider is keyboard-operable, and the frontmatter metadata text now meets WCAG AA contrast.
 
