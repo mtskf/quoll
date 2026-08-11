@@ -159,9 +159,10 @@ export const linkReveal: DecorationProvider = {
           // by contract too — its one throwing primitive in reach, `doc.lineAt`
           // over a stale tree, is guarded in buildSlugIndex and pinned by
           // test/webview/cm-link-resolve.test.ts's "skips a heading the STALE
-          // tree places past the end of a shortened document". Catching here
-          // would turn a future totality regression into a silently missing
-          // cursor instead of a loud CI failure.
+          // tree places past the end of a shortened document". The
+          // orchestrator's per-provider guard is the safety net; a local catch
+          // would add only silence — see cm/link-target.ts's "TOTALITY IS A
+          // HARD CONTRACT" header for the full argument.
           if (
             !revealed &&
             contentStart !== null &&

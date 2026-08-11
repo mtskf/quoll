@@ -11,8 +11,11 @@
 // under-promise — see `isActionableLinkTarget` and `resolveLinkTarget`.)
 //
 // TOTALITY IS A HARD CONTRACT — link-reveal calls this inside a
-// DecorationProvider.build(), where a throw permanently deactivates the whole
-// inline-reveal layer (see link-target.ts's header). Two non-string calls are
+// DecorationProvider.build(). The orchestrator contains a throw there (a
+// failing provider drops its own decorations for that build), so a violation
+// is QUIET rather than fatal — which is why the contract is pinned by direct
+// unit tests rather than trusted to show up as an obviously broken editor. See
+// link-target.ts's header for the full argument. Two non-string calls are
 // reachable. `ensureSyntaxTree` is total — it reports an exhausted budget by
 // returning null. `Text.lineAt` is NOT: it throws RangeError for a position
 // outside the document, and `state` and `tree` arrive as INDEPENDENT arguments,
@@ -77,7 +80,8 @@ function buildSlugIndex(state: EditorState, tree: Tree): Map<string, number> {
     // TOTALITY GUARD (see the header): `tree` is an independent argument, so it
     // may be stale relative to a SHORTENED `state.doc`, and `doc.lineAt(from)`
     // below throws RangeError for a position past the end — inside a
-    // DecorationProvider.build() that kills the whole inline-reveal layer.
+    // DecorationProvider.build(), where the orchestrator's guard would contain
+    // it as a silently missing link decoration rather than a visible failure.
     // Skip such a heading: the tree that describes it no longer describes this
     // document, so it has no anchor to offer. Deliberately BEFORE the slug work
     // rather than relying on it — an out-of-document span happens to slug to ""

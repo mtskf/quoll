@@ -99,8 +99,9 @@ describe("findHeadingBySlug", () => {
   it("skips a heading the STALE tree places past the end of a shortened document", () => {
     // TOTALITY PIN. `state` and `tree` are independent arguments, so a tree can
     // describe a document longer than the one it is handed, and this function
-    // runs inside a DecorationProvider.build() where a throw kills the whole
-    // inline-reveal layer permanently.
+    // runs inside a DecorationProvider.build() where the orchestrator's guard
+    // would turn a throw into a silently missing link decoration — which is
+    // exactly why the contract needs pinning here rather than in the editor.
     const doc = "intro\n\n## Second Heading\n\nbody\n";
     const before = stateOf(doc);
     const staleTree = fullTree(before);
