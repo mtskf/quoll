@@ -7,12 +7,14 @@ import {
   EditorState,
   type Extension,
   type Range,
+  type Text,
 } from "@codemirror/state";
 import {
   Decoration,
   type DecorationSet,
   EditorView,
   ViewPlugin,
+  type ViewUpdate,
   WidgetType,
 } from "@codemirror/view";
 import { afterEach, beforeEach, describe, expect, it, type MockInstance, vi } from "vitest";
@@ -853,19 +855,39 @@ describe("decoration orchestrator — provider build() throw containment", () =>
 
   it("CodeMirror really tolerates every shape the detector calls legal", () => {
     // Anchors findPluginIllegalDecoration to @codemirror/view rather than to
-    // itself: each set below is one the detector returns null for, emitted from
-    // a BARE ViewPlugin (no orchestrator guard in the way) so CodeMirror's own
-    // TileUpdate.emit check is the thing under test. CM throws while BUILDING
-    // the view, so mount() is the assertion point — no dispatch, which would
-    // shift the doc under this static, unmapped set and change what the
-    // fixtures mean. The illegal control proves the harness can go red; without
-    // it a CM upgrade that stopped emitting entirely would leave this green.
-    const plugin = (set: DecorationSet) =>
-      ViewPlugin.define(() => ({ decorations: set }), { decorations: (v) => v.decorations });
+    // itself: every shape below is one the detector returns null for, emitted
+    // from a BARE ViewPlugin (no orchestrator guard in the way) so CodeMirror's
+    // own TileUpdate.emit check is the thing under test.
+    //
+    // Both paths are exercised, because they are not the same walk: at
+    // construction emit() covers the whole document, while on a transaction it
+    // runs once per CHANGED REGION — and the region walk is the one the guard's
+    // clipping reasoning is about. So each fixture is mounted AND dispatched
+    // through.
+    //
+    // The plugin recomputes from the current view on every update, and each
+    // fixture is expressed relative to the live document length. A static set
+    // would drift as the document grows and silently stop meaning what its name
+    // says — a "past the end" fixture would wander into range and start
+    // testing something else.
+    const dynamic = (make: (doc: Text) => DecorationSet) =>
+      ViewPlugin.fromClass(
+        class {
+          decorations: DecorationSet;
+          constructor(view: EditorView) {
+            this.decorations = make(view.state.doc);
+          }
+          update(u: ViewUpdate): void {
+            this.decorations = make(u.state.doc);
+          }
+        },
+        { decorations: (v) => v.decorations }
+      );
     const doc = "hello\nworld\nagain";
-    for (const set of [
-      Decoration.set([Decoration.replace({}).range(17, 25)]),
-      Decoration.set([Decoration.replace({}).range(14, 25)]),
+    const fixtures: Array<(d: Text) => DecorationSet> = [
+      // Wholly past the end, and straddling the end from inside the last line.
+      (d) => Decoration.set([Decoration.replace({}).range(d.length, d.length + 8)]),
+      (d) => Decoration.set([Decoration.replace({}).range(d.length - 3, d.length + 8)]),
       // The two shapes nothing but WALK GEOMETRY keeps legal, and so the two
       // most fragile verdicts in the module: a block decoration past the end is
       // legal only because RangeSet.spans never visits it, and a range wholly
@@ -873,13 +895,25 @@ describe("decoration orchestrator — provider build() throw containment", () =>
       // we implement — both are upstream behaviour we depend on — so an upgrade
       // that started judging either would reopen the dispatch escape with no
       // other test going red.
-      Decoration.set([blockWidget(25)]),
-      Decoration.set([Decoration.replace({}).range(-5, -3)]),
-    ]) {
-      const view = mount([], doc, [plugin(set)]);
-      view.destroy();
+      (d) => Decoration.set([blockWidget(d.length + 8)]),
+      () => Decoration.set([Decoration.replace({}).range(-5, -3)]),
+    ];
+    for (const make of fixtures) {
+      const view = mount([], doc, [dynamic(make)]);
+      try {
+        // The transaction must COMPLETE: an upstream change that started
+        // judging these shapes would throw out of here, which is precisely the
+        // escape the guard exists to prevent.
+        view.dispatch({ changes: { from: 0, insert: "x" } });
+        expect(view.state.doc.toString()).toBe(`x${doc}`);
+      } finally {
+        view.destroy();
+      }
     }
-    expect(() => mount([], doc, [plugin(Decoration.set([blockWidget(0)]))])).toThrow(
+    // The control proves the harness can still go red — without it, a CM
+    // upgrade that stopped emitting the check at all would leave every
+    // assertion above trivially green.
+    expect(() => mount([], doc, [dynamic(() => Decoration.set([blockWidget(0)]))])).toThrow(
       /may not be specified via plugins/
     );
   });
