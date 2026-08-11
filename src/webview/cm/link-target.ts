@@ -8,6 +8,14 @@
 // working link and then did nothing on click. One classifier, two consumers,
 // so the affordance cannot drift from the behaviour again.
 //
+// The two consumers now read a RESOLVED verdict rather than this raw one:
+// cm/link-resolve.ts turns a LinkTarget into a ResolvedLinkTarget (the
+// `fragment` arm becomes `scroll` or `no-action`) and owns
+// `isActionableLinkTarget`, which used to live here. This module stayed pure as
+// a result: the fragment arm needs a DOCUMENT to be judged, and the answer to
+// "does this act?" is not a property of the string. Keep it that way — no
+// EditorState, no Tree, no callbacks in this file.
+//
 // TOTALITY IS A HARD CONTRACT — this module must never throw. It runs inside
 // DecorationProvider.build(), and the orchestrator drives EVERY inline
 // decoration provider from a SINGLE shared ViewPlugin. CodeMirror's
@@ -38,6 +46,10 @@
 // `notes/private-plan.md` both pass the allowlist and are both private. POST
 // it, never LOG it. So the rule for a consumer is: every field of a rejection
 // arm is safe to log; `href` is safe to send to the host and nothing else.
+// `slug` on the `fragment` arm is the third such field and the strictest: it is
+// neither posted nor logged. It is href bytes (post-allowlist and slugified,
+// but `#project-atlas-launch-date` is still private text), and its only legal
+// use is a lookup in cm/link-resolve.ts.
 //
 // DRIFT WARNING (inherited from link-handlers.ts): the OPENABLE_SCHEMES set +
 // schemeOf helper below are mirrored in
@@ -53,6 +65,7 @@
 
 import { isAllowedUrl } from "../../markdown/url-allowlist.js";
 import { MAX_HREF_LENGTH } from "../../shared/protocol.js";
+import { slugifyHeadingText } from "./headings.js";
 
 const OPENABLE_SCHEMES = new Set(["http", "https", "mailto"]);
 
@@ -118,14 +131,25 @@ function schemeTokenForLog(scheme: string | null): LoggableSchemeToken {
   return LOGGABLE_SCHEMES.find((s) => s === scheme) ?? "(unrecognised)";
 }
 
-/** What a decoded destination resolves to. `external` and `workspace` are the
- *  two ACTIONABLE arms — exactly the arms a click acts on, and exactly the arms
- *  that earn a pointer cursor. The rest are the dead-click classes, split by
- *  cause so link-handlers can keep one distinct warn per gate (PR #332's triage
- *  trail). `no-action` is the silent one: ordinary Markdown Quoll does not route. */
+/** What a decoded destination resolves to — the STRING verdict, which is only
+ *  the FIRST of two stages. `external` and `workspace` are actionable as they
+ *  stand: a click acts on them and they earn a pointer cursor. `fragment` is
+ *  undecided here — it acts only if THIS document has a heading with that slug,
+ *  and cm/link-resolve.ts is the stage that answers it (it turns the arm into
+ *  `scroll` / `no-action` / `unresolved-fragment` and owns the
+ *  `isActionableLinkTarget` predicate both consumers read). The remaining arms
+ *  are the dead-click classes, split by cause so link-handlers can keep one
+ *  distinct warn per gate (PR #332's triage trail). `no-action` is the silent
+ *  one: ordinary Markdown Quoll does not route. */
 export type LinkTarget =
   | { readonly kind: "external"; readonly href: string }
   | { readonly kind: "workspace"; readonly href: string }
+  /** A same-document `#slug` destination, carrying only the slugified fragment.
+   *  Not actionable on its own: whether a click does anything depends on the
+   *  DOCUMENT (does a heading produce this slug?), which this module
+   *  deliberately cannot see. cm/link-resolve.ts answers that for both
+   *  consumers. Nothing is posted and nothing is logged. */
+  | { readonly kind: "fragment"; readonly slug: string }
   | { readonly kind: "oversize"; readonly length: number }
   | { readonly kind: "blocked"; readonly schemeToken: LoggableSchemeToken }
   | { readonly kind: "unopenable-scheme"; readonly scheme: string }
@@ -191,6 +215,33 @@ function relativeMarkdownTarget(decoded: string): boolean {
   return /\.md$/i.test(pathPart);
 }
 
+/** Normalise a raw `#…` fragment (the bytes AFTER the `#`) into the slug form
+ *  the heading index is keyed by. Percent-decode first — `#My%20Section` and
+ *  `#My Section` name the same heading — then run the SAME
+ *  `slugifyHeadingText` the index uses.
+ *
+ *  Sharing that one function is what makes a match symmetric: the two sides
+ *  start from different domains (a decoded identifier here, raw Markdown source
+ *  there), so agreeing on the RULES is not enough — they have to agree on the
+ *  FUNCTION. It is idempotent, so slugging an already-slugged fragment is a
+ *  no-op, and it makes matching tolerant of case and punctuation
+ *  (`#Getting-Started!` → `getting-started`).
+ *
+ *  decodeURIComponent is the one throwing primitive in this file's reach and
+ *  this module must never throw (see the header's totality contract), so a
+ *  malformed escape falls back to the raw form — the same fallback
+ *  relativeMarkdownTarget and the host use, so a `50%off` heading stays
+ *  reachable rather than becoming a dead link. */
+function fragmentSlug(rawFragment: string): string {
+  let decodedFragment: string;
+  try {
+    decodedFragment = decodeURIComponent(rawFragment);
+  } catch {
+    decodedFragment = rawFragment;
+  }
+  return slugifyHeadingText(decodedFragment);
+}
+
 /** Classify an already-decoded link destination. Gate ORDER is load-bearing and
  *  mirrors the cascade tryOpenLinkAt used before the extraction: length cap
  *  first (so an oversize href is rejected without running the allowlist over
@@ -229,48 +280,22 @@ export function classifyLinkTarget(decoded: string): LinkTarget {
     }
     return { kind: "external", href: decoded };
   }
-  // Schemeless: a relative `.md` link opens IN-EDITOR via the host (phase-1
-  // page-to-page). Everything else schemeless — fragments, absolute paths,
-  // non-.md relatives — is ordinary Markdown Quoll does not route yet.
+  // Schemeless. A leading `#` is a same-document fragment — resolved in the
+  // webview against the document's own headings, so it needs no host round
+  // trip. Ordered BEFORE relativeMarkdownTarget for readability only: that
+  // helper already rejects a leading `#` (its path part is empty), so the two
+  // arms cannot both match.
+  if (decoded.startsWith("#")) {
+    const slug = fragmentSlug(decoded.slice(1));
+    // An empty or unsluggable fragment (`#`, `#!!!`) names no heading. Fall
+    // through to no-action so the click stays a caret move.
+    return slug === "" ? { kind: "no-action" } : { kind: "fragment", slug };
+  }
+  // Everything else schemeless: a relative `.md` link opens IN-EDITOR via the
+  // host (phase-1 page-to-page); absolute paths and non-.md relatives are
+  // ordinary Markdown Quoll does not route.
   if (relativeMarkdownTarget(decoded)) {
     return { kind: "workspace", href: decoded };
   }
   return { kind: "no-action" };
-}
-
-/** Why a lookup table rather than `kind === "external" || kind === "workspace"`:
- *  the switch in tryOpenLinkAt is exhaustiveness-checked (TS2366), but a boolean
- *  `||` chain is not — a seventh arm would compile green here and silently
- *  answer `false`. The realistic sequence is the one this module's header
- *  advertises: someone adds a fragment arm, the compiler forces them to handle
- *  it in tryOpenLinkAt, they never touch this predicate, and the result is a
- *  link that ACTS but shows no pointer cursor — the exact inverse of the bug
- *  this module was written to fix. A `Record<LinkTarget["kind"], …>` reds with
- *  TS2741 the moment the union grows, so the two halves cannot drift. */
-const ACTIONABLE_BY_KIND: Record<LinkTarget["kind"], boolean> = {
-  external: true,
-  workspace: true,
-  oversize: false,
-  blocked: false,
-  "unopenable-scheme": false,
-  "no-action": false,
-};
-
-/** True for exactly the arms a click ACTS on. Consumers: the click handler
- *  (act, or fall through to a caret move) and the reveal decoration (pointer
- *  cursor, or leave the text cursor). Keeping the predicate here rather than at
- *  each call site is the whole point of the module — the cursor and the click
- *  read the same boolean.
- *
- *  Named for the INTENT ("a click does something") rather than the mechanism
- *  ("posts to the host"), even though every actionable arm posts today. A
- *  future in-document fragment scroll would act WITHOUT posting; under a
- *  post-shaped name it would have to either lie or force a rename of a shared
- *  predicate. Such an arm needs no new pointer-cursor WIRING — the cursor
- *  already reads this predicate — but it is not free: a fragment is actionable
- *  only if its heading exists, and this module stays a pure string→verdict
- *  function with no document context, so the consumer resolves existence (see
- *  the fragment TODO). */
-export function isActionableLinkTarget(target: LinkTarget): boolean {
-  return ACTIONABLE_BY_KIND[target.kind];
 }
