@@ -3,6 +3,40 @@ import { describe, expect, it } from "vitest";
 import { decodeMarkdownDestination } from "../../src/markdown/url-decode.js";
 import { MAX_HREF_LENGTH } from "../../src/shared/protocol.js";
 import { classifyLinkTarget, isActionableLinkTarget } from "../../src/webview/cm/link-target.js";
+import {
+  OPEN_LINK_CONTAINMENT_ONLY_REJECTIONS,
+  OPEN_LINK_STRUCTURAL_MATRIX,
+} from "../fixtures/open-link-destinations.js";
+
+// The cross-boundary half of this suite. Every row below is asserted by the
+// host suite too (test/extension/links/handle-open-link.test.ts) off the SAME
+// fixture, so the webview's `relativeMarkdownTarget` copy of the cascade cannot
+// drift from `handleOpenLink`'s without reddening both files. Read the fixture
+// header for what the matrix does and does not claim.
+describe("classifyLinkTarget — shared open-link structural matrix", () => {
+  for (const { destination, hostRoutes, why } of OPEN_LINK_STRUCTURAL_MATRIX) {
+    it(`${hostRoutes ? "routes" : "does not route"} — ${why}`, () => {
+      // The biconditional, not the arm: `workspace` is exactly the class the
+      // webview posts as `open-link`, so anything else (external, blocked,
+      // no-action) is a non-route no matter which. Arm-exactness is pinned
+      // separately below, where it is webview-only information.
+      expect(classifyLinkTarget(destination).kind === "workspace").toBe(hostRoutes);
+    });
+  }
+});
+
+// The one place the two sides legitimately disagree. Pinned so it stays a
+// documented split of responsibility rather than looking like the drift the
+// matrix above exists to catch: the webview owns no path, so it classifies
+// these as `workspace` and posts them; only the host can resolve them and see
+// that they escape.
+describe("classifyLinkTarget — containment is the host's call, not the webview's", () => {
+  for (const { destination, why } of OPEN_LINK_CONTAINMENT_ONLY_REJECTIONS) {
+    it(`classifies as workspace even though the host will drop it — ${why}`, () => {
+      expect(classifyLinkTarget(destination).kind).toBe("workspace");
+    });
+  }
+});
 
 describe("classifyLinkTarget", () => {
   it("classifies http / https / mailto as external", () => {
@@ -17,45 +51,39 @@ describe("classifyLinkTarget", () => {
     });
   });
 
-  it("classifies a relative .md destination as workspace, fragment included", () => {
+  // WHETHER these route is the shared matrix's job; this pins WHAT gets posted.
+  // The href must be the destination VERBATIM — the host re-derives everything
+  // from the raw string (fragment split, single percent-decode, join), so any
+  // normalisation here would mean the two sides resolve different files.
+  it("carries the destination verbatim on the workspace arm", () => {
     expect(classifyLinkTarget("notes.md")).toEqual({ kind: "workspace", href: "notes.md" });
+    // Fragment and percent-escapes survive untouched — decoding is the host's.
     expect(classifyLinkTarget("./sub/notes.MD#heading")).toEqual({
       kind: "workspace",
       href: "./sub/notes.MD#heading",
     });
-  });
-
-  // The structural rules must be applied to the PERCENT-DECODED path, because
-  // that is the form the host judges (handle-open-link.ts). Judging the raw
-  // string instead made these classify as `workspace` — pointer cursor, post,
-  // preventDefault — and the host then dropped them, eating the caret move too.
-  it("applies the absolute / backslash / scheme rules to the percent-decoded path", () => {
-    expect(classifyLinkTarget("%2Fetc.md")).toEqual({ kind: "no-action" });
-    expect(classifyLinkTarget("%5Cfoo.md")).toEqual({ kind: "no-action" });
-    expect(classifyLinkTarget("%2F%2Fhost.md")).toEqual({ kind: "no-action" });
-    expect(classifyLinkTarget("http%3A%2F%2Fexample.com%2Fx.md")).toEqual({ kind: "no-action" });
-  });
-
-  it("percent-decodes a legitimate escaped path, and falls back on a malformed one", () => {
-    // `my%20notes.md` must still route — the decode exists to make the ordinary
-    // escaped form work, not merely to reject things.
     expect(classifyLinkTarget("my%20notes.md")).toEqual({
       kind: "workspace",
       href: "my%20notes.md",
     });
-    // A malformed escape throws inside decodeURIComponent; the host falls back
-    // to the raw form so the link still resolves to its literal-named file, and
-    // this side must agree. This catch is also what keeps the module total —
+    // A malformed escape throws inside decodeURIComponent and falls back to the
+    // raw form on both sides. That catch is also what keeps the module total —
     // decodeURIComponent is the one throwing primitive here.
     expect(classifyLinkTarget("50%off.md")).toEqual({ kind: "workspace", href: "50%off.md" });
   });
 
   it("classifies the schemeless fall-through as no-action", () => {
-    // The class this PR exists for: ordinary Markdown Quoll does not route.
+    // Arm-exactness for the non-routing classes — webview-only information the
+    // shared matrix cannot carry (it only knows "the host does not route it").
+    // Each distinct warn in link-handlers keys off one of these arms, so a
+    // silent reshuffle between them would blur the triage trail from PR #332.
     expect(classifyLinkTarget("#section")).toEqual({ kind: "no-action" });
     expect(classifyLinkTarget("./photo.png")).toEqual({ kind: "no-action" });
     expect(classifyLinkTarget("/abs.md")).toEqual({ kind: "no-action" });
     expect(classifyLinkTarget("sub\\notes.md")).toEqual({ kind: "no-action" });
+    // The decoded-form class (PR #340): rejected on the percent-DECODED path,
+    // so it lands on the same silent arm rather than looking like a blocked URL.
+    expect(classifyLinkTarget("%2Fetc.md")).toEqual({ kind: "no-action" });
   });
 
   it("classifies an oversize destination before any allowlist work", () => {

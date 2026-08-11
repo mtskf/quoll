@@ -17,3 +17,19 @@ Vitest runs in a Node environment; no jsdom (the Markdown bridge is pure).
 
 Vitest reports per-fixture pass/fail by filename — a failing row points at the
 offending `.md`.
+
+## Cross-suite fixtures (`test/fixtures/`)
+
+Distinct from the `.md` corpus above: `test/fixtures/` holds TypeScript modules
+that state ONE contract two suites must agree on, so a change on either side
+reds the other. Reach for one only when the same rule is implemented twice on
+purpose — typically across the host ⇄ webview process boundary, where sharing
+the SOURCE is not an option.
+
+- [open-link-destinations.ts](fixtures/open-link-destinations.ts) — the
+  `open-link` structural cascade, consumed by both
+  `test/webview/cm-link-target.test.ts` and
+  `test/extension/links/handle-open-link.test.ts`.
+
+Keep each row's expectation a single value both suites assert against; anything
+only one side can know (a resolved path, a rejection arm) stays in that suite.
