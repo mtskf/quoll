@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { decodeMarkdownDestination } from "../../src/markdown/url-decode.js";
 import { MAX_HREF_LENGTH } from "../../src/shared/protocol.js";
-import { classifyLinkTarget, isActionableLinkTarget } from "../../src/webview/cm/link-target.js";
+import { classifyLinkTarget } from "../../src/webview/cm/link-target.js";
 import {
   OPEN_LINK_CONTAINMENT_ONLY_REJECTIONS,
   OPEN_LINK_STRUCTURAL_MATRIX,
@@ -79,8 +79,9 @@ describe("classifyLinkTarget", () => {
     // `no-action` is the SILENT class by design: link-handlers keeps one warn
     // per gate-reject arm (oversize / blocked / unopenable-scheme — PR #332's
     // triage trail) and deliberately none here, and link-reveal withholds the
-    // pointer cursor for exactly this arm.
-    expect(classifyLinkTarget("#section")).toEqual({ kind: "no-action" });
+    // pointer cursor for exactly this arm. A leading `#` is no longer part of
+    // this class — it is the `fragment` arm now, pinned separately in
+    // "classifyLinkTarget — fragments" below.
     expect(classifyLinkTarget("./photo.png")).toEqual({ kind: "no-action" });
     expect(classifyLinkTarget("/abs.md")).toEqual({ kind: "no-action" });
     expect(classifyLinkTarget("sub\\notes.md")).toEqual({ kind: "no-action" });
@@ -120,14 +121,52 @@ describe("classifyLinkTarget", () => {
     expect(target).toEqual({ kind: "blocked", schemeToken: "(unrecognised)" });
     expect(JSON.stringify(target)).not.toContain("Passw0rd");
   });
+});
 
-  it("is actionable for exactly external + workspace", () => {
-    expect(isActionableLinkTarget({ kind: "external", href: "https://x" })).toBe(true);
-    expect(isActionableLinkTarget({ kind: "workspace", href: "a.md" })).toBe(true);
-    expect(isActionableLinkTarget({ kind: "no-action" })).toBe(false);
-    expect(isActionableLinkTarget({ kind: "oversize", length: 1 })).toBe(false);
-    expect(isActionableLinkTarget({ kind: "blocked", schemeToken: "(none)" })).toBe(false);
-    expect(isActionableLinkTarget({ kind: "unopenable-scheme", scheme: "ftp" })).toBe(false);
+describe("classifyLinkTarget — fragments", () => {
+  it("classifies a bare fragment as the fragment arm, slugified", () => {
+    expect(classifyLinkTarget("#sec")).toEqual({ kind: "fragment", slug: "sec" });
+    expect(classifyLinkTarget("#Getting-Started")).toEqual({
+      kind: "fragment",
+      slug: "getting-started",
+    });
+  });
+
+  it("percent-decodes the fragment before slugging", () => {
+    expect(classifyLinkTarget("#My%20Section")).toEqual({ kind: "fragment", slug: "my-section" });
+  });
+
+  it("falls back to the raw fragment on a malformed escape instead of throwing", () => {
+    expect(classifyLinkTarget("#50%off")).toEqual({ kind: "fragment", slug: "50off" });
+  });
+
+  it("treats an empty or unsluggable fragment as no-action", () => {
+    expect(classifyLinkTarget("#")).toEqual({ kind: "no-action" });
+    expect(classifyLinkTarget("#!!!")).toEqual({ kind: "no-action" });
+  });
+
+  it("leaves a `.md#sec` destination on the workspace arm — the host owns it", () => {
+    expect(classifyLinkTarget("notes.md#sec")).toEqual({ kind: "workspace", href: "notes.md#sec" });
+  });
+
+  it("keeps the oversize cap ahead of the fragment arm", () => {
+    const huge = `#${"a".repeat(MAX_HREF_LENGTH)}`;
+    expect(classifyLinkTarget(huge).kind).toBe("oversize");
+  });
+
+  it("keeps the allowlist ahead of the fragment arm", () => {
+    // A C0 byte is an allowlist reject, not a fragment. (A space is NOT —
+    // isAllowedUrl permits it, so `#a b` is a fragment that slugs to `a-b`.)
+    expect(classifyLinkTarget("#sec")).toEqual({ kind: "blocked", schemeToken: "(none)" });
+  });
+
+  it("stays document-free: the arm carries a slug and no resolution", () => {
+    // link-target.ts must not learn about headings. If this ever needs an
+    // EditorState to answer, the module boundary has been broken.
+    expect(classifyLinkTarget("#anything-at-all")).toEqual({
+      kind: "fragment",
+      slug: "anything-at-all",
+    });
   });
 });
 

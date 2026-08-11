@@ -214,8 +214,23 @@ describe("linkReveal — the clickable marker tracks actionability", () => {
     expect(clickableCount("see [t](./notes.md) end")).toBe(1);
   });
 
-  it("does NOT mark a fragment link", () => {
+  it("does NOT mark a fragment link whose slug matches no heading", () => {
+    // Was "does NOT mark a fragment link" — before fragments were routable,
+    // this pinned the whole class. It now pins the UNMATCHED case only: this
+    // fixture has no `## Section`. The matched case is the next test.
     expect(clickableCount("see [t](#section) end")).toBe(0);
+  });
+
+  it("marks a fragment link whose heading exists", () => {
+    expect(clickableCount("# Getting Started\n\nsee [jump](#getting-started) end\n")).toBe(1);
+  });
+
+  it("withholds the marker when no heading produces the slug", () => {
+    expect(clickableCount("# Getting Started\n\nsee [jump](#missing) end\n")).toBe(0);
+  });
+
+  it("withholds the marker for a fragment that slugs to nothing", () => {
+    expect(clickableCount("# Getting Started\n\nsee [jump](#) end\n")).toBe(0);
   });
 
   it("does NOT mark a relative non-.md link", () => {

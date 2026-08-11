@@ -8,6 +8,13 @@ import { PROTOCOL_VERSION, type WebviewToHost } from "../../../src/shared/protoc
 import { quollSyntaxReveal } from "../../../src/webview/cm/decorations/index.js";
 import { quollLinkClickHandler, tryOpenLinkAt } from "../../../src/webview/cm/link-handlers.js";
 
+/** Fragment scroll sink for the non-fragment cases: asserts by exploding, so a
+ *  test that unexpectedly takes the fragment arm fails loudly instead of
+ *  quietly passing. */
+const noScroll = () => {
+  throw new Error("unexpected in-document scroll");
+};
+
 function mount(doc: string, host: { postMessage(m: WebviewToHost): void }): EditorView {
   const parent = document.createElement("div");
   document.body.appendChild(parent);
@@ -120,7 +127,12 @@ describe("C4b integration — URL-security matrix at the click gate", () => {
         // Click position: inside the link's inline content (`t` at
         // doc.indexOf("[t]") + 1).
         const pos = doc.indexOf("[t]") + 1;
-        const handled = tryOpenLinkAt(view.state, pos, { postMessage: (m) => posted.push(m) });
+        const handled = tryOpenLinkAt(
+          view.state,
+          pos,
+          { postMessage: (m) => posted.push(m) },
+          noScroll
+        );
         expect(handled).toBe(false);
         expect(posted).toEqual([]);
       } finally {
@@ -138,9 +150,12 @@ describe("C4b integration — URL-security matrix at the click gate", () => {
     const posted: WebviewToHost[] = [];
     const view = mount(doc, { postMessage: (m) => posted.push(m) });
     try {
-      const handled = tryOpenLinkAt(view.state, doc.indexOf("[link]") + 1, {
-        postMessage: (m) => posted.push(m),
-      });
+      const handled = tryOpenLinkAt(
+        view.state,
+        doc.indexOf("[link]") + 1,
+        { postMessage: (m) => posted.push(m) },
+        noScroll
+      );
       expect(handled).toBe(true);
       expect(posted).toEqual([
         { protocol: PROTOCOL_VERSION, type: "open-external", href: "https://example.com" },

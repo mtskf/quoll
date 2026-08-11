@@ -3,8 +3,12 @@ import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
 import { ensureSyntaxTree, syntaxTree } from "@codemirror/language";
 import { EditorState } from "@codemirror/state";
 import { describe, expect, it } from "vitest";
-
-import { findHeadingBySlug } from "../../src/webview/cm/link-resolve.js";
+import {
+  findHeadingBySlug,
+  isActionableLinkTarget,
+  resolveLinkTarget,
+} from "../../src/webview/cm/link-resolve.js";
+import { classifyLinkTarget } from "../../src/webview/cm/link-target.js";
 
 function stateOf(doc: string): EditorState {
   return EditorState.create({ doc, extensions: [markdown({ base: markdownLanguage })] });
@@ -103,5 +107,62 @@ describe("findHeadingBySlug", () => {
     expect(findHeadingBySlug(state, complete as NonNullable<typeof complete>, "far-heading")).toBe(
       doc.lastIndexOf("## Far Heading")
     );
+  });
+});
+
+describe("resolveLinkTarget", () => {
+  function resolve(doc: string, destination: string, budgetMs?: number) {
+    const state = stateOf(doc);
+    return resolveLinkTarget(state, syntaxTree(state), classifyLinkTarget(destination), budgetMs);
+  }
+
+  it("passes every non-fragment arm through untouched", () => {
+    const doc = "# H\n\ntext\n";
+    expect(resolve(doc, "https://example.com")).toEqual({
+      kind: "external",
+      href: "https://example.com",
+    });
+    expect(resolve(doc, "notes.md")).toEqual({ kind: "workspace", href: "notes.md" });
+    expect(resolve(doc, "./photo.png")).toEqual({ kind: "no-action" });
+  });
+
+  it("resolves a matching fragment to a scroll target", () => {
+    const doc = "intro\n\n## Getting Started\n\nbody\n";
+    expect(resolve(doc, "#getting-started")).toEqual({
+      kind: "scroll",
+      pos: doc.indexOf("## Getting"),
+    });
+  });
+
+  it("collapses an unmatched fragment to no-action", () => {
+    expect(resolve("# One\n\ntext\n", "#missing")).toEqual({ kind: "no-action" });
+  });
+
+  it("finds a far heading when given a parse budget, and misses it without one", () => {
+    // Design decision 2: the CLICK path forces a complete parse because
+    // syntaxTree only guarantees the viewport (+~100 KB); the decoration path
+    // passes no budget and accepts the miss.
+    const doc = `# Top\n\n${"filler paragraph text\n\n".repeat(4000)}## Far Heading\n\nend\n`;
+    const state = stateOf(doc);
+    const partial = ensureSyntaxTree(state, 200, 50) ?? syntaxTree(state);
+    expect(partial.length).toBeLessThan(state.doc.length);
+    const target = classifyLinkTarget("#far-heading");
+    expect(resolveLinkTarget(state, partial, target)).toEqual({ kind: "no-action" });
+    expect(resolveLinkTarget(state, partial, target, 5000)).toEqual({
+      kind: "scroll",
+      pos: doc.lastIndexOf("## Far Heading"),
+    });
+  });
+});
+
+describe("isActionableLinkTarget", () => {
+  it("is true for exactly the arms a click acts on", () => {
+    expect(isActionableLinkTarget({ kind: "external", href: "https://x" })).toBe(true);
+    expect(isActionableLinkTarget({ kind: "workspace", href: "a.md" })).toBe(true);
+    expect(isActionableLinkTarget({ kind: "scroll", pos: 0 })).toBe(true);
+    expect(isActionableLinkTarget({ kind: "no-action" })).toBe(false);
+    expect(isActionableLinkTarget({ kind: "oversize", length: 1 })).toBe(false);
+    expect(isActionableLinkTarget({ kind: "blocked", schemeToken: "(none)" })).toBe(false);
+    expect(isActionableLinkTarget({ kind: "unopenable-scheme", scheme: "ftp" })).toBe(false);
   });
 });

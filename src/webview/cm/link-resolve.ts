@@ -15,10 +15,11 @@
 //
 // NO-URL POLICY: `slug` is href-derived. Look it up, never log it.
 
-import type { syntaxTree } from "@codemirror/language";
+import { ensureSyntaxTree, type syntaxTree } from "@codemirror/language";
 import type { EditorState, Text } from "@codemirror/state";
 
 import { collectHeadings, headingText, slugifyHeadingText } from "./headings.js";
+import type { LinkTarget } from "./link-target.js";
 
 type Tree = ReturnType<typeof syntaxTree>;
 
@@ -96,4 +97,79 @@ export function findHeadingBySlug(state: EditorState, tree: Tree, slug: string):
     SLUG_INDEX_CACHE.set(tree, index);
   }
   return index.bySlug.get(slug) ?? null;
+}
+
+/** A LinkTarget with the document question answered. The `fragment` arm is gone
+ *  — it has become either `scroll` (a heading matched; `pos` is where to go) or
+ *  `no-action` (it did not). Every other arm passes through untouched, so
+ *  link-handlers keeps one exhaustive switch with its per-gate warns intact.
+ *
+ *  Derived with `Exclude` rather than re-listed so a new LinkTarget arm shows up
+ *  here automatically and the consuming switches red until they handle it. */
+export type ResolvedLinkTarget =
+  | Exclude<LinkTarget, { kind: "fragment" }>
+  | { readonly kind: "scroll"; readonly pos: number };
+
+/** Answer the document question for `target`.
+ *
+ *  `completeParseBudgetMs` is the asymmetry between the two consumers, and it is
+ *  deliberate. `syntaxTree(state)` only guarantees the viewport (+~100 KB), so
+ *  in a large document a heading far below the fold may not be in the tree at
+ *  all — and a table-of-contents link to exactly such a heading is this
+ *  feature's main use case. The CLICK path therefore passes a budget and this
+ *  forces a complete parse (`ensureSyntaxTree`, falling back to the partial tree
+ *  when the budget runs out), mirroring what outline-panel.ts does on ITS
+ *  user-initiated path. The DECORATION path passes nothing: it rebuilds on every
+ *  viewport and selection change and must never force a parse there.
+ *
+ *  The cost is paid only for a fragment — a passing-through `external` returns
+ *  before any parse work — and the resulting asymmetry fails safe: a far-heading
+ *  link may show no pointer yet still work when clicked. That is a
+ *  discoverability miss, never a dead click, and the tree catches up as the user
+ *  scrolls. */
+export function resolveLinkTarget(
+  state: EditorState,
+  tree: Tree,
+  target: LinkTarget,
+  completeParseBudgetMs = 0
+): ResolvedLinkTarget {
+  if (target.kind !== "fragment") {
+    return target;
+  }
+  const searchTree =
+    completeParseBudgetMs > 0
+      ? (ensureSyntaxTree(state, state.doc.length, completeParseBudgetMs) ?? tree)
+      : tree;
+  const pos = findHeadingBySlug(state, searchTree, target.slug);
+  return pos === null ? { kind: "no-action" } : { kind: "scroll", pos };
+}
+
+/** Why a lookup table rather than `kind === "external" || …`: the switch in
+ *  tryOpenLinkAt is exhaustiveness-checked (TS2366), but a boolean `||` chain is
+ *  not — a new arm would compile green here and silently answer `false`. A
+ *  `Record<ResolvedLinkTarget["kind"], …>` reds with TS2741 the moment the union
+ *  grows, so the click and the cursor cannot drift. (This table and the
+ *  predicate moved here from link-target.ts when the resolve stage was
+ *  introduced: they judge a RESOLVED target now, which is the only form in which
+ *  "does this act?" has an answer.) */
+const ACTIONABLE_BY_KIND: Record<ResolvedLinkTarget["kind"], boolean> = {
+  external: true,
+  workspace: true,
+  scroll: true,
+  oversize: false,
+  blocked: false,
+  "unopenable-scheme": false,
+  "no-action": false,
+};
+
+/** True for exactly the arms a click ACTS on. Consumers: the click handler (act,
+ *  or fall through to a caret move) and the reveal decoration (pointer cursor,
+ *  or leave the text cursor). Both call `resolveLinkTarget` first and both read
+ *  THIS predicate, which is the whole point of the two-stage split — the pointer
+ *  promises exactly what the click delivers.
+ *
+ *  Named for the INTENT ("a click does something") rather than the mechanism
+ *  ("posts to the host"): `scroll` acts entirely inside the webview. */
+export function isActionableLinkTarget(resolved: ResolvedLinkTarget): boolean {
+  return ACTIONABLE_BY_KIND[resolved.kind];
 }

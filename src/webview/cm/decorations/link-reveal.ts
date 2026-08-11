@@ -31,6 +31,18 @@
 // `open-link-rejected` host→webview channel, which would buy the caret move
 // back, was considered and declined).
 //
+// A `#slug` fragment is the one class whose actionability depends on the
+// DOCUMENT rather than the destination alone, so the pointer is gated on the
+// same resolution the click uses (cm/link-resolve.ts): a slug that names a real
+// heading gets the pointer and scrolls; an unmatched one gets neither, and the
+// click stays a caret move. Two caveats, both deliberate. The lookup is memoised
+// per Lezer tree, so a table-of-contents document pays one heading walk per
+// rebuild rather than one per link. And this path passes NO parse budget — it
+// reads only the viewport tree — so in a large document a heading far below the
+// fold may not be visible to it yet, and its link shows no pointer while the
+// click (which does force a complete parse) still works. That asymmetry is the
+// safe direction: a missing affordance, never a dead click.
+//
 // Reveal-trigger range is the OUTER Link node range (mirror of
 // inline-mark-reveal). Click-to-open behaviour is wired separately in
 // src/webview/cm/link-handlers.ts.
@@ -38,7 +50,8 @@
 import { Decoration, type DecorationSet } from "@codemirror/view";
 
 import { decodeMarkdownDestination } from "../../../markdown/url-decode.js";
-import { classifyLinkTarget, isActionableLinkTarget } from "../link-target.js";
+import { isActionableLinkTarget, resolveLinkTarget } from "../link-resolve.js";
+import { classifyLinkTarget } from "../link-target.js";
 import { buildSortedRangeSet } from "../sorted-range-set.js";
 
 import { HIDE, intersectsAnySelection, REVEAL_MARK } from "./shared.js";
@@ -141,8 +154,12 @@ export const linkReveal: DecorationProvider = {
             contentStart < range.to &&
             range.from < contentEnd &&
             isActionableLinkTarget(
-              classifyLinkTarget(
-                decodeMarkdownDestination(ctx.state.doc.sliceString(urlChild.from, urlChild.to))
+              resolveLinkTarget(
+                ctx.state,
+                ctx.tree,
+                classifyLinkTarget(
+                  decodeMarkdownDestination(ctx.state.doc.sliceString(urlChild.from, urlChild.to))
+                )
               )
             )
           ) {

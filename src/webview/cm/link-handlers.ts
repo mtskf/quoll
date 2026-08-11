@@ -1,8 +1,11 @@
 // Link interaction surface for the CodeMirror editor:
-//   - tryOpenLinkAt(state, pos, host): a pure helper that resolves a
-//     position to a Link node and, when the destination is actionable, posts
-//     the matching message to the host — `open-external` for a launchable
-//     http/https/mailto URL, `open-link` for a relative `.md` target.
+//   - tryOpenLinkAt(state, pos, host, scrollTo): resolves a position to a Link
+//     node and, when the destination is actionable, either posts the matching
+//     message to the host — `open-external` for a launchable http/https/mailto
+//     URL, `open-link` for a relative `.md` target — or, for a same-document
+//     `#slug` whose heading exists, calls the injected scroll sink with that
+//     heading's offset. The fragment arm is the one actionable class that needs
+//     no host: the document is right here.
 //   - handleLinkMouseDown(event, view, host) + quollLinkClickHandler():
 //     extracted mousedown helper + the Extension factory that wires it.
 //
@@ -18,15 +21,27 @@
 // `quoll-link-clickable` decoration decide "does this act?" from one predicate
 // instead of two drifting copies. This file keeps the LOGGING policy on top of
 // that verdict.
+// Classification lives in ./link-target.js (pure) and the document question —
+// "does this `#slug` name a real heading?" — in ./link-resolve.js. This file
+// switches on the RESOLVED verdict and keeps only the LOGGING policy on top.
 
 import { syntaxTree } from "@codemirror/language";
-import type { EditorState } from "@codemirror/state";
+import { EditorSelection, type EditorState } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 
 import { decodeMarkdownDestination } from "../../markdown/url-decode.js";
 import { MAX_HREF_LENGTH, PROTOCOL_VERSION, type WebviewToHost } from "../../shared/protocol.js";
 import { type PostMessageHost, safePostMessage } from "../safe-post-message.js";
+import { resolveLinkTarget } from "./link-resolve.js";
 import { classifyLinkTarget } from "./link-target.js";
+
+/** Forced-parse budget for resolving a `#slug` on CLICK. Same value and same
+ *  reasoning as outline-panel.ts's PARSE_BUDGET_MS: a user-initiated, one-shot
+ *  action may spend real time completing the parse, because the alternative is
+ *  silently failing to find a heading that exists (syntaxTree only guarantees
+ *  the viewport +~100 KB). Keystroke-adjacent paths in this codebase use a much
+ *  smaller budget (url-link-paste.ts's 50 ms) — a click is not one of those. */
+const FRAGMENT_PARSE_BUDGET_MS = 500;
 
 // --- Click-to-open helper ---
 //
@@ -38,6 +53,13 @@ import { classifyLinkTarget } from "./link-target.js";
 /** Alias of the safe-post-message host shape (not the full Host singleton),
  *  so tests can pass a thin spy without importing the full host module. */
 export type LinkOpenHost = PostMessageHost;
+
+/** Where the fragment arm sends its resolved document offset. Injected for the
+ *  same reason `host` is: it keeps tryOpenLinkAt a function of `state` alone, so
+ *  the 20-odd classification tests stay state-only instead of having to build an
+ *  EditorView under happy-dom (which has no layout). handleLinkMouseDown owns
+ *  the one place a view is dispatched on. */
+export type InDocumentScrollSink = (pos: number) => void;
 
 /** Post a webview→host message, swallowing a transport throw (panel dispose
  *  mid-click, structured-clone edge cases) under the [quoll] grep prefix and
@@ -82,11 +104,10 @@ function selectionIntersects(state: EditorState, from: number, to: number): bool
   return false;
 }
 
-/** Try to open the Link at `pos`. Returns true ONLY when a message was
- *  posted to the host — either an `open-external` (http/https/mailto) OR an
- *  `open-link` (a schemeless, non-absolute relative `.md` link, the phase-1
- *  page-to-page path). The caller should preventDefault on the originating
- *  event. Returns false when:
+/** Try to open the Link at `pos`. Returns true when the click was ACTED on —
+ *  a host message was posted (`open-external` / `open-link`) OR a
+ *  same-document fragment resolved and `scrollTo` was called. The caller
+ *  should preventDefault on the originating event. Returns false when:
  *    - the position is not inside a Link node, or
  *    - the Link has no URL child (reference-form), or
  *    - the CURRENT selection already intersects the Link (review fix #4:
@@ -99,7 +120,10 @@ function selectionIntersects(state: EditorState, from: number, to: number): bool
  *    - the URL is non-allowlisted (post-decode), or
  *    - the URL is allowlisted but not launchable AND not a relative `.md`
  *      target (an unknown scheme, a fragment, an absolute path, or a
- *      schemeless non-.md relative → falls through to a caret move).
+ *      schemeless non-.md relative → falls through to a caret move), or
+ *    - the destination is a `#slug` that no heading in this document produces
+ *      (falls through to a caret move — `decorations/link-reveal.ts`
+ *      withheld the pointer cursor for it too, via the same resolution).
  *  The security invariant is "post-only-when-safe-and-launchable-or-a-
  *  relative-.md-target" — the return value is a caller-convenience signal
  *  for preventDefault. The gate-reject bails (oversize href, allowlist
@@ -109,7 +133,12 @@ function selectionIntersects(state: EditorState, from: number, to: number): bool
  *  caret-in-link) are ordinary UI states, and the `no-action` arm is
  *  deliberately silent because `decorations/link-reveal.ts` withholds the
  *  pointer cursor for that class. */
-export function tryOpenLinkAt(state: EditorState, pos: number, host: LinkOpenHost): boolean {
+export function tryOpenLinkAt(
+  state: EditorState,
+  pos: number,
+  host: LinkOpenHost,
+  scrollTo: InDocumentScrollSink
+): boolean {
   const tree = syntaxTree(state);
   let node = tree.resolveInner(pos, 0);
   while (node.parent !== null && node.name !== "Link") {
@@ -138,10 +167,16 @@ export function tryOpenLinkAt(state: EditorState, pos: number, host: LinkOpenHos
   }
   const raw = state.sliceDoc(urlNode.from, urlNode.to);
   const decoded = decodeMarkdownDestination(raw);
-  // This switch adds only the LOGGING policy on top of the classifier — every
-  // field below is already NO-URL-POLICY-safe by construction (see
-  // link-target.ts's header).
-  const target = classifyLinkTarget(decoded);
+  // Classify (pure), then answer the document question. The budget is spent
+  // only if the arm is a fragment — see resolveLinkTarget. This switch adds
+  // only the LOGGING policy on top; every field below is already
+  // NO-URL-POLICY-safe by construction (see link-target.ts's header).
+  const target = resolveLinkTarget(
+    state,
+    tree,
+    classifyLinkTarget(decoded),
+    FRAGMENT_PARSE_BUDGET_MS
+  );
   switch (target.kind) {
     case "external":
       return postToHost(host, {
@@ -151,6 +186,14 @@ export function tryOpenLinkAt(state: EditorState, pos: number, host: LinkOpenHos
       });
     case "workspace":
       return postToHost(host, { protocol: PROTOCOL_VERSION, type: "open-link", href: target.href });
+    case "scroll":
+      // Resolved by the SAME function link-reveal used to decide the pointer
+      // cursor, so a link that looked clickable acts. An unmatched slug never
+      // reaches here — it resolved to `no-action`, which is silent by design:
+      // it never showed a pointer, and a warn would echo href-derived bytes,
+      // which the NO-URL POLICY forbids.
+      scrollTo(target.pos);
+      return true;
     case "oversize":
       warnLinkNotOpened("URL exceeds MAX_HREF_LENGTH", {
         length: target.length,
@@ -168,10 +211,11 @@ export function tryOpenLinkAt(state: EditorState, pos: number, host: LinkOpenHos
       warnLinkNotOpened("scheme not in OPENABLE_SCHEMES", { scheme: target.scheme });
       return false;
     case "no-action":
-      // Fragments, absolute paths, non-.md relatives: ordinary Markdown Quoll
-      // does not route. Silent BY DESIGN — a warn here would fire on every
-      // table-of-contents click and drown the three real signals above. The
-      // dead-click affordance is fixed at its source instead:
+      // Absolute paths, non-.md relatives, fragments that slug to nothing,
+      // and fragments naming no heading in this document: ordinary Markdown
+      // Quoll does not route. Silent BY DESIGN — a warn here would fire on
+      // every table-of-contents click and drown the three real signals
+      // above. The dead-click affordance is fixed at its source instead:
       // decorations/link-reveal.ts withholds the pointer cursor for exactly
       // this class (isActionableLinkTarget), so the click never looked
       // available and there is nothing to explain.
@@ -187,6 +231,32 @@ export function tryOpenLinkAt(state: EditorState, pos: number, host: LinkOpenHos
 // success → preventDefault). quollLinkClickHandler is the thin
 // EditorView.domEventHandlers wrapper. Unit tests cover the helper's
 // branches directly; the extension wrapper is a one-line delegation.
+
+/** Production fragment sink: move the caret to the heading, bring it to the top
+ *  of the viewport, and take keyboard focus. Mirrors the outline panel's jumpTo
+ *  (cursor + `y: "start"` scrollIntoView + focus) so the two ways of jumping to
+ *  a heading land identically.
+ *
+ *  The `view.focus()` is load-bearing, not copied ceremony: handleLinkMouseDown
+ *  calls preventDefault on the MOUSEDOWN, and moving DOM focus onto the clicked
+ *  contenteditable is precisely that event's default action. The two existing
+ *  preventDefault handlers (open-external / open-link here, open-code-reference
+ *  in code-ref/code-ref-handlers.ts) only post to the host and never touch local
+ *  selection, so the suppressed focus never showed. This is the first arm that
+ *  moves the caret locally: without the focus call, a click made while the view
+ *  does not already hold focus — a table-of-contents click as the first
+ *  interaction, or focus sitting in the outline panel — would scroll and place a
+ *  caret the user then cannot type into. Idempotent when already focused.
+ *
+ *  `pos` is a heading line start that resolveLinkTarget derived from this same
+ *  state, so it is in range by construction. */
+function scrollToDocumentPos(view: EditorView, pos: number): void {
+  view.dispatch({
+    selection: EditorSelection.cursor(pos),
+    effects: EditorView.scrollIntoView(pos, { y: "start" }),
+  });
+  view.focus();
+}
 
 /** Pure mousedown handler. Returns true when the click was consumed (a
  *  host message — `open-external` for a launchable URL OR `open-link` for a
@@ -220,7 +290,9 @@ export function handleLinkMouseDown(
   if (pos < 0 || pos > view.state.doc.length) {
     return false;
   }
-  const handled = tryOpenLinkAt(view.state, pos, host);
+  const handled = tryOpenLinkAt(view.state, pos, host, (headingPos) =>
+    scrollToDocumentPos(view, headingPos)
+  );
   if (handled) {
     event.preventDefault();
     return true;

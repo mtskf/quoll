@@ -29,6 +29,13 @@ function posOf(doc: string, marker: string): number {
   return i;
 }
 
+/** Fragment scroll sink for the non-fragment cases: asserts by exploding, so a
+ *  test that unexpectedly takes the fragment arm fails loudly instead of
+ *  quietly passing. */
+const noScroll = () => {
+  throw new Error("unexpected in-document scroll");
+};
+
 describe("tryOpenLinkAt — safe URLs", () => {
   it("posts open-external for an https Link on hover position", () => {
     const doc = "see [link](https://example.com) end";
@@ -37,7 +44,7 @@ describe("tryOpenLinkAt — safe URLs", () => {
     const host = { postMessage: (m: { type: string; href?: string }) => posted.push(m) };
     // Position on the inline content `link` (between `[` and `]`).
     const pos = posOf(doc, "link") + 1;
-    const handled = tryOpenLinkAt(state, pos, host);
+    const handled = tryOpenLinkAt(state, pos, host, noScroll);
     expect(handled).toBe(true);
     expect(posted).toEqual([{ protocol: 1, type: "open-external", href: "https://example.com" }]);
   });
@@ -56,7 +63,7 @@ describe("tryOpenLinkAt — safe URLs", () => {
     const state = stateOf(doc);
     const posted: Array<{ type: string; href?: string }> = [];
     const host = { postMessage: (m: { type: string; href?: string }) => posted.push(m) };
-    expect(tryOpenLinkAt(state, posOf(doc, "[t]") + 1, host)).toBe(true);
+    expect(tryOpenLinkAt(state, posOf(doc, "[t]") + 1, host, noScroll)).toBe(true);
     expect(posted[0]?.href).toBe("http://x");
   });
 
@@ -65,7 +72,7 @@ describe("tryOpenLinkAt — safe URLs", () => {
     const state = stateOf(doc);
     const posted: Array<{ type: string; href?: string }> = [];
     const host = { postMessage: (m: { type: string; href?: string }) => posted.push(m) };
-    expect(tryOpenLinkAt(state, posOf(doc, "contact"), host)).toBe(true);
+    expect(tryOpenLinkAt(state, posOf(doc, "contact"), host, noScroll)).toBe(true);
     expect(posted[0]?.href).toBe("mailto:a@b.c");
   });
 
@@ -77,7 +84,7 @@ describe("tryOpenLinkAt — safe URLs", () => {
     const state = stateOf(doc);
     const posted: Array<{ type: string; href?: string }> = [];
     const host = { postMessage: (m: { type: string; href?: string }) => posted.push(m) };
-    expect(tryOpenLinkAt(state, posOf(doc, "[t]") + 1, host)).toBe(true);
+    expect(tryOpenLinkAt(state, posOf(doc, "[t]") + 1, host, noScroll)).toBe(true);
     expect(posted[0]?.href).toBe("https://example.com");
   });
 });
@@ -106,7 +113,7 @@ function setupLink(markup: string): {
 describe("tryOpenLinkAt — open-link (relative .md)", () => {
   it("posts open-link for a relative .md link", () => {
     const { host, state, linkPos } = setupLink("[go](./other.md)");
-    expect(tryOpenLinkAt(state, linkPos, host)).toBe(true);
+    expect(tryOpenLinkAt(state, linkPos, host, noScroll)).toBe(true);
     expect(host.posted).toContainEqual({
       protocol: PROTOCOL_VERSION,
       type: "open-link",
@@ -116,7 +123,7 @@ describe("tryOpenLinkAt — open-link (relative .md)", () => {
 
   it("posts open-link for a parent-relative .md link", () => {
     const { host, state, linkPos } = setupLink("[go](../notes/other.md)");
-    expect(tryOpenLinkAt(state, linkPos, host)).toBe(true);
+    expect(tryOpenLinkAt(state, linkPos, host, noScroll)).toBe(true);
     expect(host.posted).toContainEqual({
       protocol: PROTOCOL_VERSION,
       type: "open-link",
@@ -126,7 +133,7 @@ describe("tryOpenLinkAt — open-link (relative .md)", () => {
 
   it("posts open-link (fragment retained) for a .md link with a #fragment", () => {
     const { host, state, linkPos } = setupLink("[go](./other.md#sec)");
-    expect(tryOpenLinkAt(state, linkPos, host)).toBe(true);
+    expect(tryOpenLinkAt(state, linkPos, host, noScroll)).toBe(true);
     expect(host.posted).toContainEqual({
       protocol: PROTOCOL_VERSION,
       type: "open-link",
@@ -136,7 +143,7 @@ describe("tryOpenLinkAt — open-link (relative .md)", () => {
 
   it("still posts open-external for an https link", () => {
     const { host, state, linkPos } = setupLink("[go](https://example.com)");
-    expect(tryOpenLinkAt(state, linkPos, host)).toBe(true);
+    expect(tryOpenLinkAt(state, linkPos, host, noScroll)).toBe(true);
     expect(host.posted).toContainEqual({
       protocol: PROTOCOL_VERSION,
       type: "open-external",
@@ -146,13 +153,13 @@ describe("tryOpenLinkAt — open-link (relative .md)", () => {
 
   it("does not post for a relative non-.md link", () => {
     const { host, state, linkPos } = setupLink("[img](./photo.png)");
-    expect(tryOpenLinkAt(state, linkPos, host)).toBe(false);
+    expect(tryOpenLinkAt(state, linkPos, host, noScroll)).toBe(false);
     expect(host.posted).toEqual([]);
   });
 
   it("does not post for an absolute .md link (falls to caret move)", () => {
     const { host, state, linkPos } = setupLink("[x](/etc/passwd.md)");
-    expect(tryOpenLinkAt(state, linkPos, host)).toBe(false);
+    expect(tryOpenLinkAt(state, linkPos, host, noScroll)).toBe(false);
     expect(host.posted).toEqual([]);
   });
 
@@ -165,7 +172,7 @@ describe("tryOpenLinkAt — open-link (relative .md)", () => {
 
   it("does not post for a fragment-only link", () => {
     const { host, state, linkPos } = setupLink("[x](#sec)");
-    expect(tryOpenLinkAt(state, linkPos, host)).toBe(false);
+    expect(tryOpenLinkAt(state, linkPos, host, noScroll)).toBe(false);
     expect(host.posted).toEqual([]);
   });
 });
@@ -219,7 +226,7 @@ describe("tryOpenLinkAt — unsafe URLs (render-gate INERT)", () => {
       const state = stateOf(doc);
       const posted: unknown[] = [];
       const host = { postMessage: (m: unknown) => posted.push(m) };
-      const handled = tryOpenLinkAt(state, posOf(doc, "[t]") + 1, host);
+      const handled = tryOpenLinkAt(state, posOf(doc, "[t]") + 1, host, noScroll);
       // Two acceptable outcomes:
       //   (a) handled=false (caller falls through; caret moves into link
       //       and the user can edit/delete the unsafe URL)
@@ -240,7 +247,7 @@ describe("tryOpenLinkAt — non-launchable safe URLs", () => {
     const state = stateOf(doc);
     const posted: unknown[] = [];
     const host = { postMessage: (m: unknown) => posted.push(m) };
-    expect(tryOpenLinkAt(state, posOf(doc, "[t]") + 1, host)).toBe(false);
+    expect(tryOpenLinkAt(state, posOf(doc, "[t]") + 1, host, noScroll)).toBe(false);
     expect(posted).toEqual([]);
   });
 
@@ -249,7 +256,7 @@ describe("tryOpenLinkAt — non-launchable safe URLs", () => {
     const state = stateOf(doc);
     const posted: unknown[] = [];
     const host = { postMessage: (m: unknown) => posted.push(m) };
-    expect(tryOpenLinkAt(state, posOf(doc, "[t]") + 1, host)).toBe(false);
+    expect(tryOpenLinkAt(state, posOf(doc, "[t]") + 1, host, noScroll)).toBe(false);
     expect(posted).toEqual([]);
   });
 });
@@ -260,7 +267,7 @@ describe("tryOpenLinkAt — non-Link positions", () => {
     const state = stateOf(doc);
     const posted: unknown[] = [];
     const host = { postMessage: (m: unknown) => posted.push(m) };
-    expect(tryOpenLinkAt(state, 3, host)).toBe(false);
+    expect(tryOpenLinkAt(state, 3, host, noScroll)).toBe(false);
     expect(posted).toEqual([]);
   });
 
@@ -271,7 +278,7 @@ describe("tryOpenLinkAt — non-Link positions", () => {
     const state = stateOf(doc);
     const posted: unknown[] = [];
     const host = { postMessage: (m: unknown) => posted.push(m) };
-    expect(tryOpenLinkAt(state, posOf(doc, "[ref]") + 1, host)).toBe(false);
+    expect(tryOpenLinkAt(state, posOf(doc, "[ref]") + 1, host, noScroll)).toBe(false);
     expect(posted).toEqual([]);
   });
 
@@ -280,7 +287,7 @@ describe("tryOpenLinkAt — non-Link positions", () => {
     const state = stateOf(doc);
     const posted: unknown[] = [];
     const host = { postMessage: (m: unknown) => posted.push(m) };
-    expect(tryOpenLinkAt(state, posOf(doc, "alt"), host)).toBe(false);
+    expect(tryOpenLinkAt(state, posOf(doc, "alt"), host, noScroll)).toBe(false);
     expect(posted).toEqual([]);
   });
 });
@@ -303,7 +310,7 @@ describe("tryOpenLinkAt — already revealed link (caret in link)", () => {
     // Click at position 3 (same as selection) — but the contract is "if
     // CURRENT selection intersects, do not open", so even a click that
     // would otherwise open returns false.
-    expect(tryOpenLinkAt(state, 3, host)).toBe(false);
+    expect(tryOpenLinkAt(state, 3, host, noScroll)).toBe(false);
     expect(posted).toEqual([]);
   });
 
@@ -319,7 +326,7 @@ describe("tryOpenLinkAt — already revealed link (caret in link)", () => {
     });
     const posted: unknown[] = [];
     const host = { postMessage: (m: unknown) => posted.push(m) };
-    expect(tryOpenLinkAt(state, 3, host)).toBe(false);
+    expect(tryOpenLinkAt(state, 3, host, noScroll)).toBe(false);
     expect(posted).toEqual([]);
   });
 });
@@ -337,7 +344,7 @@ describe("tryOpenLinkAt — MAX_HREF_LENGTH guard", () => {
     const state = stateOf(doc);
     const posted: unknown[] = [];
     const host = { postMessage: (m: unknown) => posted.push(m) };
-    expect(tryOpenLinkAt(state, posOf(doc, "[t]") + 1, host)).toBe(false);
+    expect(tryOpenLinkAt(state, posOf(doc, "[t]") + 1, host, noScroll)).toBe(false);
     expect(posted).toEqual([]);
   });
 
@@ -353,7 +360,7 @@ describe("tryOpenLinkAt — MAX_HREF_LENGTH guard", () => {
     const state = stateOf(doc);
     const posted: Array<{ type: string; href?: string }> = [];
     const host = { postMessage: (m: { type: string; href?: string }) => posted.push(m) };
-    expect(tryOpenLinkAt(state, posOf(doc, "[t]") + 1, host)).toBe(true);
+    expect(tryOpenLinkAt(state, posOf(doc, "[t]") + 1, host, noScroll)).toBe(true);
     expect(posted[0]?.href).toBe(href);
   });
 });
@@ -379,7 +386,7 @@ describe("tryOpenLinkAt — gate-reject bails warn", () => {
     const host = { postMessage: (m: unknown) => posted.push(m) };
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
     try {
-      const handled = open(state, posOf(doc, marker) + 1, host);
+      const handled = open(state, posOf(doc, marker) + 1, host, noScroll);
       // Structural backstop: tryOpenLinkAt returns true ONLY when it posted, so
       // a bail must post nothing and an open must post exactly one message.
       // Asserted here (not only at the call sites) so a gate-reject test added
@@ -564,7 +571,7 @@ describe("tryOpenLinkAt — host.postMessage failure (review-cycle 1 C2)", () =>
     };
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
     try {
-      expect(tryOpenLinkAt(state, posOf(doc, "[t]") + 1, host)).toBe(false);
+      expect(tryOpenLinkAt(state, posOf(doc, "[t]") + 1, host, noScroll)).toBe(false);
       expect(errorSpy).toHaveBeenCalledWith(
         "[quoll] postMessage(link-open) failed",
         expect.any(Error)
@@ -782,5 +789,87 @@ describe("quollLinkClickHandler — smoke (extension shape is valid)", () => {
     } finally {
       view.destroy();
     }
+  });
+});
+
+describe("tryOpenLinkAt — fragments", () => {
+  const noHost: LinkOpenHost = {
+    postMessage: () => {
+      throw new Error("a fragment must not post to the host");
+    },
+  };
+
+  it("scrolls to the matching heading and posts nothing", () => {
+    const doc = "# Getting Started\n\nsee [jump](#getting-started) end\n";
+    const scrolled: number[] = [];
+    expect(
+      tryOpenLinkAt(stateOf(doc), posOf(doc, "jump") + 1, noHost, (p) => scrolled.push(p))
+    ).toBe(true);
+    expect(scrolled).toEqual([0]);
+  });
+
+  it("resolves a duplicate-heading slug to the right occurrence", () => {
+    const doc = "# Notes\n\na\n\n# Notes\n\nsee [second](#notes-1) end\n";
+    const scrolled: number[] = [];
+    expect(
+      tryOpenLinkAt(stateOf(doc), posOf(doc, "second") + 1, noHost, (p) => scrolled.push(p))
+    ).toBe(true);
+    expect(scrolled).toEqual([doc.indexOf("# Notes", 1)]);
+  });
+
+  it("falls through to a caret move when no heading matches the slug", () => {
+    const doc = "# One\n\nsee [jump](#missing) end\n";
+    const scrolled: number[] = [];
+    expect(
+      tryOpenLinkAt(stateOf(doc), posOf(doc, "jump") + 1, noHost, (p) => scrolled.push(p))
+    ).toBe(false);
+    expect(scrolled).toEqual([]);
+  });
+
+  it("does not scroll when the caret is already inside the link (revealed state)", () => {
+    const doc = "# Sec\n\nsee [jump](#sec) end\n";
+    const state = EditorState.create({
+      doc,
+      extensions: [markdown({ base: markdownLanguage })],
+      selection: EditorSelection.cursor(posOf(doc, "jump")),
+    });
+    const scrolled: number[] = [];
+    expect(tryOpenLinkAt(state, posOf(doc, "jump") + 1, noHost, (p) => scrolled.push(p))).toBe(
+      false
+    );
+    expect(scrolled).toEqual([]);
+  });
+});
+
+describe("handleLinkMouseDown — fragment wiring", () => {
+  it("moves the caret to the heading, takes focus, and consumes the click", () => {
+    const doc = "# Getting Started\n\nsee [jump](#getting-started) end\n";
+    const parent = document.createElement("div");
+    document.body.appendChild(parent);
+    const view = new EditorView({
+      parent,
+      state: EditorState.create({ doc, extensions: [markdown({ base: markdownLanguage })] }),
+    });
+    // happy-dom has no layout, so posAtCoords cannot be driven from real
+    // coords — stub it to the inline-content position the click would hit.
+    view.posAtCoords = () => posOf(doc, "jump") + 1;
+    let prevented = false;
+    const event = {
+      button: 0,
+      clientX: 0,
+      clientY: 0,
+      preventDefault: () => {
+        prevented = true;
+      },
+    } as unknown as MouseEvent;
+    const host: LinkOpenHost = {
+      postMessage: () => {
+        throw new Error("a fragment must not post to the host");
+      },
+    };
+    expect(handleLinkMouseDown(event, view, host)).toBe(true);
+    expect(prevented).toBe(true);
+    expect(view.state.selection.main.head).toBe(0);
+    view.destroy();
   });
 });
