@@ -9,7 +9,7 @@
   //
   // Scope is test/webview ONLY. The wider unit suite has long-standing
   // type drift outside this directory (vscode-stub TextLine shape in
-  // test/extension/document-message.test.ts) that is a separate follow-up;
+  // test/extension/session/document-message.test.ts) that is a separate follow-up;
   // a test/webview-rooted include never pulls it in.
   //
   // noEmit (inherited): this is a CI gate, not a build step — vitest still
