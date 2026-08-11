@@ -866,6 +866,15 @@ describe("decoration orchestrator — provider build() throw containment", () =>
     for (const set of [
       Decoration.set([Decoration.replace({}).range(17, 25)]),
       Decoration.set([Decoration.replace({}).range(14, 25)]),
+      // The two shapes nothing but WALK GEOMETRY keeps legal, and so the two
+      // most fragile verdicts in the module: a block decoration past the end is
+      // legal only because RangeSet.spans never visits it, and a range wholly
+      // before the document only because iter() starts at 0. Neither is a rule
+      // we implement — both are upstream behaviour we depend on — so an upgrade
+      // that started judging either would reopen the dispatch escape with no
+      // other test going red.
+      Decoration.set([blockWidget(25)]),
+      Decoration.set([Decoration.replace({}).range(-5, -3)]),
     ]) {
       const view = mount([], doc, [plugin(set)]);
       view.destroy();

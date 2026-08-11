@@ -133,6 +133,14 @@ describe("findPluginIllegalDecoration — illegal sets", () => {
     expect(findPluginIllegalDecoration(set, doc)).toBe("a decoration at a negative position -1..3");
   });
 
+  it("rejects a negative-start replace ENDING exactly at the document start", () => {
+    // The boundary of what the walk can see: iter() yields ranges ending at or
+    // after 0, so this one IS visited where `replace(-5, -3)` is not. CM crashes
+    // on it in TileBuilder.continueWidget, so being visited is what matters.
+    const set = Decoration.set([Decoration.replace({}).range(-1, 0)]);
+    expect(findPluginIllegalDecoration(set, doc)).toBe("a decoration at a negative position -1..0");
+  });
+
   it("rejects a negative-start replace CodeMirror crashes on rather than rejects", () => {
     // The one that forbids clamping: spans visits it as 0..3, which breaks
     // neither documented rule, so a clamping detector calls it legal — and CM
