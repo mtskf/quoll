@@ -771,6 +771,27 @@ describe("decoration orchestrator — provider build() throw containment", () =>
     return Decoration.widget({ widget: new BlockStub(), block: true }).range(pos);
   }
 
+  /** A BARE ViewPlugin recomputing `make(doc)` on every update — no orchestrator
+   *  guard in the way, so CodeMirror's own TileUpdate.emit check is what
+   *  answers. Recomputing rather than holding a static set keeps each fixture
+   *  expressed against the LIVE document: a static set drifts as the document
+   *  grows, which would let a "past the end" fixture wander into range and
+   *  silently start testing something else. */
+  function dynamicDeco(make: (doc: Text) => DecorationSet) {
+    return ViewPlugin.fromClass(
+      class {
+        decorations: DecorationSet;
+        constructor(view: EditorView) {
+          this.decorations = make(view.state.doc);
+        }
+        update(u: ViewUpdate): void {
+          this.decorations = make(u.state.doc);
+        }
+      },
+      { decorations: (v) => v.decorations }
+    );
+  }
+
   it("contains a provider emitting a BLOCK decoration (CodeMirror forbids it from a plugin)", () => {
     // A well-formed RangeSet passes the instanceof check, so only a legality
     // check catches this. CodeMirror rejects it later, inside TileUpdate.emit's
@@ -859,30 +880,14 @@ describe("decoration orchestrator — provider build() throw containment", () =>
     // from a BARE ViewPlugin (no orchestrator guard in the way) so CodeMirror's
     // own TileUpdate.emit check is the thing under test.
     //
-    // Both paths are exercised, because they are not the same walk: at
-    // construction emit() covers the whole document, while on a transaction it
-    // runs once per CHANGED REGION — and the region walk is the one the guard's
-    // clipping reasoning is about. So each fixture is mounted AND dispatched
-    // through.
+    // This is the BUILD walk, where emit() covers the whole document, so it is
+    // the only path that reaches a fixture positioned outside the document at
+    // all. The transaction walk is a different shape and is pinned separately
+    // below — deliberately NOT claimed here, because an edit only makes
+    // CodeMirror emit the region it touched.
     //
-    // The plugin recomputes from the current view on every update, and each
-    // fixture is expressed relative to the live document length. A static set
-    // would drift as the document grows and silently stop meaning what its name
-    // says — a "past the end" fixture would wander into range and start
-    // testing something else.
-    const dynamic = (make: (doc: Text) => DecorationSet) =>
-      ViewPlugin.fromClass(
-        class {
-          decorations: DecorationSet;
-          constructor(view: EditorView) {
-            this.decorations = make(view.state.doc);
-          }
-          update(u: ViewUpdate): void {
-            this.decorations = make(u.state.doc);
-          }
-        },
-        { decorations: (v) => v.decorations }
-      );
+    // Each fixture is expressed relative to the live document length so it
+    // keeps meaning what its name says.
     const doc = "hello\nworld\nagain";
     const fixtures: Array<(d: Text) => DecorationSet> = [
       // Wholly past the end, and straddling the end from inside the last line.
@@ -892,29 +897,61 @@ describe("decoration orchestrator — provider build() throw containment", () =>
       // most fragile verdicts in the module: a block decoration past the end is
       // legal only because RangeSet.spans never visits it, and a range wholly
       // before the document only because iter() starts at 0. Neither is a rule
-      // we implement — both are upstream behaviour we depend on — so an upgrade
-      // that started judging either would reopen the dispatch escape with no
-      // other test going red.
+      // we implement — both are upstream behaviour we depend on.
       (d) => Decoration.set([blockWidget(d.length + 8)]),
       () => Decoration.set([Decoration.replace({}).range(-5, -3)]),
     ];
     for (const make of fixtures) {
-      const view = mount([], doc, [dynamic(make)]);
-      try {
-        // The transaction must COMPLETE: an upstream change that started
-        // judging these shapes would throw out of here, which is precisely the
-        // escape the guard exists to prevent.
-        view.dispatch({ changes: { from: 0, insert: "x" } });
-        expect(view.state.doc.toString()).toBe(`x${doc}`);
-      } finally {
-        view.destroy();
-      }
+      mount([], doc, [dynamicDeco(make)]).destroy();
     }
-    // The control proves the harness can still go red — without it, a CM
-    // upgrade that stopped emitting the check at all would leave every
-    // assertion above trivially green.
-    expect(() => mount([], doc, [dynamic(() => Decoration.set([blockWidget(0)]))])).toThrow(
+    // The control proves the harness can go red — without it, a CM upgrade that
+    // stopped emitting the check at all would leave every mount above trivially
+    // green.
+    expect(() => mount([], doc, [dynamicDeco(() => Decoration.set([blockWidget(0)]))])).toThrow(
       /may not be specified via plugins/
     );
+  });
+
+  it("CodeMirror tolerates the end-straddling shape across a TRANSACTION too", () => {
+    // The build walk above covers the whole document; on a transaction emit()
+    // runs once per CHANGED REGION, and that region walk is what the guard's
+    // clipping reasoning is actually about. The edit therefore lands at the END
+    // of the document — an insert at 0 would emit only the first-line interval
+    // and never judge an end-straddling fixture at all, leaving the "it survives
+    // dispatch" claim untested while looking green.
+    //
+    // Only the straddling shape is exercised here. A fixture lying WHOLLY
+    // outside the document cannot be reached by any region walk, so there is no
+    // transaction assertion to make about it — hence mount-only above, rather
+    // than a claim this test cannot support.
+    const doc = "hello\nworld\nagain";
+    const view = mount([], doc, [
+      dynamicDeco((d) =>
+        Decoration.set([Decoration.replace({}).range(d.length - 3, d.length + 8)])
+      ),
+    ]);
+    try {
+      view.dispatch({ changes: { from: doc.length, insert: "!" } });
+      expect(view.state.doc.toString()).toBe(`${doc}!`);
+    } finally {
+      view.destroy();
+    }
+
+    // Control in the SAME region, illegal only AFTER the edit: legal at build,
+    // so the throw can only come from the transaction walk. Without it, a CM
+    // change that stopped judging that region would leave the assertion above
+    // green for the wrong reason.
+    let armed = false;
+    const control = mount([], doc, [
+      dynamicDeco((d) => (armed ? Decoration.set([blockWidget(d.length - 1)]) : Decoration.none)),
+    ]);
+    try {
+      armed = true;
+      expect(() => control.dispatch({ changes: { from: doc.length, insert: "!" } })).toThrow(
+        /may not be specified via plugins/
+      );
+    } finally {
+      control.destroy();
+    }
   });
 });
