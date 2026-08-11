@@ -287,12 +287,13 @@ describe("quollCodeRefClickHandler", () => {
   //   - swap the two keys → each event gets resolved through the WRONG seam (the
   //     mouse path would resolve by DOM target, the AT path by coordinates)
   //   - drop either key → that trigger silently stops opening references at all
-  // Neither mutation double-posts, despite the tempting symmetry of the two gates
-  // (measured, not reasoned): with the keys swapped a real mousedown is refused by
-  // `detail !== 0` and the following click is accepted by `button !== 0`, so one
-  // click still nets exactly one post — just resolved by the wrong function.
-  // Double-posting is held off by `detail !== 0` alone, which is what the third
-  // test below pins.
+  // What neither mutation does is double-post, despite the tempting symmetry of
+  // the two gates (measured, not reasoned): with the keys swapped a real mousedown
+  // is refused by `detail !== 0`, and the click that follows reaches the mousedown
+  // handler, which opens at most once — and opens nothing at all once the caret has
+  // landed inside the reference, since that handler defers on an intersecting
+  // selection. So a swap costs you the open, never duplicates it. Double-posting is
+  // held off by `detail !== 0` alone, which is what the third test below pins.
   // So these tests mount the REAL extension and dispatch REAL DOM events,
   // discriminating the handlers by the seam each uses to resolve a position: the
   // mousedown handler goes through `posAtCoords`, the click handler through
@@ -391,10 +392,10 @@ describe("quollCodeRefClickHandler", () => {
     // browser actually emits for one click: mousedown (detail 1) followed by click
     // (detail 1), both landing on this same span. That pair is where double-posting
     // would show up, and `detail !== 0` in handleCodeRefClick is the only thing
-    // stopping it — delete that gate and this sequence posts twice while every
-    // other test here stays green (measured). This is the wiring-level statement of
-    // the contract the unit test "ignores a real mouse click (detail>=1)" makes
-    // about the handler in isolation.
+    // stopping it — delete that gate and this sequence posts twice (measured),
+    // while the other two tests in this describe, which dispatch a single event
+    // each, stay green. This is the wiring-level statement of the contract the unit
+    // test "ignores a real mouse click (detail>=1)" makes about the handler alone.
     const { view, span, host } = mountWithRefSpan();
     try {
       span.dispatchEvent(
