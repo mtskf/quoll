@@ -20,6 +20,10 @@ and the webview (`src/webview/`).
 
 ## Why hand-rolled validators
 
-For the four discriminated-union variants (`Document`, `Theme`, `Ready`, `Edit`),
-a 4 KB module beats a 40 KB dependency. The validators reject malformed payloads
-at the boundary so both sides can trust the discriminated union past that point.
+`protocol.ts` is the single wire contract for two discriminated unions
+(`HostToWebview` and `WebviewToHost`), and most of its bytes are the per-variant
+JSDoc pinning each field's provenance and bounds — not validator boilerplate a
+schema library would absorb. A dependency would also break the module's
+no-imports rule, since both sides of the bridge consume it. The validators
+reject malformed payloads at the boundary so both sides can trust the
+discriminated union past that point.

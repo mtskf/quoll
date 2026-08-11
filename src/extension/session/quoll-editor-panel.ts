@@ -291,8 +291,8 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
     // descending priority so the order matches native (caret leftmost).
     // Under the E2E harness, build recording fakes so a test can observe
     // show/hide/dispose per panel — window.createStatusBarItem is otherwise
-    // invisible to the harness. Production keeps the real items. The trio (when
-    // present) is handed to panelControls below for per-panel observation. The
+    // invisible to the harness. Production keeps the real items. The probes (when
+    // present) are handed to panelControls below for per-panel observation. The
     // slots are handed to createCaretHandoffWiring below, which drives them
     // (this panel stays the single window.createStatusBarItem caller).
     const statusBarProbes = this.harness
@@ -527,14 +527,14 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
     });
 
     // Status-bar + caret-handoff wiring (see caret-handoff-wiring.ts). Owns the
-    // status-bar controller, the three per-panel caret locals, applyCaretToText-
+    // status-bar controller, the per-panel caret locals, applyCaretToText-
     // Editor, the selection/active-editor caret trackers, and the active-edge
     // half of onDidChangeViewState. Pure side channel vs the reducer; the core
     // `viewStateVisible` resync dispatch is injected (dispatchViewStateVisible)
     // so the reducer dispatch stays here, and the webview `caret-apply` post is
     // injected (postCaretApply). Constructed AFTER `post`/`dispatch` exist. The
     // panel keeps building the status-bar SLOTS (harness-aware) so it stays the
-    // single window.createStatusBarItem caller and can expose the probe trio on
+    // single window.createStatusBarItem caller and can expose the probes on
     // panelControls. Disposed with the panel via the teardown loop below.
     // One-shot latch shared by the two handoff wirings: the context-handoff
     // reveal arms it before its showTextDocument; the caret tracker consumes it

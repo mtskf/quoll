@@ -11,7 +11,7 @@ import type { PanelControlsShape, StatusBarItemProbeShape, TestHarnessShape } fr
 // and disposes with the panel. window.createStatusBarItem is invisible to the
 // E2E harness (the real item exposes nothing the test host can read back), so
 // under the harness the panel builds recording FakeStatusBarItems and hands the
-// trio through PanelControls.statusBarItems (src/extension/test-harness.ts).
+// set through PanelControls.statusBarItems (src/extension/test-harness.ts).
 //
 // Counting note: raw show/hide COUNTS are NOT asserted `=== 1` per transition.
 // VS Code may fire several onDidChangeViewState events for one tab switch, and
@@ -97,7 +97,7 @@ describe("status-bar-active-edge", function () {
   it("shows on the active edge, hides on the inactive edge, per panel, and disposes on close", async () => {
     const harness = await getHarness();
 
-    // --- Panel A opens active → its status-bar trio shows -------------------
+    // --- Panel A opens active → its status-bar items show -------------------
     const a = await openTempQuoll(harness, "a0\na1\na2\n", "doca", null);
     files.push(a.file);
     assert.strictEqual(
@@ -183,7 +183,7 @@ describe("status-bar-active-edge", function () {
 
   // The seed's `if (webviewPanel.active) statusBar.show()` FALSE-arm: a panel
   // constructed while it is NOT the active editor must leave its status-bar
-  // trio hidden — no seed `show()` — until it later becomes active. The
+  // items hidden — no seed `show()` — until it later becomes active. The
   // active TRUE-arm above never exercises this because every prior open takes
   // focus. Here panel A opens first and KEEPS focus; panel B opens `Beside`
   // with `preserveFocus: true`, so B resolves with `webviewPanel.active ===
@@ -221,10 +221,10 @@ describe("status-bar-active-edge", function () {
       assert.strictEqual(item.showCount, 0, "inactive-at-open item is never seed-shown");
       assert.strictEqual(item.visible, false, "inactive-at-open item stays hidden");
     }
-    // A kept focus, so its trio is still visible and untouched by B's open.
+    // A kept focus, so its items are still visible and untouched by B's open.
     assert.ok(allVisible(a.panel.statusBarItems), "panel A stays visible while B opens inactive");
 
-    // Activating B fires its first active edge → the trio shows.
+    // Activating B fires its first active edge → the items show.
     b.panel.webviewPanel.reveal();
     await pollUntil(
       () => allVisible(b.panel.statusBarItems),
