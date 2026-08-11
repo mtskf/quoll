@@ -84,8 +84,14 @@ export function headingText(raw: string): string {
  *  `InlineCode`, `Autolink`, …) are absent on purpose: excluding a wrapper would
  *  delete the text it wraps.
  *
- *  `URL` is conditional and must NEVER be dropped by name alone — see the parent
- *  gate in headingSlugSource. */
+ *  `URL` is conditional and must NEVER be dropped by name alone — see the
+ *  destination gate in headingSlugSource.
+ *
+ *  Known divergence: a reference link's label survives (`# [a][ref]` slugs
+ *  `aref`, GitHub says `a`). Excluding `LinkLabel` would be wrong for an
+ *  UNDEFINED reference, which GitHub renders — and slugs — literally, and
+ *  telling the two apart means resolving the document's link definitions.
+ *  Quoll shows the label either way, so the slug matches what is on screen. */
 const SLUG_EXCLUDED_NODES = new Set([
   "HeaderMark",
   "LinkMark",
