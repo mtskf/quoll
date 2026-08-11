@@ -219,10 +219,13 @@ export function createImagePasteDrop(opts: {
       // file moved/permissions) from the rest. It is metadata about the read, not
       // image content, so it is safe to log. Matches the policy in
       // `paste/html-to-markdown.ts`, which logs its caught `err` for the same reason.
-      // Carried in the `{ err, requestId }` shape the rest of this file uses, for the
-      // reason its siblings above do: concurrent reads from one paste event are only
-      // tellable apart by requestId, and this is the arm most likely to hit several
-      // at once (a batch dropped from a folder that then moves).
+      // Paired with `requestId` for the reason the two warns above are: concurrent
+      // reads from one paste event are only tellable apart by it, and this is the arm
+      // most likely to hit several at once (a batch dropped from a folder that then
+      // moves). The `{ err, requestId }` pairing matches `clearPending`'s catch — the
+      // file's other per-request logs carry `requestId` without an `err` because they
+      // caught nothing, and the per-event cap warns in `handle` carry neither: they
+      // run BEFORE `submit` mints a requestId, so there is not yet one to name.
       console.error("[quoll] failed to read pasted image", { err: reader.error, requestId });
       clearPending(view, requestId);
     };
@@ -343,28 +346,26 @@ export function createImagePasteDrop(opts: {
       return;
     }
     if (relativePath === null) {
-      // The host refused. This arm was silent on the theory that it had therefore
-      // already told the user and left nothing behind — and BOTH halves of that are
-      // false in cases the wire cannot distinguish, because `image-write-result`
-      // carries `ok:false` with no reason:
+      // The host sent no path. This arm was silent on the theory that it had
+      // therefore refused, already told the user, and left nothing behind — and ALL
+      // THREE are false in cases the wire cannot distinguish, because
+      // `image-write-result` carries `ok:false` with no reason:
+      //   · not always a refusal — the write-failure arm of
+      //     `image-write-service.ts` ACCEPTED the write and lost to the filesystem,
+      //     which is why the message below says "did not complete" and names no
+      //     cause: the wire never sent one.
       //   · not always reported — `image-write-budget.ts` latches `warned` on the
       //     first session-volume rejection (`onExceeded` fires exactly once), so a
       //     REPEAT cap rejection posts null having shown the user nothing at all.
-      //   · not always empty-handed — the write-failure arm of
-      //     `image-write-service.ts` rejects AFTER attempting the write, and
-      //     `workspace.fs.writeFile` offers no atomicity, so a partial
-      //     content-addressed file can already be on disk (that is exactly why the
-      //     budget never refunds a failed write).
+      //   · not always empty-handed — that same arm rejects AFTER attempting the
+      //     write, and `workspace.fs.writeFile` offers no atomicity, so a partial
+      //     content-addressed file can already be on disk (exactly why the budget
+      //     never refunds a failed write).
       // Most reject reasons DO showError, so this line is usually a duplicate of a
       // toast the user has seen. That is the cheap direction to be wrong in: a
       // duplicated line in a console nobody reads costs nothing, while trusting a
-      // toast we cannot verify was shown loses the refusal entirely. No
+      // toast we cannot verify was shown loses the outcome entirely. No
       // `relativePath` to carry — there is no path on this arm.
-      //
-      // The wording says "did not complete" rather than "refused" BECAUSE of the
-      // second bullet above: on the write-failure arm the host did not refuse at all
-      // — it accepted, tried, and the filesystem lost. Naming a cause the wire never
-      // sent would be the same overclaim this comment exists to retract.
       console.warn("[quoll] image write did not complete on the host; no link inserted", {
         requestId,
       });
