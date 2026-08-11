@@ -256,11 +256,8 @@ function computeMerged(view: EditorView, providers: readonly DecorationProvider[
         );
       }
       // A well-formed RangeSet can still carry a decoration a ViewPlugin may
-      // not emit. CodeMirror rejects those inside TileUpdate.emit, on the same
-      // escape path as the poisoned-accumulator case described above — worse
-      // than deactivation, and reached from OUTSIDE PluginInstance.update's
-      // try. Detecting it here routes it into this provider's catch, so it
-      // degrades exactly like a build() throw instead of aborting dispatch.
+      // not emit; CodeMirror rejects it too late to be contained (see SCOPE
+      // above and plugin-decoration-legality.ts's header for the exact route).
       // Checked per provider and BEFORE the join, so the failure is attributed
       // to the provider that caused it and the others keep their decorations.
       // `view.state.doc` is what the providers built against: `ctx.state` was

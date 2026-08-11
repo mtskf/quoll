@@ -49,10 +49,20 @@ describe("findPluginIllegalDecoration — legal sets", () => {
   });
 
   it("does NOT reject a range that lies wholly past the end of the doc", () => {
-    // RangeSet.spans clips to the [0, doc.length] window, which is exactly how
-    // CodeMirror's own emit() sees it — probed: CM does not throw for this.
-    // Over-rejecting here would drop a provider CodeMirror was happy with.
+    // Judged on its extent clipped at doc.length — see the `docEnd` comment in
+    // plugin-decoration-legality.ts for why that clip is the safe direction.
+    // Probed: CM does not throw for this. Over-rejecting here would drop a
+    // provider CodeMirror was happy with.
     const set = Decoration.set([Decoration.replace({}).range(17, 25)]);
+    expect(findPluginIllegalDecoration(set, doc)).toBeNull();
+  });
+
+  it("does NOT reject a BLOCK decoration positioned wholly past the end of the doc", () => {
+    // RangeSet.spans never visits it, so CodeMirror never judges it — probed.
+    // This is the ONLY test that holds `cursor.from <= docEnd` in place: without
+    // that clause the walk returns "a block decoration at 25..25" and drops a
+    // provider CodeMirror accepted.
+    const set = Decoration.set([Decoration.widget({ widget: new Stub(), block: true }).range(25)]);
     expect(findPluginIllegalDecoration(set, doc)).toBeNull();
   });
 
@@ -96,6 +106,49 @@ describe("findPluginIllegalDecoration — illegal sets", () => {
   it("rejects a block widget at the very end of the document", () => {
     const set = Decoration.set([Decoration.widget({ widget: new Stub(), block: true }).range(17)]);
     expect(findPluginIllegalDecoration(set, doc)).toBe("a block decoration at 17..17");
+  });
+
+  // Every negative-start shape is reported, and each fixture below forbids a
+  // DIFFERENT tempting "simplification" of that rule. Skipping them
+  // (`cursor.from >= 0`) leaks the first two to CodeMirror, which throws;
+  // clamping `from` to 0 to mirror RangeSet.spans makes the third look legal,
+  // and CodeMirror then crashes on it in TileBuilder.continueWidget. All three
+  // escape view.dispatch(), which is the whole point of this module.
+
+  it("rejects a negative-start replace that crosses a line break once clamped", () => {
+    // spans visits this as 0..8, crossing the newline at 5 — CM throws.
+    const set = Decoration.set([Decoration.replace({}).range(-1, 8)]);
+    expect(findPluginIllegalDecoration(set, doc)).toBe(
+      "a decoration at a negative position -1..8"
+    );
+  });
+
+  it("rejects a negative-start BLOCK replace", () => {
+    // Visited as 0..3, and block is forbidden outright wherever it lands.
+    const set = Decoration.set([Decoration.replace({ block: true }).range(-1, 3)]);
+    expect(findPluginIllegalDecoration(set, doc)).toBe("a decoration at a negative position -1..3");
+  });
+
+  it("rejects a negative-start replace CodeMirror crashes on rather than rejects", () => {
+    // The one that forbids clamping: spans visits it as 0..3, which breaks
+    // neither documented rule, so a clamping detector calls it legal — and CM
+    // then dies in TileBuilder.continueWidget ("Cannot read properties of
+    // null"), raised from the same emit() walk and escaping dispatch.
+    const set = Decoration.set([Decoration.replace({}).range(-1, 3)]);
+    expect(findPluginIllegalDecoration(set, doc)).toBe("a decoration at a negative position -1..3");
+  });
+
+});
+
+describe("findPluginIllegalDecoration — ranges the cursor never yields", () => {
+  it("passes a range lying wholly before the document", () => {
+    // Not an exception to the negative-position rule — the walk never sees it.
+    // `built.iter()` defaults to `from = 0`, so a range ending before 0 is
+    // skipped by the initial goto, which is exactly what RangeSet.spans visits
+    // over the same window. CM tolerates it too (probed: no throw), so passing
+    // it is the EXACT answer here rather than a deliberate leniency.
+    const set = Decoration.set([Decoration.replace({}).range(-5, -3)]);
+    expect(findPluginIllegalDecoration(set, doc)).toBeNull();
   });
 });
 

@@ -2,7 +2,13 @@
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
 import { forceParsing, syntaxTree } from "@codemirror/language";
 import { Compartment, EditorSelection, EditorState, type Extension } from "@codemirror/state";
-import { Decoration, type DecorationSet, EditorView, WidgetType } from "@codemirror/view";
+import {
+  Decoration,
+  type DecorationSet,
+  EditorView,
+  ViewPlugin,
+  WidgetType,
+} from "@codemirror/view";
 import { afterEach, beforeEach, describe, expect, it, type MockInstance, vi } from "vitest";
 
 import {
@@ -533,6 +539,16 @@ describe("decoration orchestrator — provider build() throw containment", () =>
     ).length;
   }
 
+  /** The first `[quoll]` log line's arguments. `logProviderFailure` logs a
+   *  GENERIC first argument and passes the error object third, so the count
+   *  above cannot tell "contained because the set was illegal" from "contained
+   *  because the detector itself threw" — this is what discriminates. */
+  function quollErrorArgs(): unknown[] {
+    return errorSpy.mock.calls.filter(
+      (call) => typeof call[0] === "string" && call[0].startsWith("[quoll]")
+    )[0] as unknown[];
+  }
+
   it("keeps every other provider's decorations when one provider's build() throws", () => {
     // A throw from ANY provider propagates out of the single shared
     // orchestrator ViewPlugin, and CodeMirror's PluginInstance.update responds
@@ -769,6 +785,12 @@ describe("decoration orchestrator — provider build() throw containment", () =>
       expect(view.state.doc.toString()).toBe("xhello world");
       expect(decorationClasses(view)).toContain("survivor");
       expect(quollErrorCount()).toBe(1);
+      // …and that the ONE log is this failure, not the detector falling over.
+      // The range and the "ship it as a StateField" instruction are the whole
+      // diagnostic value of the thrown message, and nothing else pins them.
+      const logged = quollErrorArgs()[2];
+      expect(String((logged as Error).message)).toContain("a block decoration at 0..0");
+      expect(String((logged as Error).message)).toContain("quollBlockReplaceZones");
     } finally {
       view.destroy();
     }
@@ -823,5 +845,33 @@ describe("decoration orchestrator — provider build() throw containment", () =>
     } finally {
       view.destroy();
     }
+  });
+
+  it("CodeMirror really tolerates every shape the detector calls legal", () => {
+    // Anchors findPluginIllegalDecoration to @codemirror/view rather than to
+    // itself: each set below is one the detector returns null for, emitted from
+    // a BARE ViewPlugin (no orchestrator guard in the way) so CodeMirror's own
+    // TileUpdate.emit check is the thing under test. CM throws while BUILDING
+    // the view, so mount() is the assertion point — no dispatch, which would
+    // shift the doc under this static, unmapped set and change what the
+    // fixtures mean. The illegal control proves the harness can go red; without
+    // it a CM upgrade that stopped emitting entirely would leave this green.
+    const plugin = (set: DecorationSet) =>
+      ViewPlugin.define(() => ({ decorations: set }), { decorations: (v) => v.decorations });
+    const doc = "hello\nworld\nagain";
+    for (const set of [
+      Decoration.set([Decoration.replace({}).range(17, 25)]),
+      Decoration.set([Decoration.replace({}).range(14, 25)]),
+    ]) {
+      const view = mount([], doc, [plugin(set)]);
+      view.destroy();
+    }
+    expect(() =>
+      mount([], doc, [
+        plugin(
+          Decoration.set([Decoration.widget({ widget: new BlockStub(), block: true }).range(0)])
+        ),
+      ])
+    ).toThrow(/may not be specified via plugins/);
   });
 });

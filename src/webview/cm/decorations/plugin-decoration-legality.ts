@@ -10,8 +10,10 @@
 // ask later, early enough for the orchestrator to contain the answer to the one
 // provider responsible.
 //
-// The two rules are @codemirror/view's own (dist/index.js:2733-2738): for a
-// PointDecoration from a dynamic (plugin) source,
+// The two rules are @codemirror/view's own — `TileUpdate.emit`'s point
+// callback, guarded by `disallowBlockEffectsFor[index]` (grep dist/index.js for
+// "may not be specified via plugins"): for a PointDecoration from a dynamic
+// (plugin) source,
 //   - `deco.block` is forbidden outright, and
 //   - a replace may not end past the end of the line its start sits on.
 //
@@ -28,7 +30,7 @@
 // on the build where the covering decoration happens not to be there.
 
 import type { Text } from "@codemirror/state";
-import type { DecorationSet } from "@codemirror/view";
+import type { Decoration, DecorationSet } from "@codemirror/view";
 
 /** Inspect `built` for a decoration a ViewPlugin may not emit.
  *
@@ -63,14 +65,15 @@ import type { DecorationSet } from "@codemirror/view";
  *  Numbers + method: .claude/docs/PERF-log.md.
  */
 export function findPluginIllegalDecoration(built: DecorationSet, doc: Text): string | null {
-  // Reproduces the clipping `RangeSet.spans` would have applied. CodeMirror's
-  // own check runs inside a spans walk bounded by the document, so a decoration
-  // running past the end is judged on its clipped EXTENT — flagging it whole
-  // would reject a provider CodeMirror was perfectly happy with. A point
-  // sitting exactly AT `doc.length` is still visited (spans visits it too),
-  // which is what keeps a block widget at the very end catchable. Note this is
-  // about extent only; it is NOT a general licence to match CM's tolerances —
-  // see the covered-point note in the module header for the one we decline.
+  // Clips `to` at the document end, the one bound CodeMirror's walk can never
+  // exceed: its check runs inside `RangeSet.spans` over a window that is at
+  // most the changed region (see the header), and spans hands the callback
+  // endpoints already clipped to that window. Judging a decoration that runs
+  // past the end on its whole extent would reject a provider CodeMirror was
+  // perfectly happy with. A point sitting exactly AT `doc.length` is still
+  // visited, which is what keeps a block widget at the very end catchable.
+  // Like the covered-point note in the header, this narrows the gap without
+  // closing it — the detector stays the stricter of the two.
   const docEnd = doc.length;
   // Cached bounds of the line the last sized point started on. The cursor yields
   // ranges by ascending `from`, and providers emit several concealed markers per
@@ -87,12 +90,37 @@ export function findPluginIllegalDecoration(built: DecorationSet, doc: Text): st
     const deco = cursor.value;
     // Marks are not points and can trip neither rule, so they cost one boolean.
     if (deco.point && cursor.from <= docEnd) {
+      // A NEGATIVE start is reported, never clamped and never skipped. Both of
+      // the tempting alternatives hand CodeMirror something that escapes
+      // `view.dispatch()`, which is the failure this module exists to prevent:
+      //   - skipping (`cursor.from >= 0` in the guard above) lets `replace(-1, 8)`
+      //     and a negative-start block replace reach CodeMirror, which throws the
+      //     two documented errors — RangeSet.spans CLAMPS a negative `from` to 0
+      //     rather than skipping the range, so CodeMirror still judges them.
+      //   - clamping `from` to 0 to mirror spans makes `replace(-1, 3)` look
+      //     legal, and CodeMirror then crashes on it in TileBuilder.continueWidget
+      //     ("Cannot read properties of null"), raised from the SAME emit() walk
+      //     as the two documented rules. All three probed against 6.43.0.
+      // Reporting covers every negative shape the walk can actually see, and
+      // costs no leniency elsewhere: `built.iter()` defaults to `from = 0`, so a
+      // range lying wholly before the document is never yielded in the first
+      // place — the same ranges RangeSet.spans skips over this window, and the
+      // ones CodeMirror tolerates.
+      if (cursor.from < 0) {
+        return `a decoration at a negative position ${cursor.from}..${cursor.to}`;
+      }
       // `block` is PointDecoration's own field — MarkDecoration and
       // LineDecoration do not have it, so this identifies the class CodeMirror
       // checks without an instanceof against a non-exported constructor. NOT
-      // `deco.spec.block`: specs carry arbitrary extra properties, and a stray
-      // `block: true` on a mark or line spec must not condemn a legal provider.
-      if ((deco as unknown as { block?: unknown }).block === true) {
+      // `deco.spec.block`: `spec` is typed `any`, and specs carry arbitrary
+      // extra properties — a stray `block: true` on a LINE spec (which is also
+      // `point`) must not condemn a legal provider.
+      //
+      // Asserted as an INTERSECTION, not `as unknown as`: if @codemirror/view
+      // ever publishes `block` with a type other than boolean, the intersection
+      // reduces to `never` and this line fails to compile instead of silently
+      // evaluating false forever.
+      if ((deco as Decoration & { block?: boolean }).block === true) {
         return `a block decoration at ${cursor.from}..${cursor.to}`;
       }
       // Zero-length points (inline widgets, line decorations) can never reach
@@ -105,6 +133,8 @@ export function findPluginIllegalDecoration(built: DecorationSet, doc: Text): st
           lineTo = line.to;
         }
         if (to > lineTo) {
+          // The reason keeps the UNCLIPPED positions: it names the range the
+          // provider actually emitted, which is what the author has to find.
           return `a decoration replacing a line break at ${cursor.from}..${cursor.to}`;
         }
       }
