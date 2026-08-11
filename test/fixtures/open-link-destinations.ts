@@ -27,17 +27,17 @@
 // the host trusts nothing it is sent). The shared PREDICATES are in fact shared
 // — both sides import isAllowedUrl from src/markdown/url-allowlist.ts and
 // MAX_HREF_LENGTH from src/shared/protocol.ts — and what stayed duplicated is
-// the cascade composing them, rejected as scope creep: see relativeMarkdownTarget's
-// docstring in link-target.ts (this mirror), and that file's DRIFT WARNING for
-// the same call on a DIFFERENT pair (OPENABLE_SCHEMES + schemeOf ↔
-// handle-open-external.ts). What was NOT
-// acceptable was the duplication being pinned by two suites with no destination
-// string in common, so that a change on one side left the other green. That is
-// not hypothetical: the webview copy once applied its checks to the
-// NOT-percent-decoded string, so `%2Fetc.md`, `%5Cfoo.md` and `%2F%2Fhost.md`
-// earned the pointer cursor, posted, and were `preventDefault`ed — then the
-// host decoded them and dropped them. A *consumed* dead click: strictly worse
-// than a plain one, because the caret move is eaten too (fixed in PR #340).
+// the cascade composing them, rejected as scope creep: see
+// relativeMarkdownTarget's docstring in link-target.ts (this mirror), and that
+// file's DRIFT WARNING for the same call on a DIFFERENT pair (OPENABLE_SCHEMES
+// + schemeOf ↔ handle-open-external.ts). What was NOT acceptable was the
+// duplication being pinned by two suites with no destination string in common,
+// so that a change on one side left the other green. That is not hypothetical:
+// the webview copy once applied its checks to the NOT-percent-decoded string,
+// so `%2Fetc.md`, `%5Cfoo.md` and `%2F%2Fhost.md` earned the pointer cursor,
+// posted, and were `preventDefault`ed — then the host decoded them and dropped
+// them. A *consumed* dead click: strictly worse than a plain one, because the
+// caret move is eaten too (fixed in PR #340).
 //
 // A comment saying "MUST mirror handleOpenLink" is not a mechanism. This module
 // is the mechanism: ONE matrix, consumed by BOTH suites, so flipping any single
