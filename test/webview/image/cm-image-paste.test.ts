@@ -430,7 +430,10 @@ describe("resolve", () => {
       // The follow-up clear throws too — same dead view — and says so. Before this
       // second line the recovery attempt failed in silence, so the log claimed a
       // cleared anchor that was never cleared.
-      ["[quoll] failed to clear a pending image anchor", { err: expect.any(Error), requestId: "1" }],
+      [
+        "[quoll] failed to clear a pending image anchor",
+        { err: expect.any(Error), requestId: "1" },
+      ],
     ]);
     // Twice: the insert, then the clear it attempts anyway. One call would mean the
     // catch returned without trying to clear.
@@ -780,7 +783,10 @@ describe("imagePaste — the image-write post", () => {
     // no longer swallowed for the READER. Pinned as the complete list so the line
     // cannot be quietly dropped back to a bare `catch {}`.
     expect(error.mock.calls).toEqual([
-      ["[quoll] failed to clear a pending image anchor", { err: expect.any(Error), requestId: expect.any(String) }],
+      [
+        "[quoll] failed to clear a pending image anchor",
+        { err: expect.any(Error), requestId: expect.any(String) },
+      ],
     ]);
   });
 });
