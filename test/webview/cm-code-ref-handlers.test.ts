@@ -2,7 +2,7 @@
 import { markdown } from "@codemirror/lang-markdown";
 import { EditorSelection, EditorState } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, type MockInstance, vi } from "vitest";
 import {
   CODE_REF_OPEN_KEY,
   handleCodeRefClick,
@@ -280,27 +280,44 @@ describe("CODE_REF_OPEN_KEY", () => {
 });
 
 describe("quollCodeRefClickHandler", () => {
-  // The two describes above call the handlers directly, which leaves the binding
-  // itself — `mousedown`→mousedown handler, `click`→click handler — unpinned:
-  // swapping the two keys, or dropping either, keeps every other test green while
-  // breaking the double-post-prevention contract in production (the `button !== 0`
-  // and `detail === 0` gates are complementary ONLY while each sits on its own
-  // event). So these two tests mount the REAL extension and dispatch REAL DOM
-  // events, discriminating the handlers by the seam each one uses to resolve a
-  // position: the mousedown handler goes through `posAtCoords`, the click handler
-  // through `posAtDOM`. Asserting on posAtCoords (called / not called) is what
-  // makes a swap red rather than merely differently-green.
+  // The `handleCodeRefMouseDown` and `handleCodeRefClick` describes above call the
+  // handlers directly, which leaves the binding itself — `mousedown`→mousedown
+  // handler, `click`→click handler — unpinned. Either mutation of it keeps every
+  // other test in the suite green:
+  //   - swap the two keys → each event gets resolved through the WRONG seam (the
+  //     mouse path would resolve by DOM target, the AT path by coordinates)
+  //   - drop either key → that trigger silently stops opening references at all
+  // Neither mutation double-posts, despite the tempting symmetry of the two gates
+  // (measured, not reasoned): with the keys swapped a real mousedown is refused by
+  // `detail !== 0` and the following click is accepted by `button !== 0`, so one
+  // click still nets exactly one post — just resolved by the wrong function.
+  // Double-posting is held off by `detail !== 0` alone, which is what the third
+  // test below pins.
+  // So these tests mount the REAL extension and dispatch REAL DOM events,
+  // discriminating the handlers by the seam each uses to resolve a position: the
+  // mousedown handler goes through `posAtCoords`, the click handler through
+  // `posAtDOM`. Asserting on posAtCoords (called / not called) is what makes a
+  // swap red rather than merely differently-green.
   const DOC = "see `src/foo.ts:42` end";
   const REF_POS = DOC.indexOf("foo");
 
-  // happy-dom has no layout, so a real `posAtCoords` cannot resolve a meaningful
-  // position (memory: happy-dom drops layout) — the instance-level spy is what
-  // makes the mouse path observable at all. Only the layout oracle is stubbed;
-  // the extension, the view, and the event dispatch are all real.
+  // happy-dom has no layout, so an unstubbed `posAtCoords` reaches through an
+  // undefined client rect and THROWS at some coordinates rather than returning a
+  // position (docs/LEARNING.md "2026-08-10: happy-dom の `view.posAtCoords` は座標
+  // 次第で throw する" — coordinate-dependent, not "always throws"). The spy is
+  // what makes the mouse path observable at all. Only that layout oracle is
+  // stubbed; the extension, the view, and the event dispatch are all real.
+  // ⚠️ The spy shields quoll's handler ONLY. CM's own mousedown selection resolves
+  // through `posAndSideAtCoords` → the module-level `posAtCoords`, which no
+  // instance stub can intercept, and which throws here. These tests never reach it
+  // because the handler returns true and CM's `runHandlers` stops before the
+  // built-in — so a mousedown this handler does NOT swallow (any negative-path
+  // case) will crash inside CM rather than fail cleanly. Pin those on
+  // `handleCodeRefMouseDown` directly, in the describe above, not here.
   function mountWithRefSpan(host: { postMessage: ReturnType<typeof vi.fn> }): {
     view: EditorView;
     span: HTMLElement;
-    posAtCoords: ReturnType<typeof vi.fn>;
+    posAtCoords: MockInstance;
   } {
     const parent = document.createElement("div");
     document.body.appendChild(parent);
@@ -327,8 +344,8 @@ describe("quollCodeRefClickHandler", () => {
       view.destroy();
       throw new Error("expected a rendered .quoll-code-ref-clickable span");
     }
-    const posAtCoords = vi.fn(() => REF_POS);
-    Object.defineProperty(view, "posAtCoords", { value: posAtCoords, configurable: true });
+    // Same stubbing idiom as `stubDropPos` in test/webview/image/cm-image-paste.test.ts.
+    const posAtCoords = vi.spyOn(view, "posAtCoords").mockReturnValue(REF_POS);
     return { view, span, posAtCoords };
   }
 
@@ -363,6 +380,31 @@ describe("quollCodeRefClickHandler", () => {
       // even though both routes happen to post.
       span.dispatchEvent(new MouseEvent("click", { bubbles: true, button: 0, detail: 0 }));
       expect(posAtCoords).not.toHaveBeenCalled();
+      expect(host.postMessage).toHaveBeenCalledTimes(1);
+      expect(host.postMessage).toHaveBeenCalledWith(
+        expect.objectContaining({ type: "open-code-reference", path: "src/foo.ts", line: 42 })
+      );
+    } finally {
+      view.destroy();
+    }
+  });
+
+  it("posts exactly once for a full mouse click (mousedown then click)", () => {
+    // The two tests above dispatch one event each, so neither sees the pair a
+    // browser actually emits for one click: mousedown (detail 1) followed by click
+    // (detail 1), both landing on this same span. That pair is where double-posting
+    // would show up, and `detail !== 0` in handleCodeRefClick is the only thing
+    // stopping it — delete that gate and this sequence posts twice while every
+    // other test here stays green (measured). This is the wiring-level statement of
+    // the contract the unit test "ignores a real mouse click (detail>=1)" makes
+    // about the handler in isolation.
+    const host = { postMessage: vi.fn() };
+    const { view, span } = mountWithRefSpan(host);
+    try {
+      span.dispatchEvent(
+        new MouseEvent("mousedown", { bubbles: true, button: 0, detail: 1, clientX: 8, clientY: 8 })
+      );
+      span.dispatchEvent(new MouseEvent("click", { bubbles: true, button: 0, detail: 1 }));
       expect(host.postMessage).toHaveBeenCalledTimes(1);
       expect(host.postMessage).toHaveBeenCalledWith(
         expect.objectContaining({ type: "open-code-reference", path: "src/foo.ts", line: 42 })
