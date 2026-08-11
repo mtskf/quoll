@@ -2,7 +2,7 @@
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
 import { forceParsing, syntaxTree } from "@codemirror/language";
 import { Compartment, EditorSelection, EditorState, type Extension } from "@codemirror/state";
-import { Decoration, type DecorationSet, EditorView } from "@codemirror/view";
+import { Decoration, type DecorationSet, EditorView, WidgetType } from "@codemirror/view";
 import { afterEach, beforeEach, describe, expect, it, type MockInstance, vi } from "vitest";
 
 import {
@@ -733,6 +733,92 @@ describe("decoration orchestrator — provider build() throw containment", () =>
       view.dispatch({ changes: { from: 0, insert: "x" } });
       view.dispatch({ changes: { from: 0, insert: "y" } });
       expect(builds).toBeGreaterThanOrEqual(3);
+      expect(quollErrorCount()).toBe(1);
+    } finally {
+      view.destroy();
+    }
+  });
+
+  class BlockStub extends WidgetType {
+    toDOM(): HTMLElement {
+      return document.createElement("div");
+    }
+    eq(): boolean {
+      return true;
+    }
+  }
+
+  it("contains a provider emitting a BLOCK decoration (CodeMirror forbids it from a plugin)", () => {
+    // A well-formed RangeSet passes the instanceof check, so only a legality
+    // check catches this. CodeMirror rejects it later, inside TileUpdate.emit's
+    // own RangeSet.spans walk, reached from DocView.update → updateInner — NOT
+    // inside PluginInstance.update's try, so it does not even get the permanent
+    // deactivate(): it escapes view.dispatch() into our own caller and aborts
+    // the update mid-flight.
+    const bad: DecorationProvider = {
+      build: () =>
+        Decoration.set([Decoration.widget({ widget: new BlockStub(), block: true }).range(0)]),
+    };
+    const good = markProvider("survivor");
+    const view = mount([createSyntaxReveal([bad, good])], "hello world");
+    try {
+      expect(decorationClasses(view)).toContain("survivor");
+      // The dispatch itself must COMPLETE — without the guard it throws out of
+      // here, so this line is where the regression lands.
+      view.dispatch({ changes: { from: 0, insert: "x" } });
+      expect(view.state.doc.toString()).toBe("xhello world");
+      expect(decorationClasses(view)).toContain("survivor");
+      expect(quollErrorCount()).toBe(1);
+    } finally {
+      view.destroy();
+    }
+  });
+
+  it("contains a provider whose replace spans a line break", () => {
+    // The second thing CodeMirror refuses from a plugin, on the same escape
+    // path. "hello\nworld" — [2, 8) crosses the newline at 5.
+    const bad: DecorationProvider = {
+      build: () => Decoration.set([Decoration.replace({}).range(2, 8)]),
+    };
+    const good = markProvider("survivor");
+    const view = mount([createSyntaxReveal([bad, good])], "hello\nworld");
+    try {
+      expect(decorationClasses(view)).toContain("survivor");
+      view.dispatch({ changes: { from: 0, insert: "x" } });
+      expect(decorationClasses(view)).toContain("survivor");
+      expect(quollErrorCount()).toBe(1);
+    } finally {
+      view.destroy();
+    }
+  });
+
+  it("contains an illegal decoration that spilled into a SECOND RangeSet layer", () => {
+    // The realistic bug shape: the block widget overlaps a mark the same
+    // provider emitted, so RangeSetBuilder spills it into a nextLayer. A guard
+    // that consulted the set's top-level maxPoint would report this legal and
+    // let the throw escape — the whole set reads maxPoint -1. CodeMirror still
+    // throws for it, so this test is the one that pins layer handling end to
+    // end.
+    const bad: DecorationProvider = {
+      build: () =>
+        Decoration.set(
+          [
+            Decoration.mark({ class: "overlapped" }).range(0, 10),
+            Decoration.widget({ widget: new BlockStub(), block: true }).range(5),
+          ],
+          true
+        ),
+    };
+    const good = markProvider("survivor");
+    const view = mount([createSyntaxReveal([bad, good])], "hello world");
+    try {
+      expect(decorationClasses(view)).toContain("survivor");
+      // The whole provider is skipped, not just the offending range — a
+      // half-applied provider output is exactly what the surrounding guard
+      // exists to avoid.
+      expect(decorationClasses(view)).not.toContain("overlapped");
+      view.dispatch({ changes: { from: 0, insert: "x" } });
+      expect(decorationClasses(view)).toContain("survivor");
       expect(quollErrorCount()).toBe(1);
     } finally {
       view.destroy();
