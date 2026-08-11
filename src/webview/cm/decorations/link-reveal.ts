@@ -159,14 +159,10 @@ export const linkReveal: DecorationProvider = {
           // by contract too — its one throwing primitive in reach, `doc.lineAt`
           // over a stale tree, is guarded in buildSlugIndex and pinned by
           // test/webview/cm-link-resolve.test.ts's "skips a heading the STALE
-          // tree places past the end of a shortened document".
-          //
-          // The orchestrator's per-provider guard already keeps a throw here
-          // from killing the other providers, so what a local catch would add
-          // is not safety — it is silence. It would swallow a totality
-          // regression at the call site, where no test is looking, instead of
-          // letting the direct unit matrices above fail loudly. Keep the
-          // safety net at the orchestrator and the detection in those pins.
+          // tree places past the end of a shortened document". The
+          // orchestrator's per-provider guard is the safety net; a local catch
+          // would add only silence — see cm/link-target.ts's "TOTALITY IS A
+          // HARD CONTRACT" header for the full argument.
           if (
             !revealed &&
             contentStart !== null &&

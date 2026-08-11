@@ -3,7 +3,7 @@ import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
 import { forceParsing, syntaxTree } from "@codemirror/language";
 import { Compartment, EditorSelection, EditorState, type Extension } from "@codemirror/state";
 import { Decoration, type DecorationSet, EditorView } from "@codemirror/view";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, type MockInstance, vi } from "vitest";
 
 import {
   createSyntaxReveal,
@@ -496,31 +496,42 @@ function decorationClasses(view: EditorView): string[] {
   return out;
 }
 
-/** Count only OUR log lines. CodeMirror's own logException falls back through
- *  exceptionSink → window.onerror → console.error, so whether it reaches
- *  console.error at all is environment-dependent under happy-dom — asserting on
- *  the TOTAL console.error count would be flaky. */
-function quollErrorCount(spy: { mock: { calls: unknown[][] } }): number {
-  return spy.mock.calls.filter(
-    (call) => typeof call[0] === "string" && call[0].startsWith("[quoll]")
-  ).length;
+/** A provider contributing one mark with `cls`. FRESH object per call — see the
+ *  dedup note in the describe below. */
+function markProvider(cls: string): DecorationProvider {
+  return { build: () => Decoration.set([Decoration.mark({ class: cls }).range(0, 5)]) };
 }
 
 describe("decoration orchestrator — provider build() throw containment", () => {
   // NOTE: the orchestrator's log-dedup state is module-level and vitest keeps
-  // module state across tests in a file, so EVERY test below constructs its OWN
-  // fresh provider object literal. Sharing a fixture would make the log-count
-  // assertions order-dependent.
+  // module state across tests in a file, so EVERY test below uses its OWN fresh
+  // provider object (`markProvider` returns a new one per call, and the
+  // throwing providers are inline literals). Sharing a fixture would make the
+  // log-count assertions order-dependent.
 
-  // Backstop for the console.error spies: `mount()` runs OUTSIDE each test's
-  // try/finally, so on exactly the regression class these tests exist to catch
-  // — a provider poisoning the accumulator until EditorView's constructor
-  // throws — the inline `spy.mockRestore()` never runs and the leaked spy
-  // corrupts the NEXT test's log count. That turns one clean localised failure
-  // into a confusing cascade on an unrelated assertion.
+  // console.error is spied for EVERY test here and restored ONLY in afterEach:
+  // `mount()` runs OUTSIDE each test's try/finally, so on exactly the
+  // regression class these tests exist to catch — a provider poisoning the
+  // accumulator until EditorView's constructor throws — an inline restore would
+  // never run, and the leaked spy would corrupt the NEXT test's log count,
+  // turning one clean localised failure into a confusing cascade.
+  let errorSpy: MockInstance<typeof console.error>;
+  beforeEach(() => {
+    errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+  });
   afterEach(() => {
     vi.restoreAllMocks();
   });
+
+  /** Count only OUR log lines. CodeMirror's own logException falls back through
+   *  exceptionSink → window.onerror → console.error, so whether it reaches
+   *  console.error at all is environment-dependent under happy-dom — asserting
+   *  on the TOTAL console.error count would be flaky. */
+  function quollErrorCount(): number {
+    return errorSpy.mock.calls.filter(
+      (call) => typeof call[0] === "string" && call[0].startsWith("[quoll]")
+    ).length;
+  }
 
   it("keeps every other provider's decorations when one provider's build() throws", () => {
     // A throw from ANY provider propagates out of the single shared
@@ -535,10 +546,7 @@ describe("decoration orchestrator — provider build() throw containment", () =>
         throw new Error("provider exploded");
       },
     };
-    const good: DecorationProvider = {
-      build: () => Decoration.set([Decoration.mark({ class: "survivor" }).range(0, 5)]),
-    };
-    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const good = markProvider("survivor");
     const view = mount([createSyntaxReveal([throwing, good])], "hello world");
     try {
       expect(decorationClasses(view)).toContain("survivor");
@@ -550,20 +558,16 @@ describe("decoration orchestrator — provider build() throw containment", () =>
       expect(decorationClasses(view)).toContain("survivor");
     } finally {
       view.destroy();
-      spy.mockRestore();
     }
   });
 
   it("keeps decorations accumulated BEFORE the throwing provider (order-independence)", () => {
-    const good: DecorationProvider = {
-      build: () => Decoration.set([Decoration.mark({ class: "earlier" }).range(0, 5)]),
-    };
+    const good = markProvider("earlier");
     const throwing: DecorationProvider = {
       build: () => {
         throw new Error("provider exploded");
       },
     };
-    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
     const view = mount([createSyntaxReveal([good, throwing])], "hello world");
     try {
       expect(decorationClasses(view)).toContain("earlier");
@@ -571,7 +575,6 @@ describe("decoration orchestrator — provider build() throw containment", () =>
       expect(decorationClasses(view)).toContain("earlier");
     } finally {
       view.destroy();
-      spy.mockRestore();
     }
   });
 
@@ -587,10 +590,7 @@ describe("decoration orchestrator — provider build() throw containment", () =>
     const bad: DecorationProvider = {
       build: () => null as unknown as DecorationSet,
     };
-    const good: DecorationProvider = {
-      build: () => Decoration.set([Decoration.mark({ class: "survivor" }).range(0, 5)]),
-    };
-    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const good = markProvider("survivor");
     // `bad` FIRST, so the accumulator is Decoration.none — the passthrough case.
     const view = mount([createSyntaxReveal([bad, good])], "hello world");
     try {
@@ -599,7 +599,6 @@ describe("decoration orchestrator — provider build() throw containment", () =>
       expect(decorationClasses(view)).toContain("survivor");
     } finally {
       view.destroy();
-      spy.mockRestore();
     }
   });
 
@@ -611,15 +610,13 @@ describe("decoration orchestrator — provider build() throw containment", () =>
         throw new Error("same failure every time");
       },
     };
-    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
     const view = mount([createSyntaxReveal([throwing])], "hello world");
     try {
       view.dispatch({ changes: { from: 0, insert: "x" } });
       view.dispatch({ changes: { from: 0, insert: "y" } });
-      expect(quollErrorCount(spy)).toBe(1);
+      expect(quollErrorCount()).toBe(1);
     } finally {
       view.destroy();
-      spy.mockRestore();
     }
   });
 
@@ -634,15 +631,13 @@ describe("decoration orchestrator — provider build() throw containment", () =>
         throw new Error(builds <= 2 ? "alpha failure" : "beta failure");
       },
     };
-    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
     const view = mount([createSyntaxReveal([throwing])], "hello world");
     try {
       view.dispatch({ changes: { from: 0, insert: "x" } }); // build 2 — alpha again
       view.dispatch({ changes: { from: 0, insert: "y" } }); // build 3 — beta
-      expect(quollErrorCount(spy)).toBe(2);
+      expect(quollErrorCount()).toBe(2);
     } finally {
       view.destroy();
-      spy.mockRestore();
     }
   });
 
@@ -654,20 +649,20 @@ describe("decoration orchestrator — provider build() throw containment", () =>
     const throwing: DecorationProvider = {
       build: () => {
         builds += 1;
-        throw new Error(`fail ${"ABCDEF"[Math.min(builds - 1, 5)]}`);
+        // No clamp: `expect(builds).toBe(6)` below runs BEFORE the log-count
+        // assertion, so an extra build fails the test either way.
+        throw new Error(`fail ${"ABCDEF"[builds - 1]}`);
       },
     };
-    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
     const view = mount([createSyntaxReveal([throwing])], "hello world");
     try {
       for (const ch of ["a", "b", "c", "d", "e"]) {
         view.dispatch({ changes: { from: 0, insert: ch } });
       }
       expect(builds).toBe(6);
-      expect(quollErrorCount(spy)).toBe(5);
+      expect(quollErrorCount()).toBe(5);
     } finally {
       view.destroy();
-      spy.mockRestore();
     }
   });
 
@@ -683,10 +678,7 @@ describe("decoration orchestrator — provider build() throw containment", () =>
         throw Object.create(null);
       },
     };
-    const good: DecorationProvider = {
-      build: () => Decoration.set([Decoration.mark({ class: "survivor" }).range(0, 5)]),
-    };
-    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const good = markProvider("survivor");
     const view = mount([createSyntaxReveal([hostile, good])], "hello world");
     try {
       expect(decorationClasses(view)).toContain("survivor");
@@ -696,10 +688,9 @@ describe("decoration orchestrator — provider build() throw containment", () =>
       // placeholder rather than letting the outer catch swallow the report,
       // and the placeholder dedupes like any other signature (one line, not
       // one per build).
-      expect(quollErrorCount(spy)).toBe(1);
+      expect(quollErrorCount()).toBe(1);
     } finally {
       view.destroy();
-      spy.mockRestore();
     }
   });
 
@@ -710,10 +701,7 @@ describe("decoration orchestrator — provider build() throw containment", () =>
     // WeakMap.set(false, …) throws "Invalid value used as weak map key". Only
     // the try/catch AROUND logProviderFailure covers this — normalising the
     // error message cannot, since the throw is not about the error value.
-    const good: DecorationProvider = {
-      build: () => Decoration.set([Decoration.mark({ class: "survivor" }).range(0, 5)]),
-    };
-    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const good = markProvider("survivor");
     const view = mount(
       [createSyntaxReveal([false as unknown as DecorationProvider, good])],
       "hello world"
@@ -724,7 +712,6 @@ describe("decoration orchestrator — provider build() throw containment", () =>
       expect(decorationClasses(view)).toContain("survivor");
     } finally {
       view.destroy();
-      spy.mockRestore();
     }
   });
 
@@ -741,16 +728,14 @@ describe("decoration orchestrator — provider build() throw containment", () =>
         throw new RangeError(`Position ${builds * 37} out of range`);
       },
     };
-    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
     const view = mount([createSyntaxReveal([throwing])], "hello world");
     try {
       view.dispatch({ changes: { from: 0, insert: "x" } });
       view.dispatch({ changes: { from: 0, insert: "y" } });
       expect(builds).toBeGreaterThanOrEqual(3);
-      expect(quollErrorCount(spy)).toBe(1);
+      expect(quollErrorCount()).toBe(1);
     } finally {
       view.destroy();
-      spy.mockRestore();
     }
   });
 });
