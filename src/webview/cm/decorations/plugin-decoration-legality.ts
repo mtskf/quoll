@@ -10,10 +10,22 @@
 // ask later, early enough for the orchestrator to contain the answer to the one
 // provider responsible.
 //
-// The two rules mirror @codemirror/view's own check verbatim (dist/index.js
-// :2733-2738): for a PointDecoration from a dynamic (plugin) source,
+// The two rules are @codemirror/view's own (dist/index.js:2733-2738): for a
+// PointDecoration from a dynamic (plugin) source,
 //   - `deco.block` is forbidden outright, and
 //   - a replace may not end past the end of the line its start sits on.
+//
+// ⚠️ This judges every decoration INDIVIDUALLY, which is deliberately STRICTER
+// than CodeMirror in one corner: an illegal point that another, higher-
+// precedence point COVERS never reaches CodeMirror's check at all, so CM
+// tolerates it. Probed: a block widget at 14 under a `replace(13, 16)` does not
+// throw, while the same widget uncovered does. Do NOT relax this to match.
+// Coverage is an artifact of walk geometry — CM's emit runs per changed REGION,
+// so whether coverage saves a widget can differ between builds of the SAME set,
+// and a per-provider check cannot see coverage coming from other decoration
+// sources regardless. Erring strict costs a provider that was already emitting
+// an illegal shape one contained skip; erring lenient lets the escape through
+// on the build where the covering decoration happens not to be there.
 
 import type { Text } from "@codemirror/state";
 import type { DecorationSet } from "@codemirror/view";
@@ -53,10 +65,12 @@ import type { DecorationSet } from "@codemirror/view";
 export function findPluginIllegalDecoration(built: DecorationSet, doc: Text): string | null {
   // Reproduces the clipping `RangeSet.spans` would have applied. CodeMirror's
   // own check runs inside a spans walk bounded by the document, so a decoration
-  // running past the end is judged on its clipped extent — flagging it whole
+  // running past the end is judged on its clipped EXTENT — flagging it whole
   // would reject a provider CodeMirror was perfectly happy with. A point
   // sitting exactly AT `doc.length` is still visited (spans visits it too),
-  // which is what keeps a block widget at the very end catchable.
+  // which is what keeps a block widget at the very end catchable. Note this is
+  // about extent only; it is NOT a general licence to match CM's tolerances —
+  // see the covered-point note in the module header for the one we decline.
   const docEnd = doc.length;
   // Cached bounds of the line the last sized point started on. The cursor yields
   // ranges by ascending `from`, and providers emit several concealed markers per
