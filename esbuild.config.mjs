@@ -74,7 +74,7 @@ export function createBuildConfigs({ production }) {
   // Emitted at `dist/test-harness.js` (not `.cjs`) so the dynamic
   // `await import("./test-harness.js")` inside extension.ts resolves
   // 1:1 against the on-disk filename. The repo root `"type": "module"`
-  // (Slice 7C) would otherwise make `.js` ESM, so `writePlainCjsMarker`
+  // (Slice 7C) would otherwise make `.js` ESM, so `writeDistCjsMarker`
   // below writes a sibling `dist/package.json` of `{"type":"commonjs"}`
   // to mark the dist tree as CJS. The host bundle stays at `.cjs` so
   // its file extension is self-describing; the test-harness needs a

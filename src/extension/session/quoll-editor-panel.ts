@@ -786,8 +786,14 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
           // no-op comparison) — the transition is then a pure function of
           // these. When the write lock is held the edit is STASHED (core
           // `edit` arm reads content/baseDocVersion only, never
-          // currentContent), so skip the O(n) canonicalisation — the drain
-          // re-snapshots at settlement. Mirrors the lazy `drainSnapshot`.
+          // currentContent), so skip the O(n) canonicalisation: the drain takes
+          // its snapshot from the settlement instead — `applyEditSettled` carries
+          // `currentContent` (effect-executor's runApplyEdit fills it from the
+          // write pipeline's `result.settledContent`). host-session-core gates on
+          // it first (`canDrain`: currentContent must match inFlightContent, else
+          // an external edit that raced the apply→settle window wins instead of
+          // being clobbered) and only then passes it into `decideEdit` alongside
+          // the stash. No host re-read is needed here.
           dispatch({
             type: "edit",
             baseDocVersion: raw.baseDocVersion,
