@@ -222,10 +222,7 @@ export function createImagePasteDrop(opts: {
       // Paired with `requestId` for the reason the two warns above are: concurrent
       // reads from one paste event are only tellable apart by it, and this is the arm
       // most likely to hit several at once (a batch dropped from a folder that then
-      // moves). The `{ err, requestId }` pairing matches `clearPending`'s catch — the
-      // file's other per-request logs carry `requestId` without an `err` because they
-      // caught nothing, and the per-event cap warns in `handle` carry neither: they
-      // run BEFORE `submit` mints a requestId, so there is not yet one to name.
+      // moves).
       console.error("[quoll] failed to read pasted image", { err: reader.error, requestId });
       clearPending(view, requestId);
     };
