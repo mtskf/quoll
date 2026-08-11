@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
-import { EditorSelection, EditorState } from "@codemirror/state";
+import { EditorSelection, EditorState, type Transaction } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import { describe, expect, it, vi } from "vitest";
 
@@ -545,6 +545,90 @@ describe("tryOpenLinkAt — gate-reject bails warn", () => {
     }
   });
 
+  // The `unresolved-fragment` bail needs an EXHAUSTED 500 ms parse budget, which
+  // a fixture can only reach with a multi-megabyte document — too slow to be
+  // worth a unit test, and the resolver side is pinned deterministically in
+  // test/webview/cm-link-resolve.test.ts. So pin the HANDLER's response to the
+  // arm through the same doMock seam the simulated-drift test above uses: it
+  // must warn (a real heading that the parse never reached must not vanish
+  // silently) and it must warn with the budget ALONE — the slug is href-derived
+  // and the NO-URL POLICY keeps it off the console.
+  it("warns when a fragment could not be resolved within the parse budget", async () => {
+    vi.resetModules();
+    vi.doMock("../../src/webview/cm/link-resolve.js", () => ({
+      resolveLinkTarget: () => ({ kind: "unresolved-fragment" }),
+    }));
+    try {
+      const { tryOpenLinkAt: openWithExhaustedBudget } = await import(
+        "../../src/webview/cm/link-handlers.js"
+      );
+      const { warnings, handled, posted } = clickLink(
+        "see [t](#secret-heading-name)",
+        "[t]",
+        openWithExhaustedBudget
+      );
+      expect(handled).toBe(false);
+      expect(posted).toEqual([]);
+      // 500 mirrors FRAGMENT_PARSE_BUDGET_MS (module-private in link-handlers).
+      expect(warnings).toEqual([
+        [
+          "[quoll] link not opened: fragment target unresolved (parse budget exhausted)",
+          { budgetMs: 500 },
+        ],
+      ]);
+      expect(JSON.stringify(warnings)).not.toContain("secret-heading-name");
+    } finally {
+      vi.doUnmock("../../src/webview/cm/link-resolve.js");
+      vi.resetModules();
+    }
+  });
+
+  // The NO-URL POLICY's STRICTEST field. A rejection arm's `schemeToken` is
+  // PICKED from a fixed literal set in link-target.ts, so it cannot carry href
+  // bytes by construction; `slug` can — it IS href bytes, and a heading name is
+  // private text (`#project-atlas-launch-date`). link-target.ts's header calls
+  // it "neither posted nor logged": the not-POSTED half is pinned by the
+  // fragment tests' exploding host, and this is the not-LOGGED half, which
+  // nothing else covers. Both declining fragment arms are driven, because they
+  // fail differently: the UNMATCHED one is silent by design, and the
+  // UNRESOLVED one is the arm that actually reaches the console.
+  it("never logs the slug on either declining fragment arm", async () => {
+    const slug = "project-atlas-launch-date";
+    const doc = `# One\n\nsee [t](#${slug}) end\n`;
+    // Unmatched: no heading produces this slug, so the click falls through to a
+    // caret move — and says nothing at all.
+    const unmatched = clickLink(doc, "[t]");
+    expect(unmatched.handled).toBe(false);
+    expect(unmatched.posted).toEqual([]);
+    expect(unmatched.warnings).toEqual([]);
+
+    // Unresolved: same doMock seam as the budget test above. This arm DOES warn,
+    // so it is the one where a slug could plausibly ride along in the detail.
+    vi.resetModules();
+    vi.doMock("../../src/webview/cm/link-resolve.js", () => ({
+      resolveLinkTarget: () => ({ kind: "unresolved-fragment" }),
+    }));
+    try {
+      const { tryOpenLinkAt: openWithExhaustedBudget } = await import(
+        "../../src/webview/cm/link-handlers.js"
+      );
+      const unresolved = clickLink(doc, "[t]", openWithExhaustedBudget);
+      expect(unresolved.handled).toBe(false);
+      expect(unresolved.warnings).toHaveLength(1);
+      // Substrings too, not just the whole slug: a truncating "fix" or a partial
+      // echo would sail past a whole-string check.
+      for (const emitted of [unmatched.warnings, unresolved.warnings]) {
+        const logged = JSON.stringify(emitted);
+        for (const secret of [slug, "project-atlas", "atlas", "launch-date"]) {
+          expect(logged).not.toContain(secret);
+        }
+      }
+    } finally {
+      vi.doUnmock("../../src/webview/cm/link-resolve.js");
+      vi.resetModules();
+    }
+  });
+
   it("does not warn on the open path", () => {
     const { warnings, handled, posted } = clickLink("see [t](https://example.com)", "[t]");
     expect(handled).toBe(true);
@@ -842,13 +926,26 @@ describe("tryOpenLinkAt — fragments", () => {
 });
 
 describe("handleLinkMouseDown — fragment wiring", () => {
-  it("moves the caret to the heading, takes focus, and consumes the click", () => {
+  // The sink does THREE things and each is load-bearing (see scrollToDocumentPos):
+  // the caret move, the scroll request, and the re-focus that `preventDefault` on
+  // the mousedown would otherwise have suppressed. Assert all three — a test that
+  // pins only the caret stays green against a "simplification" to a bare
+  // `view.dispatch({ selection })`, which silently deletes the feature's namesake
+  // scroll and leaves the caret in an unfocused view.
+  it("moves the caret to the heading, scrolls, takes focus, and consumes the click", () => {
     const doc = "# Getting Started\n\nsee [jump](#getting-started) end\n";
     const parent = document.createElement("div");
     document.body.appendChild(parent);
+    const dispatched: Transaction[] = [];
     const view = new EditorView({
       parent,
       state: EditorState.create({ doc, extensions: [markdown({ base: markdownLanguage })] }),
+      // Capture the transaction so the scroll REQUEST is observable: happy-dom
+      // has no layout, so the scroll itself cannot be measured here.
+      dispatch: (tr, v) => {
+        dispatched.push(tr);
+        v.update([tr]);
+      },
     });
     // happy-dom has no layout, so posAtCoords cannot be driven from real
     // coords — stub it to the inline-content position the click would hit.
@@ -867,9 +964,17 @@ describe("handleLinkMouseDown — fragment wiring", () => {
         throw new Error("a fragment must not post to the host");
       },
     };
+    // Non-vacuity for the focus assertion below: the view does NOT already hold
+    // focus, so a passing `hasFocus` afterwards can only come from the sink.
+    expect(view.hasFocus).toBe(false);
     expect(handleLinkMouseDown(event, view, host)).toBe(true);
     expect(prevented).toBe(true);
     expect(view.state.selection.main.head).toBe(0);
+    // One transaction carrying the scroll effect alongside the selection.
+    expect(dispatched).toHaveLength(1);
+    expect(dispatched[0].effects).toHaveLength(1);
+    expect(view.hasFocus).toBe(true);
+    expect(document.activeElement).toBe(view.contentDOM);
     view.destroy();
   });
 });

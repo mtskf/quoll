@@ -6,12 +6,14 @@
 // from syntaxTree's return type per repo convention (avoids widening the
 // @lezer/common direct-dep import surface — see decorations/types.ts).
 //
-// Also owns the pure heading-TEXT primitives shared by the outline and the
-// fragment-link resolver: headingText (strip the ATX syntax) and
-// slugifyHeadingText (GitHub-style anchor slug). Both are total string
-// functions with no CM dependency beyond the Tree type above.
+// Also owns the heading-TEXT primitives: headingText (strip the ATX syntax from
+// a raw slice — the outline's reader), headingSlugSource (the heading's RENDERED
+// content, markup nodes removed — the fragment-link resolver's reader) and
+// slugifyHeadingText (GitHub-style anchor slug, applied to either). All three
+// are total; only headingSlugSource needs the tree and the document.
 
 import type { syntaxTree } from "@codemirror/language";
+import type { EditorState } from "@codemirror/state";
 
 type Tree = ReturnType<typeof syntaxTree>;
 
@@ -37,17 +39,26 @@ export function collectHeadings(tree: Tree): { level: number; from: number; to: 
 
 /** Strip the ATX opener (`#`..`######` and following spaces/tabs) and an
  *  optional closing `#` run from a heading's node-span text, then trim.
- *  Lives here rather than in outline/build-outline.ts because the outline and
- *  the fragment-link resolver must strip IDENTICALLY — an outline row and a
- *  `#slug` have to name the same heading.
+ *  Sole consumer: outline/build-outline.ts, which wants the heading's SOURCE
+ *  text — an outline row shows the Markdown the user typed. The fragment-link
+ *  resolver deliberately does NOT share it; it reads the rendered content via
+ *  headingSlugSource below (see that function for why the two must differ).
+ *  It still lives here rather than in build-outline.ts because it is the
+ *  string half of this module's heading vocabulary.
  *
  *  Moved VERBATIM from build-outline.ts, order included: opener first, then the
  *  closing run. lint/rules/duplicate-heading-text.ts keeps its own copy with the
  *  opposite order (and whitespace collapsing, and no `^[ \t]*` indent tolerance)
- *  for a documented CommonMark reason. The two disagree only on `# #`-shaped
- *  empty headings, where this one yields "#" and that one "" — both slug to ""
- *  downstream, so the divergence is inert here. Unifying the copies is a
- *  separate change; do not "fix" the order in passing.
+ *  for a documented CommonMark reason. TWO of those differences are behavioural,
+ *  not merely textual: a `# #`-shaped empty heading yields "#" here and "" there,
+ *  and an internal whitespace run survives here (`# A  B` → "A  B") while that
+ *  copy collapses it to one space. Both are inert as things stand only because
+ *  the copies have DISJOINT consumers — an outline row shows the source as typed,
+ *  and the lint rule compares its own outputs to each other — so "inert" is a
+ *  property of the call sites, not of the strings. The `^[ \t]*` difference never
+ *  fires at all: a Lezer ATXHeading span starts at the `#` (measured: `   # X`
+ *  spans from offset 3), so the slice carries no leading indentation. Unifying
+ *  the copies is a separate change; do not "fix" the order in passing.
  *
  *  Pure string work: total by contract (see slugifyHeadingText). */
 export function headingText(raw: string): string {
@@ -57,6 +68,73 @@ export function headingText(raw: string): string {
     .trim();
 }
 
+/** Inline nodes whose bytes are MARKUP, not content: every one of them is
+ *  invisible in Quoll's rendered heading, so none may reach the slug. Verified
+ *  against the real Lezer GFM tree — `HeaderMark` covers both the opener and the
+ *  closing `#` run (which is why headingSlugSource needs no ATX regex),
+ *  `LinkMark` covers `[`, `]`, `(`, `)` and an image's `![`, and `URL` is the
+ *  destination that must NOT leak into the anchor. Content-bearing wrappers
+ *  (`Link`, `Image`, `StrongEmphasis`, `InlineCode`, …) are absent on purpose:
+ *  excluding a wrapper would delete the text it wraps. */
+const SLUG_EXCLUDED_NODES = new Set([
+  "HeaderMark",
+  "LinkMark",
+  "URL",
+  "CodeMark",
+  "EmphasisMark",
+  "StrikethroughMark",
+  "HTMLTag",
+]);
+
+/** The heading at `[from, to)` as the user SEES it: the span with every inline
+ *  markup range removed and the gaps stitched back together. This — not the raw
+ *  source — is what the fragment-link resolver slugs, so `# A [link](b)` is
+ *  addressable as `#a-link` (what GitHub says, and what the reader of a Quoll
+ *  document, which hides the syntax, would guess) instead of `#a-linkb`.
+ *  headingText cannot do this job: markup removal is a TREE question, and the
+ *  outline wants the source text anyway.
+ *
+ *  Returns the stitched text unslugged and untrimmed — the caller pipes it
+ *  through slugifyHeadingText, which trims and collapses the whitespace the
+ *  removed marks leave behind.
+ *
+ *  TOTAL BY CONTRACT — reachable from a decoration provider via link-resolve.ts.
+ *  `sliceString` is the only throwing primitive here, so a span that is not
+ *  fully inside `state.doc` (a stale tree over a shortened document — the same
+ *  hazard link-resolve.ts's index guard exists for) returns "" rather than
+ *  slicing. `tree.iterate` over an out-of-document range does not throw. */
+export function headingSlugSource(
+  state: EditorState,
+  tree: Tree,
+  from: number,
+  to: number
+): string {
+  if (from < 0 || to > state.doc.length || from > to) {
+    return "";
+  }
+  let text = "";
+  let cursor = from;
+  tree.iterate({
+    from,
+    to,
+    enter: (node) => {
+      if (!SLUG_EXCLUDED_NODES.has(node.name)) {
+        return;
+      }
+      if (node.from > cursor) {
+        text += state.doc.sliceString(cursor, node.from);
+      }
+      // Math.max, not a bare assign: excluded nodes can nest or overlap the
+      // cursor (an HTMLTag inside emphasis), and rewinding would re-emit bytes.
+      cursor = Math.max(cursor, node.to);
+    },
+  });
+  if (cursor < to) {
+    text += state.doc.sliceString(cursor, to);
+  }
+  return text;
+}
+
 /** GitHub-STYLE anchor slug for a heading's text: lowercase, drop everything
  *  that is not a letter / number / combining mark / `_` / `-` / whitespace,
  *  then collapse whitespace runs to single hyphens. Unicode-aware
@@ -64,14 +142,11 @@ export function headingText(raw: string): string {
  *  than to the empty string, which is what GitHub does.
  *
  *  "STYLE", not "compatible", and the distinction is load-bearing. This is not
- *  a github-slugger port: no transliteration, and the input is RAW Markdown
- *  source rather than rendered text. Emphasis and inline code come out
- *  identical to GitHub (their marks are punctuation, so they are stripped), but
- *  a link or image inside a heading leaks its destination — `A [link](b)` slugs
- *  to `a-linkb` where GitHub says `a-link`. Accepted: the failure mode is a
- *  fragment link that shows no pointer and stays a caret move, never a dead
- *  click. Slugging rendered text means walking the heading's inline tree and
- *  excluding mark nodes — a separate change with its own tests.
+ *  a github-slugger port: no transliteration. It also makes no claim about WHAT
+ *  it is handed — it slugs whatever string arrives. Feeding it raw source would
+ *  leak a link's destination (`A [link](b)` → `a-linkb` where GitHub says
+ *  `a-link`); that is why the fragment-link resolver feeds it headingSlugSource
+ *  (markup nodes removed) and not headingText.
  *
  *  The duplicate-heading counter is NOT here: it is positional, so it belongs
  *  to the index in link-resolve.ts, not to a per-string function.

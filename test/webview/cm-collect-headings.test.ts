@@ -1,11 +1,20 @@
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
 import { EditorState } from "@codemirror/state";
 import { describe, expect, it } from "vitest";
-import { collectHeadings, headingText, slugifyHeadingText } from "../../src/webview/cm/headings.js";
+import {
+  collectHeadings,
+  headingSlugSource,
+  headingText,
+  slugifyHeadingText,
+} from "../../src/webview/cm/headings.js";
 import { fullTree } from "./helpers/full-tree.js";
 
+function stateOf(doc: string) {
+  return EditorState.create({ doc, extensions: [markdown({ base: markdownLanguage })] });
+}
+
 function treeOf(doc: string) {
-  return fullTree(EditorState.create({ doc, extensions: [markdown({ base: markdownLanguage })] }));
+  return fullTree(stateOf(doc));
 }
 
 describe("collectHeadings", () => {
@@ -69,10 +78,11 @@ describe("slugifyHeadingText", () => {
     expect(slugifyHeadingText("The `foo` API")).toBe("the-foo-api");
   });
 
-  it("pins the KNOWN divergence: a link inside a heading leaks its destination", () => {
-    // GitHub slugs the RENDERED text ("a-link"); we slug the raw source. See
-    // design decision 3 — an approximation, deliberately not a compatibility
-    // claim. The failure mode is benign: no pointer, click stays a caret move.
+  it("slugs whatever string it is handed — raw link source included", () => {
+    // NOT a divergence pin any more: it is the statement that this function
+    // makes no claim about its INPUT. Handed raw source it leaks the
+    // destination, which is exactly why the fragment-link resolver feeds it
+    // headingSlugSource (below) rather than headingText.
     expect(slugifyHeadingText("A [link](b)")).toBe("a-linkb");
   });
 
@@ -84,5 +94,54 @@ describe("slugifyHeadingText", () => {
   it("returns an empty string for a text with nothing sluggable", () => {
     expect(slugifyHeadingText("!!!")).toBe("");
     expect(slugifyHeadingText("")).toBe("");
+  });
+});
+
+describe("headingSlugSource", () => {
+  /** Slug the SOLE heading of `doc` the way the fragment-link resolver does. */
+  function slugOf(doc: string): string {
+    const state = stateOf(doc);
+    const tree = fullTree(state);
+    const [heading] = collectHeadings(tree);
+    expect(heading).toBeDefined();
+    return slugifyHeadingText(headingSlugSource(state, tree, heading.from, heading.to));
+  }
+
+  it("drops the ATX marks without a regex — HeaderMark covers opener and closer", () => {
+    expect(slugOf("## Getting Started")).toBe("getting-started");
+    expect(slugOf("## Closed ##")).toBe("closed");
+  });
+
+  it("slugs a link's TEXT, not its destination (the anchor GitHub produces)", () => {
+    expect(slugOf("# A [link](b)")).toBe("a-link");
+  });
+
+  it("drops emphasis, code and strikethrough marks while keeping their content", () => {
+    expect(slugOf("## The `foo` API")).toBe("the-foo-api");
+    expect(slugOf("### Some **bold** heading")).toBe("some-bold-heading");
+  });
+
+  it("drops strikethrough marks and raw HTML tags", () => {
+    expect(slugOf("#### With ~~strike~~ and <em>html</em>")).toBe("with-strike-and-html");
+  });
+
+  it("keeps an image's alt text and drops its destination", () => {
+    expect(slugOf("##### ![img](u.png) caption")).toBe("img-caption");
+  });
+
+  it("yields nothing for a heading that is only marks", () => {
+    // `# #` is two HeaderMarks around a space — no content, so no anchor, and
+    // buildSlugIndex skips it.
+    expect(slugOf("# #")).toBe("");
+  });
+
+  it("stays total when the span is not inside the document", () => {
+    // Same hazard as link-resolve.ts's index guard: a stale tree over a
+    // shortened document. Slicing would throw; this returns "".
+    const state = stateOf("# Alpha");
+    const tree = fullTree(state);
+    expect(headingSlugSource(state, tree, 0, state.doc.length + 50)).toBe("");
+    expect(headingSlugSource(state, tree, -1, 3)).toBe("");
+    expect(headingSlugSource(state, tree, 5, 2)).toBe("");
   });
 });

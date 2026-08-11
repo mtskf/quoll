@@ -6,9 +6,11 @@ import { describe, expect, it } from "vitest";
 import {
   findHeadingBySlug,
   isActionableLinkTarget,
+  type ParseReach,
   resolveLinkTarget,
 } from "../../src/webview/cm/link-resolve.js";
 import { classifyLinkTarget } from "../../src/webview/cm/link-target.js";
+import { fullTree } from "./helpers/full-tree.js";
 
 function stateOf(doc: string): EditorState {
   return EditorState.create({ doc, extensions: [markdown({ base: markdownLanguage })] });
@@ -94,9 +96,37 @@ describe("findHeadingBySlug", () => {
     expect(findHeadingBySlug(after, tree, "gamma")).toBe(0);
   });
 
-  it("cannot see a heading beyond a PARTIAL tree (the premise Task 3's budget answers)", () => {
-    // Non-vacuity guard for design decision 2: prove a bounded tree really can
-    // miss a far heading, so the budgeted resolve in Task 3 pins real behaviour.
+  it("skips a heading the STALE tree places past the end of a shortened document", () => {
+    // TOTALITY PIN. `state` and `tree` are independent arguments, so a tree can
+    // describe a document longer than the one it is handed, and this function
+    // runs inside a DecorationProvider.build() where a throw kills the whole
+    // inline-reveal layer permanently.
+    const doc = "intro\n\n## Second Heading\n\nbody\n";
+    const before = stateOf(doc);
+    const staleTree = fullTree(before);
+    const headingStart = lineStartOf(doc, "## Second");
+    expect(findHeadingBySlug(before, staleTree, "second-heading")).toBe(headingStart);
+    // Truncate to "in". Assert the HAZARD, not just the outcome: this is the
+    // scenario in which the index's own `doc.lineAt(from)` would throw, so if a
+    // later edit softens the fixture into a harmless one this line goes red
+    // before the not-toThrow below silently stops proving anything.
+    const after = before.update({ changes: { from: 2, to: doc.length } }).state;
+    expect(after.doc.length).toBe(2);
+    expect(() => after.doc.lineAt(headingStart)).toThrow(RangeError);
+    expect(() => findHeadingBySlug(after, staleTree, "second-heading")).not.toThrow();
+    expect(findHeadingBySlug(after, staleTree, "second-heading")).toBeNull();
+  });
+
+  it("indexes the RENDERED heading content, so a link's destination is not in the slug", () => {
+    const doc = "# A [link](b)\n\nbody\n";
+    expect(lookup(doc, "a-link")).toBe(0);
+    expect(lookup(doc, "a-linkb")).toBeNull();
+  });
+
+  it("cannot see a heading beyond a PARTIAL tree (the premise the click budget answers)", () => {
+    // Non-vacuity guard: prove a bounded tree really can miss a far heading, so
+    // resolveLinkTarget's `{ completeWithinMs }` reach pins real behaviour
+    // rather than a tautology.
     const doc = `# Top\n\n${"filler paragraph text\n\n".repeat(4000)}## Far Heading\n\nend\n`;
     const state = stateOf(doc);
     const partial = ensureSyntaxTree(state, 200, 50) ?? syntaxTree(state);
@@ -111,9 +141,9 @@ describe("findHeadingBySlug", () => {
 });
 
 describe("resolveLinkTarget", () => {
-  function resolve(doc: string, destination: string, budgetMs?: number) {
+  function resolve(doc: string, destination: string, reach: ParseReach = "viewport-only") {
     const state = stateOf(doc);
-    return resolveLinkTarget(state, syntaxTree(state), classifyLinkTarget(destination), budgetMs);
+    return resolveLinkTarget(state, syntaxTree(state), classifyLinkTarget(destination), reach);
   }
 
   it("passes every non-fragment arm through untouched", () => {
@@ -138,19 +168,57 @@ describe("resolveLinkTarget", () => {
     expect(resolve("# One\n\ntext\n", "#missing")).toEqual({ kind: "no-action" });
   });
 
+  it("resolves a fragment against the RENDERED heading content", () => {
+    const doc = "# A [link](b)\n\nbody\n";
+    expect(resolve(doc, "#a-link")).toEqual({ kind: "scroll", pos: 0 });
+    expect(resolve(doc, "#a-linkb")).toEqual({ kind: "no-action" });
+  });
+
   it("finds a far heading when given a parse budget, and misses it without one", () => {
-    // Design decision 2: the CLICK path forces a complete parse because
-    // syntaxTree only guarantees the viewport (+~100 KB); the decoration path
-    // passes no budget and accepts the miss.
+    // The reach asymmetry, in one test: the CLICK path forces a complete parse
+    // because syntaxTree only guarantees the viewport (+~100 KB); the decoration
+    // path stays "viewport-only" and accepts the miss (a missing pointer, never
+    // a dead click).
     const doc = `# Top\n\n${"filler paragraph text\n\n".repeat(4000)}## Far Heading\n\nend\n`;
     const state = stateOf(doc);
     const partial = ensureSyntaxTree(state, 200, 50) ?? syntaxTree(state);
     expect(partial.length).toBeLessThan(state.doc.length);
     const target = classifyLinkTarget("#far-heading");
-    expect(resolveLinkTarget(state, partial, target)).toEqual({ kind: "no-action" });
-    expect(resolveLinkTarget(state, partial, target, 5000)).toEqual({
+    expect(resolveLinkTarget(state, partial, target, "viewport-only")).toEqual({
+      kind: "no-action",
+    });
+    expect(resolveLinkTarget(state, partial, target, { completeWithinMs: 5000 })).toEqual({
       kind: "scroll",
       pos: doc.lastIndexOf("## Far Heading"),
+    });
+  });
+
+  it("reports an exhausted budget as unresolved-fragment, not no-action", () => {
+    // The distinction the arm exists for: in a large document a REAL heading
+    // that the parse never reached must not read as "no such heading". Both
+    // halves use a fresh state so neither inherits the other's parse progress.
+    const doc = `# Top\n\n${"filler paragraph text\n\n".repeat(8000)}## Far Heading\n\nend\n`;
+    const target = classifyLinkTarget("#far-heading");
+
+    const starved = stateOf(doc);
+    expect(
+      resolveLinkTarget(starved, syntaxTree(starved), target, { completeWithinMs: 1 })
+    ).toEqual({ kind: "unresolved-fragment" });
+
+    // Non-vacuity: the SAME slug in the SAME document resolves once the budget
+    // is real, so the arm above is about the budget and not a missing heading.
+    const fed = stateOf(doc);
+    expect(resolveLinkTarget(fed, syntaxTree(fed), target, { completeWithinMs: 10_000 })).toEqual({
+      kind: "scroll",
+      pos: doc.lastIndexOf("## Far Heading"),
+    });
+  });
+
+  it("keeps no-action for a genuinely absent heading even when a budget was given", () => {
+    // The budget arm must not swallow the honest negative: a completed parse
+    // that finds nothing is `no-action`, which stays silent at the click site.
+    expect(resolve("# One\n\ntext\n", "#missing", { completeWithinMs: 5000 })).toEqual({
+      kind: "no-action",
     });
   });
 });
@@ -164,5 +232,8 @@ describe("isActionableLinkTarget", () => {
     expect(isActionableLinkTarget({ kind: "oversize", length: 1 })).toBe(false);
     expect(isActionableLinkTarget({ kind: "blocked", schemeToken: "(none)" })).toBe(false);
     expect(isActionableLinkTarget({ kind: "unopenable-scheme", scheme: "ftp" })).toBe(false);
+    // "could not determine" is not "act": the pointer must not promise a scroll
+    // the click cannot deliver.
+    expect(isActionableLinkTarget({ kind: "unresolved-fragment" })).toBe(false);
   });
 });

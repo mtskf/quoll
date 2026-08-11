@@ -133,19 +133,33 @@ export const linkReveal: DecorationProvider = {
           // Emit the clickable marker over [contentStart, contentEnd) when
           // HIDDEN, the content range is non-empty, it is inside the visible
           // window, AND a click on the destination would actually DO something
-          // (the honest-pointer contract in the header). `classifyLinkTarget` is
-          // the SAME function link-handlers.ts gates the click on, so cursor and
-          // behaviour cannot disagree.
+          // (the honest-pointer contract in the header). `resolveLinkTarget` +
+          // `isActionableLinkTarget` are the SAME pair link-handlers.ts gates
+          // the click on, so the pointer never OVER-promises. It can
+          // under-promise, and only in one documented way: the click passes a
+          // parse budget and this path passes "viewport-only", so a heading
+          // below the parsed region may show no pointer while the click still
+          // scrolls (the header's asymmetry — a missing affordance, never a
+          // dead click).
           //
           // Cost: one doc slice + decode + classify per VISIBLE link whose marks
           // are hidden — placed last in the && chain so it runs only for links
-          // that would otherwise get the marker, and bounded by the visible
-          // range like every other walk in this provider.
+          // that would otherwise get the marker. NOTE the resolve step is the
+          // one piece here NOT bounded by the visible range: the first FRAGMENT
+          // link after a tree change pays a whole-tree heading walk
+          // (buildSlugIndex), memoised per Tree afterwards — so once per
+          // keystroke, not once per link. See cm/link-resolve.ts's
+          // SLUG_INDEX_CACHE comment.
           //
           // NOT wrapped in try/catch on purpose: classifyLinkTarget is total by
-          // contract (pinned in test/webview/cm-link-target.test.ts). Catching
-          // here would turn a future totality regression into a silently
-          // missing cursor instead of a loud CI failure.
+          // contract (pinned against a hostile matrix in
+          // test/webview/cm-link-target.test.ts) and resolveLinkTarget is total
+          // by contract too — its one throwing primitive in reach, `doc.lineAt`
+          // over a stale tree, is guarded in buildSlugIndex and pinned by
+          // test/webview/cm-link-resolve.test.ts's "skips a heading the STALE
+          // tree places past the end of a shortened document". Catching here
+          // would turn a future totality regression into a silently missing
+          // cursor instead of a loud CI failure.
           if (
             !revealed &&
             contentStart !== null &&
@@ -159,7 +173,11 @@ export const linkReveal: DecorationProvider = {
                 ctx.tree,
                 classifyLinkTarget(
                   decodeMarkdownDestination(ctx.state.doc.sliceString(urlChild.from, urlChild.to))
-                )
+                ),
+                // "viewport-only" is the whole reason this reads as a named arm
+                // rather than an omitted budget: forcing a parse here would run
+                // on every viewport and selection rebuild.
+                "viewport-only"
               )
             )
           ) {

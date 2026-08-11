@@ -16,14 +16,13 @@
 // helpers: selectionIntersects, warnLinkNotOpened and postToHost each have
 // exactly one caller, tryOpenLinkAt.)
 //
-// What this file no longer owns is the CLASSIFICATION of a destination: that
-// moved to ./link-target.js so the click handler and the
-// `quoll-link-clickable` decoration decide "does this act?" from one predicate
-// instead of two drifting copies. This file keeps the LOGGING policy on top of
-// that verdict.
-// Classification lives in ./link-target.js (pure) and the document question —
-// "does this `#slug` name a real heading?" — in ./link-resolve.js. This file
-// switches on the RESOLVED verdict and keeps only the LOGGING policy on top.
+// What this file no longer owns is the CLASSIFICATION of a destination:
+// ./link-target.js answers "what is this destination?" from the string alone
+// (pure), and ./link-resolve.js answers the document question — "does this
+// `#slug` name a real heading?" — and owns the single `isActionableLinkTarget`
+// predicate the `quoll-link-clickable` decoration reads too, so the cursor and
+// the click cannot come from two drifting copies. This file switches on the
+// RESOLVED verdict and keeps only the LOGGING policy on top.
 
 import { syntaxTree } from "@codemirror/language";
 import { EditorSelection, type EditorState } from "@codemirror/state";
@@ -119,8 +118,8 @@ function selectionIntersects(state: EditorState, from: number, to: number): bool
  *      check), or
  *    - the URL is non-allowlisted (post-decode), or
  *    - the URL is allowlisted but not launchable AND not a relative `.md`
- *      target (an unknown scheme, a fragment, an absolute path, or a
- *      schemeless non-.md relative → falls through to a caret move), or
+ *      target (an unknown scheme, an absolute path, or a schemeless non-.md
+ *      relative → falls through to a caret move), or
  *    - the destination is a `#slug` that no heading in this document produces
  *      (falls through to a caret move — `decorations/link-reveal.ts`
  *      withheld the pointer cursor for it too, via the same resolution).
@@ -128,7 +127,10 @@ function selectionIntersects(state: EditorState, from: number, to: number): bool
  *  relative-.md-target" — the return value is a caller-convenience signal
  *  for preventDefault. The gate-reject bails (oversize href, allowlist
  *  reject, non-openable scheme) additionally log a console.warn via
- *  `warnLinkNotOpened` for triage. The remaining false-returning branches are
+ *  `warnLinkNotOpened` for triage, as does the `unresolved-fragment` arm — a
+ *  fragment whose lookup could not be COMPLETED within the parse budget, which
+ *  is a different fact from `no-action` and the one case where a silent
+ *  fall-through would hide a working link. The remaining false-returning branches are
  *  silent: the pre-classification ones (not a Link, reference-form,
  *  caret-in-link) are ordinary UI states, and the `no-action` arm is
  *  deliberately silent because `decorations/link-reveal.ts` withholds the
@@ -171,12 +173,9 @@ export function tryOpenLinkAt(
   // only if the arm is a fragment — see resolveLinkTarget. This switch adds
   // only the LOGGING policy on top; every field below is already
   // NO-URL-POLICY-safe by construction (see link-target.ts's header).
-  const target = resolveLinkTarget(
-    state,
-    tree,
-    classifyLinkTarget(decoded),
-    FRAGMENT_PARSE_BUDGET_MS
-  );
+  const target = resolveLinkTarget(state, tree, classifyLinkTarget(decoded), {
+    completeWithinMs: FRAGMENT_PARSE_BUDGET_MS,
+  });
   switch (target.kind) {
     case "external":
       return postToHost(host, {
@@ -210,6 +209,18 @@ export function tryOpenLinkAt(
     case "unopenable-scheme":
       warnLinkNotOpened("scheme not in OPENABLE_SCHEMES", { scheme: target.scheme });
       return false;
+    case "unresolved-fragment":
+      // NOT the same fact as `no-action`: the forced parse ran out of budget
+      // before it could say whether this document has the heading, so a real
+      // table-of-contents target in a large document would otherwise produce no
+      // scroll and no trace — indistinguishable from a typo'd anchor. Warn so
+      // the report has a triage trail, and fall through to a caret move.
+      // NO-URL POLICY: the budget only. The slug is href-derived bytes and never
+      // reaches the console.
+      warnLinkNotOpened("fragment target unresolved (parse budget exhausted)", {
+        budgetMs: FRAGMENT_PARSE_BUDGET_MS,
+      });
+      return false;
     case "no-action":
       // Absolute paths, non-.md relatives, fragments that slug to nothing,
       // and fragments naming no heading in this document: ordinary Markdown
@@ -239,14 +250,21 @@ export function tryOpenLinkAt(
  *
  *  The `view.focus()` is load-bearing, not copied ceremony: handleLinkMouseDown
  *  calls preventDefault on the MOUSEDOWN, and moving DOM focus onto the clicked
- *  contenteditable is precisely that event's default action. The two existing
- *  preventDefault handlers (open-external / open-link here, open-code-reference
- *  in code-ref/code-ref-handlers.ts) only post to the host and never touch local
- *  selection, so the suppressed focus never showed. This is the first arm that
- *  moves the caret locally: without the focus call, a click made while the view
+ *  contenteditable is precisely that event's default action. The other
+ *  preventDefault handlers in this file (open-external / open-link) and in
+ *  code-ref/code-ref-handlers.ts only post to the host and never touch local
+ *  selection, so the suppressed focus never showed there. This is the first arm
+ *  HERE that moves the caret locally: without the focus call, a click made while the view
  *  does not already hold focus — a table-of-contents click as the first
  *  interaction, or focus sitting in the outline panel — would scroll and place a
  *  caret the user then cannot type into. Idempotent when already focused.
+ *
+ *  NOT the only in-content preventDefault handler that moves the caret, and the
+ *  other one appears to share the defect: frontmatter/frontmatter-widget.ts
+ *  preventDefaults a left mousedown on the collapsed widget and then dispatches
+ *  a selection (frontmatter/reveal-state.ts's revealFrontmatterAt) with no
+ *  `view.focus()`. Recorded so a future audit of the focus contract is not
+ *  steered away from it; fixing it is a separate change, tracked on its own.
  *
  *  `pos` is a heading line start that resolveLinkTarget derived from this same
  *  state, so it is in range by construction. */
@@ -258,9 +276,11 @@ function scrollToDocumentPos(view: EditorView, pos: number): void {
   view.focus();
 }
 
-/** Pure mousedown handler. Returns true when the click was consumed (a
- *  host message — `open-external` for a launchable URL OR `open-link` for a
- *  relative `.md` target — was posted AND event.preventDefault was called).
+/** Pure mousedown handler. Returns true when the click was consumed — either a
+ *  host message was posted (`open-external` for a launchable URL, `open-link`
+ *  for a relative `.md` target) OR a same-document `#slug` resolved and the
+ *  caret was moved to its heading, which posts nothing — AND
+ *  event.preventDefault was called.
  *  Extracted from quollLinkClickHandler so the branches (button !== 0,
  *  posAtCoords null, out-of-range pos, tryOpenLinkAt false) are testable
  *  without synthesising real coords-based mousedown events under

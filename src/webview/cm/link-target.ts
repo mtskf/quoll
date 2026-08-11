@@ -131,11 +131,16 @@ function schemeTokenForLog(scheme: string | null): LoggableSchemeToken {
   return LOGGABLE_SCHEMES.find((s) => s === scheme) ?? "(unrecognised)";
 }
 
-/** What a decoded destination resolves to. `external` and `workspace` are the
- *  two ACTIONABLE arms — exactly the arms a click acts on, and exactly the arms
- *  that earn a pointer cursor. The rest are the dead-click classes, split by
- *  cause so link-handlers can keep one distinct warn per gate (PR #332's triage
- *  trail). `no-action` is the silent one: ordinary Markdown Quoll does not route. */
+/** What a decoded destination resolves to — the STRING verdict, which is only
+ *  the FIRST of two stages. `external` and `workspace` are actionable as they
+ *  stand: a click acts on them and they earn a pointer cursor. `fragment` is
+ *  undecided here — it acts only if THIS document has a heading with that slug,
+ *  and cm/link-resolve.ts is the stage that answers it (it turns the arm into
+ *  `scroll` / `no-action` / `unresolved-fragment` and owns the
+ *  `isActionableLinkTarget` predicate both consumers read). The remaining arms
+ *  are the dead-click classes, split by cause so link-handlers can keep one
+ *  distinct warn per gate (PR #332's triage trail). `no-action` is the silent
+ *  one: ordinary Markdown Quoll does not route. */
 export type LinkTarget =
   | { readonly kind: "external"; readonly href: string }
   | { readonly kind: "workspace"; readonly href: string }

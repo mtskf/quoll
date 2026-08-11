@@ -157,7 +157,11 @@ describe("classifyLinkTarget — fragments", () => {
   it("keeps the allowlist ahead of the fragment arm", () => {
     // A C0 byte is an allowlist reject, not a fragment. (A space is NOT —
     // isAllowedUrl permits it, so `#a b` is a fragment that slugs to `a-b`.)
-    expect(classifyLinkTarget("#sec")).toEqual({ kind: "blocked", schemeToken: "(none)" });
+    // Write the byte as an ESCAPE, matching the HOSTILE matrix below: a raw
+    // control character renders as `#sec` on screen and in the diff, which
+    // reads as a verbatim contradiction of the fragment assertion above and
+    // goes green-and-vacuous the moment any tool normalises it away.
+    expect(classifyLinkTarget("#se\u0001c")).toEqual({ kind: "blocked", schemeToken: "(none)" });
   });
 
   it("stays document-free: the arm carries a slug and no resolution", () => {
