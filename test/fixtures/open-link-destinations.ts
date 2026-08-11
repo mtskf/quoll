@@ -7,13 +7,30 @@
 //   webview  src/webview/cm/link-target.ts   relativeMarkdownTarget()
 //   host     src/extension/links/handle-open-link.ts   handleOpenLink()
 //
-// Both run: split the #fragment on the ENCODED form → percent-decode ONCE
-// (raw-form fallback on a malformed escape) → isAllowedUrl on the DECODED form
-// → reject a scheme → reject absolute `/…` or ANY backslash → require `.md`.
+// Both run, in this order: isAllowedUrl on the RAW form (the only gate that
+// ever sees #fragment bytes) → split the #fragment on the ENCODED form → stop
+// on an empty path → percent-decode ONCE (raw-form fallback on a malformed
+// escape) → isAllowedUrl on the DECODED form → reject a scheme → reject
+// absolute `/…` or ANY backslash → require `.md`.
+//
+// Same verdicts, different SHAPES — the matrix pins the former only. The host
+// is one straight-line function in which every reject logs its own warn, the
+// empty-path drop included. The webview splits the cascade over two functions:
+// classifyLinkTarget runs the length cap, the raw isAllowedUrl and the scheme
+// DISPATCH, so a scheme-bearing destination leaves as `external` /
+// `unopenable-scheme` and never reaches the scheme reject inside
+// relativeMarkdownTarget — which sees only the schemeless fall-through and
+// merely returns false (its empty-path case has no warn of its own; the
+// caller's `no-action` arm is silent by design).
 //
 // The duplication is deliberate (defense in depth; the webview owns no path and
-// the host trusts nothing it is sent), and a shared SOURCE module was rejected
-// as scope creep — see the DRIFT WARNING in link-target.ts. What was NOT
+// the host trusts nothing it is sent). The shared PREDICATES are in fact shared
+// — both sides import isAllowedUrl from src/markdown/url-allowlist.ts and
+// MAX_HREF_LENGTH from src/shared/protocol.ts — and what stayed duplicated is
+// the cascade composing them, rejected as scope creep: see relativeMarkdownTarget's
+// docstring in link-target.ts (this mirror), and that file's DRIFT WARNING for
+// the same call on a DIFFERENT pair (OPENABLE_SCHEMES + schemeOf ↔
+// handle-open-external.ts). What was NOT
 // acceptable was the duplication being pinned by two suites with no destination
 // string in common, so that a change on one side left the other green. That is
 // not hypothetical: the webview copy once applied its checks to the
@@ -63,10 +80,13 @@ export type OpenLinkCase = {
   readonly destination: string;
   /** True when `handleOpenLink` opens this destination under
    *  OPEN_LINK_DOC_LAYOUT — equivalently, when the webview classifier must
-   *  return `kind: "workspace"`. The biconditional IS the contract: a `false`
-   *  row asserts the webview does NOT promise a pointer cursor and does NOT
-   *  consume the click, whatever its non-routing reason (`external` for an
-   *  `https:` link, `blocked`, `no-action`) happens to be. */
+   *  return `kind: "workspace"`. The biconditional IS the contract, and it is
+   *  about ROUTING TO open-link ONLY: a `false` row says nothing about the
+   *  cursor or about `preventDefault`, because the non-routing reasons are not
+   *  uniform — `external` (the `http:` / `mailto:` rows) IS actionable and
+   *  takes the open-external path, while `blocked` / `no-action` are dead
+   *  clicks. Arm-level facts are webview-only and stay in the webview suite; do
+   *  not delete those assertions on the assumption this matrix subsumes them. */
   readonly hostRoutes: boolean;
   /** Why this row exists — becomes the per-case test name on both sides, so a
    *  red row in CI names the rule that broke rather than just a string. */
@@ -140,6 +160,15 @@ export const OPEN_LINK_STRUCTURAL_MATRIX: readonly OpenLinkCase[] = [
   { destination: "javascript:alert(1)", hostRoutes: false, why: "non-allowlisted scheme" },
   { destination: "./oth\u0001er.md", hostRoutes: false, why: "literal C0 control byte" },
 
+  // The one row that kills the RAW-form isAllowedUrl on its own: the second
+  // isAllowedUrl runs on the fragment-STRIPPED path, so no other row puts
+  // fragment bytes in front of a gate.
+  {
+    destination: "./other.md#bad\u0001frag",
+    hostRoutes: false,
+    why: "control byte in the #fragment — only the pre-split allowlist sees it",
+  },
+
   // ── Does not route: rejected ONLY once percent-decoded ──────────────────
   // The regression class PR #340 fixed. Each of these passes every gate in its
   // RAW form and fails one in its decoded form, so a side that judges the wrong
@@ -156,6 +185,13 @@ export const OPEN_LINK_STRUCTURAL_MATRIX: readonly OpenLinkCase[] = [
   { destination: "./oth%01er.md", hostRoutes: false, why: "decodes to a C0 control byte" },
 ];
 
+/** Containment rows carry no `hostRoutes`: the field's biconditional does not
+ *  hold here by design (the webview DOES classify these as `workspace`; only
+ *  the host can see that they escape), so the type omits it rather than stating
+ *  a value neither suite may read. The excess-property check then reds any row
+ *  that re-adds it. */
+export type OpenLinkContainmentCase = Omit<OpenLinkCase, "hostRoutes">;
+
 /** Destinations where the two sides DISAGREE — by design, not by drift.
  *
  *  Each passes the whole structural cascade, so the webview classifies it as
@@ -168,15 +204,10 @@ export const OPEN_LINK_STRUCTURAL_MATRIX: readonly OpenLinkCase[] = [
  *  asymmetry here — rather than leaving it undescribed — keeps someone from
  *  "fixing the inconsistency" by adding these to the matrix above, which would
  *  demand the webview evaluate a boundary it cannot see. */
-export const OPEN_LINK_CONTAINMENT_ONLY_REJECTIONS: readonly OpenLinkCase[] = [
-  {
-    destination: "../../etc/passwd.md",
-    hostRoutes: false,
-    why: "escapes the workspace via parent segments",
-  },
+export const OPEN_LINK_CONTAINMENT_ONLY_REJECTIONS: readonly OpenLinkContainmentCase[] = [
+  { destination: "../../etc/passwd.md", why: "escapes the workspace via parent segments" },
   {
     destination: "..%2f..%2fsecret.md",
-    hostRoutes: false,
     why: "escapes the workspace only after the percent-decode",
   },
 ];

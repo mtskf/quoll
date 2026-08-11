@@ -74,16 +74,26 @@ describe("classifyLinkTarget", () => {
 
   it("classifies the schemeless fall-through as no-action", () => {
     // Arm-exactness for the non-routing classes — webview-only information the
-    // shared matrix cannot carry (it only knows "the host does not route it").
-    // Each distinct warn in link-handlers keys off one of these arms, so a
-    // silent reshuffle between them would blur the triage trail from PR #332.
+    // shared matrix cannot carry (it only knows "the host does not route it",
+    // which `external` also satisfies while STILL being actionable).
+    // `no-action` is the SILENT class by design: link-handlers keeps one warn
+    // per gate-reject arm (oversize / blocked / unopenable-scheme — PR #332's
+    // triage trail) and deliberately none here, and link-reveal withholds the
+    // pointer cursor for exactly this arm.
     expect(classifyLinkTarget("#section")).toEqual({ kind: "no-action" });
     expect(classifyLinkTarget("./photo.png")).toEqual({ kind: "no-action" });
     expect(classifyLinkTarget("/abs.md")).toEqual({ kind: "no-action" });
     expect(classifyLinkTarget("sub\\notes.md")).toEqual({ kind: "no-action" });
     // The decoded-form class (PR #340): rejected on the percent-DECODED path,
-    // so it lands on the same silent arm rather than looking like a blocked URL.
+    // so each lands on the same silent arm rather than looking like a blocked
+    // URL. "Not workspace" is NOT enough for these, which is why the shared
+    // matrix row cannot replace them: if the decode ever moved ahead of the
+    // scheme gate, `http%3A…` would classify as `external` — pointer cursor,
+    // open-external post, browser launch — while every matrix row stayed green.
     expect(classifyLinkTarget("%2Fetc.md")).toEqual({ kind: "no-action" });
+    expect(classifyLinkTarget("%5Cfoo.md")).toEqual({ kind: "no-action" });
+    expect(classifyLinkTarget("%2F%2Fhost.md")).toEqual({ kind: "no-action" });
+    expect(classifyLinkTarget("http%3A%2F%2Fexample.com%2Fx.md")).toEqual({ kind: "no-action" });
   });
 
   it("classifies an oversize destination before any allowlist work", () => {
