@@ -68,31 +68,51 @@ export function headingText(raw: string): string {
     .trim();
 }
 
-/** Inline nodes whose bytes are MARKUP, not content: every one of them is
- *  invisible in Quoll's rendered heading, so none may reach the slug. Verified
- *  against the real Lezer GFM tree — `HeaderMark` covers both the opener and the
- *  closing `#` run (which is why headingSlugSource needs no ATX regex),
- *  `LinkMark` covers `[`, `]`, `(`, `)` and an image's `![`, and `URL` is the
- *  destination that must NOT leak into the anchor. Content-bearing wrappers
- *  (`Link`, `Image`, `StrongEmphasis`, `InlineCode`, …) are absent on purpose:
- *  excluding a wrapper would delete the text it wraps. */
+/** Inline nodes dropped before slugging. The contract is GITHUB PARITY — the
+ *  slug should match the anchor GitHub would mint for the same heading — NOT
+ *  "whatever Quoll happens to hide". Those two rules agree almost everywhere and
+ *  the distinction only shows up in raw HTML, where GitHub wins: `HTMLTag` and
+ *  `Comment` are dropped even though no Quoll decoration conceals them, because
+ *  `# A <em>x</em> B` is `a-x-b` on GitHub and an anchor a reader copies from
+ *  GitHub has to resolve here.
+ *
+ *  Membership measured against the real Lezer GFM tree: `HeaderMark` covers the
+ *  opener AND the closing `#` run (which is why headingSlugSource needs no ATX
+ *  regex), `LinkMark` covers `[`, `]`, `(`, `)` and an image's `![`, `LinkTitle`
+ *  is the `"tooltip"` tail of `[x](u "tooltip")`, and `Comment` is an HTML
+ *  comment. Content-bearing wrappers (`Link`, `Image`, `StrongEmphasis`,
+ *  `InlineCode`, `Autolink`, …) are absent on purpose: excluding a wrapper would
+ *  delete the text it wraps.
+ *
+ *  `URL` is conditional and must NEVER be dropped by name alone — see the parent
+ *  gate in headingSlugSource. */
 const SLUG_EXCLUDED_NODES = new Set([
   "HeaderMark",
   "LinkMark",
+  "LinkTitle",
   "URL",
   "CodeMark",
   "EmphasisMark",
   "StrikethroughMark",
   "HTMLTag",
+  "Comment",
 ]);
 
-/** The heading at `[from, to)` as the user SEES it: the span with every inline
- *  markup range removed and the gaps stitched back together. This — not the raw
- *  source — is what the fragment-link resolver slugs, so `# A [link](b)` is
- *  addressable as `#a-link` (what GitHub says, and what the reader of a Quoll
- *  document, which hides the syntax, would guess) instead of `#a-linkb`.
+/** The two node names under which a `URL` is a link/image DESTINATION. Anywhere
+ *  else a `URL` node is rendered content, not markup — see the parent gate. */
+const URL_DESTINATION_PARENTS = new Set(["Link", "Image"]);
+
+/** The heading at `[from, to)` with its inline MARKUP ranges removed and the
+ *  gaps stitched back together — the text GitHub would slug. This, not the raw
+ *  source, is what the fragment-link resolver slugs, so `# A [link](b)` is
+ *  addressable as `#a-link` (GitHub's answer, and also what a reader of a Quoll
+ *  document sees once the syntax is hidden) instead of `#a-linkb`.
  *  headingText cannot do this job: markup removal is a TREE question, and the
  *  outline wants the source text anyway.
+ *
+ *  "Markup" means SLUG_EXCLUDED_NODES plus the parent gate below — read that
+ *  set's contract before adding to it. It is GitHub parity, not "what Quoll
+ *  conceals"; the two diverge on raw HTML.
  *
  *  Returns the stitched text unslugged and untrimmed — the caller pipes it
  *  through slugifyHeadingText, which trims and collapses the whitespace the
@@ -121,11 +141,27 @@ export function headingSlugSource(
       if (!SLUG_EXCLUDED_NODES.has(node.name)) {
         return;
       }
+      // `URL` is markup ONLY as a Link/Image destination. GFM emits the same
+      // node name for content the reader actually sees: an `Autolink`'s inner
+      // text (`<https://example.com>`, parent `Autolink`) and a bare URL
+      // literal (`https://example.com`, parent = the heading itself, no marks
+      // at all). Dropping those by name erased the visible bytes and made
+      // `# Release https://example.com` unaddressable by any anchor — worse
+      // than the raw-source slug this function replaced, and invisible to the
+      // suite until two cycle-2 reviewers measured it.
+      if (node.name === "URL") {
+        const parent = node.node.parent;
+        if (parent === null || !URL_DESTINATION_PARENTS.has(parent.name)) {
+          return;
+        }
+      }
       if (node.from > cursor) {
         text += state.doc.sliceString(cursor, node.from);
       }
-      // Math.max, not a bare assign: excluded nodes can nest or overlap the
-      // cursor (an HTMLTag inside emphasis), and rewinding would re-emit bytes.
+      // Math.max, not a bare assign: an excluded node can sit inside another
+      // excluded node's range (the enter order is pre-order, so the parent is
+      // consumed first), and a bare assign would rewind the cursor and re-emit
+      // bytes already written.
       cursor = Math.max(cursor, node.to);
     },
   });

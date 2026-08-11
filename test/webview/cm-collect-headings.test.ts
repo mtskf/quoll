@@ -125,6 +125,29 @@ describe("headingSlugSource", () => {
     expect(slugOf("#### With ~~strike~~ and <em>html</em>")).toBe("with-strike-and-html");
   });
 
+  it("keeps a URL that IS the content, and drops one that is a destination", () => {
+    // `URL` is markup only under a Link/Image. GFM emits the same node name for
+    // an autolink's inner text and for a bare URL literal, where those bytes are
+    // what the reader sees — and what GitHub slugs. Dropping `URL` by name made
+    // a heading that is nothing but a URL produce the empty slug, i.e. no anchor
+    // at all; these three pin the parent gate that fixed it.
+    expect(slugOf("# See https://example.com bare")).toBe("see-httpsexamplecom-bare");
+    expect(slugOf("# See <https://example.com>")).toBe("see-httpsexamplecom");
+    expect(slugOf("# https://example.com/docs")).toBe("httpsexamplecomdocs");
+    // …while a real destination still never reaches the slug.
+    expect(slugOf("# A [link](https://example.com)")).toBe("a-link");
+  });
+
+  it("drops a link title — a tooltip is never rendered text", () => {
+    expect(slugOf('# A [link](b "Title")')).toBe("a-link");
+  });
+
+  it("drops an HTML comment, matching GitHub rather than Quoll's rendering", () => {
+    // The one place the exclusion set follows GitHub over "what Quoll hides":
+    // nothing conceals a comment in the editor, but GitHub's anchor omits it.
+    expect(slugOf("# A <!-- hidden --> C")).toBe("a-c");
+  });
+
   it("keeps an image's alt text and drops its destination", () => {
     expect(slugOf("##### ![img](u.png) caption")).toBe("img-caption");
   });
