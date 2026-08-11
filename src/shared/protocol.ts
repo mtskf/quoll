@@ -323,13 +323,12 @@ export type EditRejectedMessage = Envelope & {
  *  arm carries no reason string: the host usually surfaces its own toast, and the
  *  webview clears the pending entry either way.
  *
- *  "Usually" is load-bearing, and it is why the webview ALSO logs the failure arm
- *  rather than trusting it (`cm/image/image-paste.ts`): a repeat session-volume
- *  rejection shows the user nothing (the budget's warning fires once), and a
- *  write-FAILURE rejection is not a refusal at all — the host attempted a
- *  non-atomic write that can leave a partial file. Neither is distinguishable
- *  from here, which is the point of carrying no reason. Widening this arm with a
- *  reason enum would be a protocol change; do not add one for logging alone. */
+ *  "Usually" is load-bearing: this arm is NOT reliably reported to the user, and
+ *  ok:false is not even reliably a refusal. So the webview logs it independently
+ *  rather than trusting it — the cases, and why they are indistinguishable from
+ *  here, are set out at that call site (`cm/image/image-paste.ts`, resolve()).
+ *  Widening this arm with a reason enum would be a protocol change; do not add
+ *  one for logging alone. */
 export type ImageWriteResultMessage = Envelope & {
   type: "image-write-result";
   requestId: string;
