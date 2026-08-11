@@ -2,6 +2,17 @@
 
 All notable changes to Quoll are documented here.
 
+## 0.1.70 — 2026-08-12
+
+### Added
+
+- Clicking a same-document link like `[intro](#getting-started)` now scrolls to the heading it names, instead of doing nothing.
+
+### Fixed
+
+- A relative link Quoll refuses to open because its target falls outside both the workspace and the document's own folder now shows a message explaining why, instead of the click silently doing nothing.
+- A single broken inline decoration (heading, emphasis, link, table, or image) can no longer take every other inline decoration in the editor down with it — previously one bad decoration reverted the whole document to raw Markdown until you reloaded the window.
+
 ## 0.1.69 — 2026-08-11
 
 ### Fixed
