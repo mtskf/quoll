@@ -181,7 +181,12 @@ export function createImagePasteDrop(opts: {
         // reason clearPending's catch is: an unreachable branch that fires is
         // exactly the one nobody will guess at, and a paste that vanishes with no
         // trace is the failure this module keeps having.
-        console.warn("[quoll] dropped pasted image (FileReader returned a non-string result)");
+        // `requestId` carried like every other log here: one paste event can start
+        // several concurrent reads, and two bare copies of this line would be
+        // indistinguishable — you could not tell which image of the batch died.
+        console.warn("[quoll] dropped pasted image (FileReader returned a non-string result)", {
+          requestId,
+        });
         clearPending(view, requestId);
         return;
       }
@@ -191,7 +196,9 @@ export function createImagePasteDrop(opts: {
         // Reachable only for a malformed data URL — a zero-byte file, the other way
         // to land an empty payload here, is already refused (with its own warn) back
         // in `handle`. Either way the paste is abandoned on a writable doc, so it says so.
-        console.warn("[quoll] dropped pasted image (data URL carried no base64 payload)");
+        console.warn("[quoll] dropped pasted image (data URL carried no base64 payload)", {
+          requestId,
+        });
         clearPending(view, requestId);
         return;
       }
@@ -319,8 +326,9 @@ export function createImagePasteDrop(opts: {
       // the time the reply lands the host has ALREADY written the image. Not
       // inserting is right — the position could not be verified — but the file then
       // sits in the workspace with nothing pointing at it, so the outcome is named
-      // here. `relativePath` is what makes the line actionable: it IS the orphan (or
-      // `null`, which tells the reader nothing was written and the host toasted).
+      // here. `relativePath` is what makes the line actionable: a path IS the orphan.
+      // A `null` path is logged too rather than skipped — see the arm below for why
+      // "the host refused, so it reported it" does not hold in general.
       // The message states the outcome rather than the cause: a late reply from a
       // previous webview session (the sessionNonce case) reaches this same branch
       // and is indistinguishable from here.
@@ -331,11 +339,24 @@ export function createImagePasteDrop(opts: {
       return;
     }
     if (relativePath === null) {
-      // Host refused BEFORE writing anything, and it has already told the user:
-      // every reject arm in `extension/image/image-write-service.ts` calls
-      // showError first (the session-volume cap owns a one-time warning instead,
-      // by design). Nothing is on disk and nothing is unreported, so this arm is
-      // deliberately silent — the ONE refusal in this module that needs no log.
+      // The host refused. This arm was silent on the theory that it had therefore
+      // already told the user and left nothing behind — and BOTH halves of that are
+      // false in cases the wire cannot distinguish, because `image-write-result`
+      // carries `ok:false` with no reason:
+      //   · not always reported — `image-write-budget.ts` latches `warned` on the
+      //     first session-volume rejection (`onExceeded` fires exactly once), so a
+      //     REPEAT cap rejection posts null having shown the user nothing at all.
+      //   · not always empty-handed — the write-failure arm of
+      //     `image-write-service.ts` rejects AFTER attempting the write, and
+      //     `workspace.fs.writeFile` offers no atomicity, so a partial
+      //     content-addressed file can already be on disk (that is exactly why the
+      //     budget never refunds a failed write).
+      // Most reject reasons DO showError, so this line is usually a duplicate of a
+      // toast the user has seen. That is the cheap direction to be wrong in: a
+      // duplicated line in a console nobody reads costs nothing, while trusting a
+      // toast we cannot verify was shown loses the refusal entirely. No
+      // `relativePath` to carry — there is no path on this arm.
+      console.warn("[quoll] host refused the image write; no link inserted", { requestId });
       clearPending(view, requestId);
       return;
     }

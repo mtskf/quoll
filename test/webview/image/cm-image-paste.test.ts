@@ -89,7 +89,7 @@ function sizedImageFile(bytes: number): File {
 
 // A FileReader stand-in, installed per test, so the async read can be driven to a
 // chosen outcome — including outcomes a real FileReader will not produce on demand
-// (onerror, a non-string result). It implements exactly the four members production
+// (onerror, a non-string result). It implements exactly the five members production
 // touches; a fuller fake would only be more surface to drift.
 class StubFileReader
   implements Pick<FileReader, "result" | "error" | "onload" | "onerror" | "readAsDataURL">
@@ -211,22 +211,29 @@ describe("resolve", () => {
     view.destroy();
   });
 
-  it("does NOT insert — and stays SILENT — when the host rejected (relativePath null)", () => {
+  it("reports the host's refusal WITHOUT the orphan wording (relativePath null)", () => {
     // The other arm, and the reason the branch is split rather than sharing one
-    // warn: a null path means the host refused BEFORE writing anything, and it has
-    // already surfaced its own toast for every refusal reason
-    // (`image-write-service.ts` — readonly / too-large / decideImageWrite reject /
-    // write failure all showError; the session-volume cap warns once by design).
-    // There is no orphan file and no unreported outcome, so a console line here
-    // would be pure noise. The silence is asserted, not assumed — a warn hoisted
-    // back above the split would go red here.
+    // warn: the two are opposites. Here nothing was linked because the host said
+    // no; there is no path to report, so the message must not borrow the sibling's
+    // "written but not linked" wording — a reader chasing an orphan file would find
+    // nothing. Asserted as the COMPLETE list precisely to pin that separation:
+    // collapsing the two arms back into one shared warn goes red here.
+    //
+    // This arm was briefly silent, on the theory that the host had already toasted
+    // and left nothing behind. Both halves are false in cases the wire cannot tell
+    // apart (a repeat session-cap rejection shows the user nothing — `warned`
+    // latches in image-write-budget.ts; a write-failure rejection can leave a
+    // partial file — `workspace.fs.writeFile` is not atomic), and `ok:false` on the
+    // wire carries no reason to distinguish them by.
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const { view, paste } = mount("ab");
     view.dispatch({ effects: addPendingAnchor.of({ requestId: "1", anchor: 1 }) });
     paste.resolve(view, "1", null);
     expect(view.state.doc.toString()).toBe("ab");
     expect(view.state.field(pendingImageAnchors).length).toBe(0);
-    expect(warn).not.toHaveBeenCalled();
+    expect(warn.mock.calls).toEqual([
+      ["[quoll] host refused the image write; no link inserted", { requestId: "1" }],
+    ]);
     view.destroy();
   });
 
@@ -399,9 +406,10 @@ describe("resolve", () => {
   it("still logs when even the clearing dispatch fails after a teardown", () => {
     // The other end of the same guard: the view dies between the shell's null-check
     // and the dispatch, so BOTH the insert and the follow-up clear throw. The anchor
-    // then dies with the view (clearPending swallows it), so the log is the only
-    // observable left — and it is the one that must survive, since without it a
-    // half-completed paste leaves no trace anywhere.
+    // then dies with the view, and clearPending no longer swallows that second
+    // failure — it logs it too. So BOTH console.error entries are pinned below: the
+    // logs are the only observable left, and a recovery attempt that failed must not
+    // read like one that succeeded.
     const error = vi.spyOn(console, "error").mockImplementation(() => {});
     const { view, paste } = mount("ab");
     view.dispatch({ effects: addPendingAnchor.of({ requestId: "1", anchor: 1 }) });
@@ -698,7 +706,12 @@ describe("imagePaste — the image-write post", () => {
     // nothing inserted, and (before these warns) no trace — the same vanishing act
     // the zero-byte case was fixed for. Per-case rather than a shared assertion, so
     // that collapsing the two messages into one generic string goes red here.
-    expect(warn.mock.calls).toEqual([[expectedWarn]]);
+    //
+    // `requestId` is matched by shape, not value: it embeds a per-session
+    // `crypto.randomUUID()` nonce, so pinning the literal would pin the nonce. What
+    // must not regress is that the field is THERE — one paste event can start
+    // several concurrent reads, and a bare message could not say which one died.
+    expect(warn.mock.calls).toEqual([[expectedWarn, { requestId: expect.any(String) }]]);
     view.destroy();
   });
 
