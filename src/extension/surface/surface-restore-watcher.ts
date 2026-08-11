@@ -38,6 +38,7 @@ import {
   type Tab,
   TabInputCustom,
   TabInputText,
+  type TextDocument,
   type Uri,
   window,
   workspace,
@@ -111,29 +112,62 @@ function allOpenTabInputs(): unknown[] {
   return window.tabGroups.all.flatMap((g) => g.tabs).map((t) => t.input);
 }
 
+/** Injectable IO seam for `restoreSurface`. Production wires the real VS Code /
+ *  sibling-module surfaces (`REAL_RESTORE_DEPS`); unit tests inject fakes to
+ *  exercise the ORDER of the reopen→close pair and the skip / failure arms
+ *  without a live tab model. Mirrors `FinalizeSwapDeps` in surface-swap.ts —
+ *  same shape (exported interface + module-private real bindings + trailing
+ *  defaulted parameter) so the two surface finalizers stay one pattern.
+ *
+ *  `isWritableFileSystem` (not a whole `canEditWith`) is the seam: the decision
+ *  itself is the already-tested pure `canEditWith`, so only its one impure input
+ *  is injected — the readonly SKIP arm stays a real `canEditWith` call. */
+export interface RestoreDeps {
+  openDoc: (uri: Uri) => Thenable<TextDocument>;
+  isWritableFileSystem: (scheme: string) => boolean | undefined;
+  openInQuoll: (uri: Uri, quollViewType: string) => Thenable<unknown>;
+  openInText: (uri: Uri) => Thenable<unknown>;
+  closeSourceTab: (uri: Uri, sourceTab: Tab) => Thenable<void>;
+}
+
+const REAL_RESTORE_DEPS: RestoreDeps = {
+  openDoc: (uri) => workspace.openTextDocument(uri),
+  isWritableFileSystem: (scheme) => workspace.fs.isWritableFileSystem(scheme),
+  openInQuoll: (uri, quollViewType) => openInQuollEditor(uri, quollViewType),
+  openInText: (uri) => openInTextEditor(uri),
+  closeSourceTab: (uri, sourceTab) => closeSourceTabIfClean(uri, sourceTab),
+};
+
 /** Reopen `uri` in `target` and close the just-opened (wrong-surface) source tab
  *  via closeSourceTabIfClean (no save). planRestore gates the dirty / readonly
  *  cases. Best-effort; never throws — a passive restore failure logs only and
- *  leaves the doc in the (valid) surface VS Code opened it in. */
-async function restoreSurface(
+ *  leaves the doc in the (valid) surface VS Code opened it in. `deps` is seamed
+ *  for tests (see RestoreDeps); production passes the real bindings.
+ *
+ *  ORDER IS LOAD-BEARING: the target surface is opened and AWAITED before the
+ *  source tab is closed. Closing first would leave a window with no editor for
+ *  the doc, and a reopen failure would then have closed the only surface the
+ *  user had. */
+export async function restoreSurface(
   target: EditorSurface,
   uri: Uri,
   sourceTab: Tab,
-  quollViewType: string
+  quollViewType: string,
+  deps: RestoreDeps = REAL_RESTORE_DEPS
 ): Promise<void> {
   try {
-    const doc = await workspace.openTextDocument(uri);
-    const canOpenQuoll = canEditWith(doc, (scheme) => workspace.fs.isWritableFileSystem(scheme)).ok;
+    const doc = await deps.openDoc(uri);
+    const canOpenQuoll = canEditWith(doc, deps.isWritableFileSystem).ok;
     const action = planRestore(target, doc.isDirty, canOpenQuoll);
     if (action === "skip") {
       return;
     }
     if (action === "reopen-quoll") {
-      await openInQuollEditor(uri, quollViewType);
+      await deps.openInQuoll(uri, quollViewType);
     } else {
-      await openInTextEditor(uri);
+      await deps.openInText(uri);
     }
-    await closeSourceTabIfClean(uri, sourceTab);
+    await deps.closeSourceTab(uri, sourceTab);
   } catch (err) {
     console.error("[quoll] surface restore failed", err);
   }
@@ -146,8 +180,12 @@ async function restoreSurface(
  *  (restoreSurface is fire-and-forget; several opened events for one URI can
  *  arrive close together). `quollViewType` is QuollEditorPanel.viewType (passed
  *  in so this module need not import the heavy panel module). Disposed on
- *  deactivate. */
-export function registerSurfaceRestoreWatcher(quollViewType: string): Disposable {
+ *  deactivate. `deps` is seamed for tests and forwarded verbatim to
+ *  restoreSurface. */
+export function registerSurfaceRestoreWatcher(
+  quollViewType: string,
+  deps: RestoreDeps = REAL_RESTORE_DEPS
+): Disposable {
   const restoring = new Set<string>();
   return window.tabGroups.onDidChangeTabs((e) => {
     for (const tab of e.opened) {
@@ -173,7 +211,9 @@ export function registerSurfaceRestoreWatcher(quollViewType: string): Disposable
         continue;
       }
       restoring.add(uriKey);
-      void restoreSurface(reopen, uri, tab, quollViewType).finally(() => restoring.delete(uriKey));
+      void restoreSurface(reopen, uri, tab, quollViewType, deps).finally(() =>
+        restoring.delete(uriKey)
+      );
     }
   });
 }
