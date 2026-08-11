@@ -8,6 +8,7 @@ import {
   handleCodeRefClick,
   handleCodeRefMouseDown,
   openCodeRefAtCaretCommand,
+  quollCodeRefClickHandler,
   tryOpenCodeRefAt,
 } from "../../src/webview/cm/code-ref/code-ref-handlers.js";
 import { codeRefReveal } from "../../src/webview/cm/code-ref/code-ref-reveal.js";
@@ -275,6 +276,100 @@ describe("CODE_REF_OPEN_KEY", () => {
     // The real platform-resolved binding is exercised in manual smoke; happy-dom's
     // CM platform detection makes a synthetic-key runScopeHandlers test flaky.
     expect(CODE_REF_OPEN_KEY).toBe("Mod-Enter");
+  });
+});
+
+describe("quollCodeRefClickHandler", () => {
+  // The two describes above call the handlers directly, which leaves the binding
+  // itself — `mousedown`→mousedown handler, `click`→click handler — unpinned:
+  // swapping the two keys, or dropping either, keeps every other test green while
+  // breaking the double-post-prevention contract in production (the `button !== 0`
+  // and `detail === 0` gates are complementary ONLY while each sits on its own
+  // event). So these two tests mount the REAL extension and dispatch REAL DOM
+  // events, discriminating the handlers by the seam each one uses to resolve a
+  // position: the mousedown handler goes through `posAtCoords`, the click handler
+  // through `posAtDOM`. Asserting on posAtCoords (called / not called) is what
+  // makes a swap red rather than merely differently-green.
+  const DOC = "see `src/foo.ts:42` end";
+  const REF_POS = DOC.indexOf("foo");
+
+  // happy-dom has no layout, so a real `posAtCoords` cannot resolve a meaningful
+  // position (memory: happy-dom drops layout) — the instance-level spy is what
+  // makes the mouse path observable at all. Only the layout oracle is stubbed;
+  // the extension, the view, and the event dispatch are all real.
+  function mountWithRefSpan(host: { postMessage: ReturnType<typeof vi.fn> }): {
+    view: EditorView;
+    span: HTMLElement;
+    posAtCoords: ReturnType<typeof vi.fn>;
+  } {
+    const parent = document.createElement("div");
+    document.body.appendChild(parent);
+    const base = EditorState.create({ doc: DOC, extensions: [markdown()] });
+    const revealSet = codeRefReveal.build({
+      state: base,
+      selection: base.selection,
+      visibleRanges: [{ from: 0, to: DOC.length }],
+      tree: fullTree(base),
+    });
+    const view = new EditorView({
+      state: EditorState.create({
+        doc: DOC,
+        extensions: [
+          markdown(),
+          EditorView.decorations.of(revealSet),
+          quollCodeRefClickHandler(host as never),
+        ],
+      }),
+      parent,
+    });
+    const span = view.dom.querySelector<HTMLElement>(".quoll-code-ref-clickable");
+    if (span === null) {
+      view.destroy();
+      throw new Error("expected a rendered .quoll-code-ref-clickable span");
+    }
+    const posAtCoords = vi.fn(() => REF_POS);
+    Object.defineProperty(view, "posAtCoords", { value: posAtCoords, configurable: true });
+    return { view, span, posAtCoords };
+  }
+
+  it("routes a real mousedown to the mousedown handler (coord-resolved open)", () => {
+    const host = { postMessage: vi.fn() };
+    const { view, span, posAtCoords } = mountWithRefSpan(host);
+    try {
+      // A genuine left-button mousedown carries detail 1, which the click handler
+      // rejects outright — so if the bindings were swapped nothing would post and
+      // posAtCoords would never be consulted.
+      span.dispatchEvent(
+        new MouseEvent("mousedown", { bubbles: true, button: 0, detail: 1, clientX: 8, clientY: 8 })
+      );
+      expect(posAtCoords).toHaveBeenCalled();
+      expect(host.postMessage).toHaveBeenCalledTimes(1);
+      expect(host.postMessage).toHaveBeenCalledWith(
+        expect.objectContaining({ type: "open-code-reference", path: "src/foo.ts", line: 42 })
+      );
+    } finally {
+      view.destroy();
+    }
+  });
+
+  it("routes a synthesized click to the click handler (DOM-target-resolved open)", () => {
+    const host = { postMessage: vi.fn() };
+    const { view, span, posAtCoords } = mountWithRefSpan(host);
+    try {
+      // An assistive-tech activation of the role="link" span arrives as a click
+      // with detail 0 and button 0. The click handler resolves it through
+      // posAtDOM; the mousedown handler would take the button-0 path and consult
+      // posAtCoords instead, so the posAtCoords assertion below fails on a swap
+      // even though both routes happen to post.
+      span.dispatchEvent(new MouseEvent("click", { bubbles: true, button: 0, detail: 0 }));
+      expect(posAtCoords).not.toHaveBeenCalled();
+      expect(host.postMessage).toHaveBeenCalledTimes(1);
+      expect(host.postMessage).toHaveBeenCalledWith(
+        expect.objectContaining({ type: "open-code-reference", path: "src/foo.ts", line: 42 })
+      );
+    } finally {
+      view.destroy();
+    }
   });
 });
 
