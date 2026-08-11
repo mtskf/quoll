@@ -42,11 +42,19 @@ function makeDeps(overrides: Partial<HandleOpenLinkDeps> = {}) {
 describe("handleOpenLink — shared open-link structural matrix", () => {
   for (const { destination, hostRoutes, why } of OPEN_LINK_STRUCTURAL_MATRIX) {
     it(`${hostRoutes ? "routes" : "does not route"} — ${why}`, () => {
-      const { deps, opened } = makeDeps();
+      const { deps, opened, errors } = makeDeps();
       handleOpenLink(destination, deps);
       // Whether it routed, not where to: the resolved path is host-only
       // information the shared fixture cannot carry, and is pinned below.
       expect(opened.length > 0).toBe(hostRoutes);
+      // NO row in this matrix may toast, in either direction. Every structural
+      // gate is mirrored webview-side, which withholds the pointer cursor and
+      // never posts — so reaching one of these rejects at runtime means the two
+      // copies drifted, which is a log line for a maintainer, not a message for
+      // a user who never clicked anything. Asserting it here (rather than only
+      // on the containment rows below) is what stops the containment toast from
+      // being generalised to every drop arm.
+      expect(errors).toEqual([]);
     });
   }
 });
@@ -62,6 +70,23 @@ describe("handleOpenLink — containment rejects what the structural gates let t
       const { deps, opened } = makeDeps();
       handleOpenLink(destination, deps);
       expect(opened).toEqual([]);
+    });
+
+    // The flip side of that asymmetry, and the reason this arm alone speaks:
+    // the webview already promised the click (pointer cursor) and consumed it
+    // (preventDefault, which eats the caret move), because containment is the
+    // one gate it cannot run. Dropping silently here spends a real click on
+    // nothing observable. Pinned per-destination so the signal cannot be lost
+    // for the decoded form while surviving for the plain one.
+    it(`tells the user it refused, without naming the target — ${why}`, () => {
+      const { deps, errors } = makeDeps();
+      handleOpenLink(destination, deps);
+      expect(errors).toEqual([
+        "Quoll: that link points outside this workspace and the document's folder — it wasn't opened.",
+      ]);
+      // The destination is untrusted webview-supplied text: it stays out of the
+      // toast (host chrome) and goes only to the sanitised log line.
+      expect(errors[0]).not.toContain(destination);
     });
   }
 });
@@ -92,9 +117,12 @@ describe("handleOpenLink", () => {
   });
 
   it("rejects a parent escape when there is no workspace", () => {
-    const { deps, opened } = makeDeps({ isInWorkspace: () => false });
+    const { deps, opened, errors } = makeDeps({ isInWorkspace: () => false });
     handleOpenLink("../other.md", deps);
     expect(opened).toEqual([]);
+    // Same refusal toast on the no-workspace arm: containment there is the
+    // document's own directory, and the user is owed the same signal.
+    expect(errors).toEqual([expect.stringContaining("points outside this workspace")]);
   });
 
   // The plain structural rejects — non-.md, absolute, backslash, scheme-bearing,
@@ -107,9 +135,10 @@ describe("handleOpenLink", () => {
     // /ws/notes vs /ws/notes-evil must NOT match on a bare prefix — guards the
     // trailing-slash normalisation in isWithinDir (without it, startsWith would
     // wrongly accept the sibling).
-    const { deps, opened } = makeDeps({ isInWorkspace: () => false });
+    const { deps, opened, errors } = makeDeps({ isInWorkspace: () => false });
     handleOpenLink("../notes-evil/secret.md", deps);
     expect(opened).toEqual([]);
+    expect(errors).toEqual([expect.stringContaining("points outside this workspace")]);
   });
 
   it("decodes a percent-encoded space so my%20notes.md opens my notes.md", () => {
