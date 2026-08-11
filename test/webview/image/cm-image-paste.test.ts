@@ -189,20 +189,45 @@ describe("resolve", () => {
     expect(view.state.selection.main.head).toBe(20);
   });
 
-  it("does NOT insert on a read-only doc at resolve time (clears pending)", () => {
+  it("warns — the file is already on disk — when the doc goes read-only mid round-trip", () => {
+    // The costly half of the branch this test's sibling below shares with it: the
+    // host has ALREADY written the image by the time resolve runs, so a read-only
+    // flip here leaves a file in the workspace with no link and (before this warn)
+    // nothing anywhere naming it. `relativePath` is carried because it is the only
+    // way to find that orphan afterwards; it is a workspace-relative path the host
+    // itself chose, not clipboard content.
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const { view, paste } = mount("ab", false);
     view.dispatch({ effects: addPendingAnchor.of({ requestId: "1", anchor: 1 }) });
     paste.resolve(view, "1", "./assets/x.png");
     expect(view.state.doc.toString()).toBe("ab");
     expect(view.state.field(pendingImageAnchors).length).toBe(0);
+    expect(warn.mock.calls).toEqual([
+      [
+        "[quoll] pasted image written but not linked: document went read-only mid round-trip",
+        { requestId: "1", relativePath: "./assets/x.png" },
+      ],
+    ]);
+    view.destroy();
   });
 
-  it("does NOT insert when the host rejected (relativePath null)", () => {
+  it("does NOT insert — and stays SILENT — when the host rejected (relativePath null)", () => {
+    // The other arm, and the reason the branch is split rather than sharing one
+    // warn: a null path means the host refused BEFORE writing anything, and it has
+    // already surfaced its own toast for every refusal reason
+    // (`image-write-service.ts` — readonly / too-large / decideImageWrite reject /
+    // write failure all showError; the session-volume cap warns once by design).
+    // There is no orphan file and no unreported outcome, so a console line here
+    // would be pure noise. The silence is asserted, not assumed — a warn hoisted
+    // back above the split would go red here.
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const { view, paste } = mount("ab");
     view.dispatch({ effects: addPendingAnchor.of({ requestId: "1", anchor: 1 }) });
     paste.resolve(view, "1", null);
     expect(view.state.doc.toString()).toBe("ab");
     expect(view.state.field(pendingImageAnchors).length).toBe(0);
+    expect(warn).not.toHaveBeenCalled();
+    view.destroy();
   });
 
   it("ignores an unknown requestId while another anchor is still pending", () => {

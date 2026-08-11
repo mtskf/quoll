@@ -303,9 +303,27 @@ export function createImagePasteDrop(opts: {
     if (!pending) {
       return; // unknown / duplicate / already-resolved / cleared by a reseed
     }
-    if (relativePath === null || !opts.canWrite()) {
-      // Host rejected (toast already shown) OR doc went read-only mid-round-trip:
-      // clear the anchor without inserting (avoid a link edit-sync would drop).
+    if (relativePath === null) {
+      // Host refused BEFORE writing anything, and it has already told the user:
+      // every reject arm in `extension/image/image-write-service.ts` calls
+      // showError first (the session-volume cap owns a one-time warning instead,
+      // by design). Nothing is on disk and nothing is unreported, so this arm is
+      // deliberately silent — the ONE refusal in this module that needs no log.
+      clearPending(view, requestId);
+      return;
+    }
+    if (!opts.canWrite()) {
+      // Split out from the arm above because the two are opposites, not variants:
+      // here the write SUCCEEDED and the host said so, then the document flipped
+      // read-only before the link could be inserted. The image sits in the
+      // workspace with nothing pointing at it, and — unlike the null arm — no toast
+      // was ever shown for it. `relativePath` is the only handle on that orphan, so
+      // it is logged (a host-chosen workspace-relative path, never image content).
+      // The insert itself must still not happen: edit-sync would drop it.
+      console.warn(
+        "[quoll] pasted image written but not linked: document went read-only mid round-trip",
+        { requestId, relativePath }
+      );
       clearPending(view, requestId);
       return;
     }
