@@ -2,6 +2,13 @@
 
 All notable changes to Quoll are documented here.
 
+## 0.1.69 — 2026-08-11
+
+### Fixed
+
+- Links that Quoll can't actually open (protocol-relative destinations, disallowed schemes, oversized addresses) no longer show a pointer cursor, so they no longer look clickable.
+- If pasting an image fails while inserting its link, Quoll now cleans up after itself instead of leaving a stray file in your workspace with no link — retrying the paste no longer looks like a duplicate.
+
 ## 0.1.68 — 2026-08-09
 
 ### Fixed
