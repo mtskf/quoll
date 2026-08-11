@@ -2,7 +2,7 @@
 import { markdown } from "@codemirror/lang-markdown";
 import { EditorSelection, EditorState } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
-import { describe, expect, it, type MockInstance, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   CODE_REF_OPEN_KEY,
   handleCodeRefClick,
@@ -314,13 +314,12 @@ describe("quollCodeRefClickHandler", () => {
   // built-in — so a mousedown this handler does NOT swallow (any negative-path
   // case) will crash inside CM rather than fail cleanly. Pin those on
   // `handleCodeRefMouseDown` directly, in the describe above, not here.
-  function mountWithRefSpan(host: { postMessage: ReturnType<typeof vi.fn> }): {
-    view: EditorView;
-    span: HTMLElement;
-    posAtCoords: MockInstance;
-  } {
+  function mountWithRefSpan() {
     const parent = document.createElement("div");
     document.body.appendChild(parent);
+    // Owned here, not passed in, so the host asserted on is necessarily the one
+    // wired into the mounted extension.
+    const host = { postMessage: vi.fn() };
     const base = EditorState.create({ doc: DOC, extensions: [markdown()] });
     const revealSet = codeRefReveal.build({
       state: base,
@@ -346,12 +345,11 @@ describe("quollCodeRefClickHandler", () => {
     }
     // Same stubbing idiom as `stubDropPos` in test/webview/image/cm-image-paste.test.ts.
     const posAtCoords = vi.spyOn(view, "posAtCoords").mockReturnValue(REF_POS);
-    return { view, span, posAtCoords };
+    return { view, span, host, posAtCoords };
   }
 
   it("routes a real mousedown to the mousedown handler (coord-resolved open)", () => {
-    const host = { postMessage: vi.fn() };
-    const { view, span, posAtCoords } = mountWithRefSpan(host);
+    const { view, span, host, posAtCoords } = mountWithRefSpan();
     try {
       // A genuine left-button mousedown carries detail 1, which the click handler
       // rejects outright — so if the bindings were swapped nothing would post and
@@ -370,8 +368,7 @@ describe("quollCodeRefClickHandler", () => {
   });
 
   it("routes a synthesized click to the click handler (DOM-target-resolved open)", () => {
-    const host = { postMessage: vi.fn() };
-    const { view, span, posAtCoords } = mountWithRefSpan(host);
+    const { view, span, host, posAtCoords } = mountWithRefSpan();
     try {
       // An assistive-tech activation of the role="link" span arrives as a click
       // with detail 0 and button 0. The click handler resolves it through
@@ -398,8 +395,7 @@ describe("quollCodeRefClickHandler", () => {
     // other test here stays green (measured). This is the wiring-level statement of
     // the contract the unit test "ignores a real mouse click (detail>=1)" makes
     // about the handler in isolation.
-    const host = { postMessage: vi.fn() };
-    const { view, span } = mountWithRefSpan(host);
+    const { view, span, host } = mountWithRefSpan();
     try {
       span.dispatchEvent(
         new MouseEvent("mousedown", { bubbles: true, button: 0, detail: 1, clientX: 8, clientY: 8 })
