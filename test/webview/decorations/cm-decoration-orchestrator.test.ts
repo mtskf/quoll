@@ -1,8 +1,22 @@
 // @vitest-environment happy-dom
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
 import { forceParsing, syntaxTree } from "@codemirror/language";
-import { Compartment, EditorSelection, EditorState, type Extension } from "@codemirror/state";
-import { Decoration, type DecorationSet, EditorView } from "@codemirror/view";
+import {
+  Compartment,
+  EditorSelection,
+  EditorState,
+  type Extension,
+  type Range,
+  type Text,
+} from "@codemirror/state";
+import {
+  Decoration,
+  type DecorationSet,
+  EditorView,
+  ViewPlugin,
+  type ViewUpdate,
+  WidgetType,
+} from "@codemirror/view";
 import { afterEach, beforeEach, describe, expect, it, type MockInstance, vi } from "vitest";
 
 import {
@@ -523,14 +537,18 @@ describe("decoration orchestrator — provider build() throw containment", () =>
     vi.restoreAllMocks();
   });
 
-  /** Count only OUR log lines. CodeMirror's own logException falls back through
+  /** Only OUR log lines. CodeMirror's own logException falls back through
    *  exceptionSink → window.onerror → console.error, so whether it reaches
    *  console.error at all is environment-dependent under happy-dom — asserting
    *  on the TOTAL console.error count would be flaky. */
-  function quollErrorCount(): number {
+  function quollErrorCalls(): unknown[][] {
     return errorSpy.mock.calls.filter(
       (call) => typeof call[0] === "string" && call[0].startsWith("[quoll]")
-    ).length;
+    );
+  }
+
+  function quollErrorCount(): number {
+    return quollErrorCalls().length;
   }
 
   it("keeps every other provider's decorations when one provider's build() throws", () => {
@@ -736,6 +754,204 @@ describe("decoration orchestrator — provider build() throw containment", () =>
       expect(quollErrorCount()).toBe(1);
     } finally {
       view.destroy();
+    }
+  });
+
+  class BlockStub extends WidgetType {
+    toDOM(): HTMLElement {
+      return document.createElement("div");
+    }
+    eq(): boolean {
+      return true;
+    }
+  }
+
+  /** A block widget at `pos` — the shape CodeMirror refuses from a plugin. */
+  function blockWidget(pos: number): Range<Decoration> {
+    return Decoration.widget({ widget: new BlockStub(), block: true }).range(pos);
+  }
+
+  /** A BARE ViewPlugin recomputing `make(doc)` on every update — no orchestrator
+   *  guard in the way, so CodeMirror's own TileUpdate.emit check is what
+   *  answers. Recomputing rather than holding a static set keeps each fixture
+   *  expressed against the LIVE document: a static set drifts as the document
+   *  grows, which would let a "past the end" fixture wander into range and
+   *  silently start testing something else. */
+  function dynamicDeco(make: (doc: Text) => DecorationSet) {
+    return ViewPlugin.fromClass(
+      class {
+        decorations: DecorationSet;
+        constructor(view: EditorView) {
+          this.decorations = make(view.state.doc);
+        }
+        update(u: ViewUpdate): void {
+          this.decorations = make(u.state.doc);
+        }
+      },
+      { decorations: (v) => v.decorations }
+    );
+  }
+
+  it("contains a provider emitting a BLOCK decoration (CodeMirror forbids it from a plugin)", () => {
+    // A well-formed RangeSet passes the instanceof check, so only a legality
+    // check catches this. CodeMirror rejects it later, inside TileUpdate.emit's
+    // own RangeSet.spans walk, reached from DocView.update → updateInner — NOT
+    // inside PluginInstance.update's try, so it does not even get the permanent
+    // deactivate(): it escapes view.dispatch() into our own caller and aborts
+    // the update mid-flight.
+    const bad: DecorationProvider = {
+      build: () => Decoration.set([blockWidget(0)]),
+    };
+    const good = markProvider("survivor");
+    const view = mount([createSyntaxReveal([bad, good])], "hello world");
+    try {
+      expect(decorationClasses(view)).toContain("survivor");
+      // The dispatch itself must COMPLETE — without the guard it throws out of
+      // here, so this line is where the regression lands.
+      view.dispatch({ changes: { from: 0, insert: "x" } });
+      expect(view.state.doc.toString()).toBe("xhello world");
+      expect(decorationClasses(view)).toContain("survivor");
+      expect(quollErrorCount()).toBe(1);
+      // …and that the ONE log is this failure, not the detector falling over.
+      // `logProviderFailure` logs a GENERIC first argument and passes the error
+      // object third, so the count alone cannot tell "contained because the set
+      // was illegal" from "contained because the detector itself threw". The
+      // range and the "ship it as a StateField" instruction are the whole
+      // diagnostic value of the thrown message, and nothing else pins them.
+      const logged = quollErrorCalls()[0][2] as Error;
+      expect(logged.message).toContain("a block decoration at 0..0");
+      expect(logged.message).toContain("quollBlockReplaceZones");
+    } finally {
+      view.destroy();
+    }
+  });
+
+  it("contains a provider whose replace spans a line break", () => {
+    // The second thing CodeMirror refuses from a plugin, on the same escape
+    // path. "hello\nworld" — [2, 8) crosses the newline at 5.
+    const bad: DecorationProvider = {
+      build: () => Decoration.set([Decoration.replace({}).range(2, 8)]),
+    };
+    const good = markProvider("survivor");
+    const view = mount([createSyntaxReveal([bad, good])], "hello\nworld");
+    try {
+      expect(decorationClasses(view)).toContain("survivor");
+      view.dispatch({ changes: { from: 0, insert: "x" } });
+      expect(decorationClasses(view)).toContain("survivor");
+      expect(quollErrorCount()).toBe(1);
+    } finally {
+      view.destroy();
+    }
+  });
+
+  it("contains an illegal decoration that spilled into a SECOND RangeSet layer", () => {
+    // The realistic bug shape: the block widget overlaps a mark the same
+    // provider emitted, so RangeSetBuilder spills it into a nextLayer. A guard
+    // that consulted the set's top-level maxPoint would report this legal and
+    // let the throw escape — the whole set reads maxPoint -1. CodeMirror still
+    // throws for it, so this test is the one that pins layer handling end to
+    // end.
+    const bad: DecorationProvider = {
+      build: () =>
+        Decoration.set(
+          [Decoration.mark({ class: "overlapped" }).range(0, 10), blockWidget(5)],
+          true
+        ),
+    };
+    const good = markProvider("survivor");
+    const view = mount([createSyntaxReveal([bad, good])], "hello world");
+    try {
+      expect(decorationClasses(view)).toContain("survivor");
+      // The whole provider is skipped, not just the offending range — a
+      // half-applied provider output is exactly what the surrounding guard
+      // exists to avoid.
+      expect(decorationClasses(view)).not.toContain("overlapped");
+      view.dispatch({ changes: { from: 0, insert: "x" } });
+      expect(decorationClasses(view)).toContain("survivor");
+      expect(quollErrorCount()).toBe(1);
+    } finally {
+      view.destroy();
+    }
+  });
+
+  it("CodeMirror really tolerates every shape the detector calls legal", () => {
+    // Anchors findPluginIllegalDecoration to @codemirror/view rather than to
+    // itself: every shape below is one the detector returns null for, emitted
+    // from a BARE ViewPlugin (no orchestrator guard in the way) so CodeMirror's
+    // own TileUpdate.emit check is the thing under test.
+    //
+    // This is the BUILD walk, where emit() covers the whole document, so it is
+    // the only path that reaches a fixture positioned outside the document at
+    // all. The transaction walk is a different shape and is pinned separately
+    // below — deliberately NOT claimed here, because an edit only makes
+    // CodeMirror emit the region it touched.
+    //
+    // Each fixture is expressed relative to the live document length so it
+    // keeps meaning what its name says.
+    const doc = "hello\nworld\nagain";
+    const fixtures: Array<(d: Text) => DecorationSet> = [
+      // Wholly past the end, and straddling the end from inside the last line.
+      (d) => Decoration.set([Decoration.replace({}).range(d.length, d.length + 8)]),
+      (d) => Decoration.set([Decoration.replace({}).range(d.length - 3, d.length + 8)]),
+      // The two shapes nothing but WALK GEOMETRY keeps legal, and so the two
+      // most fragile verdicts in the module: a block decoration past the end is
+      // legal only because RangeSet.spans never visits it, and a range wholly
+      // before the document only because iter() starts at 0. Neither is a rule
+      // we implement — both are upstream behaviour we depend on.
+      (d) => Decoration.set([blockWidget(d.length + 8)]),
+      () => Decoration.set([Decoration.replace({}).range(-5, -3)]),
+    ];
+    for (const make of fixtures) {
+      mount([], doc, [dynamicDeco(make)]).destroy();
+    }
+    // The control proves the harness can go red — without it, a CM upgrade that
+    // stopped emitting the check at all would leave every mount above trivially
+    // green.
+    expect(() => mount([], doc, [dynamicDeco(() => Decoration.set([blockWidget(0)]))])).toThrow(
+      /may not be specified via plugins/
+    );
+  });
+
+  it("CodeMirror tolerates the end-straddling shape across a TRANSACTION too", () => {
+    // The build walk above covers the whole document; on a transaction emit()
+    // runs once per CHANGED REGION, and that region walk is what the guard's
+    // clipping reasoning is actually about. The edit therefore lands at the END
+    // of the document — an insert at 0 would emit only the first-line interval
+    // and never judge an end-straddling fixture at all, leaving the "it survives
+    // dispatch" claim untested while looking green.
+    //
+    // Only the straddling shape is exercised here. A fixture lying WHOLLY
+    // outside the document cannot be reached by any region walk, so there is no
+    // transaction assertion to make about it — hence mount-only above, rather
+    // than a claim this test cannot support.
+    const doc = "hello\nworld\nagain";
+    const view = mount([], doc, [
+      dynamicDeco((d) =>
+        Decoration.set([Decoration.replace({}).range(d.length - 3, d.length + 8)])
+      ),
+    ]);
+    try {
+      view.dispatch({ changes: { from: doc.length, insert: "!" } });
+      expect(view.state.doc.toString()).toBe(`${doc}!`);
+    } finally {
+      view.destroy();
+    }
+
+    // Control in the SAME region, illegal only AFTER the edit: legal at build,
+    // so the throw can only come from the transaction walk. Without it, a CM
+    // change that stopped judging that region would leave the assertion above
+    // green for the wrong reason.
+    let armed = false;
+    const control = mount([], doc, [
+      dynamicDeco((d) => (armed ? Decoration.set([blockWidget(d.length - 1)]) : Decoration.none)),
+    ]);
+    try {
+      armed = true;
+      expect(() => control.dispatch({ changes: { from: doc.length, insert: "!" } })).toThrow(
+        /may not be specified via plugins/
+      );
+    } finally {
+      control.destroy();
     }
   });
 });

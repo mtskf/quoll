@@ -23,6 +23,7 @@ import {
   type ViewUpdate,
 } from "@codemirror/view";
 import { perfNow, perfRecord } from "../../../shared/perf.js";
+import { findPluginIllegalDecoration } from "./plugin-decoration-legality.js";
 import type { BuildContext, DecorationProvider } from "./types.js";
 
 /** Block-widget slices ship their own StateField extensions and contribute the
@@ -215,15 +216,15 @@ function computeMerged(view: EditorView, providers: readonly DecorationProvider[
   // preserves what earlier providers already contributed. The provider keeps
   // being called on later builds, so a transient failure self-heals.
   //
-  // SCOPE, precisely: this contains a throw from build() and a return value
-  // that is not a RangeSet. It does NOT contain a provider that returns a
-  // well-formed RangeSet carrying a decoration a ViewPlugin may not emit — a
-  // block decoration, or a replace across a line break. CodeMirror rejects
-  // those later, in TileUpdate.emit ("Block decorations may not be specified
-  // via plugins"), on the escape path described below. That gap predates this
-  // guard and closing it would need a per-build scan of every emitted range on
-  // a per-keystroke path; the standing rule that block widgets are StateFields,
-  // never ViewPlugins, is what keeps it unreachable in practice.
+  // SCOPE, precisely: this contains a throw from build(), a return value that
+  // is not a RangeSet, and a well-formed RangeSet carrying a decoration a
+  // ViewPlugin may not emit (a block decoration, or a replace across a line
+  // break — see plugin-decoration-legality.ts). CodeMirror rejects that last
+  // kind LATER than the other two, inside TileUpdate.emit's own RangeSet.spans
+  // walk, on a path that is not inside PluginInstance.update's try — so it
+  // escapes dispatch entirely rather than deactivating the plugin. The standing
+  // rule that block widgets are StateFields, never ViewPlugins, now has a
+  // mechanism behind it rather than only a convention.
   //
   // ⚠️ Do NOT push try/catch down into the providers instead. A totality
   // regression inside a provider must stay a RED TEST, not become a silently
@@ -252,6 +253,20 @@ function computeMerged(view: EditorView, providers: readonly DecorationProvider[
       if (!(built instanceof RangeSet)) {
         throw new TypeError(
           `DecorationProvider.build() must return a DecorationSet, got ${built === null ? "null" : typeof built}`
+        );
+      }
+      // A well-formed RangeSet can still carry a decoration a ViewPlugin may
+      // not emit; CodeMirror rejects it too late to be contained (see SCOPE
+      // above and plugin-decoration-legality.ts's header for the exact route).
+      // Checked per provider and BEFORE the join, so the failure is attributed
+      // to the provider that caused it and the others keep their decorations.
+      // Judged against `ctx.state.doc` — the very document this provider was
+      // handed, so the line bounds the check reads are the ones it built to.
+      const illegal = findPluginIllegalDecoration(built, ctx.state.doc);
+      if (illegal !== null) {
+        throw new TypeError(
+          `DecorationProvider.build() returned ${illegal}, which CodeMirror refuses from a ViewPlugin. ` +
+            "Block widgets ship as their own StateField and publish their range via quollBlockReplaceZones."
         );
       }
       inline = RangeSet.join([inline, built]);
