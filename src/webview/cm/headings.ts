@@ -141,17 +141,28 @@ export function headingSlugSource(
       if (!SLUG_EXCLUDED_NODES.has(node.name)) {
         return;
       }
-      // `URL` is markup ONLY as a Link/Image destination. GFM emits the same
-      // node name for content the reader actually sees: an `Autolink`'s inner
-      // text (`<https://example.com>`, parent `Autolink`) and a bare URL
-      // literal (`https://example.com`, parent = the heading itself, no marks
-      // at all). Dropping those by name erased the visible bytes and made
-      // `# Release https://example.com` unaddressable by any anchor — worse
-      // than the raw-source slug this function replaced, and invisible to the
-      // suite until two cycle-2 reviewers measured it.
+      // `URL` is markup ONLY as a link/image destination, and "destination" is
+      // a POSITIONAL fact, not a parental one. GFM emits `URL` for four things:
+      //   `[text](dest)`            destination  — parent Link,  prev `(`
+      //   `[https://x](dest)`       LINK TEXT    — parent Link,  prev `[`
+      //   `![https://x](u.png)`     ALT TEXT     — parent Image, prev `![`
+      //   `<https://x>` / bare      content      — parent Autolink / the heading
+      // Autolinking fires inside link text and alt text too, so the first two
+      // share a parent and only the preceding LinkMark tells them apart. Gating
+      // on the parent alone dropped the visible text of `# [https://x](dest)`
+      // along with its destination, leaving the empty slug — a heading with no
+      // anchor at all, which is precisely the regression this gate was added to
+      // close. Match on the `(` instead: everything else is content.
       if (node.name === "URL") {
         const parent = node.node.parent;
-        if (parent === null || !URL_DESTINATION_PARENTS.has(parent.name)) {
+        const prev = node.node.prevSibling;
+        const isDestination =
+          parent !== null &&
+          URL_DESTINATION_PARENTS.has(parent.name) &&
+          prev !== null &&
+          prev.name === "LinkMark" &&
+          state.doc.sliceString(prev.from, prev.to) === "(";
+        if (!isDestination) {
           return;
         }
       }

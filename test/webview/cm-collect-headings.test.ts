@@ -138,6 +138,14 @@ describe("headingSlugSource", () => {
     expect(slugOf("# A [link](https://example.com)")).toBe("a-link");
   });
 
+  it("keeps a URL that is the LINK TEXT while still dropping the destination", () => {
+    // GFM autolinks inside link text and image alt text, so those URL nodes
+    // share the destination's parent and only the preceding mark tells them
+    // apart. Gating on the parent alone erased both and left no anchor at all.
+    expect(slugOf("# [https://example.com](dest)")).toBe("httpsexamplecom");
+    expect(slugOf("# ![see https://alt.example](u.png)")).toBe("see-httpsaltexample");
+  });
+
   it("drops a link title — a tooltip is never rendered text", () => {
     expect(slugOf('# A [link](b "Title")')).toBe("a-link");
   });
