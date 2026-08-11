@@ -111,9 +111,18 @@ describe("handleOpenLink", () => {
   });
 
   it("falls back to the document directory when there is no workspace (single-file open)", () => {
-    const { deps, opened } = makeDeps({ isInWorkspace: () => false });
+    const { deps, opened, errors } = makeDeps({ isInWorkspace: () => false });
     handleOpenLink("./other.md", deps);
     expect(opened).toEqual(["/ws/notes/other.md"]);
+    // ...and says NOTHING while doing it. The two containment conditions are an
+    // AND: being outside the workspace is only half a refusal, because the
+    // document's own directory is the other way to be in scope. Deriving the
+    // toast from `!isInWorkspace` alone still OPENS the file, so no `opened`
+    // assertion anywhere can catch it — the whole symptom is that every
+    // legitimate click in single-file operation grows a false "it wasn't
+    // opened" toast. This is the only test positioned to see that, since it is
+    // the only success path with no workspace.
+    expect(errors).toEqual([]);
   });
 
   it("rejects a parent escape when there is no workspace", () => {

@@ -85,8 +85,8 @@ export type HandleOpenLinkDeps = {
   openWith: (uri: Uri) => Thenable<unknown>;
   /** The panel's hoisted showError closure (harness-recorded + rejection-safe)
    *  — NOT a bare window.showErrorMessage. Surfaces the two user-visible
-   *  outcomes: the open FAILURE toast, and the containment REFUSAL toast (the
-   *  only rejection arm that speaks — see the containment check below). */
+   *  outcomes: the open FAILURE toast and the containment REFUSAL toast (see
+   *  the containment check below). */
   showError: (message: string) => void;
 };
 
@@ -174,12 +174,12 @@ export function handleOpenLink(href: string, deps: HandleOpenLinkDeps): void {
   // decoding before the join does not reopen the traversal hole, because the
   // boundary is asserted on the resolved target, not on the raw string.
   //
-  // THE ONE REJECTION THAT TOASTS. The webview cannot evaluate containment (it
-  // owns no path), so unlike every structural gate above it does NOT withhold
-  // the pointer cursor here: it promises the click, posts, and preventDefault's
-  // — eating the caret move — and only then does the host see the escape. A
-  // log-only drop therefore consumes a click and produces NOTHING the user can
-  // perceive: no navigation, no caret move, no toast, nothing in the webview
+  // THE ONE REJECTION THAT TOASTS — see this module's header for why this arm,
+  // and only this arm, is a reachable outcome of a real click. What follows from
+  // that is local: the webview has already promised the click (pointer cursor)
+  // and consumed it (preventDefault, which eats the caret move) by the time the
+  // host sees the escape, so a log-only drop produces NOTHING the user can
+  // perceive — no navigation, no caret move, no toast, nothing in the webview
   // console. That silence was an accepted phase-1 trade-off; it is now paid off
   // with a toast, which is the smaller half of the deferred design fork:
   //

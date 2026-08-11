@@ -24,10 +24,12 @@
 // Read that promise at its true strength — it is NOT "this link opens". The
 // webview owns no path, so it cannot evaluate host-side containment: a
 // relative `.md` target resolving outside the workspace still classifies as
-// actionable, still gets a pointer, and is dropped log-only by the host
-// (links/handle-open-link.ts) after preventDefault has already eaten the caret
-// move. Closing that one needs a host→webview rejection channel, not a cursor
-// change.
+// actionable and still gets a pointer. preventDefault has already eaten the
+// caret move by the time the host sees the escape — that part is unchanged —
+// but the drop is no longer silent: links/handle-open-link.ts toasts on the
+// containment arm alone (see its header for why that is the ONE rejection that
+// speaks, and why an `open-link-rejected` host→webview channel, which would buy
+// the caret move back, was considered and declined).
 //
 // Reveal-trigger range is the OUTER Link node range (mirror of
 // inline-mark-reveal). Click-to-open behaviour is wired separately in
