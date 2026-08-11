@@ -175,16 +175,15 @@ describe("classifyLinkTarget — fragments", () => {
 });
 
 // Totality is a hard contract, not a nicety: this function runs inside
-// DecorationProvider.build(), the orchestrator drives every INLINE decoration
-// provider from a single shared ViewPlugin, and CodeMirror permanently
-// deactivates a plugin that throws (@codemirror/view PluginInstance.update →
-// logException → deactivate). A throw here would silently strip the whole
-// inline reveal layer — emphasis, inline code, links — until a reload. (Block
-// widgets are StateFields and some constructs own their ViewPlugin, so those
-// survive; the blast radius is the shared plugin, not the editor entire.) The
-// contract is pinned rather than trusted. Deliberately NOT solved with a
-// try/catch at the call site: that would convert a future real bug into a
-// silently-missing cursor. Fail loudly in CI instead of quietly in production.
+// DecorationProvider.build(), which the orchestrator drives for every INLINE
+// decoration provider from a single shared ViewPlugin. The orchestrator now
+// CONTAINS a throw there — the failing provider drops its own decorations for
+// that build and the others stay live — so a violation costs one missing link
+// affordance and a deduped console.error nobody reads, NOT an obviously dead
+// editor. That makes this matrix more important, not less: containment removed
+// the loud symptom, so these direct calls are the only thing left that turns a
+// totality regression red. Deliberately NOT solved with a try/catch at the call
+// site either: that would swallow the bug where no test is looking.
 describe("classifyLinkTarget — totality (never throws)", () => {
   const HOSTILE = [
     "",
@@ -213,7 +212,8 @@ describe("classifyLinkTarget — totality (never throws)", () => {
   it("returns a LinkTarget for every hostile destination, raw and decoded", () => {
     for (const raw of HOSTILE) {
       // Pin the exact composition the decoration path runs: decode, then
-      // classify. A throw in EITHER half has the same fatal blast radius.
+      // classify. A throw in EITHER half is contained the same way — and so
+      // goes unnoticed the same way without this pin.
       expect(() => classifyLinkTarget(raw)).not.toThrow();
       expect(() => classifyLinkTarget(decodeMarkdownDestination(raw))).not.toThrow();
       expect(typeof classifyLinkTarget(decodeMarkdownDestination(raw)).kind).toBe("string");

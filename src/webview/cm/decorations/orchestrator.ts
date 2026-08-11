@@ -257,10 +257,12 @@ function computeMerged(view: EditorView, providers: readonly DecorationProvider[
       inline = RangeSet.join([inline, built]);
     } catch (err) {
       // The REPORTING path must not be able to escalate a contained failure
-      // into the very crash this guard prevents. `String(err)` / `err.message`
-      // run user code, a non-object provider entry would make WeakMap.set
-      // throw, and console.error is host-supplied. Failing to log is a
-      // diagnostic loss; failing to contain is a dead editor.
+      // into the very crash this guard prevents. failureSignature absorbs the
+      // hazards in the error VALUE itself; this layer covers the rest of the
+      // reporting path — a non-object provider entry makes WeakMap.set throw
+      // ("Invalid value used as weak map key"), and console.error is
+      // host-supplied. Failing to log is a diagnostic loss; failing to contain
+      // is a dead editor.
       try {
         logProviderFailure(p, index, err);
       } catch {
