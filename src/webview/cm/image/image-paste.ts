@@ -164,12 +164,22 @@ export function createImagePasteDrop(opts: {
     reader.onload = () => {
       const result = reader.result;
       if (typeof result !== "string") {
+        // Defensive: `readAsDataURL` is specified to yield a string, so this arm is
+        // not reachable through a conforming browser. Logged anyway, for the same
+        // reason clearPending's catch is: an unreachable branch that fires is
+        // exactly the one nobody will guess at, and a paste that vanishes with no
+        // trace is the failure this module keeps having.
+        console.warn("[quoll] dropped pasted image (FileReader returned a non-string result)");
         clearPending(view, requestId);
         return;
       }
       const comma = result.indexOf(",");
       const base64 = comma >= 0 ? result.slice(comma + 1) : "";
       if (base64 === "") {
+        // Reachable only for a malformed data URL — a zero-byte file, the other way
+        // to land an empty payload here, is already refused (with its own warn) back
+        // in `handle`. Either way the paste is abandoned on a writable doc, so it says so.
+        console.warn("[quoll] dropped pasted image (data URL carried no base64 payload)");
         clearPending(view, requestId);
         return;
       }
@@ -185,7 +195,12 @@ export function createImagePasteDrop(opts: {
     reader.onerror = () => {
       // No webview toast channel; rare browser-internal failure. Log + clear the
       // pending anchor so nothing leaks. (Documented in the security-audit note.)
-      console.error("[quoll] failed to read pasted image");
+      // `reader.error` is passed on because it is the ONLY account of the failure
+      // that exists — a DOMException whose `name` separates NotReadableError (the
+      // file moved/permissions) from the rest. It is metadata about the read, not
+      // image content, so it is safe to log. Matches the policy in
+      // `paste/html-to-markdown.ts`, which logs its caught `err` for the same reason.
+      console.error("[quoll] failed to read pasted image", reader.error);
       clearPending(view, requestId);
     };
     reader.readAsDataURL(file);

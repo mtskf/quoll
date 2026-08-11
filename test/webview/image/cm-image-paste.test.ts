@@ -92,9 +92,13 @@ function sizedImageFile(bytes: number): File {
 // (onerror, a non-string result). It implements exactly the four members production
 // touches; a fuller fake would only be more surface to drift.
 class StubFileReader
-  implements Pick<FileReader, "result" | "onload" | "onerror" | "readAsDataURL">
+  implements Pick<FileReader, "result" | "error" | "onload" | "onerror" | "readAsDataURL">
 {
   result: string | ArrayBuffer | null = null;
+  // The one member of the real FileReader contract this stub grew for the
+  // onerror path: `reader.error` is the ONLY description of the failure the
+  // browser gives us, and the handler must pass it on rather than discard it.
+  error: DOMException | null = null;
   onload: (() => void) | null = null;
   onerror: (() => void) | null = null;
   readAsDataURL(): void {
@@ -581,10 +585,23 @@ describe("imagePaste — the image-write post", () => {
   });
 
   it.each([
-    ["a non-string result", new ArrayBuffer(8)],
-    ["a data URL whose base64 payload is empty", "data:image/png;base64,"],
-    ["a result with no comma to split on", "not-a-data-url"],
-  ])("clears the pending anchor without posting on %s", (_label, result) => {
+    [
+      "a non-string result",
+      new ArrayBuffer(8),
+      "[quoll] dropped pasted image (FileReader returned a non-string result)",
+    ],
+    [
+      "a data URL whose base64 payload is empty",
+      "data:image/png;base64,",
+      "[quoll] dropped pasted image (data URL carried no base64 payload)",
+    ],
+    [
+      "a result with no comma to split on",
+      "not-a-data-url",
+      "[quoll] dropped pasted image (data URL carried no base64 payload)",
+    ],
+  ])("clears the pending anchor without posting on %s", (_label, result, expectedWarn) => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     stubFileReader((reader) => {
       reader.result = result;
       reader.onload?.();
@@ -597,23 +614,35 @@ describe("imagePaste — the image-write post", () => {
     // so a missing clear leaks it and the next reseed-free resolve could land an
     // unrelated image link on it.
     expect(view.state.field(pendingImageAnchors).length).toBe(0);
+    // Every one of these three refuses a paste on a WRITABLE doc: no post, no file,
+    // nothing inserted, and (before these warns) no trace — the same vanishing act
+    // the zero-byte case was fixed for. Per-case rather than a shared assertion, so
+    // that collapsing the two messages into one generic string goes red here.
+    expect(warn.mock.calls).toEqual([[expectedWarn]]);
     view.destroy();
   });
 
-  it("clears the pending anchor and logs when the read itself fails", () => {
+  it("clears the pending anchor and logs the browser's error when the read fails", () => {
     const error = vi.spyOn(console, "error").mockImplementation(() => {});
-    stubFileReader((reader) => reader.onerror?.());
+    const readError = new DOMException("boom", "NotReadableError");
+    stubFileReader((reader) => {
+      reader.error = readError;
+      reader.onerror?.();
+    });
     const { view, post } = mount("ab");
     firePasteAt(view.contentDOM, { files: IMAGE_FILE });
 
     expect(post).not.toHaveBeenCalled();
     expect(view.state.field(pendingImageAnchors).length).toBe(0);
     // There is no webview toast channel for this path, so the console line is the
-    // only trace a failed read leaves anywhere. Pinned as the COMPLETE call list,
-    // by text AND by exhaustion: CodeMirror swallows an exception thrown inside a
-    // domEventHandler (`bindHandler` → `logException`) and reports it as a further
-    // console.error, which a text-only `toHaveBeenCalledWith` would not notice.
-    expect(error.mock.calls).toEqual([["[quoll] failed to read pasted image"]]);
+    // only trace a failed read leaves anywhere — and `reader.error` is the only
+    // description of WHY the browser failed. Discarding it (the shape this test
+    // replaced) left "failed to read" with nothing to act on. Pinned as the
+    // COMPLETE call list, by text AND by exhaustion: CodeMirror swallows an
+    // exception thrown inside a domEventHandler (`bindHandler` → `logException`)
+    // and reports it as a further console.error, which a text-only
+    // `toHaveBeenCalledWith` would not notice.
+    expect(error.mock.calls).toEqual([["[quoll] failed to read pasted image", readError]]);
     view.destroy();
   });
 
