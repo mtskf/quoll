@@ -133,6 +133,21 @@ export const OPEN_LINK_STRUCTURAL_MATRIX: readonly OpenLinkCase[] = [
     hostRoutes: true,
     why: "decodeURIComponent is all-or-nothing — one bad escape means whole-string raw fallback",
   },
+  // The next two rows exist to kill mutants in the two cascade steps the header
+  // claims but nothing else enforces — ORDER (split before decode) and ARITY
+  // (decode exactly once). Both mutants are silent: swap or double the decode
+  // and every other row still passes on both sides, because no other row puts
+  // an escaped `#` or an escaped `%` in front of the gates.
+  {
+    destination: "name%23section.md",
+    hostRoutes: true,
+    why: "%23 is a literal # in the FILENAME — splitting after the decode would truncate it",
+  },
+  {
+    destination: "%252Fetc.md",
+    hostRoutes: true,
+    why: "%25 decodes ONCE to a literal %2F-named file — decoding twice would forge an absolute path",
+  },
 
   // ── Does not route: not a Markdown target ───────────────────────────────
   { destination: "./other.txt", hostRoutes: false, why: "non-.md extension" },
