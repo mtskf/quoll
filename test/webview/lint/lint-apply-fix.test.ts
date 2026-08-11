@@ -317,14 +317,20 @@ describe("quollLintFixKeymap precedence", () => {
   it("falls through to the competing binding when nothing is fixable", () => {
     // The other half of the contract: winning the race is not the same as owning the
     // chord. Returning false on a clean line hands Mod-. to whoever is next.
+    const consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     const competitor = vi.fn<Command>(() => true);
     const view = precedenceView("clean\n", competitor);
     try {
       expect(pressBothModVariants(view)).toBe(1);
       expect(competitor).toHaveBeenCalledTimes(1);
       expect(view.state.sliceDoc()).toBe("clean\n"); // byte-identical
+      // The fall-through must be a decision, not a swallowed failure: this command
+      // fails open, so a throw produces the same false / no-dispatch / unchanged-doc
+      // observation as "nothing was fixable". The log is what tells them apart.
+      expect(consoleErrorSpy).not.toHaveBeenCalled();
     } finally {
       view.destroy();
+      consoleErrorSpy.mockRestore();
     }
   });
 });

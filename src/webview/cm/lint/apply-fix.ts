@@ -126,10 +126,10 @@ export const applyLintFixAtSelection: Command = (view) => {
 
 /** Prec.high keymap binding LINT_FIX_KEY to the apply-fix command. Prec.high so
  *  it runs before defaultKeymap (which has no Mod-. binding today; high
- *  precedence future-proofs against one being added upstream). Executed by the
- *  "quollLintFixKeymap precedence" suite against a stand-in competitor binding —
- *  a `Mod-` chord can only be pressed non-flakily under happy-dom by dispatching
- *  BOTH platform normalisations (Meta and Ctrl), which is what that suite does. */
+ *  precedence future-proofs against one being added upstream). Precedence
+ *  ordering is pinned by the "quollLintFixKeymap precedence" suite in
+ *  test/webview/lint/lint-apply-fix.test.ts (see that file for the happy-dom
+ *  dual-dispatch rationale). */
 export function quollLintFixKeymap(): Extension {
   return Prec.high(keymap.of([{ key: LINT_FIX_KEY, run: applyLintFixAtSelection }]));
 }
