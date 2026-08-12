@@ -104,26 +104,10 @@ jobs:
 
       # Assemble the SHIPPED runtime dependency closure in a throwaway staging
       # tree so the SBOM below reflects what actually ships, not the build-input
-      # graph. A prod-only frozen install yields a node_modules containing
-      # exactly the runtime closure at EXACT resolved versions; the lockfile is
-      # then removed so syft catalogs that node_modules (not the dev entries in
-      # the lock graph — and the residual hidden node_modules/.pnpm/lock.yaml is
-      # named `lock.yaml`, not `pnpm-lock.yaml`, so syft's pnpm-lock cataloger
-      # does not match it). Built in $RUNNER_TEMP (outside the workspace) so it
-      # can never be picked up by the package/audit/attest/publish steps, and it
-      # leaves the workspace node_modules intact — the Package step below still
-      # needs the dev-only vsce. package.json + pnpm-lock.yaml + pnpm-workspace.yaml
-      # (overrides + release-age cooldown) + .npmrc (hoist/registry policy) are
-      # all copied so --frozen-lockfile resolves identically to the real install.
+      # graph. The script is shared with ci.yml's `sbom` job, which rehearses this
+      # whole sequence on every PR — WHY each line is needed lives in the script.
       - name: Assemble shipped runtime dependency tree (SBOM source)
-        run: |
-          STAGING="$RUNNER_TEMP/sbom-src"
-          rm -rf "$STAGING"
-          mkdir -p "$STAGING"
-          cp package.json pnpm-lock.yaml pnpm-workspace.yaml "$STAGING"/
-          if [ -f .npmrc ]; then cp .npmrc "$STAGING"/; fi
-          ( cd "$STAGING" && pnpm install --prod --frozen-lockfile --ignore-scripts )
-          rm -f "$STAGING/pnpm-lock.yaml"
+        run: scripts/assemble-sbom-staging.sh "$RUNNER_TEMP/sbom-src"
 
       # Supply-chain transparency. Syft (v1.42.3, baked into the SHA-pinned
       # sbom-action release below; Dependabot bumps the action + its Syft
