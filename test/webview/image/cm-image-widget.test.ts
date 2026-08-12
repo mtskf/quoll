@@ -13,6 +13,20 @@ const url = (s: string): AllowlistedUrl => s as AllowlistedUrl;
 
 const mockView = { dispatch: () => {} } as unknown as EditorView;
 
+// View stub that records every dispatched selection, for the click tests that
+// assert WHICH caret offset the widget aimed at.
+const recordingView = (): { view: EditorView; dispatched: Array<{ anchor: number }> } => {
+  const dispatched: Array<{ anchor: number }> = [];
+  const view = {
+    dispatch: (tr: { selection?: { anchor: number } }) => {
+      if (tr.selection) {
+        dispatched.push(tr.selection);
+      }
+    },
+  } as unknown as EditorView;
+  return { view, dispatched };
+};
+
 describe("ImageBlockWidget.toDOM (allowlisted)", () => {
   it("renders <div class='quoll-block quoll-image-block'> wrapping a live <img>", () => {
     const dom = new ImageBlockWidget(
@@ -165,34 +179,20 @@ describe("ImageBlockWidget identity + events", () => {
   });
 
   it("click on the widget dispatches a selection to docFrom (reveal trigger)", () => {
-    const dispatched: Array<{ anchor: number }> = [];
-    const stub = {
-      dispatch: (tr: { selection?: { anchor: number } }) => {
-        if (tr.selection) {
-          dispatched.push(tr.selection);
-        }
-      },
-    } as unknown as EditorView;
+    const { view, dispatched } = recordingView();
     const dom = new ImageBlockWidget(
       "a",
       url("https://x.test/a.png"),
       "![a](https://x.test/a.png)",
       42
-    ).toDOM(stub);
+    ).toDOM(view);
     dom.click();
     expect(dispatched).toEqual([{ anchor: 42 }]);
   });
 
   it("click on the blocked placeholder also dispatches caret to docFrom", () => {
-    const dispatched: Array<{ anchor: number }> = [];
-    const stub = {
-      dispatch: (tr: { selection?: { anchor: number } }) => {
-        if (tr.selection) {
-          dispatched.push(tr.selection);
-        }
-      },
-    } as unknown as EditorView;
-    const dom = new ImageBlockWidget("a", null, "![a](javascript:alert(1))", 5).toDOM(stub);
+    const { view, dispatched } = recordingView();
+    const dom = new ImageBlockWidget("a", null, "![a](javascript:alert(1))", 5).toDOM(view);
     dom.click();
     expect(dispatched).toEqual([{ anchor: 5 }]);
   });
@@ -211,20 +211,13 @@ describe("ImageBlockWidget identity + events", () => {
     ["malformed", "abc"],
     ["well-formed but wrong", "999"],
   ])("ignores a %s data-doc-from written onto the widget root", (_label, raw) => {
-    const dispatched: Array<{ anchor: number }> = [];
-    const stub = {
-      dispatch: (tr: { selection?: { anchor: number } }) => {
-        if (tr.selection) {
-          dispatched.push(tr.selection);
-        }
-      },
-    } as unknown as EditorView;
+    const { view, dispatched } = recordingView();
     const dom = new ImageBlockWidget(
       "a",
       url("https://x.test/a.png"),
       "![a](https://x.test/a.png)",
       42
-    ).toDOM(stub);
+    ).toDOM(view);
     dom.dataset.docFrom = raw;
     dom.click();
     expect(dispatched).toEqual([{ anchor: 42 }]);

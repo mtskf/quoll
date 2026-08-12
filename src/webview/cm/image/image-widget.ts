@@ -86,11 +86,10 @@ export class ImageBlockWidget extends WidgetType {
     // with the visible DOM; breathing room comes from padding on the wrapper.
     const root = document.createElement("div");
     root.className = "quoll-block quoll-image-block";
-    // The caret target travels through `blockStart`, NOT through this attribute.
-    // `data-doc-from` is written for DOM inspection (and read by tests that pin
-    // the re-stamp) and is NEVER read back: reading a position out of the DOM
-    // would put a string parse — and a malformed-value case — back on a path
-    // that has the number in hand.
+    // The caret target travels through `blockStart`, NOT through this
+    // attribute: `data-doc-from` is written for DOM inspection (and read by
+    // tests that pin the re-stamp) and is NEVER read back — see `blockStart`
+    // above for why a position must not be parsed back out of the DOM.
     root.dataset.docFrom = String(this.docFrom);
     blockStart.set(root, this.docFrom);
 
@@ -152,29 +151,28 @@ export class ImageBlockWidget extends WidgetType {
     // widget, so (unlike the table widget) there is no modifier-click
     // navigation exception to guard.
     root.addEventListener("click", () => {
-      // `?? this.docFrom` totalizes the `number | undefined` read; it is not the
-      // stale-closure hazard coming back. The entry is set above, in the same
-      // breath as attaching this listener, and at toDOM time the closure value
-      // IS the current one — so a miss is unreachable by construction. Logged,
-      // not silently trusted, so a future regression of that invariant is
-      // observable instead of silently reintroducing the stale-caret bug this
-      // WeakMap exists to fix.
-      const stamped = blockStart.get(root);
-      if (stamped === undefined) {
+      // Falling back to `this.docFrom` totalizes the `number | undefined` read;
+      // it is not the stale-closure hazard coming back. The entry is set above,
+      // in the same breath as attaching this listener, and at toDOM time the
+      // closure value IS the current one — so a miss is unreachable by
+      // construction. Logged, not silently trusted, so a future regression of
+      // that invariant is observable instead of silently reintroducing the
+      // stale-caret bug this WeakMap exists to fix.
+      let anchor = blockStart.get(root);
+      if (anchor === undefined) {
         console.error("[quoll] image widget blockStart miss — invariant violated", {
           fallback: this.docFrom,
         });
+        anchor = this.docFrom;
       }
-      const anchor = stamped ?? this.docFrom;
       // A `number` anchor does not make the dispatch infallible — see
       // table-widget.ts's `dispatchSelection` for the enumeration of what still
       // throws (out-of-range after a shrinking edit, CodeMirror's re-entrancy
-      // error, a throwing transaction filter); the latter two are
-      // widget-agnostic and were unguarded here before. The range bound is
-      // deliberately NOT re-checked against `view.state.doc.length`: CodeMirror
-      // owns that invariant and enforces it by throwing, and a second copy of
-      // the rule here could drift from it. The throw must not escape into a DOM
-      // listener unlogged — the gesture is lost, the editor keeps running.
+      // error, a throwing transaction filter). The range bound is deliberately
+      // NOT re-checked against `view.state.doc.length`: CodeMirror owns that
+      // invariant and enforces it by throwing, and a second copy of the rule
+      // here could drift from it. The throw must not escape into a DOM listener
+      // unlogged — the gesture is lost, the editor keeps running.
       try {
         view.dispatch({ selection: { anchor } });
       } catch (err) {
