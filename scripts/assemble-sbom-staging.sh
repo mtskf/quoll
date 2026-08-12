@@ -16,17 +16,19 @@
 # --frozen-lockfile resolves identically to the real install.
 #
 # Usage: scripts/assemble-sbom-staging.sh <stagingDir>
-# Callers pass a dir OUTSIDE the workspace (both workflows use
-# "$RUNNER_TEMP/sbom-src") so the tree can never be picked up by the
-# package/audit/attest/publish steps, and the workspace node_modules — which the
-# Package step still needs for the dev-only vsce — stays intact.
+# Callers pass a dir OUTSIDE the checkout (both workflows use
+# "$RUNNER_TEMP/sbom-src"), and the guards below enforce it, so the tree can
+# never be picked up by publish.yml's package/audit/attest steps and that
+# workflow's workspace node_modules — still needed there for the dev-only vsce —
+# stays intact. That second half is publish.yml-specific: ci.yml's `sbom` job
+# runs no root install and has no Package step.
 set -euo pipefail
 
 STAGING="${1:-}"
 
 # Fail closed BEFORE the rm -rf below. This script deletes whatever path it is
-# handed, so a caller typo (empty, relative, `/`, or the checkout itself) must be
-# rejected rather than executed.
+# handed, so a caller typo (empty, relative, `/`, the checkout itself, or a path
+# inside it) must be rejected rather than executed.
 if [ -z "$STAGING" ]; then
   echo "::error::assemble-sbom-staging: missing <stagingDir> argument" >&2
   exit 2
@@ -67,8 +69,8 @@ case "$STAGING_NAME" in
     exit 2
     ;;
 esac
-STAGING_PARENT="$(cd "$(dirname "$STAGING")" 2>/dev/null && pwd -P)" || {
-  echo "::error::assemble-sbom-staging: parent directory of '$STAGING' does not exist" >&2
+STAGING_PARENT="$(cd "$(dirname "$STAGING")" && pwd -P)" || {
+  echo "::error::assemble-sbom-staging: parent directory of '$STAGING' is not an accessible directory (see the shell error above)" >&2
   exit 2
 }
 # `pwd -P` of the root is "/", so joining with "/" naively yields "//name" — a
@@ -79,6 +81,17 @@ if [ "$STAGING_PARENT" = "/" ]; then
 else
   STAGING="$STAGING_PARENT/$STAGING_NAME"
 fi
+# POSIX permits a "//"-rooted path as a distinct root, and bash's cd/pwd -P
+# PRESERVE that prefix (zsh collapses it, which is why a shell probe can look
+# safe). So "//<repo>" would evade the textual containment check below while
+# rm -rf still resolves it to the real repo root. Collapse to a single leading
+# slash before anything is compared.
+while :; do
+  case "$STAGING" in
+    //*) STAGING="/${STAGING#//}" ;;
+    *) break ;;
+  esac
+done
 
 # Run from the repo root regardless of the caller's cwd, so the cp sources below
 # resolve against the checkout rather than whatever dir the step ran in.
@@ -87,6 +100,17 @@ REPO_ROOT="$(pwd -P)"
 case "$REPO_ROOT" in
   "$STAGING" | "$STAGING"/*)
     echo "::error::assemble-sbom-staging: refusing to delete '$STAGING' — it is the repo root or contains it" >&2
+    exit 2
+    ;;
+esac
+# The symmetric arm. The check above only rejects "STAGING is the checkout or an
+# ancestor of it"; a path INSIDE the checkout passed every guard, which both
+# deletes checkout content and leaves the staging tree where the
+# package/audit/attest steps would pick it up — the contamination this staging
+# design exists to prevent.
+case "$STAGING" in
+  "$REPO_ROOT"/*)
+    echo "::error::assemble-sbom-staging: refusing '$STAGING' — the staging tree must live outside the repo checkout" >&2
     exit 2
     ;;
 esac
