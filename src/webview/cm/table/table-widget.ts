@@ -67,6 +67,64 @@ function dispatchSelection(view: EditorView, selection: { anchor: number; head?:
   }
 }
 
+/** The RANGE a completed pointer gesture describes, or `null` when this gesture
+ *  is not a drag at all (no armed anchor, unmappable anchor, keyboard /
+ *  programmatic click, sub-threshold travel), when the head has no mapping, or
+ *  when the range collapses after snapping. Every `null` answer means the same
+ *  thing to the caller: dispatch the plain collapsed caret instead. */
+function dragRange(
+  view: EditorView,
+  root: HTMLElement,
+  event: MouseEvent,
+  pending: PendingDrag | null
+): { anchor: number; head: number } | null {
+  if (pending === null || pending.point === null) {
+    return null;
+  }
+  // `detail === 0` means this click was NOT produced by a pointer gesture —
+  // keyboard activation of an in-cell `<a>`, or a programmatic `.click()`. Its
+  // clientX/Y are 0, so pairing it with an armed anchor would read a large
+  // bogus travel and dispatch a range the user never drew. This is also what
+  // closes the aborted-gesture window: a press released OUTSIDE the widget
+  // delivers no click to `root`, leaving the entry armed, and the only clicks
+  // that can then reach the handler without a fresh mousedown of their own are
+  // keyboard/programmatic ones (a click retargeted to a common ancestor above
+  // the widget never runs that listener at all).
+  if (event.detail === 0) {
+    return null;
+  }
+  const travel = Math.abs(event.clientX - pending.x) + Math.abs(event.clientY - pending.y);
+  if (travel < DRAG_THRESHOLD_PX) {
+    return null;
+  }
+  const head = cellPointAt(
+    root,
+    event.clientX,
+    event.clientY,
+    view.state.facet(quollTableCaretResolver)
+  );
+  if (head === null) {
+    return null;
+  }
+  const start = pending.point;
+  // Direction comes from CELL ORDER first: an unmappable endpoint has no offset
+  // to compare, and defaulting it to 0 would call a backwards drag forward and
+  // snap the anchor inward, dropping the very cell the pointer crossed.
+  const forward =
+    start.cellFrom === head.cellFrom
+      ? start.offset === null || head.offset === null
+        ? true
+        : head.offset >= start.offset
+      : head.cellFrom > start.cellFrom;
+  // Snap an unmappable end OUTWARD so the range still covers what the pointer
+  // crossed.
+  const from = start.offset ?? (forward ? start.cellFrom : start.cellTo);
+  const to = head.offset ?? (forward ? head.cellTo : head.cellFrom);
+  // Zero-width after snapping — the caller's caret keeps the historical
+  // semantics (cell CONTENT START, not the character under the pointer).
+  return from === to ? null : { anchor: from, head: to };
+}
+
 export class TableBlockWidget extends WidgetType {
   constructor(
     readonly table: Table,
@@ -132,12 +190,9 @@ export class TableBlockWidget extends WidgetType {
     // moves focus into CodeMirror's contenteditable, and without focus the
     // revealed selection would neither paint nor be extendable.
     //
-    // A drag inside the widget CANNOT be recovered from the browser selection
-    // at mouseup: the widget is a contenteditable=false island and CodeMirror
-    // collapses any DOM selection made inside it back to `state.selection` on
-    // its next observer flush (verified in real Chromium — see cell-point.ts).
-    // So the widget owns the gesture: remember where the pointer went DOWN, and
-    // dispatch a RANGE at click time when the pointer actually moved.
+    // The widget owns the gesture end to end because a drag CANNOT be recovered
+    // from the browser selection at mouseup (cell-point.ts, "Why this exists"):
+    // remember where the pointer went DOWN, dispatch a RANGE at click time.
     root.addEventListener("mousedown", (event) => {
       // Primary button only — a right/middle press is not a selection gesture,
       // and letting it arm the anchor would pair a context-menu press with an
@@ -159,11 +214,8 @@ export class TableBlockWidget extends WidgetType {
       });
     });
 
-    // Root click handler: place the caret at the clicked cell's source offset
-    // (that selection lands inside the table's lines → tableBlockField reveals
-    // the raw source there). A click on the padding/margin (no cell) falls back
-    // to the block start via `root.dataset.docFrom`. A click that MOVED past
-    // DRAG_THRESHOLD_PX dispatches a range instead.
+    // Root click handler — the sole dispatch seam for the caret/range contract
+    // described at the top of this file.
     //
     // Modifier-click on a live `<a>` (external nav — cell-render left it
     // un-preventDefault'd because the href is absolute AND within
@@ -201,59 +253,7 @@ export class TableBlockWidget extends WidgetType {
       const cell = (event.target as Element | null)?.closest?.("th, td") as HTMLElement | null;
       const stamped = cell?.dataset.cellFrom ?? root.dataset.docFrom;
       const caret = stamped !== undefined ? Number(stamped) : this.docFrom;
-      const moved =
-        pending !== null &&
-        // `detail === 0` means this click was NOT produced by a pointer
-        // gesture — keyboard activation of an in-cell `<a>`, or a programmatic
-        // `.click()`. Its clientX/Y are 0, so pairing it with an armed anchor
-        // would read a large bogus travel and dispatch a range the user never
-        // drew. This is also what closes the aborted-gesture window: a press
-        // released OUTSIDE the widget delivers no click to `root`, leaving the
-        // entry armed, and the only clicks that can then reach this handler
-        // without a fresh mousedown of their own are keyboard/programmatic
-        // ones (a click retargeted to a common ancestor above the widget never
-        // runs this listener at all).
-        event.detail > 0 &&
-        Math.abs(event.clientX - pending.x) + Math.abs(event.clientY - pending.y) >=
-          DRAG_THRESHOLD_PX;
-      if (!moved || pending === null || pending.point === null) {
-        dispatchSelection(view, { anchor: caret });
-        return;
-      }
-      const head = cellPointAt(
-        root,
-        event.clientX,
-        event.clientY,
-        view.state.facet(quollTableCaretResolver)
-      );
-      if (head === null) {
-        dispatchSelection(view, { anchor: caret });
-        return;
-      }
-      // Named `dragAnchor`, not `anchor`: the modifier-click branch above
-      // already owns a local called `anchor` (the `<a>` element).
-      const dragAnchor = pending.point;
-      // Direction comes from CELL ORDER first: an unmappable endpoint has no
-      // offset to compare, and defaulting it to 0 would call a backwards drag
-      // forward and snap the anchor inward, dropping the very cell the pointer
-      // crossed.
-      const forward =
-        dragAnchor.cellFrom === head.cellFrom
-          ? dragAnchor.offset === null || head.offset === null
-            ? true
-            : head.offset >= dragAnchor.offset
-          : head.cellFrom > dragAnchor.cellFrom;
-      // Snap an unmappable end OUTWARD so the range still covers what the
-      // pointer crossed.
-      const from = dragAnchor.offset ?? (forward ? dragAnchor.cellFrom : dragAnchor.cellTo);
-      const to = head.offset ?? (forward ? head.cellTo : head.cellFrom);
-      if (from === to) {
-        // Zero-width after snapping — keep the historical caret semantics
-        // (cell CONTENT START, not the character under the pointer).
-        dispatchSelection(view, { anchor: caret });
-        return;
-      }
-      dispatchSelection(view, { anchor: from, head: to });
+      dispatchSelection(view, dragRange(view, root, event, pending) ?? { anchor: caret });
     });
 
     return root;

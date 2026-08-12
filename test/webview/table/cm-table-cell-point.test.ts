@@ -45,6 +45,21 @@ function resolverFor(node: Node | null, offset: number): CaretResolver {
   return () => (node === null ? null : { node, offset });
 }
 
+/** A byte-aligned cell whose 7 rendered characters are spread over three
+ *  children — text, `<code>`, text — which is what makes the element-node
+ *  (child-index) caret cases below distinguishable from the text-node ones. */
+function mixedChildrenCell(): { root: HTMLElement; td: HTMLElement } {
+  const root = fixture([{ text: "", from: 5, to: 12 }]);
+  const td = root.querySelector("td") as HTMLElement;
+  td.textContent = "";
+  td.appendChild(document.createTextNode("ab"));
+  const code = document.createElement("code");
+  code.textContent = "cde";
+  td.appendChild(code);
+  td.appendChild(document.createTextNode("fg"));
+  return { root, td };
+}
+
 describe("cellPointAt", () => {
   it("maps an offset inside a byte-aligned cell to an absolute source offset", () => {
     const root = fixture([{ text: "alpha", from: 78, to: 83 }]);
@@ -68,14 +83,7 @@ describe("cellPointAt", () => {
   });
 
   it("counts text across preceding sibling nodes inside the same cell", () => {
-    const root = fixture([{ text: "", from: 5, to: 12 }]);
-    const td = root.querySelector("td") as HTMLElement;
-    td.textContent = "";
-    td.appendChild(document.createTextNode("ab"));
-    const code = document.createElement("code");
-    code.textContent = "cde";
-    td.appendChild(code);
-    td.appendChild(document.createTextNode("fg"));
+    const { root, td } = mixedChildrenCell();
     // "ab" + "cde" + "fg" = 7 chars === cellTo - cellFrom → byte-aligned.
     expect(cellPointAt(root, 0, 0, resolverFor(td.lastChild as Node, 1))?.offset).toBe(11);
   });
@@ -84,14 +92,7 @@ describe("cellPointAt", () => {
   // (td, 2) means "before the third child", i.e. 5 chars in — the walker
   // returned 7 by running past the target subtree.
   it("resolves an element-node position between children (child index, not char index)", () => {
-    const root = fixture([{ text: "", from: 5, to: 12 }]);
-    const td = root.querySelector("td") as HTMLElement;
-    td.textContent = "";
-    td.appendChild(document.createTextNode("ab"));
-    const code = document.createElement("code");
-    code.textContent = "cde";
-    td.appendChild(code);
-    td.appendChild(document.createTextNode("fg"));
+    const { root, td } = mixedChildrenCell();
     expect(cellPointAt(root, 0, 0, resolverFor(td, 2))?.offset).toBe(10); // 5 + 5
   });
 

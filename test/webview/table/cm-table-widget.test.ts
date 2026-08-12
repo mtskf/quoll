@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import { EditorState } from "@codemirror/state";
+import { EditorState, type Extension } from "@codemirror/state";
 import { EditorView, type EditorView as EditorViewType, WidgetType } from "@codemirror/view";
 import { afterEach, describe, expect, it } from "vitest";
 
@@ -638,7 +638,8 @@ describe("TableBlockWidget cell span stamps", () => {
  *  `mountWidget`, which owns the `scope.root` assignment. */
 function stubViewWithCaret(
   dispatched: unknown[],
-  script: Array<{ text: string; offset: number } | null>
+  script: Array<{ text: string; offset: number } | null>,
+  extensions: Extension[] = []
 ): { view: EditorViewType; scope: { root: HTMLElement | null } } {
   const scope: { root: HTMLElement | null } = { root: null };
   let i = 0;
@@ -656,7 +657,7 @@ function stubViewWithCaret(
     return null;
   };
   const view = {
-    state: EditorState.create({ extensions: [quollTableCaretResolver.of(resolve)] }),
+    state: EditorState.create({ extensions: [quollTableCaretResolver.of(resolve), ...extensions] }),
     dispatch: (tr: unknown) => dispatched.push(tr),
   } as unknown as EditorViewType;
   return { view, scope };
@@ -688,17 +689,17 @@ function press(
   x: number,
   y: number,
   init: MouseEventInit = {}
-): void {
-  el.dispatchEvent(
-    new MouseEvent(type, {
-      bubbles: true,
-      cancelable: true,
-      clientX: x,
-      clientY: y,
-      detail: 1,
-      ...init,
-    })
-  );
+): MouseEvent {
+  const event = new MouseEvent(type, {
+    bubbles: true,
+    cancelable: true,
+    clientX: x,
+    clientY: y,
+    detail: 1,
+    ...init,
+  });
+  el.dispatchEvent(event);
+  return event;
 }
 
 const SRC = "| Name | Role |\n| - | - |\n| alpha | admin |";
@@ -852,28 +853,11 @@ describe("TableBlockWidget drag-selection", () => {
     // `document.body`, which the containment gate rejects — `pending.point`
     // was then null, the leak path short-circuited to the very caret dispatch
     // the assertion expects, and the test stayed green WITH the leak present.
-    const scope: { root: HTMLElement | null } = { root: null };
-    const resolve: CaretResolver = () => {
-      if (scope.root === null) {
-        return null;
-      }
-      const walker = document.createTreeWalker(scope.root, NodeFilter.SHOW_TEXT);
-      for (let n = walker.nextNode(); n !== null; n = walker.nextNode()) {
-        if (n.textContent === "x") {
-          return { node: n, offset: 0 };
-        }
-      }
-      return null;
-    };
-    const view = {
-      state: EditorState.create({
-        extensions: [
-          quollTableCaretResolver.of(resolve),
-          quollOpenExternalSink.of((href: string) => opened.push(href)),
-        ],
-      }),
-      dispatch: (tr: unknown) => dispatched.push(tr),
-    } as unknown as EditorViewType;
+    const { view, scope } = stubViewWithCaret(
+      dispatched,
+      [{ text: "x", offset: 0 }],
+      [quollOpenExternalSink.of((href: string) => opened.push(href))]
+    );
     const dom = mountWidget(makeWidget(src), view, scope);
     const a = dom.querySelector("a") as HTMLElement;
     press(a, "mousedown", 10, 10);
@@ -937,14 +921,7 @@ describe("TableBlockWidget drag-selection", () => {
     const dispatched: unknown[] = [];
     const { view, scope } = stubViewWithCaret(dispatched, [{ text: "alpha", offset: 2 }]);
     const dom = mountWidget(makeWidget(SRC), view, scope);
-    const event = new MouseEvent("mousedown", {
-      bubbles: true,
-      cancelable: true,
-      clientX: 10,
-      clientY: 10,
-      detail: 1,
-    });
-    (dom.querySelectorAll("td")[0] as HTMLElement).dispatchEvent(event);
+    const event = press(dom.querySelectorAll("td")[0] as HTMLElement, "mousedown", 10, 10);
     expect(event.defaultPrevented).toBe(false);
   });
 
