@@ -60,10 +60,15 @@ export type CaretResolver = (x: number, y: number, doc: Document) => CaretPoint 
 /** The caret-from-point capability as it ACTUALLY exists at runtime. lib.dom
  *  declares both methods as REQUIRED members of `Document`, which is false on
  *  our floor (Chromium 124 has no `caretPositionFromPoint`) and in happy-dom
- *  (neither exists). Restating them optional is what keeps the guards below
- *  load-bearing to the compiler — typed against `Document` the fallback arm
- *  narrows to `never` and a simplify pass would delete the only live path on
- *  the oldest supported VS Code. `Document` is assignable WITHOUT a cast. */
+ *  (neither exists). Restating them optional makes the type describe the real
+ *  platform minimum, so the `?.` guards and the fallback arm below read as
+ *  reachable code rather than as dead defensive noise against a `Document`
+ *  whose type promises both. It is documentation, NOT enforcement: this repo
+ *  sets neither `allowUnreachableCode: false` nor any equivalent, so typing
+ *  against `Document` would narrow the fallback to `never` without producing a
+ *  single diagnostic — what protects the Chromium-124 path from a simplify pass
+ *  is cm-table-cell-point.test.ts's `defaultCaretResolver` block, not tsc.
+ *  `Document` is assignable WITHOUT a cast. */
 interface CaretApiHost {
   readonly caretPositionFromPoint?: (x: number, y: number) => CaretPosition | null;
   readonly caretRangeFromPoint?: (x: number, y: number) => Range | null;
@@ -125,10 +130,19 @@ export interface CellPoint {
  *  got all three wrong (it returned the cell's full length for `(cell, 0)`).
  *  Returns null when `setEnd` throws — in practice an out-of-range `offset`
  *  (IndexSizeError), which the caller treats as "no mapping" rather than
- *  clamping to a position the pointer was never at. A node from OUTSIDE `cell`
- *  would NOT throw (the range re-roots and collapses, yielding 0 = the cell
- *  start), but the caller resolves `cell` from this very node, so that case
- *  cannot arise here. */
+ *  clamping to a position the pointer was never at.
+ *
+ *  A node from OUTSIDE `cell` does NOT throw, and does not necessarily collapse
+ *  either: `setEnd` re-roots the range's START only when the new end is in a
+ *  different root/document or compares BEFORE the current start (DOM spec
+ *  "set the end" step 4; happy-dom Range.setEnd mirrors it). A same-document
+ *  node lying AFTER the cell fails both conditions, so the start stays at the
+ *  cell's first character and the result EXCEEDS the cell's text length. That
+ *  is exactly the value `cellPointAt`'s no-clamp reasoning must never see —
+ *  and it cannot, because the caller derives `cell` from this very node
+ *  (`closest("th, td")`), which makes `node` the cell itself or a descendant of
+ *  it. The bound is a property of that derivation, not of `setEnd`. Any future
+ *  caller that resolves `cell` some other way owes this function a clamp. */
 function textOffsetWithinCell(cell: Element, node: Node, offset: number): number | null {
   try {
     const range = cell.ownerDocument.createRange();
@@ -142,10 +156,17 @@ function textOffsetWithinCell(cell: Element, node: Node, offset: number): number
 
 /** `null` unless the attribute is present and a non-negative INTEGER — the
  *  shape CellPoint's arithmetic and `view.dispatch({selection})` both assume.
- *  `Number.isFinite` alone would admit a negative, a fraction, and `""` (which
- *  `Number` maps to 0). `Element`, not `HTMLElement`: `getAttribute` lives on
+ *  `Number.isFinite` alone would admit a negative and a fraction, and `Number`
+ *  maps `""` to 0.
+ *
+ *  This is the ONLY gate between a DOM stamp and a dispatched position, for the
+ *  drag path here and for table-widget.ts's caret path alike, because
+ *  CodeMirror does not re-check: `checkSelection` (@codemirror/state) tests
+ *  `range.to > doc.length` and nothing else, so `NaN`, a negative, and a
+ *  fraction all pass validation and land a silently broken selection that no
+ *  try/catch can observe. `Element`, not `HTMLElement`: `getAttribute` lives on
  *  Element and this module stays realm-independent (no `instanceof`). */
-function stampedOffset(cell: Element, name: string): number | null {
+export function stampedOffset(cell: Element, name: string): number | null {
   const raw = cell.getAttribute(name);
   // Decimal digits only. `Number` alone accepts "" (→ 0), " 78 ", "-5", "78.5"
   // and "7e2"; the widget only ever writes `String(nodeFrom + cell.from)`, so
@@ -171,12 +192,18 @@ export function cellPointAt(
   y: number,
   resolve: CaretResolver
 ): CellPoint | null {
-  // Fail closed around the WHOLE body, not just the `resolve` call: the facet
-  // is a public injection seam (index.ts), so TypeScript cannot police what an
-  // out-of-repo resolver returns, and a `{ node: null }` answer would otherwise
-  // throw out of the widget's DOM listener. Every internal failure mode already
-  // answers `null`, and this function is side-effect-free, so a catch-all is
-  // exactly equivalent to those.
+  // Fail closed around the WHOLE body, not just the `resolve` call. The facet
+  // has no out-of-repo callers (the barrel is internal; only tests call
+  // `.of(...)`), but `CaretResolver`'s throw contract deliberately admits a
+  // malformed answer, and TypeScript cannot police the RETURN VALUE of a
+  // function it only sees through a facet: a `{ node: null }` answer throws on
+  // the very next line and would take the widget's DOM listener with it.
+  // Catching here is not equivalent to the two internal failure modes below —
+  // those answer `{ …, offset: null }` (keep the cell, snap to its boundary),
+  // this answers `null` (no cell at all, caller falls back to the collapsed
+  // caret). It is the strictly weaker answer, which is the right one when the
+  // failure is "we cannot trust anything this resolver told us". The function
+  // is side-effect-free, so swallowing loses nothing but the exception.
   try {
     const point = resolve(x, y, root.ownerDocument);
     if (point === null) {
@@ -205,12 +232,15 @@ export function cellPointAt(
     if (within === null) {
       return { cellFrom, cellTo, offset: null };
     }
-    // No clamp: `within` is bounded by construction. `Range.toString().length`
-    // cannot exceed the cell's rendered text, and the alignment gate above
-    // already established `rendered.length === cellTo - cellFrom`, so
-    // `cellFrom + within` is always inside `[cellFrom, cellTo]`. An offset the
-    // platform considers out of range never gets this far — `setEnd` throws
-    // IndexSizeError and `textOffsetWithinCell` returns null (fail closed).
+    // No clamp: `within` is bounded by construction. `cell` was derived from
+    // `point.node` above, so the measured range ends inside `cell` and cannot
+    // read past its rendered text (see textOffsetWithinCell — an end point
+    // OUTSIDE the cell is what would break this, and the derivation is what
+    // rules it out). The alignment gate then gives
+    // `rendered.length === cellTo - cellFrom`, so `cellFrom + within` is always
+    // inside `[cellFrom, cellTo]`. An offset the platform considers out of
+    // range never gets this far — `setEnd` throws IndexSizeError and
+    // `textOffsetWithinCell` returns null (fail closed).
     return { cellFrom, cellTo, offset: cellFrom + within };
   } catch {
     return null;

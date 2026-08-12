@@ -145,9 +145,15 @@ describe("cellPointAt", () => {
   });
 
   // Trust-boundary hardening: the stamps are DOM attributes, so anything that
-  // can touch the widget's DOM can write them. `Number.isFinite` alone admits
-  // every shape below — `Number("")` is 0, and a negative or fractional offset
-  // reaches `view.dispatch({selection})`, whose bounds check throws.
+  // can touch the widget's DOM can write them, and the value flows straight
+  // into `view.dispatch({selection})`. CodeMirror does NOT backstop this — its
+  // `checkSelection` only rejects `range.to > doc.length`, so a negative, a
+  // fraction and `NaN` all pass and install a silently broken selection.
+  //
+  // Coverage note: only the first three rows below distinguish the current gate
+  // from a plain `Number.isFinite` one (`Number("")` is 0, and finite happily
+  // admits -5 and 78.5). "abc" → NaN was rejected by the older gate too — it is
+  // a control, not a new pin.
   it.each([
     ["empty", ""],
     ["negative", "-5"],
@@ -160,15 +166,45 @@ describe("cellPointAt", () => {
     expect(cellPointAt(root, 0, 0, resolverFor(td.firstChild as Node, 2))).toBeNull();
   });
 
+  // The `Number.isSafeInteger` arm — the only rejection the digit regexp cannot
+  // make on its own, and dead until a stamp is long enough to lose precision
+  // (`Number("9007199254740993")` is 9007199254740992). BOTH stamps carry a
+  // huge value on purpose: stamping only `from` would let the
+  // `cellTo < cellFrom` guard answer null first, and the row would pin nothing.
+  // With the arm removed the pair survives as a plausible span and the
+  // alignment gate answers `{…, offset: null}` — an object, not null.
+  it("returns null for a precision-losing stamp (isSafeInteger, past the digit regexp)", () => {
+    const root = fixture([{ text: "alpha", from: 78, to: 83 }]);
+    const td = root.querySelector("td") as HTMLElement;
+    td.setAttribute("data-cell-from", "9007199254740993");
+    td.setAttribute("data-cell-to", "9007199254740994");
+    expect(cellPointAt(root, 0, 0, resolverFor(td.firstChild as Node, 2))).toBeNull();
+  });
+
   it("returns null when the stamps are inverted (cellTo < cellFrom)", () => {
     const root = fixture([{ text: "alpha", from: 83, to: 78 }]);
     const td = root.querySelector("td") as HTMLElement;
     expect(cellPointAt(root, 0, 0, resolverFor(td.firstChild as Node, 2))).toBeNull();
   });
 
-  // The facet is exported from index.ts, so an out-of-repo resolver can answer
-  // with a shape TypeScript never saw. Dereferencing it must not take down the
-  // widget's click listener — same contract as the throwing resolver above.
+  // The other side of that boundary, and the reason it is `cellTo < cellFrom`
+  // rather than `<=`: an empty GFM cell (`| a || b |`) stamps cellFrom ===
+  // cellTo, and it is a perfectly good click target — tightening the guard to
+  // `<=` would silently kill click-to-reveal on every empty cell.
+  it("maps a point in an EMPTY cell (cellFrom === cellTo is a valid span)", () => {
+    const root = fixture([{ text: "", from: 5, to: 5 }]);
+    const td = root.querySelector("td") as HTMLElement;
+    expect(cellPointAt(root, 0, 0, resolverFor(td, 0))).toEqual({
+      cellFrom: 5,
+      cellTo: 5,
+      offset: 5,
+    });
+  });
+
+  // `CaretResolver`'s throw contract deliberately admits a malformed answer, and
+  // TypeScript cannot police the return value of a function reached through a
+  // facet. Dereferencing it must not take down the widget's click listener —
+  // same contract as the throwing resolver above.
   it.each([
     ["a null node", { node: null, offset: 0 }],
     ["a missing node", { offset: 0 }],

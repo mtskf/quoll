@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 import { EditorState, type Extension } from "@codemirror/state";
 import { EditorView, type EditorView as EditorViewType, WidgetType } from "@codemirror/view";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { parseTable } from "../../../src/markdown/table/index.js";
 import { PROTOCOL_VERSION } from "../../../src/shared/protocol.js";
@@ -988,5 +988,100 @@ describe("TableBlockWidget drag-selection", () => {
     press(td, "mousedown", 10, 10);
     press(td, "click", 60, 10, { detail: 0 });
     expect(dispatched).toEqual([{ selection: { anchor: SRC.indexOf("alpha") } }]);
+  });
+
+  // The guard above lives INSIDE dragRange, i.e. BELOW the click handler's
+  // modifier-link branch, and that placement is load-bearing: keyboard
+  // activation of a focused in-cell link (Enter with Cmd held, and any
+  // synthetic `.click()`) carries detail 0, so hoisting the guard to the top of
+  // the click listener — the natural simplification, since it reads as a
+  // gesture precondition — would make Cmd+Enter on a link do NOTHING while
+  // every existing test stayed green. It is not about drags at all; it is about
+  // what a detail-0 click may still be allowed to do.
+  it("a detail-0 modifier click on an <a> still opens the link (the guard sits BELOW the link branch)", () => {
+    const src = "| L |\n| - |\n| [x](https://example.com) |";
+    const dispatched: unknown[] = [];
+    const opened: string[] = [];
+    const { view, scope } = stubViewWithCaret(
+      dispatched,
+      [{ text: "x", offset: 0 }],
+      [quollOpenExternalSink.of((href: string) => opened.push(href))]
+    );
+    const dom = mountWidget(makeWidget(src), view, scope);
+    const a = dom.querySelector("a") as HTMLElement;
+    // Keyboard activation: no pointer gesture, so no mousedown and clientX/Y 0.
+    const event = press(a, "click", 0, 0, { detail: 0, metaKey: true });
+    expect(event.defaultPrevented).toBe(true);
+    expect(opened).toEqual(["https://example.com"]);
+    expect(dispatched).toEqual([]);
+  });
+});
+
+describe("TableBlockWidget caret dispatch hardening", () => {
+  // The caret path reads `data-cell-from` / `data-doc-from` off the DOM, so it
+  // sits on the same trust boundary as the drag path and must use the same
+  // gate. A bare `Number(...)` here would not merely be untidy: CodeMirror's
+  // `checkSelection` tests `range.to > doc.length` and nothing else, so a `NaN`
+  // anchor is ACCEPTED and installs `{anchor: null, head: null}` — a silently
+  // broken selection, with no throw for `dispatchSelection`'s catch to see.
+  // Hence the assertions below are on the exact dispatched value, not on
+  // "something was dispatched".
+  it.each([
+    ["empty", ""],
+    ["negative", "-5"],
+    ["fractional", "78.5"],
+    ["non-numeric", "abc"],
+    ["precision-losing", "9007199254740993"],
+  ])("falls back to the block start for a %s cell stamp", (_label, raw) => {
+    const dispatched: unknown[] = [];
+    const dom = makeWidget(SRC, 7).toDOM(stubView(dispatched));
+    document.body.appendChild(dom);
+    const td = dom.querySelectorAll("td")[0] as HTMLElement;
+    td.setAttribute("data-cell-from", raw);
+    press(td, "click", 10, 10);
+    // The block start, NOT `Number(raw)` — reveal-on-caret is line-level, so
+    // this still reveals the table; only intra-table precision is lost.
+    expect(dispatched).toEqual([{ selection: { anchor: 7 } }]);
+  });
+
+  it("falls back to the widget's own docFrom when the ROOT stamp is malformed too", () => {
+    const dispatched: unknown[] = [];
+    const dom = makeWidget(SRC, 7).toDOM(stubView(dispatched));
+    document.body.appendChild(dom);
+    const td = dom.querySelectorAll("td")[0] as HTMLElement;
+    td.setAttribute("data-cell-from", "abc");
+    dom.setAttribute("data-doc-from", "-3");
+    press(td, "click", 10, 10);
+    // 7 is the constructor argument, which never travelled through the DOM.
+    expect(dispatched).toEqual([{ selection: { anchor: 7 } }]);
+  });
+
+  // `dispatchSelection` is the single window through which every dispatch in
+  // this widget passes, and its catch is unreachable from any fixture the suite
+  // can build: with the stamps validated, the throws that remain are a stale
+  // out-of-range offset, CodeMirror's re-entrancy error, and a throwing
+  // transaction filter — none of which a display-only widget test can stage.
+  // Without this pin the whole try/catch could be replaced by a bare
+  // `view.dispatch(...)` with the suite still green.
+  it("logs and swallows a throwing dispatch instead of letting it escape the DOM listener", () => {
+    const view = {
+      state: EditorState.create({}),
+      dispatch: () => {
+        throw new Error("dispatch boom");
+      },
+    } as unknown as EditorViewType;
+    const dom = makeWidget(SRC, 7).toDOM(view);
+    document.body.appendChild(dom);
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    try {
+      const td = dom.querySelectorAll("td")[0] as HTMLElement;
+      expect(() => press(td, "click", 10, 10)).not.toThrow();
+      expect(consoleError).toHaveBeenCalledWith("[quoll] table widget selection dispatch failed", {
+        selection: { anchor: SRC.indexOf("alpha") },
+        err: expect.any(Error),
+      });
+    } finally {
+      consoleError.mockRestore();
+    }
   });
 });

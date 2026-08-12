@@ -30,7 +30,12 @@ import { type EditorView, WidgetType } from "@codemirror/view";
 import { type Align, type Cell, type Table, tableAlign } from "../../../markdown/table/index.js";
 import { quollResourceBaseUri } from "../image/resource-base.js";
 import { quollOpenExternalSink } from "../open-external.js";
-import { type CellPoint, cellPointAt, quollTableCaretResolver } from "./cell-point.js";
+import {
+  type CellPoint,
+  cellPointAt,
+  quollTableCaretResolver,
+  stampedOffset,
+} from "./cell-point.js";
 import { renderCellInline } from "./cell-render.js";
 
 // Pointer travel (Manhattan, CSS px) below which a gesture is a CLICK, not a
@@ -55,10 +60,21 @@ interface PendingDrag {
 const pendingDrag = new WeakMap<HTMLElement, PendingDrag>();
 
 /** Every selection dispatch out of this widget's DOM listeners goes through
- *  here. Mirrors the destroyed-view-race guard of task-checkbox-command.ts and
- *  fenced-code-language-command.ts: a listener still attached to a detached
- *  widget root can fire during webview tear-down, and that throw must not
- *  escape into the DOM listener unlogged. */
+ *  here, so the throw paths are handled in ONE place rather than at each seam.
+ *
+ *  What can actually throw, after the callers below validate every offset they
+ *  read from the DOM: (1) `RangeError: Selection points outside of document` —
+ *  `checkSelection` (@codemirror/state) rejects `range.to > doc.length`, and a
+ *  stamp read off a widget root that outlived a shrinking edit is exactly that;
+ *  (2) `Calls to EditorView.update are not allowed while an update is in
+ *  progress` — this listener runs on a DOM event, which an in-progress update
+ *  can deliver; (3) anything a transaction filter/extender in this view's
+ *  pipeline throws. A dispatch to a DESTROYED view is NOT one of them —
+ *  `EditorView.update` early-returns for `this.destroyed` (@codemirror/view
+ *  6.43.0), so tear-down races are a silent no-op, not a throw.
+ *
+ *  Either way the throw must not escape into a DOM listener unlogged: the
+ *  gesture is lost, the editor keeps running. */
 function dispatchSelection(view: EditorView, selection: { anchor: number; head?: number }): void {
   try {
     view.dispatch({ selection });
@@ -250,9 +266,25 @@ export class TableBlockWidget extends WidgetType {
         view.state.facet(quollOpenExternalSink)(anchor.getAttribute("href") ?? "");
         return;
       }
-      const cell = (event.target as Element | null)?.closest?.("th, td") as HTMLElement | null;
-      const stamped = cell?.dataset.cellFrom ?? root.dataset.docFrom;
-      const caret = stamped !== undefined ? Number(stamped) : this.docFrom;
+      const cell = (event.target as Element | null)?.closest?.("th, td") ?? null;
+      // Read the stamps through the SAME gate the drag path uses
+      // (`stampedOffset`), not a bare `Number(...)`. Both are DOM attributes and
+      // therefore both are trust boundaries, and CodeMirror will not catch a bad
+      // one for us: `checkSelection` only rejects `range.to > doc.length`, so a
+      // `NaN` anchor is accepted silently and installs a broken selection that
+      // `dispatchSelection`'s catch never sees.
+      //
+      // A stamp that fails the gate degrades one step rather than dispatching
+      // nothing: reveal-on-caret is LINE-level, so the block start reveals the
+      // same table the cell offset would — only the intra-table caret precision
+      // is lost, and a dead click (no reveal at all) is a worse answer for a
+      // failure mode that only arises when something outside this widget wrote
+      // its DOM. The chain ends on `this.docFrom`, the widget's own constructor
+      // argument, which never travelled through the DOM at all.
+      const caret =
+        (cell === null ? null : stampedOffset(cell, "data-cell-from")) ??
+        stampedOffset(root, "data-doc-from") ??
+        this.docFrom;
       dispatchSelection(view, dragRange(view, root, event, pending) ?? { anchor: caret });
     });
 
