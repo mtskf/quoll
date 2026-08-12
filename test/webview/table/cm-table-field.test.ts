@@ -478,4 +478,17 @@ describe("tableBlockField — reveal and offset pins", () => {
       view.destroy();
     }
   });
+
+  it("drops the widget for a NON-EMPTY selection inside the table (drag reveal)", () => {
+    const doc = "before\n\n| Name | Role |\n| - | - |\n| alpha | admin |\n\nafter";
+    const from = doc.indexOf("alpha");
+    // The caret is the click path; the range is the drag path. Both must reveal.
+    const caretView = mount(doc, EditorSelection.single(from));
+    expect(rangesOf(caretView.state.field(tableBlockField))).toHaveLength(0);
+    const rangeView = mount(doc, EditorSelection.single(from, from + 5));
+    expect(rangesOf(rangeView.state.field(tableBlockField))).toHaveLength(0);
+    // Control: a selection entirely outside the table keeps the widget.
+    const outsideView = mount(doc, EditorSelection.single(0, 3));
+    expect(rangesOf(outsideView.state.field(tableBlockField))).toHaveLength(1);
+  });
 });
