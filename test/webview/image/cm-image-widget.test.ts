@@ -13,6 +13,20 @@ const url = (s: string): AllowlistedUrl => s as AllowlistedUrl;
 
 const mockView = { dispatch: () => {} } as unknown as EditorView;
 
+// View stub that records every dispatched selection, for the click tests that
+// assert WHICH caret offset the widget aimed at.
+const recordingView = (): { view: EditorView; dispatched: Array<{ anchor: number }> } => {
+  const dispatched: Array<{ anchor: number }> = [];
+  const view = {
+    dispatch: (tr: { selection?: { anchor: number } }) => {
+      if (tr.selection) {
+        dispatched.push(tr.selection);
+      }
+    },
+  } as unknown as EditorView;
+  return { view, dispatched };
+};
+
 describe("ImageBlockWidget.toDOM (allowlisted)", () => {
   it("renders <div class='quoll-block quoll-image-block'> wrapping a live <img>", () => {
     const dom = new ImageBlockWidget(
@@ -165,36 +179,87 @@ describe("ImageBlockWidget identity + events", () => {
   });
 
   it("click on the widget dispatches a selection to docFrom (reveal trigger)", () => {
-    const dispatched: Array<{ anchor: number }> = [];
-    const stub = {
-      dispatch: (tr: { selection?: { anchor: number } }) => {
-        if (tr.selection) {
-          dispatched.push(tr.selection);
-        }
-      },
-    } as unknown as EditorView;
+    const { view, dispatched } = recordingView();
     const dom = new ImageBlockWidget(
       "a",
       url("https://x.test/a.png"),
       "![a](https://x.test/a.png)",
       42
-    ).toDOM(stub);
+    ).toDOM(view);
     dom.click();
     expect(dispatched).toEqual([{ anchor: 42 }]);
   });
 
   it("click on the blocked placeholder also dispatches caret to docFrom", () => {
-    const dispatched: Array<{ anchor: number }> = [];
-    const stub = {
-      dispatch: (tr: { selection?: { anchor: number } }) => {
-        if (tr.selection) {
-          dispatched.push(tr.selection);
-        }
-      },
-    } as unknown as EditorView;
-    const dom = new ImageBlockWidget("a", null, "![a](javascript:alert(1))", 5).toDOM(stub);
+    const { view, dispatched } = recordingView();
+    const dom = new ImageBlockWidget("a", null, "![a](javascript:alert(1))", 5).toDOM(view);
     dom.click();
     expect(dispatched).toEqual([{ anchor: 5 }]);
+  });
+
+  // The DOM is NOT an input to the caret. `data-doc-from` is still written (DOM
+  // inspection, plus the re-stamp assertions in the updateDOM block below), but
+  // the listener reads the module-private WeakMap, so a value written onto the
+  // element cannot steer the dispatch.
+  //
+  // Both rows go red if the listener reverts to `Number(root.dataset.docFrom)`:
+  // "abc" would dispatch `NaN`, which CodeMirror ACCEPTS — `checkSelection`
+  // only rejects `range.to > doc.length` — installing a silently broken
+  // selection that no try/catch can observe; "999" is the case a format gate
+  // would also have missed, dispatching a caret into an unrelated block.
+  it.each([
+    ["malformed", "abc"],
+    ["well-formed but wrong", "999"],
+  ])("ignores a %s data-doc-from written onto the widget root", (_label, raw) => {
+    const { view, dispatched } = recordingView();
+    const dom = new ImageBlockWidget(
+      "a",
+      url("https://x.test/a.png"),
+      "![a](https://x.test/a.png)",
+      42
+    ).toDOM(view);
+    dom.dataset.docFrom = raw;
+    dom.click();
+    expect(dispatched).toEqual([{ anchor: 42 }]);
+  });
+
+  // `view.dispatch` can still throw with the anchor a `number` by construction:
+  // an offset that outlived a shrinking edit (RangeError from checkSelection),
+  // CodeMirror's "update in progress" re-entrancy error — this listener runs on
+  // a DOM event, which an in-progress update can deliver — or a throwing
+  // transaction filter. None can be staged from a display-only widget fixture,
+  // so the pin uses a throwing stub; without it the try/catch could be deleted
+  // and the suite would stay green.
+  //
+  // Only console.error is asserted, not a `dom.click()` "did not throw"
+  // wrapper: in this vitest+happy-dom suite an uncaught throw from a DOM
+  // listener propagates synchronously out of click() (real browsers instead
+  // report it via window.onerror), so that wrapper would be non-vacuous here
+  // too — asserting console.error is still the stronger pin, since it also
+  // catches a mutation that empties the catch body.
+  it("logs and swallows a throwing dispatch instead of letting it escape the listener", () => {
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const boom = new RangeError("Selection points outside of document");
+      const stub = {
+        dispatch: () => {
+          throw boom;
+        },
+      } as unknown as EditorView;
+      const dom = new ImageBlockWidget(
+        "a",
+        url("https://x.test/a.png"),
+        "![a](https://x.test/a.png)",
+        7
+      ).toDOM(stub);
+      dom.click();
+      expect(errSpy).toHaveBeenCalledWith("[quoll] image widget selection dispatch failed", {
+        anchor: 7,
+        err: boom,
+      });
+    } finally {
+      errSpy.mockRestore();
+    }
   });
 });
 
