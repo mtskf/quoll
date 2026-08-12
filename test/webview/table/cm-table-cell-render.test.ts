@@ -1007,3 +1007,49 @@ describe("renderReadonly text-node topology (merging is not vacuous)", () => {
     expect(text.length).toBeLessThan(deep.length);
   });
 });
+
+// Contract for cell-point.ts's byte-alignment gate: it decides "this cell's DOM
+// offsets map 1:1 onto source offsets" from LENGTH EQUALITY alone. That is only
+// sound while no construct can render longer than its source — a construct that
+// GREW while preserving total length would pass the gate and map drags to the
+// wrong source offsets, silently. If you add an inline construct that can grow
+// (entity decoding, alt-text fallback, emoji shortcodes), this test fails and
+// cell-point.ts's mapping must move to per-node source spans first.
+describe("renderCellInline never grows the rendered text", () => {
+  const CASES = [
+    "plain text",
+    "**bold**",
+    "_em_",
+    "~~del~~",
+    "==mark==",
+    "`code`",
+    "[label](https://example.com)",
+    "[label](./relative.md)",
+    "[label](javascript:alert(1))",
+    "<https://example.com>",
+    "![alt](https://example.com/x.png)",
+    "![alt](./local.png)",
+    "\\| escaped pipe",
+    "\\*not em\\*",
+    "&amp; entity",
+    "&lt;&gt;",
+    "&#128512;",
+    "a &copy; b",
+    "***nested bold em***",
+    "**[link](https://example.com)**",
+    "text with  double  spaces",
+    "trailing backslash \\",
+    "😀 emoji",
+    "<b>raw html</b>",
+    "<!-- comment -->",
+    "http://bare.example.com",
+  ];
+  for (const src of CASES) {
+    it(`does not grow: ${JSON.stringify(src)}`, () => {
+      const rendered = renderCellInline(src, "https://base.example/dir/")
+        .map((n) => n.textContent ?? "")
+        .join("");
+      expect(rendered.length).toBeLessThanOrEqual(src.length);
+    });
+  }
+});
