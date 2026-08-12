@@ -160,7 +160,12 @@ export class ImageBlockWidget extends WidgetType {
       // stale-caret bug this WeakMap exists to fix.
       let anchor = blockStart.get(root);
       if (anchor === undefined) {
+        // `slice` identifies WHICH widget tripped it — a document can hold many
+        // images, and `fallback` alone would not say which one. Matches the
+        // source-identifying payload of this file's other breadcrumb
+        // (`{ src }` on a failed load).
         console.error("[quoll] image widget blockStart miss — invariant violated", {
+          slice: this.slice,
           fallback: this.docFrom,
         });
         anchor = this.docFrom;
