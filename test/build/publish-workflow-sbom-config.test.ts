@@ -183,25 +183,35 @@ describe("CI rehearses the release SBOM sequence", () => {
   // named step inserted between Generate and Verify in one file only, a
   // reordering, or a duplicate step name all leave every assertion above green.
   // Pin the sequence itself.
-  // Anchored to the step indent (6 spaces inside a job) rather than trimmed:
-  // a trimmed match would also pick up a `- name:`-looking line inside a future
-  // `run: |` block scalar and silently shift the sequence.
-  const stepNames = (job: string) =>
+  // EVERY step, not just the named ones. Anchored to the step indent (6 spaces
+  // inside a job) rather than trimmed, so a `- `-looking line inside a future
+  // `run: |` block scalar cannot shift the sequence.
+  //
+  // Unnamed steps must appear here or the adjacency assertion below has a hole:
+  // this repo writes every `actions/*` setup step as a bare `- uses:`, and
+  // splicing one BETWEEN two shared steps is invisible to a names-only list —
+  // the equality blocks stop at it (stepBlock terminates on `- `), so nothing
+  // else would catch it either. Placeholder-name the unnamed ones so they still
+  // occupy a slot in the ordering.
+  const stepLabels = (job: string) =>
     job
       .split("\n")
-      .filter((line) => /^ {6}- name: /.test(line))
-      .map((line) => line.replace(/^ {6}- name: /, ""));
+      .filter((line) => /^ {6}- /.test(line))
+      .map((line) => {
+        const named = line.match(/^ {6}- name: (.*)$/);
+        return named ? named[1] : "<unnamed step>";
+      });
 
   it.each([
     ["publish.yml", publishJob],
     ["ci.yml", sbomJob],
   ])("runs the shared steps consecutively and in order in %s", (_label, job) => {
-    const names = stepNames(job);
+    const labels = stepLabels(job);
     for (const step of SHARED_STEPS) {
-      expect(names.filter((n) => n === step)).toHaveLength(1);
+      expect(labels.filter((n) => n === step)).toHaveLength(1);
     }
-    const start = names.indexOf(SHARED_STEPS[0]);
-    expect(names.slice(start, start + SHARED_STEPS.length)).toEqual(SHARED_STEPS);
+    const start = labels.indexOf(SHARED_STEPS[0]);
+    expect(labels.slice(start, start + SHARED_STEPS.length)).toEqual([...SHARED_STEPS]);
   });
 
   // Equality alone is satisfied by two files that BOTH regressed — e.g. both

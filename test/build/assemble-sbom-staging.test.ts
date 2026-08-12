@@ -85,6 +85,28 @@ describe("assemble-sbom-staging.sh argument guards", () => {
     expect(existsSync(join(repo, "CANARY"))).toBe(true);
   });
 
+  // The `//` hazard is two-sided: both containment arms compare TEXT, so it is
+  // not enough to normalise the argument. Invoked through a `//`-prefixed path,
+  // REPO_ROOT inherits the prefix from `$0` (bash's cd/pwd -P keep it) and both
+  // arms go blind — here the inside-the-checkout argument, which is rejected
+  // normally, would reach `rm -rf`.
+  it("exits 2 when invoked through a `//`-prefixed script path", () => {
+    const res = (() => {
+      try {
+        execFileSync(`/${join(repo, "scripts", "assemble-sbom-staging.sh")}`, [
+          join(repo, "sbom-src"),
+        ]);
+        return { code: 0, stderr: "" };
+      } catch (err) {
+        const e = err as { status: number; stderr?: Buffer };
+        return { code: e.status, stderr: String(e.stderr ?? "") };
+      }
+    })();
+    expect(res.code).toBe(2);
+    expect(res.stderr).toContain("must live outside the repo checkout");
+    expect(existsSync(join(repo, "CANARY"))).toBe(true);
+  });
+
   // The containment guard is symmetric: a path INSIDE the checkout would delete
   // checkout content AND leave the staging tree where publish.yml's
   // package/audit/attest steps pick it up.

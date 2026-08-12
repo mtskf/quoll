@@ -97,6 +97,17 @@ done
 # resolve against the checkout rather than whatever dir the step ran in.
 cd "$(dirname "$0")/.."
 REPO_ROOT="$(pwd -P)"
+# Collapse REPO_ROOT the same way, for the same reason: both checks below are
+# TEXTUAL comparisons, so a "//"-rooted path on EITHER side blinds them. STAGING
+# is normalised above, but REPO_ROOT inherits its prefix from "$0" — invoke this
+# script as "//<repo>/scripts/assemble-sbom-staging.sh" and cd/pwd -P keep the
+# "//", so the checkout itself would sail past both arms.
+while :; do
+  case "$REPO_ROOT" in
+    //*) REPO_ROOT="/${REPO_ROOT#//}" ;;
+    *) break ;;
+  esac
+done
 case "$REPO_ROOT" in
   "$STAGING" | "$STAGING"/*)
     echo "::error::assemble-sbom-staging: refusing to delete '$STAGING' — it is the repo root or contains it" >&2
