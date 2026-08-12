@@ -43,6 +43,7 @@ import {
   window,
   workspace,
 } from "vscode";
+import type { IsWritableFileSystem } from "../file-system.js";
 import { canEditWith } from "./can-edit-with.js";
 import { openInQuollEditor } from "./open-in-quoll.js";
 import { openInTextEditor } from "./reopen-text-editor.js";
@@ -124,7 +125,7 @@ function allOpenTabInputs(): unknown[] {
  *  is injected — the readonly SKIP arm stays a real `canEditWith` call. */
 export interface RestoreDeps {
   openDoc: (uri: Uri) => Thenable<TextDocument>;
-  isWritableFileSystem: (scheme: string) => boolean | undefined;
+  isWritableFileSystem: IsWritableFileSystem;
   openInQuoll: (uri: Uri, quollViewType: string) => Thenable<unknown>;
   openInText: (uri: Uri) => Thenable<unknown>;
   closeSourceTab: (uri: Uri, sourceTab: Tab) => Thenable<void>;
@@ -169,7 +170,11 @@ export async function restoreSurface(
     }
     await deps.closeSourceTab(uri, sourceTab);
   } catch (err) {
-    console.error("[quoll] surface restore failed", err);
+    // This log is the ONLY diagnostic channel of a deliberately silent feature
+    // (no toast), so it carries the identifying context: without the uri and
+    // the target surface an openDoc rejection and a reopen rejection collapse
+    // into one indistinguishable line.
+    console.error("[quoll] surface restore failed", { uri: uri.toString(), target, err });
   }
 }
 
@@ -195,8 +200,12 @@ export function registerSurfaceRestoreWatcher(
       }
       const { surface, uri } = classified;
       const uriKey = uri.toString();
-      // A restore for this URI is already running — its own reopen fires an
-      // opened event we must NOT re-process (memory already holds the target).
+      // A restore for this URI is already running. The hazard is NOT the
+      // restore's own reopen — that arrives as a Quoll (custom) open, which
+      // decideOpenReconcile always adopts (reopen: null), so it could never
+      // start a second restore. It is a DUPLICATE TEXT open landing mid-restore:
+      // reconcileOpen would record "text" and silently overwrite the remembered
+      // "quoll" we are in the middle of restoring to.
       if (restoring.has(uriKey)) {
         continue;
       }
@@ -210,6 +219,14 @@ export function registerSurfaceRestoreWatcher(
       if (reopen === null) {
         continue;
       }
+      // Accepted boundary: the guard is released ONLY on settlement. A
+      // `deps.openDoc` (workspace.openTextDocument) that never settles — an
+      // unresponsive FileSystemProvider — leaves `uriKey` held for the session,
+      // silently disabling restore for that one URI (no throw ⇒ no catch ⇒ no
+      // log). Deliberate: a timer-based release could fire a second reopen while
+      // the first is still pending, and the degradation is "the file stays in
+      // the valid surface VS Code opened it in", the same end state as any other
+      // restore failure.
       restoring.add(uriKey);
       void restoreSurface(reopen, uri, tab, quollViewType, deps).finally(() =>
         restoring.delete(uriKey)
