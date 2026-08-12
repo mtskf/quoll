@@ -1,4 +1,6 @@
-# Syft configuration for the release SBOM (publish.yml, "Generate SBOM (SPDX)").
+# Syft configuration for the SBOM. Used by publish.yml's "Generate SBOM (SPDX)"
+# at release AND by ci.yml's `sbom` job, which rehearses the same sequence on
+# every PR.
 #
 # WHY THIS FILE EXISTS — syft splits its JavaScript catalogers by source type:
 #
@@ -21,7 +23,9 @@
 # package.json files it walks ARE exactly the shipped runtime closure — build-only
 # tooling is never on disk to be cataloged.
 #
-# Pinned alongside the sbom-action SHA in publish.yml: if that action (and the
-# syft it bakes in) is bumped, re-confirm these cataloger names and tags upstream.
+# Pinned alongside the sbom-action SHA, which lives in BOTH publish.yml and
+# ci.yml (kept identical by test/build/publish-workflow-sbom-config.test.ts): if
+# that action (and the syft it bakes in) is bumped, re-confirm these cataloger
+# names and tags upstream.
 select-catalogers:
   - "+javascript-package-cataloger"

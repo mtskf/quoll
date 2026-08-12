@@ -146,10 +146,12 @@ jobs:
         run: node scripts/audit-vsix.mjs extension.vsix
 
   # Rehearse the RELEASE SBOM pipeline on every PR/main push. publish.yml runs
-  # these same four steps at tag time — and only at tag time, which is how the
-  # v0.1.66 empty SBOM reached a live release (syft's package.json cataloger is
-  # image-tagged, so the directory scan cataloged nothing; see
-  # .github/syft-release.yaml). No static check over our own YAML can catch an
+  # these same four steps at tag time — and only at tag time, which is why the
+  # v0.1.66 empty SBOM went undetected until a tag was pushed (syft's
+  # package.json cataloger is image-tagged, so the directory scan emitted an SBOM
+  # with ZERO npm packages; the fail-closed verify step caught it and blocked
+  # that publish, so nothing reached users — see .github/syft-release.yaml and
+  # LEARNING.md 2026-08-05). No static check over our own YAML can catch an
   # UPSTREAM change like that; only running the real action can. Dependabot bumps
   # `anchore/sbom-action` (and the syft baked into it) weekly, so this job makes
   # that bump prove itself on its own PR.
@@ -188,7 +190,7 @@ jobs:
       # No root `pnpm install` is needed: the script installs into its own staging
       # dir, and verify-sbom-scope.mjs uses node builtins only.
       - name: Assemble shipped runtime dependency tree (SBOM source)
-        run: scripts/assemble-sbom-staging.sh "$RUNNER_TEMP/sbom-src"
+        run: scripts/assemble-sbom-staging.sh "${RUNNER_TEMP:?RUNNER_TEMP is not set}/sbom-src"
 
       - name: Generate SBOM (SPDX)
         uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0

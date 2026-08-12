@@ -107,7 +107,7 @@ jobs:
       # graph. The script is shared with ci.yml's `sbom` job, which rehearses this
       # whole sequence on every PR — WHY each line is needed lives in the script.
       - name: Assemble shipped runtime dependency tree (SBOM source)
-        run: scripts/assemble-sbom-staging.sh "$RUNNER_TEMP/sbom-src"
+        run: scripts/assemble-sbom-staging.sh "${RUNNER_TEMP:?RUNNER_TEMP is not set}/sbom-src"
 
       # Supply-chain transparency. Syft (v1.42.3, baked into the SHA-pinned
       # sbom-action release below; Dependabot bumps the action + its Syft
@@ -164,7 +164,10 @@ jobs:
       # ENABLEMENT CRITERIA (do this to make it gating): once the log shows a
       # clean reconcile across a release (no "unexpected"/"missing"/"version
       # mismatch" lines), fold `--reconcile "$RUNNER_TEMP/sbom-src"` into the
-      # gating step above and delete this shadow step.
+      # gating step above and delete this shadow step — in BOTH this file and
+      # ci.yml's `sbom` job, in the same commit, and drop the last entry from
+      # SHARED_STEPS in test/build/publish-workflow-sbom-config.test.ts. The
+      # cross-file equality test fails if only one side flips (by design).
       - name: Reconcile SBOM against staged install (shadow, non-gating)
         run: node scripts/verify-sbom-scope.mjs sbom.spdx.json --reconcile "$RUNNER_TEMP/sbom-src" || true
 
