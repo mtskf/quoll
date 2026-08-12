@@ -103,11 +103,15 @@ describe("release SBOM cataloger wiring", () => {
 // The CI rehearsal is only worth something if it runs the SAME sequence the
 // release runs, and nothing in GitHub Actions enforces that. The threat is a
 // hand edit, a bad conflict resolution, or a "quick fix" applied to one file
-// only, quietly degrading the rehearsal into theatre. Dependabot is not the
-// threat: .github/dependabot.yml scopes github-actions at `directory: "/"` with
-// one group over both workflow files, so a bump lands in both at once. And if a
-// bump ever did arrive split across PRs, the red would be a TRUE positive — the
-// files really would have diverged — so this assertion is safe either way.
+// only, quietly degrading the rehearsal into theatre. Dependabot is very likely
+// not the threat: it updates a given dependency across every file it finds under
+// the configured directory in one PR, so a SHA appearing in both workflows
+// should move in both at once. (That comes from the per-dependency
+// directory-wide scan — NOT from `dependabot.yml`'s `groups:`, which only
+// bundles DIFFERENT dependencies into a single PR.) We do not depend on that
+// holding, though: if a bump ever did arrive split across PRs, the red would be
+// a TRUE positive — the files really would have diverged — so the assertion is
+// correct either way.
 describe("CI rehearses the release SBOM sequence", () => {
   const publishJob = jobBlock(
     stripComments(read(".github/workflows/publish.yml")),
@@ -162,7 +166,17 @@ describe("CI rehearses the release SBOM sequence", () => {
   });
 
   it.each(SHARED_STEPS)("keeps the load-bearing content of `%s`", (step) => {
-    expect(stepBlock(sbomJob, step, "ci.yml")).toMatch(LOAD_BEARING[step]);
+    // Assert the needle EXISTS before using it. The `Record<SharedStep, …>` type
+    // above looks like it already makes that impossible, but nothing enforces it
+    // here: `test/build/` is in none of the four tsconfigs `pnpm compile` runs
+    // (the trap CLAUDE.md documents for test/markdown and test/shared), so the
+    // exhaustiveness check never executes — and at runtime a missing entry makes
+    // this `expect(…).toMatch(undefined)`, which vitest PASSES silently. Without
+    // this line a forgotten entry ships with zero enforcement: verified by
+    // deleting one and watching the whole suite stay green.
+    const needle = LOAD_BEARING[step];
+    expect(needle).toBeDefined();
+    expect(stepBlock(sbomJob, step, "ci.yml")).toMatch(needle);
   });
 
   // Per-step equality says nothing about ORDER, ADJACENCY, or UNIQUENESS: a
