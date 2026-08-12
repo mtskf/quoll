@@ -134,9 +134,9 @@ export interface RestoreDeps {
 const REAL_RESTORE_DEPS: RestoreDeps = {
   openDoc: (uri) => workspace.openTextDocument(uri),
   isWritableFileSystem: (scheme) => workspace.fs.isWritableFileSystem(scheme),
-  openInQuoll: (uri, quollViewType) => openInQuollEditor(uri, quollViewType),
-  openInText: (uri) => openInTextEditor(uri),
-  closeSourceTab: (uri, sourceTab) => closeSourceTabIfClean(uri, sourceTab),
+  openInQuoll: openInQuollEditor,
+  openInText: openInTextEditor,
+  closeSourceTab: closeSourceTabIfClean,
 };
 
 /** Reopen `uri` in `target` and close the just-opened (wrong-surface) source tab

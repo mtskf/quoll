@@ -115,6 +115,13 @@ const restoreUri = {
 } as unknown as Uri;
 const SOURCE_TAB = { id: "source" } as unknown as Tab;
 
+/** Await a macrotask boundary: drains the ENTIRE microtask queue regardless of
+ *  how many awaits the code under test happens to have, so the assertion that
+ *  follows pins the behaviour, not the tick count. Draining a fixed number of
+ *  ticks would turn one extra await ahead of the observed call into a false
+ *  red. (Same role as the `flush` helpers in the wiring tests.) */
+const flushTasks = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 0));
+
 /** Minimal TextDocument fake shaped for canEditWith (uri.scheme / uri.path /
  *  languageId) plus the isDirty planRestore reads. */
 function fakeDoc(isDirty: boolean): TextDocument {
@@ -197,12 +204,10 @@ describe("restoreSurface (seamed orchestrator)", () => {
       },
     });
     const pending = restoreSurface("quoll", restoreUri, SOURCE_TAB, "quoll.editMarkdown", deps);
-    // Macrotask boundary: drains the ENTIRE microtask queue regardless of how
-    // many awaits restoreSurface happens to have, so the assertion pins the
-    // behaviour (close must not run while the reopen is pending), not the tick
-    // count. Draining a fixed number of ticks would turn one extra await ahead
-    // of the open into a false red.
-    await new Promise((r) => setTimeout(r, 0));
+    // Every microtask restoreSurface could still take has run by here (see
+    // flushTasks), so a close would already be logged if the reopen were not
+    // awaited.
+    await flushTasks();
     expect(calls).toEqual(["openDoc", "openInQuoll"]);
     releaseOpen();
     await pending;
@@ -357,21 +362,20 @@ describe("registerSurfaceRestoreWatcher in-flight guard", () => {
     const docReady = new Promise<TextDocument>((resolve) => {
       releaseDoc = resolve;
     });
-    let openDocCalls = 0;
-    const { deps } = makeRestoreDeps(fakeDoc(false), {
+    const { deps, calls } = makeRestoreDeps(fakeDoc(false), {
       openDoc: () => {
-        openDocCalls += 1;
+        calls.push("openDoc");
         return docReady;
       },
     });
     const sub = registerSurfaceRestoreWatcher("quoll.editMarkdown", deps);
     try {
       fireTextOpen();
-      expect(openDocCalls).toBe(1);
+      expect(calls).toEqual(["openDoc"]);
       fireTextOpen();
-      expect(openDocCalls).toBe(1); // suppressed by the in-flight guard
+      expect(calls).toEqual(["openDoc"]); // suppressed by the in-flight guard
       releaseDoc(fakeDoc(false));
-      await new Promise((r) => setTimeout(r, 0));
+      await flushTasks();
     } finally {
       sub.dispose();
     }
@@ -381,21 +385,16 @@ describe("registerSurfaceRestoreWatcher in-flight guard", () => {
     // Pins the .finally() release: a guard that never cleared would make the
     // feature fire exactly once per URI per session.
     noteSurface(uriKey, "quoll");
-    let openDocCalls = 0;
-    const { deps } = makeRestoreDeps(fakeDoc(false), {
-      openDoc: async () => {
-        openDocCalls += 1;
-        return fakeDoc(false);
-      },
-    });
+    const oneRestore = ["openDoc", "openInQuoll", "closeSourceTab"];
+    const { deps, calls } = makeRestoreDeps(fakeDoc(false));
     const sub = registerSurfaceRestoreWatcher("quoll.editMarkdown", deps);
     try {
       fireTextOpen();
-      await new Promise((r) => setTimeout(r, 0));
-      expect(openDocCalls).toBe(1);
+      await flushTasks();
+      expect(calls).toEqual(oneRestore);
       fireTextOpen();
-      await new Promise((r) => setTimeout(r, 0));
-      expect(openDocCalls).toBe(2);
+      await flushTasks();
+      expect(calls).toEqual([...oneRestore, ...oneRestore]);
     } finally {
       sub.dispose();
     }
@@ -404,20 +403,19 @@ describe("registerSurfaceRestoreWatcher in-flight guard", () => {
   it("releases the guard even when the restore FAILS (a rejection must not wedge the URI)", async () => {
     noteSurface(uriKey, "quoll");
     const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
-    let openDocCalls = 0;
-    const { deps } = makeRestoreDeps(fakeDoc(false), {
+    const { deps, calls } = makeRestoreDeps(fakeDoc(false), {
       openDoc: async () => {
-        openDocCalls += 1;
+        calls.push("openDoc");
         throw new Error("boom");
       },
     });
     const sub = registerSurfaceRestoreWatcher("quoll.editMarkdown", deps);
     try {
       fireTextOpen();
-      await new Promise((r) => setTimeout(r, 0));
+      await flushTasks();
       fireTextOpen();
-      await new Promise((r) => setTimeout(r, 0));
-      expect(openDocCalls).toBe(2);
+      await flushTasks();
+      expect(calls).toEqual(["openDoc", "openDoc"]);
     } finally {
       sub.dispose();
       errSpy.mockRestore();
@@ -434,7 +432,7 @@ describe("registerSurfaceRestoreWatcher in-flight guard", () => {
     const sub = registerSurfaceRestoreWatcher("quoll.editMarkdown", deps);
     try {
       const openedTab = fireTextOpen();
-      await new Promise((r) => setTimeout(r, 0));
+      await flushTasks();
       expect(args.openInQuoll).toEqual([{ uri: restoreUri, viewType: "quoll.editMarkdown" }]);
       expect(args.openInText).toEqual([]);
       expect(args.closeSourceTab).toEqual([{ uri: restoreUri, tab: openedTab as unknown as Tab }]);
@@ -451,18 +449,12 @@ describe("registerSurfaceRestoreWatcher in-flight guard", () => {
     stubTabGroups.push({
       tabs: [{ input: new TabInputCustom(restoreUri, "quoll.editMarkdown") }],
     });
-    let openDocCalls = 0;
-    const { deps } = makeRestoreDeps(fakeDoc(false), {
-      openDoc: async () => {
-        openDocCalls += 1;
-        return fakeDoc(false);
-      },
-    });
+    const { deps, calls } = makeRestoreDeps(fakeDoc(false));
     const sub = registerSurfaceRestoreWatcher("quoll.editMarkdown", deps);
     try {
       fireTextOpen();
-      await new Promise((r) => setTimeout(r, 0));
-      expect(openDocCalls).toBe(0); // sibling ⇒ adopt the shown surface, never bounce
+      await flushTasks();
+      expect(calls).toEqual([]); // sibling ⇒ adopt the shown surface, never bounce
     } finally {
       sub.dispose();
     }
@@ -478,13 +470,7 @@ describe("registerSurfaceRestoreWatcher in-flight guard", () => {
     } as unknown as Uri;
     noteSurface(uriKey, "quoll");
     noteSurface("file:///b.md", "quoll");
-    let openDocCalls = 0;
-    const { deps } = makeRestoreDeps(fakeDoc(false), {
-      openDoc: async () => {
-        openDocCalls += 1;
-        return fakeDoc(false);
-      },
-    });
+    const { deps, calls } = makeRestoreDeps(fakeDoc(false));
     const sub = registerSurfaceRestoreWatcher("quoll.editMarkdown", deps);
     try {
       fireTabChange({
@@ -492,8 +478,8 @@ describe("registerSurfaceRestoreWatcher in-flight guard", () => {
       });
       // Synchronous: the handler loops e.opened without awaiting, and
       // restoreSurface calls deps.openDoc before its first await.
-      expect(openDocCalls).toBe(2);
-      await new Promise((r) => setTimeout(r, 0));
+      expect(calls).toEqual(["openDoc", "openDoc"]);
+      await flushTasks();
     } finally {
       sub.dispose();
     }
@@ -501,20 +487,14 @@ describe("registerSurfaceRestoreWatcher in-flight guard", () => {
 
   it("does not restore a Quoll tab open (restore is asymmetric, upgrade-only)", async () => {
     noteSurface(uriKey, "text");
-    let openDocCalls = 0;
-    const { deps } = makeRestoreDeps(fakeDoc(false), {
-      openDoc: async () => {
-        openDocCalls += 1;
-        return fakeDoc(false);
-      },
-    });
+    const { deps, calls } = makeRestoreDeps(fakeDoc(false));
     const sub = registerSurfaceRestoreWatcher("quoll.editMarkdown", deps);
     try {
       fireTabChange({
         opened: [{ input: new TabInputCustom(restoreUri, "quoll.editMarkdown") }],
       });
-      await new Promise((r) => setTimeout(r, 0));
-      expect(openDocCalls).toBe(0);
+      await flushTasks();
+      expect(calls).toEqual([]);
     } finally {
       sub.dispose();
     }
@@ -522,16 +502,10 @@ describe("registerSurfaceRestoreWatcher in-flight guard", () => {
 
   it("stops reacting after dispose (no stale listener)", async () => {
     noteSurface(uriKey, "quoll");
-    let openDocCalls = 0;
-    const { deps } = makeRestoreDeps(fakeDoc(false), {
-      openDoc: async () => {
-        openDocCalls += 1;
-        return fakeDoc(false);
-      },
-    });
+    const { deps, calls } = makeRestoreDeps(fakeDoc(false));
     registerSurfaceRestoreWatcher("quoll.editMarkdown", deps).dispose();
     fireTextOpen();
-    await new Promise((r) => setTimeout(r, 0));
-    expect(openDocCalls).toBe(0);
+    await flushTasks();
+    expect(calls).toEqual([]);
   });
 });
