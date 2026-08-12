@@ -194,10 +194,12 @@ export function cellPointAt(
 ): CellPoint | null {
   // Fail closed around the WHOLE body, not just the `resolve` call. The facet
   // has no out-of-repo callers (the barrel is internal; only tests call
-  // `.of(...)`), but `CaretResolver`'s throw contract deliberately admits a
-  // malformed answer, and TypeScript cannot police the RETURN VALUE of a
-  // function it only sees through a facet: a `{ node: null }` answer throws on
-  // the very next line and would take the widget's DOM listener with it.
+  // `.of(...)`), and `.of(...)` does type-check what it is handed — the test
+  // that exercises a malformed answer needs a cast to get one past it. What
+  // the facet erases is PROVENANCE: by the time the value arrives here it is
+  // just a `CaretResolver`, with nothing tying it to the declaration that was
+  // checked, so a `{ node: null }` answer throws on the very next line and
+  // would take the widget's DOM listener with it.
   // Catching here is not equivalent to the two internal failure modes below —
   // those answer `{ …, offset: null }` (keep the cell, snap to its boundary),
   // this answers `null` (no cell at all, caller falls back to the collapsed

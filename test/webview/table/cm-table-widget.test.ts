@@ -991,13 +991,19 @@ describe("TableBlockWidget drag-selection", () => {
   });
 
   // The guard above lives INSIDE dragRange, i.e. BELOW the click handler's
-  // modifier-link branch, and that placement is load-bearing: keyboard
-  // activation of a focused in-cell link (Enter with Cmd held, and any
-  // synthetic `.click()`) carries detail 0, so hoisting the guard to the top of
-  // the click listener — the natural simplification, since it reads as a
-  // gesture precondition — would make Cmd+Enter on a link do NOTHING while
-  // every existing test stayed green. It is not about drags at all; it is about
-  // what a detail-0 click may still be allowed to do.
+  // modifier-link branch. That placement matters: keyboard activation of a
+  // focused in-cell link (Enter with Cmd held) carries detail 0, so hoisting
+  // the guard to the top of the click listener — which reads as a gesture
+  // precondition and so looks like a natural simplification — would make
+  // Cmd+Enter on a link do nothing.
+  //
+  // This test is deliberately explicit about that, but it is NOT the only
+  // thing standing in the way: the hoist was measured, and it reddens 14
+  // tests, 13 of which predate this file's drag work. happy-dom's `.click()`
+  // and hand-built `MouseEvent`s both default to detail 0, so every
+  // programmatic caret test and all four modifier-link sink tests already
+  // fail on it. Do not "strengthen" this by claiming the guard is otherwise
+  // unprotected — that claim was made here once and was false.
   it("a detail-0 modifier click on an <a> still opens the link (the guard sits BELOW the link branch)", () => {
     const src = "| L |\n| - |\n| [x](https://example.com) |";
     const dispatched: unknown[] = [];
@@ -1022,7 +1028,7 @@ describe("TableBlockWidget caret dispatch hardening", () => {
   // sits on the same trust boundary as the drag path and must use the same
   // gate. A bare `Number(...)` here would not merely be untidy: CodeMirror's
   // `checkSelection` tests `range.to > doc.length` and nothing else, so a `NaN`
-  // anchor is ACCEPTED and installs `{anchor: null, head: null}` — a silently
+  // anchor is ACCEPTED and installs a range whose `from` is `NaN` — a silently
   // broken selection, with no throw for `dispatchSelection`'s catch to see.
   // Hence the assertions below are on the exact dispatched value, not on
   // "something was dispatched".

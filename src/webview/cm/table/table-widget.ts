@@ -279,8 +279,16 @@ export class TableBlockWidget extends WidgetType {
       // same table the cell offset would — only the intra-table caret precision
       // is lost, and a dead click (no reveal at all) is a worse answer for a
       // failure mode that only arises when something outside this widget wrote
-      // its DOM. The chain ends on `this.docFrom`, the widget's own constructor
-      // argument, which never travelled through the DOM at all.
+      // its DOM.
+      //
+      // ⚠️ That "same table" guarantee holds for arm 2 (`data-doc-from`) but
+      // NOT for arm 3. `this.docFrom` is the toDOM-time closure value, and
+      // `updateDOM` re-stamps the DOM without being able to re-bind this
+      // listener — the very trap this file's header warns about — so after a
+      // positional shift the closure is stale and arm 3 can reveal a DIFFERENT
+      // block, not merely a less precise position within this one. It is last
+      // for exactly that reason: it is the least trustworthy link, reachable
+      // only once both DOM stamps have already failed the gate.
       const caret =
         (cell === null ? null : stampedOffset(cell, "data-cell-from")) ??
         stampedOffset(root, "data-doc-from") ??
