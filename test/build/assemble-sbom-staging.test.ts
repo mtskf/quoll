@@ -74,6 +74,25 @@ describe("assemble-sbom-staging.sh argument guards", () => {
     expect(existsSync(join(repo, "CANARY"))).toBe(true);
   });
 
+  // The `.`/`..` cases above are repo-relative, so the CONTAINMENT arms reject
+  // them and the basename guard could be deleted with every one of them still
+  // green. Pin it with an input only it rejects: a `..` basename resolving
+  // OUTSIDE the checkout. Without the guard, STAGING is rebuilt as
+  // "<base>/outside/.." — textually unrelated to REPO_ROOT, so both containment
+  // arms pass and `rm -rf` resolves through the `..` onto <base>, taking the
+  // checkout with it. Assert the message, not just the code: exiting 2 from a
+  // different guard would not pin this one.
+  it("exits 2 on a `..` basename that resolves outside the checkout", () => {
+    mkdirSync(join(base, "outside"));
+    // Concatenate, don't `join()` — path.join normalises the `..` away, which
+    // would silently turn this into a plain "checkout's parent" case that a
+    // different guard rejects.
+    const res = run(repo, [`${join(base, "outside")}/..`]);
+    expect(res.code).toBe(2);
+    expect(res.stderr).toContain("must name a directory");
+    expect(existsSync(join(repo, "CANARY"))).toBe(true);
+  });
+
   // Regression: a `//`-prefixed spelling of the checkout resolved to the same
   // directory but shared no textual prefix with REPO_ROOT, so every containment
   // check missed it and `rm -rf` ran on the checkout. Assert the message too —
