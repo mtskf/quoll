@@ -155,8 +155,17 @@ export class ImageBlockWidget extends WidgetType {
       // `?? this.docFrom` totalizes the `number | undefined` read; it is not the
       // stale-closure hazard coming back. The entry is set above, in the same
       // breath as attaching this listener, and at toDOM time the closure value
-      // IS the current one — so a miss is unreachable by construction.
-      const anchor = blockStart.get(root) ?? this.docFrom;
+      // IS the current one — so a miss is unreachable by construction. Logged,
+      // not silently trusted, so a future regression of that invariant is
+      // observable instead of silently reintroducing the stale-caret bug this
+      // WeakMap exists to fix.
+      const stamped = blockStart.get(root);
+      if (stamped === undefined) {
+        console.error("[quoll] image widget blockStart miss — invariant violated", {
+          fallback: this.docFrom,
+        });
+      }
+      const anchor = stamped ?? this.docFrom;
       // A `number` anchor does not make the dispatch infallible — see
       // table-widget.ts's `dispatchSelection` for the enumeration of what still
       // throws (out-of-range after a shrinking edit, CodeMirror's re-entrancy

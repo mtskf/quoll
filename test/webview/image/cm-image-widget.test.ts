@@ -238,9 +238,12 @@ describe("ImageBlockWidget identity + events", () => {
   // so the pin uses a throwing stub; without it the try/catch could be deleted
   // and the suite would stay green.
   //
-  // Only the console.error is asserted. An exception raised inside a DOM event
-  // listener is REPORTED, not re-thrown to the `click()` caller, so a "did not
-  // throw" assertion would pass with or without the guard.
+  // Only console.error is asserted, not a `dom.click()` "did not throw"
+  // wrapper: in this vitest+happy-dom suite an uncaught throw from a DOM
+  // listener propagates synchronously out of click() (real browsers instead
+  // report it via window.onerror), so that wrapper would be non-vacuous here
+  // too — asserting console.error is still the stronger pin, since it also
+  // catches a mutation that empties the catch body.
   it("logs and swallows a throwing dispatch instead of letting it escape the listener", () => {
     const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     try {
