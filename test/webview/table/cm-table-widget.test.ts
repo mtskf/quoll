@@ -10,6 +10,10 @@ import {
   openExternalSinkFor,
   quollOpenExternalSink,
 } from "../../../src/webview/cm/open-external.js";
+import {
+  type CaretResolver,
+  quollTableCaretResolver,
+} from "../../../src/webview/cm/table/cell-point.js";
 import { TableBlockWidget } from "../../../src/webview/cm/table/table-widget.js";
 
 function makeWidget(src: string, docFrom = 0): TableBlockWidget {
@@ -611,5 +615,274 @@ describe("TableBlockWidget cell span stamps", () => {
     const td = dom.querySelectorAll("td")[0] as HTMLElement;
     expect(td.dataset.cellFrom).toBe(String(edited.indexOf("gamma")));
     expect(td.dataset.cellTo).toBe(String(edited.indexOf("gamma") + "gamma".length));
+  });
+});
+
+/** A view stub whose caret resolver is scripted: successive calls return the
+ *  successive scripted positions, so a mousedown/click pair can be aimed at two
+ *  different characters without a layout engine.
+ *
+ *  The lookup is scoped to `scope.root` — the widget under test — NOT to
+ *  `document.body`. Tests in this file append their widgets to the body and
+ *  nothing clears it between tests, so a body-wide search would find an EARLIER
+ *  test's identically-texted cell, `root.contains` would reject it, and the
+ *  drag would silently degrade to the caret path. That would not merely fail a
+ *  test — it would make the "updateDOM cancels an in-flight drag" case pass
+ *  VACUOUSLY (its anchor would already be null for the wrong reason). Assign
+ *  `scope.root` right after `toDOM`. */
+function stubViewWithCaret(
+  dispatched: unknown[],
+  script: Array<{ text: string; offset: number } | null>
+): { view: EditorViewType; scope: { root: HTMLElement | null } } {
+  const scope: { root: HTMLElement | null } = { root: null };
+  let i = 0;
+  const resolve: CaretResolver = () => {
+    const step = script[Math.min(i++, script.length - 1)];
+    if (step === null || scope.root === null) {
+      return null;
+    }
+    const walker = document.createTreeWalker(scope.root, NodeFilter.SHOW_TEXT);
+    for (let n = walker.nextNode(); n !== null; n = walker.nextNode()) {
+      if (n.textContent === step.text) {
+        return { node: n, offset: step.offset };
+      }
+    }
+    return null;
+  };
+  const view = {
+    state: EditorState.create({ extensions: [quollTableCaretResolver.of(resolve)] }),
+    dispatch: (tr: unknown) => dispatched.push(tr),
+  } as unknown as EditorViewType;
+  return { view, scope };
+}
+
+/** Dispatch a mouse event carrying coordinates — the movement threshold reads
+ *  them, and happy-dom defaults them to 0. */
+function press(
+  el: HTMLElement,
+  type: "mousedown" | "click",
+  x: number,
+  y: number,
+  init: MouseEventInit = {}
+): void {
+  el.dispatchEvent(
+    new MouseEvent(type, { bubbles: true, cancelable: true, clientX: x, clientY: y, ...init })
+  );
+}
+
+const SRC = "| Name | Role |\n| - | - |\n| alpha | admin |";
+
+describe("TableBlockWidget drag-selection", () => {
+  it("a drag across characters inside one cell dispatches a NON-EMPTY range at the source offsets", () => {
+    const base = SRC.indexOf("alpha");
+    const dispatched: unknown[] = [];
+    const { view, scope } = stubViewWithCaret(dispatched, [
+      { text: "alpha", offset: 2 },
+      { text: "alpha", offset: 5 },
+    ]);
+    const dom = makeWidget(SRC).toDOM(view);
+    scope.root = dom;
+    document.body.appendChild(dom);
+    const td = dom.querySelectorAll("td")[0] as HTMLElement;
+    press(td, "mousedown", 10, 10);
+    press(td, "click", 60, 10);
+    expect(dispatched).toEqual([{ selection: { anchor: base + 2, head: base + 5 } }]);
+  });
+
+  it("a backwards drag keeps its direction (anchor after head)", () => {
+    const base = SRC.indexOf("alpha");
+    const dispatched: unknown[] = [];
+    const { view, scope } = stubViewWithCaret(dispatched, [
+      { text: "alpha", offset: 4 },
+      { text: "alpha", offset: 1 },
+    ]);
+    const dom = makeWidget(SRC).toDOM(view);
+    scope.root = dom;
+    document.body.appendChild(dom);
+    const td = dom.querySelectorAll("td")[0] as HTMLElement;
+    press(td, "mousedown", 60, 10);
+    press(td, "click", 10, 10);
+    expect(dispatched).toEqual([{ selection: { anchor: base + 4, head: base + 1 } }]);
+  });
+
+  it("a drag across two cells spans both cells' source offsets", () => {
+    const dispatched: unknown[] = [];
+    const { view, scope } = stubViewWithCaret(dispatched, [
+      { text: "alpha", offset: 1 },
+      { text: "admin", offset: 3 },
+    ]);
+    const dom = makeWidget(SRC).toDOM(view);
+    scope.root = dom;
+    document.body.appendChild(dom);
+    const cells = dom.querySelectorAll("td");
+    press(cells[0] as HTMLElement, "mousedown", 10, 10);
+    press(cells[1] as HTMLElement, "click", 200, 10);
+    expect(dispatched).toEqual([
+      { selection: { anchor: SRC.indexOf("alpha") + 1, head: SRC.indexOf("admin") + 3 } },
+    ]);
+  });
+
+  it("a drag inside a cell whose render is not byte-aligned selects the whole cell source", () => {
+    const src = "| Name |\n| - |\n| **bold** |";
+    const dispatched: unknown[] = [];
+    const { view, scope } = stubViewWithCaret(dispatched, [
+      { text: "bold", offset: 1 },
+      { text: "bold", offset: 3 },
+    ]);
+    const dom = makeWidget(src).toDOM(view);
+    scope.root = dom;
+    document.body.appendChild(dom);
+    const td = dom.querySelector("td") as HTMLElement;
+    press(td, "mousedown", 10, 10);
+    press(td, "click", 60, 10);
+    const from = src.indexOf("**bold**");
+    expect(dispatched).toEqual([{ selection: { anchor: from, head: from + "**bold**".length } }]);
+  });
+
+  // Fable 95 / Codex 100 regression pin.
+  it("a PLAIN CLICK on a non-byte-aligned cell still dispatches the collapsed caret", () => {
+    const src = "| Name |\n| - |\n| **bold** |";
+    const dispatched: unknown[] = [];
+    const { view, scope } = stubViewWithCaret(dispatched, [
+      { text: "bold", offset: 2 },
+      { text: "bold", offset: 2 },
+    ]);
+    const dom = makeWidget(src).toDOM(view);
+    scope.root = dom;
+    document.body.appendChild(dom);
+    const td = dom.querySelector("td") as HTMLElement;
+    press(td, "mousedown", 30, 10);
+    press(td, "click", 30, 10);
+    expect(dispatched).toEqual([{ selection: { anchor: src.indexOf("**bold**") } }]);
+  });
+
+  // Fable 90 / Codex 98: direction must come from cell order, not from an
+  // offset compared against a 0 sentinel.
+  it("a backwards drag OUT of a non-byte-aligned cell covers both cells", () => {
+    const src = "| A | B |\n| - | - |\n| x | **b** |";
+    const dispatched: unknown[] = [];
+    const { view, scope } = stubViewWithCaret(dispatched, [
+      { text: "b", offset: 1 }, // mousedown in the **b** cell (unmappable)
+      { text: "x", offset: 0 }, // drag left into the plain `x` cell
+    ]);
+    const dom = makeWidget(src).toDOM(view);
+    scope.root = dom;
+    document.body.appendChild(dom);
+    const cells = dom.querySelectorAll("td");
+    press(cells[1] as HTMLElement, "mousedown", 200, 10);
+    press(cells[0] as HTMLElement, "click", 10, 10);
+    // Anchor snaps OUTWARD to the end of the **b** cell, head is exact in `x`.
+    expect(dispatched).toEqual([
+      { selection: { anchor: src.indexOf("**b**") + "**b**".length, head: src.indexOf("x") } },
+    ]);
+  });
+
+  it("a plain click (no movement) still dispatches the collapsed caret at the cell start", () => {
+    const dispatched: unknown[] = [];
+    const { view, scope } = stubViewWithCaret(dispatched, [
+      { text: "alpha", offset: 3 },
+      { text: "alpha", offset: 3 },
+    ]);
+    const dom = makeWidget(SRC).toDOM(view);
+    scope.root = dom;
+    document.body.appendChild(dom);
+    const td = dom.querySelectorAll("td")[0] as HTMLElement;
+    press(td, "mousedown", 30, 10);
+    press(td, "click", 31, 10); // sub-threshold jitter
+    expect(dispatched).toEqual([{ selection: { anchor: SRC.indexOf("alpha") } }]);
+  });
+
+  it("a click with no preceding mousedown still dispatches the collapsed caret", () => {
+    const dispatched: unknown[] = [];
+    const { view, scope } = stubViewWithCaret(dispatched, [{ text: "alpha", offset: 4 }]);
+    const dom = makeWidget(SRC).toDOM(view);
+    scope.root = dom;
+    document.body.appendChild(dom);
+    press(dom.querySelectorAll("td")[0] as HTMLElement, "click", 60, 10);
+    expect(dispatched).toEqual([{ selection: { anchor: SRC.indexOf("alpha") } }]);
+  });
+
+  it("mousedown alone dispatches NOTHING (no reveal mid-drag)", () => {
+    const dispatched: unknown[] = [];
+    const { view, scope } = stubViewWithCaret(dispatched, [{ text: "alpha", offset: 2 }]);
+    const dom = makeWidget(SRC).toDOM(view);
+    scope.root = dom;
+    document.body.appendChild(dom);
+    press(dom.querySelectorAll("td")[0] as HTMLElement, "mousedown", 10, 10);
+    expect(dispatched).toEqual([]);
+  });
+
+  it("ignores a non-primary-button mousedown", () => {
+    const dispatched: unknown[] = [];
+    const { view, scope } = stubViewWithCaret(dispatched, [
+      { text: "alpha", offset: 2 },
+      { text: "alpha", offset: 5 },
+    ]);
+    const dom = makeWidget(SRC).toDOM(view);
+    scope.root = dom;
+    document.body.appendChild(dom);
+    const td = dom.querySelectorAll("td")[0] as HTMLElement;
+    press(td, "mousedown", 10, 10, { button: 2 }); // right-click
+    press(td, "click", 60, 10);
+    // No anchor was captured, so this is the plain-caret path.
+    expect(dispatched).toEqual([{ selection: { anchor: SRC.indexOf("alpha") } }]);
+  });
+
+  // Fable 85 / Codex 95: the anchor must be consumed even on the modifier-click
+  // early return, or it leaks into the NEXT gesture.
+  it("a modifier-click clears the pending anchor (no leak into the next click)", () => {
+    const src = "| L |\n| - |\n| [x](https://example.com) |";
+    const dispatched: unknown[] = [];
+    const opened: string[] = [];
+    const resolve: CaretResolver = () => ({ node: document.body, offset: 0 });
+    const view = {
+      state: EditorState.create({
+        extensions: [
+          quollTableCaretResolver.of(resolve),
+          quollOpenExternalSink.of((href: string) => opened.push(href)),
+        ],
+      }),
+      dispatch: (tr: unknown) => dispatched.push(tr),
+    } as unknown as EditorViewType;
+    // NOTE: this test builds its view by hand rather than via
+    // stubViewWithCaret, so there is NO `scope` here and none is needed — its
+    // resolver deliberately returns a node OUTSIDE the widget root
+    // (`document.body`), which `cellPointAt`'s containment gate rejects, so the
+    // anchor's `point` is null and the fallback path is what gets exercised.
+    const dom = makeWidget(src).toDOM(view);
+    document.body.appendChild(dom);
+    const a = dom.querySelector("a") as HTMLElement;
+    press(a, "mousedown", 10, 10);
+    press(a, "click", 10, 10, { metaKey: true });
+    expect(opened).toEqual(["https://example.com"]);
+    expect(dispatched).toEqual([]);
+    // The NEXT click, far away and with no mousedown of its own, must not
+    // resurrect the cleared anchor as a range.
+    press(dom.querySelector("td") as HTMLElement, "click", 400, 10);
+    expect(dispatched).toEqual([
+      { selection: { anchor: src.indexOf("[x](https://example.com)") } },
+    ]);
+  });
+
+  // error-handler 92: a doc edit landing mid-gesture moves the stamps.
+  it("updateDOM cancels an in-flight drag (stale-offset guard)", () => {
+    const dispatched: unknown[] = [];
+    const { view, scope } = stubViewWithCaret(dispatched, [
+      { text: "alpha", offset: 2 },
+      { text: "alpha", offset: 5 },
+    ]);
+    const first = new TableBlockWidget(parseTable(SRC, 0, SRC.length)!, SRC, 0, 0);
+    const dom = first.toDOM(view);
+    scope.root = dom;
+    document.body.appendChild(dom);
+    const td = dom.querySelectorAll("td")[0] as HTMLElement;
+    press(td, "mousedown", 10, 10);
+    // A distant edit shifts this table while the button is still down.
+    const shifted = new TableBlockWidget(parseTable(SRC, 0, SRC.length)!, SRC, 5, 5);
+    shifted.updateDOM(dom, view, first);
+    press(td, "click", 60, 10);
+    // The anchor was invalidated → collapsed caret at the NEW stamp, not a
+    // range built from two different coordinate systems.
+    expect(dispatched).toEqual([{ selection: { anchor: 5 + SRC.indexOf("alpha") } }]);
   });
 });
