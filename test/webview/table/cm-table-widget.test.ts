@@ -580,3 +580,36 @@ describe("resource-base threading (relative in-cell images)", () => {
     expect(img?.getAttribute("src")).toBe("https://csp/ws/notes/img.png");
   });
 });
+
+describe("TableBlockWidget cell span stamps", () => {
+  it("stamps data-cell-to alongside data-cell-from on a fresh render", () => {
+    const src = "| Name | Role |\n| - | - |\n| alpha | admin |";
+    const dom = makeWidget(src).toDOM(mockView);
+    const td = dom.querySelectorAll("td")[0] as HTMLElement;
+    expect(td.dataset.cellFrom).toBe(String(src.indexOf("alpha")));
+    expect(td.dataset.cellTo).toBe(String(src.indexOf("alpha") + "alpha".length));
+  });
+
+  it("re-stamps BOTH offsets on a pure positional shift (stampRow path)", () => {
+    const src = "| Name | Role |\n| - | - |\n| alpha | admin |";
+    const first = new TableBlockWidget(parseTable(src, 0, src.length)!, src, 0, 0);
+    const dom = first.toDOM(mockView);
+    const shifted = new TableBlockWidget(parseTable(src, 0, src.length)!, src, 5, 5);
+    expect(shifted.updateDOM(dom, mockView, first)).toBe(true);
+    const td = dom.querySelectorAll("td")[0] as HTMLElement;
+    expect(td.dataset.cellFrom).toBe(String(5 + src.indexOf("alpha")));
+    expect(td.dataset.cellTo).toBe(String(5 + src.indexOf("alpha") + "alpha".length));
+  });
+
+  it("re-stamps BOTH offsets on a content edit (patchRow path)", () => {
+    const src = "| Name | Role |\n| - | - |\n| alpha | admin |";
+    const edited = "| Name | Role |\n| - | - |\n| gamma | admin |";
+    const first = new TableBlockWidget(parseTable(src, 0, src.length)!, src, 0, 0);
+    const dom = first.toDOM(mockView);
+    const next = new TableBlockWidget(parseTable(edited, 0, edited.length)!, edited, 0, 0);
+    expect(next.updateDOM(dom, mockView, first)).toBe(true);
+    const td = dom.querySelectorAll("td")[0] as HTMLElement;
+    expect(td.dataset.cellFrom).toBe(String(edited.indexOf("gamma")));
+    expect(td.dataset.cellTo).toBe(String(edited.indexOf("gamma") + "gamma".length));
+  });
+});

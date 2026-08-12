@@ -141,8 +141,11 @@ export class TableBlockWidget extends WidgetType {
       }
       const a = align[col];
       el.style.textAlign = a !== null && a !== undefined ? a : "";
-      // LF-internal absolute source offset of this cell's content start.
+      // LF-internal absolute source offsets of this cell's content span. `to`
+      // is what lets a drag decide whether the rendered text is byte-aligned
+      // with the source (see cell-point.ts) and where to snap when it is not.
       el.dataset.cellFrom = String(this.nodeFrom + cell.from);
+      el.dataset.cellTo = String(this.nodeFrom + cell.to);
       for (const node of renderCellInline(cell.raw.trim(), resourceBase)) {
         el.appendChild(node);
       }
@@ -218,6 +221,7 @@ export class TableBlockWidget extends WidgetType {
       const el = domCells[col] as HTMLElement | undefined;
       if (el) {
         el.dataset.cellFrom = String(this.nodeFrom + cells[col].from);
+        el.dataset.cellTo = String(this.nodeFrom + cells[col].to);
       }
     }
   }
@@ -238,6 +242,7 @@ export class TableBlockWidget extends WidgetType {
       const a = align[col];
       el.style.textAlign = a !== null && a !== undefined ? a : "";
       el.dataset.cellFrom = String(this.nodeFrom + cell.from);
+      el.dataset.cellTo = String(this.nodeFrom + cell.to);
       el.textContent = "";
       for (const node of renderCellInline(cell.raw.trim(), resourceBase)) {
         el.appendChild(node);
