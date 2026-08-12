@@ -4,9 +4,13 @@
 // offset (data-cell-from = nodeFrom + cell.from); a click on the widget
 // padding/margin (no cell) falls back to the block line-start (data-doc-from).
 // A mousedown followed by a click that actually moved (see DRAG_THRESHOLD_PX)
-// instead dispatches a RANGE selection, spanning data-cell-from/data-cell-to
-// (see cell-point.ts for the pointer→source-offset mapping and why the widget
-// must do this itself rather than reading the browser selection at mouseup).
+// instead dispatches a RANGE selection between the two RESOLVED source offsets;
+// an endpoint whose cell renders non-byte-aligned (inline markup) has no exact
+// offset and snaps outward to that cell's data-cell-from/data-cell-to instead.
+// Any endpoint that resolves to nothing, and a range that collapses after
+// snapping, fall back to the same caret dispatch as a plain click. (See
+// cell-point.ts for the pointer→source-offset mapping and why the widget must
+// do this itself rather than reading the browser selection at mouseup.)
 // The dispatched selection — caret or range — is what fires tableBlockField's
 // line-level reveal-on-caret, surfacing the source for editing.
 //
@@ -49,6 +53,19 @@ interface PendingDrag {
   readonly point: CellPoint | null;
 }
 const pendingDrag = new WeakMap<HTMLElement, PendingDrag>();
+
+/** Every selection dispatch out of this widget's DOM listeners goes through
+ *  here. Mirrors the destroyed-view-race guard of task-checkbox-command.ts and
+ *  fenced-code-language-command.ts: a listener still attached to a detached
+ *  widget root can fire during webview tear-down, and that throw must not
+ *  escape into the DOM listener unlogged. */
+function dispatchSelection(view: EditorView, selection: { anchor: number; head?: number }): void {
+  try {
+    view.dispatch({ selection });
+  } catch (err) {
+    console.error("[quoll] table widget selection dispatch failed", { selection, err });
+  }
+}
 
 export class TableBlockWidget extends WidgetType {
   constructor(
@@ -106,36 +123,21 @@ export class TableBlockWidget extends WidgetType {
     table.appendChild(tbody);
     root.appendChild(table);
 
-    // Single root click handler: place the caret at the clicked cell's source
-    // offset (that selection lands inside the table's lines → tableBlockField
-    // reveals the raw source there). A click on the padding/margin (no cell)
-    // falls back to the block start via `root.dataset.docFrom`.
-    //
-    // Modifier-click on a live `<a>` (external nav — cell-render left it
-    // un-preventDefault'd because the href is absolute AND within
-    // MAX_HREF_LENGTH) is the exception: rather than dispatch a caret, route
-    // the open through the host `open-external` choke point
-    // (quollOpenExternalSink) so the host re-validates the URL before opening,
-    // matching link-handlers.ts. The browser's native anchor handler would
-    // skip that host re-check. `closest("a")` (not `event.target instanceof
-    // HTMLAnchorElement`) so wrapped inline link children resolve;
-    // `instanceof HTMLAnchorElement` on the `closest()` result narrows the
-    // already-resolved ancestor. `!event.defaultPrevented` mirrors
-    // cell-render's single-source-of-truth decision on whether the href opens
-    // externally (relative / fragment / oversize hrefs are preventDefault'd
-    // there and fall through to caret dispatch below).
-    // Drag-to-select. A drag inside the widget CANNOT be recovered from the
-    // browser selection at mouseup: the widget is a contenteditable=false
-    // island and CodeMirror collapses any DOM selection made inside it back to
-    // `state.selection` on its next observer flush (verified in real Chromium —
-    // see cell-point.ts). So the widget owns the gesture: remember where the
-    // pointer went DOWN, and at click time — which fires after mouseup and is
-    // already the seam owning the caret dispatch and the modifier-link path —
-    // dispatch a RANGE when the pointer actually moved.
+    // Two root listeners, one gesture. `mousedown` only ARMS the gesture
+    // (anchor point + coordinates); `click` — which fires after mouseup and
+    // already owns the caret dispatch and the modifier-link path — is the sole
+    // dispatch seam.
     //
     // Deliberately NOT preventDefault'ed: the native mousedown default is what
     // moves focus into CodeMirror's contenteditable, and without focus the
     // revealed selection would neither paint nor be extendable.
+    //
+    // A drag inside the widget CANNOT be recovered from the browser selection
+    // at mouseup: the widget is a contenteditable=false island and CodeMirror
+    // collapses any DOM selection made inside it back to `state.selection` on
+    // its next observer flush (verified in real Chromium — see cell-point.ts).
+    // So the widget owns the gesture: remember where the pointer went DOWN, and
+    // dispatch a RANGE at click time when the pointer actually moved.
     root.addEventListener("mousedown", (event) => {
       // Primary button only — a right/middle press is not a selection gesture,
       // and letting it arm the anchor would pair a context-menu press with an
@@ -157,15 +159,30 @@ export class TableBlockWidget extends WidgetType {
       });
     });
 
+    // Root click handler: place the caret at the clicked cell's source offset
+    // (that selection lands inside the table's lines → tableBlockField reveals
+    // the raw source there). A click on the padding/margin (no cell) falls back
+    // to the block start via `root.dataset.docFrom`. A click that MOVED past
+    // DRAG_THRESHOLD_PX dispatches a range instead.
+    //
+    // Modifier-click on a live `<a>` (external nav — cell-render left it
+    // un-preventDefault'd because the href is absolute AND within
+    // MAX_HREF_LENGTH) is the exception: rather than dispatch a caret, route
+    // the open through the host `open-external` choke point
+    // (quollOpenExternalSink) so the host re-validates the URL before opening,
+    // matching link-handlers.ts. The browser's native anchor handler would
+    // skip that host re-check. `closest("a")` (not `event.target instanceof
+    // HTMLAnchorElement`) so wrapped inline link children resolve;
+    // `instanceof HTMLAnchorElement` on the `closest()` result narrows the
+    // already-resolved ancestor. `!event.defaultPrevented` mirrors
+    // cell-render's single-source-of-truth decision on whether the href opens
+    // externally (relative / fragment / oversize hrefs are preventDefault'd
+    // there and fall through to caret dispatch below).
     root.addEventListener("click", (event) => {
       // One-shot read: consumed here, above the modifier-link early return, so
       // an anchor can never leak into the NEXT gesture.
       const pending = pendingDrag.get(root) ?? null;
       pendingDrag.delete(root);
-      // … existing modifier-click open-external branch follows, UNCHANGED,
-      // including its `const anchor = …closest("a")` local. Do not rename it —
-      // the drag's anchor is named `dragAnchor` below precisely so the existing
-      // branch keeps its diff at zero. …
       const anchor = (event.target as Element | null)?.closest?.("a");
       if (
         anchor instanceof HTMLAnchorElement &&
@@ -186,10 +203,21 @@ export class TableBlockWidget extends WidgetType {
       const caret = stamped !== undefined ? Number(stamped) : this.docFrom;
       const moved =
         pending !== null &&
+        // `detail === 0` means this click was NOT produced by a pointer
+        // gesture — keyboard activation of an in-cell `<a>`, or a programmatic
+        // `.click()`. Its clientX/Y are 0, so pairing it with an armed anchor
+        // would read a large bogus travel and dispatch a range the user never
+        // drew. This is also what closes the aborted-gesture window: a press
+        // released OUTSIDE the widget delivers no click to `root`, leaving the
+        // entry armed, and the only clicks that can then reach this handler
+        // without a fresh mousedown of their own are keyboard/programmatic
+        // ones (a click retargeted to a common ancestor above the widget never
+        // runs this listener at all).
+        event.detail > 0 &&
         Math.abs(event.clientX - pending.x) + Math.abs(event.clientY - pending.y) >=
           DRAG_THRESHOLD_PX;
       if (!moved || pending === null || pending.point === null) {
-        view.dispatch({ selection: { anchor: caret } });
+        dispatchSelection(view, { anchor: caret });
         return;
       }
       const head = cellPointAt(
@@ -199,7 +227,7 @@ export class TableBlockWidget extends WidgetType {
         view.state.facet(quollTableCaretResolver)
       );
       if (head === null) {
-        view.dispatch({ selection: { anchor: caret } });
+        dispatchSelection(view, { anchor: caret });
         return;
       }
       // Named `dragAnchor`, not `anchor`: the modifier-click branch above
@@ -222,10 +250,10 @@ export class TableBlockWidget extends WidgetType {
       if (from === to) {
         // Zero-width after snapping — keep the historical caret semantics
         // (cell CONTENT START, not the character under the pointer).
-        view.dispatch({ selection: { anchor: caret } });
+        dispatchSelection(view, { anchor: caret });
         return;
       }
-      view.dispatch({ selection: { anchor: from, head: to } });
+      dispatchSelection(view, { anchor: from, head: to });
     });
 
     return root;

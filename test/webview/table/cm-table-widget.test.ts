@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 import { EditorState } from "@codemirror/state";
 import { EditorView, type EditorView as EditorViewType, WidgetType } from "@codemirror/view";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 
 import { parseTable } from "../../../src/markdown/table/index.js";
 import { PROTOCOL_VERSION } from "../../../src/shared/protocol.js";
@@ -46,6 +46,13 @@ function stubView(
 }
 
 const mockView = stubView();
+
+// Widgets under test are mounted into the body (the caret resolver needs a live
+// tree). Clear it between tests so no test can see an earlier test's widget —
+// a mechanism, rather than each test remembering to tidy up.
+afterEach(() => {
+  document.body.replaceChildren();
+});
 
 describe("TableBlockWidget.toDOM", () => {
   it("renders a wrapper <div> containing <table> with <thead>, <tbody>, and one <tr> per row", () => {
@@ -623,13 +630,12 @@ describe("TableBlockWidget cell span stamps", () => {
  *  different characters without a layout engine.
  *
  *  The lookup is scoped to `scope.root` — the widget under test — NOT to
- *  `document.body`. Tests in this file append their widgets to the body and
- *  nothing clears it between tests, so a body-wide search would find an EARLIER
- *  test's identically-texted cell, `root.contains` would reject it, and the
- *  drag would silently degrade to the caret path. That would not merely fail a
- *  test — it would make the "updateDOM cancels an in-flight drag" case pass
- *  VACUOUSLY (its anchor would already be null for the wrong reason). Assign
- *  `scope.root` right after `toDOM`. */
+ *  `document.body`. A body-wide search could find a DIFFERENT widget's
+ *  identically-texted cell, `root.contains` would reject it, and the drag would
+ *  silently degrade to the caret path. That would not merely fail a test — it
+ *  would make the "updateDOM cancels an in-flight drag" case pass VACUOUSLY
+ *  (its anchor would already be null for the wrong reason). Mount through
+ *  `mountWidget`, which owns the `scope.root` assignment. */
 function stubViewWithCaret(
   dispatched: unknown[],
   script: Array<{ text: string; offset: number } | null>
@@ -656,8 +662,26 @@ function stubViewWithCaret(
   return { view, scope };
 }
 
+/** Mount a widget the way every drag test needs it: rendered, `scope.root`
+ *  wired, and attached to the body. The `scope.root` assignment is the whole
+ *  point — done by hand it is a line a new test can forget, and forgetting it
+ *  degrades that test to the caret path where it may still pass VACUOUSLY. */
+function mountWidget(
+  widget: TableBlockWidget,
+  view: EditorViewType,
+  scope: { root: HTMLElement | null }
+): HTMLElement {
+  const dom = widget.toDOM(view);
+  scope.root = dom;
+  document.body.appendChild(dom);
+  return dom;
+}
+
 /** Dispatch a mouse event carrying coordinates — the movement threshold reads
- *  them, and happy-dom defaults them to 0. */
+ *  them, and happy-dom defaults them to 0. `detail: 1` by default because a
+ *  real pointer click always carries a click count; `detail: 0` is reserved for
+ *  keyboard/programmatic activation, which the drag path deliberately ignores
+ *  (override it explicitly to exercise that guard). */
 function press(
   el: HTMLElement,
   type: "mousedown" | "click",
@@ -666,7 +690,14 @@ function press(
   init: MouseEventInit = {}
 ): void {
   el.dispatchEvent(
-    new MouseEvent(type, { bubbles: true, cancelable: true, clientX: x, clientY: y, ...init })
+    new MouseEvent(type, {
+      bubbles: true,
+      cancelable: true,
+      clientX: x,
+      clientY: y,
+      detail: 1,
+      ...init,
+    })
   );
 }
 
@@ -680,9 +711,7 @@ describe("TableBlockWidget drag-selection", () => {
       { text: "alpha", offset: 2 },
       { text: "alpha", offset: 5 },
     ]);
-    const dom = makeWidget(SRC).toDOM(view);
-    scope.root = dom;
-    document.body.appendChild(dom);
+    const dom = mountWidget(makeWidget(SRC), view, scope);
     const td = dom.querySelectorAll("td")[0] as HTMLElement;
     press(td, "mousedown", 10, 10);
     press(td, "click", 60, 10);
@@ -696,9 +725,7 @@ describe("TableBlockWidget drag-selection", () => {
       { text: "alpha", offset: 4 },
       { text: "alpha", offset: 1 },
     ]);
-    const dom = makeWidget(SRC).toDOM(view);
-    scope.root = dom;
-    document.body.appendChild(dom);
+    const dom = mountWidget(makeWidget(SRC), view, scope);
     const td = dom.querySelectorAll("td")[0] as HTMLElement;
     press(td, "mousedown", 60, 10);
     press(td, "click", 10, 10);
@@ -711,9 +738,7 @@ describe("TableBlockWidget drag-selection", () => {
       { text: "alpha", offset: 1 },
       { text: "admin", offset: 3 },
     ]);
-    const dom = makeWidget(SRC).toDOM(view);
-    scope.root = dom;
-    document.body.appendChild(dom);
+    const dom = mountWidget(makeWidget(SRC), view, scope);
     const cells = dom.querySelectorAll("td");
     press(cells[0] as HTMLElement, "mousedown", 10, 10);
     press(cells[1] as HTMLElement, "click", 200, 10);
@@ -729,9 +754,7 @@ describe("TableBlockWidget drag-selection", () => {
       { text: "bold", offset: 1 },
       { text: "bold", offset: 3 },
     ]);
-    const dom = makeWidget(src).toDOM(view);
-    scope.root = dom;
-    document.body.appendChild(dom);
+    const dom = mountWidget(makeWidget(src), view, scope);
     const td = dom.querySelector("td") as HTMLElement;
     press(td, "mousedown", 10, 10);
     press(td, "click", 60, 10);
@@ -739,7 +762,9 @@ describe("TableBlockWidget drag-selection", () => {
     expect(dispatched).toEqual([{ selection: { anchor: from, head: from + "**bold**".length } }]);
   });
 
-  // Fable 95 / Codex 100 regression pin.
+  // Regression pin (Fable 95 / Codex 100): without the DRAG_THRESHOLD_PX gate
+  // both endpoints of a plain click on a non-aligned cell resolve to
+  // `offset: null` and snap outward, turning the click into a whole-cell range.
   it("a PLAIN CLICK on a non-byte-aligned cell still dispatches the collapsed caret", () => {
     const src = "| Name |\n| - |\n| **bold** |";
     const dispatched: unknown[] = [];
@@ -747,9 +772,7 @@ describe("TableBlockWidget drag-selection", () => {
       { text: "bold", offset: 2 },
       { text: "bold", offset: 2 },
     ]);
-    const dom = makeWidget(src).toDOM(view);
-    scope.root = dom;
-    document.body.appendChild(dom);
+    const dom = mountWidget(makeWidget(src), view, scope);
     const td = dom.querySelector("td") as HTMLElement;
     press(td, "mousedown", 30, 10);
     press(td, "click", 30, 10);
@@ -765,9 +788,7 @@ describe("TableBlockWidget drag-selection", () => {
       { text: "b", offset: 1 }, // mousedown in the **b** cell (unmappable)
       { text: "x", offset: 0 }, // drag left into the plain `x` cell
     ]);
-    const dom = makeWidget(src).toDOM(view);
-    scope.root = dom;
-    document.body.appendChild(dom);
+    const dom = mountWidget(makeWidget(src), view, scope);
     const cells = dom.querySelectorAll("td");
     press(cells[1] as HTMLElement, "mousedown", 200, 10);
     press(cells[0] as HTMLElement, "click", 10, 10);
@@ -783,9 +804,7 @@ describe("TableBlockWidget drag-selection", () => {
       { text: "alpha", offset: 3 },
       { text: "alpha", offset: 3 },
     ]);
-    const dom = makeWidget(SRC).toDOM(view);
-    scope.root = dom;
-    document.body.appendChild(dom);
+    const dom = mountWidget(makeWidget(SRC), view, scope);
     const td = dom.querySelectorAll("td")[0] as HTMLElement;
     press(td, "mousedown", 30, 10);
     press(td, "click", 31, 10); // sub-threshold jitter
@@ -795,9 +814,7 @@ describe("TableBlockWidget drag-selection", () => {
   it("a click with no preceding mousedown still dispatches the collapsed caret", () => {
     const dispatched: unknown[] = [];
     const { view, scope } = stubViewWithCaret(dispatched, [{ text: "alpha", offset: 4 }]);
-    const dom = makeWidget(SRC).toDOM(view);
-    scope.root = dom;
-    document.body.appendChild(dom);
+    const dom = mountWidget(makeWidget(SRC), view, scope);
     press(dom.querySelectorAll("td")[0] as HTMLElement, "click", 60, 10);
     expect(dispatched).toEqual([{ selection: { anchor: SRC.indexOf("alpha") } }]);
   });
@@ -805,9 +822,7 @@ describe("TableBlockWidget drag-selection", () => {
   it("mousedown alone dispatches NOTHING (no reveal mid-drag)", () => {
     const dispatched: unknown[] = [];
     const { view, scope } = stubViewWithCaret(dispatched, [{ text: "alpha", offset: 2 }]);
-    const dom = makeWidget(SRC).toDOM(view);
-    scope.root = dom;
-    document.body.appendChild(dom);
+    const dom = mountWidget(makeWidget(SRC), view, scope);
     press(dom.querySelectorAll("td")[0] as HTMLElement, "mousedown", 10, 10);
     expect(dispatched).toEqual([]);
   });
@@ -818,9 +833,7 @@ describe("TableBlockWidget drag-selection", () => {
       { text: "alpha", offset: 2 },
       { text: "alpha", offset: 5 },
     ]);
-    const dom = makeWidget(SRC).toDOM(view);
-    scope.root = dom;
-    document.body.appendChild(dom);
+    const dom = mountWidget(makeWidget(SRC), view, scope);
     const td = dom.querySelectorAll("td")[0] as HTMLElement;
     press(td, "mousedown", 10, 10, { button: 2 }); // right-click
     press(td, "click", 60, 10);
@@ -834,7 +847,24 @@ describe("TableBlockWidget drag-selection", () => {
     const src = "| L |\n| - |\n| [x](https://example.com) |";
     const dispatched: unknown[] = [];
     const opened: string[] = [];
-    const resolve: CaretResolver = () => ({ node: document.body, offset: 0 });
+    // The resolver MUST resolve inside a real cell so the mousedown arms a
+    // NON-null point. An earlier version of this test resolved to
+    // `document.body`, which the containment gate rejects — `pending.point`
+    // was then null, the leak path short-circuited to the very caret dispatch
+    // the assertion expects, and the test stayed green WITH the leak present.
+    const scope: { root: HTMLElement | null } = { root: null };
+    const resolve: CaretResolver = () => {
+      if (scope.root === null) {
+        return null;
+      }
+      const walker = document.createTreeWalker(scope.root, NodeFilter.SHOW_TEXT);
+      for (let n = walker.nextNode(); n !== null; n = walker.nextNode()) {
+        if (n.textContent === "x") {
+          return { node: n, offset: 0 };
+        }
+      }
+      return null;
+    };
     const view = {
       state: EditorState.create({
         extensions: [
@@ -844,20 +874,16 @@ describe("TableBlockWidget drag-selection", () => {
       }),
       dispatch: (tr: unknown) => dispatched.push(tr),
     } as unknown as EditorViewType;
-    // NOTE: this test builds its view by hand rather than via
-    // stubViewWithCaret, so there is NO `scope` here and none is needed — its
-    // resolver deliberately returns a node OUTSIDE the widget root
-    // (`document.body`), which `cellPointAt`'s containment gate rejects, so the
-    // anchor's `point` is null and the fallback path is what gets exercised.
-    const dom = makeWidget(src).toDOM(view);
-    document.body.appendChild(dom);
+    const dom = mountWidget(makeWidget(src), view, scope);
     const a = dom.querySelector("a") as HTMLElement;
     press(a, "mousedown", 10, 10);
     press(a, "click", 10, 10, { metaKey: true });
     expect(opened).toEqual(["https://example.com"]);
     expect(dispatched).toEqual([]);
     // The NEXT click, far away and with no mousedown of its own, must not
-    // resurrect the cleared anchor as a range.
+    // resurrect the cleared anchor. If it leaked, this click sees moved=true
+    // with a non-null point (link cell → offset null → whole-cell snap) and
+    // dispatches a RANGE spanning the cell instead of the caret below.
     press(dom.querySelector("td") as HTMLElement, "click", 400, 10);
     expect(dispatched).toEqual([
       { selection: { anchor: src.indexOf("[x](https://example.com)") } },
@@ -866,15 +892,32 @@ describe("TableBlockWidget drag-selection", () => {
 
   // error-handler 92: a doc edit landing mid-gesture moves the stamps.
   it("updateDOM cancels an in-flight drag (stale-offset guard)", () => {
+    // Control arm FIRST. The real assertion below is a NEGATIVE one (expects a
+    // caret), so anything that quietly stops the resolver from resolving —
+    // a renamed fixture text, a rescoped walker — would produce the same
+    // expected value and the test would keep passing while pinning nothing.
+    // Proving the identical gesture DOES produce a range means the caret can
+    // only come from pendingDrag.delete().
+    const control: unknown[] = [];
+    const { view: controlView, scope: controlScope } = stubViewWithCaret(control, [
+      { text: "alpha", offset: 2 },
+      { text: "alpha", offset: 5 },
+    ]);
+    const controlDom = mountWidget(makeWidget(SRC), controlView, controlScope);
+    const controlTd = controlDom.querySelectorAll("td")[0] as HTMLElement;
+    press(controlTd, "mousedown", 10, 10);
+    press(controlTd, "click", 60, 10);
+    expect(control).toEqual([
+      { selection: { anchor: SRC.indexOf("alpha") + 2, head: SRC.indexOf("alpha") + 5 } },
+    ]);
+
     const dispatched: unknown[] = [];
     const { view, scope } = stubViewWithCaret(dispatched, [
       { text: "alpha", offset: 2 },
       { text: "alpha", offset: 5 },
     ]);
     const first = new TableBlockWidget(parseTable(SRC, 0, SRC.length)!, SRC, 0, 0);
-    const dom = first.toDOM(view);
-    scope.root = dom;
-    document.body.appendChild(dom);
+    const dom = mountWidget(first, view, scope);
     const td = dom.querySelectorAll("td")[0] as HTMLElement;
     press(td, "mousedown", 10, 10);
     // A distant edit shifts this table while the button is still down.
@@ -884,5 +927,89 @@ describe("TableBlockWidget drag-selection", () => {
     // The anchor was invalidated → collapsed caret at the NEW stamp, not a
     // range built from two different coordinate systems.
     expect(dispatched).toEqual([{ selection: { anchor: 5 + SRC.indexOf("alpha") } }]);
+  });
+
+  // The native mousedown default is what moves focus into CodeMirror's
+  // contenteditable; without focus the revealed selection neither paints nor
+  // extends. Adding `event.preventDefault()` here is the natural "stop the
+  // flicker" change, so the invariant needs its own assertion.
+  it("mousedown is NOT preventDefault'ed (the native default is what focuses the editor)", () => {
+    const dispatched: unknown[] = [];
+    const { view, scope } = stubViewWithCaret(dispatched, [{ text: "alpha", offset: 2 }]);
+    const dom = mountWidget(makeWidget(SRC), view, scope);
+    const event = new MouseEvent("mousedown", {
+      bubbles: true,
+      cancelable: true,
+      clientX: 10,
+      clientY: 10,
+      detail: 1,
+    });
+    (dom.querySelectorAll("td")[0] as HTMLElement).dispatchEvent(event);
+    expect(event.defaultPrevented).toBe(false);
+  });
+
+  // Mirror of "a backwards drag OUT of a non-byte-aligned cell": there the
+  // ANCHOR is unmappable, here the HEAD is. Without this the backwards arm of
+  // `head.offset ?? (forward ? head.cellTo : head.cellFrom)` is never taken.
+  it("a backwards drag ENDING in a non-byte-aligned cell snaps the head OUTWARD", () => {
+    const src = "| A | B |\n| - | - |\n| **b** | x |";
+    const dispatched: unknown[] = [];
+    const { view, scope } = stubViewWithCaret(dispatched, [
+      { text: "x", offset: 1 }, // mousedown in the plain `x` cell (mappable)
+      { text: "b", offset: 1 }, // drag LEFT into the **b** cell (unmappable)
+    ]);
+    const dom = mountWidget(makeWidget(src), view, scope);
+    const cells = dom.querySelectorAll("td");
+    press(cells[1] as HTMLElement, "mousedown", 200, 10);
+    press(cells[0] as HTMLElement, "click", 10, 10);
+    // Head snaps to the **b** cell's START — outward for a backwards drag, so
+    // the range still covers the cell the pointer crossed.
+    expect(dispatched).toEqual([
+      { selection: { anchor: src.indexOf("x") + 1, head: src.indexOf("**b**") } },
+    ]);
+  });
+
+  // The threshold's VALUE, its `>=` boundary, and the Manhattan metric are all
+  // load-bearing and were previously unpinned: every drag test moved 50-190px
+  // and every click test 0-1px, so any threshold in 2..50 passed the suite.
+  it.each([
+    [{ dx: 3, dy: 0 }, "caret"],
+    [{ dx: 0, dy: 3 }, "caret"],
+    [{ dx: 4, dy: 0 }, "range"], // exactly DRAG_THRESHOLD_PX → pins `>=`
+    [{ dx: 2, dy: 2 }, "range"], // Manhattan sum, not Euclidean distance
+  ] as const)("pointer travel %j resolves as a %s", ({ dx, dy }, kind) => {
+    const dispatched: unknown[] = [];
+    const { view, scope } = stubViewWithCaret(dispatched, [
+      { text: "alpha", offset: 2 },
+      { text: "alpha", offset: 5 },
+    ]);
+    const dom = mountWidget(makeWidget(SRC), view, scope);
+    const td = dom.querySelectorAll("td")[0] as HTMLElement;
+    press(td, "mousedown", 30, 30);
+    press(td, "click", 30 + dx, 30 + dy);
+    expect(dispatched).toEqual([
+      kind === "caret"
+        ? { selection: { anchor: SRC.indexOf("alpha") } }
+        : { selection: { anchor: SRC.indexOf("alpha") + 2, head: SRC.indexOf("alpha") + 5 } },
+    ]);
+  });
+
+  // Aborted-gesture guard. A press released OUTSIDE the widget delivers no
+  // click to the root, so the armed anchor survives with stale coordinates.
+  // The only click that can then reach this handler without a mousedown of its
+  // own is a keyboard/programmatic one — `detail === 0`, clientX/Y 0 — which
+  // would otherwise read a huge bogus travel and dispatch a range the user
+  // never drew. It must take the caret path instead.
+  it("a detail-0 click (keyboard / programmatic) never takes the drag path", () => {
+    const dispatched: unknown[] = [];
+    const { view, scope } = stubViewWithCaret(dispatched, [
+      { text: "alpha", offset: 2 },
+      { text: "alpha", offset: 5 },
+    ]);
+    const dom = mountWidget(makeWidget(SRC), view, scope);
+    const td = dom.querySelectorAll("td")[0] as HTMLElement;
+    press(td, "mousedown", 10, 10);
+    press(td, "click", 60, 10, { detail: 0 });
+    expect(dispatched).toEqual([{ selection: { anchor: SRC.indexOf("alpha") } }]);
   });
 });

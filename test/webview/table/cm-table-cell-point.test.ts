@@ -1,12 +1,21 @@
 // @vitest-environment happy-dom
 import { EditorState } from "@codemirror/state";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 
 import {
   type CaretResolver,
   cellPointAt,
+  defaultCaretResolver,
   quollTableCaretResolver,
 } from "../../../src/webview/cm/table/cell-point.js";
+
+// `fixture` mounts into the body and the containment gate is what several tests
+// below assert on — leftovers from an earlier test would give a later one a
+// second, identically-stamped cell to find. Cleanup is a mechanism, not a rule
+// each test has to remember.
+afterEach(() => {
+  document.body.replaceChildren();
+});
 
 /** Build a minimal stamped widget-shaped DOM. */
 function fixture(cells: Array<{ text: string; from: number; to: number }>): HTMLElement {
@@ -134,6 +143,42 @@ describe("cellPointAt", () => {
     expect(cellPointAt(root, 0, 0, resolverFor(td.firstChild as Node, 2))).toBeNull();
   });
 
+  // Trust-boundary hardening: the stamps are DOM attributes, so anything that
+  // can touch the widget's DOM can write them. `Number.isFinite` alone admits
+  // every shape below — `Number("")` is 0, and a negative or fractional offset
+  // reaches `view.dispatch({selection})`, whose bounds check throws.
+  it.each([
+    ["empty", ""],
+    ["negative", "-5"],
+    ["fractional", "78.5"],
+    ["non-numeric", "abc"],
+  ])("returns null for a %s data-cell-from stamp", (_label, raw) => {
+    const root = fixture([{ text: "alpha", from: 78, to: 83 }]);
+    const td = root.querySelector("td") as HTMLElement;
+    td.setAttribute("data-cell-from", raw);
+    expect(cellPointAt(root, 0, 0, resolverFor(td.firstChild as Node, 2))).toBeNull();
+  });
+
+  it("returns null when the stamps are inverted (cellTo < cellFrom)", () => {
+    const root = fixture([{ text: "alpha", from: 83, to: 78 }]);
+    const td = root.querySelector("td") as HTMLElement;
+    expect(cellPointAt(root, 0, 0, resolverFor(td.firstChild as Node, 2))).toBeNull();
+  });
+
+  // The facet is exported from index.ts, so an out-of-repo resolver can answer
+  // with a shape TypeScript never saw. Dereferencing it must not take down the
+  // widget's click listener — same contract as the throwing resolver above.
+  it.each([
+    ["a null node", { node: null, offset: 0 }],
+    ["a missing node", { offset: 0 }],
+    ["undefined", undefined],
+  ])("fails closed when the resolver returns %s", (_label, value) => {
+    const root = fixture([{ text: "alpha", from: 78, to: 83 }]);
+    const malformed = (() => value) as unknown as CaretResolver;
+    expect(() => cellPointAt(root, 0, 0, malformed)).not.toThrow();
+    expect(cellPointAt(root, 0, 0, malformed)).toBeNull();
+  });
+
   // `Range.setEnd` throws IndexSizeError past the node's length (real DOM and
   // happy-dom alike — RangeUtility.validateBoundaryPoint), so an out-of-range
   // resolver offset fails CLOSED to "no exact mapping" rather than being
@@ -156,6 +201,74 @@ describe("cellPointAt", () => {
       return null;
     });
     expect(seen).toBe(root.ownerDocument);
+  });
+});
+
+// The resolver production actually runs (nothing in src/ provides the facet, so
+// the combine's empty arm is the live path). happy-dom exposes neither caret
+// API, so every branch is driven through a hand-built fake `Document` — no
+// layout engine needed. Without this block the module's only production path is
+// 100% unexecuted: the argument order, the two result mappings, the `.bind`
+// receiver, and the Chromium-124-first branch preference would all be free to
+// break with a green suite.
+describe("defaultCaretResolver", () => {
+  const node = document.createTextNode("alpha");
+
+  it("maps caretPositionFromPoint (offsetNode/offset) and forwards x,y in that order", () => {
+    const seen: Array<[number, number]> = [];
+    const doc = {
+      caretPositionFromPoint(this: unknown, x: number, y: number) {
+        seen.push([x, y]);
+        // `this` must be the document — a missing `.bind(doc)` is an illegal
+        // invocation in Chromium, which no other assertion here would catch.
+        if (this !== doc) {
+          throw new TypeError("illegal invocation");
+        }
+        return { offsetNode: node, offset: 3 };
+      },
+    } as unknown as Document;
+    expect(defaultCaretResolver(11, 22, doc)).toEqual({ node, offset: 3 });
+    expect(seen).toEqual([[11, 22]]);
+  });
+
+  it("returns null when caretPositionFromPoint yields null", () => {
+    const doc = { caretPositionFromPoint: () => null } as unknown as Document;
+    expect(defaultCaretResolver(0, 0, doc)).toBeNull();
+  });
+
+  // The Chromium 124 path — `engines.vscode ^1.94`, where the standards-track
+  // API does not exist. This is the LIVE mapping on the oldest supported host.
+  it("falls back to caretRangeFromPoint (startContainer/startOffset)", () => {
+    const seen: Array<[number, number]> = [];
+    const doc = {
+      caretRangeFromPoint(this: unknown, x: number, y: number) {
+        seen.push([x, y]);
+        if (this !== doc) {
+          throw new TypeError("illegal invocation");
+        }
+        return { startContainer: node, startOffset: 4 };
+      },
+    } as unknown as Document;
+    expect(defaultCaretResolver(11, 22, doc)).toEqual({ node, offset: 4 });
+    expect(seen).toEqual([[11, 22]]);
+  });
+
+  it("returns null when caretRangeFromPoint yields null", () => {
+    const doc = { caretRangeFromPoint: () => null } as unknown as Document;
+    expect(defaultCaretResolver(0, 0, doc)).toBeNull();
+  });
+
+  it("prefers the standards-track caretPositionFromPoint when BOTH exist", () => {
+    const other = document.createTextNode("beta");
+    const doc = {
+      caretPositionFromPoint: () => ({ offsetNode: node, offset: 1 }),
+      caretRangeFromPoint: () => ({ startContainer: other, startOffset: 9 }),
+    } as unknown as Document;
+    expect(defaultCaretResolver(0, 0, doc)).toEqual({ node, offset: 1 });
+  });
+
+  it("returns null where the platform has neither API (happy-dom)", () => {
+    expect(defaultCaretResolver(0, 0, {} as unknown as Document)).toBeNull();
   });
 });
 

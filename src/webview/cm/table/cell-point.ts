@@ -25,9 +25,12 @@
 //
 // The gate is sound only while NO renderer construct GROWS the text (a
 // length-preserving substitution would pass the test while mapping wrongly).
-// That invariant is pinned by a test in cm-table-cell-render.test.ts — if you
-// add an inline construct that can render longer than its source, this mapping
-// breaks silently and that test is what will tell you.
+// cm-table-cell-render.test.ts pins that invariant for the constructs the
+// renderer supports TODAY: a fixed CASES list plus a fixed-seed composition
+// fuzz drawn from the same atoms, so it can only go red for source shapes it
+// already knows. Adding an inline construct therefore carries a MANUAL
+// obligation — add it to both lists. If it can render longer than its source,
+// this mapping breaks silently and must move to per-node source spans first.
 
 import { Facet } from "@codemirror/state";
 
@@ -38,17 +41,33 @@ export interface CaretPoint {
   readonly offset: number;
 }
 
-/** Injectable "what DOM position is at this viewport point" seam. The widget
- *  reads it at gesture time via `view.state.facet(...)`, matching how
- *  `quollOpenExternalSink` / `quollResourceBaseUri` are injected. The document
- *  is passed in rather than closed over so the lookup is always rooted in the
- *  widget's OWN document (a future shadow-root / multi-document host would
+/** Injectable "what DOM position is at this viewport point" seam, read at
+ *  gesture time via `view.state.facet(...)` (the injection SHAPE of
+ *  `quollOpenExternalSink` / `quollResourceBaseUri`). NOTE: unlike those two,
+ *  nothing in `src/` provides this facet — production runs on the combine's
+ *  empty-provider default (`defaultCaretResolver`) and the `.of(...)` seam
+ *  exists for tests. The document is passed in rather than closed over so the
+ *  lookup is always rooted in the widget's OWN document (a future
+ *  multi-document host — a second webview document or an iframe — would
  *  otherwise resolve against the wrong one).
  *
- *  Throw contract: a resolver MAY throw; every call site treats a throw exactly
- *  like a `null` return (no mapping → the caller falls back to the collapsed
- *  caret). It must never take down the click handler. */
+ *  Throw contract: a resolver MAY throw, and MAY return a malformed value;
+ *  every call site treats either exactly like a `null` return (no mapping →
+ *  the caller falls back to the collapsed caret). It must never take down the
+ *  click handler. */
 export type CaretResolver = (x: number, y: number, doc: Document) => CaretPoint | null;
+
+/** The caret-from-point capability as it ACTUALLY exists at runtime. lib.dom
+ *  declares both methods as REQUIRED members of `Document`, which is false on
+ *  our floor (Chromium 124 has no `caretPositionFromPoint`) and in happy-dom
+ *  (neither exists). Restating them optional is what keeps the guards below
+ *  load-bearing to the compiler — typed against `Document` the fallback arm
+ *  narrows to `never` and a simplify pass would delete the only live path on
+ *  the oldest supported VS Code. `Document` is assignable WITHOUT a cast. */
+interface CaretApiHost {
+  readonly caretPositionFromPoint?: (x: number, y: number) => CaretPosition | null;
+  readonly caretRangeFromPoint?: (x: number, y: number) => Range | null;
+}
 
 /** Production resolver.
  *
@@ -59,14 +78,16 @@ export type CaretResolver = (x: number, y: number, doc: Document) => CaretPoint 
  *  supported VS Code the fallback IS the live path. Returns null where neither
  *  exists (happy-dom, which has no layout); that degradation is deliberate —
  *  with no resolver the widget keeps its plain collapsed-caret behaviour
- *  instead of guessing. */
+ *  instead of guessing. `.bind(doc)` because both are Document methods that
+ *  throw "illegal invocation" when called with a detached receiver. */
 export const defaultCaretResolver: CaretResolver = (x, y, doc) => {
-  const fromPoint = doc.caretPositionFromPoint?.bind(doc);
+  const api: CaretApiHost = doc;
+  const fromPoint = api.caretPositionFromPoint?.bind(doc);
   if (fromPoint !== undefined) {
     const pos = fromPoint(x, y);
     return pos === null ? null : { node: pos.offsetNode, offset: pos.offset };
   }
-  const rangeFromPoint = doc.caretRangeFromPoint?.bind(doc);
+  const rangeFromPoint = api.caretRangeFromPoint?.bind(doc);
   if (rangeFromPoint !== undefined) {
     const range = rangeFromPoint(x, y);
     return range === null ? null : { node: range.startContainer, offset: range.startOffset };
@@ -74,8 +95,9 @@ export const defaultCaretResolver: CaretResolver = (x, y, doc) => {
   return null;
 };
 
-/** `combine` returns the last provider, matching `quollOpenExternalSink`'s
- *  established style (one provider in production). */
+/** `combine` returns the last provider (the `quollOpenExternalSink` style), and
+ *  its EMPTY arm is the LIVE production path — see CaretResolver above; nothing
+ *  in `src/` calls `.of(...)`. Do not delete that arm as unreachable. */
 export const quollTableCaretResolver = Facet.define<CaretResolver, CaretResolver>({
   combine: (values) => (values.length > 0 ? values[values.length - 1] : defaultCaretResolver),
 });
@@ -101,10 +123,13 @@ export interface CellPoint {
  *  hand-written walker has to get the element case, the offset-0 case and the
  *  nested-element case individually right — an earlier draft of this function
  *  got all three wrong (it returned the cell's full length for `(cell, 0)`).
- *  Returns null when the position is not addressable inside `cell` (`setEnd`
- *  throws for a detached or foreign node), which the caller treats as "no
- *  mapping". */
-function textOffsetWithinCell(cell: HTMLElement, node: Node, offset: number): number | null {
+ *  Returns null when `setEnd` throws — in practice an out-of-range `offset`
+ *  (IndexSizeError), which the caller treats as "no mapping" rather than
+ *  clamping to a position the pointer was never at. A node from OUTSIDE `cell`
+ *  would NOT throw (the range re-roots and collapses, yielding 0 = the cell
+ *  start), but the caller resolves `cell` from this very node, so that case
+ *  cannot arise here. */
+function textOffsetWithinCell(cell: Element, node: Node, offset: number): number | null {
   try {
     const range = cell.ownerDocument.createRange();
     range.selectNodeContents(cell);
@@ -115,55 +140,79 @@ function textOffsetWithinCell(cell: HTMLElement, node: Node, offset: number): nu
   }
 }
 
+/** `null` unless the attribute is present and a non-negative INTEGER — the
+ *  shape CellPoint's arithmetic and `view.dispatch({selection})` both assume.
+ *  `Number.isFinite` alone would admit a negative, a fraction, and `""` (which
+ *  `Number` maps to 0). `Element`, not `HTMLElement`: `getAttribute` lives on
+ *  Element and this module stays realm-independent (no `instanceof`). */
+function stampedOffset(cell: Element, name: string): number | null {
+  const raw = cell.getAttribute(name);
+  // Decimal digits only. `Number` alone accepts "" (→ 0), " 78 ", "-5", "78.5"
+  // and "7e2"; the widget only ever writes `String(nodeFrom + cell.from)`, so
+  // digits ARE the contract. `isSafeInteger` then rejects a digit string long
+  // enough to lose precision.
+  if (raw === null || !/^\d+$/.test(raw)) {
+    return null;
+  }
+  const value = Number(raw);
+  return Number.isSafeInteger(value) ? value : null;
+}
+
 /** Resolve a viewport point inside `root` (a `.quoll-table-block` widget) to
  *  the cell under it plus, when byte-aligned, the exact source offset.
  *  Returns null when the point is outside the widget, outside any cell (the
- *  widget's padding/margin), on a cell missing its offset stamps, or when the
- *  resolver yields nothing / throws — every one of which the caller handles by
- *  falling back to the collapsed caret. */
+ *  widget's padding/margin), on a cell whose offset stamps are missing or
+ *  malformed, or when the resolver yields nothing / throws / answers with a
+ *  malformed value — every one of which the caller handles by falling back to
+ *  the collapsed caret. */
 export function cellPointAt(
   root: HTMLElement,
   x: number,
   y: number,
   resolve: CaretResolver
 ): CellPoint | null {
-  let point: CaretPoint | null;
+  // Fail closed around the WHOLE body, not just the `resolve` call: the facet
+  // is a public injection seam (index.ts), so TypeScript cannot police what an
+  // out-of-repo resolver returns, and a `{ node: null }` answer would otherwise
+  // throw out of the widget's DOM listener. Every internal failure mode already
+  // answers `null`, and this function is side-effect-free, so a catch-all is
+  // exactly equivalent to those.
   try {
-    point = resolve(x, y, root.ownerDocument);
+    const point = resolve(x, y, root.ownerDocument);
+    if (point === null) {
+      return null;
+    }
+    const el =
+      point.node.nodeType === Node.ELEMENT_NODE
+        ? (point.node as Element)
+        : point.node.parentElement;
+    const cell = el?.closest("th, td") ?? null;
+    // `root.contains` is the containment gate: a point over a DIFFERENT table's
+    // widget (or over prose) must not be mapped through THIS widget's stamps.
+    if (cell === null || !root.contains(cell)) {
+      return null;
+    }
+    const cellFrom = stampedOffset(cell, "data-cell-from");
+    const cellTo = stampedOffset(cell, "data-cell-to");
+    if (cellFrom === null || cellTo === null || cellTo < cellFrom) {
+      return null;
+    }
+    const rendered = cell.textContent ?? "";
+    if (rendered.length !== cellTo - cellFrom) {
+      return { cellFrom, cellTo, offset: null };
+    }
+    const within = textOffsetWithinCell(cell, point.node, point.offset);
+    if (within === null) {
+      return { cellFrom, cellTo, offset: null };
+    }
+    // No clamp: `within` is bounded by construction. `Range.toString().length`
+    // cannot exceed the cell's rendered text, and the alignment gate above
+    // already established `rendered.length === cellTo - cellFrom`, so
+    // `cellFrom + within` is always inside `[cellFrom, cellTo]`. An offset the
+    // platform considers out of range never gets this far — `setEnd` throws
+    // IndexSizeError and `textOffsetWithinCell` returns null (fail closed).
+    return { cellFrom, cellTo, offset: cellFrom + within };
   } catch {
-    // Fail closed: an injected resolver must never take down the click handler.
     return null;
   }
-  if (point === null) {
-    return null;
-  }
-  const el =
-    point.node.nodeType === Node.ELEMENT_NODE ? (point.node as Element) : point.node.parentElement;
-  const cell = el?.closest("th, td") ?? null;
-  // `root.contains` is the containment gate: a point over a DIFFERENT table's
-  // widget (or over prose) must not be mapped through THIS widget's stamps.
-  if (cell === null || !root.contains(cell)) {
-    return null;
-  }
-  const cellEl = cell as HTMLElement;
-  const cellFrom = Number(cellEl.dataset.cellFrom);
-  const cellTo = Number(cellEl.dataset.cellTo);
-  if (!Number.isFinite(cellFrom) || !Number.isFinite(cellTo)) {
-    return null;
-  }
-  const rendered = cellEl.textContent ?? "";
-  if (rendered.length !== cellTo - cellFrom) {
-    return { cellFrom, cellTo, offset: null };
-  }
-  const within = textOffsetWithinCell(cellEl, point.node, point.offset);
-  if (within === null) {
-    return { cellFrom, cellTo, offset: null };
-  }
-  // No clamp: `within` is bounded by construction. `Range.toString().length`
-  // cannot exceed the cell's rendered text, and the alignment gate above
-  // already established `rendered.length === cellTo - cellFrom`, so
-  // `cellFrom + within` is always inside `[cellFrom, cellTo]`. An offset the
-  // platform considers out of range never gets this far — `setEnd` throws
-  // IndexSizeError and `textOffsetWithinCell` returns null (fail closed).
-  return { cellFrom, cellTo, offset: cellFrom + within };
 }
