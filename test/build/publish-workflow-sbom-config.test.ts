@@ -53,7 +53,7 @@ function stepBlock(workflow: string, name: string, label = "publish.yml"): strin
 // job, which is precisely the drift we are guarding against.
 function jobBlock(workflow: string, job: string): string {
   const lines = workflow.split("\n");
-  const start = lines.findIndex((line) => line === `  ${job}:`);
+  const start = lines.indexOf(`  ${job}:`);
   if (start === -1) {
     throw new Error(`job not found: ${job}`);
   }
