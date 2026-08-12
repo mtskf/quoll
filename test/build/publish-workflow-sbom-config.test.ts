@@ -30,6 +30,12 @@ function stripComments(yaml: string): string {
 const read = (rel: string) =>
   readFileSync(fileURLToPath(new URL(`../../${rel}`, import.meta.url)), "utf8");
 
+// Read each file once, here, so the workflow paths live in one place. Both a raw
+// and a comment-stripped view are needed: the SHA-pin assertion checks a
+// trailing `# vX.Y.Z` comment that stripComments() removes by design.
+const publishYml = read(".github/workflows/publish.yml");
+const ciYml = read(".github/workflows/ci.yml");
+
 // The contract is "the SBOM step passes these", not "the file mentions these
 // somewhere" — a key that migrated to another step would satisfy a whole-file
 // match while leaving the SBOM empty. Slice the named step's own block: from its
@@ -71,7 +77,7 @@ function jobBlock(workflow: string, job: string, label: string): string {
 }
 
 describe("release SBOM cataloger wiring", () => {
-  const workflow = stripComments(read(".github/workflows/publish.yml"));
+  const workflow = stripComments(publishYml);
   const syftConfig = stripComments(read(".github/syft-release.yaml"));
   const sbomStep = stepBlock(workflow, "Generate SBOM (SPDX)", "publish.yml");
 
@@ -113,16 +119,10 @@ describe("release SBOM cataloger wiring", () => {
 // a TRUE positive — the files really would have diverged — so the assertion is
 // correct either way.
 describe("CI rehearses the release SBOM sequence", () => {
-  const publishJob = jobBlock(
-    stripComments(read(".github/workflows/publish.yml")),
-    "publish",
-    "publish.yml"
-  );
-  const sbomJob = jobBlock(stripComments(read(".github/workflows/ci.yml")), "sbom", "ci.yml");
-  // Comment-preserving slices — the SHA-pin assertion below checks the trailing
-  // `# vX.Y.Z` comment that stripComments() removes by design.
-  const rawPublishJob = jobBlock(read(".github/workflows/publish.yml"), "publish", "publish.yml");
-  const rawSbomJob = jobBlock(read(".github/workflows/ci.yml"), "sbom", "ci.yml");
+  const publishJob = jobBlock(stripComments(publishYml), "publish", "publish.yml");
+  const sbomJob = jobBlock(stripComments(ciYml), "sbom", "ci.yml");
+  const rawPublishJob = jobBlock(publishYml, "publish", "publish.yml");
+  const rawSbomJob = jobBlock(ciYml, "sbom", "ci.yml");
 
   const normalise = (block: string) =>
     block
@@ -272,6 +272,6 @@ describe("CI rehearses the release SBOM sequence", () => {
     const header = sbomJob.slice(0, sbomJob.indexOf("    steps:"));
     expect(header).not.toMatch(/^ {4}continue-on-error:/m);
     expect(header).not.toMatch(/^ {4}if:/m);
-    expect(stripComments(read(".github/workflows/ci.yml"))).toMatch(/^on:\n\s+pull_request:/m);
+    expect(stripComments(ciYml)).toMatch(/^on:\n\s+pull_request:/m);
   });
 });

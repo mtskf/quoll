@@ -28,9 +28,15 @@ const SCRIPT = fileURLToPath(new URL("../../scripts/assemble-sbom-staging.sh", i
 // The script derives REPO_ROOT from `dirname($0)/..`, so a copy under
 // <fixture>/scripts/ makes the fixture the "checkout" — the containment guards
 // are then exercised against it and never against the real one.
-const run = (repo: string, args: string[]) => {
+// `exe` defaults to the fixture's own copy; the `//` test below overrides it to
+// reach that same copy through a differently-spelled path.
+const run = (
+  repo: string,
+  args: string[],
+  exe = join(repo, "scripts", "assemble-sbom-staging.sh")
+) => {
   try {
-    execFileSync(join(repo, "scripts", "assemble-sbom-staging.sh"), args, { encoding: "utf8" });
+    execFileSync(exe, args, { encoding: "utf8" });
     return { code: 0, stderr: "" };
   } catch (err) {
     const e = err as { status: number; stderr?: string };
@@ -110,17 +116,11 @@ describe("assemble-sbom-staging.sh argument guards", () => {
   // arms go blind — here the inside-the-checkout argument, which is rejected
   // normally, would reach `rm -rf`.
   it("exits 2 when invoked through a `//`-prefixed script path", () => {
-    const res = (() => {
-      try {
-        execFileSync(`/${join(repo, "scripts", "assemble-sbom-staging.sh")}`, [
-          join(repo, "sbom-src"),
-        ]);
-        return { code: 0, stderr: "" };
-      } catch (err) {
-        const e = err as { status: number; stderr?: Buffer };
-        return { code: e.status, stderr: String(e.stderr ?? "") };
-      }
-    })();
+    const res = run(
+      repo,
+      [join(repo, "sbom-src")],
+      `/${join(repo, "scripts", "assemble-sbom-staging.sh")}`
+    );
     expect(res.code).toBe(2);
     expect(res.stderr).toContain("must live outside the repo checkout");
     expect(existsSync(join(repo, "CANARY"))).toBe(true);

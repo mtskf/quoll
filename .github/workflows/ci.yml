@@ -184,8 +184,8 @@ jobs:
 
       # The four steps below are textually identical to publish.yml's — asserted
       # by test/build/publish-workflow-sbom-config.test.ts. That identity IS the
-      # feature: what passes here is what runs at tag time. Keep them in lockstep;
-      # if one file changes, change both.
+      # feature: what passes here is what runs at tag time, so a change to either
+      # file must be made in both.
       #
       # No root `pnpm install` is needed: the script installs into its own staging
       # dir, and verify-sbom-scope.mjs uses node builtins only.

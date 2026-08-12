@@ -2,8 +2,7 @@
 # Assemble the SHIPPED runtime dependency closure in a throwaway staging tree —
 # the source syft catalogs for the SBOM (publish.yml at release, ci.yml's `sbom`
 # job on every PR). Shared by both so the CI rehearsal cannot drift from the
-# release path; the steps that consume this tree are kept identical by
-# test/build/publish-workflow-sbom-config.test.ts.
+# release path.
 #
 # A prod-only frozen install yields a node_modules containing exactly the runtime
 # closure at EXACT resolved versions. The lockfile is then removed so syft
@@ -97,11 +96,11 @@ done
 # resolve against the checkout rather than whatever dir the step ran in.
 cd "$(dirname "$0")/.."
 REPO_ROOT="$(pwd -P)"
-# Collapse REPO_ROOT the same way, for the same reason: both checks below are
-# TEXTUAL comparisons, so a "//"-rooted path on EITHER side blinds them. STAGING
-# is normalised above, but REPO_ROOT inherits its prefix from "$0" — invoke this
-# script as "//<repo>/scripts/assemble-sbom-staging.sh" and cd/pwd -P keep the
-# "//", so the checkout itself would sail past both arms.
+# Collapse REPO_ROOT the same way: the hazard above is two-sided, because the
+# checks below compare TEXT and a "//" prefix on EITHER side blinds them. Here it
+# arrives from "$0" — invoke this script as
+# "//<repo>/scripts/assemble-sbom-staging.sh" and cd/pwd -P keep the "//", so the
+# checkout itself would sail past both arms.
 while :; do
   case "$REPO_ROOT" in
     //*) REPO_ROOT="/${REPO_ROOT#//}" ;;
