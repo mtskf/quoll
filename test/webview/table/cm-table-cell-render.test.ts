@@ -1007,3 +1007,100 @@ describe("renderReadonly text-node topology (merging is not vacuous)", () => {
     expect(text.length).toBeLessThan(deep.length);
   });
 });
+
+// Contract for cell-point.ts's byte-alignment gate: it decides "this cell's DOM
+// offsets map 1:1 onto source offsets" from LENGTH EQUALITY alone. That is only
+// sound while no construct can render longer than its source — a construct that
+// GREW while preserving total length would pass the gate and map drags to the
+// wrong source offsets, silently.
+//
+// If you add an inline construct, ADD A CASE HERE (and an atom to the fuzz
+// below): both lists are fixed, so a construct with no sample cannot fail them
+// — the guard is a manual obligation, not an automatic tripwire. A construct
+// that can render LONGER than its source (alt-text fallback, emoji shortcodes)
+// means cell-point.ts's mapping must move to per-node source spans first.
+// (Entity decoding is safe on this axis: `&amp;` → `&` and `&#128512;` → 😀
+// both SHRINK.)
+describe("renderCellInline never grows the rendered text", () => {
+  const CASES = [
+    "plain text",
+    "**bold**",
+    "_em_",
+    "~~del~~",
+    "==mark==",
+    "`code`",
+    "[label](https://example.com)",
+    "[label](./relative.md)",
+    "[label](javascript:alert(1))",
+    "<https://example.com>",
+    "![alt](https://example.com/x.png)",
+    "![alt](./local.png)",
+    "\\| escaped pipe",
+    "\\*not em\\*",
+    "&amp; entity",
+    "&lt;&gt;",
+    "&#128512;",
+    "a &copy; b",
+    "***nested bold em***",
+    "**[link](https://example.com)**",
+    "text with  double  spaces",
+    "trailing backslash \\",
+    "😀 emoji",
+    "<b>raw html</b>",
+    "<!-- comment -->",
+    "http://bare.example.com",
+  ];
+  for (const src of CASES) {
+    it(`does not grow: ${JSON.stringify(src)}`, () => {
+      const rendered = renderCellInline(src, "https://base.example/dir/")
+        .map((n) => n.textContent ?? "")
+        .join("");
+      expect(rendered.length).toBeLessThanOrEqual(src.length);
+    });
+  }
+
+  // The single-construct cases above say nothing about COMPOSITION: a pair that
+  // is length-safe alone can still grow when one nests inside the other (an
+  // unterminated delimiter re-emitted as literal text next to a construct that
+  // consumed it). Fixed seed so a failure is reproducible from the printed
+  // source string alone.
+  it("never grows for random compositions of every construct", () => {
+    const ATOMS = [
+      "a",
+      " ",
+      "**b**",
+      "_i_",
+      "~~d~~",
+      "==m==",
+      "`c`",
+      "\\|",
+      "\\*",
+      "&amp;",
+      "&#128512;",
+      "[l](https://e.test)",
+      "![a](./i.png)",
+      "<https://e.test>",
+      "<b>x</b>",
+      "😀",
+    ];
+    // High bits only: this LCG's LOW bits have a very short period, so
+    // `seed % n` degenerates (measured: every draw hit the first few atoms, max
+    // composition length 8, links and images NEVER generated). `>>> 16` gives a
+    // corpus that actually uses all 16 atoms.
+    let seed = 1;
+    const next = () => {
+      seed = (seed * 1103515245 + 12345) % 2147483648;
+      return (seed >>> 16) % 32768;
+    };
+    for (let i = 0; i < 500; i++) {
+      let src = "";
+      for (let n = next() % 6; n > 0; n--) {
+        src += ATOMS[next() % ATOMS.length];
+      }
+      const rendered = renderCellInline(src, "https://base.example/dir/")
+        .map((node) => node.textContent ?? "")
+        .join("");
+      expect(rendered.length, JSON.stringify(src)).toBeLessThanOrEqual(src.length);
+    }
+  });
+});
