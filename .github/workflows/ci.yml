@@ -144,3 +144,63 @@ jobs:
 
       - name: Audit .vsix contents
         run: node scripts/audit-vsix.mjs extension.vsix
+
+  # Rehearse the RELEASE SBOM pipeline on every PR/main push. publish.yml runs
+  # these same four steps at tag time — and only at tag time, which is how the
+  # v0.1.66 empty SBOM reached a live release (syft's package.json cataloger is
+  # image-tagged, so the directory scan cataloged nothing; see
+  # .github/syft-release.yaml). No static check over our own YAML can catch an
+  # UPSTREAM change like that; only running the real action can. Dependabot bumps
+  # `anchore/sbom-action` (and the syft baked into it) weekly, so this job makes
+  # that bump prove itself on its own PR.
+  #
+  # NOT path-gated: GitHub supports `paths:` only at the workflow trigger, which
+  # would gate the `build` job too, and per-job path filtering needs a
+  # third-party action (default-deny on new dependencies). The job is cheap — a
+  # prod-only install plus a syft scan of ~23 packages, no `pnpm build`, no E2E —
+  # and runs in parallel with `build`.
+  sbom:
+    runs-on: ubuntu-latest
+    steps:
+      # SHA-pinned per the repo-wide policy documented in the `build` job above.
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+
+      - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
+        with:
+          version: 11.10.0
+
+      # NO `cache: 'pnpm'` here, deliberately. setup-node's pnpm cache key comes
+      # from the lockfile hash and does NOT include the job name, and Actions
+      # caches are immutable per key — first save wins. This job finishes long
+      # before `build`, so it would publish a PROD-ONLY pnpm store under the key
+      # `build` restores from, making `build` re-download every devDependency
+      # until the lockfile changes. The prod closure is ~23 packages; the cache
+      # is not worth that regression.
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: '22'
+
+      # The four steps below are textually identical to publish.yml's — asserted
+      # by test/build/publish-workflow-sbom-config.test.ts. That identity IS the
+      # feature: what passes here is what runs at tag time. Keep them in lockstep;
+      # if one file changes, change both.
+      #
+      # No root `pnpm install` is needed: the script installs into its own staging
+      # dir, and verify-sbom-scope.mjs uses node builtins only.
+      - name: Assemble shipped runtime dependency tree (SBOM source)
+        run: scripts/assemble-sbom-staging.sh "$RUNNER_TEMP/sbom-src"
+
+      - name: Generate SBOM (SPDX)
+        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
+        with:
+          path: ${{ runner.temp }}/sbom-src
+          config: .github/syft-release.yaml
+          format: spdx-json
+          output-file: sbom.spdx.json
+          upload-release-assets: false
+
+      - name: Verify SBOM is scoped to the shipped runtime
+        run: node scripts/verify-sbom-scope.mjs sbom.spdx.json
+
+      - name: Reconcile SBOM against staged install (shadow, non-gating)
+        run: node scripts/verify-sbom-scope.mjs sbom.spdx.json --reconcile "$RUNNER_TEMP/sbom-src" || true
