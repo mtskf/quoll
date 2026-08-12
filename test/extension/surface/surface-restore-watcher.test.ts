@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Tab, TextDocument, Uri } from "vscode";
-import { TabInputCustom, TabInputText } from "vscode";
+import { TabInputCustom, TabInputText, window } from "vscode";
 import {
   __clearSurfaceMemoryForTest,
   noteSurface,
@@ -197,8 +197,12 @@ describe("restoreSurface (seamed orchestrator)", () => {
       },
     });
     const pending = restoreSurface("quoll", restoreUri, SOURCE_TAB, "quoll.editMarkdown", deps);
-    await Promise.resolve();
-    await Promise.resolve();
+    // Macrotask boundary: drains the ENTIRE microtask queue regardless of how
+    // many awaits restoreSurface happens to have, so the assertion pins the
+    // behaviour (close must not run while the reopen is pending), not the tick
+    // count. Draining a fixed number of ticks would turn one extra await ahead
+    // of the open into a false red.
+    await new Promise((r) => setTimeout(r, 0));
     expect(calls).toEqual(["openDoc", "openInQuoll"]);
     releaseOpen();
     await pending;
@@ -206,15 +210,34 @@ describe("restoreSurface (seamed orchestrator)", () => {
   });
 
   it("SKIPS a dirty doc entirely — no reopen, no close (passive restore never saves)", async () => {
-    const { deps, calls } = makeRestoreDeps(fakeDoc(true));
-    await restoreSurface("quoll", restoreUri, SOURCE_TAB, "quoll.editMarkdown", deps);
-    expect(calls).toEqual(["openDoc"]);
+    // Assert the QUIET path too: restoreSurface swallows every throw, so
+    // calls === ["openDoc"] alone cannot distinguish "skipped" from "crashed
+    // after openDoc". A silent console.error is the discriminator.
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const { deps, calls } = makeRestoreDeps(fakeDoc(true));
+      await restoreSurface("quoll", restoreUri, SOURCE_TAB, "quoll.editMarkdown", deps);
+      expect(calls).toEqual(["openDoc"]);
+      expect(errSpy).not.toHaveBeenCalled();
+    } finally {
+      errSpy.mockRestore();
+    }
   });
 
   it("SKIPS a Quoll restore onto a read-only filesystem (canEditWith gate)", async () => {
-    const { deps, calls } = makeRestoreDeps(fakeDoc(false), { isWritableFileSystem: () => false });
-    await restoreSurface("quoll", restoreUri, SOURCE_TAB, "quoll.editMarkdown", deps);
-    expect(calls).toEqual(["openDoc"]);
+    // Same discriminator as the dirty-doc skip above: a quiet return, not a
+    // swallowed throw.
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const { deps, calls } = makeRestoreDeps(fakeDoc(false), {
+        isWritableFileSystem: () => false,
+      });
+      await restoreSurface("quoll", restoreUri, SOURCE_TAB, "quoll.editMarkdown", deps);
+      expect(calls).toEqual(["openDoc"]);
+      expect(errSpy).not.toHaveBeenCalled();
+    } finally {
+      errSpy.mockRestore();
+    }
   });
 
   it("still reopens in TEXT when the filesystem is read-only (gate is Quoll-only)", async () => {
@@ -235,7 +258,13 @@ describe("restoreSurface (seamed orchestrator)", () => {
         restoreSurface("quoll", restoreUri, SOURCE_TAB, "quoll.editMarkdown", deps)
       ).resolves.toBeUndefined();
       expect(calls).toEqual([]);
-      expect(err).toHaveBeenCalled();
+      // This log is the feature's only diagnostic channel (no toast), so pin
+      // the identifying context: without uri + target an openDoc rejection and
+      // a reopen rejection are indistinguishable in the output.
+      expect(err).toHaveBeenCalledWith(
+        "[quoll] surface restore failed",
+        expect.objectContaining({ uri: "file:///a.md", target: "quoll" })
+      );
     } finally {
       err.mockRestore();
     }
@@ -280,29 +309,49 @@ describe("restoreSurface (seamed orchestrator)", () => {
   });
 });
 
+/** The live tab model the watcher's sibling check reads (`allOpenTabInputs`
+ *  flat-maps `window.tabGroups.all`). @types/vscode declares `all` as
+ *  `readonly TabGroup[]`, so reaching the stub's mutable array takes one cast —
+ *  taken ONCE here rather than at each push. Tests must reset it via
+ *  `.length = 0` (never by assigning a fresh array): the stub holds this exact
+ *  array reference, and a reassignment here would leave the watcher reading the
+ *  old one. */
+const stubTabGroups = window.tabGroups.all as unknown as unknown[];
+
 describe("registerSurfaceRestoreWatcher in-flight guard", () => {
   const uriKey = "file:///a.md";
 
   beforeEach(() => {
     resetStubTabListeners();
     __clearSurfaceMemoryForTest();
+    stubTabGroups.length = 0;
   });
 
   afterEach(() => {
     resetStubTabListeners();
     __clearSurfaceMemoryForTest();
+    // Reset on BOTH sides of every case: `tabGroups.all` is shared module state
+    // in the vscode stub, so a leaked group would silently flip the sibling
+    // check for every later test in the run — including other files.
+    stubTabGroups.length = 0;
   });
 
-  /** Fire a synthetic "a text tab for a.md just opened" event at the watcher. */
-  function fireTextOpen(): void {
-    fireTabChange({ opened: [{ input: new TabInputText(restoreUri as never) }] });
+  /** Fire a synthetic "a text tab for a.md just opened" event at the watcher,
+   *  handing back the tab object it synthesised so callers can assert that THAT
+   *  tab (not `undefined`, not some other tab) reaches the finalizer. */
+  function fireTextOpen(): { input: TabInputText } {
+    const tab = { input: new TabInputText(restoreUri) };
+    fireTabChange({ opened: [tab] });
+    return tab;
   }
 
   it("suppresses an overlapping restore of the SAME uri while one is in flight", async () => {
-    // The watcher's own reopen fires another `opened` event for the same URI;
-    // without the guard that event would start a second restore (and, via the
-    // now-open sibling, a bounce). Hold openDoc pending to keep restore #1 in
-    // flight across the second event.
+    // Several `opened` events for one URI can arrive close together (the
+    // watcher's fire-and-forget restore spans them). Without the guard the
+    // second text open starts a duplicate restore — and if restore #1 has
+    // already opened the Quoll tab, `hasSibling` makes reconcileOpen ADOPT the
+    // shown text surface, silently overwriting the remembered "quoll". Hold
+    // openDoc pending to keep restore #1 in flight across the second event.
     noteSurface(uriKey, "quoll");
     let releaseDoc: (doc: TextDocument) => void = () => {};
     const docReady = new Promise<TextDocument>((resolve) => {
@@ -375,6 +424,81 @@ describe("registerSurfaceRestoreWatcher in-flight guard", () => {
     }
   });
 
+  it("forwards the reconciled TARGET, the uri and the JUST-OPENED tab to restoreSurface", async () => {
+    // Call COUNTS alone leave the arguments unpinned: hard-coding the target as
+    // "text" (defeating the upgrade-to-Quoll feature entirely) or passing
+    // `undefined` as the source tab (closeSourceTabIfClean then returns without
+    // closing) both keep a count-only suite green.
+    noteSurface(uriKey, "quoll");
+    const { deps, args } = makeRestoreDeps(fakeDoc(false));
+    const sub = registerSurfaceRestoreWatcher("quoll.editMarkdown", deps);
+    try {
+      const openedTab = fireTextOpen();
+      await new Promise((r) => setTimeout(r, 0));
+      expect(args.openInQuoll).toEqual([{ uri: restoreUri, viewType: "quoll.editMarkdown" }]);
+      expect(args.openInText).toEqual([]);
+      expect(args.closeSourceTab).toEqual([{ uri: restoreUri, tab: openedTab as unknown as Tab }]);
+    } finally {
+      sub.dispose();
+    }
+  });
+
+  it("does NOT restore when the doc is already open in the OTHER surface (side-by-side / mid-swap)", async () => {
+    noteSurface(uriKey, "quoll");
+    // A live Quoll tab for the same uri — the forward-toggle window in which the
+    // text tab opens BEFORE toggle-editor's noteSurface("text") has run. Without
+    // the sibling check the watcher would bounce it straight back to Quoll.
+    stubTabGroups.push({
+      tabs: [{ input: new TabInputCustom(restoreUri, "quoll.editMarkdown") }],
+    });
+    let openDocCalls = 0;
+    const { deps } = makeRestoreDeps(fakeDoc(false), {
+      openDoc: async () => {
+        openDocCalls += 1;
+        return fakeDoc(false);
+      },
+    });
+    const sub = registerSurfaceRestoreWatcher("quoll.editMarkdown", deps);
+    try {
+      fireTextOpen();
+      await new Promise((r) => setTimeout(r, 0));
+      expect(openDocCalls).toBe(0); // sibling ⇒ adopt the shown surface, never bounce
+    } finally {
+      sub.dispose();
+    }
+  });
+
+  it("guards PER URI — two different docs opening in ONE batch both restore", async () => {
+    // A global in-flight flag instead of the per-uri Set would restore only the
+    // first tab of the batch and strand the second.
+    const otherUri = {
+      scheme: "file",
+      path: "/b.md",
+      toString: () => "file:///b.md",
+    } as unknown as Uri;
+    noteSurface(uriKey, "quoll");
+    noteSurface("file:///b.md", "quoll");
+    let openDocCalls = 0;
+    const { deps } = makeRestoreDeps(fakeDoc(false), {
+      openDoc: async () => {
+        openDocCalls += 1;
+        return fakeDoc(false);
+      },
+    });
+    const sub = registerSurfaceRestoreWatcher("quoll.editMarkdown", deps);
+    try {
+      fireTabChange({
+        opened: [{ input: new TabInputText(restoreUri) }, { input: new TabInputText(otherUri) }],
+      });
+      // Synchronous: the handler loops e.opened without awaiting, and
+      // restoreSurface calls deps.openDoc before its first await.
+      expect(openDocCalls).toBe(2);
+      await new Promise((r) => setTimeout(r, 0));
+    } finally {
+      sub.dispose();
+    }
+  });
+
   it("does not restore a Quoll tab open (restore is asymmetric, upgrade-only)", async () => {
     noteSurface(uriKey, "text");
     let openDocCalls = 0;
@@ -387,7 +511,7 @@ describe("registerSurfaceRestoreWatcher in-flight guard", () => {
     const sub = registerSurfaceRestoreWatcher("quoll.editMarkdown", deps);
     try {
       fireTabChange({
-        opened: [{ input: new TabInputCustom(restoreUri as never, "quoll.editMarkdown") }],
+        opened: [{ input: new TabInputCustom(restoreUri, "quoll.editMarkdown") }],
       });
       await new Promise((r) => setTimeout(r, 0));
       expect(openDocCalls).toBe(0);

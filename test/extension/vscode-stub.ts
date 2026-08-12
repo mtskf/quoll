@@ -127,8 +127,8 @@ export function resetStubEditorListeners(): void {
 // stubActiveTextEditorListeners above: the returned disposable really
 // unregisters, and resetStubTabListeners clears the registry between tests so a
 // torn-down watcher's stale listener never leaks across cases. Additive + inert
-// for every other unit test (nothing else fires it, and the previous stub's
-// no-op-disposable contract is preserved).
+// for every other unit test (nothing else fires it; existing callers still get
+// a disposable back, they just now really unregister on dispose).
 type TabChangeListener = (e: unknown) => void;
 const stubTabChangeListeners: TabChangeListener[] = [];
 
