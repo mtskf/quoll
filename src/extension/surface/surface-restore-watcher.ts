@@ -170,10 +170,12 @@ export async function restoreSurface(
     }
     await deps.closeSourceTab(uri, sourceTab);
   } catch (err) {
-    // This log is the ONLY diagnostic channel of a deliberately silent feature
-    // (no toast), so it carries the identifying context: without the uri and
-    // the target surface an openDoc rejection and a reopen rejection collapse
-    // into one indistinguishable line.
+    // This log is the only diagnostic channel for THIS function's failures —
+    // the feature is deliberately silent (no toast) — so it carries the
+    // identifying context: without the uri and the target surface an openDoc
+    // rejection and a reopen rejection collapse into one indistinguishable
+    // line. (The finalizer it delegates to, closeSourceTabIfClean, logs its own
+    // warnings separately; they never route through this catch.)
     console.error("[quoll] surface restore failed", { uri: uri.toString(), target, err });
   }
 }
@@ -203,9 +205,12 @@ export function registerSurfaceRestoreWatcher(
       // A restore for this URI is already running. The hazard is NOT the
       // restore's own reopen — that arrives as a Quoll (custom) open, which
       // decideOpenReconcile always adopts (reopen: null), so it could never
-      // start a second restore. It is a DUPLICATE TEXT open landing mid-restore:
-      // reconcileOpen would record "text" and silently overwrite the remembered
-      // "quoll" we are in the middle of restoring to.
+      // start a second restore. It is a DUPLICATE TEXT open landing mid-restore,
+      // and which harm it does depends on how far the restore has got: before
+      // the Quoll tab exists it re-enters decideOpenReconcile's upgrade branch
+      // and starts a redundant second restore; once the Quoll tab IS live the
+      // sibling makes reconcileOpen record "text" instead, silently overwriting
+      // the remembered "quoll" we are in the middle of restoring to.
       if (restoring.has(uriKey)) {
         continue;
       }

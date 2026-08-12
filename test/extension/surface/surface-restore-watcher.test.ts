@@ -263,12 +263,19 @@ describe("restoreSurface (seamed orchestrator)", () => {
         restoreSurface("quoll", restoreUri, SOURCE_TAB, "quoll.editMarkdown", deps)
       ).resolves.toBeUndefined();
       expect(calls).toEqual([]);
-      // This log is the feature's only diagnostic channel (no toast), so pin
-      // the identifying context: without uri + target an openDoc rejection and
-      // a reopen rejection are indistinguishable in the output.
+      // This log is the only diagnostic channel for restoreSurface's own
+      // failures (no toast), so pin the identifying context: without uri +
+      // target an openDoc rejection and a reopen rejection are
+      // indistinguishable in the output. `err` is pinned too — objectContaining
+      // ignores absent keys, so without it a regression that drops the failure
+      // payload (leaving a "diagnostic" line with no diagnosis) stays green.
       expect(err).toHaveBeenCalledWith(
         "[quoll] surface restore failed",
-        expect.objectContaining({ uri: "file:///a.md", target: "quoll" })
+        expect.objectContaining({
+          uri: "file:///a.md",
+          target: "quoll",
+          err: expect.any(Error),
+        })
       );
     } finally {
       err.mockRestore();
@@ -337,7 +344,8 @@ describe("registerSurfaceRestoreWatcher in-flight guard", () => {
     __clearSurfaceMemoryForTest();
     // Reset on BOTH sides of every case: `tabGroups.all` is shared module state
     // in the vscode stub, so a leaked group would silently flip the sibling
-    // check for every later test in the run — including other files.
+    // check for every later test in THIS file (vitest isolates module state per
+    // file, so other files are unaffected).
     stubTabGroups.length = 0;
   });
 
@@ -435,7 +443,12 @@ describe("registerSurfaceRestoreWatcher in-flight guard", () => {
       await flushTasks();
       expect(args.openInQuoll).toEqual([{ uri: restoreUri, viewType: "quoll.editMarkdown" }]);
       expect(args.openInText).toEqual([]);
-      expect(args.closeSourceTab).toEqual([{ uri: restoreUri, tab: openedTab as unknown as Tab }]);
+      // Reference identity, not just shape: `toEqual` is structural, so a
+      // different tab object with the same shape would pass — and duplicate
+      // text opens for one URI produce exactly such indistinguishable tabs.
+      expect(args.closeSourceTab).toHaveLength(1);
+      expect(args.closeSourceTab[0]?.tab).toBe(openedTab as unknown as Tab);
+      expect(args.closeSourceTab[0]?.uri).toBe(restoreUri);
     } finally {
       sub.dispose();
     }
