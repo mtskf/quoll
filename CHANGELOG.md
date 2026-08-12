@@ -2,6 +2,12 @@
 
 All notable changes to Quoll are documented here.
 
+## 0.1.71 — 2026-08-12
+
+### Fixed
+
+- Dragging across text in a table now keeps your selection when the raw Markdown appears — previously the selection collapsed to a single cursor the moment the table opened for editing.
+
 ## 0.1.70 — 2026-08-12
 
 ### Added
