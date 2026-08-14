@@ -31,7 +31,10 @@ describe("createRunTempRoot", () => {
     const a = newRoot();
     const b = newRoot();
     expect(a.root).not.toBe(b.root);
-    expect(path.dirname(a.root)).toBe(fs.realpathSync(os.tmpdir()));
+    // os.tmpdir() unresolved — the module must NOT realpath it. On macOS the
+    // resolved form (`/private/var/…`) reaches VS Code as a document URI and
+    // breaks the disk-conflict watcher's exact-string event filter.
+    expect(path.dirname(a.root)).toBe(os.tmpdir());
     expect(path.basename(a.root).startsWith("quoll-e2e-")).toBe(true);
     expect(path.dirname(a.userDataDir)).toBe(a.root);
     expect(path.dirname(a.workDir)).toBe(a.root);
@@ -46,7 +49,7 @@ describe("createRunTempRoot", () => {
     // absolute length would pass on CI (where $TMPDIR is `/tmp`, 56 chars
     // of slack) and so would never catch a rename of the segments.
     const run = newRoot();
-    const owned = run.userDataDir.slice(fs.realpathSync(os.tmpdir()).length);
+    const owned = run.userDataDir.slice(os.tmpdir().length);
     expect(owned).toBe(`${path.sep}${path.basename(run.root)}${path.sep}ud`);
     expect(owned.length).toBeLessThanOrEqual(24);
   });

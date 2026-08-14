@@ -31,7 +31,12 @@ export interface RunTempRoot {
 }
 
 export function createRunTempRoot(): RunTempRoot {
-  const root = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), "quoll-e2e-"));
+  // os.tmpdir() as-is, NOT realpath'd. On macOS it returns the `/var/folders/…`
+  // symlink whose target is `/private/var/folders/…`, and the paths built here
+  // become document URIs inside VS Code. The disk-conflict watcher filters
+  // events by exact URI string, so handing it the resolved form makes those
+  // comparisons miss and the dirty-doc-disk-conflict suite time out.
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "quoll-e2e-"));
   const userDataDir = path.join(root, USER_DATA_SEGMENT);
   const workDir = path.join(root, WORK_SEGMENT);
   try {
