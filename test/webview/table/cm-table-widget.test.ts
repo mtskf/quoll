@@ -1024,12 +1024,14 @@ describe("TableBlockWidget drag-selection", () => {
 });
 
 describe("TableBlockWidget caret dispatch hardening", () => {
-  // The caret path reads `data-cell-from` / `data-doc-from` off the DOM, so it
-  // sits on the same trust boundary as the drag path and must use the same
-  // gate. A bare `Number(...)` here would not merely be untidy: CodeMirror's
-  // `checkSelection` tests `range.to > doc.length` and nothing else, so a `NaN`
-  // anchor is ACCEPTED and installs a range whose `from` is `NaN` — a silently
-  // broken selection, with no throw for `dispatchSelection`'s catch to see.
+  // The caret path reads `data-cell-from` off the DOM — the per-cell offset has
+  // to live there, since `cellPointAt` resolves whatever descendant is under the
+  // pointer — so it sits on the same trust boundary as the drag path and must
+  // use the same gate. A bare `Number(...)` here would not merely be untidy:
+  // CodeMirror's `checkSelection` tests `range.to > doc.length` and nothing
+  // else, so a `NaN` anchor is ACCEPTED and installs a range whose `from` is
+  // `NaN` — a silently broken selection, with no throw for
+  // `dispatchSelection`'s catch to see.
   // Hence the assertions below are on the exact dispatched value, not on
   // "something was dispatched".
   it.each([
@@ -1050,15 +1052,29 @@ describe("TableBlockWidget caret dispatch hardening", () => {
     expect(dispatched).toEqual([{ selection: { anchor: 7 } }]);
   });
 
-  it("falls back to the widget's own docFrom when the ROOT stamp is malformed too", () => {
+  // The ROOT position, unlike the cell stamps, is NOT an input from the DOM.
+  // `data-doc-from` is still written (DOM inspection, plus the re-stamp
+  // assertions in the updateDOM block above), but the block-start fallback
+  // reads the module-private WeakMap, so a value written onto the element
+  // cannot steer the dispatch.
+  //
+  // Both rows go red if the fallback reverts to reading the attribute: "abc"
+  // through a bare `Number(...)` would dispatch `NaN` (accepted by
+  // `checkSelection`, silently broken); "999" is the case even a format gate
+  // would have missed, revealing an unrelated block rather than this table.
+  it.each([
+    ["malformed", "abc"],
+    ["well-formed but wrong", "999"],
+  ])("ignores a %s data-doc-from written onto the widget root", (_label, raw) => {
     const dispatched: unknown[] = [];
     const dom = makeWidget(SRC, 7).toDOM(stubView(dispatched));
     document.body.appendChild(dom);
     const td = dom.querySelectorAll("td")[0] as HTMLElement;
-    td.setAttribute("data-cell-from", "abc");
-    dom.setAttribute("data-doc-from", "-3");
+    td.setAttribute("data-cell-from", "abc"); // force the block-start fallback
+    dom.setAttribute("data-doc-from", raw);
     press(td, "click", 10, 10);
-    // 7 is the constructor argument, which never travelled through the DOM.
+    // 7 is the constructor argument, carried in the WeakMap — it never
+    // travelled through the DOM.
     expect(dispatched).toEqual([{ selection: { anchor: 7 } }]);
   });
 

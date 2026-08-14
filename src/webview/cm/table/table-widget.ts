@@ -2,7 +2,8 @@
 // <table> in place of its source. Click-to-reveal: a click on any cell
 // dispatches a caret selection to the cell's absolute LF-internal source
 // offset (data-cell-from = nodeFrom + cell.from); a click on the widget
-// padding/margin (no cell) falls back to the block line-start (data-doc-from).
+// padding/margin (no cell) falls back to the block line-start, carried in the
+// module-private `blockStart` WeakMap (NOT read back out of the DOM).
 // A mousedown followed by a click that actually moved (see DRAG_THRESHOLD_PX)
 // instead dispatches a RANGE selection between the two RESOLVED source offsets;
 // an endpoint whose cell renders non-byte-aligned (inline markup) has no exact
@@ -21,9 +22,9 @@
 // caret offset (nodeFrom + cell.from). Both are LF-internal (seed.ts
 // splitToCmText strips \r). Two tables at different doc positions or with
 // different Lezer node starts are NOT eq; same (docFrom, slice, nodeFrom) on
-// a rebuild reuses the existing DOM. updateDOM re-stamps both on reuse so a
-// margin/cell click after a shift uses the new offsets, not a stale toDOM-time
-// closure.
+// a rebuild reuses the existing DOM. updateDOM re-points both channels on reuse
+// (cell stamps on the DOM, block start in `blockStart`) so a margin/cell click
+// after a shift uses the new offsets, not a stale toDOM-time closure.
 
 import { type EditorView, WidgetType } from "@codemirror/view";
 
@@ -58,6 +59,45 @@ interface PendingDrag {
   readonly point: CellPoint | null;
 }
 const pendingDrag = new WeakMap<HTMLElement, PendingDrag>();
+
+/** The block's CURRENT first-byte offset (margin-click caret target), keyed on
+ *  the widget's root element for the same reason `pendingDrag` is: `updateDOM`
+ *  reuses that element across widget instances and cannot re-bind the click
+ *  listener, whose captured `this` stays the OLD instance — so the new instance
+ *  needs a channel to the existing listener that moves exactly when the block
+ *  moves, which `updateDOM` can write and the closure cannot.
+ *
+ *  A `number` end to end: unlike the per-CELL offsets it is never stringified,
+ *  parsed, or read back from the DOM, so there is no malformed-value state to
+ *  gate. (`checkSelection` in @codemirror/state only rejects
+ *  `range.to > doc.length`, so a `NaN` / negative / fractional anchor would
+ *  otherwise install a silently broken selection that no try/catch can observe
+ *  — the reason `stampedOffset` exists for the stamps that MUST stay on the
+ *  DOM.) Same channel, same rationale, as image-widget.ts's `blockStart`. */
+const blockStart = new WeakMap<HTMLElement, number>();
+
+/** Margin-click caret: the block start this root currently points at.
+ *
+ *  Falling back to the toDOM-time `widget.docFrom` totalizes the
+ *  `number | undefined` read; it is not the stale-closure hazard coming back.
+ *  The entry is written in `toDOM` in the same breath as attaching the listener,
+ *  and at that moment the closure value IS the current one — so a miss is
+ *  unreachable by construction. Logged rather than silently trusted, so a future
+ *  regression of that invariant is observable instead of silently reintroducing
+ *  the stale-caret bug this WeakMap exists to prevent. */
+function blockStartCaret(root: HTMLElement, widget: TableBlockWidget): number {
+  const current = blockStart.get(root);
+  if (current === undefined) {
+    // `slice` identifies WHICH widget tripped it — a document can hold many
+    // tables, and `fallback` alone would not say which one.
+    console.error("[quoll] table widget blockStart miss — invariant violated", {
+      slice: widget.slice,
+      fallback: widget.docFrom,
+    });
+    return widget.docFrom;
+  }
+  return current;
+}
 
 /** Every selection dispatch out of this widget's DOM listeners goes through
  *  here, so the throw paths are handled in ONE place rather than at each seam.
@@ -177,9 +217,12 @@ export class TableBlockWidget extends WidgetType {
     // block-widget height measurement stays in lockstep with the visible DOM.
     const root = document.createElement("div");
     root.className = "quoll-block quoll-table-block";
-    // Margin-click caret fallback, stored on the DOM so a reused element
-    // (updateDOM) reflects the CURRENT docFrom, not a stale toDOM-time closure.
+    // The margin-click caret travels through `blockStart`, NOT through this
+    // attribute: `data-doc-from` is written for DOM inspection (and read by the
+    // tests that pin the re-stamp) and is NEVER read back — see `blockStart`
+    // above for why this position must not be parsed back out of the DOM.
     root.dataset.docFrom = String(this.docFrom);
+    blockStart.set(root, this.docFrom);
 
     // Resource base for relative in-cell image srcs. Static per editor
     // (resource-base.ts), so it is NOT part of eq() — reading it at
@@ -267,32 +310,26 @@ export class TableBlockWidget extends WidgetType {
         return;
       }
       const cell = (event.target as Element | null)?.closest?.("th, td") ?? null;
-      // Read the stamps through the SAME gate the drag path uses
-      // (`stampedOffset`), not a bare `Number(...)`. Both are DOM attributes and
-      // therefore both are trust boundaries, and CodeMirror will not catch a bad
-      // one for us: `checkSelection` only rejects `range.to > doc.length`, so a
-      // `NaN` anchor is accepted silently and installs a broken selection that
-      // `dispatchSelection`'s catch never sees.
+      // The CELL offset must stay on the DOM — `cellPointAt` resolves an
+      // arbitrary descendant under the pointer and no closure knows which cell
+      // was clicked — so it is read through the SAME gate the drag path uses
+      // (`stampedOffset`), not a bare `Number(...)`. It is a trust boundary and
+      // CodeMirror will not catch a bad value for us: `checkSelection` only
+      // rejects `range.to > doc.length`, so a `NaN` anchor is accepted silently
+      // and installs a broken selection that `dispatchSelection`'s catch never
+      // sees.
       //
       // A stamp that fails the gate degrades one step rather than dispatching
       // nothing: reveal-on-caret is LINE-level, so the block start reveals the
       // same table the cell offset would — only the intra-table caret precision
       // is lost, and a dead click (no reveal at all) is a worse answer for a
       // failure mode that only arises when something outside this widget wrote
-      // its DOM.
-      //
-      // ⚠️ That "same table" guarantee holds for arm 2 (`data-doc-from`) but
-      // NOT for arm 3. `this.docFrom` is the toDOM-time closure value, and
-      // `updateDOM` re-stamps the DOM without being able to re-bind this
-      // listener — the very trap this file's header warns about — so after a
-      // positional shift the closure is stale and arm 3 can reveal a DIFFERENT
-      // block, not merely a less precise position within this one. It is last
-      // for exactly that reason: it is the least trustworthy link, reachable
-      // only once both DOM stamps have already failed the gate.
+      // its DOM. That "same table" guarantee now holds unconditionally: the
+      // block start comes from `blockStart`, which `updateDOM` re-points, so it
+      // can no longer be a stale closure value pointing at a DIFFERENT block.
       const caret =
         (cell === null ? null : stampedOffset(cell, "data-cell-from")) ??
-        stampedOffset(root, "data-doc-from") ??
-        this.docFrom;
+        blockStartCaret(root, this);
       dispatchSelection(view, dragRange(view, root, event, pending) ?? { anchor: caret });
     });
 
@@ -362,9 +399,13 @@ export class TableBlockWidget extends WidgetType {
     // would dispatch a selection over an unrelated span. Drop it; the gesture
     // degrades to the collapsed caret.
     pendingDrag.delete(dom);
-    // Re-stamp the margin fallback so a reused element tracks the new docFrom
-    // after a distant edit shifted this table without changing its bytes.
+    // Re-point the margin-click caret channel the click listener actually reads,
+    // so a reused element tracks the new docFrom after a distant edit shifted
+    // this table without changing its bytes. The attribute beside it is
+    // inspection-only (see toDOM) — dropping THIS line would leave the reused
+    // listener dispatching the old offset while the DOM still looked correct.
     dom.dataset.docFrom = String(this.docFrom);
+    blockStart.set(dom, this.docFrom);
     // Pure positional shift: the bytes are identical (from.slice === this.slice)
     // and only the absolute offsets moved. Re-stamp data-cell-from on each cell
     // and reuse the rendered inline children verbatim — skip patchRow's
