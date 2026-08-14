@@ -1,9 +1,15 @@
 import * as assert from "node:assert";
 import * as fs from "node:fs/promises";
-import * as os from "node:os";
 import * as path from "node:path";
 import * as vscode from "vscode";
-import { cleanupBetweenTests, getHarness, isDocumentEvent, tick, VIEW_TYPE } from "./harness";
+import {
+  cleanupBetweenTests,
+  getHarness,
+  isDocumentEvent,
+  makeTempDir,
+  tick,
+  VIEW_TYPE,
+} from "./harness";
 
 describe("hidden-webview-resync", function () {
   this.timeout(25000);
@@ -24,7 +30,7 @@ describe("hidden-webview-resync", function () {
   });
 
   it("posts a fresh Document when a hidden panel becomes visible after an external edit", async () => {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "quoll-e2e-"));
+    const dir = await makeTempDir("hidden");
     tempFile = path.join(dir, "hidden.md");
     await fs.writeFile(tempFile, "# Original\n");
     const uri = vscode.Uri.file(tempFile);

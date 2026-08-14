@@ -1,10 +1,9 @@
 import * as assert from "node:assert";
 import * as fs from "node:fs/promises";
-import * as os from "node:os";
 import * as path from "node:path";
 import * as vscode from "vscode";
 import { PROTOCOL_VERSION } from "./constants";
-import { cleanupBetweenTests, getHarness, tick, VIEW_TYPE } from "./harness";
+import { cleanupBetweenTests, getHarness, makeTempDir, tick, VIEW_TYPE } from "./harness";
 import type { PanelControlsShape, TestHarnessShape } from "./types";
 
 // Pins the host-side routing of `quoll.formatDocument`: the command forwards a
@@ -43,7 +42,7 @@ async function openTempQuoll(
   slug: string,
   previous: PanelControlsShape | null
 ): Promise<{ uri: vscode.Uri; file: string; panel: PanelControlsShape }> {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), `quoll-fmtdoc-${slug}-`));
+  const dir = await makeTempDir(`fmtdoc-${slug}`);
   const file = path.join(dir, `${slug}.md`);
   await fs.writeFile(file, content);
   const uri = vscode.Uri.file(file);

@@ -1,10 +1,16 @@
 import * as assert from "node:assert";
 import * as fs from "node:fs/promises";
-import * as os from "node:os";
 import * as path from "node:path";
 import * as vscode from "vscode";
 import { PROTOCOL_VERSION } from "./constants";
-import { cleanupBetweenTests, getHarness, isDocumentEvent, tick, VIEW_TYPE } from "./harness";
+import {
+  cleanupBetweenTests,
+  getHarness,
+  isDocumentEvent,
+  makeTempDir,
+  tick,
+  VIEW_TYPE,
+} from "./harness";
 
 // Plan S5 — experiment: racing positional applyEdit semantics (#7, gates S6).
 //
@@ -70,7 +76,7 @@ describe("racing-applyedit-semantics (Plan S5 experiment)", function () {
   });
 
   async function openTemp(base: string): Promise<vscode.Uri> {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "quoll-e2e-s5-"));
+    const dir = await makeTempDir("s5");
     tempFile = path.join(dir, "race.md");
     await fs.writeFile(tempFile, base);
     const uri = vscode.Uri.file(tempFile);

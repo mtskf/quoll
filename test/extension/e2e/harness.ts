@@ -1,7 +1,7 @@
 import * as fs from "node:fs/promises";
-import * as os from "node:os";
 import * as path from "node:path";
 import * as vscode from "vscode";
+import { makeTempDir } from "../temp-root";
 import type {
   DocumentMessageShape,
   EditorConfigMessageShape,
@@ -14,6 +14,14 @@ import type {
 
 export const EXTENSION_ID = "mtskf.quoll";
 export const VIEW_TYPE = "quoll.editMarkdown";
+
+// Every temp dir an E2E suite creates lives under the run root that
+// launch.ts made and disposes on exit — that single owner is why no suite
+// needs dir teardown of its own, and why nothing here ever globs
+// `quoll-e2e-*` (a parallel run owns its own root). Suites must NOT call
+// fs.mkdtemp(os.tmpdir(), …); test/extension/temp-dir-choke-point.test.ts
+// enforces that. Re-exported so suites keep importing from "./harness".
+export { makeTempDir, makeTempDirSync } from "../temp-root";
 
 // __dirname at runtime is `out/test-e2e/e2e/`. Resolve up to the
 // repo root then back into the source-controlled fixtures directory.
@@ -178,7 +186,7 @@ export async function openTempQuoll(
   slug: string,
   previous: PanelControlsShape | null
 ): Promise<{ uri: vscode.Uri; file: string; panel: PanelControlsShape }> {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), `quoll-e2e-${slug}-`));
+  const dir = await makeTempDir(slug);
   const file = path.join(dir, `${slug}.md`);
   await fs.writeFile(file, content);
   const uri = vscode.Uri.file(file);
