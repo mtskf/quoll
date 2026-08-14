@@ -1058,10 +1058,22 @@ describe("TableBlockWidget caret dispatch hardening", () => {
   // reads the module-private WeakMap, so a value written onto the element
   // cannot steer the dispatch.
   //
-  // Both rows go red if the fallback reverts to reading the attribute: "abc"
-  // through a bare `Number(...)` would dispatch `NaN` (accepted by
-  // `checkSelection`, silently broken); "999" is the case even a format gate
-  // would have missed, revealing an unrelated block rather than this table.
+  // The two rows kill two DIFFERENT revert flavours, not the same one twice —
+  // neither alone covers both. "abc" kills a revert to a BARE
+  // `Number(root.dataset.docFrom)` read: that dispatches `NaN`, which
+  // `checkSelection` accepts (it only rejects `range.to > doc.length`), so the
+  // selection would be silently broken. It does NOT kill a revert to the
+  // pre-refactor GATED read (`stampedOffset(root, "data-doc-from") ??
+  // this.docFrom`, PR #359's predecessor): "abc" fails that gate's `/^\d+$/`
+  // test and falls through to `this.docFrom`, which equals this fixture's
+  // expected anchor — so that row alone stays green even with the gated
+  // revert in place. "999" is what kills the gated revert: it passes the
+  // digit gate, so the old code would read 999 off the attribute and reveal
+  // an unrelated block instead of this table. (Verified by actually reverting
+  // to each expression and observing which row(s) go red — see PR #359
+  // hardening notes; mirrors the accurate wording in
+  // cm-image-widget.test.ts's equivalent block, which only had the bare-read
+  // flavour to guard against.)
   it.each([
     ["malformed", "abc"],
     ["well-formed but wrong", "999"],
@@ -1102,6 +1114,30 @@ describe("TableBlockWidget caret dispatch hardening", () => {
         selection: { anchor: SRC.indexOf("alpha") },
         err: expect.any(Error),
       });
+    } finally {
+      consoleError.mockRestore();
+    }
+  });
+
+  // A freshly toDOM'd widget's margin click MUST hit the `blockStart` WeakMap
+  // entry written in toDOM, not the miss fallback (`widget.docFrom`) —
+  // `blockStartCaret`'s breadcrumb. The anchor VALUE alone cannot prove that:
+  // in this fixture (and in every other margin-click test in this file) the
+  // fallback value equals the WeakMap value (both trace back to the same
+  // `docFrom` constructor argument), so a mutation that deletes the
+  // `blockStart.set(root, this.docFrom)` write in `toDOM` still dispatches the
+  // same anchor and every existing assertion here stays green (see PR #359
+  // hardening notes). Only the absence of the miss console.error tells hit
+  // and miss apart.
+  it("does not log a blockStart miss when a fresh toDOM'd widget's margin is clicked", () => {
+    const dispatched: unknown[] = [];
+    const dom = makeWidget(SRC, 7).toDOM(stubView(dispatched));
+    document.body.appendChild(dom);
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    try {
+      dom.click(); // the root div, not a cell
+      expect(dispatched).toEqual([{ selection: { anchor: 7 } }]);
+      expect(consoleError).not.toHaveBeenCalled();
     } finally {
       consoleError.mockRestore();
     }
