@@ -18,9 +18,11 @@ const VS_CODE_VERSION = "1.94.0";
 // starts; the previous module-load-time `existsSync` inside harness.ts
 // ran on every test file's first require and crashed the Electron
 // runner with no mocha context, which triaged as an activation bug.
-// Throws rather than process.exit()ing: once main() owns a run root, exit()
-// would skip the reclaim in its finally. Keeping every preflight on the throw
-// path makes that safety positional-order-independent.
+// Throws rather than process.exit()ing, and runs BEFORE the run root exists.
+// Both halves matter: exit() would skip the reclaim in the finally, and a throw
+// from after createRoot() escapes with no finally to reclaim either. The
+// ordering is load-bearing, so it rides the LaunchDeps seam and is pinned by
+// launch-wiring.test.ts rather than left to a comment.
 function preflightFixturesDir(): void {
   // __dirname at runtime is `out/test-e2e/`. Resolve up to the repo
   // root then back into the source-controlled fixtures directory.
@@ -38,12 +40,13 @@ function preflightFixturesDir(): void {
 export interface LaunchDeps {
   runTests: typeof runTests;
   createRoot: typeof createRunTempRoot;
+  preflight: typeof preflightFixturesDir;
 }
 
 export async function runE2E(
-  deps: LaunchDeps = { runTests, createRoot: createRunTempRoot }
+  deps: LaunchDeps = { runTests, createRoot: createRunTempRoot, preflight: preflightFixturesDir }
 ): Promise<void> {
-  preflightFixturesDir();
+  deps.preflight();
 
   // VS Code creates a unix-domain IPC socket under user-data-dir; on
   // macOS the socket path must fit in 103 chars. The repo path under
@@ -64,21 +67,37 @@ export async function runE2E(
   // 0) hard-exits this process from inside the await and the finally below
   // never runs, stranding the whole root. Holding a listener keeps the exit on
   // our side; a second Ctrl+C still force-closes through the library's own
-  // handler. SIGTERM has no graceful path there at all, so reclaim and re-exit.
+  // handler.
+  //
+  // Baseline rather than a bare count: "has the library taken over?" means "did
+  // a listener appear after ours", which reads correctly in a bare `node` run
+  // (0 → 1) and under any host that already listens.
+  const sigintListenersBefore = process.listenerCount("SIGINT");
   let interrupted = false;
   const onSigint = (): void => {
-    interrupted = true; // the library's ctrlc1 does the graceful child close
+    interrupted = true;
+    // Post-spawn, the library's ctrlc1 has appeared and does the graceful child
+    // close, so we stay passive and reclaim in the finally. Pre-spawn — during
+    // downloadAndUnzipVSCode, minutes on a cold cache — ctrlc1 does not exist
+    // yet, and merely holding this listener suppresses Node's default
+    // termination. Without this branch Ctrl+C would be a dead key for that
+    // whole window.
+    if (process.listenerCount("SIGINT") <= sigintListenersBefore + 1) {
+      try {
+        run.dispose();
+      } catch (err) {
+        console.error(`[e2e] failed to reclaim temp root ${run.root}:`, err);
+      }
+      process.exit(130); // 128 + SIGINT
+    }
   };
   process.on("SIGINT", onSigint);
-  const onSigterm = (): void => {
-    try {
-      run.dispose();
-    } catch (err) {
-      console.error(`[e2e] failed to reclaim temp root ${run.root}:`, err);
-    }
-    process.exit(143); // 128 + SIGTERM
-  };
-  process.once("SIGTERM", onSigterm);
+  // SIGTERM is deliberately NOT handled. The library exposes no child pid and
+  // no graceful stop, so a handler could only reclaim the root while VS Code
+  // may still be running — and a plain `kill` of this process alone leaves the
+  // child alive to recreate user-data-dir under the path just removed, trading
+  // one stranded root for a stranded root plus an orphaned editor. An aborted
+  // run keeping its own single root is the accepted outcome.
   try {
     const extensionDevelopmentPath = path.resolve(__dirname, "../..");
     const extensionTestsPath = path.resolve(__dirname, "./e2e/index");
@@ -97,7 +116,6 @@ export async function runE2E(
     process.exitCode = 1;
   } finally {
     process.removeListener("SIGINT", onSigint);
-    process.removeListener("SIGTERM", onSigterm);
     if (interrupted) {
       // An interrupted run is not a pass — without this it would exit 0.
       process.exitCode ??= 130; // 128 + SIGINT

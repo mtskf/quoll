@@ -139,5 +139,18 @@ describe("e2e temp-dir choke point", () => {
       "probe.ts:3 tmpdir()",
       "probe.ts:4 mkdtempSync()",
     ]);
+
+    // Banning `tmpdir` is what stops a hand-rolled
+    // `fs.mkdirSync(path.join(os.tmpdir(), …))` — `mkdirSync` is deliberately
+    // not in BANNED — so the exemption must stay scoped to the seam's own
+    // test. Widening it tree-wide is otherwise a green edit.
+    const tmpdirProbe = ts.createSourceFile(
+      "probe.ts",
+      'import * as os from "node:os";\nfs.mkdirSync(os.tmpdir() + "/x");',
+      ts.ScriptTarget.ES2022,
+      true
+    );
+    expect(findOffenders(tmpdirProbe, "probe.ts")).toEqual(["probe.ts:2 tmpdir()"]);
+    expect([...TMPDIR_REFERENCE_ALLOWED]).toEqual([path.join(SCAN_ROOT, "temp-root.test.ts")]);
   });
 });
