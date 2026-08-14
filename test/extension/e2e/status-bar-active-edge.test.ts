@@ -48,7 +48,7 @@ async function openTempQuoll(
   previous: PanelControlsShape | null,
   openOptions?: vscode.TextDocumentShowOptions
 ): Promise<{ uri: vscode.Uri; file: string; panel: PanelControlsShape }> {
-  const dir = await makeTempDir(`sbar-`);
+  const dir = await makeTempDir(`sbar-${slug}`);
   const file = path.join(dir, `${slug}.md`);
   await fs.writeFile(file, content);
   const uri = vscode.Uri.file(file);

@@ -48,7 +48,7 @@ async function openTempQuoll(
   slug: string,
   previous: PanelControlsShape | null
 ): Promise<{ uri: vscode.Uri; file: string; panel: PanelControlsShape }> {
-  const dir = await makeTempDir(`2panel-`);
+  const dir = await makeTempDir(`2panel-${slug}`);
   const file = path.join(dir, `${slug}.md`);
   await fs.writeFile(file, content);
   const uri = vscode.Uri.file(file);

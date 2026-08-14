@@ -20,11 +20,11 @@ const WORK_SEGMENT = "w";
 
 export interface RunTempRoot {
   /** The only directory under os.tmpdir() this run may write to. */
-  root: string;
+  readonly root: string;
   /** VS Code --user-data-dir. */
-  userDataDir: string;
+  readonly userDataDir: string;
   /** Parent of every per-test workspace dir the suites allocate. */
-  workDir: string;
+  readonly workDir: string;
   /** Remove the whole root. Safe to call twice; THROWS if the filesystem
    *  refuses (EBUSY / EACCES) — a leak we cannot reclaim must be loud. */
   dispose(): void;
@@ -40,7 +40,14 @@ export function createRunTempRoot(): RunTempRoot {
   } catch (err) {
     // Partial init still owns the root: reclaim it before the caller ever
     // holds a handle, otherwise the throw leaks the dir we just created.
-    fs.rmSync(root, { recursive: true, force: true });
+    // The rollback must never become the reported failure — whatever broke
+    // mkdir is the diagnosable cause (a read-only or full $TMPDIR breaks
+    // both), so log a failed rollback and rethrow the original.
+    try {
+      fs.rmSync(root, { recursive: true, force: true });
+    } catch (cleanupErr) {
+      console.error(`[e2e] failed to reclaim partially-created temp root ${root}:`, cleanupErr);
+    }
     throw err;
   }
   return {
@@ -48,7 +55,12 @@ export function createRunTempRoot(): RunTempRoot {
     userDataDir,
     workDir,
     dispose(): void {
-      fs.rmSync(root, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+      // ~3s of retries (linear backoff: 200, 400, … 1000). dispose() fires the
+      // instant the Electron main process closes, while VS Code's helpers may
+      // still be writing under user-data-dir. An ENOTEMPTY there is a race,
+      // not a leak, and must not flip a green run red; a throw past this
+      // budget means genuinely unreclaimable, which is worth failing for.
+      fs.rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
     },
   };
 }
@@ -66,13 +78,26 @@ export function resolveRunTempWorkDir(env: NodeJS.ProcessEnv = process.env): str
   return path.join(root, WORK_SEGMENT);
 }
 
+/** Reject anything that could climb out of the work dir. `path.join`
+ *  normalises `../`, so a slug carrying a separator would land a dir OUTSIDE
+ *  the run root — where nothing disposes it. The choke-point test governs who
+ *  allocates; this governs where the result lands. */
+function assertSlug(slug: string): string {
+  if (!/^[a-z0-9][a-z0-9-]*$/i.test(slug)) {
+    throw new Error(`temp-dir slug must be a bare name, got ${JSON.stringify(slug)}`);
+  }
+  return slug;
+}
+
 /** Allocate a per-test workspace dir under the run root. This is the ONLY
  *  sanctioned temp-dir allocation in the E2E tree — enforced by
- *  test/extension/temp-dir-choke-point.test.ts. */
-export function makeTempDir(slug: string): Promise<string> {
-  return fsp.mkdtemp(path.join(resolveRunTempWorkDir(), `${slug}-`));
+ *  test/extension/temp-dir-choke-point.test.ts.
+ *  `async` is load-bearing: `resolveRunTempWorkDir` / `assertSlug` throw
+ *  synchronously, and a declared `Promise` must deliver that as a rejection. */
+export async function makeTempDir(slug: string): Promise<string> {
+  return fsp.mkdtemp(path.join(resolveRunTempWorkDir(), `${assertSlug(slug)}-`));
 }
 
 export function makeTempDirSync(slug: string): string {
-  return fs.mkdtempSync(path.join(resolveRunTempWorkDir(), `${slug}-`));
+  return fs.mkdtempSync(path.join(resolveRunTempWorkDir(), `${assertSlug(slug)}-`));
 }

@@ -18,19 +18,31 @@ const VS_CODE_VERSION = "1.94.0";
 // starts; the previous module-load-time `existsSync` inside harness.ts
 // ran on every test file's first require and crashed the Electron
 // runner with no mocha context, which triaged as an activation bug.
+// Throws rather than process.exit()ing: once main() owns a run root, exit()
+// would skip the reclaim in its finally. Keeping every preflight on the throw
+// path makes that safety positional-order-independent.
 function preflightFixturesDir(): void {
   // __dirname at runtime is `out/test-e2e/`. Resolve up to the repo
   // root then back into the source-controlled fixtures directory.
   const fixturesDir = path.resolve(__dirname, "../..", "test/extension/e2e/fixtures");
   if (!fs.existsSync(fixturesDir)) {
-    console.error(
+    throw new Error(
       `[e2e] FIXTURES_DIR misresolved: ${fixturesDir} — tsconfig outDir may have changed`
     );
-    process.exit(1);
   }
 }
 
-async function main(): Promise<void> {
+/** Injectable seam so the wiring below — which env key carries the root, which
+ *  dir VS Code gets, and that dispose() runs on BOTH the pass and fail paths —
+ *  is unit-testable without downloading and spawning Electron. */
+export interface LaunchDeps {
+  runTests: typeof runTests;
+  createRoot: typeof createRunTempRoot;
+}
+
+export async function runE2E(
+  deps: LaunchDeps = { runTests, createRoot: createRunTempRoot }
+): Promise<void> {
   preflightFixturesDir();
 
   // VS Code creates a unix-domain IPC socket under user-data-dir; on
@@ -45,12 +57,33 @@ async function main(): Promise<void> {
   // whole tmp footprint. Before it, every run stranded its user-data dir
   // plus one dir per temp-file test, forever (+53 dirs per run measured
   // 2026-08-14, 2 544 accumulated).
-  const run = createRunTempRoot();
+  const run = deps.createRoot();
+  // Own SIGINT ourselves. @vscode/test-electron ends innerRunTests with
+  // `if (exitRequested && process.listenerCount('SIGINT') === 0) process.exit(1)`
+  // — so without a listener here, the FIRST Ctrl+C (graceful close, child exits
+  // 0) hard-exits this process from inside the await and the finally below
+  // never runs, stranding the whole root. Holding a listener keeps the exit on
+  // our side; a second Ctrl+C still force-closes through the library's own
+  // handler. SIGTERM has no graceful path there at all, so reclaim and re-exit.
+  let interrupted = false;
+  const onSigint = (): void => {
+    interrupted = true; // the library's ctrlc1 does the graceful child close
+  };
+  process.on("SIGINT", onSigint);
+  const onSigterm = (): void => {
+    try {
+      run.dispose();
+    } catch (err) {
+      console.error(`[e2e] failed to reclaim temp root ${run.root}:`, err);
+    }
+    process.exit(143); // 128 + SIGTERM
+  };
+  process.once("SIGTERM", onSigterm);
   try {
     const extensionDevelopmentPath = path.resolve(__dirname, "../..");
     const extensionTestsPath = path.resolve(__dirname, "./e2e/index");
 
-    await runTests({
+    await deps.runTests({
       version: VS_CODE_VERSION,
       extensionDevelopmentPath,
       extensionTestsPath,
@@ -63,6 +96,12 @@ async function main(): Promise<void> {
     // strand the whole root on every failing run.
     process.exitCode = 1;
   } finally {
+    process.removeListener("SIGINT", onSigint);
+    process.removeListener("SIGTERM", onSigterm);
+    if (interrupted) {
+      // An interrupted run is not a pass — without this it would exit 0.
+      process.exitCode ??= 130; // 128 + SIGINT
+    }
     try {
       run.dispose();
     } catch (err) {
@@ -73,4 +112,11 @@ async function main(): Promise<void> {
   }
 }
 
-void main();
+// `require.main === module` holds only under `node out/test-e2e/launch.js`, so
+// the wiring test can import runE2E without spawning anything.
+if (require.main === module) {
+  void runE2E().catch((err) => {
+    console.error(err instanceof Error ? err.message : err);
+    process.exitCode = 1;
+  });
+}

@@ -39,13 +39,38 @@ describe("createRunTempRoot", () => {
     expect(fs.existsSync(a.workDir)).toBe(true);
   });
 
-  it("keeps the user-data path within the macOS socket budget", () => {
+  it("keeps the code's own contribution inside the macOS socket budget", () => {
     // VS Code opens its IPC socket under --user-data-dir and macOS caps
     // those paths at 103 chars; an overlong path fails the launch, not a
-    // test, so pin the budget where a rename would trip it.
+    // test. Measure only the part this module controls — asserting the
+    // absolute length would pass on CI (where $TMPDIR is `/tmp`, 56 chars
+    // of slack) and so would never catch a rename of the segments.
     const run = newRoot();
-    expect(run.userDataDir.length).toBeLessThanOrEqual(80);
+    const owned = run.userDataDir.slice(fs.realpathSync(os.tmpdir()).length);
+    expect(owned).toBe(`${path.sep}${path.basename(run.root)}${path.sep}ud`);
+    expect(owned.length).toBeLessThanOrEqual(24);
   });
+
+  it.skipIf(process.getuid?.() === 0)(
+    "throws when the filesystem refuses, rather than leaking silently",
+    () => {
+      // The other half of the dispose contract. `not.toThrow()` on an
+      // already-removed root is satisfied by `force: true` alone, so a
+      // dispose() that swallowed everything would pass it — this case is what
+      // distinguishes "loud on unreclaimable" from "silently gives up".
+      const run = newRoot();
+      const locked = path.join(run.workDir, "locked");
+      fs.mkdirSync(locked);
+      fs.writeFileSync(path.join(locked, "f.md"), "x");
+      fs.chmodSync(locked, 0o500);
+      try {
+        expect(() => run.dispose()).toThrow();
+      } finally {
+        fs.chmodSync(locked, 0o700); // afterEach must still be able to reclaim
+      }
+    },
+    15000 // dispose retries with linear backoff before giving up
+  );
 
   it("reclaims a non-empty root", () => {
     const run = newRoot();
@@ -94,5 +119,15 @@ describe("makeTempDir", () => {
     // suite needs per-dir teardown of its own.
     run.dispose();
     expect(fs.existsSync(first)).toBe(false);
+  });
+
+  it("refuses a slug that would escape the run's work dir", async () => {
+    // `path.join` normalises `../`, so a separator in a slug lands the dir
+    // outside the root — where nothing disposes it. The choke-point test
+    // governs who allocates; this governs where the result lands.
+    const run = newRoot();
+    process.env[RUN_TEMP_ROOT_ENV] = run.root;
+    await expect(makeTempDir("../escape")).rejects.toThrow(/bare name/);
+    expect(() => makeTempDirSync("a/b")).toThrow(/bare name/);
   });
 });

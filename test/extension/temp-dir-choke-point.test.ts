@@ -40,10 +40,49 @@ function calleeName(node: ts.CallExpression): string {
   if (ts.isPropertyAccessExpression(target)) {
     return target.name.text;
   }
+  // fs["mkdtempSync"](…) — an element access is still a call to the same thing.
+  if (ts.isElementAccessExpression(target) && ts.isStringLiteralLike(target.argumentExpression)) {
+    return target.argumentExpression.text;
+  }
   if (ts.isIdentifier(target)) {
     return target.text;
   }
   return "";
+}
+
+/** BANNED plus whatever local names those symbols were imported AS — without
+ *  this, `import { mkdtemp as mkTmp }` walks straight past the guard, and that
+ *  rename is something an import-organiser can introduce mechanically. */
+function bannedNamesIn(source: ts.SourceFile): Set<string> {
+  const names = new Set(BANNED);
+  source.forEachChild((node) => {
+    if (!ts.isImportDeclaration(node)) {
+      return;
+    }
+    const named = node.importClause?.namedBindings;
+    if (named && ts.isNamedImports(named)) {
+      for (const spec of named.elements) {
+        if (BANNED.has((spec.propertyName ?? spec.name).text)) {
+          names.add(spec.name.text);
+        }
+      }
+    }
+  });
+  return names;
+}
+
+function findOffenders(source: ts.SourceFile, label: string): string[] {
+  const banned = bannedNamesIn(source);
+  const offenders: string[] = [];
+  const visit = (node: ts.Node): void => {
+    if (ts.isCallExpression(node) && banned.has(calleeName(node))) {
+      const { line } = source.getLineAndCharacterOfPosition(node.getStart(source));
+      offenders.push(`${label}:${line + 1} ${calleeName(node)}()`);
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(source);
+  return offenders;
 }
 
 describe("e2e temp-dir choke point", () => {
@@ -66,22 +105,39 @@ describe("e2e temp-dir choke point", () => {
         ts.ScriptTarget.ES2022,
         true
       );
-      const visit = (node: ts.Node): void => {
-        if (ts.isCallExpression(node) && BANNED.has(calleeName(node))) {
-          const name = calleeName(node);
-          const exempt = name === "tmpdir" && TMPDIR_REFERENCE_ALLOWED.has(file);
-          if (!exempt) {
-            const { line } = source.getLineAndCharacterOfPosition(node.getStart(source));
-            offenders.push(`${path.relative(SCAN_ROOT, file)}:${line + 1} ${name}()`);
-          }
-        }
-        ts.forEachChild(node, visit);
-      };
-      visit(source);
+      const found = findOffenders(source, path.relative(SCAN_ROOT, file));
+      // The seam's own test may NAME os.tmpdir() to pin where the root lands;
+      // it still may not allocate, so only `tmpdir` is exempted there.
+      offenders.push(
+        ...(TMPDIR_REFERENCE_ALLOWED.has(file)
+          ? found.filter((entry) => !entry.endsWith("tmpdir()"))
+          : found)
+      );
     }
     expect(
       offenders,
       "use makeTempDir/makeTempDirSync from ./harness — temp-root.ts is the only allocation site"
     ).toEqual([]);
+  });
+
+  it("catches the bypasses a rename or an indexed call would open", () => {
+    // Exercises the branches above, which no real source file currently hits —
+    // without this they would be dead code that silently stops working.
+    const probe = ts.createSourceFile(
+      "probe.ts",
+      [
+        'import { mkdtemp as mkTmp } from "node:fs/promises";',
+        'import * as os from "node:os";',
+        'await mkTmp(os.tmpdir() + "/x-");',
+        'fs["mkdtempSync"]("/tmp/y-");',
+      ].join("\n"),
+      ts.ScriptTarget.ES2022,
+      true
+    );
+    expect(findOffenders(probe, "probe.ts")).toEqual([
+      "probe.ts:3 mkTmp()",
+      "probe.ts:3 tmpdir()",
+      "probe.ts:4 mkdtempSync()",
+    ]);
   });
 });
