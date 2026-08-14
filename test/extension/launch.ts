@@ -4,9 +4,9 @@
 // engines.vscode bumps in package.json, this constant bumps with it.
 
 import * as fs from "node:fs";
-import * as os from "node:os";
 import * as path from "node:path";
 import { runTests } from "@vscode/test-electron";
+import { createRunTempRoot, RUN_TEMP_ROOT_ENV } from "./temp-root";
 
 const VS_CODE_VERSION = "1.94.0";
 
@@ -31,27 +31,45 @@ function preflightFixturesDir(): void {
 }
 
 async function main(): Promise<void> {
+  preflightFixturesDir();
+
+  // VS Code creates a unix-domain IPC socket under user-data-dir; on
+  // macOS the socket path must fit in 103 chars. The repo path under
+  // ~/Dev/... + worktree name routinely exceeds that, so we put the
+  // user-data-dir in a short tmp path. mkdtemp guarantees a unique
+  // root per run so parallel CI shards don't collide.
+  //
+  // The root also parents every per-test workspace dir — the suites
+  // allocate through temp-root's makeTempDir, which reads the root from
+  // RUN_TEMP_ROOT_ENV below — so this one dispose() reclaims the run's
+  // whole tmp footprint. Before it, every run stranded its user-data dir
+  // plus one dir per temp-file test, forever (+53 dirs per run measured
+  // 2026-08-14, 2 544 accumulated).
+  const run = createRunTempRoot();
   try {
-    preflightFixturesDir();
     const extensionDevelopmentPath = path.resolve(__dirname, "../..");
     const extensionTestsPath = path.resolve(__dirname, "./e2e/index");
-
-    // VS Code creates a unix-domain IPC socket under user-data-dir; on
-    // macOS the socket path must fit in 103 chars. The repo path under
-    // ~/Dev/... + worktree name routinely exceeds that, so we put the
-    // user-data-dir in a short tmp path. mkdtemp guarantees a unique
-    // dir per run so parallel CI shards don't collide.
-    const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), "quoll-e2e-"));
 
     await runTests({
       version: VS_CODE_VERSION,
       extensionDevelopmentPath,
       extensionTestsPath,
-      launchArgs: ["--disable-extensions", `--user-data-dir=${userDataDir}`],
+      extensionTestsEnv: { [RUN_TEMP_ROOT_ENV]: run.root },
+      launchArgs: ["--disable-extensions", `--user-data-dir=${run.userDataDir}`],
     });
   } catch (err) {
     console.error("Failed to run E2E tests:", err);
-    process.exit(1);
+    // exitCode, not process.exit: exit() skips the finally below and would
+    // strand the whole root on every failing run.
+    process.exitCode = 1;
+  } finally {
+    try {
+      run.dispose();
+    } catch (err) {
+      // Never silent — an unreclaimable root is the bug this owns.
+      console.error(`[e2e] failed to reclaim temp root ${run.root}:`, err);
+      process.exitCode = 1;
+    }
   }
 }
 

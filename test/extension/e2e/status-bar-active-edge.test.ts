@@ -1,9 +1,8 @@
 import * as assert from "node:assert";
 import * as fs from "node:fs/promises";
-import * as os from "node:os";
 import * as path from "node:path";
 import * as vscode from "vscode";
-import { cleanupBetweenTests, getHarness, tick, VIEW_TYPE } from "./harness";
+import { cleanupBetweenTests, getHarness, makeTempDir, tick, VIEW_TYPE } from "./harness";
 import type { PanelControlsShape, StatusBarItemProbeShape, TestHarnessShape } from "./types";
 
 // Pins the panel-side status-bar wiring PR #158 left untested: the item shows on
@@ -49,7 +48,7 @@ async function openTempQuoll(
   previous: PanelControlsShape | null,
   openOptions?: vscode.TextDocumentShowOptions
 ): Promise<{ uri: vscode.Uri; file: string; panel: PanelControlsShape }> {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), `quoll-sbar-${slug}-`));
+  const dir = await makeTempDir(`sbar-`);
   const file = path.join(dir, `${slug}.md`);
   await fs.writeFile(file, content);
   const uri = vscode.Uri.file(file);

@@ -1,9 +1,8 @@
 import * as assert from "node:assert";
 import * as fs from "node:fs/promises";
-import * as os from "node:os";
 import * as path from "node:path";
 import * as vscode from "vscode";
-import { cleanupBetweenTests, getHarness, VIEW_TYPE } from "./harness";
+import { cleanupBetweenTests, getHarness, makeTempDir, VIEW_TYPE } from "./harness";
 
 const KEY = "quoll.lint.problems.enabled";
 
@@ -73,7 +72,7 @@ describe("lint-problems-config-toggle", function () {
     // depend on inherited settings state).
     await vscode.workspace.getConfiguration().update(KEY, true, vscode.ConfigurationTarget.Global);
 
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "quoll-lint-toggle-"));
+    const dir = await makeTempDir("lint-toggle");
     tempFile = path.join(dir, "heading-skip.md");
     // h1 -> h3 skips h2: a heading-increment warning on "### Skip" (line 2).
     await fs.writeFile(tempFile, "# Title\n\n### Skip\n");

@@ -1,6 +1,5 @@
 import * as assert from "node:assert";
 import * as fs from "node:fs/promises";
-import * as os from "node:os";
 import * as path from "node:path";
 import * as vscode from "vscode";
 import { PROTOCOL_VERSION } from "./constants";
@@ -9,6 +8,7 @@ import {
   getHarness,
   isDocumentAfter,
   isDocumentEvent,
+  makeTempDir,
   VIEW_TYPE,
 } from "./harness";
 
@@ -47,7 +47,7 @@ describe("crlf-roundtrip", function () {
   it("preserves \\r\\n bytes end-to-end through the host write path", async () => {
     // Per-test temp file (mirrors external-edit-propagates) so a mid-test
     // failure does not leave a shared fixture dirty for subsequent tests.
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "quoll-e2e-crlf-"));
+    const dir = await makeTempDir("crlf");
     tempFile = path.join(dir, "crlf.md");
     // Initial on-disk bytes: pure CRLF. The trailing CRLF after the last
     // line gives the file two distinct CRLF separators so a single-
