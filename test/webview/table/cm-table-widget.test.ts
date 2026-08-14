@@ -1058,22 +1058,15 @@ describe("TableBlockWidget caret dispatch hardening", () => {
   // reads the module-private WeakMap, so a value written onto the element
   // cannot steer the dispatch.
   //
-  // The two rows kill two DIFFERENT revert flavours, not the same one twice —
-  // neither alone covers both. "abc" kills a revert to a BARE
-  // `Number(root.dataset.docFrom)` read: that dispatches `NaN`, which
+  // The rows kill two DIFFERENT reverts; both are needed. "abc" kills a BARE
+  // `Number(root.dataset.docFrom)` read — that dispatches `NaN`, which
   // `checkSelection` accepts (it only rejects `range.to > doc.length`), so the
-  // selection would be silently broken. It does NOT kill a revert to the
-  // pre-refactor GATED read (`stampedOffset(root, "data-doc-from") ??
-  // this.docFrom`, PR #359's predecessor): "abc" fails that gate's `/^\d+$/`
-  // test and falls through to `this.docFrom`, which equals this fixture's
-  // expected anchor — so that row alone stays green even with the gated
-  // revert in place. "999" is what kills the gated revert: it passes the
-  // digit gate, so the old code would read 999 off the attribute and reveal
-  // an unrelated block instead of this table. (Verified by actually reverting
-  // to each expression and observing which row(s) go red — see PR #359
-  // hardening notes; mirrors the accurate wording in
-  // cm-image-widget.test.ts's equivalent block, which only had the bare-read
-  // flavour to guard against.)
+  // selection breaks silently. It leaves the pre-refactor GATED read
+  // (`stampedOffset(root, "data-doc-from") ?? this.docFrom`) green, because
+  // "abc" fails that gate's `/^\d+$/` and falls through to `this.docFrom` —
+  // this fixture's expected anchor. "999" kills the gated read: it passes the
+  // digit gate, so the old code would dispatch 999 and reveal an unrelated
+  // block. (Each revert was applied and the red rows observed.)
   it.each([
     ["malformed", "abc"],
     ["well-formed but wrong", "999"],
@@ -1119,16 +1112,13 @@ describe("TableBlockWidget caret dispatch hardening", () => {
     }
   });
 
-  // A freshly toDOM'd widget's margin click MUST hit the `blockStart` WeakMap
-  // entry written in toDOM, not the miss fallback (`widget.docFrom`) —
-  // `blockStartCaret`'s breadcrumb. The anchor VALUE alone cannot prove that:
-  // in this fixture (and in every other margin-click test in this file) the
-  // fallback value equals the WeakMap value (both trace back to the same
-  // `docFrom` constructor argument), so a mutation that deletes the
-  // `blockStart.set(root, this.docFrom)` write in `toDOM` still dispatches the
-  // same anchor and every existing assertion here stays green (see PR #359
-  // hardening notes). Only the absence of the miss console.error tells hit
-  // and miss apart.
+  // A fresh toDOM'd widget's margin click must hit the `blockStart` entry
+  // written in toDOM, not `blockStartCaret`'s miss fallback. The anchor VALUE
+  // cannot tell them apart: here — as in every margin-click fixture in this
+  // file — both trace back to the same `docFrom` constructor argument, so
+  // deleting the `blockStart.set(root, this.docFrom)` write in `toDOM` leaves
+  // every anchor assertion green. The absent miss `console.error` is the only
+  // observable difference.
   it("does not log a blockStart miss when a fresh toDOM'd widget's margin is clicked", () => {
     const dispatched: unknown[] = [];
     const dom = makeWidget(SRC, 7).toDOM(stubView(dispatched));

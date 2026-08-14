@@ -69,11 +69,9 @@ const pendingDrag = new WeakMap<HTMLElement, PendingDrag>();
  *
  *  A `number` end to end: unlike the per-CELL offsets it is never stringified,
  *  parsed, or read back from the DOM, so there is no malformed-value state to
- *  gate. (`checkSelection` in @codemirror/state only rejects
- *  `range.to > doc.length`, so a `NaN` / negative / fractional anchor would
- *  otherwise install a silently broken selection that no try/catch can observe
- *  — the reason `stampedOffset` exists for the stamps that MUST stay on the
- *  DOM.) Same channel, same rationale, as image-widget.ts's `blockStart`. */
+ *  gate — which is why `stampedOffset` guards those stamps and not this one
+ *  (its docblock has what CodeMirror does NOT catch). Same channel, same
+ *  rationale, as image-widget.ts's `blockStart`. */
 const blockStart = new WeakMap<HTMLElement, number>();
 
 /** Margin-click caret: the block start this root currently points at.
@@ -82,8 +80,8 @@ const blockStart = new WeakMap<HTMLElement, number>();
  *  `number | undefined` read; it is not the stale-closure hazard coming back.
  *  The entry is written in `toDOM` in the same breath as attaching the listener,
  *  and at that moment the closure value IS the current one — so a miss is
- *  unreachable by construction. Logged rather than silently trusted, so a future
- *  regression of that invariant is observable instead of silently reintroducing
+ *  unreachable by construction. Logged rather than trusted, so a future
+ *  regression of that invariant is observable instead of quietly reintroducing
  *  the stale-caret bug this WeakMap exists to prevent. */
 function blockStartCaret(root: HTMLElement, widget: TableBlockWidget): number {
   const current = blockStart.get(root);
@@ -311,22 +309,20 @@ export class TableBlockWidget extends WidgetType {
       }
       const cell = (event.target as Element | null)?.closest?.("th, td") ?? null;
       // The CELL offset must stay on the DOM — `cellPointAt` resolves an
-      // arbitrary descendant under the pointer and no closure knows which cell
-      // was clicked — so it is read through the SAME gate the drag path uses
-      // (`stampedOffset`), not a bare `Number(...)`. It is a trust boundary and
-      // CodeMirror will not catch a bad value for us: `checkSelection` only
-      // rejects `range.to > doc.length`, so a `NaN` anchor is accepted silently
-      // and installs a broken selection that `dispatchSelection`'s catch never
-      // sees.
+      // arbitrary descendant under the pointer, so no closure knows which cell
+      // was clicked. That makes it a trust boundary, read through the SAME gate
+      // the drag path uses (`stampedOffset`) rather than a bare `Number(...)`;
+      // its docblock has the why — CodeMirror accepts a `NaN` anchor and
+      // installs a broken selection `dispatchSelection`'s catch never sees.
       //
       // A stamp that fails the gate degrades one step rather than dispatching
       // nothing: reveal-on-caret is LINE-level, so the block start reveals the
       // same table the cell offset would — only the intra-table caret precision
       // is lost, and a dead click (no reveal at all) is a worse answer for a
       // failure mode that only arises when something outside this widget wrote
-      // its DOM. That "same table" guarantee now holds unconditionally: the
-      // block start comes from `blockStart`, which `updateDOM` re-points, so it
-      // can no longer be a stale closure value pointing at a DIFFERENT block.
+      // its DOM. That "same table" guarantee is unconditional now that the block
+      // start comes from `blockStart`, which `updateDOM` re-points: it can no
+      // longer be a stale closure value pointing at a DIFFERENT block.
       const caret =
         (cell === null ? null : stampedOffset(cell, "data-cell-from")) ??
         blockStartCaret(root, this);
