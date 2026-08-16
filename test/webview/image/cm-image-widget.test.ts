@@ -261,6 +261,34 @@ describe("ImageBlockWidget identity + events", () => {
       errSpy.mockRestore();
     }
   });
+
+  // A fresh toDOM'd widget's click must hit the `blockStart` entry written in
+  // toDOM, not the listener's miss fallback — the absent `console.error` is the
+  // only observable difference. The anchor VALUE cannot distinguish them here
+  // (nor in any other fixture in this file, which all click in the same breath
+  // as toDOM): both trace back to the same `docFrom` constructor argument, so
+  // deleting `blockStart.set(root, this.docFrom)` in `toDOM` leaves every such
+  // anchor assertion green. (The updateDOM re-stamp fixtures below stay green
+  // for an unrelated reason: their OWN `blockStart.set` write re-fills the
+  // entry with the new docFrom.) Mirrors the table widget's pin of the same
+  // gap.
+  it("does not log a blockStart miss when a fresh toDOM'd widget is clicked", () => {
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const { view, dispatched } = recordingView();
+      const dom = new ImageBlockWidget(
+        "a",
+        url("https://x.test/a.png"),
+        "![a](https://x.test/a.png)",
+        42
+      ).toDOM(view);
+      dom.click();
+      expect(dispatched).toEqual([{ anchor: 42 }]);
+      expect(errSpy).not.toHaveBeenCalled();
+    } finally {
+      errSpy.mockRestore();
+    }
+  });
 });
 
 describe("ImageBlockWidget.toDOM — dimension cache", () => {
