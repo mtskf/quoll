@@ -63,6 +63,7 @@ function resolveToggleFrom(span: HTMLElement, widget: CheckboxWidget): number {
   const from = toggleTarget.get(span);
   if (from === undefined) {
     console.error("[quoll] task checkbox widget toggleTarget miss — invariant violated", {
+      label: widget.label,
       checked: widget.checked,
       fallback: widget.from,
     });
