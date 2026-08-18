@@ -37,7 +37,7 @@ import { toggleTaskCheckbox } from "./task-checkbox-command.js";
 
 // The marker's CURRENT `[` offset, keyed on the widget's root element.
 //
-// Keyed on the element rather than read back from `dataset.from` because
+// Keyed on the element rather than held in the `toDOM` closure because
 // `updateDOM` reuses that element across widget instances: after a distant
 // edit shifts this marker, CodeMirror builds a NEW widget, `eq()` returns
 // false, and `updateDOM` re-points the reused DOM — but it cannot re-bind
@@ -48,8 +48,9 @@ import { toggleTaskCheckbox } from "./task-checkbox-command.js";
 // A WeakMap so a discarded span takes its entry with it. Same pattern, same
 // reason, as image-widget.ts's `blockStart`.
 //
-// A `number` end to end: nothing is stringified, parsed, or read back from
-// the DOM, so there is no malformed-value state to validate against.
+// A WeakMap rather than the `dataset.from` stamp it replaced, so the offset
+// stays a `number` end to end: nothing is stringified, parsed, or read back
+// from the DOM, so there is no malformed-value state to validate against.
 const toggleTarget = new WeakMap<HTMLElement, number>();
 
 // Shared by the mousedown and keydown listeners in toDOM. Falling back to
