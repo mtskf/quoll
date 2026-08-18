@@ -35,6 +35,44 @@ import { type EditorView, WidgetType } from "@codemirror/view";
 
 import { toggleTaskCheckbox } from "./task-checkbox-command.js";
 
+// The marker's CURRENT `[` offset, keyed on the widget's root element.
+//
+// Keyed on the element rather than held in the `toDOM` closure because
+// `updateDOM` reuses that element across widget instances: after a distant
+// edit shifts this marker, CodeMirror builds a NEW widget, `eq()` returns
+// false, and `updateDOM` re-points the reused DOM — but it cannot re-bind
+// the mousedown/keydown listeners, whose captured `this` is the OLD
+// instance. So the new instance needs a channel to hand the current offset
+// to the existing listeners, and the channel has to be updatable exactly
+// when the position moves, which `updateDOM` can do and a closure cannot.
+// A WeakMap so a discarded span takes its entry with it. Same pattern, same
+// reason, as image-widget.ts's `blockStart`.
+//
+// A WeakMap rather than the `dataset.from` stamp it replaced, so the offset
+// stays a `number` end to end: nothing is stringified, parsed, or read back
+// from the DOM, so there is no malformed-value state to validate against.
+const toggleTarget = new WeakMap<HTMLElement, number>();
+
+// Shared by the mousedown and keydown listeners in toDOM. Falling back to
+// `widget.from` on a miss does not reintroduce the stale-closure hazard the
+// WeakMap exists to fix: the entry is set in the same breath as attaching
+// the listeners (toDOM) and re-set on every reuse (updateDOM), so a miss is
+// unreachable by construction. Logged, not silently trusted, so a future
+// regression of that invariant is observable instead of silently
+// reintroducing a stale toggle target.
+function resolveToggleFrom(span: HTMLElement, widget: CheckboxWidget): number {
+  const from = toggleTarget.get(span);
+  if (from === undefined) {
+    console.error("[quoll] task checkbox widget toggleTarget miss — invariant violated", {
+      label: widget.label,
+      checked: widget.checked,
+      fallback: widget.from,
+    });
+    return widget.from;
+  }
+  return from;
+}
+
 export class CheckboxWidget extends WidgetType {
   constructor(
     readonly checked: boolean,
@@ -64,10 +102,11 @@ export class CheckboxWidget extends WidgetType {
     );
     span.tabIndex = 0;
     span.dataset.checked = this.checked ? "true" : "false";
-    // Toggle target stored on the DOM so a reused span (updateDOM) toggles the
-    // CURRENT marker after a distant edit shifted it, not a stale toDOM-time
-    // closure.
+    // `data-from` is written for DOM inspection (and read by tests that pin
+    // the re-stamp) and is NEVER read back — see `toggleTarget` above for why
+    // the toggle offset must not be parsed back out of the DOM.
     span.dataset.from = String(this.from);
+    toggleTarget.set(span, this.from);
 
     span.addEventListener("mousedown", (event) => {
       // Left-click only — right/middle click stays as plain browser
@@ -86,14 +125,14 @@ export class CheckboxWidget extends WidgetType {
       // restoration plumbing; the promise has been withdrawn for C5.
       event.preventDefault();
       event.stopPropagation();
-      toggleTaskCheckbox(view, Number(span.dataset.from ?? this.from));
+      toggleTaskCheckbox(view, resolveToggleFrom(span, this));
     });
 
     span.addEventListener("keydown", (event) => {
       if (event.key === " " || event.key === "Enter") {
         event.preventDefault();
         event.stopPropagation();
-        toggleTaskCheckbox(view, Number(span.dataset.from ?? this.from));
+        toggleTaskCheckbox(view, resolveToggleFrom(span, this));
         // Return focus to the editor so the keyboard user can keep
         // typing — without this, focus stays on the now-replaced (or
         // about-to-be-stale) widget DOM and the next keystroke goes
@@ -119,8 +158,9 @@ export class CheckboxWidget extends WidgetType {
     // event capture, and the keydown handler's unconditional view.focus() (not
     // this method) is now responsible for restoring focus after a toggle
     // (round-3 #23). This optimization targets edits ABOVE the checkbox, not
-    // toggles. A pure from-shift reuses the span: re-stamp dataset.from (read by
-    // the mousedown/keydown handlers) and refresh aria-label per the widget's
+    // toggles. A pure from-shift reuses the span: re-point the `toggleTarget`
+    // channel the mousedown/keydown handlers actually read (dataset.from is
+    // inspection-only, see toDOM) and refresh aria-label per the widget's
     // (checked, from)-change contract.
     if (!dom.classList.contains("quoll-task-checkbox")) {
       return false;
@@ -129,6 +169,7 @@ export class CheckboxWidget extends WidgetType {
       return false;
     }
     dom.dataset.from = String(this.from);
+    toggleTarget.set(dom, this.from);
     dom.setAttribute(
       "aria-label",
       this.label.length > 0 ? `Task: ${this.label}` : "Task list item"
