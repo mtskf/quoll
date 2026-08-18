@@ -473,13 +473,17 @@ describe("CheckboxWidget — toggle dispatch", () => {
   // listeners read the module-private `toggleTarget` WeakMap, so a value
   // written onto the span cannot steer the dispatch.
   //
-  // Both rows go red if the listeners revert to `Number(span.dataset.from)`:
-  // "abc" would dispatch `NaN`, which `toggleTaskCheckbox`'s bound checks
-  // reject anyway (so this alone would not distinguish the two
-  // implementations) — the "999" row is the one that actually
-  // distinguishes them: it is a well-formed number but points at unrelated
-  // text, so a `Number(dataset…)` read would silently toggle the wrong
-  // bytes instead of the marker at the real `from`.
+  // Both rows pin the same "tampered dataset is ignored" contract via two
+  // different tampered values reaching `toggleTaskCheckbox` under a
+  // hypothetical `Number(span.dataset.from)` regression: "abc" → NaN, which
+  // slips past the `markerFrom < 0 || markerFrom + 3 > doc.length` bounds
+  // check (NaN comparisons are always false) and is instead caught by the
+  // TASK_MARKER_RE slice check; "999" is caught earlier, by that same bounds
+  // check, since 999 + 3 exceeds this 11-character doc's length. Either
+  // tampered value would make the row go red (doc stays unchanged, failing
+  // the "- [x] alpha" assertion) under that regression — the two rows exist
+  // to cover both of `toggleTaskCheckbox`'s early guards, not because one
+  // value would silently toggle unrelated bytes and the other wouldn't.
   it.each([
     ["malformed", "abc"],
     ["well-formed but wrong", "999"],
