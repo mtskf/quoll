@@ -104,7 +104,8 @@ const COMBINED = [
 
 // ALL block fields co-registered, exercised through a real EditorView (the
 // editor's real set, minus the inline checkbox ViewPlugin which is
-// viewport-dependent and covered by Task 4 + cm-task-checkbox-widget.test.ts).
+// viewport-dependent and covered by Task 4 + the
+// task-checkbox/cm-task-checkbox-widget-*.test.ts suite).
 // Returns the parent too so the caller's finally can remove it (view.destroy()
 // detaches CM's own DOM but leaves the parent attached → body grows across
 // tests). Caret at end so no reveal suppresses.
