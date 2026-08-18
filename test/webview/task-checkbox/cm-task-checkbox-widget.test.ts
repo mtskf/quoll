@@ -580,6 +580,56 @@ describe("CheckboxWidget — toggle dispatch", () => {
     }
   });
 
+  it("toggleTarget-miss breadcrumb reports the MISSING widget's label, not another widget's (wrong-widget mix-up guard)", () => {
+    // The single-checkbox miss test above only proves label: "alpha" is
+    // reported when "alpha" is the only label in scope — it can't tell "the
+    // breadcrumb reports the widget that actually missed" apart from "it
+    // reports some other widget's label that happens to be the only value
+    // available". Mount two checkboxes and force the miss on ONLY the
+    // second widget's span so a wrong-widget mix-up (breadcrumb reporting
+    // "alpha" while "beta" is the one that missed) would be observable.
+    const view = mountWithDoc("- [ ] alpha\n- [ ] beta");
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const wAlpha = new CheckboxWidget(false, 2, "alpha");
+    const elAlpha = wAlpha.toDOM(view);
+    // "- [ ] alpha\n" is 12 chars; beta's `[` sits at 12 + 2 = 14.
+    const wBeta = new CheckboxWidget(false, 14, "beta");
+    const elBeta = wBeta.toDOM(view);
+    const originalGet = WeakMap.prototype.get;
+    const getSpy = vi.spyOn(WeakMap.prototype, "get").mockImplementation(function (
+      this: WeakMap<object, unknown>,
+      key: object
+    ) {
+      if (key === elBeta) {
+        return undefined;
+      }
+      return originalGet.call(this, key);
+    });
+    try {
+      // alpha's own entry is untouched by the stub — this click must NOT miss.
+      elAlpha.dispatchEvent(
+        new MouseEvent("mousedown", { button: 0, bubbles: true, cancelable: true })
+      );
+      expect(errSpy).not.toHaveBeenCalled();
+      expect(view.state.sliceDoc(3, 4)).toBe("x");
+
+      // beta's entry is stubbed to miss — fallback dispatch at widget.from (14),
+      // and the breadcrumb must report "beta", not "alpha".
+      elBeta.dispatchEvent(
+        new MouseEvent("mousedown", { button: 0, bubbles: true, cancelable: true })
+      );
+      expect(view.state.sliceDoc(15, 16)).toBe("x");
+      expect(errSpy).toHaveBeenCalledWith(
+        "[quoll] task checkbox widget toggleTarget miss — invariant violated",
+        { label: "beta", checked: false, fallback: 14 }
+      );
+    } finally {
+      getSpy.mockRestore();
+      errSpy.mockRestore();
+      view.destroy();
+    }
+  });
+
   it("mousedown does NOT return focus to the editor (mouse users drive the next action)", () => {
     // Pin the deliberate asymmetry: only the keydown path calls view.focus().
     // Mousedown intentionally leaves focus alone (round-3 #23) — moving the
