@@ -540,6 +540,46 @@ describe("CheckboxWidget — toggle dispatch", () => {
     }
   });
 
+  it("logs the toggleTarget-miss breadcrumb and still dispatches at widget.from on a WeakMap miss", () => {
+    const view = mountWithDoc("- [ ] alpha");
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const w = new CheckboxWidget(false, 2, "alpha");
+    const el = w.toDOM(view);
+    // Force a genuine WeakMap miss on THIS widget's span, without reaching
+    // into module-private state. `toDOM` already called `toggleTarget.set`,
+    // so a blanket `mockReturnValueOnce(undefined)` on `WeakMap.prototype.get`
+    // would risk being consumed by some unrelated WeakMap.get CodeMirror's
+    // internals make first (e.g. during dispatchEvent) — silently making the
+    // miss land on the wrong call and this test vacuous. Matching on key
+    // identity instead (`key === el`) targets exactly this span's entry and
+    // falls through to the real implementation for every other key,
+    // reproducing exactly the "an entry SHOULD be there but isn't" invariant
+    // violation this branch exists to catch.
+    const originalGet = WeakMap.prototype.get;
+    const getSpy = vi.spyOn(WeakMap.prototype, "get").mockImplementation(function (
+      this: WeakMap<object, unknown>,
+      key: object
+    ) {
+      if (key === el) {
+        return undefined;
+      }
+      return originalGet.call(this, key);
+    });
+    try {
+      el.dispatchEvent(new MouseEvent("mousedown", { button: 0, bubbles: true, cancelable: true }));
+      // Still toggles — using the fallback (widget.from), not silently dropped.
+      expect(view.state.sliceDoc()).toBe("- [x] alpha");
+      expect(errSpy).toHaveBeenCalledWith(
+        "[quoll] task checkbox widget toggleTarget miss — invariant violated",
+        { label: "alpha", checked: false, fallback: 2 }
+      );
+    } finally {
+      getSpy.mockRestore();
+      errSpy.mockRestore();
+      view.destroy();
+    }
+  });
+
   it("mousedown does NOT return focus to the editor (mouse users drive the next action)", () => {
     // Pin the deliberate asymmetry: only the keydown path calls view.focus().
     // Mousedown intentionally leaves focus alone (round-3 #23) — moving the
