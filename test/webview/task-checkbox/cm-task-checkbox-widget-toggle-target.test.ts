@@ -104,7 +104,8 @@ describe("CheckboxWidget — toggle dispatch (focus + toggle-target)", () => {
   it("Space keydown after view.destroy() does not throw (unconditional focus is dead-view safe)", () => {
     // The keydown focus now runs unconditionally, so a Space/Enter arriving
     // after tear-down would call view.focus() on a destroyed view. That must
-    // stay as harmless as the mousedown destroyed-view case above.
+    // stay as harmless as the mousedown destroyed-view case in
+    // cm-task-checkbox-widget-toggle.test.ts.
     const view = mountWithDoc("- [ ] alpha");
     const w = new CheckboxWidget(false, 2, "alpha");
     const el = w.toDOM(view);
@@ -116,7 +117,8 @@ describe("CheckboxWidget — toggle dispatch (focus + toggle-target)", () => {
   });
 
   // The DOM is NOT an input to the toggle target. `data-from` is still
-  // written (DOM inspection, plus the re-stamp assertions above), but the
+  // written (DOM inspection, plus the re-stamp assertions in
+  // cm-task-checkbox-widget-toggle.test.ts), but the
   // listeners read the module-private `toggleTarget` WeakMap, so a value
   // written onto the span cannot steer the dispatch.
   //

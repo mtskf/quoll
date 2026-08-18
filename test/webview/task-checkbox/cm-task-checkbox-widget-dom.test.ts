@@ -85,7 +85,8 @@ describe("CheckboxWidget — DOM + a11y", () => {
 
   it("ignoreEvent returns true so CodeMirror does not consume widget events", () => {
     const a = new CheckboxWidget(false, 2, "alpha");
-    // Synthetic event — widget should signal "I handle this myself"
+    // No event is constructed — this override takes no parameter and answers
+    // unconditionally: "I handle widget-originated events myself."
     expect(a.ignoreEvent()).toBe(true);
   });
 });

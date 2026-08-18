@@ -9,9 +9,10 @@ import { createSyntaxReveal } from "../../../src/webview/cm/decorations/orchestr
 import { taskCheckboxReveal } from "../../../src/webview/cm/task-checkbox/task-checkbox-reveal.js";
 
 describe("CheckboxWidget — CM reconcile invocation contract (updateDOM reuse)", () => {
-  // The tests above call `widget.updateDOM(dom, view, from)` DIRECTLY — they
-  // pin the METHOD's logic (returns true, node identity preserved, from re-
-  // stamped) but not CM's INVOCATION contract: that a real doc edit above a
+  // The direct-invocation tests in cm-task-checkbox-widget-toggle.test.ts call
+  // `widget.updateDOM(dom, view, from)` DIRECTLY — they pin the METHOD's logic
+  // (returns true, node identity preserved, from re-stamped) but not CM's
+  // INVOCATION contract: that a real doc edit above a
   // visible widget actually drives the CM reconciler to REUSE the DOM node via
   // updateDOM rather than rebuild it via toDOM. `tsc` catches a signature
   // change, but a value-level regression (a future CM stops reusing the pool,
