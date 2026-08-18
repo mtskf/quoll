@@ -468,6 +468,74 @@ describe("CheckboxWidget — toggle dispatch", () => {
     ).not.toThrow();
   });
 
+  // The DOM is NOT an input to the toggle target. `data-from` is still
+  // written (DOM inspection, plus the re-stamp assertions above), but the
+  // listeners read the module-private `toggleTarget` WeakMap, so a value
+  // written onto the span cannot steer the dispatch.
+  //
+  // Both rows go red if the listeners revert to `Number(span.dataset.from)`:
+  // "abc" would dispatch `NaN`, which `toggleTaskCheckbox`'s bound checks
+  // reject anyway (so this alone would not distinguish the two
+  // implementations) — the "999" row is the one that actually
+  // distinguishes them: it is a well-formed number but points at unrelated
+  // text, so a `Number(dataset…)` read would silently toggle the wrong
+  // bytes instead of the marker at the real `from`.
+  it.each([
+    ["malformed", "abc"],
+    ["well-formed but wrong", "999"],
+  ])("ignores a %s data-from written onto the widget span (mousedown)", (_label, raw) => {
+    const view = mountWithDoc("- [ ] alpha");
+    try {
+      const w = new CheckboxWidget(false, 2, "alpha");
+      const el = w.toDOM(view);
+      el.dataset.from = raw;
+      el.dispatchEvent(new MouseEvent("mousedown", { button: 0, bubbles: true, cancelable: true }));
+      // Toggled at the REAL `from` (2), not the tampered dataset value.
+      expect(view.state.sliceDoc()).toBe("- [x] alpha");
+    } finally {
+      view.destroy();
+    }
+  });
+
+  it.each([
+    ["malformed", "abc"],
+    ["well-formed but wrong", "999"],
+  ])("ignores a %s data-from written onto the widget span (keydown)", (_label, raw) => {
+    const view = mountWithDoc("- [ ] alpha");
+    try {
+      const w = new CheckboxWidget(false, 2, "alpha");
+      const el = w.toDOM(view);
+      document.body.appendChild(el);
+      el.focus();
+      el.dataset.from = raw;
+      el.dispatchEvent(new KeyboardEvent("keydown", { key: " ", bubbles: true, cancelable: true }));
+      expect(view.state.sliceDoc()).toBe("- [x] alpha");
+    } finally {
+      view.destroy();
+    }
+  });
+
+  // A fresh toDOM'd widget's mousedown must hit the `toggleTarget` entry
+  // written in toDOM, not the resolveToggleFrom miss fallback — the absent
+  // `console.error` is the only observable difference (both trace back to
+  // the same `from` constructor argument, so the toggled bytes alone would
+  // stay green even if `toggleTarget.set(span, this.from)` were deleted
+  // from toDOM). Mirrors image-widget.ts's pin of the same gap.
+  it("does not log a toggleTarget miss when a fresh toDOM'd widget is clicked", () => {
+    const view = mountWithDoc("- [ ] alpha");
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const w = new CheckboxWidget(false, 2, "alpha");
+      const el = w.toDOM(view);
+      el.dispatchEvent(new MouseEvent("mousedown", { button: 0, bubbles: true, cancelable: true }));
+      expect(view.state.sliceDoc()).toBe("- [x] alpha");
+      expect(errSpy).not.toHaveBeenCalled();
+    } finally {
+      errSpy.mockRestore();
+      view.destroy();
+    }
+  });
+
   it("mousedown does NOT return focus to the editor (mouse users drive the next action)", () => {
     // Pin the deliberate asymmetry: only the keydown path calls view.focus().
     // Mousedown intentionally leaves focus alone (round-3 #23) — moving the
