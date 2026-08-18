@@ -118,9 +118,9 @@ describe("CheckboxWidget — toggle dispatch (focus + toggle-target)", () => {
 
   // The DOM is NOT an input to the toggle target. `data-from` is still
   // written (DOM inspection, plus the re-stamp assertions in
-  // cm-task-checkbox-widget-toggle.test.ts), but the
-  // listeners read the module-private `toggleTarget` WeakMap, so a value
-  // written onto the span cannot steer the dispatch.
+  // cm-task-checkbox-widget-toggle.test.ts), but the listeners read the
+  // module-private `toggleTarget` WeakMap, so a value written onto the span
+  // cannot steer the dispatch.
   //
   // Both rows pin the same "tampered dataset is ignored" contract via two
   // different tampered values reaching `toggleTaskCheckbox` under a

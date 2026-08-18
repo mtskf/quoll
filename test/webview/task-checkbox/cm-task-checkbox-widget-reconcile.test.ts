@@ -12,14 +12,14 @@ describe("CheckboxWidget — CM reconcile invocation contract (updateDOM reuse)"
   // The direct-invocation tests in cm-task-checkbox-widget-toggle.test.ts call
   // `widget.updateDOM(dom, view, from)` DIRECTLY — they pin the METHOD's logic
   // (returns true, node identity preserved, from re-stamped) but not CM's
-  // INVOCATION contract: that a real doc edit above a
-  // visible widget actually drives the CM reconciler to REUSE the DOM node via
-  // updateDOM rather than rebuild it via toDOM. `tsc` catches a signature
-  // change, but a value-level regression (a future CM stops reusing the pool,
-  // or rebuilds instead of updating) type-checks and silently defeats the
-  // optimization. This block wires the REAL provider (`taskCheckboxReveal`)
-  // through the REAL orchestrator ViewPlugin (`createSyntaxReveal`) into a live
-  // EditorView, so the only synthetic part is the mount harness.
+  // INVOCATION contract: that a real doc edit above a visible widget actually
+  // drives the CM reconciler to REUSE the DOM node via updateDOM rather than
+  // rebuild it via toDOM. `tsc` catches a signature change, but a value-level
+  // regression (a future CM stops reusing the pool, or rebuilds instead of
+  // updating) type-checks and silently defeats the optimization. This block
+  // wires the REAL provider (`taskCheckboxReveal`) through the REAL
+  // orchestrator ViewPlugin (`createSyntaxReveal`) into a live EditorView, so
+  // the only synthetic part is the mount harness.
   //
   // Verified headless-viable: happy-dom (no layout) still runs the CM
   // decoration-reconcile pass — the mounted widget's span node is reused and
