@@ -191,7 +191,8 @@ export function stampedOffset(cell: Element, name: string): number | null {
 }
 
 /** Resolve a viewport point inside `root` (a `.quoll-table-block` widget) to
- *  the cell under it plus, when byte-aligned, the exact source offset.
+ *  the cell under it plus, when the cell's (current) source map places the
+ *  rendered boundary exactly, the source offset.
  *  Returns null when the point is outside the widget, outside any cell (the
  *  widget's padding/margin), on a cell whose offset stamps are missing or
  *  malformed, or when the resolver yields nothing / throws / answers with a

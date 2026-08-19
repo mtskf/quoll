@@ -153,8 +153,11 @@ function renderableHref(safeUrl: string | null): string | null {
 }
 
 /** Mutable during the walk (`outerTo` grows as nested emphasis closers
- *  accumulate outward), frozen into a `readonly CellSourceRun` by the type of
- *  the map that carries it out. */
+ *  accumulate outward). The map's `readonly CellSourceRun[]` is a VIEW, not a
+ *  freeze: `renderCellWithMap` publishes this very array, so the guarantee
+ *  rests on the context dying with the call. A `RenderContext` hoisted across a
+ *  row's cells (the obvious allocation cut) would mutate maps already
+ *  registered for earlier cells, with no type error — do not hoist it. */
 type MutableRun = { -readonly [K in keyof CellSourceRun]: CellSourceRun[K] };
 
 /** One per `renderCellWithMap` call, shared across the whole recursion so the
@@ -178,9 +181,10 @@ function newRenderContext(): RenderContext {
   return { cursor: 0, runs: [], pendingOpen: null, sawSkipped: false };
 }
 
-/** The ONLY thing that appends a run or advances the rendered cursor, so every
- *  arm below states its source spans and nothing else has to keep the cursor in
- *  step with the DOM it emits.
+/** The ONLY thing that appends a run or advances the rendered cursor DURING THE
+ *  WALK, so every arm below states its source spans and nothing else has to
+ *  keep the cursor in step with the DOM it emits. (`renderCellSafely`'s
+ *  fallback map is minted outside the walk — see there.)
  *
  *  `[from, to)` are the source characters that render VERBATIM; `outerTo` is
  *  where the construct owning them ends (its closing markup included). */
@@ -381,9 +385,12 @@ function renderReadonly(
           const last = ctx.runs[ctx.runs.length - 1];
           last.outerTo = Math.max(last.outerTo, node.span.to);
         } else if (ctx.runs.length === mark) {
-          // The wrapper rendered nothing (`*![i](p)*a`). Drop the pending
-          // opener so its delimiters are never attributed to a later, unrelated
-          // run, and record the skip so the next run keeps its own outer span.
+          // The wrapper rendered nothing (`*![i](p)* a` — the trailing SPACE is
+          // load-bearing: with `a` straight after the closer the delimiter run
+          // is not right-flanking, no wrapper forms at all, and this arm is
+          // never reached). Drop the pending opener so its delimiters are never
+          // attributed to a later, unrelated run, and record the skip so the
+          // next run keeps its own outer span.
           ctx.pendingOpen = null;
           ctx.sawSkipped = true;
         }

@@ -363,9 +363,13 @@ export class TableBlockWidget extends WidgetType {
       }
       const a = align[col];
       el.style.textAlign = a !== null && a !== undefined ? a : "";
-      // LF-internal absolute source offsets of this cell's content span. `to`
-      // is where a drag snaps when the pointer lands on a boundary the cell's
-      // source map cannot resolve exactly (see cell-point.ts).
+      // LF-internal absolute source offsets of this cell's content span. They
+      // are ALSO where a drag across cells snaps OUTWARD when the pointer lands
+      // on a boundary the cell's source map cannot resolve exactly — `to` when
+      // this cell is the LATER end of the drag, `from` when it is the earlier
+      // one, so the range still covers what the pointer crossed. Both stamps
+      // together are the whole-cell range a same-cell drag falls back to (see
+      // dragRange / cell-point.ts).
       el.dataset.cellFrom = String(this.nodeFrom + cell.from);
       el.dataset.cellTo = String(this.nodeFrom + cell.to);
       // `cell.raw` VERBATIM, never `.trim()`: the parser's cell trimming is

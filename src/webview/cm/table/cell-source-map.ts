@@ -38,11 +38,14 @@ export interface CellSourceRun {
   readonly outerTo: number; // >= to
 }
 
-/** The map for one cell. `sourceLength` and `renderedText` exist for the
- *  staleness check in cell-point.ts: a map is only trustworthy while BOTH the
- *  source it was built from and the DOM it produced are still the ones on
- *  screen. Length equality alone would let a same-length stale map through,
- *  which is the very failure mode this module replaces. */
+/** The map for one cell. Both extra fields are load-bearing TWICE over. They
+ *  bound and terminate the lookup in `sourceOffsetAt` below — `renderedText`
+ *  for the input range and the end-of-text boundary, `sourceLength` for the
+ *  empty-runs and end-of-source exactness tests — AND they are the staleness
+ *  check in cell-point.ts: a map is only trustworthy while BOTH the source it
+ *  was built from and the DOM it produced are still the ones on screen. Length
+ *  equality alone would let a same-length stale map through, which is the very
+ *  failure mode this module replaces. */
 export interface CellSourceMap {
   readonly runs: readonly CellSourceRun[];
   /** Length of the raw cell source the map was built from. */
@@ -56,6 +59,14 @@ export interface CellSourceMap {
 // forgeable from the DOM (no new trust boundary, no parser — contrast the
 // `data-cell-from` stamps, which `stampedOffset` has to police), and a
 // discarded cell takes its entry with it.
+//
+// "The renderer is the mapping authority" is a CONVENTION, not a type: the
+// interface above is structurally satisfiable by any object with the right
+// fields, and `setCellSourceMap` takes one from anywhere. What actually holds
+// it is that `renderCellInto` is the only supported way to fill a cell and it
+// registers the map it just produced. `sourceOffsetAt` therefore does not
+// assume the numbers are sane — its caller (cell-point.ts) re-gates the answer
+// before dispatching it.
 const registry = new WeakMap<Element, CellSourceMap>();
 
 export function setCellSourceMap(cell: Element, map: CellSourceMap): void {
@@ -121,8 +132,11 @@ export function sourceOffsetAt(map: CellSourceMap, within: number): number | nul
       return prev.outerTo === run.outerFrom ? prev.outerTo : null;
     }
   }
-  // Unreachable while runs tile the rendered text contiguously (emitRun is the
-  // only producer and advances the cursor by exactly the run's length). Kept as
-  // the fail-closed answer rather than a throw: this runs inside a DOM listener.
+  // Unreachable while runs tile the rendered text contiguously. Both producers
+  // satisfy that: `emitRun` (cell-render.ts) advances the cursor by exactly the
+  // run's length and its caller publishes NO runs if the total still misses the
+  // rendered length, and `renderCellSafely`'s fallback map is a single identity
+  // run over verbatim source. Kept as the fail-closed answer rather than a
+  // throw: this runs inside a DOM listener.
   return null;
 }
