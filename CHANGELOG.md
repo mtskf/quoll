@@ -2,6 +2,12 @@
 
 All notable changes to Quoll are documented here.
 
+## 0.1.74 — 2026-08-20
+
+### Fixed
+
+- Dragging to select text inside a table cell that contains formatting — bold, a link, inline code, an escaped character — now selects exactly the characters you dragged over. Previously any such cell selected as a whole the moment you dragged inside it.
+
 ## 0.1.73 — 2026-08-19
 
 ### Changed
