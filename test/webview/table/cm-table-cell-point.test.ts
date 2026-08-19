@@ -208,7 +208,7 @@ describe("cellPointAt", () => {
 
   it("counts text across preceding sibling nodes inside the same cell", () => {
     const { root, td } = mixedChildrenCell();
-    // Rendered "abcde|fg" is 6 characters in; source `ab\`cde\`f|g` is 8.
+    // Rendered "abcdef|g" is 6 characters in; source `ab\`cde\`f|g` is 8.
     expect(cellPointAt(root, 0, 0, resolverFor(td.lastChild as Node, 1))?.offset).toBe(13);
   });
 
@@ -297,8 +297,8 @@ describe("cellPointAt", () => {
   // (`Number("9007199254740993")` is 9007199254740992). BOTH stamps carry a
   // huge value on purpose: stamping only `from` would let the
   // `cellTo < cellFrom` guard answer null first, and the row would pin nothing.
-  // With the arm removed the pair survives as a plausible span and the
-  // alignment gate answers `{…, offset: null}` — an object, not null.
+  // With the arm removed the pair survives as a plausible span, the map's
+  // staleness check answers `{…, offset: null}` — an object, not null.
   it("returns null for a precision-losing stamp (isSafeInteger, past the digit regexp)", () => {
     const root = fixture([{ md: "alpha", from: 78, to: 83 }]);
     const td = root.querySelector("td") as HTMLElement;
