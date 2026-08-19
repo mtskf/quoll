@@ -54,6 +54,16 @@ describe("CheckboxWidget — DOM + a11y", () => {
     }
   });
 
+  it("aria-label falls back to 'Task list item' for an empty label (content-less checkbox)", () => {
+    const view = mountView("- [ ]");
+    try {
+      const el = new CheckboxWidget(false, 2, "").toDOM(view);
+      expect(el.getAttribute("aria-label")).toBe("Task list item");
+    } finally {
+      view.destroy();
+    }
+  });
+
   it("carries .quoll-task-checkbox class and data-checked attribute", () => {
     const view = mountView("- [ ] alpha");
     try {
