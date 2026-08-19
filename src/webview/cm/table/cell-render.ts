@@ -238,7 +238,14 @@ function renderReadonly(
     switch (node.kind) {
       case "text":
         emitRun(ctx, node.span.from, node.span.to, node.span.to);
-        pendingText += node.value;
+        // Slice `raw` rather than trusting `node.value`: the run's LENGTH comes
+        // from `node.span`, so the rendered characters must come from the same
+        // span or the cursor desynchronises from the DOM. The two are kept in
+        // step BY HAND upstream (inline-emphasis.ts trims `value` and `span`
+        // together), and a drift there would not be caught by cell-point.ts's
+        // staleness check — `renderedText` is read back off the DOM, so it
+        // would agree with the DOM while disagreeing with the runs.
+        pendingText += raw.slice(node.span.from, node.span.to);
         break;
       case "leaf": {
         const leaf = node.leaf;
@@ -404,13 +411,28 @@ function renderCellWithMap(
 ): { nodes: Node[]; map: CellSourceMap } {
   const ctx = newRenderContext();
   const nodes = renderReadonly(parseCellInline(raw), raw, resourceBase, 0, ctx);
+  const renderedText = nodes.map((n) => n.textContent ?? "").join("");
+  // The runs MUST tile `renderedText` exactly: `sourceOffsetAt`'s interior
+  // arithmetic (`run.from + (within - run.rendered)`) assumes it, so a gap —
+  // rendered text emitted by a future walker arm without an `emitRun` — shifts
+  // every later run and answers a wrong-but-exact-LOOKING offset that neither
+  // half of cell-point.ts's staleness check can catch (`renderedText` is read
+  // off the DOM, so it agrees with the DOM). Publish NO runs rather than a map
+  // that lies: every boundary then answers null and the drag degrades to the
+  // whole-cell snap.
+  const tiled = ctx.cursor === renderedText.length;
+  if (!tiled) {
+    // Lengths only — a document's bytes never reach the console (edit-sync.ts
+    // precedent).
+    console.error("[quoll] table cell source map does not tile its render; dropping runs", {
+      cursor: ctx.cursor,
+      renderedLength: renderedText.length,
+      sourceLength: raw.length,
+    });
+  }
   return {
     nodes,
-    map: {
-      runs: ctx.runs,
-      sourceLength: raw.length,
-      renderedText: nodes.map((n) => n.textContent ?? "").join(""),
-    },
+    map: { runs: tiled ? ctx.runs : [], sourceLength: raw.length, renderedText },
   };
 }
 
@@ -427,11 +449,25 @@ function renderCellSafely(
 ): { nodes: Node[]; map: CellSourceMap } {
   try {
     return renderCellWithMap(raw, resourceBase);
-  } catch {
+  } catch (err) {
+    // Rendered content is never logged — only the failure and the length, so a
+    // document's bytes cannot reach the console (edit-sync.ts precedent). Worth
+    // logging now that a throw also changes drag mapping, not just the render:
+    // the cell silently loses its inline constructs AND its exact offsets.
+    console.error("[quoll] table cell render threw; falling back to inert source text", {
+      err,
+      length: raw.length,
+    });
     return {
       nodes: [document.createTextNode(raw)],
       map: {
-        runs: [{ rendered: 0, from: 0, to: raw.length, outerFrom: 0, outerTo: raw.length }],
+        // Empty source renders nothing, and a zero-length run is the one shape
+        // `emitRun` refuses (two runs at the same rendered index make the
+        // boundary lookup ambiguous). No runs is the identity map for "".
+        runs:
+          raw.length === 0
+            ? []
+            : [{ rendered: 0, from: 0, to: raw.length, outerFrom: 0, outerTo: raw.length }],
         sourceLength: raw.length,
         renderedText: raw,
       },

@@ -254,15 +254,21 @@ export function cellPointAt(
       return { cellFrom, cellTo, offset: null };
     }
     const relative = sourceOffsetAt(map, within);
-    if (relative === null) {
+    // Same gate `stampedOffset` applies to the DOM stamps, for the same reason:
+    // this is the OTHER input to the dispatched position, and `sourceOffsetAt`
+    // validates `within` but trusts every number inside `map` unconditionally.
+    // The clamp below cannot stand in for it — `Math.min`/`Math.max` propagate
+    // a fraction and a `NaN` untouched — and CodeMirror's `checkSelection`
+    // tests only `range.to > doc.length`.
+    if (relative === null || !Number.isSafeInteger(relative)) {
       return { cellFrom, cellTo, offset: null };
     }
-    // The clamp is a belt to the snapshot check's braces. `sourceOffsetAt`
-    // already answers within `[0, map.sourceLength]` and the check just proved
-    // `sourceLength === cellTo - cellFrom`, so this cannot fire today — but the
-    // value flows straight into `view.dispatch({selection})`, which validates
-    // only `range.to > doc.length`, and a position outside the cell is exactly
-    // the silently-wrong selection this module exists to prevent.
+    // The clamp is a belt to the snapshot check's braces, against a RANGE
+    // error rather than a shape one. `sourceOffsetAt` already answers within
+    // `[0, map.sourceLength]` and the check just proved `sourceLength ===
+    // cellTo - cellFrom`, so this cannot fire today — but a position outside
+    // the cell is exactly the silently-wrong selection this module exists to
+    // prevent.
     const offset = Math.min(Math.max(cellFrom + relative, cellFrom), cellTo);
     return { cellFrom, cellTo, offset };
   } catch {
