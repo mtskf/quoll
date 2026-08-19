@@ -44,7 +44,12 @@ import {
   MAX_INLINE_NESTING_DEPTH,
   parseCellInline,
 } from "../inline/inline-ir.js";
-import { type CellSourceMap, type CellSourceRun, setCellSourceMap } from "./cell-source-map.js";
+import {
+  asCellSourceOffset,
+  type CellSourceMap,
+  type CellSourceRun,
+  setCellSourceMap,
+} from "./cell-source-map.js";
 
 // Plain-click on a widget-internal link must NOT navigate the browser — that
 // bypasses the widget's caret-dispatch handler and the user loses the only
@@ -164,7 +169,8 @@ type MutableRun = { -readonly [K in keyof CellSourceRun]: CellSourceRun[K] };
  *  rendered cursor and the pending markup are global to the cell rather than
  *  per emphasis level. */
 interface RenderContext {
-  /** Rendered characters emitted so far — the next run's `rendered`. */
+  /** Rendered characters emitted so far. No run stores this: it exists so the
+   *  walk can check, once it ends, that the runs tile the emitted text. */
   cursor: number;
   runs: MutableRun[];
   /** Opener markup waiting for the run it belongs to (`**` before its text,
@@ -197,14 +203,17 @@ function emitRun(ctx: RenderContext, from: number, to: number, outerTo: number):
     ctx.sawSkipped = true;
     return;
   }
+  // The walk works in ONE space (the inline IR's cell-relative source spans),
+  // so this push is the single place it enters the map's branded space —
+  // branding `emitRun`'s parameters instead would add a mint to every caller
+  // without separating two spaces that were never mixed.
   ctx.runs.push({
-    rendered: ctx.cursor,
-    from,
-    to,
+    from: asCellSourceOffset(from),
+    to: asCellSourceOffset(to),
     // Invisible source between the pending opener and this run means the opener
     // is not ours — it belongs to whatever rendered nothing in between.
-    outerFrom: ctx.sawSkipped ? from : (ctx.pendingOpen ?? from),
-    outerTo,
+    outerFrom: asCellSourceOffset(ctx.sawSkipped ? from : (ctx.pendingOpen ?? from)),
+    outerTo: asCellSourceOffset(outerTo),
   });
   ctx.cursor += to - from;
   ctx.pendingOpen = null;
@@ -384,7 +393,7 @@ function renderReadonly(
           // extending there would make a boundary that straddles the image look
           // exact instead of falling back to the whole-cell snap.
           const last = ctx.runs[ctx.runs.length - 1];
-          last.outerTo = Math.max(last.outerTo, node.span.to);
+          last.outerTo = asCellSourceOffset(Math.max(last.outerTo, node.span.to));
         } else if (!emittedText) {
           // The wrapper rendered nothing (`*![i](p)* a` — the trailing SPACE is
           // load-bearing: with `a` straight after the closer the delimiter run
@@ -444,7 +453,8 @@ function renderCellWithMap(
   const nodes = renderReadonly(parseCellInline(raw), raw, resourceBase, 0, ctx);
   const renderedText = nodes.map((n) => n.textContent ?? "").join("");
   // The runs MUST tile `renderedText` exactly: `sourceOffsetAt`'s interior
-  // arithmetic (`run.from + (within - run.rendered)`) assumes it, so a gap —
+  // arithmetic (`run.from + (within - rendered)`, where `rendered` is the
+  // running sum of the preceding runs' lengths) assumes it, so a gap —
   // rendered text emitted by a future walker arm without an `emitRun` — shifts
   // every later run and answers a wrong-but-exact-LOOKING offset that neither
   // half of cell-point.ts's staleness check can catch (`renderedText` is read
@@ -464,7 +474,11 @@ function renderCellWithMap(
   }
   return {
     nodes,
-    map: { runs: tiled ? ctx.runs : [], sourceLength: raw.length, renderedText },
+    map: {
+      runs: tiled ? ctx.runs : [],
+      sourceLength: asCellSourceOffset(raw.length),
+      renderedText,
+    },
   };
 }
 
@@ -519,17 +533,16 @@ function renderCellSafely(
         length: raw.length,
       });
     }
+    const start = asCellSourceOffset(0);
+    const end = asCellSourceOffset(raw.length);
     return {
       nodes: [document.createTextNode(raw)],
       map: {
         // Empty source renders nothing, and a zero-length run is the one shape
         // `emitRun` refuses (two runs at the same rendered index make the
         // boundary lookup ambiguous). No runs is the identity map for "".
-        runs:
-          raw.length === 0
-            ? []
-            : [{ rendered: 0, from: 0, to: raw.length, outerFrom: 0, outerTo: raw.length }],
-        sourceLength: raw.length,
+        runs: raw.length === 0 ? [] : [{ from: start, to: end, outerFrom: start, outerTo: end }],
+        sourceLength: end,
         renderedText: raw,
       },
     };

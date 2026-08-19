@@ -1052,15 +1052,15 @@ describe("cell source map invariants", () => {
     let prevTo = 0;
     let prevOuterTo = 0;
     for (const run of map.runs) {
-      // No rendered gaps: `rendered` must be exactly the characters emitted so
-      // far, or every later boundary lookup lands on the wrong run.
-      expect(run.rendered, where).toBe(rendered);
       // The run's source really is what rendered, character for character —
-      // the claim the whole mapping rests on.
-      const length = run.to - run.from;
-      expect(length, where).toBeGreaterThan(0);
+      // the claim the whole mapping rests on. `rendered` is the running sum of
+      // the preceding runs' lengths, which is the map's ONLY notion of a run's
+      // rendered position and is how `sourceOffsetAt` derives it too (why no
+      // run stores it: the `CellSourceRun` doc in cell-source-map.ts).
+      const runLength = run.to - run.from;
+      expect(runLength, where).toBeGreaterThan(0);
       expect(raw.slice(run.from, run.to), where).toBe(
-        map.renderedText.slice(run.rendered, run.rendered + length)
+        map.renderedText.slice(rendered, rendered + runLength)
       );
       // Source order, non-overlapping: two runs claiming the same byte would
       // make the mapping ambiguous in the other direction.
@@ -1070,7 +1070,7 @@ describe("cell source map invariants", () => {
       expect(run.outerTo, where).toBeGreaterThanOrEqual(run.to);
       expect(run.outerFrom, where).toBeGreaterThanOrEqual(prevOuterTo);
       expect(run.outerTo, where).toBeLessThanOrEqual(raw.length);
-      rendered += length;
+      rendered += runLength;
       prevTo = run.to;
       prevOuterTo = run.outerTo;
     }
@@ -1187,16 +1187,14 @@ describe("cell source map — walker rules", () => {
     ["***x***"],
     ["**_b_**"],
   ])("attributes BOTH delimiter pairs of %s to its single run", (src) => {
-    expect(runsOf(src)).toEqual([{ rendered: 0, from: 3, to: 4, outerFrom: 0, outerTo: 7 }]);
+    expect(runsOf(src)).toEqual([{ from: 3, to: 4, outerFrom: 0, outerTo: 7 }]);
   });
 
   // Rule 4: a wrapper whose text is followed by an invisible construct must NOT
   // extend its closers over it — that would swallow the image into the left
   // run and make a boundary straddling it look exact.
   it("does not extend outerTo over trailing skipped source", () => {
-    expect(runsOf(`**a${IMG}**`)).toEqual([
-      { rendered: 0, from: 2, to: 3, outerFrom: 0, outerTo: 3 },
-    ]);
+    expect(runsOf(`**a${IMG}**`)).toEqual([{ from: 2, to: 3, outerFrom: 0, outerTo: 3 }]);
   });
 
   // Rule 5: a wrapper that rendered nothing must not lend its delimiters to a
@@ -1205,7 +1203,6 @@ describe("cell source map — walker rules", () => {
     const src = `*${IMG}* a`;
     expect(runsOf(src)).toEqual([
       {
-        rendered: 0,
         from: src.length - 2,
         to: src.length,
         outerFrom: src.length - 2,
@@ -1223,7 +1220,6 @@ describe("cell source map — walker rules", () => {
     expect(runsOf(empty)).toEqual([]);
     expect(runsOf(`${empty}a`)).toEqual([
       {
-        rendered: 0,
         from: empty.length,
         to: empty.length + 1,
         outerFrom: empty.length,
@@ -1235,7 +1231,7 @@ describe("cell source map — walker rules", () => {
   it("emits a whole-span run for an inert link (its source renders verbatim)", () => {
     const inert = "[bad](javascript:1)";
     expect(runsOf(inert)).toEqual([
-      { rendered: 0, from: 0, to: inert.length, outerFrom: 0, outerTo: inert.length },
+      { from: 0, to: inert.length, outerFrom: 0, outerTo: inert.length },
     ]);
   });
 
@@ -1256,7 +1252,6 @@ describe("cell source map — walker rules", () => {
     const from = pad.length - 2;
     expect(runsOf(src)).toEqual([
       {
-        rendered: 0,
         from,
         to: from + literal.length,
         // The outer wrappers each rendered text, so their closers accumulate
@@ -1283,7 +1278,7 @@ describe("renderCellInto", () => {
     renderCellInto(cell, "hi");
     expect(cell.textContent).toBe("hi");
     expect(getCellSourceMap(cell)).toEqual({
-      runs: [{ rendered: 0, from: 0, to: 2, outerFrom: 0, outerTo: 2 }],
+      runs: [{ from: 0, to: 2, outerFrom: 0, outerTo: 2 }],
       sourceLength: 2,
       renderedText: "hi",
     });
@@ -1311,7 +1306,7 @@ describe("renderCellInto", () => {
     }
     expect(cell.textContent).toBe("**bold**");
     expect(getCellSourceMap(cell)).toEqual({
-      runs: [{ rendered: 0, from: 0, to: 8, outerFrom: 0, outerTo: 8 }],
+      runs: [{ from: 0, to: 8, outerFrom: 0, outerTo: 8 }],
       sourceLength: 8,
       renderedText: "**bold**",
     });
