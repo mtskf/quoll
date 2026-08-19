@@ -6,8 +6,13 @@
 // module-private `blockStart` WeakMap (NOT read back out of the DOM).
 // A mousedown followed by a click that actually moved (see DRAG_THRESHOLD_PX)
 // instead dispatches a RANGE selection between the two RESOLVED source offsets;
-// an endpoint whose cell renders non-byte-aligned (inline markup) has no exact
-// offset and snaps outward to that cell's data-cell-from/data-cell-to instead.
+// an endpoint the cell's source map cannot place exactly (a boundary beside a
+// construct that renders no text, e.g. an in-cell image) has no exact offset.
+// ACROSS cells that endpoint alone snaps OUTWARD to its own data-cell-from /
+// data-cell-to (direction from cell order) and the other end keeps its offset;
+// WITHIN one cell there is no direction to snap along, so the whole gesture
+// falls back to that cell's data-cell-from..data-cell-to — the end that DID
+// map exactly is discarded too.
 // Any endpoint that resolves to nothing, and a range that collapses after
 // snapping, fall back to the same caret dispatch as a plain click. (See
 // cell-point.ts for the pointer→source-offset mapping and why the widget must
@@ -37,11 +42,11 @@ import {
   quollTableCaretResolver,
   stampedOffset,
 } from "./cell-point.js";
-import { renderCellInline } from "./cell-render.js";
+import { renderCellInto } from "./cell-render.js";
 
 // Pointer travel (Manhattan, CSS px) below which a gesture is a CLICK, not a
-// drag. Without this gate a plain click on a cell whose render is not
-// byte-aligned with its source (`**bold**`, links, code) would resolve both
+// drag. Without this gate a plain click on a cell whose pointer position has no
+// exact source offset (a boundary beside an in-cell image) would resolve both
 // endpoints to `offset: null` and dispatch a whole-cell RANGE where today a
 // collapsed caret lands — a regression of the existing click contract.
 const DRAG_THRESHOLD_PX = 4;
@@ -161,21 +166,40 @@ function dragRange(
     return null;
   }
   const start = pending.point;
-  // Direction comes from CELL ORDER first: an unmappable endpoint has no offset
-  // to compare, and defaulting it to 0 would call a backwards drag forward and
-  // snap the anchor inward, dropping the very cell the pointer crossed.
-  const forward =
-    start.cellFrom === head.cellFrom
-      ? start.offset === null || head.offset === null
-        ? true
-        : head.offset >= start.offset
-      : head.cellFrom > start.cellFrom;
-  // Snap an unmappable end OUTWARD so the range still covers what the pointer
-  // crossed.
+  if (start.cellFrom === head.cellFrom) {
+    // ONE cell. An unmappable end carries no direction here: a rendered offset
+    // beside a construct that renders no text measures the SAME on both sides
+    // of it (cell-point.ts), so "which way did the pointer go" is unknowable
+    // and the OTHER end cannot supply it either — snapping the unmappable end
+    // to a guessed cell boundary would dispatch a range on the side the pointer
+    // never crossed. Fail closed to the whole cell (the pre-map contract).
+    if (start.offset === null || head.offset === null) {
+      // `cellFrom === cellTo` (an EMPTY cell) with `offset === null` is not
+      // reachable through the current src path — `renderCellInto("")` registers
+      // a map for the empty cell too, and its single boundary answers exactly
+      // (`sourceOffsetAt` returns 0 for `within === 0 && sourceLength === 0`).
+      // Kept as defense in depth against a zero-width whole-cell dispatch, and
+      // deliberately NOT pinned: the only fixture that could reach it would
+      // have to fake a resolver answer no browser produces.
+      return start.cellFrom === start.cellTo
+        ? null
+        : { anchor: start.cellFrom, head: start.cellTo };
+    }
+    // Both ends exact: the offsets ARE the range, in the order they were made.
+    // Zero-width — the caller's caret keeps the historical semantics (cell
+    // CONTENT START, not the character under the pointer).
+    return start.offset === head.offset ? null : { anchor: start.offset, head: head.offset };
+  }
+  // Across cells the direction comes from CELL ORDER, not from the offsets: an
+  // unmappable endpoint has no offset to compare, and defaulting it to 0 would
+  // call a backwards drag forward and snap the anchor inward, dropping the very
+  // cell the pointer crossed. Cell order is known for both ends regardless.
+  const forward = head.cellFrom > start.cellFrom;
+  // Snap an unmappable end OUTWARD — away from the other end — so the range
+  // still covers the cell the pointer crossed.
   const from = start.offset ?? (forward ? start.cellFrom : start.cellTo);
   const to = head.offset ?? (forward ? head.cellTo : head.cellFrom);
-  // Zero-width after snapping — the caller's caret keeps the historical
-  // semantics (cell CONTENT START, not the character under the pointer).
+  // Zero-width after snapping (adjacent cells, both ends on the same boundary).
   return from === to ? null : { anchor: from, head: to };
 }
 
@@ -350,14 +374,25 @@ export class TableBlockWidget extends WidgetType {
       }
       const a = align[col];
       el.style.textAlign = a !== null && a !== undefined ? a : "";
-      // LF-internal absolute source offsets of this cell's content span. `to`
-      // is what lets a drag decide whether the rendered text is byte-aligned
-      // with the source (see cell-point.ts) and where to snap when it is not.
+      // LF-internal absolute source offsets of this cell's content span. They
+      // are ALSO where a drag across cells snaps OUTWARD when the pointer lands
+      // on a boundary the cell's source map cannot resolve exactly — `to` when
+      // this cell is the LATER end of the drag, `from` when it is the earlier
+      // one, so the range still covers what the pointer crossed. Both stamps
+      // together are the whole-cell range a same-cell drag falls back to (see
+      // dragRange / cell-point.ts).
       el.dataset.cellFrom = String(this.nodeFrom + cell.from);
       el.dataset.cellTo = String(this.nodeFrom + cell.to);
-      for (const node of renderCellInline(cell.raw.trim(), resourceBase)) {
-        el.appendChild(node);
-      }
+      // `cell.raw` VERBATIM, never `.trim()`: the parser's cell trimming is
+      // ASCII space/tab only, while JS `trim()` also strips NBSP, U+FEFF and
+      // every other Unicode space — so for `| <NBSP>x |` the stamps would
+      // bracket `<NBSP>x` while the render showed `x`, putting the source map
+      // off by one against `cellFrom`. `Cell.raw` is already the padding-free
+      // [from, to) slice (raw.length === cell.to - cell.from on both pushCell
+      // paths), so trimming was redundant, and dropping it makes "rendered text
+      // is anchored at cellFrom" true by construction. An exotic space inside a
+      // cell is content.
+      renderCellInto(el, cell.raw, resourceBase);
       tr.appendChild(el);
     }
     return tr;
@@ -405,7 +440,7 @@ export class TableBlockWidget extends WidgetType {
     // Pure positional shift: the bytes are identical (from.slice === this.slice)
     // and only the absolute offsets moved. Re-stamp data-cell-from on each cell
     // and reuse the rendered inline children verbatim — skip patchRow's
-    // textContent="" + renderCellInline re-tokenize (its own design comment,
+    // textContent="" + renderCellInto re-tokenize (its own design comment,
     // :16-18). This is the hot path when typing in a paragraph ABOVE the table.
     if (from.slice === this.slice) {
       this.stampRow(headerRows[0], this.table.header.cells);
@@ -462,10 +497,10 @@ export class TableBlockWidget extends WidgetType {
       el.style.textAlign = a !== null && a !== undefined ? a : "";
       el.dataset.cellFrom = String(this.nodeFrom + cell.from);
       el.dataset.cellTo = String(this.nodeFrom + cell.to);
-      el.textContent = "";
-      for (const node of renderCellInline(cell.raw.trim(), resourceBase)) {
-        el.appendChild(node);
-      }
+      // Verbatim `cell.raw` and the map-registering renderer, for the reasons
+      // in buildRow: `renderCellInto` clears the cell itself, so a reused cell
+      // can never keep the previous render's source map.
+      renderCellInto(el, cell.raw, resourceBase);
     }
   }
 

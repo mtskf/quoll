@@ -117,13 +117,15 @@ describe.each(ARMS)("table drag selection — trusted pointer, %s", (_name, arm)
     expect(sel.anchor, "a backward drag really is backward").toBeGreaterThan(sel.head);
   });
 
-  it("a drag out of a NON-byte-aligned cell snaps that end outward to the cell boundary", async () => {
-    // `**bo**` is 6 source bytes rendered as 2 characters, so cell-point.ts's
-    // length-equality gate reports `offset: null` and `dragRange` snaps the
-    // press end OUTWARD to `cellFrom` while the byte-aligned release end keeps
-    // its exact offset. Those two numbers cannot be produced by any other
-    // mechanism: a native CodeMirror drag over revealed source would land on
-    // whatever character the pointer was over, never on this cell's content
+  it("a drag out of a marked-up cell resolves its edge boundary to the construct edge", async () => {
+    // `**bo**` is 6 source bytes rendered as 2 characters. The press lands on
+    // the boundary BEFORE the first rendered character, which the cell's source
+    // map expands over the `**` opener to the cell's content start — the same
+    // number the old length-equality gate produced by snapping outward, now
+    // reached by mapping rather than by giving up. The release end in a plain
+    // cell keeps its exact offset. Those two numbers cannot be produced by any
+    // other mechanism: a native CodeMirror drag over revealed source would land
+    // on whatever character the pointer was over, never on this cell's content
     // start. So this case is also what makes the suite discriminate WHICH code
     // path produced the offsets, not merely that some plausible range appeared.
     view = mount(arm);
@@ -134,8 +136,29 @@ describe.each(ARMS)("table drag selection — trusted pointer, %s", (_name, arm)
     await settled();
 
     const sel = view.state.selection.main;
-    expect(sel.anchor, "unmappable press end snaps to the cell's content start").toBe(BOLD_FROM);
-    expect(sel.head, "the byte-aligned release end stays exact").toBe(PLAIN + 3);
+    expect(sel.anchor, "the leading boundary expands over the `**` opener").toBe(BOLD_FROM);
+    expect(sel.head, "the plain release end stays exact").toBe(PLAIN + 3);
+    expect(revealed(view)).toBe(true);
+  });
+
+  it("a drag INSIDE `**bo**` lands exact source offsets past the delimiters", async () => {
+    // The one assertion that proves Chromium's real caret-from-point +
+    // `Range.toString()` ordering agrees with the map the renderer built: a
+    // rendered offset measured over `<strong>bo</strong>` in a real layout
+    // engine must come back as `**b|o**`, i.e. BOLD_FROM + 3. Every happy-dom
+    // test feeds the resolver a hand-picked DOM position instead, so none of
+    // them can observe this. A regression to the old whole-cell behaviour would
+    // land BOLD_FROM + 6 here.
+    view = mount(arm);
+    await settled();
+    const cell = cellByText(view, "bo");
+    await dragPointer(cell, pointAtChar(cell, 0), cell, pointAtChar(cell, 1));
+    await settled();
+
+    const sel = view.state.selection.main;
+    expect(sel.empty, "drag must land a RANGE, not a caret").toBe(false);
+    expect(sel.anchor).toBe(BOLD_FROM);
+    expect(sel.head, "inside the cell, past the `**` opener").toBe(BOLD_FROM + 3);
     expect(revealed(view)).toBe(true);
   });
 

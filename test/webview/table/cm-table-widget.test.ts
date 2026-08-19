@@ -704,6 +704,24 @@ function press(
 
 const SRC = "| Name | Role |\n| - | - |\n| alpha | admin |";
 
+/** A cell whose render contains a LIVE image — the only construct that renders
+ *  no text, and therefore the only remaining source of "no exact mapping".
+ *  The `https:` src is not decoration: `resolveAgainstBase` returns null for a
+ *  relative src with an empty base, which would render the image INERT (whole
+ *  source slice as text) and quietly make every case below mappable. The `a`
+ *  and `b` around it exist so a scripted resolver has a text node to aim at;
+ *  the junction between them is the unmappable boundary. */
+const IMG_CELL = "a![i](https://x.test/a.png)b";
+
+/** The same live image with MULTI-character text on both sides, so a scripted
+ *  resolver can aim at a boundary strictly INSIDE a text run — an exact offset
+ *  — and pair it with the junction beside the image, which is unmappable. With
+ *  `IMG_CELL`'s single `a`/`b` every mappable boundary is already a cell edge,
+ *  so a mixed-mappability drag there is indistinguishable from the whole-cell
+ *  snap it must produce. Runs (measured): `[{0,0,3,0,3},{3,29,32,29,32}]` over
+ *  rendered `abcdef`, so rendered 3 is the junction and 4/5 are exact. */
+const MIXED_IMG_CELL = "abc![i](https://x.test/a.png)def";
+
 describe("TableBlockWidget drag-selection", () => {
   it("a drag across characters inside one cell dispatches a NON-EMPTY range at the source offsets", () => {
     const base = SRC.indexOf("alpha");
@@ -748,7 +766,12 @@ describe("TableBlockWidget drag-selection", () => {
     ]);
   });
 
-  it("a drag inside a cell whose render is not byte-aligned selects the whole cell source", () => {
+  // The behaviour change this PR is for. UNTIL the cell source map existed this
+  // dispatched the WHOLE cell (`**bold**`), because the length-equality gate
+  // reported `offset: null` for any cell holding inline markup. Now the map
+  // places both ends inside the delimiters: rendered "b|ol|d" is source
+  // `**b|ol|d**`, so the drag selects exactly the characters it crossed.
+  it("a drag inside a `**bold**` cell selects the crossed characters, not the whole cell", () => {
     const src = "| Name |\n| - |\n| **bold** |";
     const dispatched: unknown[] = [];
     const { view, scope } = stubViewWithCaret(dispatched, [
@@ -760,13 +783,38 @@ describe("TableBlockWidget drag-selection", () => {
     press(td, "mousedown", 10, 10);
     press(td, "click", 60, 10);
     const from = src.indexOf("**bold**");
-    expect(dispatched).toEqual([{ selection: { anchor: from, head: from + "**bold**".length } }]);
+    expect(dispatched).toEqual([{ selection: { anchor: from + 3, head: from + 5 } }]);
   });
 
-  // Regression pin (Fable 95 / Codex 100): without the DRAG_THRESHOLD_PX gate
-  // both endpoints of a plain click on a non-aligned cell resolve to
-  // `offset: null` and snap outward, turning the click into a whole-cell range.
-  it("a PLAIN CLICK on a non-byte-aligned cell still dispatches the collapsed caret", () => {
+  // An NBSP inside a cell is CONTENT — the parser's cell trimming is ASCII
+  // space/tab only, so the stamps bracket it. Rendering `cell.raw.trim()` would
+  // strip it (JS `trim()` takes every Unicode space), leaving the render one
+  // character short of what the stamps describe and every offset in the cell
+  // off by one. That mismatch fails the map's staleness check, so the whole
+  // gesture would degrade to the whole-cell snap.
+  it("a drag inside an NBSP-padded cell maps exactly (anchoring at cellFrom)", () => {
+    const src = "| Name |\n| - |\n| \u00a0xy |";
+    const dispatched: unknown[] = [];
+    const { view, scope } = stubViewWithCaret(dispatched, [
+      { text: "\u00a0xy", offset: 1 },
+      { text: "\u00a0xy", offset: 3 },
+    ]);
+    const dom = mountWidget(makeWidget(src), view, scope);
+    const td = dom.querySelector("td") as HTMLElement;
+    press(td, "mousedown", 10, 10);
+    press(td, "click", 60, 10);
+    const from = src.indexOf("\u00a0xy");
+    expect(dispatched).toEqual([{ selection: { anchor: from + 1, head: from + 3 } }]);
+  });
+
+  // Regression pin (Fable 95 / Codex 100): the DRAG_THRESHOLD_PX gate returns
+  // before either endpoint is resolved, so a click that did not move dispatches
+  // the collapsed caret NO MATTER what the two endpoints would have mapped to.
+  // (When the gate was added, both endpoints here resolved to `offset: null`
+  // and snapped outward into a whole-cell range; the source map has since made
+  // this cell mappable, which is why the row below moves the pointer to reach
+  // the same-offset collapse arm.)
+  it("a PLAIN CLICK on a marked-up cell still dispatches the collapsed caret", () => {
     const src = "| Name |\n| - |\n| **bold** |";
     const dispatched: unknown[] = [];
     const { view, scope } = stubViewWithCaret(dispatched, [
@@ -780,22 +828,54 @@ describe("TableBlockWidget drag-selection", () => {
     expect(dispatched).toEqual([{ selection: { anchor: src.indexOf("**bold**") } }]);
   });
 
-  // Fable 90 / Codex 98: direction must come from cell order, not from an
-  // offset compared against a 0 sentinel.
-  it("a backwards drag OUT of a non-byte-aligned cell covers both cells", () => {
-    const src = "| A | B |\n| - | - |\n| x | **b** |";
+  // The collapse arm of the same-cell branch. The plain-click row above cannot
+  // reach it: at 0px travel `dragRange` returns at the DRAG_THRESHOLD_PX gate
+  // before either endpoint is resolved. Here the pointer moves 50px and BOTH
+  // ends still resolve to the same source offset (rendered index 2 of `bold` is
+  // source index 4 either way), which is the only way in. Without the collapse
+  // check the widget dispatches `{ anchor: X, head: X }` — a zero-width range at
+  // the POINTER — where the caret belongs at the cell's CONTENT START.
+  it("a same-cell drag whose ends resolve to the SAME offset falls back to the cell-start caret", () => {
+    const src = "| Name |\n| - |\n| **bold** |";
     const dispatched: unknown[] = [];
     const { view, scope } = stubViewWithCaret(dispatched, [
-      { text: "b", offset: 1 }, // mousedown in the **b** cell (unmappable)
-      { text: "x", offset: 0 }, // drag left into the plain `x` cell
+      { text: "bold", offset: 2 },
+      { text: "bold", offset: 2 },
+    ]);
+    const dom = mountWidget(makeWidget(src), view, scope);
+    const td = dom.querySelector("td") as HTMLElement;
+    press(td, "mousedown", 10, 10);
+    press(td, "click", 60, 10); // ABOVE the threshold — unlike the plain click
+    expect(dispatched).toEqual([{ selection: { anchor: src.indexOf("**bold**") } }]);
+  });
+
+  // Fable 90 / Codex 98: direction must come from cell order, not from an
+  // offset compared against a 0 sentinel.
+  //
+  // The unmappable endpoint is now an IMAGE cell, not `**b**`: since the source
+  // map landed, `**b**` maps exactly and would no longer reach the snap. A live
+  // image renders zero characters, so the boundary between the `a` and `b` text
+  // runs measures the same rendered offset on both sides of it and stays the
+  // one thing a rendered offset cannot resolve.
+  it("a backwards drag OUT of an unmappable cell covers both cells", () => {
+    const src = `| A | B |\n| - | - |\n| q | ${IMG_CELL} |`;
+    const dispatched: unknown[] = [];
+    const { view, scope } = stubViewWithCaret(dispatched, [
+      { text: "b", offset: 0 }, // mousedown at the image junction (unmappable)
+      { text: "q", offset: 0 }, // drag left into the plain `q` cell
     ]);
     const dom = mountWidget(makeWidget(src), view, scope);
     const cells = dom.querySelectorAll("td");
     press(cells[1] as HTMLElement, "mousedown", 200, 10);
     press(cells[0] as HTMLElement, "click", 10, 10);
-    // Anchor snaps OUTWARD to the end of the **b** cell, head is exact in `x`.
+    // Anchor snaps OUTWARD to the end of the image cell, head is exact in `q`.
     expect(dispatched).toEqual([
-      { selection: { anchor: src.indexOf("**b**") + "**b**".length, head: src.indexOf("x") } },
+      {
+        selection: {
+          anchor: src.indexOf(IMG_CELL) + IMG_CELL.length,
+          head: src.indexOf("| q |") + 2,
+        },
+      },
     ]);
   });
 
@@ -913,6 +993,34 @@ describe("TableBlockWidget drag-selection", () => {
     expect(dispatched).toEqual([{ selection: { anchor: 5 + SRC.indexOf("alpha") } }]);
   });
 
+  // The counterpart of the row above: the shift lands BEFORE the gesture, not
+  // during it, and the drag must still map exactly. This is the ONE reason the
+  // source map holds CELL-RELATIVE offsets (cell-source-map.ts:21-25) —
+  // `stampRow` re-points the stamps on a pure positional shift WITHOUT
+  // re-rendering, so an absolute map would go stale exactly here and every
+  // marked-up cell would silently degrade to the whole-cell snap after the
+  // first keystroke above a table. The other shift rows assert stamps on a
+  // PLAIN-TEXT cell and never drag afterwards, so they cannot see it.
+  it("a drag in a marked-up cell still maps exactly after a pure positional shift", () => {
+    const src = "| Name |\n| - |\n| **bold** |";
+    const dispatched: unknown[] = [];
+    const { view, scope } = stubViewWithCaret(dispatched, [
+      { text: "bold", offset: 1 },
+      { text: "bold", offset: 3 },
+    ]);
+    const first = new TableBlockWidget(parseTable(src, 0, src.length)!, src, 0, 0);
+    const dom = mountWidget(first, view, scope);
+    // Distant insertion above the table: same bytes, new base → stampRow path.
+    const shifted = new TableBlockWidget(parseTable(src, 0, src.length)!, src, 5, 5);
+    expect(shifted.updateDOM(dom, view, first)).toBe(true);
+
+    const td = dom.querySelector("td") as HTMLElement;
+    press(td, "mousedown", 10, 10);
+    press(td, "click", 60, 10);
+    const from = 5 + src.indexOf("**bold**");
+    expect(dispatched).toEqual([{ selection: { anchor: from + 3, head: from + 5 } }]);
+  });
+
   // The native mousedown default is what moves focus into CodeMirror's
   // contenteditable; without focus the revealed selection neither paints nor
   // extends. Adding `event.preventDefault()` here is the natural "stop the
@@ -925,25 +1033,94 @@ describe("TableBlockWidget drag-selection", () => {
     expect(event.defaultPrevented).toBe(false);
   });
 
-  // Mirror of "a backwards drag OUT of a non-byte-aligned cell": there the
-  // ANCHOR is unmappable, here the HEAD is. Without this the backwards arm of
+  // Mirror of "a backwards drag OUT of an unmappable cell": there the ANCHOR is
+  // unmappable, here the HEAD is. Without this the backwards arm of
   // `head.offset ?? (forward ? head.cellTo : head.cellFrom)` is never taken.
-  it("a backwards drag ENDING in a non-byte-aligned cell snaps the head OUTWARD", () => {
-    const src = "| A | B |\n| - | - |\n| **b** | x |";
+  it("a backwards drag ENDING in an unmappable cell snaps the head OUTWARD", () => {
+    const src = `| A | B |\n| - | - |\n| ${IMG_CELL} | q |`;
     const dispatched: unknown[] = [];
     const { view, scope } = stubViewWithCaret(dispatched, [
-      { text: "x", offset: 1 }, // mousedown in the plain `x` cell (mappable)
-      { text: "b", offset: 1 }, // drag LEFT into the **b** cell (unmappable)
+      { text: "q", offset: 1 }, // mousedown in the plain `q` cell (mappable)
+      { text: "b", offset: 0 }, // drag LEFT to the image junction (unmappable)
     ]);
     const dom = mountWidget(makeWidget(src), view, scope);
     const cells = dom.querySelectorAll("td");
     press(cells[1] as HTMLElement, "mousedown", 200, 10);
     press(cells[0] as HTMLElement, "click", 10, 10);
-    // Head snaps to the **b** cell's START — outward for a backwards drag, so
+    // Head snaps to the image cell's START — outward for a backwards drag, so
     // the range still covers the cell the pointer crossed.
     expect(dispatched).toEqual([
-      { selection: { anchor: src.indexOf("x") + 1, head: src.indexOf("**b**") } },
+      { selection: { anchor: src.indexOf("| q |") + 3, head: src.indexOf(IMG_CELL) } },
     ]);
+  });
+
+  // Recorded decision, not an accident (Codex round-3, 99). Codex asked that a
+  // same-cell drag with BOTH ends unmappable fail closed to the collapsed caret
+  // so a 4px wiggle beside an image cannot select the cell. Declined here: the
+  // whole-cell range is the EXISTING contract (this PR narrows what reaches it
+  // from "every cell holding inline markup" to "cells holding a construct that
+  // renders no text"), and flipping it is a decision about DRAG_THRESHOLD_PX
+  // semantics rather than about source-span mapping. Pinned so a future PR that
+  // prefers the caret has a test to flip.
+  it("a drag whose BOTH ends sit at an in-cell image junction dispatches the whole cell", () => {
+    const src = `| A |\n| - |\n| ${IMG_CELL} |`;
+    const dispatched: unknown[] = [];
+    const { view, scope } = stubViewWithCaret(dispatched, [
+      { text: "b", offset: 0 },
+      { text: "b", offset: 0 },
+    ]);
+    const dom = mountWidget(makeWidget(src), view, scope);
+    const td = dom.querySelector("td") as HTMLElement;
+    press(td, "mousedown", 10, 10);
+    press(td, "click", 60, 10); // past DRAG_THRESHOLD_PX
+    const from = src.indexOf(IMG_CELL);
+    expect(dispatched).toEqual([{ selection: { anchor: from, head: from + IMG_CELL.length } }]);
+  });
+
+  // The MIXED same-cell case, which only became reachable when the gate moved
+  // from per-CELL to per-BOUNDARY: one end exact, the other beside the image.
+  // The forced `forward = true` this replaced answered a range on the side the
+  // pointer never crossed — pressing between `e` and `f` and dragging LEFT
+  // dispatched the single character `f`, to the RIGHT of the press point. A
+  // rendered offset beside an invisible construct measures the same on both
+  // sides of it, so neither end can supply the direction: fail closed to the
+  // whole cell (same answer as the BOTH-unmappable row above).
+  it.each([
+    ["RIGHT", { text: "abc", offset: 1 }, { text: "def", offset: 0 }],
+    ["LEFT", { text: "def", offset: 2 }, { text: "abc", offset: 3 }],
+  ])("a same-cell drag %s between an exact boundary and an image junction covers the whole cell", (_direction, down, up) => {
+    const src = `| A |\n| - |\n| ${MIXED_IMG_CELL} |`;
+    const dispatched: unknown[] = [];
+    const { view, scope } = stubViewWithCaret(dispatched, [down, up]);
+    const dom = mountWidget(makeWidget(src), view, scope);
+    const td = dom.querySelector("td") as HTMLElement;
+    press(td, "mousedown", 10, 10);
+    press(td, "click", 60, 10);
+    const from = src.indexOf(MIXED_IMG_CELL);
+    expect(dispatched).toEqual([
+      { selection: { anchor: from, head: from + MIXED_IMG_CELL.length } },
+    ]);
+  });
+
+  // The other unmappable arm: a cell whose DOM no longer matches the map that
+  // was registered for it. `renderCellInto` is the ONLY thing that registers a
+  // map, so anything that fills a cell some other way — or mutates it
+  // afterwards — must fall back rather than map through a description of
+  // content that is no longer there.
+  it("a drag in a cell whose DOM was replaced behind the map falls back to the whole cell", () => {
+    const src = "| Name |\n| - |\n| **bold** |";
+    const dispatched: unknown[] = [];
+    const { view, scope } = stubViewWithCaret(dispatched, [
+      { text: "tampered", offset: 1 },
+      { text: "tampered", offset: 3 },
+    ]);
+    const dom = mountWidget(makeWidget(src), view, scope);
+    const td = dom.querySelector("td") as HTMLElement;
+    td.replaceChildren(document.createTextNode("tampered"));
+    press(td, "mousedown", 10, 10);
+    press(td, "click", 60, 10);
+    const from = src.indexOf("**bold**");
+    expect(dispatched).toEqual([{ selection: { anchor: from, head: from + "**bold**".length } }]);
   });
 
   // The threshold's VALUE, its `>=` boundary, and the Manhattan metric are all
