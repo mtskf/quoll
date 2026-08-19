@@ -2,6 +2,12 @@
 
 All notable changes to Quoll are documented here.
 
+## 0.1.72 — 2026-08-19
+
+### Changed
+
+- Internal robustness work in the image, table and task-checkbox blocks. Nothing changes in how the editor looks or behaves.
+
 ## 0.1.71 — 2026-08-12
 
 ### Fixed
