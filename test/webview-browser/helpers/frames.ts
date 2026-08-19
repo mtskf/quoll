@@ -1,9 +1,9 @@
-// Frame-waiting primitives shared by every test/webview-browser/ suite. These
-// live here rather than in each suite because a per-suite copy can silently
-// drift on frame count — and a suite waiting one frame too few goes flaky under
-// CI load while its siblings stay green, which is exactly the failure that is
-// hardest to attribute. Not a test file itself (no .browser.test.ts suffix),
-// mirroring helpers/handoff-window.ts.
+// Frame-waiting primitives shared across the test/webview-browser/ suites.
+// These live here rather than in each suite because a per-suite copy can
+// silently drift on frame count — and a suite waiting one frame too few goes
+// flaky under CI load while its siblings stay green, which is exactly the
+// failure that is hardest to attribute. Not a test file itself (no
+// .browser.test.ts suffix), mirroring helpers/handoff-window.ts.
 //
 // Frame-based (not wall-clock) waits are the point: they scale with actual
 // frame progress under headless/CI rAF throttling, and CodeMirror's own measure

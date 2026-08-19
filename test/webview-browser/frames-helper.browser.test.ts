@@ -1,6 +1,6 @@
 // Pins the requestAnimationFrame call-count contract of helpers/frames.ts
-// itself. That file is depended on by every other suite in this directory
-// (plus helpers/handoff-window.ts and its own dependents) — an unpinned
+// itself. That file is depended on by most suites in this directory (plus
+// helpers/handoff-window.ts and its own dependents) — an unpinned
 // drift in SETTLE_FRAMES or the tick loop would surface as intermittent
 // flake spread across every dependent suite rather than a clean failure
 // here. See helpers/frames.ts's own header comment for why frame-based
