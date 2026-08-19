@@ -266,6 +266,7 @@ export function cellPointAt(
     // this source span and this DOM. `stampRow` moves the stamps without
     // re-rendering, and `patchRow` re-renders in place, so either half can move
     // under a map that outlived it.
+    //
     // `cellTo - cellFrom` is an absolute-space DELTA, which is a LENGTH and so
     // comparable with the cell-relative `sourceLength`. The brands cannot
     // certify this one: subtraction erases them, exactly as addition does.

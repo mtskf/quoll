@@ -168,14 +168,14 @@ export function sourceOffsetAt(
     const last = runs[runs.length - 1];
     return last.outerTo === sourceLength ? sourceLength : null;
   }
+  // The current run's start in the rendered text: accumulated as this scan
+  // goes, never stored on the run — see `CellSourceRun` above for why the
+  // field is absent.
   let rendered = 0;
   for (let i = 0; i < runs.length; i++) {
     const run = runs[i];
-    // Derived, not stored: `rendered` is the sum of the preceding runs'
-    // lengths, which a stored field could only ever repeat. Same scan, same
-    // arithmetic, one fewer way for a map to disagree with itself.
-    const length = run.to - run.from;
-    if (within > rendered && within < rendered + length) {
+    const runLength = run.to - run.from;
+    if (within > rendered && within < rendered + runLength) {
       // The one arithmetic crossing INSIDE the map's own space: a rendered
       // delta added to a source offset is a source offset, which the run's
       // 1:1 length (`to - from` IS its rendered length) is what makes true.
@@ -191,7 +191,7 @@ export function sourceOffsetAt(
       const prev = runs[i - 1];
       return prev.outerTo === run.outerFrom ? prev.outerTo : null;
     }
-    rendered += length;
+    rendered += runLength;
   }
   // Unreachable while runs tile the rendered text contiguously. Both producers
   // satisfy that: `emitRun` (cell-render.ts) advances the cursor by exactly the

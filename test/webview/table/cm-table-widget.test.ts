@@ -1000,12 +1000,12 @@ describe("TableBlockWidget drag-selection", () => {
   // The counterpart of the row above: the shift lands BEFORE the gesture, not
   // during it, and the drag must still map exactly. This is the ONE reason the
   // source map holds CELL-RELATIVE offsets (see the CELL-CONTENT-RELATIVE
-  // paragraph on `CellSourceRun`, cell-source-map.ts) —
-  // `stampRow` re-points the stamps on a pure positional shift WITHOUT
-  // re-rendering, so an absolute map would go stale exactly here and every
-  // marked-up cell would silently degrade to the whole-cell snap after the
-  // first keystroke above a table. The other shift rows assert stamps on a
-  // PLAIN-TEXT cell and never drag afterwards, so they cannot see it.
+  // paragraph on `CellSourceRun`, cell-source-map.ts) — `stampRow` re-points
+  // the stamps on a pure positional shift WITHOUT re-rendering, so an absolute
+  // map would go stale exactly here and every marked-up cell would silently
+  // degrade to the whole-cell snap after the first keystroke above a table.
+  // The other shift rows assert stamps on a PLAIN-TEXT cell and never drag
+  // afterwards, so they cannot see it.
   it("a drag in a marked-up cell still maps exactly after a pure positional shift", () => {
     const src = "| Name |\n| - |\n| **bold** |";
     const dispatched: unknown[] = [];

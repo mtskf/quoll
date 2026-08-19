@@ -1054,14 +1054,13 @@ describe("cell source map invariants", () => {
     for (const run of map.runs) {
       // The run's source really is what rendered, character for character —
       // the claim the whole mapping rests on. `rendered` is the running sum of
-      // the preceding runs' lengths, which is now the map's ONLY notion of a
-      // run's rendered position: the field that used to carry it could only
-      // ever repeat this sum, so the type could express an inter-run gap the
-      // renderer never emits. `sourceOffsetAt` derives it the same way.
-      const length = run.to - run.from;
-      expect(length, where).toBeGreaterThan(0);
+      // the preceding runs' lengths, which is the map's ONLY notion of a run's
+      // rendered position and is how `sourceOffsetAt` derives it too (why no
+      // run stores it: the `CellSourceRun` doc in cell-source-map.ts).
+      const runLength = run.to - run.from;
+      expect(runLength, where).toBeGreaterThan(0);
       expect(raw.slice(run.from, run.to), where).toBe(
-        map.renderedText.slice(rendered, rendered + length)
+        map.renderedText.slice(rendered, rendered + runLength)
       );
       // Source order, non-overlapping: two runs claiming the same byte would
       // make the mapping ambiguous in the other direction.
@@ -1071,7 +1070,7 @@ describe("cell source map invariants", () => {
       expect(run.outerTo, where).toBeGreaterThanOrEqual(run.to);
       expect(run.outerFrom, where).toBeGreaterThanOrEqual(prevOuterTo);
       expect(run.outerTo, where).toBeLessThanOrEqual(raw.length);
-      rendered += length;
+      rendered += runLength;
       prevTo = run.to;
       prevOuterTo = run.outerTo;
     }

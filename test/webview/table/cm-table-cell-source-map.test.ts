@@ -97,9 +97,9 @@ describe("sourceOffsetAt", () => {
   });
 
   // The interior arithmetic (`run.from + (within - rendered)`, where `rendered`
-  // is the running sum of the preceding runs' lengths) for a run
-  // that is NOT the first one. Every other fixture in THIS file leaves that
-  // case unobserved: the multi-run cells (`a${IMG}b`, `a\\|b`) have runs ONE
+  // is the running sum of the preceding runs' lengths) for a run that is NOT
+  // the first one. Every other fixture in THIS file leaves that case
+  // unobserved: the multi-run cells (`a${IMG}b`, `a\\|b`) have runs ONE
   // character wide, and no integer sits strictly between two consecutive
   // integers, so their later runs only ever reach the junction and end-of-text
   // arms. Elsewhere the case is reached only INDIRECTLY — measured: a mutant
