@@ -22,11 +22,12 @@ import type { CaretResolver } from "../../../src/webview/cm/table/cell-point.js"
 import { tableBlockField, tableSkeletonField } from "../../../src/webview/cm/table/index.js";
 import { quollTheme } from "../../../src/webview/cm/theme.js";
 
-// Row 1's cells are plain text (no inline markup) so `renderedText.length ===
-// cellTo - cellFrom` holds and cell-point.ts maps a pointer to an EXACT source
-// offset — the byte-aligned arm the offset assertions depend on. Row 2's first
-// cell is deliberately NOT byte-aligned (`**bo**`, 6 source bytes, renders as
-// 2 characters) so the snap-to-cell-boundary arm is reachable too.
+// Row 1's cells are plain text, so their source map is one identity run and a
+// pointer maps to an EXACT source offset with no markup in the way. Row 2's
+// first cell holds `**bo**` (6 source bytes rendered as 2 characters) so the
+// suite also covers a mapping that only the renderer's source map can make —
+// interior offsets past the delimiters, and an edge boundary that expands over
+// them.
 const DOC =
   "# Doc\n\npara\n\n| Alpha | Beta |\n| ----- | ---- |\n| gamma | delta |\n| **bo** | plain |\n\ntail\n";
 /** Content-start source offsets — what the widget stamps as `data-cell-from`. */

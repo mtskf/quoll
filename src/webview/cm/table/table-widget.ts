@@ -6,8 +6,9 @@
 // module-private `blockStart` WeakMap (NOT read back out of the DOM).
 // A mousedown followed by a click that actually moved (see DRAG_THRESHOLD_PX)
 // instead dispatches a RANGE selection between the two RESOLVED source offsets;
-// an endpoint whose cell renders non-byte-aligned (inline markup) has no exact
-// offset and snaps outward to that cell's data-cell-from/data-cell-to instead.
+// an endpoint the cell's source map cannot place exactly (a boundary beside a
+// construct that renders no text, e.g. an in-cell image) has no exact offset
+// and snaps outward to that cell's data-cell-from/data-cell-to instead.
 // Any endpoint that resolves to nothing, and a range that collapses after
 // snapping, fall back to the same caret dispatch as a plain click. (See
 // cell-point.ts for the pointer→source-offset mapping and why the widget must
@@ -37,11 +38,11 @@ import {
   quollTableCaretResolver,
   stampedOffset,
 } from "./cell-point.js";
-import { renderCellInline } from "./cell-render.js";
+import { renderCellInto } from "./cell-render.js";
 
 // Pointer travel (Manhattan, CSS px) below which a gesture is a CLICK, not a
-// drag. Without this gate a plain click on a cell whose render is not
-// byte-aligned with its source (`**bold**`, links, code) would resolve both
+// drag. Without this gate a plain click on a cell whose pointer position has no
+// exact source offset (a boundary beside an in-cell image) would resolve both
 // endpoints to `offset: null` and dispatch a whole-cell RANGE where today a
 // collapsed caret lands — a regression of the existing click contract.
 const DRAG_THRESHOLD_PX = 4;
@@ -351,13 +352,20 @@ export class TableBlockWidget extends WidgetType {
       const a = align[col];
       el.style.textAlign = a !== null && a !== undefined ? a : "";
       // LF-internal absolute source offsets of this cell's content span. `to`
-      // is what lets a drag decide whether the rendered text is byte-aligned
-      // with the source (see cell-point.ts) and where to snap when it is not.
+      // is where a drag snaps when the pointer lands on a boundary the cell's
+      // source map cannot resolve exactly (see cell-point.ts).
       el.dataset.cellFrom = String(this.nodeFrom + cell.from);
       el.dataset.cellTo = String(this.nodeFrom + cell.to);
-      for (const node of renderCellInline(cell.raw.trim(), resourceBase)) {
-        el.appendChild(node);
-      }
+      // `cell.raw` VERBATIM, never `.trim()`: the parser's cell trimming is
+      // ASCII space/tab only, while JS `trim()` also strips NBSP, U+FEFF and
+      // every other Unicode space — so for `| <NBSP>x |` the stamps would
+      // bracket `<NBSP>x` while the render showed `x`, putting the source map
+      // off by one against `cellFrom`. `Cell.raw` is already the padding-free
+      // [from, to) slice (raw.length === cell.to - cell.from on both pushCell
+      // paths), so trimming was redundant, and dropping it makes "rendered text
+      // is anchored at cellFrom" true by construction. An exotic space inside a
+      // cell is content.
+      renderCellInto(el, cell.raw, resourceBase);
       tr.appendChild(el);
     }
     return tr;
@@ -405,7 +413,7 @@ export class TableBlockWidget extends WidgetType {
     // Pure positional shift: the bytes are identical (from.slice === this.slice)
     // and only the absolute offsets moved. Re-stamp data-cell-from on each cell
     // and reuse the rendered inline children verbatim — skip patchRow's
-    // textContent="" + renderCellInline re-tokenize (its own design comment,
+    // textContent="" + renderCellInto re-tokenize (its own design comment,
     // :16-18). This is the hot path when typing in a paragraph ABOVE the table.
     if (from.slice === this.slice) {
       this.stampRow(headerRows[0], this.table.header.cells);
@@ -462,10 +470,10 @@ export class TableBlockWidget extends WidgetType {
       el.style.textAlign = a !== null && a !== undefined ? a : "";
       el.dataset.cellFrom = String(this.nodeFrom + cell.from);
       el.dataset.cellTo = String(this.nodeFrom + cell.to);
-      el.textContent = "";
-      for (const node of renderCellInline(cell.raw.trim(), resourceBase)) {
-        el.appendChild(node);
-      }
+      // Verbatim `cell.raw` and the map-registering renderer, for the reasons
+      // in buildRow: `renderCellInto` clears the cell itself, so a reused cell
+      // can never keep the previous render's source map.
+      renderCellInto(el, cell.raw, resourceBase);
     }
   }
 

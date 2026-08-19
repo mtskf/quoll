@@ -4,7 +4,17 @@
 // the neutral `cm/inline/` module; this file drives that IR to DOM:
 //
 //   parseCellInline(raw) → Resolved<CellLeaf>[]   [inline/inline-ir.ts]
-//     → renderReadonly(ir, raw) → Node[]
+//     → renderReadonly(ir, raw) → Node[] + CellSourceMap
+//
+// The walker emits, in the SAME pass, a rendered-text → source-run map
+// (cell-source-map.ts) — because only this file knows which IR spans actually
+// become rendered text (a live link renders only its label, an inert one its
+// whole source slice, a live image no text at all). That makes the renderer the
+// mapping authority for drag selection; re-deriving the map at gesture time
+// would duplicate the live-vs-inert security decisions below in a second walker
+// free to drift from this one. `renderCellInto` is the only supported way to
+// fill a cell, so a call site cannot append nodes without registering the map
+// that describes them.
 //
 // The C4a orchestrator drops its reveal spans inside the widget range via the
 // `quollBlockReplaceZones` facet, so the widget owns the rendering for these
@@ -34,6 +44,7 @@ import {
   MAX_INLINE_NESTING_DEPTH,
   parseCellInline,
 } from "../inline/inline-ir.js";
+import { type CellSourceMap, type CellSourceRun, setCellSourceMap } from "./cell-source-map.js";
 
 // Plain-click on a widget-internal link must NOT navigate the browser — that
 // bypasses the widget's caret-dispatch handler and the user loses the only
@@ -141,16 +152,77 @@ function renderableHref(safeUrl: string | null): string | null {
   return safeUrl !== null && safeUrl.length <= MAX_HREF_LENGTH ? safeUrl : null;
 }
 
+/** Mutable during the walk (`outerTo` grows as nested emphasis closers
+ *  accumulate outward), frozen into a `readonly CellSourceRun` by the type of
+ *  the map that carries it out. */
+type MutableRun = { -readonly [K in keyof CellSourceRun]: CellSourceRun[K] };
+
+/** One per `renderCellWithMap` call, shared across the whole recursion so the
+ *  rendered cursor and the pending markup are global to the cell rather than
+ *  per emphasis level. */
+interface RenderContext {
+  /** Rendered characters emitted so far — the next run's `rendered`. */
+  cursor: number;
+  runs: MutableRun[];
+  /** Opener markup waiting for the run it belongs to (`**` before its text,
+   *  `[` before a label, a `\` before its escaped char). `null` = none pending. */
+  pendingOpen: number | null;
+  /** Source that renders NO text has passed since the last run. This is what
+   *  keeps a boundary from claiming to be exact across an invisible construct:
+   *  it both suppresses the pending opener (that markup is not this run's) and
+   *  blocks the closer extension in the emphasis arm. */
+  sawSkipped: boolean;
+}
+
+function newRenderContext(): RenderContext {
+  return { cursor: 0, runs: [], pendingOpen: null, sawSkipped: false };
+}
+
+/** The ONLY thing that appends a run or advances the rendered cursor, so every
+ *  arm below states its source spans and nothing else has to keep the cursor in
+ *  step with the DOM it emits.
+ *
+ *  `[from, to)` are the source characters that render VERBATIM; `outerTo` is
+ *  where the construct owning them ends (its closing markup included). */
+function emitRun(ctx: RenderContext, from: number, to: number, outerTo: number): void {
+  if (from === to) {
+    // A construct that renders zero characters (`[](https://…)` → `<a></a>`).
+    // Emitting it would put two runs at the same rendered index and make the
+    // boundary lookup ambiguous; recording it as skipped is both correct and
+    // what stops a later run from claiming this construct's markup.
+    ctx.sawSkipped = true;
+    return;
+  }
+  ctx.runs.push({
+    rendered: ctx.cursor,
+    from,
+    to,
+    // Invisible source between the pending opener and this run means the opener
+    // is not ours — it belongs to whatever rendered nothing in between.
+    outerFrom: ctx.sawSkipped ? from : (ctx.pendingOpen ?? from),
+    outerTo,
+  });
+  ctx.cursor += to - from;
+  ctx.pendingOpen = null;
+  ctx.sawSkipped = false;
+}
+
 // Walk a Resolved<CellLeaf>[] and emit DOM nodes byte-identically to the
 // previous direct-DOM tokenizer. A pending text buffer merges adjacent text
 // values, escape unescaped chars, and inert-construct source slices into a
 // single Text node (preserving the single-text-node topology that the
 // renderReadonly topology tests pin). Flushed before every element node.
-export function renderReadonly(
+//
+// `ctx` collects the source-run map alongside the DOM. It is threaded rather
+// than rebuilt per level because a run's outer span can be extended by an
+// ANCESTOR emphasis wrapper (`***x***` → one run whose outer span is both
+// delimiter pairs), which only a shared run list can express.
+function renderReadonly(
   ir: Resolved<CellLeaf>[],
   raw: string,
-  resourceBase = "",
-  depth = 0
+  resourceBase: string,
+  depth: number,
+  ctx: RenderContext
 ): Node[] {
   const out: Node[] = [];
   let pendingText = "";
@@ -165,17 +237,24 @@ export function renderReadonly(
   for (const node of ir) {
     switch (node.kind) {
       case "text":
+        emitRun(ctx, node.span.from, node.span.to, node.span.to);
         pendingText += node.value;
         break;
       case "leaf": {
         const leaf = node.leaf;
         switch (leaf.kind) {
           case "escape":
-            // Merge the unescaped char into the pending-text buffer.
+            // Merge the unescaped char into the pending-text buffer. The `\` is
+            // an opener: a boundary at the rendered char expands over it, so
+            // selecting the char yields the escape sequence that produces it.
+            ctx.pendingOpen ??= node.span.from;
+            emitRun(ctx, leaf.char.from, leaf.char.to, node.span.to);
             pendingText += raw.slice(leaf.char.from, leaf.char.to);
             break;
           case "code": {
             flushPending();
+            ctx.pendingOpen ??= node.span.from;
+            emitRun(ctx, leaf.content.from, leaf.content.to, node.span.to);
             const el = document.createElement("code");
             el.textContent = raw.slice(leaf.content.from, leaf.content.to);
             out.push(el);
@@ -185,6 +264,9 @@ export function renderReadonly(
             const href = renderableHref(leaf.safeUrl);
             if (href !== null) {
               flushPending();
+              // Only the LABEL renders; `[` opens and `](url)` closes.
+              ctx.pendingOpen ??= node.span.from;
+              emitRun(ctx, leaf.label.from, leaf.label.to, node.span.to);
               const a = document.createElement("a");
               a.href = href;
               a.rel = "noopener noreferrer";
@@ -193,7 +275,10 @@ export function renderReadonly(
               out.push(a);
             } else {
               // Unsafe or over-cap URL — merge the full source slice into
-              // pending text (inert), so no native gesture can open it.
+              // pending text (inert), so no native gesture can open it. Inert
+              // means the WHOLE slice renders, so the run is the whole span.
+              ctx.pendingOpen ??= node.span.from;
+              emitRun(ctx, node.span.from, node.span.to, node.span.to);
               pendingText += raw.slice(node.span.from, node.span.to);
             }
             break;
@@ -210,11 +295,18 @@ export function renderReadonly(
               leaf.safeUrl !== null ? resolveAgainstBase(leaf.safeUrl, resourceBase) : null;
             if (src !== null) {
               flushPending();
+              // A LIVE image renders no text at all (the alt is an attribute,
+              // not textContent), so it emits no run — only the skipped flag,
+              // which is what makes a boundary beside it answer "no exact
+              // mapping" instead of silently landing on one side of it.
+              ctx.sawSkipped = true;
               const el = document.createElement("img");
               el.src = src;
               el.alt = commonMarkAltText(raw.slice(leaf.alt.from, leaf.alt.to));
               out.push(el);
             } else {
+              ctx.pendingOpen ??= node.span.from;
+              emitRun(ctx, node.span.from, node.span.to, node.span.to);
               pendingText += raw.slice(node.span.from, node.span.to);
             }
             break;
@@ -223,6 +315,9 @@ export function renderReadonly(
             const href = renderableHref(leaf.safeUrl);
             if (href !== null) {
               flushPending();
+              // Only the URL text between `<` and `>` renders.
+              ctx.pendingOpen ??= node.span.from;
+              emitRun(ctx, leaf.content.from, leaf.content.to, node.span.to);
               const a = document.createElement("a");
               a.href = href;
               a.rel = "noopener noreferrer";
@@ -230,6 +325,8 @@ export function renderReadonly(
               attachLinkClickGuard(a);
               out.push(a);
             } else {
+              ctx.pendingOpen ??= node.span.from;
+              emitRun(ctx, node.span.from, node.span.to, node.span.to);
               pendingText += raw.slice(node.span.from, node.span.to);
             }
             break;
@@ -248,13 +345,40 @@ export function renderReadonly(
         // recursion depth. No flushPending(): we emit no element, so the slice
         // merges naturally with adjacent text (same topology as inert links).
         if (depth >= MAX_INLINE_NESTING_DEPTH) {
+          // The literal source renders verbatim, exactly like an inert link.
+          ctx.pendingOpen ??= node.span.from;
+          emitRun(ctx, node.span.from, node.span.to, node.span.to);
           pendingText += raw.slice(node.span.from, node.span.to);
           break;
         }
         flushPending();
+        // SET-IF-EMPTY, never overwrite: an already-pending OUTER opener wins,
+        // so `***x***` and `**_b_**` reach `outerFrom: 0`. Overwriting here
+        // would orphan the outer `**` — a boundary at `x` would expand only
+        // over the inner delimiters and the selection would no longer
+        // round-trip.
+        ctx.pendingOpen ??= node.span.from;
+        const mark = ctx.runs.length;
         const el = document.createElement(node.tag);
-        for (const child of renderReadonly(node.children, raw, resourceBase, depth + 1)) {
+        for (const child of renderReadonly(node.children, raw, resourceBase, depth + 1, ctx)) {
           el.appendChild(child);
+        }
+        if (ctx.runs.length > mark && !ctx.sawSkipped) {
+          // The wrapper emitted text and nothing invisible follows it, so its
+          // closing delimiters belong to the LAST run. `max` because nested
+          // closers accumulate outward — em first, then strong. The
+          // `!sawSkipped` guard is what keeps a trailing invisible construct
+          // (`**a![i](p)**`) from being swallowed into the left run's closers:
+          // extending there would make a boundary that straddles the image look
+          // exact instead of falling back to the whole-cell snap.
+          const last = ctx.runs[ctx.runs.length - 1];
+          last.outerTo = Math.max(last.outerTo, node.span.to);
+        } else if (ctx.runs.length === mark) {
+          // The wrapper rendered nothing (`*![i](p)*a`). Drop the pending
+          // opener so its delimiters are never attributed to a later, unrelated
+          // run, and record the skip so the next run keeps its own outer span.
+          ctx.pendingOpen = null;
+          ctx.sawSkipped = true;
         }
         out.push(el);
         break;
@@ -267,13 +391,69 @@ export function renderReadonly(
   return out;
 }
 
-export function renderCellInline(raw: string, resourceBase = ""): Node[] {
-  // Defense in depth: the parser is bounded (iterative build + capped walker),
-  // but ANY unforeseen throw must not blank the table widget on seed — fall
-  // back to a single inert source-text node, matching the fail-closed pattern.
+/** Render a cell's raw Markdown to DOM nodes AND the map describing them.
+ *
+ *  `renderedText` is read back off the emitted nodes rather than accumulated by
+ *  the walker: it is the string cell-point.ts compares against the cell's live
+ *  `textContent`, so deriving it from the same source as that comparison is
+ *  what makes the check meaningful (a walker-side tally could agree with the
+ *  runs while disagreeing with the DOM). */
+function renderCellWithMap(
+  raw: string,
+  resourceBase: string
+): { nodes: Node[]; map: CellSourceMap } {
+  const ctx = newRenderContext();
+  const nodes = renderReadonly(parseCellInline(raw), raw, resourceBase, 0, ctx);
+  return {
+    nodes,
+    map: {
+      runs: ctx.runs,
+      sourceLength: raw.length,
+      renderedText: nodes.map((n) => n.textContent ?? "").join(""),
+    },
+  };
+}
+
+/** Defense in depth: the parser is bounded (iterative build + capped walker),
+ *  but ANY unforeseen throw must not blank the table widget on seed — fall back
+ *  to a single inert source-text node, matching the fail-closed pattern. The
+ *  fallback carries the IDENTITY map that node deserves rather than no map at
+ *  all: the source renders verbatim, so its offsets really are 1:1, and
+ *  producing a map here is what stops a reused `patchRow` cell from keeping the
+ *  stale map of whatever it rendered before. */
+function renderCellSafely(
+  raw: string,
+  resourceBase: string
+): { nodes: Node[]; map: CellSourceMap } {
   try {
-    return renderReadonly(parseCellInline(raw), raw, resourceBase);
+    return renderCellWithMap(raw, resourceBase);
   } catch {
-    return [document.createTextNode(raw)];
+    return {
+      nodes: [document.createTextNode(raw)],
+      map: {
+        runs: [{ rendered: 0, from: 0, to: raw.length, outerFrom: 0, outerTo: raw.length }],
+        sourceLength: raw.length,
+        renderedText: raw,
+      },
+    };
   }
+}
+
+/** Nodes only — the general renderer API, for callers with no cell element and
+ *  no drag to map (the raw-HTML inertness probes, the render tests). */
+export function renderCellInline(raw: string, resourceBase = ""): Node[] {
+  return renderCellSafely(raw, resourceBase).nodes;
+}
+
+/** Fill a rendered table cell: clear it, append the nodes, register the map —
+ *  ONE operation, so a call site cannot append content without registering the
+ *  map that describes it (which cell-point.ts would then read as "no mapping",
+ *  or worse, satisfy with the previous render's map on a reused cell). */
+export function renderCellInto(cell: HTMLElement, raw: string, resourceBase = ""): void {
+  const { nodes, map } = renderCellSafely(raw, resourceBase);
+  cell.textContent = "";
+  for (const node of nodes) {
+    cell.appendChild(node);
+  }
+  setCellSourceMap(cell, map);
 }

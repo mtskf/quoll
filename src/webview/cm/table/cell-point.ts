@@ -13,26 +13,34 @@
 // cannot read `window.getSelection()` at mouseup — it must map pointer
 // COORDINATES itself. Hence this module.
 //
-// Byte-alignment rule: the widget renders `cell.raw.trim()` through the inline
-// tokenizer, so a cell holding `**bold**` (8 source bytes) renders as `bold`
-// (4 characters) and a DOM character offset is NOT addable to the cell's source
-// offset. The parser already trims cell padding (`Cell.from`/`to` bracket the
-// content, excluding `leadingSpace`/`trailingSpace`), so for a cell with no
-// inline constructs `renderedText.length === cellTo - cellFrom` holds exactly.
-// That length equality is the alignment test: equal → offsets map 1:1; unequal
-// → `offset` is reported as `null` and the caller snaps to a cell boundary
-// rather than inventing a wrong position.
+// Rendered-to-source mapping: a cell holding `**bold**` (8 source bytes)
+// renders as `bold` (4 characters), so a DOM character offset is NOT addable to
+// the cell's source offset. The RENDERER answers that — cell-render.ts emits a
+// `CellSourceMap` (rendered run → source span, plus the markup each run owns)
+// in the same pass that emits the DOM, and this module measures the rendered
+// offset with a DOM `Range` and looks it up. Where the map has no exact answer
+// — a boundary beside a construct that renders NO text, where both sides
+// measure the same rendered offset — `offset` is `null` and the caller snaps to
+// a cell boundary rather than inventing a position.
 //
-// The gate is sound only while NO renderer construct GROWS the text (a
-// length-preserving substitution would pass the test while mapping wrongly).
-// cm-table-cell-render.test.ts pins that invariant for the constructs the
-// renderer supports TODAY: a fixed CASES list plus a fixed-seed composition
-// fuzz drawn from the same atoms, so it can only go red for source shapes it
-// already knows. Adding an inline construct therefore carries a MANUAL
-// obligation — add it to both lists. If it can render longer than its source,
-// this mapping breaks silently and must move to per-node source spans first.
+// This replaced a LENGTH-EQUALITY gate (`renderedText.length === cellTo -
+// cellFrom` → map 1:1, else null). It was wrong in both directions: every cell
+// holding any inline markup lost exact mapping, and it rested on an unwritten
+// contract — "no construct may render LONGER than its source" — whose only
+// guard was a hand-maintained CASES list, so a future construct that GREW text
+// while preserving total length would have passed the gate and mapped every
+// offset wrongly, silently. The map has no such contract to break.
+//
+// Staleness: the map is keyed on the cell ELEMENT, and `stampRow` re-points the
+// offset stamps on a positional shift WITHOUT re-rendering, so a map must be
+// proven current before it is trusted. Both halves are checked —
+// `sourceLength` against the stamps and `renderedText` against the cell's live
+// `textContent`. Lengths alone would let a same-length stale map through; the
+// text comparison is the one check a coincidence of lengths cannot fool.
 
 import { Facet } from "@codemirror/state";
+
+import { getCellSourceMap, sourceOffsetAt } from "./cell-source-map.js";
 
 /** A DOM caret position — the subset of `CaretPosition` / `Range` this module
  *  needs, so a test can hand-build one without a layout engine. */
@@ -113,9 +121,10 @@ export interface CellPoint {
   readonly cellFrom: number;
   /** Absolute source offset of the cell's content end (`data-cell-to`). */
   readonly cellTo: number;
-  /** Absolute source offset under the pointer, or `null` when this cell's
-   *  rendered text is not byte-aligned with its source (inline markup,
-   *  escapes, images) and an exact character mapping is not available. */
+  /** Absolute source offset under the pointer, or `null` when this cell has no
+   *  exact mapping for it — no current source map (an unrendered or
+   *  hand-built cell), or a boundary the map cannot place because invisible
+   *  source (a live image) sits on one side of it. */
   readonly offset: number | null;
 }
 
@@ -137,9 +146,11 @@ export interface CellPoint {
  *  different root/document or compares BEFORE the current start (DOM spec
  *  "set the end" step 4; happy-dom Range.setEnd mirrors it). A same-document
  *  node lying AFTER the cell fails both conditions, so the start stays at the
- *  cell's first character and the result EXCEEDS the cell's text length. That
- *  is exactly the value `cellPointAt`'s no-clamp reasoning must never see —
- *  and it cannot, because the caller derives `cell` from this very node
+ *  cell's first character and the result EXCEEDS the cell's text length — a
+ *  rendered offset for a point the pointer was never at, which `sourceOffsetAt`
+ *  would refuse as out of range but only by luck, since a SHORTER overshoot
+ *  inside the cell's own text would map silently. It cannot happen here,
+ *  because the caller derives `cell` from this very node
  *  (`closest("th, td")`), which makes `node` the cell itself or a descendant of
  *  it. The bound is a property of that derivation, not of `setEnd`. Any future
  *  caller that resolves `cell` some other way owes this function a clamp. */
@@ -226,24 +237,34 @@ export function cellPointAt(
     if (cellFrom === null || cellTo === null || cellTo < cellFrom) {
       return null;
     }
-    const rendered = cell.textContent ?? "";
-    if (rendered.length !== cellTo - cellFrom) {
-      return { cellFrom, cellTo, offset: null };
-    }
     const within = textOffsetWithinCell(cell, point.node, point.offset);
     if (within === null) {
       return { cellFrom, cellTo, offset: null };
     }
-    // No clamp: `within` is bounded by construction. `cell` was derived from
-    // `point.node` above, so the measured range ends inside `cell` and cannot
-    // read past its rendered text (see textOffsetWithinCell — an end point
-    // OUTSIDE the cell is what would break this, and the derivation is what
-    // rules it out). The alignment gate then gives
-    // `rendered.length === cellTo - cellFrom`, so `cellFrom + within` is always
-    // inside `[cellFrom, cellTo]`. An offset the platform considers out of
-    // range never gets this far — `setEnd` throws IndexSizeError and
-    // `textOffsetWithinCell` returns null (fail closed).
-    return { cellFrom, cellTo, offset: cellFrom + within };
+    // Snapshot check — the map is only usable while it still describes BOTH
+    // this source span and this DOM. `stampRow` moves the stamps without
+    // re-rendering, and `patchRow` re-renders in place, so either half can move
+    // under a map that outlived it.
+    const map = getCellSourceMap(cell);
+    if (
+      map === null ||
+      map.sourceLength !== cellTo - cellFrom ||
+      map.renderedText !== (cell.textContent ?? "")
+    ) {
+      return { cellFrom, cellTo, offset: null };
+    }
+    const relative = sourceOffsetAt(map, within);
+    if (relative === null) {
+      return { cellFrom, cellTo, offset: null };
+    }
+    // The clamp is a belt to the snapshot check's braces. `sourceOffsetAt`
+    // already answers within `[0, map.sourceLength]` and the check just proved
+    // `sourceLength === cellTo - cellFrom`, so this cannot fire today — but the
+    // value flows straight into `view.dispatch({selection})`, which validates
+    // only `range.to > doc.length`, and a position outside the cell is exactly
+    // the silently-wrong selection this module exists to prevent.
+    const offset = Math.min(Math.max(cellFrom + relative, cellFrom), cellTo);
+    return { cellFrom, cellTo, offset };
   } catch {
     return null;
   }

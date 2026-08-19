@@ -1,13 +1,13 @@
 // @vitest-environment happy-dom
 import { EditorState } from "@codemirror/state";
 import { afterEach, describe, expect, it } from "vitest";
-
 import {
   type CaretResolver,
   cellPointAt,
   defaultCaretResolver,
   quollTableCaretResolver,
 } from "../../../src/webview/cm/table/cell-point.js";
+import { renderCellInto } from "../../../src/webview/cm/table/cell-render.js";
 
 // `fixture` mounts into the body and the containment gate is what several tests
 // below assert on — leftovers from an earlier test would give a later one a
@@ -17,8 +17,14 @@ afterEach(() => {
   document.body.replaceChildren();
 });
 
-/** Build a minimal stamped widget-shaped DOM. */
-function fixture(cells: Array<{ text: string; from: number; to: number }>): HTMLElement {
+/** Build a minimal stamped widget-shaped DOM whose cells are filled the way the
+ *  widget fills them — `renderCellInto`, which registers the source map
+ *  `cellPointAt` reads. `md` is Markdown SOURCE, not rendered text: the mapping
+ *  under test is exactly the one between those two, so a fixture that skipped
+ *  the renderer would be testing a map no production code ever produces.
+ *  `from`/`to` are the stamps, normally `md.length` apart (`Cell.raw` is the
+ *  padding-free slice); a deliberate mismatch is what drives the stale-map rows. */
+function fixture(cells: Array<{ md: string; from: number; to: number }>): HTMLElement {
   const root = document.createElement("div");
   root.className = "quoll-block quoll-table-block";
   root.dataset.docFrom = "0";
@@ -29,7 +35,7 @@ function fixture(cells: Array<{ text: string; from: number; to: number }>): HTML
     const td = document.createElement("td");
     td.dataset.cellFrom = String(c.from);
     td.dataset.cellTo = String(c.to);
-    td.appendChild(document.createTextNode(c.text));
+    renderCellInto(td, c.md);
     tr.appendChild(td);
   }
   tbody.appendChild(tr);
@@ -39,30 +45,37 @@ function fixture(cells: Array<{ text: string; from: number; to: number }>): HTML
   return root;
 }
 
+/** The same shape with the cell filled BY HAND — no `renderCellInto`, so no
+ *  registered map. Used by the rows that are about the trust boundary itself
+ *  (malformed stamps, a cell nobody rendered), where going through the renderer
+ *  would only add noise. */
+function unmappedFixture(text: string, from: number, to: number): HTMLElement {
+  const root = fixture([{ md: "", from, to }]);
+  const td = root.querySelector("td") as HTMLElement;
+  td.replaceChildren(document.createTextNode(text));
+  return root;
+}
+
 /** happy-dom has no layout, so the tests hand the mapping the DOM position a
  *  real caretPositionFromPoint would have returned. */
 function resolverFor(node: Node | null, offset: number): CaretResolver {
   return () => (node === null ? null : { node, offset });
 }
 
-/** A byte-aligned cell whose 7 rendered characters are spread over three
- *  children — text, `<code>`, text — which is what makes the element-node
- *  (child-index) caret cases below distinguishable from the text-node ones. */
+/** A cell whose 7 rendered characters are spread over three children — text,
+ *  `<code>`, text — which is what makes the element-node (child-index) caret
+ *  cases below distinguishable from the text-node ones. Source is 9 bytes (the
+ *  backtick pair renders nothing), so it also exercises a mapping that a length
+ *  comparison could never have made. */
+const MIXED_MD = "ab`cde`fg";
 function mixedChildrenCell(): { root: HTMLElement; td: HTMLElement } {
-  const root = fixture([{ text: "", from: 5, to: 12 }]);
-  const td = root.querySelector("td") as HTMLElement;
-  td.textContent = "";
-  td.appendChild(document.createTextNode("ab"));
-  const code = document.createElement("code");
-  code.textContent = "cde";
-  td.appendChild(code);
-  td.appendChild(document.createTextNode("fg"));
-  return { root, td };
+  const root = fixture([{ md: MIXED_MD, from: 5, to: 5 + MIXED_MD.length }]);
+  return { root, td: root.querySelector("td") as HTMLElement };
 }
 
 describe("cellPointAt", () => {
   it("maps an offset inside a byte-aligned cell to an absolute source offset", () => {
-    const root = fixture([{ text: "alpha", from: 78, to: 83 }]);
+    const root = fixture([{ md: "alpha", from: 78, to: 83 }]);
     const text = root.querySelector("td")?.firstChild as Node;
     expect(cellPointAt(root, 0, 0, resolverFor(text, 2))).toEqual({
       cellFrom: 78,
@@ -71,9 +84,96 @@ describe("cellPointAt", () => {
     });
   });
 
-  it("reports offset null when the rendered text is not byte-aligned with source", () => {
-    // `**bold**` is 8 source bytes rendering as 4 characters.
-    const root = fixture([{ text: "bold", from: 10, to: 18 }]);
+  // Inline markup used to be the disqualifier — `**bold**` is 8 source bytes
+  // rendering as 4 characters, so the old length-equality gate answered `null`
+  // for it and a drag selected the whole cell. The map places the boundary
+  // exactly: rendered index 1 is source index 3, INSIDE the delimiters.
+  it("maps an offset inside `**bold**` to the source character under it", () => {
+    const root = fixture([{ md: "**bold**", from: 100, to: 108 }]);
+    const text = root.querySelector("strong")?.firstChild as Node;
+    expect(cellPointAt(root, 0, 0, resolverFor(text, 1))).toEqual({
+      cellFrom: 100,
+      cellTo: 108,
+      offset: 103,
+    });
+  });
+
+  // A boundary AT a run's edge expands over the markup the run's construct
+  // owns, so selecting all of `bold` yields `**bold**` — the selection still
+  // round-trips to the same rendered content instead of landing inside a
+  // delimiter run and breaking it.
+  it.each([
+    [0, 100],
+    [4, 108],
+  ])("resolves the `**bold**` edge boundary %i to the construct edge", (within, expected) => {
+    const root = fixture([{ md: "**bold**", from: 100, to: 108 }]);
+    const text = root.querySelector("strong")?.firstChild as Node;
+    expect(cellPointAt(root, 0, 0, resolverFor(text, within))?.offset).toBe(expected);
+  });
+
+  it("maps an offset inside a link LABEL past the `[` opener", () => {
+    const md = "[label](https://example.com)";
+    const root = fixture([{ md, from: 40, to: 40 + md.length }]);
+    const text = root.querySelector("a")?.firstChild as Node;
+    // Rendered "la|bel" → source `[la|bel](…)`: 40 + 1 (the `[`) + 2.
+    expect(cellPointAt(root, 0, 0, resolverFor(text, 2))?.offset).toBe(43);
+  });
+
+  it("maps an offset inside `` `code` `` past the opening backtick", () => {
+    const root = fixture([{ md: "`code`", from: 40, to: 46 }]);
+    const text = root.querySelector("code")?.firstChild as Node;
+    expect(cellPointAt(root, 0, 0, resolverFor(text, 2))?.offset).toBe(43);
+  });
+
+  // An escape renders ONE character from TWO source bytes. The boundary after
+  // it must clear the whole sequence, or a selection ending there would split
+  // `\|` and write a bare `|` into a table cell.
+  it("resolves the boundary after an escaped `\\|` past both source bytes", () => {
+    const root = fixture([{ md: "\\|", from: 40, to: 42 }]);
+    const text = root.querySelector("td")?.firstChild as Node;
+    expect(cellPointAt(root, 0, 0, resolverFor(text, 1))?.offset).toBe(42);
+  });
+
+  // A live image renders ZERO characters, so the rendered offsets on both sides
+  // of it are the SAME number — nothing in a rendered offset can prove the
+  // pointer crossed it. The map refuses rather than guess, and the caller snaps
+  // outward exactly as it did for every marked-up cell before this change.
+  it("reports offset null for a boundary beside a live in-cell image", () => {
+    const md = "x![i](https://x.test/a.png)y";
+    const root = fixture([{ md, from: 40, to: 40 + md.length }]);
+    const y = root.querySelector("td")?.lastChild as Node;
+    expect(cellPointAt(root, 0, 0, resolverFor(y, 0))).toEqual({
+      cellFrom: 40,
+      cellTo: 40 + md.length,
+      offset: null,
+    });
+  });
+
+  // NBSP is content, not padding: the parser's cell trimming is ASCII
+  // space/tab only, so the stamps bracket it. The widget must render
+  // `cell.raw` VERBATIM — a JS `.trim()` would strip the NBSP and shift every
+  // rendered character one source byte left of where the stamps say it is.
+  it("maps exactly inside an NBSP-padded cell (the anchoring contract)", () => {
+    const root = fixture([{ md: "\u00a0x", from: 5, to: 7 }]);
+    const text = root.querySelector("td")?.firstChild as Node;
+    expect(cellPointAt(root, 0, 0, resolverFor(text, 1))?.offset).toBe(6);
+  });
+
+  it("reports offset null for a cell nobody rendered (no registered map)", () => {
+    const root = unmappedFixture("alpha", 78, 83);
+    const text = root.querySelector("td")?.firstChild as Node;
+    expect(cellPointAt(root, 0, 0, resolverFor(text, 2))).toEqual({
+      cellFrom: 78,
+      cellTo: 83,
+      offset: null,
+    });
+  });
+
+  // `stampRow` re-points the stamps on a positional shift WITHOUT re-rendering,
+  // so a map can outlive the span it describes. Length disagreement is the
+  // cheap half of the staleness check.
+  it("reports offset null when the map's sourceLength disagrees with the stamps", () => {
+    const root = fixture([{ md: "alpha", from: 10, to: 18 }]);
     const text = root.querySelector("td")?.firstChild as Node;
     expect(cellPointAt(root, 0, 0, resolverFor(text, 2))).toEqual({
       cellFrom: 10,
@@ -82,10 +182,25 @@ describe("cellPointAt", () => {
     });
   });
 
+  // ...and the half a coincidence of lengths cannot fool. Here the stamps and
+  // the map agree on LENGTH while the DOM has moved on, which is precisely the
+  // state a length-only check waves through.
+  it("reports offset null when the map's renderedText disagrees with the DOM", () => {
+    const root = fixture([{ md: "alpha", from: 78, to: 83 }]);
+    const td = root.querySelector("td") as HTMLElement;
+    const text = td.firstChild as Node;
+    td.appendChild(document.createTextNode("X"));
+    expect(cellPointAt(root, 0, 0, resolverFor(text, 2))).toEqual({
+      cellFrom: 78,
+      cellTo: 83,
+      offset: null,
+    });
+  });
+
   it("counts text across preceding sibling nodes inside the same cell", () => {
     const { root, td } = mixedChildrenCell();
-    // "ab" + "cde" + "fg" = 7 chars === cellTo - cellFrom → byte-aligned.
-    expect(cellPointAt(root, 0, 0, resolverFor(td.lastChild as Node, 1))?.offset).toBe(11);
+    // Rendered "abcde|fg" is 6 characters in; source `ab\`cde\`f|g` is 8.
+    expect(cellPointAt(root, 0, 0, resolverFor(td.lastChild as Node, 1))?.offset).toBe(13);
   });
 
   // Codex's counterexample for the hand-rolled walker this replaced: caret
@@ -93,28 +208,30 @@ describe("cellPointAt", () => {
   // returned 7 by running past the target subtree.
   it("resolves an element-node position between children (child index, not char index)", () => {
     const { root, td } = mixedChildrenCell();
-    expect(cellPointAt(root, 0, 0, resolverFor(td, 2))?.offset).toBe(10); // 5 + 5
+    // Rendered index 5 is the junction between the code run's closers and the
+    // trailing text run's start — both name source index 7, so it is exact.
+    expect(cellPointAt(root, 0, 0, resolverFor(td, 2))?.offset).toBe(12); // 5 + 7
   });
 
   it("resolves an element-node position at child index 0 to the cell start", () => {
-    const root = fixture([{ text: "alpha", from: 78, to: 83 }]);
+    const root = fixture([{ md: "alpha", from: 78, to: 83 }]);
     const td = root.querySelector("td") as HTMLElement;
     expect(cellPointAt(root, 0, 0, resolverFor(td, 0))?.offset).toBe(78);
   });
 
   it("resolves an element-node position past the last child to the cell end", () => {
-    const root = fixture([{ text: "alpha", from: 78, to: 83 }]);
+    const root = fixture([{ md: "alpha", from: 78, to: 83 }]);
     const td = root.querySelector("td") as HTMLElement;
     expect(cellPointAt(root, 0, 0, resolverFor(td, 1))?.offset).toBe(83);
   });
 
   it("returns null when the resolver finds nothing", () => {
-    const root = fixture([{ text: "alpha", from: 78, to: 83 }]);
+    const root = fixture([{ md: "alpha", from: 78, to: 83 }]);
     expect(cellPointAt(root, 0, 0, resolverFor(null, 0))).toBeNull();
   });
 
   it("fails closed when the resolver throws", () => {
-    const root = fixture([{ text: "alpha", from: 78, to: 83 }]);
+    const root = fixture([{ md: "alpha", from: 78, to: 83 }]);
     const throwing: CaretResolver = () => {
       throw new Error("resolver exploded");
     };
@@ -123,7 +240,7 @@ describe("cellPointAt", () => {
   });
 
   it("returns null when the point resolves outside this widget root", () => {
-    const root = fixture([{ text: "alpha", from: 78, to: 83 }]);
+    const root = fixture([{ md: "alpha", from: 78, to: 83 }]);
     const outside = document.createElement("td");
     outside.dataset.cellFrom = "0";
     outside.dataset.cellTo = "3";
@@ -133,12 +250,12 @@ describe("cellPointAt", () => {
   });
 
   it("returns null when the point is in the widget but not in a cell (margin)", () => {
-    const root = fixture([{ text: "alpha", from: 78, to: 83 }]);
+    const root = fixture([{ md: "alpha", from: 78, to: 83 }]);
     expect(cellPointAt(root, 0, 0, resolverFor(root, 0))).toBeNull();
   });
 
   it("returns null when a cell is missing its stamps", () => {
-    const root = fixture([{ text: "alpha", from: 78, to: 83 }]);
+    const root = fixture([{ md: "alpha", from: 78, to: 83 }]);
     const td = root.querySelector("td") as HTMLElement;
     td.removeAttribute("data-cell-to");
     expect(cellPointAt(root, 0, 0, resolverFor(td.firstChild as Node, 2))).toBeNull();
@@ -160,7 +277,7 @@ describe("cellPointAt", () => {
     ["fractional", "78.5"],
     ["non-numeric", "abc"],
   ])("returns null for a %s data-cell-from stamp", (_label, raw) => {
-    const root = fixture([{ text: "alpha", from: 78, to: 83 }]);
+    const root = fixture([{ md: "alpha", from: 78, to: 83 }]);
     const td = root.querySelector("td") as HTMLElement;
     td.setAttribute("data-cell-from", raw);
     expect(cellPointAt(root, 0, 0, resolverFor(td.firstChild as Node, 2))).toBeNull();
@@ -174,7 +291,7 @@ describe("cellPointAt", () => {
   // With the arm removed the pair survives as a plausible span and the
   // alignment gate answers `{…, offset: null}` — an object, not null.
   it("returns null for a precision-losing stamp (isSafeInteger, past the digit regexp)", () => {
-    const root = fixture([{ text: "alpha", from: 78, to: 83 }]);
+    const root = fixture([{ md: "alpha", from: 78, to: 83 }]);
     const td = root.querySelector("td") as HTMLElement;
     td.setAttribute("data-cell-from", "9007199254740993");
     td.setAttribute("data-cell-to", "9007199254740994");
@@ -182,7 +299,7 @@ describe("cellPointAt", () => {
   });
 
   it("returns null when the stamps are inverted (cellTo < cellFrom)", () => {
-    const root = fixture([{ text: "alpha", from: 83, to: 78 }]);
+    const root = fixture([{ md: "alpha", from: 83, to: 78 }]);
     const td = root.querySelector("td") as HTMLElement;
     expect(cellPointAt(root, 0, 0, resolverFor(td.firstChild as Node, 2))).toBeNull();
   });
@@ -192,7 +309,7 @@ describe("cellPointAt", () => {
   // cellTo, and it is a perfectly good click target — tightening the guard to
   // `<=` would silently kill click-to-reveal on every empty cell.
   it("maps a point in an EMPTY cell (cellFrom === cellTo is a valid span)", () => {
-    const root = fixture([{ text: "", from: 5, to: 5 }]);
+    const root = fixture([{ md: "", from: 5, to: 5 }]);
     const td = root.querySelector("td") as HTMLElement;
     expect(cellPointAt(root, 0, 0, resolverFor(td, 0))).toEqual({
       cellFrom: 5,
@@ -210,7 +327,7 @@ describe("cellPointAt", () => {
     ["a missing node", { offset: 0 }],
     ["undefined", undefined],
   ])("fails closed when the resolver returns %s", (_label, value) => {
-    const root = fixture([{ text: "alpha", from: 78, to: 83 }]);
+    const root = fixture([{ md: "alpha", from: 78, to: 83 }]);
     const malformed = (() => value) as unknown as CaretResolver;
     expect(() => cellPointAt(root, 0, 0, malformed)).not.toThrow();
     expect(cellPointAt(root, 0, 0, malformed)).toBeNull();
@@ -221,7 +338,7 @@ describe("cellPointAt", () => {
   // resolver offset fails CLOSED to "no exact mapping" rather than being
   // silently clamped to a position the pointer was never at.
   it("reports offset null for an out-of-range resolver offset", () => {
-    const root = fixture([{ text: "alpha", from: 78, to: 83 }]);
+    const root = fixture([{ md: "alpha", from: 78, to: 83 }]);
     const text = root.querySelector("td")?.firstChild as Node;
     expect(cellPointAt(root, 0, 0, resolverFor(text, 99))).toEqual({
       cellFrom: 78,
@@ -231,7 +348,7 @@ describe("cellPointAt", () => {
   });
 
   it("passes the widget's OWN document to the resolver", () => {
-    const root = fixture([{ text: "alpha", from: 78, to: 83 }]);
+    const root = fixture([{ md: "alpha", from: 78, to: 83 }]);
     let seen: Document | null = null;
     cellPointAt(root, 1, 2, (_x, _y, doc) => {
       seen = doc;
