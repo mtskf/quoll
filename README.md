@@ -139,7 +139,7 @@ Quoll is early software. Be aware of the following before relying on it:
      README — even inside a code span — which turns a "relative path" example into an
      absolute one on the Marketplace page. Bare paths are left alone. -->
 
-- **Images have partial support.** Relative image paths (`./img.png`) render for **file-scheme** documents only. Paste/drop saves a content-hashed PNG/JPEG/GIF/WebP under `./assets/` (10 MB cap, type sniffed host-side). Images outside the document folder and remote (`https://…`) images are not loaded (CSP scope); a remote-image opt-in is tracked for a follow-up.
+- **Images have partial support.** Relative image paths (`./img.png`) render for **file-scheme** documents only. Paste/drop saves a content-hashed PNG/JPEG/GIF/WebP under `./assets/` (10 MB cap, type sniffed host-side). Images outside the document folder (`../sibling/img.png`) are not loaded — the resolved path must stay inside the document's own folder (`localResourceRoots`) — and remote (`https://…`) images are blocked by the content security policy; a remote-image opt-in is tracked for a follow-up.
 - **Unsafe URLs block saving.** Link/image destinations pass only when schemeless (relative or `#fragment`) or `http:` / `https:` / `mailto:`. Anything else (`javascript:`, `data:`, `file:`, protocol-relative `//host`) renders inertly and blocks the save with a "Cannot save" notice until fixed. The check covers Markdown destinations only — URLs inside raw HTML aren't checked.
 - **Line endings:** a file that mixes CRLF/LF is shown with one normalized separator (VS Code normalizes on load); opening and saving it without edits leaves the on-disk bytes unchanged.
 - **MDX (`.mdx`) is not supported** — only `.md` files open with the rich editor.
