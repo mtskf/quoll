@@ -713,6 +713,15 @@ const SRC = "| Name | Role |\n| - | - |\n| alpha | admin |";
  *  the junction between them is the unmappable boundary. */
 const IMG_CELL = "a![i](https://x.test/a.png)b";
 
+/** The same live image with MULTI-character text on both sides, so a scripted
+ *  resolver can aim at a boundary strictly INSIDE a text run — an exact offset
+ *  — and pair it with the junction beside the image, which is unmappable. With
+ *  `IMG_CELL`'s single `a`/`b` every mappable boundary is already a cell edge,
+ *  so a mixed-mappability drag there is indistinguishable from the whole-cell
+ *  snap it must produce. Runs (measured): `[{0,0,3,0,3},{3,29,32,29,32}]` over
+ *  rendered `abcdef`, so rendered 3 is the junction and 4/5 are exact. */
+const MIXED_IMG_CELL = "abc![i](https://x.test/a.png)def";
+
 describe("TableBlockWidget drag-selection", () => {
   it("a drag across characters inside one cell dispatches a NON-EMPTY range at the source offsets", () => {
     const base = SRC.indexOf("alpha");
@@ -959,6 +968,34 @@ describe("TableBlockWidget drag-selection", () => {
     expect(dispatched).toEqual([{ selection: { anchor: 5 + SRC.indexOf("alpha") } }]);
   });
 
+  // The counterpart of the row above: the shift lands BEFORE the gesture, not
+  // during it, and the drag must still map exactly. This is the ONE reason the
+  // source map holds CELL-RELATIVE offsets (cell-source-map.ts:21-25) —
+  // `stampRow` re-points the stamps on a pure positional shift WITHOUT
+  // re-rendering, so an absolute map would go stale exactly here and every
+  // marked-up cell would silently degrade to the whole-cell snap after the
+  // first keystroke above a table. The other shift rows assert stamps on a
+  // PLAIN-TEXT cell and never drag afterwards, so they cannot see it.
+  it("a drag in a marked-up cell still maps exactly after a pure positional shift", () => {
+    const src = "| Name |\n| - |\n| **bold** |";
+    const dispatched: unknown[] = [];
+    const { view, scope } = stubViewWithCaret(dispatched, [
+      { text: "bold", offset: 1 },
+      { text: "bold", offset: 3 },
+    ]);
+    const first = new TableBlockWidget(parseTable(src, 0, src.length)!, src, 0, 0);
+    const dom = mountWidget(first, view, scope);
+    // Distant insertion above the table: same bytes, new base → stampRow path.
+    const shifted = new TableBlockWidget(parseTable(src, 0, src.length)!, src, 5, 5);
+    expect(shifted.updateDOM(dom, view, first)).toBe(true);
+
+    const td = dom.querySelector("td") as HTMLElement;
+    press(td, "mousedown", 10, 10);
+    press(td, "click", 60, 10);
+    const from = 5 + src.indexOf("**bold**");
+    expect(dispatched).toEqual([{ selection: { anchor: from + 3, head: from + 5 } }]);
+  });
+
   // The native mousedown default is what moves focus into CodeMirror's
   // contenteditable; without focus the revealed selection neither paints nor
   // extends. Adding `event.preventDefault()` here is the natural "stop the
@@ -1013,6 +1050,31 @@ describe("TableBlockWidget drag-selection", () => {
     press(td, "click", 60, 10); // past DRAG_THRESHOLD_PX
     const from = src.indexOf(IMG_CELL);
     expect(dispatched).toEqual([{ selection: { anchor: from, head: from + IMG_CELL.length } }]);
+  });
+
+  // The MIXED same-cell case, which only became reachable when the gate moved
+  // from per-CELL to per-BOUNDARY: one end exact, the other beside the image.
+  // The forced `forward = true` this replaced answered a range on the side the
+  // pointer never crossed — pressing between `e` and `f` and dragging LEFT
+  // dispatched the single character `f`, to the RIGHT of the press point. A
+  // rendered offset beside an invisible construct measures the same on both
+  // sides of it, so neither end can supply the direction: fail closed to the
+  // whole cell (same answer as the BOTH-unmappable row above).
+  it.each([
+    ["RIGHT", { text: "abc", offset: 1 }, { text: "def", offset: 0 }],
+    ["LEFT", { text: "def", offset: 2 }, { text: "abc", offset: 3 }],
+  ])("a same-cell drag %s between an exact boundary and an image junction covers the whole cell", (_direction, down, up) => {
+    const src = `| A |\n| - |\n| ${MIXED_IMG_CELL} |`;
+    const dispatched: unknown[] = [];
+    const { view, scope } = stubViewWithCaret(dispatched, [down, up]);
+    const dom = mountWidget(makeWidget(src), view, scope);
+    const td = dom.querySelector("td") as HTMLElement;
+    press(td, "mousedown", 10, 10);
+    press(td, "click", 60, 10);
+    const from = src.indexOf(MIXED_IMG_CELL);
+    expect(dispatched).toEqual([
+      { selection: { anchor: from, head: from + MIXED_IMG_CELL.length } },
+    ]);
   });
 
   // The other unmappable arm: a cell whose DOM no longer matches the map that

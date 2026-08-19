@@ -162,21 +162,33 @@ function dragRange(
     return null;
   }
   const start = pending.point;
-  // Direction comes from CELL ORDER first: an unmappable endpoint has no offset
-  // to compare, and defaulting it to 0 would call a backwards drag forward and
-  // snap the anchor inward, dropping the very cell the pointer crossed.
-  const forward =
-    start.cellFrom === head.cellFrom
-      ? start.offset === null || head.offset === null
-        ? true
-        : head.offset >= start.offset
-      : head.cellFrom > start.cellFrom;
-  // Snap an unmappable end OUTWARD so the range still covers what the pointer
-  // crossed.
+  if (start.cellFrom === head.cellFrom) {
+    // ONE cell. An unmappable end carries no direction here: a rendered offset
+    // beside a construct that renders no text measures the SAME on both sides
+    // of it (cell-point.ts), so "which way did the pointer go" is unknowable
+    // and the OTHER end cannot supply it either — snapping the unmappable end
+    // to a guessed cell boundary would dispatch a range on the side the pointer
+    // never crossed. Fail closed to the whole cell (the pre-map contract).
+    if (start.offset === null || head.offset === null) {
+      return start.cellFrom === start.cellTo
+        ? null
+        : { anchor: start.cellFrom, head: start.cellTo };
+    }
+    // Both ends exact: the offsets ARE the range, in the order they were made.
+    // Zero-width — the caller's caret keeps the historical semantics (cell
+    // CONTENT START, not the character under the pointer).
+    return start.offset === head.offset ? null : { anchor: start.offset, head: head.offset };
+  }
+  // Across cells the direction comes from CELL ORDER, not from the offsets: an
+  // unmappable endpoint has no offset to compare, and defaulting it to 0 would
+  // call a backwards drag forward and snap the anchor inward, dropping the very
+  // cell the pointer crossed. Cell order is known for both ends regardless.
+  const forward = head.cellFrom > start.cellFrom;
+  // Snap an unmappable end OUTWARD — away from the other end — so the range
+  // still covers the cell the pointer crossed.
   const from = start.offset ?? (forward ? start.cellFrom : start.cellTo);
   const to = head.offset ?? (forward ? head.cellTo : head.cellFrom);
-  // Zero-width after snapping — the caller's caret keeps the historical
-  // semantics (cell CONTENT START, not the character under the pointer).
+  // Zero-width after snapping (adjacent cells, both ends on the same boundary).
   return from === to ? null : { anchor: from, head: to };
 }
 
