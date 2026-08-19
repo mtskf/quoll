@@ -164,7 +164,8 @@ type MutableRun = { -readonly [K in keyof CellSourceRun]: CellSourceRun[K] };
  *  rendered cursor and the pending markup are global to the cell rather than
  *  per emphasis level. */
 interface RenderContext {
-  /** Rendered characters emitted so far — the next run's `rendered`. */
+  /** Rendered characters emitted so far. No run stores this: it exists so the
+   *  walk can check, once it ends, that the runs tile the emitted text. */
   cursor: number;
   runs: MutableRun[];
   /** Opener markup waiting for the run it belongs to (`**` before its text,
@@ -198,7 +199,6 @@ function emitRun(ctx: RenderContext, from: number, to: number, outerTo: number):
     return;
   }
   ctx.runs.push({
-    rendered: ctx.cursor,
     from,
     to,
     // Invisible source between the pending opener and this run means the opener
@@ -444,7 +444,8 @@ function renderCellWithMap(
   const nodes = renderReadonly(parseCellInline(raw), raw, resourceBase, 0, ctx);
   const renderedText = nodes.map((n) => n.textContent ?? "").join("");
   // The runs MUST tile `renderedText` exactly: `sourceOffsetAt`'s interior
-  // arithmetic (`run.from + (within - run.rendered)`) assumes it, so a gap —
+  // arithmetic (`run.from + (within - rendered)`, where `rendered` is the
+  // running sum of the preceding runs' lengths) assumes it, so a gap —
   // rendered text emitted by a future walker arm without an `emitRun` — shifts
   // every later run and answers a wrong-but-exact-LOOKING offset that neither
   // half of cell-point.ts's staleness check can catch (`renderedText` is read
@@ -526,9 +527,7 @@ function renderCellSafely(
         // `emitRun` refuses (two runs at the same rendered index make the
         // boundary lookup ambiguous). No runs is the identity map for "".
         runs:
-          raw.length === 0
-            ? []
-            : [{ rendered: 0, from: 0, to: raw.length, outerFrom: 0, outerTo: raw.length }],
+          raw.length === 0 ? [] : [{ from: 0, to: raw.length, outerFrom: 0, outerTo: raw.length }],
         sourceLength: raw.length,
         renderedText: raw,
       },

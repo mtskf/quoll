@@ -110,7 +110,7 @@ describe("cell-render publishes no map it cannot stand behind", () => {
     const cell = renderInto("abc");
     expect(cell.textContent).toBe("a");
     expect(getCellSourceMap(cell)).toEqual({
-      runs: [{ rendered: 0, from: 0, to: 1, outerFrom: 0, outerTo: 1 }],
+      runs: [{ from: 0, to: 1, outerFrom: 0, outerTo: 1 }],
       sourceLength: 3,
       renderedText: "a",
     });
@@ -126,7 +126,7 @@ describe("cell-render publishes no map it cannot stand behind", () => {
     const cell = renderInto("**bold**");
     expect(cell.textContent).toBe("**bold**");
     expect(getCellSourceMap(cell)).toEqual({
-      runs: [{ rendered: 0, from: 0, to: 8, outerFrom: 0, outerTo: 8 }],
+      runs: [{ from: 0, to: 8, outerFrom: 0, outerTo: 8 }],
       sourceLength: 8,
       renderedText: "**bold**",
     });
@@ -255,7 +255,7 @@ function stampedCell(text: string, from: number, map: CellSourceMap): HTMLElemen
 }
 
 describe("cellPointAt rejects a map offset that is not a position", () => {
-  const runs = (from: number, to: number) => [{ rendered: 0, from, to, outerFrom: 0, outerTo: 3 }];
+  const runs = (from: number, to: number) => [{ from, to, outerFrom: 0, outerTo: 3 }];
 
   function offsetFor(map: CellSourceMap): number | null | undefined {
     const root = stampedCell("abc", 40, map);

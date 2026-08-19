@@ -18,8 +18,16 @@
  *  equality check makes a junction between two touching runs resolve exactly
  *  anyway.
  *
- *  `rendered` is the run's start index in the cell's rendered text; every
- *  offset here is CELL-CONTENT-RELATIVE (`+ cellFrom` at lookup) because
+ *  There is deliberately NO rendered-position field: a run's start in the
+ *  cell's rendered text is the running sum of the preceding runs' lengths
+ *  (`to - from` each), which `sourceOffsetAt` accumulates as it scans. Storing
+ *  it would let the TYPE express an inter-run gap or overlap — a shape neither
+ *  producer emits and every consumer would misread. This does NOT make every
+ *  malformed map unrepresentable (a run list whose TOTAL length disagrees with
+ *  the rendered text still is, which is why `renderCellWithMap` keeps its
+ *  tiling check) — it removes exactly the class that was pure duplication.
+ *
+ *  Every offset here is CELL-CONTENT-RELATIVE (`+ cellFrom` at lookup) because
  *  `TableBlockWidget.stampRow` re-points `data-cell-from`/`data-cell-to` on a
  *  pure positional shift WITHOUT re-rendering — an absolute map would go stale
  *  exactly there.
@@ -31,7 +39,6 @@
  *  expands to, so selecting all of `bold` in `**bold**` yields `**bold**` and
  *  the selection still round-trips to the same rendered content. */
 export interface CellSourceRun {
-  readonly rendered: number;
   readonly from: number;
   readonly to: number;
   readonly outerFrom: number; // <= from
@@ -118,12 +125,17 @@ export function sourceOffsetAt(map: CellSourceMap, within: number): number | nul
     const last = runs[runs.length - 1];
     return last.outerTo === sourceLength ? sourceLength : null;
   }
+  let rendered = 0;
   for (let i = 0; i < runs.length; i++) {
     const run = runs[i];
-    if (within > run.rendered && within < run.rendered + (run.to - run.from)) {
-      return run.from + (within - run.rendered);
+    // Derived, not stored: `rendered` is the sum of the preceding runs'
+    // lengths, which a stored field could only ever repeat. Same scan, same
+    // arithmetic, one fewer way for a map to disagree with itself.
+    const length = run.to - run.from;
+    if (within > rendered && within < rendered + length) {
+      return run.from + (within - rendered);
     }
-    if (within === run.rendered) {
+    if (within === rendered) {
       if (i === 0) {
         // Leading skipped source (`![i](p.png)a`) leaves the first run's
         // openers short of the cell start, and the boundary is then ambiguous
@@ -133,6 +145,7 @@ export function sourceOffsetAt(map: CellSourceMap, within: number): number | nul
       const prev = runs[i - 1];
       return prev.outerTo === run.outerFrom ? prev.outerTo : null;
     }
+    rendered += length;
   }
   // Unreachable while runs tile the rendered text contiguously. Both producers
   // satisfy that: `emitRun` (cell-render.ts) advances the cursor by exactly the
