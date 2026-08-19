@@ -508,6 +508,13 @@ function renderCellSafely(
         // category plus a length is what this module can honestly vouch for;
         // anything finer costs a breakpoint, which is the right trade for a
         // path that only fires on a bug (Codex review, Conf 98 then 88).
+        // Residual, accepted: `instanceof` is not passive either — a thrown
+        // Proxy whose `getPrototypeOf` trap throws would escape this handler
+        // (Codex, Conf 93). Everything that throws on this path is OURS (the
+        // tokenizer, the walker, a DOM call), none of which mints a Proxy, and
+        // anything that could already runs code in this webview. Dropping to a
+        // bare `typeof` would answer "object" for every Error — erasing the one
+        // distinction this line exists to draw — so the classification stays.
         errKind: err instanceof Error ? "Error" : typeof err,
         length: raw.length,
       });
