@@ -55,9 +55,10 @@ describe("sourceOffsetAt", () => {
   // function that refuses everything.
   it("answers every boundary of a cell with no invisible construct", () => {
     expect(boundaries("abc")).toEqual([0, 1, 2, 3]);
-    // Rendered `bold` is source `**bold**`: the interior boundaries land inside
-    // the delimiters, the two edges expand OVER them (`outerFrom` / `outerTo`)
-    // so a full-content selection still round-trips to the same render.
+    // Rendered `bold` is source `**bold**`: the interior boundaries land
+    // BETWEEN the delimiters, the two edges expand OVER them (`outerFrom` /
+    // `outerTo`) so a full-content selection still round-trips to the same
+    // render.
     expect(boundaries("**bold**")).toEqual([0, 3, 4, 5, 8]);
   });
 
@@ -65,8 +66,8 @@ describe("sourceOffsetAt", () => {
   // AFTER the cell start (`run.outerFrom !== 0`), so boundary 0 is on neither
   // side of the image in particular: a rendered offset cannot prove the pointer
   // crossed a construct that renders zero characters. The two mutants answer
-  // DIFFERENT wrong offsets and the comment has to say which is which, because
-  // the arm's whole subject is where this run's openers actually start:
+  // DIFFERENT wrong offsets, and which one you get is exactly what this arm
+  // settles — where the first run's openers actually start:
   // `return run.outerFrom` answers 26 — just past the image, since `emitRun`
   // gives a run following skipped source `outerFrom: from` — while dropping the
   // check answers 0, the cell start. Either is an exact-looking mapping for a

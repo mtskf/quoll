@@ -822,8 +822,8 @@ describe("TableBlockWidget drag-selection", () => {
     const src = `| A |\n| - |\n| ${IMG_CELL} |`;
     const dispatched: unknown[] = [];
     const { view, scope } = stubViewWithCaret(dispatched, [
-      { text: "b", offset: 0 },
-      { text: "b", offset: 0 },
+      { text: "b", offset: 0 }, // mousedown at the image junction (unmappable)
+      { text: "b", offset: 0 }, // click without moving — the same junction
     ]);
     const dom = mountWidget(makeWidget(src), view, scope);
     const td = dom.querySelector("td") as HTMLElement;
