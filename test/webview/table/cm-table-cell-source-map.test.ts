@@ -1,0 +1,121 @@
+// @vitest-environment happy-dom
+//
+// `sourceOffsetAt` — the boundary lookup that turns a rendered offset inside a
+// table cell into a source offset — pinned DIRECTLY, at every arm.
+//
+// Why its own file: until now the function had no importer in the suite at all.
+// Everything reached it through `cellPointAt`, whose fixtures only ever build
+// the INTERIOR-junction shape, so each of its three refusal arms (leading
+// skipped source, trailing skipped source, a cell that renders nothing from
+// something) could be mutated into returning a real offset with the whole suite
+// still green — a mutant that claims an EXACT drag mapping across an invisible
+// image, which is precisely the answer the arm exists to refuse.
+//
+// Every map here is built by the production renderer (`renderCellInto` →
+// `getCellSourceMap`) rather than written by hand: a hand-built map would pin
+// the lookup against a shape the renderer may never emit, and the renderer is
+// the mapping authority (cell-render.ts). The live-image fixture's `https:` src
+// is load-bearing — a RELATIVE src with an empty resource base resolves to null
+// and renders the image INERT, whose whole source slice DOES emit a run, which
+// would quietly make every case below mappable and vacuous.
+import { describe, expect, it } from "vitest";
+
+import { renderCellInto } from "../../../src/webview/cm/table/cell-render.js";
+import {
+  type CellSourceMap,
+  getCellSourceMap,
+  sourceOffsetAt,
+} from "../../../src/webview/cm/table/cell-source-map.js";
+
+const IMG = "![i](https://x.test/a.png)";
+
+function mapOf(raw: string): CellSourceMap {
+  const cell = document.createElement("td");
+  renderCellInto(cell, raw);
+  const map = getCellSourceMap(cell);
+  expect(map, `no map registered for ${JSON.stringify(raw)}`).not.toBeNull();
+  return map as CellSourceMap;
+}
+
+/** Every rendered boundary of a cell, answered in order — `renderedText.length
+ *  + 1` of them, because a boundary sits BETWEEN characters. Asserting the
+ *  whole vector rather than one probe is what makes a mutant visible wherever
+ *  it lands: an arm that starts answering an offset shows up as a changed
+ *  entry even if the case was written for a different arm. */
+function boundaries(raw: string): Array<number | null> {
+  const map = mapOf(raw);
+  return Array.from({ length: map.renderedText.length + 1 }, (_, within) =>
+    sourceOffsetAt(map, within)
+  );
+}
+
+describe("sourceOffsetAt", () => {
+  // The control. Without it every expectation below is satisfiable by a
+  // `return null` body, and the three refusal arms would be pinned by a
+  // function that refuses everything.
+  it("answers every boundary of a cell with no invisible construct", () => {
+    expect(boundaries("abc")).toEqual([0, 1, 2, 3]);
+    // Rendered `bold` is source `**bold**`: the interior boundaries land inside
+    // the delimiters, the two edges expand OVER them (`outerFrom` / `outerTo`)
+    // so a full-content selection still round-trips to the same render.
+    expect(boundaries("**bold**")).toEqual([0, 3, 4, 5, 8]);
+  });
+
+  // Refusal arm 1 — leading skipped source. The first run's openers start
+  // AFTER the cell start (`run.outerFrom !== 0`), so boundary 0 is on neither
+  // side of the image in particular: a rendered offset cannot prove the pointer
+  // crossed a construct that renders zero characters. Mutating the arm to
+  // `run.outerFrom` (or dropping the check) answers 0 — an exact-looking mapping
+  // to the cell start for a pointer that may have been past the image.
+  it("refuses the boundary before leading skipped source", () => {
+    expect(boundaries(`${IMG}a`)).toEqual([null, IMG.length + 1]);
+  });
+
+  // Refusal arm 2 — trailing skipped source. The last run's closers stop short
+  // of the source end, so the end-of-text boundary could be either side of the
+  // image. Mutating it to always answer `sourceLength` would place a drag that
+  // ended BEFORE the image at the end of the cell.
+  it("refuses the end-of-text boundary after trailing skipped source", () => {
+    expect(boundaries(`a${IMG}`)).toEqual([0, null]);
+  });
+
+  // Refusal arm 3 — a cell that renders NOTHING out of something. No run at
+  // all, and its single boundary sits on both sides of the image at once. The
+  // `sourceLength === 0` half of the guard is what distinguishes it from a
+  // genuinely EMPTY cell, whose only boundary really is source offset 0.
+  it("refuses the only boundary of a cell whose whole source renders invisibly", () => {
+    expect(boundaries(IMG)).toEqual([null]);
+    expect(boundaries("")).toEqual([0]);
+  });
+
+  // The interior junction — the one shape `cellPointAt`'s fixtures already
+  // reach, kept here so the three arms above are read against the case they
+  // are the edges of.
+  it("refuses an interior junction across an invisible construct", () => {
+    expect(boundaries(`a${IMG}b`)).toEqual([0, null, IMG.length + 2]);
+  });
+
+  // An escape's `\` is an OPENER: the run for the escaped character must own
+  // it, or the junction between `a` and `|` stops matching the previous run's
+  // `outerTo` and answers null. The only other escape fixture in the suite
+  // (`\|` as a whole cell) never reads `outerFrom` — it exits through the
+  // end-of-text arm — so deleting `ctx.pendingOpen ??= node.span.from` from
+  // cell-render.ts's escape arm leaves that one green. This one goes red.
+  it("keeps an escape's backslash with the character it produces", () => {
+    // Source `a\|b` renders `a|b`; boundary 1 is the junction between the `a`
+    // run (`outerTo` 1) and the escape's run, whose openers must reach back to
+    // the backslash at 1 for the two to coincide.
+    expect(boundaries("a\\|b")).toEqual([0, 1, 3, 4]);
+  });
+
+  // Input gate. `within` arrives from a DOM measurement one layer up
+  // (cell-point.ts), so out-of-range and non-integer inputs are answered
+  // rather than indexed with.
+  it("refuses a boundary outside the rendered text, or a non-integer one", () => {
+    const map = mapOf("abc");
+    expect(sourceOffsetAt(map, -1)).toBeNull();
+    expect(sourceOffsetAt(map, 4)).toBeNull();
+    expect(sourceOffsetAt(map, 1.5)).toBeNull();
+    expect(sourceOffsetAt(map, Number.NaN)).toBeNull();
+  });
+});
