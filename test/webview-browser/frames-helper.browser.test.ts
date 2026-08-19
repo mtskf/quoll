@@ -40,23 +40,34 @@ describe("frames helper: requestAnimationFrame call-count contract", () => {
   // The call-count assertions above pin HOW MANY frames are requested, not that
   // the promise waits for them: an implementation that fires n rAF calls and
   // resolves synchronously keeps every count green while dependent suites stop
-  // waiting for layout at all. This observes the elapsed frames instead.
-  it("frames(n) resolves only after n frames have actually elapsed", async () => {
-    // Registered BEFORE frames() so this callback runs first within each frame
-    // (rAF callbacks fire in registration order) — and because it re-registers
-    // itself ahead of the helper's own tick, it stays first in every later
-    // frame too. So `elapsed` is current when the awaited promise resolves.
-    let elapsed = 0;
-    const count = (): void => {
-      elapsed += 1;
-      id = requestAnimationFrame(count);
-    };
-    let id = requestAnimationFrame(count);
-    try {
-      await frames(3);
-      expect(elapsed).toBe(3);
-    } finally {
-      cancelAnimationFrame(id);
-    }
-  });
+  // waiting for layout at all. These observe the elapsed frames instead — one
+  // per entry point, because raf() carries its own wait loop and settled() only
+  // reaches frames() by delegation, so pinning frames() alone leaves the other
+  // two free to resolve early.
+  const waits: [name: string, wait: () => Promise<void>, expected: number][] = [
+    ["raf()", raf, 1],
+    ["frames(n)", () => frames(3), 3],
+    ["settled()", settled, 4],
+  ];
+
+  for (const [name, wait, expected] of waits) {
+    it(`${name} resolves only after ${expected} frame(s) have actually elapsed`, async () => {
+      // Registered BEFORE the wait so this callback runs first within each frame
+      // (rAF callbacks fire in registration order) — and because it re-registers
+      // itself ahead of the helper's own tick, it stays first in every later
+      // frame too. So `elapsed` is current when the awaited promise resolves.
+      let elapsed = 0;
+      const count = (): void => {
+        elapsed += 1;
+        id = requestAnimationFrame(count);
+      };
+      let id = requestAnimationFrame(count);
+      try {
+        await wait();
+        expect(elapsed).toBe(expected);
+      } finally {
+        cancelAnimationFrame(id);
+      }
+    });
+  }
 });
