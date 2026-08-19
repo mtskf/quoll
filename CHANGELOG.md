@@ -2,6 +2,12 @@
 
 All notable changes to Quoll are documented here.
 
+## 0.1.73 — 2026-08-19
+
+### Changed
+
+- Rewrote the Marketplace page: what Quoll does is now shown in short animations (live Markdown reveal, task checkboxes, table editing, the document outline), and the formatting shortcuts and editor settings that were missing from it are documented. The editor itself is unchanged.
+
 ## 0.1.72 — 2026-08-19
 
 ### Changed
