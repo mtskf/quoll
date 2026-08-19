@@ -4,7 +4,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Resolved } from "../../../src/webview/cm/inline/inline-emphasis.js";
 import type { CellLeaf } from "../../../src/webview/cm/inline/inline-ir.js";
 import { cellPointAt } from "../../../src/webview/cm/table/cell-point.js";
-import { renderCellInto } from "../../../src/webview/cm/table/cell-render.js";
+import {
+  renderCellInto,
+  resetCellRenderLogLatchesForTest,
+} from "../../../src/webview/cm/table/cell-render.js";
 import type { CellSourceMap } from "../../../src/webview/cm/table/cell-source-map.js";
 import {
   getCellSourceMap,
@@ -37,6 +40,10 @@ let errors: unknown[][] = [];
 
 beforeEach(() => {
   errors = [];
+  // Both diagnostics below are warn-once per MODULE (cell-render.ts), which is
+  // the behaviour the two "…ONCE per session" rows pin — and which would make
+  // every other row here observe nothing after whichever of them ran first.
+  resetCellRenderLogLatchesForTest();
   vi.spyOn(console, "error").mockImplementation((...args: unknown[]) => {
     errors.push(args);
   });
@@ -73,6 +80,26 @@ describe("cell-render publishes no map it cannot stand behind", () => {
     expect(errors[0][1]).toEqual({ cursor: 100, renderedLength: 3, sourceLength: 3 });
   });
 
+  // The sibling direction, and the one the comment at the guard actually names:
+  // rendered text emitted by a walker arm without an `emitRun` leaves the runs
+  // describing FEWER characters than the DOM holds. A reversed second span
+  // renders nothing (`raw.slice(2, 0)` is empty) while moving the cursor
+  // backwards, which is that shape. Without this row the guard is pinned in one
+  // direction only and `cursor <= renderedText.length` passes the whole suite —
+  // publishing runs that under-describe the DOM, so every run after the gap
+  // answers a wrong-but-exact-LOOKING offset.
+  it("drops the runs when they describe FEWER rendered characters than the DOM holds", () => {
+    irOverride.fn = () => [
+      { kind: "text", value: "ab", span: { from: 0, to: 2 } },
+      { kind: "text", value: "", span: { from: 2, to: 0 } },
+    ];
+    const cell = renderInto("abcd");
+    expect(cell.textContent).toBe("ab");
+    expect(getCellSourceMap(cell)).toEqual({ runs: [], sourceLength: 4, renderedText: "ab" });
+    expect(errors).toHaveLength(1);
+    expect(errors[0][1]).toEqual({ cursor: 0, renderedLength: 2, sourceLength: 4 });
+  });
+
   // The `text` arm takes the run's LENGTH from `node.span` and must therefore
   // take the rendered characters from the same span. Trusting `node.value`
   // rests on an unwritten cross-module contract (`value.length === span.to -
@@ -92,7 +119,7 @@ describe("cell-render publishes no map it cannot stand behind", () => {
     expect(errors).toEqual([]);
   });
 
-  it("logs the throw it falls back from (never the cell's bytes)", () => {
+  it("logs the throw it falls back from (adding no field that carries the cell's bytes)", () => {
     irOverride.fn = () => {
       throw new Error("tokenizer exploded");
     };
@@ -105,9 +132,19 @@ describe("cell-render publishes no map it cannot stand behind", () => {
     });
     expect(errors).toHaveLength(1);
     expect(errors[0][0]).toContain("table cell render threw");
-    expect(errors[0][1]).toMatchObject({ length: 8 });
-    expect(String((errors[0][1] as { err: unknown }).err)).toContain("tokenizer exploded");
-    // The raw source is not in the diagnostic.
+    // `toEqual` on the WHOLE payload, and every field a primitive. Logging the
+    // Error object itself would defeat both halves of this row: `toMatchObject`
+    // would not see a new field, and `JSON.stringify` cannot see an Error's
+    // `message`/`stack` at all (non-enumerable), so the leak check below would
+    // pass no matter what the payload carried.
+    expect(errors[0][1]).toEqual({
+      errName: "Error",
+      errMessage: "tokenizer exploded",
+      length: 8,
+    });
+    // What the CALL SITE controls: it adds no field holding the cell's source.
+    // It cannot promise as much for `errMessage` — that string belongs to
+    // whatever threw (cell-render.ts's comment carries that caveat).
     expect(JSON.stringify(errors[0][1])).not.toContain("bold");
   });
 
@@ -120,6 +157,28 @@ describe("cell-render publishes no map it cannot stand behind", () => {
     };
     const cell = renderInto("");
     expect(getCellSourceMap(cell)).toEqual({ runs: [], sourceLength: 0, renderedText: "" });
+  });
+
+  // Both diagnostics sit on `renderCellInto`, which `patchRow` runs for EVERY
+  // cell of the table on every content edit — and both conditions are pure
+  // functions of the cell's bytes, so an unlatched log repeats per cell per
+  // keystroke while the offending bytes stay in the document. The repeats carry
+  // no new signal: neither message holds cell identity. (The `beforeEach` reset
+  // is what keeps the rows above observing their own log rather than nothing.)
+  it("logs the untiled map ONCE per session, not once per re-render", () => {
+    irOverride.fn = () => [{ kind: "text", value: "abc", span: { from: 0, to: 100 } }];
+    renderInto("abc");
+    renderInto("abc");
+    expect(errors).toHaveLength(1);
+  });
+
+  it("logs the render throw ONCE per session, not once per re-render", () => {
+    irOverride.fn = () => {
+      throw new Error("tokenizer exploded");
+    };
+    renderInto("**bold**");
+    renderInto("**bold**");
+    expect(errors).toHaveLength(1);
   });
 });
 

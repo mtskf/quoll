@@ -405,6 +405,29 @@ function renderReadonly(
   return out;
 }
 
+// One-shot latches for the two diagnostics below. Module-scoped because
+// `renderCellInto` runs per CELL on every content edit (table-widget.ts's
+// `patchRow` re-renders every cell of the table), and both conditions are
+// deterministic functions of the cell's bytes — so an unguarded log fires once
+// per cell per keystroke for as long as the offending bytes stay in the table,
+// and every repeat is byte-identical (the messages deliberately carry no cell
+// identity). Same latch, same reason, as table-field.ts's
+// `warnedMissingSkeletonField`.
+let loggedUntiledMap = false;
+let loggedRenderThrow = false;
+
+/** Test-only: re-arm both latches. They are module-scoped BY DESIGN, which
+ *  makes each diagnostic observable exactly once per module instance — a test
+ *  that asserts one has to re-arm it first, or it pins nothing after whichever
+ *  test happened to run first. (Re-importing the module through
+ *  `vi.resetModules()` would re-arm them too, but it forks cell-source-map.ts's
+ *  registry as well, so the fresh renderer would register maps that the test's
+ *  own `getCellSourceMap` cannot see.) */
+export function resetCellRenderLogLatchesForTest(): void {
+  loggedUntiledMap = false;
+  loggedRenderThrow = false;
+}
+
 /** Render a cell's raw Markdown to DOM nodes AND the map describing them.
  *
  *  `renderedText` is read back off the emitted nodes rather than accumulated by
@@ -428,9 +451,10 @@ function renderCellWithMap(
   // that lies: every boundary then answers null and the drag degrades to the
   // whole-cell snap.
   const tiled = ctx.cursor === renderedText.length;
-  if (!tiled) {
-    // Lengths only — a document's bytes never reach the console (edit-sync.ts
-    // precedent).
+  if (!tiled && !loggedUntiledMap) {
+    loggedUntiledMap = true;
+    // Lengths only — every field here is a number this file computed, so no
+    // document byte is in the payload (edit-sync.ts precedent).
     console.error("[quoll] table cell source map does not tile its render; dropping runs", {
       cursor: ctx.cursor,
       renderedLength: renderedText.length,
@@ -457,14 +481,28 @@ function renderCellSafely(
   try {
     return renderCellWithMap(raw, resourceBase);
   } catch (err) {
-    // Rendered content is never logged — only the failure and the length, so a
-    // document's bytes cannot reach the console (edit-sync.ts precedent). Worth
-    // logging now that a throw also changes drag mapping, not just the render:
-    // the cell silently loses its inline constructs AND its exact offsets.
-    console.error("[quoll] table cell render threw; falling back to inert source text", {
-      err,
-      length: raw.length,
-    });
+    // This file never puts the cell's content in the payload — the failure and
+    // a length, per the edit-sync.ts precedent. `err` is not ours, though: the
+    // message comes from whatever threw, and `assertNever` (inline-ir.ts) does
+    // interpolate its input, so a broken IR type would surface leaf bytes here.
+    // Keep new throw sites on this path message-only. The error is FLATTENED to
+    // primitives rather than logged as an object because `message`/`stack` are
+    // non-enumerable: any structured copy of this payload (a test's
+    // `JSON.stringify`, a log shipper) sees `{}` for an Error and cannot check
+    // what it carries. Worth logging at all now that a throw also changes drag
+    // mapping, not just the render: the cell silently loses its inline
+    // constructs AND its exact offsets.
+    if (!loggedRenderThrow) {
+      loggedRenderThrow = true;
+      console.error("[quoll] table cell render threw; falling back to inert source text", {
+        errName: err instanceof Error ? err.name : typeof err,
+        // Only an Error is trusted for a string: `String(err)` on a thrown
+        // Symbol or an object with a hostile `toString` throws again, inside
+        // the handler that exists to keep this path from throwing.
+        errMessage: err instanceof Error ? err.message : "",
+        length: raw.length,
+      });
+    }
     return {
       nodes: [document.createTextNode(raw)],
       map: {

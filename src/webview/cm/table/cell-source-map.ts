@@ -64,9 +64,11 @@ export interface CellSourceMap {
 // interface above is structurally satisfiable by any object with the right
 // fields, and `setCellSourceMap` takes one from anywhere. What actually holds
 // it is that `renderCellInto` is the only supported way to fill a cell and it
-// registers the map it just produced. `sourceOffsetAt` therefore does not
-// assume the numbers are sane — its caller (cell-point.ts) re-gates the answer
-// before dispatching it.
+// registers the map it just produced. Nothing here VERIFIES it: `sourceOffsetAt`
+// checks `within` and then trusts every number in the map unconditionally, so a
+// bad map yields a bad answer. The design does not rest on that, because its
+// caller (cell-point.ts) re-gates the answer with `Number.isSafeInteger` before
+// dispatching it.
 const registry = new WeakMap<Element, CellSourceMap>();
 
 export function setCellSourceMap(cell: Element, map: CellSourceMap): void {
