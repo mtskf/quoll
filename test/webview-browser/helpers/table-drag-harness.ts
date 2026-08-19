@@ -38,16 +38,6 @@ export const PLAIN = DOC.indexOf("plain");
  *  back to when a gesture maps to no cell at all (`blockStartCaret`). */
 export const TABLE_BLOCK_START = DOC.indexOf("| Alpha");
 
-/** Drain CM's bounded measure queue (4-frame idiom shared with the sibling
- *  browser suites) so getBoundingClientRect reads a settled layout. */
-export function settled(): Promise<void> {
-  return new Promise((resolve) => {
-    let n = 4;
-    const tick = () => (--n <= 0 ? resolve() : requestAnimationFrame(tick));
-    requestAnimationFrame(tick);
-  });
-}
-
 /** Production extension order for the table island (editor.ts: skeleton field
  *  BEFORE the block field). Caret parked at doc end so the line-level reveal is
  *  not already firing when a gesture starts. `extra` exists only so a suite can

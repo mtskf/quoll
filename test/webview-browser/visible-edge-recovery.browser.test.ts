@@ -20,12 +20,12 @@
 import type { EditorView } from "@codemirror/view";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { quollVisibleEdgeRecovery } from "../../src/webview/cm/visible-edge-recovery.js";
+import { raf } from "./helpers/frames.js";
 import {
   biggestUncoveredHole,
   lineNumberAtViewportTop,
   mount,
   pinAndScroll,
-  raf,
   resetVisibility,
   runHandoffWindow,
   setVisibility,
