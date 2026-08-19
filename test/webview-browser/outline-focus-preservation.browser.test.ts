@@ -15,6 +15,7 @@ import "../../src/webview/styles.css";
 import { quollMarkdownLanguage } from "../../src/webview/cm/markdown.js";
 import { outlinePlugin, quollOutline } from "../../src/webview/cm/outline/index.js";
 import { quollTheme } from "../../src/webview/cm/theme.js";
+import { settled } from "./helpers/frames.js";
 
 // Nested three-level tree: Alpha (h1) ⊃ Beta (h2) ⊃ Gamma (h3). Alpha and Beta
 // both have children, so both carry a collapsible twistie.
@@ -45,14 +46,6 @@ function mount(doc: string): { view: EditorView; host: HTMLElement } {
     }),
   });
   return { view, host };
-}
-
-function settled(): Promise<void> {
-  return new Promise((resolve) => {
-    let n = 4;
-    const tick = () => (--n <= 0 ? resolve() : requestAnimationFrame(tick));
-    requestAnimationFrame(tick);
-  });
 }
 
 /** The tree row <li> whose heading label matches `text`. With `required` false,

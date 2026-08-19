@@ -46,7 +46,7 @@ let warnedImageLoadError = false;
 // channel has to be updatable exactly when the position moves, which
 // `updateDOM` can do and the closure cannot. A WeakMap so a discarded root
 // takes its entry with it. Same pattern, same reason, as table-widget.ts's
-// `pendingDrag`.
+// `blockStart`.
 //
 // A `number` end to end: nothing is stringified, parsed, or read back from the
 // DOM, so there is no malformed-value state to validate against. (`checkSelection`
