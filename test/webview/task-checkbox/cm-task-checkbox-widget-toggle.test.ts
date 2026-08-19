@@ -270,6 +270,25 @@ describe("CheckboxWidget — toggle dispatch", () => {
     }
   });
 
+  it("updateDOM re-applies the 'Task list item' fallback when the reused label is empty", () => {
+    const view = mountWithDoc("- [ ] alpha\n- [ ]");
+    try {
+      // "alpha" marker `[` at 2 (non-empty label); shift to the content-less
+      // second item's marker `[` at 14 (empty label) — the reuse path must
+      // re-derive the fallback, not carry over the stale non-empty aria-label.
+      const a = new CheckboxWidget(false, 2, "alpha");
+      const el = a.toDOM(view);
+      expect(el.getAttribute("aria-label")).toBe("Task: alpha");
+
+      const reused = new CheckboxWidget(false, 14, "").updateDOM(el, view, a);
+
+      expect(reused).toBe(true);
+      expect(el.getAttribute("aria-label")).toBe("Task list item");
+    } finally {
+      view.destroy();
+    }
+  });
+
   it("updateDOM returns false (forcing a rebuild) on a checked-state change", () => {
     const view = mountWithDoc("- [ ] alpha");
     try {
