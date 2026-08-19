@@ -47,12 +47,11 @@ describe("frames helper: requestAnimationFrame call-count contract", () => {
     // itself ahead of the helper's own tick, it stays first in every later
     // frame too. So `elapsed` is current when the awaited promise resolves.
     let elapsed = 0;
-    let id = 0;
     const count = (): void => {
       elapsed += 1;
       id = requestAnimationFrame(count);
     };
-    id = requestAnimationFrame(count);
+    let id = requestAnimationFrame(count);
     try {
       await frames(3);
       expect(elapsed).toBe(3);
