@@ -6,6 +6,7 @@
 // recovery contract). Not a test file itself (no .browser.test.ts suffix).
 import { EditorState, type Extension } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
+import { frames, raf } from "./frames.js";
 import "../../../src/webview/styles.css";
 import { quollFloatingToolbarScroll } from "../../../src/webview/cm/floating-toolbar-scroll.js";
 import { quollMarkdownLanguage } from "../../../src/webview/cm/markdown.js";
@@ -74,28 +75,6 @@ export function mount(extraExtensions: Extension[]): {
     }),
   });
   return { view, host, root };
-}
-
-export function raf(): Promise<void> {
-  return new Promise((resolve) => requestAnimationFrame(() => resolve()));
-}
-
-/** Await n animation frames. Frame-based waits scale with actual frame
- *  progress under CI/headless rAF throttling, unlike wall-clock sleeps —
- *  the recovery plugin's wait cap and thaw are frame-based, so its test
- *  vehicle must be too. */
-export function frames(n: number): Promise<void> {
-  return new Promise((resolve) => {
-    let left = n;
-    const tick = (): void => {
-      if (--left <= 0) {
-        resolve();
-      } else {
-        requestAnimationFrame(tick);
-      }
-    };
-    requestAnimationFrame(tick);
-  });
 }
 
 export function sleep(ms: number): Promise<void> {

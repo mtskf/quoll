@@ -20,6 +20,7 @@ import type { Extension } from "@codemirror/state";
 import type { EditorView } from "@codemirror/view";
 import { afterEach, describe, expect, it } from "vitest";
 import { quollTableCaretResolver } from "../../src/webview/cm/table/cell-point.js";
+import { settled } from "./helpers/frames.js";
 import {
   BOLD_FROM,
   cellByText,
@@ -33,7 +34,6 @@ import {
   pointAtChar,
   pointInWidgetPadding,
   revealed,
-  settled,
   TABLE_BLOCK_START,
   unmount,
   widgetRoot,

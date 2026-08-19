@@ -21,6 +21,7 @@
 // destroy and no observer pass worth running.
 import type { EditorView } from "@codemirror/view";
 import { afterEach, describe, expect, it } from "vitest";
+import { settled } from "./helpers/frames.js";
 import {
   cellByText,
   DELTA,
@@ -30,7 +31,6 @@ import {
   GAMMA,
   mount,
   pointAtChar,
-  settled,
   unmount,
 } from "./helpers/table-drag-harness.js";
 

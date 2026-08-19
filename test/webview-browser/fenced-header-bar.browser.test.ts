@@ -22,16 +22,7 @@ import {
   quollCopyButtonTheme,
   quollFencedHeaderBarTheme,
 } from "../../src/webview/cm/theme.js";
-
-/** Drain CM's bounded measure queue (4-frame idiom shared with the sibling browser
- *  suites) so getBoundingClientRect / getComputedStyle read a settled layout. */
-function settled(): Promise<void> {
-  return new Promise((resolve) => {
-    let n = 4;
-    const tick = () => (--n <= 0 ? resolve() : requestAnimationFrame(tick));
-    requestAnimationFrame(tick);
-  });
-}
+import { settled } from "./helpers/frames.js";
 
 let view: EditorView | undefined;
 afterEach(() => {
