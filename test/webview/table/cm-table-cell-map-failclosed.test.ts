@@ -137,7 +137,7 @@ describe("cell-render publishes no map it cannot stand behind", () => {
     // would not see a new field, and `JSON.stringify` cannot see an Error's
     // `message`/`stack` at all (non-enumerable), so the leak check below would
     // pass no matter what the payload carried.
-    expect(errors[0][1]).toEqual({ errName: "Error", length: 8 });
+    expect(errors[0][1]).toEqual({ errKind: "Error", length: 8 });
     // The thrown message is deliberately absent: `assertNever` interpolates the
     // leaf it rejected, so a broken IR type would route a document-derived
     // destination through `err.message` into this payload. `toEqual` on the
@@ -146,6 +146,40 @@ describe("cell-render publishes no map it cannot stand behind", () => {
     // `toMatchObject`.
     expect(JSON.stringify(errors[0][1])).not.toContain("bold");
     expect(JSON.stringify(errors[0][1])).not.toContain("exploded");
+  });
+
+  // The promise above is "no property of `err` reaches the payload", and only a
+  // thrower that puts the cell's bytes somewhere readable can hold it to that.
+  // A source-derived `name` is the reachable half (`assertNever` builds its
+  // message from the leaf it rejected); a `name` getter that THROWS is the
+  // other half, and it must not take down the handler that exists to stop this
+  // path from throwing — the cell still has to render its inert source.
+  it("copies nothing off the thrown error, not even a source-derived name", () => {
+    const hostile = new Error("tokenizer exploded on **bold**");
+    hostile.name = "**bold**";
+    irOverride.fn = () => {
+      throw hostile;
+    };
+    const cell = renderInto("**bold**");
+    expect(cell.textContent).toBe("**bold**");
+    expect(errors[0][1]).toEqual({ errKind: "Error", length: 8 });
+    expect(JSON.stringify(errors[0][1])).not.toContain("bold");
+  });
+
+  it("survives an error whose name getter throws", () => {
+    const booby = new Error("boom");
+    Object.defineProperty(booby, "name", {
+      get() {
+        throw new Error("name getter exploded");
+      },
+    });
+    irOverride.fn = () => {
+      throw booby;
+    };
+    // The fallback must still return, or the widget renders nothing at all.
+    const cell = renderInto("abc");
+    expect(cell.textContent).toBe("abc");
+    expect(errors[0][1]).toEqual({ errKind: "Error", length: 3 });
   });
 
   // The fallback map is the SECOND producer of runs, so it owes the same

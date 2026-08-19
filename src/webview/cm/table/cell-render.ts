@@ -500,10 +500,15 @@ function renderCellSafely(
     if (!loggedRenderThrow) {
       loggedRenderThrow = true;
       console.error("[quoll] table cell render threw; falling back to inert source text", {
-        // `err instanceof Error` rather than `String(err)`: a thrown Symbol or
-        // an object with a hostile `toString` throws again, inside the handler
-        // that exists to keep this path from throwing.
-        errName: err instanceof Error ? err.name : typeof err,
+        // NO property of `err` is read — not `message`, not `name`. Both are
+        // the thrower's to define: `assertNever` interpolates the leaf it
+        // rejected into its message, a subclass can carry a source-derived
+        // name, and either accessor can be a getter that throws INSIDE the
+        // handler whose whole job is to keep this path from throwing. A fixed
+        // category plus a length is what this module can honestly vouch for;
+        // anything finer costs a breakpoint, which is the right trade for a
+        // path that only fires on a bug (Codex review, Conf 98 then 88).
+        errKind: err instanceof Error ? "Error" : typeof err,
         length: raw.length,
       });
     }
