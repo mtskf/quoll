@@ -64,9 +64,13 @@ describe("sourceOffsetAt", () => {
   // Refusal arm 1 — leading skipped source. The first run's openers start
   // AFTER the cell start (`run.outerFrom !== 0`), so boundary 0 is on neither
   // side of the image in particular: a rendered offset cannot prove the pointer
-  // crossed a construct that renders zero characters. Mutating the arm to
-  // `run.outerFrom` (or dropping the check) answers 0 — an exact-looking mapping
-  // to the cell start for a pointer that may have been past the image.
+  // crossed a construct that renders zero characters. The two mutants answer
+  // DIFFERENT wrong offsets and the comment has to say which is which, because
+  // the arm's whole subject is where this run's openers actually start:
+  // `return run.outerFrom` answers 26 — just past the image, since `emitRun`
+  // gives a run following skipped source `outerFrom: from` — while dropping the
+  // check answers 0, the cell start. Either is an exact-looking mapping for a
+  // pointer that may have been on the other side of the image.
   it("refuses the boundary before leading skipped source", () => {
     expect(boundaries(`${IMG}a`)).toEqual([null, IMG.length + 1]);
   });
@@ -86,6 +90,25 @@ describe("sourceOffsetAt", () => {
   it("refuses the only boundary of a cell whose whole source renders invisibly", () => {
     expect(boundaries(IMG)).toEqual([null]);
     expect(boundaries("")).toEqual([0]);
+  });
+
+  // The interior arithmetic (`run.from + (within - run.rendered)`) for a run
+  // that is NOT the first one. Every other fixture in THIS file leaves that
+  // case unobserved: the multi-run cells (`a${IMG}b`, `a\\|b`) have runs ONE
+  // character wide, and no integer sits strictly between two consecutive
+  // integers, so their later runs only ever reach the junction and end-of-text
+  // arms. Elsewhere the case is reached only INDIRECTLY — measured: a mutant
+  // reading `runs[0]` where the loop means `run` also reds
+  // cm-table-cell-point.test.ts's mixed-children row, which arrives through
+  // `cellPointAt`'s DOM walk over a cell holding a code span. That is a real
+  // pin but an oblique one: it fails while naming a DOM traversal, and it
+  // would go away with a fixture change made for reasons having nothing to do
+  // with this arm. This row states the same contract where the arm lives.
+  it("resolves an interior boundary inside a run that is not the cell's first", () => {
+    // Rendered `abc` is source `**a**bc`: run 0 is the `a` inside the
+    // delimiters, run 1 the plain `bc`. Boundary 2 sits strictly inside run 1
+    // (source 6); boundary 1 is the junction and 3 the end of the text.
+    expect(boundaries("**a**bc")).toEqual([0, 5, 6, 7]);
   });
 
   // The interior junction — the one shape `cellPointAt`'s fixtures already
