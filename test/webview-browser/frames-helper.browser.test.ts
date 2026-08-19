@@ -36,4 +36,28 @@ describe("frames helper: requestAnimationFrame call-count contract", () => {
     await settled();
     expect(spy).toHaveBeenCalledTimes(4);
   });
+
+  // The call-count assertions above pin HOW MANY frames are requested, not that
+  // the promise waits for them: an implementation that fires n rAF calls and
+  // resolves synchronously keeps every count green while dependent suites stop
+  // waiting for layout at all. This observes the elapsed frames instead.
+  it("frames(n) resolves only after n frames have actually elapsed", async () => {
+    // Registered BEFORE frames() so this callback runs first within each frame
+    // (rAF callbacks fire in registration order) — and because it re-registers
+    // itself ahead of the helper's own tick, it stays first in every later
+    // frame too. So `elapsed` is current when the awaited promise resolves.
+    let elapsed = 0;
+    let id = 0;
+    const count = (): void => {
+      elapsed += 1;
+      id = requestAnimationFrame(count);
+    };
+    id = requestAnimationFrame(count);
+    try {
+      await frames(3);
+      expect(elapsed).toBe(3);
+    } finally {
+      cancelAnimationFrame(id);
+    }
+  });
 });
