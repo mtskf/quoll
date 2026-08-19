@@ -58,12 +58,14 @@ A toggle-able overlay lists the document's headings — click one to jump straig
 
 ### And the rest
 
+- **Familiar formatting shortcuts** — `⌘B` bold, `⌘I` italic, `⌘E` code, `⌘K` link, `⌘⇧X` strikethrough (Ctrl on Windows/Linux), plus a whole-document formatter.
 - **Rich blocks, rendered in place** — headings, lists, blockquotes, callouts (`[!TIP]`, `[!NOTE]`, …), images, and fenced code.
 - **Frontmatter panel** — YAML frontmatter renders as a metadata block.
 - **Fenced-code tools** — one-click copy; long blocks collapse behind a "Show more" bar.
 - **Image paste & drop** — pasted or dropped images save under `./assets/` and insert a relative link.
 - **Switch between rich and text** — flip between Quoll and the built-in text editor with `⌘⌥E` (`Ctrl+Alt+E`), carrying your caret across.
-- **Markdown lint** — advisory findings as inline underlines, with an optional gutter dot and an optional **Problems**-panel mirror.
+- **Markdown lint & spellcheck** — advisory findings as inline underlines, with an optional gutter dot, an optional **Problems**-panel mirror, opt-in prose-style hints, and native spellcheck.
+- **Tune the reading surface** — font family, size, line height, and column width, from the outline sidebar's Settings popover or `settings.json`.
 - **Theme-aware** — follows your light/dark/high-contrast theme.
 
 ## Requirements
@@ -106,19 +108,26 @@ Reload the VS Code window after installing.
 | `quoll.editWith`     | Edit with Quoll                            | —                | Opens the active file in Quoll; also the **cat**-icon title-bar button on a Markdown text editor. |
 | `quoll.toggleEditor` | Quoll: Toggle Between Rich and Text Editor | `⌘⌥E` / `Ctrl+Alt+E` | Swaps between Quoll and the text editor, carrying your caret position across. |
 | `quoll.reopenInTextEditor` | Quoll: Reopen in Text Editor         | —                | Reopens the current document in the built-in text editor; also the **file-code**-icon title-bar button on Quoll. |
+| `quoll.format`       | Quoll: Format Selection                    | `⌘B` / `⌘I` / `⌘E` / `⌘⇧X` / `⌘K` (Ctrl on Windows/Linux) | Wraps the selection as bold / italic / code / strikethrough / link inside Quoll. |
+| `quoll.formatDocument` | Quoll: Format Document                   | —                | Normalizes Markdown formatting across the whole document. |
 
 Two more overlay buttons sit in the editor's top-right corner: toggle the **document outline** (`Ctrl/Cmd+Alt+O`) and **switch to the text editor** (`⌘⌥E`). The outline toggle and the caret live-reveal are editor-internal behaviour rather than VS Code commands, so they do not appear in the keybindings UI.
 
 ## Settings
 
-Quoll contributes two settings (Settings UI → search "Quoll", or `settings.json`):
+Settings UI → search "Quoll", or `settings.json`. The editor-surface settings are also reachable from the outline sidebar's Settings popover.
 
-- `quoll.lint.problems.enabled` (default `true`) — mirror Quoll's advisory
-  Markdown lint findings into VS Code's **Problems** panel. Turning it off
-  clears those entries and suppresses new ones; the in-editor underlines stay on.
-- `quoll.lint.gutter.enabled` (default `false`) — show a severity-coloured dot
-  in a thin left gutter on each line that has an advisory lint finding. Off by
-  default so the clean centred reading column is unchanged.
+Lint & spellcheck:
+
+- `quoll.lint.problems.enabled` (default `true`) — mirror advisory lint findings into VS Code's **Problems** panel; the in-editor underlines stay on either way.
+- `quoll.lint.gutter.enabled` (default `false`) — severity-coloured dot in a thin left gutter on lines with a lint finding.
+- `quoll.lint.prose.enabled` (default `false`) — opt-in writing-style hints (passive voice, filler words, over-long sentences) as info-level squiggles.
+- `quoll.editor.spellcheck` (default `true`) — native spellchecker on the editing surface.
+
+Reading surface:
+
+- `quoll.editor.fontFamily` (default `default`) — inherit your VS Code font, or a curated serif / sans reading font.
+- `quoll.editor.fontSize`, `quoll.editor.lineHeight`, `quoll.editor.contentWidth` — size, spacing, and reading-column width.
 
 ## Known limitations
 
