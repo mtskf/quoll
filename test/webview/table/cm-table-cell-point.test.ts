@@ -45,14 +45,23 @@ function fixture(cells: Array<{ md: string; from: number; to: number }>): HTMLEl
   return root;
 }
 
-/** The same shape with the cell filled BY HAND — no `renderCellInto`, so no
- *  registered map. Used by the rows that are about the trust boundary itself
- *  (malformed stamps, a cell nobody rendered), where going through the renderer
- *  would only add noise. */
+/** The same shape with the cell REPLACED by a hand-built one `renderCellInto`
+ *  never touched, so `getCellSourceMap` genuinely answers null. Used by the rows
+ *  that are about the trust boundary itself (malformed stamps, a cell nobody
+ *  rendered), where going through the renderer would only add noise.
+ *
+ *  The clone is what makes that true: `fixture` renders every cell it builds, so
+ *  a `replaceChildren` on the SAME element would swap the DOM while the WeakMap
+ *  entry (keyed on the element) survived — the rows below would then exercise
+ *  the staleness arms two later tests already cover, and the `map === null` arm
+ *  would stay unpinned. `cloneNode(false)` copies the stamps, not the registry
+ *  entry. */
 function unmappedFixture(text: string, from: number, to: number): HTMLElement {
   const root = fixture([{ md: "", from, to }]);
   const td = root.querySelector("td") as HTMLElement;
-  td.replaceChildren(document.createTextNode(text));
+  const fresh = td.cloneNode(false) as HTMLElement;
+  fresh.appendChild(document.createTextNode(text));
+  td.replaceWith(fresh);
   return root;
 }
 

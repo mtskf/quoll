@@ -824,6 +824,27 @@ describe("TableBlockWidget drag-selection", () => {
     expect(dispatched).toEqual([{ selection: { anchor: src.indexOf("**bold**") } }]);
   });
 
+  // The collapse arm of the same-cell branch. The plain-click row above cannot
+  // reach it: at 0px travel `dragRange` returns at the DRAG_THRESHOLD_PX gate
+  // before either endpoint is resolved. Here the pointer moves 50px and BOTH
+  // ends still resolve to the same source offset (rendered index 2 of `bold` is
+  // source index 4 either way), which is the only way in. Without the collapse
+  // check the widget dispatches `{ anchor: X, head: X }` — a zero-width range at
+  // the POINTER — where the caret belongs at the cell's CONTENT START.
+  it("a same-cell drag whose ends resolve to the SAME offset falls back to the cell-start caret", () => {
+    const src = "| Name |\n| - |\n| **bold** |";
+    const dispatched: unknown[] = [];
+    const { view, scope } = stubViewWithCaret(dispatched, [
+      { text: "bold", offset: 2 },
+      { text: "bold", offset: 2 },
+    ]);
+    const dom = mountWidget(makeWidget(src), view, scope);
+    const td = dom.querySelector("td") as HTMLElement;
+    press(td, "mousedown", 10, 10);
+    press(td, "click", 60, 10); // ABOVE the threshold — unlike the plain click
+    expect(dispatched).toEqual([{ selection: { anchor: src.indexOf("**bold**") } }]);
+  });
+
   // Fable 90 / Codex 98: direction must come from cell order, not from an
   // offset compared against a 0 sentinel.
   //

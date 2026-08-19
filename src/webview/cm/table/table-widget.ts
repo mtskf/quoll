@@ -7,8 +7,12 @@
 // A mousedown followed by a click that actually moved (see DRAG_THRESHOLD_PX)
 // instead dispatches a RANGE selection between the two RESOLVED source offsets;
 // an endpoint the cell's source map cannot place exactly (a boundary beside a
-// construct that renders no text, e.g. an in-cell image) has no exact offset
-// and snaps outward to that cell's data-cell-from/data-cell-to instead.
+// construct that renders no text, e.g. an in-cell image) has no exact offset.
+// ACROSS cells that endpoint alone snaps OUTWARD to its own data-cell-from /
+// data-cell-to (direction from cell order) and the other end keeps its offset;
+// WITHIN one cell there is no direction to snap along, so the whole gesture
+// falls back to that cell's data-cell-from..data-cell-to — the end that DID
+// map exactly is discarded too.
 // Any endpoint that resolves to nothing, and a range that collapses after
 // snapping, fall back to the same caret dispatch as a plain click. (See
 // cell-point.ts for the pointer→source-offset mapping and why the widget must
@@ -170,6 +174,13 @@ function dragRange(
     // to a guessed cell boundary would dispatch a range on the side the pointer
     // never crossed. Fail closed to the whole cell (the pre-map contract).
     if (start.offset === null || head.offset === null) {
+      // `cellFrom === cellTo` (an EMPTY cell) with `offset === null` is not
+      // reachable through the current src path — `renderCellInto("")` registers
+      // a map for the empty cell too, and its single boundary answers exactly
+      // (`sourceOffsetAt` returns 0 for `within === 0 && sourceLength === 0`).
+      // Kept as defense in depth against a zero-width whole-cell dispatch, and
+      // deliberately NOT pinned: the only fixture that could reach it would
+      // have to fake a resolver answer no browser produces.
       return start.cellFrom === start.cellTo
         ? null
         : { anchor: start.cellFrom, head: start.cellTo };

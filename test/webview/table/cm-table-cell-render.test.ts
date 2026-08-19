@@ -1162,12 +1162,15 @@ describe("cell source map invariants", () => {
 // wrong bytes. One named case per walker rule.
 //
 // ⚠ The fixture shapes are verified against the real tokenizer, not guessed.
-// CommonMark right-flanking means a closer must be followed by end-of-input,
-// space or punctuation, so `**a![i](p)**b` forms NO emphasis at all and never
-// reaches the wrapper arm; and every live-image fixture uses an ABSOLUTE
-// `https:` src because `resolveAgainstBase` returns null for a relative src
-// with an empty base, which renders the image INERT — a run-emitting path that
-// would silently test the wrong arm. Do not paraphrase them.
+// A CommonMark closer preceded by PUNCTUATION is right-flanking only when it is
+// also followed by whitespace, punctuation or end-of-input — so `**a![i](p)**b`
+// (closer preceded by `)`, followed by `b`) forms NO emphasis at all and never
+// reaches the wrapper arm. (`**a**b` DOES form emphasis: its closer is preceded
+// by an alphanumeric, so what follows is irrelevant.) And every live-image
+// fixture uses an ABSOLUTE `https:` src because `resolveAgainstBase` returns
+// null for a relative src with an empty base, which renders the image INERT —
+// a run-emitting path that would silently test the wrong arm. Do not
+// paraphrase them.
 describe("cell source map — walker rules", () => {
   const IMG = "![i](https://x.test/a.png)";
 
@@ -1293,6 +1296,10 @@ describe("renderCellInto", () => {
   // length.
   it("registers the identity map when the renderer throws", () => {
     const cell = document.createElement("td");
+    // The fallback logs BY DESIGN (cell-render.ts's catch), so silence it here
+    // rather than leave a maintainer wondering whether the line is a symptom.
+    // It is asserted where it is the subject: cm-table-cell-map-failclosed.ts.
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     const spy = vi.spyOn(document, "createElement").mockImplementation(() => {
       throw new Error("renderer exploded");
     });
@@ -1300,6 +1307,7 @@ describe("renderCellInto", () => {
       renderCellInto(cell, "**bold**");
     } finally {
       spy.mockRestore();
+      errSpy.mockRestore();
     }
     expect(cell.textContent).toBe("**bold**");
     expect(getCellSourceMap(cell)).toEqual({
