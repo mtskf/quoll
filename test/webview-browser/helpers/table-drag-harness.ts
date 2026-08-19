@@ -109,11 +109,19 @@ export function firstText(cell: HTMLElement): Text {
   return node as Text;
 }
 
+/** An x/y pair. Viewport coordinates — what getBoundingClientRect reports and
+ *  what caret-from-point takes — everywhere except `toLocal`'s return, which is
+ *  element-local because that is what Playwright's position options take. */
+interface Point {
+  readonly x: number;
+  readonly y: number;
+}
+
 /** Viewport point sitting in the LEFT QUARTER of character `index`'s box, so
  *  the browser's caret-from-point lands on the boundary BEFORE that character
  *  (a midpoint would be a coin-flip between `index` and `index + 1`).
  *  Measured with a Range because a character has no element of its own. */
-export function pointAtChar(cell: HTMLElement, index: number): { x: number; y: number } {
+export function pointAtChar(cell: HTMLElement, index: number): Point {
   const text = firstText(cell);
   const range = cell.ownerDocument.createRange();
   range.setStart(text, index);
@@ -132,7 +140,7 @@ export function pointAtChar(cell: HTMLElement, index: number): { x: number; y: n
  *  cell-free region is above and below the table. Asserted, not assumed: a
  *  padding change that swallowed this point would otherwise turn the test into
  *  a second cell-release test in silence. */
-export function pointInWidgetPadding(root: HTMLElement): { x: number; y: number } {
+export function pointInWidgetPadding(root: HTMLElement): Point {
   const box = root.getBoundingClientRect();
   const pt = { x: box.left + box.width / 2, y: box.bottom - 2 };
   const hit = root.ownerDocument.elementFromPoint(pt.x, pt.y);
@@ -144,7 +152,7 @@ export function pointInWidgetPadding(root: HTMLElement): { x: number; y: number 
 /** Playwright positions a pointer action relative to the element's PADDING BOX
  *  top-left, while getBoundingClientRect measures the border box — hence the
  *  explicit border subtraction rather than a bare `pt.x - box.left`. */
-function toLocal(el: HTMLElement, pt: { x: number; y: number }): { x: number; y: number } {
+function toLocal(el: HTMLElement, pt: Point): Point {
   const box = el.getBoundingClientRect();
   const style = getComputedStyle(el);
   return {
@@ -153,21 +161,24 @@ function toLocal(el: HTMLElement, pt: { x: number; y: number }): { x: number; y:
   };
 }
 
-/** Per-element positions for a Playwright drag.
+/** Pointer positions the two adapters below hand to Playwright.
  *
  *  ⚠️ vitest declares `UserEventDragAndDropOptions` / `UserEventClickOptions` as
  *  EMPTY interfaces and lets the active provider augment them; the augmentation
  *  lives in `@vitest/browser-playwright`, which this suite's tsconfig program
  *  never pulls in (`types: []`, and the provider is referenced only from
- *  vitest.browser.config.ts). So the provider fields are invisible to tsc here.
- *  Declaring the shape locally keeps every call site type-checked and confines
- *  the cast to the two one-line adapters below. */
+ *  vitest.browser.config.ts). So tsc sees no fields on those options at all and
+ *  would wave through any object. Declaring the shapes locally and pinning each
+ *  call with `satisfies` is what keeps the positions type-checked — and, unlike
+ *  a cast, it stays a real check if the augmentation ever does reach this
+ *  program. */
 interface DragPositions {
-  readonly sourcePosition: { readonly x: number; readonly y: number };
-  readonly targetPosition: { readonly x: number; readonly y: number };
+  readonly sourcePosition: Point;
+  readonly targetPosition: Point;
 }
-type DragOptions = NonNullable<Parameters<typeof userEvent.dragAndDrop>[2]>;
-type ClickOptions = NonNullable<Parameters<typeof userEvent.click>[1]>;
+interface ClickPosition {
+  readonly position: Point;
+}
 
 /** A TRUSTED pointer drag: real `mousedown` → `mousemove`s → `mouseup` →
  *  `click`, dispatched by the browser itself rather than by `new MouseEvent`.
@@ -183,23 +194,19 @@ type ClickOptions = NonNullable<Parameters<typeof userEvent.click>[1]>;
  *  pointer. `TableBlockWidget.ignoreEvent()` returns true unconditionally. */
 export async function dragPointer(
   source: HTMLElement,
-  sourcePt: { x: number; y: number },
+  sourcePt: Point,
   target: HTMLElement,
-  targetPt: { x: number; y: number }
+  targetPt: Point
 ): Promise<void> {
-  const positions: DragPositions = {
+  await userEvent.dragAndDrop(source, target, {
     sourcePosition: toLocal(source, sourcePt),
     targetPosition: toLocal(target, targetPt),
-  };
-  await userEvent.dragAndDrop(source, target, positions as unknown as DragOptions);
+  } satisfies DragPositions);
 }
 
 /** A TRUSTED click at one viewport point (press and release with no travel). */
-export async function clickPointer(
-  target: HTMLElement,
-  pt: { x: number; y: number }
-): Promise<void> {
-  await userEvent.click(target, { position: toLocal(target, pt) } as unknown as ClickOptions);
+export async function clickPointer(target: HTMLElement, pt: Point): Promise<void> {
+  await userEvent.click(target, { position: toLocal(target, pt) } satisfies ClickPosition);
 }
 
 /** Reveal fired: the widget was dropped and the raw source is back on screen. */
