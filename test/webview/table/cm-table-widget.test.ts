@@ -810,22 +810,26 @@ describe("TableBlockWidget drag-selection", () => {
   // Regression pin (Fable 95 / Codex 100): the DRAG_THRESHOLD_PX gate returns
   // before either endpoint is resolved, so a click that did not move dispatches
   // the collapsed caret NO MATTER what the two endpoints would have mapped to.
-  // (When the gate was added, both endpoints here resolved to `offset: null`
-  // and snapped outward into a whole-cell range; the source map has since made
-  // this cell mappable, which is why the row below moves the pointer to reach
-  // the same-offset collapse arm.)
-  it("a PLAIN CLICK on a marked-up cell still dispatches the collapsed caret", () => {
-    const src = "| Name |\n| - |\n| **bold** |";
+  //
+  // The cell is the IMAGE one, and that is the whole point. With `**bold**`
+  // (this row's fixture until the source map landed) both endpoints now map to
+  // the SAME source offset, so `dragRange`'s own collapse guard answers the
+  // caret too and deleting the threshold left the row green — it pinned
+  // nothing. Beside a live image both endpoints are unmappable, so without the
+  // gate this gesture snaps outward to the WHOLE CELL, which is the answer a
+  // 0px click must never produce.
+  it("a PLAIN CLICK on an unmappable cell still dispatches the collapsed caret", () => {
+    const src = `| A |\n| - |\n| ${IMG_CELL} |`;
     const dispatched: unknown[] = [];
     const { view, scope } = stubViewWithCaret(dispatched, [
-      { text: "bold", offset: 2 },
-      { text: "bold", offset: 2 },
+      { text: "b", offset: 0 }, // mousedown at the image junction (unmappable)
+      { text: "b", offset: 0 }, // click without moving — the same junction
     ]);
     const dom = mountWidget(makeWidget(src), view, scope);
     const td = dom.querySelector("td") as HTMLElement;
     press(td, "mousedown", 30, 10);
     press(td, "click", 30, 10);
-    expect(dispatched).toEqual([{ selection: { anchor: src.indexOf("**bold**") } }]);
+    expect(dispatched).toEqual([{ selection: { anchor: src.indexOf(IMG_CELL) } }]);
   });
 
   // The collapse arm of the same-cell branch. The plain-click row above cannot
