@@ -19,7 +19,7 @@
 ## Why Quoll?
 
 - **Your Markdown stays yours.** The raw text is the only source of truth — every construct round-trips byte-for-byte, with no hidden transforms and no lock-in. What you edit is exactly what lands on disk.
-- **Private by design.** No telemetry, no network calls. A default-deny content security policy keeps the editor fully local (local images only).
+- **Private by design.** No telemetry, no background network requests. A default-deny content security policy keeps the editor fully local (local images only).
 - **A good neighbour.** Quoll registers as an opt-in editor, so it never hijacks `.md` from your other extensions. Open it per file, or make it your default when you're ready.
 
 ## Features
@@ -108,7 +108,7 @@ Reload the VS Code window after installing.
 | `quoll.editWith`     | Edit with Quoll                            | —                | Opens the active file in Quoll; also the **cat**-icon title-bar button on a Markdown text editor. |
 | `quoll.toggleEditor` | Quoll: Toggle Between Rich and Text Editor | `⌘⌥E` / `Ctrl+Alt+E` | Swaps between Quoll and the text editor, carrying your caret position across. |
 | `quoll.reopenInTextEditor` | Quoll: Reopen in Text Editor         | —                | Reopens the current document in the built-in text editor; also the **file-code**-icon title-bar button on Quoll. |
-| `quoll.format`       | Quoll: Format Selection                    | `⌘B` / `⌘I` / `⌘E` / `⌘⇧X` / `⌘K` (Ctrl on Windows/Linux) | Wraps the selection as bold / italic / code / strikethrough / link inside Quoll. |
+| `quoll.format`       | Quoll: Format Selection (bold / italic / code / strike / link) | `⌘B` / `⌘I` / `⌘E` / `⌘⇧X` / `⌘K` (Ctrl on Windows/Linux) | Wraps the selection with the chosen inline format inside Quoll. |
 | `quoll.formatDocument` | Quoll: Format Document                   | —                | Normalizes Markdown formatting across the whole document. |
 
 Two more overlay buttons sit in the editor's top-right corner: toggle the **document outline** (`Ctrl/Cmd+Alt+O`) and **switch to the text editor** (`⌘⌥E`). The outline toggle and the caret live-reveal are editor-internal behaviour rather than VS Code commands, so they do not appear in the keybindings UI.
@@ -135,7 +135,7 @@ Quoll is early software. Be aware of the following before relying on it:
 
 - **Raw HTML is shown as inert source** — displayed as-is, never rendered as live HTML, and preserved byte-for-byte on save.
 - **Images have partial support.** Relative images (`![](./img.png)`) render for **file-scheme** documents only. Paste/drop saves a content-hashed PNG/JPEG/GIF/WebP under `./assets/` (10 MB cap, type sniffed host-side). Images outside the document folder and remote (`https://…`) images are not loaded (CSP scope); a remote-image opt-in is tracked for a follow-up.
-- **Unsafe URLs block saving.** Link/image destinations pass only when schemeless (relative or `#fragment`) or `http:` / `https:` / `mailto:`. Anything else (`javascript:`, `data:`, `file:`, protocol-relative `//host`) renders an inert placeholder and blocks the save with a "Cannot save" notice until fixed. The check covers Markdown destinations only — URLs inside raw HTML aren't checked.
+- **Unsafe URLs block saving.** Link/image destinations pass only when schemeless (relative or `#fragment`) or `http:` / `https:` / `mailto:`. Anything else (`javascript:`, `data:`, `file:`, protocol-relative `//host`) renders inertly and blocks the save with a "Cannot save" notice until fixed. The check covers Markdown destinations only — URLs inside raw HTML aren't checked.
 - **Line endings:** a file that mixes CRLF/LF is shown with one normalized separator (VS Code normalizes on load); opening and saving it without edits leaves the on-disk bytes unchanged.
 - **MDX (`.mdx`) is not supported** — only `.md` files open with the rich editor.
 - **Not implemented:** slash/block-insert menu, column resizing for tables, diff/git views, and collaborative editing. Single file, single editor only.
