@@ -482,25 +482,28 @@ function renderCellSafely(
   try {
     return renderCellWithMap(raw, resourceBase);
   } catch (err) {
-    // This file never puts the cell's content in the payload — the failure and
-    // a length, per the edit-sync.ts precedent. `err` is not ours, though: the
-    // message comes from whatever threw, and `assertNever` (inline-ir.ts) does
-    // interpolate its input, so a broken IR type would surface leaf bytes here.
-    // Keep new throw sites on this path message-only. The error is FLATTENED to
-    // primitives rather than logged as an object because `message`/`stack` are
-    // non-enumerable: any structured copy of this payload (a test's
-    // `JSON.stringify`, a log shipper) sees `{}` for an Error and cannot check
-    // what it carries. Worth logging at all now that a throw also changes drag
-    // mapping, not just the render: the cell silently loses its inline
-    // constructs AND its exact offsets.
+    // The payload carries the failure's SHAPE and nothing from the cell: a
+    // name and a length, per the edit-sync.ts precedent. `err.message` is
+    // deliberately NOT logged — `err` is not ours, and `assertNever`
+    // (inline-ir.ts) interpolates the leaf it rejected, so a broken IR type
+    // would put a document-derived destination into that string. A name plus a
+    // length still says which failure fired and how big the cell was; recovering
+    // the message costs a breakpoint, which is the right trade for a path that
+    // only fires on a bug (Codex review, Conf 98).
+    // FLATTENED to primitives rather than logged as an object because
+    // `message`/`stack` are non-enumerable: any structured copy of this payload
+    // (a test's `JSON.stringify`, a log shipper) sees `{}` for an Error and
+    // cannot check what it carries — flattening is what makes the leak check in
+    // cm-table-cell-map-failclosed.test.ts able to fail at all. Worth logging at
+    // all now that a throw also changes drag mapping, not just the render: the
+    // cell silently loses its inline constructs AND its exact offsets.
     if (!loggedRenderThrow) {
       loggedRenderThrow = true;
       console.error("[quoll] table cell render threw; falling back to inert source text", {
+        // `err instanceof Error` rather than `String(err)`: a thrown Symbol or
+        // an object with a hostile `toString` throws again, inside the handler
+        // that exists to keep this path from throwing.
         errName: err instanceof Error ? err.name : typeof err,
-        // Only an Error is trusted for a string: `String(err)` on a thrown
-        // Symbol or an object with a hostile `toString` throws again, inside
-        // the handler that exists to keep this path from throwing.
-        errMessage: err instanceof Error ? err.message : "",
         length: raw.length,
       });
     }

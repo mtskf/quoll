@@ -137,15 +137,15 @@ describe("cell-render publishes no map it cannot stand behind", () => {
     // would not see a new field, and `JSON.stringify` cannot see an Error's
     // `message`/`stack` at all (non-enumerable), so the leak check below would
     // pass no matter what the payload carried.
-    expect(errors[0][1]).toEqual({
-      errName: "Error",
-      errMessage: "tokenizer exploded",
-      length: 8,
-    });
-    // What the CALL SITE controls: it adds no field holding the cell's source.
-    // It cannot promise as much for `errMessage` — that string belongs to
-    // whatever threw (cell-render.ts's comment carries that caveat).
+    expect(errors[0][1]).toEqual({ errName: "Error", length: 8 });
+    // The thrown message is deliberately absent: `assertNever` interpolates the
+    // leaf it rejected, so a broken IR type would route a document-derived
+    // destination through `err.message` into this payload. `toEqual` on the
+    // WHOLE object is what keeps that promise enforceable — a future field
+    // carrying the message fails this row rather than slipping past a
+    // `toMatchObject`.
     expect(JSON.stringify(errors[0][1])).not.toContain("bold");
+    expect(JSON.stringify(errors[0][1])).not.toContain("exploded");
   });
 
   // The fallback map is the SECOND producer of runs, so it owes the same
@@ -179,6 +179,23 @@ describe("cell-render publishes no map it cannot stand behind", () => {
     renderInto("**bold**");
     renderInto("**bold**");
     expect(errors).toHaveLength(1);
+  });
+
+  // The two rows above each fire ONE condition, so a single shared latch would
+  // satisfy both while silently muting the second failure in production: these
+  // are unrelated faults that can co-occur in one session (a walker arm that
+  // stops tiling, and a tokenizer that throws on a different cell), and the
+  // first to fire must not take the other's only diagnostic with it.
+  it("latches the two diagnostics independently (one does not mute the other)", () => {
+    irOverride.fn = () => [{ kind: "text", value: "abc", span: { from: 0, to: 100 } }];
+    renderInto("abc");
+    irOverride.fn = () => {
+      throw new Error("tokenizer exploded");
+    };
+    renderInto("**bold**");
+    expect(errors).toHaveLength(2);
+    expect(errors[0][0]).toContain("source map");
+    expect(errors[1][0]).toContain("table cell render threw");
   });
 });
 
