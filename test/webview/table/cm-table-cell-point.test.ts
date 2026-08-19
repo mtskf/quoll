@@ -83,7 +83,7 @@ function mixedChildrenCell(): { root: HTMLElement; td: HTMLElement } {
 }
 
 describe("cellPointAt", () => {
-  it("maps an offset inside a byte-aligned cell to an absolute source offset", () => {
+  it("maps an offset inside a plain-text cell to an absolute source offset", () => {
     const root = fixture([{ md: "alpha", from: 78, to: 83 }]);
     const text = root.querySelector("td")?.firstChild as Node;
     expect(cellPointAt(root, 0, 0, resolverFor(text, 2))).toEqual({

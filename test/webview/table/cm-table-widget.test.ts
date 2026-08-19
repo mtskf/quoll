@@ -807,10 +807,14 @@ describe("TableBlockWidget drag-selection", () => {
     expect(dispatched).toEqual([{ selection: { anchor: from + 1, head: from + 3 } }]);
   });
 
-  // Regression pin (Fable 95 / Codex 100): without the DRAG_THRESHOLD_PX gate
-  // both endpoints of a plain click on a non-aligned cell resolve to
-  // `offset: null` and snap outward, turning the click into a whole-cell range.
-  it("a PLAIN CLICK on a non-byte-aligned cell still dispatches the collapsed caret", () => {
+  // Regression pin (Fable 95 / Codex 100): the DRAG_THRESHOLD_PX gate returns
+  // before either endpoint is resolved, so a click that did not move dispatches
+  // the collapsed caret NO MATTER what the two endpoints would have mapped to.
+  // (When the gate was added, both endpoints here resolved to `offset: null`
+  // and snapped outward into a whole-cell range; the source map has since made
+  // this cell mappable, which is why the row below moves the pointer to reach
+  // the same-offset collapse arm.)
+  it("a PLAIN CLICK on a marked-up cell still dispatches the collapsed caret", () => {
     const src = "| Name |\n| - |\n| **bold** |";
     const dispatched: unknown[] = [];
     const { view, scope } = stubViewWithCaret(dispatched, [

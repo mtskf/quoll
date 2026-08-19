@@ -36,7 +36,7 @@
 
 import { MAX_HREF_LENGTH } from "../../../shared/protocol.js";
 import { resolveAgainstBase } from "../image/resource-base.js";
-import type { Resolved } from "../inline/inline-emphasis.js";
+import type { Resolved, Span } from "../inline/inline-emphasis.js";
 import {
   assertNever,
   type CellLeaf,
@@ -238,6 +238,17 @@ function renderReadonly(
     }
   };
 
+  /** A construct rendered INERT: its whole source slice becomes text (a blocked
+   *  or over-cap URL, an emphasis past the nesting cap), so the run is the whole
+   *  span and there is no markup for it to own. No flushPending() — we emit no
+   *  element, so the slice merges with adjacent text, which is the
+   *  single-text-node topology the renderReadonly topology tests pin. */
+  const renderInertSource = (span: Span): void => {
+    ctx.pendingOpen ??= span.from;
+    emitRun(ctx, span.from, span.to, span.to);
+    pendingText += raw.slice(span.from, span.to);
+  };
+
   for (const node of ir) {
     switch (node.kind) {
       case "text":
@@ -285,12 +296,9 @@ function renderReadonly(
               attachLinkClickGuard(a);
               out.push(a);
             } else {
-              // Unsafe or over-cap URL — merge the full source slice into
-              // pending text (inert), so no native gesture can open it. Inert
-              // means the WHOLE slice renders, so the run is the whole span.
-              ctx.pendingOpen ??= node.span.from;
-              emitRun(ctx, node.span.from, node.span.to, node.span.to);
-              pendingText += raw.slice(node.span.from, node.span.to);
+              // Unsafe or over-cap URL — render the full source slice inert, so
+              // no native gesture can open it.
+              renderInertSource(node.span);
             }
             break;
           }
@@ -316,9 +324,7 @@ function renderReadonly(
               el.alt = commonMarkAltText(raw.slice(leaf.alt.from, leaf.alt.to));
               out.push(el);
             } else {
-              ctx.pendingOpen ??= node.span.from;
-              emitRun(ctx, node.span.from, node.span.to, node.span.to);
-              pendingText += raw.slice(node.span.from, node.span.to);
+              renderInertSource(node.span);
             }
             break;
           }
@@ -336,9 +342,7 @@ function renderReadonly(
               attachLinkClickGuard(a);
               out.push(a);
             } else {
-              ctx.pendingOpen ??= node.span.from;
-              emitRun(ctx, node.span.from, node.span.to, node.span.to);
-              pendingText += raw.slice(node.span.from, node.span.to);
+              renderInertSource(node.span);
             }
             break;
           }
@@ -350,16 +354,11 @@ function renderReadonly(
       case "emphasis": {
         // Delimiter-run wrapper: em/strong (`*`/`_`) or del/mark (`~~`/`==`).
         // `node.tag` is a valid element name, so createElement builds the right
-        // box for all four. Past the nesting cap, merge the inert literal source
-        // of the whole span (node.span covers openDelim..closeDelim) into the
-        // pending-text buffer instead of recursing — bounds this walker's
-        // recursion depth. No flushPending(): we emit no element, so the slice
-        // merges naturally with adjacent text (same topology as inert links).
+        // box for all four. Past the nesting cap, render the whole span
+        // (node.span covers openDelim..closeDelim) as inert literal source
+        // instead of recursing — bounds this walker's recursion depth.
         if (depth >= MAX_INLINE_NESTING_DEPTH) {
-          // The literal source renders verbatim, exactly like an inert link.
-          ctx.pendingOpen ??= node.span.from;
-          emitRun(ctx, node.span.from, node.span.to, node.span.to);
-          pendingText += raw.slice(node.span.from, node.span.to);
+          renderInertSource(node.span);
           break;
         }
         flushPending();
@@ -369,12 +368,14 @@ function renderReadonly(
         // over the inner delimiters and the selection would no longer
         // round-trip.
         ctx.pendingOpen ??= node.span.from;
-        const mark = ctx.runs.length;
+        const runsBefore = ctx.runs.length;
         const el = document.createElement(node.tag);
         for (const child of renderReadonly(node.children, raw, resourceBase, depth + 1, ctx)) {
           el.appendChild(child);
         }
-        if (ctx.runs.length > mark && !ctx.sawSkipped) {
+        // Runs only ever grow, so this is "the wrapper's subtree rendered text".
+        const emittedText = ctx.runs.length > runsBefore;
+        if (emittedText && !ctx.sawSkipped) {
           // The wrapper emitted text and nothing invisible follows it, so its
           // closing delimiters belong to the LAST run. `max` because nested
           // closers accumulate outward — em first, then strong. The
@@ -384,7 +385,7 @@ function renderReadonly(
           // exact instead of falling back to the whole-cell snap.
           const last = ctx.runs[ctx.runs.length - 1];
           last.outerTo = Math.max(last.outerTo, node.span.to);
-        } else if (ctx.runs.length === mark) {
+        } else if (!emittedText) {
           // The wrapper rendered nothing (`*![i](p)* a` — the trailing SPACE is
           // load-bearing: with `a` straight after the closer the delimiter run
           // is not right-flanking, no wrapper forms at all, and this arm is
