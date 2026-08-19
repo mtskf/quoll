@@ -2,12 +2,15 @@
 import { EditorState } from "@codemirror/state";
 import { afterEach, describe, expect, it } from "vitest";
 import {
+  type AbsoluteOffset,
+  asAbsoluteOffset,
   type CaretResolver,
   cellPointAt,
   defaultCaretResolver,
   quollTableCaretResolver,
 } from "../../../src/webview/cm/table/cell-point.js";
 import { renderCellInto } from "../../../src/webview/cm/table/cell-render.js";
+import { asRenderedOffset } from "../../../src/webview/cm/table/cell-source-map.js";
 
 // `fixture` mounts into the body and the containment gate is what several tests
 // below assert on — leftovers from an earlier test would give a later one a
@@ -448,5 +451,21 @@ describe("quollTableCaretResolver", () => {
     const stub: CaretResolver = () => ({ node: document.body, offset: 7 });
     const state = EditorState.create({ extensions: [quollTableCaretResolver.of(stub)] });
     expect(state.facet(quollTableCaretResolver)(0, 0, document)?.offset).toBe(7);
+  });
+});
+
+// The absolute space is branded where it is declared (this module). Pinned here
+// for the same reason as the two rows in cm-table-cell-source-map.test.ts: tsc
+// type-checks this directory, so an unneeded directive is TS2578.
+describe("absolute offset brand", () => {
+  it("refuses the cross-space sum the source map's header warns about", () => {
+    const cellFrom = asAbsoluteOffset(40);
+    const within = asRenderedOffset(2);
+    // TS types `branded + branded` as plain `number`, so the ADD itself is not
+    // an error — the brand bites here, at the consumption: the sum cannot pass
+    // as an absolute document offset without an explicit, reviewable mint.
+    // @ts-expect-error — `number` is not an AbsoluteOffset.
+    const wrong: AbsoluteOffset = cellFrom + within;
+    expect(wrong).toBe(42);
   });
 });

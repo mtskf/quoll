@@ -22,7 +22,10 @@ import { describe, expect, it } from "vitest";
 
 import { renderCellInto } from "../../../src/webview/cm/table/cell-render.js";
 import {
+  asCellSourceOffset,
+  asRenderedOffset,
   type CellSourceMap,
+  type CellSourceOffset,
   getCellSourceMap,
   sourceOffsetAt,
 } from "../../../src/webview/cm/table/cell-source-map.js";
@@ -45,7 +48,7 @@ function mapOf(raw: string): CellSourceMap {
 function boundaries(raw: string): Array<number | null> {
   const map = mapOf(raw);
   return Array.from({ length: map.renderedText.length + 1 }, (_, within) =>
-    sourceOffsetAt(map, within)
+    sourceOffsetAt(map, asRenderedOffset(within))
   );
 }
 
@@ -138,9 +141,37 @@ describe("sourceOffsetAt", () => {
   // rather than indexed with.
   it("refuses a boundary outside the rendered text, or a non-integer one", () => {
     const map = mapOf("abc");
-    expect(sourceOffsetAt(map, -1)).toBeNull();
-    expect(sourceOffsetAt(map, 4)).toBeNull();
-    expect(sourceOffsetAt(map, 1.5)).toBeNull();
-    expect(sourceOffsetAt(map, Number.NaN)).toBeNull();
+    expect(sourceOffsetAt(map, asRenderedOffset(-1))).toBeNull();
+    expect(sourceOffsetAt(map, asRenderedOffset(4))).toBeNull();
+    expect(sourceOffsetAt(map, asRenderedOffset(1.5))).toBeNull();
+    expect(sourceOffsetAt(map, asRenderedOffset(Number.NaN))).toBeNull();
+  });
+});
+
+// The offset spaces are branded, so the confusion this module's header warns
+// about ("a DOM character offset is NOT addable to the cell's source offset")
+// is a COMPILE error rather than a comment. These rows are type-level:
+// `pnpm compile` type-checks test/webview (test/webview/tsconfig.json), so an
+// unneeded `@ts-expect-error` here is TS2578 — which is what makes them
+// non-vacuous. ONE PIN PER BRAND, because one mutation reds exactly one pin:
+// with fewer, dropping a brand leaves the other pin still erroring, so it never
+// reports TS2578 and the proof silently fails to cover that brand (measured).
+// Each directive applies to the ONE statement after it.
+describe("offset space brands", () => {
+  it("refuses a cell-source offset where a rendered offset is required", () => {
+    const map = mapOf("abc");
+    // @ts-expect-error — `within` is a RENDERED index; a cell-source offset is
+    // a different space even though both are numbers at runtime.
+    const answer = sourceOffsetAt(map, asCellSourceOffset(1));
+    // The runtime answer is unremarkable (brands are erased); the assertion is
+    // here so the row is a real test rather than a bare directive.
+    expect(answer).toBe(1);
+  });
+
+  it("refuses a rendered offset where a cell-source offset is required", () => {
+    // @ts-expect-error — the reverse direction, which the pin above cannot
+    // cover: dropping the CellSourceOffset brand reds only this one.
+    const wrong: CellSourceOffset = asRenderedOffset(1);
+    expect(wrong).toBe(1);
   });
 });

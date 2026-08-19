@@ -12,6 +12,45 @@
 // emits the DOM, and cell-point.ts consumes it. The renderer is the mapping
 // authority; nothing re-derives it.
 
+// Two of the three offset spaces this module's header warns about, made
+// distinct at compile time. (The third — the ABSOLUTE document space — lives in
+// cell-point.ts: this module neither produces nor consumes it, and putting it
+// here would give the map a vocabulary it never speaks.) Same idiom as
+// `OpenLineOffset` (fenced-code-node.ts) and `AllowlistedUrl`
+// (src/markdown/url-allowlist.ts): a `unique symbol` brand plus a NAMED
+// constructor, so entering a space is a grep-discoverable line.
+//
+// What the brands buy: a value from one space can no longer be passed where
+// another is expected. What they deliberately do NOT do: reject `a + b`. TS
+// types arithmetic on number-assignable operands as plain `number`, so a
+// cross-space sum is caught at its CONSUMPTION (the sum is no longer branded),
+// not at the `+`. That is why cell-point.ts's one legitimate crossing has to
+// say `asAbsoluteOffset(...)` out loud, and why every other crossing fails.
+//
+// The constructors are casts, not guards — the brand is a marker (the
+// AllowlistedUrl precedent's wording). Runtime safety still comes from
+// `stampedOffset`'s digit gate and cell-point.ts's `Number.isSafeInteger`
+// re-check, both unchanged, and both sit directly beside the mint they feed.
+
+declare const renderedOffsetBrand: unique symbol;
+/** An index into ONE cell's rendered text — what a DOM `Range` measures. */
+export type RenderedOffset = number & { readonly [renderedOffsetBrand]: true };
+
+declare const cellSourceOffsetBrand: unique symbol;
+/** An offset into ONE cell's raw Markdown source, relative to the cell's
+ *  content start — the space every offset in a `CellSourceMap` lives in. */
+export type CellSourceOffset = number & { readonly [cellSourceOffsetBrand]: true };
+
+/** THE constructor of a {@link RenderedOffset}. */
+export function asRenderedOffset(value: number): RenderedOffset {
+  return value as RenderedOffset;
+}
+
+/** THE constructor of a {@link CellSourceOffset}. */
+export function asCellSourceOffset(value: number): CellSourceOffset {
+  return value as CellSourceOffset;
+}
+
 /** One run of rendered characters mapping 1:1 onto source characters. Adjacent
  *  runs are NOT merged — a text node and a following inert construct stay
  *  separate runs, so "maximal run" would be a lie; the boundary lookup's
@@ -39,10 +78,10 @@
  *  expands to, so selecting all of `bold` in `**bold**` yields `**bold**` and
  *  the selection still round-trips to the same rendered content. */
 export interface CellSourceRun {
-  readonly from: number;
-  readonly to: number;
-  readonly outerFrom: number; // <= from
-  readonly outerTo: number; // >= to
+  readonly from: CellSourceOffset;
+  readonly to: CellSourceOffset;
+  readonly outerFrom: CellSourceOffset; // <= from
+  readonly outerTo: CellSourceOffset; // >= to
 }
 
 /** The map for one cell. Both extra fields are load-bearing TWICE over. They
@@ -55,8 +94,9 @@ export interface CellSourceRun {
  *  failure mode this module replaces. */
 export interface CellSourceMap {
   readonly runs: readonly CellSourceRun[];
-  /** Length of the raw cell source the map was built from. */
-  readonly sourceLength: number;
+  /** Length of the raw cell source the map was built from — equivalently the
+   *  END offset of that source, which is what the end-of-text arm returns. */
+  readonly sourceLength: CellSourceOffset;
   /** The text the map describes — compared against the cell's live
    *  `textContent`, the one check a coincidence of lengths cannot fool. */
   readonly renderedText: string;
@@ -107,7 +147,10 @@ export function getCellSourceMap(cell: Element): CellSourceMap | null {
  *  `L.outerTo !== R.outerFrom` we therefore answer `null` — the same "no exact
  *  mapping" the old length gate gave for such cells, which `dragRange`'s
  *  existing outward snap already handles. */
-export function sourceOffsetAt(map: CellSourceMap, within: number): number | null {
+export function sourceOffsetAt(
+  map: CellSourceMap,
+  within: RenderedOffset
+): CellSourceOffset | null {
   const { runs, renderedText, sourceLength } = map;
   if (!Number.isInteger(within) || within < 0 || within > renderedText.length) {
     return null;
@@ -116,7 +159,7 @@ export function sourceOffsetAt(map: CellSourceMap, within: number): number | nul
     // No run at all. The only cell whose single boundary is still exact is one
     // that renders nothing FROM nothing; a cell whose whole source rendered
     // invisibly (`![i](p.png)`) has a boundary that could be either side of it.
-    return within === 0 && sourceLength === 0 ? 0 : null;
+    return within === 0 && sourceLength === 0 ? sourceLength : null;
   }
   if (within === renderedText.length) {
     // End of the rendered text. Exact only when the last run's closers reach
@@ -133,14 +176,17 @@ export function sourceOffsetAt(map: CellSourceMap, within: number): number | nul
     // arithmetic, one fewer way for a map to disagree with itself.
     const length = run.to - run.from;
     if (within > rendered && within < rendered + length) {
-      return run.from + (within - rendered);
+      // The one arithmetic crossing INSIDE the map's own space: a rendered
+      // delta added to a source offset is a source offset, which the run's
+      // 1:1 length (`to - from` IS its rendered length) is what makes true.
+      return asCellSourceOffset(run.from + (within - rendered));
     }
     if (within === rendered) {
       if (i === 0) {
         // Leading skipped source (`![i](p.png)a`) leaves the first run's
         // openers short of the cell start, and the boundary is then ambiguous
         // in exactly the same way an interior one is.
-        return run.outerFrom === 0 ? 0 : null;
+        return run.outerFrom === 0 ? run.outerFrom : null;
       }
       const prev = runs[i - 1];
       return prev.outerTo === run.outerFrom ? prev.outerTo : null;

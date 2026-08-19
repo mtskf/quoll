@@ -10,6 +10,7 @@ import {
 } from "../../../src/webview/cm/table/cell-render.js";
 import type { CellSourceMap } from "../../../src/webview/cm/table/cell-source-map.js";
 import {
+  asCellSourceOffset,
   getCellSourceMap,
   setCellSourceMap,
 } from "../../../src/webview/cm/table/cell-source-map.js";
@@ -255,7 +256,17 @@ function stampedCell(text: string, from: number, map: CellSourceMap): HTMLElemen
 }
 
 describe("cellPointAt rejects a map offset that is not a position", () => {
-  const runs = (from: number, to: number) => [{ from, to, outerFrom: 0, outerTo: 3 }];
+  // Cast-only mints: this suite's whole point is feeding `sourceOffsetAt` a map
+  // the renderer would never emit (a FRACTIONAL span), so the constructors must
+  // not validate — the runtime gate being pinned is cell-point.ts's, downstream.
+  const runs = (from: number, to: number) => [
+    {
+      from: asCellSourceOffset(from),
+      to: asCellSourceOffset(to),
+      outerFrom: asCellSourceOffset(0),
+      outerTo: asCellSourceOffset(3),
+    },
+  ];
 
   function offsetFor(map: CellSourceMap): number | null | undefined {
     const root = stampedCell("abc", 40, map);
@@ -266,7 +277,9 @@ describe("cellPointAt rejects a map offset that is not a position", () => {
   // Control: the same lookup on an integer map IS exact, so the null below can
   // only come from the gate and not from the fixture failing to resolve.
   it("resolves the boundary exactly when the map holds integers", () => {
-    expect(offsetFor({ runs: runs(0, 3), sourceLength: 3, renderedText: "abc" })).toBe(41);
+    expect(
+      offsetFor({ runs: runs(0, 3), sourceLength: asCellSourceOffset(3), renderedText: "abc" })
+    ).toBe(41);
   });
 
   // `Math.min`/`Math.max` propagate a fraction (and a NaN) untouched, so the
@@ -275,6 +288,8 @@ describe("cellPointAt rejects a map offset that is not a position", () => {
   // anchor installs a silently broken selection no try/catch can observe. Same
   // gate `stampedOffset` applies to the DOM stamps, for the same reason.
   it("answers offset:null when the map places the boundary at a fraction", () => {
-    expect(offsetFor({ runs: runs(0.5, 2.5), sourceLength: 3, renderedText: "abc" })).toBeNull();
+    expect(
+      offsetFor({ runs: runs(0.5, 2.5), sourceLength: asCellSourceOffset(3), renderedText: "abc" })
+    ).toBeNull();
   });
 });
