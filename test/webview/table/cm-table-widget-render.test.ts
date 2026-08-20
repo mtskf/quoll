@@ -456,21 +456,21 @@ describe("resource-base threading (relative in-cell images)", () => {
 
   it("toDOM resolves a relative in-cell image against the facet base", () => {
     const src = "| ![p](./img.png) |\n| - |";
-    const dom = makeWidget(src).toDOM(stubView(undefined, BASE));
+    const dom = makeWidget(src).toDOM(stubView([], BASE));
     const img = dom.querySelector<HTMLImageElement>("th img");
     expect(img?.getAttribute("src")).toBe("https://csp/ws/notes/img.png");
   });
 
   it("toDOM renders a traversal in-cell image inert (../ escape)", () => {
     const src = "| ![p](../x.png) |\n| - |";
-    const dom = makeWidget(src).toDOM(stubView(undefined, BASE));
+    const dom = makeWidget(src).toDOM(stubView([], BASE));
     expect(dom.querySelector("img")).toBeNull();
     expect(dom.querySelector("th")?.textContent).toBe("![p](../x.png)");
   });
 
   it("toDOM renders a relative in-cell image inert when no base facet is set", () => {
     const src = "| ![p](./img.png) |\n| - |";
-    const dom = makeWidget(src).toDOM(stubView());
+    const dom = makeWidget(src).toDOM(stubView([]));
     expect(dom.querySelector("img")).toBeNull();
     expect(dom.querySelector("th")?.textContent).toBe("![p](./img.png)");
   });
@@ -478,7 +478,7 @@ describe("resource-base threading (relative in-cell images)", () => {
   it("updateDOM (patchRow) resolves a relative image added by a cell edit", () => {
     const srcA = "| a |\n| - |\n| plain |";
     const srcB = "| a |\n| - |\n| ![p](./img.png) |";
-    const view = stubView(undefined, BASE);
+    const view = stubView([], BASE);
     const widgetA = makeWidget(srcA);
     const dom = widgetA.toDOM(view);
     expect(makeWidget(srcB).updateDOM(dom, view, widgetA)).toBe(true);

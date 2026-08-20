@@ -75,9 +75,21 @@ export function makeWidget(src: string, docFrom = 0): TableBlockWidget {
 
 /** Minimal view stub — display-only toDOM reads `view.dispatch` and
  *  `view.state.facet(quollResourceBaseUri)` (a real EditorState so facet
- *  reads work; no doc/extensions beyond the optional resource base). */
+ *  reads work; no doc/extensions beyond the optional resource base).
+ *
+ *  `dispatched` is REQUIRED, not optional. Omitted, the recorder silently
+ *  no-opped — and four render rows assert `expect(dispatched).toEqual([])`,
+ *  which a recorder that records NOTHING satisfies for free. Passing `[]`
+ *  explicitly costs two characters and makes those four rows mean something.
+ *
+ *  `satisfies` before the cast: `as unknown as EditorViewType` erases the
+ *  literal's own shape, so a `dispath` typo would compile and every dispatch
+ *  assertion in three suites would silently go empty. The clause type-checks
+ *  the literal against the real surface first (verified non-vacuous: the typo
+ *  reddens with TS2561), and the cast then covers only the members a
+ *  display-only widget never touches. */
 export function stubView(
-  dispatched?: unknown[],
+  dispatched: unknown[],
   resourceBase?: string,
   opened?: string[]
 ): EditorViewType {
@@ -90,13 +102,13 @@ export function stubView(
   }
   return {
     state: EditorState.create({ extensions }),
-    dispatch: (tr: unknown) => dispatched?.push(tr),
-  } as unknown as EditorViewType;
+    dispatch: (tr: unknown) => dispatched.push(tr),
+  } satisfies Pick<EditorViewType, "state" | "dispatch"> as unknown as EditorViewType;
 }
 
-/** The shared zero-argument `stubView` — for the display-only paths, where no
- *  test asserts on what was dispatched. */
-export const mockView = stubView();
+/** The shared throwaway-recorder `stubView` — for the display-only paths, where
+ *  no test asserts on what was dispatched. */
+export const mockView = stubView([]);
 
 /** A view stub whose caret resolver is scripted: successive calls return the
  *  successive scripted positions, so a mousedown/click pair can be aimed at two
