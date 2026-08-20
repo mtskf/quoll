@@ -277,7 +277,7 @@ describe("TableBlockWidget drag-selection", () => {
     ]);
 
     const dispatched: unknown[] = [];
-    const { view, mount } = stubViewWithCaret(dispatched, [
+    const { mount, update } = stubViewWithCaret(dispatched, [
       { text: "alpha", offset: 2 },
       { text: "alpha", offset: 5 },
     ]);
@@ -287,7 +287,7 @@ describe("TableBlockWidget drag-selection", () => {
     press(td, "mousedown", 10, 10);
     // A distant edit shifts this table while the button is still down.
     const shifted = new TableBlockWidget(parseTable(SRC, 0, SRC.length)!, SRC, 5, 5);
-    shifted.updateDOM(dom, view, first);
+    update(dom, shifted, first);
     press(td, "click", 60, 10);
     // The anchor was invalidated → collapsed caret at the NEW stamp, not a
     // range built from two different coordinate systems.
@@ -307,7 +307,7 @@ describe("TableBlockWidget drag-selection", () => {
   it("a drag in a marked-up cell still maps exactly after a pure positional shift", () => {
     const src = "| Name |\n| - |\n| **bold** |";
     const dispatched: unknown[] = [];
-    const { view, mount } = stubViewWithCaret(dispatched, [
+    const { mount, update } = stubViewWithCaret(dispatched, [
       { text: "bold", offset: 1 },
       { text: "bold", offset: 3 },
     ]);
@@ -315,7 +315,7 @@ describe("TableBlockWidget drag-selection", () => {
     const dom = mount(first);
     // Distant insertion above the table: same bytes, new base → stampRow path.
     const shifted = new TableBlockWidget(parseTable(src, 0, src.length)!, src, 5, 5);
-    expect(shifted.updateDOM(dom, view, first)).toBe(true);
+    expect(update(dom, shifted, first)).toBe(true);
 
     const td = dom.querySelector("td") as HTMLElement;
     press(td, "mousedown", 10, 10);

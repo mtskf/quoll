@@ -123,12 +123,23 @@ export const mockView = stubView([]);
  *  find a DIFFERENT widget's identically-texted cell, `root.contains` would
  *  reject it, and the drag would silently degrade to the caret path — the
  *  EXPECTED value of most rows in the drag suite, so the mistake would pass
- *  VACUOUSLY rather than fail. */
+ *  VACUOUSLY rather than fail.
+ *
+ *  `view` itself is deliberately NOT returned. While it was, the guard below
+ *  was reachable around: `makeWidget(src).toDOM(view)` renders a second widget
+ *  through this vehicle without going through `mount`, leaving the resolver
+ *  pointed at the FIRST widget's tree. That walk then SUCCEEDS — most rows
+ *  share `SRC`, so the text is found in the wrong widget — and a successful
+ *  walk trips none of the failure arms above. `update` exists so the two rows
+ *  that call `updateDOM` still can, without the view escaping to do it. */
 export function stubViewWithCaret(
   dispatched: unknown[],
   script: Array<{ text: string; offset: number } | null>,
   extensions: Extension[] = []
-): { view: EditorViewType; mount: (widget: TableBlockWidget) => HTMLElement } {
+): {
+  mount: (widget: TableBlockWidget) => HTMLElement;
+  update: (dom: HTMLElement, next: TableBlockWidget, prev: TableBlockWidget) => boolean;
+} {
   let root: HTMLElement | null = null;
   let i = 0;
   const resolve: CaretResolver = () => {
@@ -185,7 +196,13 @@ export function stubViewWithCaret(
     document.body.appendChild(dom);
     return dom;
   };
-  return { view, mount };
+
+  /** `updateDOM` through the vehicle's own view — the only other consumer of
+   *  `view`, and the reason `view` itself never escapes. */
+  const update = (dom: HTMLElement, next: TableBlockWidget, prev: TableBlockWidget): boolean =>
+    next.updateDOM(dom, view, prev);
+
+  return { mount, update };
 }
 
 /** Dispatch a mouse event carrying coordinates — the movement threshold reads
