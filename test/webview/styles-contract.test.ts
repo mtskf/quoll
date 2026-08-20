@@ -90,7 +90,7 @@ describe("styles.css — block-widget margin invariant (CL)", () => {
   const css = readFileSync(new URL("../../src/webview/styles.css", import.meta.url), "utf8");
 
   // The `quoll-block` marker class is the DOM hook (pinned in
-  // cm-table-widget.test.ts); this pins the CSS half — the load-bearing
+  // table/cm-table-widget-render.test.ts); this pins the CSS half — the load-bearing
   // `margin: 0` rule itself. CodeMirror measures block-widget height via
   // getBoundingClientRect() (which excludes margin), so any VERTICAL margin on a
   // quoll-block root reintroduces a click→caret offset for every line
