@@ -1,8 +1,10 @@
 // @vitest-environment happy-dom
 // `updateDOM`: when the widget may reuse an already-rendered DOM (and when it
 // must refuse), plus the offset re-stamping both reuse paths owe the click
-// handlers. Fresh renders are cm-table-widget-render.test.ts. Fixtures:
-// helpers/widget-fixtures.ts.
+// handlers. The one fresh-render row here is deliberate — it is the baseline of
+// the fresh / stampRow / patchRow triad, so all three stamp assertions can be
+// read side by side. Everything else about a fresh `toDOM` is
+// cm-table-widget-render.test.ts. Fixtures: helpers/widget-fixtures.ts.
 import { describe, expect, it } from "vitest";
 
 import { parseTable } from "../../../src/markdown/table/index.js";

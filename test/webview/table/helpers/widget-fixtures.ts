@@ -1,10 +1,12 @@
-// Fixtures shared by the four `cm-table-widget-*.test.ts` suites (render,
-// update, drag, caret). They live here rather than in one suite because the
-// drag and caret suites both need the scripted-caret vehicle, and a per-suite
-// copy would be free to drift — `mountWidget`'s `scope.root` assignment in
-// particular is what keeps a drag test from silently degrading to the caret
-// path and passing VACUOUSLY, so it must have exactly one definition. Not a
-// test file itself (no `.test.ts` suffix), mirroring
+// Fixtures shared by the four `cm-table-widget-*.test.ts` suites. What is
+// shared by whom: `makeWidget` / `stubView` / `mockView` by render, update and
+// caret; `press` / `SRC` by drag and caret; the scripted-caret vehicle
+// (`stubViewWithCaret` + `mountWidget`) by drag alone. That last pair lives
+// here anyway rather than inline in the drag suite, because `mountWidget`'s
+// `scope.root` assignment is what keeps a drag test from silently degrading to
+// the caret path and passing VACUOUSLY — a rule that has to have exactly one
+// definition to be enforceable when the next suite reaches for it. Not a test
+// file itself (no `.test.ts` suffix), mirroring
 // test/webview-browser/helpers/frames.ts.
 import { EditorState, type Extension } from "@codemirror/state";
 import type { EditorView as EditorViewType } from "@codemirror/view";
@@ -22,8 +24,17 @@ import { TableBlockWidget } from "../../../../src/webview/cm/table/table-widget.
 // Widgets under test are mounted into the body (the caret resolver needs a live
 // tree). Clear it between tests so no test can see an earlier test's widget —
 // a mechanism, rather than each test remembering to tidy up. Registered HERE,
-// on import, so a new suite cannot acquire `mountWidget` without also
-// acquiring the cleanup that makes its mounts safe.
+// on import, so a suite cannot acquire `mountWidget` without also acquiring the
+// cleanup that makes its mounts safe.
+//
+// ⚠️ Two limits on that guarantee, both measured. It holds only under vitest's
+// default `isolate: true`, where this module is re-evaluated per test file:
+// under `--isolate=false` the module is evaluated once and the hook attaches to
+// the FIRST importing suite alone. And nothing currently pins it — no test
+// asserts on `document.body` between cases, so deleting this hook leaves all 78
+// green (cross-widget capture is prevented by `scope.root` scoping, not by body
+// cleanliness). A probe pair that reddens when the hook is removed is a
+// follow-up entry in docs/TODO.md.
 afterEach(() => {
   document.body.replaceChildren();
 });

@@ -302,8 +302,9 @@ describe("TableBlockWidget drag-selection", () => {
   // the stamps on a pure positional shift WITHOUT re-rendering, so an absolute
   // map would go stale exactly here and every marked-up cell would silently
   // degrade to the whole-cell snap after the first keystroke above a table.
-  // The other shift rows assert stamps on a PLAIN-TEXT cell and never drag
-  // afterwards, so they cannot see it.
+  // The other shift rows (cm-table-widget-update.test.ts's re-stamp pair, and
+  // the click-after-shift row in cm-table-widget-render.test.ts) assert stamps
+  // on a PLAIN-TEXT cell and never drag afterwards, so they cannot see it.
   it("a drag in a marked-up cell still maps exactly after a pure positional shift", () => {
     const src = "| Name |\n| - |\n| **bold** |";
     const dispatched: unknown[] = [];
@@ -478,13 +479,12 @@ describe("TableBlockWidget drag-selection", () => {
   // Cmd+Enter on a link do nothing.
   //
   // This test is deliberately explicit about that, but it is NOT the only
-  // thing standing in the way: the hoist was measured, and it reddens 14
-  // tests, 13 of which live in the sibling widget suites and predate the drag
-  // work. happy-dom's `.click()`
-  // and hand-built `MouseEvent`s both default to detail 0, so every
-  // programmatic caret test and all four modifier-link sink tests already
-  // fail on it. Do not "strengthen" this by claiming the guard is otherwise
-  // unprotected — that claim was made here once and was false.
+  // thing standing in the way: the hoist was measured, and it reddens 14 tests,
+  // 13 of which live in the sibling widget suites and predate the drag work.
+  // happy-dom's `.click()` and hand-built `MouseEvent`s both default to detail
+  // 0, so every programmatic caret test and all four modifier-link sink tests
+  // already fail on it. Do not "strengthen" this by claiming the guard is
+  // otherwise unprotected — that claim was made here once and was false.
   it("a detail-0 modifier click on an <a> still opens the link (the guard sits BELOW the link branch)", () => {
     const src = "| L |\n| - |\n| [x](https://example.com) |";
     const dispatched: unknown[] = [];

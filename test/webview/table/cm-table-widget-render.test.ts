@@ -1,9 +1,13 @@
 // @vitest-environment happy-dom
-// What a FRESH `toDOM` produces: DOM shape, cell escaping, the offset stamps a
-// later click reads back, the link/image URL gates, and the resource-base
-// threading that resolves a relative in-cell image. Reuse of an existing DOM is
-// cm-table-widget-update.test.ts; the pointer paths are
-// cm-table-widget-drag.test.ts / -caret.test.ts. Fixtures: helpers/widget-fixtures.ts.
+// What `toDOM` produces and what a click on it does: DOM shape, cell escaping,
+// the offset stamps, the link/image URL gates, the resource-base threading that
+// resolves a relative in-cell image, and the collapsed-caret/open-external
+// routing a click on that fresh DOM takes. Two rows here call `updateDOM` —
+// they are about the click AFTER a re-stamp, so they stay with the click
+// tests; `updateDOM`'s own reuse/refusal contract is
+// cm-table-widget-update.test.ts. Pointer GESTURES (drag, and the untrusted
+// cell-stamp boundary) are cm-table-widget-drag.test.ts / -caret.test.ts.
+// Fixtures: helpers/widget-fixtures.ts.
 import { EditorState } from "@codemirror/state";
 import { EditorView, type EditorView as EditorViewType, WidgetType } from "@codemirror/view";
 import { describe, expect, it } from "vitest";
