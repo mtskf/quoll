@@ -104,11 +104,13 @@ describe("TableBlockWidget caret dispatch hardening", () => {
   // distinguish them here (nor in any other fixture across these widget suites
   // that clicks right after toDOM): both trace back to the same `docFrom`
   // constructor argument, so deleting `blockStart.set(root, this.docFrom)` in
-  // `toDOM` leaves every such anchor assertion green. (The one fixture that
-  // clicks AFTER updateDOM — "re-stamps offsets on updateDOM so a click after a
-  // shift uses the new base", in cm-table-widget-render.test.ts — stays green
-  // for an unrelated reason: updateDOM's OWN `blockStart.set` write re-fills
-  // the entry with the new docFrom.)
+  // `toDOM` leaves every such anchor assertion green. (The one MARGIN click
+  // that lands after updateDOM — "re-stamps offsets on updateDOM so a click
+  // after a shift uses the new base", in cm-table-widget-render.test.ts —
+  // stays green for an unrelated reason: updateDOM's OWN `blockStart.set`
+  // write re-fills the entry with the new docFrom. The drag suite's two
+  // post-updateDOM rows click a CELL, so they never reach `blockStart` at
+  // all.)
   it("does not log a blockStart miss when a fresh toDOM'd widget's margin is clicked", () => {
     const dispatched: unknown[] = [];
     const dom = makeWidget(SRC, 7).toDOM(stubView(dispatched));
