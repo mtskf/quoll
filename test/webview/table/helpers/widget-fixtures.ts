@@ -148,7 +148,11 @@ export const mockView = stubView([]);
  *  through this vehicle without going through `mount`, leaving the resolver
  *  pointed at the FIRST widget's tree. That walk then SUCCEEDS — most rows
  *  share `SRC`, so the text is found in the wrong widget — and a successful
- *  walk trips none of the failure arms above. `update` exists so the two rows
+ *  walk trips none of the failure arms above. `cellPointAt`'s containment gate
+ *  (`!root.contains(cell)`, cell-point.ts) rejects the foreign node a moment
+ *  later and the gesture degrades to the collapsed caret: the EXPECTED value of
+ *  most rows in the drag suite, so the mis-pair reads as a pass and nothing
+ *  anywhere records that it happened. `update` exists so the two rows
  *  that call `updateDOM` still can, without the view escaping to do it. */
 export function stubViewWithCaret(
   dispatched: unknown[],
