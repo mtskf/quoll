@@ -1,13 +1,12 @@
-// Fixtures shared by the four `cm-table-widget-*.test.ts` suites. What is
-// shared by whom: `makeWidget` / `stubView` / `mockView` by render, update and
-// caret; `press` / `SRC` by drag and caret; the scripted-caret vehicle
-// (`stubViewWithCaret` + `mountWidget`) by drag alone. That last pair lives
-// here anyway rather than inline in the drag suite, because `mountWidget`'s
-// `scope.root` assignment is what keeps a drag test from silently degrading to
-// the caret path and passing VACUOUSLY — a rule that has to have exactly one
-// definition to be enforceable when the next suite reaches for it. Not a test
-// file itself (no `.test.ts` suffix), mirroring
-// test/webview-browser/helpers/frames.ts.
+// Fixtures shared by the four `cm-table-widget-*.test.ts` suites. Who shares
+// what: `makeWidget` by all four; `stubView` by render, update and caret;
+// `mockView` by render and update; `press` / `SRC` by drag and caret; the
+// scripted-caret vehicle (`stubViewWithCaret` + `mountWidget`) and the image
+// cells by drag alone. That last group lives here anyway rather than inline in
+// the drag suite, because the `scope.root` rule it carries (stated once on
+// `stubViewWithCaret` below) has to have exactly one definition to be
+// enforceable when the next suite reaches for it. Not a test file itself (no
+// `.test.ts` suffix), mirroring test/webview-browser/helpers/frames.ts.
 import { EditorState, type Extension } from "@codemirror/state";
 import type { EditorView as EditorViewType } from "@codemirror/view";
 import { afterEach } from "vitest";
@@ -68,8 +67,8 @@ export function stubView(
   } as unknown as EditorViewType;
 }
 
-/** A view stub that records nothing — for the display-only paths, where the
- *  dispatch is never read. */
+/** The shared zero-argument `stubView` — for the display-only paths, where no
+ *  test asserts on what was dispatched. */
 export const mockView = stubView();
 
 /** A view stub whose caret resolver is scripted: successive calls return the
