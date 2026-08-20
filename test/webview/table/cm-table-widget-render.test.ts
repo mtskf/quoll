@@ -2,9 +2,11 @@
 // What `toDOM` produces and what a click on it does: DOM shape, cell escaping,
 // the offset stamps, the link/image URL gates, the resource-base threading that
 // resolves a relative in-cell image, and the collapsed-caret/open-external
-// routing a click on that fresh DOM takes. Two rows here call `updateDOM` —
-// they are about the click AFTER a re-stamp, so they stay with the click
-// tests; `updateDOM`'s own reuse/refusal contract is
+// routing a click on that fresh DOM takes. Two rows here call `updateDOM`, each
+// because it extends material that lives here rather than because it is about
+// reuse: one takes the click AFTER a re-stamp, the other checks that a
+// relative image introduced by a cell edit resolves against the same base the
+// fresh-render rows use. `updateDOM`'s own reuse/refusal contract is
 // cm-table-widget-update.test.ts. Pointer GESTURES (drag, and the untrusted
 // cell-stamp boundary) are cm-table-widget-drag.test.ts / -caret.test.ts.
 // Fixtures: helpers/widget-fixtures.ts.

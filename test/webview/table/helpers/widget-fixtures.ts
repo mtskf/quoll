@@ -1,13 +1,15 @@
-// Fixtures shared by the four `cm-table-widget-*.test.ts` suites. Who shares
-// what: `makeWidget` by all four; `stubView` by render, update and caret;
-// `mockView` by render and update; `press` / `SRC` by drag and caret; the
-// scripted-caret vehicle (`stubViewWithCaret`, whose `mount` is part of the
-// closure it returns) and the image cells by drag alone. That last group lives
-// here rather than inline in the drag suite because the resolver-scoping rule
-// it carries — now ENFORCED by that closure rather than asked for in prose —
-// has to have exactly one definition to be enforceable when the next suite
-// reaches for it. Not a test file itself (no `.test.ts` suffix), mirroring
-// test/webview-browser/helpers/frames.ts.
+// Fixtures shared by the four `cm-table-widget-*.test.ts` suites and by
+// widget-fixtures-guards.test.ts, the probe file that pins this module's own
+// mechanisms. Who shares what: `makeWidget` by all five; `stubView` by render,
+// update and caret; `mockView` by render, update and guards; `press` / `SRC`
+// by drag, caret and guards; the scripted-caret vehicle (`stubViewWithCaret`,
+// whose `mount` / `update` are part of the closure it returns) by drag and
+// guards; `drainResolverFailures` by guards alone; the image cells by drag
+// alone. The vehicle lives here rather than inline in the drag suite because
+// the resolver-scoping rule it carries — now ENFORCED by that closure rather
+// than asked for in prose — has to have exactly one definition to be
+// enforceable when the next suite reaches for it. Not a test file itself (no
+// `.test.ts` suffix), mirroring test/webview-browser/helpers/frames.ts.
 import { EditorState, type Extension } from "@codemirror/state";
 import type { EditorView as EditorViewType } from "@codemirror/view";
 import { afterEach } from "vitest";
@@ -21,11 +23,46 @@ import {
 } from "../../../../src/webview/cm/table/cell-point.js";
 import { TableBlockWidget } from "../../../../src/webview/cm/table/table-widget.js";
 
+// Out-of-band failure channel for the scripted caret resolver. It cannot
+// signal by THROWING: `cellPointAt` wraps every resolver call in a catch-all (a
+// documented part of the `CaretResolver` contract — a throw must never take
+// down the click handler), and `dragRange` turns a null point into the
+// collapsed caret. So a resolver that failed for a reason the test did not ASK
+// for is indistinguishable, at the assertion, from one scripted to return null
+// on purpose — and the caret is the expected value of most rows in the drag
+// suite, so the failure reads as a pass. Recording the reason here and throwing
+// it out of the drain below is the only channel that survives the catch-all.
+const resolverFailures: string[] = [];
+
+/** Throw whatever the scripted resolver recorded since the last drain, and
+ *  clear it either way. The `afterEach` below is the automatic caller — every
+ *  suite gets the channel for free — and it is EXPORTED so the guards probe can
+ *  assert on a deliberately-provoked failure in-test: an expected failure has to
+ *  be consumed inside the case that provoked it, or the hook would rethrow it
+ *  and redden a test that behaved exactly as designed.
+ *
+ *  Attribution rests on one invariant: the mousedown/click handlers in
+ *  table-widget.ts call the resolver SYNCHRONOUSLY (no rAF, timeout or promise
+ *  anywhere on that path) and no suite here has an async test body, so every
+ *  failure is recorded before the owning test returns — i.e. before its own
+ *  `afterEach` runs. Should that path ever go async, a failure would drain into
+ *  the NEXT test's hook and be reported against an innocent row; move the drain
+ *  to `onTestFinished` registered per vehicle if that day comes. */
+export function drainResolverFailures(): void {
+  if (resolverFailures.length === 0) {
+    return;
+  }
+  const reasons = resolverFailures.join("; ");
+  resolverFailures.length = 0; // drain BEFORE throwing, or the next test inherits it
+  throw new Error(`scripted caret resolver misuse: ${reasons}`);
+}
+
 // Widgets under test are mounted into the body (the caret resolver needs a live
 // tree). Clear it between tests so no test can see an earlier test's widget —
 // a mechanism, rather than each test remembering to tidy up. Registered HERE,
 // on import, so a suite cannot acquire the mounting vehicle without also
-// acquiring the cleanup that makes its mounts safe.
+// acquiring the cleanup that makes its mounts safe, nor the resolver without
+// the drain that makes its silent failures audible.
 //
 // ⚠️ One limit on that guarantee, measured. It holds only under vitest's
 // default `isolate: true`, where this module is re-evaluated per test file:
@@ -36,33 +73,10 @@ import { TableBlockWidget } from "../../../../src/webview/cm/table/table-widget.
 // than a spurious one. (Before that probe, deleting this hook left all 78 tests
 // green: cross-widget capture is prevented by the resolver's private root, not
 // by body cleanliness, so nothing observed the body between cases.)
-// Out-of-band failure channel for the scripted caret resolver. It cannot
-// signal by THROWING: `cellPointAt` wraps every resolver call in a catch-all (a
-// documented part of the `CaretResolver` contract — a throw must never take
-// down the click handler), and `dragRange` turns a null point into the
-// collapsed caret. So a resolver that failed for a reason the test did not ASK
-// for is indistinguishable, at the assertion, from one scripted to return null
-// on purpose — and the caret is the expected value of most rows in the drag
-// suite, so the failure reads as a pass. Recording the reason here and throwing
-// it below is the only channel that survives the catch-all.
-//
-// Attribution rests on one invariant: the mousedown/click handlers in
-// table-widget.ts call the resolver SYNCHRONOUSLY (no rAF, timeout or promise
-// anywhere on that path) and no suite here has an async test body, so every
-// failure is recorded before the owning test returns — i.e. before its own
-// `afterEach` runs. Should that path ever go async, a failure would drain into
-// the NEXT test's hook and be reported against an innocent row; move the drain
-// to `onTestFinished` registered per vehicle if that day comes.
-const resolverFailures: string[] = [];
-
 afterEach(() => {
   // Cleanup FIRST, so a throwing drain never also leaks DOM into the next test.
   document.body.replaceChildren();
-  if (resolverFailures.length > 0) {
-    const reasons = resolverFailures.join("; ");
-    resolverFailures.length = 0; // drain BEFORE throwing, or the next test inherits it
-    throw new Error(`scripted caret resolver misuse: ${reasons}`);
-  }
+  drainResolverFailures();
 });
 
 export function makeWidget(src: string, docFrom = 0): TableBlockWidget {
@@ -75,12 +89,16 @@ export function makeWidget(src: string, docFrom = 0): TableBlockWidget {
 
 /** Minimal view stub — display-only toDOM reads `view.dispatch` and
  *  `view.state.facet(quollResourceBaseUri)` (a real EditorState so facet
- *  reads work; no doc/extensions beyond the optional resource base).
+ *  reads work; the doc is empty and the only extensions are the two optional
+ *  ones below: the resource base, and the `quollOpenExternalSink` that
+ *  `opened` installs to capture what a widget-internal link would open).
  *
- *  `dispatched` is REQUIRED, not optional. Omitted, the recorder silently
- *  no-opped — and four render rows assert `expect(dispatched).toEqual([])`,
- *  which a recorder that records NOTHING satisfies for free. Passing `[]`
- *  explicitly costs two characters and makes those four rows mean something.
+ *  `dispatched` is REQUIRED, not optional. Left optional, a call site that
+ *  omits it gets a recorder that silently no-ops — and a no-op recorder is
+ *  indistinguishable from a widget that dispatched nothing, so the day someone
+ *  adds `expect(dispatched).toEqual([...])` to one of those call sites it can
+ *  go vacuously green against an array nothing was ever written to. Requiring
+ *  the argument costs two characters and keeps every stub's recorder real.
  *
  *  `satisfies` before the cast: `as unknown as EditorViewType` erases the
  *  literal's own shape, so a `dispath` typo would compile and every dispatch
@@ -143,14 +161,34 @@ export function stubViewWithCaret(
   let root: HTMLElement | null = null;
   let i = 0;
   const resolve: CaretResolver = () => {
-    const step = script[Math.min(i++, script.length - 1)];
+    // NOT clamped to the last step. Replaying the final step for an
+    // off-the-end call would answer a gesture the script never described with
+    // a plausible-looking position, and a plausible answer trips none of the
+    // failure arms below — the row would pass while testing something nobody
+    // wrote down. Running off the end reads `undefined` instead, which is a
+    // recorded failure. (Measured: no drag row needs the clamp.)
+    const step = script[i++];
     if (step === null) {
       return null; // the one INTENTIONAL no-mapping — silence is correct here
     }
     if (step === undefined) {
-      resolverFailures.push("resolver called with an EMPTY script — nothing to aim at");
+      resolverFailures.push(
+        script.length === 0
+          ? "resolver called with an EMPTY script — nothing to aim at"
+          : `resolver call #${i} ran off the end of a ${script.length}-step script`
+      );
       return null;
     }
+    // A TYPED GUARD, not a detector — and deliberately not pinned. It is
+    // UNREACHABLE by construction: `view` never leaves this closure, so `mount`
+    // is the only thing that can render a widget onto this resolver, and it
+    // assigns `root` before returning. (It WAS reachable while `view` escaped —
+    // `makeWidget(SRC).toDOM(view)` renders without mounting — which is what
+    // the recorded message describes.) No probe is written for it, because a
+    // probe that cannot fail is the vacuity this file exists to remove.
+    // It stays because `root` is `HTMLElement | null` and `createTreeWalker`
+    // needs the narrowing: deleting it buys a non-null assertion, trading a
+    // loud typed guard for a silent one.
     if (root === null) {
       resolverFailures.push(`resolver ran before mount (looking for ${JSON.stringify(step.text)})`);
       return null;
