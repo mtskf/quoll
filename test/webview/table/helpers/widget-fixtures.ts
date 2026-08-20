@@ -49,12 +49,12 @@ const resolverFailures: string[] = [];
  *  the NEXT test's hook and be reported against an innocent row; move the drain
  *  to `onTestFinished` registered per vehicle if that day comes. */
 export function drainResolverFailures(): void {
-  if (resolverFailures.length === 0) {
-    return;
+  // `splice` empties the channel before there is anything to throw, so the
+  // throw cannot leave entries behind for the next test to inherit.
+  const reasons = resolverFailures.splice(0);
+  if (reasons.length > 0) {
+    throw new Error(`scripted caret resolver misuse: ${reasons.join("; ")}`);
   }
-  const reasons = resolverFailures.join("; ");
-  resolverFailures.length = 0; // drain BEFORE throwing, or the next test inherits it
-  throw new Error(`scripted caret resolver misuse: ${reasons}`);
 }
 
 // Widgets under test are mounted into the body (the caret resolver needs a live
@@ -158,10 +158,7 @@ export function stubViewWithCaret(
   dispatched: unknown[],
   script: Array<{ text: string; offset: number } | null>,
   extensions: Extension[] = []
-): {
-  mount: (widget: TableBlockWidget) => HTMLElement;
-  update: (dom: HTMLElement, next: TableBlockWidget, prev: TableBlockWidget) => boolean;
-} {
+) {
   let root: HTMLElement | null = null;
   let i = 0;
   const resolve: CaretResolver = () => {
