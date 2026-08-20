@@ -3,8 +3,8 @@
 // to a source RANGE, degrades to a whole-cell snap where the render carries no
 // exact mapping, and stands down for the modifier-link and non-gesture cases.
 // The collapsed-caret path is cm-table-widget-caret.test.ts. Fixtures — the
-// scripted caret resolver in particular, whose `scope.root` wiring is what
-// keeps these tests from passing vacuously — are helpers/widget-fixtures.ts.
+// scripted caret resolver in particular, whose private mount-scoped root is
+// what keeps these tests from passing vacuously — are helpers/widget-fixtures.ts.
 import { describe, expect, it } from "vitest";
 
 import { parseTable } from "../../../src/markdown/table/index.js";
@@ -14,7 +14,6 @@ import {
   IMG_CELL,
   MIXED_IMG_CELL,
   makeWidget,
-  mountWidget,
   press,
   SRC,
   stubViewWithCaret,
@@ -24,11 +23,11 @@ describe("TableBlockWidget drag-selection", () => {
   it("a drag across characters inside one cell dispatches a NON-EMPTY range at the source offsets", () => {
     const base = SRC.indexOf("alpha");
     const dispatched: unknown[] = [];
-    const { view, scope } = stubViewWithCaret(dispatched, [
+    const { mount } = stubViewWithCaret(dispatched, [
       { text: "alpha", offset: 2 },
       { text: "alpha", offset: 5 },
     ]);
-    const dom = mountWidget(makeWidget(SRC), view, scope);
+    const dom = mount(makeWidget(SRC));
     const td = dom.querySelectorAll("td")[0] as HTMLElement;
     press(td, "mousedown", 10, 10);
     press(td, "click", 60, 10);
@@ -38,11 +37,11 @@ describe("TableBlockWidget drag-selection", () => {
   it("a backwards drag keeps its direction (anchor after head)", () => {
     const base = SRC.indexOf("alpha");
     const dispatched: unknown[] = [];
-    const { view, scope } = stubViewWithCaret(dispatched, [
+    const { mount } = stubViewWithCaret(dispatched, [
       { text: "alpha", offset: 4 },
       { text: "alpha", offset: 1 },
     ]);
-    const dom = mountWidget(makeWidget(SRC), view, scope);
+    const dom = mount(makeWidget(SRC));
     const td = dom.querySelectorAll("td")[0] as HTMLElement;
     press(td, "mousedown", 60, 10);
     press(td, "click", 10, 10);
@@ -51,11 +50,11 @@ describe("TableBlockWidget drag-selection", () => {
 
   it("a drag across two cells spans both cells' source offsets", () => {
     const dispatched: unknown[] = [];
-    const { view, scope } = stubViewWithCaret(dispatched, [
+    const { mount } = stubViewWithCaret(dispatched, [
       { text: "alpha", offset: 1 },
       { text: "admin", offset: 3 },
     ]);
-    const dom = mountWidget(makeWidget(SRC), view, scope);
+    const dom = mount(makeWidget(SRC));
     const cells = dom.querySelectorAll("td");
     press(cells[0] as HTMLElement, "mousedown", 10, 10);
     press(cells[1] as HTMLElement, "click", 200, 10);
@@ -72,11 +71,11 @@ describe("TableBlockWidget drag-selection", () => {
   it("a drag inside a `**bold**` cell selects the crossed characters, not the whole cell", () => {
     const src = "| Name |\n| - |\n| **bold** |";
     const dispatched: unknown[] = [];
-    const { view, scope } = stubViewWithCaret(dispatched, [
+    const { mount } = stubViewWithCaret(dispatched, [
       { text: "bold", offset: 1 },
       { text: "bold", offset: 3 },
     ]);
-    const dom = mountWidget(makeWidget(src), view, scope);
+    const dom = mount(makeWidget(src));
     const td = dom.querySelector("td") as HTMLElement;
     press(td, "mousedown", 10, 10);
     press(td, "click", 60, 10);
@@ -93,11 +92,11 @@ describe("TableBlockWidget drag-selection", () => {
   it("a drag inside an NBSP-padded cell maps exactly (anchoring at cellFrom)", () => {
     const src = "| Name |\n| - |\n| \u00a0xy |";
     const dispatched: unknown[] = [];
-    const { view, scope } = stubViewWithCaret(dispatched, [
+    const { mount } = stubViewWithCaret(dispatched, [
       { text: "\u00a0xy", offset: 1 },
       { text: "\u00a0xy", offset: 3 },
     ]);
-    const dom = mountWidget(makeWidget(src), view, scope);
+    const dom = mount(makeWidget(src));
     const td = dom.querySelector("td") as HTMLElement;
     press(td, "mousedown", 10, 10);
     press(td, "click", 60, 10);
@@ -119,11 +118,11 @@ describe("TableBlockWidget drag-selection", () => {
   it("a PLAIN CLICK on an unmappable cell still dispatches the collapsed caret", () => {
     const src = `| A |\n| - |\n| ${IMG_CELL} |`;
     const dispatched: unknown[] = [];
-    const { view, scope } = stubViewWithCaret(dispatched, [
+    const { mount } = stubViewWithCaret(dispatched, [
       { text: "b", offset: 0 }, // mousedown at the image junction (unmappable)
       { text: "b", offset: 0 }, // click without moving — the same junction
     ]);
-    const dom = mountWidget(makeWidget(src), view, scope);
+    const dom = mount(makeWidget(src));
     const td = dom.querySelector("td") as HTMLElement;
     press(td, "mousedown", 30, 10);
     press(td, "click", 30, 10);
@@ -140,11 +139,11 @@ describe("TableBlockWidget drag-selection", () => {
   it("a same-cell drag whose ends resolve to the SAME offset falls back to the cell-start caret", () => {
     const src = "| Name |\n| - |\n| **bold** |";
     const dispatched: unknown[] = [];
-    const { view, scope } = stubViewWithCaret(dispatched, [
+    const { mount } = stubViewWithCaret(dispatched, [
       { text: "bold", offset: 2 },
       { text: "bold", offset: 2 },
     ]);
-    const dom = mountWidget(makeWidget(src), view, scope);
+    const dom = mount(makeWidget(src));
     const td = dom.querySelector("td") as HTMLElement;
     press(td, "mousedown", 10, 10);
     press(td, "click", 60, 10); // ABOVE the threshold — unlike the plain click
@@ -162,11 +161,11 @@ describe("TableBlockWidget drag-selection", () => {
   it("a backwards drag OUT of an unmappable cell covers both cells", () => {
     const src = `| A | B |\n| - | - |\n| q | ${IMG_CELL} |`;
     const dispatched: unknown[] = [];
-    const { view, scope } = stubViewWithCaret(dispatched, [
+    const { mount } = stubViewWithCaret(dispatched, [
       { text: "b", offset: 0 }, // mousedown at the image junction (unmappable)
       { text: "q", offset: 0 }, // drag left into the plain `q` cell
     ]);
-    const dom = mountWidget(makeWidget(src), view, scope);
+    const dom = mount(makeWidget(src));
     const cells = dom.querySelectorAll("td");
     press(cells[1] as HTMLElement, "mousedown", 200, 10);
     press(cells[0] as HTMLElement, "click", 10, 10);
@@ -183,11 +182,11 @@ describe("TableBlockWidget drag-selection", () => {
 
   it("a plain click (no movement) still dispatches the collapsed caret at the cell start", () => {
     const dispatched: unknown[] = [];
-    const { view, scope } = stubViewWithCaret(dispatched, [
+    const { mount } = stubViewWithCaret(dispatched, [
       { text: "alpha", offset: 3 },
       { text: "alpha", offset: 3 },
     ]);
-    const dom = mountWidget(makeWidget(SRC), view, scope);
+    const dom = mount(makeWidget(SRC));
     const td = dom.querySelectorAll("td")[0] as HTMLElement;
     press(td, "mousedown", 30, 10);
     press(td, "click", 31, 10); // sub-threshold jitter
@@ -196,27 +195,27 @@ describe("TableBlockWidget drag-selection", () => {
 
   it("a click with no preceding mousedown still dispatches the collapsed caret", () => {
     const dispatched: unknown[] = [];
-    const { view, scope } = stubViewWithCaret(dispatched, [{ text: "alpha", offset: 4 }]);
-    const dom = mountWidget(makeWidget(SRC), view, scope);
+    const { mount } = stubViewWithCaret(dispatched, [{ text: "alpha", offset: 4 }]);
+    const dom = mount(makeWidget(SRC));
     press(dom.querySelectorAll("td")[0] as HTMLElement, "click", 60, 10);
     expect(dispatched).toEqual([{ selection: { anchor: SRC.indexOf("alpha") } }]);
   });
 
   it("mousedown alone dispatches NOTHING (no reveal mid-drag)", () => {
     const dispatched: unknown[] = [];
-    const { view, scope } = stubViewWithCaret(dispatched, [{ text: "alpha", offset: 2 }]);
-    const dom = mountWidget(makeWidget(SRC), view, scope);
+    const { mount } = stubViewWithCaret(dispatched, [{ text: "alpha", offset: 2 }]);
+    const dom = mount(makeWidget(SRC));
     press(dom.querySelectorAll("td")[0] as HTMLElement, "mousedown", 10, 10);
     expect(dispatched).toEqual([]);
   });
 
   it("ignores a non-primary-button mousedown", () => {
     const dispatched: unknown[] = [];
-    const { view, scope } = stubViewWithCaret(dispatched, [
+    const { mount } = stubViewWithCaret(dispatched, [
       { text: "alpha", offset: 2 },
       { text: "alpha", offset: 5 },
     ]);
-    const dom = mountWidget(makeWidget(SRC), view, scope);
+    const dom = mount(makeWidget(SRC));
     const td = dom.querySelectorAll("td")[0] as HTMLElement;
     press(td, "mousedown", 10, 10, { button: 2 }); // right-click
     press(td, "click", 60, 10);
@@ -235,12 +234,12 @@ describe("TableBlockWidget drag-selection", () => {
     // `document.body`, which the containment gate rejects — `pending.point`
     // was then null, the leak path short-circuited to the very caret dispatch
     // the assertion expects, and the test stayed green WITH the leak present.
-    const { view, scope } = stubViewWithCaret(
+    const { mount } = stubViewWithCaret(
       dispatched,
       [{ text: "x", offset: 0 }],
       [quollOpenExternalSink.of((href: string) => opened.push(href))]
     );
-    const dom = mountWidget(makeWidget(src), view, scope);
+    const dom = mount(makeWidget(src));
     const a = dom.querySelector("a") as HTMLElement;
     press(a, "mousedown", 10, 10);
     press(a, "click", 10, 10, { metaKey: true });
@@ -265,11 +264,11 @@ describe("TableBlockWidget drag-selection", () => {
     // Proving the identical gesture DOES produce a range means the caret can
     // only come from pendingDrag.delete().
     const control: unknown[] = [];
-    const { view: controlView, scope: controlScope } = stubViewWithCaret(control, [
+    const { mount: controlMount } = stubViewWithCaret(control, [
       { text: "alpha", offset: 2 },
       { text: "alpha", offset: 5 },
     ]);
-    const controlDom = mountWidget(makeWidget(SRC), controlView, controlScope);
+    const controlDom = controlMount(makeWidget(SRC));
     const controlTd = controlDom.querySelectorAll("td")[0] as HTMLElement;
     press(controlTd, "mousedown", 10, 10);
     press(controlTd, "click", 60, 10);
@@ -278,12 +277,12 @@ describe("TableBlockWidget drag-selection", () => {
     ]);
 
     const dispatched: unknown[] = [];
-    const { view, scope } = stubViewWithCaret(dispatched, [
+    const { view, mount } = stubViewWithCaret(dispatched, [
       { text: "alpha", offset: 2 },
       { text: "alpha", offset: 5 },
     ]);
     const first = new TableBlockWidget(parseTable(SRC, 0, SRC.length)!, SRC, 0, 0);
-    const dom = mountWidget(first, view, scope);
+    const dom = mount(first);
     const td = dom.querySelectorAll("td")[0] as HTMLElement;
     press(td, "mousedown", 10, 10);
     // A distant edit shifts this table while the button is still down.
@@ -308,12 +307,12 @@ describe("TableBlockWidget drag-selection", () => {
   it("a drag in a marked-up cell still maps exactly after a pure positional shift", () => {
     const src = "| Name |\n| - |\n| **bold** |";
     const dispatched: unknown[] = [];
-    const { view, scope } = stubViewWithCaret(dispatched, [
+    const { view, mount } = stubViewWithCaret(dispatched, [
       { text: "bold", offset: 1 },
       { text: "bold", offset: 3 },
     ]);
     const first = new TableBlockWidget(parseTable(src, 0, src.length)!, src, 0, 0);
-    const dom = mountWidget(first, view, scope);
+    const dom = mount(first);
     // Distant insertion above the table: same bytes, new base → stampRow path.
     const shifted = new TableBlockWidget(parseTable(src, 0, src.length)!, src, 5, 5);
     expect(shifted.updateDOM(dom, view, first)).toBe(true);
@@ -331,8 +330,8 @@ describe("TableBlockWidget drag-selection", () => {
   // flicker" change, so the invariant needs its own assertion.
   it("mousedown is NOT preventDefault'ed (the native default is what focuses the editor)", () => {
     const dispatched: unknown[] = [];
-    const { view, scope } = stubViewWithCaret(dispatched, [{ text: "alpha", offset: 2 }]);
-    const dom = mountWidget(makeWidget(SRC), view, scope);
+    const { mount } = stubViewWithCaret(dispatched, [{ text: "alpha", offset: 2 }]);
+    const dom = mount(makeWidget(SRC));
     const event = press(dom.querySelectorAll("td")[0] as HTMLElement, "mousedown", 10, 10);
     expect(event.defaultPrevented).toBe(false);
   });
@@ -343,11 +342,11 @@ describe("TableBlockWidget drag-selection", () => {
   it("a backwards drag ENDING in an unmappable cell snaps the head OUTWARD", () => {
     const src = `| A | B |\n| - | - |\n| ${IMG_CELL} | q |`;
     const dispatched: unknown[] = [];
-    const { view, scope } = stubViewWithCaret(dispatched, [
+    const { mount } = stubViewWithCaret(dispatched, [
       { text: "q", offset: 1 }, // mousedown in the plain `q` cell (mappable)
       { text: "b", offset: 0 }, // drag LEFT to the image junction (unmappable)
     ]);
-    const dom = mountWidget(makeWidget(src), view, scope);
+    const dom = mount(makeWidget(src));
     const cells = dom.querySelectorAll("td");
     press(cells[1] as HTMLElement, "mousedown", 200, 10);
     press(cells[0] as HTMLElement, "click", 10, 10);
@@ -369,11 +368,11 @@ describe("TableBlockWidget drag-selection", () => {
   it("a drag whose BOTH ends sit at an in-cell image junction dispatches the whole cell", () => {
     const src = `| A |\n| - |\n| ${IMG_CELL} |`;
     const dispatched: unknown[] = [];
-    const { view, scope } = stubViewWithCaret(dispatched, [
+    const { mount } = stubViewWithCaret(dispatched, [
       { text: "b", offset: 0 },
       { text: "b", offset: 0 },
     ]);
-    const dom = mountWidget(makeWidget(src), view, scope);
+    const dom = mount(makeWidget(src));
     const td = dom.querySelector("td") as HTMLElement;
     press(td, "mousedown", 10, 10);
     press(td, "click", 60, 10); // past DRAG_THRESHOLD_PX
@@ -395,8 +394,8 @@ describe("TableBlockWidget drag-selection", () => {
   ])("a same-cell drag %s between an exact boundary and an image junction covers the whole cell", (_direction, down, up) => {
     const src = `| A |\n| - |\n| ${MIXED_IMG_CELL} |`;
     const dispatched: unknown[] = [];
-    const { view, scope } = stubViewWithCaret(dispatched, [down, up]);
-    const dom = mountWidget(makeWidget(src), view, scope);
+    const { mount } = stubViewWithCaret(dispatched, [down, up]);
+    const dom = mount(makeWidget(src));
     const td = dom.querySelector("td") as HTMLElement;
     press(td, "mousedown", 10, 10);
     press(td, "click", 60, 10);
@@ -414,11 +413,11 @@ describe("TableBlockWidget drag-selection", () => {
   it("a drag in a cell whose DOM was replaced behind the map falls back to the whole cell", () => {
     const src = "| Name |\n| - |\n| **bold** |";
     const dispatched: unknown[] = [];
-    const { view, scope } = stubViewWithCaret(dispatched, [
+    const { mount } = stubViewWithCaret(dispatched, [
       { text: "tampered", offset: 1 },
       { text: "tampered", offset: 3 },
     ]);
-    const dom = mountWidget(makeWidget(src), view, scope);
+    const dom = mount(makeWidget(src));
     const td = dom.querySelector("td") as HTMLElement;
     td.replaceChildren(document.createTextNode("tampered"));
     press(td, "mousedown", 10, 10);
@@ -437,11 +436,11 @@ describe("TableBlockWidget drag-selection", () => {
     [{ dx: 2, dy: 2 }, "range"], // Manhattan sum, not Euclidean distance
   ] as const)("pointer travel %j resolves as a %s", ({ dx, dy }, kind) => {
     const dispatched: unknown[] = [];
-    const { view, scope } = stubViewWithCaret(dispatched, [
+    const { mount } = stubViewWithCaret(dispatched, [
       { text: "alpha", offset: 2 },
       { text: "alpha", offset: 5 },
     ]);
-    const dom = mountWidget(makeWidget(SRC), view, scope);
+    const dom = mount(makeWidget(SRC));
     const td = dom.querySelectorAll("td")[0] as HTMLElement;
     press(td, "mousedown", 30, 30);
     press(td, "click", 30 + dx, 30 + dy);
@@ -460,11 +459,11 @@ describe("TableBlockWidget drag-selection", () => {
   // never drew. It must take the caret path instead.
   it("a detail-0 click (keyboard / programmatic) never takes the drag path", () => {
     const dispatched: unknown[] = [];
-    const { view, scope } = stubViewWithCaret(dispatched, [
+    const { mount } = stubViewWithCaret(dispatched, [
       { text: "alpha", offset: 2 },
       { text: "alpha", offset: 5 },
     ]);
-    const dom = mountWidget(makeWidget(SRC), view, scope);
+    const dom = mount(makeWidget(SRC));
     const td = dom.querySelectorAll("td")[0] as HTMLElement;
     press(td, "mousedown", 10, 10);
     press(td, "click", 60, 10, { detail: 0 });
@@ -489,12 +488,12 @@ describe("TableBlockWidget drag-selection", () => {
     const src = "| L |\n| - |\n| [x](https://example.com) |";
     const dispatched: unknown[] = [];
     const opened: string[] = [];
-    const { view, scope } = stubViewWithCaret(
+    const { mount } = stubViewWithCaret(
       dispatched,
       [{ text: "x", offset: 0 }],
       [quollOpenExternalSink.of((href: string) => opened.push(href))]
     );
-    const dom = mountWidget(makeWidget(src), view, scope);
+    const dom = mount(makeWidget(src));
     const a = dom.querySelector("a") as HTMLElement;
     // Keyboard activation: no pointer gesture, so no mousedown and clientX/Y 0.
     const event = press(a, "click", 0, 0, { detail: 0, metaKey: true });

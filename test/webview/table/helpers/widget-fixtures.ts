@@ -1,12 +1,13 @@
 // Fixtures shared by the four `cm-table-widget-*.test.ts` suites. Who shares
 // what: `makeWidget` by all four; `stubView` by render, update and caret;
 // `mockView` by render and update; `press` / `SRC` by drag and caret; the
-// scripted-caret vehicle (`stubViewWithCaret` + `mountWidget`) and the image
-// cells by drag alone. That last group lives here anyway rather than inline in
-// the drag suite, because the `scope.root` rule it carries (stated once on
-// `stubViewWithCaret` below) has to have exactly one definition to be
-// enforceable when the next suite reaches for it. Not a test file itself (no
-// `.test.ts` suffix), mirroring test/webview-browser/helpers/frames.ts.
+// scripted-caret vehicle (`stubViewWithCaret`, whose `mount` is part of the
+// closure it returns) and the image cells by drag alone. That last group lives
+// here rather than inline in the drag suite because the resolver-scoping rule
+// it carries — now ENFORCED by that closure rather than asked for in prose —
+// has to have exactly one definition to be enforceable when the next suite
+// reaches for it. Not a test file itself (no `.test.ts` suffix), mirroring
+// test/webview-browser/helpers/frames.ts.
 import { EditorState, type Extension } from "@codemirror/state";
 import type { EditorView as EditorViewType } from "@codemirror/view";
 import { afterEach } from "vitest";
@@ -23,19 +24,45 @@ import { TableBlockWidget } from "../../../../src/webview/cm/table/table-widget.
 // Widgets under test are mounted into the body (the caret resolver needs a live
 // tree). Clear it between tests so no test can see an earlier test's widget —
 // a mechanism, rather than each test remembering to tidy up. Registered HERE,
-// on import, so a suite cannot acquire `mountWidget` without also acquiring the
-// cleanup that makes its mounts safe.
+// on import, so a suite cannot acquire the mounting vehicle without also
+// acquiring the cleanup that makes its mounts safe.
 //
-// ⚠️ Two limits on that guarantee, both measured. It holds only under vitest's
+// ⚠️ One limit on that guarantee, measured. It holds only under vitest's
 // default `isolate: true`, where this module is re-evaluated per test file:
 // under `--isolate=false` the module is evaluated once and the hook attaches to
-// the FIRST importing suite alone. And nothing currently pins it — no test
-// asserts on `document.body` between cases, so deleting this hook leaves all 78
-// green (cross-widget capture is prevented by `scope.root` scoping, not by body
-// cleanliness). A probe pair that reddens when the hook is removed is a
-// follow-up entry in docs/TODO.md.
+// the FIRST importing suite alone. The hook IS pinned — widget-fixtures-guards
+// .test.ts holds an order-dependent probe pair that reddens when it is removed,
+// and reddens under `--isolate=false` too, which is the accurate signal rather
+// than a spurious one. (Before that probe, deleting this hook left all 78 tests
+// green: cross-widget capture is prevented by the resolver's private root, not
+// by body cleanliness, so nothing observed the body between cases.)
+// Out-of-band failure channel for the scripted caret resolver. It cannot
+// signal by THROWING: `cellPointAt` wraps every resolver call in a catch-all (a
+// documented part of the `CaretResolver` contract — a throw must never take
+// down the click handler), and `dragRange` turns a null point into the
+// collapsed caret. So a resolver that failed for a reason the test did not ASK
+// for is indistinguishable, at the assertion, from one scripted to return null
+// on purpose — and the caret is the expected value of most rows in the drag
+// suite, so the failure reads as a pass. Recording the reason here and throwing
+// it below is the only channel that survives the catch-all.
+//
+// Attribution rests on one invariant: the mousedown/click handlers in
+// table-widget.ts call the resolver SYNCHRONOUSLY (no rAF, timeout or promise
+// anywhere on that path) and no suite here has an async test body, so every
+// failure is recorded before the owning test returns — i.e. before its own
+// `afterEach` runs. Should that path ever go async, a failure would drain into
+// the NEXT test's hook and be reported against an innocent row; move the drain
+// to `onTestFinished` registered per vehicle if that day comes.
+const resolverFailures: string[] = [];
+
 afterEach(() => {
+  // Cleanup FIRST, so a throwing drain never also leaks DOM into the next test.
   document.body.replaceChildren();
+  if (resolverFailures.length > 0) {
+    const reasons = resolverFailures.join("; ");
+    resolverFailures.length = 0; // drain BEFORE throwing, or the next test inherits it
+    throw new Error(`scripted caret resolver misuse: ${reasons}`);
+  }
 });
 
 export function makeWidget(src: string, docFrom = 0): TableBlockWidget {
@@ -75,53 +102,78 @@ export const mockView = stubView();
  *  successive scripted positions, so a mousedown/click pair can be aimed at two
  *  different characters without a layout engine.
  *
- *  The lookup is scoped to `scope.root` — the widget under test — NOT to
- *  `document.body`. A body-wide search could find a DIFFERENT widget's
- *  identically-texted cell, `root.contains` would reject it, and the drag would
- *  silently degrade to the caret path. That would not merely fail a test — it
- *  would make the "updateDOM cancels an in-flight drag" case pass VACUOUSLY
- *  (its anchor would already be null for the wrong reason). Mount through
- *  `mountWidget`, which owns the `scope.root` assignment. */
+ *  The vehicle is returned as a CLOSURE PAIR — `view` plus the `mount` that
+ *  feeds it — because the two are only meaningful together. The lookup root is
+ *  module-private and assigned by `mount` alone, so a widget mounted through
+ *  one vehicle can never be resolved against another's: mis-pairing is not
+ *  representable, rather than being a rule a doc comment asks tests to keep.
+ *  It has to be structural, because a body-wide or cross-vehicle lookup could
+ *  find a DIFFERENT widget's identically-texted cell, `root.contains` would
+ *  reject it, and the drag would silently degrade to the caret path — the
+ *  EXPECTED value of most rows in the drag suite, so the mistake would pass
+ *  VACUOUSLY rather than fail. */
 export function stubViewWithCaret(
   dispatched: unknown[],
   script: Array<{ text: string; offset: number } | null>,
   extensions: Extension[] = []
-): { view: EditorViewType; scope: { root: HTMLElement | null } } {
-  const scope: { root: HTMLElement | null } = { root: null };
+): { view: EditorViewType; mount: (widget: TableBlockWidget) => HTMLElement } {
+  let root: HTMLElement | null = null;
   let i = 0;
   const resolve: CaretResolver = () => {
     const step = script[Math.min(i++, script.length - 1)];
-    if (step === null || scope.root === null) {
+    if (step === null) {
+      return null; // the one INTENTIONAL no-mapping — silence is correct here
+    }
+    if (step === undefined) {
+      resolverFailures.push("resolver called with an EMPTY script — nothing to aim at");
       return null;
     }
-    const walker = document.createTreeWalker(scope.root, NodeFilter.SHOW_TEXT);
+    if (root === null) {
+      resolverFailures.push(`resolver ran before mount (looking for ${JSON.stringify(step.text)})`);
+      return null;
+    }
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
     for (let n = walker.nextNode(); n !== null; n = walker.nextNode()) {
       if (n.textContent === step.text) {
         return { node: n, offset: step.offset };
       }
     }
+    resolverFailures.push(
+      `scripted text ${JSON.stringify(step.text)} matched no text node in the mounted widget`
+    );
     return null;
   };
   const view = {
     state: EditorState.create({ extensions: [quollTableCaretResolver.of(resolve), ...extensions] }),
     dispatch: (tr: unknown) => dispatched.push(tr),
-  } as unknown as EditorViewType;
-  return { view, scope };
-}
+  } satisfies Pick<EditorViewType, "state" | "dispatch"> as unknown as EditorViewType;
 
-/** Mount a widget the way every drag test needs it: rendered, `scope.root`
- *  wired, and attached to the body. The `scope.root` assignment is the whole
- *  point — done by hand it is a line a new test can forget, and forgetting it
- *  degrades that test to the caret path where it may still pass VACUOUSLY. */
-export function mountWidget(
-  widget: TableBlockWidget,
-  view: EditorViewType,
-  scope: { root: HTMLElement | null }
-): HTMLElement {
-  const dom = widget.toDOM(view);
-  scope.root = dom;
-  document.body.appendChild(dom);
-  return dom;
+  /** Mount a widget the way every drag test needs it: rendered, resolver root
+   *  wired, attached to the body (the caret resolver needs a live tree). The
+   *  root assignment is the whole point — done by hand it is a line a new test
+   *  can forget, and forgetting it degrades that test to the caret path where
+   *  it may still pass VACUOUSLY.
+   *
+   *  ONE VEHICLE, ONE WIDGET. A second `mount` would overwrite `root`, orphan
+   *  the first widget in the body, and re-point the resolver at the second
+   *  tree — and because most rows here share `SRC`, the scripted text usually
+   *  EXISTS in both, so the walker would find a plausible match in the wrong
+   *  widget and dispatch a wrong-but-believable offset. That outcome is not a
+   *  miss, so none of the failure arms above would catch it. Refusing the
+   *  second mount is what keeps it out of reach — the closure would otherwise
+   *  close one misuse channel while leaving this one open. */
+  const mount = (widget: TableBlockWidget): HTMLElement => {
+    if (root !== null) {
+      throw new Error(
+        "mount() called twice on one stubViewWithCaret vehicle — build a new vehicle per widget"
+      );
+    }
+    const dom = widget.toDOM(view);
+    root = dom;
+    document.body.appendChild(dom);
+    return dom;
+  };
+  return { view, mount };
 }
 
 /** Dispatch a mouse event carrying coordinates — the movement threshold reads
