@@ -297,13 +297,18 @@ describe("CI rehearses the release SBOM sequence", () => {
   // previous version of them — a block-scalar `if: >-`, a quoted `"defaults":`
   // key, a job attribute written AFTER `steps:`, a capitalised `Always()`. The
   // helpers below answer that by reading KEY SETS structurally instead of
-  // matching a line, which measurably closes all four, plus flow mappings and
-  // `<<:` merge keys (an unexpected key is an unexpected key however it is
-  // written, and a flow-style job makes `jobBlock` throw). But "no spelling I
-  // thought to try got through" is not "no spelling exists": only a real YAML
-  // parse settles that, and this repo has no YAML parser — adding one is a
-  // dependency decision, tracked as its own task. Read these as a tripwire for
-  // the plausible mid-release edit, not as proof the gate cannot be un-gated.
+  // matching a line, which measurably closes all four, plus a flow-style JOB
+  // (which makes `jobBlock` throw) and `<<:` merge keys at job level. A
+  // flow-style STEP hides its keys mid-line from every line-oriented helper
+  // here, so step openers are pinned to the two block forms this repo writes.
+  //
+  // Even so: "no spelling anyone thought to try got through" is not "no
+  // spelling exists" — four review rounds each produced a new one, and the
+  // last left YAML's explicit-key form (`? if` / `: always()` on separate
+  // lines) open by construction. Only a real parse settles this, and the repo
+  // has no YAML parser; adding one is a dependency decision, tracked as its own
+  // task. Read these as a tripwire for the plausible mid-release edit, not as
+  // proof the gate cannot be un-gated.
 
   // Collects the sorted set of mapping keys `pattern` matches — the shared tail
   // of both callers below (only the indent, and whether comments need
@@ -335,6 +340,16 @@ describe("CI rehearses the release SBOM sequence", () => {
   ])("keeps the gate's execution context unmodified in %s", (_label, raw, job, top) => {
     expect(jobAttributeKeys(job)).toEqual(["runs-on", "steps"]);
     expect(topLevelKeys(raw)).toEqual([...top].sort());
+    // Every step opens block-style. A flow-mapped step — `- { name: …, if:
+    // always(), run: … }` — is valid YAML that GHA honours, and it carries its
+    // keys mid-line where no line-oriented helper in this file can see them:
+    // `ifScalars` misses the `if:`, `stepLabels` reads it as an unnamed step,
+    // and the non-vacuity guard still finds the Open VSX step's block-style
+    // `if:` and passes. Requiring a plain `name`/`uses` scalar after the dash
+    // forces attributes onto their own lines, where the rest of this file works.
+    for (const step of job.split("\n").filter((line) => /^ {6}- /.test(line))) {
+      expect(step).toMatch(/^ {6}- (?:name|uses): [^\s{[&*!]/);
+    }
   });
 
   // In publish.yml a red verify step blocks the release solely because every
