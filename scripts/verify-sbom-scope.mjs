@@ -21,11 +21,14 @@
 //
 // The optional `--reconcile <stagingDir>` flag additionally reconciles the
 // SBOM's {name, version} set against an independent inventory read from the
-// frozen prod staging tree's REAL package manifests (see deriveInstalledInventory).
+// frozen prod staging tree's REAL package manifests (see deriveInstalledInventory),
+// so a syntactically-valid-but-wrong SBOM — a stale or forged version, a package
+// syft failed to catalog — fails instead of being attested.
 // It is opt-in at the CLI but GATING in CI: publish.yml and ci.yml's `sbom` job
-// both pass it on the verify step (promoted from a non-gating shadow step on
-// 2026-08-21, after a real release run reconciled cleanly against the pinned
-// syft). Absent the flag, behaviour is unchanged.
+// both pass it on the verify step. It ran as a non-gating shadow step from
+// 2026-08-01 and was promoted on 2026-08-21, once the v0.1.66 re-tag run logged
+// `reconciled 23 staged packages against SBOM` on a real staging tree with the
+// pinned syft. Absent the flag, behaviour is unchanged.
 
 import { readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
@@ -120,9 +123,9 @@ export function resolveReconcileArg(argv) {
   return { stagingDir: value, error: null };
 }
 
-// Strict reconciliation (via main()'s --reconcile): the SBOM's npm
-// {name, version} set must EQUAL the inventory read from the staged install's
-// real package manifests, after dropping `ignore` (exact `name@version` keys —
+// Strict reconciliation (via main()'s --reconcile): the SBOM's npm {name,
+// version} set must EQUAL the inventory read from the staged install's real
+// package manifests, after dropping `ignore` (exact `name@version` keys —
 // the staging self-package, which syft catalogs from the root manifest but is
 // never in .pnpm) from both sides. Compared per name on the SET of versions so
 // a co-installed dual-major is classified correctly: a version on one side only

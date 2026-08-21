@@ -132,11 +132,11 @@ describe("CI rehearses the release SBOM sequence", () => {
       .join("\n");
 
   // Every step of the release SBOM sequence, in order. `--reconcile` is folded
-  // into the gating verify step in BOTH files (it ran as a separate non-gating
-  // shadow step until 2026-08-21), so a one-sided edit to it fails here.
-  // `as const` + the exhaustive Record below make the pairing total: adding a
-  // step here without giving it a load-bearing needle fails, so a future step
-  // cannot silently fall back to the (vacuity-prone) equality assertion alone.
+  // into the gating verify step in BOTH files, so a one-sided edit to it fails
+  // here. `as const` + the exhaustive Record below make the pairing total:
+  // adding a step here without giving it a load-bearing needle fails, so a
+  // future step cannot silently fall back to the (vacuity-prone) equality
+  // assertion alone.
   const SHARED_STEPS = [
     "Assemble shipped runtime dependency tree (SBOM source)",
     "Generate SBOM (SPDX)",
@@ -180,27 +180,20 @@ describe("CI rehearses the release SBOM sequence", () => {
     expect(stepBlock(sbomJob, step, "ci.yml")).toMatch(needle);
   });
 
-  // The reconcile is a GATE, not a shadow step — and the tempting "quick fix"
-  // for a red reconcile mid-release is to append the `|| true` it was promoted
-  // out of, or (less obviously) to rewrite the step as a `run: |` block scalar
-  // that shells out to `set +e; <original command>; exit 0`. A blocklist of
-  // swallow spellings (`||`, `continue-on-error:`) misses that second form
-  // outright: neither string appears anywhere in the rewritten block, yet the
-  // script's exit code — including exit 2, could-not-reconcile-at-all, which
-  // prints none of the diff lines — is discarded. The LOAD_BEARING needle
-  // above still matches too, since the original command text sits unchanged
-  // inside the block scalar. Verified by hand: rewriting both files' verify
-  // step that way leaves every other assertion in this suite green.
+  // The reconcile is a GATE, so pin the step's SHAPE rather than blocklisting
+  // ways to un-gate it. A blocklist of swallow spellings (`||`,
+  // `continue-on-error:`) misses the sneakiest one outright: rewriting the step
+  // as a `run: |` block scalar around `set +e; <original command>; exit 0`
+  // contains neither string, keeps the LOAD_BEARING needle green (the original
+  // command text sits unchanged inside the block), and still discards the exit
+  // code the gate is made of. Verified by hand: that rewrite leaves every other
+  // assertion in this suite green. Another blocklist entry is just a checklist
+  // the next swallow spelling dodges.
   //
-  // The fix is not another blocklist entry — that's a checklist a future
-  // swallow spelling can always dodge. Instead, pin the step to its one KNOWN
-  // shape: today it is exactly one `run:` line, so anchor the WHOLE normalised
-  // block against that exact command, unanchored to `/m`. Any reshape into a
-  // multi-line block scalar — the swallow vector above, but also anything else
-  // that turns this into more than one line, including a step-level
-  // `continue-on-error: true` (which adds its own line) — makes the block fail
-  // the single-line anchor and goes red, whether or not it also swallows the
-  // exit code.
+  // So anchor the WHOLE normalised block (no `/m`) against the exact one-line
+  // command this step is today. Anything that turns it into more than one line
+  // — the block-scalar rewrite above, a step-level `continue-on-error: true` —
+  // fails the single-line anchor, whether or not it also swallows the status.
   it.each([
     ["publish.yml", publishJob],
     ["ci.yml", sbomJob],
