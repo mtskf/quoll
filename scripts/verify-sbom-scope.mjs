@@ -1,12 +1,12 @@
 #!/usr/bin/env node
 // scripts/verify-sbom-scope.mjs
 //
-// CI gate (publish.yml): assert the SPDX SBOM that gets attested against the
-// published .vsix reflects ONLY the shipped runtime dependency closure —
-// exact resolved versions, every declared runtime `dependency` present, a
-// known shipped transitive dep present (proves the closure — not just the
-// top-level manifest — was captured), and NO build-only tooling
-// (devDependencies) leaking in.
+// CI gate (publish.yml and ci.yml's `sbom` job): assert the SPDX SBOM that
+// gets attested against the published .vsix reflects ONLY the shipped
+// runtime dependency closure — exact resolved versions, every declared
+// runtime `dependency` present, a known shipped transitive dep present
+// (proves the closure — not just the top-level manifest — was captured),
+// and NO build-only tooling (devDependencies) leaking in.
 //
 // Why: the SBOM is generated from a prod-only staging tree (see publish.yml
 // "Assemble shipped runtime dependency tree"). This gate is the mechanical
