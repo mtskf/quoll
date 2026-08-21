@@ -8,9 +8,10 @@
 // leaf's own boundary spans partitioning ITS outer span (a link's brackets,
 // label, parens and destination) — the level at which dimming picks characters,
 // and invisible to the outer check.
-// The DOM is never touched here, but the pragma stays: it is how every file in
-// this directory declares its environment, and the module under test is one
-// import away from the renderer that does.
+// The DOM is never touched here, and the global environment is node
+// (vitest.config.ts), so the pragma is not load-bearing today. It stays because
+// the module under test is one import away from the renderer that IS — the
+// first assertion that renders needs no pragma edit to work.
 import { describe, expect, it } from "vitest";
 
 import type { Resolved, Span } from "../../../src/webview/cm/inline/inline-emphasis.js";

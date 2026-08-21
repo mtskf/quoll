@@ -9,8 +9,10 @@
 // The cap lives here rather than with the click routing because it decides
 // whether an anchor is created at all: an over-cap URL never becomes a live
 // `<a>`, so no native gesture (Open Link, middle-click, drag-to-address-bar) can
-// reach a URL the host's open-external sink would reject. The two at-cap rows
-// observe a click only as proof the anchor really did go live.
+// reach a URL the host's open-external sink would reject. The absolute at-cap row
+// keeps its modifier-click loop because the clicks suite only ever uses short
+// URLs: it is the sole pin that an at-cap href still routes through the widget
+// root handler under BOTH modifiers. The autolink at-cap row asserts liveness only.
 // What a link does once it IS live is cm-table-cell-render-clicks.test.ts; how
 // the delimiters around it pair is cm-table-cell-render-emphasis.test.ts.
 // Fixtures: helpers/cell-render-fixtures.ts.

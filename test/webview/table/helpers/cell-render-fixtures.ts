@@ -1,7 +1,9 @@
 // Fixtures shared by the `cm-table-cell-render-*.test.ts` suites that assert on
 // rendered markup — urls, emphasis and text. (The clicks suite dispatches events
-// against the returned nodes and needs neither; inline-ir and render-map never
-// touch innerHTML.) Extracted rather than copied per file because the tooltip
+// against the returned nodes and needs neither; inline-ir touches no DOM at all,
+// and render-map reads innerHTML off the real cell `renderCellInto` populated
+// rather than serialising a detached Node[].) Extracted rather than copied per
+// file because the tooltip
 // strip had 11 occurrences before the split, spread over three files-to-be: one
 // definition is one place to fix when the tooltip's text changes, eleven is
 // eleven chances to miss one. Not a test file itself (no `.test.ts` suffix),

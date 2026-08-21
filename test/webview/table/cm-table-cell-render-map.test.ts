@@ -297,7 +297,7 @@ describe("renderCellInto", () => {
     const cell = document.createElement("td");
     // The fallback logs BY DESIGN (cell-render.ts's catch), so silence it here
     // rather than leave a maintainer wondering whether the line is a symptom.
-    // It is asserted where it is the subject: cm-table-cell-map-failclosed.ts.
+    // It is asserted where it is the subject: cm-table-cell-map-failclosed.test.ts.
     const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     const spy = vi.spyOn(document, "createElement").mockImplementation(() => {
       throw new Error("renderer exploded");
