@@ -59,12 +59,21 @@ describe.sequential("widget-fixtures body cleanup", { shuffle: false }, () => {
 // two halves would put another suite's DOM and another suite's `afterEach`
 // between the arming and the assertion.
 //
-// ⚠️ Firing the resolver takes a real gesture. `cellPointAt` runs it once from
-// `mousedown` and once more from `click`, but only for a click that carries
-// `detail !== 0` AND travelled at least DRAG_THRESHOLD_PX (4) from the press —
-// so a lone `click`, or a click at the press coordinates, resolves NOTHING and
-// any probe built on one passes vacuously. Every case below uses a mousedown /
-// far-click pair.
+// ⚠️ Firing the resolver takes a real gesture, and how MANY times it fires is
+// what each case below is built on. `mousedown` always resolves (primary
+// button). `click` resolves a SECOND time only when the mousedown actually
+// armed a point — `pending.point !== null` — and the click carries
+// `detail !== 0` and travelled at least DRAG_THRESHOLD_PX (4) from the press.
+// A lone `click`, or one at the press coordinates, resolves NOTHING, so a probe
+// built on one passes vacuously.
+//
+// So the cases differ deliberately, and copying one wholesale will mislead:
+// the double-mount case fires NO gesture (it throws before any DOM exists), the
+// EMPTY-script case needs only the mousedown, and only the two that must reach
+// a second resolve press a far-click as well. The `matched no text node` case
+// is the subtle one: its mousedown resolves nothing, so `pending.point` stays
+// null and its click never reaches the resolver at all — one script step is all
+// it can ever consume.
 //
 // The recorded failures are consumed HERE, in the case that provoked them,
 // rather than left for the module's `afterEach`: an expected failure reaching
@@ -77,16 +86,14 @@ describe("stubViewWithCaret misuse guards", () => {
   });
 
   it("records a scripted text that matches no text node in the mounted widget", () => {
-    const { mount } = stubViewWithCaret(
-      [],
-      [
-        { text: "nowhere", offset: 0 },
-        { text: "nowhere", offset: 1 },
-      ]
-    );
+    // ONE step, not two: the mousedown's failed resolve leaves `pending.point`
+    // null, so the click below never reaches the resolver. A second step here
+    // could never be consumed — and would quietly turn this into a test whose
+    // script says more than the gesture can read.
+    const { mount } = stubViewWithCaret([], [{ text: "nowhere", offset: 0 }]);
     const td = mount(makeWidget(SRC)).querySelectorAll("td")[0] as HTMLElement;
     press(td, "mousedown", 10, 10);
-    press(td, "click", 60, 10);
+    press(td, "click", 60, 10); // consumed by the caret path, not the resolver
     expect(() => drainResolverFailures()).toThrow(/matched no text node/);
   });
 
