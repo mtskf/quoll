@@ -67,13 +67,18 @@ describe.sequential("widget-fixtures body cleanup", { shuffle: false }, () => {
 // A lone `click`, or one at the press coordinates, resolves NOTHING, so a probe
 // built on one passes vacuously.
 //
-// So the cases differ deliberately, and copying one wholesale will mislead:
-// the double-mount case fires NO gesture (it throws before any DOM exists), the
-// EMPTY-script case needs only the mousedown, and only the two that must reach
-// a second resolve press a far-click as well. The `matched no text node` case
-// is the subtle one: its mousedown resolves nothing, so `pending.point` stays
-// null and its click never reaches the resolver at all — one script step is all
-// it can ever consume.
+// So the cases differ deliberately, and copying one wholesale will mislead.
+// Counting the resolver calls each one actually makes:
+//   - `refuses a second mount` — ZERO. It throws before any DOM exists, so it
+//     fires no gesture at all.
+//   - `records … an EMPTY script` — ONE, from the mousedown. It presses no
+//     click because it needs none.
+//   - `matched no text node` — ONE, also from the mousedown. It DOES press a
+//     far-click, but that click resolves nothing: the failed mousedown left
+//     `pending.point` null, so `dragRange` returns at its FIRST guard, before
+//     travel is ever considered. One script step is all it can consume.
+//   - `runs off the end of its script` — TWO. This is the only case whose click
+//     reaches the resolver, which is precisely what it exists to pin.
 //
 // The recorded failures are consumed HERE, in the case that provoked them,
 // rather than left for the module's `afterEach`: an expected failure reaching
