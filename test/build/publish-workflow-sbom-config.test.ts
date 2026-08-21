@@ -289,36 +289,95 @@ describe("CI rehearses the release SBOM sequence", () => {
     expect(sbomPins).toEqual(pins(publishJob));
   });
 
-  // Everything above pins what the gate RUNS. Two things decide whether running
-  // it red actually stops anything, and both live outside every step block.
+  // Everything above pins what the gate RUNS. What follows pins whether running
+  // it red actually stops anything — decided entirely outside the step blocks.
   //
-  // First, the interpreter. A `run:` step's shell comes from the job's (or the
-  // workflow's) `defaults.run.shell`, and a custom shell template's exit code
-  // IS the step outcome — so `shell: bash -c "bash {0}; exit 0" bash` on the
-  // job makes every step succeed while still executing. Measured: that
-  // mutation leaves every other assertion in this suite green. Pin the header
-  // by SHAPE, the same way the step anchor does: both jobs declare exactly
-  // `runs-on`, so a job-level `continue-on-error:`, `if:`, or `defaults:`
-  // cannot appear without changing the header — and check the workflow level
-  // too, which no job block would ever show.
+  // ⚠️ Scope, stated plainly: these assertions read YAML as TEXT. Successive
+  // adversarial rounds each produced a fresh spelling that walked past the
+  // previous version of them — a block-scalar `if: >-`, a quoted `"defaults":`
+  // key, a job attribute written AFTER `steps:`, a capitalised `Always()`. The
+  // helpers below answer that by reading KEY SETS structurally instead of
+  // matching a line, which measurably closes all four, plus flow mappings and
+  // `<<:` merge keys (an unexpected key is an unexpected key however it is
+  // written, and a flow-style job makes `jobBlock` throw). But "no spelling I
+  // thought to try got through" is not "no spelling exists": only a real YAML
+  // parse settles that, and this repo has no YAML parser — adding one is a
+  // dependency decision, tracked as its own task. Read these as a tripwire for
+  // the plausible mid-release edit, not as proof the gate cannot be un-gated.
+
+  // The keys a job declares, wherever they sit: YAML mappings are unordered, so
+  // scanning only the slice before `steps:` misses `defaults:` written after it.
+  // Quote-tolerant, because `"defaults":` and `defaults:` are the same key.
+  const jobAttributeKeys = (job: string) =>
+    job
+      .split("\n")
+      .map((line) => line.match(/^ {4}(?:"([^"]*)"|'([^']*)'|([^\s:]+))\s*:/))
+      .filter((m): m is RegExpMatchArray => m !== null)
+      .map((m) => m[1] ?? m[2] ?? m[3])
+      .sort();
+
+  // Same idea at the top of the file, where a workflow-wide `defaults:` would
+  // live — no job block would ever show it.
+  const topLevelKeys = (yaml: string) =>
+    stripComments(yaml)
+      .split("\n")
+      .map((line) => line.match(/^(?:"([^"]*)"|'([^']*)'|([^\s:#]+))\s*:/))
+      .filter((m): m is RegExpMatchArray => m !== null)
+      .map((m) => m[1] ?? m[2] ?? m[3])
+      .sort();
+
+  // A `run:` step's shell comes from the job's — or the workflow's —
+  // `defaults.run.shell`, and a custom shell template's exit code IS the step
+  // outcome, so `shell: bash -c "bash {0}; exit 0" bash` runs every command and
+  // discards every failure without touching a single step block. Pin the key
+  // SETS instead of blocklisting the attribute: both jobs declare exactly
+  // `runs-on` and `steps`, and neither file declares anything at the top level
+  // beyond its trigger and permissions.
   it.each([
-    ["publish.yml", publishYml, publishJob],
-    ["ci.yml", ciYml, sbomJob],
-  ])("keeps the gate's execution context unmodified in %s", (_label, raw, job) => {
-    const header = normalise(job.slice(0, job.indexOf("    steps:")));
-    expect(header).toBe("    runs-on: ubuntu-latest");
-    expect(stripComments(raw)).not.toMatch(/^defaults:/m);
+    ["publish.yml", publishYml, publishJob, ["name", "on", "permissions", "jobs"]],
+    ["ci.yml", ciYml, sbomJob, ["name", "on", "permissions", "concurrency", "jobs"]],
+  ])("keeps the gate's execution context unmodified in %s", (_label, raw, job, top) => {
+    expect(jobAttributeKeys(job)).toEqual(["runs-on", "steps"]);
+    expect(topLevelKeys(raw)).toEqual([...top].sort());
   });
 
-  // Second, in publish.yml only: a red verify step blocks the release solely
-  // because every later step carries the implicit `if: success()`. Nothing else
-  // pins that, so `if: always()` on Package / Audit / Publish ships the release
-  // — unattested — straight past a failed gate, with this suite green. GHA has
-  // exactly three status functions that resurrect a step after a failure
-  // (`always()`, `failure()`, `cancelled()`), so naming them is a closed
-  // contract rather than the blocklist-of-spellings this file keeps rejecting.
+  // In publish.yml a red verify step blocks the release solely because every
+  // later step carries the implicit `if: success()`. `if: always()` on Package /
+  // Audit / Publish ships the release — unattested — straight past a failed
+  // gate. GHA resurrects a step after a failure through exactly three status
+  // functions, and its expression language is case-insensitive, so read each
+  // `if:` as a whole scalar (a folded `if: >-` puts the expression on the NEXT
+  // line) and reject those three however they are cased.
+  const ifScalars = (job: string) => {
+    const lines = job.split("\n");
+    const scalars: string[] = [];
+    lines.forEach((line, i) => {
+      const key = line.match(/^(\s*)(?:"if"|'if'|if)\s*:(.*)$/);
+      if (!key) {
+        return;
+      }
+      const indent = key[1].length;
+      const continuation: string[] = [];
+      for (const next of lines.slice(i + 1)) {
+        if (next.trim() !== "" && next.length - next.trimStart().length <= indent) {
+          break;
+        }
+        continuation.push(next);
+      }
+      scalars.push([key[2], ...continuation].join("\n"));
+    });
+    return scalars;
+  };
+
   it("keeps a red gate blocking every later publish.yml step", () => {
-    expect(publishJob).not.toMatch(/^\s+if:.*\b(?:always|failure|cancelled)\s*\(/m);
+    const scalars = ifScalars(publishJob);
+    // Non-vacuity: publish.yml has exactly one `if:` today (the Open VSX step's
+    // token check). An empty result would satisfy the loop below while proving
+    // the collector never collected.
+    expect(scalars.filter((s) => s.includes("OVSX_PAT"))).toHaveLength(1);
+    for (const scalar of scalars) {
+      expect(scalar).not.toMatch(/(?:always|failure|cancelled)\s*\(/i);
+    }
   });
 
   // The ci.yml rehearsal only rehearses if it can FAIL the PR — which also
