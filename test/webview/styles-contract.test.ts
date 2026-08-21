@@ -446,7 +446,7 @@ describe("styles.css — widgets consume the accent tokens (palette refresh use 
       /\.quoll-table-block code\s*\{[^}]*background\s*:\s*var\(--quoll-surface-fill/s
     );
   });
-  // Strikethrough / highlight inside a table cell (cm-table-cell-render renders
+  // Strikethrough / highlight inside a table cell (cell-render.ts renders
   // <del>/<mark>). happy-dom does not apply CSS, so pin the source rule text
   // (same idiom as the table-link/code pins above): <del> line-through, <mark>
   // reusing the shared --quoll-highlight-bg tint. Non-vacuous — both red if the
