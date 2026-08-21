@@ -182,21 +182,33 @@ describe("CI rehearses the release SBOM sequence", () => {
 
   // The reconcile is a GATE, not a shadow step — and the tempting "quick fix"
   // for a red reconcile mid-release is to append the `|| true` it was promoted
-  // out of. Nothing above would catch that: the two files would still be
-  // identical and the needle above still matches a line with a trailing
-  // `|| true`. Pin the absence. It matters for all three of the script's exit
-  // codes, but especially exit 2 (could not reconcile at all — unreadable
-  // .pnpm, manifest missing name/version, malformed JSON): that run prints none
-  // of the diff lines, so a swallowed status reads as a clean reconcile.
+  // out of, or (less obviously) to rewrite the step as a `run: |` block scalar
+  // that shells out to `set +e; <original command>; exit 0`. A blocklist of
+  // swallow spellings (`||`, `continue-on-error:`) misses that second form
+  // outright: neither string appears anywhere in the rewritten block, yet the
+  // script's exit code — including exit 2, could-not-reconcile-at-all, which
+  // prints none of the diff lines — is discarded. The LOAD_BEARING needle
+  // above still matches too, since the original command text sits unchanged
+  // inside the block scalar. Verified by hand: rewriting both files' verify
+  // step that way leaves every other assertion in this suite green.
+  //
+  // The fix is not another blocklist entry — that's a checklist a future
+  // swallow spelling can always dodge. Instead, pin the step to its one KNOWN
+  // shape: today it is exactly one `run:` line, so anchor the WHOLE normalised
+  // block against that exact command, unanchored to `/m`. Any reshape into a
+  // multi-line block scalar — the swallow vector above, but also anything else
+  // that turns this into more than one line, including a step-level
+  // `continue-on-error: true` (which adds its own line) — makes the block fail
+  // the single-line anchor and goes red, whether or not it also swallows the
+  // exit code.
   it.each([
     ["publish.yml", publishJob],
     ["ci.yml", sbomJob],
   ])("keeps the SBOM verify step fail-closed in %s", (label, job) => {
-    // Comment-stripped blocks, so prose ABOUT `|| true` cannot satisfy — or
-    // falsely trip — either assertion.
     const step = stepBlock(job, "Verify SBOM is scoped to the shipped runtime", label);
-    expect(step).not.toMatch(/\|\|/);
-    expect(step).not.toMatch(/^\s*continue-on-error:/m);
+    expect(normalise(step)).toMatch(
+      /^ {8}run: node scripts\/verify-sbom-scope\.mjs sbom\.spdx\.json --reconcile "\$\{RUNNER_TEMP:\?RUNNER_TEMP is not set\}\/sbom-src"$/
+    );
   });
 
   // Per-step equality says nothing about ORDER, ADJACENCY, or UNIQUENESS: a
