@@ -13,7 +13,6 @@
 // The oracle for these expectations is @lezer/markdown, the parser the editor
 // itself runs — EXCEPT the astral-plane flanking rows, which say in place why
 // they use the CommonMark spec and markdown-it instead.
-// Fixtures: helpers/cell-render-fixtures.ts.
 import { describe, expect, it } from "vitest";
 
 import { renderCellInline } from "../../../src/webview/cm/table/cell-render.js";

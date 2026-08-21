@@ -8,7 +8,6 @@
 // `a|b`, below as a single text node. A renderer that emitted three nodes whose
 // text happened to concatenate to `a|b` would satisfy the first and fail the
 // second, which is why the two live together.
-// Fixtures: helpers/cell-render-fixtures.ts.
 import { describe, expect, it } from "vitest";
 
 import { renderCellInline } from "../../../src/webview/cm/table/cell-render.js";

@@ -15,7 +15,6 @@
 // root handler under BOTH modifiers. The autolink at-cap row asserts liveness only.
 // What a link does once it IS live is cm-table-cell-render-clicks.test.ts; how
 // the delimiters around it pair is cm-table-cell-render-emphasis.test.ts.
-// Fixtures: helpers/cell-render-fixtures.ts.
 import { describe, expect, it } from "vitest";
 
 import { MAX_HREF_LENGTH } from "../../../src/shared/protocol.js";
