@@ -289,14 +289,44 @@ describe("CI rehearses the release SBOM sequence", () => {
     expect(sbomPins).toEqual(pins(publishJob));
   });
 
-  // The rehearsal only rehearses if it can FAIL the PR. Job-level attributes sit
-  // outside every step block above, so `continue-on-error: true` or an `if:`
-  // narrowing the trigger would leave every assertion here green while the job
-  // stops gating. Pin the job header itself.
+  // Everything above pins what the gate RUNS. Two things decide whether running
+  // it red actually stops anything, and both live outside every step block.
+  //
+  // First, the interpreter. A `run:` step's shell comes from the job's (or the
+  // workflow's) `defaults.run.shell`, and a custom shell template's exit code
+  // IS the step outcome — so `shell: bash -c "bash {0}; exit 0" bash` on the
+  // job makes every step succeed while still executing. Measured: that
+  // mutation leaves every other assertion in this suite green. Pin the header
+  // by SHAPE, the same way the step anchor does: both jobs declare exactly
+  // `runs-on`, so a job-level `continue-on-error:`, `if:`, or `defaults:`
+  // cannot appear without changing the header — and check the workflow level
+  // too, which no job block would ever show.
+  it.each([
+    ["publish.yml", publishYml, "publish"],
+    ["ci.yml", ciYml, "sbom"],
+  ])("keeps the gate's execution context unmodified in %s", (label, raw, jobName) => {
+    const stripped = stripComments(raw);
+    const job = jobBlock(stripped, jobName, label);
+    const header = normalise(job.slice(0, job.indexOf("    steps:")));
+    expect(header).toBe("    runs-on: ubuntu-latest");
+    expect(stripped).not.toMatch(/^defaults:/m);
+  });
+
+  // Second, in publish.yml only: a red verify step blocks the release solely
+  // because every later step carries the implicit `if: success()`. Nothing else
+  // pins that, so `if: always()` on Package / Audit / Publish ships the release
+  // — unattested — straight past a failed gate, with this suite green. GHA has
+  // exactly three status functions that resurrect a step after a failure
+  // (`always()`, `failure()`, `cancelled()`), so naming them is a closed
+  // contract rather than the blocklist-of-spellings this file keeps rejecting.
+  it("keeps a red gate blocking every later publish.yml step", () => {
+    expect(publishJob).not.toMatch(/^\s+if:.*\b(?:always|failure|cancelled)\s*\(/m);
+  });
+
+  // The ci.yml rehearsal only rehearses if it can FAIL the PR — which also
+  // needs the trigger itself to stay put (a job header pinned to `runs-on`
+  // says nothing about `on:`).
   it("keeps the sbom rehearsal gating on every PR", () => {
-    const header = sbomJob.slice(0, sbomJob.indexOf("    steps:"));
-    expect(header).not.toMatch(/^ {4}continue-on-error:/m);
-    expect(header).not.toMatch(/^ {4}if:/m);
     expect(stripComments(ciYml)).toMatch(/^on:\n\s+pull_request:/m);
   });
 });
