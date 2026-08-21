@@ -131,17 +131,16 @@ describe("CI rehearses the release SBOM sequence", () => {
       .filter((line) => line.trim() !== "")
       .join("\n");
 
-  // Every step of the release SBOM sequence, in order. `--reconcile` is shadow
-  // (non-gating) in BOTH files: when the separate "promote reconcile to gating"
-  // entry lands, this assertion forces both to flip together.
-  // `as const` + the exhaustive Record below make the pairing total: adding a
-  // step here without giving it a load-bearing needle fails, so a future step
-  // cannot silently fall back to the (vacuity-prone) equality assertion alone.
+  // Every step of the release SBOM sequence, in order. `--reconcile` is folded
+  // into the gating verify step in BOTH files, so a one-sided edit to it fails
+  // here. `as const` + the exhaustive Record below make the pairing total:
+  // adding a step here without giving it a load-bearing needle fails, so a
+  // future step cannot silently fall back to the (vacuity-prone) equality
+  // assertion alone.
   const SHARED_STEPS = [
     "Assemble shipped runtime dependency tree (SBOM source)",
     "Generate SBOM (SPDX)",
     "Verify SBOM is scoped to the shipped runtime",
-    "Reconcile SBOM against staged install (shadow, non-gating)",
   ] as const;
   type SharedStep = (typeof SHARED_STEPS)[number];
 
@@ -153,10 +152,12 @@ describe("CI rehearses the release SBOM sequence", () => {
     "Assemble shipped runtime dependency tree (SBOM source)":
       /scripts\/assemble-sbom-staging\.sh "\$\{RUNNER_TEMP:\?RUNNER_TEMP is not set\}\/sbom-src"/,
     "Generate SBOM (SPDX)": /config: \.github\/syft-release\.yaml/,
+    // Both halves of the gate: the script AND the `--reconcile` flag that makes
+    // it compare the SBOM against the staging tree's real manifests. Dropping
+    // the flag in both files would leave a bare-script needle green while the
+    // gate silently reverted to the syntax-only check.
     "Verify SBOM is scoped to the shipped runtime":
-      /node scripts\/verify-sbom-scope\.mjs sbom\.spdx\.json/,
-    "Reconcile SBOM against staged install (shadow, non-gating)":
-      /--reconcile "\$RUNNER_TEMP\/sbom-src"/,
+      /node scripts\/verify-sbom-scope\.mjs sbom\.spdx\.json --reconcile "\$\{RUNNER_TEMP:\?RUNNER_TEMP is not set\}\/sbom-src"/,
   };
 
   it.each(SHARED_STEPS)("runs `%s` identically in both workflows", (step) => {
@@ -177,6 +178,30 @@ describe("CI rehearses the release SBOM sequence", () => {
     const needle = LOAD_BEARING[step];
     expect(needle).toBeDefined();
     expect(stepBlock(sbomJob, step, "ci.yml")).toMatch(needle);
+  });
+
+  // The reconcile is a GATE, so pin the step's SHAPE rather than blocklisting
+  // ways to un-gate it. A blocklist of swallow spellings (`||`,
+  // `continue-on-error:`) misses the sneakiest one outright: rewriting the step
+  // as a `run: |` block scalar around `set +e; <original command>; exit 0`
+  // contains neither string, keeps the LOAD_BEARING needle green (the original
+  // command text sits unchanged inside the block), and still discards the exit
+  // code the gate is made of. Verified by hand: that rewrite leaves every other
+  // assertion in this suite green. Another blocklist entry is just a checklist
+  // the next swallow spelling dodges.
+  //
+  // So anchor the WHOLE normalised block (no `/m`) against the exact one-line
+  // command this step is today. Anything that turns it into more than one line
+  // — the block-scalar rewrite above, a step-level `continue-on-error: true` —
+  // fails the single-line anchor, whether or not it also swallows the status.
+  it.each([
+    ["publish.yml", publishJob],
+    ["ci.yml", sbomJob],
+  ])("keeps the SBOM verify step fail-closed in %s", (label, job) => {
+    const step = stepBlock(job, "Verify SBOM is scoped to the shipped runtime", label);
+    expect(normalise(step)).toMatch(
+      /^ {8}run: node scripts\/verify-sbom-scope\.mjs sbom\.spdx\.json --reconcile "\$\{RUNNER_TEMP:\?RUNNER_TEMP is not set\}\/sbom-src"$/
+    );
   });
 
   // Per-step equality says nothing about ORDER, ADJACENCY, or UNIQUENESS: a
@@ -264,14 +289,112 @@ describe("CI rehearses the release SBOM sequence", () => {
     expect(sbomPins).toEqual(pins(publishJob));
   });
 
-  // The rehearsal only rehearses if it can FAIL the PR. Job-level attributes sit
-  // outside every step block above, so `continue-on-error: true` or an `if:`
-  // narrowing the trigger would leave every assertion here green while the job
-  // stops gating. Pin the job header itself.
+  // Everything above pins what the gate RUNS. What follows pins whether running
+  // it red actually stops anything — decided entirely outside the step blocks.
+  //
+  // ⚠️ Scope, stated plainly: these assertions read YAML as TEXT. Successive
+  // adversarial rounds each produced a fresh spelling that walked past the
+  // previous version of them — a block-scalar `if: >-`, a quoted `"defaults":`
+  // key, a job attribute written AFTER `steps:`, a capitalised `Always()`. The
+  // helpers below answer that by reading KEY SETS structurally instead of
+  // matching a line, which measurably closes all four, plus a flow-style JOB
+  // (which makes `jobBlock` throw) and `<<:` merge keys at job level. A
+  // flow-style STEP hides its keys mid-line from every line-oriented helper
+  // here, so step openers are pinned to the two block forms this repo writes.
+  //
+  // Even so: "no spelling anyone thought to try got through" is not "no
+  // spelling exists" — four review rounds each produced a new one, and the
+  // last left YAML's explicit-key form (`? if` / `: always()` on separate
+  // lines) open by construction. Only a real parse settles this, and the repo
+  // has no YAML parser; adding one is a dependency decision, tracked as its own
+  // task. Read these as a tripwire for the plausible mid-release edit, not as
+  // proof the gate cannot be un-gated.
+
+  // Collects the sorted set of mapping keys `pattern` matches — the shared tail
+  // of both callers below (only the indent, and whether comments need
+  // stripping first, differs between them). Quote-tolerant, because
+  // `"defaults":` and `defaults:` are the same key.
+  const mappingKeys = (text: string, pattern: RegExp) =>
+    [...text.matchAll(pattern)].map((m) => m[1] ?? m[2] ?? m[3]).sort();
+
+  // The keys a job declares, wherever they sit: YAML mappings are unordered, so
+  // scanning only the slice before `steps:` misses `defaults:` written after it.
+  const jobAttributeKeys = (job: string) =>
+    mappingKeys(job, /^ {4}(?:"([^"]*)"|'([^']*)'|([^\s:]+))\s*:/gm);
+
+  // Same idea at the top of the file, where a workflow-wide `defaults:` would
+  // live — no job block would ever show it.
+  const topLevelKeys = (yaml: string) =>
+    mappingKeys(stripComments(yaml), /^(?:"([^"]*)"|'([^']*)'|([^\s:]+))\s*:/gm);
+
+  // A `run:` step's shell comes from the job's — or the workflow's —
+  // `defaults.run.shell`, and a custom shell template's exit code IS the step
+  // outcome, so `shell: bash -c "bash {0}; exit 0" bash` runs every command and
+  // discards every failure without touching a single step block. Pin the key
+  // SETS instead of blocklisting the attribute: both jobs declare exactly
+  // `runs-on` and `steps`, and neither file declares anything at the top level
+  // beyond its trigger and permissions.
+  it.each([
+    ["publish.yml", publishYml, publishJob, ["name", "on", "permissions", "jobs"]],
+    ["ci.yml", ciYml, sbomJob, ["name", "on", "permissions", "concurrency", "jobs"]],
+  ])("keeps the gate's execution context unmodified in %s", (_label, raw, job, top) => {
+    expect(jobAttributeKeys(job)).toEqual(["runs-on", "steps"]);
+    expect(topLevelKeys(raw)).toEqual([...top].sort());
+    // Every step opens block-style. A flow-mapped step — `- { name: …, if:
+    // always(), run: … }` — is valid YAML that GHA honours, and it carries its
+    // keys mid-line where no line-oriented helper in this file can see them:
+    // `ifScalars` misses the `if:`, `stepLabels` reads it as an unnamed step,
+    // and the non-vacuity guard still finds the Open VSX step's block-style
+    // `if:` and passes. Requiring a plain `name`/`uses` scalar after the dash
+    // forces attributes onto their own lines, where the rest of this file works.
+    for (const step of job.split("\n").filter((line) => /^ {6}- /.test(line))) {
+      expect(step).toMatch(/^ {6}- (?:name|uses): [^\s{[&*!]/);
+    }
+  });
+
+  // In publish.yml a red verify step blocks the release solely because every
+  // later step carries the implicit `if: success()`. `if: always()` on Package /
+  // Audit / Publish ships the release — unattested — straight past a failed
+  // gate. GHA resurrects a step after a failure through exactly three status
+  // functions, and its expression language is case-insensitive, so read each
+  // `if:` as a whole scalar (a folded `if: >-` puts the expression on the NEXT
+  // line) and reject those three however they are cased.
+  const ifScalars = (job: string) => {
+    const lines = job.split("\n");
+    const scalars: string[] = [];
+    lines.forEach((line, i) => {
+      const match = line.match(/^(\s*)(?:"if"|'if'|if)\s*:(.*)$/);
+      if (!match) {
+        return;
+      }
+      const indent = match[1].length;
+      const continuation: string[] = [];
+      for (const next of lines.slice(i + 1)) {
+        if (next.trim() !== "" && next.length - next.trimStart().length <= indent) {
+          break;
+        }
+        continuation.push(next);
+      }
+      scalars.push([match[2], ...continuation].join("\n"));
+    });
+    return scalars;
+  };
+
+  it("keeps a red gate blocking every later publish.yml step", () => {
+    const scalars = ifScalars(publishJob);
+    // Non-vacuity: publish.yml has exactly one `if:` today (the Open VSX step's
+    // token check). An empty result would satisfy the loop below while proving
+    // the collector never collected.
+    expect(scalars.filter((s) => s.includes("OVSX_PAT"))).toHaveLength(1);
+    for (const scalar of scalars) {
+      expect(scalar).not.toMatch(/(?:always|failure|cancelled)\s*\(/i);
+    }
+  });
+
+  // The ci.yml rehearsal only rehearses if it can FAIL the PR — which also
+  // needs the trigger itself to stay put (a job header pinned to `runs-on`
+  // says nothing about `on:`).
   it("keeps the sbom rehearsal gating on every PR", () => {
-    const header = sbomJob.slice(0, sbomJob.indexOf("    steps:"));
-    expect(header).not.toMatch(/^ {4}continue-on-error:/m);
-    expect(header).not.toMatch(/^ {4}if:/m);
     expect(stripComments(ciYml)).toMatch(/^on:\n\s+pull_request:/m);
   });
 });

@@ -1,12 +1,12 @@
 #!/usr/bin/env node
 // scripts/verify-sbom-scope.mjs
 //
-// CI gate (publish.yml): assert the SPDX SBOM that gets attested against the
-// published .vsix reflects ONLY the shipped runtime dependency closure —
-// exact resolved versions, every declared runtime `dependency` present, a
-// known shipped transitive dep present (proves the closure — not just the
-// top-level manifest — was captured), and NO build-only tooling
-// (devDependencies) leaking in.
+// CI gate (publish.yml and ci.yml's `sbom` job): assert the SPDX SBOM that
+// gets attested against the published .vsix reflects ONLY the shipped
+// runtime dependency closure — exact resolved versions, every declared
+// runtime `dependency` present, a known shipped transitive dep present
+// (proves the closure — not just the top-level manifest — was captured),
+// and NO build-only tooling (devDependencies) leaking in.
 //
 // Why: the SBOM is generated from a prod-only staging tree (see publish.yml
 // "Assemble shipped runtime dependency tree"). This gate is the mechanical
@@ -16,16 +16,19 @@
 // attestation. Fail-closed by design.
 //
 // Usage: node scripts/verify-sbom-scope.mjs <path-to-sbom.spdx.json> [--reconcile <stagingDir>]
-// Exit:  0 pass, 1 scope violation, 2 usage/parse error.
+// Exit:  0 pass, 1 scope violation or reconcile diff, 2 usage/parse error
+//        (incl. a staging tree the inventory cannot be derived from).
 //
 // The optional `--reconcile <stagingDir>` flag additionally reconciles the
 // SBOM's {name, version} set against an independent inventory read from the
-// frozen prod staging tree's REAL package manifests (see deriveInstalledInventory).
-// It is OPT-IN and NOT yet a gating CI check: publish.yml runs it only as a
-// non-gating shadow step, collecting evidence that the manifest-derived
-// inventory matches what the pinned syft (v1.42.3) catalogs on a real staging
-// tree, before it is promoted to a gate. Absent the flag, behaviour is
-// unchanged.
+// frozen prod staging tree's REAL package manifests (see deriveInstalledInventory),
+// so a syntactically-valid-but-wrong SBOM — a stale or forged version, a package
+// syft failed to catalog — fails instead of being attested.
+// It is opt-in at the CLI but GATING in CI: publish.yml and ci.yml's `sbom` job
+// both pass it on the verify step. It ran as a non-gating shadow step from
+// 2026-08-01 and was promoted on 2026-08-21, once the v0.1.66 re-tag run logged
+// `reconciled 23 staged packages against SBOM` on a real staging tree with the
+// pinned syft. Absent the flag, behaviour is unchanged.
 
 import { readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
@@ -120,9 +123,9 @@ export function resolveReconcileArg(argv) {
   return { stagingDir: value, error: null };
 }
 
-// Strict reconciliation (opt-in via main()'s --reconcile): the SBOM's npm
-// {name, version} set must EQUAL the inventory read from the staged install's
-// real package manifests, after dropping `ignore` (exact `name@version` keys —
+// Strict reconciliation (via main()'s --reconcile): the SBOM's npm {name,
+// version} set must EQUAL the inventory read from the staged install's real
+// package manifests, after dropping `ignore` (exact `name@version` keys —
 // the staging self-package, which syft catalogs from the root manifest but is
 // never in .pnpm) from both sides. Compared per name on the SET of versions so
 // a co-installed dual-major is classified correctly: a version on one side only

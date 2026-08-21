@@ -2,6 +2,12 @@
 
 All notable changes to Quoll are documented here.
 
+## 0.1.75 — 2026-08-21
+
+### Changed
+
+- Internal hardening of the table cell's text-mapping code, plus test coverage around it. Nothing changes in how the editor looks or behaves.
+
 ## 0.1.74 — 2026-08-20
 
 ### Fixed
