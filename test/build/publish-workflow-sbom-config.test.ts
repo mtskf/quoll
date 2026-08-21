@@ -131,9 +131,9 @@ describe("CI rehearses the release SBOM sequence", () => {
       .filter((line) => line.trim() !== "")
       .join("\n");
 
-  // Every step of the release SBOM sequence, in order. `--reconcile` is shadow
-  // (non-gating) in BOTH files: when the separate "promote reconcile to gating"
-  // entry lands, this assertion forces both to flip together.
+  // Every step of the release SBOM sequence, in order. `--reconcile` is folded
+  // into the gating verify step in BOTH files (it ran as a separate non-gating
+  // shadow step until 2026-08-21), so a one-sided edit to it fails here.
   // `as const` + the exhaustive Record below make the pairing total: adding a
   // step here without giving it a load-bearing needle fails, so a future step
   // cannot silently fall back to the (vacuity-prone) equality assertion alone.
@@ -141,7 +141,6 @@ describe("CI rehearses the release SBOM sequence", () => {
     "Assemble shipped runtime dependency tree (SBOM source)",
     "Generate SBOM (SPDX)",
     "Verify SBOM is scoped to the shipped runtime",
-    "Reconcile SBOM against staged install (shadow, non-gating)",
   ] as const;
   type SharedStep = (typeof SHARED_STEPS)[number];
 
@@ -153,10 +152,12 @@ describe("CI rehearses the release SBOM sequence", () => {
     "Assemble shipped runtime dependency tree (SBOM source)":
       /scripts\/assemble-sbom-staging\.sh "\$\{RUNNER_TEMP:\?RUNNER_TEMP is not set\}\/sbom-src"/,
     "Generate SBOM (SPDX)": /config: \.github\/syft-release\.yaml/,
+    // Both halves of the gate: the script AND the `--reconcile` flag that makes
+    // it compare the SBOM against the staging tree's real manifests. Dropping
+    // the flag in both files would leave a bare-script needle green while the
+    // gate silently reverted to the syntax-only check.
     "Verify SBOM is scoped to the shipped runtime":
-      /node scripts\/verify-sbom-scope\.mjs sbom\.spdx\.json/,
-    "Reconcile SBOM against staged install (shadow, non-gating)":
-      /--reconcile "\$RUNNER_TEMP\/sbom-src"/,
+      /node scripts\/verify-sbom-scope\.mjs sbom\.spdx\.json --reconcile "\$\{RUNNER_TEMP:\?RUNNER_TEMP is not set\}\/sbom-src"/,
   };
 
   it.each(SHARED_STEPS)("runs `%s` identically in both workflows", (step) => {
@@ -177,6 +178,25 @@ describe("CI rehearses the release SBOM sequence", () => {
     const needle = LOAD_BEARING[step];
     expect(needle).toBeDefined();
     expect(stepBlock(sbomJob, step, "ci.yml")).toMatch(needle);
+  });
+
+  // The reconcile is a GATE, not a shadow step — and the tempting "quick fix"
+  // for a red reconcile mid-release is to append the `|| true` it was promoted
+  // out of. Nothing above would catch that: the two files would still be
+  // identical and the needle above still matches a line with a trailing
+  // `|| true`. Pin the absence. It matters for all three of the script's exit
+  // codes, but especially exit 2 (could not reconcile at all — unreadable
+  // .pnpm, manifest missing name/version, malformed JSON): that run prints none
+  // of the diff lines, so a swallowed status reads as a clean reconcile.
+  it.each([
+    ["publish.yml", publishJob],
+    ["ci.yml", sbomJob],
+  ])("keeps the SBOM verify step fail-closed in %s", (label, job) => {
+    // Comment-stripped blocks, so prose ABOUT `|| true` cannot satisfy — or
+    // falsely trip — either assertion.
+    const step = stepBlock(job, "Verify SBOM is scoped to the shipped runtime", label);
+    expect(step).not.toMatch(/\|\|/);
+    expect(step).not.toMatch(/^\s*continue-on-error:/m);
   });
 
   // Per-step equality says nothing about ORDER, ADJACENCY, or UNIQUENESS: a

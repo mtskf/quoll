@@ -16,16 +16,16 @@
 // attestation. Fail-closed by design.
 //
 // Usage: node scripts/verify-sbom-scope.mjs <path-to-sbom.spdx.json> [--reconcile <stagingDir>]
-// Exit:  0 pass, 1 scope violation, 2 usage/parse error.
+// Exit:  0 pass, 1 scope violation or reconcile diff, 2 usage/parse error
+//        (incl. a staging tree the inventory cannot be derived from).
 //
 // The optional `--reconcile <stagingDir>` flag additionally reconciles the
 // SBOM's {name, version} set against an independent inventory read from the
 // frozen prod staging tree's REAL package manifests (see deriveInstalledInventory).
-// It is OPT-IN and NOT yet a gating CI check: publish.yml runs it only as a
-// non-gating shadow step, collecting evidence that the manifest-derived
-// inventory matches what the pinned syft (v1.42.3) catalogs on a real staging
-// tree, before it is promoted to a gate. Absent the flag, behaviour is
-// unchanged.
+// It is opt-in at the CLI but GATING in CI: publish.yml and ci.yml's `sbom` job
+// both pass it on the verify step (promoted from a non-gating shadow step on
+// 2026-08-21, after a real release run reconciled cleanly against the pinned
+// syft). Absent the flag, behaviour is unchanged.
 
 import { readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
@@ -120,7 +120,7 @@ export function resolveReconcileArg(argv) {
   return { stagingDir: value, error: null };
 }
 
-// Strict reconciliation (opt-in via main()'s --reconcile): the SBOM's npm
+// Strict reconciliation (via main()'s --reconcile): the SBOM's npm
 // {name, version} set must EQUAL the inventory read from the staged install's
 // real package manifests, after dropping `ignore` (exact `name@version` keys —
 // the staging self-package, which syft catalogs from the root manifest but is

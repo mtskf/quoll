@@ -150,26 +150,25 @@ jobs:
 
       # Gate: fail the release if the SBOM is not scoped to the shipped runtime
       # (dev tooling leaked in, a declared/known-transitive runtime dep missing,
-      # or non-exact versions). Fail-safe — a misleading attestation never ships.
+      # or non-exact versions), or if it does not RECONCILE against the staging
+      # tree it was generated from. Fail-safe — a misleading attestation never
+      # ships.
+      #
+      # `--reconcile` re-derives the tree's {name@version} inventory from the
+      # installed packages' real manifests and requires set equality with the
+      # SBOM, so a syntactically-valid-but-wrong SBOM (a stale or forged version,
+      # a package syft failed to catalog) fails here instead of being attested.
+      # It ran as a non-gating shadow step from 2026-08-01 until the v0.1.66
+      # re-tag run logged `reconciled 23 staged packages against SBOM` on a real
+      # staging tree with the pinned syft; promoted to a gate on that evidence.
+      #
+      # Deliberately no `|| true`: the script exits 0 clean / 1 reconcile diff /
+      # 2 could-not-reconcile-at-all (unreadable .pnpm, manifest missing
+      # name/version, malformed JSON). Swallowing the status collapses all three
+      # into a green step — and an exit-2 run prints none of the diff lines, so
+      # it reads as clean while having verified nothing.
       - name: Verify SBOM is scoped to the shipped runtime
-        run: node scripts/verify-sbom-scope.mjs sbom.spdx.json
-
-      # SHADOW (non-gating) reconciliation. Runs the opt-in --reconcile check
-      # against the same frozen prod staging tree the SBOM was generated from,
-      # comparing the attested SBOM's {name@version} set to the tree's real
-      # package manifests. `|| true` keeps it NON-gating: a mismatch prints to
-      # the run log but never fails a live publish. Purpose: collect evidence
-      # that the manifest-derived inventory equals what the pinned syft (v1.42.3)
-      # catalogs, on real staging trees, BEFORE promoting this to a gate.
-      # ENABLEMENT CRITERIA (do this to make it gating): once the log shows a
-      # clean reconcile across a release (no "unexpected"/"missing"/"version
-      # mismatch" lines), fold `--reconcile "$RUNNER_TEMP/sbom-src"` into the
-      # gating step above and delete this shadow step — in BOTH this file and
-      # ci.yml's `sbom` job, in the same commit, and drop the last entry from
-      # SHARED_STEPS in test/build/publish-workflow-sbom-config.test.ts. The
-      # cross-file equality test fails if only one side flips (by design).
-      - name: Reconcile SBOM against staged install (shadow, non-gating)
-        run: node scripts/verify-sbom-scope.mjs sbom.spdx.json --reconcile "$RUNNER_TEMP/sbom-src" || true
+        run: node scripts/verify-sbom-scope.mjs sbom.spdx.json --reconcile "${RUNNER_TEMP:?RUNNER_TEMP is not set}/sbom-src"
 
       - name: Package .vsix
         run: pnpm exec vsce package --no-dependencies -o extension.vsix
