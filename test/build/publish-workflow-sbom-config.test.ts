@@ -302,14 +302,12 @@ describe("CI rehearses the release SBOM sequence", () => {
   // cannot appear without changing the header — and check the workflow level
   // too, which no job block would ever show.
   it.each([
-    ["publish.yml", publishYml, "publish"],
-    ["ci.yml", ciYml, "sbom"],
-  ])("keeps the gate's execution context unmodified in %s", (label, raw, jobName) => {
-    const stripped = stripComments(raw);
-    const job = jobBlock(stripped, jobName, label);
+    ["publish.yml", publishYml, publishJob],
+    ["ci.yml", ciYml, sbomJob],
+  ])("keeps the gate's execution context unmodified in %s", (_label, raw, job) => {
     const header = normalise(job.slice(0, job.indexOf("    steps:")));
     expect(header).toBe("    runs-on: ubuntu-latest");
-    expect(stripped).not.toMatch(/^defaults:/m);
+    expect(stripComments(raw)).not.toMatch(/^defaults:/m);
   });
 
   // Second, in publish.yml only: a red verify step blocks the release solely
