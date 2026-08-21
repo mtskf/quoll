@@ -305,26 +305,22 @@ describe("CI rehearses the release SBOM sequence", () => {
   // dependency decision, tracked as its own task. Read these as a tripwire for
   // the plausible mid-release edit, not as proof the gate cannot be un-gated.
 
+  // Collects the sorted set of mapping keys `pattern` matches — the shared tail
+  // of both callers below (only the indent, and whether comments need
+  // stripping first, differs between them). Quote-tolerant, because
+  // `"defaults":` and `defaults:` are the same key.
+  const mappingKeys = (text: string, pattern: RegExp) =>
+    [...text.matchAll(pattern)].map((m) => m[1] ?? m[2] ?? m[3]).sort();
+
   // The keys a job declares, wherever they sit: YAML mappings are unordered, so
   // scanning only the slice before `steps:` misses `defaults:` written after it.
-  // Quote-tolerant, because `"defaults":` and `defaults:` are the same key.
   const jobAttributeKeys = (job: string) =>
-    job
-      .split("\n")
-      .map((line) => line.match(/^ {4}(?:"([^"]*)"|'([^']*)'|([^\s:]+))\s*:/))
-      .filter((m): m is RegExpMatchArray => m !== null)
-      .map((m) => m[1] ?? m[2] ?? m[3])
-      .sort();
+    mappingKeys(job, /^ {4}(?:"([^"]*)"|'([^']*)'|([^\s:]+))\s*:/gm);
 
   // Same idea at the top of the file, where a workflow-wide `defaults:` would
   // live — no job block would ever show it.
   const topLevelKeys = (yaml: string) =>
-    stripComments(yaml)
-      .split("\n")
-      .map((line) => line.match(/^(?:"([^"]*)"|'([^']*)'|([^\s:#]+))\s*:/))
-      .filter((m): m is RegExpMatchArray => m !== null)
-      .map((m) => m[1] ?? m[2] ?? m[3])
-      .sort();
+    mappingKeys(stripComments(yaml), /^(?:"([^"]*)"|'([^']*)'|([^\s:]+))\s*:/gm);
 
   // A `run:` step's shell comes from the job's — or the workflow's —
   // `defaults.run.shell`, and a custom shell template's exit code IS the step
@@ -352,11 +348,11 @@ describe("CI rehearses the release SBOM sequence", () => {
     const lines = job.split("\n");
     const scalars: string[] = [];
     lines.forEach((line, i) => {
-      const key = line.match(/^(\s*)(?:"if"|'if'|if)\s*:(.*)$/);
-      if (!key) {
+      const match = line.match(/^(\s*)(?:"if"|'if'|if)\s*:(.*)$/);
+      if (!match) {
         return;
       }
-      const indent = key[1].length;
+      const indent = match[1].length;
       const continuation: string[] = [];
       for (const next of lines.slice(i + 1)) {
         if (next.trim() !== "" && next.length - next.trimStart().length <= indent) {
@@ -364,7 +360,7 @@ describe("CI rehearses the release SBOM sequence", () => {
         }
         continuation.push(next);
       }
-      scalars.push([key[2], ...continuation].join("\n"));
+      scalars.push([match[2], ...continuation].join("\n"));
     });
     return scalars;
   };
