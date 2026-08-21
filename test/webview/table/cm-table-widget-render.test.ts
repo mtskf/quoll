@@ -2,9 +2,11 @@
 // What `toDOM` produces and what a click on it does: DOM shape, cell escaping,
 // the offset stamps, the link/image URL gates, the resource-base threading that
 // resolves a relative in-cell image, and the collapsed-caret/open-external
-// routing a click on that fresh DOM takes. Two rows here call `updateDOM` —
-// they are about the click AFTER a re-stamp, so they stay with the click
-// tests; `updateDOM`'s own reuse/refusal contract is
+// routing a click on that fresh DOM takes. Two rows here call `updateDOM`, each
+// because it extends material that lives here rather than because it is about
+// reuse: one takes the click AFTER a re-stamp, the other checks that a
+// relative image introduced by a cell edit resolves against the same base the
+// fresh-render rows use. `updateDOM`'s own reuse/refusal contract is
 // cm-table-widget-update.test.ts. Pointer GESTURES (drag, and the untrusted
 // cell-stamp boundary) are cm-table-widget-drag.test.ts / -caret.test.ts.
 // Fixtures: helpers/widget-fixtures.ts.
@@ -456,21 +458,21 @@ describe("resource-base threading (relative in-cell images)", () => {
 
   it("toDOM resolves a relative in-cell image against the facet base", () => {
     const src = "| ![p](./img.png) |\n| - |";
-    const dom = makeWidget(src).toDOM(stubView(undefined, BASE));
+    const dom = makeWidget(src).toDOM(stubView([], BASE));
     const img = dom.querySelector<HTMLImageElement>("th img");
     expect(img?.getAttribute("src")).toBe("https://csp/ws/notes/img.png");
   });
 
   it("toDOM renders a traversal in-cell image inert (../ escape)", () => {
     const src = "| ![p](../x.png) |\n| - |";
-    const dom = makeWidget(src).toDOM(stubView(undefined, BASE));
+    const dom = makeWidget(src).toDOM(stubView([], BASE));
     expect(dom.querySelector("img")).toBeNull();
     expect(dom.querySelector("th")?.textContent).toBe("![p](../x.png)");
   });
 
   it("toDOM renders a relative in-cell image inert when no base facet is set", () => {
     const src = "| ![p](./img.png) |\n| - |";
-    const dom = makeWidget(src).toDOM(stubView());
+    const dom = makeWidget(src).toDOM(stubView([]));
     expect(dom.querySelector("img")).toBeNull();
     expect(dom.querySelector("th")?.textContent).toBe("![p](./img.png)");
   });
@@ -478,7 +480,7 @@ describe("resource-base threading (relative in-cell images)", () => {
   it("updateDOM (patchRow) resolves a relative image added by a cell edit", () => {
     const srcA = "| a |\n| - |\n| plain |";
     const srcB = "| a |\n| - |\n| ![p](./img.png) |";
-    const view = stubView(undefined, BASE);
+    const view = stubView([], BASE);
     const widgetA = makeWidget(srcA);
     const dom = widgetA.toDOM(view);
     expect(makeWidget(srcB).updateDOM(dom, view, widgetA)).toBe(true);
