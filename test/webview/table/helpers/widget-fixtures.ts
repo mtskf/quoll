@@ -73,8 +73,20 @@ export function drainResolverFailures(): void {
 // than a spurious one. (Before that probe, deleting this hook left all 78 tests
 // green: cross-widget capture is prevented by the resolver's private root, not
 // by body cleanliness, so nothing observed the body between cases.)
+// Disposers for widgets mounted through `stubViewWithCaret`. A widget owns
+// DOCUMENT-level listeners while a gesture is in flight, and `replaceChildren`
+// only unparents its DOM — `destroy` is what CodeMirror itself would call, and
+// what actually takes those listeners with it. Without this every suite leaves
+// its last mount's listeners attached to the document for the whole file.
+const mountedWidgets: Array<() => void> = [];
+
 afterEach(() => {
   // Cleanup FIRST, so a throwing drain never also leaks DOM into the next test.
+  // Destroy BEFORE unparenting: the widget's own teardown is what removes the
+  // document listeners, and it must not depend on the DOM still being attached.
+  for (const dispose of mountedWidgets.splice(0)) {
+    dispose();
+  }
   document.body.replaceChildren();
   drainResolverFailures();
 });
@@ -166,7 +178,17 @@ export const mockView = stubView([]);
 export function stubViewWithCaret(
   dispatched: unknown[],
   script: Array<{ text: string; offset: number } | null>,
-  extensions: Extension[] = []
+  extensions: Extension[] = [],
+  /** What `view.posAtCoords` answers for a release point OUTSIDE the widget —
+   *  the document position the outside-release seam uses as the range head.
+   *  Scripted per suite, like the caret resolver, because happy-dom has no
+   *  layout and CodeMirror is not mounted here at all.
+   *
+   *  The default is NOT `() => null`: a null answer degrades to the collapsed
+   *  caret, which is the expected value of several rows in the release suite, so
+   *  an unscripted call would pass vacuously. It records misuse through the same
+   *  channel the caret resolver uses, so an unscripted call is audible instead. */
+  posAtCoords?: (x: number, y: number) => number | null
 ) {
   let root: HTMLElement | null = null;
   let i = 0;
@@ -235,9 +257,28 @@ export function stubViewWithCaret(
     state: EditorState.create({ extensions: [quollTableCaretResolver.of(resolve), ...extensions] }),
     dispatch: (tr: unknown) => dispatched.push(tr),
     contentDOM,
+    // ⚠️ `EditorView.posAtCoords` is OVERLOADED — `(coords, precise: false):
+    // number` and `(coords): number | null` — and a single-signature stub is not
+    // assignable to the FIRST overload, so `satisfies` rejects it with TS2322
+    // ("Type 'number | null' is not assignable to type 'number'"). Measured with
+    // tsc, and worth knowing WHY this cast is here rather than "cleaning it up":
+    // vitest is transpile-only, so no test run would catch its removal — the
+    // error surfaces only at `pnpm compile`.
+    //
+    // Only this ONE member is cast, and the key stays IN the `Pick` below, so an
+    // omitted member is still an error. Casting the whole literal instead would
+    // give up the typo check (`dispath`) for every member at once, which is the
+    // entire reason the `satisfies` clause exists.
+    posAtCoords: ((coords: { x: number; y: number }) => {
+      if (posAtCoords === undefined) {
+        resolverFailures.push("view.posAtCoords called with no scripted answer");
+        return null;
+      }
+      return posAtCoords(coords.x, coords.y);
+    }) as EditorViewType["posAtCoords"],
   } satisfies Pick<
     EditorViewType,
-    "state" | "dispatch" | "contentDOM"
+    "state" | "dispatch" | "contentDOM" | "posAtCoords"
   > as unknown as EditorViewType;
 
   /** Mount a widget the way every drag test needs it: rendered, resolver root
@@ -263,6 +304,7 @@ export function stubViewWithCaret(
     const dom = widget.toDOM(view);
     root = dom;
     document.body.appendChild(dom);
+    mountedWidgets.push(() => widget.destroy(dom));
     return dom;
   };
 
@@ -287,10 +329,15 @@ export function stubViewWithCaret(
  *  them, and happy-dom defaults them to 0. `detail: 1` by default because a
  *  real pointer click always carries a click count; `detail: 0` is reserved for
  *  keyboard/programmatic activation, which the drag path deliberately ignores
- *  (override it explicitly to exercise that guard). */
+ *  (override it explicitly to exercise that guard).
+ *
+ *  `mouseup` is what the OUTSIDE-release seam listens for, and it is dispatched
+ *  on whatever element the pointer was released over — usually NOT the widget,
+ *  which is the whole point of that seam. Aim it at `document.body` to model a
+ *  release that landed outside the table. */
 export function press(
   el: HTMLElement,
-  type: "mousedown" | "click",
+  type: "mousedown" | "mouseup" | "click",
   x: number,
   y: number,
   init: MouseEventInit = {}

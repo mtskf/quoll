@@ -91,6 +91,15 @@ const pendingDrag = new WeakMap<HTMLElement, PendingDrag>();
  *  rationale, as image-widget.ts's `blockStart`. */
 const blockStart = new WeakMap<HTMLElement, number>();
 
+/** Aborts the document-level listeners armed for the gesture in flight on this
+ *  root. Kept OUT of `PendingDrag` because the two have different lifetimes:
+ *  `updateDOM` drops the pending anchor when a doc edit invalidates it while the
+ *  gesture is still physically in progress, and that release must still be heard
+ *  (it dispatches the block-start caret). A WeakMap so a discarded root takes its
+ *  controller with it — though the listeners are removed by the gesture's own end
+ *  and by `destroy`, not left to garbage collection. */
+const armedRelease = new WeakMap<HTMLElement, AbortController>();
+
 /** Margin-click caret: the block start this root currently points at.
  *
  *  Falling back to the toDOM-time `widget.docFrom` totalizes the
@@ -152,33 +161,50 @@ function travelSince(view: EditorView, pending: PendingDrag, event: MouseEvent):
   return Math.abs(now.x - pending.contentX) + Math.abs(now.y - pending.contentY);
 }
 
+/** A `PendingDrag` whose press landed on a cell — the only kind either seam can
+ *  build a range from. */
+interface ArmedDrag extends PendingDrag {
+  readonly point: CellPoint;
+}
+
+/** Is this completed gesture a DRAG (rather than a click, a keyboard or
+ *  programmatic activation, or nothing this widget armed)? ONE definition for
+ *  both seams, so the click and the outside release can never disagree about
+ *  what a drag is.
+ *
+ *  `detail === 0` means the event was NOT produced by a pointer gesture —
+ *  keyboard activation of an in-cell `<a>`, or a programmatic `.click()` /
+ *  `dispatchEvent`. Its clientX/Y are 0, so pairing it with an armed anchor
+ *  would read a large bogus travel and dispatch a range the user never drew. */
+function isDrag(
+  view: EditorView,
+  event: MouseEvent,
+  pending: PendingDrag | null
+): pending is ArmedDrag {
+  if (pending === null || pending.point === null) {
+    return false;
+  }
+  if (event.detail === 0) {
+    return false;
+  }
+  return travelSince(view, pending, event) >= DRAG_THRESHOLD_PX;
+}
+
 /** The RANGE a completed pointer gesture describes, or `null` when this gesture
- *  is not a drag at all (no armed anchor, unmappable anchor, keyboard /
- *  programmatic click, sub-threshold travel), when the head has no mapping, or
- *  when the range collapses after snapping. Every `null` answer means the same
- *  thing to the caller: dispatch the plain collapsed caret instead. */
+ *  is not a drag at all (see `isDrag`), when the head has no mapping, or when
+ *  the range collapses after snapping. Every `null` answer means the same thing
+ *  to the caller: dispatch the plain collapsed caret instead.
+ *
+ *  The aborted-gesture window this used to close through `detail === 0` is now
+ *  ALSO closed structurally: the release seam disarms itself on every mouseup,
+ *  and any press elsewhere disarms a gesture whose release never arrived. */
 function dragRange(
   view: EditorView,
   root: HTMLElement,
   event: MouseEvent,
   pending: PendingDrag | null
 ): { anchor: number; head: number } | null {
-  if (pending === null || pending.point === null) {
-    return null;
-  }
-  // `detail === 0` means this click was NOT produced by a pointer gesture —
-  // keyboard activation of an in-cell `<a>`, or a programmatic `.click()`. Its
-  // clientX/Y are 0, so pairing it with an armed anchor would read a large
-  // bogus travel and dispatch a range the user never drew. This is also what
-  // closes the aborted-gesture window: a press released OUTSIDE the widget
-  // delivers no click to `root`, leaving the entry armed, and the only clicks
-  // that can then reach the handler without a fresh mousedown of their own are
-  // keyboard/programmatic ones (a click retargeted to a common ancestor above
-  // the widget never runs that listener at all).
-  if (event.detail === 0) {
-    return null;
-  }
-  if (travelSince(view, pending, event) < DRAG_THRESHOLD_PX) {
+  if (!isDrag(view, event, pending)) {
     return null;
   }
   const head = cellPointAt(
@@ -226,6 +252,48 @@ function dragRange(
   const to = head.offset ?? (forward ? head.cellTo : head.cellFrom);
   // Zero-width after snapping (adjacent cells, both ends on the same boundary).
   return from === to ? null : { anchor: from, head: to };
+}
+
+/** The RANGE a gesture RELEASED OUTSIDE this widget describes, or `null` when it
+ *  is not a drag, when the press was not on a cell, or when the editor cannot
+ *  place the release point — every one of which the caller answers with the
+ *  collapsed caret, the same degrade the click seam uses.
+ *
+ *  The head comes from `view.posAtCoords` rather than from `cellPointAt`: the
+ *  release is outside the widget by construction, so there is no cell to map and
+ *  the editor's own coordinate lookup IS the answer. It returns `null` for a
+ *  point it cannot resolve (an unrendered block, a viewport gap) — but NOT for
+ *  an overshoot: past the last line it clamps to `doc.length`, and above the
+ *  first to `0` (@codemirror/view 6.43.0), which is why a release below the
+ *  document still draws a range to the end rather than degrading.
+ *
+ *  Direction comes from comparing that document position with the cell, for the
+ *  same reason the across-cells arm of `dragRange` uses cell order: an
+ *  unmappable anchor has no offset to compare, and it snaps OUTWARD — away from
+ *  the release — so the range still covers the cell the pointer started in. */
+function releaseRange(
+  view: EditorView,
+  event: MouseEvent,
+  pending: PendingDrag | null
+): { anchor: number; head: number } | null {
+  if (!isDrag(view, event, pending)) {
+    return null;
+  }
+  let head: number | null;
+  try {
+    head = view.posAtCoords({ x: event.clientX, y: event.clientY });
+  } catch (err) {
+    // Same contract as `dispatchSelection`'s catch: a coordinate lookup against
+    // a view torn down mid-gesture must cost the gesture, not the editor.
+    console.error("[quoll] table widget release lookup failed", { err });
+    return null;
+  }
+  if (head === null) {
+    return null;
+  }
+  const start = pending.point;
+  const anchor = start.offset ?? (head > start.cellFrom ? start.cellFrom : start.cellTo);
+  return anchor === head ? null : { anchor, head };
 }
 
 export class TableBlockWidget extends WidgetType {
@@ -322,6 +390,102 @@ export class TableBlockWidget extends WidgetType {
           view.state.facet(quollTableCaretResolver)
         ),
       });
+
+      // The SECOND dispatch seam. A gesture released outside this root never
+      // delivers a `click` here — measured in real Chromium: the click is
+      // retargeted to `.cm-content`, the nearest common ancestor of the press
+      // and release targets — so the release has to be heard on the document,
+      // where every mouseup lands. Armed per gesture rather than kept
+      // permanently, so the listener that can dispatch is exactly the one
+      // belonging to the press in flight. Any controller left over from a
+      // previous press is aborted first, so at most one is ever armed.
+      armedRelease.get(root)?.abort();
+      const release = new AbortController();
+      armedRelease.set(root, release);
+      const doc = root.ownerDocument;
+      const armingPress = event;
+      doc.addEventListener(
+        "mouseup",
+        (up: MouseEvent) => {
+          // BEFORE the abort, not after: a right-button press-and-release while
+          // the left button is held delivers a mouseup this gesture did not end.
+          // Aborting first would leave the real release with no listener.
+          if (up.button !== 0) {
+            return;
+          }
+          release.abort(); // one-shot: this gesture is over either way
+          // The root left the document mid-gesture — CodeMirror rebuilds a
+          // widget by REPLACING its root, and a detached root's stamps have
+          // stopped tracking the document. The click seam never had to check
+          // (a detached root receives no clicks); a document-level one does.
+          if (!root.isConnected) {
+            return;
+          }
+          // Released INSIDE: the click WILL reach this root, and it owns the
+          // dispatch — including the modifier-link `open-external` branch, which
+          // stays exactly where it was. Leave `pendingDrag` armed for it.
+          if (root.contains(up.target as Node | null)) {
+            return;
+          }
+          const pending = pendingDrag.get(root) ?? null;
+          pendingDrag.delete(root);
+          dispatchSelection(
+            view,
+            releaseRange(view, up, pending) ?? {
+              anchor: pending?.point?.cellFrom ?? blockStartCaret(root, this),
+            }
+          );
+        },
+        { signal: release.signal }
+      );
+      // ⚠️ The guard that makes the seam safe rather than merely useful.
+      //
+      // A release this document never sees — the pointer leaves the webview
+      // iframe, focus is lost, Cmd+Tab — leaves the listener above armed, and
+      // the user's NEXT unrelated release would be read as this gesture's end:
+      // a range from a table cell to a point nobody dragged to. A press is the
+      // one thing that must precede any such release, so disarming here covers
+      // every focus-loss path, including the ones nobody enumerated.
+      //
+      // CAPTURE, and that is the load-bearing part. Four sibling widgets in this
+      // editor call stopPropagation() on mousedown — the task checkbox, the
+      // fenced-code copy and collapse buttons, the language picker — and NONE of
+      // them stops mouseup. A bubble-phase disarm is therefore starved by
+      // exactly those presses while the release still arrives, which is the one
+      // combination that dispatches a range the user never drew (measured:
+      // bubble 0, capture 1, mouseup delivered). Capture runs document → target,
+      // so nothing downstream can starve it.
+      //
+      // The identity check guards the other direction: this listener is added
+      // DURING the dispatch of the arming press. In capture that press has
+      // already passed the document, so it cannot reach here — but the check
+      // costs one line, says out loud what must stay true, and keeps the guard
+      // correct if the phase is ever changed back. Comparing the event OBJECT,
+      // not the target, which a second press in the same cell would match too.
+      doc.addEventListener(
+        "mousedown",
+        (down: MouseEvent) => {
+          if (down === armingPress || down.button !== 0) {
+            return;
+          }
+          release.abort();
+          pendingDrag.delete(root);
+        },
+        { signal: release.signal, capture: true }
+      );
+      // A native drag-and-drop ends in `dragend`, NOT in a mouseup. Measured: a
+      // plain cell drag starts no DnD at all, so this is for a press that begins
+      // on an in-cell <img> or <a>, both natively draggable. Nothing is
+      // preventDefault'ed — the selection seam simply stands down, because a
+      // drag-and-drop is not a text selection.
+      doc.addEventListener(
+        "dragstart",
+        () => {
+          release.abort();
+          pendingDrag.delete(root);
+        },
+        { signal: release.signal, capture: true }
+      );
     });
 
     // Root click handler — the sole dispatch seam for the caret/range contract
@@ -535,5 +699,17 @@ export class TableBlockWidget extends WidgetType {
 
   ignoreEvent(): boolean {
     return true;
+  }
+
+  /** CodeMirror's documented teardown for a widget instance. The gesture
+   *  listeners live on the DOCUMENT and close over `root`, so without this a
+   *  widget destroyed mid-gesture keeps both the listeners and the DOM alive —
+   *  and the listeners keep answering for an editor that has forgotten them.
+   *  The `isConnected` guard in the release seam is not a substitute: `destroy`
+   *  can be called while the DOM is still in the tree. */
+  destroy(dom: HTMLElement): void {
+    armedRelease.get(dom)?.abort();
+    armedRelease.delete(dom);
+    pendingDrag.delete(dom);
   }
 }
