@@ -11,14 +11,21 @@
   // The scripts/ and esbuild.config.mjs modules they import are plain .mjs with
   // no bundled types. The shape to reach for is a line-scoped `@ts-expect-error`
   // on the import alone — it self-verifies (goes red the day the module gains
-  // types) and leaves everything the test itself authors checked. Several
+  // types) and leaves everything the test itself authors checked. Five
   // suites still use a file-level `@ts-nocheck` instead, which switches the
   // WHOLE file off — a type-level assertion in one of those is still vacuous.
-  // (`git grep -l '@ts-nocheck' test/build` lists the current set; deliberately
-  // not enumerated here, because the tracked follow-up swaps them over one file
-  // at a time, so a hand-copied roster goes stale on the first swap. CLAUDE.md
-  // points at the same grep for that reason; the only place that does name the
-  // files is that TODO.md follow-up entry, where the roster IS the work item.)
+  //
+  // To list them, anchor the grep to the directive itself:
+  // `git grep -l '^// @ts-nocheck' test/build` returns exactly those five. The
+  // unanchored `git grep -l '@ts-nocheck' test/build` returns EIGHT and is
+  // misleading — three of those hits are prose ABOUT the directive rather than
+  // the directive: this file, plus theme-palettes.test.ts and
+  // publish-workflow-sbom-config.test.ts, which each note that they carry none.
+  // The roster is deliberately not enumerated here: the tracked follow-up swaps
+  // the files over one at a time, so a hand-copied list goes stale on the first
+  // swap. Two places do name them — the TODO.md follow-up entry, where the
+  // roster IS the work item, and the 2026-08-22 LEARNING.md entry — and keeping
+  // both current is part of that follow-up.
   // Do not read this config as proof that every file under it is checked.
   //
   // noEmit (inherited): this is a CI gate, not a build step — vitest still runs
