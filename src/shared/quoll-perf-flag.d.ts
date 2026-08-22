@@ -13,6 +13,6 @@
 // `const PERF_ENABLED = … ; if (PERF_ENABLED)` does NOT (esbuild keeps
 // `const o=!1; o&&fn()`). Do NOT reintroduce an intermediate const.
 //
-// All five tsc programs include `src/shared/**`, so this one file is visible
-// everywhere with no tsconfig `include` edits.
+// Every tsc program in the repo includes `src/shared/**`, so this one file is
+// visible everywhere with no tsconfig `include` edits.
 declare const QUOLL_PERF: boolean;
