@@ -1,0 +1,33 @@
+{
+  // Type-check program for the build/tooling suite. vitest runs these files
+  // through esbuild transpile-only, so without this gate every type-level
+  // contract in test/build (the `@ts-expect-error` pins on the untyped .mjs
+  // imports, the workflow/SBOM parsing helpers) is erased and never enforced.
+  //
+  // These tests exercise the BUILD side of the repo — esbuild configs, the
+  // scripts/ tooling, the packaged workflow YAML — so the compiler view is
+  // Node + ESM, with no DOM lib and no vscode-webview types.
+  //
+  // The scripts/ and esbuild.config.mjs modules they import are plain .mjs with
+  // no bundled types. The shape to reach for is a line-scoped `@ts-expect-error`
+  // on the import alone — it self-verifies (goes red the day the module gains
+  // types) and leaves everything the test itself authors checked. Five suites
+  // (doc-sync, preview-server-theme, stale-todo-markers, todo-hygiene,
+  // verify-sbom-scope) still use a file-level `@ts-nocheck` instead, which
+  // switches the WHOLE file off — a type-level assertion in one of those is
+  // still vacuous. Swapping them over is its own TODO entry; do not read this
+  // config as proof that every file under it is checked.
+  //
+  // noEmit (inherited): this is a CI gate, not a build step — vitest still runs
+  // through its own transpiler. rootDir is the repo root so the cross-layer
+  // import from ../../src/shared resolves.
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "module": "esnext",
+    "moduleResolution": "bundler",
+    "lib": ["es2022"],
+    "types": ["node"],
+    "rootDir": "../.."
+  },
+  "include": ["**/*.ts", "../../src/shared/**/*.ts"]
+}

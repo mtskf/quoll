@@ -22,14 +22,15 @@ import { readFileSync } from "node:fs";
 
 import { describe, expect, it } from "vitest";
 
+// Namespace import so the module specifier — where TS7016 is reported — stays on
+// the same line as the directive. A named import wide enough to hold all four
+// bindings wraps past Biome's line width, which pushes the specifier out from
+// under the directive and leaves the suppression unused (and the error live).
 // @ts-expect-error — plain .mjs with no bundled types; vitest transpiles it.
-import {
-  bodyThemeAttrs,
-  PALETTES,
-  THEME_KINDS,
-  themeVarsCss,
-} from "../../scripts/preview/vscode-theme-palettes.mjs";
+import * as themePalettes from "../../scripts/preview/vscode-theme-palettes.mjs";
 import { THEME_KINDS as WIRE_THEME_KINDS } from "../../src/shared/protocol";
+
+const { bodyThemeAttrs, PALETTES, THEME_KINDS, themeVarsCss } = themePalettes;
 
 const stylesCss = readFileSync(new URL("../../src/webview/styles.css", import.meta.url), "utf8");
 // Live rules only — see the comment-strip rationale at the selector assertions below.

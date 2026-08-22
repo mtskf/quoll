@@ -12,6 +12,8 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import esbuild from "esbuild";
 import { beforeAll, describe, expect, it } from "vitest";
+// @ts-expect-error — esbuild.config.mjs is plain JS with no .d.ts; the runtime
+// shape (a factory returning esbuild BuildOptions) is exercised below.
 import { createBuildConfigs } from "../../esbuild.config.mjs";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
@@ -60,7 +62,10 @@ describe("NOTICE covers every bundled third-party package", () => {
     // Every value is a config emitting into the packaged dist/ (host, webview,
     // test-harness). Union them all so a dependency bundled into ANY shipped
     // output must be attributed — not just host + webview.
-    const configs = Object.values(createBuildConfigs({ production: true }));
+    // Annotated because createBuildConfigs comes from the untyped .mjs above:
+    // Object.values() over an `any` widens each entry to `unknown`, and this is
+    // the shape the rest of the suite (and esbuild.build) actually requires.
+    const configs: esbuild.BuildOptions[] = Object.values(createBuildConfigs({ production: true }));
     const sets = await Promise.all(configs.map(shippedPackages));
     bundled = [...new Set(sets.flatMap((s) => [...s]))].sort();
     notice = readFileSync(resolve(root, "NOTICE"), "utf8");
