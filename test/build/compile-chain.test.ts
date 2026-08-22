@@ -76,7 +76,10 @@ describe("pnpm compile project chain", () => {
     const e2e = parseJsonc(
       readFileSync(fileURLToPath(new URL("../extension/tsconfig.json", import.meta.url)), "utf8")
     );
-    expect(e2e.include.filter((p: string) => p.includes("src/"))).toEqual([]);
+    // Match `src` as a whole path SEGMENT: a bare directory include spelled
+    // "../../src" (no trailing slash) is valid tsconfig and pulls in the same
+    // files, but `includes("src/")` does not see it.
+    expect(e2e.include.filter((p: string) => /(^|\/)src(\/|$)/.test(p))).toEqual([]);
     // rootDir "." is what makes reaching into ../../src a TS6059 error rather
     // than a silent widening, so it is part of the same guarantee.
     expect(e2e.compilerOptions.rootDir).toBe(".");
@@ -90,25 +93,29 @@ describe("pnpm compile project chain", () => {
     // the same dist/webview/ output. Pinning `compile` alone left the webview
     // half free to drift behind esbuild while this test stayed green.
     //
-    // Split into steps rather than substring-matching the script: "pnpm
-    // compile" is a PREFIX of "pnpm compile:webview", so toContain("pnpm
-    // compile") stays green after the compile step is deleted outright — the
-    // same trap the `tsc -p ./` note above calls out, and it was live here
-    // until the cycle-2 simplify pass caught it.
+    // Assert the required PREFIX rather than splitting into steps and checking
+    // order. Splitting on `&&` cannot see shell short-circuiting, so it accepts
+    // `pnpm compile && pnpm compile:webview && false || node esbuild…`: both
+    // gates precede the bundle-bearing segment, yet `||` runs the bundler when
+    // a gate fails. A prefix pin models what actually matters — the bundler is
+    // reachable only through two successful `&&` gates — and it replaces the
+    // split/indexOf logic rather than adding to it.
     //
-    // Unlike `compile`, `build` is deliberately NOT pinned by exact equality.
-    // Its roster is not the contract under test and the bundle step's flags are
-    // expected to move for ordinary reasons; only the relative order is
-    // load-bearing, so an exact pin here would be a false tripwire.
+    // `build` is still deliberately NOT pinned by exact equality: the bundle
+    // step's trailing flags are expected to move for ordinary reasons, and only
+    // the gating prefix is load-bearing.
     const buildScript: string = pkg.scripts.build;
-    const steps = buildScript.split("&&").map((s) => s.trim());
-    const bundleStepIndex = steps.findIndex((s) => s.includes("esbuild.config.mjs"));
-    expect(bundleStepIndex).toBeGreaterThanOrEqual(0);
-    for (const gate of ["pnpm compile", "pnpm compile:webview"]) {
-      // toContain is not redundant with the ordering check below: a missing
-      // gate makes indexOf return -1, which would pass `toBeLessThan` silently.
-      expect(steps).toContain(gate);
-      expect(steps.indexOf(gate)).toBeLessThan(bundleStepIndex);
-    }
+    expect(
+      buildScript.startsWith("pnpm compile && pnpm compile:webview && node esbuild.config.mjs")
+    ).toBe(true);
+  });
+
+  it("keeps compile:webview a real tsc pass", () => {
+    // `build` calling `compile:webview` means nothing if that script stops
+    // type-checking: `"echo skip"` or a trailing `|| true` leaves every other
+    // assertion here green while the ONLY tsc pass over src/webview disappears
+    // — the same accident this file exists to catch, one level down. The body
+    // is pinned exactly, matching the treatment `compile` already gets.
+    expect(pkg.scripts["compile:webview"]).toBe("tsc -p ./src/webview");
   });
 });
