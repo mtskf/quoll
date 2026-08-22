@@ -33,8 +33,10 @@ import {
   PLAIN,
   pointAtChar,
   pointInWidgetPadding,
+  proseLine,
   revealed,
   TABLE_BLOCK_START,
+  TAIL,
   unmount,
   widgetRoot,
 } from "./helpers/table-drag-harness.js";
@@ -184,6 +186,47 @@ describe.each(ARMS)("table drag selection — trusted pointer, %s", (_name, arm)
     expect(sel.empty, "no cell under the release point → no range").toBe(true);
     expect(sel.anchor, "falls back to the block-start caret").toBe(TABLE_BLOCK_START);
     expect(revealed(view), "the fallback caret still reveals this table").toBe(true);
+  });
+
+  it("a drag from a cell RELEASED over the paragraph below spans from the cell into the prose", async () => {
+    // The gesture that was silently lost. Measured before the fix: the release
+    // lands on a `.cm-line`, the click is retargeted to `.cm-content` so the
+    // root's click listener never runs, and CodeMirror's own observer parks a
+    // COLLAPSED CARET at the release position. That last detail is why the
+    // emptiness assertion comes first: today's caret already sits at TAIL + 2,
+    // so asserting the head alone would pass without the seam existing.
+    view = mount(arm);
+    await settled();
+    const cell = cellByText(view, "gamma");
+    const tail = proseLine(view, "tail");
+    await dragPointer(cell, pointAtChar(cell, 1), tail, pointAtChar(tail, 2));
+    await settled();
+
+    const sel = view.state.selection.main;
+    expect(sel.empty, "the gesture must land a RANGE, not the caret it lands today").toBe(false);
+    expect(sel.anchor, "anchor is the pressed cell's source offset").toBe(GAMMA + 1);
+    expect(sel.head, "head is the release position in the prose below").toBe(TAIL + 2);
+    expect(revealed(view), "and the range still fires the table's reveal").toBe(true);
+  });
+
+  it("a drag released BELOW the last line runs to the end of the document", async () => {
+    // The commonest live overshoot, and the one the unit suite cannot see:
+    // `posAtCoords` clamps a point past the document to `doc.length` rather than
+    // answering null (@codemirror/view 6.43.0), so this is a real range, not a
+    // degrade. Released well below the editor's own box.
+    view = mount(arm);
+    await settled();
+    const cell = cellByText(view, "gamma");
+    const box = view.dom.getBoundingClientRect();
+    await dragPointer(cell, pointAtChar(cell, 1), document.body, {
+      x: box.left + box.width / 2,
+      y: box.bottom + 40,
+    });
+    await settled();
+
+    const sel = view.state.selection.main;
+    expect(sel.anchor).toBe(GAMMA + 1);
+    expect(sel.head, "clamped to the document end, not refused").toBe(view.state.doc.length);
   });
 
   it("a press and release at the SAME point stays a click: collapsed caret at the cell start", async () => {
