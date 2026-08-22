@@ -23,10 +23,11 @@
 // What this does NOT cover — measured, so nobody assumes wider protection than
 // exists. It pins the CHAIN, not the contents of each link: shrinking a
 // project's `include`, setting `noCheck`, or flipping `strict` in
-// tsconfig.base.json all leave these four assertions green (the E2E `include`
-// check below is the one exception, and only for that config). Nor does it pin
-// its own execution path — the vitest `include` and the CI wiring that runs
-// `pnpm test` could stop invoking this file. And dist/ can still be produced
+// tsconfig.base.json all leave these four assertions green — measured. The E2E
+// `include` check below is not an exception to that list: it fires when that
+// config GAINS a src path, not when any project's checking is weakened. Nor
+// does this file pin its own execution path — the vitest `include` and the CI
+// step that runs `pnpm test:unit` could stop invoking it. And dist/ can still be produced
 // outside the gate by `pnpm watch` or a direct esbuild call, which is by
 // design; the release path is safe only because ci.yml and publish.yml both go
 // through `pnpm build`, and that wiring is outside this file's guarantee.
@@ -98,14 +99,14 @@ describe("pnpm compile project chain", () => {
   it("reaches the bundle step only through both type-check gates", () => {
     // `build` emitting dist/ without the gates would restore the same silent
     // green: the bundle would ship from source no compiler ever looked at.
-    // BOTH gates are load-bearing. `compile` covers the host and test
-    // programs — including two that DO compile src/webview (test/webview,
-    // test/webview-browser), so `compile:webview` is not the only tsc pass
-    // over that source. It is the only one that checks it under the ambient
-    // view it actually ships with (`types: ["vscode-webview"]`, no node),
-    // which is what catches webview code reaching for a Node global; the
-    // others widen or empty `types`. Pinning `compile` alone once left that
-    // check free to drift while this test stayed green.
+    // BOTH gates are pinned, though only `compile` is load-bearing TODAY:
+    // test/webview-browser already compiles src/webview with a superset
+    // include and an emptied `types`, so it currently subsumes what
+    // `compile:webview` checks (measured — a Node-global probe in
+    // src/webview/shell.ts reddens both). `compile:webview` is pinned as
+    // defence in depth: that subsumption rests on the browser project's
+    // `include`, which nothing here pins (see the boundary note at the top).
+    // Do not "simplify" this gate away on the strength of today's overlap.
     //
     // Pinned by exact equality, like `compile`, because every weaker shape
     // tried here turned out to be bypassable. Splitting on `&&` and comparing
@@ -129,9 +130,10 @@ describe("pnpm compile project chain", () => {
   it("keeps compile:webview a real tsc pass", () => {
     // `build` calling `compile:webview` means nothing if that script stops
     // type-checking: `"echo skip"` or a trailing `|| true` leaves every other
-    // assertion here green while the ONLY tsc pass over src/webview disappears
-    // — the same accident this file exists to catch, one level down. The body
-    // is pinned exactly, matching the treatment `compile` already gets.
+    // assertion here green while a tsc pass over src/webview disappears — the
+    // same accident this file exists to catch, one level down. (It is not the
+    // only such pass today; see the gate comment above for why it is pinned
+    // anyway.) The body is pinned exactly, as `compile` already is.
     expect(pkg.scripts["compile:webview"]).toBe("tsc -p ./src/webview");
   });
 });
