@@ -88,24 +88,25 @@ describe("pnpm compile project chain", () => {
   it("reaches the bundle step only through both type-check gates", () => {
     // `build` emitting dist/ without the gates would restore the same silent
     // green: the bundle would ship from source no compiler ever looked at.
-    // BOTH gates matter — `compile` covers the host and test programs, and
-    // `compile:webview` is the only tsc pass over src/webview, which lands in
-    // the same dist/webview/ output.
+    // BOTH gates are load-bearing — `compile` covers the host and test
+    // programs, and `compile:webview` is the only tsc pass over src/webview,
+    // which lands in the same dist/webview/ output; pinning `compile` alone
+    // once left that half free to drift while this test stayed green.
     //
     // Pinned by exact equality, like `compile`, because every weaker shape
-    // tried here has been measurably bypassable. Splitting on `&&` and
-    // comparing indices cannot see short-circuiting, so it accepted
+    // tried here turned out to be bypassable. Splitting on `&&` and comparing
+    // indices cannot see short-circuiting, so it accepted
     // `… && false || node esbuild…`. Pinning only the leading prefix left the
     // tail free, so it accepted `… --production || node esbuild…` (bundles
     // ungated when a gate fails) and `… --production || true` (exits 0 on a
     // failed type-check). The obvious next patch — reject `[&|;\n]` in the
     // tail — is a denylist, and this file's whole history is denylists missing
-    // a case: it would still admit `>`, `$(…)`, backticks and `#`. An exact
-    // match has no such gap.
+    // a case: it would still admit `>`, `$(…)`, backticks and `#`. Exact
+    // equality has no such gap.
     //
     // The cost is deliberate: changing `build` now requires updating this
-    // string. That is the same contract `compile` already carries, and the
-    // measured price is nil — `build` has not changed since the initial commit.
+    // string. `compile` already carries that same contract, and the measured
+    // price is nil — `build` has not changed since the initial commit.
     expect(pkg.scripts.build).toBe(
       "pnpm compile && pnpm compile:webview && node esbuild.config.mjs --production"
     );
