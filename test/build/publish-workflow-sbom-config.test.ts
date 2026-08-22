@@ -168,13 +168,14 @@ describe("CI rehearses the release SBOM sequence", () => {
 
   it.each(SHARED_STEPS)("keeps the load-bearing content of `%s`", (step) => {
     // Assert the needle EXISTS before using it. The `Record<SharedStep, …>` type
-    // above looks like it already makes that impossible, but nothing enforces it
-    // here: `test/build/` is in none of the four tsconfigs `pnpm compile` runs
-    // (the trap CLAUDE.md documents for test/markdown and test/shared), so the
-    // exhaustiveness check never executes — and at runtime a missing entry makes
-    // this `expect(…).toMatch(undefined)`, which vitest PASSES silently. Without
-    // this line a forgotten entry ships with zero enforcement: verified by
-    // deleting one and watching the whole suite stay green.
+    // above IS enforced now — this file carries no `@ts-nocheck` and
+    // `test/build/tsconfig.json` type-checks the directory as `pnpm compile`'s
+    // 5th project, so a forgotten entry fails the build (measured: dropping the
+    // "Generate SBOM (SPDX)" entry yields TS2741 at the LOAD_BEARING literal).
+    // Kept as a runtime belt-and-braces check anyway, because the failure mode
+    // it covers is silent: if that type-level guarantee ever regresses, a
+    // missing entry degrades this to `expect(…).toMatch(undefined)`, which
+    // vitest PASSES.
     const needle = LOAD_BEARING[step];
     expect(needle).toBeDefined();
     expect(stepBlock(sbomJob, step, "ci.yml")).toMatch(needle);
