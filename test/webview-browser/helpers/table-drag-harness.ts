@@ -38,6 +38,9 @@ export const PLAIN = DOC.indexOf("plain");
 /** Source offset of the table block's first byte — the caret the widget falls
  *  back to when a gesture maps to no cell at all (`blockStartCaret`). */
 export const TABLE_BLOCK_START = DOC.indexOf("| Alpha");
+/** Source offset of the paragraph AFTER the table — the release point for the
+ *  gesture "select the table plus the paragraph below". */
+export const TAIL = DOC.indexOf("tail");
 
 /** Production extension order for the table island (editor.ts: skeleton field
  *  BEFORE the block field). Caret parked at doc end so the line-level reveal is
@@ -80,6 +83,16 @@ export function widgetRoot(v: EditorView): HTMLElement {
   const root = v.contentDOM.querySelector<HTMLElement>(".quoll-table-block");
   expect(root, "table widget must be rendered").not.toBeNull();
   return root as HTMLElement;
+}
+
+/** The rendered `.cm-line` holding `text`, as ordinary editable prose OUTSIDE
+ *  the table widget — the release target for a drag that leaves the widget. */
+export function proseLine(v: EditorView, text: string): HTMLElement {
+  const line = [...v.contentDOM.querySelectorAll<HTMLElement>(".cm-line")].find(
+    (l) => l.textContent === text
+  );
+  expect(line, `prose line "${text}" must be rendered`).toBeDefined();
+  return line as HTMLElement;
 }
 
 export function cellByText(v: EditorView, text: string): HTMLElement {

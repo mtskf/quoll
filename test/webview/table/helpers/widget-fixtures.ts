@@ -1,15 +1,18 @@
-// Fixtures shared by the four `cm-table-widget-*.test.ts` suites and by
-// widget-fixtures-guards.test.ts, the probe file that pins this module's own
-// mechanisms. Who shares what: `makeWidget` by all five; `stubView` by render,
-// update and caret; `mockView` by render, update and guards; `press` / `SRC`
-// by drag, caret and guards; the scripted-caret vehicle (`stubViewWithCaret`,
-// whose `mount` / `update` are part of the closure it returns) by drag and
-// guards; `drainResolverFailures` by guards alone; the image cells by drag
-// alone. The vehicle lives here rather than inline in the drag suite because
-// the resolver-scoping rule it carries — now ENFORCED by that closure rather
-// than asked for in prose — has to have exactly one definition to be
-// enforceable when the next suite reaches for it. Not a test file itself (no
-// `.test.ts` suffix), mirroring test/webview-browser/helpers/frames.ts.
+// Fixtures shared by the five `cm-table-widget-*.test.ts` suites (render,
+// update, caret, drag, release) and by widget-fixtures-guards.test.ts, the
+// probe file that pins this module's own mechanisms. Who shares what:
+// `makeWidget` by all six; `stubView` by render, update and caret; `mockView`
+// by render, update and guards; `press` / `SRC` by drag, release, caret and
+// guards; the scripted-caret vehicle (`stubViewWithCaret`, whose `mount` /
+// `update` / `scrollContentBy` are part of the closure it returns) by drag,
+// release and guards — `scrollContentBy` by drag alone and the `posAtCoords`
+// script by release alone; `drainResolverFailures` by guards alone; `IMG_CELL`
+// by drag AND release, `MIXED_IMG_CELL` by drag alone. The vehicle lives here
+// rather than inline in the drag suite because the resolver-scoping rule it
+// carries — now ENFORCED by that closure rather than asked for in prose — has
+// to have exactly one definition to be enforceable when the next suite reaches
+// for it. Not a test file itself (no `.test.ts` suffix), mirroring
+// test/webview-browser/helpers/frames.ts.
 import { EditorState, type Extension } from "@codemirror/state";
 import type { EditorView as EditorViewType } from "@codemirror/view";
 import { afterEach } from "vitest";
@@ -23,18 +26,24 @@ import {
 } from "../../../../src/webview/cm/table/cell-point.js";
 import { TableBlockWidget } from "../../../../src/webview/cm/table/table-widget.js";
 
-// Out-of-band failure channel for the scripted caret resolver. It cannot
-// signal by THROWING: `cellPointAt` wraps every resolver call in a catch-all (a
-// documented part of the `CaretResolver` contract — a throw must never take
-// down the click handler), and `dragRange` turns a null point into the
-// collapsed caret. So a resolver that failed for a reason the test did not ASK
-// for is indistinguishable, at the assertion, from one scripted to return null
-// on purpose — and the caret is the expected value of most rows in the drag
-// suite, so the failure reads as a pass. Recording the reason here and throwing
-// it out of the drain below is the only channel that survives the catch-all.
+// Out-of-band failure channel for this module's own misuse reports. Its first
+// producer was the scripted caret resolver — hence the name it and its drain
+// still carry — but the widget-disposer loop in the `afterEach` below reports
+// through it too, so the message each producer pushes has to name its own
+// mechanism; the headline the drain prints cannot.
+//
+// The resolver cannot signal by THROWING: `cellPointAt` wraps every resolver
+// call in a catch-all (a documented part of the `CaretResolver` contract — a
+// throw must never take down the click handler), and `dragRange` turns a null
+// point into the collapsed caret. So a resolver that failed for a reason the
+// test did not ASK for is indistinguishable, at the assertion, from one
+// scripted to return null on purpose — and the caret is the expected value of
+// most rows in the drag suite, so the failure reads as a pass. Recording the
+// reason here and throwing it out of the drain below is the only channel that
+// survives the catch-all.
 const resolverFailures: string[] = [];
 
-/** Throw whatever the scripted resolver recorded since the last drain, and
+/** Throw whatever this module's producers recorded since the last drain, and
  *  clear it either way. The `afterEach` below is the automatic caller — every
  *  suite gets the channel for free — and it is EXPORTED so the guards probe can
  *  assert on a deliberately-provoked failure in-test: an expected failure has to
@@ -53,9 +62,26 @@ export function drainResolverFailures(): void {
   // throw cannot leave entries behind for the next test to inherit.
   const reasons = resolverFailures.splice(0);
   if (reasons.length > 0) {
-    throw new Error(`scripted caret resolver misuse: ${reasons.join("; ")}`);
+    // A MECHANISM-NEUTRAL headline: the channel has more than one producer, and
+    // leading with any one of their names would misattribute the others. Each
+    // reason names its own mechanism instead. Newline-joined rather than
+    // `"; "`-joined because a reason may itself be multi-line — a disposer
+    // reason carries the thrown error's stack.
+    throw new Error(`widget fixture misuse:\n${reasons.join("\n")}`);
   }
 }
+
+// Disposers for widgets mounted through `stubViewWithCaret`. A widget owns
+// DOCUMENT-level listeners while a gesture is in flight, and `replaceChildren`
+// only unparents its DOM — `destroy` is what CodeMirror itself would call, and
+// what actually takes those listeners with it.
+//
+// The leak this prevents is per-GESTURE, not per-file: the listeners are armed
+// on `mousedown` and removed only when the gesture's controller aborts, so
+// every row whose release the seam never saw — every click-seam row, every
+// mousedown-only row — would leave its own listener set on the document for
+// the rest of the file, not merely the last mount's.
+const mountedWidgets: Array<() => void> = [];
 
 // Widgets under test are mounted into the body (the caret resolver needs a live
 // tree). Clear it between tests so no test can see an earlier test's widget —
@@ -75,6 +101,35 @@ export function drainResolverFailures(): void {
 // by body cleanliness, so nothing observed the body between cases.)
 afterEach(() => {
   // Cleanup FIRST, so a throwing drain never also leaks DOM into the next test.
+  // Destroy BEFORE unparenting: the widget's own teardown is what removes the
+  // document listeners, and it must not depend on the DOM still being attached.
+  //
+  // Per-disposer catch, not a bare loop. No disposer can throw TODAY —
+  // `destroy` only calls `AbortController.abort()`, and nothing registers an
+  // `abort` listener on that signal, so no user code runs during teardown — but
+  // this loop is a throw-CAPABLE step sitting ahead of the two cleanups the
+  // comment above orders first, and the failure mode is silent three ways at
+  // once: the remaining disposers are skipped (leaking the very document
+  // listeners this loop exists to remove), `replaceChildren` is skipped, and
+  // the drain is skipped, pushing a recorded resolver failure into the NEXT
+  // test's hook — the misattribution `drainResolverFailures`' docblock is built
+  // to prevent. Routing a throw into `resolverFailures` keeps the report on the
+  // test that provoked it and keeps the ordering invariant structural rather
+  // than dependent on `destroy` staying throw-free.
+  for (const dispose of mountedWidgets.splice(0)) {
+    try {
+      dispose();
+    } catch (err) {
+      // The STACK, not `String(err)`. The drain throws a NEW Error, whose own
+      // stack points at this hook, so unless the thrown one is carried in the
+      // message nothing anywhere names the throw site — and this loop calls
+      // into `TableBlockWidget.destroy`, a mechanism the reason has to name
+      // itself because the drain's headline is deliberately neutral.
+      resolverFailures.push(
+        `widget disposer threw: ${err instanceof Error ? (err.stack ?? err.message) : String(err)}`
+      );
+    }
+  }
   document.body.replaceChildren();
   drainResolverFailures();
 });
@@ -121,7 +176,16 @@ export function stubView(
   return {
     state: EditorState.create({ extensions }),
     dispatch: (tr: unknown) => dispatched.push(tr),
-  } satisfies Pick<EditorViewType, "state" | "dispatch"> as unknown as EditorViewType;
+    // The widget measures pointer travel against this element's rect when it
+    // arms a gesture, so a stub without one throws inside a DOM listener —
+    // where the throw is swallowed and the test sees a missing dispatch rather
+    // than an error. happy-dom reports an all-zero rect, which is exactly right
+    // for the suites using this stub: content that never moves.
+    contentDOM: document.createElement("div"),
+  } satisfies Pick<
+    EditorViewType,
+    "state" | "dispatch" | "contentDOM"
+  > as unknown as EditorViewType;
 }
 
 /** The shared throwaway-recorder `stubView` — for the display-only paths, where
@@ -157,7 +221,17 @@ export const mockView = stubView([]);
 export function stubViewWithCaret(
   dispatched: unknown[],
   script: Array<{ text: string; offset: number } | null>,
-  extensions: Extension[] = []
+  extensions: Extension[] = [],
+  /** What `view.posAtCoords` answers for a release point OUTSIDE the widget —
+   *  the document position the outside-release seam uses as the range head.
+   *  Scripted per suite, like the caret resolver, because happy-dom has no
+   *  layout and CodeMirror is not mounted here at all.
+   *
+   *  The default is NOT `() => null`: a null answer degrades to the collapsed
+   *  caret, which is the expected value of several rows in the release suite, so
+   *  an unscripted call would pass vacuously. It records misuse through the same
+   *  channel the caret resolver uses, so an unscripted call is audible instead. */
+  posAtCoords?: (x: number, y: number) => number | null
 ) {
   let root: HTMLElement | null = null;
   let i = 0;
@@ -205,10 +279,50 @@ export function stubViewWithCaret(
     );
     return null;
   };
+  // happy-dom has no layout engine, so `getBoundingClientRect` answers zeros for
+  // everything. The widget only ever reads `left`/`top` off this rect, so a
+  // scripted origin is a complete stand-in — and it is the ONLY way to express
+  // "the content moved under a stationary pointer" without a layout engine.
+  const contentDOM = document.createElement("div");
+  let origin = { left: 0, top: 0 };
+  contentDOM.getBoundingClientRect = () =>
+    ({
+      ...origin,
+      x: origin.left,
+      y: origin.top,
+      width: 0,
+      height: 0,
+      right: 0,
+      bottom: 0,
+    }) as DOMRect;
+
   const view = {
     state: EditorState.create({ extensions: [quollTableCaretResolver.of(resolve), ...extensions] }),
     dispatch: (tr: unknown) => dispatched.push(tr),
-  } satisfies Pick<EditorViewType, "state" | "dispatch"> as unknown as EditorViewType;
+    contentDOM,
+    // ⚠️ `EditorView.posAtCoords` is OVERLOADED — `(coords, precise: false):
+    // number` and `(coords): number | null` — and a single-signature stub is not
+    // assignable to the FIRST overload, so `satisfies` rejects it with TS2322
+    // ("Type 'number | null' is not assignable to type 'number'"). Measured with
+    // tsc, and worth knowing WHY this cast is here rather than "cleaning it up":
+    // vitest is transpile-only, so no test run would catch its removal — the
+    // error surfaces only at `pnpm compile`.
+    //
+    // Only this ONE member is cast, and the key stays IN the `Pick` below, so an
+    // omitted member is still an error. Casting the whole literal instead would
+    // give up the typo check (`dispath`) for every member at once, which is the
+    // entire reason the `satisfies` clause exists.
+    posAtCoords: ((coords: { x: number; y: number }) => {
+      if (posAtCoords === undefined) {
+        resolverFailures.push("view.posAtCoords called with no scripted answer");
+        return null;
+      }
+      return posAtCoords(coords.x, coords.y);
+    }) as EditorViewType["posAtCoords"],
+  } satisfies Pick<
+    EditorViewType,
+    "state" | "dispatch" | "contentDOM" | "posAtCoords"
+  > as unknown as EditorViewType;
 
   /** Mount a widget the way every drag test needs it: rendered, resolver root
    *  wired, attached to the body (the caret resolver needs a live tree). The
@@ -233,6 +347,7 @@ export function stubViewWithCaret(
     const dom = widget.toDOM(view);
     root = dom;
     document.body.appendChild(dom);
+    mountedWidgets.push(() => widget.destroy(dom));
     return dom;
   };
 
@@ -241,17 +356,31 @@ export function stubViewWithCaret(
   const update = (dom: HTMLElement, next: TableBlockWidget, prev: TableBlockWidget): boolean =>
     next.updateDOM(dom, view, prev);
 
-  return { mount, update };
+  /** Move the CONTENT by (dx, dy) — a scroll, a `scrollIntoView` from the host,
+   *  anything that shifts the text under a held pointer. Scrolling DOWN by 40
+   *  moves the content UP, so the origin goes negative: a pointer that has not
+   *  moved is then 40px further into the document than where it pressed, which
+   *  is the travel the old viewport measurement could not see. */
+  const scrollContentBy = (dx: number, dy: number): void => {
+    origin = { left: origin.left - dx, top: origin.top - dy };
+  };
+
+  return { mount, update, scrollContentBy };
 }
 
 /** Dispatch a mouse event carrying coordinates — the movement threshold reads
  *  them, and happy-dom defaults them to 0. `detail: 1` by default because a
  *  real pointer click always carries a click count; `detail: 0` is reserved for
  *  keyboard/programmatic activation, which the drag path deliberately ignores
- *  (override it explicitly to exercise that guard). */
+ *  (override it explicitly to exercise that guard).
+ *
+ *  `mouseup` is what the OUTSIDE-release seam listens for, and it is dispatched
+ *  on whatever element the pointer was released over — usually NOT the widget,
+ *  which is the whole point of that seam. Aim it at `document.body` to model a
+ *  release that landed outside the table. */
 export function press(
   el: HTMLElement,
-  type: "mousedown" | "click",
+  type: "mousedown" | "mouseup" | "click",
   x: number,
   y: number,
   init: MouseEventInit = {}
