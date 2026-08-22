@@ -2,6 +2,12 @@
 
 All notable changes to Quoll are documented here.
 
+## 0.1.76 — 2026-08-23
+
+### Fixed
+
+- Dragging to select text in a table now keeps the selection when you release the mouse outside the table, and when the document scrolls mid-drag. Previously either case dropped what you had selected and left a plain cursor behind.
+
 ## 0.1.75 — 2026-08-21
 
 ### Changed
