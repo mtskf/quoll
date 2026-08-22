@@ -24,7 +24,10 @@
 // /instance route only fills the template. No esbuild bundle is built on this path.
 //
 // @ts-nocheck — importing a plain .mjs with no bundled types; vitest runs this
-// transpile-only and tsc does not include test/build/ in `pnpm compile`.
+// transpile-only. `test/build/tsconfig.json` DOES type-check this directory
+// under `pnpm compile`, but this file opts out wholesale via the file-level
+// directive, so nothing here is checked; swapping it for a line-scoped
+// `@ts-expect-error` on the import alone is a tracked follow-up.
 import type { Server } from "node:http";
 
 import { afterEach, describe, expect, it } from "vitest";

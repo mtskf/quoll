@@ -12,6 +12,8 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import esbuild from "esbuild";
 import { beforeAll, describe, expect, it } from "vitest";
+// @ts-expect-error — esbuild.config.mjs is plain JS with no .d.ts; the runtime
+// shape (a factory returning esbuild BuildOptions) is exercised below.
 import { createBuildConfigs } from "../../esbuild.config.mjs";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
@@ -60,7 +62,20 @@ describe("NOTICE covers every bundled third-party package", () => {
     // Every value is a config emitting into the packaged dist/ (host, webview,
     // test-harness). Union them all so a dependency bundled into ANY shipped
     // output must be attributed — not just host + webview.
-    const configs = Object.values(createBuildConfigs({ production: true }));
+    // A CAST, deliberately — not a checked declaration. createBuildConfigs comes
+    // from the untyped .mjs above, so Object.values() over it widens each entry
+    // to `unknown`, which `.map(shippedPackages)` rejects; the cast is what
+    // narrows it to the shape esbuild.build actually requires. But it only
+    // ASSERTS that shape — nothing here verifies the factory really emits it.
+    // Written as an annotation it would READ like a compile-time pin while doing
+    // exactly this much: contextual typing feeds the annotation back into
+    // Object.values<T>, and `any` satisfies whatever T it picks. Spelled as a
+    // cast so the file does not claim a check it is not performing. Giving
+    // esbuild.config.mjs a companion .d.mts (tracked in TODO.md) is what turns
+    // this back into a real pin.
+    const configs = Object.values(
+      createBuildConfigs({ production: true })
+    ) as esbuild.BuildOptions[];
     const sets = await Promise.all(configs.map(shippedPackages));
     bundled = [...new Set(sets.flatMap((s) => [...s]))].sort();
     notice = readFileSync(resolve(root, "NOTICE"), "utf8");

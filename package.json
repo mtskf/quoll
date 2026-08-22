@@ -305,7 +305,7 @@
     ]
   },
   "scripts": {
-    "compile": "tsc -p ./ && tsc -p ./test/extension/tsconfig.unit.json && tsc -p ./test/webview/tsconfig.json && tsc -p ./test/webview-browser/tsconfig.json",
+    "compile": "tsc -p ./ && tsc -p ./test/extension/tsconfig.unit.json && tsc -p ./test/webview/tsconfig.json && tsc -p ./test/webview-browser/tsconfig.json && tsc -p ./test/build/tsconfig.json",
     "compile:webview": "tsc -p ./src/webview",
     "build": "pnpm compile && pnpm compile:webview && node esbuild.config.mjs --production",
     "watch": "node esbuild.config.mjs --watch",
