@@ -88,28 +88,27 @@ describe("pnpm compile project chain", () => {
   it("reaches the bundle step only through both type-check gates", () => {
     // `build` emitting dist/ without the gates would restore the same silent
     // green: the bundle would ship from source no compiler ever looked at.
-    // BOTH gates are pinned — `compile` covers the host and test programs, and
+    // BOTH gates matter — `compile` covers the host and test programs, and
     // `compile:webview` is the only tsc pass over src/webview, which lands in
-    // the same dist/webview/ output. Pinning `compile` alone left the webview
-    // half free to drift behind esbuild while this test stayed green.
+    // the same dist/webview/ output.
     //
-    // Assert the required PREFIX rather than splitting into steps and checking
-    // order. Splitting on `&&` cannot see shell short-circuiting, so it accepts
-    // `pnpm compile && pnpm compile:webview && false || node esbuild…`: both
-    // gates precede the bundle-bearing segment, yet `||` runs the bundler when
-    // a gate fails. A prefix pin models what actually matters — the bundler is
-    // reachable only through two successful `&&` gates.
+    // Pinned by exact equality, like `compile`, because every weaker shape
+    // tried here has been measurably bypassable. Splitting on `&&` and
+    // comparing indices cannot see short-circuiting, so it accepted
+    // `… && false || node esbuild…`. Pinning only the leading prefix left the
+    // tail free, so it accepted `… --production || node esbuild…` (bundles
+    // ungated when a gate fails) and `… --production || true` (exits 0 on a
+    // failed type-check). The obvious next patch — reject `[&|;\n]` in the
+    // tail — is a denylist, and this file's whole history is denylists missing
+    // a case: it would still admit `>`, `$(…)`, backticks and `#`. An exact
+    // match has no such gap.
     //
-    // The prefix stops at the bundler's name on purpose: `build` is still
-    // deliberately NOT pinned by exact equality, because the bundle step's
-    // trailing flags are expected to move for ordinary reasons and only the
-    // gating prefix is load-bearing.
-    const REQUIRED_BUILD_PREFIX = "pnpm compile && pnpm compile:webview && node esbuild.config.mjs";
-    const buildScript: string = pkg.scripts.build;
-    // Compare a slice rather than asserting `startsWith(…)` is true: on failure
-    // this reports the actual leading text against the expected prefix, where
-    // the boolean form reports only `expected false to be true`.
-    expect(buildScript.slice(0, REQUIRED_BUILD_PREFIX.length)).toBe(REQUIRED_BUILD_PREFIX);
+    // The cost is deliberate: changing `build` now requires updating this
+    // string. That is the same contract `compile` already carries, and the
+    // measured price is nil — `build` has not changed since the initial commit.
+    expect(pkg.scripts.build).toBe(
+      "pnpm compile && pnpm compile:webview && node esbuild.config.mjs --production"
+    );
   });
 
   it("keeps compile:webview a real tsc pass", () => {
