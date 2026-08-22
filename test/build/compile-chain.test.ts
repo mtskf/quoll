@@ -20,17 +20,18 @@
 // program driven by `pnpm test:e2e:run`. A derived list would quietly adopt
 // whatever config lands next instead of forcing that call to be reviewed.
 //
-// What this does NOT cover — measured, so nobody assumes wider protection than
-// exists. It pins the CHAIN, not the contents of each link: shrinking a
+// What this does NOT cover — written down so nobody assumes wider protection
+// than exists. It pins the CHAIN, not the contents of each link: shrinking a
 // project's `include`, setting `noCheck`, or flipping `strict` in
 // tsconfig.base.json all leave these four assertions green — measured. The E2E
 // `include` check below is not an exception to that list: it fires when that
 // config GAINS a src path, not when any project's checking is weakened. Nor
 // does this file pin its own execution path — the vitest `include` and the CI
-// step that runs `pnpm test:unit` could stop invoking it. And dist/ can still be produced
-// outside the gate by `pnpm watch` or a direct esbuild call, which is by
-// design; the release path is safe only because ci.yml and publish.yml both go
-// through `pnpm build`, and that wiring is outside this file's guarantee.
+// step that runs `pnpm test:unit` could stop invoking it. And dist/ can still
+// be produced outside the gate by `pnpm watch` or a direct esbuild call, which
+// is by design; the release path is safe only because ci.yml and publish.yml
+// both go through `pnpm build`, and that wiring is outside this file's
+// guarantee.
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
