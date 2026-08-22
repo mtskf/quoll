@@ -67,6 +67,16 @@ describe("pnpm compile project chain", () => {
   it("runs that chain ahead of the bundle step", () => {
     // `build` emitting dist/ without the gate would restore the same silent
     // green: the bundle would ship from source no compiler ever looked at.
-    expect(pkg.scripts.build).toContain("pnpm compile");
+    //
+    // Split into steps rather than substring-matching the script. "pnpm
+    // compile" is a PREFIX of "pnpm compile:webview", which `build` also runs,
+    // so toContain("pnpm compile") stays green after the compile step is
+    // deleted outright — the same trap this file calls out for `tsc -p ./`
+    // above, and it was live here until the cycle-2 simplify pass caught it.
+    const steps: string[] = pkg.scripts.build.split("&&").map((s: string) => s.trim());
+    expect(steps).toContain("pnpm compile");
+    expect(steps.indexOf("pnpm compile")).toBeLessThan(
+      steps.findIndex((s: string) => s.includes("esbuild.config.mjs"))
+    );
   });
 });
