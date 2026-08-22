@@ -14,10 +14,14 @@
 // rectangles measured with a DOM Range, and the facet's real caret-from-point
 // resolvers.
 //
-// Every contract below runs TWICE, once per caret-from-point arm: the default
-// (`caretPositionFromPoint`, what this runner's Chromium takes) and the
-// `caretRangeFromPoint` fallback, which is the one arm LIVE on the extension's
-// floor and would otherwise never be exercised here. See `ARMS` below.
+// Every contract inside the `describe.each(ARMS)` below runs TWICE, once per
+// caret-from-point arm: the default (`caretPositionFromPoint`, what this
+// runner's Chromium takes) and the `caretRangeFromPoint` fallback, which is the
+// one arm LIVE on the extension's floor and would otherwise never be exercised
+// here. See `ARMS` below. The one exception is the focus contract in the final
+// `describe`, which sits OUTSIDE that block and mounts with no arm: what it pins
+// is the native mousedown default, which no caret-from-point API takes part in,
+// so a second run would assert the same thing twice.
 import type { Extension } from "@codemirror/state";
 import type { EditorView } from "@codemirror/view";
 import { afterEach, describe, expect, it } from "vitest";

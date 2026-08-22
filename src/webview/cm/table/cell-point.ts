@@ -129,8 +129,15 @@ declare const absoluteOffsetBrand: unique symbol;
 export type AbsoluteOffset = number & { readonly [absoluteOffsetBrand]: true };
 
 /** THE constructor of an {@link AbsoluteOffset} — a cast, not a guard (see the
- *  brand note in cell-source-map.ts). Both call sites below mint only a value
- *  that `Number.isSafeInteger` has just accepted. */
+ *  brand note in cell-source-map.ts). It checks nothing, so the guarantee lives
+ *  at each MINT, and a grep for `asAbsoluteOffset` is how a reader audits them.
+ *  Deliberately not an enumeration: mints span modules — today `stampedOffset`
+ *  (only what `Number.isSafeInteger` has just accepted), `cellPointAt` (clamped
+ *  between two already-branded bounds), and table-widget.ts's outside-release
+ *  seam (`view.posAtCoords`, which CodeMirror has already clamped to
+ *  `[0, doc.length]`) — so no list written HERE can stay complete, and an
+ *  earlier one silently did not. The grep is the check; those are examples of
+ *  what it should find at each hit. */
 export function asAbsoluteOffset(value: number): AbsoluteOffset {
   return value as AbsoluteOffset;
 }

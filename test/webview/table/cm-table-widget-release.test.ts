@@ -18,7 +18,7 @@ import { describe, expect, it, vi } from "vitest";
 import { parseTable } from "../../../src/markdown/table/index.js";
 import { quollOpenExternalSink } from "../../../src/webview/cm/open-external.js";
 import { TableBlockWidget } from "../../../src/webview/cm/table/table-widget.js";
-import { makeWidget, press, SRC, stubViewWithCaret } from "./helpers/widget-fixtures.js";
+import { IMG_CELL, makeWidget, press, SRC, stubViewWithCaret } from "./helpers/widget-fixtures.js";
 
 /** A document position in the prose BELOW the table, as `view.posAtCoords`
  *  would answer it. Any offset outside the table's own source works. */
@@ -132,12 +132,27 @@ describe("TableBlockWidget release outside the widget", () => {
   // ⚠️ What THIS row pins, stated honestly: the observable re-arm cycle, not
   // the `armedRelease.get(root)?.abort()` line that runs at arm time. That line
   // is unobservable here — gesture 1's controller was already aborted by its
-  // own mouseup, so aborting it again is a no-op. No single-line mutation of
-  // the seam was found that reddens this row (measured: dropping the arm-time
-  // abort, dropping `armedRelease.set`, and dropping the mouseup's own
-  // `release.abort()` all leave it green — the last two redden the destroy and
-  // one-shot rows instead). It is a behavioural tripwire for the cycle, and the
-  // scripted head makes it discriminating about WHICH gesture answered.
+  // own mouseup, so aborting it again is a no-op. Two mutations DO redden this
+  // row's contract, and only one of them is visible in this environment:
+  //
+  //  1. Arming once per root — `if (armedRelease.get(root) !== undefined)
+  //     return;` in place of the arm-time abort — reddens this row and NO
+  //     other in the table suite (measured). So the row does have unique
+  //     discriminating power; do not delete it as redundant.
+  //  2. Reusing the spent controller — `armedRelease.get(root) ?? new
+  //     AbortController()` — MUST redden it per the DOM spec, because
+  //     `addEventListener` returns early on an already-aborted signal and
+  //     gesture 2 would register no listeners at all. It stays GREEN here:
+  //     happy-dom registers on pre-aborted signals anyway (measured
+  //     2026-08-22). Only a real-browser row can pin fresh-controller-
+  //     per-gesture.
+  //
+  // (2) is also why an earlier note here claimed no single-line mutation could
+  // redden this row: that mutation was tried, came back green, and was
+  // believed. In THIS suite a green mutation is not evidence that nothing pins
+  // the line — happy-dom's event fidelity has to be ruled out first (it is the
+  // same class of gap as its missing layout, dropped `calc()` and dropped
+  // nested `var()`).
   it("a completed gesture re-arms: the next press draws its own range", () => {
     const dispatched: unknown[] = [];
     // The head is the release's own Y, so the two gestures cannot be confused
@@ -196,7 +211,9 @@ describe("TableBlockWidget release outside the widget", () => {
     // mousedown, and NONE of them stops mouseup. A bubble-phase disarm is
     // starved by exactly those presses while the release still arrives: the one
     // combination that dispatches a range the user never drew. Capture cannot be
-    // starved from below. (Measured: bubble 0, capture 1, mouseup delivered.)
+    // starved from below. (measured against an element that stops mousedown: a
+    // bubble-phase listener fired 0 times, a capture-phase listener 1; the
+    // mouseup reached the document either way)
     const dispatched: unknown[] = [];
     const { mount } = stubViewWithCaret(
       dispatched,
@@ -221,14 +238,20 @@ describe("TableBlockWidget release outside the widget", () => {
   // disarming press is then itself an ARMING press for another widget, which is
   // the one shape none of those rows have.
   //
-  // What that shape actually tests: `pendingDrag` and `armedRelease` are keyed
-  // on the widget ROOT, so the first table's disarm must take its own entry and
-  // only its own. Were either a module-wide singleton, the second table's press
-  // would arm into the same slot the first one is about to clear, and the
-  // second gesture — the live one, the one the user is making — would be the
-  // casualty. (The ORDER is not what discriminates here: document capture runs
-  // before the second root's bubble `mousedown`, but root-keying makes either
-  // order correct. It is the keying that this row would lose.)
+  // What that shape actually tests: a disarm and an arm COEXISTING in one
+  // press — the first table's entry going away in the same event that writes
+  // the second table's.
+  //
+  // It does NOT pin that `pendingDrag` / `armedRelease` are keyed on the widget
+  // ROOT, though it reads as if it does. Document capture runs the disarm
+  // BEFORE the second root's bubble `mousedown`, so even a module-wide
+  // singleton would be cleared before gesture 2 armed into it — clear → write →
+  // read — and both assertions below would still hold. (Measured: with both
+  // WeakMaps replaced by module-wide singletons this row stays green, as does
+  // every other row that predates the two below.) What a singleton WOULD redden
+  // here is only the conjunction with a bubble-phase disarm, and the phase row
+  // above already owns that half. The keying itself is pinned by the two rows
+  // after this one.
   //
   // The second table's range doubles as the control arm, in the idiom of
   // cm-table-widget-drag.test.ts's stale-offset row: the first expectation is
@@ -259,6 +282,54 @@ describe("TableBlockWidget release outside the widget", () => {
     press(document.body, "mouseup", 30, 400);
     expect(first, "the stale gesture must not be resurrected").toEqual([]);
     expect(second, "and the live one must still draw its range").toEqual([
+      { selection: { anchor: SRC.indexOf("alpha") + 2, head: BELOW } },
+    ]);
+  });
+
+  // Cross-widget keying, pinned — the half the row above cannot reach.
+  //
+  // The only observable difference between root-keyed WeakMaps and a
+  // module-wide singleton is a SECOND widget's entry being touched while THIS
+  // gesture is in flight, with no press of its own to re-establish the live
+  // one. `destroy` and `updateDOM` are exactly that: both write the shared
+  // structures without an arming press, and CodeMirror calls both routinely —
+  // any viewport change, any edit in a paragraph above the tables. Under a
+  // singleton the OTHER table's teardown aborts the live gesture's listeners
+  // (nothing dispatches at all) and the OTHER table's update drops the live
+  // anchor (the release degrades to a block-start caret). Both rows are green
+  // on HEAD and red under the singleton mutation — measured, not assumed.
+  it("another table's widget being destroyed mid-gesture does not disarm this one", () => {
+    const first: unknown[] = [];
+    const second: unknown[] = [];
+    // ONE VEHICLE, ONE WIDGET (widget-fixtures.ts) — two tables need two.
+    const v1 = stubViewWithCaret(first, [{ text: "alpha", offset: 2 }], [], () => BELOW);
+    const v2 = stubViewWithCaret(second, [{ text: "alpha", offset: 2 }], [], () => BELOW);
+    const dom1 = v1.mount(makeWidget(SRC));
+    const other = makeWidget(SRC);
+    const dom2 = v2.mount(other);
+    press(dom1.querySelectorAll("td")[0] as HTMLElement, "mousedown", 30, 30);
+    // CodeMirror discards the OTHER table's widget mid-gesture.
+    other.destroy(dom2);
+    press(document.body, "mouseup", 30, 400);
+    expect(first, "this gesture is untouched by the other widget's teardown").toEqual([
+      { selection: { anchor: SRC.indexOf("alpha") + 2, head: BELOW } },
+    ]);
+  });
+
+  it("another table's updateDOM mid-gesture does not disarm this one", () => {
+    const first: unknown[] = [];
+    const second: unknown[] = [];
+    const v1 = stubViewWithCaret(first, [{ text: "alpha", offset: 2 }], [], () => BELOW);
+    const v2 = stubViewWithCaret(second, [{ text: "alpha", offset: 2 }], [], () => BELOW);
+    const dom1 = v1.mount(makeWidget(SRC));
+    const otherBefore = makeWidget(SRC);
+    const dom2 = v2.mount(otherBefore);
+    press(dom1.querySelectorAll("td")[0] as HTMLElement, "mousedown", 30, 30);
+    // A distant edit shifts the OTHER table, so its widget is updated in place —
+    // which drops ITS pending anchor. This gesture's anchor is a different entry.
+    v2.update(dom2, makeWidget(SRC, 7), otherBefore);
+    press(document.body, "mouseup", 30, 400);
+    expect(first, "this gesture keeps the anchor it armed").toEqual([
       { selection: { anchor: SRC.indexOf("alpha") + 2, head: BELOW } },
     ]);
   });
@@ -399,9 +470,14 @@ describe("TableBlockWidget release outside the widget", () => {
   // exactly what an in-progress update can deliver. Every such drag collapses
   // silently to a caret, so the log is the only trace it happened.
   //
-  // `objectContaining` rather than an exact payload: what the log must carry is
-  // an Error, and pinning the surrounding diagnostic fields exactly would make
-  // this row a change-detector for a payload that is meant to grow.
+  // The three diagnostic fields are pinned BY VALUE, not merely by shape. The
+  // point of the payload is that it names the RIGHT cell and the RIGHT point —
+  // `expect.any(Number)` would pass a log that reported some other cell's
+  // `cellFrom`, which is precisely the bug this diagnostic exists to rule out.
+  // Naming them does not make the row a change-detector: `objectContaining` is
+  // OPEN, so a payload that grows further fields still matches (measured), and
+  // the three below are the contract rather than the whole payload. `err` stays
+  // `expect.any(Error)` — pinning an Error's identity buys nothing.
   it("logs and swallows a throwing release lookup instead of losing the editor", () => {
     const dispatched: unknown[] = [];
     const { mount } = stubViewWithCaret(dispatched, [{ text: "alpha", offset: 2 }], [], () => {
@@ -414,7 +490,12 @@ describe("TableBlockWidget release outside the widget", () => {
       expect(() => press(document.body, "mouseup", 30, 400)).not.toThrow();
       expect(consoleError).toHaveBeenCalledWith(
         "[quoll] table widget release lookup failed",
-        expect.objectContaining({ err: expect.any(Error) })
+        expect.objectContaining({
+          cellFrom: SRC.indexOf("alpha"),
+          x: 30,
+          y: 400,
+          err: expect.any(Error),
+        })
       );
     } finally {
       consoleError.mockRestore();
@@ -462,15 +543,14 @@ describe("TableBlockWidget release outside the widget", () => {
     // comparing the release position with the cell, and the end that cannot be
     // placed exactly snaps AWAY from the other one, so the range still covers
     // the cell the pointer started in.
-    const cell = "a![i](https://x.test/a.png)b";
-    const src = `| A |\n| - |\n| ${cell} |`;
+    const src = `| A |\n| - |\n| ${IMG_CELL} |`;
     const dispatched: unknown[] = [];
     const { mount } = stubViewWithCaret(dispatched, [{ text: "b", offset: 0 }], [], () => 0);
     const dom = mount(makeWidget(src));
     press(dom.querySelector("td") as HTMLElement, "mousedown", 30, 30);
     press(document.body, "mouseup", 30, 0); // released ABOVE the table
     expect(dispatched).toEqual([
-      { selection: { anchor: src.indexOf(cell) + cell.length, head: 0 } },
+      { selection: { anchor: src.indexOf(IMG_CELL) + IMG_CELL.length, head: 0 } },
     ]);
   });
 
@@ -483,8 +563,7 @@ describe("TableBlockWidget release outside the widget", () => {
   // not notice, after which a forward drag out of an image cell would anchor at
   // the cell END, dropping the very cell the pointer started in.)
   it("a forward release below the table snaps an unmappable anchor OUTWARD", () => {
-    const cell = "a![i](https://x.test/a.png)b";
-    const src = `| A |\n| - |\n| ${cell} |`;
+    const src = `| A |\n| - |\n| ${IMG_CELL} |`;
     const dispatched: unknown[] = [];
     // The junction beside the image is the unmappable boundary, so the anchor
     // has no exact offset and must come from the cell stamps.
@@ -493,6 +572,6 @@ describe("TableBlockWidget release outside the widget", () => {
     press(dom.querySelector("td") as HTMLElement, "mousedown", 30, 30);
     press(document.body, "mouseup", 30, 400); // released BELOW the table
     // Release AFTER the cell → snap away from it, to `data-cell-from`.
-    expect(dispatched).toEqual([{ selection: { anchor: src.indexOf(cell), head: BELOW } }]);
+    expect(dispatched).toEqual([{ selection: { anchor: src.indexOf(IMG_CELL), head: BELOW } }]);
   });
 });

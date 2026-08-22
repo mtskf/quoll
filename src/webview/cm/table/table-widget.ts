@@ -207,8 +207,16 @@ interface ArmedDrag extends PendingDrag {
 }
 
 /** Pure type guard: false ⟺ not an `ArmedDrag`. Sound in BOTH arms, so the
- *  compiler's negative inference stays true however it is called. */
-function isArmed(pending: PendingDrag | null): pending is ArmedDrag {
+ *  compiler's negative inference stays true however it is called.
+ *
+ *  Named for the PRESS rather than for "armed", which everywhere else in this
+ *  module means "a gesture is in flight on this root" (`armedRelease`,
+ *  `disarm`, the header's four disarm paths). Those two senses come apart: a
+ *  press on the widget's padding stores an entry with `point: null` AND arms the
+ *  release seam — armed in the dominant sense — while this predicate answers
+ *  false. The type name `ArmedDrag` reads as a compound noun at its use sites;
+ *  the bare predicate is where a reader meets the word alone. */
+function pressedOnCell(pending: PendingDrag | null): pending is ArmedDrag {
   return pending !== null && pending.point !== null;
 }
 
@@ -234,7 +242,7 @@ function armedDragFor(
   event: MouseEvent,
   pending: PendingDrag | null
 ): ArmedDrag | null {
-  if (!isArmed(pending) || event.detail === 0) {
+  if (!pressedOnCell(pending) || event.detail === 0) {
     return null;
   }
   return travelSince(view, pending, event) >= DRAG_THRESHOLD_PX ? pending : null;
@@ -380,11 +388,19 @@ function releaseRange(
     return null;
   }
   // The crossing into absolute document space, minted here for the reason
-  // cell-point.ts mints at its own one legal crossing: a grep for
-  // `asAbsoluteOffset` must enumerate EVERY entry into this space, and this is
-  // the only one in the family that lacked a mint. CodeMirror answers a real
-  // document position — clamped to `[0, doc.length]`, never a fraction — so
-  // there is nothing further to validate, only to say out loud.
+  // cell-point.ts mints at its own legal crossings: an entry into this space is
+  // said out loud rather than inferred. CodeMirror answers a real document
+  // position — clamped to `[0, doc.length]`, never a fraction — so there is
+  // nothing further to validate, only to name.
+  //
+  // NOT a whole-module guarantee, and a grep for `asAbsoluteOffset` will not
+  // find one. What IS branded end to end is `DragSelection`: both producers hand
+  // back minted ends. The CARET path is not — `docFrom`, `blockStart`,
+  // `blockStartCaret` and `dispatchSelection`'s own signature carry absolute
+  // offsets as plain `number` and reach `view.dispatch` unbranded, exactly as
+  // they did BEFORE this seam existed (nothing here widened them). Finishing
+  // that path is tracked separately: it changes `dispatchSelection`, the sink
+  // BOTH seams share, so it is not a local edit.
   const head = asAbsoluteOffset(raw);
   const start = armed.point;
   const anchor = start.offset ?? (head > start.cellFrom ? start.cellFrom : start.cellTo);
@@ -502,9 +518,10 @@ export class TableBlockWidget extends WidgetType {
       /** Stand this gesture down: nothing more can dispatch for it, and the
        *  armed anchor must not survive to be paired with a release that belongs
        *  to someone else. ONE definition for the two disarm listeners below so
-       *  they cannot drift apart. `destroy` is the third disarm path and does
-       *  strictly more (it clears `armedRelease` too), because there the root
-       *  itself is going away rather than just this gesture.
+       *  they cannot drift apart. `destroy` — the FOURTH path in the header's
+       *  list — does not call this and does strictly more (it clears
+       *  `armedRelease` too), because there the root itself is going away rather
+       *  than just this gesture.
        *
        *  ⚠️ The `mouseup` seam below deliberately does NOT call this — it aborts
        *  and leaves `pendingDrag` alone, because a release INSIDE the root has
@@ -579,9 +596,11 @@ export class TableBlockWidget extends WidgetType {
       // fenced-code copy and collapse buttons, the language picker — and NONE of
       // them stops mouseup. A bubble-phase disarm is therefore starved by
       // exactly those presses while the release still arrives, which is the one
-      // combination that dispatches a range the user never drew (measured:
-      // bubble 0, capture 1, mouseup delivered). Capture runs document → target,
-      // so nothing downstream can starve it.
+      // combination that dispatches a range the user never drew (measured
+      // against an element that stops mousedown: a bubble-phase listener
+      // fired 0 times, a capture-phase listener 1; the mouseup reached the
+      // document either way). Capture runs document → target, so nothing
+      // downstream can starve it.
       //
       // The identity check guards the other direction: this listener is added
       // DURING the dispatch of the arming press. In capture that press has

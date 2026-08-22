@@ -6,12 +6,13 @@
 // guards; the scripted-caret vehicle (`stubViewWithCaret`, whose `mount` /
 // `update` / `scrollContentBy` are part of the closure it returns) by drag,
 // release and guards — `scrollContentBy` by drag alone and the `posAtCoords`
-// script by release alone; `drainResolverFailures` by guards alone; the image
-// cells by drag alone. The vehicle lives here rather than inline in the drag
-// suite because the resolver-scoping rule it carries — now ENFORCED by that
-// closure rather than asked for in prose — has to have exactly one definition
-// to be enforceable when the next suite reaches for it. Not a test file itself
-// (no `.test.ts` suffix), mirroring test/webview-browser/helpers/frames.ts.
+// script by release alone; `drainResolverFailures` by guards alone; `IMG_CELL`
+// by drag AND release, `MIXED_IMG_CELL` by drag alone. The vehicle lives here
+// rather than inline in the drag suite because the resolver-scoping rule it
+// carries — now ENFORCED by that closure rather than asked for in prose — has
+// to have exactly one definition to be enforceable when the next suite reaches
+// for it. Not a test file itself (no `.test.ts` suffix), mirroring
+// test/webview-browser/helpers/frames.ts.
 import { EditorState, type Extension } from "@codemirror/state";
 import type { EditorView as EditorViewType } from "@codemirror/view";
 import { afterEach } from "vitest";
@@ -25,18 +26,24 @@ import {
 } from "../../../../src/webview/cm/table/cell-point.js";
 import { TableBlockWidget } from "../../../../src/webview/cm/table/table-widget.js";
 
-// Out-of-band failure channel for the scripted caret resolver. It cannot
-// signal by THROWING: `cellPointAt` wraps every resolver call in a catch-all (a
-// documented part of the `CaretResolver` contract — a throw must never take
-// down the click handler), and `dragRange` turns a null point into the
-// collapsed caret. So a resolver that failed for a reason the test did not ASK
-// for is indistinguishable, at the assertion, from one scripted to return null
-// on purpose — and the caret is the expected value of most rows in the drag
-// suite, so the failure reads as a pass. Recording the reason here and throwing
-// it out of the drain below is the only channel that survives the catch-all.
+// Out-of-band failure channel for this module's own misuse reports. Its first
+// producer was the scripted caret resolver — hence the name it and its drain
+// still carry — but the widget-disposer loop in the `afterEach` below reports
+// through it too, so the message each producer pushes has to name its own
+// mechanism; the headline the drain prints cannot.
+//
+// The resolver cannot signal by THROWING: `cellPointAt` wraps every resolver
+// call in a catch-all (a documented part of the `CaretResolver` contract — a
+// throw must never take down the click handler), and `dragRange` turns a null
+// point into the collapsed caret. So a resolver that failed for a reason the
+// test did not ASK for is indistinguishable, at the assertion, from one
+// scripted to return null on purpose — and the caret is the expected value of
+// most rows in the drag suite, so the failure reads as a pass. Recording the
+// reason here and throwing it out of the drain below is the only channel that
+// survives the catch-all.
 const resolverFailures: string[] = [];
 
-/** Throw whatever the scripted resolver recorded since the last drain, and
+/** Throw whatever this module's producers recorded since the last drain, and
  *  clear it either way. The `afterEach` below is the automatic caller — every
  *  suite gets the channel for free — and it is EXPORTED so the guards probe can
  *  assert on a deliberately-provoked failure in-test: an expected failure has to
@@ -55,9 +62,26 @@ export function drainResolverFailures(): void {
   // throw cannot leave entries behind for the next test to inherit.
   const reasons = resolverFailures.splice(0);
   if (reasons.length > 0) {
-    throw new Error(`scripted caret resolver misuse: ${reasons.join("; ")}`);
+    // A MECHANISM-NEUTRAL headline: the channel has more than one producer, and
+    // leading with any one of their names would misattribute the others. Each
+    // reason names its own mechanism instead. Newline-joined rather than
+    // `"; "`-joined because a reason may itself be multi-line — a disposer
+    // reason carries the thrown error's stack.
+    throw new Error(`widget fixture misuse:\n${reasons.join("\n")}`);
   }
 }
+
+// Disposers for widgets mounted through `stubViewWithCaret`. A widget owns
+// DOCUMENT-level listeners while a gesture is in flight, and `replaceChildren`
+// only unparents its DOM — `destroy` is what CodeMirror itself would call, and
+// what actually takes those listeners with it.
+//
+// The leak this prevents is per-GESTURE, not per-file: the listeners are armed
+// on `mousedown` and removed only when the gesture's controller aborts, so
+// every row whose release the seam never saw — every click-seam row, every
+// mousedown-only row — would leave its own listener set on the document for
+// the rest of the file, not merely the last mount's.
+const mountedWidgets: Array<() => void> = [];
 
 // Widgets under test are mounted into the body (the caret resolver needs a live
 // tree). Clear it between tests so no test can see an earlier test's widget —
@@ -75,13 +99,6 @@ export function drainResolverFailures(): void {
 // than a spurious one. (Before that probe, deleting this hook left all 78 tests
 // green: cross-widget capture is prevented by the resolver's private root, not
 // by body cleanliness, so nothing observed the body between cases.)
-// Disposers for widgets mounted through `stubViewWithCaret`. A widget owns
-// DOCUMENT-level listeners while a gesture is in flight, and `replaceChildren`
-// only unparents its DOM — `destroy` is what CodeMirror itself would call, and
-// what actually takes those listeners with it. Without this every suite leaves
-// its last mount's listeners attached to the document for the whole file.
-const mountedWidgets: Array<() => void> = [];
-
 afterEach(() => {
   // Cleanup FIRST, so a throwing drain never also leaks DOM into the next test.
   // Destroy BEFORE unparenting: the widget's own teardown is what removes the
@@ -103,7 +120,14 @@ afterEach(() => {
     try {
       dispose();
     } catch (err) {
-      resolverFailures.push(`widget disposer threw: ${String(err)}`);
+      // The STACK, not `String(err)`. The drain throws a NEW Error, whose own
+      // stack points at this hook, so unless the thrown one is carried in the
+      // message nothing anywhere names the throw site — and this loop calls
+      // into `TableBlockWidget.destroy`, a mechanism the reason has to name
+      // itself because the drain's headline is deliberately neutral.
+      resolverFailures.push(
+        `widget disposer threw: ${err instanceof Error ? (err.stack ?? err.message) : String(err)}`
+      );
     }
   }
   document.body.replaceChildren();
