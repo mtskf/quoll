@@ -54,7 +54,6 @@ const parseJsonc = (source: string) =>
 
 describe("pnpm compile project chain", () => {
   it("type-checks exactly the five reviewed projects, &&-chained with nothing else", () => {
-    const compileScript: string = pkg.scripts.compile;
     // Pin the WHOLE script by exact equality rather than extracting its `-p`
     // arguments. A partial extraction never sees what sits between and around
     // the steps, so all of these stay green while the gate is dead:
@@ -63,7 +62,7 @@ describe("pnpm compile project chain", () => {
     // `echo` in front of a step. Substring matching is weaker still — a bare
     // `toContain("tsc -p ./")` is satisfied by any of the four nested projects,
     // so the root pin would never go red.
-    expect(compileScript).toBe(CHAINED_PROJECTS.map((p) => `tsc -p ${p}`).join(" && "));
+    expect(pkg.scripts.compile).toBe(CHAINED_PROJECTS.map((p) => `tsc -p ${p}`).join(" && "));
   });
 
   // The scoped claim in src/shared/quoll-perf-flag.d.ts names this program as
@@ -88,10 +87,14 @@ describe("pnpm compile project chain", () => {
   it("reaches the bundle step only through both type-check gates", () => {
     // `build` emitting dist/ without the gates would restore the same silent
     // green: the bundle would ship from source no compiler ever looked at.
-    // BOTH gates are load-bearing — `compile` covers the host and test
-    // programs, and `compile:webview` is the only tsc pass over src/webview,
-    // which lands in the same dist/webview/ output; pinning `compile` alone
-    // once left that half free to drift while this test stayed green.
+    // BOTH gates are load-bearing. `compile` covers the host and test
+    // programs — including two that DO compile src/webview (test/webview,
+    // test/webview-browser), so `compile:webview` is not the only tsc pass
+    // over that source. It is the only one that checks it under the ambient
+    // view it actually ships with (`types: ["vscode-webview"]`, no node),
+    // which is what catches webview code reaching for a Node global; the
+    // others widen or empty `types`. Pinning `compile` alone once left that
+    // check free to drift while this test stayed green.
     //
     // Pinned by exact equality, like `compile`, because every weaker shape
     // tried here turned out to be bypassable. Splitting on `&&` and comparing
