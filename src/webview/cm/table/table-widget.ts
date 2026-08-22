@@ -190,10 +190,14 @@ function contentPoint(view: EditorView, event: MouseEvent): ContentPoint {
 
 /** Manhattan pointer travel since the press, over the CONTENT. One measurement
  *  in one frame, so a pointer that follows moving content cancels out and stays
- *  a click. Manhattan (not Euclidean) to match the threshold the suite pins. */
-function travelSince(view: EditorView, pending: PendingDrag, event: MouseEvent): number {
+ *  a click. Manhattan (not Euclidean) to match the threshold the suite pins.
+ *
+ *  Takes the press as a bare {@link ContentPoint} rather than the whole
+ *  `PendingDrag`: the anchor's cell mapping is no business of a distance
+ *  measurement, and the narrower parameter says so in the signature. */
+function travelSince(view: EditorView, pressedAt: ContentPoint, event: MouseEvent): number {
   const now = contentPoint(view, event);
-  return Math.abs(now.contentX - pending.contentX) + Math.abs(now.contentY - pending.contentY);
+  return Math.abs(now.contentX - pressedAt.contentX) + Math.abs(now.contentY - pressedAt.contentY);
 }
 
 /** A `PendingDrag` whose press landed on a cell — the only kind either seam can
@@ -495,6 +499,22 @@ export class TableBlockWidget extends WidgetType {
       armedRelease.set(root, release);
       const doc = root.ownerDocument;
       const armingPress = event;
+      /** Stand this gesture down: nothing more can dispatch for it, and the
+       *  armed anchor must not survive to be paired with a release that belongs
+       *  to someone else. ONE definition for the two disarm listeners below so
+       *  they cannot drift apart. `destroy` is the third disarm path and does
+       *  strictly more (it clears `armedRelease` too), because there the root
+       *  itself is going away rather than just this gesture.
+       *
+       *  ⚠️ The `mouseup` seam below deliberately does NOT call this — it aborts
+       *  and leaves `pendingDrag` alone, because a release INSIDE the root has
+       *  to leave the anchor armed for the click listener that owns it. Swapping
+       *  its `release.abort()` for `disarm()` would look tidier and would break
+       *  every inside-released drag. */
+      const disarm = (): void => {
+        release.abort();
+        pendingDrag.delete(root);
+      };
       doc.addEventListener(
         "mouseup",
         (up: MouseEvent) => {
@@ -575,8 +595,7 @@ export class TableBlockWidget extends WidgetType {
           if (down === armingPress || down.button !== 0) {
             return;
           }
-          release.abort();
-          pendingDrag.delete(root);
+          disarm();
         },
         { signal: release.signal, capture: true }
       );
@@ -585,14 +604,7 @@ export class TableBlockWidget extends WidgetType {
       // on an in-cell <img> or <a>, both natively draggable. Nothing is
       // preventDefault'ed — the selection seam simply stands down, because a
       // drag-and-drop is not a text selection.
-      doc.addEventListener(
-        "dragstart",
-        () => {
-          release.abort();
-          pendingDrag.delete(root);
-        },
-        { signal: release.signal, capture: true }
-      );
+      doc.addEventListener("dragstart", disarm, { signal: release.signal, capture: true });
     });
 
     // Root click handler — the dispatch seam for a gesture released INSIDE this
