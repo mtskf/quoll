@@ -85,7 +85,7 @@ describe("pnpm compile project chain", () => {
     expect(e2e.compilerOptions.rootDir).toBe(".");
   });
 
-  it("runs both type-check gates ahead of the bundle step", () => {
+  it("reaches the bundle step only through both type-check gates", () => {
     // `build` emitting dist/ without the gates would restore the same silent
     // green: the bundle would ship from source no compiler ever looked at.
     // BOTH gates are pinned — `compile` covers the host and test programs, and
@@ -98,16 +98,18 @@ describe("pnpm compile project chain", () => {
     // `pnpm compile && pnpm compile:webview && false || node esbuild…`: both
     // gates precede the bundle-bearing segment, yet `||` runs the bundler when
     // a gate fails. A prefix pin models what actually matters — the bundler is
-    // reachable only through two successful `&&` gates — and it replaces the
-    // split/indexOf logic rather than adding to it.
+    // reachable only through two successful `&&` gates.
     //
-    // `build` is still deliberately NOT pinned by exact equality: the bundle
-    // step's trailing flags are expected to move for ordinary reasons, and only
-    // the gating prefix is load-bearing.
+    // The prefix stops at the bundler's name on purpose: `build` is still
+    // deliberately NOT pinned by exact equality, because the bundle step's
+    // trailing flags are expected to move for ordinary reasons and only the
+    // gating prefix is load-bearing.
+    const REQUIRED_BUILD_PREFIX = "pnpm compile && pnpm compile:webview && node esbuild.config.mjs";
     const buildScript: string = pkg.scripts.build;
-    expect(
-      buildScript.startsWith("pnpm compile && pnpm compile:webview && node esbuild.config.mjs")
-    ).toBe(true);
+    // Compare a slice rather than asserting `startsWith(…)` is true: on failure
+    // this reports the actual leading text against the expected prefix, where
+    // the boolean form reports only `expected false to be true`.
+    expect(buildScript.slice(0, REQUIRED_BUILD_PREFIX.length)).toBe(REQUIRED_BUILD_PREFIX);
   });
 
   it("keeps compile:webview a real tsc pass", () => {
