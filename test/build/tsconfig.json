@@ -11,9 +11,9 @@
   // The scripts/ and esbuild.config.mjs modules they import are plain .mjs with
   // no bundled types. The shape to reach for is a line-scoped `@ts-expect-error`
   // on the import alone — it self-verifies (goes red the day the module gains
-  // types) and leaves everything the test itself authors checked. Five
-  // suites still use a file-level `@ts-nocheck` instead, which switches the
-  // WHOLE file off — a type-level assertion in one of those is still vacuous.
+  // types) and leaves everything the test itself authors checked. Five suites
+  // still use a file-level `@ts-nocheck` instead, which switches the WHOLE file
+  // off — a type-level assertion in one of those is still vacuous.
   //
   // To list them, anchor the grep to the directive itself:
   // `git grep -l '^// @ts-nocheck' test/build` returns exactly those five. The
@@ -26,6 +26,7 @@
   // swap. Two places do name them — the TODO.md follow-up entry, where the
   // roster IS the work item, and the 2026-08-22 LEARNING.md entry — and keeping
   // both current is part of that follow-up.
+  //
   // Do not read this config as proof that every file under it is checked.
   //
   // noEmit (inherited): this is a CI gate, not a build step — vitest still runs

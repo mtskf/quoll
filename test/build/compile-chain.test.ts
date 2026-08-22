@@ -53,7 +53,7 @@ const parseJsonc = (source: string) =>
   );
 
 describe("pnpm compile project chain", () => {
-  it("type-checks exactly the five reviewed projects", () => {
+  it("type-checks exactly the five reviewed projects, &&-chained with nothing else", () => {
     const compileScript: string = pkg.scripts.compile;
     // Pin the WHOLE script by exact equality rather than extracting its `-p`
     // arguments. A partial extraction never sees what sits between and around
@@ -100,12 +100,15 @@ describe("pnpm compile project chain", () => {
     // Its roster is not the contract under test and the bundle step's flags are
     // expected to move for ordinary reasons; only the relative order is
     // load-bearing, so an exact pin here would be a false tripwire.
-    const steps: string[] = pkg.scripts.build.split("&&").map((s: string) => s.trim());
-    const bundleStep = steps.findIndex((s: string) => s.includes("esbuild.config.mjs"));
-    expect(bundleStep).toBeGreaterThanOrEqual(0);
+    const buildScript: string = pkg.scripts.build;
+    const steps = buildScript.split("&&").map((s) => s.trim());
+    const bundleStepIndex = steps.findIndex((s) => s.includes("esbuild.config.mjs"));
+    expect(bundleStepIndex).toBeGreaterThanOrEqual(0);
     for (const gate of ["pnpm compile", "pnpm compile:webview"]) {
+      // toContain is not redundant with the ordering check below: a missing
+      // gate makes indexOf return -1, which would pass `toBeLessThan` silently.
       expect(steps).toContain(gate);
-      expect(steps.indexOf(gate)).toBeLessThan(bundleStep);
+      expect(steps.indexOf(gate)).toBeLessThan(bundleStepIndex);
     }
   });
 });
