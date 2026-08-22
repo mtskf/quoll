@@ -121,7 +121,16 @@ export function stubView(
   return {
     state: EditorState.create({ extensions }),
     dispatch: (tr: unknown) => dispatched.push(tr),
-  } satisfies Pick<EditorViewType, "state" | "dispatch"> as unknown as EditorViewType;
+    // The widget measures pointer travel against this element's rect when it
+    // arms a gesture, so a stub without one throws inside a DOM listener —
+    // where the throw is swallowed and the test sees a missing dispatch rather
+    // than an error. happy-dom reports an all-zero rect, which is exactly right
+    // for the suites using this stub: content that never moves.
+    contentDOM: document.createElement("div"),
+  } satisfies Pick<
+    EditorViewType,
+    "state" | "dispatch" | "contentDOM"
+  > as unknown as EditorViewType;
 }
 
 /** The shared throwaway-recorder `stubView` — for the display-only paths, where
@@ -205,10 +214,31 @@ export function stubViewWithCaret(
     );
     return null;
   };
+  // happy-dom has no layout engine, so `getBoundingClientRect` answers zeros for
+  // everything. The widget only ever reads `left`/`top` off this rect, so a
+  // scripted origin is a complete stand-in — and it is the ONLY way to express
+  // "the content moved under a stationary pointer" without a layout engine.
+  const contentDOM = document.createElement("div");
+  let origin = { left: 0, top: 0 };
+  contentDOM.getBoundingClientRect = () =>
+    ({
+      ...origin,
+      x: origin.left,
+      y: origin.top,
+      width: 0,
+      height: 0,
+      right: 0,
+      bottom: 0,
+    }) as DOMRect;
+
   const view = {
     state: EditorState.create({ extensions: [quollTableCaretResolver.of(resolve), ...extensions] }),
     dispatch: (tr: unknown) => dispatched.push(tr),
-  } satisfies Pick<EditorViewType, "state" | "dispatch"> as unknown as EditorViewType;
+    contentDOM,
+  } satisfies Pick<
+    EditorViewType,
+    "state" | "dispatch" | "contentDOM"
+  > as unknown as EditorViewType;
 
   /** Mount a widget the way every drag test needs it: rendered, resolver root
    *  wired, attached to the body (the caret resolver needs a live tree). The
@@ -241,7 +271,16 @@ export function stubViewWithCaret(
   const update = (dom: HTMLElement, next: TableBlockWidget, prev: TableBlockWidget): boolean =>
     next.updateDOM(dom, view, prev);
 
-  return { mount, update };
+  /** Move the CONTENT by (dx, dy) — a scroll, a `scrollIntoView` from the host,
+   *  anything that shifts the text under a held pointer. Scrolling DOWN by 40
+   *  moves the content UP, so the origin goes negative: a pointer that has not
+   *  moved is then 40px further into the document than where it pressed, which
+   *  is the travel the old viewport measurement could not see. */
+  const scrollContentBy = (dx: number, dy: number): void => {
+    origin = { left: origin.left - dx, top: origin.top - dy };
+  };
+
+  return { mount, update, scrollContentBy };
 }
 
 /** Dispatch a mouse event carrying coordinates — the movement threshold reads

@@ -451,6 +451,61 @@ describe("TableBlockWidget drag-selection", () => {
     ]);
   });
 
+  // (2) of the TODO entry. Travel was measured between two VIEWPORT points, so
+  // a gesture the CONTENT moved under — a scroll mid-drag, a host-driven
+  // scrollIntoView, CodeMirror's own scrolling — measured ~0 and was judged a
+  // plain click. The pointer moved relative to the TEXT, which is the only
+  // space the gesture means anything in.
+  it("a drag the content scrolled under is a drag, even with a stationary pointer", () => {
+    const dispatched: unknown[] = [];
+    const { mount, scrollContentBy } = stubViewWithCaret(dispatched, [
+      { text: "alpha", offset: 2 },
+      { text: "alpha", offset: 5 },
+    ]);
+    const dom = mount(makeWidget(SRC));
+    const td = dom.querySelectorAll("td")[0] as HTMLElement;
+    press(td, "mousedown", 30, 30);
+    scrollContentBy(0, 40); // the text moved 40px under a pointer that did not
+    press(td, "click", 30, 30);
+    expect(dispatched).toEqual([
+      { selection: { anchor: SRC.indexOf("alpha") + 2, head: SRC.indexOf("alpha") + 5 } },
+    ]);
+  });
+
+  // The mirror image, and the reason this is ONE measurement in the content's
+  // frame rather than two gates added together: a pointer that follows the
+  // scroll exactly has not moved over the text at all, so it is still a click.
+  // A scroll-aware threshold that summed magnitudes would call this a drag.
+  it("a pointer that tracks the scrolling content exactly is still a click", () => {
+    const dispatched: unknown[] = [];
+    const { mount, scrollContentBy } = stubViewWithCaret(dispatched, [
+      { text: "alpha", offset: 2 },
+      { text: "alpha", offset: 5 },
+    ]);
+    const dom = mount(makeWidget(SRC));
+    const td = dom.querySelectorAll("td")[0] as HTMLElement;
+    press(td, "mousedown", 30, 30);
+    scrollContentBy(0, 40);
+    press(td, "click", 30, -10); // followed the text up by exactly 40px
+    expect(dispatched).toEqual([{ selection: { anchor: SRC.indexOf("alpha") } }]);
+  });
+
+  it("horizontal content movement counts too", () => {
+    const dispatched: unknown[] = [];
+    const { mount, scrollContentBy } = stubViewWithCaret(dispatched, [
+      { text: "alpha", offset: 2 },
+      { text: "alpha", offset: 5 },
+    ]);
+    const dom = mount(makeWidget(SRC));
+    const td = dom.querySelectorAll("td")[0] as HTMLElement;
+    press(td, "mousedown", 30, 30);
+    scrollContentBy(25, 0);
+    press(td, "click", 30, 30);
+    expect(dispatched).toEqual([
+      { selection: { anchor: SRC.indexOf("alpha") + 2, head: SRC.indexOf("alpha") + 5 } },
+    ]);
+  });
+
   // Aborted-gesture guard. A press released OUTSIDE the widget delivers no
   // click to the root, so the armed anchor survives with stale coordinates.
   // The only click that can then reach this handler without a mousedown of its

@@ -59,8 +59,20 @@ const DRAG_THRESHOLD_PX = 4;
  *  `updateDOM` can do and the closure cannot. A WeakMap so a discarded widget
  *  root takes its entry with it. */
 interface PendingDrag {
-  readonly x: number;
-  readonly y: number;
+  /** The press point RELATIVE TO THE CONTENT, not to the viewport. The content
+   *  can move under a held pointer — a scroll mid-gesture, a `scrollIntoView`
+   *  from an incoming host message, CodeMirror's own scrolling — and a pointer
+   *  that stayed still through one of those HAS crossed text. Two `clientX/Y`
+   *  pairs cannot see that, and called the gesture a click.
+   *
+   *  Relative to `contentDOM`'s rect rather than `scrollDOM`'s scroll offsets so
+   *  that both operands are VISUAL pixels: CodeMirror supports being CSS
+   *  transformed (`view.scaleX` / `scaleY` exist for exactly that), and mixing a
+   *  viewport coordinate with a layout-space scroll offset breaks the threshold
+   *  under any scale but 1. Measuring both ends the same way makes the scale
+   *  cancel instead of needing a correction. */
+  readonly contentX: number;
+  readonly contentY: number;
   readonly point: CellPoint | null;
 }
 const pendingDrag = new WeakMap<HTMLElement, PendingDrag>();
@@ -126,6 +138,20 @@ function dispatchSelection(view: EditorView, selection: { anchor: number; head?:
   }
 }
 
+/** A pointer position in the CONTENT's frame of reference. */
+function contentPoint(view: EditorView, event: MouseEvent): { x: number; y: number } {
+  const origin = view.contentDOM.getBoundingClientRect();
+  return { x: event.clientX - origin.left, y: event.clientY - origin.top };
+}
+
+/** Manhattan pointer travel since the press, over the CONTENT. One measurement
+ *  in one frame, so a pointer that follows moving content cancels out and stays
+ *  a click. Manhattan (not Euclidean) to match the threshold the suite pins. */
+function travelSince(view: EditorView, pending: PendingDrag, event: MouseEvent): number {
+  const now = contentPoint(view, event);
+  return Math.abs(now.x - pending.contentX) + Math.abs(now.y - pending.contentY);
+}
+
 /** The RANGE a completed pointer gesture describes, or `null` when this gesture
  *  is not a drag at all (no armed anchor, unmappable anchor, keyboard /
  *  programmatic click, sub-threshold travel), when the head has no mapping, or
@@ -152,8 +178,7 @@ function dragRange(
   if (event.detail === 0) {
     return null;
   }
-  const travel = Math.abs(event.clientX - pending.x) + Math.abs(event.clientY - pending.y);
-  if (travel < DRAG_THRESHOLD_PX) {
+  if (travelSince(view, pending, event) < DRAG_THRESHOLD_PX) {
     return null;
   }
   const head = cellPointAt(
@@ -283,9 +308,13 @@ export class TableBlockWidget extends WidgetType {
       }
       // No dispatch here: dispatching would fire the reveal mid-drag and pull
       // the widget out from under the pointer.
+      const at = contentPoint(view, event);
       pendingDrag.set(root, {
-        x: event.clientX,
-        y: event.clientY,
+        contentX: at.x,
+        contentY: at.y,
+        // `cellPointAt` keeps taking VIEWPORT coordinates — it feeds
+        // `caretPositionFromPoint`, which is a viewport API. Only the travel
+        // measurement changes frame.
         point: cellPointAt(
           root,
           event.clientX,
