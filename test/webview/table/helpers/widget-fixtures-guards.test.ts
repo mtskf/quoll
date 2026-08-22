@@ -79,6 +79,11 @@ describe.sequential("widget-fixtures body cleanup", { shuffle: false }, () => {
 //     travel is ever considered. One script step is all it can consume.
 //   - `runs off the end of its script` — TWO. This is the only case whose click
 //     reaches the resolver, which is precisely what it exists to pin.
+//   - `no scripted posAtCoords answer` — ONE, from the mousedown, and that one
+//     must SUCCEED: the recorded failure comes from the OTHER scripted seam.
+//     Its release lands outside the root, so the gesture never reaches a click
+//     at all — the document `mouseup` seam answers it, and that seam reads
+//     `view.posAtCoords`, not the caret resolver.
 //
 // The recorded failures are consumed HERE, in the case that provoked them,
 // rather than left for the module's `afterEach`: an expected failure reaching
@@ -119,5 +124,24 @@ describe("stubViewWithCaret misuse guards", () => {
     press(td, "mousedown", 10, 10);
     press(td, "click", 60, 10);
     expect(() => drainResolverFailures()).toThrow(/ran off the end of a 1-step script/);
+  });
+
+  // The vehicle's OTHER scripted seam, and the last arm of `resolverFailures`
+  // to get a probe. Omitting the `posAtCoords` argument is silent by design at
+  // the assertion: the outside-release seam degrades an unanswerable lookup to
+  // the collapsed caret, which is the expected value of several rows in
+  // cm-table-widget-release.test.ts — so an unscripted call there would pass
+  // VACUOUSLY. This case is what makes the omission audible instead.
+  //
+  // The gesture has to LEAVE the root: a release inside it is handed to the
+  // click listener, which never looks a coordinate up. It also has to clear the
+  // 4px drag floor — a sub-threshold release is not a drag, and `releaseRange`
+  // returns before the lookup.
+  it("records a release lookup made with no scripted posAtCoords answer", () => {
+    const { mount } = stubViewWithCaret([], [{ text: "alpha", offset: 2 }]);
+    const td = mount(makeWidget(SRC)).querySelectorAll("td")[0] as HTMLElement;
+    press(td, "mousedown", 10, 10);
+    press(document.body, "mouseup", 10, 400); // outside the root, well past the floor
+    expect(() => drainResolverFailures()).toThrow(/no scripted answer/);
   });
 });

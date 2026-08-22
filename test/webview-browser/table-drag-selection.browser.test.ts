@@ -14,8 +14,10 @@
 // rectangles measured with a DOM Range, and the facet's real caret-from-point
 // resolvers.
 //
-// Both caret-from-point arms run, because there are two floor-dependent ones
-// (see `ARMS` below), not one.
+// Every contract below runs TWICE, once per caret-from-point arm: the default
+// (`caretPositionFromPoint`, what this runner's Chromium takes) and the
+// `caretRangeFromPoint` fallback, which is the one arm LIVE on the extension's
+// floor and would otherwise never be exercised here. See `ARMS` below.
 import type { Extension } from "@codemirror/state";
 import type { EditorView } from "@codemirror/view";
 import { afterEach, describe, expect, it } from "vitest";

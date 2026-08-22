@@ -1,15 +1,17 @@
-// Fixtures shared by the four `cm-table-widget-*.test.ts` suites and by
-// widget-fixtures-guards.test.ts, the probe file that pins this module's own
-// mechanisms. Who shares what: `makeWidget` by all five; `stubView` by render,
-// update and caret; `mockView` by render, update and guards; `press` / `SRC`
-// by drag, caret and guards; the scripted-caret vehicle (`stubViewWithCaret`,
-// whose `mount` / `update` are part of the closure it returns) by drag and
-// guards; `drainResolverFailures` by guards alone; the image cells by drag
-// alone. The vehicle lives here rather than inline in the drag suite because
-// the resolver-scoping rule it carries — now ENFORCED by that closure rather
-// than asked for in prose — has to have exactly one definition to be
-// enforceable when the next suite reaches for it. Not a test file itself (no
-// `.test.ts` suffix), mirroring test/webview-browser/helpers/frames.ts.
+// Fixtures shared by the five `cm-table-widget-*.test.ts` suites (render,
+// update, caret, drag, release) and by widget-fixtures-guards.test.ts, the
+// probe file that pins this module's own mechanisms. Who shares what:
+// `makeWidget` by all six; `stubView` by render, update and caret; `mockView`
+// by render, update and guards; `press` / `SRC` by drag, release, caret and
+// guards; the scripted-caret vehicle (`stubViewWithCaret`, whose `mount` /
+// `update` / `scrollContentBy` are part of the closure it returns) by drag,
+// release and guards — `scrollContentBy` by drag alone and the `posAtCoords`
+// script by release alone; `drainResolverFailures` by guards alone; the image
+// cells by drag alone. The vehicle lives here rather than inline in the drag
+// suite because the resolver-scoping rule it carries — now ENFORCED by that
+// closure rather than asked for in prose — has to have exactly one definition
+// to be enforceable when the next suite reaches for it. Not a test file itself
+// (no `.test.ts` suffix), mirroring test/webview-browser/helpers/frames.ts.
 import { EditorState, type Extension } from "@codemirror/state";
 import type { EditorView as EditorViewType } from "@codemirror/view";
 import { afterEach } from "vitest";
@@ -84,8 +86,25 @@ afterEach(() => {
   // Cleanup FIRST, so a throwing drain never also leaks DOM into the next test.
   // Destroy BEFORE unparenting: the widget's own teardown is what removes the
   // document listeners, and it must not depend on the DOM still being attached.
+  //
+  // Per-disposer catch, not a bare loop. No disposer can throw TODAY —
+  // `destroy` only calls `AbortController.abort()`, and nothing registers an
+  // `abort` listener on that signal, so no user code runs during teardown — but
+  // this loop is a throw-CAPABLE step sitting ahead of the two cleanups the
+  // comment above orders first, and the failure mode is silent three ways at
+  // once: the remaining disposers are skipped (leaking the very document
+  // listeners this loop exists to remove), `replaceChildren` is skipped, and
+  // the drain is skipped, pushing a recorded resolver failure into the NEXT
+  // test's hook — the misattribution `drainResolverFailures`' docblock is built
+  // to prevent. Routing a throw into `resolverFailures` keeps the report on the
+  // test that provoked it and keeps the ordering invariant structural rather
+  // than dependent on `destroy` staying throw-free.
   for (const dispose of mountedWidgets.splice(0)) {
-    dispose();
+    try {
+      dispose();
+    } catch (err) {
+      resolverFailures.push(`widget disposer threw: ${String(err)}`);
+    }
   }
   document.body.replaceChildren();
   drainResolverFailures();

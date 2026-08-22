@@ -13,7 +13,7 @@
 // a native drag-and-drop, the widget's destruction, and the NEXT press
 // anywhere. That last one is the load-bearing guard — see its row.
 // The click-seam contract is cm-table-widget-drag.test.ts.
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { parseTable } from "../../../src/markdown/table/index.js";
 import { quollOpenExternalSink } from "../../../src/webview/cm/open-external.js";
@@ -111,27 +111,56 @@ describe("TableBlockWidget release outside the widget", () => {
     expect(dispatched, "the stale gesture must not be resurrected").toEqual([]);
   });
 
-  // The other half of that guard. The trap it names is real but phase-
-  // dependent: the arming mousedown BUBBLES to the document, so a bubble-phase
-  // disarm would cancel the gesture it was just armed for — and every
-  // outside-release row above would go green for the wrong reason (nothing
-  // dispatched, caret expected nowhere). The capture phase this seam uses
-  // sidesteps it (the press has already passed the document by then), which is
-  // exactly why this row stays green either way and cannot be the pin for the
-  // identity check. It pins something else, and something worth pinning: that
-  // arming and disarming coexist at all.
-  it("the arming press does not disarm its own gesture", () => {
+  // The far side of the one-shot row below: that row pins that a release with
+  // no new press behind it dispatches nothing, and this one pins that a release
+  // WITH one does. Together they are the whole cycle — arm, fire, re-arm — and
+  // neither half implies the other.
+  //
+  // ⚠️ It replaces a row titled "the arming press does not disarm its own
+  // gesture", which was byte-identical to the first row of this file. The
+  // knowledge that row carried is worth keeping even though the row was not:
+  // the arming mousedown BUBBLES to the document, so a bubble-phase disarm
+  // would cancel the gesture it was just armed for, and every outside-release
+  // row in this file would then go green for the wrong reason (nothing
+  // dispatched, caret expected nowhere). The `down === armingPress` identity
+  // check in table-widget.ts guards exactly that, and under the `capture: true`
+  // this seam uses it is UNREACHABLE — the press has already passed the
+  // document before the listener exists. So no row here can pin it, and the old
+  // title claimed a pin that does not exist. (Measured: dropping the identity
+  // check leaves the suite green.)
+  //
+  // ⚠️ What THIS row pins, stated honestly: the observable re-arm cycle, not
+  // the `armedRelease.get(root)?.abort()` line that runs at arm time. That line
+  // is unobservable here — gesture 1's controller was already aborted by its
+  // own mouseup, so aborting it again is a no-op. No single-line mutation of
+  // the seam was found that reddens this row (measured: dropping the arm-time
+  // abort, dropping `armedRelease.set`, and dropping the mouseup's own
+  // `release.abort()` all leave it green — the last two redden the destroy and
+  // one-shot rows instead). It is a behavioural tripwire for the cycle, and the
+  // scripted head makes it discriminating about WHICH gesture answered.
+  it("a completed gesture re-arms: the next press draws its own range", () => {
     const dispatched: unknown[] = [];
+    // The head is the release's own Y, so the two gestures cannot be confused
+    // for one another: a second dispatch carrying the FIRST release's head
+    // would mean the stale listener answered, not a freshly armed one.
     const { mount } = stubViewWithCaret(
       dispatched,
-      [{ text: "alpha", offset: 2 }],
+      [
+        { text: "alpha", offset: 2 },
+        { text: "alpha", offset: 2 },
+      ],
       [],
-      () => BELOW
+      (_x, y) => y
     );
-    const dom = mount(makeWidget(SRC));
-    press(dom.querySelectorAll("td")[0] as HTMLElement, "mousedown", 30, 30);
+    const td = mount(makeWidget(SRC)).querySelectorAll("td")[0] as HTMLElement;
+    press(td, "mousedown", 30, 30);
     press(document.body, "mouseup", 30, 400);
-    expect(dispatched).toEqual([{ selection: { anchor: SRC.indexOf("alpha") + 2, head: BELOW } }]);
+    press(td, "mousedown", 30, 30);
+    press(document.body, "mouseup", 30, 600);
+    expect(dispatched).toEqual([
+      { selection: { anchor: SRC.indexOf("alpha") + 2, head: 400 } },
+      { selection: { anchor: SRC.indexOf("alpha") + 2, head: 600 } },
+    ]);
   });
 
   // Fable 80. A right-button press-and-release while the left button is held
@@ -156,8 +185,11 @@ describe("TableBlockWidget release outside the widget", () => {
     ]);
   });
 
-  // The phase of the disarm, pinned. No other row here distinguishes capture
-  // from bubble — they all disarm through presses nothing interferes with.
+  // The phase of the DISARM listener (the document `mousedown`), pinned. No
+  // other row here distinguishes capture from bubble for it — they all disarm
+  // through presses nothing interferes with. Its pair is the row below, which
+  // pins the phase of the DISPATCH listener (the document `mouseup`); the two
+  // read alike and are not interchangeable, so each names its listener.
   it("a press that stops propagation still disarms the seam", () => {
     // Sibling widgets in this editor — the task checkbox, the fenced-code copy
     // and collapse buttons, the language picker — all call stopPropagation() on
@@ -182,6 +214,82 @@ describe("TableBlockWidget release outside the widget", () => {
     press(swallower, "mousedown", 500, 900);
     press(document.body, "mouseup", 500, 900);
     expect(dispatched).toEqual([]);
+  });
+
+  // Every other disarm row presses on `document.body` or a bare `<button>` —
+  // nodes that arm nothing. A document with two tables is ordinary, and the
+  // disarming press is then itself an ARMING press for another widget, which is
+  // the one shape none of those rows have.
+  //
+  // What that shape actually tests: `pendingDrag` and `armedRelease` are keyed
+  // on the widget ROOT, so the first table's disarm must take its own entry and
+  // only its own. Were either a module-wide singleton, the second table's press
+  // would arm into the same slot the first one is about to clear, and the
+  // second gesture — the live one, the one the user is making — would be the
+  // casualty. (The ORDER is not what discriminates here: document capture runs
+  // before the second root's bubble `mousedown`, but root-keying makes either
+  // order correct. It is the keying that this row would lose.)
+  //
+  // The second table's range doubles as the control arm, in the idiom of
+  // cm-table-widget-drag.test.ts's stale-offset row: the first expectation is
+  // NEGATIVE, so without a positive one beside it anything that quietly stopped
+  // both gestures from resolving would read as a pass.
+  it("a press in ANOTHER table disarms this one and arms that one", () => {
+    const first: unknown[] = [];
+    const second: unknown[] = [];
+    // ONE VEHICLE, ONE WIDGET (widget-fixtures.ts) — two tables need two.
+    const { mount: mountFirst } = stubViewWithCaret(
+      first,
+      [{ text: "alpha", offset: 2 }],
+      [],
+      () => BELOW
+    );
+    const { mount: mountSecond } = stubViewWithCaret(
+      second,
+      [{ text: "alpha", offset: 2 }],
+      [],
+      () => BELOW
+    );
+    const firstTd = mountFirst(makeWidget(SRC)).querySelectorAll("td")[0] as HTMLElement;
+    const secondTd = mountSecond(makeWidget(SRC)).querySelectorAll("td")[0] as HTMLElement;
+    press(firstTd, "mousedown", 30, 30);
+    // ...the first table's release was lost outside this document. The user
+    // then starts a fresh drag in the SECOND table.
+    press(secondTd, "mousedown", 30, 30);
+    press(document.body, "mouseup", 30, 400);
+    expect(first, "the stale gesture must not be resurrected").toEqual([]);
+    expect(second, "and the live one must still draw its range").toEqual([
+      { selection: { anchor: SRC.indexOf("alpha") + 2, head: BELOW } },
+    ]);
+  });
+
+  // The phase of the DISPATCH listener (the document `mouseup`), pinned — the
+  // pair of the disarm row above, and the only row that distinguishes capture
+  // from bubble for it.
+  //
+  // No sibling widget stops `mouseup` today, which is exactly why this listener
+  // was left in bubble; but that is an enumeration of today's siblings, and the
+  // failure it admits is silent — a starved seam dispatches NOTHING, which is
+  // indistinguishable from the pre-seam behaviour, so no other row would redden.
+  // Capture runs document → target and cannot be starved from below.
+  it("a sibling that stops mouseup does not starve the dispatch seam", () => {
+    const dispatched: unknown[] = [];
+    const { mount } = stubViewWithCaret(
+      dispatched,
+      [{ text: "alpha", offset: 2 }],
+      [],
+      () => BELOW
+    );
+    const dom = mount(makeWidget(SRC));
+    press(dom.querySelectorAll("td")[0] as HTMLElement, "mousedown", 30, 30);
+    // The drag ends over a sibling widget that swallows mouseup on its way up.
+    const swallower = document.createElement("button");
+    document.body.appendChild(swallower);
+    swallower.addEventListener("mouseup", (event) => event.stopPropagation());
+    press(swallower, "mouseup", 500, 900);
+    expect(dispatched, "the release still reaches the seam").toEqual([
+      { selection: { anchor: SRC.indexOf("alpha") + 2, head: BELOW } },
+    ]);
   });
 
   it("a native drag-and-drop disarms the seam (no mouseup follows a dragstart)", () => {
@@ -282,6 +390,40 @@ describe("TableBlockWidget release outside the widget", () => {
     expect(dispatched).toEqual([{ selection: { anchor: SRC.indexOf("alpha") } }]);
   });
 
+  // The third catch in this widget family, and the last one to get a pin: the
+  // siblings are `dispatchSelection`'s (cm-table-widget-caret.test.ts) and
+  // `cellPointAt`'s (cm-table-cell-point.test.ts). This one is the only one
+  // whose listener lives on the DOCUMENT, and the only one whose throw mode is
+  // SYSTEMATIC rather than a teardown race: `posAtCoords` calls `readMeasured`,
+  // which throws whenever CodeMirror is mid-update, and a DOM mouseup is
+  // exactly what an in-progress update can deliver. Every such drag collapses
+  // silently to a caret, so the log is the only trace it happened.
+  //
+  // `objectContaining` rather than an exact payload: what the log must carry is
+  // an Error, and pinning the surrounding diagnostic fields exactly would make
+  // this row a change-detector for a payload that is meant to grow.
+  it("logs and swallows a throwing release lookup instead of losing the editor", () => {
+    const dispatched: unknown[] = [];
+    const { mount } = stubViewWithCaret(dispatched, [{ text: "alpha", offset: 2 }], [], () => {
+      throw new Error("posAtCoords boom");
+    });
+    const dom = mount(makeWidget(SRC));
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    try {
+      press(dom.querySelectorAll("td")[0] as HTMLElement, "mousedown", 30, 30);
+      expect(() => press(document.body, "mouseup", 30, 400)).not.toThrow();
+      expect(consoleError).toHaveBeenCalledWith(
+        "[quoll] table widget release lookup failed",
+        expect.objectContaining({ err: expect.any(Error) })
+      );
+    } finally {
+      consoleError.mockRestore();
+    }
+    // The gesture costs itself, not the editor: the same collapsed caret the
+    // null-lookup row above degrades to.
+    expect(dispatched).toEqual([{ selection: { anchor: SRC.indexOf("alpha") } }]);
+  });
+
   it("a press on the widget's own padding falls back to the block-start caret", () => {
     // No cell under the press, so there is no anchor to span FROM: `cellPointAt`
     // answered null and the gesture has only the block start to offer. The
@@ -296,7 +438,7 @@ describe("TableBlockWidget release outside the widget", () => {
   });
 
   it("updateDOM cancels an outside release too (stale-offset guard)", () => {
-    // The click seam's counterpart of this row is in cm-table-widget-drag.ts.
+    // The click seam's counterpart of this row is in cm-table-widget-drag.test.ts.
     // A doc edit landing mid-gesture moves every stamp, so the anchor captured
     // under the old ones must not be paired with a head resolved under the new.
     const dispatched: unknown[] = [];
@@ -330,5 +472,27 @@ describe("TableBlockWidget release outside the widget", () => {
     expect(dispatched).toEqual([
       { selection: { anchor: src.indexOf(cell) + cell.length, head: 0 } },
     ]);
+  });
+
+  // The mirror of the row above, and the reason it exists: OUTWARD is a
+  // ternary, and until this row only its BACKWARDS arm ever ran. Every other
+  // release row scripts a plain-text cell, so `start.offset` is non-null and
+  // the `??` short-circuits before the ternary is reached at all. (Measured:
+  // collapsing the ternary to `start.offset ?? start.cellTo` left the file
+  // green — a "simplify" pass could delete the forward arm and the suite would
+  // not notice, after which a forward drag out of an image cell would anchor at
+  // the cell END, dropping the very cell the pointer started in.)
+  it("a forward release below the table snaps an unmappable anchor OUTWARD", () => {
+    const cell = "a![i](https://x.test/a.png)b";
+    const src = `| A |\n| - |\n| ${cell} |`;
+    const dispatched: unknown[] = [];
+    // The junction beside the image is the unmappable boundary, so the anchor
+    // has no exact offset and must come from the cell stamps.
+    const { mount } = stubViewWithCaret(dispatched, [{ text: "b", offset: 0 }], [], () => BELOW);
+    const dom = mount(makeWidget(src));
+    press(dom.querySelector("td") as HTMLElement, "mousedown", 30, 30);
+    press(document.body, "mouseup", 30, 400); // released BELOW the table
+    // Release AFTER the cell → snap away from it, to `data-cell-from`.
+    expect(dispatched).toEqual([{ selection: { anchor: src.indexOf(cell), head: BELOW } }]);
   });
 });

@@ -246,9 +246,15 @@ describe("TableBlockWidget drag-selection", () => {
     expect(opened).toEqual(["https://example.com"]);
     expect(dispatched).toEqual([]);
     // The NEXT click, far away and with no mousedown of its own, must not
-    // resurrect the cleared anchor. If it leaked, this click sees moved=true
-    // with a non-null point (link cell → offset null → whole-cell snap) and
-    // dispatches a RANGE spanning the cell instead of the caret below.
+    // resurrect the cleared anchor. Which mechanism reddens the row matters,
+    // because it is NOT the assertion below: with the anchor leaked,
+    // `armedDragFor` sees 390px of travel against a non-null point and hands
+    // `dragRange` an armed anchor, `dragRange` then resolves the HEAD through
+    // `cellPointAt` — a SECOND resolver call this vehicle's one-step script
+    // cannot answer. The fixture records "resolver call #2 ran off the end of a
+    // 1-step script" and returns null, so `head === null`, `dragRange` returns
+    // null, a caret is dispatched and the expectation below PASSES. The leak
+    // surfaces only through `drainResolverFailures` in the shared `afterEach`.
     press(dom.querySelector("td") as HTMLElement, "click", 400, 10);
     expect(dispatched).toEqual([
       { selection: { anchor: src.indexOf("[x](https://example.com)") } },
@@ -506,12 +512,19 @@ describe("TableBlockWidget drag-selection", () => {
     ]);
   });
 
-  // Aborted-gesture guard. A press released OUTSIDE the widget delivers no
-  // click to the root, so the armed anchor survives with stale coordinates.
-  // The only click that can then reach this handler without a mousedown of its
-  // own is a keyboard/programmatic one — `detail === 0`, clientX/Y 0 — which
-  // would otherwise read a huge bogus travel and dispatch a range the user
-  // never drew. It must take the caret path instead.
+  // Non-gesture activation. A keyboard or programmatic click — `detail === 0`,
+  // clientX/Y 0 — can reach this handler while an anchor is still armed (a
+  // press whose release the document never saw: the pointer left the webview
+  // iframe, focus was lost, Cmd+Tab), and would then read a huge bogus travel
+  // and dispatch a range the user never drew. It must take the caret path
+  // instead.
+  //
+  // ⚠️ Do NOT re-justify this row with "a press released OUTSIDE the widget
+  // leaves the anchor armed" — that window is closed structurally now: the
+  // outside-release seam deletes `pendingDrag` itself, and any later press
+  // disarms what a lost release did not (cm-table-widget-release.test.ts).
+  // What `detail === 0` still guards is the genuine non-pointer activation
+  // above.
   it("a detail-0 click (keyboard / programmatic) never takes the drag path", () => {
     const dispatched: unknown[] = [];
     const { mount } = stubViewWithCaret(dispatched, [
