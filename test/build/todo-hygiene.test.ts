@@ -12,7 +12,10 @@
 // `pnpm check:todo-hygiene` run, not by this suite.
 //
 // @ts-nocheck — importing a plain .mjs with no bundled types; vitest runs
-// this transpile-only and tsc does not include test/build/ in `pnpm compile`.
+// this transpile-only. `test/build/tsconfig.json` DOES type-check this
+// directory under `pnpm compile`, but this file opts out wholesale via the
+// file-level directive, so nothing here is checked; swapping it for a
+// line-scoped `@ts-expect-error` on the import alone is a tracked follow-up.
 import { describe, expect, it } from "vitest";
 
 import {
