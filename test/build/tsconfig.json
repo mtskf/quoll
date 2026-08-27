@@ -15,8 +15,15 @@
   // still use a file-level `@ts-nocheck` instead, which switches the WHOLE file
   // off — a type-level assertion in one of those is still vacuous.
   //
-  // To list them, anchor the grep to the directive itself:
-  // `git grep -l '^// @ts-nocheck' test/build` returns exactly those five. The
+  // To list them, anchor the grep to the directive grammar tsc honours:
+  // `git grep -ilE '^[[:space:]]*///?[[:space:]]*@ts-nocheck([[:space:]]|:|$)' test/build`
+  // returns exactly those five. The pattern is deliberately wider than the
+  // canonical `// @ts-nocheck` spelling: tsc also honours indented,
+  // space-less (`//@ts-nocheck`), triple-slash, case-variant, and
+  // colon-suffixed forms (measured, tsc 5.9.3), and missing one of those
+  // reports an unchecked file as checked — the exact trap this roster
+  // exists to prevent. Block comments (`/* @ts-nocheck */`) and mid-line
+  // prose are NOT honoured by tsc and are correctly not matched. The
   // unanchored `git grep -l '@ts-nocheck' test/build` returns EIGHT and is
   // misleading — three of those hits are prose ABOUT the directive rather than
   // the directive: this file, plus theme-palettes.test.ts and
