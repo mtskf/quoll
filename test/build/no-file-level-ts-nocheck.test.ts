@@ -43,8 +43,12 @@ const LEADING_WS = /\s*/y;
 const LINE_END = /[\r\n\u2028\u2029]/g;
 
 // The authority. tsc honours a `@ts-nocheck` pragma only from a file's LEADING
-// trivia — the whitespace and comments before the first real token — so this
-// walks exactly that region and stops at the first token. Block comments are
+// trivia — an optional shebang, then whitespace and comments, up to the first
+// real token — so this walks that region and stops at the first token.
+// ⚠️ "Mirrors tsc" is a goal, not a proven property: the walk is validated
+// against a measured probe corpus, and the shebang case below was found only
+// after an earlier version claimed to reproduce the honour region exactly.
+// Treat an unmodelled trivia form as a live possibility, not an impossibility. Block comments are
 // trivia too, which is why `/* head */ // @ts-nocheck` and its multi-line form
 // are honoured and reached here (measured, tsc 5.9.3).
 //
@@ -55,7 +59,14 @@ const LINE_END = /[\r\n\u2028\u2029]/g;
 // sitting between them and report the file clean while tsc has switched it off
 // (measured). This file's own header contains that glob three times.
 const leadingTriviaOptsOut = (source: string): boolean => {
+  // A shebang is trivia too, but only at offset 0 — tsc's scanner accepts `#!`
+  // nowhere else. Without this the walk mistakes `#` for the first real token
+  // and bails before ever reaching the directive below it (measured).
   let i = 0;
+  if (source.startsWith("#!")) {
+    LINE_END.lastIndex = 0;
+    i = LINE_END.exec(source)?.index ?? source.length;
+  }
   while (i < source.length) {
     LEADING_WS.lastIndex = i;
     LEADING_WS.exec(source);
@@ -150,6 +161,11 @@ describe("test/build carries no file-level type-check opt-out", () => {
       '// /*\n// @ts-nocheck\nconst x: string = 1;\nconst s = "*/";',
       '// covers **/*.ts\n// @ts-nocheck\nexport const p = "test/**/*.test.ts";',
       "// header /*\n// @ts-nocheck\nconst x: string = 1;\n/* real trailing comment */",
+      // A shebang is trivia at offset 0, so the directive under it is still
+      // honoured. Combined with the glob above, this defeated BOTH arms of an
+      // earlier attempt: the walk stopped at `#`, and the strip ate the rest.
+      "#!/usr/bin/env node\n// @ts-nocheck",
+      '#!/usr/bin/env node\n// covers **/*.ts\n// @ts-nocheck\nexport const p = "test/**/*.test.ts";',
     ];
     for (const source of honoured) {
       expect(detectsOptOut(source)).toBe(true);
