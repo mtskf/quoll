@@ -9,32 +9,30 @@
   // Node + ESM, with no DOM lib and no vscode-webview types.
   //
   // The scripts/ and esbuild.config.mjs modules they import are plain .mjs with
-  // no bundled types. The shape to reach for is a line-scoped `@ts-expect-error`
-  // on the import alone — it self-verifies (goes red the day the module gains
-  // types) and leaves everything the test itself authors checked. Five suites
-  // still use a file-level `@ts-nocheck` instead, which switches the WHOLE file
-  // off — a type-level assertion in one of those is still vacuous.
+  // no bundled types. Every one of those imports carries a line-scoped
+  // `@ts-expect-error` on the module specifier — it self-verifies (goes red the
+  // day the module gains types) and leaves everything the test itself authors
+  // checked. As of 2026-08-28 no file here uses a file-level `@ts-nocheck`,
+  // which would switch the WHOLE file off and make any type-level assertion in
+  // it vacuous; five suites sat in that state from the day this config landed
+  // (2026-08-22) until the swap.
   //
-  // To list them, anchor the grep to the directive grammar tsc honours:
+  // ⚠️ When a wrapping binding list would push the specifier off the directive's
+  // line, use a namespace import and destructure below — a wrapped named import
+  // silently unsuppresses (theme-palettes.test.ts documents the measurement).
+  //
+  // The tripwire against drifting back is no-file-level-ts-nocheck.test.ts. Its
+  // manual equivalent, anchored to the directive grammar tsc honours, is
   // `git grep -ilE '^[[:space:]]*///?[[:space:]]*@ts-nocheck([[:space:]]|:|$)' test/build`
-  // returns exactly those five. The pattern is deliberately wider than the
-  // canonical `// @ts-nocheck` spelling: tsc also honours indented,
-  // space-less (`//@ts-nocheck`), triple-slash, case-variant, and
-  // colon-suffixed forms (measured, tsc 5.9.3), and missing one of those
-  // reports an unchecked file as checked — the exact trap this roster
-  // exists to prevent. Block comments (`/* @ts-nocheck */`) and mid-line
-  // prose are NOT honoured by tsc and are correctly not matched. The
-  // unanchored `git grep -l '@ts-nocheck' test/build` returns EIGHT and is
-  // misleading — three of those hits are prose ABOUT the directive rather than
-  // the directive: this file, plus theme-palettes.test.ts and
-  // publish-workflow-sbom-config.test.ts, which each note that they carry none.
-  // The roster is deliberately not enumerated here: the tracked follow-up swaps
-  // the files over one at a time, so a hand-copied list goes stale on the first
-  // swap. Two places do name them — the TODO.md follow-up entry, where the
-  // roster IS the work item, and the 2026-08-22 LEARNING.md entry — and keeping
-  // both current is part of that follow-up.
-  //
-  // Do not read this config as proof that every file under it is checked.
+  // and must print nothing. The pattern is deliberately wider than the canonical
+  // `// @ts-nocheck` spelling: tsc also honours indented, space-less
+  // (`//@ts-nocheck`), triple-slash, case-variant, and colon-suffixed forms
+  // (measured, tsc 5.9.3), and missing one of those reports an unchecked file as
+  // checked — the exact trap this guard exists to prevent. Block comments
+  // (`/* @ts-nocheck */`) and mid-line prose are NOT honoured by tsc and are
+  // correctly not matched, which is why both the grep and the test are anchored
+  // per line: this header names the directive in prose repeatedly, and the
+  // unanchored `git grep -l '@ts-nocheck' test/build` still hits it.
   //
   // noEmit (inherited): this is a CI gate, not a build step — vitest still runs
   // through its own transpiler. rootDir is pinned to the repo root explicitly
