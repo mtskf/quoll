@@ -75,8 +75,8 @@ const collectSuites = (root: string) =>
   readdirSync(root, { encoding: "utf8", recursive: true }).filter((f) => /\.[cm]?tsx?$/.test(f));
 
 // Ask TypeScript which names it treats as declarations, for the same reason the
-// directive oracle below asks it rather than matching text: `.d.ts` is not the
-// only spelling. tsc counts any `*.d.<tag>.ts` — the arbitrary-extension
+// directive oracle asks it rather than matching text: `.d.ts` is not the only
+// spelling. tsc counts any `*.d.<tag>.ts` — the arbitrary-extension
 // declaration form — as a declaration file, and `skipLibCheck` skips it exactly
 // as it skips a plain `.d.ts`. `isDeclarationFile` is public API, unlike the
 // directive field, and is derived from the filename alone.
@@ -369,7 +369,8 @@ describe("the sweep collects what the program can reach", () => {
     writeFileSync(join(root, "helper.cts"), "// @ts-nocheck\nexport const g = 1;\n");
     writeFileSync(join(root, "helper.tsx"), "// @ts-nocheck\nexport const h = 1;\n");
 
-    expect(collectSuites(root).sort()).toEqual([
+    const collected = collectSuites(root).sort();
+    expect(collected).toEqual([
       "helper.cts",
       "helper.mts",
       "helper.ts",
@@ -379,7 +380,7 @@ describe("the sweep collects what the program can reach", () => {
       "types.d.mts",
       "types.d.ts",
     ]);
-    expect(collectSuites(root).filter(isDeclaration).sort()).toEqual([
+    expect(collected.filter(isDeclaration)).toEqual([
       "types.d.css.ts",
       "types.d.cts",
       "types.d.mts",
