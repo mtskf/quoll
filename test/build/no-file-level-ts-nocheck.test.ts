@@ -72,9 +72,7 @@ const detectsOptOut = (source: string): boolean => {
 // declaration. Sweeping a file the program does not contain costs a false
 // alarm; missing one costs the thing this guard exists to prevent.
 const collectSuites = (root: string) =>
-  readdirSync(root, { encoding: "utf8", recursive: true }).filter((f) =>
-    /\.[cm]?tsx?$/.test(f)
-  );
+  readdirSync(root, { encoding: "utf8", recursive: true }).filter((f) => /\.[cm]?tsx?$/.test(f));
 
 // Reading the bytes the way tsc reads them is part of the oracle, not plumbing
 // around it. `sys.readFile` sniffs the byte order mark before the scanner runs:
