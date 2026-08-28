@@ -15,25 +15,52 @@
 // would wrap and push the specifier off the directive's line, use a namespace
 // import and destructure below; theme-palettes.test.ts documents why.
 //
-// The pattern below is deliberately wider than the canonical spelling: tsc also
-// honours indented, space-less, triple-slash, case-variant and colon-suffixed
-// forms (measured, tsc 5.9.3), and missing one of those would let an unchecked
-// file read as checked — the exact trap this guard exists to close. Block
-// comments and mid-line prose are NOT honoured by tsc and are correctly not
-// matched, which is why the check is anchored per line rather than run over the
-// whole file: this very file names the directive in prose several times.
-import { readdirSync, readFileSync } from "node:fs";
+// Detection is deliberately wider than the canonical spelling, because every
+// form tsc honours but the scan misses is a file that reads as checked while
+// being fully unchecked — the exact trap this guard exists to close. The
+// accept/reject sets below were measured against this repo's own tsc (5.9.3) by
+// planting a type error behind each form and watching whether tsc suppressed it;
+// `detectsOptOut` reproduces that verdict for every one of them.
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 
-// Mirrors the roster grep in CLAUDE.md and tsconfig.json's header — keep the
-// three in step if the directive grammar ever widens.
-const DIRECTIVE = /^[ \t]*\/\/\/?[ \t]*@ts-nocheck([ \t]|:|$)/im;
+// Block comments are trivia to tsc exactly like line comments, so a directive
+// that trails one on the same line — `/* head */ // @ts-nocheck`, including the
+// multi-line `/*\n * …\n */ // @ts-nocheck` shape — IS honoured (measured).
+// Stripping block comments before the per-line scan models that directly and
+// reads better than a regex trying to re-derive it.
+// ⚠️ A `/*` inside a string literal would make this strip too much. That cannot
+// hide a live directive: a string literal is a token, and tsc only honours the
+// pragma from trivia BEFORE the first token, so anything the over-strip could
+// swallow was never honoured to begin with.
+const BLOCK_COMMENT = /\/\*[\s\S]*?\*\//g;
 
-const suites = readdirSync(HERE).filter((f) => f.endsWith(".ts"));
+// Mirrors the character classes in tsc's own pragma matcher
+// (`singleLinePragmaRegEx = /^\/\/\/?\s*@([^\s:]+)((?:[^\S\r\n]|:).*)?$/m`):
+// `[^\S\r\n]` is "whitespace except newlines", which covers NBSP, form feed,
+// vertical tab and a stray BOM. ASCII `[ \t]` misses all four — and a BOM is the
+// realistic one, since an editor configured to write it produces a byte-perfect
+// canonical directive that `readFileSync` still reports with `﻿` in front.
+const DIRECTIVE = /^[^\S\r\n]*\/\/\/?[^\S\r\n]*@ts-nocheck(?:[^\S\r\n]|:|$)/im;
+
+const detectsOptOut = (source: string) => DIRECTIVE.test(source.replace(BLOCK_COMMENT, ""));
+
+// Recursive on purpose: `tsconfig.json` includes `**/*.ts` and vitest includes
+// `test/**/*.test.ts`, so a future `test/build/<subdir>/foo.test.ts` sits inside
+// the very program this tripwire protects (nested test directories are already
+// established here — see `test/extension/e2e/`). A top-level-only sweep would
+// let such a suite opt out with no signal anywhere.
+const collectSuites = (root: string) =>
+  readdirSync(root, { recursive: true })
+    .map(String)
+    .filter((f) => f.endsWith(".ts"));
+
+const suites = collectSuites(HERE);
 
 describe("test/build carries no file-level type-check opt-out", () => {
   it("finds the suites to scan (guards against an empty, vacuously-passing sweep)", () => {
@@ -41,29 +68,90 @@ describe("test/build carries no file-level type-check opt-out", () => {
   });
 
   it("reports no suite that switches its whole file off", () => {
-    const offenders = suites.filter((f) => DIRECTIVE.test(readFileSync(join(HERE, f), "utf8")));
+    const offenders = suites.filter((f) => detectsOptOut(readFileSync(join(HERE, f), "utf8")));
     expect(offenders).toEqual([]);
   });
 
-  it("matches the directive forms tsc honours, and only those", () => {
-    const accepted = [
+  it("detects every directive form tsc honours", () => {
+    // Each string is the file prefix from the corresponding tsc probe; every one
+    // of them suppressed a planted TS2322 under tsc 5.9.3.
+    const honoured = [
       "// @ts-nocheck",
       "//@ts-nocheck",
-      "  // @ts-nocheck — trailing prose",
+      "\t// @ts-nocheck",
       "/// @ts-nocheck",
       "// @TS-NoCheck",
       "// @ts-nocheck: because",
+      "  // @ts-nocheck — trailing prose",
+      "// @ts-nocheck\r\n",
+      "\n\n// @ts-nocheck",
+      "\u{FEFF}// @ts-nocheck",
+      "//\u{00A0}@ts-nocheck",
+      "\u{00A0}// @ts-nocheck",
+      "// @ts-nocheck\u{00A0}because",
+      "\u{000C}// @ts-nocheck",
+      "\u{000B}// @ts-nocheck",
+      "/* head */ // @ts-nocheck",
+      "/*\n * header\n */ // @ts-nocheck",
     ];
-    const rejected = [
+    for (const source of honoured) {
+      expect(detectsOptOut(source)).toBe(true);
+    }
+  });
+
+  it("ignores look-alikes tsc does not honour", () => {
+    // Measured the same way: tsc reported the planted TS2322 behind each of
+    // these, so treating them as an opt-out would be a false alarm.
+    const notHonoured = [
       "/* @ts-nocheck */",
+      "/*\n * // @ts-nocheck is bad\n */",
+      "////@ts-nocheck",
+      "const x = 1; // @ts-nocheck",
       "// swapping the @ts-nocheck for a line-scoped directive",
       "const s = '@ts-nocheck';",
     ];
-    for (const line of accepted) {
-      expect(DIRECTIVE.test(line)).toBe(true);
+    for (const source of notHonoured) {
+      expect(detectsOptOut(source)).toBe(false);
     }
-    for (const line of rejected) {
-      expect(DIRECTIVE.test(line)).toBe(false);
-    }
+  });
+
+  it("over-matches a directive placed after code, which fails loud rather than silent", () => {
+    // tsc only honours the pragma from a file's leading trivia, so it ignores
+    // this one — the scan still flags it. Documented rather than fixed: a false
+    // alarm is read by a human, a missed opt-out is read by nobody.
+    expect(detectsOptOut("export const y = 1;\n// @ts-nocheck")).toBe(true);
+  });
+});
+
+describe("the sweep descends into subdirectories", () => {
+  let root: string;
+
+  beforeEach(() => {
+    // Built under the OS temp dir, never in the repo: a stray `.ts` in the shared
+    // work tree is picked up by `tsconfig.json`'s `**/*.ts` and breaks other
+    // agents' type-checks.
+    root = mkdtempSync(join(tmpdir(), "quoll-nocheck-sweep-"));
+  });
+
+  afterEach(() => {
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it("returns nested suites, not just the top level", () => {
+    writeFileSync(join(root, "top.test.ts"), "");
+    mkdirSync(join(root, "nested"));
+    writeFileSync(join(root, "nested", "deep.test.ts"), "");
+
+    expect(collectSuites(root).sort()).toEqual([join("nested", "deep.test.ts"), "top.test.ts"]);
+  });
+
+  it("flags an opt-out that hides in a subdirectory", () => {
+    mkdirSync(join(root, "nested"));
+    writeFileSync(join(root, "nested", "sneaky.test.ts"), "// @ts-nocheck\nexport const a = 1;\n");
+
+    const offenders = collectSuites(root).filter((f) =>
+      detectsOptOut(readFileSync(join(root, f), "utf8"))
+    );
+    expect(offenders).toEqual([join("nested", "sneaky.test.ts")]);
   });
 });

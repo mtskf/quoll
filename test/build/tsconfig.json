@@ -21,18 +21,23 @@
   // line, use a namespace import and destructure below — a wrapped named import
   // silently unsuppresses (theme-palettes.test.ts documents the measurement).
   //
-  // The tripwire against drifting back is no-file-level-ts-nocheck.test.ts. Its
-  // manual equivalent, anchored to the directive grammar tsc honours, is
-  // `git grep -ilE '^[[:space:]]*///?[[:space:]]*@ts-nocheck([[:space:]]|:|$)' test/build`
-  // and must print nothing. The pattern is deliberately wider than the canonical
-  // `// @ts-nocheck` spelling: tsc also honours indented, space-less
-  // (`//@ts-nocheck`), triple-slash, case-variant, and colon-suffixed forms
-  // (measured, tsc 5.9.3), and missing one of those reports an unchecked file as
-  // checked — the exact trap this guard exists to prevent. Block comments
-  // (`/* @ts-nocheck */`) and mid-line prose are NOT honoured by tsc and are
-  // correctly not matched, which is why both the grep and the test are anchored
-  // per line: this header names the directive in prose repeatedly, and the
-  // unanchored `git grep -l '@ts-nocheck' test/build` still hits it.
+  // The tripwire against drifting back is no-file-level-ts-nocheck.test.ts, and
+  // it is the AUTHORITY — its accept/reject sets were measured against this
+  // repo's own tsc (5.9.3) by planting a type error behind each directive form
+  // and watching whether tsc suppressed it. It scans recursively, matches the
+  // Unicode whitespace classes tsc's own pragma matcher uses (so a BOM, NBSP,
+  // form feed or vertical tab cannot smuggle a directive past it), and strips
+  // block comments first so a directive trailing one on the same line is still
+  // seen. Run `pnpm vitest run test/build/no-file-level-ts-nocheck.test.ts`.
+  //
+  // For a quick eyeball there is
+  // `git grep -ilE '^[[:space:]]*///?[[:space:]]*@ts-nocheck([[:space:]]|:|$)' test/build`,
+  // but treat it as an APPROXIMATION, not a second authority: grep's POSIX
+  // `[[:space:]]` is ASCII-only in the default C locale, so it shares none of
+  // the Unicode coverage above, and it has no way to model block-comment
+  // trivia. It is anchored per line for the same reason the test is — this
+  // header names the directive in prose repeatedly, and the unanchored
+  // `git grep -l '@ts-nocheck' test/build` still hits it.
   //
   // noEmit (inherited): this is a CI gate, not a build step — vitest still runs
   // through its own transpiler. rootDir is pinned to the repo root explicitly
