@@ -64,8 +64,17 @@ const detectsOptOut = (source: string): boolean => {
 // `encoding` is load-bearing for types, not decoration: without it the recursive
 // overload of readdirSync widens to `string[] | Buffer[]` and the filter below
 // stops compiling.
+//
+// The extension set is deliberately wider than `tsconfig.json`'s `**/*.ts`,
+// which admits only `.ts` and `.d.ts` (measured). A `.mts` or `.d.mts` reached
+// by an explicit `./x.mjs` import IS a program input, and there it opts out the
+// same two ways a `.ts` does — an honoured directive, or `skipLibCheck` on a
+// declaration. Sweeping a file the program does not contain costs a false
+// alarm; missing one costs the thing this guard exists to prevent.
 const collectSuites = (root: string) =>
-  readdirSync(root, { encoding: "utf8", recursive: true }).filter((f) => f.endsWith(".ts"));
+  readdirSync(root, { encoding: "utf8", recursive: true }).filter((f) =>
+    /\.[cm]?tsx?$/.test(f)
+  );
 
 // Reading the bytes the way tsc reads them is part of the oracle, not plumbing
 // around it. `sys.readFile` sniffs the byte order mark before the scanner runs:
@@ -138,10 +147,10 @@ describe("test/build carries no file-level type-check opt-out", () => {
     //
     // There is no such file today. If one is ever wanted, this line is where
     // the exemption gets made consciously rather than by drifting in.
-    expect(suites.filter((f) => f.endsWith(".d.ts"))).toEqual([]);
+    expect(suites.filter((f) => /\.d\.[cm]?ts$/.test(f))).toEqual([]);
   });
 
-  it("detects every directive form tsc honours", () => {
+  it("detects the directive forms pinned below", () => {
     // Each string is the file prefix from the corresponding tsc probe; every one
     // of them suppressed a planted TS2322 under tsc 5.9.3.
     const honoured = [
@@ -298,9 +307,9 @@ describe("the sweep reads files the way tsc does", () => {
   it("decodes UTF-16BE with a trailing odd byte, as tsc does", () => {
     // tsc truncates the odd tail (`len &= ~1`) and reads the rest. Without the
     // matching trim the read layer throws ERR_INVALID_BUFFER_SIZE instead of
-    // answering — loud, but still a file the sweep never reports on. Every
-    // other fixture here is even-length, so this is the only one that can go
-    // red if a future pass decides the trim is a no-op.
+    // answering — loud, but still a file the sweep never reports on. This is the
+    // only fixture that reaches the byte-swap branch with an odd body, so it is
+    // the one that goes red if a future pass decides the trim is a no-op.
     write(
       "utf16be-odd.test.ts",
       concat(concat(Uint8Array.of(0xfe, 0xff), utf16be(DIRECTIVE)), Uint8Array.of(0x41))
@@ -336,6 +345,26 @@ describe("the sweep descends into subdirectories", () => {
     writeFileSync(join(root, "nested", "deep.test.ts"), "");
 
     expect(collectSuites(root).sort()).toEqual([join("nested", "deep.test.ts"), "top.test.ts"]);
+  });
+
+  it("collects the extensions the program can reach, not just test files", () => {
+    // What the `.d.*` assertion above silently depends on. Every other fixture
+    // in this file is named `*.test.ts`, so narrowing the collector to that
+    // suffix would leave the whole suite green while the declaration check
+    // degenerated to `expect([]).toEqual([])` and a non-test helper stopped
+    // being swept.
+    writeFileSync(join(root, "types.d.ts"), "export declare const a: string;\n");
+    writeFileSync(join(root, "types.d.mts"), "export declare const b: string;\n");
+    writeFileSync(join(root, "helper.ts"), "// @ts-nocheck\nexport const c = 1;\n");
+    writeFileSync(join(root, "helper.mts"), "// @ts-nocheck\nexport const d = 1;\n");
+
+    expect(collectSuites(root).sort()).toEqual([
+      "helper.mts",
+      "helper.ts",
+      "types.d.mts",
+      "types.d.ts",
+    ]);
+    expect(findOptOuts(root).sort()).toEqual(["helper.mts", "helper.ts"]);
   });
 
   it("flags an opt-out that hides in a subdirectory", () => {
