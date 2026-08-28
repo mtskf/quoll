@@ -55,10 +55,17 @@ const detectsOptOut = (source: string) => DIRECTIVE.test(source.replace(BLOCK_CO
 // the very program this tripwire protects (nested test directories are already
 // established here — see `test/extension/e2e/`). A top-level-only sweep would
 // let such a suite opt out with no signal anywhere.
+//
+// `encoding` is load-bearing for types, not decoration: without it the recursive
+// overload of readdirSync widens to `string[] | Buffer[]` and the filter below
+// stops compiling.
 const collectSuites = (root: string) =>
-  readdirSync(root, { recursive: true })
-    .map(String)
-    .filter((f) => f.endsWith(".ts"));
+  readdirSync(root, { encoding: "utf8", recursive: true }).filter((f) => f.endsWith(".ts"));
+
+// The one sweep the guard actually performs — shared so the subdirectory suite
+// below pins this exact path rather than a look-alike re-implementation.
+const findOptOuts = (root: string) =>
+  collectSuites(root).filter((f) => detectsOptOut(readFileSync(join(root, f), "utf8")));
 
 const suites = collectSuites(HERE);
 
@@ -68,8 +75,7 @@ describe("test/build carries no file-level type-check opt-out", () => {
   });
 
   it("reports no suite that switches its whole file off", () => {
-    const offenders = suites.filter((f) => detectsOptOut(readFileSync(join(HERE, f), "utf8")));
-    expect(offenders).toEqual([]);
+    expect(findOptOuts(HERE)).toEqual([]);
   });
 
   it("detects every directive form tsc honours", () => {
@@ -149,9 +155,6 @@ describe("the sweep descends into subdirectories", () => {
     mkdirSync(join(root, "nested"));
     writeFileSync(join(root, "nested", "sneaky.test.ts"), "// @ts-nocheck\nexport const a = 1;\n");
 
-    const offenders = collectSuites(root).filter((f) =>
-      detectsOptOut(readFileSync(join(root, f), "utf8"))
-    );
-    expect(offenders).toEqual([join("nested", "sneaky.test.ts")]);
+    expect(findOptOuts(root)).toEqual([join("nested", "sneaky.test.ts")]);
   });
 });
