@@ -24,11 +24,17 @@
   // The tripwire against drifting back is no-file-level-ts-nocheck.test.ts, and
   // it is the AUTHORITY — its accept/reject sets were measured against this
   // repo's own tsc (5.9.3) by planting a type error behind each directive form
-  // and watching whether tsc suppressed it. It scans recursively, matches the
-  // Unicode whitespace classes tsc's own pragma matcher uses (so a BOM, NBSP,
-  // form feed or vertical tab cannot smuggle a directive past it), and strips
-  // block comments first so a directive trailing one on the same line is still
-  // seen. Run `pnpm vitest run test/build/no-file-level-ts-nocheck.test.ts`.
+  // and watching whether tsc suppressed it. It scans recursively, and rather
+  // than pattern-matching lines it WALKS the file's leading trivia the way tsc
+  // does — whitespace and comments up to the first real token — so a BOM, NBSP,
+  // form feed or vertical tab cannot smuggle a directive past it and a
+  // directive trailing a block comment on the same line is still seen.
+  // ⚠️ The walk is not over-engineering. Its predecessor stripped `/* … */`
+  // from the whole file and then scanned lines, which is unsound: `/*` also
+  // occurs inside LINE comments, so a header quoting a glob like `**/*.ts`
+  // plus any later `*/` made the strip swallow a live directive and report the
+  // file clean (measured — the trap this guard exists to close, reached through
+  // the guard itself). Run `pnpm vitest run test/build/no-file-level-ts-nocheck.test.ts`.
   //
   // For a quick eyeball there is
   // `git grep -ilE '^[[:space:]]*///?[[:space:]]*@ts-nocheck([[:space:]]|:|$)' test/build`,

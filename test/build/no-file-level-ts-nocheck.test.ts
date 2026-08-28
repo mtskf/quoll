@@ -15,12 +15,13 @@
 // would wrap and push the specifier off the directive's line, use a namespace
 // import and destructure below; theme-palettes.test.ts documents why.
 //
-// Detection is deliberately wider than the canonical spelling, because every
-// form tsc honours but the scan misses is a file that reads as checked while
-// being fully unchecked — the exact trap this guard exists to close. The
-// accept/reject sets below were measured against this repo's own tsc (5.9.3) by
-// planting a type error behind each form and watching whether tsc suppressed it;
-// `detectsOptOut` reproduces that verdict for every one of them.
+// Detection walks the file's leading trivia the way tsc does, rather than
+// pattern-matching lines, because every form tsc honours but the scan misses is
+// a file that reads as checked while being fully unchecked — the exact trap this
+// guard exists to close. The accept/reject sets below were measured against this
+// repo's own tsc (5.9.3) by planting a type error behind each form and watching
+// whether tsc suppressed it; `detectsOptOut` reproduces that verdict for every
+// one of them.
 import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -29,26 +30,70 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 
-// Block comments are trivia to tsc exactly like line comments, so a directive
-// that trails one on the same line — `/* head */ // @ts-nocheck`, including the
-// multi-line `/*\n * …\n */ // @ts-nocheck` shape — IS honoured (measured).
-// Stripping block comments before the per-line scan models that directly and
-// reads better than a regex trying to re-derive it.
-// ⚠️ A `/*` inside a string literal would make this strip too much. That cannot
-// hide a live directive: a string literal is a token, and tsc only honours the
-// pragma from trivia BEFORE the first token, so anything the over-strip could
-// swallow was never honoured to begin with.
-const BLOCK_COMMENT = /\/\*[\s\S]*?\*\//g;
-
 // Mirrors the character classes in tsc's own pragma matcher
 // (`singleLinePragmaRegEx = /^\/\/\/?\s*@([^\s:]+)((?:[^\S\r\n]|:).*)?$/m`):
 // `[^\S\r\n]` is "whitespace except newlines", which covers NBSP, form feed,
 // vertical tab and a stray BOM. ASCII `[ \t]` misses all four — and a BOM is the
 // realistic one, since an editor configured to write it produces a byte-perfect
 // canonical directive that `readFileSync` still reports with `﻿` in front.
-const DIRECTIVE = /^[^\S\r\n]*\/\/\/?[^\S\r\n]*@ts-nocheck(?:[^\S\r\n]|:|$)/im;
+// Applied to one already-isolated comment line, never to a whole file.
+const PRAGMA = /^\/\/\/?[^\S\r\n]*@ts-nocheck(?:[^\S\r\n]|:|$)/i;
 
-const detectsOptOut = (source: string) => DIRECTIVE.test(source.replace(BLOCK_COMMENT, ""));
+const LEADING_WS = /\s*/y;
+const LINE_END = /[\r\n\u2028\u2029]/g;
+
+// The authority. tsc honours a `@ts-nocheck` pragma only from a file's LEADING
+// trivia — the whitespace and comments before the first real token — so this
+// walks exactly that region and stops at the first token. Block comments are
+// trivia too, which is why `/* head */ // @ts-nocheck` and its multi-line form
+// are honoured and reached here (measured, tsc 5.9.3).
+//
+// ⚠️ Walking is not over-engineering: the obvious shortcut — strip `/* … */`
+// from the whole file, then scan lines — is UNSOUND. `/*` also occurs inside
+// LINE comments, which are leading trivia too, so a header mentioning a glob
+// like `**/*.ts` plus any later `*/` makes the strip swallow the directive
+// sitting between them and report the file clean while tsc has switched it off
+// (measured). This file's own header contains that glob three times.
+const leadingTriviaOptsOut = (source: string): boolean => {
+  let i = 0;
+  while (i < source.length) {
+    LEADING_WS.lastIndex = i;
+    LEADING_WS.exec(source);
+    i = LEADING_WS.lastIndex;
+
+    if (source.startsWith("//", i)) {
+      LINE_END.lastIndex = i;
+      const end = LINE_END.exec(source)?.index ?? source.length;
+      if (PRAGMA.test(source.slice(i, end))) {
+        return true;
+      }
+      i = end;
+      continue;
+    }
+    if (source.startsWith("/*", i)) {
+      const close = source.indexOf("*/", i + 2);
+      if (close === -1) {
+        return false; // unterminated: the rest of the file is comment body
+      }
+      i = close + 2;
+      continue;
+    }
+    return false; // first real token — nothing past here is honoured
+  }
+  return false;
+};
+
+// A directive sitting after code is NOT honoured by tsc, but it is almost
+// always someone's mistaken attempt to opt out, so it is flagged anyway: a
+// false alarm gets read by a human, a missed opt-out gets read by nobody.
+// ⚠️ Best-effort only, and deliberately not a second safety net — it inherits
+// the unsound whole-file strip described above, so it can miss. Everything that
+// actually matters for correctness is decided by the walker.
+const BLOCK_COMMENT = /\/\*[\s\S]*?\*\//g;
+const AFTER_CODE_DIRECTIVE = /^[^\S\r\n]*\/\/\/?[^\S\r\n]*@ts-nocheck(?:[^\S\r\n]|:|$)/im;
+
+const detectsOptOut = (source: string) =>
+  leadingTriviaOptsOut(source) || AFTER_CODE_DIRECTIVE.test(source.replace(BLOCK_COMMENT, ""));
 
 // Recursive on purpose: `tsconfig.json` includes `**/*.ts` and vitest includes
 // `test/**/*.test.ts`, so a future `test/build/<subdir>/foo.test.ts` sits inside
@@ -99,6 +144,12 @@ describe("test/build carries no file-level type-check opt-out", () => {
       "\u{000B}// @ts-nocheck",
       "/* head */ // @ts-nocheck",
       "/*\n * header\n */ // @ts-nocheck",
+      // A `/*` inside a LINE comment is still leading trivia, so tsc honours the
+      // directive below it. These three defeated the earlier whole-file
+      // block-comment strip, which swallowed everything up to the trailing `*/`.
+      '// /*\n// @ts-nocheck\nconst x: string = 1;\nconst s = "*/";',
+      '// covers **/*.ts\n// @ts-nocheck\nexport const p = "test/**/*.test.ts";',
+      "// header /*\n// @ts-nocheck\nconst x: string = 1;\n/* real trailing comment */",
     ];
     for (const source of honoured) {
       expect(detectsOptOut(source)).toBe(true);
