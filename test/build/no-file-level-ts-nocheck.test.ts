@@ -33,11 +33,13 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 // Ask TypeScript instead of reimplementing its scanner.
 //
 // This guard's question is exactly "does tsc consider this file opted out?", so
-// the faithful oracle is tsc itself. Three hand-rolled approximations were tried
-// in this PR and all three were wrong, each one measured only after it shipped:
-// a whole-file block-comment strip that swallowed live directives, a leading-
-// trivia walk that stopped at a shebang, and a whitespace class that missed
-// U+0085 and U+200B. Every fix asserted the next approximation was complete.
+// the faithful oracle is tsc itself. Three approximations of tsc's SCANNER were
+// tried in this PR and all three were wrong, each one measured only after it
+// shipped: a whole-file block-comment strip that swallowed live directives, a
+// leading-trivia walk that stopped at a shebang, and a whitespace class that
+// missed U+0085 and U+200B. (The tsconfig header counts four misses because it
+// includes the read layer below, which is a different mistake in the same
+// shape.) Every fix asserted the next approximation was complete.
 // None were, and the failure direction is always the dangerous one — a file
 // reported clean while tsc has switched checking off.
 //
@@ -88,8 +90,7 @@ const readAsTypeScriptWould = (path: string): string => {
     // UTF-16BE. Node ships no decoder for it, so mirror what tsc does: drop the
     // mark, ignore a trailing odd byte, byte-swap into LE. `Buffer.from` copies,
     // so the in-place swap never touches `bytes`. The odd-byte trim is not
-    // cosmetic — `swap16` throws on an odd length — and it is pinned by the
-    // odd-tail fixture below, because every other fixture here is even-length.
+    // cosmetic — `swap16` throws on an odd length.
     const body = bytes.subarray(2);
     return Buffer.from(body.subarray(0, body.length - (body.length % 2)))
       .swap16()
