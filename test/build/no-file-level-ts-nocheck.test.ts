@@ -17,10 +17,10 @@
 //
 // Detection asks TypeScript rather than pattern-matching the source, because
 // every form tsc honours but the scan misses is a file that reads as checked
-// while being fully unchecked — the exact trap this guard exists to close. The
-// accept/reject sets below were measured against this repo's own tsc (5.9.3) by
-// planting a type error behind each form and watching whether tsc suppressed it;
-// `detectsOptOut` reproduces that verdict for every one of them.
+// while being fully unchecked — the exact trap this guard exists to close.
+// Which forms count, and which encodings the sweep can read, are settled by the
+// fixtures below rather than by any sentence in this file: three cycles of this
+// PR's review shipped a comment asserting coverage the code did not have.
 import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -75,19 +75,21 @@ const collectSuites = (root: string) =>
 // stops reading as leading trivia (measured against tsc 5.9.3: the directive IS
 // honoured, the naive read says it is not).
 const readAsTypeScriptWould = (path: string): string => {
-  // Uint8Array rather than Buffer throughout: @types/node 20 types `Buffer` as
-  // `Uint8Array<ArrayBufferLike>`, which TS 5.9's lib will not hand back to
-  // `Buffer.concat` / `Buffer.from` / `writeFileSync` (they want an
-  // `ArrayBuffer`-backed view). Working in the plain view type and reaching for
-  // Buffer only to decode keeps that friction out of the guard.
+  // Uint8Array rather than Buffer: @types/node 20 types `Buffer` as
+  // `Uint8Array<ArrayBufferLike>`, which TS 5.9's lib rejects wherever an
+  // `ArrayBuffer`-backed view is required (`Buffer.from`, `writeFileSync`).
+  // Working in the plain view type and reaching for Buffer only to decode keeps
+  // that friction out of the guard.
   const bytes = new Uint8Array(readFileSync(path));
   const decode = (view: Uint8Array, encoding: "utf8" | "utf16le") =>
     Buffer.from(view.buffer, view.byteOffset, view.byteLength).toString(encoding);
 
   if (bytes.length >= 2 && bytes[0] === 0xfe && bytes[1] === 0xff) {
     // UTF-16BE. Node ships no decoder for it, so mirror what tsc does: drop the
-    // mark, ignore a trailing odd byte (`swap16` rejects an odd length), byte-swap
-    // into LE. `Buffer.from` copies, so the in-place swap never touches `bytes`.
+    // mark, ignore a trailing odd byte, byte-swap into LE. `Buffer.from` copies,
+    // so the in-place swap never touches `bytes`. The odd-byte trim is not
+    // cosmetic — `swap16` throws on an odd length — and it is pinned by the
+    // odd-tail fixture below, because every other fixture here is even-length.
     const body = bytes.subarray(2);
     return Buffer.from(body.subarray(0, body.length - (body.length % 2)))
       .swap16()
@@ -124,6 +126,20 @@ describe("test/build carries no file-level type-check opt-out", () => {
     expect(findOptOuts(HERE)).toEqual([]);
   });
 
+  it("carries no declaration file, which would be unchecked with no directive", () => {
+    // A second way to be unchecked, reached without any directive at all:
+    // `tsconfig.base.json` sets `skipLibCheck: true`, `include` is `**/*.ts`
+    // which matches `.d.ts`, and tsc's `skipTypeCheckingWorker` short-circuits
+    // on `skipLibCheck && isDeclarationFile` BEFORE it ever reads
+    // `checkJsDirective` — so no improvement to the detector above can reach
+    // this case. Measured on tsc 5.9.3: a planted TS2339 in a `.d.ts` here is
+    // reported with `skipLibCheck: false` and suppressed with it on.
+    //
+    // There is no such file today. If one is ever wanted, this line is where
+    // the exemption gets made consciously rather than by drifting in.
+    expect(suites.filter((f) => f.endsWith(".d.ts"))).toEqual([]);
+  });
+
   it("detects every directive form tsc honours", () => {
     // Each string is the file prefix from the corresponding tsc probe; every one
     // of them suppressed a planted TS2322 under tsc 5.9.3.
@@ -143,6 +159,11 @@ describe("test/build carries no file-level type-check opt-out", () => {
       "// @ts-nocheck\u{00A0}because",
       "\u{000C}// @ts-nocheck",
       "\u{000B}// @ts-nocheck",
+      // The two forms this PR shipped a miss on: tsc counts them as leading
+      // whitespace, JS `\s` does not. Their rejected counterparts sit in the
+      // look-alike list below — the asymmetry with NBSP is real, not a typo.
+      "\u{0085}// @ts-nocheck",
+      "\u{200B}// @ts-nocheck",
       "/* head */ // @ts-nocheck",
       "/*\n * header\n */ // @ts-nocheck",
       // A `/*` inside a LINE comment is still leading trivia, so tsc honours the
@@ -172,6 +193,10 @@ describe("test/build carries no file-level type-check opt-out", () => {
       "const x = 1; // @ts-nocheck",
       "// swapping the @ts-nocheck for a line-scoped directive",
       "const s = '@ts-nocheck';",
+      // Between the slashes and the `@`, tsc's pragma matcher accepts NBSP (see
+      // the honoured list) but not these two.
+      "//\u{0085}@ts-nocheck",
+      "//\u{200B}@ts-nocheck",
     ];
     for (const source of notHonoured) {
       expect(detectsOptOut(source)).toBe(false);
@@ -188,9 +213,11 @@ describe("test/build carries no file-level type-check opt-out", () => {
   });
 
   it("still detects the canonical form, so an upstream API change fails loud", () => {
-    // `checkJsDirective` is internal to typescript. This assertion is what turns
-    // its removal into a red suite instead of a guard that silently passes every
-    // file — the exact failure mode the tripwire exists to prevent.
+    // `checkJsDirective` is internal to typescript. Its removal would make
+    // `detectsOptOut` return false for every file — a guard that silently passes
+    // everything, the exact failure mode this tripwire exists to prevent. The
+    // honoured list above catches that too; this test exists so the red suite
+    // names the cause instead of making a reader diff 24 fixtures.
     expect(detectsOptOut("// @ts-nocheck")).toBe(true);
   });
 });
@@ -267,7 +294,21 @@ describe("the sweep reads files the way tsc does", () => {
     expect(findOptOuts(root)).toEqual(["utf16be.test.ts"]);
   });
 
-  it("leaves a plain UTF-8 file alone", () => {
+  it("decodes UTF-16BE with a trailing odd byte, as tsc does", () => {
+    // tsc truncates the odd tail (`len &= ~1`) and reads the rest. Without the
+    // matching trim the read layer throws ERR_INVALID_BUFFER_SIZE instead of
+    // answering — loud, but still a file the sweep never reports on. Every
+    // other fixture here is even-length, so this is the only one that can go
+    // red if a future pass decides the trim is a no-op.
+    write(
+      "utf16be-odd.test.ts",
+      concat(concat(Uint8Array.of(0xfe, 0xff), utf16be(DIRECTIVE)), Uint8Array.of(0x41))
+    );
+
+    expect(findOptOuts(root)).toEqual(["utf16be-odd.test.ts"]);
+  });
+
+  it("detects a plain UTF-8 file, the no-decoding control", () => {
     write("plain.test.ts", bytesOf(DIRECTIVE, "utf8"));
 
     expect(findOptOuts(root)).toEqual(["plain.test.ts"]);
