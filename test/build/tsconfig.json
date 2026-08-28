@@ -24,25 +24,29 @@
   // The tripwire against drifting back is no-file-level-ts-nocheck.test.ts, and
   // it is the AUTHORITY — its accept/reject sets were measured against this
   // repo's own tsc (5.9.3) by planting a type error behind each directive form
-  // and watching whether tsc suppressed it. It scans recursively, and rather
-  // than pattern-matching lines it WALKS the file's leading trivia the way tsc
-  // does — whitespace and comments up to the first real token — so a BOM, NBSP,
-  // form feed or vertical tab cannot smuggle a directive past it and a
-  // directive trailing a block comment on the same line is still seen.
-  // ⚠️ The walk is not over-engineering. Its predecessor stripped `/* … */`
-  // from the whole file and then scanned lines, which is unsound: `/*` also
-  // occurs inside LINE comments, so a header quoting a glob like `**/*.ts`
-  // plus any later `*/` made the strip swallow a live directive and report the
-  // file clean (measured — the trap this guard exists to close, reached through
-  // the guard itself). Run `pnpm vitest run test/build/no-file-level-ts-nocheck.test.ts`.
+  // and watching whether tsc suppressed it. It scans recursively and asks
+  // TypeScript itself whether each file is opted out, rather than matching
+  // patterns in the text — and it decodes each file the way `sys.readFile`
+  // does (UTF-8 BOM stripped, UTF-16LE/BE decoded), because an oracle is only
+  // faithful when it is fed the same string tsc reads.
+  // ⚠️ Asking is not over-engineering — it is what three hand-rolled
+  // approximations failed at during this file's own review, each one measured
+  // only after it shipped: a whole-file block-comment strip that swallowed live
+  // directives, a leading-trivia walk that stopped at a shebang, and a
+  // whitespace class that missed U+0085 and U+200B. Every miss pointed the same
+  // dangerous way — file reported clean, checking actually off. Run
+  // `pnpm vitest run test/build/no-file-level-ts-nocheck.test.ts`.
   //
   // For a quick eyeball there is
   // `git grep -ilE '^[[:space:]]*///?[[:space:]]*@ts-nocheck([[:space:]]|:|$)' test/build`,
-  // but treat it as an APPROXIMATION, not a second authority: grep's POSIX
-  // `[[:space:]]` is ASCII-only in the default C locale, so it shares none of
-  // the Unicode coverage above, and it has no way to model block-comment
-  // trivia. It is anchored per line for the same reason the test is — this
-  // header names the directive in prose repeatedly, and the unanchored
+  // but treat it as an APPROXIMATION, not a second authority. What `[[:space:]]`
+  // covers depends on the grep build and the locale — on this machine's BSD grep
+  // it matched form feed, vertical tab and NBSP but not U+0085 or U+200B, and a
+  // GNU grep elsewhere need not agree — so the classes the test pins are exactly
+  // what a one-liner cannot promise. It also has no way to model block-comment
+  // trivia or a shebang, and it reads bytes as text, so a UTF-16 file is
+  // invisible to it. It is anchored per line for the same reason the test is —
+  // this header names the directive in prose repeatedly, and the unanchored
   // `git grep -l '@ts-nocheck' test/build` still hits it.
   //
   // noEmit (inherited): this is a CI gate, not a build step — vitest still runs

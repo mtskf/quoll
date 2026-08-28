@@ -15,96 +15,48 @@
 // would wrap and push the specifier off the directive's line, use a namespace
 // import and destructure below; theme-palettes.test.ts documents why.
 //
-// Detection walks the file's leading trivia the way tsc does, rather than
-// pattern-matching lines, because every form tsc honours but the scan misses is
-// a file that reads as checked while being fully unchecked — the exact trap this
-// guard exists to close. The accept/reject sets below were measured against this
-// repo's own tsc (5.9.3) by planting a type error behind each form and watching
-// whether tsc suppressed it; `detectsOptOut` reproduces that verdict for every
-// one of them.
+// Detection asks TypeScript rather than pattern-matching the source, because
+// every form tsc honours but the scan misses is a file that reads as checked
+// while being fully unchecked — the exact trap this guard exists to close. The
+// accept/reject sets below were measured against this repo's own tsc (5.9.3) by
+// planting a type error behind each form and watching whether tsc suppressed it;
+// `detectsOptOut` reproduces that verdict for every one of them.
 import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import ts from "typescript";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 
-// Mirrors the character classes in tsc's own pragma matcher
-// (`singleLinePragmaRegEx = /^\/\/\/?\s*@([^\s:]+)((?:[^\S\r\n]|:).*)?$/m`):
-// `[^\S\r\n]` is "whitespace except newlines", which covers NBSP, form feed,
-// vertical tab and a stray BOM. ASCII `[ \t]` misses all four — and a BOM is the
-// realistic one, since an editor configured to write it produces a byte-perfect
-// canonical directive that `readFileSync` still reports with `﻿` in front.
-// Applied to one already-isolated comment line, never to a whole file.
-const PRAGMA = /^\/\/\/?[^\S\r\n]*@ts-nocheck(?:[^\S\r\n]|:|$)/i;
-
-const LEADING_WS = /\s*/y;
-const LINE_END = /[\r\n\u2028\u2029]/g;
-
-// The authority. tsc honours a `@ts-nocheck` pragma only from a file's LEADING
-// trivia — an optional shebang, then whitespace and comments, up to the first
-// real token — so this walks that region and stops at the first token.
-// ⚠️ "Mirrors tsc" is a goal, not a proven property: the walk is validated
-// against a measured probe corpus, and the shebang case below was found only
-// after an earlier version claimed to reproduce the honour region exactly.
-// Treat an unmodelled trivia form as a live possibility, not an impossibility. Block comments are
-// trivia too, which is why `/* head */ // @ts-nocheck` and its multi-line form
-// are honoured and reached here (measured, tsc 5.9.3).
+// Ask TypeScript instead of reimplementing its scanner.
 //
-// ⚠️ Walking is not over-engineering: the obvious shortcut — strip `/* … */`
-// from the whole file, then scan lines — is UNSOUND. `/*` also occurs inside
-// LINE comments, which are leading trivia too, so a header mentioning a glob
-// like `**/*.ts` plus any later `*/` makes the strip swallow the directive
-// sitting between them and report the file clean while tsc has switched it off
-// (measured). This file's own header contains that glob three times.
-const leadingTriviaOptsOut = (source: string): boolean => {
-  // A shebang is trivia too, but only at offset 0 — tsc's scanner accepts `#!`
-  // nowhere else. Without this the walk mistakes `#` for the first real token
-  // and bails before ever reaching the directive below it (measured).
-  let i = 0;
-  if (source.startsWith("#!")) {
-    LINE_END.lastIndex = 0;
-    i = LINE_END.exec(source)?.index ?? source.length;
-  }
-  while (i < source.length) {
-    LEADING_WS.lastIndex = i;
-    LEADING_WS.exec(source);
-    i = LEADING_WS.lastIndex;
+// This guard's question is exactly "does tsc consider this file opted out?", so
+// the faithful oracle is tsc itself. Three hand-rolled approximations were tried
+// in this PR and all three were wrong, each one measured only after it shipped:
+// a whole-file block-comment strip that swallowed live directives, a leading-
+// trivia walk that stopped at a shebang, and a whitespace class that missed
+// U+0085 and U+200B. Every fix asserted the next approximation was complete.
+// None were, and the failure direction is always the dangerous one — a file
+// reported clean while tsc has switched checking off.
+//
+// ⚠️ `checkJsDirective` is not in typescript's public `.d.ts`, hence the cast.
+// The risk that an upgrade removes it is real, but it fails LOUD rather than
+// silent: the fixtures below assert a canonical `// @ts-nocheck` IS detected, so
+// the field disappearing turns this suite red instead of quietly passing every
+// file (verified by deleting the property from a parsed source file).
+type SourceFileWithDirective = ts.SourceFile & { checkJsDirective?: { enabled: boolean } };
 
-    if (source.startsWith("//", i)) {
-      LINE_END.lastIndex = i;
-      const end = LINE_END.exec(source)?.index ?? source.length;
-      if (PRAGMA.test(source.slice(i, end))) {
-        return true;
-      }
-      i = end;
-      continue;
-    }
-    if (source.startsWith("/*", i)) {
-      const close = source.indexOf("*/", i + 2);
-      if (close === -1) {
-        return false; // unterminated: the rest of the file is comment body
-      }
-      i = close + 2;
-      continue;
-    }
-    return false; // first real token — nothing past here is honoured
-  }
-  return false;
+const detectsOptOut = (source: string): boolean => {
+  const parsed = ts.createSourceFile(
+    "probe.ts",
+    source,
+    ts.ScriptTarget.ESNext,
+    false
+  ) as SourceFileWithDirective;
+  return parsed.checkJsDirective?.enabled === false;
 };
-
-// A directive sitting after code is NOT honoured by tsc, but it is almost
-// always someone's mistaken attempt to opt out, so it is flagged anyway: a
-// false alarm gets read by a human, a missed opt-out gets read by nobody.
-// ⚠️ Best-effort only, and deliberately not a second safety net — it inherits
-// the unsound whole-file strip described above, so it can miss. Everything that
-// actually matters for correctness is decided by the walker.
-const BLOCK_COMMENT = /\/\*[\s\S]*?\*\//g;
-const AFTER_CODE_DIRECTIVE = /^[^\S\r\n]*\/\/\/?[^\S\r\n]*@ts-nocheck(?:[^\S\r\n]|:|$)/im;
-
-const detectsOptOut = (source: string) =>
-  leadingTriviaOptsOut(source) || AFTER_CODE_DIRECTIVE.test(source.replace(BLOCK_COMMENT, ""));
 
 // Recursive on purpose: `tsconfig.json` includes `**/*.ts` and vitest includes
 // `test/**/*.test.ts`, so a future `test/build/<subdir>/foo.test.ts` sits inside
@@ -118,10 +70,56 @@ const detectsOptOut = (source: string) =>
 const collectSuites = (root: string) =>
   readdirSync(root, { encoding: "utf8", recursive: true }).filter((f) => f.endsWith(".ts"));
 
+// Reading the bytes the way tsc reads them is part of the oracle, not plumbing
+// around it. `sys.readFile` sniffs the byte order mark before the scanner runs:
+// it decodes UTF-16LE/BE natively and strips a UTF-8 BOM, so tsc checks a
+// different string than `readFileSync(f, "utf8")` returns. Both differences are
+// silent misses in the dangerous direction — a UTF-16 suite arrives as mojibake
+// and matches nothing, and a UTF-8 BOM shifts a shebang off offset 0, where
+// tsc's scanner is the only place `#!` is legal, so the directive under it
+// stops reading as leading trivia (measured against tsc 5.9.3: the directive IS
+// honoured, the naive read says it is not).
+const readAsTypeScriptWould = (path: string): string => {
+  // Uint8Array rather than Buffer throughout: @types/node 20 types `Buffer` as
+  // `Uint8Array<ArrayBufferLike>`, which TS 5.9's lib will not hand back to
+  // `Buffer.concat` / `Buffer.from` / `writeFileSync` (they want an
+  // `ArrayBuffer`-backed view). Working in the plain view type and reaching for
+  // Buffer only to decode keeps that friction out of the guard.
+  const bytes = new Uint8Array(readFileSync(path));
+  const decode = (view: Uint8Array, encoding: "utf8" | "utf16le") =>
+    Buffer.from(view.buffer, view.byteOffset, view.byteLength).toString(encoding);
+
+  if (bytes.length >= 2 && bytes[0] === 0xfe && bytes[1] === 0xff) {
+    // UTF-16BE. Node ships no decoder for it, so mirror what tsc does: drop the
+    // mark, ignore a trailing odd byte, byte-swap into LE.
+    const body = bytes.subarray(2);
+    const even = body.length - (body.length % 2);
+    const swapped = new Uint8Array(even);
+    for (let i = 0; i < even; i += 2) {
+      swapped[i] = body[i + 1];
+      swapped[i + 1] = body[i];
+    }
+    return decode(swapped, "utf16le");
+  }
+  if (bytes.length >= 2 && bytes[0] === 0xff && bytes[1] === 0xfe) {
+    return decode(bytes.subarray(2), "utf16le");
+  }
+  if (bytes.length >= 3 && bytes[0] === 0xef && bytes[1] === 0xbb && bytes[2] === 0xbf) {
+    return decode(bytes.subarray(3), "utf8");
+  }
+  return decode(bytes, "utf8");
+};
+
 // The one sweep the guard actually performs — shared so the subdirectory suite
 // below pins this exact path rather than a look-alike re-implementation.
+//
+// Scope is this directory only, which is narrower than the program it guards:
+// `tsconfig.json` also includes `../../src/shared/**/*.ts`, and a directive
+// there would switch those files off in this project and in `tsc -p ./` alike.
+// That is a repo-wide guard rather than a test/build one, and it is filed as
+// such; do not read this sweep as covering it.
 const findOptOuts = (root: string) =>
-  collectSuites(root).filter((f) => detectsOptOut(readFileSync(join(root, f), "utf8")));
+  collectSuites(root).filter((f) => detectsOptOut(readAsTypeScriptWould(join(root, f))));
 
 const suites = collectSuites(HERE);
 
@@ -188,11 +186,102 @@ describe("test/build carries no file-level type-check opt-out", () => {
     }
   });
 
-  it("over-matches a directive placed after code, which fails loud rather than silent", () => {
-    // tsc only honours the pragma from a file's leading trivia, so it ignores
-    // this one — the scan still flags it. Documented rather than fixed: a false
-    // alarm is read by a human, a missed opt-out is read by nobody.
-    expect(detectsOptOut("export const y = 1;\n// @ts-nocheck")).toBe(true);
+  it("ignores a directive placed after code, exactly as tsc does", () => {
+    // An earlier version flagged this deliberately, on the theory that a false
+    // alarm is cheap. Dropped with the hand-rolled scan: tsc leaves such a file
+    // fully CHECKED, so there is no vacuity to catch, and the extra arm was one
+    // more approximation to get wrong. If someone later moves the directive to
+    // the top — where it does bite — the sweep catches it there.
+    expect(detectsOptOut("export const y = 1;\n// @ts-nocheck")).toBe(false);
+  });
+
+  it("still detects the canonical form, so an upstream API change fails loud", () => {
+    // `checkJsDirective` is internal to typescript. This assertion is what turns
+    // its removal into a red suite instead of a guard that silently passes every
+    // file — the exact failure mode the tripwire exists to prevent.
+    expect(detectsOptOut("// @ts-nocheck")).toBe(true);
+  });
+});
+
+describe("the sweep reads files the way tsc does", () => {
+  // tsc never hands its scanner raw bytes, so neither can this guard. Each
+  // fixture below is an encoding a file in this tree could genuinely arrive in,
+  // and each was measured to have its directive honoured by tsc 5.9.3.
+  const DIRECTIVE = "// @ts-nocheck\nexport const a: string = 1;\n";
+
+  // Built from char codes rather than from the reader's own byte-swap, so the
+  // UTF-16BE case is checked against an independent encoder and not against a
+  // mirror of the code under test.
+  const utf16be = (text: string): Uint8Array => {
+    const out = new Uint8Array(text.length * 2);
+    for (let i = 0; i < text.length; i += 1) {
+      const code = text.charCodeAt(i);
+      out[i * 2] = code >> 8;
+      out[i * 2 + 1] = code & 0xff;
+    }
+    return out;
+  };
+
+  const bytesOf = (text: string, encoding: "utf8" | "utf16le") =>
+    new Uint8Array(Buffer.from(text, encoding));
+
+  const concat = (...parts: readonly Uint8Array[]) => {
+    const out = new Uint8Array(parts.reduce((total, part) => total + part.length, 0));
+    let at = 0;
+    for (const part of parts) {
+      out.set(part, at);
+      at += part.length;
+    }
+    return out;
+  };
+
+  let root: string;
+
+  beforeEach(() => {
+    root = mkdtempSync(join(tmpdir(), "quoll-nocheck-encoding-"));
+  });
+
+  afterEach(() => {
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  const write = (name: string, bytes: Uint8Array) => {
+    writeFileSync(join(root, name), bytes);
+    return join(root, name);
+  };
+
+  it("strips a UTF-8 BOM, so a shebang still sits at offset 0", () => {
+    // The compound case. With the BOM left in place `#!` lands at offset 1,
+    // where tsc's scanner does not accept it, so everything below stops
+    // counting as leading trivia — while tsc, reading the stripped text,
+    // honours the directive.
+    const path = write(
+      "bom-shebang.test.ts",
+      concat(Uint8Array.of(0xef, 0xbb, 0xbf), bytesOf(`#!/usr/bin/env node\n${DIRECTIVE}`, "utf8"))
+    );
+
+    expect(detectsOptOut(readAsTypeScriptWould(path))).toBe(true);
+    // The naive read this replaced, pinned as the reason the read layer exists.
+    expect(detectsOptOut(readFileSync(path, "utf8"))).toBe(false);
+    expect(findOptOuts(root)).toEqual(["bom-shebang.test.ts"]);
+  });
+
+  it("decodes UTF-16LE", () => {
+    write("utf16le.test.ts", concat(Uint8Array.of(0xff, 0xfe), bytesOf(DIRECTIVE, "utf16le")));
+
+    expect(findOptOuts(root)).toEqual(["utf16le.test.ts"]);
+  });
+
+  it("decodes UTF-16BE", () => {
+    write("utf16be.test.ts", concat(Uint8Array.of(0xfe, 0xff), utf16be(DIRECTIVE)));
+
+    expect(findOptOuts(root)).toEqual(["utf16be.test.ts"]);
+  });
+
+  it("leaves a plain UTF-8 file alone", () => {
+    write("plain.test.ts", bytesOf(DIRECTIVE, "utf8"));
+
+    expect(findOptOuts(root)).toEqual(["plain.test.ts"]);
   });
 });
 
