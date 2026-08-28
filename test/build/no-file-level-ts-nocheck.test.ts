@@ -49,13 +49,8 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 type SourceFileWithDirective = ts.SourceFile & { checkJsDirective?: { enabled: boolean } };
 
 const detectsOptOut = (source: string): boolean => {
-  const parsed = ts.createSourceFile(
-    "probe.ts",
-    source,
-    ts.ScriptTarget.ESNext,
-    false
-  ) as SourceFileWithDirective;
-  return parsed.checkJsDirective?.enabled === false;
+  const parsed = ts.createSourceFile("probe.ts", source, ts.ScriptTarget.ESNext);
+  return (parsed as SourceFileWithDirective).checkJsDirective?.enabled === false;
 };
 
 // Recursive on purpose: `tsconfig.json` includes `**/*.ts` and vitest includes
@@ -91,15 +86,12 @@ const readAsTypeScriptWould = (path: string): string => {
 
   if (bytes.length >= 2 && bytes[0] === 0xfe && bytes[1] === 0xff) {
     // UTF-16BE. Node ships no decoder for it, so mirror what tsc does: drop the
-    // mark, ignore a trailing odd byte, byte-swap into LE.
+    // mark, ignore a trailing odd byte (`swap16` rejects an odd length), byte-swap
+    // into LE. `Buffer.from` copies, so the in-place swap never touches `bytes`.
     const body = bytes.subarray(2);
-    const even = body.length - (body.length % 2);
-    const swapped = new Uint8Array(even);
-    for (let i = 0; i < even; i += 2) {
-      swapped[i] = body[i + 1];
-      swapped[i + 1] = body[i];
-    }
-    return decode(swapped, "utf16le");
+    return Buffer.from(body.subarray(0, body.length - (body.length % 2)))
+      .swap16()
+      .toString("utf16le");
   }
   if (bytes.length >= 2 && bytes[0] === 0xff && bytes[1] === 0xfe) {
     return decode(bytes.subarray(2), "utf16le");
@@ -225,13 +217,10 @@ describe("the sweep reads files the way tsc does", () => {
   const bytesOf = (text: string, encoding: "utf8" | "utf16le") =>
     new Uint8Array(Buffer.from(text, encoding));
 
-  const concat = (...parts: readonly Uint8Array[]) => {
-    const out = new Uint8Array(parts.reduce((total, part) => total + part.length, 0));
-    let at = 0;
-    for (const part of parts) {
-      out.set(part, at);
-      at += part.length;
-    }
+  const concat = (mark: Uint8Array, body: Uint8Array) => {
+    const out = new Uint8Array(mark.length + body.length);
+    out.set(mark);
+    out.set(body, mark.length);
     return out;
   };
 
