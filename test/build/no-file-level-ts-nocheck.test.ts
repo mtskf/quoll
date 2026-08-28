@@ -74,6 +74,15 @@ const detectsOptOut = (source: string): boolean => {
 const collectSuites = (root: string) =>
   readdirSync(root, { encoding: "utf8", recursive: true }).filter((f) => /\.[cm]?tsx?$/.test(f));
 
+// Ask TypeScript which names it treats as declarations, for the same reason the
+// directive oracle below asks it rather than matching text: `.d.ts` is not the
+// only spelling. tsc counts any `*.d.<tag>.ts` — the arbitrary-extension
+// declaration form — as a declaration file, and `skipLibCheck` skips it exactly
+// as it skips a plain `.d.ts`. `isDeclarationFile` is public API, unlike the
+// directive field, and is derived from the filename alone.
+const isDeclaration = (f: string) =>
+  ts.createSourceFile(f, "", ts.ScriptTarget.ESNext).isDeclarationFile;
+
 // Reading the bytes the way tsc reads them is part of the oracle, not plumbing
 // around it. `sys.readFile` sniffs the byte order mark before the scanner runs:
 // it decodes UTF-16LE/BE natively and strips a UTF-8 BOM, so tsc checks a
@@ -145,7 +154,7 @@ describe("test/build carries no file-level type-check opt-out", () => {
     //
     // There is no such file today. If one is ever wanted, this line is where
     // the exemption gets made consciously rather than by drifting in.
-    expect(suites.filter((f) => /\.d\.[cm]?ts$/.test(f))).toEqual([]);
+    expect(suites.filter(isDeclaration)).toEqual([]);
   });
 
   it("detects the directive forms pinned below", () => {
@@ -323,7 +332,7 @@ describe("the sweep reads files the way tsc does", () => {
   });
 });
 
-describe("the sweep descends into subdirectories", () => {
+describe("the sweep collects what the program can reach", () => {
   let root: string;
 
   beforeEach(() => {
@@ -353,16 +362,35 @@ describe("the sweep descends into subdirectories", () => {
     // being swept.
     writeFileSync(join(root, "types.d.ts"), "export declare const a: string;\n");
     writeFileSync(join(root, "types.d.mts"), "export declare const b: string;\n");
+    writeFileSync(join(root, "types.d.cts"), "export declare const e: string;\n");
+    writeFileSync(join(root, "types.d.css.ts"), "export declare const f: string;\n");
     writeFileSync(join(root, "helper.ts"), "// @ts-nocheck\nexport const c = 1;\n");
     writeFileSync(join(root, "helper.mts"), "// @ts-nocheck\nexport const d = 1;\n");
+    writeFileSync(join(root, "helper.cts"), "// @ts-nocheck\nexport const g = 1;\n");
+    writeFileSync(join(root, "helper.tsx"), "// @ts-nocheck\nexport const h = 1;\n");
 
     expect(collectSuites(root).sort()).toEqual([
+      "helper.cts",
       "helper.mts",
       "helper.ts",
+      "helper.tsx",
+      "types.d.css.ts",
+      "types.d.cts",
       "types.d.mts",
       "types.d.ts",
     ]);
-    expect(findOptOuts(root).sort()).toEqual(["helper.mts", "helper.ts"]);
+    expect(collectSuites(root).filter(isDeclaration).sort()).toEqual([
+      "types.d.css.ts",
+      "types.d.cts",
+      "types.d.mts",
+      "types.d.ts",
+    ]);
+    expect(findOptOuts(root).sort()).toEqual([
+      "helper.cts",
+      "helper.mts",
+      "helper.ts",
+      "helper.tsx",
+    ]);
   });
 
   it("flags an opt-out that hides in a subdirectory", () => {
