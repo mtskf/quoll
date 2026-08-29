@@ -888,10 +888,19 @@ describe("the sweep enumerates the repo's tsc programs, not a fixed directory", 
     const root = mkdtempSync(join(tmpdir(), "quoll-nocheck-hoisted-"));
     try {
       mkdirSync(join(root, "node_modules", "pkg"), { recursive: true });
+      // A config that PARSES. An empty `files` list would also make this test
+      // go red when the entry is removed, but for the wrong reason: `readProject`
+      // would throw TS18002 out of `discoverProjects` before the assertion below
+      // ran, so the red would come from the error path, not from discovery. The
+      // day that throw stops being fatal, this fixture would go quietly green
+      // and the entry it exists to pin would be unpinned again — in the same
+      // file that documents the entry as inert on this checkout, which is
+      // exactly where deletion pressure comes from.
       writeFileSync(
         join(root, "node_modules", "pkg", "tsconfig.json"),
-        JSON.stringify({ compilerOptions: { noEmit: true, noLib: true }, files: [] })
+        JSON.stringify({ compilerOptions: { noEmit: true, noLib: true }, include: ["*.ts"] })
       );
+      writeFileSync(join(root, "node_modules", "pkg", "vendored.ts"), "export const v = 1;\n");
       writeFileSync(
         join(root, "tsconfig.json"),
         JSON.stringify({ compilerOptions: { noEmit: true, noLib: true }, include: ["*.ts"] })
