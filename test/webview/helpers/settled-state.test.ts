@@ -126,19 +126,19 @@ class ShortTreeParser extends Parser {
 }
 
 describe("both helpers throw rather than handing back a tree that stops short", () => {
-  const stateFor = () => {
+  const shortTreeState = () => {
     const language = new Language(defineLanguageFacet({}), new ShortTreeParser());
     return EditorState.create({ doc: "x".repeat(5_000), extensions: [language] });
   };
 
   it("settledState() reports how much of the doc the snapshot actually covers", () => {
-    expect(() => settledState(stateFor())).toThrow(
+    expect(() => settledState(shortTreeState())).toThrow(
       new RegExp(`snapshot still truncated \\(${STUB_TREE_LENGTH} of 5000 code units\\)`)
     );
   });
 
   it("fullTree() reports how much of the doc the returned tree actually covers", () => {
-    expect(() => fullTree(stateFor())).toThrow(
+    expect(() => fullTree(shortTreeState())).toThrow(
       new RegExp(`tree spans ${STUB_TREE_LENGTH} of 5000 code units`)
     );
   });
