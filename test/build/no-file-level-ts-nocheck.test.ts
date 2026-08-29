@@ -278,6 +278,12 @@ type Sweep = ReturnType<typeof sweepProject>;
 // `ts.Program` costs 150–400 ms, so the describe body sweeps every project
 // exactly once into a Map and hands the values here; a `sweepAll(configs)` that
 // re-derived them would double that for no gain.
+//
+// The shape asymmetry is deliberate, not an oversight: `files` stays a `Set`
+// because every caller only ever asks it `.has()` / `.size` ("reaches the whole
+// repo"), so there is nothing a sort would buy. `optOuts` and `declarations` are
+// compared with `toEqual([...])`, which needs a deterministic order, so they are
+// deduplicated back into sorted arrays.
 const mergeSweeps = (sweeps: Sweep[]) => ({
   files: new Set(sweeps.flatMap((swept) => swept.files)),
   optOuts: [...new Set(sweeps.flatMap((swept) => swept.optOuts))].sort(),
@@ -784,9 +790,12 @@ describe("no file in any tsc program switches its whole file off", () => {
     // is satisfiable by ONE program while every other one shrinks to its anchor
     // plus transitive imports — and a file dropped out of every program is
     // exactly as unchecked as one carrying a directive, with no text in it to
-    // notice. Each floor is roughly half its measured count, so routine churn
-    // never touches this list while a program losing most of its `include` goes
-    // red naming itself. A project missing from the table falls back to
+    // notice. Six of the seven floors are roughly half the count measured when
+    // this landed; `test/build`'s is two-thirds (12 of 18) because it is the
+    // smallest program, where halving leaves a floor low enough that a collapse
+    // could still clear it. Either way routine churn never touches this list
+    // while a program losing most of its `include` goes red naming itself.
+    // A project missing from the table falls back to
     // "non-empty"; the roster assertion above is what makes a new one visible.
     const floors: Record<string, number> = {
       "src/webview/tsconfig.json": 80,
