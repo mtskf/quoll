@@ -891,11 +891,16 @@ describe("the sweep enumerates the repo's tsc programs, not a fixed directory", 
       // A config that PARSES. An empty `files` list would also make this test
       // go red when the entry is removed, but for the wrong reason: `readProject`
       // would throw TS18002 out of `discoverProjects` before the assertion below
-      // ran, so the red would come from the error path, not from discovery. The
-      // day that throw stops being fatal, this fixture would go quietly green
-      // and the entry it exists to pin would be unpinned again — in the same
-      // file that documents the entry as inert on this checkout, which is
-      // exactly where deletion pressure comes from.
+      // ran, so the red would come from the error path, not from discovery —
+      // the fixture would be pinning `readProject`'s diagnostics while reading
+      // as though it pinned the walk. Measured, so the risk is stated no wider
+      // than it is: with that throw removed the old fixture still goes red at
+      // the assertion (the unparseable config surfaces in discovery), so this
+      // is not one refactor away from silence. It goes silent under a narrower
+      // one — discovery catching and DROPPING configs it cannot parse — and
+      // that is worth guarding against here, because the surrounding comment
+      // records this entry as inert on this checkout, which is where pressure
+      // to delete it comes from.
       writeFileSync(
         join(root, "node_modules", "pkg", "tsconfig.json"),
         JSON.stringify({ compilerOptions: { noEmit: true, noLib: true }, include: ["*.ts"] })
