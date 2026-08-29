@@ -33,13 +33,14 @@
   // `pnpm vitest run test/build/no-file-level-ts-nocheck.test.ts`.
   //
   // Two gates hold it up, named here by function only: `findConfigFiles` walks
-  // everything outside dot-directories and outside its `SKIP_DIRS`, and the
-  // "covers every project `pnpm compile` and `pnpm compile:webview` type-check"
-  // cross-check reads those two scripts, so a config the walk missed but the
-  // compile gate names goes red. One gap those two leave: a program rooted in a
-  // dot-directory and invoked directly — a workflow step running
-  // `tsc -p .tooling/tsconfig.json` without going through `pnpm compile` — is
-  // seen by neither.
+  // everything outside dot-directories and outside its `SKIP_DIRS`, keeping the
+  // files whose NAME matches its tsconfig pattern, and the "covers every
+  // project `pnpm compile` and `pnpm compile:webview` type-check" cross-check
+  // reads those two scripts, so a config the walk missed but the compile gate
+  // names goes red. What escapes both is a program the walk cannot see that no
+  // compile script names — rooted in a dot-directory, or under a `SKIP_DIRS`
+  // name, or called something the pattern does not match — and invoked
+  // directly, say by a workflow step running `tsc -p .tooling/tsconfig.json`.
   //
   // ⛔ Do NOT restate the boundaries here. Where each sits, why the `SKIP_DIRS`
   // names do not share one authority, why relaxing the dot-directory skip is

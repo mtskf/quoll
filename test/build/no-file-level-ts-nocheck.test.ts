@@ -63,9 +63,11 @@ const findConfigFiles = (dir: string): string[] =>
 //     glob, so the entry is what would stop it descending into vendored
 //     configs. ⚠️ On THIS checkout it stops nothing, and TWO independent things
 //     already do: pnpm parks every real package under `node_modules/.pnpm/`,
-//     which the dot-skip above catches, and the hoisted top level is symlinks,
-//     which `entry.isDirectory()` reports as false so the walk never enters
-//     them either. Measured with this exact walker: dropping `node_modules`
+//     which the dot-skip above catches, and what it leaves beside the store is
+//     symlinks INTO it — at the top level for unscoped packages, one level
+//     down inside `@scope/` directories — which `entry.isDirectory()` reports
+//     as false, so the walk never enters those either. Measured with this
+//     exact walker (`readdirSync` + `isDirectory`): dropping `node_modules`
 //     from this list finds zero extra configs. It stays for the layout pnpm
 //     does not produce — npm and yarn materialise real `node_modules/<pkg>/`
 //     directories, where neither of those two mechanisms applies and this
@@ -442,7 +444,7 @@ describe("the sweep sees a directive through the encodings tsc decodes", () => {
   // `Uint8Array<ArrayBuffer>` that `writeFileSync` and `utf16be` speak in.
   // Measured: folding either helper into `Buffer.from`/`Buffer.concat` costs
   // four TS2345s under `pnpm compile` — while vitest, being transpile-only,
-  // still reports all 22 tests green.
+  // still reports every test in this file green.
   const bytesOf = (text: string, encoding: "utf8" | "utf16le") =>
     new Uint8Array(Buffer.from(text, encoding));
   const concat = (mark: Uint8Array, body: Uint8Array) => {
@@ -826,10 +828,17 @@ describe("the sweep enumerates the repo's tsc programs, not a fixed directory", 
     // release moves either name between the two classes, the comment stops
     // being a hope and starts being red.
     //
-    // `exclude: []` is load-bearing: it overrides tsc's DEFAULT exclude, which
-    // already names `node_modules`. Without it the two classes are
-    // indistinguishable here, because the default would be doing the work the
-    // `**` token is being tested for.
+    // `exclude: []` is NOT load-bearing today, and saying so is the point:
+    // measured, dropping the key entirely leaves all three results identical,
+    // because tsc's absent-`exclude` default is only `[outDir, declarationDir]`
+    // — it never names `node_modules`. The refusal being tested lives in the
+    // `**` token itself, in the same place the dot-segment refusal does. The
+    // override stays as insulation: if that default ever widens to name
+    // `node_modules`, it would start doing the work this assertion attributes
+    // to `**`, and the assertion would keep passing for the wrong reason.
+    // (An earlier version of this comment asserted the opposite — that the
+    // default already names `node_modules` — which is exactly the unpinned,
+    // unfalsifiable sentence this fixture exists to replace.)
     const root = mkdtempSync(join(tmpdir(), "quoll-nocheck-globclass-"));
     try {
       for (const dir of ["dist", "out", "coverage", "node_modules", ".dot"]) {
@@ -853,13 +862,43 @@ describe("the sweep enumerates the repo's tsc programs, not a fixed directory", 
           .sort();
       };
 
-      // Reached by a bare `**`: the repo-curated three, and nothing else.
+      // Reached by a bare `**`: the root file plus the repo-curated three,
+      // and neither refused name.
       expect(filesFor(["**/*.ts"])).toEqual(["coverage/x.ts", "dist/x.ts", "out/x.ts", "top.ts"]);
       // Named outright, both refused names come in — so `node_modules` really
       // is in the dot-directory class and not merely absent for some other
       // reason.
       expect(filesFor(["**/*.ts", "node_modules/**/*.ts"])).toContain("node_modules/x.ts");
       expect(filesFor(["**/*.ts", ".dot/**/*.ts"])).toContain(".dot/x.ts");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("earns the SKIP_DIRS `node_modules` entry against a layout pnpm does not produce", () => {
+    // The assertion above pins the tsc half of the split. This pins the half
+    // that justifies keeping `node_modules` in SKIP_DIRS at all — and it needs
+    // its own fixture precisely because the entry is inert on this checkout:
+    // pnpm hides real packages behind `.pnpm/` and reaches them by symlink, so
+    // deleting the entry today reddens nothing. A hoisted layout (npm, yarn) is
+    // a real directory with no dot segment, and `findConfigFiles` is a
+    // `readdirSync` recursion rather than a tsc glob, so nothing but this entry
+    // stops it there. Built here rather than asserted about `node_modules/`,
+    // which is the package manager's shape to change, not ours.
+    const root = mkdtempSync(join(tmpdir(), "quoll-nocheck-hoisted-"));
+    try {
+      mkdirSync(join(root, "node_modules", "pkg"), { recursive: true });
+      writeFileSync(
+        join(root, "node_modules", "pkg", "tsconfig.json"),
+        JSON.stringify({ compilerOptions: { noEmit: true, noLib: true }, files: [] })
+      );
+      writeFileSync(
+        join(root, "tsconfig.json"),
+        JSON.stringify({ compilerOptions: { noEmit: true, noLib: true }, include: ["*.ts"] })
+      );
+      writeFileSync(join(root, "a.ts"), "export const a = 1;\n");
+
+      expect(discoverProjects(root).map((p) => relative(root, p))).toEqual(["tsconfig.json"]);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
