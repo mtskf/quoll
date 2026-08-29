@@ -813,6 +813,55 @@ describe("the sweep enumerates the repo's tsc programs, not a fixed directory", 
       rmSync(root, { recursive: true, force: true });
     }
   });
+
+  it("pins the two authorities SKIP_DIRS's comment splits on", () => {
+    // The `SKIP_DIRS` comment claims `dist`/`out`/`coverage` are pure repo
+    // curation — tsc's own `**` would reach a program rooted there — while
+    // `node_modules` sits with the dot-directories that `**` refuses. Both are
+    // claims about tsc, and prose making claims about tsc is what this PR spent
+    // three review cycles getting wrong: sixteen defects, every one a sentence
+    // no assertion could contradict. So this is that assertion. If a TypeScript
+    // release moves either name between the two classes, the comment stops
+    // being a hope and starts being red.
+    //
+    // `exclude: []` is load-bearing: it overrides tsc's DEFAULT exclude, which
+    // already names `node_modules`. Without it the two classes are
+    // indistinguishable here, because the default would be doing the work the
+    // `**` token is being tested for.
+    const root = mkdtempSync(join(tmpdir(), "quoll-nocheck-globclass-"));
+    try {
+      for (const dir of ["dist", "out", "coverage", "node_modules", ".dot"]) {
+        mkdirSync(join(root, dir));
+        writeFileSync(join(root, dir, "x.ts"), "export const x = 1;\n");
+      }
+      writeFileSync(join(root, "top.ts"), "export const t = 1;\n");
+
+      const filesFor = (include: string[]): string[] => {
+        const configPath = join(root, "tsconfig.json");
+        writeFileSync(
+          configPath,
+          JSON.stringify({
+            compilerOptions: { noEmit: true, noLib: true },
+            include,
+            exclude: [],
+          })
+        );
+        return readProject(configPath)
+          .parsed.fileNames.map((f) => relative(root, f))
+          .sort();
+      };
+
+      // Reached by a bare `**`: the repo-curated three, and nothing else.
+      expect(filesFor(["**/*.ts"])).toEqual(["coverage/x.ts", "dist/x.ts", "out/x.ts", "top.ts"]);
+      // Named outright, both refused names come in — so `node_modules` really
+      // is in the dot-directory class and not merely absent for some other
+      // reason.
+      expect(filesFor(["**/*.ts", "node_modules/**/*.ts"])).toContain("node_modules/x.ts");
+      expect(filesFor(["**/*.ts", ".dot/**/*.ts"])).toContain(".dot/x.ts");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("no file in any tsc program switches its whole file off", () => {
