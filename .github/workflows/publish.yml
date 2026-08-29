@@ -6,9 +6,13 @@ on:
       - 'v*'
 
 # NOTE: This workflow is ACTIVE. On a pushed `v*` tag it packages one .vsix and publishes
-# it to the VS Code Marketplace (VSCODE_PAT secret, required — configured). The Open VSX
-# step (OPENVSX_PAT secret, optional) is skipped while that secret is unset, so releases
-# currently go to the Marketplace only. The publisher ID (`mtskf`) matches
+# it to BOTH registries: the VS Code Marketplace (VSCODE_PAT) and Open VSX (OPENVSX_PAT).
+# Both secrets are configured and both legs run today. The Open VSX step keeps an
+# `if: ${{ env.OVSX_PAT != '' }}` guard, which means that if that secret is ever removed
+# or emptied this workflow does NOT fail — it silently skips, and releases quietly stop
+# reaching Open VSX with the run still green. That failure mode is why
+# .github/workflows/token-liveness.yml treats OPENVSX_PAT as required and goes red on an
+# empty one. The publisher ID (`mtskf`) matches
 # `package.json.publisher`. Tag pushes trigger a LIVE publish (v0.1.0 shipped 2026-07-02),
 # so never push a `v*` tag until you intend to release that version to users.
 

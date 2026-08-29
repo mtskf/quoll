@@ -8,8 +8,26 @@ name: Publish Token Liveness
 # the worst possible moment. That has now happened to both: `VSCODE_PAT` expiry
 # killed the v0.1.66 publish, and `OPENVSX_PAT` sat invalid for ~5 releases
 # without anyone noticing. This job moves that discovery off the release path —
-# it asks each registry whether the stored secret still has publish rights, on a
-# schedule, and goes red when the answer is no.
+# it asks each registry whether the stored secret is still valid, on a schedule,
+# and goes red when the answer is no.
+#
+# WHAT "STILL VALID" DOES AND DOES NOT COVER: the Marketplace leg is a liveness
+# check, not a capability check. `vsce verify-pat` only calls the Azure DevOps
+# `getRoleAssignments` API, and per @vscode/vsce's own source comment that
+# returns 200 for ANY role on the publisher — Creator, Owner, Contributor or
+# Reader. A read-only PAT therefore passes this probe green while being unable
+# to publish, so this ping catches expiry and revocation but NOT a wrong-scope
+# rotation. When rotating VSCODE_PAT, issue it with the Marketplace *Manage*
+# scope; nothing here will tell you if you did not. The Open VSX leg is outside
+# that caveat — its `verify-pat` endpoint is a genuine publish-capability check.
+#
+# NO IN-BAND GATE (deliberate): this cron is an EARLY WARNING, meant to find a
+# dead token days before a release rather than seconds into one. A second,
+# complementary guard — verifying both PATs at the TOP of publish.yml, so a
+# doomed release dies in ~30s instead of after the full build/SBOM/attest
+# sequence — is genuinely worth having, but it edits the release-critical
+# workflow and warrants its own review; it is tracked as a follow-up, not folded
+# in here.
 #
 # READ-ONLY BY CONSTRUCTION: `verify-pat` is a pure read on both CLIs —
 # `vsce verify-pat` calls the Azure DevOps `getRoleAssignments` API, and
@@ -26,9 +44,16 @@ name: Publish Token Liveness
 # disables scheduled workflows after 60 days with no repo activity, so a long
 # quiet spell silences this ping rather than failing it.
 #
-# After editing this file, dispatch it once manually (Actions › Publish Token
-# Liveness › Run workflow) — `workflow_dispatch` only fires from the copy on the
-# default branch, so a branch build of this workflow cannot self-verify.
+# SELF-VERIFYING AN EDIT: `workflow_dispatch` becomes dispatchable only once a
+# copy of this file carrying that trigger has landed on the default branch, so
+# the FIRST version cannot be exercised from its own branch — merge it, then
+# dispatch it once manually (Actions › Publish Token Liveness › Run workflow)
+# and confirm it goes green. That is a one-time bootstrap caveat, not a standing
+# rule: from then on "Run workflow" offers a "Use workflow from" ref picker, and
+# GitHub runs the file from the ref you pick rather than the default branch's
+# copy. In THIS repo, however, the default-branch guard that opens the job below
+# exits non-zero on any other ref, so dispatching a branch proves only that the
+# guard fires. Verification of an edit here happens on `main`, after merge.
 
 on:
   schedule:
@@ -48,6 +73,26 @@ jobs:
   verify-tokens:
     runs-on: ubuntu-latest
     steps:
+      # Guard, not a boundary. `workflow_dispatch` only needs the trigger to exist on the
+      # default branch; the RUN uses whichever ref the dispatcher selects, and that ref
+      # supplies this very file — so anyone who can edit it can also delete this check.
+      # What it does buy is that an ACCIDENTAL dispatch of a feature branch stops here
+      # instead of handing live publish tokens to a branch build, and that it stops LOUDLY:
+      # a job-level `if:` would report the run as successful-but-skipped, the one outcome a
+      # liveness ping must never produce. The real boundary is a GitHub Environment whose
+      # deployment-branch policy holds the two secrets; that needs repo configuration and is
+      # tracked separately. `main` is spelled out rather than read from the event payload
+      # because a payload field that is absent on `schedule` would fail every weekly run —
+      # publish.yml pins `origin/main` by name for the same reason.
+      - name: Refuse to run off the default branch
+        env:
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          if [ "$REF_NAME" != "main" ]; then
+            echo "::error::Refusing to run on '$REF_NAME' — this job holds live publish tokens and only runs on main."
+            exit 1
+          fi
+
       # All GitHub Actions are pinned to commit SHAs — supply-chain hardening.
       # The threat (tag remutation against a compromised maintainer / repo) applies
       # equally to first-party `actions/*` and third-party actions, so the same
@@ -111,14 +156,23 @@ jobs:
       # the default (fail-fast) behaviour one bad token would hide the other, which
       # is precisely how OPENVSX_PAT went unnoticed across ~5 releases — every run
       # must report a verdict for BOTH tokens.
+      #
+      # `steps.publisher.outcome == 'success'` narrows that, because `!cancelled()`
+      # alone is too wide: it also runs this step when the ref guard, the install or
+      # the publisher lookup failed, none of which say anything about this token.
+      # `NAMESPACE` would then be empty and the probe would fail on the argument
+      # rather than on the credential — leaving a red step literally named "Verify
+      # Open VSX token" that never tested OPENVSX_PAT at all, which reads as "the
+      # second token is dead too". Skipping is the honest verdict there; the real
+      # failure is already red one step up.
       - name: Verify Open VSX token (OPENVSX_PAT)
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && steps.publisher.outcome == 'success' }}
         env:
           OVSX_PAT: ${{ secrets.OPENVSX_PAT }}
           NAMESPACE: ${{ steps.publisher.outputs.id }}
         run: |
           if [ -z "${OVSX_PAT:-}" ]; then
-            echo "::error::OPENVSX_PAT is unset or empty — publish.yml would fail at its Open VSX publish step."
+            echo "::error::OPENVSX_PAT is unset or empty — publish.yml SKIPS its Open VSX step in this state, so releases would silently stop reaching Open VSX."
             exit 1
           fi
           pnpm exec ovsx verify-pat "$NAMESPACE"

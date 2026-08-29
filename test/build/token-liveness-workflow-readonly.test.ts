@@ -106,17 +106,21 @@ describe("token liveness workflow is read-only", () => {
 describe("token liveness workflow is not reachable from branch events", () => {
   const triggers = topLevelBlock(workflow, "on");
 
-  it("runs on a schedule and on manual dispatch", () => {
-    expect(triggers).toMatch(/^\s+schedule:$/m);
+  it("runs on schedule + workflow_dispatch and nothing else", () => {
+    // An allowlist, matching how this file pins the CLI invocations. The previous
+    // denylist named only push / pull_request(_target); a fourth secret-reachable
+    // trigger — `issue_comment`, `workflow_run` — sailed past it, which is the
+    // vacuity class this suite exists to catch. Any such trigger would hand both
+    // publish PATs to a branch build, for a check whose verdict does not depend
+    // on the branch.
+    const triggerKeys = triggers
+      .split("\n")
+      .filter((line) => /^ {2}\S/.test(line))
+      .map((line) => line.trim());
+    expect(triggerKeys).toEqual(["schedule:", "workflow_dispatch:"]);
+    // The schedule is what makes this a ping rather than a button; keep it pinned
+    // separately, since the key list above cannot see whether `schedule:` is empty.
     expect(triggers).toMatch(/^\s+- cron: /m);
-    expect(triggers).toMatch(/^\s+workflow_dispatch:$/m);
-  });
-
-  it("does not run on push or pull_request", () => {
-    // Either trigger would expose both publish PATs to every branch build. The
-    // check's verdict is branch-independent, so there is no version of this
-    // workflow that needs them.
-    expect(triggers).not.toMatch(/^\s+(?:push|pull_request|pull_request_target):/m);
   });
 });
 
@@ -130,12 +134,24 @@ describe("token liveness workflow reports on both tokens", () => {
     );
   });
 
-  it("keeps a failing Marketplace probe from masking the Open VSX one", () => {
-    // Default step behaviour is fail-fast: without this `if:`, a dead
+  it("runs the Open VSX probe after a failed Marketplace one, but not after a failed setup", () => {
+    // Two conditions on one `if:`, pinned separately because they defend
+    // opposite mistakes and either going missing is a real regression.
+    //
+    // `!cancelled()` — default step behaviour is fail-fast, so without it a dead
     // VSCODE_PAT skips the Open VSX probe entirely and the run reports one
     // problem where there may be two. That is the exact shape of the incident
     // this workflow was written for.
-    expect(stepBlock(workflow, OPENVSX_STEP)).toMatch(/^\s+if:\s*\$\{\{\s*!cancelled\(\)\s*\}\}$/m);
+    //
+    // `steps.publisher.outcome == 'success'` — `!cancelled()` alone is too wide:
+    // it also runs this step after a failed ref guard, install, or publisher
+    // lookup, with `NAMESPACE` empty. The probe would then fail on its argument
+    // rather than on the credential, leaving a red step named "Verify Open VSX
+    // token" that never tested the token — which reads as "both tokens are
+    // dead". Skipping is the honest verdict; the real failure is already red.
+    const openVsxStep = stepBlock(workflow, OPENVSX_STEP);
+    expect(openVsxStep).toMatch(/^\s+if: \$\{\{ !cancelled\(\) &&/m);
+    expect(openVsxStep).toMatch(/^\s+if: .* && steps\.publisher\.outcome == 'success' \}\}$/m);
   });
 
   it("fails loudly on an empty secret instead of falling through to a prompt", () => {
@@ -147,5 +163,35 @@ describe("token liveness workflow reports on both tokens", () => {
     // placeholder to the linter inside a plain string literal.
     expect(stepBlock(workflow, MARKETPLACE_STEP)).toMatch(/if \[ -z "\$\{VSCE_PAT:-\}" \]; then/);
     expect(stepBlock(workflow, OPENVSX_STEP)).toMatch(/if \[ -z "\$\{OVSX_PAT:-\}" \]; then/);
+  });
+});
+
+describe("token liveness workflow fails closed", () => {
+  it("fails loudly when package.json has no publisher", () => {
+    // The publisher is derived, not hard-coded, so that a rename cannot leave
+    // this job cheerfully verifying a stale identity. Without this guard the
+    // derivation degrades instead of failing: an empty id flows into both
+    // probes, and what the run reports is an argument error dressed up as a
+    // token verdict.
+    expect(stepBlock(workflow, "Resolve publisher id")).toMatch(/if \[ -z "\$publisher" \]; then/);
+  });
+
+  it("pins every action to a 40-hex commit SHA, not a mutable tag", () => {
+    // The FORM, not the SHAs themselves: Dependabot bumps these routinely and
+    // pinning the literal values would turn every routine bump PR red. What must
+    // not drift is `@<40-hex> # vX.Y.Z` — a mutable tag is what the file's own
+    // header calls out as the supply-chain risk, and this job hands live publish
+    // credentials to whatever those actions resolve to.
+    //
+    // Reads `raw`, not the comment-stripped copy: the trailing `# vX.Y.Z` that
+    // keeps a SHA humanly readable is exactly what `stripComments` removes.
+    const usesLines = raw
+      .split("\n")
+      .filter((line) => /^\s*- uses: /.test(line))
+      .map((line) => line.trim());
+    expect(usesLines.length).toBe(3);
+    for (const line of usesLines) {
+      expect(line).toMatch(/^- uses: [\w.-]+\/[\w.-]+@[0-9a-f]{40} # v\d+\.\d+\.\d+$/);
+    }
   });
 });
