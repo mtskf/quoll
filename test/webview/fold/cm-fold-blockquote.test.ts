@@ -4,16 +4,27 @@
 // pragma. Uses quollMarkdownLanguage() — the SAME language object editor.ts
 // mounts — so this pins the delivered contract, and also DETECTS a lang-markdown
 // upgrade that re-enables a subtracted chevron (see plan Constraints).
-import { codeFolding, ensureSyntaxTree, foldable } from "@codemirror/language";
+import { codeFolding, foldable, syntaxTree } from "@codemirror/language";
 import { EditorState } from "@codemirror/state";
 import { describe, expect, it } from "vitest";
 import { quollMarkdownLanguage } from "../../../src/webview/cm/markdown.js";
+import { settledState } from "../helpers/settled-state.js";
 
 const lang = quollMarkdownLanguage();
 
+function stateFor(doc: string): EditorState {
+  return EditorState.create({ doc, extensions: [lang, codeFolding()] });
+}
+
+// Query the fold over a SETTLED parse. `foldable()` reads `syntaxTree(state)` —
+// the language field's tree SNAPSHOT — while `ensureSyntaxTree` only completes the
+// mutable parse CONTEXT, so a snapshot truncated by CM's 20ms init budget stays
+// truncated and every assertion below reads a tree the fold cannot resolve in
+// (returning a spurious `null`). `settledState` rebuilds the snapshot and asserts it
+// spans the doc; the truncation this closes is pinned deterministically by the
+// "reads a settled parse" describe at the bottom of this file.
 function foldableAt(doc: string, at: number): { from: number; to: number } | null {
-  const state = EditorState.create({ doc, extensions: [lang, codeFolding()] });
-  ensureSyntaxTree(state, state.doc.length, 5000);
+  const state = settledState(stateFor(doc));
   const line = state.doc.lineAt(at);
   return foldable(state, line.from, line.to);
 }
@@ -149,5 +160,41 @@ describe("foldable content nested in a blockquote stays foldable (contract)", ()
 
   it("a blockquote wrapping ONLY a fenced block yields NO fold (code subtracted too)", () => {
     expect(foldableAt("> ```js\n> const x = 1\n> ```\n", 0)).toBeNull();
+  });
+});
+
+// The harness's own non-vacuity guard: proves `foldableAt` reads a SETTLED parse
+// and not the possibly-truncated init snapshot. Deterministic by construction —
+// no load required. `LanguageState.init` parses at most a 3000-char init viewport,
+// so a doc longer than that ALWAYS lands a truncated snapshot in the field, which
+// is exactly the state CPU preemption produced on the sub-KB fixtures above (the
+// load-sensitive flake measured in PR #382's review cycle; docs/LEARNING.md
+// 2026-07-23 + 2026-08-30). Drop the settle from `foldableAt` and the last
+// assertion here goes red.
+describe("the fold harness reads a settled parse, not a truncated snapshot", () => {
+  // > 3000 chars of filler, then the fold target — so the target sits beyond the
+  // init viewport that CM's snapshot covers.
+  const PAD = "filler paragraph line\n\n".repeat(200);
+  const doc = `${PAD}- a\n  - b\n  - c\n- d\n`;
+  const at = doc.length - "- a\n  - b\n  - c\n- d\n".length;
+
+  it("a freshly-created state's snapshot is truncated (the precondition)", () => {
+    // Pins the CM behaviour this guard rests on: if an upstream change ever made
+    // the init snapshot complete, this guard would be vacuous — so it goes red
+    // instead of silently passing.
+    const state = stateFor(doc);
+    expect(syntaxTree(state).length).toBeLessThan(state.doc.length);
+  });
+
+  it("settling covers the whole doc", () => {
+    const state = settledState(stateFor(doc));
+    expect(syntaxTree(state).length).toBe(state.doc.length);
+  });
+
+  it("the truncated snapshot loses the fold that the settled one finds", () => {
+    const raw = stateFor(doc);
+    const rawLine = raw.doc.lineAt(at);
+    expect(foldable(raw, rawLine.from, rawLine.to)).toBeNull(); // the flake's shape
+    expect(foldableAt(doc, at)).not.toBeNull(); // ... which foldableAt no longer sees
   });
 });

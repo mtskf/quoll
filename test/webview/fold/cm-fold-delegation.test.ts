@@ -9,23 +9,22 @@
 // in cm-fold-blockquote.test.ts.) No view is mounted, so no happy-dom pragma is needed.
 
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
-import {
-  codeFolding,
-  ensureSyntaxTree,
-  foldable,
-  foldEffect,
-  foldedRanges,
-} from "@codemirror/language";
+import { codeFolding, foldable, foldEffect, foldedRanges } from "@codemirror/language";
 import { EditorState } from "@codemirror/state";
 import { describe, expect, it } from "vitest";
+import { settledState } from "../helpers/settled-state.js";
 
+// A SETTLED state: `ensureSyntaxTree` alone completes the parse CONTEXT but leaves
+// the language field's tree SNAPSHOT — the tree `foldable()` actually resolves in —
+// truncated, so under CPU preemption a fold query returns a spurious `null`. See
+// settled-state.ts and the non-vacuity guard in cm-fold-blockquote.test.ts.
 function stateFor(doc: string): EditorState {
-  const state = EditorState.create({
-    doc,
-    extensions: [markdown({ base: markdownLanguage }), codeFolding()],
-  });
-  ensureSyntaxTree(state, state.doc.length, 5000); // force a full sync parse (headless)
-  return state;
+  return settledState(
+    EditorState.create({
+      doc,
+      extensions: [markdown({ base: markdownLanguage }), codeFolding()],
+    })
+  );
 }
 
 /** foldable() for the line that offset `at` falls on. */

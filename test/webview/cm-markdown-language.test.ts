@@ -21,6 +21,7 @@ import { EditorSelection, EditorState, type Extension } from "@codemirror/state"
 import { EditorView, runScopeHandlers } from "@codemirror/view";
 import { afterEach, describe, expect, it } from "vitest";
 import { quollMarkdownLanguage } from "../../src/webview/cm/markdown.js";
+import { settledState } from "./helpers/settled-state.js";
 
 const quollLang = quollMarkdownLanguage();
 const upstreamLang = markdown({ base: markdownLanguage });
@@ -84,9 +85,12 @@ describe("re-implemented headerIndent folds byte-identically to upstream", () =>
   // shared contract). A wrong sectionEnd/headingLevel diverges from upstream.
   // The blockquote-wrapped-heading fixture pins the exact from/to that
   // cm-fold-blockquote.test.ts only asserts `not.toBeNull()` for.
+  // Settled, not merely ensureSyntaxTree'd: `foldable()` resolves in the language
+  // field's tree SNAPSHOT, which `ensureSyntaxTree` leaves truncated (it advances
+  // only the parse CONTEXT) — the load-sensitive spurious `null`. See
+  // helpers/settled-state.ts.
   function foldHeadingRange(lang: Extension, doc: string, headAt: number) {
-    const state = EditorState.create({ doc, extensions: [lang, codeFolding()] });
-    ensureSyntaxTree(state, state.doc.length, 5000);
+    const state = settledState(EditorState.create({ doc, extensions: [lang, codeFolding()] }));
     const line = state.doc.lineAt(headAt);
     return foldable(state, line.from, line.to);
   }

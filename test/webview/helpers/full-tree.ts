@@ -22,6 +22,12 @@ import type { EditorState } from "@codemirror/state";
  * resurrect the exact flake this helper exists to kill. Tests that DELIBERATELY
  * tolerate a partial tree (e.g. the viewport ratio assertion over a 1MB doc)
  * keep their own `?? syntaxTree(state)` fallback and must NOT use this helper.
+ *
+ * ⚠️ This returns the tree `ensureSyntaxTree` produced; it does NOT repair the
+ * state's own tree SNAPSHOT — `syntaxTree(state)` can still be truncated after
+ * this call. If the assertion reads the tree THROUGH the state (`syntaxTree`,
+ * `foldable()`, any `foldService` / `foldNodeProp`) rather than through the
+ * returned tree, use `settledState()` in ./settled-state.ts instead.
  */
 export function fullTree(state: EditorState) {
   const tree = ensureSyntaxTree(state, state.doc.length, 5_000);
