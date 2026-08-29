@@ -23,12 +23,230 @@
 // PR's review shipped a comment asserting coverage the code did not have.
 import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import ts from "typescript";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
+const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const HERE = dirname(fileURLToPath(import.meta.url));
+
+const findConfigFiles = (dir: string): string[] =>
+  readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
+    if (entry.isDirectory()) {
+      return SKIP_DIRS.has(entry.name) ? [] : findConfigFiles(join(dir, entry.name));
+    }
+    return /^tsconfig(\..+)?\.json$/.test(entry.name) ? [join(dir, entry.name)] : [];
+  });
+
+// Directories a tsc program never reads from and a sweep must not walk into.
+const SKIP_DIRS = new Set(["node_modules", ".git", "dist", "out", ".vscode-test", "coverage"]);
+
+// `tsc -p` on the COMMAND LINE accepts a directory or a file. This mirrors that
+// one documented CLI rule, and nothing else — in particular it is not used to
+// resolve `extends`, which has different rules (see below).
+const resolveCliProjectTarget = (target: string): string =>
+  target.endsWith(".json") ? resolve(target) : resolve(target, "tsconfig.json");
+
+// Read every config once, and let tsc say which of them are `extends` targets.
+//
+// The rule is: a config that another config extends is treated as an options
+// carrier, not a program.
+//
+// ⚠️ That is a HEURISTIC, not a theorem, and the plan says so rather than
+// pretending otherwise: a config can legitimately be both a base for one
+// project and a project someone runs `tsc -p` on. Such a config would be
+// excluded here and its files would go unswept — except that both ways of
+// noticing are loud, by construction:
+//   - if it is wired into `pnpm compile` / `compile:webview`, the cross-check
+//     below goes red (it reads the scripts, not this classification);
+//   - otherwise it drops out of the roster assertion above, which goes red.
+// Both are loud rather than silent, which is the property being bought here.
+// Note what is NOT claimed: a red roster CAN be made green by deleting the
+// entry, so this is a prompt for a human to look, not a mechanism that forces
+// a classifier fix. That is why the entry is a roster of what SHOULD be swept
+// and not a snapshot of what IS — the two differ exactly when something is
+// wrong. The heuristic holds for all eight configs in this repo today
+// (measured).
+//
+// Sweeping a base instead of skipping it is not a harmless over-approximation:
+// `tsconfig.base.json` declares no `include`, so on its own it resolves the
+// DEFAULT include — measured at 570 files, among them `test/markdown` (29) and
+// `test/shared` (4), which no real program type-checks. Directives there change
+// nothing, so reporting them would be pure false alarm.
+//
+// Letting tsc resolve `extends` rather than reading the raw field is the same
+// reflex as the rest of this guard, and the difference is measurable:
+// `"extends": "./tsconfig.base"` without the `.json` is valid and resolves to
+// `tsconfig.base.json`, while the obvious hand-rolled rule ("not `.json`? then
+// it's a directory") produces `tsconfig.base/tsconfig.json`, misses, and
+// promotes the base to a swept project.
+const discoverProjects = (root: string): string[] => {
+  const configs = findConfigFiles(root);
+  const extended = new Set(configs.flatMap((config) => readProject(config).extendsTargets));
+  return configs.filter((config) => !extended.has(config)).sort();
+};
+
+// Read one config, and keep the `TsConfigSourceFile` in hand.
+//
+// ⚠️ Do NOT reach for the source file back through `parsed.options.configFile`.
+// `extendedSourceFiles` is public on `TsConfigSourceFile`, but `configFile` is
+// reachable on `CompilerOptions` only through its index signature, so the
+// property access lands on a union including `string` and fails to compile:
+//
+//   error TS2339: Property 'extendedSourceFiles' does not exist on type
+//   'string | number | boolean | ... | TsConfigSourceFile'
+//
+// Measured on TS 5.9.3 under this repo's strictness — it would have taken
+// `pnpm compile` down. Holding the source file from the start is both the fix
+// and the smaller design: one read, both answers, and no cast anywhere.
+const readProject = (configPath: string) => {
+  // Read the bytes ourselves so an unreadable config is OUR error with OUR
+  // filename in it. `ts.readJsonConfigFile` swallows a failed read and returns
+  // an object with no `statements`, which then makes
+  // `parseJsonSourceFileConfigFileContent` die on a raw
+  // `TypeError: Cannot read properties of undefined (reading '0')` — loud, but
+  // it names nothing. Reachable in practice: a config deleted or chmodded
+  // between `findConfigFiles` listing it and this line.
+  //
+  // Reading it ourselves does not change how the bytes are decoded:
+  // `ts.sys.readFile` IS the reader `readJsonConfigFile` would have called, so
+  // BOM stripping and UTF-16 decoding are unchanged. Measured against tsc's own
+  // `getParsedCommandLineOfConfigFile` on the same files — plain UTF-8, UTF-8
+  // with a BOM, and UTF-16LE with a BOM all resolve identically through both.
+  const text = ts.sys.readFile(configPath);
+  if (text === undefined) {
+    throw new Error(`${relative(REPO_ROOT, configPath)}: could not be read`);
+  }
+  const source = ts.readJsonConfigFile(configPath, () => text);
+  const parsed = ts.parseJsonSourceFileConfigFileContent(
+    source,
+    ts.sys,
+    dirname(configPath),
+    undefined,
+    configPath
+  );
+
+  // ⚠️ `getConfigFileParsingDiagnostics`, NOT `parsed.errors`.
+  //
+  // This is the same class of mistake as everything else this guard has been
+  // burned by, one layer up: `parsed.errors` is not the set of things wrong
+  // with the config. JSON SYNTAX errors land on the source file, not in
+  // `errors`, so a config truncated mid-object — `{"include":["**/*.ts"],` —
+  // measures as `parseDiagnostics: [TS1005]` with `errors: []`, and a
+  // `parsed.errors`-only check waves it through as a clean project with a
+  // partial file list. `tsc -p` on the same file exits non-zero. That is the
+  // silent-pass direction, in the one place the guard trusts a config.
+  //
+  // `getConfigFileParsingDiagnostics` is public (typescript.d.ts:9582) and is
+  // defined as the concatenation tsc's own program construction reports:
+  // the source file's parse diagnostics plus `errors`. Asking it is asking tsc.
+  //
+  // Measured to throw on: truncated JSON (TS1005), garbage JSON (TS1005 /
+  // TS1327 / TS1328 / TS1136), self-circular `extends` (TS18000), a missing
+  // `extends` target (TS5083), an unknown compiler option (TS5023), and an
+  // `include` that matches nothing (TS18003) — that last one being a second,
+  // independent guard on the per-project non-empty assertion in Task 1.
+  const fatal = ts
+    .getConfigFileParsingDiagnostics(parsed)
+    .filter((d) => d.category === ts.DiagnosticCategory.Error);
+  if (fatal.length > 0) {
+    // Throw rather than return an empty file list: a config that stops parsing
+    // must not degrade into "this project contributed no files", which reads
+    // exactly like "this project is clean".
+    throw new Error(
+      `${relative(REPO_ROOT, configPath)}: ${fatal
+        .map((d) => `TS${d.code}: ${ts.flattenDiagnosticMessageText(d.messageText, "\n")}`)
+        .join("; ")}`
+    );
+  }
+
+  // ⚠️ ORDER IS LOAD-BEARING. `extendedSourceFiles` is `undefined` until
+  // `parseJsonSourceFileConfigFileContent` has run — it is populated BY the
+  // parse, not by the read (measured: `undefined` before, populated after).
+  // Reading it earlier would classify every config as a leaf, promote
+  // `tsconfig.base.json` to a swept project, and start reporting `test/markdown`
+  // and `test/shared` — silently, since the `?? []` swallows the `undefined`.
+  return { parsed, extendsTargets: source.extendedSourceFiles ?? [] };
+};
+
+// Repo-owned = under `root`, and not vendored.
+//
+// Every test here is on PATH SEGMENTS of the relative path, because each of the
+// string-level shortcuts has a measured counter-example:
+//   `startsWith(`${root}/`)`   matches `/repo-backup` under root `/repo`
+//   `rel.startsWith("..")`      matches a real subdirectory named `..generated`
+//   `.includes("/node_modules/")` hard-codes the separator
+// The first two reject or accept the wrong file silently, which is the failure
+// direction this guard exists to close.
+//
+// `node_modules` holds the lib files and @types packages every program pulls
+// in; they are not ours to police, and a directive in one is upstream's
+// business.
+const repoRelative = (root: string, fileName: string): string | null => {
+  const rel = relative(root, fileName);
+  if (rel === "" || isAbsolute(rel)) {
+    return null;
+  }
+  const segments = rel.split(sep);
+  // `..` as a SEGMENT, not as a prefix: `rel.startsWith("..")` also rejects a
+  // real subdirectory named `..generated` (measured — `relative()` returns
+  // `..generated/a.ts`, which the prefix test calls an escape and the segment
+  // test correctly does not). Rejecting a file the program contains is the
+  // silent-pass direction, which is the whole failure class this guard exists
+  // to close.
+  if (segments[0] === "..") {
+    return null;
+  }
+  // Same reasoning for vendored code: a segment test does not depend on the
+  // separator, and does not fire on a directory merely named
+  // `my_node_modules` (both measured).
+  if (segments.includes("node_modules")) {
+    return null;
+  }
+  return rel;
+};
+
+// `root` is both the containment boundary and the base for reported paths, so
+// one function serves the repo sweep and the temp-dir fixtures with no second
+// code path. Defaults to the repo so the repo-sweep call sites read plainly.
+//
+// ⚠️ Callers pass the root spelled the way the config path was spelled — see
+// the measured note in Task 2 Step 4. tsc does not canonicalise, so
+// `realpathSync`-ing one side and not the other silently empties the sweep.
+const sweepProject = (configPath: string, root: string = REPO_ROOT) => {
+  const { parsed } = readProject(configPath);
+  const program = ts.createProgram({ rootNames: parsed.fileNames, options: parsed.options });
+  const files: string[] = [];
+  const optOuts: string[] = [];
+  const declarations: string[] = [];
+  for (const source of program.getSourceFiles()) {
+    const rel = repoRelative(root, source.fileName);
+    if (rel === null) continue;
+    files.push(rel);
+    if ((source as SourceFileWithDirective).checkJsDirective?.enabled === false) optOuts.push(rel);
+    if (source.isDeclarationFile) declarations.push(rel);
+  }
+  return { files: files.sort(), optOuts: optOuts.sort(), declarations: declarations.sort() };
+};
+
+// Merges results that were ALREADY swept — it does not sweep. Building each
+// `ts.Program` costs 150–400 ms, so the describe body sweeps every project
+// exactly once into a Map and hands the values here; a `sweepAll(configs)` that
+// re-derived them would double that for no gain.
+type Sweep = ReturnType<typeof sweepProject>;
+
+const mergeSweeps = (sweeps: Sweep[]) => {
+  const files = new Set<string>();
+  const optOuts = new Set<string>();
+  const declarations = new Set<string>();
+  for (const swept of sweeps) {
+    for (const f of swept.files) files.add(f);
+    for (const f of swept.optOuts) optOuts.add(f);
+    for (const f of swept.declarations) declarations.add(f);
+  }
+  return { files, optOuts: [...optOuts].sort(), declarations: [...declarations].sort() };
+};
 
 // Ask TypeScript instead of reimplementing its scanner.
 //
@@ -399,5 +617,152 @@ describe("the sweep collects what the program can reach", () => {
     writeFileSync(join(root, "nested", "sneaky.test.ts"), "// @ts-nocheck\nexport const a = 1;\n");
 
     expect(findOptOuts(root)).toEqual([join("nested", "sneaky.test.ts")]);
+  });
+});
+
+describe("the sweep enumerates the repo's tsc programs, not a fixed directory", () => {
+  it("registers every tsc program in the repo, and only the options base is left out", () => {
+    // Discovery is automatic; REGISTRATION is deliberate. The list below is a
+    // roster, not the enumeration — `discoverProjects` reads the filesystem and
+    // asks tsc which configs are `extends` targets, and this assertion is where
+    // a human acknowledges the answer. Adding a tsconfig therefore costs one
+    // line here, on purpose: a new program puts new files under type-check, and
+    // that is exactly the event this guard exists to make visible.
+    //
+    // (Reviewed and kept deliberately: an auto-discovered set with no roster
+    // would silently accept a config that discovery misclassified, which is the
+    // failure direction this whole tripwire exists to close. The cost is a
+    // one-line edit roughly once a year — seven configs in the repo's life.)
+    expect(discoverProjects(REPO_ROOT).map((p) => relative(REPO_ROOT, p))).toEqual([
+      "src/webview/tsconfig.json",
+      "test/build/tsconfig.json",
+      "test/extension/tsconfig.json",
+      "test/extension/tsconfig.unit.json",
+      "test/webview-browser/tsconfig.json",
+      "test/webview/tsconfig.json",
+      "tsconfig.json",
+    ]);
+  });
+
+  it("covers every project `pnpm compile` and `pnpm compile:webview` type-check", () => {
+    // The cross-check that keeps the roster honest in the other direction: it
+    // reads the compile gate rather than trusting the list above, so a config
+    // wired into CI but dropped by discovery goes red even if someone updated
+    // the roster to match the broken output.
+    const scripts = JSON.parse(
+      readFileSync(join(REPO_ROOT, "package.json"), "utf8")
+    ).scripts as Record<string, string>;
+    const referenced = [...`${scripts.compile} && ${scripts["compile:webview"]}`.matchAll(
+      /tsc -p (\S+)/g
+    )].map(([, target]) => resolveCliProjectTarget(join(REPO_ROOT, target)));
+
+    // 5 from `compile`, 1 from `compile:webview` — pinned so a script edit that
+    // drops a `tsc -p` invocation cannot quietly shrink what this test checks.
+    expect(referenced.length).toBe(6);
+    const discovered = new Set(discoverProjects(REPO_ROOT));
+    expect(referenced.filter((r) => !discovered.has(r)).map((r) => relative(REPO_ROOT, r))).toEqual(
+      []
+    );
+  });
+
+  it("lets tsc resolve `extends`, including the extensionless form", () => {
+    // The one place discovery could have re-implemented tsc, pinned so it
+    // cannot drift back. `"extends": "./base"` (no `.json`) is valid and tsc
+    // resolves it to `base.json`; a hand-rolled resolver that appends
+    // `/tsconfig.json` to non-`.json` targets instead produces
+    // `base/tsconfig.json`, fails to match, and promotes the base to a swept
+    // project — whose default include is the whole repo, so `test/markdown` and
+    // `test/shared` start raising false alarms.
+    // ⚠️ The base MUST be named `tsconfig.base.json`, not `base.json`.
+    // `findConfigFiles` matches /^tsconfig(\..+)?\.json$/, so a `base.json`
+    // never enters discovery at all — and then this assertion holds whether
+    // `extends` resolution works or is completely broken, i.e. it pins nothing.
+    // (An earlier draft did exactly that; caught in review, not by the test.)
+    // With the name below, a broken resolver leaves the base unmatched and
+    // discovery returns BOTH files, so the assertion goes red for the right
+    // reason.
+    const root = mkdtempSync(join(tmpdir(), "quoll-nocheck-extends-"));
+    try {
+      writeFileSync(
+        join(root, "tsconfig.base.json"),
+        JSON.stringify({ compilerOptions: { noLib: true } })
+      );
+      writeFileSync(
+        join(root, "tsconfig.json"),
+        JSON.stringify({ extends: "./tsconfig.base", include: ["**/*.ts"] })
+      );
+      writeFileSync(join(root, "a.ts"), "export const a = 1;\n");
+
+      expect(discoverProjects(root).map((p) => relative(root, p))).toEqual(["tsconfig.json"]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("no file in any tsc program switches its whole file off", () => {
+  // Built once, in the describe body, and shared by all four assertions.
+  //
+  // Two reasons this is not a detail. (a) Cost: each project is a full
+  // `ts.Program`, ~150–400 ms; re-deriving per `it` would build all seven
+  // twice. (b) Flake: vitest's default `testTimeout` is 5000 ms and this repo
+  // deliberately runs uncapped parallel workers (see vitest.config.ts's note on
+  // the ruled-out load-flake), so a multi-second body inside an `it` is exactly
+  // the shape that goes intermittently red under contention. Collection-time
+  // work carries no per-test timeout.
+  const projects = discoverProjects(REPO_ROOT);
+  const perProject = new Map(projects.map((p) => [relative(REPO_ROOT, p), sweepProject(p)]));
+  const swept = mergeSweeps([...perProject.values()]);
+
+  it("reaches the whole repo, not one directory (guards a vacuous sweep)", () => {
+    // A floor, not an exact count — the union was 467 files when this landed,
+    // and it moves with every source file added. What it pins is that the
+    // sweep did not silently collapse: a broken config, a bad filter or an
+    // enumeration that found nothing all land far below this.
+    expect(swept.files.size).toBeGreaterThan(300);
+    // Named anchors, one per layer, so "reaches the whole repo" is not just a
+    // number. `protocol.ts` is the file the non-vacuity spike planted into;
+    // the last two are only reachable transitively or from a narrow include.
+    for (const anchor of [
+      "src/extension/extension.ts",
+      "src/markdown/validate-for-write.ts",
+      "src/shared/protocol.ts",
+      "src/webview/shell.ts",
+      "test/build/no-file-level-ts-nocheck.test.ts",
+      "test/extension/types-equality.test.ts",
+      "test/webview-browser/harness-smoke.browser.test.ts",
+    ]) {
+      expect(swept.files.has(anchor)).toBe(true);
+    }
+  });
+
+  it("reports no file that switches its whole file off", () => {
+    expect(swept.optOuts).toEqual([]);
+  });
+
+  it("carries only the declaration files exempted on purpose", () => {
+    // A second way to be unchecked, reached with no directive at all:
+    // `tsconfig.base.json` sets `skipLibCheck: true`, and tsc's
+    // `skipTypeCheckingWorker` short-circuits on
+    // `skipLibCheck && isDeclarationFile` BEFORE it reads `checkJsDirective` —
+    // so no improvement to the detector can reach this case.
+    //
+    // `quoll-perf-flag.d.ts` is an ambient declaration for a build-time flag;
+    // it declares, it does not assert. Any addition to this list is a conscious
+    // exemption made here rather than a file that drifted in.
+    expect(swept.declarations).toEqual(["src/shared/quoll-perf-flag.d.ts"]);
+  });
+
+  it("gets a non-empty program from every project it discovered", () => {
+    // Per-project, because the union hides a single dead config: one project
+    // resolving to zero files still leaves the union in the hundreds.
+    //
+    // Asserted as the LIST OF OFFENDERS rather than a count comparison, so the
+    // failure diff names the config that died. A `toBeGreaterThan(0)` in a loop
+    // prints `0 > 0` and leaves the reader to work out which of the seven it
+    // was.
+    const empty = [...perProject].filter(([, swept]) => swept.files.length === 0).map(([p]) => p);
+
+    expect(empty).toEqual([]);
   });
 });
