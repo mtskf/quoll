@@ -244,7 +244,8 @@ describe("re-implemented listItemFold folds list items byte-identically to upstr
 
   const FIXTURES = [
     "- a\n  - b\n  - c\n- d\n", // nested children
-    "- item line one\n  item line two\n  item line three\n- next\n", // lazy continuation lines
+    "- item line one\n  item line two\n  item line three\n- next\n", // indented continuation lines
+    "- lazy one\nlazy two\n- next\n", // lazy continuation line (no indent)
     "1. one\n   cont\n2. two\n", // ordered marker
   ];
 

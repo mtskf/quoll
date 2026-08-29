@@ -94,9 +94,8 @@ describe("settledState() republishes the language field's tree snapshot", () => 
 // at the end of the input while returning a Tree that stops short of it, and its
 // stopAt() is a no-op. ParseContext.work() sets `treeLen` to
 // `parse.stoppedAt ?? state.doc.length` — never to the returned tree's length —
-// and this stub never sets `stoppedAt` (ensureSyntaxTree's upto == doc.length
-// makes work() drop `upto` to undefined, so `stopAt` is not called at all), so
-// `treeLen` lands on the full doc length while the tree is 10 units long.
+// and the no-op stopAt() leaves `stoppedAt` null, so `treeLen` lands on the full
+// doc length while the tree is 10 units long.
 // `ensureSyntaxTree` then reports success, fullTree() receives the short tree,
 // and LanguageState.apply() republishes it as the state's snapshot.
 //

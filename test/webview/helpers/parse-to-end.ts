@@ -33,9 +33,8 @@ type ParseCaller = "fullTree" | "settledState";
  *
  * `caller` is the helper name to prefix, so the thrown message still points at
  * the helper the test actually called. It is a closed union rather than `string`
- * so a new helper routing through here has to ADD its own label — a copy-pasted
- * body that keeps the sibling's label is a compile error, not a message that
- * misattributes the failure.
+ * so an unknown label — a typo, or a new helper's — is a compile error until it
+ * is added here.
  *
  * `budgetMs` is a parameter rather than a literal so the timeout arm can be
  * driven without a five-second hang, and the message quotes the value it was
