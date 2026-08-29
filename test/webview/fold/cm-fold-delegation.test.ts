@@ -1,12 +1,16 @@
-// These state-only tests pin the DELIVERED fold contract via foldable() against
-// upstream markdown({ base }) as a REFERENCE ORACLE. Heading folds are produced by
-// Quoll's re-implementation of lang-markdown's headerIndent foldService (see
-// cm/markdown.ts); list/block folds still come from lang-markdown's foldNodeProp.
-// These tests assert the upstream contract our language must match for headings and
-// lists; the direct-build parity is pinned in cm-markdown-language.test.ts. (Tables
-// fold in this upstream oracle but NOT in quollMarkdownLanguage — nonFoldableBlocks
-// subtracts the Table node so table blocks show no chevron; that divergence is pinned
-// in cm-fold-blockquote.test.ts.) No view is mounted, so no happy-dom pragma is needed.
+// These state-only tests pin the fold contract via foldable() against upstream
+// markdown({ base }) as a REFERENCE ORACLE — no Quoll language is built here.
+// Heading folds are Quoll's re-implementation of lang-markdown's headerIndent
+// foldService (cm/markdown.ts); its byte-identical parity against this same oracle
+// is asserted in cm-markdown-language.test.ts's headerIndent describe.
+// List folds are NOT delegated wholesale: nonFoldableBlocks registers
+// `ListItem: listItemFold` (cm/markdown.ts), which reproduces lang-markdown's default
+// Block range EXCEPT when the item's first content child is a GFM table that starts on
+// the marker line AND emits a block widget — there it returns null. That override, and
+// the Table subtraction (tables fold in this upstream oracle but NOT in
+// quollMarkdownLanguage), are pinned against quollMarkdownLanguage() itself in
+// cm-fold-blockquote.test.ts, not here. No view is mounted, so no happy-dom pragma is
+// needed.
 
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
 import { codeFolding, foldable, foldEffect, foldedRanges } from "@codemirror/language";
@@ -61,11 +65,15 @@ describe("heading folding matches lang-markdown's contract (reference oracle)", 
   });
 });
 
-describe("list folding is delegated to lang-markdown (foldNodeProp Block fallback)", () => {
-  // lang-markdown's `isList(type)` excludes only the BulletList/OrderedList
-  // CONTAINERS — not ListItem. ListItem is a "Block", so foldNodeProp folds it
-  // to the item end. Quoll adds no custom list foldService; foldable() already
-  // returns the item-body range.
+describe("list folding matches lang-markdown's default Block fallback (upstream oracle)", () => {
+  // Upstream only: stateFor mounts markdown({ base: markdownLanguage }), never
+  // quollMarkdownLanguage. lang-markdown's `isList(type)` excludes only the
+  // BulletList/OrderedList CONTAINERS — not ListItem. ListItem is a "Block", so
+  // foldNodeProp folds it to the item end. quollMarkdownLanguage OVERRIDES that
+  // node's foldNodeProp (listItemFold, cm/markdown.ts): it returns the same range
+  // for the shapes below, and null for a marker-line table that emits a block
+  // widget — the divergence is pinned against quollMarkdownLanguage() in
+  // cm-fold-blockquote.test.ts.
   it("a nested-list parent item is foldable (folds the item body)", () => {
     const doc = "- a\n  - b\n  - c\n- d\n";
     const r = foldableAt(doc, 0); // on "- a"

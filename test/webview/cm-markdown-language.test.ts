@@ -16,7 +16,7 @@
 // (dropped in markdown.ts); Quoll's own paste-URL-over-selection handler lives in
 // src/webview/cm/paste/url-link-paste.ts and is covered by cm-paste-url-link.test.ts.
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
-import { codeFolding, ensureSyntaxTree, foldable, syntaxTree } from "@codemirror/language";
+import { codeFolding, foldable, forceParsing, syntaxTree } from "@codemirror/language";
 import { EditorSelection, EditorState, type Extension } from "@codemirror/state";
 import { EditorView, runScopeHandlers } from "@codemirror/view";
 import { afterEach, describe, expect, it } from "vitest";
@@ -43,7 +43,15 @@ function mount(doc: string, anchor: number, selEnd = anchor): EditorView {
       extensions: [quollLang],
     }),
   });
-  ensureSyntaxTree(view.state, view.state.doc.length, 5000);
+  // Settle the parse AND republish the language field's tree SNAPSHOT. The keymap
+  // commands exercised below read `syntaxTree(state)` — that snapshot — directly
+  // (lang-markdown's insertNewlineContinueMarkupCommand and deleteMarkupBackward),
+  // and `ensureSyntaxTree` advances only the mutable parse CONTEXT, leaving the
+  // snapshot truncated. `forceParsing` is the view-carrying twin of settledState():
+  // it dispatches an empty tx when the parse advanced, so the field rebuilds over the
+  // finished tree. Asserted, not ignored — a false return means the 5s budget never
+  // reached doc end, which must read as a parse-budget failure, not a broken keymap.
+  expect(forceParsing(view, view.state.doc.length, 5000)).toBe(true);
   return view;
 }
 
@@ -75,6 +83,29 @@ describe("quollMarkdownLanguage wires the active markdownKeymap", () => {
     // Upstream deleteMarkupBackward removes the bullet marker; assert the "- "
     // prefix is gone (exact remainder pinned so a broken keymap reds this).
     expect(v.state.sliceDoc()).toBe("alpha");
+  });
+});
+
+describe("mount() hands the keymap a settled tree snapshot", () => {
+  // Non-vacuity guard for mount()'s forceParsing settle, made deterministic by DOC
+  // SIZE instead of CPU load: `LanguageState.init` parses at most a 3000-char init
+  // viewport, so a longer doc always lands a truncated snapshot in the language
+  // field — the same shape CPU preemption produces on the sub-KB fixtures above.
+  // (Same construction as cm-fold-blockquote.test.ts's "reads a settled parse".)
+  // Swap mount()'s forceParsing back to a bare ensureSyntaxTree and the second
+  // assertion goes red.
+  const doc = `${"filler paragraph line\n\n".repeat(200)}- alpha`;
+
+  it("a freshly-created state's snapshot is truncated (the precondition)", () => {
+    // If an upstream change ever made the init snapshot complete, the guard below
+    // would be vacuous — so it reds here instead of silently passing.
+    const state = EditorState.create({ doc, extensions: [quollLang] });
+    expect(syntaxTree(state).length).toBeLessThan(state.doc.length);
+  });
+
+  it("the mounted view's snapshot spans the whole doc", () => {
+    const v = mount(doc, doc.length);
+    expect(syntaxTree(v.state).length).toBe(v.state.doc.length);
   });
 });
 
