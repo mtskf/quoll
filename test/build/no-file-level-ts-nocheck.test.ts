@@ -742,13 +742,22 @@ describe("the sweep enumerates the repo's tsc programs, not a fixed directory", 
     }
   });
 
-  it("does not walk into dot-directories, where tsc's `**` never goes", () => {
+  it("does not walk into dot-directories, so a stray project is neither rostered nor swept", () => {
     // Reproduced before this guard existed: a `/review-cycle` reviewer's probe
     // tsconfig under `.review-cycle-<id>/scratch/` joined the roster, and one
     // that did not parse took collection down for the whole file. The planted
     // directive below is the second half of the same failure — a stray project
     // is also SWEPT, so its files reach `optOuts` on a project no `tsc -p` in
     // this repo ever names.
+    //
+    // Both halves are ASSERTED here, not one asserted and one narrated. The
+    // second holds only transitively (the suite sweeps whatever discovery
+    // returns, so exclusion from discovery is what keeps `.scratch/b.ts` out of
+    // `optOuts`), and an earlier draft planted the directive while asserting
+    // discovery alone — leaving the directive inert and this comment claiming
+    // coverage the code did not have, the exact defect this file has shipped
+    // three times. Sweeping the discovered set below is what makes the planted
+    // directive load-bearing.
     const root = mkdtempSync(join(tmpdir(), "quoll-nocheck-dotdir-"));
     try {
       const project = JSON.stringify({
@@ -761,7 +770,23 @@ describe("the sweep enumerates the repo's tsc programs, not a fixed directory", 
       writeFileSync(join(root, ".scratch", "tsconfig.json"), project);
       writeFileSync(join(root, ".scratch", "b.ts"), "// @ts-nocheck\nexport const b = 1;\n");
 
-      expect(discoverProjects(root).map((p) => relative(root, p))).toEqual(["tsconfig.json"]);
+      const discovered = discoverProjects(root);
+      expect(discovered.map((p) => relative(root, p))).toEqual(["tsconfig.json"]);
+      // Composed the way the suite body composes it, so this measures the real
+      // path rather than a parallel one. Non-vacuity, measured: rename the
+      // fixture's `.scratch` to `scratch` and this goes red with
+      // `["scratch/b.ts"]` against `[]` — the stray project is discovered,
+      // therefore swept, therefore its directive is reported.
+      //
+      // ⚠️ Deleting the dot-directory skip in `findConfigFiles` is NOT the way
+      // to check that; measured, it does not redden this assertion but takes
+      // collection for the whole file down to `0 test`, because discovery then
+      // reaches `.vscode-test/`'s bundled VS Code and one of its configs fails
+      // to parse (TS5083). That is the cycle-1 failure this skip exists to
+      // close, reproduced — loud, but it hides every per-assertion result.
+      expect(mergeSweeps(discovered.map((config) => sweepProject(config, root))).optOuts).toEqual(
+        []
+      );
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
