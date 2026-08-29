@@ -51,11 +51,22 @@ const findConfigFiles = (dir: string): string[] =>
     return /^tsconfig(\..+)?\.json$/.test(entry.name) ? [join(dir, entry.name)] : [];
   });
 
-// Non-dot directories no tsconfig this repo OWNS lives under. Not a claim about
-// what tsc reads — every program pulls its lib and @types files out of
-// `node_modules` (see below) — and not the containment boundary either, which
-// is `repoRelative`'s separate job over swept FILES. Dot-directories are
-// skipped wholesale above, so `.git` and `.vscode-test` need no entry here.
+// Non-dot directories no tsconfig this repo OWNS lives under. The four names do
+// NOT share one authority, and the difference is measured:
+//   - `dist`/`out`/`coverage` are pure repo curation. An `include: ["**/*.ts"]`
+//     with `exclude: []` returns files from all THREE, so tsc's own `**` would
+//     reach a program rooted there and only this list keeps the walk out.
+//   - `node_modules` sits where a dot-directory sits instead: that same
+//     `exclude: []` include returns nothing from it, and only naming
+//     `node_modules/**/*.ts` explicitly pulls it in. It is listed anyway
+//     because THIS walk is a plain `readdirSync` recursion rather than a tsc
+//     glob — without the entry it descends into the vendored tsconfigs down
+//     there (measured on this branch: 30 files matching the name pattern).
+// Not a claim about what tsc reads — every program pulls its lib and @types
+// files out of `node_modules` (see below) — and not the containment boundary
+// either, which is `repoRelative`'s separate job over swept FILES.
+// Dot-directories are skipped wholesale above, so `.git` and `.vscode-test`
+// need no entry here.
 const SKIP_DIRS = new Set(["node_modules", "dist", "out", "coverage"]);
 
 // `tsc -p` on the COMMAND LINE accepts a directory or a file. This mirrors that

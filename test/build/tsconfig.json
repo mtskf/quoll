@@ -23,37 +23,32 @@
   //
   // The tripwire against drifting back is no-file-level-ts-nocheck.test.ts, and
   // it is the AUTHORITY — for this directory and for the rest of the repo. As
-  // of 2026-08-30 it no longer walks a directory: it finds every tsconfig
-  // outside dot-directories (where tsc's own `**` genuinely never descends) and
-  // outside the vendored/output directories its SKIP_DIRS names — and those two
-  // exclusions have DIFFERENT authorities. `node_modules`, `dist`, `out` and
-  // `coverage` are a repo-curated denylist, not a tsc glob rule: measured, an
-  // `include: ["**/*.ts"]` with no `exclude` picks files straight out of
-  // `dist`/`out`/`coverage` (this very config carries no such `exclude`). They
-  // are skipped because no tsconfig this repo owns lives under them, which is
-  // the boundary the test's own SKIP_DIRS comment states. It then treats the
-  // configs no other config `extends` as the programs (a
-  // deliberate heuristic — the test says so, and pins a roster of the result),
-  // builds each of those, and asks the program's own SourceFiles whether tsc
-  // opted them out. That makes containment and byte
-  // decoding tsc's answers rather than the guard's, which is what let two
-  // hand-rolled layers be deleted instead of extended. Which forms it detects
-  // is stated by its fixtures, not here — this header asserted coverage three
-  // times during its own review and was wrong each time. Run
+  // of 2026-08-30 it no longer walks a directory: `discoverProjects` enumerates
+  // the repo's tsconfigs, treats the ones no other config `extends` as the
+  // programs (a deliberate heuristic — the test says so, and pins a roster of
+  // the result), builds each of those, and asks the program's own SourceFiles
+  // whether tsc opted them out. That makes containment and byte decoding tsc's
+  // answers rather than the guard's, which is what let two hand-rolled layers be
+  // deleted instead of extended. Run
   // `pnpm vitest run test/build/no-file-level-ts-nocheck.test.ts`.
   //
-  // So state the reach plainly rather than as "no program can live outside it":
-  // the guard covers every program reachable by `**`-glob discovery, plus every
-  // program named by `package.json`'s `compile` / `compile:webview` (a separate
-  // cross-check reads those two scripts). A program rooted in a dot-directory
-  // and invoked directly — a workflow step running `tsc -p .tooling/tsconfig.json`
-  // without going through `pnpm compile` — is outside that reach. Closing it by
-  // relaxing the dot-directory skip is NOT the fix: that skip is what keeps a
-  // `/review-cycle` reviewer's throwaway probe tsconfig out of the roster (one
-  // previously reddened it, and an unparseable one took collection down to
-  // `0 test`), and nothing distinguishes such a probe from a legitimate
-  // dot-rooted project. Wire a real one into `compile` instead, or widen the
-  // cross-check to read the workflow files too.
+  // Two gates hold it up, named here by function only: `findConfigFiles` walks
+  // everything outside dot-directories and outside its `SKIP_DIRS`, and the
+  // "covers every project `pnpm compile` and `pnpm compile:webview` type-check"
+  // cross-check reads those two scripts, so a config the walk missed but the
+  // compile gate names goes red. One gap those two leave: a program rooted in a
+  // dot-directory and invoked directly — a workflow step running
+  // `tsc -p .tooling/tsconfig.json` without going through `pnpm compile` — is
+  // seen by neither.
+  //
+  // ⛔ Do NOT restate the boundaries here. Where each sits, why the `SKIP_DIRS`
+  // names do not share one authority, why relaxing the dot-directory skip is
+  // not the answer, and which directive forms and encodings the oracle detects
+  // are each stated once next to the code that enforces them — the `SKIP_DIRS`
+  // comment and that file's fixtures. This header re-derived those mechanics in
+  // its own English three review cycles running and shipped a wrong claim every
+  // time; its job is WHY the guard is built this way and WHERE the authority
+  // lives, not to be the authority.
   // ⚠️ Asking tsc is not over-engineering. Four hand-rolled approximations were
   // tried first and every one shipped a silent miss: a block-comment strip that
   // swallowed live directives, a trivia walk that stopped at a shebang, a
