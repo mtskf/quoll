@@ -33,13 +33,27 @@ const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const findConfigFiles = (dir: string): string[] =>
   readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
     if (entry.isDirectory()) {
-      return SKIP_DIRS.has(entry.name) ? [] : findConfigFiles(join(dir, entry.name));
+      // Mirror the one structural rule tsc's own `**` applies: it never
+      // descends into a dot-prefixed directory, so no glob-included program can
+      // live under one. Re-deriving that boundary as a growing denylist is how
+      // a work-tree scratch project joins the roster — measured on this branch,
+      // a `/review-cycle` reviewer's probe tsconfig under `.review-cycle-<id>/`
+      // reddened the roster assertion, and an unparseable one took collection
+      // for the whole file down (`0 test`). Pinned by the dot-directory fixture
+      // below rather than left to this comment.
+      return entry.name.startsWith(".") || SKIP_DIRS.has(entry.name)
+        ? []
+        : findConfigFiles(join(dir, entry.name));
     }
     return /^tsconfig(\..+)?\.json$/.test(entry.name) ? [join(dir, entry.name)] : [];
   });
 
-// Directories a tsc program never reads from and a sweep must not walk into.
-const SKIP_DIRS = new Set(["node_modules", ".git", "dist", "out", ".vscode-test", "coverage"]);
+// Non-dot directories no tsconfig this repo OWNS lives under. Not a claim about
+// what tsc reads — every program pulls its lib and @types files out of
+// `node_modules` (see below) — and not the containment boundary either, which
+// is `repoRelative`'s separate job over swept FILES. Dot-directories are
+// skipped wholesale above, so `.git` and `.vscode-test` need no entry here.
+const SKIP_DIRS = new Set(["node_modules", "dist", "out", "coverage"]);
 
 // `tsc -p` on the COMMAND LINE accepts a directory or a file. This mirrors that
 // one documented CLI rule, and nothing else — in particular it is not used to
@@ -208,12 +222,20 @@ const repoRelative = (root: string, fileName: string): string | null => {
 
 // `root` is both the containment boundary and the base for reported paths, so
 // one function serves the repo sweep and the temp-dir fixtures with no second
-// code path. Defaults to the repo so the repo-sweep call sites read plainly.
+// code path.
+//
+// ⚠️ REQUIRED, deliberately — no default. A `root` that does not contain the
+// config makes `repoRelative` reject every file, and the sweep then returns
+// empty while reporting success: "this project is clean" and "this sweep saw
+// nothing" become the same value. That is the silent-pass direction the parse
+// path closes with a throw, and a default parameter is a one-word way back into
+// it — today only the assertion shapes at the fixture call sites stand in the
+// way, and a negative fixture (`toEqual([])`) would be vacuously green.
 //
 // ⚠️ Callers pass the root spelled the way the config path was spelled — see
 // the measured note in Task 2 Step 4. tsc does not canonicalise, so
 // `realpathSync`-ing one side and not the other silently empties the sweep.
-const sweepProject = (configPath: string, root: string = REPO_ROOT) => {
+const sweepProject = (configPath: string, root: string) => {
   const { parsed } = readProject(configPath);
   const program = ts.createProgram({ rootNames: parsed.fileNames, options: parsed.options });
   const files: string[] = [];
@@ -323,9 +345,10 @@ describe("the directive oracle matches what tsc honours", () => {
       "#!/usr/bin/env node\n// @ts-nocheck",
       '#!/usr/bin/env node\n// covers **/*.ts\n// @ts-nocheck\nexport const p = "test/**/*.test.ts";',
     ];
-    for (const source of honoured) {
-      expect(detectsOptOut(source)).toBe(true);
-    }
+    // Same idiom as the empty-program assertion below: report the OFFENDERS, so
+    // a regression names the fixture instead of printing `expected false to be
+    // true` for one of 24 prefixes, several of which are invisible characters.
+    expect(honoured.filter((source) => !detectsOptOut(source))).toEqual([]);
   });
 
   it("ignores look-alikes tsc does not honour", () => {
@@ -343,9 +366,7 @@ describe("the directive oracle matches what tsc honours", () => {
       "//\u{0085}@ts-nocheck",
       "//\u{200B}@ts-nocheck",
     ];
-    for (const source of notHonoured) {
-      expect(detectsOptOut(source)).toBe(false);
-    }
+    expect(notHonoured.filter((source) => detectsOptOut(source))).toEqual([]);
   });
 
   it("ignores a directive placed after code, exactly as tsc does", () => {
@@ -618,6 +639,12 @@ describe("the sweep follows the program, not a filename pattern", () => {
   });
 });
 
+// Discovered once. The roster below, the `pnpm compile` cross-check and the
+// sweep are asserted against EACH OTHER, so they have to be talking about one
+// set — three independent calls left that relationship implicit and invited a
+// reader to wonder whether the three could disagree.
+const PROJECTS = discoverProjects(REPO_ROOT);
+
 describe("the sweep enumerates the repo's tsc programs, not a fixed directory", () => {
   it("registers every tsc program in the repo, and only the options base is left out", () => {
     // Discovery is automatic; REGISTRATION is deliberate. The list below is a
@@ -631,7 +658,7 @@ describe("the sweep enumerates the repo's tsc programs, not a fixed directory", 
     // would silently accept a config that discovery misclassified, which is the
     // failure direction this whole tripwire exists to close. The cost is a
     // one-line edit roughly once a year — seven configs in the repo's life.)
-    expect(discoverProjects(REPO_ROOT).map((p) => relative(REPO_ROOT, p))).toEqual([
+    expect(PROJECTS.map((p) => relative(REPO_ROOT, p))).toEqual([
       "src/webview/tsconfig.json",
       "test/build/tsconfig.json",
       "test/extension/tsconfig.json",
@@ -656,7 +683,7 @@ describe("the sweep enumerates the repo's tsc programs, not a fixed directory", 
     // 5 from `compile`, 1 from `compile:webview` — pinned so a script edit that
     // drops a `tsc -p` invocation cannot quietly shrink what this test checks.
     expect(referenced.length).toBe(6);
-    const discovered = new Set(discoverProjects(REPO_ROOT));
+    const discovered = new Set(PROJECTS);
     expect(referenced.filter((r) => !discovered.has(r)).map((r) => relative(REPO_ROOT, r))).toEqual(
       []
     );
@@ -695,6 +722,31 @@ describe("the sweep enumerates the repo's tsc programs, not a fixed directory", 
       rmSync(root, { recursive: true, force: true });
     }
   });
+
+  it("does not walk into dot-directories, where tsc's `**` never goes", () => {
+    // Reproduced before this guard existed: a `/review-cycle` reviewer's probe
+    // tsconfig under `.review-cycle-<id>/scratch/` joined the roster, and one
+    // that did not parse took collection down for the whole file. The planted
+    // directive below is the second half of the same failure — a stray project
+    // is also SWEPT, so its files reach `optOuts` on a project no `tsc -p` in
+    // this repo ever names.
+    const root = mkdtempSync(join(tmpdir(), "quoll-nocheck-dotdir-"));
+    try {
+      const project = JSON.stringify({
+        compilerOptions: { noEmit: true, noLib: true },
+        include: ["*.ts"],
+      });
+      writeFileSync(join(root, "tsconfig.json"), project);
+      writeFileSync(join(root, "a.ts"), "export const a = 1;\n");
+      mkdirSync(join(root, ".scratch"));
+      writeFileSync(join(root, ".scratch", "tsconfig.json"), project);
+      writeFileSync(join(root, ".scratch", "b.ts"), "// @ts-nocheck\nexport const b = 1;\n");
+
+      expect(discoverProjects(root).map((p) => relative(root, p))).toEqual(["tsconfig.json"]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("no file in any tsc program switches its whole file off", () => {
@@ -707,13 +759,37 @@ describe("no file in any tsc program switches its whole file off", () => {
   // the ruled-out load-flake), so a multi-second body inside an `it` is exactly
   // the shape that goes intermittently red under contention. Collection-time
   // work carries no per-test timeout.
-  const projects = discoverProjects(REPO_ROOT);
-  const perProject = new Map(projects.map((p) => [relative(REPO_ROOT, p), sweepProject(p)]));
+  const perProject = new Map(
+    PROJECTS.map((p) => [relative(REPO_ROOT, p), sweepProject(p, REPO_ROOT)])
+  );
   const swept = mergeSweeps([...perProject.values()]);
 
   it("reaches the whole repo, not one directory (guards a vacuous sweep)", () => {
-    // A floor, not an exact count — the union was 467 files when this landed,
-    // and it moves with every source file added. What it pins is that the
+    // Per-project floors, not only a union floor. `test/webview` contributes
+    // 323 of the 467 files measured when this landed, so a union floor of 300
+    // is satisfiable by ONE program while every other one shrinks to its anchor
+    // plus transitive imports — and a file dropped out of every program is
+    // exactly as unchecked as one carrying a directive, with no text in it to
+    // notice. Each floor is roughly half its measured count, so routine churn
+    // never touches this list while a program losing most of its `include` goes
+    // red naming itself. A project missing from the table falls back to
+    // "non-empty"; the roster assertion above is what makes a new one visible.
+    const floors: Record<string, number> = {
+      "src/webview/tsconfig.json": 80,
+      "test/build/tsconfig.json": 12,
+      "test/extension/tsconfig.json": 25,
+      "test/extension/tsconfig.unit.json": 7,
+      "test/webview-browser/tsconfig.json": 90,
+      "test/webview/tsconfig.json": 160,
+      "tsconfig.json": 45,
+    };
+    const undersized = [...perProject]
+      .filter(([configPath, project]) => project.files.length < (floors[configPath] ?? 1))
+      .map(([configPath, project]) => `${configPath}: ${project.files.length}`);
+
+    expect(undersized).toEqual([]);
+    // A floor on the union too, not an exact count — it was 467 files when this
+    // landed and moves with every source file added. What it pins is that the
     // sweep did not silently collapse: a broken config, a bad filter or an
     // enumeration that found nothing all land far below this.
     expect(swept.files.size).toBeGreaterThan(300);
@@ -758,7 +834,9 @@ describe("no file in any tsc program switches its whole file off", () => {
     // failure diff names the config that died. A `toBeGreaterThan(0)` in a loop
     // prints `0 > 0` and leaves the reader to work out which of the seven it
     // was.
-    const empty = [...perProject].filter(([, swept]) => swept.files.length === 0).map(([p]) => p);
+    const empty = [...perProject]
+      .filter(([, project]) => project.files.length === 0)
+      .map(([configPath]) => configPath);
 
     expect(empty).toEqual([]);
   });

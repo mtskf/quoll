@@ -23,8 +23,10 @@
   //
   // The tripwire against drifting back is no-file-level-ts-nocheck.test.ts, and
   // it is the AUTHORITY — for this directory and for the rest of the repo. As
-  // of 2026-08-30 it no longer walks a directory: it finds every tsconfig in
-  // the repo, treats the ones no other config `extends` as the programs (a
+  // of 2026-08-30 it no longer walks a directory: it finds every tsconfig
+  // outside dot-directories and the vendored/output directories it names (the
+  // same places tsc's own `**` will not look, so no program can live there),
+  // treats the ones no other config `extends` as the programs (a
   // deliberate heuristic — the test says so, and pins a roster of the result),
   // builds each of those, and asks the program's own SourceFiles whether tsc
   // opted them out. That makes containment and byte
