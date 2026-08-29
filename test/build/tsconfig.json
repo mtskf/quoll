@@ -39,8 +39,11 @@
   // reads those two scripts, so a config the walk missed but the compile gate
   // names goes red. What escapes both is a program the walk cannot see that no
   // compile script names — rooted in a dot-directory, or under a `SKIP_DIRS`
-  // name, or called something the pattern does not match — and invoked
-  // directly, say by a workflow step running `tsc -p .tooling/tsconfig.json`.
+  // name, or reachable only through a directory SYMLINK (the walk tests
+  // `isDirectory()`, which a link reports false, and the same `SKIP_DIRS`
+  // comment shows that mechanism doing real work here), or called something
+  // the pattern does not match — and invoked directly, say by a workflow step
+  // running `tsc -p .tooling/tsconfig.json`.
   //
   // ⛔ Do NOT restate the boundaries here. Where each sits, why the `SKIP_DIRS`
   // names do not share one authority, why relaxing the dot-directory skip is
