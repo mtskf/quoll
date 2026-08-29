@@ -60,8 +60,14 @@ const findConfigFiles = (dir: string): string[] =>
 //     `exclude: []` include returns nothing from it, and only naming
 //     `node_modules/**/*.ts` explicitly pulls it in. It is listed anyway
 //     because THIS walk is a plain `readdirSync` recursion rather than a tsc
-//     glob — without the entry it descends into the vendored tsconfigs down
-//     there (measured on this branch: 30 files matching the name pattern).
+//     glob, so the entry is what would stop it descending into vendored
+//     configs. ⚠️ On THIS checkout it stops nothing: pnpm parks every package
+//     under `node_modules/.pnpm/`, so all 30 vendored `tsconfig*.json` here sit
+//     behind a dot-directory and the skip above already catches them —
+//     dropping `node_modules` from this list discovers zero extra configs
+//     (measured both ways). It stays because the layout is the package
+//     manager's choice, not ours: a hoisted `node_modules/<pkg>/tsconfig.json`
+//     carries no dot segment, and nothing else would stop the walk.
 // Not a claim about what tsc reads — every program pulls its lib and @types
 // files out of `node_modules` (see below) — and not the containment boundary
 // either, which is `repoRelative`'s separate job over swept FILES.
