@@ -272,29 +272,17 @@ const sweepProject = (configPath: string, root: string) => {
   return { files: files.sort(), optOuts: optOuts.sort(), declarations: declarations.sort() };
 };
 
+type Sweep = ReturnType<typeof sweepProject>;
+
 // Merges results that were ALREADY swept — it does not sweep. Building each
 // `ts.Program` costs 150–400 ms, so the describe body sweeps every project
 // exactly once into a Map and hands the values here; a `sweepAll(configs)` that
 // re-derived them would double that for no gain.
-type Sweep = ReturnType<typeof sweepProject>;
-
-const mergeSweeps = (sweeps: Sweep[]) => {
-  const files = new Set<string>();
-  const optOuts = new Set<string>();
-  const declarations = new Set<string>();
-  for (const swept of sweeps) {
-    for (const f of swept.files) {
-      files.add(f);
-    }
-    for (const f of swept.optOuts) {
-      optOuts.add(f);
-    }
-    for (const f of swept.declarations) {
-      declarations.add(f);
-    }
-  }
-  return { files, optOuts: [...optOuts].sort(), declarations: [...declarations].sort() };
-};
+const mergeSweeps = (sweeps: Sweep[]) => ({
+  files: new Set(sweeps.flatMap((swept) => swept.files)),
+  optOuts: [...new Set(sweeps.flatMap((swept) => swept.optOuts))].sort(),
+  declarations: [...new Set(sweeps.flatMap((swept) => swept.declarations))].sort(),
+});
 
 // Ask TypeScript instead of reimplementing its scanner.
 //
@@ -423,6 +411,13 @@ describe("the sweep sees a directive through the encodings tsc decodes", () => {
     }
     return out;
   };
+  // ⚠️ The `new Uint8Array(...)` is NOT a redundant wrapper, and `concat` is not
+  // a hand-rolled `Buffer.concat`. Under this repo's @types/node a `Buffer` is a
+  // `Uint8Array<ArrayBufferLike>`, which does not assign to the
+  // `Uint8Array<ArrayBuffer>` that `writeFileSync` and `utf16be` speak in.
+  // Measured: folding either helper into `Buffer.from`/`Buffer.concat` costs
+  // four TS2345s under `pnpm compile` — while vitest, being transpile-only,
+  // still reports all 22 tests green.
   const bytesOf = (text: string, encoding: "utf8" | "utf16le") =>
     new Uint8Array(Buffer.from(text, encoding));
   const concat = (mark: Uint8Array, body: Uint8Array) => {
