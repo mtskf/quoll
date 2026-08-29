@@ -176,6 +176,18 @@ describe("token liveness workflow fails closed", () => {
     expect(stepBlock(workflow, "Resolve publisher id")).toMatch(/if \[ -z "\$publisher" \]; then/);
   });
 
+  it("refuses any ref but the main BRANCH, so a tag named main cannot pass", () => {
+    // Must compare the full ref. `github.ref_name` is the SHORT name of a branch
+    // OR a tag, so it reads `main` for a tag literally named `main` — and
+    // `workflow_dispatch` accepts a tag as its ref, which would hand the publish
+    // tokens to whatever workflow content that tag carries. Pinning the
+    // `refs/heads/` prefix is what makes the short-name form fail this test.
+    const guard = stepBlock(workflow, "Refuse to run off the default branch");
+    expect(guard).toMatch(/if \[ "\$GITHUB_REF" != "refs\/heads\/main" \]; then/);
+    expect(guard).toContain("exit 1");
+    expect(guard).not.toMatch(/ref_name/);
+  });
+
   it("pins every action to a 40-hex commit SHA, not a mutable tag", () => {
     // The FORM, not the SHAs themselves: Dependabot bumps these routinely and
     // pinning the literal values would turn every routine bump PR red. What must

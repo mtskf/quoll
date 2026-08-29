@@ -84,12 +84,18 @@ jobs:
       # tracked separately. `main` is spelled out rather than read from the event payload
       # because a payload field that is absent on `schedule` would fail every weekly run —
       # publish.yml pins `origin/main` by name for the same reason.
+      #
+      # Compares the FULL ref, not `github.ref_name`. `ref_name` is the short name
+      # of a branch OR a tag, so it reads `main` for both `refs/heads/main` and a
+      # tag literally named `main` — and `workflow_dispatch` accepts a tag as its
+      # ref. A short-name comparison would therefore wave through a `main` tag
+      # carrying edited workflow content. `GITHUB_REF` is a default Actions
+      # environment variable holding `github.ref`, and it is set on `schedule`
+      # runs too (as the default branch's ref), so no `env:` mapping is needed.
       - name: Refuse to run off the default branch
-        env:
-          REF_NAME: ${{ github.ref_name }}
         run: |
-          if [ "$REF_NAME" != "main" ]; then
-            echo "::error::Refusing to run on '$REF_NAME' — this job holds live publish tokens and only runs on main."
+          if [ "$GITHUB_REF" != "refs/heads/main" ]; then
+            echo "::error::Refusing to run on '$GITHUB_REF' — this job holds live publish tokens and only runs on the main branch."
             exit 1
           fi
 
