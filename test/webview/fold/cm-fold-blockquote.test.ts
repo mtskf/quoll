@@ -16,13 +16,10 @@ function stateFor(doc: string): EditorState {
   return EditorState.create({ doc, extensions: [lang, codeFolding()] });
 }
 
-// Query the fold over a SETTLED parse. `foldable()` reads `syntaxTree(state)` —
-// the language field's tree SNAPSHOT — while `ensureSyntaxTree` only completes the
-// mutable parse CONTEXT, so a snapshot truncated by CM's 20ms init budget stays
-// truncated and every assertion below reads a tree the fold cannot resolve in
-// (returning a spurious `null`). `settledState` rebuilds the snapshot and asserts it
-// spans the doc; the truncation this closes is pinned deterministically by the
-// "reads a settled parse" describe at the bottom of this file.
+// Query the fold over a SETTLED parse: `foldable()` resolves in the language field's
+// tree snapshot, which a bare `ensureSyntaxTree` leaves truncated — see
+// ../helpers/settled-state.ts. The truncation this closes is pinned deterministically
+// by the "reads a settled parse" describe at the bottom of this file.
 function foldableAt(doc: string, at: number): { from: number; to: number } | null {
   const state = settledState(stateFor(doc));
   const line = state.doc.lineAt(at);

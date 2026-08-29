@@ -43,14 +43,13 @@ function mount(doc: string, anchor: number, selEnd = anchor): EditorView {
       extensions: [quollLang],
     }),
   });
-  // Settle the parse AND republish the language field's tree SNAPSHOT. The keymap
-  // commands exercised below read `syntaxTree(state)` — that snapshot — directly
-  // (lang-markdown's insertNewlineContinueMarkupCommand and deleteMarkupBackward),
-  // and `ensureSyntaxTree` advances only the mutable parse CONTEXT, leaving the
-  // snapshot truncated. `forceParsing` is the view-carrying twin of settledState():
-  // it dispatches an empty tx when the parse advanced, so the field rebuilds over the
-  // finished tree. Asserted, not ignored — a false return means the 5s budget never
-  // reached doc end, which must read as a parse-budget failure, not a broken keymap.
+  // Settle the parse AND republish the language field's tree snapshot: the keymap
+  // commands exercised below (lang-markdown's insertNewlineContinueMarkupCommand and
+  // deleteMarkupBackward) read that snapshot via `syntaxTree(state)`, which a bare
+  // `ensureSyntaxTree` leaves truncated — see helpers/settled-state.ts. `forceParsing`
+  // is its view-carrying twin. Asserted, not ignored — a false return means the 5s
+  // budget never reached doc end, which must read as a parse-budget failure, not a
+  // broken keymap.
   expect(forceParsing(view, view.state.doc.length, 5000)).toBe(true);
   return view;
 }
@@ -88,12 +87,10 @@ describe("quollMarkdownLanguage wires the active markdownKeymap", () => {
 
 describe("mount() hands the keymap a settled tree snapshot", () => {
   // Non-vacuity guard for mount()'s forceParsing settle, made deterministic by DOC
-  // SIZE instead of CPU load: `LanguageState.init` parses at most a 3000-char init
-  // viewport, so a longer doc always lands a truncated snapshot in the language
-  // field — the same shape CPU preemption produces on the sub-KB fixtures above.
-  // (Same construction as cm-fold-blockquote.test.ts's "reads a settled parse".)
-  // Swap mount()'s forceParsing back to a bare ensureSyntaxTree and the second
-  // assertion goes red.
+  // SIZE instead of CPU load — same construction as cm-fold-blockquote.test.ts's
+  // "reads a settled parse" describe, which documents why an over-long doc always
+  // lands a truncated snapshot. Swap mount()'s forceParsing back to a bare
+  // ensureSyntaxTree and the second assertion goes red.
   const doc = `${"filler paragraph line\n\n".repeat(200)}- alpha`;
 
   it("a freshly-created state's snapshot is truncated (the precondition)", () => {
@@ -117,9 +114,8 @@ describe("re-implemented headerIndent folds byte-identically to upstream", () =>
   // The blockquote-wrapped-heading fixture pins the exact from/to that
   // cm-fold-blockquote.test.ts only asserts `not.toBeNull()` for.
   // Settled, not merely ensureSyntaxTree'd: `foldable()` resolves in the language
-  // field's tree SNAPSHOT, which `ensureSyntaxTree` leaves truncated (it advances
-  // only the parse CONTEXT) — the load-sensitive spurious `null`. See
-  // helpers/settled-state.ts.
+  // field's tree snapshot, which a bare `ensureSyntaxTree` leaves truncated — the
+  // load-sensitive spurious `null`. See helpers/settled-state.ts.
   function foldHeadingRange(lang: Extension, doc: string, headAt: number) {
     const state = settledState(EditorState.create({ doc, extensions: [lang, codeFolding()] }));
     const line = state.doc.lineAt(headAt);

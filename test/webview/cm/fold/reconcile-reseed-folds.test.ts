@@ -17,6 +17,17 @@ import { settledState } from "../../helpers/settled-state.js";
 // the partial-tree fixtures in cm-decoration-viewport.test.ts.
 const BIG_TAIL = `\n\n${"filler paragraph body text.\n\n".repeat(4000)}`;
 
+/**
+ * A Quoll-language + folding state whose parse is complete AND whose tree snapshot
+ * has been republished, so `foldable()` resolves against the whole doc. See
+ * ../../helpers/settled-state.ts for why the snapshot needs republishing.
+ */
+function settledStateFor(doc: string): EditorState {
+  return settledState(
+    EditorState.create({ doc, extensions: [quollMarkdownLanguage(), codeFolding()] })
+  );
+}
+
 function foldRanges(state: EditorState): Array<{ from: number; to: number }> {
   const out: Array<{ from: number; to: number }> = [];
   foldedRanges(state).between(0, state.doc.length, (from, to) => {
@@ -53,11 +64,10 @@ describe("reconcileReseedFolds — incomplete post-reseed parse frontier", () =>
     expect(foldRanges(state)[0].to).toBeGreaterThan(newPos); // still conceals "# New"
 
     // (2) Once the parse is complete, reconcile clamps the over-wide fold back to
-    // "# One"'s real section end. `settledState` completes the parse the way a test
-    // can produce a complete-tree state (it advances the context AND republishes the
-    // tree snapshot that syntaxTree(state) — which foldable() reads — returns). We
-    // assert only the OUTCOME (availability + clamp), NOT CM's private tree-snapshot
-    // mechanism (Codex review: don't pin an implementation detail).
+    // "# One"'s real section end. `settledState` is how a test produces a
+    // complete-tree state (../../helpers/settled-state.ts). We assert only the
+    // OUTCOME (availability + clamp), NOT CM's private tree-snapshot mechanism
+    // (Codex review: don't pin an implementation detail).
     state = settledState(state);
     expect(syntaxTreeAvailable(state, state.doc.length)).toBe(true);
 
@@ -77,9 +87,7 @@ describe("reconcileReseedFolds — incomplete post-reseed parse frontier", () =>
     // ListItem (before `- sibling`), so the excess conceals the sibling's marker
     // line. Pins that the reconcile clamps a LIST boundary, not only a heading.
     const doc = "- parent\n  - a\n- sibling\n  - b\n\nafter\n";
-    let state = settledState(
-      EditorState.create({ doc, extensions: [quollMarkdownLanguage(), codeFolding()] })
-    );
+    let state = settledStateFor(doc);
     expect(syntaxTreeAvailable(state, state.doc.length)).toBe(true);
 
     const line1 = state.doc.line(1); // "- parent"
@@ -108,9 +116,7 @@ describe("reconcileReseedFolds — incomplete post-reseed parse frontier", () =>
     // concealsFoldableBoundary against spuriously firing on a benign over-wide list
     // fold, symmetric with the heading negative test below.
     const doc = "- parent\n  - a\n\nafter\n";
-    let state = settledState(
-      EditorState.create({ doc, extensions: [quollMarkdownLanguage(), codeFolding()] })
-    );
+    let state = settledStateFor(doc);
 
     const line1 = state.doc.line(1); // "- parent"
     const canonical = foldable(state, line1.from, line1.to);
@@ -125,9 +131,7 @@ describe("reconcileReseedFolds — incomplete post-reseed parse frontier", () =>
 
   it("leaves an over-wide fold untouched when the excess conceals no heading boundary", () => {
     const doc = "# One\n\nalpha\n\nbravo\n\ncharlie\n\n# Two\n\ndelta";
-    let state = settledState(
-      EditorState.create({ doc, extensions: [quollMarkdownLanguage(), codeFolding()] })
-    );
+    let state = settledStateFor(doc);
     const line1 = state.doc.line(1);
     const canonical = foldable(state, line1.from, line1.to);
     if (!canonical) {

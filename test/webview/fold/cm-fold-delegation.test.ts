@@ -18,10 +18,10 @@ import { EditorState } from "@codemirror/state";
 import { describe, expect, it } from "vitest";
 import { settledState } from "../helpers/settled-state.js";
 
-// A SETTLED state: `ensureSyntaxTree` alone completes the parse CONTEXT but leaves
-// the language field's tree SNAPSHOT — the tree `foldable()` actually resolves in —
-// truncated, so under CPU preemption a fold query returns a spurious `null`. See
-// settled-state.ts and the non-vacuity guard in cm-fold-blockquote.test.ts.
+// A SETTLED state: `foldable()` resolves in the language field's tree snapshot, which
+// a bare `ensureSyntaxTree` leaves truncated — under CPU preemption a fold query then
+// returns a spurious `null`. See ../helpers/settled-state.ts and the non-vacuity guard
+// in cm-fold-blockquote.test.ts.
 function stateFor(doc: string): EditorState {
   return settledState(
     EditorState.create({
@@ -69,11 +69,9 @@ describe("list folding matches lang-markdown's default Block fallback (upstream 
   // Upstream only: stateFor mounts markdown({ base: markdownLanguage }), never
   // quollMarkdownLanguage. lang-markdown's `isList(type)` excludes only the
   // BulletList/OrderedList CONTAINERS — not ListItem. ListItem is a "Block", so
-  // foldNodeProp folds it to the item end. quollMarkdownLanguage OVERRIDES that
-  // node's foldNodeProp (listItemFold, cm/markdown.ts): it returns the same range
-  // for the shapes below, and null for a marker-line table that emits a block
-  // widget — the divergence is pinned against quollMarkdownLanguage() in
-  // cm-fold-blockquote.test.ts.
+  // foldNodeProp folds it to the item end. quollMarkdownLanguage's listItemFold
+  // override reproduces that range for the shapes below; where it diverges is stated
+  // in this file's header comment and pinned in cm-fold-blockquote.test.ts.
   it("a nested-list parent item is foldable (folds the item body)", () => {
     const doc = "- a\n  - b\n  - c\n- d\n";
     const r = foldableAt(doc, 0); // on "- a"
