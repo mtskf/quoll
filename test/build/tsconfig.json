@@ -22,12 +22,37 @@
   // silently unsuppresses (theme-palettes.test.ts documents the measurement).
   //
   // The tripwire against drifting back is no-file-level-ts-nocheck.test.ts, and
-  // it is the AUTHORITY. It scans this directory recursively, decodes each file
-  // the way `sys.readFile` does, and asks TypeScript itself whether the file is
-  // opted out, rather than matching patterns in the text. Which forms and
-  // encodings that covers is stated by its fixtures, not here — this header
-  // asserted coverage three times during its own review and was wrong each
-  // time. Run `pnpm vitest run test/build/no-file-level-ts-nocheck.test.ts`.
+  // it is the AUTHORITY — for this directory and for the rest of the repo. As
+  // of 2026-08-30 it no longer walks a directory: `discoverProjects` enumerates
+  // the repo's tsconfigs, treats the ones no other config `extends` as the
+  // programs (a deliberate heuristic — the test says so, and pins a roster of
+  // the result), builds each of those, and asks the program's own SourceFiles
+  // whether tsc opted them out. That makes containment and byte decoding tsc's
+  // answers rather than the guard's, which is what let two hand-rolled layers be
+  // deleted instead of extended. Run
+  // `pnpm vitest run test/build/no-file-level-ts-nocheck.test.ts`.
+  //
+  // Two gates hold it up, named here by function only: `findConfigFiles` walks
+  // everything outside dot-directories and outside its `SKIP_DIRS`, keeping the
+  // files whose NAME matches its tsconfig pattern, and the "covers every
+  // project `pnpm compile` and `pnpm compile:webview` type-check" cross-check
+  // reads those two scripts, so a config the walk missed but the compile gate
+  // names goes red. What escapes both is a program the walk cannot see that no
+  // compile script names — rooted in a dot-directory, or under a `SKIP_DIRS`
+  // name, or reachable only through a directory SYMLINK (the walk tests
+  // `isDirectory()`, which a link reports false, and the same `SKIP_DIRS`
+  // comment shows that mechanism doing real work here), or called something
+  // the pattern does not match — and invoked directly, say by a workflow step
+  // running `tsc -p .tooling/tsconfig.json`.
+  //
+  // ⛔ Do NOT restate the boundaries here. Where each sits, why the `SKIP_DIRS`
+  // names do not share one authority, why relaxing the dot-directory skip is
+  // not the answer, and which directive forms and encodings the oracle detects
+  // are each stated once next to the code that enforces them — the `SKIP_DIRS`
+  // comment and that file's fixtures. This header re-derived those mechanics in
+  // its own English three review cycles running and shipped a wrong claim every
+  // time; its job is WHY the guard is built this way and WHERE the authority
+  // lives, not to be the authority.
   // ⚠️ Asking tsc is not over-engineering. Four hand-rolled approximations were
   // tried first and every one shipped a silent miss: a block-comment strip that
   // swallowed live directives, a trivia walk that stopped at a shebang, a
@@ -35,13 +60,10 @@
   // oracle a different string than tsc reads. Every miss pointed the same
   // dangerous way — file reported clean, checking actually off.
   //
-  // For a quick eyeball there is
-  // `git grep -ilE '^[[:space:]]*///?[[:space:]]*@ts-nocheck([[:space:]]|:|$)' test/build`,
-  // which should print nothing. It is an aid, not a second authority: it reads
-  // bytes as text, cannot model comment trivia or a shebang, and its whitespace
-  // class depends on the git build and locale. It is anchored per line so this
-  // header's own prose does not match it — the unanchored
-  // `git grep -l '@ts-nocheck' test/build` still hits this file.
+  // There is no grep that substitutes for it. Measured in PR #382: POSIX
+  // `[[:space:]]` coverage varies by grep build and locale, misses U+0085 and
+  // U+200B, and grep can model neither comment trivia, nor a shebang, nor a
+  // UTF-16 file. Run the test.
   //
   // noEmit (inherited): this is a CI gate, not a build step — vitest still runs
   // through its own transpiler. rootDir is pinned to the repo root explicitly
