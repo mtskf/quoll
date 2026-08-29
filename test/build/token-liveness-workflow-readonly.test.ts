@@ -136,29 +136,17 @@ describe("token liveness workflow reports on both tokens", () => {
 
   it("runs the Open VSX probe after a failed Marketplace one, but not after a failed setup", () => {
     // Two conditions on one `if:`, pinned separately because they defend
-    // opposite mistakes and either going missing is a real regression.
-    //
-    // `!cancelled()` — default step behaviour is fail-fast, so without it a dead
-    // VSCODE_PAT skips the Open VSX probe entirely and the run reports one
-    // problem where there may be two. That is the exact shape of the incident
-    // this workflow was written for.
-    //
-    // `steps.publisher.outcome == 'success'` — `!cancelled()` alone is too wide:
-    // it also runs this step after a failed ref guard, install, or publisher
-    // lookup, with `NAMESPACE` empty. The probe would then fail on its argument
-    // rather than on the credential, leaving a red step named "Verify Open VSX
-    // token" that never tested the token — which reads as "both tokens are
-    // dead". Skipping is the honest verdict; the real failure is already red.
+    // opposite mistakes and either going missing is a real regression. WHY each
+    // one is needed lives on the step itself in token-liveness.yml — not
+    // restated here, since two copies is two places to go stale on the next edit.
     const openVsxStep = stepBlock(workflow, OPENVSX_STEP);
     expect(openVsxStep).toMatch(/^\s+if: \$\{\{ !cancelled\(\) &&/m);
     expect(openVsxStep).toMatch(/^\s+if: .* && steps\.publisher\.outcome == 'success' \}\}$/m);
   });
 
   it("fails loudly on an empty secret instead of falling through to a prompt", () => {
-    // With no token in the environment BOTH CLIs fall back to interactive input
-    // (vsce: credential store then `read()`; ovsx: `getPAT` then
-    // `getUserInput`). On a runner that is a hang or an opaque stdin error —
-    // the one failure mode a liveness ping must not have.
+    // WHY these guards exist (both CLIs prompt interactively on an empty token):
+    // see the steps' own comments in token-liveness.yml.
     // Regex rather than toContain: the shell's `${VAR:-}` reads as a JS template
     // placeholder to the linter inside a plain string literal.
     expect(stepBlock(workflow, MARKETPLACE_STEP)).toMatch(/if \[ -z "\$\{VSCE_PAT:-\}" \]; then/);
@@ -168,8 +156,8 @@ describe("token liveness workflow reports on both tokens", () => {
 
 describe("token liveness workflow fails closed", () => {
   it("fails loudly when package.json has no publisher", () => {
-    // The publisher is derived, not hard-coded, so that a rename cannot leave
-    // this job cheerfully verifying a stale identity. Without this guard the
+    // WHY the publisher is derived rather than hard-coded: see the "Resolve
+    // publisher id" step's own comment in token-liveness.yml. Without this guard the
     // derivation degrades instead of failing: an empty id flows into both
     // probes, and what the run reports is an argument error dressed up as a
     // token verdict.
@@ -177,10 +165,8 @@ describe("token liveness workflow fails closed", () => {
   });
 
   it("refuses any ref but the main BRANCH, so a tag named main cannot pass", () => {
-    // Must compare the full ref. `github.ref_name` is the SHORT name of a branch
-    // OR a tag, so it reads `main` for a tag literally named `main` — and
-    // `workflow_dispatch` accepts a tag as its ref, which would hand the publish
-    // tokens to whatever workflow content that tag carries. Pinning the
+    // WHY the full ref and not `github.ref_name` (a tag can be named `main`):
+    // see the guard step's own comment in token-liveness.yml. Pinning the
     // `refs/heads/` prefix is what makes the short-name form fail this test.
     const guard = stepBlock(workflow, "Refuse to run off the default branch");
     expect(guard).toMatch(/if \[ "\$GITHUB_REF" != "refs\/heads\/main" \]; then/);
