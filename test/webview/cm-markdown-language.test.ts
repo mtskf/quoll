@@ -4,7 +4,7 @@
 // src/webview/cm/markdown.ts) against the upstream markdown() wrapper it
 // replaces. The pre-existing suites do NOT cover the direct build:
 // cm-decoration-integration mounts markdown({ base }); cm-fold-delegation
-// likewise. These three contracts are what the refactor must preserve:
+// likewise. These four contracts are what the refactor must preserve:
 //   1. markdownLanguage.isActiveAt is true on the built language — proves the
 //      reused markdownLanguage.data facet (markdownKeymap's commands early-return
 //      without it, since isActiveAt compares the languageDataProp facet identity,
@@ -12,6 +12,8 @@
 //   2. markdownKeymap (Enter/Backspace) is wired + active.
 //   3. the re-implemented headerIndent folds heading lines byte-identically to
 //      upstream markdown({ base }) — a parity oracle across heading fixtures.
+//   4. the re-implemented listItemFold folds list items byte-identically to that
+//      same upstream oracle — its surviving (non-null) range.
 // NOTE: the built-in pasteURLAsLink is deliberately NOT part of this language
 // (dropped in markdown.ts); Quoll's own paste-URL-over-selection handler lives in
 // src/webview/cm/paste/url-link-paste.ts and is covered by cm-paste-url-link.test.ts.
@@ -47,10 +49,13 @@ function mount(doc: string, anchor: number, selEnd = anchor): EditorView {
   // commands exercised below (lang-markdown's insertNewlineContinueMarkupCommand and
   // deleteMarkupBackward) read that snapshot via `syntaxTree(state)`, which a bare
   // `ensureSyntaxTree` leaves truncated — see helpers/settled-state.ts. `forceParsing`
-  // is its view-carrying twin. Asserted, not ignored — a false return means the 5s
-  // budget never reached doc end, which must read as a parse-budget failure, not a
-  // broken keymap.
-  expect(forceParsing(view, view.state.doc.length, 5000)).toBe(true);
+  // is its view-carrying twin, and like `ensureSyntaxTree` it collapses "no language
+  // attached" and "budget exhausted" into one falsy result — so this assertion's
+  // failure is only a budget failure because mount() always attaches quollLang.
+  expect(
+    forceParsing(view, view.state.doc.length, 5000),
+    `mount: parse did not complete within 5s for a ${view.state.doc.length}-code-unit document`
+  ).toBe(true);
   return view;
 }
 
@@ -224,6 +229,32 @@ describe("re-implemented headerIndent folds byte-identically to upstream", () =>
     expect(foldHeadingRange(quollLang, body, bodyAt)).toBeNull();
     expect(foldHeadingRange(upstreamLang, body, bodyAt)).toBeNull();
   });
+});
+
+describe("re-implemented listItemFold folds list items byte-identically to upstream", () => {
+  // The parity oracle for listItemFold's SURVIVING range (cm/markdown.ts) — the arm
+  // cm-fold-blockquote.test.ts leaves uncompared, since it asserts only null /
+  // not-null. Same construction as the headerIndent oracle above: settled state,
+  // foldable() on the first line, byte-identical from/to against upstream.
+  function foldListRange(lang: Extension, doc: string) {
+    const state = settledState(EditorState.create({ doc, extensions: [lang, codeFolding()] }));
+    const line = state.doc.line(1);
+    return foldable(state, line.from, line.to);
+  }
+
+  const FIXTURES = [
+    "- a\n  - b\n  - c\n- d\n", // nested children
+    "- item line one\n  item line two\n  item line three\n- next\n", // lazy continuation lines
+    "1. one\n   cont\n2. two\n", // ordered marker
+  ];
+
+  for (const doc of FIXTURES) {
+    it(`matches upstream fold range for ${JSON.stringify(doc.slice(0, 14))}…`, () => {
+      const q = foldListRange(quollLang, doc);
+      expect(q).not.toBeNull(); // list items must stay foldable...
+      expect(q).toEqual(foldListRange(upstreamLang, doc)); // ...with upstream's from/to.
+    });
+  }
 });
 
 describe("quollMarkdownLanguage registers the ==highlight== inline mark", () => {

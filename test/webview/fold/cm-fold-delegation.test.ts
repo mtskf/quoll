@@ -6,11 +6,13 @@
 // List folds are NOT delegated wholesale: nonFoldableBlocks registers
 // `ListItem: listItemFold` (cm/markdown.ts), which reproduces lang-markdown's default
 // Block range EXCEPT when the item's first content child is a GFM table that starts on
-// the marker line AND emits a block widget — there it returns null. That override, and
-// the Table subtraction (tables fold in this upstream oracle but NOT in
-// quollMarkdownLanguage), are pinned against quollMarkdownLanguage() itself in
-// cm-fold-blockquote.test.ts, not here. No view is mounted, so no happy-dom pragma is
-// needed.
+// the marker line AND emits a block widget — there it returns null. Both arms are
+// pinned against quollMarkdownLanguage() itself, not here: the null arm by
+// cm-fold-blockquote.test.ts (along with the Table subtraction — tables fold in this
+// upstream oracle but NOT in quollMarkdownLanguage), the surviving range by
+// cm-markdown-language.test.ts's "re-implemented listItemFold folds list items
+// byte-identically to upstream" describe. No view is mounted, so no happy-dom pragma
+// is needed.
 
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
 import { codeFolding, foldable, foldEffect, foldedRanges } from "@codemirror/language";
@@ -70,8 +72,9 @@ describe("list folding matches lang-markdown's default Block fallback (upstream 
   // quollMarkdownLanguage. lang-markdown's `isList(type)` excludes only the
   // BulletList/OrderedList CONTAINERS — not ListItem. ListItem is a "Block", so
   // foldNodeProp folds it to the item end. quollMarkdownLanguage's listItemFold
-  // override reproduces that range for the shapes below; where it diverges is stated
-  // in this file's header comment and pinned in cm-fold-blockquote.test.ts.
+  // override reproduces that range — pinned against this same upstream oracle in
+  // cm-markdown-language.test.ts — except for the marker-line table shape stated in
+  // this file's header comment, which is pinned in cm-fold-blockquote.test.ts.
   it("a nested-list parent item is foldable (folds the item body)", () => {
     const doc = "- a\n  - b\n  - c\n- d\n";
     const r = foldableAt(doc, 0); // on "- a"
