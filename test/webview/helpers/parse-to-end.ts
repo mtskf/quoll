@@ -1,6 +1,8 @@
 import { ensureSyntaxTree, language } from "@codemirror/language";
 import type { EditorState } from "@codemirror/state";
 
+type ParseCaller = "fullTree" | "settledState";
+
 /**
  * Shared parse step behind `fullTree()` and `settledState()`: advance the state's
  * parse CONTEXT to the end of the document and return the resulting tree, or
@@ -15,7 +17,7 @@ import type { EditorState } from "@codemirror/state";
  *
  *   (A) the state has no language extension at all — returns in 0ms, entirely
  *       unrelated to elapsed time or CPU load;
- *   (B) the 5s budget really was exhausted.
+ *   (B) the parse budget really was exhausted.
  *
  * A message that tells story (B) for case (A) sends the reader chasing CPU
  * contention for what is a one-line extension list fix, so we test for a
@@ -30,21 +32,28 @@ import type { EditorState } from "@codemirror/state";
  * is what `enables` it, making the two conditions the same condition.
  *
  * `caller` is the helper name to prefix, so the thrown message still points at
- * the helper the test actually called.
+ * the helper the test actually called. It is a closed union rather than `string`
+ * so a new helper routing through here has to ADD its own label — a copy-pasted
+ * body that keeps the sibling's label is a compile error, not a message that
+ * misattributes the failure.
+ *
+ * `budgetMs` is a parameter rather than a literal so the timeout arm can be
+ * driven without a five-second hang, and the message quotes the value it was
+ * actually given rather than a second copy of the default.
  *
  * Lengths in the messages are UTF-16 code units (what `state.doc.length`
  * counts), not bytes.
  */
-export function parseToEnd(state: EditorState, caller: string) {
+export function parseToEnd(state: EditorState, caller: ParseCaller, budgetMs = 5_000) {
   if (state.facet(language) === null) {
     throw new Error(
       `${caller}: state has no language configured — no Language extension is attached, so there is nothing to parse`
     );
   }
-  const tree = ensureSyntaxTree(state, state.doc.length, 5_000);
+  const tree = ensureSyntaxTree(state, state.doc.length, budgetMs);
   if (tree === null) {
     throw new Error(
-      `${caller}: parse did not complete within 5s for a ${state.doc.length}-code-unit document`
+      `${caller}: parse did not complete within ${budgetMs}ms for a ${state.doc.length}-code-unit document`
     );
   }
   return tree;

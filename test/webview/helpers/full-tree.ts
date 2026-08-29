@@ -14,13 +14,13 @@ import { parseToEnd } from "./parse-to-end.js";
  * run alone.
  *
  * `parseToEnd` (./parse-to-end.ts) advances the parse to the end of the
- * document within 5s. For the sub-KB fixtures these provider tests use that is
- * effectively unbounded, so it always returns a complete tree. If the parse does
- * not finish we THROW rather than silently fall back to a partial tree: a
- * "fullTree" that quietly returned an incomplete tree would resurrect the exact
- * flake this helper exists to kill. Tests that DELIBERATELY tolerate a partial
- * tree (e.g. the viewport ratio assertion over a 1MB doc) keep their own
- * `?? syntaxTree(state)` fallback and must NOT use this helper.
+ * document under a bounded time budget. For the sub-KB fixtures these provider
+ * tests use that is effectively unbounded, so it always returns a complete tree.
+ * If the parse does not finish we THROW rather than silently fall back to a
+ * partial tree: a "fullTree" that quietly returned an incomplete tree would
+ * resurrect the exact flake this helper exists to kill. Tests that DELIBERATELY
+ * tolerate a partial tree (e.g. the viewport ratio assertion over a 1MB doc)
+ * keep their own `?? syntaxTree(state)` fallback and must NOT use this helper.
  *
  * The throw lives in `parseToEnd` so that this helper and `settledState()` —
  * documented below as a matched pair — report the same two `null` causes the
@@ -34,5 +34,19 @@ import { parseToEnd } from "./parse-to-end.js";
  * returned tree, use `settledState()` in ./settled-state.ts instead.
  */
 export function fullTree(state: EditorState) {
-  return parseToEnd(state, "fullTree");
+  const tree = parseToEnd(state, "fullTree");
+  // `ensureSyntaxTree` decides success from the parse CONTEXT's `treeLen`
+  // (`stoppedAt ?? doc.length`), not from the tree it hands back, so a non-null
+  // return is not by itself evidence that the tree reaches the doc end.
+  //
+  // ⚠️ DEFENSIVE, not a live failure mode: no conformant Lezer parser reaches
+  // this throw. ./settled-state.test.ts drives it with a deliberately
+  // non-conformant stub, which pins that it fires and reports the coverage
+  // numbers — not that anything in the tree today can produce a short tree.
+  if (tree.length < state.doc.length) {
+    throw new Error(
+      `fullTree: parse reported success but the tree spans ${tree.length} of ${state.doc.length} code units`
+    );
+  }
+  return tree;
 }
