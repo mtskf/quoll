@@ -1,5 +1,6 @@
-import { ensureSyntaxTree, syntaxTree } from "@codemirror/language";
+import { syntaxTree } from "@codemirror/language";
 import type { EditorState } from "@codemirror/state";
+import { parseToEnd } from "./parse-to-end.js";
 
 /**
  * The view-free twin of `forceParsing`: return an `EditorState` whose LANGUAGE
@@ -29,18 +30,25 @@ import type { EditorState } from "@codemirror/state";
  * We THROW rather than return a partial state: a "settled" state that quietly
  * carried a truncated snapshot would resurrect the exact flake this helper
  * exists to kill.
+ *
+ * The return type is a plain `EditorState` and does NOT distinguish settled from
+ * unsettled. A brand type would label what this function produces, but it could
+ * not gate a single consumer: the consumer is CodeMirror's
+ * `foldable(state: EditorState, …)`, so there is no seam at which a branded type
+ * could be REQUIRED — the only callers that could get it wrong build their state
+ * inline and never pass through such a parameter. The runtime throws are the
+ * enforcement; the type is not.
+ *
+ * The truncated-snapshot throw below, and the no-language throw `parseToEnd`
+ * raises for this helper, are pinned by ./settled-state.test.ts.
  */
 export function settledState(state: EditorState): EditorState {
-  if (ensureSyntaxTree(state, state.doc.length, 5_000) === null) {
-    throw new Error(
-      `settledState: parse did not complete within 5s for a ${state.doc.length}-byte document`
-    );
-  }
+  parseToEnd(state, "settledState");
   const settled = state.update({}).state;
   const covered = syntaxTree(settled).length;
   if (covered < settled.doc.length) {
     throw new Error(
-      `settledState: snapshot still truncated (${covered} of ${settled.doc.length} bytes) after settling`
+      `settledState: snapshot still truncated (${covered} of ${settled.doc.length} code units) after settling`
     );
   }
   return settled;
