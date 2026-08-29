@@ -773,10 +773,15 @@ describe("the sweep enumerates the repo's tsc programs, not a fixed directory", 
       const discovered = discoverProjects(root);
       expect(discovered.map((p) => relative(root, p))).toEqual(["tsconfig.json"]);
       // Composed the way the suite body composes it, so this measures the real
-      // path rather than a parallel one. Non-vacuity, measured: rename the
-      // fixture's `.scratch` to `scratch` and this goes red with
-      // `["scratch/b.ts"]` against `[]` — the stray project is discovered,
-      // therefore swept, therefore its directive is reported.
+      // path rather than a parallel one. Non-vacuity, measured — and it takes
+      // TWO edits, not one, because the assertion above guards this one:
+      // rename the fixture's `.scratch` to `scratch` AND widen the discovery
+      // expectation above to `["scratch/tsconfig.json", "tsconfig.json"]`.
+      // Then this goes red with `["scratch/b.ts"]` against `[]` — the stray
+      // project is discovered, therefore swept, therefore its directive is
+      // reported. The rename ALONE reddens the discovery assertion first
+      // (`['scratch/tsconfig.json', …(1)]` against `['tsconfig.json']`) and
+      // this line is never reached, so it proves nothing about this line.
       //
       // ⚠️ Deleting the dot-directory skip in `findConfigFiles` is NOT the way
       // to check that; measured, it does not redden this assertion but takes
