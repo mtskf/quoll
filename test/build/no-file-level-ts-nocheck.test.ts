@@ -1,13 +1,16 @@
-// Tripwire for the file-level type-check opt-out in this directory.
+// Tripwire for the file-level type-check opt-out, repo-wide.
 //
-// `test/build/tsconfig.json` type-checks these suites under `pnpm compile`, but
-// a file-level nocheck directive switches its whole file off — so a suite that
-// reaches for one to silence a single untyped `scripts/*.mjs` import loses
-// enforcement everywhere else in the file, and any type-level assertion it
-// carries goes permanently vacuous while `pnpm compile`, `pnpm test` and CI all
-// stay green. Five suites lived in exactly that state between the tsconfig
-// landing (2026-08-22) and the swap to line-scoped directives (2026-08-28);
-// nothing but this test stops them drifting back.
+// It lives in test/build because that is where the trap was first sprung, but it
+// sweeps every tsc program in the repo (see `discoverProjects`). It answers one
+// question — "does tsc consider this file opted out?" — for the files a program
+// CONTAINS. A file in no program is unchecked by a different mechanism and is
+// out of this guard's reach. A file-level nocheck directive switches its whole
+// file off, so a file that reaches for one loses enforcement everywhere else in
+// it and any type-level assertion it carries goes permanently vacuous while
+// `pnpm compile`, `pnpm test` and CI all stay green. Five suites in this
+// directory lived in exactly that state between the tsconfig landing
+// (2026-08-22) and the swap to line-scoped directives (2026-08-28); nothing but
+// this test stops them, or any other file in the repo, drifting back.
 //
 // The supported shape is a line-scoped `@ts-expect-error` on the import's
 // module specifier — it self-verifies (goes red the day the module gains types)
@@ -66,14 +69,15 @@ const resolveCliProjectTarget = (target: string): string =>
 // The rule is: a config that another config extends is treated as an options
 // carrier, not a program.
 //
-// ⚠️ That is a HEURISTIC, not a theorem, and the plan says so rather than
+// ⚠️ That is a HEURISTIC, not a theorem, and this comment says so rather than
 // pretending otherwise: a config can legitimately be both a base for one
 // project and a project someone runs `tsc -p` on. Such a config would be
 // excluded here and its files would go unswept — except that both ways of
 // noticing are loud, by construction:
 //   - if it is wired into `pnpm compile` / `compile:webview`, the cross-check
 //     below goes red (it reads the scripts, not this classification);
-//   - otherwise it drops out of the roster assertion above, which goes red.
+//   - otherwise it drops out of the roster assertion below ("registers every
+//     tsc program in the repo"), which goes red.
 // Both are loud rather than silent, which is the property being bought here.
 // Note what is NOT claimed: a red roster CAN be made green by deleting the
 // entry, so this is a prompt for a human to look, not a mechanism that forces
@@ -112,7 +116,7 @@ const discoverProjects = (root: string): string[] => {
 //
 // Measured on TS 5.9.3 under this repo's strictness — it would have taken
 // `pnpm compile` down. Holding the source file from the start is both the fix
-// and the smaller design: one read, both answers, and no cast anywhere.
+// and the smaller design: one read, both answers, and no cast on this route.
 const readProject = (configPath: string) => {
   // Read the bytes ourselves so an unreadable config is OUR error with OUR
   // filename in it. `ts.readJsonConfigFile` swallows a failed read and returns
@@ -121,6 +125,12 @@ const readProject = (configPath: string) => {
   // `TypeError: Cannot read properties of undefined (reading '0')` — loud, but
   // it names nothing. Reachable in practice: a config deleted or chmodded
   // between `findConfigFiles` listing it and this line.
+  //
+  // The message stays at "could not be read" on purpose: `ts.sys.readFile`
+  // wraps a bare catch and returns `undefined` for missing, is-a-directory and
+  // chmod-000 alike (all three measured), so naming a cause here would be a
+  // guess. An EMPTY config is not this branch at all — it reads as `""`, parses
+  // as a valid config, and resolves the default include from its own directory.
   //
   // Reading it ourselves does not change how the bytes are decoded:
   // `ts.sys.readFile` IS the reader `readJsonConfigFile` would have called, so
@@ -151,15 +161,17 @@ const readProject = (configPath: string) => {
   // partial file list. `tsc -p` on the same file exits non-zero. That is the
   // silent-pass direction, in the one place the guard trusts a config.
   //
-  // `getConfigFileParsingDiagnostics` is public (typescript.d.ts:9582) and is
-  // defined as the concatenation tsc's own program construction reports:
-  // the source file's parse diagnostics plus `errors`. Asking it is asking tsc.
+  // `getConfigFileParsingDiagnostics` is part of typescript's public `.d.ts`
+  // (unlike `checkJsDirective` below) and is defined as the concatenation tsc's
+  // own program construction reports: the source file's parse diagnostics plus
+  // `errors`. Asking it is asking tsc.
   //
   // Measured to throw on: truncated JSON (TS1005), garbage JSON (TS1005 /
   // TS1327 / TS1328 / TS1136), self-circular `extends` (TS18000), a missing
   // `extends` target (TS5083), an unknown compiler option (TS5023), and an
   // `include` that matches nothing (TS18003) — that last one being a second,
-  // independent guard on the per-project non-empty assertion in Task 1.
+  // independent guard on the "gets a non-empty program from every project it
+  // discovered" assertion below.
   const fatal = ts
     .getConfigFileParsingDiagnostics(parsed)
     .filter((d) => d.category === ts.DiagnosticCategory.Error);
@@ -187,7 +199,7 @@ const readProject = (configPath: string) => {
 //
 // Every test here is on PATH SEGMENTS of the relative path, because each of the
 // string-level shortcuts has a measured counter-example:
-//   `startsWith(`${root}/`)`   matches `/repo-backup` under root `/repo`
+//   `startsWith(root)`          matches `/repo-backup` under root `/repo`
 //   `rel.startsWith("..")`      matches a real subdirectory named `..generated`
 //   `.includes("/node_modules/")` hard-codes the separator
 // The first two reject or accept the wrong file silently, which is the failure
@@ -232,9 +244,12 @@ const repoRelative = (root: string, fileName: string): string | null => {
 // it — today only the assertion shapes at the fixture call sites stand in the
 // way, and a negative fixture (`toEqual([])`) would be vacuously green.
 //
-// ⚠️ Callers pass the root spelled the way the config path was spelled — see
-// the measured note in Task 2 Step 4. tsc does not canonicalise, so
-// `realpathSync`-ing one side and not the other silently empties the sweep.
+// ⚠️ Callers pass the root spelled the way the config path was spelled. tsc
+// does not canonicalise the paths it derives from a config's own location, so
+// `realpathSync`-ing the root while leaving `source.fileName` as tsc spelled it
+// makes every `relative()` escape the root and `repoRelative` reject the whole
+// program — a silently EMPTY sweep. Measured on macOS, where `mkdtemp` hands
+// back `/var/folders/…` for a real `/private/var/folders/…`.
 const sweepProject = (configPath: string, root: string) => {
   const { parsed } = readProject(configPath);
   const program = ts.createProgram({ rootNames: parsed.fileNames, options: parsed.options });
@@ -289,8 +304,9 @@ const mergeSweeps = (sweeps: Sweep[]) => {
 // shipped: a whole-file block-comment strip that swallowed live directives, a
 // leading-trivia walk that stopped at a shebang, and a whitespace class that
 // missed U+0085 and U+200B. (The tsconfig header counts four misses because it
-// includes the read layer below, which is a different mistake in the same
-// shape.) Every fix asserted the next approximation was complete.
+// also counts the read layer this PR deleted — a different mistake in the same
+// shape; the encoding fixtures below are what replaced it.)
+// Every fix asserted the next approximation was complete.
 // None were, and the failure direction is always the dangerous one — a file
 // reported clean while tsc has switched checking off.
 //
@@ -508,10 +524,11 @@ describe("the sweep follows the program, not a filename pattern", () => {
 
   it("finds a file the include glob never matched, reached only by import", () => {
     // The reason a program is the containment oracle and a glob is not:
-    // `test/extension/tsconfig.unit.json` includes four paths and reaches
-    // `src/shared` transitively. A `.mts` pulled in by an explicit specifier is
-    // a program input that `**/*.ts` does not match — the old collector had to
-    // guess a wider extension set to cover it.
+    // `test/extension/tsconfig.unit.json` includes four paths, none of which
+    // matches `src/extension` or `src/markdown` — the program reaches those only
+    // through `types-equality.test.ts`'s imports. A `.mts` pulled in by an
+    // explicit specifier is a program input that `**/*.ts` does not match
+    // either — the old collector had to guess a wider extension set to cover it.
     writeProject(["entry.ts"]);
     writeFileSync(join(root, "entry.ts"), 'export { helper } from "./helper.mjs";\n');
     writeFileSync(join(root, "helper.mts"), "// @ts-nocheck\nexport const helper = 1;\n");
@@ -531,8 +548,8 @@ describe("the sweep follows the program, not a filename pattern", () => {
     // (TS1005), garbage JSON (TS1005/TS1327/TS1328/TS1136), self-circular
     // `extends` (TS18000), a missing `extends` target (TS5083), an unknown
     // compiler option (TS5023), and an `include` that matches nothing (TS18003).
-    // The last is a second, independent guard on the per-project non-empty
-    // assertion in Task 1.
+    // The last is a second, independent guard on the "gets a non-empty program
+    // from every project it discovered" assertion below.
     //
     // This is also what replaces `getParsedCommandLineOfConfigFile`'s
     // `onUnRecoverableConfigFileDiagnostic` hook. That hook's job — do not let
@@ -657,7 +674,8 @@ describe("the sweep enumerates the repo's tsc programs, not a fixed directory", 
     // (Reviewed and kept deliberately: an auto-discovered set with no roster
     // would silently accept a config that discovery misclassified, which is the
     // failure direction this whole tripwire exists to close. The cost is a
-    // one-line edit roughly once a year — seven configs in the repo's life.)
+    // one-line edit per new tsc program — seven of them so far, plus the
+    // options base discovery leaves out.)
     expect(PROJECTS.map((p) => relative(REPO_ROOT, p))).toEqual([
       "src/webview/tsconfig.json",
       "test/build/tsconfig.json",
@@ -753,8 +771,9 @@ describe("no file in any tsc program switches its whole file off", () => {
   // Built once, in the describe body, and shared by all four assertions.
   //
   // Two reasons this is not a detail. (a) Cost: each project is a full
-  // `ts.Program`, ~150–400 ms; re-deriving per `it` would build all seven
-  // twice. (b) Flake: vitest's default `testTimeout` is 5000 ms and this repo
+  // `ts.Program`, ~150–400 ms; re-deriving per `it` would build all seven once
+  // per assertion — four times over. (b) Flake: vitest's default `testTimeout`
+  // is 5000 ms and this repo
   // deliberately runs uncapped parallel workers (see vitest.config.ts's note on
   // the ruled-out load-flake), so a multi-second body inside an `it` is exactly
   // the shape that goes intermittently red under contention. Collection-time
