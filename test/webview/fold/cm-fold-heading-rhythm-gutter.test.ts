@@ -1,7 +1,6 @@
 // @vitest-environment happy-dom
 
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
-import { forceParsing } from "@codemirror/language";
 import { EditorSelection, EditorState, StateEffect, StateField } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import { afterEach, describe, expect, it } from "vitest";
@@ -10,6 +9,7 @@ import {
   headingRhythmFoldGutterLineClass,
   quollFolding,
 } from "../../../src/webview/cm/fold/index.js";
+import { settledView } from "../helpers/settled-view.js";
 
 let view: EditorView | null = null;
 afterEach(() => {
@@ -31,7 +31,7 @@ function mountDoc(doc: string, extra: readonly unknown[] = []): EditorView {
   // (forceParsing dispatches an empty tx if the parse advanced). ensureSyntaxTree
   // alone completes the parse CONTEXT but not the field snapshot, so under load the
   // mount-time field could be built over a truncated init tree. See settleParse.
-  expect(forceParsing(v, v.state.doc.length, 5000)).toBe(true);
+  settledView(v);
   return v;
 }
 
@@ -50,10 +50,8 @@ function mountDoc(doc: string, extra: readonly unknown[] = []): EditorView {
 // common, unloaded case), so the bounded recompute path stays exercised there while
 // a red now strictly means a bounded-vs-full contract breach, not a parse-timing race.
 function settleParse(v: EditorView): void {
-  // Assert convergence directly: forceParsing returns false if the 5000ms budget
-  // fails to reach doc end. A non-converged settle would otherwise surface as a
-  // confusing "bounded ≠ full" mismatch rather than a clear parse-budget failure.
-  expect(forceParsing(v, v.state.doc.length, 5000)).toBe(true);
+  // settledView throws on non-convergence — the assertion this used to make inline.
+  settledView(v);
 }
 
 // A contributor that churns the facet reference every transaction (mimics

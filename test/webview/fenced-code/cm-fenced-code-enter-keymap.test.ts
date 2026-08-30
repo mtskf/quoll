@@ -14,18 +14,14 @@ vi.mock("@codemirror/language", async (importActual) => {
   return { ...actual, ensureSyntaxTree: vi.fn(actual.ensureSyntaxTree) };
 });
 
-import { ensureSyntaxTree, forceParsing } from "@codemirror/language";
+import { ensureSyntaxTree } from "@codemirror/language";
 
 import {
   autoCloseFenceOnEnter,
   fencedCodeEnterKeymap,
 } from "../../../src/webview/cm/fenced-code/fenced-code-enter-keymap.js";
 import { quollMarkdownLanguage } from "../../../src/webview/cm/markdown.js";
-
-function forceParse(view: EditorView): EditorView {
-  forceParsing(view, view.state.doc.length, 5_000);
-  return view;
-}
+import { settledView } from "../helpers/settled-view.js";
 
 function mount(
   doc: string,
@@ -44,7 +40,7 @@ function mount(
       ...(opts.withKeymap ? [fencedCodeEnterKeymap()] : []),
     ],
   });
-  return forceParse(new EditorView({ state, parent }));
+  return settledView(new EditorView({ state, parent }));
 }
 
 /** Cursor at the END of 1-based line `n`. */

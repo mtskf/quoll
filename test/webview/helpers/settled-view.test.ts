@@ -12,7 +12,7 @@ import { EditorState, type Extension } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import { describe, expect, it } from "vitest";
 import { settledView } from "./settled-view.js";
-import { neverFinishingLanguage, shortTreeLanguage, STUB_TREE_LENGTH } from "./stub-parsers.js";
+import { neverFinishingLanguage, STUB_TREE_LENGTH, shortTreeLanguage } from "./stub-parsers.js";
 
 function mount(doc: string, extensions: Extension[] = [markdown()]): EditorView {
   const parent = document.createElement("div");

@@ -1,7 +1,6 @@
 // @vitest-environment happy-dom
 
 import { history, undo } from "@codemirror/commands";
-import { forceParsing } from "@codemirror/language";
 import { EditorSelection, EditorState, type SelectionRange } from "@codemirror/state";
 import { EditorView, runScopeHandlers } from "@codemirror/view";
 import { describe, expect, it } from "vitest";
@@ -11,12 +10,7 @@ import {
   listContinuationKeymap,
 } from "../../../src/webview/cm/list/list-continuation-keymap.js";
 import { quollMarkdownLanguage } from "../../../src/webview/cm/markdown.js";
-
-function forceParse(view: EditorView): EditorView {
-  // Force a full parse so the syntax tree is available synchronously in tests.
-  forceParsing(view, view.state.doc.length, 5_000);
-  return view;
-}
+import { settledView } from "../helpers/settled-view.js";
 
 function mount(
   doc: string,
@@ -38,7 +32,7 @@ function mount(
       ...(opts.withKeymap ? [listContinuationKeymap()] : []),
     ],
   });
-  return forceParse(new EditorView({ state, parent }));
+  return settledView(new EditorView({ state, parent }));
 }
 
 /** Caret at the given absolute offset. */

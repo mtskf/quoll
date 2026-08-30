@@ -9,7 +9,7 @@ import { describe, expect, it } from "vitest";
 import { fullTree } from "./full-tree.js";
 import { parseToEnd } from "./parse-to-end.js";
 import { settledState } from "./settled-state.js";
-import { neverFinishingLanguage, shortTreeLanguage, STUB_TREE_LENGTH } from "./stub-parsers.js";
+import { neverFinishingLanguage, STUB_TREE_LENGTH, shortTreeLanguage } from "./stub-parsers.js";
 
 describe("a state with no language is reported as such, not as a timeout", () => {
   // `ensureSyntaxTree` returns `null` in 0ms when no Language extension is

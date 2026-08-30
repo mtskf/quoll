@@ -1,7 +1,6 @@
 // @vitest-environment happy-dom
 import { defaultKeymap } from "@codemirror/commands";
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
-import { forceParsing } from "@codemirror/language";
 import { EditorSelection, EditorState, type SelectionRange, Transaction } from "@codemirror/state";
 import { type DecorationSet, EditorView, keymap, runScopeHandlers } from "@codemirror/view";
 import { describe, expect, it } from "vitest";
@@ -13,6 +12,7 @@ import {
 } from "../../../src/webview/cm/decorations/block-zone-arrow-keymap.js";
 import { quollBlockReplaceZones } from "../../../src/webview/cm/decorations/index.js";
 import { tableBlockField } from "../../../src/webview/cm/table/index.js";
+import { settledView } from "../helpers/settled-view.js";
 
 function rangesOf(set: DecorationSet): Array<{ from: number; to: number }> {
   const out: Array<{ from: number; to: number }> = [];
@@ -33,12 +33,8 @@ function rangesOf(set: DecorationSet): Array<{ from: number; to: number }> {
 // same "force AND publish" mechanism the production resync path uses
 // (CellEditorController.revalidateOrResync). ensureSyntaxTree / fullTree alone
 // would NOT fix it: they advance the parse but never republish into the field's
-// snapshot. See LEARNING.md "syntaxTree(state) は LAZY".
-function forceParse(view: EditorView): EditorView {
-  forceParsing(view, view.state.doc.length, 5_000);
-  return view;
-}
-
+// snapshot. See LEARNING.md "syntaxTree(state) は LAZY". settledView wraps that
+// call and throws instead of returning a discardable boolean.
 function mount(doc: string, selection: EditorSelection | SelectionRange): EditorView {
   const parent = document.createElement("div");
   document.body.appendChild(parent);
@@ -51,7 +47,7 @@ function mount(doc: string, selection: EditorSelection | SelectionRange): Editor
       tableBlockField,
     ],
   });
-  return forceParse(new EditorView({ state, parent }));
+  return settledView(new EditorView({ state, parent }));
 }
 
 const TABLE = "| H1 | H2 |\n| -- | -- |\n| a1 | a2 |";
@@ -174,7 +170,7 @@ describe("blockZoneArrowDown", () => {
         observer,
       ],
     });
-    const view = forceParse(new EditorView({ state, parent }));
+    const view = settledView(new EditorView({ state, parent }));
     try {
       expect(blockZoneArrowDown(view)).toBe(true);
       expect(dispatched).toContain("select");
@@ -311,7 +307,7 @@ describe("blockZoneArrowKeymap — precedence vs defaultKeymap", () => {
         blockZoneArrowKeymap(),
       ],
     });
-    return forceParse(new EditorView({ state, parent }));
+    return settledView(new EditorView({ state, parent }));
   }
 
   it("ArrowDown dispatched via runScopeHandlers lands caret at TABLE_FROM (Prec.high wins over defaultKeymap)", () => {

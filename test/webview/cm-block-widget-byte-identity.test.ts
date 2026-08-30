@@ -36,7 +36,7 @@
 // comparison is not vacuous.
 
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
-import { forceParsing, syntaxTreeAvailable } from "@codemirror/language";
+import { syntaxTreeAvailable } from "@codemirror/language";
 import {
   EditorSelection,
   EditorState,
@@ -58,6 +58,7 @@ import {
   tableBlockField,
   tableSkeletonField,
 } from "../../src/webview/cm/table/index.js";
+import { settledView } from "./helpers/settled-view.js";
 
 // ── shared slot + equivalence machinery (mirrors cm-block-widget-bounded) ──────
 
@@ -162,7 +163,7 @@ function tableFullSlots(doc: string, selection: EditorSelection): Slot[] {
     parent,
   });
   try {
-    forceParsing(view, view.state.doc.length, 10_000);
+    settledView(view, 10_000);
     return slots(view.state.field(tableBlockField));
   } finally {
     view.destroy();
@@ -177,7 +178,7 @@ function checkTableEquivalence(initial: string, edits: Edit[]): void {
     parent,
   });
   try {
-    forceParsing(view, view.state.doc.length, 10_000);
+    settledView(view, 10_000);
     // create() correctness on the fully-parsed initial doc.
     assertEquivalent(
       slots(view.state.field(tableBlockField)),
@@ -203,7 +204,7 @@ function checkTableEquivalence(initial: string, edits: Edit[]): void {
         );
         assertTableByteAnchored(view.state);
       }
-      forceParsing(view, len, 10_000); // publish → converge (also covers the G2 path)
+      settledView(view, 10_000); // publish → converge (also covers the G2 path)
       assertEquivalent(
         slots(view.state.field(tableBlockField)),
         tableFullSlots(view.state.doc.toString(), view.state.selection)
@@ -308,7 +309,7 @@ describe("tableBlockField byte-identity: bounded ≡ full", () => {
       parent,
     });
     try {
-      forceParsing(view, view.state.doc.length, 10_000);
+      settledView(view, 10_000);
       view.dispatch({
         changes: { from: 0, insert: "x" }, // edit OUTSIDE both tables
         selection: EditorSelection.cursor(1),
@@ -507,7 +508,7 @@ describe("CRLF-seeded byte-identity: line-ending-aware widget anchors", () => {
       parent,
     });
     try {
-      forceParsing(view, view.state.doc.length, 10_000);
+      settledView(view, 10_000);
       const st = view.state;
       const emitted = slots(st.field(tableBlockField));
       expect(emitted.length).toBe(1); // the table renders (guards against vacuity)

@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
-import { forceParsing, syntaxTree } from "@codemirror/language";
+import { syntaxTree } from "@codemirror/language";
 import { EditorSelection, EditorState, type SelectionRange } from "@codemirror/state";
 import { EditorView, runScopeHandlers } from "@codemirror/view";
 import { describe, expect, it } from "vitest";
@@ -11,11 +11,7 @@ import {
   listIndentKeymap,
   outdentListItem,
 } from "../../../src/webview/cm/list/list-indent-keymap.js";
-
-function forceParse(view: EditorView): EditorView {
-  forceParsing(view, view.state.doc.length, 5_000);
-  return view;
-}
+import { settledView } from "../helpers/settled-view.js";
 
 function mount(
   doc: string,
@@ -33,7 +29,7 @@ function mount(
       ...(opts.tabSize === undefined ? [] : [EditorState.tabSize.of(opts.tabSize)]),
     ],
   });
-  return forceParse(new EditorView({ state, parent }));
+  return settledView(new EditorView({ state, parent }));
 }
 
 function at(view: EditorView, n: number, col = 0): EditorSelection | SelectionRange {
@@ -45,7 +41,7 @@ function at(view: EditorView, n: number, col = 0): EditorSelection | SelectionRa
 // the item's nesting depth. Re-parses first (the command's dispatch changed the
 // doc). Pins ACTUAL structural nesting, not just the whitespace (Codex #2).
 function itemDepth(view: EditorView, n: number): number {
-  forceParsing(view, view.state.doc.length, 5_000);
+  settledView(view);
   const line = view.state.doc.line(n);
   const wsLen = line.text.length - line.text.trimStart().length;
   let node: ReturnType<typeof syntaxTree>["topNode"] | null = syntaxTree(view.state).resolveInner(
@@ -663,7 +659,7 @@ describe("listIndentKeymap — registration + precedence", () => {
       selection,
       extensions: [markdown({ base: markdownLanguage }), listIndentKeymap()],
     });
-    return forceParse(new EditorView({ state, parent }));
+    return settledView(new EditorView({ state, parent }));
   }
 
   it("Tab via runScopeHandlers nests the item (keymap wires Tab → indentListItem)", () => {
