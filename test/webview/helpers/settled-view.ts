@@ -86,15 +86,7 @@ import { assertHasLanguage, timeoutMessage, truncatedSnapshotMessage } from "./p
  * All three throws are pinned by ./settled-view.test.ts.
  */
 export function settledView(view: EditorView, budgetMs = 5_000): EditorView {
-  assertHasLanguage(view.state, "settledView");
-  if (!forceParsing(view, view.state.doc.length, budgetMs)) {
-    throw new Error(timeoutMessage("settledView", budgetMs, view.state.doc.length));
-  }
-  const covered = syntaxTree(view.state).length;
-  if (covered < view.state.doc.length) {
-    throw new Error(truncatedSnapshotMessage("settledView", covered, view.state.doc.length));
-  }
-  return view;
+  return settleMountedView(view, budgetMs, "settledView");
 }
 
 /**
@@ -120,13 +112,49 @@ export function settledView(view: EditorView, budgetMs = 5_000): EditorView {
  *
  * Both halves — destroy on throw, leave attached on success — are pinned by
  * ./settled-view.test.ts.
+ *
+ * The three settle failures are reported under `settledMount:`, not under the name of the
+ * helper it delegates to: a message that names `settledView` sends the reader to a call
+ * the test never wrote. That is the whole reason ./parse-to-end.ts takes a `caller`, so
+ * the shared guards below are parameterised by it rather than reached through
+ * `settledView`.
  */
 export function settledMount(config: EditorViewConfig, budgetMs = 5_000): EditorView {
   const view = new EditorView(config);
   try {
-    return settledView(view, budgetMs);
+    return settleMountedView(view, budgetMs, "settledMount");
   } catch (error) {
     view.destroy();
     throw error;
   }
+}
+
+/**
+ * The three guards themselves, shared by both exported helpers above so neither owns a
+ * second copy of them. It is deliberately NOT exported: the two entry points differ in
+ * ownership (see `settledMount`'s docblock), and a third caller passing its own label
+ * would be a helper with neither ownership rule documented.
+ *
+ * `caller` is threaded through instead of fixed here for the reason ./parse-to-end.ts's
+ * docblock gives: the thrown message must name the helper the TEST called. The union is
+ * narrowed to the two names this file exports, so `parseToEnd`'s state-side labels cannot
+ * be smuggled in through here.
+ *
+ * Why each of the three failures is reported separately, and why the last one is kept
+ * despite being unreachable for a conformant parser, is documented on `settledView` above.
+ */
+function settleMountedView(
+  view: EditorView,
+  budgetMs: number,
+  caller: "settledView" | "settledMount"
+): EditorView {
+  assertHasLanguage(view.state, caller);
+  if (!forceParsing(view, view.state.doc.length, budgetMs)) {
+    throw new Error(timeoutMessage(caller, budgetMs, view.state.doc.length));
+  }
+  const covered = syntaxTree(view.state).length;
+  if (covered < view.state.doc.length) {
+    throw new Error(truncatedSnapshotMessage(caller, covered, view.state.doc.length));
+  }
+  return view;
 }

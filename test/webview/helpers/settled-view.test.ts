@@ -61,7 +61,7 @@ describe("an exhausted parse budget is reported as a timeout", () => {
     // may converge anyway and leave the arm untested.
     withView("x".repeat(5_000), [neverFinishingLanguage()], (view) => {
       expect(() => settledView(view, 1)).toThrow(
-        /settledView: parse did not complete within 1ms for a 5000-code-unit document/
+        /^settledView: parse did not complete within 1ms for a 5000-code-unit document/
       );
     });
   });
@@ -135,7 +135,7 @@ describe("settledMount destroys what it built when the settle throws", () => {
 
   it("after the no-language throw", () => {
     expect(
-      mountThrowing("# heading\n\nbody\n", [], /^settledView: state has no language configured/)
+      mountThrowing("# heading\n\nbody\n", [], /^settledMount: state has no language configured/)
         .children
     ).toHaveLength(0);
   });
@@ -145,7 +145,7 @@ describe("settledMount destroys what it built when the settle throws", () => {
       mountThrowing(
         "x".repeat(5_000),
         [neverFinishingLanguage()],
-        /^settledView: parse did not complete within 1ms/,
+        /^settledMount: parse did not complete within 1ms/,
         1
       ).children
     ).toHaveLength(0);
@@ -156,7 +156,7 @@ describe("settledMount destroys what it built when the settle throws", () => {
       mountThrowing(
         "x".repeat(5_000),
         [shortTreeLanguage()],
-        /^settledView: snapshot still truncated/
+        /^settledMount: snapshot still truncated/
       ).children
     ).toHaveLength(0);
   });

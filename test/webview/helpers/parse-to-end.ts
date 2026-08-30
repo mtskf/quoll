@@ -1,7 +1,7 @@
 import { ensureSyntaxTree, language } from "@codemirror/language";
 import type { EditorState } from "@codemirror/state";
 
-type ParseCaller = "fullTree" | "settledState" | "settledView";
+type ParseCaller = "fullTree" | "settledState" | "settledView" | "settledMount";
 
 /**
  * Shared parse step behind `fullTree()` and `settledState()`: advance the state's
@@ -59,13 +59,14 @@ export function parseToEnd(state: EditorState, caller: ParseCaller, budgetMs = 5
 }
 
 /**
- * Case (A) above, on its own, so `settledView()` can reuse it.
+ * Case (A) above, on its own, so `settledView()` — and `settledMount()`, which reaches
+ * these guards through it — can reuse it.
  *
  * `settledView` cannot call `parseToEnd` — it settles through `forceParsing`, which
  * needs the VIEW, not the state — but it inherits the same conflation: `forceParsing`
  * is `ensureSyntaxTree` plus a conditional dispatch and collapses to the same falsy
- * result for both causes. Exporting the probe rather than copying it is what keeps all
- * THREE helpers reporting a missing language in identical words.
+ * result for both causes. Exporting the probe rather than copying it is what keeps every
+ * helper that settles a parse reporting a missing language in identical words.
  */
 export function assertHasLanguage(state: EditorState, caller: ParseCaller): void {
   if (state.facet(language) === null) {
