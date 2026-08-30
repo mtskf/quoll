@@ -1,7 +1,7 @@
 import { ensureSyntaxTree, language } from "@codemirror/language";
 import type { EditorState } from "@codemirror/state";
 
-type ParseCaller = "fullTree" | "settledState";
+type ParseCaller = "fullTree" | "settledState" | "settledView";
 
 /**
  * Shared parse step behind `fullTree()` and `settledState()`: advance the state's
@@ -23,8 +23,11 @@ type ParseCaller = "fullTree" | "settledState";
  * contention for what is a one-line extension list fix, so we test for a
  * language FIRST and only then attribute a `null` to the timeout. Both helpers
  * are generically named and live in a shared `helpers/` directory, so case (A)
- * is a plausible mistake for a future caller; keeping the two throw sites in ONE
- * function is what stops the two messages drifting apart again.
+ * is a plausible mistake for a future caller; keeping the throw sites in ONE
+ * function is what stops the messages drifting apart again. Case (A) is exported
+ * separately as `assertHasLanguage` because `settledView()` — which settles a VIEW via
+ * `forceParsing` and so cannot route through `parseToEnd` — needs the same probe and
+ * the same wording.
  *
  * The probe is the public `language` FACET rather than the `Language.state`
  * field `ensureSyntaxTree` itself reads: that field is `@internal` (absent from
@@ -43,12 +46,25 @@ type ParseCaller = "fullTree" | "settledState";
  * Lengths in the messages are UTF-16 code units (what `state.doc.length`
  * counts), not bytes.
  */
-export function parseToEnd(state: EditorState, caller: ParseCaller, budgetMs = 5_000) {
+/**
+ * Case (A) above, on its own, so `settledView()` can reuse it.
+ *
+ * `settledView` cannot call `parseToEnd` — it settles through `forceParsing`, which
+ * needs the VIEW, not the state — but it inherits the same conflation: `forceParsing`
+ * is `ensureSyntaxTree` plus a conditional dispatch and collapses to the same falsy
+ * result for both causes. Exporting the probe rather than copying it is what keeps all
+ * THREE helpers reporting a missing language in identical words.
+ */
+export function assertHasLanguage(state: EditorState, caller: ParseCaller): void {
   if (state.facet(language) === null) {
     throw new Error(
       `${caller}: state has no language configured — no Language extension is attached, so there is nothing to parse`
     );
   }
+}
+
+export function parseToEnd(state: EditorState, caller: ParseCaller, budgetMs = 5_000) {
+  assertHasLanguage(state, caller);
   const tree = ensureSyntaxTree(state, state.doc.length, budgetMs);
   if (tree === null) {
     throw new Error(
