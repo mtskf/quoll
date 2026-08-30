@@ -962,12 +962,14 @@ describe("structural guard under Quoll's production language (quollMarkdownLangu
     const { quollMarkdownLanguage } = await import("../../../src/webview/cm/markdown.js");
     const parent = document.createElement("div");
     document.body.appendChild(parent);
-    const v = new EditorView({
+    // settledMount, not settleParse: this factory settles a view it has not yet handed
+    // back, so on a non-convergent parse the caller has no reference to destroy. Owning
+    // the teardown of what it constructed is exactly settledMount's remit — see the
+    // ownership rule in ../helpers/settled-view.ts. mountDoc above settles the same way.
+    return settledMount({
       parent,
       state: EditorState.create({ doc, extensions: [quollMarkdownLanguage(), quollFolding()] }),
     });
-    settleParse(v); // complete the mount parse + rebuild fields over it (see settleParse)
-    return v;
   }
   async function prodOracle(
     doc: string,
