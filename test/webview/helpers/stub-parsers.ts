@@ -66,11 +66,14 @@ export const STUB_TREE_LENGTH = 10;
  * the coverage numbers — not that anything in the tree today produces a short tree.
  *
  * ⚠️ The stub is coupled to CM-private `work()` bookkeeping: if upstream ever derives
- * `treeLen` from the returned tree, DELETE the describes that use it rather than chase
- * it — and weigh what that costs first. Two describes use it (one per contract test
- * file), and between them they are the only thing driving THREE span guards:
- * `fullTree()`'s short-tree throw, `settledState()`'s, and `settledView()`'s. Deleting
- * the describes retires all three, leaving those guards unexercised.
+ * `treeLen` from the returned tree, retire what depends on it rather than chase it —
+ * but weigh the cost first, and do NOT reach for "delete every describe that mentions
+ * it". Grep for the call, not for a remembered count: the describes that use this stub
+ * also pin guards that have nothing to do with short trees (`settled-view.test.ts`
+ * drives its no-language, timeout and double-destroy arms from the same fixtures), so
+ * deleting them wholesale retires far more than the span guards. What is genuinely tied
+ * to this stub is the short-tree throw of `fullTree()`, `settledState()` and
+ * `settledView()` — those three, and only those, go unexercised without it.
  */
 class ShortTreeParser extends Parser {
   createParse(

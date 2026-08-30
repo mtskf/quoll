@@ -61,6 +61,16 @@ import { assertHasLanguage, timeoutMessage, truncatedSnapshotMessage } from "./p
  * second call — measured under happy-dom, and pinned by ./settled-view.test.ts), and it
  * cannot be guarded from typed code anyway since `destroyed` is `private` in the `.d.ts`.
  *
+ * ⚠️ ONE part of the teardown genuinely re-runs: `docView.destroy()` reaches each
+ * widget's `destroy()` again, so a widget mounted on the view sees TWO destroy calls
+ * (measured: 1 after the helper, 2 after the caller's `finally`). Every widget this
+ * repo mounts has an idempotent `destroy()`, so nothing is wrong today — but a widget
+ * whose `destroy()` is NOT idempotent would misbehave here, and it would do so while a
+ * test is already failing, which is the worst moment to add noise. If you add such a
+ * widget, either make its teardown idempotent or move view ownership out of this helper
+ * (the redesign is recorded in docs/TODO.md). The alternative — dropping the destroy —
+ * is not free either: it reinstates the leak this arm exists to close.
+ *
  * ⚠️ The `(X) => X` shape is shared with `settledState()`, but the discard semantics are
  * OPPOSITE. Writing `settledView(view);` as a bare statement is correct — a view is
  * mutable, so the caller's view is settled either way — whereas the same discard on

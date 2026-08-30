@@ -34,9 +34,11 @@ function mountDoc(doc: string, extra: readonly unknown[] = []): EditorView {
 }
 
 // Settle CodeMirror's async parser after an edit so the fold gutter fields are observed
-// against a COMPLETE syntax tree. The mechanism and its failure modes are documented
-// once, on `settledView` in ../helpers/settled-view.ts; what is specific to THESE
-// fixtures: CM's LanguageState.apply reparses a docChanged under a hardcoded 20ms
+// against a COMPLETE syntax tree. `settledView` (../helpers/settled-view.ts) documents
+// the MOUNT-time story — happy-dom never runs CM's background parse worker, so a fresh
+// view never self-heals — and owns the throw contract. It does NOT cover the POST-EDIT
+// path below, which is why this block exists rather than deferring wholesale: CM's
+// LanguageState.apply reparses a docChanged under a hardcoded 20ms
 // `Work.Apply` budget and they need several parse `advance()` steps, so under full-suite
 // CPU starvation a >20ms preemption mid-parse makes CM `takeTree()` TRUNCATE the
 // post-edit tree (treeLen < doc.length). The field then correctly falls back to a full

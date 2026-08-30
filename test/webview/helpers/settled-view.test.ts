@@ -9,7 +9,13 @@
 import { markdown } from "@codemirror/lang-markdown";
 import { syntaxTree } from "@codemirror/language";
 import { EditorState, type Extension } from "@codemirror/state";
-import { EditorView } from "@codemirror/view";
+import {
+  Decoration,
+  type DecorationSet,
+  EditorView,
+  ViewPlugin,
+  WidgetType,
+} from "@codemirror/view";
 import { describe, expect, it } from "vitest";
 import { settledView } from "./settled-view.js";
 import { neverFinishingLanguage, STUB_TREE_LENGTH, shortTreeLanguage } from "./stub-parsers.js";
@@ -147,5 +153,53 @@ describe("a throwing settle destroys the view instead of leaking it", () => {
     } finally {
       view.destroy();
     }
+  });
+});
+
+describe("the failure destroy reaches each widget twice", () => {
+  // The one part of CM's teardown that genuinely re-runs on a second destroy:
+  // docView.destroy() walks the widgets again. Every widget this repo mounts has an
+  // idempotent destroy(), so this is a documented property rather than a live bug — but
+  // it is documented in settled-view.ts as a MEASURED number, and a number in prose
+  // rots. This pins it, so a future non-idempotent widget destroy is a red test rather
+  // than confusing noise inside an already-failing one.
+  class CountingWidget extends WidgetType {
+    constructor(private readonly onDestroy: () => void) {
+      super();
+    }
+    toDOM(): HTMLElement {
+      return document.createElement("span");
+    }
+    destroy(): void {
+      this.onDestroy();
+    }
+  }
+
+  function widgetPlugin(onDestroy: () => void): Extension {
+    return ViewPlugin.fromClass(
+      class {
+        decorations: DecorationSet;
+        constructor() {
+          this.decorations = Decoration.set([
+            Decoration.widget({ widget: new CountingWidget(onDestroy), side: 1 }).range(0),
+          ]);
+        }
+      },
+      { decorations: (v) => v.decorations }
+    );
+  }
+
+  it("once from the helper's throw path, once more from the caller's own destroy", () => {
+    let destroys = 0;
+    const view = mount("x".repeat(5_000), [
+      shortTreeLanguage(),
+      widgetPlugin(() => {
+        destroys += 1;
+      }),
+    ]);
+    expect(() => settledView(view)).toThrow(/snapshot still truncated/);
+    expect(destroys).toBe(1); // the helper's cleanup
+    view.destroy(); // what a caller that bound the view does in its own finally
+    expect(destroys).toBe(2); // ...and the widget sees it again
   });
 });
