@@ -47,7 +47,7 @@ describe("a view with no language is reported as such, not as a timeout", () => 
   // is what keeps the two apart; these pin that the message names the real cause.
   it("settledView() names the missing language", () => {
     withView("# heading\n\nbody\n", [], (view) => {
-      expect(() => settledView(view)).toThrow(/no language configured/);
+      expect(() => settledView(view)).toThrow(/^settledView: state has no language configured/);
     });
   });
 
@@ -100,7 +100,9 @@ describe("settledView() throws rather than handing back a view whose tree stops 
     // that would mean deleting this rather than chasing it.
     withView("x".repeat(5_000), [shortTreeLanguage()], (view) => {
       expect(() => settledView(view)).toThrow(
-        new RegExp(`snapshot still truncated \\(${STUB_TREE_LENGTH} of 5000 code units\\)`)
+        new RegExp(
+          `^settledView: snapshot still truncated \\(${STUB_TREE_LENGTH} of 5000 code units\\)`
+        )
       );
     });
   });
@@ -109,8 +111,8 @@ describe("settledView() throws rather than handing back a view whose tree stops 
 describe("a throwing settle destroys the view instead of leaking it", () => {
   // The documented `return settledView(new EditorView({ state, parent }))` shape hands
   // the caller nothing to destroy when the settle throws, and an undisposed view keeps
-  // real timers and a happy-dom document alive for the rest of the file (why
-  // cm-fold-extension.test.ts destroys in a `finally`). Under load a budget miss is a
+  // real timers and a happy-dom document alive for the rest of the file (why the fold
+  // suites dispose in an `afterEach`). Under load a budget miss is a
   // recorded reality, so one failure would otherwise poison its whole file. Each arm is
   // pinned separately because each throws from a different point in the body.
   //
@@ -119,31 +121,36 @@ describe("a throwing settle destroys the view instead of leaking it", () => {
   const detached = (view: EditorView) => !view.dom.isConnected;
 
   it("after the no-language throw", () => {
-    const view = mount("# heading\n\nbody\n", []);
-    expect(() => settledView(view)).toThrow(/no language configured/);
-    expect(detached(view)).toBe(true);
+    withView("# heading\n\nbody\n", [], (view) => {
+      expect(() => settledView(view)).toThrow(/no language configured/);
+      expect(detached(view)).toBe(true);
+    });
   });
 
   it("after the timeout throw", () => {
-    const view = mount("x".repeat(5_000), [neverFinishingLanguage()]);
-    expect(() => settledView(view, 1)).toThrow(/did not complete within/);
-    expect(detached(view)).toBe(true);
+    withView("x".repeat(5_000), [neverFinishingLanguage()], (view) => {
+      expect(() => settledView(view, 1)).toThrow(/did not complete within/);
+      expect(detached(view)).toBe(true);
+    });
   });
 
   it("after the short-snapshot throw", () => {
-    const view = mount("x".repeat(5_000), [shortTreeLanguage()]);
-    expect(() => settledView(view)).toThrow(/snapshot still truncated/);
-    expect(detached(view)).toBe(true);
+    withView("x".repeat(5_000), [shortTreeLanguage()], (view) => {
+      expect(() => settledView(view)).toThrow(/snapshot still truncated/);
+      expect(detached(view)).toBe(true);
+    });
   });
 
   it("and tolerates the caller destroying it a second time", () => {
-    // Sites that bind the view themselves already destroy it in their own `finally`, so
-    // the helper's destroy is the FIRST of two. `EditorView.destroy()` has no
-    // `destroyed` early-return and the flag cannot be read from typed code, so the
-    // second call is not guarded — it has to be harmless, and this is what says so.
-    const view = mount("x".repeat(5_000), [shortTreeLanguage()]);
-    expect(() => settledView(view)).toThrow();
-    expect(() => view.destroy()).not.toThrow();
+    // Sites that bind the view themselves already dispose of it, so the helper's destroy
+    // is the FIRST of two. `EditorView.destroy()` has no `destroyed` early-return and the
+    // flag cannot be read from typed code, so the second call is not guarded — it has to
+    // be harmless, and this is what says so. (`withView`'s own destroy makes it a third;
+    // that it stays harmless is the same property.)
+    withView("x".repeat(5_000), [shortTreeLanguage()], (view) => {
+      expect(() => settledView(view)).toThrow();
+      expect(() => view.destroy()).not.toThrow();
+    });
   });
 
   it("leaves a successful settle attached, so the caller still owns disposal", () => {

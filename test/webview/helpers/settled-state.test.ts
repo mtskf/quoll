@@ -19,7 +19,9 @@ describe("a state with no language is reported as such, not as a timeout", () =>
   const languageless = () => EditorState.create({ doc: "# heading\n\nbody\n" });
 
   it("settledState() names the missing language", () => {
-    expect(() => settledState(languageless())).toThrow(/no language configured/);
+    expect(() => settledState(languageless())).toThrow(
+      /^settledState: state has no language configured/
+    );
   });
 
   it("settledState() does NOT blame the parse budget", () => {
@@ -29,7 +31,7 @@ describe("a state with no language is reported as such, not as a timeout", () =>
   it("fullTree() reports it the same way (shared throw site)", () => {
     // Both helpers route through parseToEnd, so this is the pin that keeps the
     // sibling from drifting back to the timeout-only story.
-    expect(() => fullTree(languageless())).toThrow(/no language configured/);
+    expect(() => fullTree(languageless())).toThrow(/^fullTree: state has no language configured/);
     expect(() => fullTree(languageless())).not.toThrow(/did not complete within/);
   });
 });
@@ -72,7 +74,9 @@ describe("both helpers throw rather than handing back a tree that stops short", 
 
   it("settledState() reports how much of the doc the snapshot actually covers", () => {
     expect(() => settledState(shortTreeState())).toThrow(
-      new RegExp(`snapshot still truncated \\(${STUB_TREE_LENGTH} of 5000 code units\\)`)
+      new RegExp(
+        `^settledState: snapshot still truncated \\(${STUB_TREE_LENGTH} of 5000 code units\\)`
+      )
     );
   });
 

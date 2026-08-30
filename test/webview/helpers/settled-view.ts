@@ -23,11 +23,19 @@ import { assertHasLanguage, timeoutMessage, truncatedSnapshotMessage } from "./p
  * `forceParse` wrapper, and nearly all of those dropped the result; a few other files
  * hand-rolled an `expect(...).toBe(true)` of their own. That is one problem with as many
  * solutions as there are files, and the check fell out of most of them — so it is put
- * where it cannot be omitted rather than left as something each author must remember.
- * (The census behind "most" belongs to the PR description, which is dated and does not
- * drift; repeating counts here would only rot.) A silently non-converged settle
- * otherwise surfaces as a baffling content mismatch far from its cause, or passes
- * vacuously because both sides of a comparison are equally truncated.
+ * where an author using this helper cannot omit it, rather than left as something each
+ * one must remember. (The census behind "most" belongs to the PR description, which is
+ * dated and does not drift; repeating counts here would only rot.) A silently
+ * non-converged settle otherwise surfaces as a baffling content mismatch far from its
+ * cause, or passes vacuously because both sides of a comparison are equally truncated.
+ *
+ * ⚠️ "Cannot omit" reaches exactly that far. Nothing stops a new test from importing
+ * `forceParsing` directly and discarding the boolean again — which is how the drift
+ * accumulated in the first place. A choke-point guard would close that (this repo
+ * mechanises the same shape in `test/build/no-file-level-ts-nocheck.test.ts` and
+ * `url-choke-point.test.ts`) and would land green today, since the call below is the
+ * only one left in `test/**`. Whether it earns its allowlist is recorded in
+ * docs/TODO.md; until then this helper is a convention, not an enforcement.
  *
  * The three failures are reported separately because they send the reader to different
  * places:

@@ -73,7 +73,9 @@ export const STUB_TREE_LENGTH = 10;
  * keeps its no-language and timeout arms in the same describes, on different fixtures), so
  * deleting them wholesale retires far more than the span guards. What is genuinely tied
  * to this stub is the short-tree throw of `fullTree()`, `settledState()` and
- * `settledView()` — those three, and only those, go unexercised without it.
+ * `settledView()`; the stub also happens to be the cheapest way to make `settledView`
+ * throw, so arms that only need *a* failure use it too. Let the grep tell you which is
+ * which — the point of not writing a number here is that the number changes.
  */
 class ShortTreeParser extends Parser {
   createParse(

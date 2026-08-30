@@ -31,7 +31,7 @@ function rangesOf(set: DecorationSet): Array<{ from: number; to: number }> {
 // `tableBlockField` length 0-vs-1 race). `settledView` (../helpers/settled-view.ts)
 // forces the parse to the doc end and republishes the snapshot, so the field
 // recomputes from the complete tree — the same "force AND publish" mechanism the
-// production resync path uses (CellEditorController.revalidateOrResync) — and it
+// production resync path uses (`forceParsing` in src/webview/editor.ts) — and it
 // throws on non-convergence instead of returning a discardable boolean.
 // ensureSyntaxTree / fullTree alone would NOT fix it: they advance the parse but
 // never republish into the field's snapshot. See LEARNING.md
