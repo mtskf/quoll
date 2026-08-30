@@ -2,7 +2,7 @@
 
 import { history, undo } from "@codemirror/commands";
 import { EditorSelection, EditorState, type SelectionRange } from "@codemirror/state";
-import { EditorView, runScopeHandlers } from "@codemirror/view";
+import { type EditorView, runScopeHandlers } from "@codemirror/view";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -10,7 +10,7 @@ import {
   listContinuationKeymap,
 } from "../../../src/webview/cm/list/list-continuation-keymap.js";
 import { quollMarkdownLanguage } from "../../../src/webview/cm/markdown.js";
-import { settledView } from "../helpers/settled-view.js";
+import { settledMount } from "../helpers/settled-view.js";
 
 function mount(
   doc: string,
@@ -32,7 +32,7 @@ function mount(
       ...(opts.withKeymap ? [listContinuationKeymap()] : []),
     ],
   });
-  return settledView(new EditorView({ state, parent }));
+  return settledMount({ state, parent });
 }
 
 /** Caret at the given absolute offset. */

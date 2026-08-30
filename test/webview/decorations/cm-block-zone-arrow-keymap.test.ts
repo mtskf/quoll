@@ -2,7 +2,7 @@
 import { defaultKeymap } from "@codemirror/commands";
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
 import { EditorSelection, EditorState, type SelectionRange, Transaction } from "@codemirror/state";
-import { type DecorationSet, EditorView, keymap, runScopeHandlers } from "@codemirror/view";
+import { type DecorationSet, type EditorView, keymap, runScopeHandlers } from "@codemirror/view";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -12,7 +12,7 @@ import {
 } from "../../../src/webview/cm/decorations/block-zone-arrow-keymap.js";
 import { quollBlockReplaceZones } from "../../../src/webview/cm/decorations/index.js";
 import { tableBlockField } from "../../../src/webview/cm/table/index.js";
-import { settledView } from "../helpers/settled-view.js";
+import { settledMount, settledView } from "../helpers/settled-view.js";
 
 function rangesOf(set: DecorationSet): Array<{ from: number; to: number }> {
   const out: Array<{ from: number; to: number }> = [];
@@ -48,7 +48,7 @@ function mount(doc: string, selection: EditorSelection | SelectionRange): Editor
       tableBlockField,
     ],
   });
-  return settledView(new EditorView({ state, parent }));
+  return settledMount({ state, parent });
 }
 
 const TABLE = "| H1 | H2 |\n| -- | -- |\n| a1 | a2 |";
@@ -171,7 +171,7 @@ describe("blockZoneArrowDown", () => {
         observer,
       ],
     });
-    const view = settledView(new EditorView({ state, parent }));
+    const view = settledMount({ state, parent });
     try {
       expect(blockZoneArrowDown(view)).toBe(true);
       expect(dispatched).toContain("select");
@@ -309,7 +309,7 @@ describe("blockZoneArrowKeymap — precedence vs defaultKeymap", () => {
         blockZoneArrowKeymap(),
       ],
     });
-    return settledView(new EditorView({ state, parent }));
+    return settledMount({ state, parent });
   }
 
   it("ArrowDown dispatched via runScopeHandlers lands caret at TABLE_FROM (Prec.high wins over defaultKeymap)", () => {

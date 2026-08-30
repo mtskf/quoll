@@ -1,12 +1,12 @@
 // @vitest-environment happy-dom
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
 import { EditorSelection, EditorState, type SelectionRange } from "@codemirror/state";
-import { type DecorationSet, EditorView } from "@codemirror/view";
+import type { DecorationSet, EditorView } from "@codemirror/view";
 import { describe, expect, it, vi } from "vitest";
 
 import { ImageBlockWidget } from "../../../src/webview/cm/image/image-widget.js";
 import { imageBlockField, quollResourceBaseUri } from "../../../src/webview/cm/image/index.js";
-import { settledView } from "../helpers/settled-view.js";
+import { settledMount } from "../helpers/settled-view.js";
 
 function widgetsOf(set: DecorationSet): ImageBlockWidget[] {
   const out: ImageBlockWidget[] = [];
@@ -64,7 +64,7 @@ function mount(doc: string, selection?: EditorSelection | SelectionRange): Edito
       imageBlockField,
     ],
   });
-  return settledView(new EditorView({ state, parent }));
+  return settledMount({ state, parent });
 }
 
 const SAFE = "![logo](https://x.test/a.png)";
@@ -366,7 +366,7 @@ function mountWithBase(doc: string, base: string): EditorView {
       imageBlockField,
     ],
   });
-  return settledView(new EditorView({ state, parent }));
+  return settledMount({ state, parent });
 }
 
 describe("imageBlockField — relative resolution", () => {

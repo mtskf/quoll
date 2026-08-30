@@ -1,5 +1,5 @@
 import { forceParsing, syntaxTree } from "@codemirror/language";
-import type { EditorView } from "@codemirror/view";
+import { EditorView, type EditorViewConfig } from "@codemirror/view";
 import { assertHasLanguage, timeoutMessage, truncatedSnapshotMessage } from "./parse-to-end.js";
 
 /**
@@ -59,25 +59,15 @@ import { assertHasLanguage, timeoutMessage, truncatedSnapshotMessage } from "./p
  * written out here, so the view-side and state-side wordings cannot drift: each copy
  * would be pinned only by its own helper's test.
  *
- * Returns the SAME view, so it can wrap a constructor at a fixture factory:
- * `return settledView(new EditorView({ state, parent }))`. On ANY of the three throws
- * the view is destroyed first, because in exactly that shape the caller never receives
- * the reference and could not destroy it itself — and an undisposed view keeps real
- * timers and a happy-dom document alive for the rest of the file. Call sites that pass
- * an already-bound view and destroy it in their own `finally` therefore destroy twice;
- * that is safe (`EditorView.destroy()` clears `plugins` and its sub-objects tolerate a
- * second call — measured under happy-dom, and pinned by ./settled-view.test.ts), and it
- * cannot be guarded from typed code anyway since `destroyed` is `private` in the `.d.ts`.
- *
- * ⚠️ ONE part of the teardown genuinely re-runs: `docView.destroy()` reaches each
- * widget's `destroy()` again, so a widget mounted on the view sees TWO destroy calls
- * (measured: 1 after the helper, 2 after the caller's `finally`). Every widget this
- * repo mounts has an idempotent `destroy()`, so nothing is wrong today — but a widget
- * whose `destroy()` is NOT idempotent would misbehave here, and it would do so while a
- * test is already failing, which is the worst moment to add noise. If you add such a
- * widget, either make its teardown idempotent or move view ownership out of this helper
- * (the redesign is recorded in docs/TODO.md). The alternative — dropping the destroy —
- * is not free either: it reinstates the leak this arm exists to close.
+ * ⚠️ LIFECYCLE: this function does NOT destroy the view, on any path. It briefly did,
+ * to close a leak in the `return settledView(new EditorView(…))` shape where a throw
+ * left the caller no reference to dispose. But owning the teardown of a view it did not
+ * create made every caller that binds its own view and disposes it in a `finally`
+ * destroy twice, and CM's `docView.destroy()` re-runs each widget's `destroy()` — fine
+ * for this repo's widgets, lethal for a future non-idempotent one, and lethal precisely
+ * while a test is already failing. `settledMount()` below owns what it constructs
+ * instead; that is the shape the leak actually lived in. Here ownership stays with the
+ * caller, which is where it started.
  *
  * ⚠️ The `(X) => X` shape is shared with `settledState()`, but the discard semantics are
  * OPPOSITE. Writing `settledView(view);` as a bare statement is correct — a view is
@@ -95,18 +85,40 @@ import { assertHasLanguage, timeoutMessage, truncatedSnapshotMessage } from "./p
  * All three throws are pinned by ./settled-view.test.ts.
  */
 export function settledView(view: EditorView, budgetMs = 5_000): EditorView {
+  assertHasLanguage(view.state, "settledView");
+  if (!forceParsing(view, view.state.doc.length, budgetMs)) {
+    throw new Error(timeoutMessage("settledView", budgetMs, view.state.doc.length));
+  }
+  const covered = syntaxTree(view.state).length;
+  if (covered < view.state.doc.length) {
+    throw new Error(truncatedSnapshotMessage("settledView", covered, view.state.doc.length));
+  }
+  return view;
+}
+
+/**
+ * Construct a view and settle it, destroying it if the settle throws.
+ *
+ * This is what a fixture factory wants — `return settledMount({ state, parent })` — and
+ * it is the ONLY shape that had a real leak: the caller never receives the reference, so
+ * a throw would otherwise strand a mounted view with its timers and its happy-dom
+ * document alive for the rest of the file. Because this function creates the view,
+ * disposing of it on failure discharges its OWN obligation rather than seizing the
+ * caller's — the distinction that keeps `settledView()` above free of a double
+ * `destroy()` at the sites that mount and dispose for themselves.
+ *
+ * On success the view comes back undestroyed and disposal is the caller's, exactly as if
+ * they had written `new EditorView(...)` themselves.
+ *
+ * Both halves — destroy on throw, leave attached on success — are pinned by
+ * ./settled-view.test.ts.
+ */
+export function settledMount(config: EditorViewConfig, budgetMs = 5_000): EditorView {
+  const view = new EditorView(config);
   try {
-    assertHasLanguage(view.state, "settledView");
-    if (!forceParsing(view, view.state.doc.length, budgetMs)) {
-      throw new Error(timeoutMessage("settledView", budgetMs, view.state.doc.length));
-    }
-    const covered = syntaxTree(view.state).length;
-    if (covered < view.state.doc.length) {
-      throw new Error(truncatedSnapshotMessage("settledView", covered, view.state.doc.length));
-    }
+    return settledView(view, budgetMs);
   } catch (error) {
     view.destroy();
     throw error;
   }
-  return view;
 }

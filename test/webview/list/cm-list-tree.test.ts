@@ -3,7 +3,7 @@
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
 import type { syntaxTree } from "@codemirror/language";
 import { EditorSelection, EditorState, type SelectionRange } from "@codemirror/state";
-import { EditorView } from "@codemirror/view";
+import type { EditorView } from "@codemirror/view";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -15,7 +15,7 @@ import {
   lastListItemOf,
   listItemAt,
 } from "../../../src/webview/cm/list/list-tree.js";
-import { settledView } from "../helpers/settled-view.js";
+import { settledMount } from "../helpers/settled-view.js";
 
 function mount(
   doc: string,
@@ -32,7 +32,7 @@ function mount(
       EditorState.readOnly.of(opts.readOnly ?? false),
     ],
   });
-  return settledView(new EditorView({ state, parent }));
+  return settledMount({ state, parent });
 }
 
 // Resolves the `ListItem` enclosing line `n`'s first non-whitespace column —

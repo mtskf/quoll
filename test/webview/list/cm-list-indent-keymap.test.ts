@@ -3,7 +3,7 @@
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
 import { syntaxTree } from "@codemirror/language";
 import { EditorSelection, EditorState, type SelectionRange } from "@codemirror/state";
-import { EditorView, runScopeHandlers } from "@codemirror/view";
+import { type EditorView, runScopeHandlers } from "@codemirror/view";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -11,7 +11,7 @@ import {
   listIndentKeymap,
   outdentListItem,
 } from "../../../src/webview/cm/list/list-indent-keymap.js";
-import { settledView } from "../helpers/settled-view.js";
+import { settledMount, settledView } from "../helpers/settled-view.js";
 
 function mount(
   doc: string,
@@ -29,7 +29,7 @@ function mount(
       ...(opts.tabSize === undefined ? [] : [EditorState.tabSize.of(opts.tabSize)]),
     ],
   });
-  return settledView(new EditorView({ state, parent }));
+  return settledMount({ state, parent });
 }
 
 function at(view: EditorView, n: number, col = 0): EditorSelection | SelectionRange {
@@ -659,7 +659,7 @@ describe("listIndentKeymap — registration + precedence", () => {
       selection,
       extensions: [markdown({ base: markdownLanguage }), listIndentKeymap()],
     });
-    return settledView(new EditorView({ state, parent }));
+    return settledMount({ state, parent });
   }
 
   it("Tab via runScopeHandlers nests the item (keymap wires Tab → indentListItem)", () => {

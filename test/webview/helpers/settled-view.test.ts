@@ -17,7 +17,7 @@ import {
   WidgetType,
 } from "@codemirror/view";
 import { describe, expect, it } from "vitest";
-import { settledView } from "./settled-view.js";
+import { settledMount, settledView } from "./settled-view.js";
 import { neverFinishingLanguage, STUB_TREE_LENGTH, shortTreeLanguage } from "./stub-parsers.js";
 
 function mount(doc: string, extensions: Extension[] = [markdown()]): EditorView {
@@ -108,112 +108,70 @@ describe("settledView() throws rather than handing back a view whose tree stops 
   });
 });
 
-describe("a throwing settle destroys the view instead of leaking it", () => {
-  // The documented `return settledView(new EditorView({ state, parent }))` shape hands
-  // the caller nothing to destroy when the settle throws, and an undisposed view keeps
-  // real timers and a happy-dom document alive for the rest of the file (why the fold
-  // suites dispose in an `afterEach`). Under load a budget miss is a
-  // recorded reality, so one failure would otherwise poison its whole file. Each arm is
-  // pinned separately because each throws from a different point in the body.
+describe("settledMount destroys what it built when the settle throws", () => {
+  // `settledMount` is the shape that had the leak: the caller never receives the
+  // reference, so a throw would otherwise strand a mounted view with its timers and its
+  // happy-dom document alive for the rest of the file. Each arm is pinned separately
+  // because each throws from a different point in the body.
   //
   // `EditorView.destroy()` calls `this.dom.remove()`, so detachment is the observable
-  // proxy: `destroyed` is `private` in the `.d.ts` and unreadable from typed code.
-  const detached = (view: EditorView) => !view.dom.isConnected;
+  // proxy: `destroyed` is `private` in the `.d.ts` and unreadable from typed code. The
+  // view is reached through the thrown-away construction, so the assertions capture the
+  // parent and look for an emptied DOM rather than holding the view itself.
+  function mountThrowing(doc: string, extensions: Extension[], budgetMs?: number): HTMLElement {
+    const parent = document.createElement("div");
+    document.body.appendChild(parent);
+    const config = { parent, state: EditorState.create({ doc, extensions }) };
+    expect(() =>
+      budgetMs === undefined ? settledMount(config) : settledMount(config, budgetMs)
+    ).toThrow();
+    return parent;
+  }
 
   it("after the no-language throw", () => {
-    withView("# heading\n\nbody\n", [], (view) => {
-      expect(() => settledView(view)).toThrow(/no language configured/);
-      expect(detached(view)).toBe(true);
-    });
+    expect(mountThrowing("# heading\n\nbody\n", []).children).toHaveLength(0);
   });
 
   it("after the timeout throw", () => {
-    withView("x".repeat(5_000), [neverFinishingLanguage()], (view) => {
-      expect(() => settledView(view, 1)).toThrow(/did not complete within/);
-      expect(detached(view)).toBe(true);
-    });
+    expect(mountThrowing("x".repeat(5_000), [neverFinishingLanguage()], 1).children).toHaveLength(
+      0
+    );
   });
 
   it("after the short-snapshot throw", () => {
-    withView("x".repeat(5_000), [shortTreeLanguage()], (view) => {
-      expect(() => settledView(view)).toThrow(/snapshot still truncated/);
-      expect(detached(view)).toBe(true);
-    });
+    expect(mountThrowing("x".repeat(5_000), [shortTreeLanguage()]).children).toHaveLength(0);
   });
 
-  it("and tolerates the caller destroying it a second time", () => {
-    // Sites that bind the view themselves already dispose of it, so the helper's destroy
-    // is the FIRST of two. `EditorView.destroy()` has no `destroyed` early-return and the
-    // flag cannot be read from typed code, so the second call is not guarded — it has to
-    // be harmless, and this is what says so. (`withView`'s own destroy makes it a third;
-    // that it stays harmless is the same property.)
-    withView("x".repeat(5_000), [shortTreeLanguage()], (view) => {
-      expect(() => settledView(view)).toThrow();
-      expect(() => view.destroy()).not.toThrow();
+  it("leaves a successful mount attached, so the caller owns disposal", () => {
+    // The other half of the contract: settledMount only disposes of what it failed to
+    // hand back. A caller receiving a view is in exactly the position it would be in
+    // after `new EditorView(...)`.
+    const parent = document.createElement("div");
+    document.body.appendChild(parent);
+    const view = settledMount({
+      parent,
+      state: EditorState.create({
+        doc: `${"filler paragraph line\n\n".repeat(200)}- a\n  - b\n`,
+        extensions: [markdown()],
+      }),
     });
-  });
-
-  it("leaves a successful settle attached, so the caller still owns disposal", () => {
-    const view = mount(`${"filler paragraph line\n\n".repeat(200)}- a\n  - b\n`, [markdown()]);
     try {
-      expect(detached(settledView(view))).toBe(false);
+      expect(view.dom.isConnected).toBe(true);
     } finally {
       view.destroy();
     }
   });
 });
 
-describe("the failure destroy reaches each widget twice", () => {
-  // The one part of CM's teardown that genuinely re-runs on a second destroy:
-  // docView.destroy() walks the widgets again. Every widget this repo mounts has an
-  // idempotent destroy(), so this is a documented property rather than a live bug — but
-  // it is documented in settled-view.ts as a MEASURED number, and a number in prose
-  // rots. This pins it, so a future non-idempotent widget destroy is a red test rather
-  // than confusing noise inside an already-failing one.
-  class CountingWidget extends WidgetType {
-    constructor(private readonly onDestroy: () => void) {
-      super();
-    }
-    toDOM(): HTMLElement {
-      return document.createElement("span");
-    }
-    destroy(): void {
-      this.onDestroy();
-    }
-  }
-
-  function widgetPlugin(onDestroy: () => void): Extension {
-    return ViewPlugin.fromClass(
-      class {
-        decorations: DecorationSet;
-        constructor() {
-          this.decorations = Decoration.set([
-            Decoration.widget({ widget: new CountingWidget(onDestroy), side: 1 }).range(0),
-          ]);
-        }
-      },
-      { decorations: (v) => v.decorations }
-    );
-  }
-
-  it("once from the helper's throw path, once more from the caller's own destroy", () => {
-    let destroys = 0;
-    const view = mount("x".repeat(5_000), [
-      shortTreeLanguage(),
-      widgetPlugin(() => {
-        destroys += 1;
-      }),
-    ]);
-    // The `finally` is load-bearing rather than tidiness: if settledView ever STOPS
-    // throwing, the first assertion aborts the test and this view would stay attached,
-    // keeping happy-dom state and real timers alive for everything after it — the very
-    // leak the describe above exists to close. A regression here has to produce one
-    // isolated failure, not poison the rest of the file.
+describe("settledView does NOT dispose of a view it was handed", () => {
+  // The ownership rule that keeps the ~35 sites which mount and dispose for themselves
+  // from destroying twice — and, through that, keeps CM's `docView.destroy()` from
+  // re-running every widget's `destroy()` while a test is already failing.
+  it("leaves the caller's view attached after a throw", () => {
+    const view = mount("x".repeat(5_000), [shortTreeLanguage()]);
     try {
       expect(() => settledView(view)).toThrow(/snapshot still truncated/);
-      expect(destroys).toBe(1); // the helper's cleanup
-      view.destroy(); // what a caller that bound the view does in its own finally
-      expect(destroys).toBe(2); // ...and the widget sees it again
+      expect(view.dom.isConnected).toBe(true);
     } finally {
       view.destroy();
     }

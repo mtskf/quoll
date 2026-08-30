@@ -21,7 +21,7 @@ import {
   fencedCodeEnterKeymap,
 } from "../../../src/webview/cm/fenced-code/fenced-code-enter-keymap.js";
 import { quollMarkdownLanguage } from "../../../src/webview/cm/markdown.js";
-import { settledView } from "../helpers/settled-view.js";
+import { settledMount } from "../helpers/settled-view.js";
 
 function mount(
   doc: string,
@@ -40,7 +40,7 @@ function mount(
       ...(opts.withKeymap ? [fencedCodeEnterKeymap()] : []),
     ],
   });
-  return settledView(new EditorView({ state, parent }));
+  return settledMount({ state, parent });
 }
 
 /** Cursor at the END of 1-based line `n`. */
@@ -261,13 +261,15 @@ describe("autoCloseFenceOnEnter — history + keymap wiring", () => {
 // A plain-paragraph Enter must NOT force a parse to end-of-document.
 describe("autoCloseFenceOnEnter — lazy parse (no EOF parse on non-triggers)", () => {
   // Mount WITHOUT settling the parse — deliberately NOT this file's `mount()`, which
-  // wraps the view in `settledView`. Here we want a fresh, mostly-unparsed large doc,
+  // builds through `settledMount`. Here we want a fresh, mostly-unparsed large doc,
   // mirroring a just-opened file where an eager EOF parse would stall.
   //
-  // ⚠️ The spy is cleared AFTER the mount, so settling this fixture would add no observed
-  // call: every assertion below stays green while the doc silently stops being unparsed
-  // (measured 2026-08-30 — wrapping this in `settledView` keeps all 20 tests passing).
-  // The three big-doc tests therefore assert the precondition explicitly, rather than
+  // ⚠️ The spy is cleared AFTER the mount, so settling this fixture adds no observed
+  // call: the spy-based assertions cannot notice, and before the guards below existed a
+  // settled fixture kept all 20 tests green while the doc silently stopped being
+  // unparsed (measured 2026-08-30). Re-check by wrapping this return in `settledMount`:
+  // three tests must now go red at their `syntaxTreeAvailable` lines.
+  // The three big-doc tests assert the precondition explicitly, rather than
   // leaving "keep this one unsettled" as a rule the reader has to remember — the same
   // reasoning that put the settle check inside `settledView` in the first place.
   // The guard cannot live in this factory: the small `\`\`\`ruby\nputs 1` fixture below is
