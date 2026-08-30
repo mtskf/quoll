@@ -59,14 +59,15 @@ export function parseToEnd(state: EditorState, caller: ParseCaller, budgetMs = 5
 }
 
 /**
- * Case (A) above, on its own, so `settledView()` — and `settledMount()`, which reaches
- * these guards through it — can reuse it.
+ * Case (A) above, on its own, so the view-side helpers can reuse it. They settle through
+ * `forceParsing`, which needs the VIEW rather than the state, so they cannot call
+ * `parseToEnd` at all — but they inherit the same conflation: `forceParsing` is
+ * `ensureSyntaxTree` plus a conditional dispatch and collapses to the same falsy result
+ * for both causes. Exporting the probe rather than copying it is what keeps every helper
+ * that settles a parse reporting a missing language in identical words.
  *
- * `settledView` cannot call `parseToEnd` — it settles through `forceParsing`, which
- * needs the VIEW, not the state — but it inherits the same conflation: `forceParsing`
- * is `ensureSyntaxTree` plus a conditional dispatch and collapses to the same falsy
- * result for both causes. Exporting the probe rather than copying it is what keeps every
- * helper that settles a parse reporting a missing language in identical words.
+ * Which helper calls this, and through what, is ./settled-view.ts's business — naming a
+ * call chain here only dates the comment the next time that file rearranges one.
  */
 export function assertHasLanguage(state: EditorState, caller: ParseCaller): void {
   if (state.facet(language) === null) {
@@ -77,18 +78,18 @@ export function assertHasLanguage(state: EditorState, caller: ParseCaller): void
 }
 
 /**
- * The budget-exhausted message, shared by `parseToEnd` above and by `settledView()`,
- * which reaches the same condition through `forceParsing`'s `false`.
+ * The budget-exhausted message, shared by `parseToEnd` above and by the view-side
+ * settle, which reaches the same condition through `forceParsing`'s `false`.
  */
 export function timeoutMessage(caller: ParseCaller, budgetMs: number, docLength: number): string {
   return `${caller}: parse did not complete within ${budgetMs}ms for a ${docLength}-code-unit document`;
 }
 
 /**
- * The short-snapshot message, shared by `settledState()` and `settledView()`. Neither
+ * The short-snapshot message, shared by the state-side and view-side settles. Neither
  * routes through `parseToEnd` for this check — the published SNAPSHOT is read after the
  * parse step, from the state and from the view's state respectively — so the builder,
- * not a common call site, is what keeps the two worded alike.
+ * not a common call site, is what keeps them worded alike.
  *
  * `fullTree()` deliberately does NOT use it: it reports the tree `ensureSyntaxTree`
  * returned rather than a republished snapshot, which is a different fact and reads as a
