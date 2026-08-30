@@ -12,7 +12,7 @@ import {
 } from "../../../src/webview/cm/decorations/block-zone-arrow-keymap.js";
 import { quollBlockReplaceZones } from "../../../src/webview/cm/decorations/index.js";
 import { tableBlockField } from "../../../src/webview/cm/table/index.js";
-import { settledMount, settledView } from "../helpers/settled-view.js";
+import { settledMount } from "../helpers/settled-view.js";
 
 function rangesOf(set: DecorationSet): Array<{ from: number; to: number }> {
   const out: Array<{ from: number; to: number }> = [];
@@ -28,7 +28,7 @@ function rangesOf(set: DecorationSet): Array<{ from: number; to: number }> {
 // read. tableBlockField.create() builds from the LAZY syntaxTree(state); under
 // CPU starvation the bounded initial parse can stop before reaching the table,
 // leaving the field empty — a flake that only bit the full parallel suite (the
-// `tableBlockField` length 0-vs-1 race). `settledView` (../helpers/settled-view.ts)
+// `tableBlockField` length 0-vs-1 race). `settledMount` (../helpers/settled-view.ts)
 // forces the parse to the doc end and republishes the snapshot, so the field
 // recomputes from the complete tree — the same "force AND publish" mechanism the
 // production resync path uses (`forceParsing` in src/webview/editor.ts) — and it
@@ -223,9 +223,10 @@ describe("mount — forces parse readiness (lazy-parse flake guard)", () => {
     // parse of a tiny doc; here we trigger the SAME root condition without luck
     // by pushing the table PAST CodeMirror's ~3000-char initial parse viewport,
     // so the create-time lazy tree provably lacks the Table node. A mount that
-    // does not force+publish a complete parse yields an empty field. Drop the
-    // `settledView(...)` wrapper from mount() — return the bare `new EditorView(...)`
-    // — and this assertion goes red.
+    // does not force+publish a complete parse yields an empty field. To see it go
+    // red: in mount(), return `new EditorView({ state, parent })` instead of
+    // `settledMount({ state, parent })`, dropping `type` from this file's
+    // `EditorView` import so the class is in scope as a value.
     const pad = "padding paragraph line.\n\n".repeat(200); // > 3000 chars
     const bigDoc = `${pad}${TABLE}\n\nbelow`;
     const tableFrom = bigDoc.indexOf(TABLE);

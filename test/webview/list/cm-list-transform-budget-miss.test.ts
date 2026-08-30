@@ -13,7 +13,7 @@
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
 import { syntaxTree } from "@codemirror/language";
 import { EditorSelection, EditorState } from "@codemirror/state";
-import { EditorView } from "@codemirror/view";
+import type { EditorView } from "@codemirror/view";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 // Override ONLY ensureSyntaxTree; keep forceParsing / syntaxTree / markdown
@@ -26,7 +26,7 @@ vi.mock("@codemirror/language", async (importActual) => {
 
 import { outdentListItem } from "../../../src/webview/cm/list/list-indent-keymap.js";
 import { renumberRun } from "../../../src/webview/cm/list/list-transform.js";
-import { settledView } from "../helpers/settled-view.js";
+import { settledMount } from "../helpers/settled-view.js";
 
 function mount(doc: string, headLine: number): EditorView {
   const parent = document.createElement("div");
@@ -36,10 +36,9 @@ function mount(doc: string, headLine: number): EditorView {
     selection: EditorSelection.cursor(0),
     extensions: [markdown({ base: markdownLanguage })],
   });
-  const view = new EditorView({ state, parent });
   // Real EOF parse so the doc is fully structured BEFORE the mocked
   // ensureSyntaxTree null forces the planner's re-parse to fail closed.
-  settledView(view);
+  const view = settledMount({ state, parent });
   view.dispatch({ selection: EditorSelection.cursor(view.state.doc.line(headLine).to) });
   return view;
 }

@@ -59,14 +59,15 @@ import { assertHasLanguage, timeoutMessage, truncatedSnapshotMessage } from "./p
  * written out here, so the view-side and state-side wordings cannot drift: each copy
  * would be pinned only by its own helper's test.
  *
- * ⚠️ LIFECYCLE: this function does NOT destroy the view, on any path. It briefly did,
- * to close a leak in the `return settledView(new EditorView(…))` shape where a throw
- * left the caller no reference to dispose. But owning the teardown of a view it did not
- * create made every caller that binds its own view and disposes it in a `finally`
- * destroy twice, and CM's `docView.destroy()` re-runs each widget's `destroy()` — fine
- * for this repo's widgets, lethal for a future non-idempotent one, and lethal precisely
- * while a test is already failing. `settledMount()` below owns what it constructs
- * instead; that is the shape the leak actually lived in. Here ownership stays with the
+ * ⚠️ LIFECYCLE: this function does NOT destroy the view, on any path. It briefly did, to
+ * close the leak a factory hits when it settles a view before handing the reference back,
+ * so a throw leaves the caller nothing to dispose. But owning the teardown of a view it
+ * did not create made every caller that binds its own view and disposes it in a `finally`
+ * destroy twice, and CM's `docView.destroy()` re-runs each widget's `destroy()` — which
+ * this repo's widgets survived (the suite was green while the double `destroy()` was in
+ * place) but a future non-idempotent one would not, and precisely while a test is already
+ * failing. `settledMount()` below closes that leak from the other end, by owning what it
+ * constructs; its docblock states the ownership rule. Here ownership stays with the
  * caller, which is where it started.
  *
  * ⚠️ The `(X) => X` shape is shared with `settledState()`, but the discard semantics are
@@ -100,12 +101,19 @@ export function settledView(view: EditorView, budgetMs = 5_000): EditorView {
  * Construct a view and settle it, destroying it if the settle throws.
  *
  * This is what a fixture factory wants — `return settledMount({ state, parent })` — and
- * it is the ONLY shape that had a real leak: the caller never receives the reference, so
- * a throw would otherwise strand a mounted view with its timers and its happy-dom
- * document alive for the rest of the file. Because this function creates the view,
- * disposing of it on failure discharges its OWN obligation rather than seizing the
- * caller's — the distinction that keeps `settledView()` above free of a double
- * `destroy()` at the sites that mount and dispose for themselves.
+ * it closes the leak that `settledView()` alone cannot: whenever a factory constructs a
+ * view and settles it BEFORE the reference reaches an owner, a throw strands a mounted
+ * view with its timers and its happy-dom document alive for the rest of the file. The
+ * leak lives in that un-owned window, not in one syntactic shape — the one-expression
+ * `return settledView(new EditorView(…))` and the two-statement
+ * `const v = new EditorView(…); settledView(v); return v;` are equally exposed — so no
+ * claim is made here about how many shapes of it the suite ever contained.
+ *
+ * The line between the two helpers is OWNERSHIP, not shape: whoever constructs the view
+ * owes its `destroy()`. `settledMount` constructs, so disposing on failure discharges its
+ * OWN obligation; `settledView` is handed a view someone else built, so destroying it
+ * would seize the caller's obligation and double-destroy at every site that already
+ * disposes in a `finally`.
  *
  * On success the view comes back undestroyed and disposal is the caller's, exactly as if
  * they had written `new EditorView(...)` themselves.

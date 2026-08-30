@@ -37,7 +37,7 @@ import {
   expandToEnclosingBlock,
   touchesStructuralReparse,
 } from "../../../src/webview/cm/structural-guard.js";
-import { settledView } from "../helpers/settled-view.js";
+import { settledMount, settledView } from "../helpers/settled-view.js";
 
 let view: EditorView | null = null;
 afterEach(() => {
@@ -48,16 +48,15 @@ afterEach(() => {
 function mountDoc(doc: string, extra: readonly unknown[] = []): EditorView {
   const parent = document.createElement("div");
   document.body.appendChild(parent);
-  const v = new EditorView({
+  // Settle the mount parse so the fold fields are built over a COMPLETE tree instead of
+  // the truncated init one — same reason as settleParse below.
+  const v = settledMount({
     parent,
     state: EditorState.create({
       doc,
       extensions: [markdown({ base: markdownLanguage }), quollFolding(), ...(extra as never[])],
     }),
   });
-  // Settle the mount parse so the fold fields are built over a COMPLETE tree instead of
-  // the truncated init one — same reason as settleParse below.
-  settledView(v);
   return v;
 }
 
