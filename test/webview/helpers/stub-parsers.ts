@@ -13,8 +13,8 @@ import { NodeType, Parser, Tree } from "@lezer/common";
  *
  * They live here rather than in one of the test files because both contract tests
  * need both stubs, and copying ~20 lines of CM-private bookkeeping into a second
- * file is exactly the duplication that let five of six `forceParse` wrappers drift
- * apart in the first place.
+ * file is exactly the duplication that let the per-file `forceParse` wrappers this
+ * helper set replaces drift apart in the first place.
  */
 
 /** Top node for the trees the stubs return; its shape is irrelevant, only length is. */
@@ -66,8 +66,11 @@ export const STUB_TREE_LENGTH = 10;
  * the coverage numbers — not that anything in the tree today produces a short tree.
  *
  * ⚠️ The stub is coupled to CM-private `work()` bookkeeping: if upstream ever derives
- * `treeLen` from the returned tree, DELETE the describes that use it rather than
- * chase it. It now guards two callers, so delete both.
+ * `treeLen` from the returned tree, DELETE the describes that use it rather than chase
+ * it — and weigh what that costs first. Two describes use it (one per contract test
+ * file), and between them they are the only thing driving THREE span guards:
+ * `fullTree()`'s short-tree throw, `settledState()`'s, and `settledView()`'s. Deleting
+ * the describes retires all three, leaving those guards unexercised.
  */
 class ShortTreeParser extends Parser {
   createParse(

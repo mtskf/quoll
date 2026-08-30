@@ -260,8 +260,15 @@ describe("autoCloseFenceOnEnter — history + keymap wiring", () => {
 // actually a fenced-block opener (whose extent the parser must resolve anyway).
 // A plain-paragraph Enter must NOT force a parse to end-of-document.
 describe("autoCloseFenceOnEnter — lazy parse (no EOF parse on non-triggers)", () => {
-  // Mount WITHOUT forceParse — a fresh, mostly-unparsed large doc, mirroring a
-  // just-opened file where an eager EOF parse would stall.
+  // Mount WITHOUT settling the parse — deliberately NOT this file's `mount()`, which
+  // wraps the view in `settledView`. Here we want a fresh, mostly-unparsed large doc,
+  // mirroring a just-opened file where an eager EOF parse would stall.
+  //
+  // ⚠️ Nothing below would go red if this were settled: the `ensureSyntaxTree` spy is
+  // cleared AFTER the mount, so a settle adds no observed call and the assertions stay
+  // green while the fixture silently stops representing an unparsed document (measured
+  // 2026-08-30 — wrapping this in `settledView` keeps all 20 tests passing). Keeping the
+  // mount unsettled is therefore a rule the reader must hold, not one the suite checks.
   function mountUnparsed(doc: string, caret: number): EditorView {
     const parent = document.createElement("div");
     document.body.appendChild(parent);

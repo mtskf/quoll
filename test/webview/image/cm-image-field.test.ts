@@ -36,12 +36,14 @@ function rangesOf(set: DecorationSet): Array<{ from: number; to: number }> {
 // mount-time parse (LanguageState.init) only covers the first ~3000 chars within
 // a wall-clock 20ms budget, so under CPU starvation the bounded initial parse can
 // stop before reaching the image node (or even mid-fixture), leaving the field
-// empty — a flake that only bit the full parallel suite. forceParsing(view,
-// doc.length) advances the parse and dispatches so the field recomputes from the
-// complete tree — the same "force AND publish" mechanism the production resync
-// path uses. ensureSyntaxTree / fullTree alone would NOT fix it: they advance the
-// parse but never republish into the field's snapshot. See LEARNING.md
-// "syntaxTree(state) は LAZY" and PR #204 (cm-block-zone-arrow-keymap).
+// empty — a flake that only bit the full parallel suite. `settledView`
+// (../helpers/settled-view.ts) forces the parse to the doc end and republishes the
+// snapshot, so the field recomputes from the complete tree — the same "force AND
+// publish" mechanism the production resync path uses — and it throws on
+// non-convergence instead of returning a discardable boolean. ensureSyntaxTree /
+// fullTree alone would NOT fix it: they advance the parse but never republish into
+// the field's snapshot. See LEARNING.md "syntaxTree(state) は LAZY" and PR #204
+// (cm-block-zone-arrow-keymap).
 function mount(doc: string, selection?: EditorSelection | SelectionRange): EditorView {
   const parent = document.createElement("div");
   document.body.appendChild(parent);

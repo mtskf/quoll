@@ -50,9 +50,9 @@ function mount(doc: string, anchor: number, selEnd = anchor): EditorView {
   // commands exercised below (lang-markdown's insertNewlineContinueMarkupCommand and
   // deleteMarkupBackward) read that snapshot via `syntaxTree(state)`, which a bare
   // `ensureSyntaxTree` leaves truncated — see helpers/settled-state.ts. `settledView`
-  // is its view-carrying twin, and it throws (rather than returning falsy) on either
-  // "no language attached" or "budget exhausted" — so mount() always attaches
-  // quollLang, and a thrown failure here is only ever a budget failure.
+  // is its view-carrying twin: it throws rather than returning a discardable boolean.
+  // The thrown message names which non-convergence fired; helpers/settled-view.ts's
+  // docblock is the authority on the full set, so this comment does not restate it.
   settledView(view);
   return view;
 }
@@ -89,11 +89,12 @@ describe("quollMarkdownLanguage wires the active markdownKeymap", () => {
 });
 
 describe("mount() hands the keymap a settled tree snapshot", () => {
-  // Non-vacuity guard for mount()'s forceParsing settle, made deterministic by DOC
-  // SIZE instead of CPU load — same construction as cm-fold-blockquote.test.ts's
+  // Non-vacuity guard for mount()'s `settledView(view)` settle, made deterministic by
+  // DOC SIZE instead of CPU load — same construction as cm-fold-blockquote.test.ts's
   // "reads a settled parse" describe, which documents why an over-long doc always
-  // lands a truncated snapshot. Swap mount()'s forceParsing back to a bare
-  // ensureSyntaxTree and the second assertion goes red.
+  // lands a truncated snapshot. Replace mount()'s `settledView(view)` with a bare
+  // `ensureSyntaxTree(view.state, view.state.doc.length)` — which advances the parse
+  // CONTEXT but never republishes the field snapshot — and the second assertion goes red.
   const doc = `${"filler paragraph line\n\n".repeat(200)}- alpha`;
 
   it("a freshly-created state's snapshot is truncated (the precondition)", () => {

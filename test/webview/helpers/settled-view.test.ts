@@ -20,7 +20,11 @@ function mount(doc: string, extensions: Extension[] = [markdown()]): EditorView 
   return new EditorView({ parent, state: EditorState.create({ doc, extensions }) });
 }
 
-/** Mount, run `body`, and always destroy — a leaked view keeps a happy-dom document alive. */
+/**
+ * Mount, run `body`, and always destroy — a leaked view keeps a happy-dom document
+ * alive. On the throwing arms `settledView` has already destroyed it, so this is a
+ * second `destroy()`; that it is harmless is pinned by the last describe, not assumed.
+ */
 function withView(doc: string, extensions: Extension[], body: (view: EditorView) => void): void {
   const view = mount(doc, extensions);
   try {
@@ -93,5 +97,55 @@ describe("settledView() throws rather than handing back a view whose tree stops 
         new RegExp(`snapshot still truncated \\(${STUB_TREE_LENGTH} of 5000 code units\\)`)
       );
     });
+  });
+});
+
+describe("a throwing settle destroys the view instead of leaking it", () => {
+  // The documented `return settledView(new EditorView({ state, parent }))` shape hands
+  // the caller nothing to destroy when the settle throws, and an undisposed view keeps
+  // real timers and a happy-dom document alive for the rest of the file (why
+  // cm-fold-extension.test.ts destroys in a `finally`). Under load a budget miss is a
+  // recorded reality, so one failure would otherwise poison its whole file. Each arm is
+  // pinned separately because each throws from a different point in the body.
+  //
+  // `EditorView.destroy()` calls `this.dom.remove()`, so detachment is the observable
+  // proxy: `destroyed` is `private` in the `.d.ts` and unreadable from typed code.
+  const detached = (view: EditorView) => !view.dom.isConnected;
+
+  it("after the no-language throw", () => {
+    const view = mount("# heading\n\nbody\n", []);
+    expect(() => settledView(view)).toThrow(/no language configured/);
+    expect(detached(view)).toBe(true);
+  });
+
+  it("after the timeout throw", () => {
+    const view = mount("x".repeat(5_000), [neverFinishingLanguage()]);
+    expect(() => settledView(view, 1)).toThrow(/did not complete within/);
+    expect(detached(view)).toBe(true);
+  });
+
+  it("after the short-snapshot throw", () => {
+    const view = mount("x".repeat(5_000), [shortTreeLanguage()]);
+    expect(() => settledView(view)).toThrow(/snapshot still truncated/);
+    expect(detached(view)).toBe(true);
+  });
+
+  it("and tolerates the caller destroying it a second time", () => {
+    // Sites that bind the view themselves already destroy it in their own `finally`, so
+    // the helper's destroy is the FIRST of two. `EditorView.destroy()` has no
+    // `destroyed` early-return and the flag cannot be read from typed code, so the
+    // second call is not guarded — it has to be harmless, and this is what says so.
+    const view = mount("x".repeat(5_000), [shortTreeLanguage()]);
+    expect(() => settledView(view)).toThrow();
+    expect(() => view.destroy()).not.toThrow();
+  });
+
+  it("leaves a successful settle attached, so the caller still owns disposal", () => {
+    const view = mount(`${"filler paragraph line\n\n".repeat(200)}- a\n  - b\n`, [markdown()]);
+    try {
+      expect(detached(settledView(view))).toBe(false);
+    } finally {
+      view.destroy();
+    }
   });
 });

@@ -27,30 +27,26 @@ function mountDoc(doc: string, extra: readonly unknown[] = []): EditorView {
       extensions: [markdown({ base: markdownLanguage }), quollFolding(), ...(extra as never[])],
     }),
   });
-  // Settle the initial parse AND rebuild fold fields over the complete tree
-  // (forceParsing dispatches an empty tx if the parse advanced). ensureSyntaxTree
-  // alone completes the parse CONTEXT but not the field snapshot, so under load the
-  // mount-time field could be built over a truncated init tree. See settleParse.
+  // Settle the mount parse so the fold fields are built over a COMPLETE tree instead of
+  // the truncated init one — same reason as settleParse below.
   settledView(v);
   return v;
 }
 
-// Settle CodeMirror's async parser after an edit so the fold gutter fields are
-// observed against a COMPLETE syntax tree. CM's LanguageState.apply reparses a
-// docChanged with only a hardcoded 20ms `Work.Apply` budget; these fixtures need
-// several parse `advance()` steps, so under full-suite CPU starvation a >20ms
-// scheduler preemption mid-parse makes CM `takeTree()` TRUNCATE the post-edit tree
-// (treeLen < doc.length). The field then correctly falls back to a full rebuild,
-// but the tree-completeness check reads false and a node the edit was
-// meant to reveal can still be missing — the historical load-sensitive flake (memory
-// [[quoll-fold-bounded-equals-full-tests-flaky-under-load]], docs/LEARNING.md).
-// `forceParsing` finishes the parse and, if it advanced, dispatches an empty tx so
-// the field rebuilds over the finished tree — EXACTLY production's async-parse
-// settle path. It is a no-op when the tree already completed within budget (the
-// common, unloaded case), so the bounded recompute path stays exercised there while
-// a red now strictly means a bounded-vs-full contract breach, not a parse-timing race.
+// Settle CodeMirror's async parser after an edit so the fold gutter fields are observed
+// against a COMPLETE syntax tree. The mechanism and its failure modes are documented
+// once, on `settledView` in ../helpers/settled-view.ts; what is specific to THESE
+// fixtures: CM's LanguageState.apply reparses a docChanged under a hardcoded 20ms
+// `Work.Apply` budget and they need several parse `advance()` steps, so under full-suite
+// CPU starvation a >20ms preemption mid-parse makes CM `takeTree()` TRUNCATE the
+// post-edit tree (treeLen < doc.length). The field then correctly falls back to a full
+// rebuild, but the tree-completeness check reads false and a node the edit was meant to
+// reveal can still be missing — the historical load-sensitive flake (memory
+// [[quoll-fold-bounded-equals-full-tests-flaky-under-load]], docs/LEARNING.md). Settling
+// is a no-op once the tree completed within budget (the common, unloaded case), so the
+// bounded recompute path stays exercised there while a red strictly means a
+// bounded-vs-full contract breach, not a parse-timing race.
 function settleParse(v: EditorView): void {
-  // settledView throws on non-convergence — the assertion this used to make inline.
   settledView(v);
 }
 

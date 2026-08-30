@@ -141,9 +141,10 @@ interface Edit {
 // tableBlockField reads its widget slices from the bounded-maintained
 // tableSkeletonField, so BOTH must be registered for the bounded path to run
 // (absent, buildAll falls back to a full walk and the oracle would be vacuous).
-// A live view + forceParsing is required: the field converges to the fully-
-// parsed result via the tree-identity self-heal branch, exactly as
-// cm-table-skeleton.test.ts drives it.
+// A live view settled through `settledView` is required: settling advances the
+// parse to the doc end AND republishes the tree snapshot, and the field then
+// converges to the fully-parsed result via the tree-identity self-heal branch,
+// exactly as cm-table-skeleton.test.ts drives it.
 
 const tableExts = (): Extension[] => [
   EditorState.allowMultipleSelections.of(true),
@@ -193,7 +194,7 @@ function checkTableEquivalence(initial: string, edits: Edit[]): void {
       const len = view.state.doc.length;
       // Pre-self-heal bounded assertion: when the post-edit tree is already
       // complete, boundedUpdate ran during dispatch — check its output BEFORE
-      // forceParsing so a self-heal can't mask a bounded byte bug (Codex R2-2,
+      // settling so a self-heal can't mask a bounded byte bug (Codex R2-2,
       // cm-table-skeleton.test.ts). Whether or not the tree is synchronously
       // available here is harness-dependent, so this stays conditional and the
       // guaranteed bounded-path pin lives in its own test below.
@@ -298,7 +299,7 @@ describe("tableBlockField byte-identity: bounded ≡ full", () => {
   // no-self-heal anchor): a small in-place edit on a complete tree keeps the
   // frontier at doc end, so boundedUpdate ran during dispatch. Assert the tree
   // IS available (not conditional) and check the field's output — plus its
-  // byte-anchor — BEFORE any forceParsing, so a broken bounded reuse can't be
+  // byte-anchor — BEFORE any settling, so a broken bounded reuse can't be
   // masked by a self-heal. This is the case the matrix's conditional guard
   // cannot guarantee runs.
   it("exercises the bounded path without self-heal masking (revert-check anchor)", () => {

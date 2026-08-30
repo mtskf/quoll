@@ -1,6 +1,6 @@
 import { forceParsing, syntaxTree } from "@codemirror/language";
 import type { EditorView } from "@codemirror/view";
-import { assertHasLanguage } from "./parse-to-end.js";
+import { assertHasLanguage, timeoutMessage, truncatedSnapshotMessage } from "./parse-to-end.js";
 
 /**
  * The view-carrying twin of `settledState()`: force a MOUNTED view's parse to the end
@@ -13,17 +13,21 @@ import { assertHasLanguage } from "./parse-to-end.js";
  * transaction when the parse finishes. happy-dom never runs that worker, so under
  * vitest a mounted view's fields stay built on the init-viewport fragment forever.
  * "It is a live view, so parsing runs" is FALSE here — a comment in
- * cm-fenced-code-language-picker.test.ts asserted exactly that and was wrong.
+ * cm-fenced-code-language-picker.test.ts states exactly that and is wrong. That comment
+ * is still in the tree: correcting it is out of this change's scope and belongs to the
+ * follow-up that migrates the remaining hand-rolled settles.
  *
  * Why the checks live INSIDE this helper rather than at the call sites. `forceParsing`
- * reports failure by RETURNING FALSE, and this suite discarded that boolean at 27 of
- * its 32 call sites (measured 2026-08-30). Six of those were near-identical four-line
- * `forceParse` wrappers, five of which dropped the result; three other files each
- * hand-rolled their own `expect(...).toBe(true)`. That is one problem with six
- * solutions, and the check fell out of most of them — so it is put where it cannot be
- * omitted rather than left as something each author must remember. A silently
- * non-converged settle otherwise surfaces as a baffling content mismatch far from its
- * cause, or passes vacuously because both sides of a comparison are equally truncated.
+ * reports failure by RETURNING FALSE, and most of this suite's call sites discarded
+ * that boolean. Several files had each grown their own near-identical four-line
+ * `forceParse` wrapper, and nearly all of those dropped the result; a few other files
+ * hand-rolled an `expect(...).toBe(true)` of their own. That is one problem with as many
+ * solutions as there are files, and the check fell out of most of them — so it is put
+ * where it cannot be omitted rather than left as something each author must remember.
+ * (The census behind "most" belongs to the PR description, which is dated and does not
+ * drift; repeating counts here would only rot.) A silently non-converged settle
+ * otherwise surfaces as a baffling content mismatch far from its cause, or passes
+ * vacuously because both sides of a comparison are equally truncated.
  *
  * The three failures are reported separately because they send the reader to different
  * places:
@@ -43,27 +47,48 @@ import { assertHasLanguage } from "./parse-to-end.js";
  * ./settled-view.test.ts, for the same reason ./full-tree.ts keeps its own — a silent
  * partial is the one outcome this helper must never produce.
  *
+ * The latter two messages are built by shared builders in ./parse-to-end.ts rather than
+ * written out here, so the view-side and state-side wordings cannot drift: each copy
+ * would be pinned only by its own helper's test.
+ *
  * Returns the SAME view, so it can wrap a constructor at a fixture factory:
- * `return settledView(new EditorView({ state, parent }))`.
+ * `return settledView(new EditorView({ state, parent }))`. On ANY of the three throws
+ * the view is destroyed first, because in exactly that shape the caller never receives
+ * the reference and could not destroy it itself — and an undisposed view keeps real
+ * timers and a happy-dom document alive for the rest of the file. Call sites that pass
+ * an already-bound view and destroy it in their own `finally` therefore destroy twice;
+ * that is safe (`EditorView.destroy()` clears `plugins` and its sub-objects tolerate a
+ * second call — measured under happy-dom, and pinned by ./settled-view.test.ts), and it
+ * cannot be guarded from typed code anyway since `destroyed` is `private` in the `.d.ts`.
+ *
+ * ⚠️ The `(X) => X` shape is shared with `settledState()`, but the discard semantics are
+ * OPPOSITE. Writing `settledView(view);` as a bare statement is correct — a view is
+ * mutable, so the caller's view is settled either way — whereas the same discard on
+ * `settledState(state);` is a SILENT NO-OP. Do not carry the statement form across to
+ * the state-side sibling; see the warning in ./settled-state.ts.
  *
  * The default budget is 5_000ms, matching what the retired wrappers used, so migrating
- * a call site is a behaviour-preserving rename. Sites that passed 10_000 keep passing it.
+ * a call site changes no timing. It is NOT a pure rename, though: the sites that
+ * discarded `forceParsing`'s boolean move from a best-effort settle to one that THROWS
+ * when the parse does not converge, which is a contract change and the point of the
+ * exercise. Sites that passed 10_000 keep passing it.
  *
  * Lengths are UTF-16 code units (what `state.doc.length` counts), not bytes.
  * All three throws are pinned by ./settled-view.test.ts.
  */
 export function settledView(view: EditorView, budgetMs = 5_000): EditorView {
-  assertHasLanguage(view.state, "settledView");
-  if (!forceParsing(view, view.state.doc.length, budgetMs)) {
-    throw new Error(
-      `settledView: parse did not complete within ${budgetMs}ms for a ${view.state.doc.length}-code-unit document`
-    );
-  }
-  const covered = syntaxTree(view.state).length;
-  if (covered < view.state.doc.length) {
-    throw new Error(
-      `settledView: snapshot still truncated (${covered} of ${view.state.doc.length} code units) after settling`
-    );
+  try {
+    assertHasLanguage(view.state, "settledView");
+    if (!forceParsing(view, view.state.doc.length, budgetMs)) {
+      throw new Error(timeoutMessage("settledView", budgetMs, view.state.doc.length));
+    }
+    const covered = syntaxTree(view.state).length;
+    if (covered < view.state.doc.length) {
+      throw new Error(truncatedSnapshotMessage("settledView", covered, view.state.doc.length));
+    }
+  } catch (error) {
+    view.destroy();
+    throw error;
   }
   return view;
 }
