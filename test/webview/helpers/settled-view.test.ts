@@ -197,9 +197,18 @@ describe("the failure destroy reaches each widget twice", () => {
         destroys += 1;
       }),
     ]);
-    expect(() => settledView(view)).toThrow(/snapshot still truncated/);
-    expect(destroys).toBe(1); // the helper's cleanup
-    view.destroy(); // what a caller that bound the view does in its own finally
-    expect(destroys).toBe(2); // ...and the widget sees it again
+    // The `finally` is load-bearing rather than tidiness: if settledView ever STOPS
+    // throwing, the first assertion aborts the test and this view would stay attached,
+    // keeping happy-dom state and real timers alive for everything after it — the very
+    // leak the describe above exists to close. A regression here has to produce one
+    // isolated failure, not poison the rest of the file.
+    try {
+      expect(() => settledView(view)).toThrow(/snapshot still truncated/);
+      expect(destroys).toBe(1); // the helper's cleanup
+      view.destroy(); // what a caller that bound the view does in its own finally
+      expect(destroys).toBe(2); // ...and the widget sees it again
+    } finally {
+      view.destroy();
+    }
   });
 });

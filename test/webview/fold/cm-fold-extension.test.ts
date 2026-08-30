@@ -67,7 +67,7 @@ function mountDoc(doc: string, extra: readonly unknown[] = []): EditorView {
 // view never self-heals — and owns the throw contract. It does NOT cover the POST-EDIT
 // path below, which is why this block exists rather than deferring wholesale: CM's
 // LanguageState.apply reparses a docChanged under a hardcoded 20ms
-// `Work.Apply` budget and they need several parse `advance()` steps, so under full-suite
+// `Work.Apply` budget, and these fixtures need several parse `advance()` steps, so under full-suite
 // CPU starvation a >20ms preemption mid-parse makes CM `takeTree()` TRUNCATE the
 // post-edit tree (treeLen < doc.length). The field then correctly falls back to a full
 // rebuild, but the tree-completeness check reads false and a node the edit was meant to
