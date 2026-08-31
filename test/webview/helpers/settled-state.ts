@@ -1,6 +1,6 @@
 import { syntaxTree } from "@codemirror/language";
 import type { EditorState } from "@codemirror/state";
-import { parseToEnd } from "./parse-to-end.js";
+import { parseToEnd, truncatedSnapshotMessage } from "./parse-to-end.js";
 
 /**
  * The view-free twin of `forceParsing`: return an `EditorState` whose LANGUAGE
@@ -39,17 +39,26 @@ import { parseToEnd } from "./parse-to-end.js";
  * inline and never pass through such a parameter. The runtime throws are the
  * enforcement; the type is not.
  *
+ * ⚠️ ALWAYS BIND THE RESULT. This helper and `settledView()` in ./settled-view.ts
+ * share a `(X) => X` shape, but their discard semantics are OPPOSITE: a view is
+ * mutable, so `settledView(view);` as a bare statement still settles the caller's
+ * view, whereas `settledState(state);` as a bare statement is a SILENT NO-OP — an
+ * `EditorState` is immutable and the republished snapshot exists only in the
+ * returned value. Nothing catches that: TypeScript has no must-use, Biome does not
+ * flag a discarded call expression, and `pnpm compile` is green either way. The
+ * tests that follow such a call keep reading the truncated original and go back to
+ * flaking under load, which is the failure this helper exists to remove.
+ *
  * The truncated-snapshot throw below, and the no-language throw `parseToEnd`
- * raises for this helper, are pinned by ./settled-state.test.ts.
+ * raises for this helper, are pinned by ./settled-state.test.ts. Its wording comes
+ * from a builder shared with `settledView()` — see ./parse-to-end.ts.
  */
 export function settledState(state: EditorState): EditorState {
   parseToEnd(state, "settledState");
   const settled = state.update({}).state;
   const covered = syntaxTree(settled).length;
   if (covered < settled.doc.length) {
-    throw new Error(
-      `settledState: snapshot still truncated (${covered} of ${settled.doc.length} code units) after settling`
-    );
+    throw new Error(truncatedSnapshotMessage("settledState", covered, settled.doc.length));
   }
   return settled;
 }

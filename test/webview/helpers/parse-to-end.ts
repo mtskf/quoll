@@ -1,7 +1,7 @@
 import { ensureSyntaxTree, language } from "@codemirror/language";
 import type { EditorState } from "@codemirror/state";
 
-type ParseCaller = "fullTree" | "settledState";
+type ParseCaller = "fullTree" | "settledState" | "settledView" | "settledMount";
 
 /**
  * Shared parse step behind `fullTree()` and `settledState()`: advance the state's
@@ -23,8 +23,14 @@ type ParseCaller = "fullTree" | "settledState";
  * contention for what is a one-line extension list fix, so we test for a
  * language FIRST and only then attribute a `null` to the timeout. Both helpers
  * are generically named and live in a shared `helpers/` directory, so case (A)
- * is a plausible mistake for a future caller; keeping the two throw sites in ONE
- * function is what stops the two messages drifting apart again.
+ * is a plausible mistake for a future caller; keeping the checks and their
+ * wording in ONE module is what stops the messages drifting apart again.
+ * `settledView()` settles a VIEW via `forceParsing` and so cannot route through
+ * `parseToEnd` at all, which is why case (A) is exported separately as
+ * `assertHasLanguage` and why the two message bodies are exported as builders
+ * rather than written out at each throw site: every copy of a message is only
+ * pinned by its own helper's test, so a copy can be reworded while the rest of
+ * the suite stays green.
  *
  * The probe is the public `language` FACET rather than the `Language.state`
  * field `ensureSyntaxTree` itself reads: that field is `@internal` (absent from
@@ -44,16 +50,55 @@ type ParseCaller = "fullTree" | "settledState";
  * counts), not bytes.
  */
 export function parseToEnd(state: EditorState, caller: ParseCaller, budgetMs = 5_000) {
+  assertHasLanguage(state, caller);
+  const tree = ensureSyntaxTree(state, state.doc.length, budgetMs);
+  if (tree === null) {
+    throw new Error(timeoutMessage(caller, budgetMs, state.doc.length));
+  }
+  return tree;
+}
+
+/**
+ * Case (A) above, on its own, so the view-side helpers can reuse it. They settle through
+ * `forceParsing`, which needs the VIEW rather than the state, so they cannot call
+ * `parseToEnd` at all — but they inherit the same conflation: `forceParsing` is
+ * `ensureSyntaxTree` plus a conditional dispatch and collapses to the same falsy result
+ * for both causes. Exporting the probe rather than copying it is what keeps every helper
+ * that settles a parse reporting a missing language in identical words.
+ *
+ * Which helper calls this, and through what, is ./settled-view.ts's business — naming a
+ * call chain here only dates the comment the next time that file rearranges one.
+ */
+export function assertHasLanguage(state: EditorState, caller: ParseCaller): void {
   if (state.facet(language) === null) {
     throw new Error(
       `${caller}: state has no language configured — no Language extension is attached, so there is nothing to parse`
     );
   }
-  const tree = ensureSyntaxTree(state, state.doc.length, budgetMs);
-  if (tree === null) {
-    throw new Error(
-      `${caller}: parse did not complete within ${budgetMs}ms for a ${state.doc.length}-code-unit document`
-    );
-  }
-  return tree;
+}
+
+/**
+ * The budget-exhausted message, shared by `parseToEnd` above and by the view-side
+ * settle, which reaches the same condition through `forceParsing`'s `false`.
+ */
+export function timeoutMessage(caller: ParseCaller, budgetMs: number, docLength: number): string {
+  return `${caller}: parse did not complete within ${budgetMs}ms for a ${docLength}-code-unit document`;
+}
+
+/**
+ * The short-snapshot message, shared by the state-side and view-side settles. Neither
+ * routes through `parseToEnd` for this check — the published SNAPSHOT is read after the
+ * parse step, from the state and from the view's state respectively — so the builder,
+ * not a common call site, is what keeps them worded alike.
+ *
+ * `fullTree()` deliberately does NOT use it: it reports the tree `ensureSyntaxTree`
+ * returned rather than a republished snapshot, which is a different fact and reads as a
+ * different sentence.
+ */
+export function truncatedSnapshotMessage(
+  caller: ParseCaller,
+  covered: number,
+  docLength: number
+): string {
+  return `${caller}: snapshot still truncated (${covered} of ${docLength} code units) after settling`;
 }

@@ -18,12 +18,13 @@
 // (dropped in markdown.ts); Quoll's own paste-URL-over-selection handler lives in
 // src/webview/cm/paste/url-link-paste.ts and is covered by cm-paste-url-link.test.ts.
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
-import { codeFolding, foldable, forceParsing, syntaxTree } from "@codemirror/language";
+import { codeFolding, foldable, syntaxTree } from "@codemirror/language";
 import { EditorSelection, EditorState, type Extension } from "@codemirror/state";
 import { EditorView, runScopeHandlers } from "@codemirror/view";
 import { afterEach, describe, expect, it } from "vitest";
 import { quollMarkdownLanguage } from "../../src/webview/cm/markdown.js";
 import { settledState } from "./helpers/settled-state.js";
+import { settledView } from "./helpers/settled-view.js";
 
 const quollLang = quollMarkdownLanguage();
 const upstreamLang = markdown({ base: markdownLanguage });
@@ -48,14 +49,11 @@ function mount(doc: string, anchor: number, selEnd = anchor): EditorView {
   // Settle the parse AND republish the language field's tree snapshot: the keymap
   // commands exercised below (lang-markdown's insertNewlineContinueMarkupCommand and
   // deleteMarkupBackward) read that snapshot via `syntaxTree(state)`, which a bare
-  // `ensureSyntaxTree` leaves truncated — see helpers/settled-state.ts. `forceParsing`
-  // is its view-carrying twin, and like `ensureSyntaxTree` it collapses "no language
-  // attached" and "budget exhausted" into one falsy result — so this assertion's
-  // failure is only a budget failure because mount() always attaches quollLang.
-  expect(
-    forceParsing(view, view.state.doc.length, 5000),
-    `mount: parse did not complete within 5s for a ${view.state.doc.length}-code-unit document`
-  ).toBe(true);
+  // `ensureSyntaxTree` leaves truncated — see helpers/settled-state.ts. `settledView`
+  // is its view-carrying twin: it throws rather than returning a discardable boolean.
+  // The thrown message names which non-convergence fired; helpers/settled-view.ts's
+  // docblock is the authority on the full set, so this comment does not restate it.
+  settledView(view);
   return view;
 }
 
@@ -91,11 +89,12 @@ describe("quollMarkdownLanguage wires the active markdownKeymap", () => {
 });
 
 describe("mount() hands the keymap a settled tree snapshot", () => {
-  // Non-vacuity guard for mount()'s forceParsing settle, made deterministic by DOC
-  // SIZE instead of CPU load — same construction as cm-fold-blockquote.test.ts's
+  // Non-vacuity guard for mount()'s `settledView(view)` settle, made deterministic by
+  // DOC SIZE instead of CPU load — same construction as cm-fold-blockquote.test.ts's
   // "reads a settled parse" describe, which documents why an over-long doc always
-  // lands a truncated snapshot. Swap mount()'s forceParsing back to a bare
-  // ensureSyntaxTree and the second assertion goes red.
+  // lands a truncated snapshot. Replace mount()'s `settledView(view)` with a bare
+  // `ensureSyntaxTree(view.state, view.state.doc.length)` — which advances the parse
+  // CONTEXT but never republishes the field snapshot — and the second assertion goes red.
   const doc = `${"filler paragraph line\n\n".repeat(200)}- alpha`;
 
   it("a freshly-created state's snapshot is truncated (the precondition)", () => {
