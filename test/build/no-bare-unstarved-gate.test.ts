@@ -136,11 +136,21 @@ function scannableFiles(dir: string, out: string[] = []): string[] {
   return out;
 }
 
+/**
+ * `test/`-relative path in POSIX form — the shape both the ALLOW keys and the directory
+ * roster below are written in. Shared by the census and the reach test so the two cannot
+ * drift apart on Windows, where only one of them normalising would compare "/"-joined
+ * expectations against "\"-separated actuals.
+ */
+function testRelative(abs: string): string {
+  return relative(TEST_ROOT, abs).split("\\").join("/");
+}
+
 /** file (relative to test/) → the lines carrying the shape. */
 function census(): Map<string, number[]> {
   const found = new Map<string, number[]>();
   for (const abs of scannableFiles(TEST_ROOT)) {
-    const rel = relative(TEST_ROOT, abs).split("\\").join("/");
+    const rel = testRelative(abs);
     const lines = findBareGates(readFileSync(abs, "utf8"), abs);
     if (lines.length > 0) {
       found.set(rel, lines);
@@ -180,9 +190,7 @@ describe("the scanner itself is not vacuous", () => {
   // no-file-level-ts-nocheck.test.ts learned — do not leave "what is in scope" as the
   // guard's own unverified answer.
   it("scans every test subtree, not just the allowlisted ones", () => {
-    const scanned = new Set(
-      scannableFiles(TEST_ROOT).map((abs) => relative(TEST_ROOT, abs).split("\\").join("/"))
-    );
+    const scanned = new Set(scannableFiles(TEST_ROOT).map(testRelative));
     const dirs = new Set([...scanned].map((rel) => rel.split("/").slice(0, -1).join("/")));
     for (const required of [
       "build",
