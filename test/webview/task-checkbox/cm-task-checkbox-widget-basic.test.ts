@@ -2,11 +2,12 @@
 
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
 import { EditorState } from "@codemirror/state";
-import { EditorView } from "@codemirror/view";
+import type { EditorView } from "@codemirror/view";
 import { describe, expect, it } from "vitest";
 
 import { toggleTaskCheckbox } from "../../../src/webview/cm/task-checkbox/task-checkbox-command.js";
 import { CheckboxWidget } from "../../../src/webview/cm/task-checkbox/task-checkbox-widget.js";
+import { settledMount } from "../helpers/settled-view.js";
 
 function mountView(doc: string): EditorView {
   const parent = document.createElement("div");
@@ -15,7 +16,9 @@ function mountView(doc: string): EditorView {
     doc,
     extensions: [markdown({ base: markdownLanguage })],
   });
-  return new EditorView({ state, parent });
+  // toggleTaskCheckbox reads syntaxTree(view.state) (task-checkbox-command.ts) —
+  // settle so the mounted view's tree isn't stuck on the init-viewport fragment.
+  return settledMount({ state, parent });
 }
 
 describe("CheckboxWidget — DOM + a11y", () => {

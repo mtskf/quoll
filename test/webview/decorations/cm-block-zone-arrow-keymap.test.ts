@@ -1,9 +1,8 @@
 // @vitest-environment happy-dom
 import { defaultKeymap } from "@codemirror/commands";
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
-import { forceParsing } from "@codemirror/language";
 import { EditorSelection, EditorState, type SelectionRange, Transaction } from "@codemirror/state";
-import { type DecorationSet, EditorView, keymap, runScopeHandlers } from "@codemirror/view";
+import { type DecorationSet, type EditorView, keymap, runScopeHandlers } from "@codemirror/view";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -13,6 +12,7 @@ import {
 } from "../../../src/webview/cm/decorations/block-zone-arrow-keymap.js";
 import { quollBlockReplaceZones } from "../../../src/webview/cm/decorations/index.js";
 import { tableBlockField } from "../../../src/webview/cm/table/index.js";
+import { settledMount } from "../helpers/settled-view.js";
 
 function rangesOf(set: DecorationSet): Array<{ from: number; to: number }> {
   const out: Array<{ from: number; to: number }> = [];
@@ -28,17 +28,14 @@ function rangesOf(set: DecorationSet): Array<{ from: number; to: number }> {
 // read. tableBlockField.create() builds from the LAZY syntaxTree(state); under
 // CPU starvation the bounded initial parse can stop before reaching the table,
 // leaving the field empty — a flake that only bit the full parallel suite (the
-// `tableBlockField` length 0-vs-1 race). forceParsing(view, doc.length) advances
-// the parse and dispatches so the field recomputes from the complete tree — the
-// same "force AND publish" mechanism the production resync path uses
-// (CellEditorController.revalidateOrResync). ensureSyntaxTree / fullTree alone
-// would NOT fix it: they advance the parse but never republish into the field's
-// snapshot. See LEARNING.md "syntaxTree(state) は LAZY".
-function forceParse(view: EditorView): EditorView {
-  forceParsing(view, view.state.doc.length, 5_000);
-  return view;
-}
-
+// `tableBlockField` length 0-vs-1 race). `settledMount` (../helpers/settled-view.ts)
+// forces the parse to the doc end and republishes the snapshot, so the field
+// recomputes from the complete tree — the same "force AND publish" mechanism the
+// production resync path uses (`forceParsing` in src/webview/editor.ts) — and it
+// throws on non-convergence instead of returning a discardable boolean.
+// ensureSyntaxTree / fullTree alone would NOT fix it: they advance the parse but
+// never republish into the field's snapshot. See LEARNING.md
+// "syntaxTree(state) は LAZY".
 function mount(doc: string, selection: EditorSelection | SelectionRange): EditorView {
   const parent = document.createElement("div");
   document.body.appendChild(parent);
@@ -51,7 +48,7 @@ function mount(doc: string, selection: EditorSelection | SelectionRange): Editor
       tableBlockField,
     ],
   });
-  return forceParse(new EditorView({ state, parent }));
+  return settledMount({ state, parent });
 }
 
 const TABLE = "| H1 | H2 |\n| -- | -- |\n| a1 | a2 |";
@@ -174,7 +171,7 @@ describe("blockZoneArrowDown", () => {
         observer,
       ],
     });
-    const view = forceParse(new EditorView({ state, parent }));
+    const view = settledMount({ state, parent });
     try {
       expect(blockZoneArrowDown(view)).toBe(true);
       expect(dispatched).toContain("select");
@@ -226,8 +223,10 @@ describe("mount — forces parse readiness (lazy-parse flake guard)", () => {
     // parse of a tiny doc; here we trigger the SAME root condition without luck
     // by pushing the table PAST CodeMirror's ~3000-char initial parse viewport,
     // so the create-time lazy tree provably lacks the Table node. A mount that
-    // does not force+publish a complete parse yields an empty field. Revert the
-    // forceParse step in mount() and this assertion goes red.
+    // does not force+publish a complete parse yields an empty field. To see it go
+    // red: in mount(), return `new EditorView({ state, parent })` instead of
+    // `settledMount({ state, parent })`, dropping `type` from this file's
+    // `EditorView` import so the class is in scope as a value.
     const pad = "padding paragraph line.\n\n".repeat(200); // > 3000 chars
     const bigDoc = `${pad}${TABLE}\n\nbelow`;
     const tableFrom = bigDoc.indexOf(TABLE);
@@ -311,7 +310,7 @@ describe("blockZoneArrowKeymap — precedence vs defaultKeymap", () => {
         blockZoneArrowKeymap(),
       ],
     });
-    return forceParse(new EditorView({ state, parent }));
+    return settledMount({ state, parent });
   }
 
   it("ArrowDown dispatched via runScopeHandlers lands caret at TABLE_FROM (Prec.high wins over defaultKeymap)", () => {

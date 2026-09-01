@@ -12,6 +12,7 @@ import { splitToCmText } from "../../../src/webview/cm/seed.js";
 import { tableBlockField } from "../../../src/webview/cm/table/index.js";
 import type { TableBlockWidget } from "../../../src/webview/cm/table/table-widget.js";
 import { fullTree } from "../helpers/full-tree.js";
+import { settledMount } from "../helpers/settled-view.js";
 
 function rangesOf(set: DecorationSet): Array<{ from: number; to: number }> {
   const out: Array<{ from: number; to: number }> = [];
@@ -63,7 +64,11 @@ function mount(
       ...(extraExtensions as never[]),
     ],
   });
-  return new EditorView({ state, parent });
+  // Settle: these extensions register tableBlockField WITHOUT tableSkeletonField,
+  // so resolveModels() takes its fallback arm into tableModels(state) — the
+  // syntaxTree(state) read (table-skeleton.ts). A mounted view never self-heals
+  // under happy-dom, so force the full tree at mount time.
+  return settledMount({ state, parent });
 }
 
 const TABLE = "| H1 | H2 |\n| -- | -- |\n| a1 | a2 |";
@@ -441,7 +446,8 @@ describe("tableBlockField — reveal and offset pins", () => {
     const lfText = splitToCmText(raw);
     const parent = document.createElement("div");
     document.body.appendChild(parent);
-    const view = new EditorView({
+    // Settle: same tableModels(state)/syntaxTree(state) fallback read as mount() above.
+    const view = settledMount({
       parent,
       state: EditorState.create({
         doc: lfText,
@@ -482,19 +488,25 @@ describe("tableBlockField — reveal and offset pins", () => {
   it("drops the widget for a NON-EMPTY selection inside the table (drag reveal)", () => {
     const doc = "before\n\n| Name | Role |\n| - | - |\n| alpha | admin |\n\nafter";
     const from = doc.indexOf("alpha");
-    // The caret is the click path; the range is the drag path. Both must reveal.
-    const caretView = mount(doc, EditorSelection.single(from));
-    const rangeView = mount(doc, EditorSelection.single(from, from + 5));
-    // Control: a selection entirely outside the table keeps the widget.
-    const outsideView = mount(doc, EditorSelection.single(0, 3));
+    // Declared outside the try so `finally` can reach whichever mounts
+    // succeeded; each mount() call below already settles, so a throw on the
+    // 2nd/3rd construction must not strand the ones built before it.
+    let caretView: EditorView | undefined;
+    let rangeView: EditorView | undefined;
+    let outsideView: EditorView | undefined;
     try {
+      // The caret is the click path; the range is the drag path. Both must reveal.
+      caretView = mount(doc, EditorSelection.single(from));
+      rangeView = mount(doc, EditorSelection.single(from, from + 5));
+      // Control: a selection entirely outside the table keeps the widget.
+      outsideView = mount(doc, EditorSelection.single(0, 3));
       expect(rangesOf(caretView.state.field(tableBlockField))).toHaveLength(0);
       expect(rangesOf(rangeView.state.field(tableBlockField))).toHaveLength(0);
       expect(rangesOf(outsideView.state.field(tableBlockField))).toHaveLength(1);
     } finally {
-      caretView.destroy();
-      rangeView.destroy();
-      outsideView.destroy();
+      caretView?.destroy();
+      rangeView?.destroy();
+      outsideView?.destroy();
     }
   });
 });

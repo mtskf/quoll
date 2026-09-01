@@ -3,10 +3,11 @@
 import { history } from "@codemirror/commands";
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
 import { EditorState } from "@codemirror/state";
-import { EditorView } from "@codemirror/view";
+import type { EditorView } from "@codemirror/view";
 import { describe, expect, it, vi } from "vitest";
 
 import { CheckboxWidget } from "../../../src/webview/cm/task-checkbox/task-checkbox-widget.js";
+import { settledMount } from "../helpers/settled-view.js";
 
 describe("CheckboxWidget — toggle dispatch (focus + toggle-target)", () => {
   function mountWithDoc(doc: string): EditorView {
@@ -16,7 +17,8 @@ describe("CheckboxWidget — toggle dispatch (focus + toggle-target)", () => {
       doc,
       extensions: [markdown({ base: markdownLanguage }), history()],
     });
-    return new EditorView({ state, parent });
+    // toggleTaskCheckbox's Lezer cross-check reads syntaxTree(view.state).
+    return settledMount({ state, parent });
   }
 
   it("Space/Enter on the focused widget returns focus to the editor after toggle (round-3 #23 — keyboard UX)", () => {
@@ -84,7 +86,10 @@ describe("CheckboxWidget — toggle dispatch (focus + toggle-target)", () => {
       doc: "- [ ] alpha",
       extensions: [markdown({ base: markdownLanguage }), history(), EditorState.readOnly.of(true)],
     });
-    const view = new EditorView({ state, parent });
+    // Settling is inert here — the readOnly guard aborts before the tree
+    // read — but applying it uniformly avoids a silent dependence on the
+    // guard's internal ORDER.
+    const view = settledMount({ state, parent });
     try {
       const w = new CheckboxWidget(false, 2, "alpha");
       const el = w.toDOM(view);
