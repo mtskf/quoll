@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { proseSpaceMetric } from "../../src/webview/cm/decorations/prose-space-metric.js";
 import { listHangIndent } from "../../src/webview/cm/list/list-hang-indent.js";
 import { quollCmLinePaddingTheme } from "../../src/webview/cm/theme.js";
+import { settled } from "./helpers/frames.js";
 
 // The `.cm-line` start-padding token. Task 1 shipped this as the EXISTING
 // `--quoll-column-inset-left` (styles.css :root, mirrored by the fenced-code /
@@ -28,23 +29,6 @@ const PADDING_TOKEN = "--quoll-column-inset-left";
 // while correct code stays well inside it. Kept per-target (Codex C85): only the
 // bullet-glyph case uses it; the ownership + nesting checks are exact/ordinal.
 const BULLET_TOLERANCE_PX = 2;
-
-/** Resolve after CM's layout has quiesced. proseSpaceMetric writes
- *  --quoll-prose-space on its first measure, then queues (via queueMicrotask)
- *  exactly ONE follow-up view.requestMeasure to rebuild the height map against
- *  the new padding — and that re-measure CONVERGES (no further measures schedule;
- *  prose-space-metric.ts). Because the settling is BOUNDED, awaiting a small
- *  fixed number of frames drains every pending measure regardless of
- *  microtask/rAF interleaving (more robust than a 2-frame wait whose ordering vs
- *  the microtask-scheduled re-measure is not guaranteed — Codex C84), after which
- *  coordsAtPos()/getComputedStyle() read a settled height map (Codex C93). */
-function settled(): Promise<void> {
-  return new Promise((resolve) => {
-    let n = 4;
-    const tick = () => (--n <= 0 ? resolve() : requestAnimationFrame(tick));
-    requestAnimationFrame(tick);
-  });
-}
 
 let view: EditorView | undefined;
 afterEach(() => {

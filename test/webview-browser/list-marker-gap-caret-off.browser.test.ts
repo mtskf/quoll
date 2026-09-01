@@ -35,6 +35,7 @@ import { quollSyntaxReveal } from "../../src/webview/cm/decorations/index.js";
 import { proseSpaceMetric } from "../../src/webview/cm/decorations/prose-space-metric.js";
 import { listHangIndent } from "../../src/webview/cm/list/list-hang-indent.js";
 import { quollBulletMarkerTheme, quollCmLinePaddingTheme } from "../../src/webview/cm/theme.js";
+import { settled } from "./helpers/frames.js";
 
 // Alignment tolerance. Monospace (see mount) degrades the marker-glyph blend to
 // EXACT (`1ch == a space == the dash advance`) so first-row content and the
@@ -56,17 +57,6 @@ const DISTINCTIVE_GAP_PX = 40;
 // bullet line caret-OFF — the state that renders the dot + engages markerGap.
 const DOC =
   "- This is a fairly long bullet whose text must wrap onto a second visual row\ntrailing";
-
-/** Resolve after CM's bounded measure queue drains (4-frame idiom shared with
- *  the sibling browser suites; proseSpaceMetric's one follow-up re-measure
- *  converges, so a small fixed frame count reads a settled height map). */
-function settled(): Promise<void> {
-  return new Promise((resolve) => {
-    let n = 4;
-    const tick = () => (--n <= 0 ? resolve() : requestAnimationFrame(tick));
-    requestAnimationFrame(tick);
-  });
-}
 
 let view: EditorView | undefined;
 afterEach(() => {

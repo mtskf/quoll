@@ -9,7 +9,6 @@
 // [[quoll-cm-keymap-test-runscopehandlers-platform-flaky]]).
 
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
-import { ensureSyntaxTree } from "@codemirror/language";
 import { EditorSelection, EditorState } from "@codemirror/state";
 import { EditorView, keymap } from "@codemirror/view";
 import { describe, expect, it } from "vitest";
@@ -20,11 +19,21 @@ import {
   TASK_TOGGLE_KEY,
   toggleTaskCheckboxAtCaret,
 } from "../../../src/webview/cm/task-checkbox/task-checkbox-command.js";
+import { settledMount } from "../helpers/settled-view.js";
 
 /** Mount a real EditorView with the markdown language, caret at `caret`, and a
- *  FULLY parsed syntax tree (ensureSyntaxTree forces the parse to the doc end so
- *  the tree walk in findTaskMarkerOnLine is deterministic under full-suite CPU
- *  load — cf. the fullTree helper rationale). Optionally read-only. */
+ *  FULLY parsed syntax tree. `toggleTaskCheckboxAtCaret`'s Lezer cross-check reads
+ *  `syntaxTree(view.state)` (task-checkbox-command.ts) — the VIEW's own field snapshot —
+ *  so the settle has to republish that snapshot, not just advance the parse context: a
+ *  bare `ensureSyntaxTree` call (the previous shape here) forces the CONTEXT to the doc
+ *  end and returns the resulting tree, but never republishes `view.state`'s own snapshot,
+ *  leaving that walk flaky under full-suite CPU load. (`findTaskMarkerOnLine` is the other
+ *  class: it self-ensures through the caret line and walks the RETURNED tree, so it does not
+ *  depend on the snapshot WHEN that ensure succeeds. It is not immune, though — the source
+ *  reads `ensureSyntaxTree(state, line.to, 50) ?? syntaxTree(state)`, so under exactly the
+ *  CPU load discussed here the 50 ms budget can miss and it falls back to the published
+ *  snapshot. A settle helps it too, just less decisively.) `settledMount` republishes it and
+ *  throws instead of settling for a truncated tree. Optionally read-only. */
 function mountView(doc: string, caret: number, readOnly = false): EditorView {
   const parent = document.createElement("div");
   document.body.appendChild(parent);
@@ -36,9 +45,7 @@ function mountView(doc: string, caret: number, readOnly = false): EditorView {
       ...(readOnly ? [EditorState.readOnly.of(true), EditorView.editable.of(false)] : []),
     ],
   });
-  const view = new EditorView({ state, parent });
-  ensureSyntaxTree(view.state, view.state.doc.length, 5_000);
-  return view;
+  return settledMount({ state, parent });
 }
 
 describe("findTaskMarkerOnLine", () => {

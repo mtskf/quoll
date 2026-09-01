@@ -29,6 +29,7 @@ import {
   quollCmLinePaddingTheme,
   quollCollapseToggleTheme,
 } from "../../src/webview/cm/theme.js";
+import { settled } from "./helpers/frames.js";
 
 // Two directly-adjacent single-body fenced blocks, then a blank + paragraph so the caret
 // can park OFF both. block2's opening fence is doc line 4 — the split point between the
@@ -36,16 +37,6 @@ import {
 //   L1 ```[0,3] L2 a[4,5] L3 ```[6,9] L4 ```[10,13] L5 b[14,15] L6 ```[16,19] L7 ""[20] L8 para
 const DOC = "```\na\n```\n```\nb\n```\n\npara";
 const BLOCK2_OPEN_LINE = 4;
-
-/** Drain CM's bounded measure queue (4-frame idiom shared with the sibling browser
- *  suites) so getBoundingClientRect / getComputedStyle read a settled layout. */
-function settled(): Promise<void> {
-  return new Promise((resolve) => {
-    let n = 4;
-    const tick = () => (--n <= 0 ? resolve() : requestAnimationFrame(tick));
-    requestAnimationFrame(tick);
-  });
-}
 
 let view: EditorView | undefined;
 afterEach(() => {

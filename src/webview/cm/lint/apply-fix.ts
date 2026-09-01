@@ -40,8 +40,12 @@ type Fix = { from: number; to: number; insert: string };
  *  span of any selection range, as a sorted, non-overlapping change set.
  *  Iterating findings (not spans) yields each fix at most once, so a
  *  multi-cursor selection on one line never duplicates a change; the sort +
- *  first-wins overlap skip keep the change set valid for `dispatch` even if a
- *  future rule emits unordered or overlapping fixes. Pure (calls the engine);
+ *  first-wins overlap skip make the outcome deterministic if a future rule emits
+ *  unordered or overlapping fixes. That is a semantics choice, NOT crash
+ *  prevention — `dispatch` accepts unsorted and overlapping specs (it maps and
+ *  composes them), so dropping either would quietly apply both of two conflicting
+ *  fixes instead of the first, rather than failing loudly. Only the range guard
+ *  below stands between a malformed fix and a throw. Pure (calls the engine);
  *  may throw if the engine throws — the caller catches. */
 function collectFreshFixesForSelection(state: EditorState): Fix[] {
   // Pass the live prose-gate so the fix path stays consistent with the displayed
@@ -65,7 +69,16 @@ function collectFreshFixesForSelection(state: EditorState): Fix[] {
       continue;
     }
     const { from, to, insert } = d.fix;
-    if (spans.some((s) => from <= s.to && to >= s.from)) {
+    // Fix range is half-open `[from, to)`; the line span is closed `[s.from, s.to]`.
+    // Their intersection is non-empty iff `from <= s.to && to > s.from`. The `to >`
+    // (not `to >=`) is load-bearing: a fix whose `to` equals a content line's start
+    // offset (e.g. the no-multiple-blanks fix, which deletes a blank line up to the
+    // following line's start) must NOT match a caret parked at column 0 of that
+    // clean content line — the caret only touches the fix at its exclusive end, so
+    // the selection doesn't actually intersect the flagged blank line. A caret on
+    // the flagged blank line itself (a zero-length span at `from`) still matches
+    // via the closed `from <= s.to` end.
+    if (spans.some((s) => from <= s.to && to > s.from)) {
       inScope.push({ from, to, insert });
     }
   }
@@ -113,7 +126,10 @@ export const applyLintFixAtSelection: Command = (view) => {
 
 /** Prec.high keymap binding LINT_FIX_KEY to the apply-fix command. Prec.high so
  *  it runs before defaultKeymap (which has no Mod-. binding today; high
- *  precedence future-proofs against one being added upstream). */
+ *  precedence future-proofs against one being added upstream). Precedence
+ *  ordering is pinned by the "quollLintFixKeymap precedence" suite in
+ *  test/webview/lint/lint-apply-fix.test.ts (see that file for the happy-dom
+ *  dual-dispatch rationale). */
 export function quollLintFixKeymap(): Extension {
   return Prec.high(keymap.of([{ key: LINT_FIX_KEY, run: applyLintFixAtSelection }]));
 }

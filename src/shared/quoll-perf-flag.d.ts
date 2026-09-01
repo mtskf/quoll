@@ -13,6 +13,12 @@
 // `const PERF_ENABLED = … ; if (PERF_ENABLED)` does NOT (esbuild keeps
 // `const o=!1; o&&fn()`). Do NOT reintroduce an intermediate const.
 //
-// All four tsc programs include `src/shared/**`, so this one file is visible
-// everywhere with no tsconfig `include` edits.
+// Every tsc program that compiles a `QUOLL_PERF` reference includes
+// `src/shared/**`, so this one file reaches all of them with no tsconfig
+// `include` edits. Not every program in the repo does: the E2E emit config
+// (`test/extension/tsconfig.json`, `rootDir: "."`) pulls in no `src/` file at
+// all — it deliberately mirrors the wire constants rather than importing them,
+// and it references no QUOLL_PERF. Before widening this claim, enumerate with
+// `git ls-files '*tsconfig*.json'`; reading the `compile` script instead misses
+// the configs no script chains.
 declare const QUOLL_PERF: boolean;

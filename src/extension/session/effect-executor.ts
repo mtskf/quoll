@@ -19,36 +19,41 @@
 // arm (NOT the false/reject arms — those log unconditionally), and
 // `sendEditRejected`'s early-return + BOTH `.then` arms. `runEffects` itself is
 // NEVER wrapped in a disposed guard, and `runApplyEdit`'s `applyEditSettled`
-// dispatch fires EVEN post-dispose in every arm (ok / refused / rejected) — the
-// core is the decision authority and needs the settlement to drain a stashed
-// last-keystroke edit (the "type-one-more-char-then-close" data-loss race).
+// dispatch fires EVEN post-dispose in every arm (ok / refused / rejected, plus
+// the pipeline-rejection arm) — the core is the decision authority and needs the
+// settlement to drain a stashed last-keystroke edit (the
+// "type-one-more-char-then-close" data-loss race). For the same reason BOTH
+// promise arms of the settlement must reach `dispatch`: on the live path
+// `applyEditSettled` is the only event that releases the host write lock (the
+// core's `disposed` arm also clears `pendingApplyBaseVersion`, but that fires
+// only on teardown, so it cannot rescue a panel the user is still typing into).
 
 import type { MarkdownError } from "../../markdown/errors.js";
 import { perfNow, perfRecord, perfReport } from "../../shared/perf.js";
 import type { HostToWebview, ThemeKind } from "../../shared/protocol.js";
-import type { HostSessionEffect, HostSessionEvent, HostSessionState } from "./host-session-core.js";
-import type { MinimalEditSpan } from "./minimal-edit.js";
-import { minimalEditSpan } from "./minimal-edit.js";
+import type {
+  DocumentWriteAdapter,
+  DocumentWriteOutcome,
+} from "../document-write/execute-write.js";
+import { executeDocumentWrite } from "../document-write/execute-write.js";
+import type {
+  ApplyEditOutcome,
+  HostSessionEffect,
+  HostSessionEvent,
+  HostSessionState,
+} from "./host-session-core.js";
 
-/** VS Code WorkspaceEdit build+apply seam for runApplyEdit. `build` may throw
- *  (→ constructThrew); `apply` may throw synchronously (→ applyThrew) or settle
- *  async (→ ok/refused). The edit token is opaque to the module.
- *
- *  `readText` / `readVersion` / `readCanonical` are assumed non-throwing (as
- *  `document.getText()` / `document.version` / `canonicalDocumentText(document)`
- *  are today — they run OUTSIDE the build/apply try blocks). Only `build` throws
- *  map to `constructThrew`, only synchronous `apply` throws to `applyThrew`. */
-export interface ApplyEditSeam {
-  readText: () => string;
-  readVersion: () => number;
-  readCanonical: () => string;
-  build: (span: MinimalEditSpan) => unknown;
-  apply: (edit: unknown) => Thenable<boolean>;
-}
+/** The VS Code build+apply+verify seam for the write executor (Plan S6). The
+ *  pipeline itself lives in `document-write/execute-write.ts`; this alias keeps
+ *  the panel's inline wiring + the executor deps stable. */
+export type ApplyEditSeam = DocumentWriteAdapter;
 
 export interface EffectExecutorDeps {
   isDisposed: () => boolean;
-  /** drainSnapshot (pendingEdit) + sendEditRejected warn log (lastAppliedDocVersion). */
+  /** Read for the `sendEditRejected` delivery-refused warn log
+   *  (`lastAppliedDocVersion`) — the executor's only state read. The stash
+   *  drain reads `pendingEdit` inside the core's `applyEditSettled` arm, not
+   *  through here. */
   getState: () => HostSessionState;
   /** document.uri.toString() — for the sendEditRejected delivery-refused warn
    *  payload, kept byte-identical. */
@@ -60,9 +65,20 @@ export interface EffectExecutorDeps {
   recordEvent: (message: HostToWebview) => void;
   showError: (message: string) => void;
   canWrite: () => boolean;
-  /** Live builders — read theme/canWrite/document text at call time (freshness). */
-  buildSeedDocument: (docVersion: number) => HostToWebview;
-  buildRejectedDraft: (content: string, docVersion: number) => HostToWebview;
+  /** Live builders — read theme/canWrite/document text at call time (freshness).
+   *  The (externalEpoch, epochGeneration) pair is core-managed and passed from
+   *  the effect (self-contained, like docVersion). */
+  buildSeedDocument: (
+    docVersion: number,
+    externalEpoch: number,
+    epochGeneration: number
+  ) => HostToWebview;
+  buildRejectedDraft: (
+    content: string,
+    docVersion: number,
+    externalEpoch: number,
+    epochGeneration: number
+  ) => HostToWebview;
   buildTheme: (themeKind: ThemeKind) => HostToWebview;
   buildEditRejected: (error: MarkdownError) => HostToWebview;
   applyEditSeam: ApplyEditSeam;
@@ -156,7 +172,10 @@ export function createEffectExecutor(deps: EffectExecutorDeps): EffectExecutor {
   // id) is a no-op in the `editRejectedDeliveryFailed` arm, so it can neither
   // clobber the live banner nor force an unsolicited reseed. When the clear
   // DOES fire, the user's typed content is overwritten — same "external wins"
-  // semantics as for an `onDidChangeTextDocument` race.
+  // semantics as for an `onDidChangeTextDocument` race. The event carries the
+  // LIVE document version (readVersion at this dispatch, read synchronously with
+  // the reseed's live bytes) so the recovery Document's version matches its
+  // bytes — never the possibly-stale stored version.
   const sendEditRejected = (error: MarkdownError, id: number): void => {
     if (deps.isDisposed()) {
       return;
@@ -173,7 +192,11 @@ export function createEffectExecutor(deps: EffectExecutorDeps): EffectExecutor {
       pending = deps.send(message);
     } catch (err) {
       console.error("[quoll] edit-rejected delivery threw synchronously; resync fallback", err);
-      deps.dispatch({ type: "editRejectedDeliveryFailed", id });
+      deps.dispatch({
+        type: "editRejectedDeliveryFailed",
+        id,
+        documentVersion: deps.applyEditSeam.readVersion(),
+      });
       return;
     }
     // Promise.resolve(...) assimilation: a non-standard Thenable can no
@@ -193,123 +216,184 @@ export function createEffectExecutor(deps: EffectExecutorDeps): EffectExecutor {
           uri: deps.uriString(),
           docVersion: deps.getState().lastAppliedDocVersion,
         });
-        deps.dispatch({ type: "editRejectedDeliveryFailed", id });
+        deps.dispatch({
+          type: "editRejectedDeliveryFailed",
+          id,
+          documentVersion: deps.applyEditSeam.readVersion(),
+        });
       },
       (err: unknown) => {
         if (deps.isDisposed()) {
           return;
         }
         console.error("[quoll] edit-rejected delivery rejected; resync fallback", err);
-        deps.dispatch({ type: "editRejectedDeliveryFailed", id });
+        deps.dispatch({
+          type: "editRejectedDeliveryFailed",
+          id,
+          documentVersion: deps.applyEditSeam.readVersion(),
+        });
       }
     );
   };
 
-  // applyEdit executor — the lock is already set by the `accept`
-  // transition; this only constructs the WorkspaceEdit, applies it, and
-  // reports every outcome back via `applyEditSettled`. The construct /
-  // apply SYNC-throw paths dispatch-then-`return` cleanly (the enqueued
-  // outcome is drained by the same loop, clearing the optimistic lock);
-  // the async settlement is funnelled through `Promise.resolve(...).then`
-  // so it lands in a fresh drain.
+  // Map a verified-write outcome (Plan S6 `document-write/`) to the reducer's
+  // `ApplyEditOutcome`. 1:1 against today's five kinds; `diverged` is an `ok`
+  // apply whose landed bytes differ from intended (racing splice / external
+  // race) and rides out as `ok` + the `divergedAfterApply` annotation on the
+  // event (NOT `refused` — the apply DID land; this is conflict resolution, not
+  // a save failure).
+  const toApplyEditOutcome = (result: DocumentWriteOutcome): ApplyEditOutcome => {
+    switch (result.tag) {
+      case "applied":
+      case "diverged":
+        return { kind: "ok", documentVersion: result.settledVersion };
+      case "applyRefused":
+        return { kind: "refused" };
+      case "buildThrew":
+        return { kind: "constructThrew", message: result.message ?? "" };
+      case "applyThrew":
+        return { kind: "applyThrew", message: result.message ?? "" };
+      case "applyRejected":
+        return { kind: "rejected", message: result.message ?? "" };
+      default: {
+        const _exhaustive: never = result.tag;
+        throw new Error(`[quoll] unhandled DocumentWriteTag: ${String(_exhaustive)}`);
+      }
+    }
+  };
+
+  // Best-effort error → message for a settlement toast. Guarded because a
+  // rejection value can be an exotic object whose `message` getter or `toString`
+  // throws, and this runs while BUILDING the settlement event. An unguarded
+  // throw here would abort that build, so `applyEditSettled` — the event that
+  // releases the write lock — would never be dispatched: the very failure this
+  // module's settlement guards exist to prevent. (It is evaluated inside the
+  // rejection arm's `try`, so such a throw would be logged rather than escaping
+  // as an unhandled rejection — but a log is not a released lock, which is why
+  // the guard belongs HERE, at the source, and not on the catch.) This is NOT a
+  // blanket "both arms are non-throwing" guarantee: `toApplyEditOutcome` and the
+  // fulfilment arm's `deps.dispatch` are deliberately left unwrapped (swallowing
+  // a reducer bug would hide it). The rejection arm's `dispatch` IS wrapped, but
+  // only so a throwing settlement EFFECT is logged instead of becoming an
+  // unhandled rejection — see that arm.
+  const errorMessage = (err: unknown): string => {
+    try {
+      return err instanceof Error ? err.message : String(err);
+    } catch {
+      return "unknown error";
+    }
+  };
+
+  // `canWrite` is an FS/config read (not a document read) and is the principal
+  // throw source in the settlement's fulfilment arm (`toApplyEditOutcome`'s
+  // exhaustiveness guard also throws from the same object literal, but it is
+  // unreachable for the closed tag union `execute-write.ts` produces). A throw
+  // here escapes the `.then` (an `onRejected` sibling does NOT catch its own
+  // `onFulfilled`) and strands the write lock forever, so read it defensively.
+  // Assume NOT writable on a throw. That is a real trade-off, not a free win:
+  // `canDrain` does NOT consult `canWrite`, so a false negative still runs the
+  // drain, `decideEdit` then returns `readonly`, and the core's `readonly` arm
+  // drops the stash WITHOUT a showError. While the panel is alive the keystroke
+  // survives regardless — the webview's single-flight replay buffer
+  // (`webview/cm/edit-sync.ts`) still holds it and re-posts after the reseed.
+  // Post-dispose the stash is the only carrier and that keystroke is lost. That
+  // loss is PRE-EXISTING and NOT introduced by this fallback — the identical
+  // drop happens for a genuine read-only flip mid-flight, and it is strictly
+  // better than the behaviour this arm replaced (an unguarded throw stranded the
+  // lock, losing that keystroke AND every later edit for the session). Tracked
+  // as its own TODO. The alternative here is worse: optimistically claiming
+  // writability would let the reducer replay a write we could not confirm is
+  // permitted.
+  const readCanWrite = (): boolean => {
+    try {
+      return deps.canWrite();
+    } catch (err) {
+      console.error("[quoll] canWrite() threw at applyEdit settlement; assuming read-only", err);
+      return false;
+    }
+  };
+
+  // applyEdit executor — a THIN wrapper over the session-independent verified
+  // write pipeline. The lock is already set by the `accept` transition; the
+  // pipeline (snapshot → span → build → apply → post-apply verify) lives in
+  // `executeDocumentWrite`, and this only MAPS the immutable tagged outcome onto
+  // an `applyEditSettled` event. It NEVER re-reads the document — `currentContent`
+  // / `preApplyContent` / the settled version all come from the outcome's
+  // verify-time snapshots (a re-read could observe a later edit and mis-attribute
+  // divergence). `canWrite` is read here (an FS/config read, not a document read)
+  // for the stash-drain re-gate. The settlement lands in a fresh drain (the
+  // pipeline is async) and fires EVEN post-dispose: a stashed one-more-char edit
+  // can only drain on settlement, which fires AFTER onDidDispose (the core stays
+  // a strict no-op post-dispose unless a stash is waiting; webview-bound posts
+  // self-suppress via post()'s disposed guard).
   const runApplyEdit = (content: string): void => {
-    // OLD text = the live buffer (applyEdit has not run yet, and the write
-    // lock — set by the accept transition — blocks any other inbound edit on
-    // the synchronous dispatch chain). Diff against the inbound NEW content to
-    // the smallest single span. Resulting buffer is byte-identical to a
-    // whole-document replace (measured ~90ms@1MB whole-doc vs flat ~0.5ms
-    // minimal; see PERF.md § Write-path applyEdit baseline).
-    const oldText = deps.applyEditSeam.readText();
-    // Snapshot the drain inputs the core needs at settlement. currentContent is
-    // only consulted when a stash is waiting, so skip the O(n) canonicalisation
-    // otherwise (Codex #6). Reads state via deps.getState(), as sendEditRejected
-    // already does. LAZY: the thunk re-reads getState().pendingEdit at each
-    // dispatch site (settlement time), never cached at apply-start — a stash
-    // that appears during the in-flight apply must be observed at settle time.
-    const drainSnapshot = () => ({
-      canWrite: deps.canWrite(),
-      currentContent:
-        deps.getState().pendingEdit !== null ? deps.applyEditSeam.readCanonical() : "",
-    });
-    const span = minimalEditSpan(oldText, content);
-    if (span.from === span.to && span.insert.length === 0) {
-      // No-op short-circuit (defensive — the core already gates no-ops via the
-      // canonical currentContent compare; only a mixed-EOL literal-buffer
-      // match could reach here). Settle ok with the UNCHANGED version so the
-      // write lock releases + resync proceeds, WITHOUT submitting an empty
-      // WorkspaceEdit.
-      deps.dispatch({
-        type: "applyEditSettled",
-        outcome: { kind: "ok", documentVersion: deps.applyEditSeam.readVersion() },
-        ...drainSnapshot(),
-      });
-      return;
-    }
-    let edit: unknown;
-    try {
-      // positionAt clamps out-of-range offsets (never throws) and
-      // minimalEditSpan is pure — so constructThrew stays unreachable in
-      // practice; the arm is preserved for parity with the prior path.
-      edit = deps.applyEditSeam.build(span);
-    } catch (err) {
-      deps.dispatch({
-        type: "applyEditSettled",
-        outcome: {
-          kind: "constructThrew",
-          message: err instanceof Error ? err.message : String(err),
-        },
-        ...drainSnapshot(),
-      });
-      return;
-    }
-    let pending: Thenable<boolean>;
-    const applyStart = QUOLL_PERF ? perfNow() : 0;
-    try {
-      pending = deps.applyEditSeam.apply(edit);
-    } catch (err) {
-      // Synchronous apply throw: immediate failure, not a latency sample —
-      // intentionally not recorded under host:applyEdit.
-      deps.dispatch({
-        type: "applyEditSettled",
-        outcome: {
-          kind: "applyThrew",
-          message: err instanceof Error ? err.message : String(err),
-        },
-        ...drainSnapshot(),
-      });
-      return;
-    }
-    Promise.resolve(pending).then(
-      (ok) => {
-        if (QUOLL_PERF) {
-          perfRecord("host:applyEdit", perfNow() - applyStart);
-        }
-        // Dispatch EVEN post-dispose: a stashed pending edit (typed
-        // one-more-char then closed within the same ms while this apply held
-        // the lock) can only drain on settlement, which fires AFTER
-        // onDidDispose. The core stays a strict no-op post-dispose unless a
-        // stash is waiting (host-session-core applyEditSettled). Webview-bound
-        // posts self-suppress via post()'s disposed guard.
+    void executeDocumentWrite(deps.applyEditSeam, content).then(
+      (result) => {
         deps.dispatch({
           type: "applyEditSettled",
-          outcome: ok
-            ? { kind: "ok", documentVersion: deps.applyEditSeam.readVersion() }
-            : { kind: "refused" },
-          ...drainSnapshot(),
+          outcome: toApplyEditOutcome(result),
+          canWrite: readCanWrite(),
+          currentContent: result.settledContent,
+          preApplyContent: result.preApplyContent,
+          divergedAfterApply: result.tag === "diverged",
         });
       },
+      // REJECTION ARM — the write lock's only release valve. `executeDocumentWrite`
+      // documents `readText` / `readCanonical` / `readVersion` / `canonicalize` as
+      // non-throwing, but they sit OUTSIDE its try blocks (pre-apply snapshot +
+      // `settle()`), so a seam that breaks that assumption rejects the whole
+      // pipeline. Without this arm the rejection is left UNHANDLED by `void`
+      // (`void` does not catch — it only discards the promise reference),
+      // `applyEditSettled` never fires, and `pendingApplyBaseVersion` — which ONLY
+      // this event clears (host-session-core `applyEditSettled`; dispose is the
+      // sole other path) — stays held for the session: every later inbound edit is
+      // stashed behind a bare warn and never saved. Silent, toast-free data loss.
+      // Settling with a NON-OK outcome is what makes it safe: `canDrain` requires
+      // `ok`, so the empty snapshots below never reach `decideEdit`, and the
+      // non-ok foreign-bytes check compares `currentContent` against
+      // `preApplyContent` — two empties are equal, so no spurious epoch bump. The
+      // user gets the same `Failed to save:` toast + authoritative reseed as any
+      // other failed write, instead of a panel that has quietly stopped saving.
+      //
+      // ⚠️ This arm MUST NOT re-read the document or `canWrite()` — those seams are
+      // the candidate throw sources, and a throw HERE strands the lock exactly as
+      // before (the "fix" would reintroduce the bug on its own recovery path).
+      // `canWrite` is unused for a non-ok settlement, so pass the conservative
+      // `false` rather than reading it.
       (err: unknown) => {
-        if (QUOLL_PERF) {
-          perfRecord("host:applyEdit", perfNow() - applyStart);
+        console.error("[quoll] verified write pipeline rejected; releasing the write lock", err);
+        try {
+          deps.dispatch({
+            type: "applyEditSettled",
+            outcome: { kind: "rejected", message: errorMessage(err) },
+            canWrite: false,
+            currentContent: "",
+            preApplyContent: "",
+          });
+        } catch (dispatchErr) {
+          // CORRELATED FAILURE. The settlement's own effects can throw on this
+          // path: `runEffects`'s `postDocument` case calls `buildSeedDocument`
+          // unguarded, and in production that bottoms out in
+          // `canonicalDocumentText(document)` — the SAME seam whose throw
+          // produced this rejection. Two halves are already safe without any
+          // rescue here: the write lock (the panel's `step` commits the new state
+          // BEFORE running effects) and the user-visible toast
+          // (`settlementEffects` emits `showError` BEFORE the reseed for every
+          // non-ok outcome — see the ORDER note there; that is why this catch does
+          // NOT re-raise a toast and cannot double-toast).
+          // NOT rescued: the panel's `step` calls `editSettledBarrier.settle(...)`
+          // AFTER `runEffects`, and that is its only settle site, so this throw
+          // skips it. Side-channel thunks deferred behind the barrier (handoff /
+          // switch-to-text) are then neither dropped per the failed-apply contract
+          // nor drained — they run at the NEXT settle, against a document this
+          // edit never landed in. Pre-existing panel-lifecycle gap, tracked
+          // separately (fixing it means a try/finally in `step`).
+          // Log only, and deliberately WITHOUT `deps.uriString()`: this catch is
+          // the last line of defence, and that injected seam could throw too —
+          // which would turn the log into an unhandled rejection. The cause's
+          // stack is the triage payload.
+          console.error("[quoll] applyEdit rejection settlement effects threw", dispatchErr);
         }
-        deps.dispatch({
-          type: "applyEditSettled",
-          outcome: {
-            kind: "rejected",
-            message: err instanceof Error ? err.message : String(err),
-          },
-          ...drainSnapshot(),
-        });
       }
     );
   };
@@ -324,7 +408,11 @@ export function createEffectExecutor(deps: EffectExecutorDeps): EffectExecutor {
       switch (effect.type) {
         case "postDocument": {
           const buildStart = QUOLL_PERF ? perfNow() : 0;
-          const documentMessage = deps.buildSeedDocument(effect.docVersion);
+          const documentMessage = deps.buildSeedDocument(
+            effect.docVersion,
+            effect.externalEpoch,
+            effect.epochGeneration
+          );
           if (QUOLL_PERF) {
             perfRecord("host:doc-build", perfNow() - buildStart);
           }
@@ -345,7 +433,14 @@ export function createEffectExecutor(deps: EffectExecutorDeps): EffectExecutor {
           // reducer's `document` arm clears `serializeError`, so the
           // Document MUST precede the `edit-rejected` (reversing it would
           // wipe the banner the user needs).
-          post(deps.buildRejectedDraft(effect.content, effect.docVersion));
+          post(
+            deps.buildRejectedDraft(
+              effect.content,
+              effect.docVersion,
+              effect.externalEpoch,
+              effect.epochGeneration
+            )
+          );
           // The replay banner is FAILURE-AWARE: route it through
           // `sendEditRejected` (with the core-stamped fresh delivery id),
           // NOT a bare `post`. A `ready`/`seed` replay can fail to deliver

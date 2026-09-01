@@ -343,7 +343,7 @@ const EOF_BUDGET = 50;
  *  behaviour (and the packaged .vsix) is byte-identical — dead-coded out — and
  *  the unit suite (QUOLL_PERF=false) stays quiet; the Tab/Shift-Tab result is
  *  the same `{ kind: "noop" }` either way. */
-function warnBudgetMiss(where: string, state: EditorState): void {
+export function warnBudgetMiss(where: string, state: EditorState): void {
   if (QUOLL_PERF) {
     console.warn(
       `[quoll] ${where}: parse did not reach EOF within budget — list transform no-op (retryable)`,

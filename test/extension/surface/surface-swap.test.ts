@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { Tab, TextDocument, Uri } from "vscode";
+import { window } from "vscode";
 import {
   closeSourceTabIfClean,
   type FinalizeSwapDeps,
@@ -164,6 +165,136 @@ describe("finalizeSurfaceSwap", () => {
     await finalizeSurfaceSwap(fileUri, undefined, deps);
     expect(reresolve).not.toHaveBeenCalled();
     expect(closeTab).not.toHaveBeenCalled();
+  });
+});
+
+describe("finalizeSurfaceSwap shouldAbortClose (point-of-no-return guard)", () => {
+  const ABORT_REASON = "Quoll: can't switch while a change was rejected — fix it first.";
+
+  it("does NOT close a clean doc when shouldAbortClose returns a reason", async () => {
+    // Clean doc ⇒ shouldCloseSourceTab would allow the close; the abort guard
+    // overrides it (e.g. a write-gate rejection is pending → keep both open).
+    const doc = fakeDoc(false, true);
+    const { deps, closeTab } = makeDeps(doc);
+    await finalizeSurfaceSwap(fileUri, SENTINEL_TAB, deps, () => ABORT_REASON);
+    expect(closeTab).not.toHaveBeenCalled();
+  });
+
+  it("shows the RETURNED reason as a warning toast (test-(c): a silent abort must fail the suite)", async () => {
+    // The predicate returns a reason STRING and finalizeSurfaceSwap itself
+    // surfaces it — the abort is user-visible by contract, not by caller
+    // courtesy. At check time the user's focus is on the freshly opened text
+    // tab, so a bare boolean predicate + no toast would let a silent abort pass;
+    // this assertion is what pins the visible surface.
+    const doc = fakeDoc(false, true);
+    const { deps, closeTab } = makeDeps(doc);
+    const warn = vi.spyOn(window, "showWarningMessage");
+    try {
+      await finalizeSurfaceSwap(fileUri, SENTINEL_TAB, deps, () => ABORT_REASON);
+      expect(closeTab).not.toHaveBeenCalled();
+      expect(warn).toHaveBeenCalledWith(ABORT_REASON);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("checks shouldAbortClose AFTER the openDoc await (closes the TOCTOU gap)", async () => {
+    // The guard must observe a condition that becomes true DURING finalize's
+    // awaits, not just at call time — mirrors a rejection that lands while
+    // finalizeSurfaceSwap is awaiting openDoc. `pending` flips true inside
+    // openDoc; the guard reads it AFTER that await and aborts the close.
+    let pending = false;
+    const doc = fakeDoc(false, true);
+    const { deps, closeTab } = makeDeps(doc, {
+      openDoc: async () => {
+        pending = true;
+        return doc;
+      },
+    });
+    await finalizeSurfaceSwap(fileUri, SENTINEL_TAB, deps, () => (pending ? ABORT_REASON : null));
+    expect(closeTab).not.toHaveBeenCalled();
+  });
+
+  it("checks shouldAbortClose AFTER the save await too (dirty-doc path)", async () => {
+    // A dirty doc is saved before the close, so the guard must be re-checked
+    // AFTER the save await as well — not only after openDoc. `pending` flips true
+    // inside save(), mirroring a rejection that lands while finalize is saving.
+    // Without an after-save check the dirty doc saves clean and closes.
+    let pending = false;
+    const state = { dirty: true };
+    const doc = {
+      uri: fileUri,
+      get isDirty() {
+        return state.dirty;
+      },
+      save: vi.fn(async () => {
+        pending = true;
+        state.dirty = false;
+        return true;
+      }),
+    } as unknown as TextDocument;
+    const { deps, closeTab } = makeDeps(doc);
+    await finalizeSurfaceSwap(fileUri, SENTINEL_TAB, deps, () => (pending ? ABORT_REASON : null));
+    expect(closeTab).not.toHaveBeenCalled();
+  });
+
+  it("closes normally when shouldAbortClose returns null (guard does not block the happy path)", async () => {
+    const doc = fakeDoc(false, true);
+    const { deps, closeTab } = makeDeps(doc);
+    await finalizeSurfaceSwap(fileUri, SENTINEL_TAB, deps, () => null);
+    expect(closeTab).toHaveBeenCalledWith(LIVE_TAB);
+  });
+
+  it("does NOT re-check a condition that flips DURING closeTab (accepted teardown-atomicity boundary)", async () => {
+    // Contract for the documented residual boundary (PR #256 residual): the
+    // guard is the LAST synchronous gate before the close is INITIATED. A
+    // condition that flips true only DURING `await closeTab` — the sub-ms window
+    // where the webview is still live as the tab disposes — is deliberately NOT
+    // re-checked, so the close still commits. This is provably not a
+    // writable-content-loss window (a valid edit drains onto the live document
+    // post-dispose; an invalid edit is unwritable), so closing it would need an
+    // input-freeze/drain handshake we intentionally do not build. This test goes
+    // red if someone adds a naive post-close re-check that tries to "un-close".
+    let pending = false;
+    const doc = fakeDoc(false, true);
+    const closeTab = vi.fn(async () => {
+      // The rejection lands mid-close — exactly the accepted boundary.
+      pending = true;
+      return true;
+    });
+    const { deps } = makeDeps(doc, { closeTab });
+    const warn = vi.spyOn(window, "showWarningMessage");
+    try {
+      await finalizeSurfaceSwap(fileUri, SENTINEL_TAB, deps, () => (pending ? ABORT_REASON : null));
+      // The synchronous pre-close check saw pending=false → the close proceeded
+      // and committed; the during-close flip is out of scope by design.
+      expect(closeTab).toHaveBeenCalledWith(LIVE_TAB);
+      // And no spurious abort toast: a post-close re-check that treated the
+      // during-close flip as an abort would fire the warning here — this pins
+      // the boundary as accepted-silently, not accepted-then-warned.
+      expect(warn).not.toHaveBeenCalled();
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("treats an EMPTY reason as a FAIL-SAFE abort (keeps both open, shows a fallback warning)", async () => {
+    // A point-of-no-return data-loss guard must default to keeping both surfaces
+    // open on ANY non-null return — never take the irreversible close because the
+    // caller's diagnostic string happened to be empty. The empty reason falls
+    // back to a generic, non-blank warning so the abort stays user-visible.
+    const doc = fakeDoc(false, true);
+    const { deps, closeTab } = makeDeps(doc);
+    const warn = vi.spyOn(window, "showWarningMessage");
+    try {
+      await finalizeSurfaceSwap(fileUri, SENTINEL_TAB, deps, () => "");
+      expect(closeTab).not.toHaveBeenCalled();
+      expect(warn).toHaveBeenCalledTimes(1);
+      const shown = warn.mock.calls[0]?.[0] as string;
+      expect(shown.length).toBeGreaterThan(0);
+    } finally {
+      warn.mockRestore();
+    }
   });
 });
 

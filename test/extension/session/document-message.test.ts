@@ -15,6 +15,8 @@ describe("buildDocumentMessage", () => {
       docVersion: 7,
       themeKind: "dark",
       canWrite: false,
+      externalEpoch: 3,
+      epochGeneration: 777,
     });
     expect(msg).toEqual({
       protocol: PROTOCOL_VERSION,
@@ -23,35 +25,66 @@ describe("buildDocumentMessage", () => {
       docVersion: 7,
       themeKind: "dark",
       canWrite: false,
+      externalEpoch: 3,
+      epochGeneration: 777,
     });
   });
 
   it("carries an HC kind verbatim (host distinguishes HC from Light)", () => {
     expect(
-      buildDocumentMessage({ content: "", docVersion: 0, themeKind: "hc-dark", canWrite: true })
-        .themeKind
+      buildDocumentMessage({
+        content: "",
+        docVersion: 0,
+        themeKind: "hc-dark",
+        canWrite: true,
+        externalEpoch: 0,
+        epochGeneration: 1,
+      }).themeKind
     ).toBe("hc-dark");
     expect(
-      buildDocumentMessage({ content: "", docVersion: 0, themeKind: "hc-light", canWrite: true })
-        .themeKind
+      buildDocumentMessage({
+        content: "",
+        docVersion: 0,
+        themeKind: "hc-light",
+        canWrite: true,
+        externalEpoch: 0,
+        epochGeneration: 1,
+      }).themeKind
     ).toBe("hc-light");
   });
 
-  it("pins the emitted key set (so re-introducing reason on the emitter side fails CI)", () => {
+  it("pins the emitted key set (so re-introducing reason on the emitter side fails CI; externalEpoch + epochGeneration always emitted)", () => {
     const msg = buildDocumentMessage({
       content: "",
       docVersion: 0,
       themeKind: "light",
       canWrite: true,
+      externalEpoch: 0,
+      epochGeneration: 1,
     });
     expect(Object.keys(msg).sort()).toEqual([
       "canWrite",
       "content",
       "docVersion",
+      "epochGeneration",
+      "externalEpoch",
       "protocol",
       "themeKind",
       "type",
     ]);
+  });
+
+  it("carries the identity pair through (externalEpoch + epochGeneration)", () => {
+    const msg = buildDocumentMessage({
+      content: "",
+      docVersion: 4,
+      themeKind: "dark",
+      canWrite: true,
+      externalEpoch: 9,
+      epochGeneration: 12345,
+    });
+    expect(msg.externalEpoch).toBe(9);
+    expect(msg.epochGeneration).toBe(12345);
   });
 
   it("preserves canWrite=false for readonly documents", () => {
@@ -60,6 +93,8 @@ describe("buildDocumentMessage", () => {
       docVersion: 0,
       themeKind: "light",
       canWrite: false,
+      externalEpoch: 0,
+      epochGeneration: 1,
     });
     expect(msg.canWrite).toBe(false);
   });

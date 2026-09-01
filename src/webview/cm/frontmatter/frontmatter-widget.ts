@@ -12,13 +12,17 @@
 // different structure than their (preserved) source. role="region" + aria-label
 // live on the root either way.
 //
-// eq() is keyed on `slice`: same source at the same place (frontmatter is always
-// at offset 0) reuses the DOM; any source change rebuilds. `body` is a pure
-// function of `slice`, so it need not participate in eq().
+// eq() is keyed on `slice` AND `canWrite`: same source at the same place
+// (frontmatter is always at offset 0) reuses the DOM, but a writability flip must
+// rebuild because the writability-gated aria-description (below) is baked into the
+// DOM — without `canWrite` in the identity, a read-only flip (a config-only
+// reconfigure that never changes the doc/selection) would leave the stale hint on
+// a block that can no longer be revealed. `body` is a pure function of `slice`, so
+// it need not participate in eq().
 
 import { type EditorView, WidgetType } from "@codemirror/view";
 
-import { isWritable, revealFrontmatterAt } from "./reveal-state.js";
+import { revealFrontmatterAt } from "./reveal-state.js";
 
 export interface FrontmatterRow {
   readonly key: string;
@@ -73,14 +77,22 @@ export class FrontmatterBlockWidget extends WidgetType {
   constructor(
     /** Raw frontmatter body (between the fences). */
     readonly body: string,
-    /** Full source slice `---\n…\n---` — the eq() key. */
-    readonly slice: string
+    /** Full source slice `---\n…\n---` — part of the eq() key. */
+    readonly slice: string,
+    /** Whether reveal-to-edit can actually succeed (isWritable — reveal-state.ts).
+     *  Part of the eq() key so a writability flip rebuilds the DOM and refreshes
+     *  the writability-gated aria-description. */
+    readonly canWrite: boolean
   ) {
     super();
   }
 
   eq(other: WidgetType): boolean {
-    return other instanceof FrontmatterBlockWidget && other.slice === this.slice;
+    return (
+      other instanceof FrontmatterBlockWidget &&
+      other.slice === this.slice &&
+      other.canWrite === this.canWrite
+    );
   }
 
   toDOM(view?: EditorView): HTMLElement {
@@ -104,9 +116,10 @@ export class FrontmatterBlockWidget extends WidgetType {
     // (and the reveal state machine) are a silent no-op on a read-only document
     // (isWritable — reveal-state.ts), so gating on the SAME authority keeps the
     // announced affordance in lockstep with real behaviour instead of promising an
-    // edit route that dead-ends. `view` is absent only in DOM-probe unit tests;
-    // there is nothing to gate on, so the hint is emitted.
-    if (!view || isWritable(view.state)) {
+    // edit route that dead-ends. `canWrite` is captured at construction from that
+    // same authority (frontmatter-field.ts), so a writability flip recreates the
+    // widget with a fresh value rather than leaving this hint stale.
+    if (this.canWrite) {
       root.setAttribute(
         "aria-description",
         "Move the caret into this block to reveal and edit the source."

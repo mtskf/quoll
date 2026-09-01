@@ -1,0 +1,145 @@
+import {
+  codeFolding,
+  foldable,
+  foldEffect,
+  foldedRanges,
+  syntaxTreeAvailable,
+} from "@codemirror/language";
+import { EditorState } from "@codemirror/state";
+import { describe, expect, it } from "vitest";
+import { reconcileReseedFolds } from "../../../../src/webview/cm/fold/index.js";
+import { quollMarkdownLanguage } from "../../../../src/webview/cm/markdown.js";
+import { settledState } from "../../helpers/settled-state.js";
+
+// A large trailing body so CM's bounded initial parse (leading region only)
+// leaves the frontier incomplete: syntaxTreeAvailable(doc.length) === false,
+// deterministically, while the leading "# One"/"# New" region IS parsed. Mirrors
+// the partial-tree fixtures in cm-decoration-viewport.test.ts.
+const BIG_TAIL = `\n\n${"filler paragraph body text.\n\n".repeat(4000)}`;
+
+/**
+ * A Quoll-language + folding state whose parse is complete AND whose tree snapshot
+ * has been republished, so `foldable()` resolves against the whole doc. See
+ * ../../helpers/settled-state.ts for why the snapshot needs republishing.
+ */
+function settledStateFor(doc: string): EditorState {
+  return settledState(
+    EditorState.create({ doc, extensions: [quollMarkdownLanguage(), codeFolding()] })
+  );
+}
+
+function foldRanges(state: EditorState): Array<{ from: number; to: number }> {
+  const out: Array<{ from: number; to: number }> = [];
+  foldedRanges(state).between(0, state.doc.length, (from, to) => {
+    out.push({ from, to });
+  });
+  return out;
+}
+
+describe("reconcileReseedFolds — incomplete post-reseed parse frontier", () => {
+  it("bails on an incomplete parse, then clamps the over-wide fold once the tree is complete", () => {
+    // "# One"'s body now contains a same-level sibling "# New" (as a reseed would
+    // have inserted). The over-wide fold spans from end-of-"# One" through past
+    // "# New", swallowing it — the exact stale-fold shape PR #293 clamps.
+    const head = "# One\n\nalpha\n\n# New\n\ngamma\n\n# Two\n\ncharlie";
+    const doc = head + BIG_TAIL;
+    let state = EditorState.create({
+      doc,
+      extensions: [quollMarkdownLanguage(), codeFolding()],
+    });
+
+    const line1 = state.doc.line(1); // "# One"
+    const overWideFrom = line1.to; // end of the "# One" line
+    const overWideTo = doc.indexOf("# Two"); // swallows "# New"
+    state = state.update({ effects: foldEffect.of({ from: overWideFrom, to: overWideTo }) }).state;
+    expect(foldRanges(state).length).toBe(1);
+
+    // (1) Incomplete frontier → reconcile is a safe no-op (the bug: the stale
+    // over-wide fold is left concealing "# New"). This is the deterministic,
+    // non-vacuous pin for the incomplete-parse path — no forced parse beforehand.
+    expect(syntaxTreeAvailable(state, state.doc.length)).toBe(false);
+    const newPos = doc.indexOf("# New");
+    const editedRange = { from: newPos, to: newPos + "# New".length };
+    expect(reconcileReseedFolds(state, editedRange)).toEqual([]);
+    expect(foldRanges(state)[0].to).toBeGreaterThan(newPos); // still conceals "# New"
+
+    // (2) Once the parse is complete, reconcile clamps the over-wide fold back to
+    // "# One"'s real section end. `settledState` is how a test produces a
+    // complete-tree state (../../helpers/settled-state.ts). We assert only the
+    // OUTCOME (availability + clamp), NOT CM's private tree-snapshot mechanism
+    // (Codex review: don't pin an implementation detail).
+    state = settledState(state);
+    expect(syntaxTreeAvailable(state, state.doc.length)).toBe(true);
+
+    const effects = reconcileReseedFolds(state, editedRange);
+    expect(effects.length).toBe(2); // unfold(stale) + fold(fresh)
+    const clamped = state.update({ effects }).state;
+    const [range] = foldRanges(clamped);
+    expect(range.to).toBeLessThanOrEqual(newPos); // "# New" no longer concealed
+    const freshLine1 = clamped.doc.line(1);
+    expect(foldable(clamped, freshLine1.from, freshLine1.to)).toEqual(range);
+  });
+
+  it("clamps an over-wide fold whose excess conceals a sibling LIST ITEM", () => {
+    // A folded `- parent` (spanning its `  - a` child) whose remapped fold now
+    // extends across a top-level sibling `- sibling` — the list parallel of the
+    // heading case above. `foldable()` on `- parent` stops at the end of its own
+    // ListItem (before `- sibling`), so the excess conceals the sibling's marker
+    // line. Pins that the reconcile clamps a LIST boundary, not only a heading.
+    const doc = "- parent\n  - a\n- sibling\n  - b\n\nafter\n";
+    let state = settledStateFor(doc);
+    expect(syntaxTreeAvailable(state, state.doc.length)).toBe(true);
+
+    const line1 = state.doc.line(1); // "- parent"
+    const canonical = foldable(state, line1.from, line1.to);
+    if (!canonical) {
+      throw new Error("parent list item should be foldable");
+    }
+    // Remapped over-wide fold that swallowed the inserted sibling marker line.
+    const siblingPos = doc.indexOf("- sibling");
+    const overWide = { from: canonical.from, to: siblingPos + "- sibling".length };
+    state = state.update({ effects: foldEffect.of(overWide) }).state;
+
+    const editedRange = { from: siblingPos, to: siblingPos + "- sibling".length };
+    const effects = reconcileReseedFolds(state, editedRange);
+    expect(effects.length).toBe(2); // unfold(stale) + fold(fresh)
+    const clamped = state.update({ effects }).state;
+    const [range] = foldRanges(clamped);
+    expect(range.to).toBeLessThanOrEqual(siblingPos); // sibling no longer concealed
+    expect(range).toEqual(canonical); // clamped back to the parent item's real span
+  });
+
+  it("leaves an over-wide LIST fold untouched when the excess conceals no sibling item", () => {
+    // Negative-path mirror of the LIST-ITEM clamp test above: a folded `- parent`
+    // whose fold spills a couple of chars into trailing prose (no sibling ListItem
+    // in the excess) must be left alone — guarding the ListItem branch of
+    // concealsFoldableBoundary against spuriously firing on a benign over-wide list
+    // fold, symmetric with the heading negative test below.
+    const doc = "- parent\n  - a\n\nafter\n";
+    let state = settledStateFor(doc);
+
+    const line1 = state.doc.line(1); // "- parent"
+    const canonical = foldable(state, line1.from, line1.to);
+    if (!canonical) {
+      throw new Error("parent list item should be foldable");
+    }
+    const overWide = { from: canonical.from, to: Math.min(canonical.to + 2, doc.length) };
+    state = state.update({ effects: foldEffect.of(overWide) }).state;
+
+    expect(reconcileReseedFolds(state, { from: 0, to: 0 })).toEqual([]);
+  });
+
+  it("leaves an over-wide fold untouched when the excess conceals no heading boundary", () => {
+    const doc = "# One\n\nalpha\n\nbravo\n\ncharlie\n\n# Two\n\ndelta";
+    let state = settledStateFor(doc);
+    const line1 = state.doc.line(1);
+    const canonical = foldable(state, line1.from, line1.to);
+    if (!canonical) {
+      throw new Error("heading line should be foldable");
+    }
+    const overWide = { from: canonical.from, to: canonical.to + 2 };
+    state = state.update({ effects: foldEffect.of(overWide) }).state;
+
+    expect(reconcileReseedFolds(state, { from: 0, to: 0 })).toEqual([]);
+  });
+});

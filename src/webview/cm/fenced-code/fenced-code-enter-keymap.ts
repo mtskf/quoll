@@ -131,9 +131,20 @@ export const autoCloseFenceOnEnter: Command = (view) => {
   return true;
 };
 
-/** Keymap: Enter → auto-close an unclosed fence opener. Prec.high so it is tried
- *  before CodeMirror's default Enter; it returns false for every non-trigger so
- *  the default still runs. */
+/** Keymap: Enter → auto-close an unclosed fence opener. `Prec.highest` so it wins
+ *  over the upstream `markdownKeymap` Enter (mounted Prec.high by
+ *  quollMarkdownLanguage). Upstream ignores a fence opener ONLY when the caret
+ *  resolves into the FencedCode (caret at/after the backticks) — its context walk
+ *  bails on FencedCode. But this command probes the LINE END, so it also fires when
+ *  the caret sits on a PREFIX before the fence (`> ```js`, `- ```js` with the caret
+ *  on the `> ` / list marker): there the caret resolves to the Blockquote / ListItem
+ *  and upstream returns true, so at an equal Prec.high — registered first — upstream
+ *  would grab that Enter and leave the fence unclosed (reflowing following text into
+ *  code). Prec.highest keeps auto-close winning for every fence opener regardless of
+ *  caret column; it returns false for non-triggers so the default newline still runs.
+ *  Registered after listContinuationKeymap (also Prec.highest), which defers a fence
+ *  opener on its marker line (caretInCode / caret-before-content), so this wins there.
+ *  Pinned by cm-enter-precedence.test.ts. */
 export function fencedCodeEnterKeymap() {
-  return Prec.high(keymap.of([{ key: "Enter", run: autoCloseFenceOnEnter }]));
+  return Prec.highest(keymap.of([{ key: "Enter", run: autoCloseFenceOnEnter }]));
 }

@@ -87,6 +87,7 @@ const BLOCK_TAGS = new Set([
   "HR",
   "PRE",
   "FIGURE",
+  "CENTER",
 ]);
 
 /** Clamp a DOM col/row span into `[1, max]`. `colspan="0"`/`rowspan="0"` (the DOM

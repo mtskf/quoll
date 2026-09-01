@@ -66,15 +66,19 @@ export function tableEdits(source: string, tableRanges: readonly Range[]): Edit[
     if (!table) {
       continue; // malformed / blockquote table
     }
-    // Only reformat "well-formed" tables where EVERY row (header and body) has
-    // both outer pipes. formatTableBlock always emits `| … |`; forcing outer
-    // pipes onto any pipe-less-outer row (valid GFM, e.g. `a | b\n:-- | --:\n1 |
-    // 2`, or a piped header with a pipe-less body row) is render-identical but
-    // changes the Lezer structure signature, so we conservatively leave those
-    // untouched. A header-only check would miss a pipe-less body row.
+    // Only reformat "well-formed" tables where EVERY row (header, delimiter, and
+    // body) has both outer pipes. formatTableBlock always emits `| … |`; forcing
+    // outer pipes onto any pipe-less-outer row (valid GFM, e.g. `a | b\n:-- |
+    // --:\n1 | 2`, a piped header with a pipe-less body row, or a piped
+    // header/body with a pipe-less delimiter) is render-identical but changes the
+    // Lezer structure signature, so we conservatively leave those untouched. The
+    // delimiter row needs the same guard as header/body: a header-only check
+    // would miss a pipe-less delimiter row.
     if (
       !table.header.leadingPipe ||
       !table.header.trailingPipe ||
+      !table.delimiter.leadingPipe ||
+      !table.delimiter.trailingPipe ||
       table.rows.some((r) => !r.leadingPipe || !r.trailingPipe)
     ) {
       continue;

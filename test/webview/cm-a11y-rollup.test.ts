@@ -8,7 +8,7 @@ import { EditorState } from "@codemirror/state";
 import type { EditorView } from "@codemirror/view";
 import { describe, expect, it } from "vitest";
 
-import { parseTable } from "../../src/markdown/table/index.js"; // match cm-table-widget.test.ts import
+import { parseTable } from "../../src/markdown/table/index.js"; // match table/helpers/widget-fixtures.ts import
 import type { AllowlistedUrl } from "../../src/markdown/url-allowlist.js";
 import { FrontmatterBlockWidget } from "../../src/webview/cm/frontmatter/frontmatter-widget.js";
 import { ImageBlockWidget } from "../../src/webview/cm/image/image-widget.js";
@@ -77,7 +77,8 @@ describe("C8 a11y roll-up — frontmatter metadata block (C8a)", () => {
   it("renders a labelled region (NOT an hr) with a definition list", () => {
     const dom = new FrontmatterBlockWidget(
       "title: x\ndraft: true",
-      "---\ntitle: x\ndraft: true\n---"
+      "---\ntitle: x\ndraft: true\n---",
+      true
     ).toDOM();
     expect(dom.getAttribute("role")).toBe("region");
     expect(dom.getAttribute("aria-label")).toBe("Document metadata");

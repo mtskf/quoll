@@ -27,43 +27,43 @@ export type CellRaw = string & { readonly __cellRaw: unique symbol };
  */
 export interface Cell {
   readonly raw: CellRaw;
-  leadingSpace: string;
-  trailingSpace: string;
-  from: number;
-  to: number;
+  readonly leadingSpace: string;
+  readonly trailingSpace: string;
+  readonly from: number;
+  readonly to: number;
 }
 
 export interface Row {
-  cells: Cell[];
-  leadingPipe: boolean;
-  trailingPipe: boolean;
+  readonly cells: readonly Cell[];
+  readonly leadingPipe: boolean;
+  readonly trailingPipe: boolean;
   /** Verbatim leading whitespace before the row's first pipe/content. Non-empty
    *  only for indented rows — e.g. a table nested in a list item, where Lezer
    *  keeps the continuation lines' indent in the Table node slice. Serialized
    *  verbatim so the row round-trips byte-for-byte. */
-  leadingIndent: string;
+  readonly leadingIndent: string;
   /** Verbatim whitespace from the row body end to the line's terminator. Preserves trailing spaces after a final `|`. */
-  trailingLineSpace: string;
+  readonly trailingLineSpace: string;
   /** The line terminator that followed this row in source: "\n", "\r\n", or "" for the table's last row. CRLF MUST round-trip verbatim. */
-  lineEnding: LineEnding;
-  from: number;
-  to: number;
+  readonly lineEnding: LineEnding;
+  readonly from: number;
+  readonly to: number;
 }
 
 export interface DelimiterCell {
-  raw: string;
+  readonly raw: string;
 }
 
 export interface DelimiterRow {
-  cells: DelimiterCell[];
-  leadingPipe: boolean;
-  trailingPipe: boolean;
+  readonly cells: readonly DelimiterCell[];
+  readonly leadingPipe: boolean;
+  readonly trailingPipe: boolean;
   /** See {@link Row.leadingIndent}. */
-  leadingIndent: string;
-  trailingLineSpace: string;
-  lineEnding: LineEnding;
-  from: number;
-  to: number;
+  readonly leadingIndent: string;
+  readonly trailingLineSpace: string;
+  readonly lineEnding: LineEnding;
+  readonly from: number;
+  readonly to: number;
 }
 
 /**
@@ -71,30 +71,56 @@ export interface DelimiterRow {
  * enforced at construction by {@link makeTable} — the sanctioned way to build
  * a `Table`, which throws on a mismatch. On parse input a mismatch is not an
  * error but a non-table: `parseTable` pre-checks and returns null per GFM/Lezer
- * before reaching the factory, so the throw backstops the structure column ops
- * (and future logic errors), not parse input.
+ * before reaching the factory, so on that path the throw is only a backstop —
+ * which construction sites it actually gates is spelled out at {@link makeTable}.
  *
  * Body rows MAY differ in cell count from `delimiter.cells.length`: the parser
  * does not pad/truncate and `makeTable` does not constrain them.
+ *
+ * Every field of the model — this interface, {@link Row}, {@link Cell},
+ * {@link DelimiterRow}, {@link DelimiterCell}, and the arrays they hold — is
+ * `readonly`, so nothing can write through the model's own types: a
+ * construction-time check is not undone one statement later. That is a
+ * type-level guarantee, not a runtime one — it does not survive a cast, and it
+ * does not reach an array the caller still holds a mutable reference to (see
+ * {@link makeTable}). A parsed `Table` is a snapshot of a source range: edits go
+ * through the document (widget dispatch → `edit-sync` → re-parse), never by
+ * writing into a model a consumer happens to hold.
  */
 export interface Table {
-  header: Row;
-  delimiter: DelimiterRow;
-  rows: Row[];
-  from: number;
-  to: number;
+  readonly header: Row;
+  readonly delimiter: DelimiterRow;
+  readonly rows: readonly Row[];
+  readonly from: number;
+  readonly to: number;
 }
 
 /**
  * Construct a {@link Table}, enforcing the GFM rule that the header and
- * delimiter rows carry the SAME number of cells. `Table` is a plain interface,
- * so TypeScript cannot express this invariant: any spread-and-mutate build
- * could silently set `header.cells.length !== delimiter.cells.length`, yielding
- * a table whose `tableAlign[col]` is `undefined` and whose columns misalign at
- * render. Routing every `Table` construction through this factory makes that
- * latent corruption a loud build-time throw: the structure column ops rely on it
- * directly, while `parseTable` pre-screens mismatches as non-tables (returns
- * null) before constructing, so there the throw is a redundant backstop.
+ * delimiter rows carry the SAME number of cells. TypeScript can express that
+ * neither count changes through the model — it is `readonly` throughout, so
+ * `table.header.cells.push(…)` is a compile error — but not that the two counts
+ * RELATE, so a hand-rolled object literal typed as `Table` can still be born
+ * with `header.cells.length !== delimiter.cells.length`, yielding a table whose
+ * `tableAlign[col]` is `undefined` and whose columns misalign at render.
+ * Construction is therefore where the invariant has to be checked, and routing
+ * every `Table` construction through this factory makes that latent corruption a
+ * loud throw. Today `parseTable` is the only production caller and it pre-screens
+ * mismatches as non-tables (returns null) before constructing, so the throw is a
+ * redundant backstop there; for a future construction site that builds a table
+ * structurally rather than by parsing — the row/column ops this model exists to
+ * carry — it is the primary gate.
+ *
+ * The arrays are stored uncopied — `readonly` in, `readonly` out, so the
+ * returned model exposes no way to write into them. One hole is left open by
+ * that: a caller that keeps its own mutable reference to an array it passed in
+ * can still mutate what the model aliases. Copying the arrays here WOULD close
+ * it — the cell-count invariant reads only `length`, so even a shallow copy of
+ * each `cells` array would do — but the only production construction site drops
+ * its locals on return, so the hole has no way to be reached and the copy would
+ * cost an allocation per parse for nothing. Revisit if a construction site
+ * appears that retains its arrays. (The unit test also calls this factory
+ * directly, with throwaway fixtures it never mutates afterwards.)
  *
  * Body `rows` are intentionally unconstrained: GFM/Lezer never pads or truncates
  * ragged body rows, so neither does this factory (see {@link Table}).
@@ -102,7 +128,7 @@ export interface Table {
 export function makeTable(
   header: Row,
   delimiter: DelimiterRow,
-  rows: Row[],
+  rows: readonly Row[],
   from: number,
   to: number
 ): Table {

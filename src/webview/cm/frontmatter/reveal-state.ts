@@ -33,7 +33,8 @@
 
 import {
   type ChangeDesc,
-  type EditorState,
+  EditorState,
+  type Facet,
   StateEffect,
   type Transaction,
 } from "@codemirror/state";
@@ -72,12 +73,39 @@ function changeCoversRange(changes: ChangeDesc, range: { from: number; to: numbe
   return covered;
 }
 
-/** CodeMirror's canonical "can edit" authority is EditorState.readOnly; the
- *  EditorView.editable facet controls the DOM contenteditable. The reveal logic
- *  checks BOTH so a (readOnly=true, editable=true) combination cannot leak a
- *  reveal (Codex re-review #4). */
+/** The SINGLE source of truth for "which facets gate writability" — each facet
+ *  paired with the value that means writable. `writabilityFacets` (the reactive
+ *  dependency list) and `isWritable()` (the predicate) both derive from this, so
+ *  the two can no longer drift: a new writability input is one row here and both
+ *  update. CodeMirror's canonical "can edit" authority is EditorState.readOnly
+ *  (writable when false); EditorView.editable controls the DOM contenteditable
+ *  (writable when true). The reveal logic checks BOTH so a (readOnly=true,
+ *  editable=true) combination cannot leak a reveal (Codex re-review #4). */
+const writabilityInputs: readonly Readonly<{
+  facet: Facet<boolean, boolean>;
+  writableWhen: boolean;
+}>[] = [
+  { facet: EditorState.readOnly, writableWhen: false },
+  { facet: EditorView.editable, writableWhen: true },
+];
+
+/** The facets `isWritable()` reads. Providers whose output is gated on write
+ *  access (e.g. the collapsed widget's aria-description in frontmatter-field.ts)
+ *  spread this into their `compute()` dependency list so a facet-only reconfigure
+ *  still recomputes. Derived from `writabilityInputs` — no hand-maintained list to
+ *  drift out of sync with `isWritable()`. Typed `readonly` so the derived list is
+ *  as immutable as the old `as const` tuple was (`.map()` otherwise widens to a
+ *  mutable array, which would undercut the drift guarantee). */
+export const writabilityFacets: readonly Facet<boolean, boolean>[] = writabilityInputs.map(
+  (input) => input.facet
+);
+
+/** True iff every writability input holds its writable value (readOnly=false AND
+ *  editable=true). Derived from the same `writabilityInputs` source as
+ *  `writabilityFacets`, so the predicate and its reactive dependency list stay in
+ *  lockstep by construction. */
 export function isWritable(state: EditorState): boolean {
-  return !state.readOnly && state.facet(EditorView.editable);
+  return writabilityInputs.every((input) => state.facet(input.facet) === input.writableWhen);
 }
 
 export function nextRevealState(prev: RevealState, tr: Transaction): RevealState {

@@ -38,10 +38,12 @@ import {
   type Tab,
   TabInputCustom,
   TabInputText,
+  type TextDocument,
   type Uri,
   window,
   workspace,
 } from "vscode";
+import type { IsWritableFileSystem } from "../file-system.js";
 import { canEditWith } from "./can-edit-with.js";
 import { openInQuollEditor } from "./open-in-quoll.js";
 import { openInTextEditor } from "./reopen-text-editor.js";
@@ -111,31 +113,70 @@ function allOpenTabInputs(): unknown[] {
   return window.tabGroups.all.flatMap((g) => g.tabs).map((t) => t.input);
 }
 
+/** Injectable IO seam for `restoreSurface`. Production wires the real VS Code /
+ *  sibling-module surfaces (`REAL_RESTORE_DEPS`); unit tests inject fakes to
+ *  exercise the ORDER of the reopen→close pair and the skip / failure arms
+ *  without a live tab model. Mirrors `FinalizeSwapDeps` in surface-swap.ts —
+ *  same shape (exported interface + module-private real bindings + trailing
+ *  defaulted parameter) so the two surface finalizers stay one pattern.
+ *
+ *  `isWritableFileSystem` (not a whole `canEditWith`) is the seam: the decision
+ *  itself is the already-tested pure `canEditWith`, so only its one impure input
+ *  is injected — the readonly SKIP arm stays a real `canEditWith` call. */
+export interface RestoreDeps {
+  openDoc: (uri: Uri) => Thenable<TextDocument>;
+  isWritableFileSystem: IsWritableFileSystem;
+  openInQuoll: (uri: Uri, quollViewType: string) => Thenable<unknown>;
+  openInText: (uri: Uri) => Thenable<unknown>;
+  closeSourceTab: (uri: Uri, sourceTab: Tab) => Thenable<void>;
+}
+
+const REAL_RESTORE_DEPS: RestoreDeps = {
+  openDoc: (uri) => workspace.openTextDocument(uri),
+  isWritableFileSystem: (scheme) => workspace.fs.isWritableFileSystem(scheme),
+  openInQuoll: openInQuollEditor,
+  openInText: openInTextEditor,
+  closeSourceTab: closeSourceTabIfClean,
+};
+
 /** Reopen `uri` in `target` and close the just-opened (wrong-surface) source tab
  *  via closeSourceTabIfClean (no save). planRestore gates the dirty / readonly
  *  cases. Best-effort; never throws — a passive restore failure logs only and
- *  leaves the doc in the (valid) surface VS Code opened it in. */
-async function restoreSurface(
+ *  leaves the doc in the (valid) surface VS Code opened it in. `deps` is seamed
+ *  for tests (see RestoreDeps); production passes the real bindings.
+ *
+ *  ORDER IS LOAD-BEARING: the target surface is opened and AWAITED before the
+ *  source tab is closed. Closing first would leave a window with no editor for
+ *  the doc, and a reopen failure would then have closed the only surface the
+ *  user had. */
+export async function restoreSurface(
   target: EditorSurface,
   uri: Uri,
   sourceTab: Tab,
-  quollViewType: string
+  quollViewType: string,
+  deps: RestoreDeps = REAL_RESTORE_DEPS
 ): Promise<void> {
   try {
-    const doc = await workspace.openTextDocument(uri);
-    const canOpenQuoll = canEditWith(doc, (scheme) => workspace.fs.isWritableFileSystem(scheme)).ok;
+    const doc = await deps.openDoc(uri);
+    const canOpenQuoll = canEditWith(doc, deps.isWritableFileSystem).ok;
     const action = planRestore(target, doc.isDirty, canOpenQuoll);
     if (action === "skip") {
       return;
     }
     if (action === "reopen-quoll") {
-      await openInQuollEditor(uri, quollViewType);
+      await deps.openInQuoll(uri, quollViewType);
     } else {
-      await openInTextEditor(uri);
+      await deps.openInText(uri);
     }
-    await closeSourceTabIfClean(uri, sourceTab);
+    await deps.closeSourceTab(uri, sourceTab);
   } catch (err) {
-    console.error("[quoll] surface restore failed", err);
+    // This log is the only diagnostic channel for THIS function's failures —
+    // the feature is deliberately silent (no toast) — so it carries the
+    // identifying context: without the uri and the target surface an openDoc
+    // rejection and a reopen rejection collapse into one indistinguishable
+    // line. (The finalizer it delegates to, closeSourceTabIfClean, logs its own
+    // warnings separately; they never route through this catch.)
+    console.error("[quoll] surface restore failed", { uri: uri.toString(), target, err });
   }
 }
 
@@ -146,8 +187,12 @@ async function restoreSurface(
  *  (restoreSurface is fire-and-forget; several opened events for one URI can
  *  arrive close together). `quollViewType` is QuollEditorPanel.viewType (passed
  *  in so this module need not import the heavy panel module). Disposed on
- *  deactivate. */
-export function registerSurfaceRestoreWatcher(quollViewType: string): Disposable {
+ *  deactivate. `deps` is seamed for tests and forwarded verbatim to
+ *  restoreSurface. */
+export function registerSurfaceRestoreWatcher(
+  quollViewType: string,
+  deps: RestoreDeps = REAL_RESTORE_DEPS
+): Disposable {
   const restoring = new Set<string>();
   return window.tabGroups.onDidChangeTabs((e) => {
     for (const tab of e.opened) {
@@ -157,8 +202,15 @@ export function registerSurfaceRestoreWatcher(quollViewType: string): Disposable
       }
       const { surface, uri } = classified;
       const uriKey = uri.toString();
-      // A restore for this URI is already running — its own reopen fires an
-      // opened event we must NOT re-process (memory already holds the target).
+      // A restore for this URI is already running. The hazard is NOT the
+      // restore's own reopen — that arrives as a Quoll (custom) open, which
+      // decideOpenReconcile always adopts (reopen: null), so it could never
+      // start a second restore. It is a DUPLICATE TEXT open landing mid-restore,
+      // and which harm it does depends on how far the restore has got: before
+      // the Quoll tab exists it re-enters decideOpenReconcile's upgrade branch
+      // and starts a redundant second restore; once the Quoll tab IS live the
+      // sibling makes reconcileOpen record "text" instead, silently overwriting
+      // the remembered "quoll" we are in the middle of restoring to.
       if (restoring.has(uriKey)) {
         continue;
       }
@@ -172,8 +224,18 @@ export function registerSurfaceRestoreWatcher(quollViewType: string): Disposable
       if (reopen === null) {
         continue;
       }
+      // Accepted boundary: the guard is released ONLY on settlement. A
+      // `deps.openDoc` (workspace.openTextDocument) that never settles — an
+      // unresponsive FileSystemProvider — leaves `uriKey` held for the session,
+      // silently disabling restore for that one URI (no throw ⇒ no catch ⇒ no
+      // log). Deliberate: a timer-based release could fire a second reopen while
+      // the first is still pending, and the degradation is "the file stays in
+      // the valid surface VS Code opened it in", the same end state as any other
+      // restore failure.
       restoring.add(uriKey);
-      void restoreSurface(reopen, uri, tab, quollViewType).finally(() => restoring.delete(uriKey));
+      void restoreSurface(reopen, uri, tab, quollViewType, deps).finally(() =>
+        restoring.delete(uriKey)
+      );
     }
   });
 }

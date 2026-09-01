@@ -159,6 +159,103 @@ export const cmLinePaddingThemeSpec = {
 
 export const quollCmLinePaddingTheme = EditorView.theme(cmLinePaddingThemeSpec);
 
+// Muted ink for quoted prose — plain blockquotes AND callouts. A callout inherits
+// the blockquote panel's fill, column alignment and TEXT colour wholesale; the only
+// thing unique to a callout is its per-type left accent bar, painted separately
+// below via --quoll-callout-accent.
+//
+// WHY THE MIX (A11Y-10, AA contrast floor): the BARE host descriptionForeground is
+// #717171 in Default Light+, which lands at 4.44:1 on the --quoll-surface-fill quote
+// panel (#f1f4fc) — under the 4.5:1 AA normal-text threshold. This has always been
+// the value; it is a long-standing shortfall, not a regression (evidence: the A11Y-10
+// entry in docs/a11y-audit/2026-07-24-widget-surface.md). Nudge it 10% toward the
+// editor FOREGROUND, exactly as A11Y-08 did for the frontmatter card (styles.css
+// .quoll-frontmatter-block): the mix is monotonic — it darkens on light and lightens
+// on dark, so contrast only ever rises — while the ink stays host-theme-adaptive and
+// visibly quieter than body prose. Measured via `pnpm a11y:probe`: 4.44 → 5.24
+// (light), 5.70 → 6.16 (dark), 5.47 → 6.06 (hc-light), 9.96 → 10.89 (hc-dark).
+//
+// SCOPE of those ratios: they are the depth-1 BASE panel, which is what the `90%`
+// FALLBACK below encodes. A nested `> >` / `> > >` line mixes the fill a further
+// 7% / 14% toward the editor foreground (the -depth-2/-3 rules below), and against
+// those darker fills the shared depth-1 ink measured 4.49 (depth-2) and 3.81
+// (depth-3) in light — both under AA.
+//
+// A11Y-13 closes that by making the mix PERCENTAGE an inherited custom property:
+// each depth rule steps `--quoll-quote-ink-mix` down by the same 7 points as its
+// own fill (90 → 83 → 76), so the ink tracks the fill level for level. Custom
+// properties inherit, so the `t.quote` span INSIDE a nested line re-resolves this
+// one formula at its own depth — no per-depth colour constant, and no specificity
+// fight with the generated highlight class. (Carrying a custom property on a
+// `.cm-line` rule is the established shape here: the callout type rules already
+// set `--quoll-callout-accent`.) Depth 4+ needs no rule of its own —
+// blockquoteDepthClass clamps at BLOCKQUOTE_MAX_DEPTH, so deeper lines reuse the
+// depth-3 class and its fill and ink plateau TOGETHER. A future depth-4 fill MUST
+// bring its own ink step (pinned by cm-decoration-block-style.test.ts).
+//
+// MEASURED, not derived — `pnpm a11y:probe` over the four shipped palettes, on the
+// SPAN the reader actually sees. depth-2 / depth-3, before → after:
+//   light    4.49 → 5.06   3.81 → 4.85     (the AA failure this closes)
+//   dark     5.48 → 5.74   4.75 → 5.18
+//   hc-light 5.66 → 6.03   5.25 → 5.91
+//   hc-dark 10.24 → 10.79  8.95 → 9.83
+// The depth-1 base is untouched by construction and measured unchanged (5.24 /
+// 6.16 / 6.06 / 10.89). A nested line INSIDE a callout measures identical to a
+// plain one at the same depth, which is the callout rules adding no fill and no
+// colour of their own (pinned by cm-decoration-block-style.test.ts).
+//
+// The direction of travel is toward `editor-foreground`, which is LIGHT in
+// dark/hc-dark and DARK in hc-light, so each step is EXPECTED to help in every
+// kind — but `color-mix()` is not linear in contrast ratio and each palette sits
+// differently against its own surface, so treat the table as the numbers that were
+// measured, NOT as a proof that a future palette rises. Re-run the probe when a
+// palette changes — CI does NOT make that instruction obsolete. What CI gained in
+// A11Y-14 is narrower than it sounds: test/webview/cm-quote-ink-contrast.test.ts
+// resolves this formula over the FOUR palettes transcribed in
+// scripts/preview/vscode-theme-palettes.mjs and asserts each result clears the 4.5
+// AA floor. It does not re-verify the table above — a retune that moves every
+// ratio while staying over 4.5 leaves these numbers stale and CI green — and it
+// cannot see a host at all, so a VS Code release or a third-party theme that
+// changes descriptionForeground is still visible only to the probe.
+//
+// STILL do NOT close a nested-contrast gap by retuning the depth FILL mixes:
+// `.cm-line.quoll-blockquote-depth-2/-3` apply only on NESTED lines
+// (blockquoteDepthClass returns null below depth 2, block-style.ts), so a depth-1
+// line never carries either class and the base panel is untouched by that lever —
+// the cost of retuning the mixes is a weaker nesting cue (the deeper bands would
+// read closer to the base panel), not a moved base panel. What DOES move the base
+// panel is retuning the `90%` fallback itself, since depth-1 falls back to it.
+//
+// CONCRETE FALLBACKS (not a nested `var()` chain) because color-mix cannot take
+// `inherit`, and a nested fallback is invisible to happy-dom's CSSOM. They keep the
+// mix well-formed when ONE token is missing; they assume host var injection already
+// succeeded and are NOT a defence against VS Code injecting no --vscode-* at all
+// (both absent ⇒ a fixed, non-adaptive grey — the same trade-off already accepted
+// for A11Y-08's frontmatter card, styles.css .quoll-frontmatter-block).
+//
+// ONE const, TWO use sites, kept in sync — NOT because they paint disjoint content.
+// `@lezer/markdown` maps `"Blockquote/...": tags.quote`, and Lezer's `/...` is
+// Mode.Inherit, so the `quote` tag reaches EVERY descendant inside a quote — the
+// `>` marker, plain prose, emphasis, links, all of it. There is no ancestor cascade
+// involved: @lezer/highlight CONCATENATES the inherited tag class onto the node's
+// own class and emits ONE span, so a link inside a quote is a single element
+// carrying both classes, and which colour lands is decided by RULE ORDER —
+// HighlightStyle.define emits its rules in spec order and documents that later
+// entries take CSS precedence. `{ tag: t.quote, … }` is therefore kept LAST in
+// quollHighlightSpec deliberately: that position is load-bearing, not incidental.
+// Move it and the accent tokens repaint quoted links and headings (light depth-3
+// green measures 3.99:1, sub-AA), so the order is pinned by
+// test/webview/cm-quote-ink-contrast.test.ts. Being last is what makes the
+// `t.quote` entry below paint essentially all visible quoted text, leaving
+// `.cm-line.quoll-blockquote`'s copy painting almost nothing the reader sees. That
+// copy still has to track QUOTE_INK exactly,
+// because `pnpm a11y:probe`'s `calloutFirstLine` sample reads `.cm-line.quoll-callout`'s
+// OWN computed colour, not the span inside it: a drift here would silently stop the
+// probe reflecting the colour the reader actually sees, while nothing on screen
+// changed.
+const QUOTE_INK =
+  "color-mix(in srgb, var(--vscode-descriptionForeground, #616161) var(--quoll-quote-ink-mix, 90%), var(--vscode-editor-foreground, #000))";
+
 // Markdown token styling. Lezer tags → CSS. Heading sizes give the
 // Notion-ish hierarchy without rich nodes; the syntax marks stay
 // visible (no reveal in C1).
@@ -245,7 +342,7 @@ export const quollHighlightSpec: TagStyle[] = [
   // underline supplied elsewhere; colour is the accent).
   { tag: t.link, color: "var(--quoll-accent-green, var(--vscode-textLink-foreground))" },
   { tag: t.url, color: "var(--quoll-accent-green, var(--vscode-textLink-foreground))" },
-  { tag: t.quote, color: "var(--vscode-descriptionForeground)" },
+  { tag: t.quote, color: QUOTE_INK },
 ];
 
 const quollHighlight = HighlightStyle.define(quollHighlightSpec);
@@ -462,8 +559,8 @@ export const blockStyleThemeSpec = {
   // the fill's edges.
   ".cm-line.quoll-blockquote": {
     // The subtle navy fill alone affords "this is a quote"; text stays muted
-    // (descriptionForeground) since a quote is secondary. (The former green
-    // left rule was removed 2026-07-01 — the fill carries the affordance.)
+    // (QUOTE_INK) since a quote is secondary. (The former green left rule was
+    // removed 2026-07-01 — the fill carries the affordance.)
     backgroundColor: "var(--quoll-surface-fill, transparent)",
     // Body-text-column alignment (2026-07-01 overflow re-report; SHARED contract
     // for .quoll-fenced-code and .quoll-fenced-collapse-bar). The navy fill is a
@@ -497,7 +594,7 @@ export const blockStyleThemeSpec = {
     backgroundClip: "padding-box",
     paddingLeft: "var(--quoll-block-pad-x, 16px)",
     paddingRight: "var(--quoll-block-pad-x, 16px)",
-    color: "var(--vscode-descriptionForeground, var(--vscode-editor-foreground))",
+    color: QUOTE_INK,
   },
   // Round the top corners on the opening quote line, mirroring the fenced-code panel
   // — same shared elliptical corner spec (blockEdgeCorner). Real-pixel geometry is
@@ -535,10 +632,12 @@ export const blockStyleThemeSpec = {
   ".cm-line.quoll-blockquote-depth-2": {
     backgroundColor:
       "color-mix(in srgb, var(--quoll-surface-fill, transparent), var(--vscode-editor-foreground) 7%)",
+    "--quoll-quote-ink-mix": "83%",
   },
   ".cm-line.quoll-blockquote-depth-3": {
     backgroundColor:
       "color-mix(in srgb, var(--quoll-surface-fill, transparent), var(--vscode-editor-foreground) 14%)",
+    "--quoll-quote-ink-mix": "76%",
   },
   // Callout admonitions (classification in decorations/callout.ts). An OUTERMOST
   // blockquote whose first line is `[!TYPE]` carries `quoll-callout

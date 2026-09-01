@@ -7,11 +7,13 @@
 // guards inside edit-sync.ts handle re-entry.
 
 import { defaultKeymap, history, historyKeymap } from "@codemirror/commands";
+import { foldedRanges, forceParsing } from "@codemirror/language";
 import { highlightSelectionMatches, search, searchKeymap } from "@codemirror/search";
 import { Compartment, EditorState, Prec, Transaction } from "@codemirror/state";
 import { EditorView, keymap } from "@codemirror/view";
 import { perfNow, perfRecord } from "../shared/perf.js";
 import {
+  type FormatAction,
   type LintDiagnosticWire,
   MAX_CONTENT_LENGTH,
   PROTOCOL_VERSION,
@@ -35,15 +37,12 @@ import { fencedCodeEnterKeymap } from "./cm/fenced-code/fenced-code-enter-keymap
 import { quollCodeHighlighting } from "./cm/fenced-code/fenced-code-highlight-languages.js";
 import { fencedCodeLanguagePicker } from "./cm/fenced-code/fenced-code-language-picker.js";
 import { quollFloatingToolbarScroll } from "./cm/floating-toolbar-scroll.js";
-import { quollFolding } from "./cm/fold/index.js";
+import { quollFolding, reconcileReseedFolds } from "./cm/fold/index.js";
 import { runFormatDocument } from "./cm/format/format-document-command.js";
 import { frontmatterBlockField, frontmatterRevealKeymap } from "./cm/frontmatter/index.js";
 import { hostDocumentReseed } from "./cm/host-reseed.js";
 import { createImagePasteDrop, imageBlockField, quollResourceBaseUri } from "./cm/image/index.js";
-import {
-  type FormatAction,
-  runFormatCommand as runInlineFormat,
-} from "./cm/inline/inline-formatting-commands.js";
+import { runFormatCommand as runInlineFormat } from "./cm/inline/inline-formatting-commands.js";
 import { quollLinkClickHandler } from "./cm/link-handlers.js";
 import { quollLintFixKeymap } from "./cm/lint/apply-fix.js";
 import { quollLintGutter } from "./cm/lint/gutter.js";
@@ -61,7 +60,7 @@ import {
   pasteUrlOverSelection,
   richHtmlPaste,
 } from "./cm/paste/index.js";
-import { detectLineSeparator, splitToCmText } from "./cm/seed.js";
+import { computeReseedChange, detectLineSeparator, splitToCmText } from "./cm/seed.js";
 import { quollSwitchEditor } from "./cm/switch-editor.js";
 import { tableBlockField, tableSkeletonField } from "./cm/table/index.js";
 import { quollTaskCheckboxKeymap } from "./cm/task-checkbox/task-checkbox-command.js";
@@ -95,6 +94,22 @@ type Dispatch = (action: Action) => void;
 // window only trims the mid-move flood.
 const CARET_REPORT_DEBOUNCE_MS = 100;
 
+// Worst-case SYNCHRONOUS ceiling (ms) for the ONE forced complete parse before
+// reconciling folds after a reseed whose bounded apply-parse left the frontier
+// incomplete (large doc). NOT a free wait: ensureSyntaxTree's parse.work does not
+// yield the main thread. An already-parsed doc returns instantly (isDone → no
+// added jank, no extra dispatch), so this cost is only paid when a reseed left the
+// parse incomplete. Mirrors cm/outline/outline-panel.ts's PARSE_BUDGET_MS; kept at
+// 500 (not lowered) because the budget caps jank AND fix-coverage together —
+// lowering it would drop the fix for the mid-size docs this targets. On a
+// pathological multi-MB doc that exceeds it, forceParsing returns false and
+// reconcileReseedFolds' own syntaxTreeAvailable guard leaves the mapped fold as-is
+// (the pre-existing accepted behaviour). Unlike outline-open, reseed can fire
+// passively/repeatedly (external saves), so the caller only pays this when there
+// are active folds to reconcile (foldedRanges(...).size > 0 gate). See
+// .claude/docs/LEARNING.md.
+const RECONCILE_PARSE_BUDGET_MS = 500;
+
 export type EditorOptions = {
   parent: HTMLElement;
   nonce: string;
@@ -105,11 +120,21 @@ export type EditorOptions = {
   /** Webview-resource base URI for resolving relative image paths (from the
    *  host's data-resource-base-uri). "" for non-file documents. */
   resourceBaseUri?: string;
+  /** Fired ONCE per session when identity transitions cluster (S3b tripwire).
+   *  The shell wires it to a low-alarm user-visible notice. Passed straight
+   *  through to edit-sync's `onResyncStorm`. */
+  onResyncStorm?: () => void;
 };
 
 export type EditorHandle = {
   /** Replace the editor's document from a host snapshot. */
-  applyDocument(rawText: string, canWrite: boolean, baseDocVersion: number): void;
+  applyDocument(
+    rawText: string,
+    canWrite: boolean,
+    baseDocVersion: number,
+    externalEpoch?: number,
+    epochGeneration?: number
+  ): void;
   /** Fired by the shell after every state-changing dispatch — the SOLE
    *  drain entry point. */
   onReducerCommit(editInFlight: boolean): void;
@@ -158,6 +183,11 @@ export type EditorHandle = {
    *  clamped to the live doc, suppressing the echo caret-report. The dispatch is
    *  skipped when the caret is already at the target; the focus is not. */
   applyRemoteCaret(caret: Caret): void;
+  /** Would an incoming Document's identity pair be an identity transition against
+   *  the currently recorded pair? (S3b) The shell calls this BEFORE applyDocument
+   *  so it can bypass its whole-Document stale-version drop and thread the
+   *  `adopt` flag to the reducer. Delegates to edit-sync's pure predicate. */
+  isIdentityTransition(externalEpoch?: number, epochGeneration?: number): boolean;
 };
 
 /** Dispatch `post-edit` and ship the Edit message in the same tick.
@@ -277,6 +307,7 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
     getDoc: () => view.state.sliceDoc(),
     canPost: () => canPostEdit(opts.getState()),
     post: (content, baseDocVersion) => postEditMessage(opts.dispatch, content, baseDocVersion),
+    onResyncStorm: opts.onResyncStorm,
   });
 
   const imagePaste = createImagePasteDrop({
@@ -537,9 +568,11 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
         // marks on the row). Block widgets MUST come from a StateField.
         calloutMarkerConcealField,
         // Copy-code button: a selection-independent ViewPlugin emitting one
-        // inline point widget at each top-level fenced block's open line; the
-        // button copies the code body via navigator.clipboard. Display-only
-        // (byte-identical round-trip) and absent in read-only mode.
+        // inline point widget at each visible fenced block's open line — top-level
+        // AND blockquote-/list-nested, per the shared open-line enumerator this
+        // and the language picker both route through; the button copies the code
+        // body via navigator.clipboard. Display-only (byte-identical round-trip)
+        // and absent in read-only mode.
         fencedCodeCopyButton,
         // Language picker: a selection-independent ViewPlugin emitting one inline
         // point widget per fenced block's open line; its <select> rewrites the
@@ -553,8 +586,10 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
         // not a ViewPlugin. Display-only (byte-identical round-trip). Does NOT
         // contribute to quollBlockReplaceZones — the zone is non-atomic and the
         // caret reaches concealed lines via auto-expand (fold parity), not the
-        // generic block-zone arrow keymap. Top-level blocks only (same gate as the
-        // copy button above).
+        // generic block-zone arrow keymap. Top-level blocks only — a STRICTLY
+        // NARROWER gate than the copy button / language picker above: this field
+        // walks the tree itself and descends only through the Document root, so
+        // a blockquote- or list-nested fence is never collapsible.
         fencedCodeCollapseField,
         // Bounded Table-node skeleton — precedes tableBlockField so buildAll
         // reads it via state.field() instead of a per-keystroke full walk.
@@ -601,13 +636,29 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
         // Tab never escapes to VS Code focus navigation. Prec.high so it wins
         // before CM's default. Edits raw source → normal edit-sync path.
         listIndentKeymap(),
+        // Enter precedence story (one deliberate order, not registration luck).
+        // Effective order highest→lowest: (1) list continuation, (2) fenced-code
+        // auto-close [both Prec.highest, list registered first], (3) upstream markup
+        // continuation [Prec.high], (4) CM default newline [Prec.default]. Both Quoll
+        // handlers are promoted above upstream `markdownKeymap` Enter (mounted
+        // Prec.high by quollMarkdownLanguage, registered first) because at equal
+        // precedence upstream shadowed them: it returns true for bullet/ordered items
+        // (stealing list renumber/exit — visible on non-sequential ordered runs) AND
+        // for a fence opener whose caret sits on a `> ` / list PREFIX (it resolves to
+        // the Blockquote/ListItem, not the FencedCode, so upstream continues the
+        // markup and leaves the fence unclosed). Prec.highest fixes both.
+        // Pinned by cm-enter-precedence.test.ts.
+        //
         // Enter in a bullet/ordered/task list item continues the marker on the
         // next line; Enter on an empty marker line removes it (exiting the list);
         // ordered runs renumber to stay sequential. Registered BEFORE the
         // fenced-code Enter so a normal list line is handled here, while a fence
         // opener on a list marker line (`- ```\`) is deferred (caretInCode guard)
-        // to fencedCodeEnterKeymap. Prec.high; returns false for every non-list
-        // caret so the default Enter still runs. One transaction → edit-sync path.
+        // to fencedCodeEnterKeymap. It ALSO defers every blockquote-involved caret
+        // (`- > q`, `> - x`) to the upstream handler, which preserves the `>`
+        // context. Prec.highest; returns false for every non-owned caret so the
+        // fence handler / upstream markup / default Enter still run. One
+        // transaction → edit-sync path.
         listContinuationKeymap(),
         // Mod-l toggles the GFM task-list checkbox on the caret's line — the
         // keyboard path for the checkbox, which the inline Decoration.replace
@@ -621,9 +672,11 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
         // Enter on an unclosed ```-fence opener auto-inserts a matching closing
         // fence and lands the caret on the empty body line between the two, so a
         // fence typed mid-document no longer reflows every following line into
-        // code until EOF. Prec.high so it is tried before CM's default Enter; it
-        // returns false for every non-trigger (inline code / inside-block /
-        // already-closed) so the default newline still runs. One ordinary
+        // code until EOF. Prec.highest (see the precedence story above) so it wins
+        // over the upstream markup Enter even when the caret sits on a `> ` / list
+        // prefix before the fence (where upstream would otherwise continue the
+        // markup); it returns false for every non-trigger (inline code / inside-block
+        // / already-closed) so the default newline still runs. One ordinary
         // transaction → normal edit-sync path, byte-identical round-trip.
         fencedCodeEnterKeymap(),
         // Register AFTER quollSyntaxReveal so the reveal decoration build
@@ -740,8 +793,15 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
         // (bold/italic, headings, nested lists, links, code, blockquotes, tables via
         // the shared table core) is inserted through the normal edit pipeline.
         // Prec.high, registered AFTER the table / URL / list handlers (they keep
-        // their fast paths) and BEFORE imagePaste (a pure image copy carries no
-        // text/html → this defers). Non-convertible → return false, plain paste runs.
+        // their fast paths) and BEFORE imagePaste. That ordering is safe for the two
+        // paths where this handler SWALLOWS a paste (in-code, null conversion): both
+        // exempt a clipboard carrying an image file item (hasImageFileItem) — NOT
+        // because an image copy lacks a text/html flavour; copying an image out of a
+        // web page carries both. The insert path does NOT exempt it: a fragment that
+        // emits real Markdown syntax is inserted here even when an image rides along,
+        // and imagePaste never runs. Accepted because a "Copy image" clipboard's HTML
+        // is a bare <img>, which converts to nothing → null → the exempted path.
+        // Non-convertible → return false, plain paste runs.
         richHtmlPaste({ canWrite: () => opts.getState().canWrite }),
         // Paste/drop image ingestion: capture image files, post image-write, and
         // insert the relative link at a position-mapped anchor on the host's
@@ -804,13 +864,29 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
   }
 
   return {
-    applyDocument(rawText, canWrite, baseDocVersion) {
+    applyDocument(rawText, canWrite, baseDocVersion, externalEpoch, epochGeneration) {
       // Cancel a scheduled flush BEFORE writing the snapshot so a pending
       // debounced Edit cannot post the host's own bytes back — this also
       // captures an in-window keystroke into the buffer so it survives
       // the reseed and replays on the ack.
       sync.cancelPendingFlush();
-      const needsReseed = view.state.sliceDoc() !== rawText;
+      const liveDoc = view.state.sliceDoc();
+      const aheadOfHost = liveDoc !== rawText;
+      // ok-ack fold (update-loop guard — ARCHITECTURE.md §3/§5/§7). A host
+      // Document that merely ECHOES our own in-flight edit back is an ack, not
+      // a divergence. When the user kept typing during the in-flight window the
+      // live buffer has advanced past those acked bytes; a wholesale reseed
+      // would visibly REWIND the newer keystrokes (and a keystroke typed during
+      // the revert round-trip would fork off the stale base and be lost). The
+      // buffered edit replays forward on the reducer commit below, so fold this
+      // ack into version bookkeeping only — skip the visible content replace.
+      // Gated on canWrite so the readonly hard-drop path (cancelPendingFlush
+      // nulled the buffer) is untouched. The live buffer is always a descendant
+      // of what we posted, so an echo match means the acked content is a strict
+      // ancestor of the buffer — never a genuine external divergence (whose
+      // content never matches our posted bytes), which still reseeds.
+      const foldsOkAck = aheadOfHost && canWrite && sync.echoesInFlightEdit(rawText);
+      const needsReseed = aheadOfHost && !foldsOkAck;
       // Capture BEFORE the reseed. The needsReseed branch issues a wholesale
       // `0..doc.length` replace; CodeMirror's default selection mapping
       // collapses mid-doc cursors through that delete (the typical
@@ -831,6 +907,11 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
       const insertText = needsReseed ? splitToCmText(rawText) : null;
       const newDocLength = insertText !== null ? insertText.length : view.state.doc.length;
       const prevMain = prevSelection?.main;
+      // Computed BEFORE dispatch (needs the PRE-change view.state.doc — see the
+      // helper's CRLF note). Reused below, post-dispatch, to derive the edited
+      // span in POST-change coordinates for reconcileReseedFolds's orphan gate.
+      const reseedChange =
+        insertText !== null ? computeReseedChange(view.state.doc, insertText) : null;
       seeding = true;
       try {
         view.dispatch({
@@ -846,15 +927,17 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
               EditorState.readOnly.of(!canWrite),
             ]),
           ],
-          ...(insertText !== null
+          ...(reseedChange !== null
             ? {
-                changes: {
-                  from: 0,
-                  to: view.state.doc.length,
-                  // Pre-split on /\r\n?|\n/ so the line model is clean
-                  // regardless of facet timing.
-                  insert: insertText,
-                },
+                // Minimal single-span change (not a wholesale {0, doc.length}
+                // replace): CM maps every foldState range through the change, and
+                // a whole-doc delete drops them ALL — any external touch would
+                // spring the document open. computeReseedChange trims the common
+                // prefix/suffix so foldState ranges outside the real edit survive.
+                // Operands are CM Text in LF-internal coords (view.state.doc, not
+                // the sliceDoc() render) — see the helper's CRLF note. insertText
+                // stays the pre-split snapshot Text (also feeds newDocLength).
+                changes: reseedChange,
               }
             : {}),
           // Restore ONLY the main range, clamped to new doc bounds.
@@ -876,8 +959,87 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
         // echo-Edit detection.
         seeding = false;
       }
-      sync.onHostSnapshot(baseDocVersion, canWrite);
+      sync.onHostSnapshot(baseDocVersion, canWrite, externalEpoch, epochGeneration);
       setReadOnlyClass(canWrite);
+      // Reconcile native folds that the minimal-span reseed REMAPPED. The diff maps
+      // overlapping folds through the change (preserving them — PR #292), but an
+      // external insert INTO a collapsed section can widen a mapped fold to swallow a
+      // newly-inserted sibling heading, hiding it until the user unfolds; and an edit
+      // that strips a folded heading's OWN marker can orphan its fold entirely (no
+      // canonical range left to clamp to). Only meaningful when the reseed actually
+      // changed the document (reseedChange !== null). This is a SEPARATE, display-only
+      // dispatch carrying NO `changes` — byte-identical round-trip, and a no-op for the
+      // updateListener's `docChanged`-gated edit-sync — so it behaves exactly like a
+      // user fold/unfold (hence NOT annotated as a hostDocumentReseed; it rewrites no
+      // document bytes). addToHistory.of(false) keeps the clamp out of undo.
+      // reconcileReseedFolds self-guards on a complete parse tree. The edited-span
+      // argument is in POST-change coordinates (reseedChange.from is unaffected by its
+      // own edit; the edit's far end shifts to reseedChange.from + insert.length) —
+      // reconcileReseedFolds uses it to gate the orphan-release path to folds whose OWN
+      // line OR span the reseed actually touched, per its JSDoc.
+      //
+      // Skip an EMPTY change (from === to AND no insert): computeReseedChange yields
+      // that iff the two docs are content-identical (a no-op reseed — e.g. EOL-only
+      // normalisation), so the fold structure is unchanged and there is nothing to
+      // reconcile. Skipping is also load-bearing, not just an optimisation: the
+      // orphan gate's span test is boundary-inclusive, so a zero-width edited span
+      // sitting on a fold's boundary would otherwise (mis)count as touching it and
+      // spring a still-valid fold open. Bailing on the empty change keeps the no-op
+      // reseed a true no-op for folds (pinned by (r5)).
+      if (
+        reseedChange !== null &&
+        (reseedChange.from !== reseedChange.to || reseedChange.insert.length > 0) &&
+        // Only reconcile — and only pay for the forced parse — when there are active
+        // folds to reconcile. Folding is opt-in, so the overwhelming majority of
+        // reseeds have no folds and nothing to clamp; skipping keeps the whole-doc
+        // parse off the common no-fold reseed path (Codex review). foldedRanges is
+        // O(folds), cheap.
+        foldedRanges(view.state).size > 0
+      ) {
+        // Force ONE bounded complete parse so reconcileReseedFolds' foldable() /
+        // heading walk read the WHOLE tree even when the reseed's bounded apply
+        // parse left the frontier incomplete (large / just-opened doc). forceParsing
+        // — NOT a bare ensureSyntaxTree — is required: its public contract is to
+        // force a bounded parse AND make the completed tree visible to
+        // syntaxTree(view.state) (which foldable() reads); a bare ensureSyntaxTree
+        // advances the parse context but leaves syntaxTree(state) stale (it would
+        // even report syntaxTreeAvailable === true while foldable still reads the old
+        // tree). Reseed is not a keystroke path, so this one-shot parse is acceptable
+        // (mirrors cm/outline/outline-panel.ts); an already-parsed doc returns
+        // instantly with no added parse or dispatch. We call reconcileReseedFolds
+        // even if forceParsing returns false (budget exhausted on a pathological
+        // multi-MB doc): its own syntaxTreeAvailable guard makes that a safe no-op
+        // that leaves the mapped fold untouched (the pre-existing accepted
+        // behaviour), and NOT gating here leaves room for a future retry/publication
+        // path. See .claude/docs/LEARNING.md.
+        const parsed = forceParsing(view, view.state.doc.length, RECONCILE_PARSE_BUDGET_MS);
+        if (!parsed) {
+          // Dev-diagnostic (webview devtools only, never user-facing): the forced
+          // parse hit its budget on a pathological doc, so reconcileReseedFolds
+          // below will bail on its own syntaxTreeAvailable guard and any stale
+          // over-wide fold stays unreconciled (recoverable by unfolding — the
+          // Done-when's accepted no-op path). Logged so a future "inserted section
+          // stayed hidden behind a stale fold on a huge file" report can be
+          // correlated to this budget-miss path. Mirrors the recoverable-
+          // degradation console.warn convention in cm/image/*.
+          console.warn(
+            "[quoll] reconcileReseedFolds: forced parse hit its budget; fold reconciliation skipped (a stale fold, if any, is left unreconciled)"
+          );
+        }
+        const foldEffects = reconcileReseedFolds(view.state, {
+          from: reseedChange.from,
+          to: reseedChange.from + reseedChange.insert.length,
+        });
+        if (foldEffects.length > 0) {
+          view.dispatch({
+            annotations: [Transaction.addToHistory.of(false)],
+            effects: foldEffects,
+          });
+        }
+      }
+    },
+    isIdentityTransition(externalEpoch, epochGeneration) {
+      return sync.isIdentityTransition(externalEpoch, epochGeneration);
     },
     resolveImageWrite(requestId, relativePath) {
       imagePaste.resolve(view, requestId, relativePath);

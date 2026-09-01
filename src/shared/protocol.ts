@@ -30,8 +30,12 @@
  *   - No imports beyond TypeScript itself. No `vscode`, no `react`, no DOM.
  *     Both sides of the bridge consume it; either-side-only dependencies break
  *     the other side's build.
- *   - Validators are hand-rolled. A 4 KB module beats a 40 KB dependency for
- *     four discriminated unions.
+ *   - Validators are hand-rolled, and stay so as the module grows. It is the
+ *     single wire contract for two discriminated unions — `HostToWebview` and
+ *     `WebviewToHost` — and most of its bytes are the per-variant JSDoc pinning
+ *     each field's provenance and bounds, not validator boilerplate a schema
+ *     library would absorb. A dependency here would also break the no-imports
+ *     rule above, since BOTH sides of the bridge consume this module.
  */
 
 export const PROTOCOL_VERSION = 1;
@@ -104,7 +108,7 @@ export const MAX_LINT_COORDINATE = 0x7fffffff;
 
 /** Hard cap on a pasted/dropped image's DECODED byte length — the reject
  *  threshold. 10 MiB bounds abuse while covering screenshots/photos. Authoritative
- *  enforcement is host-side after base64 decode (src/extension/image-ingest.ts). */
+ *  enforcement is host-side after base64 decode (src/extension/image/image-ingest.ts). */
 export const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
 
 /** Transfer headroom above the reject threshold. A *slightly* oversized image
@@ -216,7 +220,7 @@ export function isThemeKind(value: unknown): value is ThemeKind {
  *  Document carries no `reason` discriminator. The validator ignores
  *  unknown extra fields (forward-compat) and `buildDocumentMessage` is
  *  pinned by the key-set test in
- *  test/extension/document-message.test.ts to never emit `reason`.
+ *  test/extension/session/document-message.test.ts to never emit `reason`.
  *  Host and webview always ship together in one `.vsix`, so the wire
  *  never holds mismatched peers and `PROTOCOL_VERSION` does not need to
  *  bump for this shape.
@@ -225,13 +229,34 @@ export function isThemeKind(value: unknown): value is ThemeKind {
  *  normalized to the document's `eol` (identical to `getText()` for the
  *  uniform documents VS Code produces) — and is intentionally not size-capped
  *  at the protocol layer — see MAX_CONTENT_LENGTH for the directionality
- *  rationale. */
+ *  rationale.
+ *
+ *  `externalEpoch` + `epochGeneration` are an EXCLUSIVE PAIR — both present or
+ *  both absent; a partial pair is a boundary-INVALID message (validator-
+ *  authoritative). They are wire-OPTIONAL for one release so an old host that
+ *  never sends them does not brick a new webview (absence = "no epoch info" =
+ *  today's unconditional-replay behaviour). Semantics (S3a plumbs them; S3b
+ *  consumes them): `externalEpoch` is host-owned and monotonic WITHIN one host
+ *  session (starts at 0), advancing whenever document content changed by
+ *  anything other than the webview's own acked edit lineage; `epochGeneration`
+ *  is a per-host-session nonce (minted once at session start — a counter-salted
+ *  timestamp) that identifies WHICH host session's epoch counter it is, so a
+ *  webview surviving a host restart can tell an epoch regression across
+ *  generations from a real advance. Identity, not ordering — never compared for
+ *  magnitude.
+ *
+ *  The fields are typed as INDEPENDENTLY optional, but the EXCLUSIVE-pair
+ *  contract (both present or both absent; a partial pair is invalid) is enforced
+ *  at the boundary by `isValidEpochIdentity` — the validator is the authority,
+ *  not the type. The host's `buildDocumentMessage` always emits BOTH. */
 export type DocumentMessage = Envelope & {
   type: "document";
   content: string;
   docVersion: number;
   themeKind: ThemeKind;
   canWrite: boolean;
+  externalEpoch?: number;
+  epochGeneration?: number;
 };
 
 /** Theme change only — no content, no version. Pushed on
@@ -298,36 +323,53 @@ export type EditRejectedMessage = Envelope & {
 
 /** Host→webview result of an `image-write` request. `ok` is true only when the
  *  host validated, sniffed, and wrote the file; `relativePath` (present iff ok)
- *  is the document-relative markdown destination the webview inserts. On
- *  rejection the host surfaces a human-readable toast itself, so the failure arm
- *  carries no reason string — the webview only clears its pending entry. */
+ *  is the document-relative markdown destination the webview inserts. The failure
+ *  arm carries no reason string: the host usually surfaces its own toast, and the
+ *  webview clears the pending entry either way.
+ *
+ *  "Usually" is load-bearing: this arm is NOT reliably reported to the user, and
+ *  ok:false is not even reliably a refusal. So the webview logs it independently
+ *  rather than trusting it — the cases, and why they are indistinguishable from
+ *  here, are set out at that call site (`cm/image/image-paste.ts`, resolve()).
+ *  Widening this arm with a reason enum would be a protocol change; do not add
+ *  one for logging alone. */
 export type ImageWriteResultMessage = Envelope & {
   type: "image-write-result";
   requestId: string;
 } & ({ ok: true; relativePath: string } | { ok: false; relativePath?: undefined });
 
+/** The inline-formatting action set — the SINGLE SOURCE OF TRUTH for it.
+ *  Everything downstream derives from this array rather than restating it:
+ *  `FormatAction` below, the wire validator's `FORMAT_ACTION_SET`, the host
+ *  command's argument guard + its "one of …" toast
+ *  (`src/extension/commands/format-command.ts`), and the webview's dispatch
+ *  (`src/webview/cm/inline/inline-formatting-commands.ts`). Restating the list
+ *  anywhere is what let an action exist on the wire while `normalizeFormatAction`
+ *  still rejected it — a silent no-op the type-checker could not see.
+ *
+ *  Adding an action here is deliberately NOT free: the webview's `MARKERS`
+ *  record (keyed by `Exclude<FormatAction, "link">`) and the E2E wire mirror
+ *  (`test/extension/e2e/types.ts`, pinned by `AssertEqual<HostToWebview, …>`)
+ *  both fail `pnpm compile` until they account for it. That is the point — the
+ *  sites that need real work are the ones that break. A new action also wants a
+ *  `quoll.format` keybinding entry AND its title-string action list in
+ *  package.json — neither is enforced by any type or test. */
+export const FORMAT_ACTIONS = ["bold", "italic", "code", "strike", "link"] as const;
+export type FormatAction = (typeof FORMAT_ACTIONS)[number];
+
 /** Host→webview instruction to run an inline-formatting command on the
  *  active selection. Sent by the `quoll.format` command (bound to a
  *  keybinding scoped to the active Quoll editor) to the active panel's
  *  webview, which performs the actual CodeMirror transaction — no document
- *  mutation happens on the host side. `action` is an inline union (NOT
- *  imported from the webview) to keep this module import-free. */
+ *  mutation happens on the host side. */
 export type FormatCommandMessage = Envelope & {
   type: "format-command";
-  action: "bold" | "italic" | "code" | "strike" | "link";
+  action: FormatAction;
 };
 
-const FORMAT_COMMAND_ACTIONS: ReadonlySet<string> = new Set([
-  "bold",
-  "italic",
-  "code",
-  "strike",
-  "link",
-]);
+const FORMAT_ACTION_SET: ReadonlySet<string> = new Set(FORMAT_ACTIONS);
 
-export function buildFormatCommandMessage(
-  action: FormatCommandMessage["action"]
-): FormatCommandMessage {
+export function buildFormatCommandMessage(action: FormatAction): FormatCommandMessage {
   return { protocol: PROTOCOL_VERSION, type: "format-command", action };
 }
 
@@ -388,7 +430,9 @@ export type EditMessage = Envelope & {
  *
  *  `href` is the already-decoded URL string (post
  *  decodeMarkdownDestination) — NOT raw Markdown source bytes. The host
- *  feeds it straight to isAllowedUrl + Uri.parse with no further decode. */
+ *  feeds it to isAllowedUrl, then rebuilds the URL via `buildExternalUri`
+ *  (WHATWG split + `Uri.from`) so path/query percent-encoding (`%2F`/`+`)
+ *  reaches the browser intact — no `Uri.parse` round-trip, no further decode. */
 export type OpenExternalMessage = Envelope & {
   type: "open-external";
   href: string;
@@ -540,6 +584,11 @@ export type LintDiagnosticWire = {
   endCharacter: number;
   severity: "warning" | "info";
   code: string;
+  // Bounded to MAX_LINT_MESSAGE_LENGTH. Enforced twice: `toWireDiagnostics`
+  // (webview producer, cm/lint/extension.ts) truncates before this type is
+  // constructed, and `isLintDiagnosticWire` (below) re-checks at the host
+  // boundary — TS structural typing does not itself prevent a future producer
+  // from skipping the truncation, so both runtime checks must stay in sync.
   message: string;
 };
 
@@ -628,6 +677,33 @@ function isUnboundedContent(value: unknown): value is string {
   return typeof value === "string";
 }
 
+/** One component (epoch OR generation) of the Document's identity pair: a
+ *  non-negative safe integer. `externalEpoch` starts at 0 and only advances;
+ *  `epochGeneration` is a counter-salted timestamp (always positive). Both are
+ *  bounded by the safe-integer ceiling for the same reason `docVersion` is —
+ *  values beyond 2^53 stop incrementing/comparing reliably. */
+function isEpochComponent(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
+}
+
+/** The Document's `externalEpoch` + `epochGeneration` pair is EXCLUSIVE:
+ *  both valid, or both absent. A partial pair (exactly one present) is a
+ *  boundary-INVALID message — the webview must never see a half-formed
+ *  identity (its S3b drop-and-adopt logic enumerates only well-formed states:
+ *  absent, or a valid pair). Absence is tolerated (old host → new webview
+ *  skew): the webview falls back to today's unconditional-replay behaviour. */
+function isValidEpochIdentity(epoch: unknown, generation: unknown): boolean {
+  const epochAbsent = epoch === undefined;
+  const generationAbsent = generation === undefined;
+  if (epochAbsent && generationAbsent) {
+    return true; // no epoch info — tolerated
+  }
+  if (epochAbsent || generationAbsent) {
+    return false; // partial pair — invalid
+  }
+  return isEpochComponent(epoch) && isEpochComponent(generation);
+}
+
 function isBoundedContent(value: unknown): value is string {
   // Webview→host: cap to bound oversized payloads from a user-controlled
   // surface. The exact boundary is asserted in test/shared/protocol.test.ts.
@@ -645,7 +721,8 @@ export function isHostToWebview(value: unknown): value is HostToWebview {
         isUnboundedContent(v.content) &&
         isValidDocVersion(v.docVersion) &&
         isThemeKind(v.themeKind) &&
-        typeof v.canWrite === "boolean"
+        typeof v.canWrite === "boolean" &&
+        isValidEpochIdentity(v.externalEpoch, v.epochGeneration)
       );
     case "theme":
       return isThemeKind(v.themeKind);
@@ -680,7 +757,7 @@ export function isHostToWebview(value: unknown): value is HostToWebview {
     case "caret-apply":
       return isCaretCoordinate(v.line) && isCaretCoordinate(v.character);
     case "format-command":
-      return typeof v.action === "string" && FORMAT_COMMAND_ACTIONS.has(v.action);
+      return typeof v.action === "string" && FORMAT_ACTION_SET.has(v.action);
     case "format-document":
       return true; // no payload beyond the validated envelope/protocol
     default:

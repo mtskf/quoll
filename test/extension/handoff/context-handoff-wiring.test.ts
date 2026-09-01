@@ -32,6 +32,7 @@ function makeWiring(barrier: EditSettledBarrier, isDisposed: () => boolean) {
     viewType: "quoll.editMarkdown",
     editSettledBarrier: barrier,
     isDisposed,
+    armRevealCaretSuppression: () => {},
   });
 }
 

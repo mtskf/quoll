@@ -1,8 +1,12 @@
+import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import * as vscode from "vscode";
+import { makeTempDir } from "../temp-root";
 import type {
   DocumentMessageShape,
   EditorConfigMessageShape,
+  FormatCommandMessageShape,
+  PanelControlsShape,
   RecordedEventShape,
   TestHarnessShape,
   ThemeMessageShape,
@@ -10,6 +14,14 @@ import type {
 
 export const EXTENSION_ID = "mtskf.quoll";
 export const VIEW_TYPE = "quoll.editMarkdown";
+
+// Every temp dir an E2E suite creates lives under the run root that
+// launch.ts made and disposes on exit — that single owner is why no suite
+// needs dir teardown of its own, and why nothing here ever globs
+// `quoll-e2e-*` (a parallel run owns its own root). Suites must NOT call
+// fs.mkdtemp(os.tmpdir(), …); test/extension/temp-dir-choke-point.test.ts
+// enforces that. Re-exported so suites keep importing from "./harness".
+export { makeTempDir, makeTempDirSync } from "../temp-root";
 
 // __dirname at runtime is `out/test-e2e/e2e/`. Resolve up to the
 // repo root then back into the source-controlled fixtures directory.
@@ -127,6 +139,70 @@ export function isEditorConfigEvent(
   e: RecordedEventShape
 ): e is RecordedEventShape & { message: EditorConfigMessageShape } {
   return e.message.type === "editor-config";
+}
+
+// Type-guard for outbound format-command messages. Mirrors isEditorConfigEvent
+// so a dispatch test's narrowing flows through to message.action — without it
+// `.action` resolves through RecordedEventShape's `Record<string, unknown>` and
+// a renamed field (or a typo at the assertion) only fails at runtime.
+export function isFormatCommandEvent(
+  e: RecordedEventShape
+): e is RecordedEventShape & { message: FormatCommandMessageShape } {
+  return e.message.type === "format-command";
+}
+
+// Poll `predicate` until true, or throw naming what was awaited. Lives here so
+// new suites stop adding a private copy of the same loop. NOTE the older suites
+// have NOT been folded in yet: format-document-active-edge and
+// status-bar-active-edge still carry byte-identical local copies, so a change to
+// the wait semantics here does not reach them (that dedupe is its own change).
+export async function pollUntil(
+  predicate: () => boolean,
+  label: string,
+  timeoutMs = 8000
+): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    if (predicate()) {
+      return;
+    }
+    if (Date.now() >= deadline) {
+      throw new Error(`timed out waiting for ${label}`);
+    }
+    await tick(50);
+  }
+}
+
+/** Open a temp `.md` in Quoll and return the NEWLY-registered panel controls.
+ *  `previous` guards the second open of a two-panel run: poll until activePanel
+ *  becomes distinct from it, so the caller never captures the older panel.
+ *  Deliberately NOT defaulted — a caller who forgets it on a second open would
+ *  silently get the first panel back, so the compiler asks every time (the
+ *  sibling suites' private copies require it for the same reason). Pass `null`
+ *  explicitly for the first open. */
+export async function openTempQuoll(
+  harness: TestHarnessShape,
+  content: string,
+  slug: string,
+  previous: PanelControlsShape | null
+): Promise<{ uri: vscode.Uri; file: string; panel: PanelControlsShape }> {
+  const dir = await makeTempDir(slug);
+  const file = path.join(dir, `${slug}.md`);
+  await fs.writeFile(file, content);
+  const uri = vscode.Uri.file(file);
+
+  await vscode.commands.executeCommand("vscode.openWith", uri, VIEW_TYPE);
+  const deadline = Date.now() + 8000;
+  for (;;) {
+    const panel = harness.activePanel;
+    if (panel && panel !== previous) {
+      return { uri, file, panel };
+    }
+    if (Date.now() >= deadline) {
+      throw new Error(`panel for ${slug} did not register a distinct activePanel`);
+    }
+    await tick(50);
+  }
 }
 
 // Externally-settled promise. An applyEditOverride that returns

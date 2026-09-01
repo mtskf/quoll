@@ -131,3 +131,22 @@ export function caretInCode(state: EditorState, pos: number): boolean {
   }
   return false;
 }
+
+/** True when `pos` sits inside a `Blockquote` — either a blockquote nested in a
+ *  list item (`- > quote`) or a list item nested in a blockquote (`> - x`).
+ *  Resolves AT the caret (biased left, like `caretInCode`) and walks ancestors.
+ *  The Enter continuation defers on this so the upstream `markdownKeymap` handler
+ *  keeps ALL blockquote continuation — it preserves the `>` context (`- > q\n  > `,
+ *  and exiting `> - ` back to `> `), whereas continuing/exiting the list here would
+ *  split into a sibling marker or strip the quote. Bounds the parse to the caret
+ *  line / `pos`, same as `caretInCode`. */
+export function caretInBlockquote(state: EditorState, pos: number): boolean {
+  const line = state.doc.lineAt(pos);
+  const tree = ensureSyntaxTree(state, Math.max(line.to, pos), 50) ?? syntaxTree(state);
+  for (let n: SyntaxNode | null = tree.resolveInner(pos, -1); n !== null; n = n.parent) {
+    if (n.name === "Blockquote") {
+      return true;
+    }
+  }
+  return false;
+}

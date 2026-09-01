@@ -1,4 +1,5 @@
 import * as assert from "node:assert";
+import type { Uri } from "vscode";
 import { PROTOCOL_VERSION } from "./constants";
 import { cleanupBetweenTests, getHarness, isDocumentEvent, openFixtureWithQuoll } from "./harness";
 
@@ -9,21 +10,17 @@ import { cleanupBetweenTests, getHarness, isDocumentEvent, openFixtureWithQuoll 
  * `handleOpenExternal` in isolation, but the case-arm's wiring — label
  * spelling, fallthrough behaviour, delegate target — has zero coverage.
  * A typo on the case label, an accidental fallthrough, or a swapped
- * delegate target would be invisible to CI. (The `Uri.parse` wrap
- * inside the production closure is intentionally NOT pinned here —
- * `openExternalOverride` replaces the entire closure, so the override
- * sees the post-allowlist href as a plain string; `quoll-editor-panel.ts`
- * documents this bypass on the case arm itself, and TypeScript's
- * `env.openExternal: (uri: Uri)` signature would catch a removed wrap
- * at compile time.)
+ * delegate target would be invisible to CI.
  *
- * The harness exposes `openExternalOverride` so the test can pin the
- * delegation contract without depending on `env.openExternal` (which the
- * test process cannot spy on through the vscode module namespace). The
- * override sees the post-allowlist href as a plain string; production
- * routes through `(url) => env.openExternal(Uri.parse(url))`, but the
- * pre-Uri.parse string is exactly what `handleOpenExternal`'s injected
- * dep contract requires.
+ * The production closure builds the encoding-preserving `Uri` via
+ * `buildExternalUri` (WHATWG split + `Uri.from`) BEFORE the override
+ * boundary, so `openExternalOverride` now receives the fully-built
+ * `vscode.Uri` env.openExternal would open — NOT a pre-Uri string. These
+ * tests therefore pin the full production handoff
+ * `closure → buildExternalUri → Uri → env.openExternal`, and the byte-exact
+ * test below proves `%2F`/`+` survive that path. The harness seam is used
+ * because the test process cannot spy on `env.openExternal` through the
+ * vscode module namespace.
  */
 describe("open-external", function () {
   this.timeout(15000);
@@ -43,8 +40,8 @@ describe("open-external", function () {
     await harness.waitForEvent(isDocumentEvent, 8000);
 
     const calls: string[] = [];
-    harness.openExternalOverride = async (url: string): Promise<boolean> => {
-      calls.push(url);
+    harness.openExternalOverride = async (uri: Uri): Promise<boolean> => {
+      calls.push(uri.toString(true));
       return true;
     };
 
@@ -64,8 +61,8 @@ describe("open-external", function () {
 
     assert.deepStrictEqual(
       calls,
-      ["https://example.com"],
-      "expected env.openExternal to be invoked once with the safe URL"
+      ["https://example.com/"],
+      "expected env.openExternal to be invoked once with the safe URL (new URL() adds the trailing / on a bare authority)"
     );
   });
 
@@ -75,8 +72,8 @@ describe("open-external", function () {
     await harness.waitForEvent(isDocumentEvent, 8000);
 
     const calls: string[] = [];
-    harness.openExternalOverride = async (url: string): Promise<boolean> => {
-      calls.push(url);
+    harness.openExternalOverride = async (uri: Uri): Promise<boolean> => {
+      calls.push(uri.toString(true));
       return true;
     };
 
@@ -109,8 +106,8 @@ describe("open-external", function () {
     await harness.waitForEvent(isDocumentEvent, 8000);
 
     const calls: string[] = [];
-    harness.openExternalOverride = async (url: string): Promise<boolean> => {
-      calls.push(url);
+    harness.openExternalOverride = async (uri: Uri): Promise<boolean> => {
+      calls.push(uri.toString(true));
       return true;
     };
 
@@ -129,6 +126,61 @@ describe("open-external", function () {
       calls,
       [],
       "expected OPENABLE_SCHEMES fallthrough to drop the fragment-only URL — openExternal must not be reached"
+    );
+  });
+
+  it("hands env.openExternal a Uri that preserves %2F and + byte-exactly", async () => {
+    const harness = await getHarness();
+    await openFixtureWithQuoll("sample.md");
+    await harness.waitForEvent(isDocumentEvent, 8000);
+
+    const calls: string[] = [];
+    harness.openExternalOverride = async (uri: Uri): Promise<boolean> => {
+      calls.push(uri.toString(true));
+      return true;
+    };
+
+    const raw = "https://gitlab.com/api/v4/projects/foo%2Fbar/pipelines?q=a+b";
+    const panel = harness.activePanel;
+    assert.ok(panel);
+    panel.simulateInbound({ protocol: PROTOCOL_VERSION, type: "open-external", href: raw });
+
+    await Promise.resolve();
+    await Promise.resolve();
+
+    // toString(true) is the skipEncoding form VS Code's opener feeds to
+    // encodeURI(...) (which leaves %2F / + untouched) — so this is what reaches
+    // the browser. The old Uri.parse path would show `.../foo/bar/...?q=a+b`.
+    assert.deepStrictEqual(calls, [raw], "expected the built Uri to preserve %2F and +");
+  });
+
+  it("still reaches openExternal via the Uri.parse fallback when WHATWG rejects the href", async () => {
+    // "https://" passes isAllowedUrl (scheme-only check) but has no host, so
+    // `new URL()` throws inside splitExternalUrl — buildExternalUri falls back
+    // to `Uri.parse(href)` (see build-external-uri.ts's FALLBACK doc). This
+    // pins that the fallback does not throw synchronously and still reaches
+    // env.openExternal through handleOpenExternal's try/catch (review fix #6).
+    const harness = await getHarness();
+    await openFixtureWithQuoll("sample.md");
+    await harness.waitForEvent(isDocumentEvent, 8000);
+
+    const calls: string[] = [];
+    harness.openExternalOverride = async (uri: Uri): Promise<boolean> => {
+      calls.push(uri.toString(true));
+      return true;
+    };
+
+    const panel = harness.activePanel;
+    assert.ok(panel);
+    panel.simulateInbound({ protocol: PROTOCOL_VERSION, type: "open-external", href: "https://" });
+
+    await Promise.resolve();
+    await Promise.resolve();
+
+    assert.strictEqual(
+      calls.length,
+      1,
+      "expected the Uri.parse fallback to reach env.openExternal exactly once, without throwing"
     );
   });
 });

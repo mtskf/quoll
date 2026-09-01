@@ -4,6 +4,7 @@ import {
   buildFormatCommandMessage,
   buildFormatDocumentMessage,
   buildSwitchToTextMessage,
+  FORMAT_ACTIONS,
   isHostToWebview,
   isWebviewToHost,
   MAX_CONTENT_LENGTH,
@@ -163,7 +164,7 @@ describe("isHostToWebview — document", () => {
     // The validator never branches on `reason`; an inbound document with a
     // legacy reason payload is accepted unchanged (and the webview never
     // reads it). Pinning the new host emitter side is done in
-    // test/extension/document-message.test.ts via Object.keys(...).sort().
+    // test/extension/session/document-message.test.ts via Object.keys(...).sort().
     for (const reason of ["init", "revive", "external", "accepted", "anything"]) {
       expect(isHostToWebview({ ...validDocument(), reason })).toBe(true);
     }
@@ -284,6 +285,61 @@ describe("isHostToWebview — document", () => {
   it("rejects missing canWrite", () => {
     const { canWrite: _omit, ...rest } = validDocument();
     expect(isHostToWebview(rest)).toBe(false);
+  });
+});
+
+// ---------- isHostToWebview / document — externalEpoch + epochGeneration (S3a) ----------
+
+describe("isHostToWebview — document epoch identity pair (S3a)", () => {
+  // Absence is TOLERATED (old host → new webview skew): both omitted = valid.
+  it("accepts a document with NEITHER epoch field (pure-absent, today's behaviour)", () => {
+    expect(isHostToWebview(validDocument())).toBe(true);
+  });
+
+  it("accepts a document carrying BOTH valid epoch fields", () => {
+    expect(isHostToWebview({ ...validDocument(), externalEpoch: 0, epochGeneration: 12345 })).toBe(
+      true
+    );
+    expect(isHostToWebview({ ...validDocument(), externalEpoch: 7, epochGeneration: 1 })).toBe(
+      true
+    );
+  });
+
+  // Partial pair = boundary-INVALID (the webview never sees a half-formed identity).
+  it("rejects a PARTIAL pair — externalEpoch present, epochGeneration absent", () => {
+    expect(isHostToWebview({ ...validDocument(), externalEpoch: 3 })).toBe(false);
+  });
+
+  it("rejects a PARTIAL pair — epochGeneration present, externalEpoch absent", () => {
+    expect(isHostToWebview({ ...validDocument(), epochGeneration: 3 })).toBe(false);
+  });
+
+  // An explicit `undefined` for one half is treated as absent, so a value + an
+  // explicit-undefined is still a partial pair → invalid.
+  it("rejects externalEpoch present with epochGeneration explicitly undefined", () => {
+    expect(
+      isHostToWebview({ ...validDocument(), externalEpoch: 2, epochGeneration: undefined })
+    ).toBe(false);
+  });
+
+  const badEpochComponents: Array<[string, unknown]> = [
+    ["negative", -1],
+    ["fractional", 1.5],
+    ["NaN", Number.NaN],
+    ["Infinity", Number.POSITIVE_INFINITY],
+    ["beyond 2^53", Number.MAX_SAFE_INTEGER + 1],
+    ["string", "1"],
+    ["boolean", true],
+    ["null", null],
+    ["object", {}],
+  ];
+
+  it.each(badEpochComponents)("rejects invalid externalEpoch (%s)", (_label, externalEpoch) => {
+    expect(isHostToWebview({ ...validDocument(), externalEpoch, epochGeneration: 1 })).toBe(false);
+  });
+
+  it.each(badEpochComponents)("rejects invalid epochGeneration (%s)", (_label, epochGeneration) => {
+    expect(isHostToWebview({ ...validDocument(), externalEpoch: 0, epochGeneration })).toBe(false);
   });
 });
 
@@ -1134,9 +1190,27 @@ describe("format-command message", () => {
   });
 
   it("accepts every action", () => {
-    for (const a of ["bold", "italic", "code", "strike", "link"] as const) {
+    // Derived from FORMAT_ACTIONS so the wire validator is checked against the
+    // same list the builder's type comes from — a new action cannot be added to
+    // the union while the validator's Set silently keeps rejecting it.
+    expect(FORMAT_ACTIONS.length).toBeGreaterThan(0);
+    for (const a of FORMAT_ACTIONS) {
       expect(isHostToWebview(buildFormatCommandMessage(a))).toBe(true);
     }
+  });
+
+  it("is exactly the five actions the protocol currently defines", () => {
+    // Deliberately duplicates the literal list (not derived from FORMAT_ACTIONS):
+    // the derived loop above only catches drift in the *consuming* logic
+    // (validator/builder out of sync with the array), not corruption of the
+    // array's own contents (a dropped/typo'd/duplicated action). This is the
+    // one place that pins the actual values.
+    //
+    // Scope note: this pins the TypeScript array only. package.json's keybinding
+    // `args` and the command title enumerate the same actions in plain JSON and
+    // are checked by nothing — see the FORMAT_ACTIONS JSDoc. Do not read this
+    // test's name as covering them.
+    expect(FORMAT_ACTIONS).toEqual(["bold", "italic", "code", "strike", "link"]);
   });
 
   it("rejects an unknown action", () => {

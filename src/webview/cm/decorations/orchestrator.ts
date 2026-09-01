@@ -23,6 +23,7 @@ import {
   type ViewUpdate,
 } from "@codemirror/view";
 import { perfNow, perfRecord } from "../../../shared/perf.js";
+import { findPluginIllegalDecoration } from "./plugin-decoration-legality.js";
 import type { BuildContext, DecorationProvider } from "./types.js";
 
 /** Block-widget slices ship their own StateField extensions and contribute the
@@ -134,6 +135,65 @@ export function createSyntaxReveal(providers: readonly DecorationProvider[]): Ex
   );
 }
 
+/** Failure signatures already logged, per provider.
+ *
+ *  Keyed by provider identity AND normalised message rather than identity
+ *  alone: identity-only deduping would silence a provider's next, unrelated
+ *  failure for the rest of the session once it had failed once — recreating
+ *  this guard's own failure mode one layer down. `WeakMap` so
+ *  test-constructed providers impose no retention.
+ *
+ *  ⚠️ This buckets by MESSAGE, which is a proxy for "distinct failure", not a
+ *  synonym: two different bugs that both surface as
+ *  `Cannot read properties of undefined` collide and the second is dropped.
+ *  Keying on the throw site (stack frame) would separate them, at the cost of
+ *  parsing stacks that non-`Error` throws do not have. The message proxy is
+ *  the deliberate middle: strictly better than identity-only, far cheaper than
+ *  stack parsing, and the first log of each signature carries the full error
+ *  (stack included) for the developer who actually reads it. */
+const loggedBuildFailures = new WeakMap<DecorationProvider, Set<string>>();
+
+/** Cap per provider. Messages are provider-authored and not a finite set, so
+ *  the signature set needs a bound regardless of normalisation. */
+const MAX_LOGGED_SIGNATURES_PER_PROVIDER = 5;
+
+/** Digit runs collapse so that ONE bug reported at many positions counts as one
+ *  signature. Without this the cap defeats itself: a `RangeError` from
+ *  `doc.lineAt(pos)` embeds the position, so a failure that follows the caret
+ *  would mint a fresh signature per keystroke and exhaust the cap within
+ *  seconds — silencing the provider before any unrelated second failure could
+ *  ever log.
+ *
+ *  Must be TOTAL: `err.message` and `String(err)` both run user-supplied code
+ *  (a getter, a `toString`) and can throw, and a value with no primitive
+ *  conversion (`Object.create(null)`) makes `String()` throw on its own. */
+function failureSignature(err: unknown): string {
+  try {
+    return String(err instanceof Error ? err.message : err).replace(/\d+/g, "#");
+  } catch {
+    return "<unrepresentable error>";
+  }
+}
+
+function logProviderFailure(provider: DecorationProvider, index: number, err: unknown): void {
+  let seen = loggedBuildFailures.get(provider);
+  if (!seen) {
+    seen = new Set();
+    loggedBuildFailures.set(provider, seen);
+  }
+  const signature = failureSignature(err);
+  if (seen.has(signature) || seen.size >= MAX_LOGGED_SIGNATURES_PER_PROVIDER) {
+    return;
+  }
+  seen.add(signature);
+  console.error(
+    "[quoll] decoration provider build() failed; its decorations are skipped for this build. " +
+      `Further distinct failures from this provider are logged up to ${MAX_LOGGED_SIGNATURES_PER_PROVIDER} signatures.`,
+    { providerIndex: index },
+    err
+  );
+}
+
 function computeMerged(view: EditorView, providers: readonly DecorationProvider[]): DecorationSet {
   const buildStart = QUOLL_PERF ? perfNow() : 0;
   const tree = syntaxTree(view.state);
@@ -144,8 +204,86 @@ function computeMerged(view: EditorView, providers: readonly DecorationProvider[
     tree,
   };
   let inline: DecorationSet = Decoration.none;
-  for (const p of providers) {
-    inline = RangeSet.join([inline, p.build(ctx)]);
+  // CONTAINMENT (do not remove): every provider runs inside the ONE orchestrator
+  // ViewPlugin, and CodeMirror's PluginInstance.update catches a throw from
+  // either the constructor or update path, calls logException, then
+  // deactivate()s the plugin PERMANENTLY (spec/value nulled, no reconstruction
+  // path). One bad provider would therefore revert EVERY inline decoration —
+  // headings, emphasis, links, tables, images — to raw Markdown until the user
+  // reloads the window, with only a console.error they will never see. So a
+  // failing provider degrades to "contributes nothing this build" and the rest
+  // stay live. `inline` is reassigned only on the success path, so a failure
+  // preserves what earlier providers already contributed. The provider keeps
+  // being called on later builds, so a transient failure self-heals.
+  //
+  // SCOPE, precisely: this contains a throw from build(), a return value that
+  // is not a RangeSet, and a well-formed RangeSet carrying a decoration a
+  // ViewPlugin may not emit (a block decoration, or a replace across a line
+  // break — see plugin-decoration-legality.ts). CodeMirror rejects that last
+  // kind LATER than the other two, inside TileUpdate.emit's own RangeSet.spans
+  // walk, on a path that is not inside PluginInstance.update's try — so it
+  // escapes dispatch entirely rather than deactivating the plugin. The standing
+  // rule that block widgets are StateFields, never ViewPlugins, now has a
+  // mechanism behind it rather than only a convention.
+  //
+  // ⚠️ Do NOT push try/catch down into the providers instead. A totality
+  // regression inside a provider must stay a RED TEST, not become a silently
+  // missing decoration — see cm/link-target.ts's "TOTALITY IS A HARD CONTRACT"
+  // header and cm/link-resolve.ts's buildSlugIndex guard. Containment makes
+  // such a regression QUIETER, which raises the value of those direct unit
+  // matrices rather than lowering it.
+  for (let index = 0; index < providers.length; index++) {
+    // Indexed loop, not `.entries()`: this runs on every keystroke and caret
+    // move, and `.entries()` allocates an iterator plus one tuple per provider
+    // per build purely to carry an index used only in a log message.
+    const p = providers[index];
+    try {
+      const built = p.build(ctx);
+      // Validate BEFORE the join: RangeSet.join([acc, built]) starts from
+      // `result = built` and only enters its merge loop while
+      // `acc != RangeSet.empty`, so with an empty accumulator a null/undefined
+      // return (or a bare Range[]) is passed through UNTHROWN. That poisons
+      // `inline`, and then either the NEXT provider's join throws (blaming an
+      // innocent provider and losing its output too) or `this.decorations`
+      // reaches CodeMirror, which throws while diffing the decoration set in
+      // DocView.update → RangeSet.compare. That path is NOT inside
+      // PluginInstance.update's try, so it does not even reach the
+      // deactivate() above — it escapes view.dispatch() into our own caller,
+      // aborting the update mid-flight. Strictly worse than deactivation.
+      if (!(built instanceof RangeSet)) {
+        throw new TypeError(
+          `DecorationProvider.build() must return a DecorationSet, got ${built === null ? "null" : typeof built}`
+        );
+      }
+      // A well-formed RangeSet can still carry a decoration a ViewPlugin may
+      // not emit; CodeMirror rejects it too late to be contained (see SCOPE
+      // above and plugin-decoration-legality.ts's header for the exact route).
+      // Checked per provider and BEFORE the join, so the failure is attributed
+      // to the provider that caused it and the others keep their decorations.
+      // Judged against `ctx.state.doc` — the very document this provider was
+      // handed, so the line bounds the check reads are the ones it built to.
+      const illegal = findPluginIllegalDecoration(built, ctx.state.doc);
+      if (illegal !== null) {
+        throw new TypeError(
+          `DecorationProvider.build() returned ${illegal}, which CodeMirror refuses from a ViewPlugin. ` +
+            "Block widgets ship as their own StateField and publish their range via quollBlockReplaceZones."
+        );
+      }
+      inline = RangeSet.join([inline, built]);
+    } catch (err) {
+      // The REPORTING path must not be able to escalate a contained failure
+      // into the very crash this guard prevents. failureSignature absorbs the
+      // hazards in the error VALUE itself; this layer covers the rest of the
+      // reporting path — a non-object provider entry makes WeakMap.set throw
+      // ("Invalid value used as weak map key"), and console.error is
+      // host-supplied. Failing to log is a diagnostic loss; failing to contain
+      // is a dead editor.
+      try {
+        logProviderFailure(p, index, err);
+      } catch {
+        // Intentionally empty — see above.
+      }
+    }
   }
   const blockZones = view.state.facet(quollBlockReplaceZones);
   const syntaxZones = view.state.facet(quollSyntaxExclusionZones);

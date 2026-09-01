@@ -6,6 +6,7 @@
 // recovery contract). Not a test file itself (no .browser.test.ts suffix).
 import { EditorState, type Extension } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
+import { frames, raf } from "./frames.js";
 import "../../../src/webview/styles.css";
 import { quollFloatingToolbarScroll } from "../../../src/webview/cm/floating-toolbar-scroll.js";
 import { quollMarkdownLanguage } from "../../../src/webview/cm/markdown.js";
@@ -76,30 +77,22 @@ export function mount(extraExtensions: Extension[]): {
   return { view, host, root };
 }
 
-export function raf(): Promise<void> {
-  return new Promise((resolve) => requestAnimationFrame(() => resolve()));
-}
-
-/** Await n animation frames. Frame-based waits scale with actual frame
- *  progress under CI/headless rAF throttling, unlike wall-clock sleeps —
- *  the recovery plugin's wait cap and thaw are frame-based, so its test
- *  vehicle must be too. */
-export function frames(n: number): Promise<void> {
-  return new Promise((resolve) => {
-    let left = n;
-    const tick = (): void => {
-      if (--left <= 0) {
-        resolve();
-      } else {
-        requestAnimationFrame(tick);
-      }
-    };
-    requestAnimationFrame(tick);
-  });
-}
-
 export function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/** Poll a condition once per frame; throw past the cap so a hang fails loud
+ *  instead of silently timing out the whole test. Frame-based (not wall-clock)
+ *  so it scales with rAF throttling under headless CI, matching the recovery
+ *  plugin's frame-based wait/thaw budgets. Mirrors the unit suite's helper. */
+export async function until(cond: () => boolean, capFrames = 120): Promise<void> {
+  for (let i = 0; i < capFrames; i += 1) {
+    if (cond()) {
+      return;
+    }
+    await frames(1);
+  }
+  throw new Error("condition not reached within frame cap");
 }
 
 /** Biggest vertical hole in the scroller's visible area not covered by any

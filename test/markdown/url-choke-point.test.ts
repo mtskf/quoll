@@ -133,9 +133,14 @@ const HTML_TABLE_PASTE_PARSE = [
   "src/webview/cm/paste/html-to-markdown.ts",
 ] as const;
 
+//   - build-external-uri.ts: splits an ALREADY-`isAllowedUrl`-gated external URL
+//     with `new URL` to preserve path/query percent-encoding (`%2F`/`+`) before
+//     rebuilding a `vscode.Uri` for `env.openExternal`. The parse re-derives
+//     components from a gated href; it mints no new destination.
 const URL_PARSE_ENDPOINTS = [
   "src/markdown/url-allowlist.ts",
   "src/webview/cm/image/resource-base.ts",
+  "src/extension/links/build-external-uri.ts",
 ] as const;
 
 const CHOKE_POINTS: readonly ChokePoint[] = [

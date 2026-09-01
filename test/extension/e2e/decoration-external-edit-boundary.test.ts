@@ -9,10 +9,15 @@
 
 import * as assert from "node:assert";
 import * as fs from "node:fs/promises";
-import * as os from "node:os";
 import * as path from "node:path";
 import * as vscode from "vscode";
-import { cleanupBetweenTests, getHarness, isDocumentEvent, VIEW_TYPE } from "./harness";
+import {
+  cleanupBetweenTests,
+  getHarness,
+  isDocumentEvent,
+  makeTempDir,
+  VIEW_TYPE,
+} from "./harness";
 
 describe("C4a external-edit byte-identity across a token boundary", function () {
   this.timeout(20000);
@@ -36,7 +41,7 @@ describe("C4a external-edit byte-identity across a token boundary", function () 
     // Per-test temp file so a mid-test failure does not leave any shared
     // fixture dirty for subsequent tests. Mirrors the pattern used by
     // external-edit-propagates.test.ts.
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "quoll-e2e-c4a-"));
+    const dir = await makeTempDir("c4a");
     tempFile = path.join(dir, "boundary.md");
     const initial = "**bold** rest";
     await fs.writeFile(tempFile, initial);

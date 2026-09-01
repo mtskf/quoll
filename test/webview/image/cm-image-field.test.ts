@@ -1,12 +1,12 @@
 // @vitest-environment happy-dom
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
-import { forceParsing } from "@codemirror/language";
 import { EditorSelection, EditorState, type SelectionRange } from "@codemirror/state";
-import { type DecorationSet, EditorView } from "@codemirror/view";
+import type { DecorationSet, EditorView } from "@codemirror/view";
 import { describe, expect, it, vi } from "vitest";
 
 import { ImageBlockWidget } from "../../../src/webview/cm/image/image-widget.js";
 import { imageBlockField, quollResourceBaseUri } from "../../../src/webview/cm/image/index.js";
+import { settledMount } from "../helpers/settled-view.js";
 
 function widgetsOf(set: DecorationSet): ImageBlockWidget[] {
   const out: ImageBlockWidget[] = [];
@@ -36,17 +36,14 @@ function rangesOf(set: DecorationSet): Array<{ from: number; to: number }> {
 // mount-time parse (LanguageState.init) only covers the first ~3000 chars within
 // a wall-clock 20ms budget, so under CPU starvation the bounded initial parse can
 // stop before reaching the image node (or even mid-fixture), leaving the field
-// empty — a flake that only bit the full parallel suite. forceParsing(view,
-// doc.length) advances the parse and dispatches so the field recomputes from the
-// complete tree — the same "force AND publish" mechanism the production resync
-// path uses. ensureSyntaxTree / fullTree alone would NOT fix it: they advance the
-// parse but never republish into the field's snapshot. See LEARNING.md
-// "syntaxTree(state) は LAZY" and PR #204 (cm-block-zone-arrow-keymap).
-function forceParse(view: EditorView): EditorView {
-  forceParsing(view, view.state.doc.length, 5_000);
-  return view;
-}
-
+// empty — a flake that only bit the full parallel suite. `settledView`
+// (../helpers/settled-view.ts) forces the parse to the doc end and republishes the
+// snapshot, so the field recomputes from the complete tree — the same "force AND
+// publish" mechanism the production resync path uses — and it throws on
+// non-convergence instead of returning a discardable boolean. ensureSyntaxTree /
+// fullTree alone would NOT fix it: they advance the parse but never republish into
+// the field's snapshot. See LEARNING.md "syntaxTree(state) は LAZY" and PR #204
+// (cm-block-zone-arrow-keymap).
 function mount(doc: string, selection?: EditorSelection | SelectionRange): EditorView {
   const parent = document.createElement("div");
   document.body.appendChild(parent);
@@ -67,7 +64,7 @@ function mount(doc: string, selection?: EditorSelection | SelectionRange): Edito
       imageBlockField,
     ],
   });
-  return forceParse(new EditorView({ state, parent }));
+  return settledMount({ state, parent });
 }
 
 const SAFE = "![logo](https://x.test/a.png)";
@@ -369,7 +366,7 @@ function mountWithBase(doc: string, base: string): EditorView {
       imageBlockField,
     ],
   });
-  return forceParse(new EditorView({ state, parent }));
+  return settledMount({ state, parent });
 }
 
 describe("imageBlockField — relative resolution", () => {

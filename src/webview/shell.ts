@@ -80,6 +80,44 @@ export type ShellOptions = {
   resourceBaseUri?: string;
 };
 
+/** Register the post-init teardown listeners and return their remover.
+ *
+ *  Extracted as a named seam for two reasons:
+ *   1. It collapses the add-list and the remove-list into ONE source of truth,
+ *      so the "registered here but forgotten in dispose()" asymmetry — the very
+ *      leak class this module guards against — cannot recur.
+ *   2. The perf `onPageHide` listener is compiled out under `QUOLL_PERF=false`
+ *      (every unit / browser / production build), leaving it with no observable
+ *      surface in tests. Passing it as an argument lets a unit test drive the
+ *      non-null branch directly and pin that onPageHide rides this after-init
+ *      teardown set (rather than a mount-time registration) — the property the
+ *      leak fix depends on.
+ *
+ *  `onPageHide` is registered before `flushPending`'s pagehide listener to
+ *  preserve the original fire order (perf session report, then flush).
+ */
+export function attachTeardownListeners(handlers: {
+  onPageHide: (() => void) | null;
+  flushPending: () => void;
+  onVisibilityChange: () => void;
+}): () => void {
+  const { onPageHide, flushPending, onVisibilityChange } = handlers;
+  if (onPageHide) {
+    window.addEventListener("pagehide", onPageHide, { once: true });
+  }
+  document.addEventListener("visibilitychange", onVisibilityChange);
+  window.addEventListener("pagehide", flushPending);
+  window.addEventListener("blur", flushPending);
+  return () => {
+    if (onPageHide) {
+      window.removeEventListener("pagehide", onPageHide);
+    }
+    document.removeEventListener("visibilitychange", onVisibilityChange);
+    window.removeEventListener("pagehide", flushPending);
+    window.removeEventListener("blur", flushPending);
+  };
+}
+
 export function mountShell(root: HTMLElement, opts: ShellOptions): ShellHandle {
   const { nonce, resourceBaseUri = "" } = opts;
   // Skeleton DOM. The banner host sits above the editor mount; both live
@@ -88,6 +126,34 @@ export function mountShell(root: HTMLElement, opts: ShellOptions): ShellHandle {
   const bannerHost = document.createElement("div");
   bannerHost.className = "quoll-banner-host";
   main.appendChild(bannerHost);
+
+  // Clustering escalation tripwire notice (S3b). A low-alarm, once-per-session,
+  // user-visible hint surfaced when identity transitions cluster (edit-sync
+  // fires onResyncStorm at ≥3 within 5 min). It lives OUTSIDE bannerHost so the
+  // reducer-driven renderBanners (replaceChildren) never clobbers it, and is NOT
+  // reducer state — it is an edit-sync lifecycle event, not a document error.
+  // Latched by edit-sync (fires at most once) and here (idempotent).
+  let resyncNoticeShown = false;
+  function showResyncNotice(): void {
+    if (resyncNoticeShown) {
+      return;
+    }
+    resyncNoticeShown = true;
+    const notice = document.createElement("div");
+    notice.className = "quoll-resync-notice";
+    notice.setAttribute("role", "status");
+    const text = document.createElement("span");
+    text.textContent =
+      "Quoll re-synced with the editor host repeatedly — recent keystrokes may not have been saved.";
+    const dismiss = document.createElement("button");
+    dismiss.type = "button";
+    dismiss.className = "quoll-resync-notice-dismiss";
+    dismiss.setAttribute("aria-label", "Dismiss");
+    dismiss.textContent = "×";
+    dismiss.addEventListener("click", () => notice.remove());
+    notice.append(text, dismiss);
+    main.appendChild(notice);
+  }
   // The editor mounts its own .quoll-editor div as a child of bannerHost's
   // sibling; we hand it `main` as the parent so it sits inside <main>.
   root.appendChild(main);
@@ -114,11 +180,13 @@ export function mountShell(root: HTMLElement, opts: ShellOptions): ShellHandle {
     }
   }
   // Best-effort session report when VS Code tears the webview down (a reload
-  // does NOT call shell.dispose). once:true + the latch above guard a double fire.
+  // does NOT call shell.dispose). once:true + the latch above guard a double
+  // fire. The listener is REGISTERED below — only AFTER init succeeds, next to
+  // the teardown-flush listeners — never at mount, so an init failure (the
+  // ready-post throw, or a mountEditor throw above — mountEditor runs outside
+  // the try) does not leak it on the dead init-error page; dispose() removes it
+  // symmetrically.
   const onPageHide = QUOLL_PERF ? (): void => reportSession() : null;
-  if (onPageHide) {
-    window.addEventListener("pagehide", onPageHide, { once: true });
-  }
   // Local: a dispatch BEFORE the editor mount (e.g. a same-tick re-entry,
   // not currently possible but defensive) must not crash; editor is
   // assigned before the first message can arrive (subscribe is wired
@@ -198,6 +266,7 @@ export function mountShell(root: HTMLElement, opts: ShellOptions): ShellHandle {
     resourceBaseUri,
     getState: () => state,
     dispatch,
+    onResyncStorm: showResyncNotice,
   });
 
   const unsubscribe = subscribeToHost((message) => {
@@ -258,7 +327,18 @@ export function mountShell(root: HTMLElement, opts: ShellOptions): ShellHandle {
         editor?.applyRemoteCaret({ line: message.line, character: message.character });
         return;
       case "document": {
-        if (message.docVersion < state.docVersion) {
+        // Identity-transition bypass (S3b): a new host session (fresh
+        // epochGeneration, or a legacy host that dropped the pair) legitimately
+        // restarts at a LOWER docVersion. Version ordering is meaningful only
+        // WITHIN one host generation, so on a transition we SKIP the stale drop
+        // and adopt the Document unconditionally — threading `adopt` so the
+        // reducer's inlined copy of the same guard also adopts (otherwise the
+        // webview goes permanently deaf to the live host). editor is non-null
+        // whenever a stale compare could fire (docVersion only advances past 0
+        // after the editor mounted), so the null-guard here is defensive.
+        const isTransition =
+          editor?.isIdentityTransition(message.externalEpoch, message.epochGeneration) ?? false;
+        if (!isTransition && message.docVersion < state.docVersion) {
           // Stale — drop without touching the editor or the reducer (the
           // two-comparison rule, inlined at the call site).
           return;
@@ -273,7 +353,13 @@ export function mountShell(root: HTMLElement, opts: ShellOptions): ShellHandle {
           return;
         }
         const applyStart = QUOLL_PERF ? perfNow() : 0;
-        editor.applyDocument(message.content, message.canWrite, message.docVersion);
+        editor.applyDocument(
+          message.content,
+          message.canWrite,
+          message.docVersion,
+          message.externalEpoch,
+          message.epochGeneration
+        );
         if (QUOLL_PERF) {
           const settled = perfNow();
           perfRecord("webview:doc-apply", settled - applyStart);
@@ -296,6 +382,7 @@ export function mountShell(root: HTMLElement, opts: ShellOptions): ShellHandle {
           docVersion: message.docVersion,
           canWrite: message.canWrite,
           themeKind: message.themeKind,
+          adopt: isTransition,
         });
         return;
       }
@@ -329,9 +416,10 @@ export function mountShell(root: HTMLElement, opts: ShellOptions): ShellHandle {
   // the panel hides (incl. on close, retainContextWhenHidden keeps us alive to
   // deliver it, and on switch-away); pagehide on iframe teardown; blur when
   // focus leaves toward the close affordance. The listeners are REGISTERED
-  // below — only AFTER the ready post succeeds — so an init failure (the catch
-  // nulls editor + rethrows) never leaks a listener on the dead init-error
-  // page; dispose() removes all three symmetrically.
+  // below via attachTeardownListeners — only AFTER the ready post succeeds — so
+  // an init failure (the catch nulls editor + rethrows) never leaks a listener
+  // on the dead init-error page; its returned remover unwinds them symmetrically
+  // in dispose().
   const flushPending = (): void => editor?.flushPending();
   const onVisibilityChange = (): void => {
     if (document.visibilityState === "hidden") {
@@ -362,24 +450,33 @@ export function mountShell(root: HTMLElement, opts: ShellOptions): ShellHandle {
     throw postErr;
   }
 
-  // Register teardown-flush listeners now that init succeeded (see the const
+  // Register teardown listeners now that init succeeded (see the const
   // declarations above for the rationale + the no-leak-on-init-failure note).
-  document.addEventListener("visibilitychange", onVisibilityChange);
-  window.addEventListener("pagehide", flushPending);
-  window.addEventListener("blur", flushPending);
+  // onPageHide (the perf session-report listener) rides this after-init set —
+  // not a mount-time registration — so neither a ready-post throw nor a
+  // mountEditor throw leaks it on the dead page. The single remover keeps add
+  // and remove in lockstep.
+  //
+  // INVARIANT: attachTeardownListeners is the ONLY registration path for these
+  // listeners — never add a `window.addEventListener("pagehide"/"blur", …)` or
+  // `document.addEventListener("visibilitychange", …)` directly in mountShell.
+  // A stray mount-time registration would reintroduce the init-failure leak,
+  // and it is NOT unit-observable: onPageHide is compiled to null under
+  // QUOLL_PERF=false (every test build), so a perf-listener regression here can
+  // only be caught in a perf build / manual smoke. Keep the single call below.
+  const removeTeardownListeners = attachTeardownListeners({
+    onPageHide,
+    flushPending,
+    onVisibilityChange,
+  });
 
   return {
     dispose() {
       shellDisposed = true;
-      if (onPageHide) {
-        window.removeEventListener("pagehide", onPageHide);
-      }
+      removeTeardownListeners();
       if (QUOLL_PERF) {
         reportSession();
       }
-      document.removeEventListener("visibilitychange", onVisibilityChange);
-      window.removeEventListener("pagehide", flushPending);
-      window.removeEventListener("blur", flushPending);
       unsubscribe();
       // try/finally so editor=null and main.remove() run even if
       // editor.dispose() throws. editor.ts's own dispose already wraps

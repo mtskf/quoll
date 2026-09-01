@@ -14,10 +14,60 @@
 // Design notes:
 //  - No new dependencies: it shells out to the `gh` CLI (already a dev tool)
 //    via execFileSync (argv array, no shell — no injection surface).
-//  - Fail-soft: if gh is missing or unauthenticated it warns and exits 0,
-//    so a contributor without gh isn't blocked. There is no CI equivalent —
-//    the TODO file lives under .claude/ (gitignored, not checked in), so
-//    this script is intentionally local-only (see CLAUDE.md).
+//  - Fail-soft & advisory: this is a LOCAL-only check (the TODO file lives
+//    under .claude/, gitignored, absent from CI checkouts), so it never hard-
+//    blocks a contributor. A missing/unauthenticated/rate-limited `gh` warns
+//    and exits 0.
+//  - Tests split by seam: pure transforms (`parseInflight`, `parseEntry`,
+//    `summarize`) are pinned with literal in-memory fixtures; the `ghRunner`-
+//    injected exports (`resolveEntry`, `scanTodo`, `runScan`) are pinned with
+//    a fake `ghRunner`; `classifyGhError` is pinned with fake error objects
+//    and `ghExec` with a fake `exec` (a different seam, not the `ghRunner`).
+//    `main()` is a thin fs + console + process.exit wrapper behind the
+//    import-guard at the bottom.
+//
+// Verdict correctness (three false-verdict paths this file deliberately avoids):
+//  (a) REUSED head-branch name — a branch name may be reused after its first
+//      PR merged. `resolveEntry` prefers an OPEN PR for the branch, so
+//      still-in-flight work is not flagged stale WHILE that OPEN PR exists.
+//      Residual gap (ACCEPTED limitation, not a bug): a reused branch whose new
+//      work has not yet opened a PR still resolves via the old MERGED PR and
+//      reads STALE. A durable fix would need a repo-bound PR identity (number
+//      or head SHA) recorded on the 🚧 marker and verified here — but the
+//      marker is written by next-todo's claim BEFORE any PR exists, so that
+//      identity would have to be back-filled by a new step in the *global*
+//      /ship or /merge-pr flow and kept in lockstep across four skills, all to
+//      serve this LOCAL-only advisory backstop. The false-positive window is
+//      narrow (reused branch + old merged PR + no new PR opened yet + the check
+//      run in exactly that window), and the merged-no-open path is ALSO this
+//      tool's primary genuine-stale signal, so it cannot be downgraded to a
+//      warning without gutting detection. Decision: accept the
+//      branch-name-identity limitation. Full cost/rarity weighing:
+//      .claude/docs/LEARNING.md → "Claude Workflow" (2026-07-29).
+//  (b) NUMBER-ONLY match — PR numbers are reused across repo generations, so a
+//      match resting solely on a `(#N)` / `(PR #N)` number is REPORT-ONLY
+//      (a warning), never a hard STALE verdict. A conforming in-flight entry
+//      names a `(branch: X)` (the marker `check-todo-hygiene.mjs` lints for)
+//      and resolves via the branch path, which still exits 1 when stale.
+//  (c) TRANSIENT gh failure — a one-off 404 / network blip skips only THAT
+//      entry (recorded for a partial-scan warning) and keeps scanning; it does
+//      NOT bail the whole loop. See the error taxonomy below.
+//
+// Error taxonomy (see `classifyGhError`):
+//  - GhUnavailable — `gh` is unusable for the REST of this run: not installed
+//    (ENOENT), not authenticated (auth failure / HTTP 401 bad credentials), or
+//    rate-limited. All three persist for the run, so re-trying every remaining
+//    entry is futile; the scan stops but
+//    still RETURNS what it already found (a stale marker confirmed before a
+//    mid-scan auth expiry must not be silently discarded).
+//  - GhTransient — a genuinely per-entry failure (single 404, one-off network
+//    blip, unparseable JSON): skip that entry, continue.
+//  Any OTHER error is a real bug and propagates (never swallowed), surfacing as
+//  exit 2 — kept distinct from the stale exit 1 so a crash can't read as
+//  "stale found".
+//
+// Exit codes: 0 = clean or partial scan (fail-soft), 1 = a genuine stale
+// marker, 2 = TODO unreadable or an internal error.
 //
 // Usage:
 //   node scripts/check-stale-todo-markers.mjs [path-to-todo.md]
@@ -25,34 +75,61 @@
 
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
+import { pathToFileURL } from "node:url";
 
-const DEFAULT_TODO = ".claude/docs/TODO.md";
-const todoPath = process.argv[2] ?? DEFAULT_TODO;
+export const DEFAULT_TODO = ".claude/docs/TODO.md";
 
-let text;
-try {
-  text = readFileSync(todoPath, "utf8");
-} catch (err) {
-  console.error(`check-stale-todo-markers: cannot read ${todoPath}: ${err.message}`);
-  process.exit(2);
+// `gh` is unusable for the rest of this run (ENOENT / auth / rate limit).
+export class GhUnavailable extends Error {}
+// A single-entry `gh` failure (one 404, a network blip, unparseable JSON).
+export class GhTransient extends Error {}
+
+// Map a raw execFile/JSON error to the taxonomy. Pure — fake error objects in,
+// the right class out — so the classification is unit-testable without a real
+// `gh`. ENOENT (not installed), auth failures, and rate limits all persist for
+// the run → GhUnavailable; everything else is treated as per-entry transient.
+export function classifyGhError(err) {
+  const msg = `${err?.stderr ?? ""}${err?.message ?? ""}`;
+  if (
+    err?.code === "ENOENT" ||
+    /not logged|authentication|gh auth login|GH_TOKEN|rate limit|bad credentials|HTTP 401/i.test(
+      msg
+    )
+  ) {
+    return new GhUnavailable(msg.trim() || String(err));
+  }
+  return new GhTransient(msg.trim() || String(err));
+}
+
+// Run `gh` and return parsed JSON. `exec` is injectable so tests can exercise
+// the JSON.parse → GhTransient path and the happy path without a real binary.
+// Throws GhUnavailable / GhTransient per classifyGhError; a JSON parse failure
+// is transient (one bad response for one entry).
+export function ghExec(args, exec = execFileSync) {
+  let out;
+  try {
+    out = exec("gh", args, { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+  } catch (err) {
+    throw classifyGhError(err);
+  }
+  try {
+    return JSON.parse(out);
+  } catch (err) {
+    throw new GhTransient(`unparseable gh output: ${err.message}`);
+  }
 }
 
 // An ACTIVE in-flight entry is an unchecked task line carrying the 🚧 glyph.
 // Checked (`- [x]`) lines are done and never in-flight, so they are skipped.
-const inflight = text
-  .split("\n")
-  .filter((line) => /^\s*-\s*\[ \]/.test(line) && line.includes("🚧"));
-
-if (inflight.length === 0) {
-  console.log("check-stale-todo-markers: no 🚧 in-flight entries — OK");
-  process.exit(0);
+export function parseInflight(text) {
+  return text.split("\n").filter((line) => /^\s*-\s*\[ \]/.test(line) && line.includes("🚧"));
 }
 
 // Extract the branch and/or PR number from one entry line. Both the modern
 // `(branch: X)` form and the legacy `<!-- branch: X -->` HTML marker are
 // recognized (the same two forms /merge-pr's sync understands). PR numbers
 // appear as `(PR #123)` or a bare `(#123)`.
-function parseEntry(line) {
+export function parseEntry(line) {
   const branch =
     line.match(/\(branch:\s*([^)]+?)\s*\)/)?.[1] ??
     line.match(/<!--\s*branch:\s*(.+?)\s*-->/)?.[1] ??
@@ -63,102 +140,207 @@ function parseEntry(line) {
   return { branch, pr, title };
 }
 
-// Run gh and return parsed JSON, or null if gh is unavailable/unauthenticated
-// so the caller can decide to warn-and-pass rather than hard-fail.
-function gh(args) {
-  try {
-    const out = execFileSync("gh", args, { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
-    return JSON.parse(out);
-  } catch (err) {
-    const msg = `${err.stderr ?? ""}${err.message ?? ""}`;
-    if (
-      err.code === "ENOENT" || // gh not installed
-      /not logged|authentication|gh auth login|GH_TOKEN/i.test(msg)
-    ) {
-      throw new GhUnavailable(msg.trim());
-    }
-    // Other failures (e.g. transient API error) — treat as unavailable too,
-    // since a guard that hard-fails on a flaky network would be worse than
-    // one that warns. CI re-runs catch genuinely stale markers.
-    throw new GhUnavailable(msg.trim() || String(err));
-  }
-}
-
-class GhUnavailable extends Error {}
-
-// Resolve whether an entry's PR has already merged. Prefer the branch lookup
-// (covers entries with only a branch); fall back to the PR number.
-function resolveMerged({ branch, pr }) {
+// Resolve one entry against GitHub via the injected `ghRunner`.
+// Returns { status: "clean" | "stale" | "warn", merged?: { number, title } }.
+//  - branch path (authoritative): fix (a) — an OPEN PR for the head branch
+//    means the work is in flight, so it reads clean WHILE that OPEN PR
+//    exists, even if an OLDER same-named PR merged. Only "no OPEN + a
+//    MERGED" → stale. (A reused branch with no new PR yet still resolves
+//    via the old MERGED PR — see the header note.)
+//  - number-only path: fix (b) — a match resting solely on a PR number is a
+//    WARNING, never stale (PR numbers are reused across repo generations).
+export function resolveEntry({ branch, pr }, ghRunner) {
   if (branch) {
-    const prs = gh([
+    // fix (a): an OPEN PR for the head branch means the work is in flight, so
+    // the entry reads clean while that OPEN PR exists — even if an older
+    // same-named PR merged. Query OPEN on its own (not a truncated `--state
+    // all` slice) so a busy reused branch can't hide the in-flight PR behind
+    // a result cap. (If no new PR has been opened yet for a reused branch,
+    // this still falls through to the MERGED check below and reads stale — a
+    // fundamental branch-name-identity limitation, ACCEPTED as a known gap, not
+    // a bug here. Rationale: header note (a) + LEARNING.md 2026-07-29.)
+    const open = ghRunner([
       "pr",
       "list",
       "--head",
       branch,
       "--state",
-      "all",
+      "open",
       "--json",
-      "number,state,title,mergedAt",
+      "number",
       "--limit",
-      "5",
+      "1",
     ]);
-    const merged = prs.find((p) => p.state === "MERGED");
-    if (merged) {
-      return { number: merged.number, title: merged.title };
+    if (open.length > 0) {
+      return { status: "clean" }; // in flight — clean while this OPEN PR exists (fix (a))
     }
-    return null;
+    const merged = ghRunner([
+      "pr",
+      "list",
+      "--head",
+      branch,
+      "--state",
+      "merged",
+      "--json",
+      "number,title,mergedAt",
+      "--limit",
+      "1",
+    ]);
+    if (merged.length > 0) {
+      return { status: "stale", merged: { number: merged[0].number, title: merged[0].title } };
+    }
+    return { status: "clean" };
   }
   if (pr) {
-    const view = gh(["pr", "view", pr, "--json", "state,title,mergedAt"]);
+    const view = ghRunner(["pr", "view", pr, "--json", "state,title,mergedAt"]);
     if (view.state === "MERGED") {
-      return { number: Number(pr), title: view.title };
+      // Report-only: a number can collide across repo generations (fix (b)).
+      return { status: "warn", merged: { number: Number(pr), title: view.title } };
     }
-    return null;
+    return { status: "clean" };
   }
-  return null;
+  return { status: "clean" };
 }
 
-const stale = [];
-try {
+// Walk every in-flight entry, resolving each against `ghRunner`.
+// Returns { inflightCount, stale, warnings, skipped, aborted }.
+//  - GhTransient → record in `skipped`, keep scanning (fix (c)).
+//  - GhUnavailable → record `aborted` and STOP, but still return everything
+//    found so far (never discard a stale marker confirmed before the abort).
+//  - any other error → rethrow (a real bug must not be swallowed into a
+//    silent clean/continue).
+export function scanTodo(text, ghRunner = ghExec) {
+  const inflight = parseInflight(text);
+  const stale = [];
+  const warnings = [];
+  const skipped = [];
+  let aborted = null;
+
   for (const line of inflight) {
     const entry = parseEntry(line);
     if (!entry.branch && !entry.pr) {
       continue; // nothing to resolve against
     }
-    const merged = resolveMerged(entry);
-    if (merged) {
-      stale.push({ entry, merged });
+    let result;
+    try {
+      result = resolveEntry(entry, ghRunner);
+    } catch (err) {
+      if (err instanceof GhTransient) {
+        skipped.push({ entry, reason: err.message });
+        continue;
+      }
+      if (err instanceof GhUnavailable) {
+        aborted = { reason: err.message };
+        break;
+      }
+      throw err; // taxonomy-external → a real bug, surface it (never swallowed)
+    }
+    if (result.status === "stale") {
+      stale.push({ entry, merged: result.merged });
+    } else if (result.status === "warn") {
+      warnings.push({ entry, merged: result.merged });
     }
   }
-} catch (err) {
-  if (err instanceof GhUnavailable) {
-    console.warn(
-      `check-stale-todo-markers: gh unavailable/unauthenticated — skipping check.\n  (${err.message})`
-    );
-    process.exit(0);
+
+  return { inflightCount: inflight.length, stale, warnings, skipped, aborted };
+}
+
+// Pure: turn a scan result into an exit code + message lines (no I/O, no
+// throw). Exit 1 iff a genuine stale marker exists; otherwise 0 (fail-soft).
+// The summary line always says "partial scan" when any entry was skipped or
+// the scan aborted, so exit 0 never reads as "all verified clean".
+export function summarize(scan) {
+  const out = [];
+  const err = [];
+  const { inflightCount, stale, warnings, skipped, aborted } = scan;
+
+  if (inflightCount === 0) {
+    out.push("check-stale-todo-markers: no 🚧 in-flight entries — OK");
+    return { exitCode: 0, out, err };
   }
-  throw err;
-}
 
-if (stale.length === 0) {
-  console.log(
-    `check-stale-todo-markers: ${inflight.length} 🚧 in-flight ${
-      inflight.length === 1 ? "entry" : "entries"
-    } checked, none stale — OK`
+  const partial = skipped.length > 0 || Boolean(aborted);
+
+  for (const { entry, merged } of warnings) {
+    err.push(`  ⚠ ${entry.title}`);
+    err.push(
+      `      PR #${merged.number} looks MERGED (number-only match — verify): ${merged.title}`
+    );
+  }
+  for (const { entry, reason } of skipped) {
+    err.push(`  … skipped (transient gh error): ${entry.title}\n      (${reason})`);
+  }
+  if (aborted) {
+    err.push(
+      `  … scan stopped early — gh became unavailable; remaining entries unchecked.\n      (${aborted.reason})`
+    );
+  }
+
+  if (stale.length === 0) {
+    const scope = partial ? "partial scan" : "checked";
+    const noun = inflightCount === 1 ? "entry" : "entries";
+    out.push(
+      `check-stale-todo-markers: ${inflightCount} 🚧 in-flight ${noun} (${scope}), none stale — OK` +
+        (warnings.length ? ` (${warnings.length} number-only warning(s) above)` : "")
+    );
+    return { exitCode: 0, out, err };
+  }
+
+  err.unshift(
+    `check-stale-todo-markers: ${stale.length} STALE 🚧 marker(s)` +
+      (partial ? " (partial scan — some entries unchecked)" : "") +
+      "\n"
   );
-  process.exit(0);
+  for (const { entry, merged } of stale) {
+    const via = entry.branch ? `branch: ${entry.branch}` : `PR #${merged.number}`;
+    err.push(`  ✗ ${entry.title}`);
+    err.push(`      ${via} — PR #${merged.number} is MERGED: ${merged.title}`);
+  }
+  err.push(
+    "\nRemediation: the PR(s) above merged outside /merge-pr, so the 🚧 entry was\n" +
+      "never archived. Move each stale entry from the TODO file into TODO-archive.md\n" +
+      "(collapse to a one-line ✅ entry), then re-run this check. Going forward, merge\n" +
+      "through /merge-pr so its post-merge sync handles this automatically."
+  );
+  return { exitCode: 1, out, err };
 }
 
-console.error(`check-stale-todo-markers: ${stale.length} STALE 🚧 marker(s) in ${todoPath}\n`);
-for (const { entry, merged } of stale) {
-  const branch = entry.branch ? `branch: ${entry.branch}` : `PR #${merged.number}`;
-  console.error(`  ✗ ${entry.title}`);
-  console.error(`      ${branch} — PR #${merged.number} is MERGED: ${merged.title}`);
+// Wrap summarize(scanTodo(...)) so a taxonomy-external error (a real bug) maps
+// to exit 2 — distinct from stale's exit 1 — instead of crashing with Node's
+// default exit 1 (which would read as "stale found"). The testable exit-2 seam.
+export function runScan(text, ghRunner = ghExec) {
+  try {
+    return summarize(scanTodo(text, ghRunner));
+  } catch (e) {
+    return {
+      exitCode: 2,
+      out: [],
+      err: [`check-stale-todo-markers: internal error — ${e?.message ?? String(e)}`],
+    };
+  }
 }
-console.error(
-  "\nRemediation: the PR(s) above merged outside /merge-pr, so the 🚧 entry was\n" +
-    "never archived. Move each stale entry from the TODO file into TODO-archive.md\n" +
-    "(collapse to a one-line ✅ entry), then re-run this check. Going forward, merge\n" +
-    "through /merge-pr so its post-merge sync handles this automatically."
-);
-process.exit(1);
+
+function main() {
+  const todoPath = process.argv[2] ?? DEFAULT_TODO;
+  let text;
+  try {
+    text = readFileSync(todoPath, "utf8");
+  } catch (err) {
+    console.error(`check-stale-todo-markers: cannot read ${todoPath}: ${err.message}`);
+    process.exit(2);
+  }
+
+  const { exitCode, out, err } = runScan(text);
+  for (const line of out) {
+    console.log(line);
+  }
+  for (const line of err) {
+    console.error(line);
+  }
+  process.exit(exitCode);
+}
+
+// Only run main when invoked directly (not when imported by the test suite).
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  main();
+}

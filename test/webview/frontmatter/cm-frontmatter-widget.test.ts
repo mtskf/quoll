@@ -77,7 +77,8 @@ describe("FrontmatterBlockWidget — DOM structure (a11y, read-only)", () => {
   it("builds a role=region div with an aria-label and a <dl> (NOT an <hr>)", () => {
     const dom = new FrontmatterBlockWidget(
       "title: x\ndraft: true",
-      "---\ntitle: x\ndraft: true\n---"
+      "---\ntitle: x\ndraft: true\n---",
+      true
     ).toDOM();
     expect(dom.tagName).toBe("DIV");
     expect(dom.className).toBe("quoll-block quoll-frontmatter-block");
@@ -91,24 +92,39 @@ describe("FrontmatterBlockWidget — DOM structure (a11y, read-only)", () => {
     expect((dl?.querySelectorAll("dd")[0] as HTMLElement).textContent).toBe("x");
   });
 
-  it("carries an aria-description hinting the caret-reveal edit affordance (a11y M3)", () => {
+  it("carries an aria-description hinting the caret-reveal edit affordance when writable (a11y M3)", () => {
     // The region's reveal-to-edit action is pointer-only on the element (mousedown);
     // the canonical keyboard route is the caret model. Pin the SR discovery hint so
     // the region is not announced as a dead end. Non-vacuous: absent the attribute,
     // getAttribute returns null and both assertions fail.
     const dom = new FrontmatterBlockWidget(
       "title: x\ndraft: true",
-      "---\ntitle: x\ndraft: true\n---"
+      "---\ntitle: x\ndraft: true\n---",
+      true
     ).toDOM();
     const description = dom.getAttribute("aria-description");
     expect(description).toBeTruthy();
     expect(description).toMatch(/caret|edit/i);
   });
 
+  it("OMITS the aria-description hint when NOT writable (reveal is a no-op, so no false affordance)", () => {
+    // The reveal-to-edit route silently refuses on a read-only document, so the
+    // hint must be gated on the widget's captured writability. Non-vacuous: with a
+    // stale `true` the attribute would be present and the assertion would fail.
+    const dom = new FrontmatterBlockWidget(
+      "title: x\ndraft: true",
+      "---\ntitle: x\ndraft: true\n---",
+      false
+    ).toDOM();
+    expect(dom.getAttribute("aria-label")).toBe("Document metadata");
+    expect(dom.getAttribute("aria-description")).toBeNull();
+  });
+
   it("renders a <pre> raw fallback for complex YAML (no misrepresentation)", () => {
     const dom = new FrontmatterBlockWidget(
       "author:\n  name: x",
-      "---\nauthor:\n  name: x\n---"
+      "---\nauthor:\n  name: x\n---",
+      true
     ).toDOM();
     expect(dom.querySelector("dl")).toBeNull();
     const pre = dom.querySelector("pre.quoll-frontmatter-raw");
@@ -116,15 +132,19 @@ describe("FrontmatterBlockWidget — DOM structure (a11y, read-only)", () => {
     expect((pre as HTMLElement).textContent).toBe("author:\n  name: x");
   });
 
-  it("eq() is keyed on slice", () => {
-    const a = new FrontmatterBlockWidget("a: 1", "---\na: 1\n---");
-    const same = new FrontmatterBlockWidget("a: 1", "---\na: 1\n---");
-    const diff = new FrontmatterBlockWidget("a: 2", "---\na: 2\n---");
+  it("eq() is keyed on slice AND writability", () => {
+    const a = new FrontmatterBlockWidget("a: 1", "---\na: 1\n---", true);
+    const same = new FrontmatterBlockWidget("a: 1", "---\na: 1\n---", true);
+    const diff = new FrontmatterBlockWidget("a: 2", "---\na: 2\n---", true);
+    // Same slice but a flipped writability must NOT be equal — otherwise CM keeps
+    // the old DOM and the writability-gated aria-description goes stale.
+    const readOnly = new FrontmatterBlockWidget("a: 1", "---\na: 1\n---", false);
     expect(a.eq(same)).toBe(true);
     expect(a.eq(diff)).toBe(false);
+    expect(a.eq(readOnly)).toBe(false);
   });
 
   it("ignoreEvent() returns true (atomic from CM's perspective)", () => {
-    expect(new FrontmatterBlockWidget("a: 1", "---\na: 1\n---").ignoreEvent()).toBe(true);
+    expect(new FrontmatterBlockWidget("a: 1", "---\na: 1\n---", true).ignoreEvent()).toBe(true);
   });
 });

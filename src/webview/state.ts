@@ -1,10 +1,19 @@
 // Webview UI / protocol state reducer.
 //
 // Why a hand-rolled reducer (and not Jotai/Zustand/Redux): the state
-// surface is tiny (~9 fields) and the transitions encode the protocol
+// surface is tiny (six fields) and the transitions encode the protocol
 // invariants (docVersion monotonicity, single-flight Edit, save-policy
-// gating). Keeping the spec inside a ~150-line pure function means there
+// gating). Keeping the spec inside an ~80-line pure function means there
 // is no third-party store to migrate when its maintainer disappears.
+//
+// Why every field is `readonly` and the seed is frozen: state moves ONLY
+// by `state = reducer(state, action)` at the shell's single dispatch site,
+// so a field write is always a bug. `readonly` makes that bug a compile
+// error, and `Object.freeze(initialState)` makes it a runtime throw —
+// `initialState` is a module-level singleton shared by every mount in the
+// realm, so one stray write would poison every later mount, not just the
+// one that made it. Mirrors the host counterpart `HostSessionState`
+// (host-session-core.ts), which is readonly throughout.
 //
 // Why content is NOT here: CodeMirror's EditorState owns the document
 // body inside the webview (the CM EditorView mounted by editor.ts).
@@ -17,20 +26,20 @@ import type { ThemeKind } from "../shared/protocol.js";
 
 export type WebviewState = {
   /** True once the webview has accepted at least one Document from the host. */
-  ready: boolean;
+  readonly ready: boolean;
   /** Last host-issued Document.docVersion. The webview never mints this — it
    *  echoes the value back as `baseDocVersion` on outgoing Edit messages so
    *  the host can detect stale-base edits with a single equality check. */
-  docVersion: number;
-  theme: ThemeKind;
+  readonly docVersion: number;
+  readonly theme: ThemeKind;
   /** Host-authoritative write capability. When false, post-edit transitions
    *  are dropped at the reducer so read-only / virtual documents do not
    *  emit Edit messages the host would reject anyway. */
-  canWrite: boolean;
+  readonly canWrite: boolean;
   /** Single-flight invariant: at most one Edit pending at any time. Set
    *  true by a successful post-edit dispatch, cleared by the next non-stale
    *  Document (which is the host's authoritative acknowledgement). */
-  editInFlight: boolean;
+  readonly editInFlight: boolean;
   /** Most recent send-side failure — dispatched when postMessage throws
    *  (closed MessagePort, structuredClone error, host throttle) during
    *  a post-edit call, or when the host rejects an Edit (`edit-rejected`).
@@ -38,19 +47,29 @@ export type WebviewState = {
    *  non-stale Document or a local-edit-attempt retry. The sole surviving
    *  webview banner surface (C8 retired the PM-bridge parse-warning /
    *  parse-error machinery). */
-  serializeError: MarkdownError | null;
+  readonly serializeError: MarkdownError | null;
 };
 
 export type Action =
   | {
-      type: "document";
-      docVersion: number;
-      canWrite: boolean;
-      themeKind: ThemeKind;
+      readonly type: "document";
+      readonly docVersion: number;
+      readonly canWrite: boolean;
+      readonly themeKind: ThemeKind;
+      /** Identity-transition adoption (S3b): when true, bypass the stale
+       *  two-comparison drop and adopt this Document unconditionally. A new host
+       *  session (fresh epochGeneration, or a legacy host that dropped the pair)
+       *  legitimately restarts at a LOWER docVersion; version ordering is
+       *  meaningful only within one generation. The shell computes this (via
+       *  edit-sync's `isIdentityTransition`) and threads it here so the reducer's
+       *  inlined copy of the stale guard cannot re-drop the adoption and strand
+       *  the webview permanently deaf to the live host. Absent/false on ordinary
+       *  same-generation (or pure-absent legacy) Documents. */
+      readonly adopt?: boolean;
     }
-  | { type: "theme"; themeKind: ThemeKind }
-  | { type: "post-edit" }
-  | { type: "serialize-error"; error: MarkdownError }
+  | { readonly type: "theme"; readonly themeKind: ThemeKind }
+  | { readonly type: "post-edit" }
+  | { readonly type: "serialize-error"; readonly error: MarkdownError }
   | {
       /** Next user keystroke after a host-side rejected save attempt
        *  (serializeError != null). Clears the gate so the debounced
@@ -61,17 +80,22 @@ export type Action =
        *  not post stale pre-reject buffered bytes (see editor.ts and
        *  edit-sync.ts for the pair contract). No-op when serializeError
        *  is already null so per-keystroke dispatches are cheap. */
-      type: "local-edit-attempt";
+      readonly type: "local-edit-attempt";
     };
 
-export const initialState: WebviewState = {
+/** The seed every mount starts from. Frozen, not merely `readonly`: the
+ *  `readonly` fields are erased at runtime, and this ONE object is shared by
+ *  every shell in the realm, so the freeze is what stops a stray write from
+ *  leaking into later mounts. Transitions never write through it — the
+ *  reducer always returns a fresh object. */
+export const initialState: WebviewState = Object.freeze({
   ready: false,
   docVersion: 0,
   theme: "dark",
   canWrite: false,
   editInFlight: false,
   serializeError: null,
-};
+});
 
 /** Save-policy gate: does the current UI/protocol state PERMIT the webview
  *  to post an Edit to the host? This is the POLICY layer only — today the
@@ -103,8 +127,10 @@ export function reducer(state: WebviewState, action: Action): WebviewState {
       // Two-comparison rule: the webview accepts a Document iff
       // incoming >= displayed. The host uses === on Edit base versions;
       // the two comparisons answer different questions and stay inlined
-      // at their call sites.
-      if (action.docVersion < state.docVersion) {
+      // at their call sites. An identity-transition adoption (S3b) bypasses
+      // this: a new host generation restarts docVersion lower, and version
+      // ordering only holds within one generation (see the `adopt` JSDoc).
+      if (!action.adopt && action.docVersion < state.docVersion) {
         return state;
       }
       return {

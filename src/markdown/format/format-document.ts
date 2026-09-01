@@ -4,6 +4,7 @@
 // Table nodes for CRLF-joined input; a future host-side caller must LF-normalize
 // (or map offsets) before calling. The per-row table model still preserves each
 // row's own CRLF lineEnding verbatim, so LF-in / mixed-ending round-trips.
+import { bulletUnifyEdits } from "./bullet-rules.js";
 import { applyEdits, type Edit } from "./edit.js";
 import { lineEdits } from "./line-planner.js";
 import { listRenumberEdits } from "./list-rules.js";
@@ -14,7 +15,7 @@ export function formatDocumentEdits(source: string): Edit[] {
   if (source.length === 0) {
     return [];
   }
-  const { protectedRanges, tableRanges, orderedLists } = classifyDocument(source);
+  const { protectedRanges, tableRanges, orderedLists, bulletLists } = classifyDocument(source);
   const keepOut = [...protectedRanges, ...tableRanges];
   // Sort into document order: the runtime path dispatches `{ changes: edits }`
   // directly, and CM expects changes in order. This is the ONE sort — applyEdits
@@ -23,6 +24,7 @@ export function formatDocumentEdits(source: string): Edit[] {
   return [
     ...tableEdits(source, tableRanges),
     ...listRenumberEdits(orderedLists),
+    ...bulletUnifyEdits(source, bulletLists),
     ...lineEdits(source, keepOut),
   ].sort((a, b) => a.from - b.from || a.to - b.to);
 }

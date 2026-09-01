@@ -36,13 +36,19 @@ import {
   ViewPlugin,
   type ViewUpdate,
 } from "@codemirror/view";
-import { patchPersistedState, readPersistedState } from "../../host.js";
 import { requireQuollEditorHost } from "../editor-host.js";
 import { DEFAULT_EDITOR_PREFS, editorPrefsField } from "../editor-prefs.js";
 import { extractOutline, type OutlineHeading } from "./build-outline.js";
 import { createChevronIcon, createMenuIcon, createPinIcon, createSettingsIcon } from "./icons.js";
+import { createTreeNav, type RowRef, type TreeNav } from "./keyboard-tree.js";
+import { createResizeHandle, DEFAULT_WIDTH_PX, type ResizeHandle } from "./resize-handle.js";
 import { createSettingsPopover, type SettingsPopover } from "./settings-popover.js";
 import { quollUpdateConfigSink } from "./update-config-sink.js";
+
+// The runtime-resizable sidebar-width constant is owned by resize-handle.ts (the
+// module that reads/writes it). Re-exported here to keep the public import path
+// stable for the styles.css parity contract test, which imports it from this file.
+export { DEFAULT_WIDTH_PX };
 
 /** Toggle chord. CM-scoped (fires only while the editor has focus), so it never
  *  collides with a workbench keybinding — same posture as the context-handoff /
@@ -92,49 +98,21 @@ const HOVER_OPEN_DELAY_MS = 120;
 export const OUTLINE_OPEN_CLASS = "quoll-outline-open";
 export const OUTLINE_PINNED_CLASS = "quoll-outline-pinned";
 
-/** Runtime-resizable sidebar width bounds (px). The stylesheet default
- *  (--quoll-outline-sidebar-width: 260px) applies until the user drags; a drag
- *  overrides the var inline on the host and persists the value. This clamp
- *  bounds the STORED width at drag/restore time; styles.css additionally caps
- *  the LIVE display at min(var, 80%) of the host (re-evaluated on layout, for
- *  host-shrink) using the SAME expression on the sidebar and the handle so they
- *  never desync. The two are complementary — both keep the editor column alive. */
-const MIN_WIDTH_PX = 180;
-const MAX_WIDTH_PX = 600;
-/** Keyboard-resize nudge (px) per Arrow press on the focused separator. Coarse
- *  enough that a handful of presses spans the range, in the spirit of VS Code's
- *  keyboard sash nudges; Home jumps to MIN_WIDTH_PX. End requests MAX_WIDTH_PX but
- *  is still subject to clampWidth's host-relative 80% cap (see the comment above),
- *  so on a narrow host it lands below the documented max. */
-const RESIZE_STEP_PX = 16;
-/** Stylesheet baseline for --quoll-outline-sidebar-width (styles.css) — the
- *  width the keyboard math and aria-valuenow read before any inline width is set.
- *  Exported so a contract test machine-enforces parity with the CSS default (the
- *  test reads styles.css and fails if the two diverge — not just this comment). */
-export const DEFAULT_WIDTH_PX = 260;
-/** Persisted view-state key (flat, survives reload) — see readPersistedState.
- *  Flat + namespaced by name so it shallow-merges alongside any future keys
- *  without a nested schema (one key today). */
-const WIDTH_STATE_KEY = "outlineWidthPx";
-
-/** A rendered outline row + its structural facts, for post-render visibility
- *  updates that never rebuild the DOM (collapse toggles reuse these refs). The
- *  `li` IS the focusable tree node (roving tabindex); the twistie is an
- *  aria-hidden decorative chevron and the item span is display-only. */
-interface RowRef {
-  heading: OutlineHeading;
-  hasChildren: boolean;
-  li: HTMLLIElement;
-  twistie: HTMLSpanElement | null;
-}
-
 class OutlinePanel implements PluginValue {
   private readonly host: HTMLElement;
   private readonly toggleEl: HTMLButtonElement;
   private readonly sidebarEl: HTMLElement;
   private readonly pinEl: HTMLButtonElement;
   private readonly listEl: HTMLElement;
-  private readonly resizeEl: HTMLElement;
+  private readonly resizeHandle: ResizeHandle;
+  /** The keyboard-tree navigator: sole owner of the rendered rows + the roving
+   *  tab stop + the focused-row offset. The panel builds rows in renderList and
+   *  hands them over (setRows); reads them back through treeNav.rows for its own
+   *  visibility / active passes; and routes every tab-stop / focus-restore call
+   *  through it. collapsedFroms stays panel-owned — treeNav only reads it via the
+   *  isCollapsed dep and asks the panel to change it via toggleCollapse — so no
+   *  field is mutated from both modules. */
+  private readonly treeNav: TreeNav;
   private readonly settingsToggleEl: HTMLButtonElement;
   private readonly footerEl: HTMLElement;
   /** Visually-hidden `aria-live=polite` region. `updateActive` writes the active
@@ -148,14 +126,6 @@ class OutlinePanel implements PluginValue {
   /** Capturing document pointerdown listener installed while the popover is open
    *  (click-outside close); removed by closeSettings. */
   private onDocPointerDown: ((e: Event) => void) | null = null;
-  private resizing = false;
-  /** The pointerId that started the active drag; guards against a second
-   *  pointer's events hijacking the resize. */
-  private resizePointerId: number | null = null;
-  /** True once a pointermove actually changed the width during this drag. Only
-   *  a moved drag persists — a click-without-drag (pointerdown→up, no move)
-   *  must not fire a redundant setState. */
-  private resizeMoved = false;
   private open = false;
   /** Invariant: pinned ⇒ open (closing by any path unpins). */
   private pinned = false;
@@ -165,12 +135,6 @@ class OutlinePanel implements PluginValue {
    *  never persisted (no protocol / storage). Pruned on each rebuild to parent
    *  headings that still exist, so it never grows unbounded. */
   private readonly collapsedFroms = new Set<number>();
-  /** Rendered rows for post-render visibility refresh (see refreshVisibility). */
-  private rows: RowRef[] = [];
-  /** `from` of the row that currently holds `tabindex="0"` — the single tab stop
-   *  into the tree (roving tabindex). All other visible rows are `tabindex="-1"`,
-   *  reachable only via the arrow-key handlers. Null while the list is empty. */
-  private tabbableFrom: number | null = null;
   /** Signature of the last rendered list; null forces the first render. */
   private renderedSignature: string | null = null;
   private rebuildTimer: ReturnType<typeof setTimeout> | null = null;
@@ -303,11 +267,6 @@ class OutlinePanel implements PluginValue {
     // aria-labelledby) so sighted and AT users get the same string.
     this.listEl.setAttribute("role", "tree");
     this.listEl.setAttribute("aria-labelledby", titleEl.id);
-    // Keyboard tree model (WAI-ARIA tree-view pattern): one delegated handler on
-    // the list — focus lives on a row <li> (roving tabindex), so every arrow /
-    // Home / End / Enter keydown bubbles here. Delegation survives every rebuild
-    // (the list element persists; only its rows are replaced).
-    this.listEl.addEventListener("keydown", (e) => this.onListKeydown(e));
     // Focusing a tree row makes the SR announce its treeitem — i.e. that section.
     // Keep the announcement baseline in sync with whatever row holds focus (Tab-in,
     // roving arrow nav, click) via this one delegated `focusin` (it bubbles), so
@@ -363,53 +322,35 @@ class OutlinePanel implements PluginValue {
     this.host.insertBefore(this.sidebarEl, this.host.firstChild);
     this.host.appendChild(this.toggleEl);
 
-    // Resize handle: a host child (not a sidebar child) pinned to the sidebar's
-    // right edge via `left: var(--quoll-outline-sidebar-width)`. Dragging it
-    // rewrites that var inline on the host, which moves the sidebar edge, the
-    // pinned flex-basis, AND the handle together — one source of truth for the
-    // runtime width. Only interactive while the sidebar is open (CSS gates it).
-    // Listeners live on the handle + pointer capture, so a release outside the
-    // iframe still ends the drag (pointerup/pointercancel), and remove() cleans
-    // them up.
-    this.resizeEl = document.createElement("div");
-    this.resizeEl.className = "quoll-outline-resize-handle";
-    // A focusable WAI-ARIA window splitter (role=separator): pointer drag AND
-    // keyboard (Arrow = nudge by RESIZE_STEP_PX, Home/End = min/max) both rewrite
-    // the width var. aria-value* report the live width to AT; aria-controls ties
-    // it to the sidebar it sizes. Only interactive while open (CSS gates display,
-    // so it drops out of the tab order when closed — matching the inert sidebar).
-    this.resizeEl.setAttribute("role", "separator");
-    this.resizeEl.setAttribute("aria-orientation", "vertical");
-    this.resizeEl.setAttribute("aria-label", "Resize outline sidebar");
-    this.resizeEl.setAttribute("aria-controls", this.sidebarEl.id);
-    this.resizeEl.setAttribute("aria-valuemin", String(MIN_WIDTH_PX));
-    this.resizeEl.setAttribute("aria-valuemax", String(MAX_WIDTH_PX));
-    this.resizeEl.tabIndex = 0;
-    this.resizeEl.addEventListener("pointerdown", (e) => this.onResizePointerDown(e));
-    this.resizeEl.addEventListener("pointermove", (e) => this.onResizePointerMove(e));
-    this.resizeEl.addEventListener("pointerup", (e) => this.onResizePointerEnd(e));
-    this.resizeEl.addEventListener("pointercancel", (e) => this.onResizePointerEnd(e));
-    this.resizeEl.addEventListener("keydown", (e) => this.onResizeKeydown(e));
-    // The handle lives on the host, not the sidebar, but belongs to the same
-    // outline focus region: bind focusout here too so tabbing from the handle to
-    // an element outside the sidebar/handle dismisses the transient overlay (the
-    // shared onSidebarFocusOut exempts focus moving BACK to the sidebar or handle).
-    // Without this, a keyboard user focused on the handle has no focus-out path to
-    // close a non-pinned overlay — the A11Y-03 obscured-focus wart would recur.
-    this.resizeEl.addEventListener("focusout", (e) => this.onSidebarFocusOut(e));
-    this.host.appendChild(this.resizeEl);
+    // Keyboard-tree navigator: owns the rendered rows + roving tab stop + focused
+    // offset, and binds its own keydown handler on listEl. It reaches back into
+    // the panel only through these typed deps — reading collapse state and asking
+    // the panel to toggle it (collapse stays panel-owned), jumping the caret, and
+    // taking focus back when the tree empties.
+    this.treeNav = createTreeNav({
+      listEl: this.listEl,
+      isCollapsed: (from) => this.collapsedFroms.has(from),
+      toggleCollapse: (from) => this.toggleCollapse(from),
+      jumpTo: (heading) => this.jumpTo(heading),
+      focusEditor: () => this.view.focus(),
+    });
 
-    // Restore a persisted width before first paint (guarded + in-range only:
-    // a corrupt / out-of-range value falls through to the stylesheet default).
-    const persisted = readPersistedState()[WIDTH_STATE_KEY];
-    if (typeof persisted === "number" && Number.isFinite(persisted)) {
-      if (this.clampWidth(persisted) === persisted) {
-        this.host.style.setProperty("--quoll-outline-sidebar-width", `${persisted}px`);
-      }
-    }
-    // Seed aria-valuenow AFTER the persisted restore so AT reads the effective
-    // width (restored value or the stylesheet default), not a stale placeholder.
-    this.updateResizeAria();
+    // Resize handle: a host child (not a sidebar child) pinned to the sidebar's
+    // right edge. It owns all runtime-width state + persistence (resize-handle.ts)
+    // and calls back into the panel only for hover-close scheduling, focus-out
+    // dismiss, and Escape-close. The factory restores any persisted width + seeds
+    // aria-valuenow internally; append AFTER (order-independent — both are
+    // non-layout synchronous DOM writes landing before first paint, and the width
+    // restore targets the host, not the handle).
+    this.resizeHandle = createResizeHandle({
+      host: this.host,
+      sidebarId: this.sidebarEl.id,
+      cancelScheduledClose: () => this.cancelScheduledClose(),
+      scheduleClose: () => this.scheduleClose(),
+      onFocusOut: (e) => this.onSidebarFocusOut(e),
+      onEscapeClose: () => this.setOpen(false),
+    });
+    this.host.appendChild(this.resizeHandle.el);
   }
 
   update(u: ViewUpdate): void {
@@ -460,6 +401,13 @@ class OutlinePanel implements PluginValue {
       if (this.lastAnnouncedFrom !== null) {
         this.lastAnnouncedFrom = u.changes.mapPos(this.lastAnnouncedFrom, 1);
       }
+      // …and the focused row's offset (owned by treeNav), so a rebuild triggered
+      // by an edit that shifts the focused heading (e.g. an external / programmatic
+      // edit landing BEFORE it while a keyboard user is in the tree) re-homes focus
+      // onto that same heading, not the first-visible-row fallback. Assoc +1 (follow
+      // the heading, not text inserted at its start) — the mapper stays panel-side so
+      // treeNav never imports a CodeMirror type.
+      this.treeNav.remapFocus((from) => u.changes.mapPos(from, 1));
     }
     if (!this.open) {
       return;
@@ -484,10 +432,13 @@ class OutlinePanel implements PluginValue {
     this.cancelScheduledClose();
     this.cancelScheduledOpen();
     this.closeSettings(); // unmount the popover + drop its document listener
-    this.endResize(); // persist an in-flight drag before teardown (no-op if idle)
     this.toggleEl.remove();
     this.sidebarEl.remove();
-    this.resizeEl.remove(); // drops its pointer listeners with it
+    // destroy() flushes an in-flight drag (persist), THEN removes the handle. Kept
+    // AFTER the sidebar/toggle removals so the handle's removal-fired focusout runs
+    // with the sidebar already detached — any onSidebarFocusOut fall-through then
+    // mutates only inert DOM, matching the pre-extraction removal order.
+    this.resizeHandle.destroy();
     // Clear the host flags so a lingering host node (tests, re-mount) never
     // inherits a stale open/pinned layout — mirrors FloatingToolbarScroll's
     // destroy hygiene.
@@ -584,7 +535,8 @@ class OutlinePanel implements PluginValue {
     // separator handle (a host sibling, not a sidebar child) — mirror the same
     // union onSidebarFocusOut uses so a handle-focused close restores editor focus.
     const hadOutlineFocus =
-      this.sidebarEl.contains(document.activeElement) || document.activeElement === this.resizeEl;
+      this.sidebarEl.contains(document.activeElement) ||
+      document.activeElement === this.resizeHandle.el;
     if (this.rebuildTimer !== null) {
       clearTimeout(this.rebuildTimer);
       this.rebuildTimer = null;
@@ -646,12 +598,13 @@ class OutlinePanel implements PluginValue {
    *     `footerEl` and so stays DOM-descended here). Any future owned overlay
    *     MUST likewise render inside `sidebarEl`, or this guard would misread it
    *     as a leave and close the sidebar out from under it.
-   *   - `next === this.resizeEl` — focus moved to the resize separator. It lives
-   *     on the host (not the sidebar) because CSS anchors it to the sidebar's
+   *   - `next === this.resizeHandle.el` — focus moved to the resize separator. It
+   *     lives on the host (not the sidebar) because CSS anchors it to the sidebar's
    *     right edge, but it belongs to the outline: Tabbing to it must resize, not
    *     dismiss the overlay out from under the very handle being focused.
-   *  This handler is bound to BOTH `sidebarEl` and `resizeEl`, so the sidebar and
-   *  the separator form one focus region: a focusout from either that lands
+   *  This handler is bound to BOTH `sidebarEl` and the separator (resize-handle.ts
+   *  wires the handle's own focusout to `onFocusOut`), so the sidebar and the
+   *  separator form one focus region: a focusout from either that lands
    *  outside both dismisses the overlay, while a move between them is exempted by
    *  the guards above. A programmatic `.focus()` to a real element outside the
    *  region is indistinguishable from a deliberate Tab-out and will also dismiss —
@@ -661,7 +614,7 @@ class OutlinePanel implements PluginValue {
       return;
     }
     const next = e.relatedTarget as Node | null;
-    if (next === null || this.sidebarEl.contains(next) || next === this.resizeEl) {
+    if (next === null || this.sidebarEl.contains(next) || next === this.resizeHandle.el) {
       return;
     }
     this.setOpen(false);
@@ -704,149 +657,11 @@ class OutlinePanel implements PluginValue {
     }
   }
 
-  private clampWidth(px: number): number {
-    // happy-dom / pre-layout: clientWidth 0 ⇒ no viewport bound yet, use the
-    // absolute ceiling. In a real browser, also cap at 80% of the host width so
-    // the editor column survives at drag/restore time. styles.css re-applies the
-    // same 80%-of-host cap live via min(var, 80%) for later host shrinks; the two
-    // caps agree, so a value this clamp passes is never re-capped on a stable host.
-    const hostWidth = this.host.clientWidth;
-    const upper = hostWidth > 0 ? Math.min(MAX_WIDTH_PX, hostWidth * 0.8) : MAX_WIDTH_PX;
-    return Math.round(Math.max(MIN_WIDTH_PX, Math.min(upper, px)));
-  }
-
-  /** Set the width var from a pointer's clientX (relative to the host's left). */
-  private applyResize(clientX: number): void {
-    const width = this.clampWidth(clientX - this.host.getBoundingClientRect().left);
-    this.host.style.setProperty("--quoll-outline-sidebar-width", `${width}px`);
-    this.updateResizeAria();
-  }
-
-  /** The effective sidebar width (px): the inline var if set, else the stylesheet
-   *  default. The numeric baseline the keyboard nudges and aria-valuenow read. */
-  private currentWidthPx(): number {
-    const raw = Number.parseInt(
-      this.host.style.getPropertyValue("--quoll-outline-sidebar-width"),
-      10
-    );
-    return Number.isFinite(raw) ? raw : DEFAULT_WIDTH_PX;
-  }
-
-  /** Reflect the live width onto the separator's aria-valuenow (AT read-out).
-   *  Called from every width mutation — pointer drag and keyboard alike. */
-  private updateResizeAria(): void {
-    this.resizeEl.setAttribute("aria-valuenow", String(this.currentWidthPx()));
-  }
-
-  /** Commit a keyboard-chosen width: clamp, write the var, sync aria, persist.
-   *  Unlike the pointer drag (one persist at drag-end), each Arrow/Home/End press
-   *  is its own discrete, already-committed width — so it persists immediately. */
-  private setWidth(px: number): void {
-    const width = this.clampWidth(px);
-    this.host.style.setProperty("--quoll-outline-sidebar-width", `${width}px`);
-    this.updateResizeAria();
-    patchPersistedState({ [WIDTH_STATE_KEY]: width });
-  }
-
-  /** Keyboard resize on the focused separator (WAI-ARIA window-splitter keys):
-   *  Left/Right nudge by RESIZE_STEP_PX. Home jumps to MIN_WIDTH_PX; End requests
-   *  MAX_WIDTH_PX but setWidth's clampWidth call still applies the host-relative
-   *  80% cap, so End may land below MAX_WIDTH_PX on a narrow host. Escape closes
-   *  the overlay (mirrors the sidebar's Escape); Tab and everything else bubble. */
-  private onResizeKeydown(e: KeyboardEvent): void {
-    // Escape closes the transient overlay from the handle (the handle is a host
-    // child, so the sidebar's Escape handler never sees its keydowns). Matches the
-    // sidebar Escape path: setOpen(false) also unpins via its invariant.
-    if (e.key === "Escape") {
-      e.preventDefault();
-      this.setOpen(false);
-      return;
-    }
-    let next: number;
-    switch (e.key) {
-      case "ArrowLeft":
-        next = this.currentWidthPx() - RESIZE_STEP_PX;
-        break;
-      case "ArrowRight":
-        next = this.currentWidthPx() + RESIZE_STEP_PX;
-        break;
-      case "Home":
-        next = MIN_WIDTH_PX;
-        break;
-      case "End":
-        next = MAX_WIDTH_PX;
-        break;
-      default:
-        return;
-    }
-    e.preventDefault();
-    this.setWidth(next);
-  }
-
-  private onResizePointerDown(e: PointerEvent): void {
-    if (this.resizing) {
-      return; // a second pointer must not hijack an active drag
-    }
-    e.preventDefault();
-    this.resizing = true;
-    this.resizeMoved = false;
-    this.resizePointerId = e.pointerId;
-    // Route subsequent moves/up to the handle even outside the iframe. Guarded:
-    // happy-dom has no setPointerCapture.
-    this.resizeEl.setPointerCapture?.(e.pointerId);
-    // Dragging in overlay mode moves the pointer out of the sidebar — cancel any
-    // armed hover-close so the surface can't vanish mid-drag (scheduleClose also
-    // early-returns while resizing).
-    this.cancelScheduledClose();
-  }
-
-  private onResizePointerMove(e: PointerEvent): void {
-    if (!this.resizing || e.pointerId !== this.resizePointerId) {
-      return;
-    }
-    this.resizeMoved = true;
-    this.applyResize(e.clientX);
-  }
-
-  /** Unified drag-end for pointerup AND pointercancel. */
-  private onResizePointerEnd(e: PointerEvent): void {
-    if (!this.resizing || e.pointerId !== this.resizePointerId) {
-      return;
-    }
-    // pointercancel carries no useful clientX — only apply on pointerup.
-    if (e.type === "pointerup") {
-      this.applyResize(e.clientX);
-    }
-    this.endResize();
-  }
-
-  /** Stop the drag and persist the committed width. Idempotent + shared by the
-   *  pointer-end path and destroy-mid-drag. Only a drag that actually moved
-   *  persists — a click-without-drag fires no redundant setState. */
-  private endResize(): void {
-    if (!this.resizing) {
-      return;
-    }
-    this.resizing = false;
-    if (this.resizePointerId !== null) {
-      this.resizeEl.releasePointerCapture?.(this.resizePointerId);
-      this.resizePointerId = null;
-    }
-    if (!this.resizeMoved) {
-      return; // no movement ⇒ no new width to persist
-    }
-    this.resizeMoved = false;
-    const width = Number.parseInt(
-      this.host.style.getPropertyValue("--quoll-outline-sidebar-width"),
-      10
-    );
-    if (Number.isFinite(width)) {
-      patchPersistedState({ [WIDTH_STATE_KEY]: width });
-    }
-  }
-
   private scheduleClose(): void {
-    if (this.pinned || !this.open || this.resizing) {
+    // The resizing check reads the handle's live drag state so a mid-drag pointer
+    // boundary never arms a close (in happy-dom, where pointer capture is a no-op,
+    // the sidebar/handle pointerleave still fires during a drag).
+    if (this.pinned || !this.open || this.resizeHandle.isResizing()) {
       return;
     }
     this.cancelScheduledClose();
@@ -894,8 +709,14 @@ class OutlinePanel implements PluginValue {
     this.headings = extractOutline(state, tree);
     const signature = this.headings.map((h) => `${h.from}:${h.level}:${h.text}`).join("\n");
     if (signature !== this.renderedSignature) {
+      // renderList clears the <ul> (textContent = "") and rebuilds every row, so
+      // a rebuild that fires while a keyboard user is navigating the tree (a
+      // background reparse, or the debounced edit rebuild) removes the focused
+      // row and drops focus to <body>. Capture focus first, restore it after.
+      const focusedFrom = this.treeNav.focusedRowFrom();
       this.renderedSignature = signature;
       this.renderList();
+      this.treeNav.restoreRowFocus(focusedFrom);
     }
     // A rebuild is structural (open, an edit, or the parser catching up), never a
     // caret navigation — so it re-baselines the announcer silently rather than
@@ -907,8 +728,8 @@ class OutlinePanel implements PluginValue {
 
   private renderList(): void {
     this.listEl.textContent = "";
-    this.rows = [];
     if (this.headings.length === 0) {
+      this.treeNav.setRows([]);
       const empty = document.createElement("li");
       empty.className = "quoll-outline-empty";
       // Not a tree node — neutralise the implicit listitem role so the empty
@@ -927,6 +748,7 @@ class OutlinePanel implements PluginValue {
         this.collapsedFroms.delete(from);
       }
     }
+    const rows: RowRef[] = [];
     this.headings.forEach((heading, i) => {
       const li = document.createElement("li");
       li.className = "quoll-outline-row";
@@ -977,13 +799,14 @@ class OutlinePanel implements PluginValue {
       li.appendChild(label);
 
       this.listEl.appendChild(li);
-      this.rows.push({ heading, hasChildren: hasChildren[i], li, twistie });
+      rows.push({ heading, hasChildren: hasChildren[i], li, twistie });
     });
+    this.treeNav.setRows(rows);
     this.refreshVisibility();
     // Seed the roving tab stop at the first visible row; updateActive (called
     // right after in rebuild) re-homes it onto the caret's heading when the list
     // is not focused, so Tab enters the tree at the current location.
-    this.setTabbable(this.firstVisibleFrom());
+    this.treeNav.setTabbable(this.treeNav.firstVisibleFrom());
   }
 
   /** hasChildren[i] ⇔ the next heading is deeper (its subtree starts under i). */
@@ -1001,136 +824,19 @@ class OutlinePanel implements PluginValue {
     } else {
       this.collapsedFroms.add(from);
     }
+    // Capture DOM focus BEFORE hiding rows: refreshVisibility can hide the very
+    // row that holds keyboard focus (a pointer collapse of an ancestor while a
+    // descendant li was focused), and the browser then blurs it to <body>.
+    const focusedFrom = this.treeNav.focusedRowFrom();
     this.refreshVisibility();
     // A collapse can hide the row that held the tab stop (e.g. a pointer collapse
     // of an ancestor while a descendant was tabbable) — re-home it so the tree
     // never keeps its only tab stop on a `display:none` row.
-    this.ensureTabbableVisible();
+    this.treeNav.ensureTabbableVisible();
+    // …and if that row actually held focus, move focus with it so a keyboard
+    // user is never stranded on <body> (the roving tab stop alone is silent).
+    this.treeNav.restoreRowFocus(focusedFrom);
     this.updateActive();
-  }
-
-  // ── Roving tabindex + keyboard tree navigation (WAI-ARIA tree-view) ──────────
-
-  /** `from` of the first visible row, or null when none are visible. */
-  private firstVisibleFrom(): number | null {
-    const row = this.rows.find((r) => !r.li.hidden);
-    return row !== undefined ? row.heading.from : null;
-  }
-
-  /** Promote exactly one row to `tabindex="0"` (the sole tab stop into the tree);
-   *  demote the rest to `-1`. Null clears every row to `-1` (empty list). */
-  private setTabbable(from: number | null): void {
-    this.tabbableFrom = from;
-    for (const row of this.rows) {
-      row.li.tabIndex = row.heading.from === from ? 0 : -1;
-    }
-  }
-
-  /** If the tab stop landed on a now-hidden (or removed) row, move it to the
-   *  first visible row so Tab always reaches a real, visible node. */
-  private ensureTabbableVisible(): void {
-    if (this.tabbableFrom === null) {
-      return;
-    }
-    const row = this.rows.find((r) => r.heading.from === this.tabbableFrom);
-    if (row === undefined || row.li.hidden) {
-      this.setTabbable(this.firstVisibleFrom());
-    }
-  }
-
-  /** Move the tab stop to a row and focus it — the shared move for every
-   *  arrow-key / Home / End navigation. */
-  private focusRow(row: RowRef): void {
-    this.setTabbable(row.heading.from);
-    row.li.focus();
-  }
-
-  /** Focus the nearest visible row in `dir` from `idx` (no wrap). */
-  private focusRelative(idx: number, dir: 1 | -1): void {
-    for (let i = idx + dir; i >= 0 && i < this.rows.length; i += dir) {
-      if (!this.rows[i].li.hidden) {
-        this.focusRow(this.rows[i]);
-        return;
-      }
-    }
-  }
-
-  private onListKeydown(e: KeyboardEvent): void {
-    const target = e.target as HTMLElement | null;
-    const li = target?.closest<HTMLLIElement>(".quoll-outline-row") ?? null;
-    if (li === null) {
-      return;
-    }
-    const idx = this.rows.findIndex((r) => r.li === li);
-    if (idx === -1) {
-      return;
-    }
-    const row = this.rows[idx];
-    switch (e.key) {
-      case "ArrowDown":
-        e.preventDefault();
-        this.focusRelative(idx, 1);
-        break;
-      case "ArrowUp":
-        e.preventDefault();
-        this.focusRelative(idx, -1);
-        break;
-      case "Home":
-        e.preventDefault();
-        this.focusRelative(-1, 1); // first visible: scan forward from before row 0
-        break;
-      case "End":
-        e.preventDefault();
-        this.focusRelative(this.rows.length, -1); // last visible: scan back from the end
-        break;
-      case "ArrowRight":
-        e.preventDefault();
-        this.onArrowRight(idx, row);
-        break;
-      case "ArrowLeft":
-        e.preventDefault();
-        this.onArrowLeft(idx, row);
-        break;
-      case "Enter":
-        e.preventDefault();
-        this.jumpTo(row.heading);
-        break;
-      default:
-        // Everything else (incl. Escape, handled by the sidebar) bubbles on.
-        break;
-    }
-  }
-
-  /** Right: expand a collapsed parent (focus stays); on an already-expanded
-   *  parent, dive to the first child; a leaf does nothing. */
-  private onArrowRight(idx: number, row: RowRef): void {
-    if (!row.hasChildren) {
-      return;
-    }
-    if (this.collapsedFroms.has(row.heading.from)) {
-      this.toggleCollapse(row.heading.from); // expand in place
-      this.focusRow(row); // re-assert the tab stop / focus on this row
-    } else {
-      // Expanded ⇒ the next row is this parent's first child (build order).
-      this.focusRelative(idx, 1);
-    }
-  }
-
-  /** Left: collapse an expanded parent (focus stays); otherwise climb to the
-   *  parent row (nearest shallower visible ancestor). */
-  private onArrowLeft(idx: number, row: RowRef): void {
-    if (row.hasChildren && !this.collapsedFroms.has(row.heading.from)) {
-      this.toggleCollapse(row.heading.from); // collapse in place
-      this.focusRow(row);
-      return;
-    }
-    const depth = row.heading.depth;
-    for (let i = idx - 1; i >= 0; i--) {
-      if (!this.rows[i].li.hidden && this.rows[i].heading.depth < depth) {
-        this.focusRow(this.rows[i]);
-        return;
-      }
-    }
   }
 
   /** Walk the flat rows with a depth stack: any row deeper than the shallowest
@@ -1139,7 +845,7 @@ class OutlinePanel implements PluginValue {
    *  toggle. */
   private refreshVisibility(): void {
     let collapseDepth: number | null = null; // depth of the hiding ancestor, or null
-    for (const row of this.rows) {
+    for (const row of this.treeNav.rows) {
       const depth = row.heading.depth;
       if (collapseDepth !== null && depth <= collapseDepth) {
         collapseDepth = null; // exited the collapsed subtree
@@ -1198,11 +904,11 @@ class OutlinePanel implements PluginValue {
     // row — we keep the nearest visible ancestor lit rather than auto-expanding
     // (auto-expand would undo a deliberate collapse on every caret move).
     if (activeFrom !== null) {
-      const idx = this.rows.findIndex((r) => r.heading.from === activeFrom);
-      if (idx !== -1 && this.rows[idx].li.hidden) {
+      const idx = this.treeNav.rows.findIndex((r) => r.heading.from === activeFrom);
+      if (idx !== -1 && this.treeNav.rows[idx].li.hidden) {
         for (let i = idx - 1; i >= 0; i--) {
-          if (!this.rows[i].li.hidden) {
-            activeFrom = this.rows[i].heading.from;
+          if (!this.treeNav.rows[i].li.hidden) {
+            activeFrom = this.treeNav.rows[i].heading.from;
             break;
           }
         }
@@ -1226,7 +932,7 @@ class OutlinePanel implements PluginValue {
     // has tabbed in and is arrow-navigating, the keyboard owns the tab stop and a
     // caret-driven move must not yank it out from under them.
     if (!this.listEl.contains(document.activeElement)) {
-      this.setTabbable(activeFrom ?? this.firstVisibleFrom());
+      this.treeNav.setTabbable(activeFrom ?? this.treeNav.firstVisibleFrom());
     }
     if (caretDriven || this.announceTimer !== null) {
       // Caret-driven, OR a structural rebuild that arrived while a cue was still
@@ -1261,9 +967,13 @@ class OutlinePanel implements PluginValue {
     if (!li) {
       return;
     }
-    const row = this.rows.find((r) => r.li === li);
+    const row = this.treeNav.rows.find((r) => r.li === li);
     if (row !== undefined) {
       this.lastAnnouncedFrom = row.heading.from;
+      // Track the focused row so a later rebuild can re-home focus onto this exact
+      // heading; update() keeps it in the current doc's coordinate space. (This is
+      // the sole writer — the value is read only while focus is live in the tree.)
+      this.treeNav.noteFocusedRow(row.heading.from);
       // Cancel a pending live cue ONLY when this focused row IS that cue's target:
       // then the treeitem announcement covers the very section the cue would speak,
       // so firing it too (if focus returns to the editor before the debounce) would

@@ -159,6 +159,14 @@ describe("htmlTableToGfm — cell text extraction", () => {
     ).toContain("| a b |");
   });
 
+  it("treats <center> as a block boundary inside a cell (does not glue)", () => {
+    // <center> is block-level in every browser and common in newsletter/email HTML;
+    // omitting it from BLOCK_TAGS glued adjacent sections into one word.
+    expect(
+      htmlTableToGfm("<table><tr><td><center>a</center><center>b</center></td></tr></table>")
+    ).toContain("| a b |");
+  });
+
   it("does not leak <script>/<style> text into a cell", () => {
     const out = htmlTableToGfm(
       "<table><tr><td><script>alert(1)</script>foo</td><td><style>.x{}</style>bar</td></tr></table>"
