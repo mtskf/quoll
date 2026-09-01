@@ -64,6 +64,15 @@ describe("tableEdits", () => {
     expect(tableEdits(src, classifyDocument(src).tableRanges)).toEqual([]);
   });
 
+  it("skips a mixed table where the DELIMITER row lacks outer pipes (guard must cover it too)", () => {
+    // Piped header and body, but the delimiter `:-- | --:` lacks outer pipes.
+    // Forcing outer pipes onto it changes the Lezer structure signature just as a
+    // pipe-less header/body row would, so the whole table stays byte-untouched.
+    const src = "| a | b |\n:-- | --:\n| 1 | 2 |\n";
+    expect(tableEdits(src, classifyDocument(src).tableRanges)).toEqual([]);
+    expect(fmt(src)).toBe(src);
+  });
+
   it("is idempotent", () => {
     const once = fmt("| a | bbbb |\n| - | - |\n| 1 | 2 |\n");
     expect(fmt(once)).toBe(once);

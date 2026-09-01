@@ -44,7 +44,9 @@ describe("styles.css — nascent-setext de-style", () => {
     )?.[1] ?? "";
 
   it("resets font-size to the body size with !important (beats the em heading size)", () => {
-    expect(rule).toMatch(/font-size\s*:\s*var\(--vscode-font-size\)\s*!important/);
+    expect(rule).toMatch(
+      /font-size\s*:\s*var\(--quoll-editor-font-size,\s*var\(--vscode-font-size\)\)\s*!important/
+    );
   });
 
   it("resets font-weight and colour to plain body text with !important", () => {
@@ -88,7 +90,7 @@ describe("styles.css — block-widget margin invariant (CL)", () => {
   const css = readFileSync(new URL("../../src/webview/styles.css", import.meta.url), "utf8");
 
   // The `quoll-block` marker class is the DOM hook (pinned in
-  // cm-table-widget.test.ts); this pins the CSS half — the load-bearing
+  // table/cm-table-widget-render.test.ts); this pins the CSS half — the load-bearing
   // `margin: 0` rule itself. CodeMirror measures block-widget height via
   // getBoundingClientRect() (which excludes margin), so any VERTICAL margin on a
   // quoll-block root reintroduces a click→caret offset for every line
@@ -258,9 +260,10 @@ describe("styles.css — frontmatter metadata block (C8a)", () => {
     // (monotonic: darkens on light / lightens on dark) so contrast clears the
     // floor while staying host-theme-adaptive. Pin the exact formula so a future
     // edit that reverts to the bare passthrough (or changes the mix) goes red —
-    // `pnpm a11y:probe` is dev-only, non-CI, and non-fatal, so unit tests are the
-    // sole automated guard. Same precedent as the --quoll-selection-fill color-mix
-    // assertion below.
+    // `pnpm a11y:probe` does gate this sample (its `frontmatter-text-contrast`
+    // check is fatal) but is dev-only and non-CI, so unit tests remain the sole
+    // automated guard that runs in CI. Same precedent as the
+    // --quoll-selection-fill color-mix assertion below.
     const rule = css.match(/\.quoll-frontmatter-block\s*\{([^}]*)\}/s)?.[1] ?? "";
     expect(rule).toMatch(
       /color\s*:\s*color-mix\(\s*in srgb,\s*var\(--vscode-descriptionForeground,\s*#616161\)\s*90%,\s*var\(--vscode-editor-foreground,\s*#000\)\s*\)/
@@ -443,7 +446,7 @@ describe("styles.css — widgets consume the accent tokens (palette refresh use 
       /\.quoll-table-block code\s*\{[^}]*background\s*:\s*var\(--quoll-surface-fill/s
     );
   });
-  // Strikethrough / highlight inside a table cell (cm-table-cell-render renders
+  // Strikethrough / highlight inside a table cell (cell-render.ts renders
   // <del>/<mark>). happy-dom does not apply CSS, so pin the source rule text
   // (same idiom as the table-link/code pins above): <del> line-through, <mark>
   // reusing the shared --quoll-highlight-bg tint. Non-vacuous — both red if the

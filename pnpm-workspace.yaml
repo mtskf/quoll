@@ -30,6 +30,7 @@ overrides:
   js-yaml: ^4.2.0
   serialize-javascript: ^7.0.5
   fast-uri: ^3.1.4
+  postcss: ^8.5.18
 
 # Approved audit exceptions land here (GHSA ids, not CVE — pnpm 11 uses the
 # bulk advisory endpoint, which doesn't return CVE identifiers). Document each

@@ -1,13 +1,13 @@
 // @vitest-environment happy-dom
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
-import { forceParsing } from "@codemirror/language";
 import { EditorSelection, EditorState } from "@codemirror/state";
-import { EditorView } from "@codemirror/view";
+import type { EditorView } from "@codemirror/view";
 import { describe, expect, it } from "vitest";
 import { quollSyntaxReveal } from "../../../src/webview/cm/decorations/index.js";
 import { quollFolding } from "../../../src/webview/cm/fold/index.js";
 import { listHangIndent } from "../../../src/webview/cm/list/list-hang-indent.js";
 import { quollTheme } from "../../../src/webview/cm/theme.js";
+import { settledMount, settledView } from "../helpers/settled-view.js";
 
 // The list-item vertical gap is UNIFORM (2026-07-10): every renderable list-item
 // MARKER line carries `.quoll-list-hang` (→ `--quoll-list-item-gap` padding-top),
@@ -20,7 +20,7 @@ import { quollTheme } from "../../../src/webview/cm/theme.js";
 function render(doc: string) {
   const parent = document.createElement("div");
   document.body.appendChild(parent);
-  const view = new EditorView({
+  const view = settledMount({
     state: EditorState.create({
       doc,
       selection: EditorSelection.cursor(0),
@@ -33,7 +33,6 @@ function render(doc: string) {
     }),
     parent,
   });
-  forceParsing(view as unknown as never, view.state.doc.length, 5_000);
   const lines = [...view.dom.querySelectorAll(".cm-line")].map((l) => ({
     text: l.textContent,
     hang: l.className.includes("quoll-list-hang"),
@@ -80,7 +79,7 @@ describe("list-hang render — uniform vertical gap", () => {
 function mountWithGutter(doc: string): EditorView {
   const parent = document.createElement("div");
   document.body.appendChild(parent);
-  const view = new EditorView({
+  const view = settledMount({
     state: EditorState.create({
       doc,
       selection: EditorSelection.cursor(0),
@@ -94,7 +93,6 @@ function mountWithGutter(doc: string): EditorView {
     }),
     parent,
   });
-  forceParsing(view, view.state.doc.length, 5_000);
   return view;
 }
 
@@ -133,7 +131,7 @@ describe("fold gutter lock-step (uniform gap)", () => {
     // bounded-recompute must still keep content + gutter counts consistent.
     const blankLine = view.state.doc.line(2);
     view.dispatch({ changes: { from: blankLine.from, to: blankLine.to + 1, insert: "" } });
-    forceParsing(view, view.state.doc.length, 5_000);
+    settledView(view);
 
     const after = contentVsGutter(view);
     view.destroy();

@@ -2,6 +2,174 @@
 
 All notable changes to Quoll are documented here.
 
+## 0.1.76 — 2026-08-23
+
+### Fixed
+
+- Dragging to select text in a table now keeps the selection when you release the mouse outside the table, and when the document scrolls mid-drag. Previously either case dropped what you had selected and left a plain cursor behind.
+
+## 0.1.75 — 2026-08-21
+
+### Changed
+
+- Internal hardening of the table cell's text-mapping code, plus test coverage around it. Nothing changes in how the editor looks or behaves.
+
+## 0.1.74 — 2026-08-20
+
+### Fixed
+
+- Dragging to select text inside a table cell that contains formatting — bold, a link, inline code, an escaped character — now selects exactly the characters you dragged over. Previously any such cell selected as a whole the moment you dragged inside it.
+
+## 0.1.73 — 2026-08-19
+
+### Changed
+
+- Rewrote the Marketplace page: what Quoll does is now shown in short animations (live Markdown reveal, task checkboxes, table editing, the document outline), and the formatting shortcuts and editor settings that were missing from it are documented. The editor itself is unchanged.
+
+## 0.1.72 — 2026-08-19
+
+### Changed
+
+- Internal robustness work in the image, table and task-checkbox blocks. Nothing changes in how the editor looks or behaves.
+
+## 0.1.71 — 2026-08-12
+
+### Fixed
+
+- Dragging across text in a table now keeps your selection when the raw Markdown appears — previously the selection collapsed to a single cursor the moment the table opened for editing.
+
+## 0.1.70 — 2026-08-12
+
+### Added
+
+- Clicking a same-document link like `[intro](#getting-started)` now scrolls to the heading it names, instead of doing nothing.
+
+### Fixed
+
+- A relative link Quoll refuses to open because its target falls outside both the workspace and the document's own folder now shows a message explaining why, instead of the click silently doing nothing.
+- A single broken inline decoration (heading, emphasis, link, table, or image) can no longer take every other inline decoration in the editor down with it — previously one bad decoration reverted the whole document to raw Markdown until you reloaded the window.
+
+## 0.1.69 — 2026-08-11
+
+### Fixed
+
+- Links that Quoll can't actually open (protocol-relative destinations, disallowed schemes, oversized addresses) no longer show a pointer cursor, so they no longer look clickable.
+- If pasting an image fails while inserting its link, Quoll now cleans up after itself instead of leaving a stray file in your workspace with no link — retrying the paste no longer looks like a duplicate.
+
+## 0.1.68 — 2026-08-09
+
+### Fixed
+
+- "Quoll: Format Document" now tells you to open a Markdown file in the Quoll editor when none is active, instead of appearing to do nothing.
+- The Command Palette no longer lists "Quoll: Format Selection", which could never do anything from there. The formatting shortcuts inside the editor (bold, italic, code, strikethrough, link) are unchanged.
+
+## 0.1.67 — 2026-08-09
+
+### Fixed
+
+- Quoted text in the light theme now meets accessibility contrast guidelines, including nested blockquotes and callouts that were still too faint at deeper nesting levels.
+
+## 0.1.66 — 2026-08-05
+
+### Added
+
+- Format Document now gives your bullet lists one consistent marker, rewriting `*` and `+` items to `-`. Lists where that change would alter how the document reads — merging with a neighbouring list, or turning an item into a horizontal rule — are left exactly as you wrote them.
+
+### Fixed
+
+- Pasting plain Markdown you copied from somewhere else — a checklist, a list, a heading — now lands exactly as you copied it, instead of arriving with a backslash in front of every `-`, `[`, and `]` and its blank lines squashed away. Pasting genuinely formatted text (bold, links, headings, tables) is unchanged: stray Markdown characters inside it are still neutralised so they stay literal.
+- Converted rich paste no longer merges separate lines together: content laid out as separate blocks stays on separate lines, and a blank line between them survives instead of turning into a stray `\`.
+- Switching back to a Quoll tab no longer occasionally lands you at the wrong scroll position when the editor was resized while hidden — for example with the outline pinned open. Your place is now restored once the layout has settled, including when it settles late.
+
+## 0.1.65 — 2026-07-31
+
+### Fixed
+
+- Typing a lone `-`/`=` under a paragraph no longer shrinks that paragraph to the default font size when a non-default font-size preset is active.
+
+## 0.1.64 — 2026-07-31
+
+### Fixed
+
+- The stale-fold clamp (from 0.1.61–0.1.63) now reliably kicks in right after an external change, instead of occasionally missing on the very next update while the document was still being re-parsed.
+
+## 0.1.63 — 2026-07-31
+
+### Fixed
+
+- A collapsed list no longer hides a list item that an external change (a formatter, git, or another editor) inserts into it. As with headings, the fold now shrinks back to its own item, so the newly-added sibling stays visible instead of being concealed until you unfold.
+
+## 0.1.62 — 2026-07-29
+
+### Fixed
+
+- A collapsed section no longer hides a heading that an external change (a formatter, git, or another editor) inserts inside it. The fold now shrinks back to its own section, so the newly-added section stays visible instead of being concealed until you unfold.
+
+## 0.1.61 — 2026-07-29
+
+### Fixed
+
+- Collapsed sections no longer spring open when the file is changed outside the editor (by a formatter, git, or another editor). Your folds stay put; only a fold that directly overlaps the external change is affected.
+
+## 0.1.60 — 2026-07-29
+
+### Fixed
+
+- Pasting images into a single document is now capped at a generous total size per editing session, guarding against runaway disk use from a misbehaving source. The limit is far above any normal paste workflow; if it is ever reached, further image pastes are declined with a one-time notice and resume when you reopen the document.
+
+## 0.1.59 — 2026-07-29
+
+### Fixed
+
+- Links with percent-encoded characters now open correctly: a relative link like `[notes](my%20notes.md)` opens the space-named file, and external links containing `%2F` or `+` (GitLab-style API URLs, search queries) reach your browser unchanged instead of being silently altered.
+
+## 0.1.58 — 2026-07-28
+
+### Fixed
+
+- Format Document now leaves a table whose delimiter row omits its outer pipes (e.g. `:-- | --:`) byte-untouched, matching how it already treats pipe-less header and body rows, instead of rewriting just that row's outer pipes.
+- When a file is changed on disk while you have unsaved edits, the reload-or-keep prompt now only fires for the document you're actually looking at, and a file that isn't valid UTF-8 no longer triggers a spurious conflict — closing edge cases that could otherwise discard your in-editor changes.
+
+## 0.1.57 — 2026-07-28
+
+### Fixed
+
+- When a document becomes read-only, the metadata (frontmatter) block no longer tells screen-reader users they can move the caret in to edit it — that hint now disappears in step with the document's writability instead of lingering as a dead-end affordance.
+
+## 0.1.56 — 2026-07-28
+
+### Fixed
+
+- Inside a table cell, `[a](x\ y)` now renders as literal text instead of a link, matching how the same text renders everywhere else. Only proper backslash escapes (like `\)`) still keep a link intact.
+- Links inside table cells now go through Quoll's link-safety check consistently no matter how you open them — middle-click and the right-click "Open Link" menu can no longer bypass the validation that a normal click already went through.
+
+## 0.1.55 — 2026-07-27
+
+### Fixed
+
+- Pasting rich text where a bold or italic span has whitespace at its edge (a space, or a line break, just inside the bold) now renders as emphasis instead of showing the literal `**`/`*` markers.
+- Pasting a numbered list that starts at an unusual value (a negative or very large `start`) now produces a valid numbered list instead of degrading to plain paragraphs.
+- Clicking a code reference like `` `src/foo.ts` `` in a document that lives outside every open workspace folder now opens the file next to the document, instead of guessing a same-named file under an unrelated workspace root.
+- A lint rule with a very long message (for example one quoting a long duplicate heading) no longer blanks out the whole Problems list for the document — the message is trimmed and the other problems still show.
+- Keyboard focus in the outline is now preserved when a section collapses or the outline rebuilds after an edit, instead of dropping back to the top of the page.
+- Reaching for the outline sidebar's resize handle no longer causes the hover-opened sidebar to close mid-reach.
+- The `Cmd/Ctrl+.` lint autofix no longer deletes the blank line above when the caret is resting at the start of the following (clean) line — it now only acts when the caret is actually on the flagged line.
+
+## 0.1.54 — 2026-07-25
+
+### Added
+
+- Screen readers now announce when the outline's active section changes as the caret moves through the document, not just when you navigate the outline tree directly.
+
+### Fixed
+
+- Enter now behaves correctly in a few list and blockquote edge cases (non-sequential ordered lists, a blockquote nested in a list, a fenced code block opened right after a `>` or list marker) where it previously produced the wrong result.
+- Pasting rich text (e.g. from a webpage) while the caret is inside a fenced code block no longer corrupts the fence — it now pastes as plain text instead.
+- Closed a gap where some auto-linked URLs (like a bare `xmpp:` address) could skip Quoll's link-safety check before being saved to disk.
+- Switching to the text editor while an edit is blocked by the safety check no longer risks closing the Quoll tab and losing your unsaved draft, and the resulting warning now explains why.
+- Fixed rare cases where typing quickly right after an edit settled, or while an external file change was still coalescing, could visibly rewind or drop your latest keystrokes.
+- Fixed a rare case on documents with Windows-style line endings (CRLF) where a queued edit could be silently dropped instead of applied.
+
 ## 0.1.53 — 2026-07-24
 
 ### Added
@@ -13,6 +181,7 @@ All notable changes to Quoll are documented here.
 - Task checkboxes can now be toggled from the keyboard: press `Cmd/Ctrl+L` with the caret on a task line.
 
 ### Changed
+- correct stale comments across host, webview, and build config (#349)
 
 - Accessibility polish across the outline sidebar and editor chrome: the outline settings popover now behaves as a proper dialog for assistive tech, the hover outline overlay closes when keyboard focus leaves it, the outline tree announces the document's title, the pinned outline's resize divider is keyboard-operable, and the frontmatter metadata text now meets WCAG AA contrast.
 

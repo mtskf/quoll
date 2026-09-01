@@ -74,7 +74,7 @@ export function createBuildConfigs({ production }) {
   // Emitted at `dist/test-harness.js` (not `.cjs`) so the dynamic
   // `await import("./test-harness.js")` inside extension.ts resolves
   // 1:1 against the on-disk filename. The repo root `"type": "module"`
-  // (Slice 7C) would otherwise make `.js` ESM, so `writePlainCjsMarker`
+  // (Slice 7C) would otherwise make `.js` ESM, so `writeDistCjsMarker`
   // below writes a sibling `dist/package.json` of `{"type":"commonjs"}`
   // to mark the dist tree as CJS. The host bundle stays at `.cjs` so
   // its file extension is self-describing; the test-harness needs a
@@ -87,6 +87,12 @@ export function createBuildConfigs({ production }) {
     format: "cjs",
     target: "node20",
     external: ["vscode"],
+    // Carry the perf define for symmetry with hostConfig: the harness is a
+    // sibling Node/CJS bundle, and a future import of src/shared/perf.ts (or
+    // any module guarded by `if (QUOLL_PERF)`) would otherwise ship an unbound
+    // `QUOLL_PERF` reference and throw at runtime. Inert until such an import
+    // exists — the constant simply folds away.
+    define: { ...perfDefine },
   };
 
   const webviewConfig = {
@@ -94,7 +100,6 @@ export function createBuildConfigs({ production }) {
     entryPoints: [resolve(__dirname, "src/webview/index.ts")],
     outdir: resolve(__dirname, "dist/webview"),
     entryNames: "index",
-    assetNames: "assets/[name]-[hash]",
     platform: "browser",
     format: "esm",
     target: ["es2022", "chrome120", "safari17"],
@@ -116,18 +121,14 @@ export function createBuildConfigs({ production }) {
       "process.env": "{}",
       "process.env.NODE_ENV": JSON.stringify(production ? "production" : "development"),
     },
-    loader: {
-      ".woff": "file",
-      ".woff2": "file",
-      ".ttf": "file",
-      ".otf": "file",
-      ".eot": "file",
-      ".svg": "file",
-      ".png": "file",
-      ".jpg": "file",
-      ".jpeg": "file",
-      ".gif": "file",
-    },
+    // No asset loaders — the webview bundles zero binary assets. Fonts come
+    // from VS Code CSS variables (--vscode-font-*), and document images are
+    // written next to the .md by the host image-write service, never bundled.
+    // Default-deny: if a future import pulls in a font/.svg/.png, esbuild fails
+    // loudly ("No loader configured for …"), forcing a deliberate decision to
+    // add BOTH the loader here AND a matching `dist/webview/assets/…` entry to
+    // ALLOWED_PAYLOAD in scripts/audit-vsix.mjs (whose allowlist permits only
+    // .cjs|js|css|json today). Keeping those two configs in lockstep is the point.
   };
 
   return { hostConfig, webviewConfig, testHarnessConfig };

@@ -71,7 +71,9 @@ import { getNonce } from "../get-nonce.js";
 import { createCaretHandoffWiring } from "../handoff/caret-handoff-wiring.js";
 import { createContextHandoffWiring } from "../handoff/context-handoff-wiring.js";
 import { takeSwitchCaret } from "../handoff/editor-switch-caret.js";
+import { createRevealCaretSuppression } from "../handoff/reveal-caret-suppression.js";
 import { createImageWriteWiring } from "../image/image-write-wiring.js";
+import { buildExternalUri } from "../links/build-external-uri.js";
 import { handleOpenCodeReference } from "../links/handle-open-code-reference.js";
 import { handleOpenExternal } from "../links/handle-open-external.js";
 import { handleOpenLink } from "../links/handle-open-link.js";
@@ -79,6 +81,10 @@ import { toLintDiagnostics } from "../lint/lint-diagnostics.js";
 import { LintMirror } from "../lint/lint-mirror.js";
 import type { StatusBarSlots } from "../status-bar.js";
 import { openInQuollEditor } from "../surface/open-in-quoll.js";
+import {
+  REJECTION_BLOCKS_SWITCH_MESSAGE,
+  registerPendingRejection,
+} from "../surface/rejection-registry.js";
 import { openInTextEditor } from "../surface/reopen-text-editor.js";
 import {
   codeReferenceFileExistsWithinRoot,
@@ -96,7 +102,11 @@ import {
 } from "../webview-assets.js";
 import { buildWebviewHtml } from "../webview-html.js";
 import { canHostWrite } from "./can-host-write.js";
-import { buildDocumentMessageFromDocument, canonicalDocumentText } from "./document-canonical.js";
+import {
+  buildDocumentMessageFromDocument,
+  canonicalDocumentText,
+  canonicalizeText,
+} from "./document-canonical.js";
 import {
   buildCaretApplyMessage,
   buildDocumentMessage,
@@ -281,8 +291,8 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
     // descending priority so the order matches native (caret leftmost).
     // Under the E2E harness, build recording fakes so a test can observe
     // show/hide/dispose per panel — window.createStatusBarItem is otherwise
-    // invisible to the harness. Production keeps the real items. The trio (when
-    // present) is handed to panelControls below for per-panel observation. The
+    // invisible to the harness. Production keeps the real items. The probes (when
+    // present) are handed to panelControls below for per-panel observation. The
     // slots are handed to createCaretHandoffWiring below, which drives them
     // (this panel stays the single window.createStatusBarItem caller).
     const statusBarProbes = this.harness
@@ -326,6 +336,18 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
       { validateForWrite: createIncrementalWriteValidator() }
     );
     let state = core.initialState(document.version);
+
+    // Publish THIS session's pending-rejection state to the cross-surface
+    // registry keyed by document.uri, so the TAB-ONLY command path to the forward
+    // swap (quoll.reopenInTextEditor title-bar button / quoll.toggleEditor
+    // to-text → reopenActiveQuollTabAsText) can refuse the swap while a write-gate
+    // rejection is pending — the same data-loss guard the in-webview
+    // switch-to-text arm applies below, which that command path cannot reach
+    // because it has no panel closure. Identity-safe deregistration on dispose
+    // (pushed onto `disposables`). See surface/rejection-registry.ts.
+    disposables.push(
+      registerPendingRejection(document.uri.toString(), () => state.rejection.kind === "pending")
+    );
 
     // Edit-applied barrier for the document side channels (context-handoff /
     // codex-context-handoff / switch-to-text). It DEFERS a side-channel thunk
@@ -400,21 +422,28 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
         (
           this.harness?.webviewPostMessageOverride ?? ((mm) => webviewPanel.webview.postMessage(mm))
         )(m),
-      recordEvent: (m) => this.harness?.recordEvent(m),
+      // Stamp the sending panel's URI: the harness keeps ONE event stream for
+      // every panel, so an e2e that opens two panels can otherwise only count
+      // posts, not tell which webview a command reached.
+      recordEvent: (m) => this.harness?.recordEvent(m, document.uri.toString()),
       showError,
       canWrite: canWriteNow,
-      buildSeedDocument: (docVersion) =>
+      buildSeedDocument: (docVersion, externalEpoch, epochGeneration) =>
         buildDocumentMessageFromDocument(document, {
           docVersion,
           themeKind: themeKindFromColorTheme(window.activeColorTheme.kind),
           canWrite: canWriteNow(),
+          externalEpoch,
+          epochGeneration,
         }),
-      buildRejectedDraft: (content, docVersion) =>
+      buildRejectedDraft: (content, docVersion, externalEpoch, epochGeneration) =>
         buildDocumentMessage({
           content,
           docVersion,
           themeKind: themeKindFromColorTheme(window.activeColorTheme.kind),
           canWrite: canWriteNow(),
+          externalEpoch,
+          epochGeneration,
         }),
       buildTheme: (themeKind) => buildThemeMessage(themeKind),
       buildEditRejected: (error) => buildEditRejectedMessage(error),
@@ -425,6 +454,7 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
         readText: () => document.getText(),
         readVersion: () => document.version,
         readCanonical: () => canonicalDocumentText(document),
+        canonicalize: (text) => canonicalizeText(text, document.eol),
         build: (span) => {
           // positionAt clamps out-of-range offsets (never throws) and
           // minimalEditSpan is pure — so a build throw stays unreachable in
@@ -442,15 +472,23 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
             ? this.harness.applyEditOverride(edit as WorkspaceEdit)
             : workspace.applyEdit(edit as WorkspaceEdit),
       },
-      // `openExternalOverride` (when set) bypasses Uri.parse so the open-external
-      // E2E test can pin the delegation contract without depending on the real
-      // `env` binding — the test process cannot spy on `env.openExternal` through
-      // the vscode module namespace. The override sees the gated href as a plain
-      // string; same surface as the production closure.
+      // The production closure builds the encoding-preserving `Uri` via
+      // `buildExternalUri` (WHATWG split + `Uri.from`, preserving `%2F`/`+`)
+      // and routes it to the override (tests) or the real `env.openExternal`.
+      // `openExternalOverride` (when set) receives that built `Uri`, so the
+      // open-external E2E pins the real handoff — the test process cannot spy on
+      // `env.openExternal` through the vscode module namespace.
       openExternal: (href) =>
         handleOpenExternal(href, {
-          openExternal:
-            this.harness?.openExternalOverride ?? ((url) => env.openExternal(Uri.parse(url))),
+          // Build the encoding-preserving Uri ONCE, then route it to the override
+          // (tests) or the real env.openExternal. Building BEFORE the override
+          // boundary means the E2E observes the exact Uri production opens — the
+          // old code built via Uri.parse INSIDE the fallback arm, so the override
+          // bypassed it and %2F/+ mangling went untested.
+          openExternal: (url) =>
+            (this.harness?.openExternalOverride ?? ((uri) => env.openExternal(uri)))(
+              buildExternalUri(url)
+            ),
           showError,
         }),
     });
@@ -489,15 +527,21 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
     });
 
     // Status-bar + caret-handoff wiring (see caret-handoff-wiring.ts). Owns the
-    // status-bar controller, the three per-panel caret locals, applyCaretToText-
+    // status-bar controller, the per-panel caret locals, applyCaretToText-
     // Editor, the selection/active-editor caret trackers, and the active-edge
     // half of onDidChangeViewState. Pure side channel vs the reducer; the core
     // `viewStateVisible` resync dispatch is injected (dispatchViewStateVisible)
     // so the reducer dispatch stays here, and the webview `caret-apply` post is
     // injected (postCaretApply). Constructed AFTER `post`/`dispatch` exist. The
     // panel keeps building the status-bar SLOTS (harness-aware) so it stays the
-    // single window.createStatusBarItem caller and can expose the probe trio on
+    // single window.createStatusBarItem caller and can expose the probes on
     // panelControls. Disposed with the panel via the teardown loop below.
+    // One-shot latch shared by the two handoff wirings: the context-handoff
+    // reveal arms it before its showTextDocument; the caret tracker consumes it
+    // so the reveal's line-range selection is not collapsed. See
+    // reveal-caret-suppression.ts. One per panel (function-scoped, never
+    // module-level — like the other per-panel caret locals).
+    const revealCaretSuppression = createRevealCaretSuppression();
     const caretWiring = createCaretHandoffWiring({
       document,
       webviewPanel,
@@ -505,7 +549,9 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
       switchCaret,
       isDisposed: () => disposed,
       postCaretApply: (caret) => post(buildCaretApplyMessage(caret)),
-      dispatchViewStateVisible: () => dispatch({ type: "viewStateVisible" }),
+      dispatchViewStateVisible: () =>
+        dispatch({ type: "viewStateVisible", documentVersion: document.version }),
+      consumeRevealCaretSuppression: () => revealCaretSuppression.consume(),
     });
     disposables.push(caretWiring);
 
@@ -675,7 +721,16 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
         isDirty: () => document.isDirty,
         readBufferText: () => canonicalDocumentText(document),
         promptOverride: () => this.harness?.diskConflictPromptOverride ?? null,
+        // The active-editor confirm + gate logic lives in buildActiveGatedRevert
+        // (unit-tested); the panel supplies only these logic-free adapters over
+        // webviewPanel. isPanelActive reads webviewPanel.active (throws after
+        // dispose — the factory guards on isDisposed before every read).
         revealPanel: () => webviewPanel.reveal(webviewPanel.viewColumn, false),
+        isPanelActive: () => webviewPanel.active,
+        subscribePanelViewStateChange: (onChange) => {
+          const sub = webviewPanel.onDidChangeViewState(() => onChange());
+          return () => sub.dispose();
+        },
         showError,
       })
     );
@@ -691,6 +746,7 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
       viewType: QuollEditorPanel.viewType,
       editSettledBarrier,
       isDisposed: () => disposed,
+      armRevealCaretSuppression: () => revealCaretSuppression.arm(),
     });
 
     const handleInbound = (raw: unknown): void => {
@@ -716,7 +772,7 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
       }
       switch (raw.type) {
         case "ready":
-          dispatch({ type: "ready" });
+          dispatch({ type: "ready", documentVersion: document.version });
           // Guard-less: relies on handleInbound's top-of-function `disposed`
           // guard above, which already gates this whole switch.
           editorConfig.push();
@@ -730,8 +786,14 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
           // no-op comparison) — the transition is then a pure function of
           // these. When the write lock is held the edit is STASHED (core
           // `edit` arm reads content/baseDocVersion only, never
-          // currentContent), so skip the O(n) canonicalisation — the drain
-          // re-snapshots at settlement. Mirrors the lazy `drainSnapshot`.
+          // currentContent), so skip the O(n) canonicalisation: the drain takes
+          // its snapshot from the settlement instead — `applyEditSettled` carries
+          // `currentContent` (effect-executor's runApplyEdit fills it from the
+          // write pipeline's `result.settledContent`). host-session-core gates on
+          // it first (`canDrain`: currentContent must match inFlightContent, else
+          // an external edit that raced the apply→settle window wins instead of
+          // being clobbered) and only then passes it into `decideEdit` alongside
+          // the stash. No host re-read is needed here.
           dispatch({
             type: "edit",
             baseDocVersion: raw.baseDocVersion,
@@ -842,15 +904,68 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
           // last action; caret apply + document.uri are closure locals, safe
           // across the dispose. finalizeSurfaceSwap never throws and refuses to
           // close a doc it could not make clean (no revert / no data loss).
+          //
+          // Data-loss guard (rejection pending): a write-gate rejection leaves
+          // the user's draft ONLY webview-side — the on-disk document is
+          // unchanged (clean); the rejection banner is up (showing the error)
+          // and the editor beneath it still shows the un-saved bytes, because
+          // CodeMirror was never reseeded. finalizeSurfaceSwap below would close
+          // THIS Quoll tab and the text editor would open on the CLEAN disk
+          // snapshot, silently orphaning the typed draft (finalizeSurfaceSwap
+          // sees a clean doc, so its save-then-close is a no-op close — no
+          // data-loss tripwire fires). Refuse the swap while a rejection is
+          // pending: switch-to-text is a pure side channel that never reloaded
+          // the webview, so the banner + draft stay mounted intact — the user
+          // resolves the highlighted problem first, then switches. NEVER
+          // finalize a surface swap that orphans typed bytes.
+          //
+          // This receipt-time check is a cheap fast path only; the check that
+          // actually closes the hole is the DRAIN-time re-check inside
+          // editSettledBarrier.run below — see the comment there.
+          if (state.rejection.kind === "pending") {
+            showError(REJECTION_BLOCKS_SWITCH_MESSAGE);
+            return;
+          }
           const sourceTab = findSourceTab(
             document.uri.toString(),
             "quoll",
             QuollEditorPanel.viewType
           );
           editSettledBarrier.run(() => {
+            // Re-check at DRAIN time, not just at receipt time: when the switch
+            // arrives while the write lock is held it is DEFERRED here, and the
+            // very settlement that releases this barrier can flip
+            // state.rejection to "pending" in the same transition — a stash
+            // drained on an accepted apply's settlement that fails the
+            // write-gate (host-session-core.ts applyEditSettled's parse-failed
+            // drain arm) sets the rejection AFTER the receipt-time check above
+            // already passed, then settle(true) drains this callback in the
+            // same step(). Without this re-check the deferred swap would close
+            // the Quoll tab and orphan the just-rejected draft.
+            if (state.rejection.kind === "pending") {
+              showError(REJECTION_BLOCKS_SWITCH_MESSAGE);
+              return;
+            }
             const caret = caretWiring.getCaret();
             void openInTextEditor(document.uri).then(
               () => {
+                // Async-window guard: openInTextEditor is async, and the webview
+                // stays live (still focused, still able to emit edits) until
+                // finalizeSurfaceSwap closes the Quoll tab below. A NEW edit that
+                // arrives and fails the write-gate DURING this open sets
+                // state.rejection to "pending" AFTER both earlier checks passed.
+                // Re-check here, immediately before the surface is finalized: if
+                // a rejection landed, retain the Quoll tab (do NOT record the
+                // text-surface intent or close the source) so the just-rejected
+                // draft is not orphaned. The text editor that just opened is a
+                // harmless second view of the clean on-disk bytes; the user
+                // resolves the highlighted problem in the Quoll tab, then
+                // switches. Same data-loss invariant as the two checks above —
+                // never finalize a swap that orphans typed bytes.
+                if (state.rejection.kind === "pending") {
+                  showError(REJECTION_BLOCKS_SWITCH_MESSAGE);
+                  return;
+                }
                 // Record intent AFTER the open succeeds and BEFORE the source
                 // close, so the surface-restore watcher adopts "text" for this
                 // deliberate Quoll→text swap (a failed open records nothing).
@@ -863,7 +978,20 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
                     caretWiring.applyCaretToTextEditor(editor, caret);
                   }
                 }
-                void finalizeSurfaceSwap(document.uri, sourceTab);
+                // Point-of-no-return guard: finalizeSurfaceSwap still awaits
+                // openDoc (and maybe save) before the irreversible tab close, so
+                // a rejection landing in THAT window would slip past the check
+                // above. Pass the same rejection predicate so the close is
+                // aborted synchronously right before it happens — closing every
+                // async window from open-resolve through the actual close. It
+                // returns the shared refusal message as the abort REASON so
+                // finalizeSurfaceSwap surfaces it (the SAME message the
+                // drain-time / async-window checks above show; check 3 renders it
+                // as a warning — nothing failed, the swap was refused to protect
+                // the draft — while those fast paths use an error toast).
+                void finalizeSurfaceSwap(document.uri, sourceTab, undefined, () =>
+                  state.rejection.kind === "pending" ? REJECTION_BLOCKS_SWITCH_MESSAGE : null
+                );
               },
               (err: unknown) => {
                 // Symmetric with quoll.toggleEditor's forward error toast (a
@@ -1015,7 +1143,7 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
     // The Ready handshake (webview → 'ready' → host → postDocument) is
     // the reliable fallback path. If VS Code ever stops buffering, the
     // eager seed becomes a no-op and Ready takes over.
-    dispatch({ type: "seed" });
+    dispatch({ type: "seed", documentVersion: document.version });
     editorConfig.push();
   }
 

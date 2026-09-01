@@ -36,6 +36,15 @@ import type { HostToWebview, WebviewToHost } from "../shared/protocol.js";
 export interface RecordedEvent {
   readonly message: HostToWebview;
   readonly timestamp: number;
+  /** Document URI of the panel that sent this message. `events` is ONE stream
+   *  shared by every open panel, so without this a two-panel test can only
+   *  count posts, never tell which webview received one — a command routed to
+   *  the wrong (inactive) panel would look identical to the correct routing.
+   *  REQUIRED, not optional: every post originates from a panel, and an
+   *  omitted stamp would land as `undefined` and let a routing assertion pass
+   *  by comparing `undefined` against `undefined`. Keeping it mandatory makes
+   *  that regression a compile error at the one call site instead. */
+  readonly uri: string;
 }
 
 export interface RecordedInbound {
@@ -103,11 +112,11 @@ export interface PanelControls {
    *  that the recorder fired (received) and that the validator dropped
    *  it (no Document reply). */
   rawSimulate(raw: unknown): void;
-  /** The three recording status-bar items this panel's controller drives,
-   *  in native left-to-right order (caret, eol, language). Populated only
-   *  under the harness — the panel builds them via `newStatusBarItem` and
-   *  hands the trio through here so a test observes show/hide/dispose PER
-   *  panel (window.createStatusBarItem is otherwise unobservable). */
+  /** The four recording status-bar items this panel's controller drives, in
+   *  native left-to-right order (caret, eol, language, count). Populated only
+   *  under the harness — the panel builds them via `newStatusBarItem` and hands
+   *  the set through here so a test observes show/hide/dispose PER panel
+   *  (window.createStatusBarItem is otherwise unobservable). */
   readonly statusBarItems: readonly FakeStatusBarItem[];
 }
 
@@ -157,13 +166,14 @@ interface TestOverrides {
   webviewPostMessage: ((message: HostToWebview) => Thenable<boolean>) | null;
   /** When non-null, the panel's `case "open-external"` arm routes
    *  `handleOpenExternal`'s injected `openExternal` dep through this
-   *  instead of `(url) => env.openExternal(Uri.parse(url))`. The override
-   *  sees the already-allowlist-gated, post-decode href as a plain string
-   *  and is used by the open-external E2E test to pin the case arm's
-   *  delegation contract without depending on the real `env` binding
-   *  (which the test process cannot spy on through the vscode module
-   *  namespace). */
-  openExternal: ((url: string) => Thenable<boolean>) | null;
+   *  instead of `(uri) => env.openExternal(uri)`. The production closure
+   *  builds the encoding-preserving `Uri` via `buildExternalUri(href)`
+   *  BEFORE this override boundary, so the override sees the fully-built
+   *  `vscode.Uri` env.openExternal would open — letting the open-external
+   *  E2E assert the exact Uri (and its byte-exact `%2F`/`+` preservation)
+   *  without depending on the real `env` binding (which the test process
+   *  cannot spy on through the vscode module namespace). */
+  openExternal: ((uri: Uri) => Thenable<boolean>) | null;
   /** When non-null, the panel's `case "open-link"` arm routes
    *  `handleOpenLink`'s injected `openWith` dep through this instead of
    *  `(uri) => openInQuollEditor(uri, QuollEditorPanel.viewType)`. The
@@ -285,12 +295,12 @@ export class TestHarness {
 
   /** Read by the panel's `case "open-external"` arm to route the
    *  `openExternal` dep through a test override — see
-   *  `TestOverrides.openExternal`. */
-  get openExternalOverride(): ((url: string) => Thenable<boolean>) | null {
+   *  `TestOverrides.openExternal`. Receives the built `vscode.Uri`. */
+  get openExternalOverride(): ((uri: Uri) => Thenable<boolean>) | null {
     return this._overrides.openExternal;
   }
 
-  set openExternalOverride(override: ((url: string) => Thenable<boolean>) | null) {
+  set openExternalOverride(override: ((uri: Uri) => Thenable<boolean>) | null) {
     this._overrides.openExternal = override;
   }
 
@@ -370,8 +380,8 @@ export class TestHarness {
     return this._lastError;
   }
 
-  recordEvent(message: HostToWebview): void {
-    const entry: RecordedEvent = { message, timestamp: Date.now() };
+  recordEvent(message: HostToWebview, uri: string): void {
+    const entry: RecordedEvent = { message, timestamp: Date.now(), uri };
     this._events.push(entry);
     for (let i = this._eventWaiters.length - 1; i >= 0; i--) {
       const w = this._eventWaiters[i];
@@ -398,9 +408,9 @@ export class TestHarness {
 
   /** Build a recording status-bar item for a panel opened under the harness.
    *  The panel routes `window.createStatusBarItem` through this when a harness
-   *  is present (production keeps the real call) and exposes the returned trio
+   *  is present (production keeps the real call) and exposes the returned items
    *  on its `PanelControls.statusBarItems`. Stateless per call — attribution is
-   *  the panel's job (it groups the three items it built), so this holds no
+   *  the panel's job (it groups the four items it built), so this holds no
    *  per-item registry to clear in `reset()`. */
   newStatusBarItem(alignment: number | undefined, priority: number | undefined): FakeStatusBarItem {
     return new FakeStatusBarItem(alignment, priority);

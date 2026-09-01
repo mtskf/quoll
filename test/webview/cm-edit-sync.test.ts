@@ -1,9 +1,14 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, type MockInstance, vi } from "vitest";
 import { createEditSync } from "../../src/webview/cm/edit-sync.js";
 
 type Posted = { content: string; baseDocVersion: number };
 
-function setup(opts?: { blockPost?: () => boolean; failPost?: boolean }) {
+function setup(opts?: {
+  blockPost?: () => boolean;
+  failPost?: boolean;
+  now?: () => number;
+  onResyncStorm?: () => void;
+}) {
   let doc = "hello";
   const posted: Posted[] = [];
   let postOk = !opts?.failPost;
@@ -22,6 +27,8 @@ function setup(opts?: { blockPost?: () => boolean; failPost?: boolean }) {
     },
     // Synchronous flush so tests need no fake timers.
     scheduleFlush: (run) => run(),
+    now: opts?.now,
+    onResyncStorm: opts?.onResyncStorm,
   });
   return {
     sync,
@@ -354,6 +361,56 @@ describe("cm edit-sync", () => {
   });
 });
 
+describe("cm edit-sync — echoesInFlightEdit", () => {
+  const ack = (s: ReturnType<typeof setup>, v: number, canWrite = true) => {
+    s.sync.onHostSnapshot(v, canWrite);
+    s.sync.onReducerCommit(false);
+  };
+
+  it("is false before anything is posted", () => {
+    const s = setup();
+    s.sync.onHostSnapshot(1, true);
+    expect(s.sync.echoesInFlightEdit("hello")).toBe(false);
+  });
+
+  it("is true for the exact bytes of the Edit currently in flight", () => {
+    const s = setup();
+    s.sync.onHostSnapshot(1, true);
+    s.type("hello world"); // posts, editInFlight = true
+    expect(s.sync.echoesInFlightEdit("hello world")).toBe(true);
+    // A different string (a genuine external divergence) never matches.
+    expect(s.sync.echoesInFlightEdit("something else")).toBe(false);
+  });
+
+  it("clears when the reducer commit acks the in-flight Edit", () => {
+    const s = setup();
+    s.sync.onHostSnapshot(1, true);
+    s.type("a"); // posts, editInFlight = true
+    expect(s.sync.echoesInFlightEdit("a")).toBe(true);
+    ack(s, 2); // ack clears editInFlight
+    expect(s.sync.echoesInFlightEdit("a")).toBe(false);
+  });
+
+  it("tracks the newest in-flight bytes across a buffered replay", () => {
+    const s = setup();
+    s.sync.onHostSnapshot(1, true);
+    s.type("a"); // posts "a", editInFlight = true
+    s.type("ab"); // buffered while in flight
+    expect(s.sync.echoesInFlightEdit("a")).toBe(true); // still "a" in flight
+    ack(s, 2); // ack "a" → replay drains "ab" → "ab" now in flight
+    expect(s.sync.echoesInFlightEdit("ab")).toBe(true);
+    expect(s.sync.echoesInFlightEdit("a")).toBe(false);
+  });
+
+  it("clears when a post fails (no phantom in-flight echo)", () => {
+    const s = setup();
+    s.sync.onHostSnapshot(1, true);
+    s.setPostOk(false);
+    s.type("x"); // post returns false → not in flight
+    expect(s.sync.echoesInFlightEdit("x")).toBe(false);
+  });
+});
+
 describe("cm edit-sync — discardBuffer", () => {
   const ack = (s: ReturnType<typeof setup>, v: number, canWrite = true) => {
     s.sync.onHostSnapshot(v, canWrite);
@@ -674,6 +731,30 @@ describe("cm edit-sync — flush (teardown)", () => {
     }
   });
 
+  it("echoesInFlightEdit recognises the force-posted content after an idle flush (alive hide→show)", () => {
+    // flush()'s success branch sets inFlightContent so a subsequent ok-ack that
+    // echoes the force-posted bytes is recognised as an echo (and folded by
+    // applyDocument) rather than reseeding backwards — the same protection
+    // trySend/replayIfNeeded give, but reached through the teardown/hide path.
+    // Revert-check: delete `inFlightContent = content;` from flush's ok branch →
+    // this test goes red (echoesInFlightEdit returns false).
+    vi.useFakeTimers();
+    try {
+      let doc = "seed";
+      const sync = createEditSync({
+        getDoc: () => doc,
+        post: () => true,
+      });
+      sync.onHostSnapshot(1, true);
+      doc = "seed+edit";
+      sync.onLocalChange(); // timer pending, idle (no prior in-flight)
+      sync.flush(); // force-posts "seed+edit"; must record it as in-flight
+      expect(sync.echoesInFlightEdit("seed+edit")).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("flush under readonly hard-drops the buffer (no post)", () => {
     vi.useFakeTimers();
     try {
@@ -776,6 +857,411 @@ describe("cm edit-sync — flushIfIdle", () => {
       expect(posted).toEqual([]);
     } finally {
       vi.useRealTimers();
+    }
+  });
+});
+
+// onHostSnapshot captures (externalEpoch, epochGeneration) alongside the
+// version; S3b's buffer-validity + acceptance logic consumes it (the behaviour
+// tests live in the S3b block below). These pins keep the RECORDING contract
+// honest — what recordedIdentity() returns after each snapshot.
+describe("cm edit-sync — recordedIdentity", () => {
+  it("starts null before the first snapshot", () => {
+    const s = setup();
+    expect(s.sync.recordedIdentity()).toEqual({ epoch: null, generation: null });
+  });
+
+  it("records the pair from an accepted host snapshot", () => {
+    const s = setup();
+    s.sync.onHostSnapshot(1, true, 3, 12345);
+    expect(s.sync.recordedIdentity()).toEqual({ epoch: 3, generation: 12345 });
+  });
+
+  it("records null for an omitted pair (old-host tolerance)", () => {
+    const s = setup();
+    s.sync.onHostSnapshot(1, true); // legacy host: no pair
+    expect(s.sync.recordedIdentity()).toEqual({ epoch: null, generation: null });
+  });
+
+  it("updates the recorded pair on each accepted snapshot", () => {
+    const s = setup();
+    s.sync.onHostSnapshot(1, true, 0, 999);
+    s.sync.onHostSnapshot(2, true, 1, 999);
+    expect(s.sync.recordedIdentity()).toEqual({ epoch: 1, generation: 999 });
+  });
+
+  it("does NOT update the recorded pair on a stale (older-version) SAME-generation snapshot", () => {
+    // Stale ordering only holds WITHIN one host generation (S3b). A lower
+    // version under the SAME generation is ignored wholesale; the recorded pair
+    // is unchanged. (A DIFFERENT-generation lower version is an identity
+    // transition and IS adopted — covered by the S3b acceptance tests.)
+    const s = setup();
+    s.sync.onHostSnapshot(5, true, 4, 777);
+    s.sync.onHostSnapshot(3, true, 2, 777); // stale, same generation — ignored
+    expect(s.sync.recordedIdentity()).toEqual({ epoch: 4, generation: 777 });
+  });
+});
+
+// S3b: epoch-bounded buffer validity + generation-aware acceptance ordering +
+// the clustering escalation tripwire. The buffer becomes {content, epoch,
+// generation}; replayIfNeeded DROPS it on a same-generation foreign epoch
+// advance or ANY identity transition; onHostSnapshot adopts a transitioned
+// identity unconditionally (bypassing the stale-version guard); ≥3 transitions
+// within 5 minutes fire ONE per-session notice. Repro map (a)–(h) from the plan.
+describe("cm edit-sync — epoch-bounded buffers (S3b)", () => {
+  // Snapshot + drain with an identity pair, mirroring production's
+  // onHostSnapshot → onReducerCommit(false) ack sequence.
+  const ackPair = (
+    s: ReturnType<typeof setup>,
+    v: number,
+    epoch: number | undefined,
+    generation: number | undefined,
+    canWrite = true
+  ) => {
+    s.sync.onHostSnapshot(v, canWrite, epoch, generation);
+    s.sync.onReducerCommit(false);
+  };
+
+  it("(a/b) drops a single-flight buffer when a settlement Document carries a higher epoch", () => {
+    const s = setup();
+    s.sync.onHostSnapshot(1, true, 0, 42);
+    s.type("a"); // posts at v1, editInFlight, buffered=null
+    s.type("ab"); // buffered, stamped {epoch:0, gen:42}
+    expect(s.posted.length).toBe(1);
+    // External-wins settlement: same generation, epoch advanced 0→1. The webview
+    // mirrors the host's external-wins policy — the buffer is DROPPED, not
+    // replayed over the foreign bytes.
+    ackPair(s, 2, 1, 42);
+    expect(s.posted.length).toBe(1); // no replay post
+  });
+
+  it("(h) replays a buffer on a same-generation, same-epoch settlement (stale-recovery preserved)", () => {
+    const s = setup();
+    s.sync.onHostSnapshot(1, true, 5, 42);
+    s.type("a"); // posts at v1, in flight
+    s.type("ab"); // buffered {epoch:5, gen:42}
+    expect(s.posted.length).toBe(1);
+    // No foreign bytes: the settlement epoch is UNCHANGED → the recovery replay
+    // fires (this is the case byte-heuristics alone could not separate from
+    // external-wins).
+    ackPair(s, 2, 5, 42);
+    expect(s.posted.length).toBe(2);
+    expect(s.posted[1]).toEqual({ content: "ab", baseDocVersion: 2 });
+  });
+
+  it("(c) drops a buffer captured pre-readonly-flip when foreign edits advance the epoch", () => {
+    const s = setup();
+    s.sync.onHostSnapshot(2, true, 0, 42);
+    s.type("a"); // posts at v2, in flight
+    s.type("ab"); // buffered {epoch:0, gen:42}, typed while writable
+    expect(s.posted.length).toBe(1);
+    // Foreign edits arrive during a readonly window: epoch advances 0→1 under
+    // canWrite=false. The foreign-epoch drop fires ahead of the readonly hold.
+    ackPair(s, 3, 1, 42, false);
+    // Write re-granted at the advanced epoch: nothing to replay (dropped).
+    ackPair(s, 3, 1, 42, true);
+    expect(s.posted.length).toBe(1);
+  });
+
+  it("(d1) drops a buffer on a new-generation Document (cross-restart hole)", () => {
+    const s = setup();
+    s.sync.onHostSnapshot(5, true, 3, 111);
+    s.type("a"); // posts at v5, in flight
+    s.type("ab"); // buffered {epoch:3, gen:111}
+    expect(s.posted.length).toBe(1);
+    // A new host session (generation 222) at epoch 0, LOWER version — an identity
+    // transition. Adopted unconditionally; the cross-generation buffer dropped.
+    ackPair(s, 1, 0, 222);
+    expect(s.posted.length).toBe(1); // dropped, not replayed
+    expect(s.sync.recordedIdentity()).toEqual({ epoch: 0, generation: 222 });
+    // Not deaf: a fresh keystroke posts at the ADOPTED (lower) version.
+    s.type("fresh");
+    expect(s.posted[1]).toEqual({ content: "fresh", baseDocVersion: 1 });
+  });
+
+  it("(d2) drops a buffer stamped under an ABSENT pair when the pair appears (absent→present)", () => {
+    const s = setup();
+    s.sync.onHostSnapshot(1, true); // legacy host — no pair
+    s.type("a"); // posts, in flight
+    s.type("ab"); // buffered {epoch:null, gen:null}
+    expect(s.posted.length).toBe(1);
+    ackPair(s, 2, 0, 42); // pair appears → identity transition → drop
+    expect(s.posted.length).toBe(1);
+    expect(s.sync.recordedIdentity()).toEqual({ epoch: 0, generation: 42 });
+  });
+
+  it("(d3) drops a buffer when a legacy Document downgrades the pair (present→absent)", () => {
+    const s = setup();
+    s.sync.onHostSnapshot(1, true, 0, 42);
+    s.type("a"); // posts, in flight
+    s.type("ab"); // buffered {epoch:0, gen:42}
+    expect(s.posted.length).toBe(1);
+    ackPair(s, 2, undefined, undefined); // host downgraded → present→absent → drop
+    expect(s.posted.length).toBe(1);
+    expect(s.sync.recordedIdentity()).toEqual({ epoch: null, generation: null });
+  });
+
+  it("keeps a pure-absent (legacy throughout) buffer replayable — today's behaviour", () => {
+    const s = setup();
+    s.sync.onHostSnapshot(1, true); // legacy
+    s.type("a"); // posts, in flight
+    s.type("ab"); // buffered {null, null}
+    expect(s.posted.length).toBe(1);
+    ackPair(s, 2, undefined, undefined); // still legacy → no drop → replay
+    expect(s.posted.length).toBe(2);
+    expect(s.posted[1]).toEqual({ content: "ab", baseDocVersion: 2 });
+  });
+
+  it("(e/f) adopts lower-version different-generation Documents (bypasses the stale guard)", () => {
+    const s = setup();
+    // Session A leaves the webview at a HIGH version.
+    s.sync.onHostSnapshot(10, true, 0, 111);
+    // Session B seeds at a LOWER version — normally stale-dropped, but a new
+    // generation is an identity transition → adopted.
+    s.sync.onHostSnapshot(5, true, 0, 222);
+    expect(s.sync.recordedIdentity()).toEqual({ epoch: 0, generation: 222 });
+    s.sync.onReducerCommit(false);
+    s.type("x");
+    expect(s.posted[s.posted.length - 1]).toEqual({ content: "x", baseDocVersion: 5 });
+  });
+
+  it("(f) A→B→A straggler self-heals: never deaf, typing survives the re-adoption", () => {
+    const s = setup();
+    s.sync.onHostSnapshot(10, true, 0, 111); // A at v10
+    s.sync.onHostSnapshot(5, true, 0, 222); // B adopted (transition)
+    // A delayed straggler from generation 111 arrives AFTER B — transition, adopted.
+    s.sync.onHostSnapshot(11, true, 3, 111);
+    expect(s.sync.recordedIdentity()).toEqual({ epoch: 3, generation: 111 });
+    // The live host B re-adopts at a LOWER version than the straggler — transition.
+    s.sync.onHostSnapshot(6, true, 1, 222);
+    expect(s.sync.recordedIdentity()).toEqual({ epoch: 1, generation: 222 });
+    s.sync.onReducerCommit(false);
+    s.type("survives");
+    expect(s.posted[s.posted.length - 1]).toEqual({ content: "survives", baseDocVersion: 6 });
+  });
+
+  it("(f) B→absent→B: a legacy straggler at a LOWER version is adopted, stream continues", () => {
+    const s = setup();
+    s.sync.onHostSnapshot(10, true, 0, 222); // B at v10
+    // Legacy (pair-less) straggler at a LOWER version — present→absent transition.
+    // A same-or-higher version would pass the stale guard anyway; the lower
+    // version proves the bypass is exercised.
+    s.sync.onHostSnapshot(5, true);
+    expect(s.sync.recordedIdentity()).toEqual({ epoch: null, generation: null });
+    // Live host B re-adopts (absent→present).
+    s.sync.onHostSnapshot(6, true, 1, 222);
+    expect(s.sync.recordedIdentity()).toEqual({ epoch: 1, generation: 222 });
+    s.sync.onReducerCommit(false);
+    s.type("y");
+    expect(s.posted[s.posted.length - 1]).toEqual({ content: "y", baseDocVersion: 6 });
+  });
+
+  it("(g) fires the resync-storm notice EXACTLY ONCE at ≥3 transitions in the window", () => {
+    let clock = 1000;
+    const onResyncStorm = vi.fn();
+    const s = setup({ now: () => clock, onResyncStorm });
+    s.sync.onHostSnapshot(1, true, 0, 1); // seed — NOT a transition
+    expect(onResyncStorm).not.toHaveBeenCalled();
+    clock += 1000;
+    s.sync.onHostSnapshot(1, true, 0, 2); // transition 1
+    clock += 1000;
+    s.sync.onHostSnapshot(1, true, 0, 3); // transition 2
+    expect(onResyncStorm).not.toHaveBeenCalled();
+    clock += 1000;
+    s.sync.onHostSnapshot(1, true, 0, 4); // transition 3 → fires
+    expect(onResyncStorm).toHaveBeenCalledTimes(1);
+    clock += 1000;
+    s.sync.onHostSnapshot(1, true, 0, 5); // transition 4 → latched, no re-fire
+    expect(onResyncStorm).toHaveBeenCalledTimes(1);
+  });
+
+  it("(g) a single transition fires NO notice", () => {
+    const onResyncStorm = vi.fn();
+    const s = setup({ now: () => 0, onResyncStorm });
+    s.sync.onHostSnapshot(1, true, 0, 1); // seed
+    s.sync.onHostSnapshot(1, true, 0, 2); // one transition
+    expect(onResyncStorm).not.toHaveBeenCalled();
+  });
+
+  it("(g) transitions spread beyond the 5-minute window do NOT fire the notice", () => {
+    let clock = 0;
+    const onResyncStorm = vi.fn();
+    const s = setup({ now: () => clock, onResyncStorm });
+    const SIX_MIN = 6 * 60 * 1000;
+    s.sync.onHostSnapshot(1, true, 0, 1); // seed
+    s.sync.onHostSnapshot(1, true, 0, 2); // transition 1 @ t=0
+    clock += SIX_MIN;
+    s.sync.onHostSnapshot(1, true, 0, 3); // transition 2 @ t=6min (window evicts #1)
+    clock += SIX_MIN;
+    s.sync.onHostSnapshot(1, true, 0, 4); // transition 3 @ t=12min
+    expect(onResyncStorm).not.toHaveBeenCalled();
+  });
+
+  it("isIdentityTransition is a pure predicate (no side effects, agrees across calls)", () => {
+    const onResyncStorm = vi.fn();
+    const s = setup({ onResyncStorm });
+    s.sync.onHostSnapshot(1, true, 0, 111);
+    // Repeated pure queries must not count toward the tripwire nor mutate state.
+    for (let i = 0; i < 5; i++) {
+      expect(s.sync.isIdentityTransition(0, 222)).toBe(true); // new generation
+      expect(s.sync.isIdentityTransition(9, 111)).toBe(false); // same generation
+      expect(s.sync.isIdentityTransition(undefined, undefined)).toBe(true); // present→absent
+    }
+    expect(onResyncStorm).not.toHaveBeenCalled();
+    expect(s.sync.recordedIdentity()).toEqual({ epoch: 0, generation: 111 });
+  });
+
+  it("treats the first snapshot as an adoption, not a transition (no tripwire count)", () => {
+    const s = setup();
+    expect(s.sync.isIdentityTransition(0, 111)).toBe(false); // before any snapshot
+  });
+});
+
+// A readonly hard drop is the one outcome in this module that DISCARDS the
+// user's bytes rather than deferring their replay, so all three sites must
+// leave a trace — the same contract the stale-buffer drop in replayIfNeeded
+// already honours. Each test drives the site through its production entry
+// point and asserts the warn fired without the document text in the payload
+// (a drop trace must never become a content leak).
+describe("cm edit-sync — readonly hard drops are traced", () => {
+  const SECRET = "SECRET-BYTES"; // 12 chars — distinctive enough to grep the payload for
+  type WarnSpy = MockInstance<typeof console.warn>;
+  const warnArgs = (spy: WarnSpy) =>
+    spy.mock.calls.filter((c) => String(c[0]).includes("under readonly"));
+  const expectNoContentLeak = (spy: WarnSpy) => {
+    expect(JSON.stringify(warnArgs(spy))).not.toContain(SECRET);
+  };
+
+  it("warns when trySend hard-drops a change typed under readonly", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const s = setup();
+      s.sync.onHostSnapshot(1, false); // readonly
+      s.type(SECRET);
+      expect(s.posted).toEqual([]);
+      expect(warnArgs(warn)).toEqual([
+        [
+          expect.stringContaining("under readonly"),
+          { site: "trySend", liveLength: SECRET.length, bufferedLength: null },
+        ],
+      ]);
+      expectNoContentLeak(warn);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("warns when cancelPendingFlush hard-drops the in-window keystroke", () => {
+    // The real timer path (no scheduleFlush override) is required: the capture
+    // branch only runs while a debounce timer is live.
+    vi.useFakeTimers();
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      let doc = "seed";
+      const sync = createEditSync({ getDoc: () => doc, post: () => true });
+      sync.onHostSnapshot(1, false); // readonly
+      doc = SECRET;
+      sync.onLocalChange(); // schedules the flush; still inside the window
+      sync.cancelPendingFlush(); // host Document interrupts → readonly hard drop
+      expect(warnArgs(warn)).toEqual([
+        [
+          expect.stringContaining("under readonly"),
+          { site: "cancelPendingFlush", liveLength: SECRET.length, bufferedLength: null },
+        ],
+      ]);
+      expectNoContentLeak(warn);
+    } finally {
+      warn.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
+  it("warns when flush hard-drops pending bytes at teardown under readonly", () => {
+    vi.useFakeTimers();
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      let doc = "seed";
+      const posted: string[] = [];
+      const sync = createEditSync({
+        getDoc: () => doc,
+        post: (content) => {
+          posted.push(content);
+          return true;
+        },
+      });
+      sync.onHostSnapshot(1, false); // readonly
+      doc = SECRET;
+      sync.onLocalChange();
+      sync.flush();
+      expect(posted).toEqual([]);
+      expect(warnArgs(warn)).toEqual([
+        [
+          expect.stringContaining("under readonly"),
+          { site: "flush", liveLength: SECRET.length, bufferedLength: null },
+        ],
+      ]);
+      expectNoContentLeak(warn);
+    } finally {
+      warn.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
+  it("stays silent when nothing is pending — a no-op flush is not a drop", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const s = setup();
+      s.sync.onHostSnapshot(1, false); // readonly, nothing typed
+      s.sync.flush(); // content === null → genuine no-op
+      s.sync.cancelPendingFlush(); // no live timer → no capture, no drop
+      expect(warnArgs(warn)).toEqual([]);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("stays silent when a normal writable edit is posted (not a drop)", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const s = setup();
+      s.sync.onHostSnapshot(1, true); // writable
+      s.type(SECRET);
+      expect(s.posted).toEqual([{ content: SECRET, baseDocVersion: 1 }]);
+      expect(warnArgs(warn)).toEqual([]);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("reports liveLength and bufferedLength as DISTINCT values when a buffer survives a readonly reseed", () => {
+    // Reachability (per the module's warnReadonlyDrop comment): a buffer
+    // stashed under single-flight survives a readonly Document because
+    // replayIfNeeded's `!canWrite` guard returns WITHOUT nulling it — so by
+    // the time a further readonly keystroke hits trySend's hard-drop branch,
+    // the held buffer and the live doc disagree. Picking either one via `??`
+    // would under-report the loss; this pins that both are reported, and
+    // that they are genuinely different numbers (not a coincidental match).
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const s = setup();
+      s.sync.onHostSnapshot(1, true); // seed, writable
+      s.type("aa"); // posts "aa" at v1, editInFlight = true
+      s.type("aaa"); // single-flight: stashed into buffered (len 3), not posted
+      expect(s.posted.length).toBe(1);
+      s.sync.onHostSnapshot(2, false); // readonly ack; canWrite flips false
+      s.sync.onReducerCommit(false); // editInFlight clears; replayIfNeeded holds
+      // the buffer under !canWrite WITHOUT nulling it (buffered is still "aaa")
+      s.type("aaaaa"); // trySend's readonly branch fires: doc is now "aaaaa" (len 5)
+      expect(s.posted.length).toBe(1); // no new post — still a hard drop
+      expect(warnArgs(warn)).toEqual([
+        [
+          expect.stringContaining("under readonly"),
+          { site: "trySend", liveLength: 5, bufferedLength: 3 },
+        ],
+      ]);
+      expectNoContentLeak(warn);
+    } finally {
+      warn.mockRestore();
     }
   });
 });

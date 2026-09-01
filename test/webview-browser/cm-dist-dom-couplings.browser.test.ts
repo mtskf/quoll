@@ -15,16 +15,7 @@ import { quollSyntaxReveal } from "../../src/webview/cm/decorations/index.js";
 import { fencedCodeCollapseField } from "../../src/webview/cm/fenced-code/fenced-code-collapse.js";
 import { quollFolding } from "../../src/webview/cm/fold/index.js";
 import { quollTheme } from "../../src/webview/cm/theme.js";
-
-/** Drain CM's bounded measure queue so getComputedStyle()/adjacency read a settled
- *  DOM (same 4-frame idiom as list-hang-layout.browser.test.ts). */
-function settled(): Promise<void> {
-  return new Promise((resolve) => {
-    let n = 4;
-    const tick = () => (--n <= 0 ? resolve() : requestAnimationFrame(tick));
-    requestAnimationFrame(tick);
-  });
-}
+import { settled } from "./helpers/frames.js";
 
 let view: EditorView | undefined;
 afterEach(() => {

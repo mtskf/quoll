@@ -156,8 +156,11 @@ export function openCodeRefAtCaretCommand(host: CodeRefHost): Command {
 }
 
 /** Prec.high keymap binding CODE_REF_OPEN_KEY to the caret-open command. Prec.high
- *  so it is tried before defaultKeymap's Mod-Enter; the command returns false off
- *  a reference, so the default still runs there. */
+ *  so it is tried before defaultKeymap's Mod-Enter (insertBlankLine); the command
+ *  returns false off a reference, so the default still runs there. Both halves are
+ *  pinned by the "quollCodeRefKeymap precedence" suite in
+ *  test/webview/cm-code-ref-handlers.test.ts (see that file for the happy-dom
+ *  dual-dispatch rationale). */
 export function quollCodeRefKeymap(host: CodeRefHost): Extension {
   return Prec.high(keymap.of([{ key: CODE_REF_OPEN_KEY, run: openCodeRefAtCaretCommand(host) }]));
 }

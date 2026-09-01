@@ -141,11 +141,59 @@ const REAL_SWAP_DEPS: FinalizeSwapDeps = {
  *  Save the shared doc if dirty (so the source tab is clean and closing it can
  *  neither revert the working copy nor pop a save dialog), then close the
  *  pre-captured source tab. Refuses to close if the doc can't be made clean
- *  (never data loss). Best-effort; never throws. `deps` is seamed for tests. */
+ *  (never data loss). Best-effort; never throws. `deps` is seamed for tests.
+ *
+ *  `shouldAbortClose` (optional) is a point-of-no-return guard: this function
+ *  awaits `openDoc` (and maybe `save`) BEFORE the irreversible source-tab close,
+ *  so any condition a caller checked before calling us has a TOCTOU gap across
+ *  those awaits. Callers that must not close under a late-arriving condition —
+ *  e.g. a write-gate rejection that lands during those awaits, leaving the
+ *  user's draft only in the source webview — pass this; it is re-checked
+ *  SYNCHRONOUSLY immediately before the close (no await after it), so nothing
+ *  can slip the condition past the check up to the point the close is
+ *  INITIATED.
+ *
+ *  Accepted residual boundary (teardown-atomicity, PR #256 residual): a
+ *  condition flipping DURING `await closeTab` — the sub-ms interval where the
+ *  webview is still live as the tab disposes — is NOT re-checked and is
+ *  deliberately out of scope. It is provably not a writable-content-loss window:
+ *  a VALID edit landing then is stashed under the write lock and drained onto
+ *  the live TextDocument on the post-dispose settlement (the freshly opened
+ *  target text editor keeps the doc alive — quoll-editor-panel `pendingEdit`
+ *  drain, pinned by `pending-edit-dispose-drain`), so nothing is lost; an
+ *  INVALID edit is unwritable by construction (the write-gate rejects it), so it
+ *  has no valid surface to be preserved to (the text editor only ever shows the
+ *  clean disk bytes). The rejection invariant's purpose is to keep that draft
+ *  MOUNTED in the webview so the user can fix it — but here the user has
+ *  DELIBERATELY initiated the switch away from that surface (openInTextEditor
+ *  steals focus before the close), and the only unpreserved bytes are a partial
+ *  invalid edit typed in the sub-ms window during their own teardown. Extending
+ *  the mounted-for-correction guarantee across a user-initiated teardown is
+ *  exactly what an input-freeze/drain handshake (stop webview edits → await ack
+ *  + settle → final check → close) would buy; that standing protocol surface is
+ *  not worth adding for a window with no writable-content loss (KISS /
+ *  protocol-minimization; NOT a No-dual-editor concern — no second editor — but
+ *  it would bloat the single protocol's teardown face). Considered and deferred,
+ *  not overlooked (PR #256 / #265 adversarial review re-raised it). Decision +
+ *  safety-net reasoning: ARCHITECTURE.md §3 "Forward swap の rejection-guard
+ *  checkpoints と teardown-atomicity 境界" / LEARNING.md 2026-07-25. A non-null
+ *  return is the abort REASON:
+ *  finalizeSurfaceSwap ITSELF logs and shows it as a warning toast (the abort is
+ *  user-visible by CONTRACT, not by caller courtesy — at check time the user's
+ *  focus is on the freshly opened text tab, so a bare boolean + silent abort
+ *  would read as a dead keybinding). Fail-safe on the ambiguous case: any
+ *  non-null reason aborts — including an empty string — because a point-of-no-
+ *  return data-loss guard must default to keeping both surfaces open, NEVER to
+ *  the irreversible close; an empty reason falls back to a generic message so
+ *  the abort is never a blank toast (no current caller returns "" — this is
+ *  defence against a future one). Only `null` / `undefined` proceed to the
+ *  close. This is the single refusal surface for every window this guard covers.
+ *  Abort → both-open (safe), symmetric with the save-failure degradation. */
 export async function finalizeSurfaceSwap(
   uri: Uri,
   sourceTab: Tab | undefined,
-  deps: FinalizeSwapDeps = REAL_SWAP_DEPS
+  deps: FinalizeSwapDeps = REAL_SWAP_DEPS,
+  shouldAbortClose?: () => string | null
 ): Promise<void> {
   try {
     const doc = await deps.openDoc(uri);
@@ -193,6 +241,30 @@ export async function finalizeSurfaceSwap(
     // refers to (by uri, in its group) is still open. reresolveTab returns
     // undefined if the tab is gone → nothing to close (both-open, safe).
     const liveSourceTab = sourceTab && deps.reresolveSourceTab(sourceTab);
+    // Point-of-no-return guard (see the doc comment): re-check the caller's
+    // abort condition SYNCHRONOUSLY here — after the openDoc/save awaits AND the
+    // reresolve, immediately before the irreversible close, with NO await
+    // following — so nothing can slip the condition past it before the close is
+    // INITIATED. A flip DURING `await closeTab` below is the accepted
+    // teardown-atomicity boundary (see the doc comment): not a
+    // writable-content-loss window, so it is deliberately not re-checked. A
+    // non-null return
+    // is the abort REASON; we own the user-visible warning (a silent no-op reads
+    // as a dead keybinding — same rule the save-failure branch above follows,
+    // and the single refusal surface for every window this guard covers).
+    // Fail-safe: any non-null reason aborts (a guard hit must NEVER take the
+    // irreversible close); an empty reason falls back to a generic message so the
+    // abort is user-visible, never a blank toast. Only null/undefined proceed.
+    const abortReason = shouldAbortClose?.();
+    if (abortReason != null) {
+      const message =
+        abortReason || "Quoll: couldn't complete the editor switch, so both editors stay open.";
+      console.warn(
+        `[quoll] surface-swap: close aborted by caller guard (${message}); leaving both surfaces open`
+      );
+      showSafely(window.showWarningMessage(message), "showWarningMessage");
+      return;
+    }
     const closed = liveSourceTab ? await deps.closeTab(liveSourceTab) : true;
     if (!closed) {
       console.warn("[quoll] surface-swap: source tab close was cancelled; both surfaces remain");

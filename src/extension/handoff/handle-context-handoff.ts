@@ -99,13 +99,29 @@ export type HandleContextHandoffPayload = {
   endLine: number;
 };
 
-/** Selection geometry handed to deps.revealForMention. Lines are 1-based and
- *  already clamped to the live document + ordered (startLine <= endLine) by
- *  handleContextHandoff, so the implementation can index lines directly. */
+/** Type-only brand carrying the "clamped + ordered" proof. Declared (never
+ *  defined) and NOT exported, so the property is unnameable outside this
+ *  module: no other file can write an object literal that satisfies
+ *  HandoffRevealSelection, making clampHandoffSelection the only way in. */
+declare const handoffRevealSelectionBrand: unique symbol;
+
+/** Selection geometry handed to deps.revealForMention. Lines are 1-based,
+ *  clamped to the live document's line count and ordered (startLine <=
+ *  endLine), so the implementation can index lines directly.
+ *
+ *  BRANDED on purpose: structurally this is HandleContextHandoffPayload, so
+ *  before the brand the raw, webview-supplied payload compiled straight
+ *  through to revealForMention — whose implementation calls
+ *  `document.lineAt(endLine - 1)` with no re-clamp and would throw on an
+ *  out-of-range line. The brand turns that documentation-only contract into a
+ *  compile-time one, with clampHandoffSelection as the sole construction
+ *  point. Pinned by the handoff type pins in
+ *  test/extension/types-equality.test.ts. */
 export type HandoffRevealSelection = {
-  hasSelection: boolean;
-  startLine: number;
-  endLine: number;
+  readonly hasSelection: boolean;
+  readonly startLine: number;
+  readonly endLine: number;
+  readonly [handoffRevealSelectionBrand]: true;
 };
 
 export type HandleContextHandoffDeps = {
@@ -211,6 +227,27 @@ function clampLine(line: number, lineCount: number): number {
   return clampInt(line, 1, Math.max(lineCount, 1));
 }
 
+/** Build a HandoffRevealSelection from an untrusted payload — the SOLE
+ *  construction point for the branded type (the `as` below is the only cast
+ *  that mints the brand; keep it here so every consumer provably gets a
+ *  clamped, ordered range).
+ *
+ *  `lineCount` must come from the LIVE document, read AFTER any save — see
+ *  deps.getLineCount for why. The floor of 1 covers an empty document: line 1
+ *  always exists. */
+export function clampHandoffSelection(
+  payload: HandleContextHandoffPayload,
+  lineCount: number
+): HandoffRevealSelection {
+  const clampedStart = clampLine(payload.startLine, lineCount);
+  const clampedEnd = clampLine(payload.endLine, lineCount);
+  return {
+    hasSelection: payload.hasSelection,
+    startLine: Math.min(clampedStart, clampedEnd),
+    endLine: Math.max(clampedStart, clampedEnd),
+  } as HandoffRevealSelection;
+}
+
 /** Tier 0 — reveal the document (activeTextEditor choreography) and delegate
  *  to Claude Code's own insert command. Returns true only when the command
  *  resolved (Claude Code accepted the delegation). Between the reveal and the
@@ -281,18 +318,16 @@ export async function handleContextHandoff(
   // The webview is the untrusted boundary; the validator already bounded the
   // numbers, but only the host knows the real line count. revealForMention
   // relies on this clamp to index lines directly (no await sits between the
-  // clamp and the reveal call, so the document cannot shrink in between).
-  const lineCount = deps.getLineCount();
-  const a = clampLine(payload.startLine, lineCount);
-  const b = clampLine(payload.endLine, lineCount);
-  const startLine = Math.min(a, b);
-  const endLine = Math.max(a, b);
+  // clamp and the reveal call, so the document cannot shrink in between) — and
+  // the branded return type is what makes that reliance checkable rather than
+  // documentary.
+  const selection = clampHandoffSelection(payload, deps.getLineCount());
 
   const reference = buildContextReference(
     deps.relativePath,
-    payload.hasSelection,
-    startLine,
-    endLine
+    selection.hasSelection,
+    selection.startLine,
+    selection.endLine
   );
 
   // Tier 0 — delegation. On success Claude Code has already delivered the
@@ -312,11 +347,7 @@ export async function handleContextHandoff(
   // short-circuits, so tryDelegateToClaudeCode never runs when the path is
   // hostile.)
   const delegated =
-    !hasControlChar(deps.relativePath) &&
-    (await tryDelegateToClaudeCode(
-      { hasSelection: payload.hasSelection, startLine, endLine },
-      deps
-    ));
+    !hasControlChar(deps.relativePath) && (await tryDelegateToClaudeCode(selection, deps));
   if (delegated) {
     try {
       await deps.writeClipboard(reference);

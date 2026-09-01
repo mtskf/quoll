@@ -14,7 +14,7 @@
 
 import type { syntaxTree } from "@codemirror/language";
 import type { EditorState } from "@codemirror/state";
-import { collectHeadings } from "../headings.js";
+import { collectHeadings, headingText } from "../headings.js";
 
 // `@lezer/common` is a direct dep as of PR #66 (for the lint incremental
 // parser's `TreeFragment`); derive the tree type from syntaxTree's return type
@@ -38,15 +38,6 @@ export interface OutlineHeading {
   /** Document offset of the heading line start — the jump target and the
    *  positional identity that disambiguates duplicate text. */
   from: number;
-}
-
-/** Strip the ATX opener (`#`..`######` and following spaces/tabs) and an
- *  optional closing `#` run from a heading's node-span text, then trim. */
-function headingText(raw: string): string {
-  return raw
-    .replace(/^[ \t]*#{1,6}(?:[ \t]+|$)/, "")
-    .replace(/[ \t]+#+[ \t]*$/, "")
-    .trim();
 }
 
 /** Build outline entries from `collectHeadings(tree)`'s document-order ATX

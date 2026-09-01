@@ -1,5 +1,12 @@
 // @vitest-environment happy-dom
-import { ensureSyntaxTree, foldable } from "@codemirror/language";
+import {
+  codeFolding,
+  foldable,
+  foldEffect,
+  foldedRanges,
+  syntaxTreeAvailable,
+} from "@codemirror/language";
+import { EditorState } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MAX_CONTENT_LENGTH, PROTOCOL_VERSION } from "../../src/shared/protocol.js";
@@ -11,10 +18,13 @@ import {
 } from "../../src/webview/cm/decorations/block-style.js";
 import { editorPrefsField } from "../../src/webview/cm/editor-prefs.js";
 import { buildListHangIndent, listHangIndent } from "../../src/webview/cm/list/list-hang-indent.js";
+import { quollMarkdownLanguage } from "../../src/webview/cm/markdown.js";
 import { quollOpenExternalSink } from "../../src/webview/cm/open-external.js";
 import { type EditorHandle, mountEditor } from "../../src/webview/editor.js";
 import { type Action, initialState, type WebviewState } from "../../src/webview/state.js";
 import { fullTree } from "./helpers/full-tree.js";
+import { settledState } from "./helpers/settled-state.js";
+import { settledView } from "./helpers/settled-view.js";
 
 // editor.ts CodeMirror-view integration tests (post C3 vanilla mount).
 //
@@ -132,6 +142,24 @@ describe("editor — applyDocument seeds the CM doc (a)", () => {
   });
 });
 
+// (S3b) applyDocument threads the (externalEpoch, epochGeneration) pair into
+// edit-sync, so editor.isIdentityTransition reflects the recorded pair. Pins the
+// editor.ts threading: without it the pair would record as absent and the
+// same-generation query below would wrongly report a transition.
+describe("editor — applyDocument threads the identity pair (S3b)", () => {
+  it("isIdentityTransition reflects the recorded pair after seeding", () => {
+    const { handle } = mount();
+    handle.applyDocument("seed", true, 1, 0, 111);
+    expect(handle.isIdentityTransition(0, 222)).toBe(true); // new generation
+    expect(handle.isIdentityTransition(9, 111)).toBe(false); // same generation
+    expect(handle.isIdentityTransition(undefined, undefined)).toBe(true); // present→absent
+    // A same-generation advance re-records the pair; the predicate tracks it.
+    handle.applyDocument("seed2", true, 2, 5, 111);
+    expect(handle.isIdentityTransition(5, 111)).toBe(false);
+    expect(handle.isIdentityTransition(0, 333)).toBe(true);
+  });
+});
+
 // (a2) quollTokenMarkers is wired into the PRODUCTION editor extension list.
 // The render test (cm-decoration-setext-nascent-render) mounts its own extension
 // list, so it proves the marker+keep-rule MECHANISM but not that editor.ts still
@@ -204,6 +232,103 @@ describe("editor — fresh canWrite from applyDocument drives Compartment + repl
     // Simulate the shell's post-dispatch drain after the host ack.
     setState(makeState({ canWrite: true, editInFlight: true, docVersion: 1 }));
     commit(true);
+  });
+});
+
+// (d2) ok-ack while ahead must NOT reseed backwards over newer keystrokes.
+// A settlement ack Document merely ECHOES the in-flight edit's bytes back; if
+// the user kept typing during the in-flight window a wholesale reseed would
+// visibly rewind those keystrokes (and lose one typed during the revert
+// round-trip). applyDocument folds such an ack into version bookkeeping only.
+describe("editor — ok-ack while ahead does not reseed backwards (d2)", () => {
+  it("an ok-ack echoing the in-flight edit does NOT visibly rewind newer keystrokes", () => {
+    vi.useFakeTimers();
+    const { handle, view, commit } = mount();
+    handle.applyDocument("D1", true, 1); // seed at v1
+    // User types "2" → the debounced Edit posts (editInFlight in edit-sync).
+    view.dispatch({ changes: { from: view.state.doc.length, insert: "2" } });
+    vi.advanceTimersByTime(300);
+    expect(editPosts()).toHaveLength(1);
+    expect((editPosts()[0] as { content: string }).content).toBe("D12");
+    // User keeps typing "3" during the in-flight window → buffered (single-flight).
+    view.dispatch({ changes: { from: view.state.doc.length, insert: "3" } });
+    vi.advanceTimersByTime(300);
+    expect(editPosts()).toHaveLength(1); // still one — "D123" buffered, not posted
+    expect(view.state.sliceDoc()).toBe("D123");
+    // The ok-ack: host applied "D12", echoes it back at v2. It must NOT reseed
+    // the doc back to "D12" (which would erase the visible "3").
+    handle.applyDocument("D12", true, 2);
+    expect(view.state.sliceDoc()).toBe("D123"); // no visible rewind
+    // The shell's post-dispatch commit clears editInFlight and replays "D123".
+    commit(false);
+    expect(editPosts()).toHaveLength(2);
+    const replay = editPosts()[1] as { content: string; baseDocVersion: number };
+    expect(replay.content).toBe("D123");
+    expect(replay.baseDocVersion).toBe(2);
+    expect(view.state.sliceDoc()).toBe("D123");
+  });
+
+  it("a keystroke typed during the ack round-trip is preserved end-to-end (no fork off a rewound base)", () => {
+    vi.useFakeTimers();
+    const { handle, view, commit } = mount();
+    handle.applyDocument("D1", true, 1);
+    view.dispatch({ changes: { from: view.state.doc.length, insert: "2" } });
+    vi.advanceTimersByTime(300); // posts "D12"
+    view.dispatch({ changes: { from: view.state.doc.length, insert: "3" } });
+    vi.advanceTimersByTime(300); // buffers "D123"
+    // ok-ack #1 echoes "D12" back; the user is ahead at "D123".
+    handle.applyDocument("D12", true, 2);
+    // Before the commit replays, the user types "4" — it must build on the live
+    // "D123", not a rewound "D12" base (which would fork off "D124", dropping 3).
+    view.dispatch({ changes: { from: view.state.doc.length, insert: "4" } });
+    expect(view.state.sliceDoc()).toBe("D1234");
+    commit(false); // replays "D123" at v2; "D1234" now buffers behind it
+    vi.advanceTimersByTime(300);
+    // ok-ack #2 echoes "D123" back; the user is ahead at "D1234".
+    handle.applyDocument("D123", true, 3);
+    commit(false); // replays "D1234" at v3
+    expect(view.state.sliceDoc()).toBe("D1234");
+    const contents = editPosts().map((m) => (m as { content: string }).content);
+    expect(contents).toContain("D1234"); // the full content reached the host
+    expect(contents).not.toContain("D124"); // the fork that drops "3" never posted
+  });
+
+  it("a genuine external divergence (content not our in-flight edit) still reseeds", () => {
+    vi.useFakeTimers();
+    const { handle, view } = mount();
+    handle.applyDocument("D1", true, 1);
+    view.dispatch({ changes: { from: view.state.doc.length, insert: "2" } });
+    vi.advanceTimersByTime(300); // posts "D12", in flight
+    expect(view.state.sliceDoc()).toBe("D12");
+    // An EXTERNAL edit changed the file to unrelated content at a newer version.
+    // It does not echo our in-flight "D12", so the reseed must still apply.
+    handle.applyDocument("EXTERNAL", true, 2);
+    expect(view.state.sliceDoc()).toBe("EXTERNAL");
+  });
+
+  it("an ok-ack that also revokes write access still reseeds (does not fold)", () => {
+    // The `canWrite` conjunct in `foldsOkAck` is load-bearing, but ONLY matters
+    // when the editor is ahead — so the user MUST have typed past the acked bytes
+    // for this to exercise the gate (an ack with live == acked never folds
+    // regardless of canWrite). When write access is revoked simultaneously with
+    // the echo ack, cancelPendingFlush's readonly hard-drop path means the
+    // live-ahead content could never replay; folding must be suppressed so the
+    // doc reseeds to the host's authoritative readonly bytes rather than
+    // stranding unsavable content ahead of the host.
+    // Revert-check: strip `&& canWrite` from foldsOkAck → this test goes red
+    // (foldsOkAck becomes true, the doc keeps the live-ahead "D123").
+    vi.useFakeTimers();
+    const { handle, view } = mount();
+    handle.applyDocument("D1", true, 1);
+    view.dispatch({ changes: { from: view.state.doc.length, insert: "2" } });
+    vi.advanceTimersByTime(300); // posts "D12", in flight
+    view.dispatch({ changes: { from: view.state.doc.length, insert: "3" } });
+    vi.advanceTimersByTime(300); // buffers "D123" — editor is now AHEAD of the ack
+    expect(view.state.sliceDoc()).toBe("D123");
+    // ok-ack echoing "D12" back BUT canWrite=false now → must reseed, not fold.
+    handle.applyDocument("D12", false, 2);
+    expect(view.state.readOnly).toBe(true);
+    expect(view.state.sliceDoc()).toBe("D12");
   });
 });
 
@@ -519,11 +644,10 @@ describe("editor — GFM tree active (n)", () => {
     const { handle, view } = mount();
     const fixture = "~~s~~\n\n| a | b |\n| - | - |\n| 1 | 2 |\n\n- [ ] task";
     handle.applyDocument(fixture, true, 1);
-    const tree = ensureSyntaxTree(view.state, view.state.doc.length, 5000);
-    expect(tree).not.toBeNull();
-    if (tree === null) {
-      throw new Error("syntax tree unavailable");
-    }
+    // fullTree, not a bare ensureSyntaxTree + null check: only the RETURNED tree is
+    // walked here, and fullTree throws with the coverage numbers instead of leaving the
+    // caller to hand-roll the guard.
+    const tree = fullTree(view.state);
     const seen = new Set<string>();
     tree.iterate({
       enter: (node) => {
@@ -1066,7 +1190,7 @@ describe("editor — blockquotes are not foldable through the live editor (wirin
   it("blockquote line yields no foldable range; heading line does", () => {
     const { handle, view } = mount();
     handle.applyDocument("# H\nbody1\nbody2\n\n> quote1\n> quote2\n", true, 1);
-    ensureSyntaxTree(view.state, view.state.doc.length, 5000);
+    settledView(view, 5000);
     const headingLine = view.state.doc.lineAt(0);
     const quotePos = view.state.doc.toString().indexOf("> quote1");
     const quoteLine = view.state.doc.lineAt(quotePos);
@@ -1401,5 +1525,374 @@ describe("editor — setEditorPrefs applies vars and re-dispatches on same-value
     expect(dom.style.getPropertyValue("--quoll-editor-font-family")).toBe(
       "Georgia, 'Times New Roman', serif"
     );
+  });
+});
+
+// (r) External reseed preserves native fold ranges outside the changed span.
+// A whole-doc {0, len} replace maps every foldState range away, springing the
+// document open on any external touch; the minimal-span reseed keeps folds that
+// lie outside the actual edit — and stays correct on CRLF docs (coordinate bug
+// guard) and on EOL-only no-op reseeds. The reseed carries no `delete` user
+// event, so foldState's isUserEvent-gated auto-clear does NOT fire: an
+// overlapping fold is remapped (preserved), not sprung open — the intended
+// behaviour for an external touch.
+describe("editor — external reseed preserves unrelated folds (r)", () => {
+  const foldedCount = (view: EditorView): number => foldedRanges(view.state).size;
+  const foldRanges = (view: EditorView): Array<{ from: number; to: number }> => {
+    const ranges: Array<{ from: number; to: number }> = [];
+    foldedRanges(view.state).between(0, view.state.doc.length, (from, to) => {
+      ranges.push({ from, to });
+    });
+    return ranges;
+  };
+
+  it("(r1) a one-char edit below a folded heading keeps the heading folded", () => {
+    const { handle, view } = mount();
+    const doc = "# One\n\nalpha\nbravo\n\n# Two\n\ncharlie";
+    handle.applyDocument(doc, true, 1);
+    const foldFrom = doc.indexOf("\n"); // end of "# One" heading line
+    const foldTo = doc.indexOf("\n\n# Two") + 1; // through the blank line
+    view.dispatch({ effects: foldEffect.of({ from: foldFrom, to: foldTo }) });
+    expect(foldedCount(view)).toBe(1);
+
+    const next = doc.replace("charlie", "Charlie"); // edit in the SECOND section
+    handle.applyDocument(next, true, 2);
+
+    expect(view.state.sliceDoc()).toBe(next);
+    expect(foldedCount(view)).toBe(1); // fold above the edit survives
+  });
+
+  it("(r2) a fold BELOW the edit survives, remapped to shifted coordinates", () => {
+    const { handle, view } = mount();
+    const doc = "# One\n\nalpha\n\n# Two\n\nbravo\ncharlie";
+    handle.applyDocument(doc, true, 1);
+    // Fold the SECOND heading's body.
+    const foldFrom = doc.indexOf("# Two") + "# Two".length;
+    const foldTo = doc.length;
+    view.dispatch({ effects: foldEffect.of({ from: foldFrom, to: foldTo }) });
+    expect(foldedCount(view)).toBe(1);
+
+    // Edit the FIRST section (above the fold) — lengthens it by `delta`, so the
+    // surviving fold must shift by exactly `delta` (NOT just "still count 1",
+    // which a stale un-remapped range would also pass).
+    const next = doc.replace("alpha", "alpha extended");
+    const delta = next.length - doc.length;
+    handle.applyDocument(next, true, 2);
+
+    expect(view.state.sliceDoc()).toBe(next);
+    expect(foldRanges(view)).toEqual([{ from: foldFrom + delta, to: foldTo + delta }]);
+  });
+
+  it("(r3) a CRLF document reseed spanning interior lines does not throw and keeps folds", () => {
+    const { handle, view } = mount();
+    // CRLF doc: sliceDoc() renders \r\n, but doc.length is LF-internal. This is
+    // the integration guard that the helper was NOT wired against sliceDoc(): if
+    // it were, a diff in CRLF-inflated coordinates could overshoot doc.length and
+    // throw. (The coordinate GUARANTEE itself is Task 1's unit test; this test
+    // pins fold-survival + no-throw end-to-end on a CRLF doc.)
+    const doc = "# One\r\n\r\nalpha\r\nbravo\r\n\r\n# Two\r\n\r\ncharlie";
+    handle.applyDocument(doc, true, 1);
+    // Fold the first heading region (positions in LF-internal coords).
+    const internal = view.state.doc;
+    const foldFrom = internal.line(1).to; // end of "# One"
+    const foldTo = internal.toString().indexOf("\n\n# Two") + 1;
+    view.dispatch({ effects: foldEffect.of({ from: foldFrom, to: foldTo }) });
+    expect(foldedCount(view)).toBe(1);
+
+    // External reseed changing an interior line (still CRLF).
+    const next = doc.replace("charlie", "Charlie");
+    expect(() => handle.applyDocument(next, true, 2)).not.toThrow();
+    expect(view.state.sliceDoc()).toBe(next); // byte-identical, no corruption
+    expect(foldedCount(view)).toBe(1);
+  });
+
+  it("(r4) an external reseed that changes content posts NO edit", () => {
+    const { handle } = mount();
+    handle.applyDocument("# One\n\nalpha\nbravo", true, 1);
+    postMessage.mockReset(); // ignore the seed's traffic
+    handle.applyDocument("# One\n\nalpha\nBRAVO", true, 2);
+    expect(editPosts()).toEqual([]); // reseed is display-only, never posts an edit
+  });
+
+  it("(r5) an EOL-only reseed (normalizes identical) is a no-op change, no throw, no edit, folds kept", () => {
+    const { handle, view } = mount();
+    // Seed as CRLF so the facet renders \r\n; internal doc is "a\nb\nc".
+    handle.applyDocument("a\r\nb\r\nc", true, 1);
+    const foldFrom = view.state.doc.line(1).to;
+    view.dispatch({ effects: foldEffect.of({ from: foldFrom, to: view.state.doc.length }) });
+    expect(foldedCount(view)).toBe(1);
+    postMessage.mockReset();
+    // Reseed the SAME content as LF: raw differs (aheadOfHost true) but the
+    // normalized Text is identical → computeReseedChange yields an empty change.
+    expect(() => handle.applyDocument("a\nb\nc", true, 2)).not.toThrow();
+    expect(view.state.sliceDoc()).toBe("a\nb\nc"); // facet flipped to LF, content same
+    expect(editPosts()).toEqual([]);
+    expect(foldedCount(view)).toBe(1); // empty change maps nothing away
+  });
+
+  it("(r6) a fold CONTAINING the edit is preserved (remapped), not sprung open", () => {
+    const { handle, view } = mount();
+    // Fold "# One"'s body [foldFrom, foldTo]; the caret rests at 0 (outside the
+    // fold) so the selection-head clear does NOT fire.
+    const doc = "# One\n\nalpha\nbravo\n\n# Two\n\ncharlie";
+    handle.applyDocument(doc, true, 1);
+    const foldFrom = doc.indexOf("\n"); // end of "# One"
+    const foldTo = doc.indexOf("\n\n# Two") + 1;
+    view.dispatch({ effects: foldEffect.of({ from: foldFrom, to: foldTo }) });
+    expect(foldedCount(view)).toBe(1);
+
+    // External edit INSIDE the folded region: "bravo" -> "BR" (shrinks by 3).
+    const next = doc.replace("bravo", "BR");
+    const delta = next.length - doc.length; // -3
+    handle.applyDocument(next, true, 2);
+
+    expect(view.state.sliceDoc()).toBe(next);
+    // Fold persists, remapped: from unchanged (before the edit), to shrinks by
+    // |delta| (the edit is inside, before the fold end).
+    expect(foldRanges(view)).toEqual([{ from: foldFrom, to: foldTo + delta }]);
+  });
+
+  it("(r7) a reseed that inserts a sibling heading INTO a folded section clamps the stale fold so the new heading is not hidden", () => {
+    const { handle, view } = mount();
+    const doc = "# One\n\nalpha\nbravo\n\n# Two\n\ncharlie";
+    handle.applyDocument(doc, true, 1);
+    // Fold "# One" at its CANONICAL range (what foldCode/the gutter would produce),
+    // so the fold matches foldable() exactly BEFORE the reseed remaps it.
+    settledView(view, 5000);
+    const line1 = view.state.doc.line(1); // "# One"
+    const canonical = foldable(view.state, line1.from, line1.to);
+    if (!canonical) {
+      throw new Error("heading line should be foldable");
+    }
+    view.dispatch({ effects: foldEffect.of(canonical) });
+    expect(foldedCount(view)).toBe(1);
+
+    // External reseed drops a same-level sibling heading INTO "# One"'s body (a
+    // formatter / git inserting a new section). The minimal-span diff maps the
+    // overlapping fold THROUGH the insert, so without reconciliation it widens to
+    // swallow "# New" — hiding the new section behind the stale fold.
+    const next = doc.replace("alpha", "alpha\n\n# New\n\ngamma");
+    handle.applyDocument(next, true, 2);
+    expect(view.state.sliceDoc()).toBe(next);
+
+    // The section is still collapsed (the fold is preserved, not sprung open)...
+    expect(foldedCount(view)).toBe(1);
+    // ...but clamped back to "# One"'s real section end, so "# New" is NOT concealed.
+    const newHeadingPos = next.indexOf("# New");
+    const [range] = foldRanges(view);
+    expect(range.to).toBeLessThanOrEqual(newHeadingPos);
+    // And the clamp lands exactly on the current foldable range for "# One".
+    const freshLine1 = view.state.doc.line(1);
+    expect(foldable(view.state, freshLine1.from, freshLine1.to)).toEqual(range);
+  });
+
+  it("(r8) a reseed that removes the heading marker on a folded line fully unfolds it (no clamp target)", () => {
+    const { handle, view } = mount();
+    const doc = "# One\n\nalpha\nbravo\n\n# Two\n\ncharlie";
+    handle.applyDocument(doc, true, 1);
+    settledView(view, 5000);
+    const line1 = view.state.doc.line(1);
+    const canonical = foldable(view.state, line1.from, line1.to);
+    if (!canonical) {
+      throw new Error("heading line should be foldable");
+    }
+    view.dispatch({ effects: foldEffect.of(canonical) });
+    expect(foldedCount(view)).toBe(1);
+
+    // External reseed strips the ATX marker: "# One" -> "One" (no longer a heading,
+    // so line 1 is no longer foldable at all).
+    const next = doc.replace("# One", "One");
+    handle.applyDocument(next, true, 2);
+
+    expect(view.state.sliceDoc()).toBe(next);
+    expect(foldedCount(view)).toBe(0); // fully released, not clamped to an empty range
+  });
+
+  it("(r9) clamping a fold that contains a nested child heading keeps the child but reveals an inserted sibling", () => {
+    const { handle, view } = mount();
+    const doc = "# One\n\n## Sub\n\nfoo\n\n# Two\n\nbar";
+    handle.applyDocument(doc, true, 1);
+    settledView(view, 5000);
+    const line1 = view.state.doc.line(1);
+    const canonical = foldable(view.state, line1.from, line1.to); // includes "## Sub"
+    if (!canonical) {
+      throw new Error("heading line should be foldable");
+    }
+    view.dispatch({ effects: foldEffect.of(canonical) });
+    expect(foldedCount(view)).toBe(1);
+
+    // External reseed inserts a same-level SIBLING "# New" after the child section,
+    // INTO One's folded body. Reconciliation must clamp so "# New" is revealed,
+    // while the child "## Sub" stays inside the fold.
+    const next = doc.replace("foo", "foo\n\n# New\n\ngamma");
+    handle.applyDocument(next, true, 2);
+    expect(view.state.sliceDoc()).toBe(next);
+
+    expect(foldedCount(view)).toBe(1);
+    const newPos = next.indexOf("# New");
+    const subPos = next.indexOf("## Sub");
+    const [range] = foldRanges(view);
+    expect(range.to).toBeLessThanOrEqual(newPos); // "# New" NOT concealed
+    expect(range.from).toBeLessThanOrEqual(subPos);
+    expect(range.to).toBeGreaterThan(subPos); // "## Sub" (child) STILL inside the fold
+  });
+
+  it("(r10) a reseed that deletes a folded section's BODY (heading kept) releases the orphaned fold", () => {
+    const { handle, view } = mount();
+    // "# One" is the LAST section; folding it then deleting its ENTIRE body leaves
+    // the heading with no foldable content (foldable() → null), so the mapped fold
+    // is ORPHANED. The reseed's common prefix swallows the heading line + its
+    // trailing newline, so the edit span starts BELOW the heading line — exactly the
+    // body-delete case the line-only orphan gate missed, which left a phantom fold
+    // pill on a heading that no longer folds.
+    const doc = "intro\n\n# One\n\nalpha\nbravo";
+    handle.applyDocument(doc, true, 1);
+    settledView(view, 5000);
+    const line = view.state.doc.line(3); // "# One"
+    const canonical = foldable(view.state, line.from, line.to);
+    if (!canonical) {
+      throw new Error("heading line should be foldable");
+    }
+    view.dispatch({ effects: foldEffect.of(canonical) });
+    expect(foldedCount(view)).toBe(1);
+
+    // External reseed deletes the whole body of "# One" (heading kept). The
+    // minimal-span diff is a pure deletion whose edited span starts after the
+    // heading line, so the line-only gate never sees the touch.
+    const next = "intro\n\n# One\n";
+    handle.applyDocument(next, true, 2);
+
+    expect(view.state.sliceDoc()).toBe(next);
+    expect(foldedCount(view)).toBe(0); // orphaned fold released, no phantom pill
+  });
+
+  it("(r11) a reseed into a folded region on a LARGE doc still reveals an inserted sibling (parse forced at the call site)", () => {
+    const { handle, view } = mount();
+    // A large trailing body so the parse frontier stays incomplete. `repeat` count
+    // is sized so the reseed's own bounded apply-parse does NOT reach EOF (see the
+    // incomplete-before assert) but the 500 ms call-site forceParsing does.
+    const bigTail = `\n\n${"filler paragraph body text.\n\n".repeat(6000)}`;
+    const doc = `# One\n\nalpha\nbravo\n\n# Two\n\ncharlie${bigTail}`;
+    // Force the initial seed's parse frontier to stay INCOMPLETE deterministically,
+    // independent of machine speed: CM's apply() budget (Work.Apply = 20 ms wall
+    // clock, whole-doc since we transition from an empty doc) is checked against
+    // Date.now(), so advancing the mocked clock by >20 ms per call exhausts it on
+    // the first check. Restored immediately so the reseed below uses the real 500 ms
+    // forceParsing budget. (The sibling unit test gets determinism structurally via
+    // EditorState.create's min(3000) init cap; (r11) can't — it must exercise
+    // applyDocument's apply() path.)
+    let virtualNow = Date.now();
+    const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => (virtualNow += 30));
+    try {
+      handle.applyDocument(doc, true, 1);
+    } finally {
+      nowSpy.mockRestore();
+    }
+
+    // The live view's parse is genuinely INCOMPLETE — the whole point. We do NOT
+    // force-parse the live state here (Codex review #2): ensureSyntaxTree on the live
+    // view would complete its mutable parse context to EOF, so the reseed below would
+    // resume from a done context and parse to completion, making the bug irreproducible
+    // and this test vacuous.
+    expect(syntaxTreeAvailable(view.state, view.state.doc.length)).toBe(false);
+
+    // Canonical "# One" fold range comes from a SEPARATE, fully-parsed oracle state
+    // (same doc → same offsets) — never the live view. This is how we fold "# One" at
+    // its canonical range without touching the live view's parse context. (foldable
+    // reads syntaxTree(state), which a bare ensureSyntaxTree leaves stale, so the oracle
+    // goes through `settledState` — it republishes the snapshot and throws if it stays
+    // short — the same reason the call site uses forceParsing on the live view.)
+    const oracle = settledState(
+      EditorState.create({
+        doc,
+        extensions: [quollMarkdownLanguage(), codeFolding()],
+      })
+    );
+    const oLine1 = oracle.doc.line(1); // "# One"
+    const canonical = foldable(oracle, oLine1.from, oLine1.to);
+    if (!canonical) {
+      throw new Error("oracle: heading line should be foldable");
+    }
+    view.dispatch({ effects: foldEffect.of(canonical) });
+    expect(foldedRanges(view.state).size).toBe(1);
+
+    // External reseed drops a same-level sibling into "# One"'s body. On this large
+    // doc the reseed's bounded apply parse leaves the frontier incomplete; without
+    // the call-site forceParsing, reconcileReseedFolds bails and "# New" stays
+    // concealed behind the stale (remapped, over-wide) fold.
+    postMessage.mockReset(); // ignore the seed traffic; watch the reseed only
+    const next = doc.replace("alpha", "alpha\n\n# New\n\ngamma");
+    handle.applyDocument(next, true, 2);
+    expect(view.state.sliceDoc()).toBe(next);
+
+    // The forced parse ran (frontier complete) AND the fold was clamped so the new
+    // sibling is revealed.
+    expect(syntaxTreeAvailable(view.state, view.state.doc.length)).toBe(true);
+    expect(foldedRanges(view.state).size).toBe(1);
+    const newHeadingPos = next.indexOf("# New");
+    let clampedTo = -1;
+    foldedRanges(view.state).between(0, view.state.doc.length, (_from, to) => {
+      clampedTo = to;
+    });
+    expect(clampedTo).toBeLessThanOrEqual(newHeadingPos); // "# New" NOT concealed
+
+    // Side-effect guard (Codex review #5/#7): the forced parse + reconcile are
+    // display-only — the forceParsing no-op dispatch and the addToHistory:false
+    // reconcile dispatch carry no doc change, so no edit must be posted (mirrors
+    // (r4)). flushPending() forces edit-sync to drain any pending/debounced edit NOW,
+    // so this also catches a regression that made the reconcile dispatch carry a real
+    // change (which would otherwise only surface after the 300 ms debounce, past a
+    // synchronous assert).
+    handle.flushPending();
+    expect(editPosts()).toEqual([]);
+  });
+
+  it("(r12) logs a dev diagnostic when the reseed forced parse misses its budget", () => {
+    const { handle, view } = mount();
+    // Same large-doc shape as (r11): a big trailing body keeps the parse frontier
+    // genuinely incomplete so the reseed's call-site forceParsing has real work to do.
+    const bigTail = `\n\n${"filler paragraph body text.\n\n".repeat(6000)}`;
+    const doc = `# One\n\nalpha\nbravo\n\n# Two\n\ncharlie${bigTail}`;
+
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    // Keep a mocked clock that jumps 600 ms per read active for the WHOLE sequence
+    // (seed → fold → reseed). Every parse budget check is Date.now-based, so each
+    // expires on its first check: the seed's apply parse (20 ms budget) bails one
+    // chunk in, leaving the frontier incomplete; the fold-only dispatch is
+    // non-docChanged, so LanguageState.apply early-returns without parsing (it does
+    // NOT advance or complete the tree); then the reseed's own docChanged apply
+    // (20 ms) and the call-site forceParsing (500 ms) both fail under the mocked
+    // clock, so forceParsing returns false and fires the budget-miss diagnostic.
+    // Deterministic regardless of machine speed / doc size (contrast (r11), which
+    // restores the clock so the same reseed forceParsing SUCCEEDS — this is that
+    // path's false branch).
+    let virtualNow = Date.now();
+    const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => (virtualNow += 600));
+    try {
+      handle.applyDocument(doc, true, 1);
+      // Precondition: the seed left the frontier genuinely incomplete (else
+      // forceParsing would return true instantly and this test would be vacuous).
+      expect(syntaxTreeAvailable(view.state, view.state.doc.length)).toBe(false);
+
+      // A fold must exist so the reseed reconcile block (and its forced parse) runs at
+      // all — foldedRanges(view.state).size > 0 is the gate. A hand-folded range is
+      // enough; this test pins the budget-miss log, not the clamp itself.
+      const line1 = view.state.doc.line(1); // "# One"
+      view.dispatch({ effects: foldEffect.of({ from: line1.to, to: doc.indexOf("# Two") }) });
+      expect(foldedRanges(view.state).size).toBe(1);
+
+      handle.applyDocument(doc.replace("alpha", "alpha\n\n# New\n\ngamma"), true, 2);
+    } finally {
+      nowSpy.mockRestore();
+    }
+
+    // The forced parse hit its budget (returned false) → the diagnostic fired. The
+    // frontier is STILL incomplete, corroborating that the forced parse did not finish
+    // (contrast (r11), where it completes and syntaxTreeAvailable flips to true).
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining("forced parse hit its budget; fold reconciliation skipped")
+    );
+    expect(syntaxTreeAvailable(view.state, view.state.doc.length)).toBe(false);
+    warnSpy.mockRestore();
   });
 });

@@ -6,9 +6,13 @@ on:
       - 'v*'
 
 # NOTE: This workflow is ACTIVE. On a pushed `v*` tag it packages one .vsix and publishes
-# it to the VS Code Marketplace (VSCODE_PAT secret, required — configured). The Open VSX
-# step (OPENVSX_PAT secret, optional) is skipped while that secret is unset, so releases
-# currently go to the Marketplace only. The publisher ID (`mtskf`) matches
+# it to BOTH registries: the VS Code Marketplace (VSCODE_PAT) and Open VSX (OPENVSX_PAT).
+# Both secrets are configured and both legs run today. The Open VSX step keeps an
+# `if: ${{ env.OVSX_PAT != '' }}` guard, which means that if that secret is ever removed
+# or emptied this workflow does NOT fail — it silently skips, and releases quietly stop
+# reaching Open VSX with the run still green. That failure mode is why
+# .github/workflows/token-liveness.yml treats OPENVSX_PAT as required and goes red on an
+# empty one. The publisher ID (`mtskf`) matches
 # `package.json.publisher`. Tag pushes trigger a LIVE publish (v0.1.0 shipped 2026-07-02),
 # so never push a `v*` tag until you intend to release that version to users.
 
@@ -36,6 +40,31 @@ jobs:
       # lightweight and annotated tags (e.g. `pnpm/action-setup` uses annotated tags,
       # and `git/refs/tags/<tag>` would return its tag-object SHA, not the commit).
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+
+      # Reachability gate — the FIRST thing after checkout so nothing else runs
+      # for an off-main tag. Branch protection does NOT cover tag refs, so a `v*`
+      # tag pushed onto an unreviewed feature/WIP commit (with a bumped
+      # package.json) would otherwise publish that code LIVE to the Marketplace +
+      # Open VSX. Require the tagged commit ($GITHUB_SHA — a tag push points it at
+      # the tagged commit) to be reachable from origin/main, the only history that
+      # passes review, before ANY build or publish step. The default checkout is
+      # shallow (depth 1), so deepen main first. The explicit refspec is required:
+      # checkout configures origin to fetch the tag ref, not a branch wildcard, so
+      # a bare `git fetch origin main` would update FETCH_HEAD without writing
+      # refs/remotes/origin/main. --unshallow gives merge-base main's full
+      # ancestry to walk; the `|| fetch` fallback covers the already-complete case
+      # (where --unshallow errors). A fetch failure or missing origin/main leaves
+      # merge-base to exit non-zero, which blocks the publish — fail-safe.
+      - name: Verify tag is reachable from main (release gate)
+        env:
+          TAGGED_SHA: ${{ github.sha }}
+        run: |
+          git fetch --no-tags --unshallow origin +refs/heads/main:refs/remotes/origin/main 2>/dev/null \
+            || git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
+          if ! git merge-base --is-ancestor "$TAGGED_SHA" origin/main; then
+            echo "::error::Tagged commit $TAGGED_SHA is not reachable from origin/main — refusing to publish unreviewed code."
+            exit 1
+          fi
 
       - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
         with:
@@ -77,30 +106,66 @@ jobs:
       - name: Build (webview + extension + esbuild bundle)
         run: pnpm build
 
+      # Assemble the SHIPPED runtime dependency closure in a throwaway staging
+      # tree so the SBOM below reflects what actually ships, not the build-input
+      # graph. The script is shared with ci.yml's `sbom` job, which rehearses this
+      # whole sequence on every PR — WHY each line is needed lives in the script.
+      - name: Assemble shipped runtime dependency tree (SBOM source)
+        run: scripts/assemble-sbom-staging.sh "${RUNNER_TEMP:?RUNNER_TEMP is not set}/sbom-src"
+
       # Supply-chain transparency. Syft (v1.42.3, baked into the SHA-pinned
       # sbom-action release below; Dependabot bumps the action + its Syft
       # together — so we deliberately do NOT set `syft-version`, which would
-      # drift from that baked default) catalogs the build's dependency graph
-      # into an SPDX SBOM. This is the build-input graph (a superset that covers
-      # every component esbuild bundles into the shipped `dist/`), NOT a
-      # byte-for-byte manifest of the `--no-dependencies` .vsix. Runs only on tag
-      # pushes and never ships in the .vsix.
+      # drift from that baked default) catalogs the staging prod tree into an
+      # SPDX SBOM: the shipped runtime dependency closure at exact resolved
+      # versions, with devDependencies (vitest/biome/@types/*, etc.) excluded.
+      # That SBOM is bound to the .vsix digest by the Attest SBOM step below, so
+      # a consumer verifying the attestation sees only the shipped surface — no
+      # false-positive advisory matches against build-only tooling.
       #
-      # Ordered BEFORE packaging + the .vsix audit on purpose: this is the only
-      # third-party action in the job and shares the runner workspace, so keeping
-      # it ahead of the audit leaves that audit as the true last gate before the
-      # (first-party) attest + publish steps — a compromised action here cannot
-      # mutate an already-audited .vsix. It scans `path: .` (the dependency
-      # graph), so it does not need the packaged .vsix to exist. Release-asset
+      # Scope note: this lists the prod *dependency closure* — a conservative
+      # superset of the esbuild-bundled set (it also lists prod-transitive deps
+      # that get tree-shaken out). A byte-exact bundled SBOM would need a
+      # hand-rolled SPDX generator off the esbuild metafile; deferred as a
+      # future refinement. The verify step below pins the guarantees this SBOM
+      # must hold.
+      #
+      # Ordering: this is the only third-party action on the build→package→attest
+      # critical path (pnpm/action-setup is a third-party action too, but runs
+      # earlier during setup, before any artifact exists), and it still runs
+      # BEFORE Package .vsix, so audit-vsix (below) remains the last gate before
+      # attest + publish — a compromised action here cannot mutate an
+      # already-audited .vsix (none exists yet). It scans the staging tree, not
+      # the workspace, so it does not need the packaged .vsix. Release-asset
       # upload is disabled — this job holds only `contents: read`; the SBOM is
       # kept as the sbom-action workflow artifact instead.
+      #
+      # `config:` is REQUIRED, not cosmetic: syft's package.json cataloger is
+      # image-scan-only, so a directory scan of the lockfile-less staging tree
+      # catalogs zero npm packages without it. Rationale in full: .github/syft-release.yaml.
       - name: Generate SBOM (SPDX)
         uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
         with:
-          path: .
+          path: ${{ runner.temp }}/sbom-src
+          config: .github/syft-release.yaml
           format: spdx-json
           output-file: sbom.spdx.json
           upload-release-assets: false
+
+      # Gate: fail the release if the SBOM is not scoped to the shipped runtime
+      # (dev tooling leaked in, a declared/known-transitive runtime dep missing,
+      # or non-exact versions), or if it does not RECONCILE against the staging
+      # tree it was generated from — see scripts/verify-sbom-scope.mjs for what
+      # `--reconcile` compares and the evidence behind promoting it to a gate.
+      # Fail-safe — a misleading attestation never ships.
+      #
+      # Deliberately no `|| true`: the script distinguishes clean from a
+      # reconcile diff from could-not-reconcile-at-all by exit code, and
+      # swallowing the status collapses all three into a green step — the
+      # could-not-reconcile run prints none of the diff lines, so it reads as
+      # clean while having verified nothing.
+      - name: Verify SBOM is scoped to the shipped runtime
+        run: node scripts/verify-sbom-scope.mjs sbom.spdx.json --reconcile "${RUNNER_TEMP:?RUNNER_TEMP is not set}/sbom-src"
 
       - name: Package .vsix
         run: pnpm exec vsce package --no-dependencies -o extension.vsix

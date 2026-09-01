@@ -1,9 +1,15 @@
 import * as assert from "node:assert";
 import * as fs from "node:fs/promises";
-import * as os from "node:os";
 import * as path from "node:path";
 import * as vscode from "vscode";
-import { cleanupBetweenTests, getHarness, isDocumentEvent, tick, VIEW_TYPE } from "./harness";
+import {
+  cleanupBetweenTests,
+  getHarness,
+  isDocumentEvent,
+  makeTempDir,
+  tick,
+  VIEW_TYPE,
+} from "./harness";
 
 const PROTOCOL = 1;
 
@@ -25,7 +31,7 @@ describe("caret-handoff", function () {
   });
 
   it("caret-report inbound mutates no document and posts no Document event (reducer bypass)", async () => {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "quoll-e2e-"));
+    const dir = await makeTempDir("caret-bypass");
     tempFile = path.join(dir, "caret-bypass.md");
     await fs.writeFile(tempFile, "line0\nline1\nline2\n");
     const uri = vscode.Uri.file(tempFile);
@@ -76,7 +82,7 @@ describe("caret-handoff", function () {
   });
 
   it("applies the tracked caret to the live text editor on Quoll→text-editor switch", async () => {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "quoll-e2e-"));
+    const dir = await makeTempDir("caret-apply");
     tempFile = path.join(dir, "caret-apply.md");
     await fs.writeFile(tempFile, "line0\nline1\nline2\nline3\n");
     const uri = vscode.Uri.file(tempFile);
@@ -109,7 +115,7 @@ describe("caret-handoff", function () {
   });
 
   it("posts a caret-apply with the tracked caret on text-editor→Quoll switch (Codex #1)", async () => {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "quoll-e2e-"));
+    const dir = await makeTempDir("caret-push");
     tempFile = path.join(dir, "caret-push.md");
     await fs.writeFile(tempFile, "line0\nline1\nline2\nline3\nline4\n");
     const uri = vscode.Uri.file(tempFile);

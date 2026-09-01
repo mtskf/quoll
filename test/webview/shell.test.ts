@@ -3,6 +3,9 @@ import { EditorView } from "@codemirror/view";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { type HostToWebview, PROTOCOL_VERSION } from "../../src/shared/protocol.js";
+import { EDITOR_PREF_CSS_VARS, editorPrefToCssValue } from "../../src/webview/cm/editor-prefs.js";
+import { addPendingAnchor } from "../../src/webview/cm/image/image-paste.js";
+import { proseLintEnabled } from "../../src/webview/cm/lint/index.js";
 
 // shell.ts integration tests (post C3 React-free shell). Replaces the
 // React-era app.test.ts + persistence.test.ts. The shell mounts as a
@@ -101,6 +104,15 @@ function deliver(message: HostToWebview): void {
   }
 }
 
+function mountedView(): EditorView {
+  const mountEl = (container as HTMLElement).querySelector(".quoll-editor") as HTMLElement;
+  const view = EditorView.findFromDOM(mountEl);
+  if (!view) {
+    throw new Error("EditorView not found via findFromDOM");
+  }
+  return view;
+}
+
 describe("shell — Ready handshake ordering", () => {
   it("subscribes to host before posting ready", async () => {
     await mount();
@@ -130,6 +142,71 @@ describe("shell — stale Document drop at ingress", () => {
     deliver(buildDocument({ docVersion: 2, content: "STALE", canWrite: true }));
     const view = EditorView.findFromDOM(container?.querySelector(".quoll-editor") as HTMLElement);
     expect(view?.state.sliceDoc()).toBe("current"); // stale (v2 < v5) ignored — unchanged
+  });
+});
+
+describe("shell — S3b epoch-bounded acceptance ordering", () => {
+  const readDoc = (): string | undefined =>
+    EditorView.findFromDOM(
+      container?.querySelector(".quoll-editor") as HTMLElement
+    )?.state.sliceDoc();
+
+  it("still drops a stale SAME-generation Document (ordering holds within one generation)", async () => {
+    await mount();
+    deliver(
+      buildDocument({ docVersion: 5, content: "current", externalEpoch: 2, epochGeneration: 111 })
+    );
+    deliver(
+      buildDocument({ docVersion: 2, content: "STALE", externalEpoch: 1, epochGeneration: 111 })
+    );
+    expect(readDoc()).toBe("current"); // same generation, lower version → dropped
+  });
+
+  it("(e) adopts a lower-version Document from a NEW generation, end-to-end through the reducer", async () => {
+    // The reducer's inlined copy of the stale guard must ALSO adopt (via the
+    // `adopt` flag) — otherwise state.docVersion stays high and the NEXT
+    // same-generation Document is stale-dropped at the shell, leaving the webview
+    // permanently deaf. Prove the reducer adopted docVersion 1 by delivering a
+    // follow-up B Document at v2 and asserting it lands (v2 > adopted 1).
+    await mount();
+    deliver(
+      buildDocument({ docVersion: 10, content: "A", externalEpoch: 0, epochGeneration: 111 })
+    );
+    deliver(buildDocument({ docVersion: 1, content: "B", externalEpoch: 0, epochGeneration: 222 }));
+    expect(readDoc()).toBe("B"); // identity transition adopted despite v1 < v10
+    deliver(
+      buildDocument({ docVersion: 2, content: "B2", externalEpoch: 1, epochGeneration: 222 })
+    );
+    // If the reducer had NOT adopted v1, state.docVersion would be 10 and this
+    // v2 Document would be stale-dropped at the shell → still "B".
+    expect(readDoc()).toBe("B2");
+  });
+
+  it("(g) surfaces ONE resync-storm notice when identity transitions cluster", async () => {
+    await mount();
+    // Seed + three generation changes (3 identity transitions) within the window.
+    deliver(buildDocument({ docVersion: 1, content: "s", externalEpoch: 0, epochGeneration: 1 }));
+    deliver(buildDocument({ docVersion: 1, content: "s", externalEpoch: 0, epochGeneration: 2 }));
+    deliver(buildDocument({ docVersion: 1, content: "s", externalEpoch: 0, epochGeneration: 3 }));
+    expect(container?.querySelectorAll(".quoll-resync-notice").length).toBe(0);
+    deliver(buildDocument({ docVersion: 1, content: "s", externalEpoch: 0, epochGeneration: 4 }));
+    const notices = container?.querySelectorAll(".quoll-resync-notice");
+    expect(notices?.length).toBe(1);
+    expect(notices?.[0].textContent).toContain("re-synced with the editor host repeatedly");
+    // Latched: a further transition does not add a second notice.
+    deliver(buildDocument({ docVersion: 1, content: "s", externalEpoch: 0, epochGeneration: 5 }));
+    expect(container?.querySelectorAll(".quoll-resync-notice").length).toBe(1);
+    // Dismiss button removes the notice.
+    const notice = container?.querySelector(".quoll-resync-notice") as HTMLElement;
+    (notice.querySelector(".quoll-resync-notice-dismiss") as HTMLButtonElement).click();
+    expect(container?.querySelectorAll(".quoll-resync-notice").length).toBe(0);
+  });
+
+  it("shows NO resync-storm notice for a single identity transition", async () => {
+    await mount();
+    deliver(buildDocument({ docVersion: 1, content: "s", externalEpoch: 0, epochGeneration: 1 }));
+    deliver(buildDocument({ docVersion: 1, content: "s", externalEpoch: 0, epochGeneration: 2 }));
+    expect(container?.querySelectorAll(".quoll-resync-notice").length).toBe(0);
   });
 });
 
@@ -355,6 +432,243 @@ describe("shell — format-document routing", () => {
   });
 });
 
+describe("shell — format-command routing", () => {
+  it("routes a format-command message to the editor and marks the selection", async () => {
+    // The webview end of the `quoll.format` chord path: message arm -> the
+    // editor handle -> a real CodeMirror transaction producing bold markers.
+    // The host end is pinned by test/extension/e2e/format-command-dispatch.test.ts,
+    // which explains (at its top) why it deliberately stops at the wire instead
+    // of asserting document text.
+    // Reverting shell.ts's `case "format-command"` leaves "word" unmarked.
+    await mount();
+    deliver(buildDocument({ docVersion: 1, content: "word\n" }));
+
+    const mountEl = (container as HTMLElement).querySelector(".quoll-editor") as HTMLElement;
+    const view = EditorView.findFromDOM(mountEl);
+    if (!view) {
+      throw new Error("EditorView not found via findFromDOM");
+    }
+    view.dispatch({ selection: { anchor: 0, head: 4 } });
+    // Stub the guard's input rather than calling view.focus(): a real focus()
+    // fires a selectionchange that happy-dom flushes back through CodeMirror's
+    // DOMObserver mid-test. Same technique (and reason) as
+    // test/webview/inline/cm-inline-formatting-run-command.test.ts.
+    Object.defineProperty(view, "hasFocus", { get: () => true, configurable: true });
+
+    deliver({ protocol: PROTOCOL_VERSION, type: "format-command", action: "bold" });
+
+    expect(view.state.doc.toString()).toBe("**word**\n");
+    // The post back to the host is edit-sync's debounced job (300 ms), pinned by
+    // test/webview/cm-edit-sync.test.ts for every doc change — not re-asserted
+    // here, where a timer wait would only add flake.
+  });
+});
+
+describe("shell — editor-config routing", () => {
+  it("routes every editor-config field to its own applied outcome", async () => {
+    // This pins two separate risks under one `editor-config` delivery pipeline:
+    //
+    // 1. The 4-field editor-prefs mapping (fontFamily/fontSize/lineHeight/
+    //    contentWidth): the shell hand-copies `message.{...}` into one object
+    //    literal passed to `editor.setEditorPrefs`. A same-field-name swap
+    //    here is NOT a silent risk: each field's type is a distinct string
+    //    literal union (protocol.ts EDITOR_PREF_ENUMS), and for every one of
+    //    the 6 field pairs neither union is a subset of the other, so `tsc`
+    //    rejects a swap with TS2322 (verified by hand: swapping
+    //    fontSize↔lineHeight in shell.ts breaks `pnpm compile` with exactly
+    //    that error). What the type system can't catch is a dropped
+    //    `editor?.set*` call — asserting the applied CSS custom property (the
+    //    outcome, not "was setEditorPrefs called") is what makes a dropped
+    //    route red. Expected values are derived from editorPrefToCssValue
+    //    rather than hand-written, so this test cannot drift from the preset
+    //    table. Every id below is deliberately NON-default: a default id
+    //    makes the applier REMOVE the var, which would leave a dropped route
+    //    indistinguishable from a routed one.
+    //
+    // 2. The 3 boolean siblings (lintGutter/proseLint/spellcheck →
+    //    setLintGutter/setProseLint/setSpellcheck): unlike the 4 pref fields
+    //    above, these are all bare `boolean`, so a swap type-checks. The
+    //    second `deliver` below (with a comment on the fixture design) is
+    //    what makes each of the 3 possible swaps red.
+    await mount();
+    deliver(buildDocument({ docVersion: 1, content: "word\n" }));
+
+    const view = mountedView();
+    const cssVar = (key: keyof typeof EDITOR_PREF_CSS_VARS): string =>
+      view.dom.style.getPropertyValue(EDITOR_PREF_CSS_VARS[key]);
+    // Baseline: nothing applied yet, so a test that never delivered the message
+    // could not pass by accident.
+    expect(cssVar("quoll.editor.fontSize")).toBe("");
+    expect(view.contentDOM.getAttribute("spellcheck")).toBe("true");
+    expect(view.dom.querySelector(".quoll-lint-gutter")).toBeNull();
+    expect(view.state.facet(proseLintEnabled)).toBe(false);
+
+    // The 4 pref fields are identical in both deliveries below; only the
+    // booleans vary (see the fixture-design note on the second delivery).
+    const prefs = {
+      fontFamily: "sans",
+      fontSize: "large",
+      lineHeight: "roomy",
+      contentWidth: "narrow",
+    } as const;
+
+    deliver({
+      protocol: PROTOCOL_VERSION,
+      type: "editor-config",
+      lintGutter: true,
+      proseLint: true,
+      spellcheck: false,
+      ...prefs,
+    });
+
+    expect(cssVar("quoll.editor.fontFamily")).toBe(
+      editorPrefToCssValue("quoll.editor.fontFamily", prefs.fontFamily)
+    );
+    expect(cssVar("quoll.editor.fontSize")).toBe(
+      editorPrefToCssValue("quoll.editor.fontSize", prefs.fontSize)
+    );
+    expect(cssVar("quoll.editor.lineHeight")).toBe(
+      editorPrefToCssValue("quoll.editor.lineHeight", prefs.lineHeight)
+    );
+    expect(cssVar("quoll.editor.contentWidth")).toBe(
+      editorPrefToCssValue("quoll.editor.contentWidth", prefs.contentWidth)
+    );
+    expect(view.contentDOM.getAttribute("spellcheck")).toBe("false");
+    expect(view.dom.querySelector(".quoll-lint-gutter")).not.toBeNull();
+    expect(view.state.facet(proseLintEnabled)).toBe(true);
+
+    // Second delivery with a DIFFERENT boolean combination. One delivery
+    // alone can't distinguish all 3 possible pairwise swaps among
+    // lintGutter/proseLint/spellcheck: each field only has 2 possible values,
+    // so in any single message some pair is bound to share a value, and
+    // swapping two fields that hold the SAME value in that message is a
+    // no-op there. The combination below is chosen so every pair differs in
+    // at least one of the two deliveries:
+    //   field        | delivery 1 | delivery 2
+    //   lintGutter   |    true    |   false
+    //   proseLint    |    true    |    true
+    //   spellcheck   |   false    |    true
+    // lintGutter/proseLint only differ in delivery 2 (both true in delivery
+    // 1); lintGutter/spellcheck differ in both; proseLint/spellcheck only
+    // differ in delivery 1 (both true in delivery 2). So swapping any one
+    // pair changes at least one applied outcome in at least one delivery.
+    // A wholly DROPPED setter is caught by delivery 1 alone, whichever of the
+    // three it is: every delivery-1 value differs from that setter's default
+    // (gutter false→true, prose false→true, spellcheck true→false), so a
+    // dropped call leaves the default in place and delivery 1 goes red — and
+    // no setter's same-value no-op guard can absorb that, because each
+    // delivery-1 value is a real change away from the default. It is also why
+    // proseLint may stay true here: delivery 1 already pinned that route, so
+    // delivery 2's prose push being a guard no-op costs this test nothing.
+    deliver({
+      protocol: PROTOCOL_VERSION,
+      type: "editor-config",
+      lintGutter: false,
+      proseLint: true,
+      spellcheck: true,
+      ...prefs,
+    });
+
+    expect(view.contentDOM.getAttribute("spellcheck")).toBe("true");
+    expect(view.dom.querySelector(".quoll-lint-gutter")).toBeNull();
+    expect(view.state.facet(proseLintEnabled)).toBe(true);
+  });
+});
+
+describe("shell — HostToWebview exhaustiveness guard", () => {
+  it("throws on an unknown message type (fail loud, not silent drop)", async () => {
+    // Mirrors the reducer's exhaustiveness guard (state.test.ts). The default
+    // arm is unreachable by type — HostToWebview is a closed union — so the
+    // cast is necessary to exercise the runtime guard at all. `deliver()`
+    // calls the subscribeToHost handler synchronously (this test file's
+    // handler shim bypasses the isHostToWebview wire-boundary validator,
+    // which would normally reject an unknown type before it ever reaches the
+    // switch), so the throw happens synchronously inside deliver() and
+    // `expect(() => ...).toThrow` catches it directly.
+    await mount();
+    const unknown = {
+      protocol: PROTOCOL_VERSION,
+      type: "no-such-message",
+    } as unknown as HostToWebview;
+
+    expect(() => deliver(unknown)).toThrow(/unhandled HostToWebview: no-such-message/);
+  });
+});
+
+describe("shell — image-write-result routing", () => {
+  // The anchors are seeded with addPendingAnchor rather than a synthesized
+  // paste: the paste path is already pinned by
+  // test/webview/image/cm-image-paste.test.ts, and driving it here would need a
+  // FileReader stub whose failure modes have nothing to do with the route under
+  // test.
+  const seedAnchor = (view: EditorView, requestId: string, anchor: number): void => {
+    view.dispatch({ effects: addPendingAnchor.of({ requestId, anchor }) });
+  };
+
+  it("routes ok:true to an insert at the matching requestId's anchor", async () => {
+    await mount();
+    deliver(buildDocument({ docVersion: 1, content: "alpha\n" }));
+    const view = mountedView();
+    // Two pending anchors so the requestId is load-bearing: passing the wrong id
+    // (or ignoring it) resolves the wrong anchor and the insert lands at 0.
+    seedAnchor(view, "req-a", 0);
+    seedAnchor(view, "req-b", 6);
+
+    deliver({
+      protocol: PROTOCOL_VERSION,
+      type: "image-write-result",
+      requestId: "req-b",
+      ok: true,
+      relativePath: "./assets/shot.png",
+    });
+
+    expect(view.state.doc.toString()).toBe("alpha\n![](./assets/shot.png)\n");
+  });
+
+  it("routes ok:false to a null path — nothing is inserted", async () => {
+    // The ternary `message.ok ? message.relativePath : null` is the whole arm.
+    // Inverted, ok:true would pass null (previous test goes red) and ok:false
+    // would pass `undefined` — which resolve() does NOT treat as a rejection
+    // (`relativePath === null`), so it would insert `![](undefined)` here.
+    await mount();
+    deliver(buildDocument({ docVersion: 1, content: "alpha\n" }));
+    const view = mountedView();
+    seedAnchor(view, "req-a", 6);
+
+    deliver({
+      protocol: PROTOCOL_VERSION,
+      type: "image-write-result",
+      requestId: "req-a",
+      ok: false,
+    });
+
+    expect(view.state.doc.toString()).toBe("alpha\n");
+  });
+});
+
+describe("shell — caret-apply routing", () => {
+  it("routes caret-apply to the selection offset for {line, character}", async () => {
+    // A pure side channel: the arm moves the caret and touches nothing else.
+    // The fixture's line index and character offset are DIFFERENT numbers on
+    // lines of unequal length, so transposing them in the shell's object literal
+    // (the one mistake the wire's two same-typed `number` fields allow) resolves
+    // to a different offset and this goes red.
+    await mount();
+    deliver(buildDocument({ docVersion: 1, content: "alpha\nbravo charlie\ndelta\n" }));
+    const view = mountedView();
+    const docBefore = view.state.doc.toString();
+    expect(view.state.selection.main.head).toBe(0); // seed caret — not already at the target
+
+    deliver({ protocol: PROTOCOL_VERSION, type: "caret-apply", line: 1, character: 3 });
+
+    // line 1 ("bravo charlie") starts at offset 6 → 6 + 3.
+    expect(view.state.selection.main.head).toBe(9);
+    expect(view.state.selection.main.empty).toBe(true);
+    // Selection-only: the handoff must never mutate the document.
+    expect(view.state.doc.toString()).toBe(docBefore);
+  });
+});
+
 describe("shell — relative image read-path seam (shell → editor → facet)", () => {
   it("resolves a relative image src against the injected resourceBaseUri", async () => {
     // End-to-end passthrough of the read-path spine: mountShell({resourceBaseUri})
@@ -451,6 +765,124 @@ describe("shell — teardown flush (close-without-save data loss)", () => {
       expect(sequence.filter((s) => s === "post:edit").length).toBe(1);
     } finally {
       vi.useRealTimers();
+    }
+  });
+});
+
+describe("shell — init-failure teardown (no leaked pagehide listener)", () => {
+  // Pins the "an init failure never leaks a teardown listener on the dead page"
+  // contract asserted by the shell's own comments. The teardown listeners
+  // (flushPending's pagehide/blur, onVisibilityChange, and the perf
+  // onPageHide session-report listener) register ONLY after the ready-post
+  // succeeds, so a mount that throws mid-init must leave no pagehide listener
+  // pinning the dead shell/editor closures.
+  //
+  // Scope note: under the unit suite's QUOLL_PERF=false define (vitest.config
+  // .ts) the perf onPageHide listener is compiled out, so these tests exercise
+  // the surviving flushPending pagehide listener — the realistic regression
+  // surface (moving a teardown registration back above the ready-post throw).
+
+  it("propagates the ready-post throw, tears down the subscription, and registers no pagehide listener", async () => {
+    const winAdd = vi.spyOn(window, "addEventListener");
+    const { mountShell } = await import("../../src/webview/shell.js");
+    postMessage.mockImplementationOnce(() => {
+      throw new Error("synthetic ready-post failure");
+    });
+    // mountShell rethrows so index.ts can paint the init-error banner; `handle`
+    // is never assigned, so afterEach's dispose() does not run for this test.
+    expect(() => mountShell(container as HTMLElement, { nonce: "test-nonce" })).toThrow(
+      "synthetic ready-post failure"
+    );
+    // Host subscription torn down — no dangling handler on the dead page.
+    expect(subscribers.length).toBe(0);
+    // No pagehide listener registered during the failed init.
+    const pagehideAdds = winAdd.mock.calls.filter(([type]) => type === "pagehide");
+    expect(pagehideAdds.length).toBe(0);
+    winAdd.mockRestore();
+  });
+
+  it("registers the pagehide flush listener only after init succeeds and removes it on dispose", async () => {
+    const winAdd = vi.spyOn(window, "addEventListener");
+    const winRemove = vi.spyOn(window, "removeEventListener");
+    await mount();
+    // Init succeeded → the pagehide flush listener is now registered.
+    expect(winAdd.mock.calls.filter(([type]) => type === "pagehide").length).toBeGreaterThanOrEqual(
+      1
+    );
+    handle?.dispose();
+    handle = null;
+    // dispose() removes it symmetrically — no leak on teardown.
+    expect(
+      winRemove.mock.calls.filter(([type]) => type === "pagehide").length
+    ).toBeGreaterThanOrEqual(1);
+    winAdd.mockRestore();
+    winRemove.mockRestore();
+  });
+});
+
+describe("attachTeardownListeners — perf onPageHide rides the after-init set", () => {
+  // These pin the actual leak fix directly, independent of the QUOLL_PERF build
+  // flag: the mountShell integration tests above cannot observe the perf
+  // onPageHide listener because the unit config compiles it out (onPageHide is
+  // null when QUOLL_PERF=false). Driving the seam with an explicit non-null
+  // onPageHide exercises the branch that, in a perf build, must ride the
+  // after-init teardown set rather than a mount-time registration. If the fix
+  // regressed (onPageHide dropped from this set / registered elsewhere), the
+  // first test goes red.
+
+  it("registers onPageHide on pagehide (once) and the remover takes it back off", async () => {
+    const { attachTeardownListeners } = await import("../../src/webview/shell.js");
+    const winAdd = vi.spyOn(window, "addEventListener");
+    const winRemove = vi.spyOn(window, "removeEventListener");
+    const onPageHide = vi.fn();
+    const flushPending = vi.fn();
+    const remove = attachTeardownListeners({
+      onPageHide,
+      flushPending,
+      onVisibilityChange: vi.fn(),
+    });
+    // onPageHide is registered on pagehide with { once: true }.
+    const onPageHideAdds = winAdd.mock.calls.filter(
+      ([type, fn]) => type === "pagehide" && fn === onPageHide
+    );
+    expect(onPageHideAdds.length).toBe(1);
+    expect(onPageHideAdds[0][2]).toEqual({ once: true });
+    // Its fire order precedes flushPending's pagehide listener (perf report,
+    // then flush).
+    const pagehideFns = winAdd.mock.calls
+      .filter(([type]) => type === "pagehide")
+      .map(([, fn]) => fn);
+    expect(pagehideFns.indexOf(onPageHide)).toBeLessThan(pagehideFns.indexOf(flushPending));
+    // The remover unwinds onPageHide symmetrically.
+    remove();
+    expect(
+      winRemove.mock.calls.filter(([type, fn]) => type === "pagehide" && fn === onPageHide).length
+    ).toBe(1);
+    winAdd.mockRestore();
+    winRemove.mockRestore();
+  });
+
+  it("registers no perf pagehide listener when onPageHide is null (the QUOLL_PERF=false build)", async () => {
+    const { attachTeardownListeners } = await import("../../src/webview/shell.js");
+    const winAdd = vi.spyOn(window, "addEventListener");
+    const flushPending = vi.fn();
+    // Capture the remover and call it in a finally — otherwise this test would
+    // leak the flushPending/blur/visibilitychange listeners onto the shared
+    // happy-dom window/document (the exact add/remove asymmetry this fix guards
+    // against, in test code).
+    const remove = attachTeardownListeners({
+      onPageHide: null,
+      flushPending,
+      onVisibilityChange: vi.fn(),
+    });
+    try {
+      // Only flushPending's pagehide listener is registered — no extra perf one.
+      const pagehideAdds = winAdd.mock.calls.filter(([type]) => type === "pagehide");
+      expect(pagehideAdds.length).toBe(1);
+      expect(pagehideAdds[0][1]).toBe(flushPending);
+    } finally {
+      remove();
+      winAdd.mockRestore();
     }
   });
 });

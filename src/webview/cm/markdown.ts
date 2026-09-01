@@ -219,7 +219,16 @@ const headerIndent = foldService.of((state, start, end) => {
  *      identity, so the editor language MUST carry the same `data` facet to be
  *      recognised as active (mkLang does the same).
  *    - support: headerIndent (heading folds) and markdownKeymap at Prec.high —
- *      the support extensions `markdown()` adds that we keep. We deliberately
+ *      the support extensions `markdown()` adds that we keep. markdownKeymap's
+ *      Enter (`insertNewlineContinueMarkup`) is DELIBERATELY the lower-precedence
+ *      fallback: editor.ts mounts Quoll's list-continuation AND fenced-code Enter
+ *      handlers at Prec.highest ABOVE it (it had shadowed both at equal precedence —
+ *      list items, and fence openers whose caret sits on a `> `/list prefix), so
+ *      upstream Enter only fires for the carets Quoll defers on — chiefly blockquote
+ *      continuation (which Quoll does not reimplement and explicitly defers). Its
+ *      Backspace (`deleteMarkupBackward`) is unaffected. This mount stays Prec.high
+ *      (not higher) precisely so Quoll's promoted handlers win; see editor.ts's
+ *      Enter precedence story. We deliberately
  *      DROP the built-in pasteURLAsLink; Quoll's own paste-URL-over-selection
  *      handler (src/webview/cm/paste/url-link-paste.ts, mounted in editor.ts)
  *      supersedes it with allowlist-aligned, single-token http(s) detection.

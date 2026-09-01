@@ -1242,6 +1242,54 @@ describe("quollOutline resizable width", () => {
     h.dispatchEvent(pm(320));
     expect(widthVar(host)).toBe("320px");
   });
+
+  it("hovering the handle cancels the armed hover-close (aiming for the grab never closes)", () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const { host } = mount("# Alpha\n");
+    hoverToggle(host);
+    // Moving the pointer from the sidebar onto the host-sibling handle fires the
+    // sidebar's pointerleave (arming the close); the handle's own pointerenter
+    // must cancel it so a pause while aiming for the grab doesn't close the panel.
+    leaveSidebar(host);
+    handleEl(host).dispatchEvent(new Event("pointerenter"));
+    vi.advanceTimersByTime(1000); // well past the 150ms grace — no pending close
+    expect(isOpen(host)).toBe(true);
+  });
+
+  it("leaving the handle (not back into the sidebar) re-arms the hover-close", () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const { host } = mount("# Alpha\n");
+    hoverToggle(host);
+    leaveSidebar(host);
+    handleEl(host).dispatchEvent(new Event("pointerenter"));
+    // Prove the handle's pointerenter cancel actually fired: advance past the
+    // 150ms deadline the sidebar's own leaveSidebar() timer would have closed by,
+    // with nothing else pending. Without the cancel, the panel would be gone here
+    // — so this pins the pointerenter half independently of the re-arm below.
+    vi.advanceTimersByTime(150);
+    expect(isOpen(host)).toBe(true);
+    // Pointer sits on the handle (close cancelled), then leaves it rightward into
+    // the editor: hover-to-close must still fire so the overlay doesn't get stuck.
+    handleEl(host).dispatchEvent(new Event("pointerleave"));
+    expect(isOpen(host)).toBe(true); // grace window
+    vi.advanceTimersByTime(200);
+    expect(isOpen(host)).toBe(false);
+  });
+
+  it("does not close the OVERLAY when a boundary pointerleave fires mid-drag (isResizing no-op)", () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const { host } = mount("# Alpha\n");
+    hoverToggle(host); // past the hover-intent delay — overlay is open, NOT pinned
+    expect(isOpen(host)).toBe(true);
+    const h = handleEl(host);
+    stubPointerCapture(h);
+    h.dispatchEvent(pd(260)); // drag starts → isResizing() true
+    h.dispatchEvent(pm(300));
+    leaveSidebar(host); // would arm a close; the isResizing() guard must suppress it
+    vi.advanceTimersByTime(1000); // well past the 150ms grace — still no close
+    expect(isOpen(host)).toBe(true);
+    h.dispatchEvent(pu(300)); // end the drag through the real accessor
+  });
 });
 
 // Keyboard resize (A11Y-07): the handle is a focusable WAI-ARIA window splitter.

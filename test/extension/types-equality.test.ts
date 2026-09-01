@@ -16,13 +16,22 @@
 // are where the load-bearing e2e-mirror drift lives.
 //
 // This file also hosts unrelated tsc-enforced type-level pins for source
-// modules (see the "status-bar type pins" describe block below) — they reuse
-// the same AssertEqual-runs-under-`pnpm compile` mechanism but are NOT part of
-// the e2e-mirror equality guard described above.
+// modules (the "handoff type pins", "table model type pins", and "status-bar
+// type pins" describe blocks below). They are NOT part of the e2e-mirror
+// equality guard above: each pins a source-module type contract with a
+// tsc-checked assertion — an AssertEqual identity check or a
+// `@ts-expect-error` directive — which is non-vacuous only because
+// `pnpm compile` type-checks THIS file.
 
 import { describe, expect, it } from "vitest";
+import {
+  clampHandoffSelection,
+  type HandleContextHandoffPayload,
+  type HandoffRevealSelection,
+} from "../../src/extension/handoff/handle-context-handoff";
 import type { EndOfLineValue } from "../../src/extension/status-bar";
 import type { PanelControls } from "../../src/extension/test-harness";
+import type { Cell, DelimiterCell, DelimiterRow, Row, Table } from "../../src/markdown/table/model";
 import type {
   DocumentMessage,
   EditMessage,
@@ -85,6 +94,92 @@ describe("e2e/types mirror equality", () => {
     const _drift: PanelControlsShape = _src;
     void _drift;
     expect(true).toBe(true);
+  });
+});
+
+describe("handoff type pins", () => {
+  it("rejects a raw handoff payload where a clamped HandoffRevealSelection is required", () => {
+    // HandoffRevealSelection's "clamped + ordered against the live line count"
+    // contract used to be documentation-only: the type was structurally
+    // identical to the untrusted HandleContextHandoffPayload, so the raw
+    // payload could be passed straight to revealForMention, whose
+    // implementation calls document.lineAt(endLine - 1) with no re-clamp.
+    // The brand makes clampHandoffSelection the only construction point.
+    //
+    // Lives here (not in the handoff unit test) for the reason spelled out in
+    // the status-bar pin below: this file is the one test program `pnpm
+    // compile` type-checks, so a @ts-expect-error here is non-vacuous.
+    // Revert-check: drop the brand from HandoffRevealSelection and the
+    // directive below becomes unused → tsc errors on it.
+    const raw = {} as unknown as HandleContextHandoffPayload;
+    // @ts-expect-error — a raw payload is not a clamped selection.
+    const _drift: HandoffRevealSelection = raw;
+    void _drift;
+    expect(true).toBe(true);
+  });
+
+  it("accepts the clamp helper's result as a HandoffRevealSelection", () => {
+    // The other half of the pin: the sole construction point must still
+    // produce the branded type (a brand nobody can build is useless).
+    const clamped: HandoffRevealSelection = clampHandoffSelection(
+      { hasSelection: true, startLine: 1, endLine: 1 },
+      1
+    );
+    expect(clamped).toEqual({ hasSelection: true, startLine: 1, endLine: 1 });
+  });
+
+  it("keeps HandoffRevealSelection's data fields readonly", () => {
+    // The brand alone only proves an instance was minted through
+    // clampHandoffSelection — it says nothing about the fields staying
+    // clamped afterwards. Revert-check: drop `readonly` from
+    // HandoffRevealSelection's data fields and the directive below becomes
+    // unused → tsc errors (TS2578) at this file, which `pnpm compile`
+    // type-checks.
+    const clamped = clampHandoffSelection({ hasSelection: true, startLine: 1, endLine: 1 }, 1);
+    // @ts-expect-error — startLine is readonly; construction-time clamping
+    // must not be undoable by later mutation.
+    clamped.startLine = 2;
+    expect(true).toBe(true);
+  });
+});
+
+describe("table model type pins", () => {
+  it("keeps every field and array of the GFM table model readonly", () => {
+    // makeTable's header/delimiter cell-count check is a CONSTRUCTION-time
+    // gate; it only stays true afterwards if nothing can write into the model
+    // it returned. `readonly` throughout is what makes that hold, and these
+    // assertions are what keep it from being dropped silently.
+    //
+    // Lives here for the reason the status-bar pin spells out: no tsconfig
+    // type-checks test/markdown, so the same assertion next to the model's own
+    // unit test would be erased by vitest's transpile-only path and never fail.
+    //
+    // `Readonly<T>` is homomorphic, so `AssertEqual<T, Readonly<T>>` holds only
+    // when EVERY field of T is already readonly — including fields added later,
+    // which a per-field `@ts-expect-error` would stop covering the moment the
+    // shape grows. Revert-check: drop `readonly` from any single field below
+    // and its assertion resolves to `false`, failing the `= true` assignment.
+    const _table: AssertEqual<Table, Readonly<Table>> = true;
+    const _row: AssertEqual<Row, Readonly<Row>> = true;
+    const _cell: AssertEqual<Cell, Readonly<Cell>> = true;
+    const _delimiterRow: AssertEqual<DelimiterRow, Readonly<DelimiterRow>> = true;
+    const _delimiterCell: AssertEqual<DelimiterCell, Readonly<DelimiterCell>> = true;
+    // Readonly<T> is SHALLOW: it freezes the `cells` field but not the array it
+    // holds, so the collections need their own pins. A mutable `Row[]` is not
+    // structurally equal to `readonly Row[]` (it carries push/splice/index-set).
+    const _rows: AssertEqual<Table["rows"], readonly Row[]> = true;
+    const _cells: AssertEqual<Row["cells"], readonly Cell[]> = true;
+    const _delimiterCells: AssertEqual<DelimiterRow["cells"], readonly DelimiterCell[]> = true;
+    expect(
+      _table &&
+        _row &&
+        _cell &&
+        _delimiterRow &&
+        _delimiterCell &&
+        _rows &&
+        _cells &&
+        _delimiterCells
+    ).toBe(true);
   });
 });
 

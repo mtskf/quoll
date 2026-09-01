@@ -12,15 +12,20 @@
 //   2. markdownKeymap (Enter/Backspace) is wired + active.
 //   3. the re-implemented headerIndent folds heading lines byte-identically to
 //      upstream markdown({ base }) — a parity oracle across heading fixtures.
+//   4. the re-implemented listItemFold folds list items byte-identically to that
+//      same upstream oracle — its surviving (non-null) range.
 // NOTE: the built-in pasteURLAsLink is deliberately NOT part of this language
 // (dropped in markdown.ts); Quoll's own paste-URL-over-selection handler lives in
 // src/webview/cm/paste/url-link-paste.ts and is covered by cm-paste-url-link.test.ts.
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
-import { codeFolding, ensureSyntaxTree, foldable, syntaxTree } from "@codemirror/language";
+import { codeFolding, foldable, syntaxTree } from "@codemirror/language";
 import { EditorSelection, EditorState, type Extension } from "@codemirror/state";
 import { EditorView, runScopeHandlers } from "@codemirror/view";
 import { afterEach, describe, expect, it } from "vitest";
 import { quollMarkdownLanguage } from "../../src/webview/cm/markdown.js";
+import { fullTree } from "./helpers/full-tree.js";
+import { settledState } from "./helpers/settled-state.js";
+import { settledView } from "./helpers/settled-view.js";
 
 const quollLang = quollMarkdownLanguage();
 const upstreamLang = markdown({ base: markdownLanguage });
@@ -42,7 +47,14 @@ function mount(doc: string, anchor: number, selEnd = anchor): EditorView {
       extensions: [quollLang],
     }),
   });
-  ensureSyntaxTree(view.state, view.state.doc.length, 5000);
+  // Settle the parse AND republish the language field's tree snapshot: the keymap
+  // commands exercised below (lang-markdown's insertNewlineContinueMarkupCommand and
+  // deleteMarkupBackward) read that snapshot via `syntaxTree(state)`, which a bare
+  // `ensureSyntaxTree` leaves truncated — see helpers/settled-state.ts. `settledView`
+  // is its view-carrying twin: it throws rather than returning a discardable boolean.
+  // The thrown message names which non-convergence fired; helpers/settled-view.ts's
+  // docblock is the authority on the full set, so this comment does not restate it.
+  settledView(view);
   return view;
 }
 
@@ -77,6 +89,28 @@ describe("quollMarkdownLanguage wires the active markdownKeymap", () => {
   });
 });
 
+describe("mount() hands the keymap a settled tree snapshot", () => {
+  // Non-vacuity guard for mount()'s `settledView(view)` settle, made deterministic by
+  // DOC SIZE instead of CPU load — same construction as cm-fold-blockquote.test.ts's
+  // "reads a settled parse" describe, which documents why an over-long doc always
+  // lands a truncated snapshot. Replace mount()'s `settledView(view)` with a bare
+  // `ensureSyntaxTree(view.state, view.state.doc.length)` — which advances the parse
+  // CONTEXT but never republishes the field snapshot — and the second assertion goes red.
+  const doc = `${"filler paragraph line\n\n".repeat(200)}- alpha`;
+
+  it("a freshly-created state's snapshot is truncated (the precondition)", () => {
+    // If an upstream change ever made the init snapshot complete, the guard below
+    // would be vacuous — so it reds here instead of silently passing.
+    const state = EditorState.create({ doc, extensions: [quollLang] });
+    expect(syntaxTree(state).length).toBeLessThan(state.doc.length);
+  });
+
+  it("the mounted view's snapshot spans the whole doc", () => {
+    const v = mount(doc, doc.length);
+    expect(syntaxTree(v.state).length).toBe(v.state.doc.length);
+  });
+});
+
 describe("re-implemented headerIndent folds byte-identically to upstream", () => {
   // The parity oracle for the section-boundary math. Compare foldable() on the
   // HEADING line only (quollLang's nonFoldableBlocks subtraction diverges from
@@ -84,9 +118,11 @@ describe("re-implemented headerIndent folds byte-identically to upstream", () =>
   // shared contract). A wrong sectionEnd/headingLevel diverges from upstream.
   // The blockquote-wrapped-heading fixture pins the exact from/to that
   // cm-fold-blockquote.test.ts only asserts `not.toBeNull()` for.
+  // Settled, not merely ensureSyntaxTree'd: `foldable()` resolves in the language
+  // field's tree snapshot, which a bare `ensureSyntaxTree` leaves truncated — the
+  // load-sensitive spurious `null`. See helpers/settled-state.ts.
   function foldHeadingRange(lang: Extension, doc: string, headAt: number) {
-    const state = EditorState.create({ doc, extensions: [lang, codeFolding()] });
-    ensureSyntaxTree(state, state.doc.length, 5000);
+    const state = settledState(EditorState.create({ doc, extensions: [lang, codeFolding()] }));
     const line = state.doc.lineAt(headAt);
     return foldable(state, line.from, line.to);
   }
@@ -195,11 +231,40 @@ describe("re-implemented headerIndent folds byte-identically to upstream", () =>
   });
 });
 
+describe("re-implemented listItemFold folds list items byte-identically to upstream", () => {
+  // The parity oracle for listItemFold's SURVIVING range (cm/markdown.ts) — the arm
+  // cm-fold-blockquote.test.ts leaves uncompared, since it asserts only null /
+  // not-null. Same construction as the headerIndent oracle above: settled state,
+  // foldable() on the first line, byte-identical from/to against upstream.
+  function foldListRange(lang: Extension, doc: string) {
+    const state = settledState(EditorState.create({ doc, extensions: [lang, codeFolding()] }));
+    const line = state.doc.line(1);
+    return foldable(state, line.from, line.to);
+  }
+
+  const FIXTURES = [
+    "- a\n  - b\n  - c\n- d\n", // nested children
+    "- item line one\n  item line two\n  item line three\n- next\n", // indented continuation lines
+    "- lazy one\nlazy two\n- next\n", // lazy continuation line (no indent)
+    "1. one\n   cont\n2. two\n", // ordered marker
+  ];
+
+  for (const doc of FIXTURES) {
+    it(`matches upstream fold range for ${JSON.stringify(doc.slice(0, 14))}…`, () => {
+      const q = foldListRange(quollLang, doc);
+      expect(q).not.toBeNull(); // list items must stay foldable...
+      expect(q).toEqual(foldListRange(upstreamLang, doc)); // ...with upstream's from/to.
+    });
+  }
+});
+
 describe("quollMarkdownLanguage registers the ==highlight== inline mark", () => {
   it("parses ==text== into a Highlight span (registered in the webview config)", () => {
     const state = EditorState.create({ doc: "==hi==", extensions: [quollLang] });
     const names: string[] = [];
-    syntaxTree(state).iterate({
+    // Walk the returned tree only, so `fullTree` — not `syntaxTree(state)`'s
+    // truncatable init snapshot — is the right read here.
+    fullTree(state).iterate({
       enter: (n) => {
         names.push(n.name);
       },

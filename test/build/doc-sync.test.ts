@@ -12,15 +12,18 @@
 // so reading it here would fail in CI. "Passes on current tree" is pinned
 // separately by the local `pnpm check:doc-sync` run, not by this suite.
 //
-// @ts-nocheck — importing a plain .mjs with no bundled types; vitest runs
-// this transpile-only and tsc does not include test/build/ in `pnpm compile`.
+// The .mjs import below is untyped, so it carries a line-scoped
+// `@ts-expect-error`; everything this file itself authors stays checked by
+// `test/build/tsconfig.json` under `pnpm compile`.
 import { describe, expect, it } from "vitest";
 
-import {
-  extractCodeMessageTypes,
-  extractDocMessageNames,
-  findDrift,
-} from "../../scripts/check-doc-sync.mjs";
+// Namespace import so the module specifier — where TS7016 is reported — stays on
+// the same line as the directive; a named import wide enough for all three
+// bindings wraps and leaves the suppression unused (see theme-palettes.test.ts).
+// @ts-expect-error — plain .mjs with no bundled types; vitest transpiles it.
+import * as docSync from "../../scripts/check-doc-sync.mjs";
+
+const { extractCodeMessageTypes, extractDocMessageNames, findDrift } = docSync;
 
 // A minimal protocol.ts shaped like the real one: message types declare their
 // discriminant via a `type: "…"` field; a builder repeats a literal (dedup);

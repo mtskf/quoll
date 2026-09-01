@@ -33,7 +33,6 @@
 
 import * as assert from "node:assert";
 import * as fs from "node:fs/promises";
-import * as os from "node:os";
 import * as path from "node:path";
 import * as vscode from "vscode";
 import {
@@ -41,6 +40,7 @@ import {
   getHarness,
   isDocumentAfter,
   isDocumentEvent,
+  makeTempDir,
   VIEW_TYPE,
 } from "./harness";
 import type { DocumentMessageShape, RecordedEventShape } from "./types";
@@ -70,7 +70,7 @@ describe("external-fs-write-propagates", function () {
   it("propagates an out-of-process fs.writeFile as a higher-docVersion Document", async () => {
     // Per-test temp dir so a mid-test failure does not leave the shared
     // fixture dirty for subsequent tests (mirrors external-edit-propagates).
-    tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "quoll-e2e-fswrite-"));
+    tempDir = await makeTempDir("fswrite");
     tempFile = path.join(tempDir, "ext-fs-write.md");
     await fs.writeFile(tempFile, "# Initial\n\nbody\n");
     const uri = vscode.Uri.file(tempFile);

@@ -1,7 +1,12 @@
 // @vitest-environment happy-dom
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
-import { EditorSelection, EditorState } from "@codemirror/state";
-import { EditorView } from "@codemirror/view";
+import {
+  EditorSelection,
+  EditorState,
+  type EditorStateConfig,
+  type Transaction,
+} from "@codemirror/state";
+import type { EditorView } from "@codemirror/view";
 import { describe, expect, it, vi } from "vitest";
 
 import { PROTOCOL_VERSION, type WebviewToHost } from "../../src/shared/protocol.js";
@@ -11,14 +16,36 @@ import {
   quollLinkClickHandler,
   tryOpenLinkAt,
 } from "../../src/webview/cm/link-handlers.js";
+import { settledState } from "./helpers/settled-state.js";
+import { settledMount } from "./helpers/settled-view.js";
 
 // ---- tryOpenLinkAt (Task 7) ----
 
-function stateOf(doc: string): EditorState {
-  return EditorState.create({
-    doc,
-    extensions: [markdown({ base: markdownLanguage })],
-  });
+// Settled: tryOpenLinkAt reads `syntaxTree(state)` (link-handlers.ts) — the language
+// field's SNAPSHOT, which a freshly-created state leaves truncated whenever the bounded
+// init parse runs out of budget. An unsettled fixture makes a real Link read as plain text
+// under CPU load.
+//
+// `selection` is typed as EditorStateConfig["selection"] rather than a number so the
+// multi-cursor fixture below can pass an EditorSelection; a present-but-undefined key
+// takes EditorState.create's own `!config.selection` default branch (cursor 0), the same
+// as an absent one.
+function stateOf(doc: string, selection?: EditorStateConfig["selection"]): EditorState {
+  return settledState(
+    EditorState.create({
+      doc,
+      selection,
+      extensions: [
+        markdown({ base: markdownLanguage }),
+        // Load-bearing for the multi-cursor fixture below: EditorState.create ends in
+        // `selection.asSingle()` — and every transaction, `settledState`'s empty update
+        // included, re-collapses the same way — unless this facet is set. Without it that
+        // fixture would silently degrade to a single cursor. A no-op for every other
+        // (single-range) call site here.
+        EditorState.allowMultipleSelections.of(true),
+      ],
+    })
+  );
 }
 
 function posOf(doc: string, marker: string): number {
@@ -29,6 +56,13 @@ function posOf(doc: string, marker: string): number {
   return i;
 }
 
+/** Fragment scroll sink for the non-fragment cases: asserts by exploding, so a
+ *  test that unexpectedly takes the fragment arm fails loudly instead of
+ *  quietly passing. */
+const noScroll = () => {
+  throw new Error("unexpected in-document scroll");
+};
+
 describe("tryOpenLinkAt — safe URLs", () => {
   it("posts open-external for an https Link on hover position", () => {
     const doc = "see [link](https://example.com) end";
@@ -37,7 +71,7 @@ describe("tryOpenLinkAt — safe URLs", () => {
     const host = { postMessage: (m: { type: string; href?: string }) => posted.push(m) };
     // Position on the inline content `link` (between `[` and `]`).
     const pos = posOf(doc, "link") + 1;
-    const handled = tryOpenLinkAt(state, pos, host);
+    const handled = tryOpenLinkAt(state, pos, host, noScroll);
     expect(handled).toBe(true);
     expect(posted).toEqual([{ protocol: 1, type: "open-external", href: "https://example.com" }]);
   });
@@ -56,7 +90,7 @@ describe("tryOpenLinkAt — safe URLs", () => {
     const state = stateOf(doc);
     const posted: Array<{ type: string; href?: string }> = [];
     const host = { postMessage: (m: { type: string; href?: string }) => posted.push(m) };
-    expect(tryOpenLinkAt(state, posOf(doc, "[t]") + 1, host)).toBe(true);
+    expect(tryOpenLinkAt(state, posOf(doc, "[t]") + 1, host, noScroll)).toBe(true);
     expect(posted[0]?.href).toBe("http://x");
   });
 
@@ -65,7 +99,7 @@ describe("tryOpenLinkAt — safe URLs", () => {
     const state = stateOf(doc);
     const posted: Array<{ type: string; href?: string }> = [];
     const host = { postMessage: (m: { type: string; href?: string }) => posted.push(m) };
-    expect(tryOpenLinkAt(state, posOf(doc, "contact"), host)).toBe(true);
+    expect(tryOpenLinkAt(state, posOf(doc, "contact"), host, noScroll)).toBe(true);
     expect(posted[0]?.href).toBe("mailto:a@b.c");
   });
 
@@ -77,7 +111,7 @@ describe("tryOpenLinkAt — safe URLs", () => {
     const state = stateOf(doc);
     const posted: Array<{ type: string; href?: string }> = [];
     const host = { postMessage: (m: { type: string; href?: string }) => posted.push(m) };
-    expect(tryOpenLinkAt(state, posOf(doc, "[t]") + 1, host)).toBe(true);
+    expect(tryOpenLinkAt(state, posOf(doc, "[t]") + 1, host, noScroll)).toBe(true);
     expect(posted[0]?.href).toBe("https://example.com");
   });
 });
@@ -106,7 +140,7 @@ function setupLink(markup: string): {
 describe("tryOpenLinkAt — open-link (relative .md)", () => {
   it("posts open-link for a relative .md link", () => {
     const { host, state, linkPos } = setupLink("[go](./other.md)");
-    expect(tryOpenLinkAt(state, linkPos, host)).toBe(true);
+    expect(tryOpenLinkAt(state, linkPos, host, noScroll)).toBe(true);
     expect(host.posted).toContainEqual({
       protocol: PROTOCOL_VERSION,
       type: "open-link",
@@ -116,7 +150,7 @@ describe("tryOpenLinkAt — open-link (relative .md)", () => {
 
   it("posts open-link for a parent-relative .md link", () => {
     const { host, state, linkPos } = setupLink("[go](../notes/other.md)");
-    expect(tryOpenLinkAt(state, linkPos, host)).toBe(true);
+    expect(tryOpenLinkAt(state, linkPos, host, noScroll)).toBe(true);
     expect(host.posted).toContainEqual({
       protocol: PROTOCOL_VERSION,
       type: "open-link",
@@ -126,7 +160,7 @@ describe("tryOpenLinkAt — open-link (relative .md)", () => {
 
   it("posts open-link (fragment retained) for a .md link with a #fragment", () => {
     const { host, state, linkPos } = setupLink("[go](./other.md#sec)");
-    expect(tryOpenLinkAt(state, linkPos, host)).toBe(true);
+    expect(tryOpenLinkAt(state, linkPos, host, noScroll)).toBe(true);
     expect(host.posted).toContainEqual({
       protocol: PROTOCOL_VERSION,
       type: "open-link",
@@ -136,7 +170,7 @@ describe("tryOpenLinkAt — open-link (relative .md)", () => {
 
   it("still posts open-external for an https link", () => {
     const { host, state, linkPos } = setupLink("[go](https://example.com)");
-    expect(tryOpenLinkAt(state, linkPos, host)).toBe(true);
+    expect(tryOpenLinkAt(state, linkPos, host, noScroll)).toBe(true);
     expect(host.posted).toContainEqual({
       protocol: PROTOCOL_VERSION,
       type: "open-external",
@@ -146,13 +180,13 @@ describe("tryOpenLinkAt — open-link (relative .md)", () => {
 
   it("does not post for a relative non-.md link", () => {
     const { host, state, linkPos } = setupLink("[img](./photo.png)");
-    expect(tryOpenLinkAt(state, linkPos, host)).toBe(false);
+    expect(tryOpenLinkAt(state, linkPos, host, noScroll)).toBe(false);
     expect(host.posted).toEqual([]);
   });
 
   it("does not post for an absolute .md link (falls to caret move)", () => {
     const { host, state, linkPos } = setupLink("[x](/etc/passwd.md)");
-    expect(tryOpenLinkAt(state, linkPos, host)).toBe(false);
+    expect(tryOpenLinkAt(state, linkPos, host, noScroll)).toBe(false);
     expect(host.posted).toEqual([]);
   });
 
@@ -165,7 +199,7 @@ describe("tryOpenLinkAt — open-link (relative .md)", () => {
 
   it("does not post for a fragment-only link", () => {
     const { host, state, linkPos } = setupLink("[x](#sec)");
-    expect(tryOpenLinkAt(state, linkPos, host)).toBe(false);
+    expect(tryOpenLinkAt(state, linkPos, host, noScroll)).toBe(false);
     expect(host.posted).toEqual([]);
   });
 });
@@ -219,7 +253,7 @@ describe("tryOpenLinkAt — unsafe URLs (render-gate INERT)", () => {
       const state = stateOf(doc);
       const posted: unknown[] = [];
       const host = { postMessage: (m: unknown) => posted.push(m) };
-      const handled = tryOpenLinkAt(state, posOf(doc, "[t]") + 1, host);
+      const handled = tryOpenLinkAt(state, posOf(doc, "[t]") + 1, host, noScroll);
       // Two acceptable outcomes:
       //   (a) handled=false (caller falls through; caret moves into link
       //       and the user can edit/delete the unsafe URL)
@@ -240,7 +274,7 @@ describe("tryOpenLinkAt — non-launchable safe URLs", () => {
     const state = stateOf(doc);
     const posted: unknown[] = [];
     const host = { postMessage: (m: unknown) => posted.push(m) };
-    expect(tryOpenLinkAt(state, posOf(doc, "[t]") + 1, host)).toBe(false);
+    expect(tryOpenLinkAt(state, posOf(doc, "[t]") + 1, host, noScroll)).toBe(false);
     expect(posted).toEqual([]);
   });
 
@@ -249,7 +283,7 @@ describe("tryOpenLinkAt — non-launchable safe URLs", () => {
     const state = stateOf(doc);
     const posted: unknown[] = [];
     const host = { postMessage: (m: unknown) => posted.push(m) };
-    expect(tryOpenLinkAt(state, posOf(doc, "[t]") + 1, host)).toBe(false);
+    expect(tryOpenLinkAt(state, posOf(doc, "[t]") + 1, host, noScroll)).toBe(false);
     expect(posted).toEqual([]);
   });
 });
@@ -260,7 +294,7 @@ describe("tryOpenLinkAt — non-Link positions", () => {
     const state = stateOf(doc);
     const posted: unknown[] = [];
     const host = { postMessage: (m: unknown) => posted.push(m) };
-    expect(tryOpenLinkAt(state, 3, host)).toBe(false);
+    expect(tryOpenLinkAt(state, 3, host, noScroll)).toBe(false);
     expect(posted).toEqual([]);
   });
 
@@ -271,7 +305,7 @@ describe("tryOpenLinkAt — non-Link positions", () => {
     const state = stateOf(doc);
     const posted: unknown[] = [];
     const host = { postMessage: (m: unknown) => posted.push(m) };
-    expect(tryOpenLinkAt(state, posOf(doc, "[ref]") + 1, host)).toBe(false);
+    expect(tryOpenLinkAt(state, posOf(doc, "[ref]") + 1, host, noScroll)).toBe(false);
     expect(posted).toEqual([]);
   });
 
@@ -280,7 +314,7 @@ describe("tryOpenLinkAt — non-Link positions", () => {
     const state = stateOf(doc);
     const posted: unknown[] = [];
     const host = { postMessage: (m: unknown) => posted.push(m) };
-    expect(tryOpenLinkAt(state, posOf(doc, "alt"), host)).toBe(false);
+    expect(tryOpenLinkAt(state, posOf(doc, "alt"), host, noScroll)).toBe(false);
     expect(posted).toEqual([]);
   });
 });
@@ -292,34 +326,41 @@ describe("tryOpenLinkAt — already revealed link (caret in link)", () => {
   // false so the caller falls through to default CM behaviour.
   it("returns false when state.selection intersects the Link node", () => {
     const doc = "[link](https://example.com)";
-    const state = EditorState.create({
-      doc,
-      // Caret inside the inline content `link`.
-      selection: EditorSelection.single(3),
-      extensions: [markdown({ base: markdownLanguage })],
-    });
+    // Caret inside the inline content `link`.
+    const state = stateOf(doc, EditorSelection.single(3));
     const posted: unknown[] = [];
     const host = { postMessage: (m: unknown) => posted.push(m) };
     // Click at position 3 (same as selection) — but the contract is "if
     // CURRENT selection intersects, do not open", so even a click that
     // would otherwise open returns false.
-    expect(tryOpenLinkAt(state, 3, host)).toBe(false);
+    expect(tryOpenLinkAt(state, 3, host, noScroll)).toBe(false);
     expect(posted).toEqual([]);
   });
 
   it("returns false when any cursor in a multi-cursor selection intersects the Link", () => {
     const doc = "[link](https://example.com) and other text";
-    const state = EditorState.create({
+    const state = stateOf(
       doc,
-      selection: EditorSelection.create([
-        EditorSelection.cursor(3), // inside the link
-        EditorSelection.cursor(35), // far away
-      ]),
-      extensions: [markdown({ base: markdownLanguage })],
-    });
+      // mainIndex 1: the intersecting cursor must be SECONDARY, otherwise a regression
+      // that read `state.selection.main` instead of `.ranges` (link-handlers.ts's
+      // selectionIntersects) would still find it and this test would stay green.
+      EditorSelection.create(
+        [
+          EditorSelection.cursor(3), // inside the link — secondary
+          EditorSelection.cursor(35), // far away — main
+        ],
+        1
+      )
+    );
+    expect(state.selection.ranges).toHaveLength(2); // the fixture is really multi-cursor
+    // …and the intersecting cursor is the SECONDARY one — the property `mainIndex: 1`
+    // exists for. Without this line a reorder of the two ranges (which makes
+    // EditorSelection.create renormalise and recompute mainIndex) would silently promote
+    // cursor(3) to `main` and re-vacate the test against a `.main`-only regression.
+    expect(state.selection.main.head).toBe(35);
     const posted: unknown[] = [];
     const host = { postMessage: (m: unknown) => posted.push(m) };
-    expect(tryOpenLinkAt(state, 3, host)).toBe(false);
+    expect(tryOpenLinkAt(state, 3, host, noScroll)).toBe(false);
     expect(posted).toEqual([]);
   });
 });
@@ -337,7 +378,7 @@ describe("tryOpenLinkAt — MAX_HREF_LENGTH guard", () => {
     const state = stateOf(doc);
     const posted: unknown[] = [];
     const host = { postMessage: (m: unknown) => posted.push(m) };
-    expect(tryOpenLinkAt(state, posOf(doc, "[t]") + 1, host)).toBe(false);
+    expect(tryOpenLinkAt(state, posOf(doc, "[t]") + 1, host, noScroll)).toBe(false);
     expect(posted).toEqual([]);
   });
 
@@ -353,8 +394,280 @@ describe("tryOpenLinkAt — MAX_HREF_LENGTH guard", () => {
     const state = stateOf(doc);
     const posted: Array<{ type: string; href?: string }> = [];
     const host = { postMessage: (m: { type: string; href?: string }) => posted.push(m) };
-    expect(tryOpenLinkAt(state, posOf(doc, "[t]") + 1, host)).toBe(true);
+    expect(tryOpenLinkAt(state, posOf(doc, "[t]") + 1, host, noScroll)).toBe(true);
     expect(posted[0]?.href).toBe(href);
+  });
+});
+
+// Invariant: every gate-reject bail in tryOpenLinkAt emits exactly one
+// `[quoll] link not opened: …` warn so a "this link does nothing" report has a
+// triage trail (rationale + why this is NOT a "dead click" live on
+// `warnLinkNotOpened` in src/webview/cm/link-handlers.ts). These tests pin the
+// message shape AND the NO-URL POLICY: the detail must never carry the href or
+// any slice of it.
+describe("tryOpenLinkAt — gate-reject bails warn", () => {
+  /** Click the link at `marker` and report everything the call did: its return
+   *  value, the messages posted, and the console.warn calls. `open` is
+   *  injectable so the simulated-drift test below can drive a re-imported
+   *  module through the same seam. */
+  function clickLink(
+    doc: string,
+    marker: string,
+    open: typeof tryOpenLinkAt = tryOpenLinkAt
+  ): { warnings: unknown[][]; handled: boolean; posted: unknown[] } {
+    const state = stateOf(doc);
+    const posted: unknown[] = [];
+    const host = { postMessage: (m: unknown) => posted.push(m) };
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    try {
+      const handled = open(state, posOf(doc, marker) + 1, host, noScroll);
+      // Structural backstop: tryOpenLinkAt returns true ONLY when it posted, so
+      // a bail must post nothing and an open must post exactly one message.
+      // Asserted here (not only at the call sites) so a gate-reject test added
+      // later inherits the invariant instead of having to remember it.
+      if (handled) {
+        expect(posted).toHaveLength(1);
+      } else {
+        expect(posted).toEqual([]);
+      }
+      return { warnings: warnSpy.mock.calls.map((c) => [...c]), handled, posted };
+    } finally {
+      warnSpy.mockRestore();
+    }
+  }
+
+  it("warns with the rejected URL's scheme when the URL is not in the allowlist", () => {
+    const { warnings, handled, posted } = clickLink("see [t](javascript:alert(1))", "[t]");
+    expect(handled).toBe(false);
+    expect(posted).toEqual([]);
+    expect(warnings).toEqual([
+      ["[quoll] link not opened: URL not in allowlist", { scheme: "javascript" }],
+    ]);
+    // The scheme token is safe to log; the URL body ("alert(1)") is not.
+    expect(JSON.stringify(warnings)).not.toContain("alert(1)");
+  });
+
+  it('warns with scheme "(none)" when the rejected URL carries no scheme', () => {
+    const { warnings, handled, posted } = clickLink("see [t](//evil.example/x)", "[t]");
+    expect(handled).toBe(false);
+    expect(posted).toEqual([]);
+    expect(warnings).toEqual([
+      ["[quoll] link not opened: URL not in allowlist", { scheme: "(none)" }],
+    ]);
+    expect(JSON.stringify(warnings)).not.toContain("evil.example");
+  });
+
+  it("collapses an unknown scheme token to an opaque marker (kilobyte-scale run)", async () => {
+    const { MAX_HREF_LENGTH } = await import("../../src/shared/protocol.js");
+    // `schemeOf`'s regex bounds the ALPHABET of the pre-colon run, not its
+    // LENGTH: a crafted `<thousands of scheme-legal chars>:` destination reaches
+    // the allowlist-reject warn with the whole run as `scheme`. Size the href to
+    // land EXACTLY on MAX_HREF_LENGTH so the earlier length gate cannot fire —
+    // this test must exercise the allowlist-reject branch, not that one.
+    const token = "a".repeat(MAX_HREF_LENGTH - 2);
+    const href = `${token}:x`;
+    expect(href.length).toBe(MAX_HREF_LENGTH);
+    const { warnings, handled, posted } = clickLink(`see [t](${href})`, "[t]");
+    expect(handled).toBe(false);
+    expect(posted).toEqual([]);
+    expect(warnings).toEqual([
+      ["[quoll] link not opened: URL not in allowlist", { scheme: "(unrecognised)" }],
+    ]);
+    // The NO-URL POLICY assertion proper: not one byte of the token may appear.
+    expect(JSON.stringify(warnings)).not.toContain(token);
+    // …and no PREFIX of it either — catches a truncating "fix" (`slice(0, n)`)
+    // that the whole-token check above would sail straight past.
+    expect(JSON.stringify(warnings)).not.toContain("aa");
+  });
+
+  // The reason a length cap was not the fix (review cycle 3): a short pre-colon
+  // run is still href bytes. This destination is 28 chars — comfortably under
+  // any plausible cap — and every one of them is the author's private business.
+  it("collapses a short but private-looking scheme token to an opaque marker", () => {
+    const href = "MyVault-Passw0rd.notes:entry";
+    const { warnings, handled, posted } = clickLink(`see [t](${href})`, "[t]");
+    expect(handled).toBe(false);
+    expect(posted).toEqual([]);
+    expect(warnings).toEqual([
+      ["[quoll] link not opened: URL not in allowlist", { scheme: "(unrecognised)" }],
+    ]);
+    // Check the lowercased form too: `schemeOf` lowercases before matching, so a
+    // leak would surface as `myvault-passw0rd.notes`, which an as-written
+    // substring check on the original spelling would miss.
+    const logged = JSON.stringify(warnings);
+    for (const secret of [href, href.toLowerCase(), "MyVault", "myvault", "Passw0rd", "entry"]) {
+      expect(logged).not.toContain(secret);
+    }
+  });
+
+  // Length must not re-enter the decision by any door. Every leak this file has
+  // shipped was a length rule that looked safe, so the classification has to
+  // hold at the one size no "short tokens are fine" shortcut can sit below: the
+  // shortest token the scheme grammar admits at all. Passing this can only be
+  // done by classifying, never by measuring.
+  it("collapses an unrecognised scheme token of the shortest possible length", () => {
+    const { warnings, handled, posted } = clickLink("see [t](a:entry)", "[t]");
+    expect(handled).toBe(false);
+    expect(posted).toEqual([]);
+    expect(warnings).toEqual([
+      ["[quoll] link not opened: URL not in allowlist", { scheme: "(unrecognised)" }],
+    ]);
+  });
+
+  // Triage value must survive the classification: these are the schemes the
+  // render gate and write validator exist to block, so a blocked-link report is
+  // only actionable while the warn still names them. Pins LOGGABLE_SCHEMES
+  // against being quietly emptied "for safety".
+  it.each([
+    ["javascript", "javascript:alert(1)"],
+    ["vbscript", "vbscript:msgbox"],
+    ["data", "data:text/html,<script>alert(1)</script>"],
+    ["blob", "blob:https://example.com/uuid"],
+    ["file", "file:///etc/passwd"],
+    ["about", "about:blank"],
+  ])("still names the known dangerous scheme %s", (scheme, href) => {
+    const { warnings, handled, posted } = clickLink(`see [t](${href})`, "[t]");
+    expect(handled).toBe(false);
+    expect(posted).toEqual([]);
+    expect(warnings).toEqual([["[quoll] link not opened: URL not in allowlist", { scheme }]]);
+  });
+
+  it("warns when the URL exceeds MAX_HREF_LENGTH, without logging the URL", async () => {
+    const { MAX_HREF_LENGTH } = await import("../../src/shared/protocol.js");
+    const padding = "a".repeat(MAX_HREF_LENGTH);
+    const { warnings, handled, posted } = clickLink(`see [t](https://x/${padding})`, "[t]");
+    expect(handled).toBe(false);
+    expect(posted).toEqual([]);
+    // Length + cap are safe to log; the URL itself is not. `https://x/` is the
+    // 10 chars the padded path adds to.
+    expect(warnings).toEqual([
+      [
+        "[quoll] link not opened: URL exceeds MAX_HREF_LENGTH",
+        { length: MAX_HREF_LENGTH + 10, max: MAX_HREF_LENGTH },
+      ],
+    ]);
+    expect(JSON.stringify(warnings)).not.toContain(padding.slice(0, 32));
+  });
+
+  // The non-openable-scheme bail is UNREACHABLE through the real gate:
+  // url-allowlist's ALLOWED_URL_SCHEMES and link-handlers' OPENABLE_SCHEMES
+  // are the same set by construction, so any scheme-bearing URL that
+  // survives isAllowedUrl is launchable by construction. The branch exists
+  // as drift insurance (same rationale as the host arm's mirror in
+  // src/extension/links/handle-open-external.ts), so pin it by simulating
+  // the drift: stub isAllowedUrl to accept everything and feed an `ftp:` URL.
+  it("warns when an allowlisted URL carries a non-openable scheme (simulated drift)", async () => {
+    vi.resetModules();
+    vi.doMock("../../src/markdown/url-allowlist.js", () => ({ isAllowedUrl: () => true }));
+    try {
+      const { tryOpenLinkAt: openWithEverythingAllowlisted } = await import(
+        "../../src/webview/cm/link-handlers.js"
+      );
+      const { warnings, handled, posted } = clickLink(
+        "see [t](ftp://example.com/file)",
+        "[t]",
+        openWithEverythingAllowlisted
+      );
+      expect(handled).toBe(false);
+      expect(posted).toEqual([]);
+      expect(warnings).toEqual([
+        ["[quoll] link not opened: scheme not in OPENABLE_SCHEMES", { scheme: "ftp" }],
+      ]);
+    } finally {
+      vi.doUnmock("../../src/markdown/url-allowlist.js");
+      vi.resetModules();
+    }
+  });
+
+  // The `unresolved-fragment` bail needs an EXHAUSTED 500 ms parse budget, which
+  // a fixture can only reach with a multi-megabyte document — too slow to be
+  // worth a unit test, and the resolver side is pinned deterministically in
+  // test/webview/cm-link-resolve.test.ts. So pin the HANDLER's response to the
+  // arm through the same doMock seam the simulated-drift test above uses: it
+  // must warn (a real heading that the parse never reached must not vanish
+  // silently) and it must warn with the budget ALONE — the slug is href-derived
+  // and the NO-URL POLICY keeps it off the console.
+  it("warns when a fragment could not be resolved within the parse budget", async () => {
+    vi.resetModules();
+    vi.doMock("../../src/webview/cm/link-resolve.js", () => ({
+      resolveLinkTarget: () => ({ kind: "unresolved-fragment" }),
+    }));
+    try {
+      const { tryOpenLinkAt: openWithExhaustedBudget } = await import(
+        "../../src/webview/cm/link-handlers.js"
+      );
+      const { warnings, handled, posted } = clickLink(
+        "see [t](#secret-heading-name)",
+        "[t]",
+        openWithExhaustedBudget
+      );
+      expect(handled).toBe(false);
+      expect(posted).toEqual([]);
+      // 500 mirrors FRAGMENT_PARSE_BUDGET_MS (module-private in link-handlers).
+      expect(warnings).toEqual([
+        [
+          "[quoll] link not opened: fragment target unresolved (parse budget exhausted)",
+          { budgetMs: 500 },
+        ],
+      ]);
+      expect(JSON.stringify(warnings)).not.toContain("secret-heading-name");
+    } finally {
+      vi.doUnmock("../../src/webview/cm/link-resolve.js");
+      vi.resetModules();
+    }
+  });
+
+  // The NO-URL POLICY's STRICTEST field. A rejection arm's `schemeToken` is
+  // PICKED from a fixed literal set in link-target.ts, so it cannot carry href
+  // bytes by construction; `slug` can — it IS href bytes, and a heading name is
+  // private text (`#project-atlas-launch-date`). link-target.ts's header calls
+  // it "neither posted nor logged": the not-POSTED half is pinned by the
+  // fragment tests' exploding host, and this is the not-LOGGED half, which
+  // nothing else covers. Both declining fragment arms are driven, because they
+  // fail differently: the UNMATCHED one is silent by design, and the
+  // UNRESOLVED one is the arm that actually reaches the console.
+  it("never logs the slug on either declining fragment arm", async () => {
+    const slug = "project-atlas-launch-date";
+    const doc = `# One\n\nsee [t](#${slug}) end\n`;
+    // Unmatched: no heading produces this slug, so the click falls through to a
+    // caret move — and says nothing at all.
+    const unmatched = clickLink(doc, "[t]");
+    expect(unmatched.handled).toBe(false);
+    expect(unmatched.posted).toEqual([]);
+    expect(unmatched.warnings).toEqual([]);
+
+    // Unresolved: same doMock seam as the budget test above. This arm DOES warn,
+    // so it is the one where a slug could plausibly ride along in the detail.
+    vi.resetModules();
+    vi.doMock("../../src/webview/cm/link-resolve.js", () => ({
+      resolveLinkTarget: () => ({ kind: "unresolved-fragment" }),
+    }));
+    try {
+      const { tryOpenLinkAt: openWithExhaustedBudget } = await import(
+        "../../src/webview/cm/link-handlers.js"
+      );
+      const unresolved = clickLink(doc, "[t]", openWithExhaustedBudget);
+      expect(unresolved.handled).toBe(false);
+      expect(unresolved.warnings).toHaveLength(1);
+      // Substrings too, not just the whole slug: a truncating "fix" or a partial
+      // echo would sail past a whole-string check.
+      for (const emitted of [unmatched.warnings, unresolved.warnings]) {
+        const logged = JSON.stringify(emitted);
+        for (const secret of [slug, "project-atlas", "atlas", "launch-date"]) {
+          expect(logged).not.toContain(secret);
+        }
+      }
+    } finally {
+      vi.doUnmock("../../src/webview/cm/link-resolve.js");
+      vi.resetModules();
+    }
+  });
+
+  it("does not warn on the open path", () => {
+    const { warnings, handled, posted } = clickLink("see [t](https://example.com)", "[t]");
+    expect(handled).toBe(true);
+    expect(posted).toHaveLength(1);
+    expect(warnings).toEqual([]);
   });
 });
 
@@ -376,7 +689,7 @@ describe("tryOpenLinkAt — host.postMessage failure (review-cycle 1 C2)", () =>
     };
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
     try {
-      expect(tryOpenLinkAt(state, posOf(doc, "[t]") + 1, host)).toBe(false);
+      expect(tryOpenLinkAt(state, posOf(doc, "[t]") + 1, host, noScroll)).toBe(false);
       expect(errorSpy).toHaveBeenCalledWith(
         "[quoll] postMessage(link-open) failed",
         expect.any(Error)
@@ -419,6 +732,10 @@ function makeMockEvent(
 }
 
 describe("handleLinkMouseDown — short-circuit branches", () => {
+  // These four fixtures stay a plain EditorState.create rather than going through
+  // stateOf(): every one returns before handleLinkMouseDown reaches tryOpenLinkAt, so no
+  // tree is ever read and there is nothing for a settle to fix. Settling them anyway
+  // would add a parse — and a parse-budget failure mode — to a test about event.button.
   it("returns false for non-left-button (button !== 0); does NOT preventDefault", () => {
     const state = EditorState.create({
       doc: "[t](https://x)",
@@ -493,10 +810,7 @@ describe("handleLinkMouseDown — short-circuit branches", () => {
   // is intentionally NOT asserted here — the pin is purely on the
   // doc-range guard's "let it through" semantics, not on the open path.
   it("does NOT short-circuit when pos === view.state.doc.length (boundary-inclusive upper edge)", () => {
-    const realState = EditorState.create({
-      doc: "see [t](https://x)",
-      extensions: [markdown({ base: markdownLanguage })],
-    });
+    const realState = stateOf("see [t](https://x)");
     let stateAccessCount = 0;
     const view = {
       get state() {
@@ -525,10 +839,7 @@ describe("handleLinkMouseDown — success / failure paths", () => {
   // mask both the success and unsafe-URL paths.
   it("calls preventDefault AND posts open-external when tryOpenLinkAt succeeds", () => {
     const doc = "see [t](https://example.com)";
-    const state = EditorState.create({
-      doc,
-      extensions: [markdown({ base: markdownLanguage })],
-    });
+    const state = stateOf(doc);
     const event = makeMockEvent(/* button */ 0);
     // Map coords to a pos inside the link's inline text (offset 5 = "[t]"+1).
     const view = makeMockView(state, () => 5);
@@ -542,10 +853,7 @@ describe("handleLinkMouseDown — success / failure paths", () => {
 
   it("does NOT preventDefault and returns false when click hits plain text", () => {
     const doc = "just a paragraph";
-    const state = EditorState.create({
-      doc,
-      extensions: [markdown({ base: markdownLanguage })],
-    });
+    const state = stateOf(doc);
     const event = makeMockEvent(/* button */ 0);
     const view = makeMockView(state, () => 4);
     const posted: WebviewToHost[] = [];
@@ -557,10 +865,7 @@ describe("handleLinkMouseDown — success / failure paths", () => {
 
   it("does NOT preventDefault for unsafe URL clicks (caret-fallthrough preserved)", () => {
     const doc = "see [t](javascript:alert(1))";
-    const state = EditorState.create({
-      doc,
-      extensions: [markdown({ base: markdownLanguage })],
-    });
+    const state = stateOf(doc);
     const event = makeMockEvent(/* button */ 0);
     const view = makeMockView(state, () => 5);
     const posted: WebviewToHost[] = [];
@@ -576,7 +881,10 @@ describe("quollLinkClickHandler — smoke (extension shape is valid)", () => {
     const parent = document.createElement("div");
     document.body.appendChild(parent);
     const posted: WebviewToHost[] = [];
-    const view = new EditorView({
+    // Kept out of stateOf() — it carries the click-handler extension the shared fixture
+    // does not — but still settled, so the mounted view is on the same footing as every
+    // other fixture that a reader could later be pointed at.
+    const view = settledMount({
       parent,
       state: EditorState.create({
         doc: "[link](https://example.com)",
@@ -594,5 +902,110 @@ describe("quollLinkClickHandler — smoke (extension shape is valid)", () => {
     } finally {
       view.destroy();
     }
+  });
+});
+
+describe("tryOpenLinkAt — fragments", () => {
+  const noHost: LinkOpenHost = {
+    postMessage: () => {
+      throw new Error("a fragment must not post to the host");
+    },
+  };
+
+  it("scrolls to the matching heading and posts nothing", () => {
+    const doc = "# Getting Started\n\nsee [jump](#getting-started) end\n";
+    const scrolled: number[] = [];
+    expect(
+      tryOpenLinkAt(stateOf(doc), posOf(doc, "jump") + 1, noHost, (p) => scrolled.push(p))
+    ).toBe(true);
+    expect(scrolled).toEqual([0]);
+  });
+
+  it("resolves a duplicate-heading slug to the right occurrence", () => {
+    const doc = "# Notes\n\na\n\n# Notes\n\nsee [second](#notes-1) end\n";
+    const scrolled: number[] = [];
+    expect(
+      tryOpenLinkAt(stateOf(doc), posOf(doc, "second") + 1, noHost, (p) => scrolled.push(p))
+    ).toBe(true);
+    expect(scrolled).toEqual([doc.indexOf("# Notes", 1)]);
+  });
+
+  it("falls through to a caret move when no heading matches the slug", () => {
+    const doc = "# One\n\nsee [jump](#missing) end\n";
+    const scrolled: number[] = [];
+    expect(
+      tryOpenLinkAt(stateOf(doc), posOf(doc, "jump") + 1, noHost, (p) => scrolled.push(p))
+    ).toBe(false);
+    expect(scrolled).toEqual([]);
+  });
+
+  it("does not scroll when the caret is already inside the link (revealed state)", () => {
+    const doc = "# Sec\n\nsee [jump](#sec) end\n";
+    const state = stateOf(doc, EditorSelection.cursor(posOf(doc, "jump")));
+    const scrolled: number[] = [];
+    expect(tryOpenLinkAt(state, posOf(doc, "jump") + 1, noHost, (p) => scrolled.push(p))).toBe(
+      false
+    );
+    expect(scrolled).toEqual([]);
+  });
+});
+
+describe("handleLinkMouseDown — fragment wiring", () => {
+  // The sink does THREE things and each is load-bearing (see scrollToDocumentPos):
+  // the caret move, the scroll request, and the re-focus that `preventDefault` on
+  // the mousedown would otherwise have suppressed. Assert all three — a test that
+  // pins only the caret stays green against a "simplification" to a bare
+  // `view.dispatch({ selection })`, which silently deletes the feature's namesake
+  // scroll and leaves the caret in an unfocused view.
+  it("moves the caret to the heading, scrolls, takes focus, and consumes the click", () => {
+    const doc = "# Getting Started\n\nsee [jump](#getting-started) end\n";
+    const parent = document.createElement("div");
+    document.body.appendChild(parent);
+    const dispatched: Transaction[] = [];
+    // settledMount: handleLinkMouseDown reaches tryOpenLinkAt, which reads
+    // syntaxTree(view.state) — an unsettled mount can miss the heading and turn the
+    // fragment into a caret move.
+    const view = settledMount({
+      parent,
+      state: EditorState.create({ doc, extensions: [markdown({ base: markdownLanguage })] }),
+      // Capture the transaction so the scroll REQUEST is observable: happy-dom
+      // has no layout, so the scroll itself cannot be measured here.
+      dispatch: (tr, v) => {
+        dispatched.push(tr);
+        v.update([tr]);
+      },
+    });
+    // The settle above goes through this same custom dispatch, so its empty transaction
+    // lands in `dispatched`. Clear it: the count assertion below is about the CLICK.
+    dispatched.length = 0;
+    // happy-dom has no layout, so posAtCoords cannot be driven from real
+    // coords — stub it to the inline-content position the click would hit.
+    view.posAtCoords = () => posOf(doc, "jump") + 1;
+    let prevented = false;
+    const event = {
+      button: 0,
+      clientX: 0,
+      clientY: 0,
+      preventDefault: () => {
+        prevented = true;
+      },
+    } as unknown as MouseEvent;
+    const host: LinkOpenHost = {
+      postMessage: () => {
+        throw new Error("a fragment must not post to the host");
+      },
+    };
+    // Non-vacuity for the focus assertion below: the view does NOT already hold
+    // focus, so a passing `hasFocus` afterwards can only come from the sink.
+    expect(view.hasFocus).toBe(false);
+    expect(handleLinkMouseDown(event, view, host)).toBe(true);
+    expect(prevented).toBe(true);
+    expect(view.state.selection.main.head).toBe(0);
+    // One transaction carrying the scroll effect alongside the selection.
+    expect(dispatched).toHaveLength(1);
+    expect(dispatched[0].effects).toHaveLength(1);
+    expect(view.hasFocus).toBe(true);
+    expect(document.activeElement).toBe(view.contentDOM);
+    view.destroy();
   });
 });

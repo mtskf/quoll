@@ -20,6 +20,7 @@ import {
   DISK_CONFLICT_KEEP,
   DISK_CONFLICT_MESSAGE,
   DISK_CONFLICT_RELOAD,
+  decodeComparableUtf8,
 } from "./disk-conflict.js";
 
 /** Disk-conflict watching applies ONLY to file-scheme documents: a non-file doc
@@ -28,6 +29,99 @@ import {
  *  vscode-free unit seam. */
 export function shouldWatchDiskConflicts(scheme: string): boolean {
   return scheme === "file";
+}
+
+/** Default window to wait for THIS panel to become the active editor after a
+ *  reveal before giving up (and skipping the revert). Short so a miss degrades
+ *  promptly to the manual-revert toast; the unit suite overrides it small. */
+export const CONFIRM_ACTIVE_TIMEOUT_MS = 500;
+
+export interface ActiveGatedRevertDeps {
+  /** True once the panel is disposed. Re-read in every async callback. */
+  readonly isDisposed: () => boolean;
+  /** True iff THIS panel is currently the active editor. (Panel adapter: reads
+   *  webviewPanel.active, which THROWS after dispose — hence the isDisposed
+   *  guards below read it only when not disposed.) */
+  readonly isActive: () => boolean;
+  /** Make the panel visible + focused (webviewPanel.reveal). */
+  readonly reveal: () => void;
+  /** Subscribe to this panel's view-state changes; returns an unsubscribe. */
+  readonly subscribeViewStateChange: (onChange: () => void) => () => void;
+  /** Perform the argument-less platform revert of the active editor. */
+  readonly revert: () => Promise<void>;
+  /** Confirm-active timeout in ms. Defaults to CONFIRM_ACTIVE_TIMEOUT_MS. */
+  readonly confirmTimeoutMs?: number;
+}
+
+/** Build the `reloadFromDisk` closure: confirm THIS panel is the active editor,
+ *  then run the argument-less platform revert ONLY when it is. VS Code 1.94 has
+ *  no URI-scoped revert command — `workbench.action.files.revert` reverts the
+ *  ACTIVE editor and ignores any argument (verified against the 1.94
+ *  `fileCommands.ts`). Firing it while some OTHER dirty editor is active would
+ *  discard that unrelated file, so we gate on active and, if the panel never
+ *  becomes active, skip — the watcher's still-dirty post-condition then surfaces
+ *  the manual "File: Revert File" toast (no data loss). Vscode-free so the
+ *  ordering-critical async/dispose logic is a unit seam. */
+export function buildActiveGatedRevert(deps: ActiveGatedRevertDeps): () => Promise<void> {
+  const timeoutMs = deps.confirmTimeoutMs ?? CONFIRM_ACTIVE_TIMEOUT_MS;
+  const confirmActive = (): Promise<boolean> =>
+    new Promise<boolean>((resolve) => {
+      if (deps.isDisposed()) {
+        resolve(false);
+        return;
+      }
+      if (deps.isActive()) {
+        resolve(true);
+        return;
+      }
+      deps.reveal();
+      let settled = false;
+      let unsubscribe: () => void = () => undefined;
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const finish = (value: boolean): void => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        unsubscribe();
+        if (timer !== undefined) {
+          clearTimeout(timer);
+        }
+        resolve(value);
+      };
+      // Re-check isDisposed in BOTH async callbacks BEFORE reading isActive: the
+      // panel adapter's isActive() touches webviewPanel, which THROWS after
+      // dispose. Guarding resolves false cleanly; without it the read throws
+      // inside the timer/handler (outside this executor) → the Promise never
+      // settles → the whole reload hangs and the watcher's single-flight flag
+      // never releases (permanently wedged, no further conflict prompts).
+      const teardown = deps.subscribeViewStateChange(() => {
+        if (deps.isDisposed()) {
+          finish(false);
+          return;
+        }
+        if (deps.isActive()) {
+          finish(true);
+        }
+      });
+      // If subscribe fired onChange SYNCHRONOUSLY, `finish` already ran while
+      // `unsubscribe` was still the initial no-op — the real subscription would
+      // leak. Tear it down now and skip arming a timer we'd leak too. (VS Code's
+      // onDidChangeViewState does not fire synchronously, so this is a
+      // correct-by-construction guard against a future adapter swap, not a live
+      // bug.) Otherwise wire the teardown + the fallback timeout normally.
+      if (settled) {
+        teardown();
+        return;
+      }
+      unsubscribe = teardown;
+      timer = setTimeout(() => finish(deps.isDisposed() ? false : deps.isActive()), timeoutMs);
+    });
+  return async () => {
+    if (await confirmActive()) {
+      await deps.revert();
+    }
+  };
 }
 
 export interface DiskConflictWiringDeps {
@@ -47,8 +141,15 @@ export interface DiskConflictWiringDeps {
   readonly promptOverride: () =>
     | ((message: string, ...actions: string[]) => Thenable<string | undefined>)
     | null;
-  /** Make the panel the active editor so the platform revert targets THIS doc. */
+  /** Make the panel visible + focused so the (active-editor-scoped) platform
+   *  revert can target THIS document. Paired with isPanelActive /
+   *  subscribePanelViewStateChange (see buildActiveGatedRevert). */
   readonly revealPanel: () => void;
+  /** True iff THIS panel is currently the active editor (reads
+   *  webviewPanel.active). Read only when not disposed. */
+  readonly isPanelActive: () => boolean;
+  /** Subscribe to this panel's view-state changes; returns an unsubscribe. */
+  readonly subscribePanelViewStateChange: (onChange: () => void) => () => void;
   /** Surface an error toast. */
   readonly showError: (message: string) => void;
 }
@@ -94,8 +195,7 @@ export function createDiskConflictWiring(deps: DiskConflictWiringDeps): DiskConf
     documentUriString: deps.documentUri.toString(),
     isDisposed: deps.isDisposed,
     isDirty: deps.isDirty,
-    readDiskText: async () =>
-      Buffer.from(await workspace.fs.readFile(deps.documentUri)).toString("utf8"),
+    readDiskText: async () => decodeComparableUtf8(await workspace.fs.readFile(deps.documentUri)),
     readBufferText: deps.readBufferText,
     promptReload: () => {
       const override = deps.promptOverride();
@@ -108,15 +208,24 @@ export function createDiskConflictWiring(deps: DiskConflictWiringDeps): DiskConf
           );
     },
     reloadChoice: DISK_CONFLICT_RELOAD,
-    // User-confirmed TRUE revert. revealPanel() makes the panel the active editor
-    // so the text-file revert targets THIS document; the platform reload then
-    // fires onDidChangeTextDocument → the reducer reseeds the webview with disk
-    // content (the same path the clean case rides) AND clears the dirty flag +
-    // refreshes VS Code's etag.
-    reloadFromDisk: async () => {
-      deps.revealPanel();
-      await commands.executeCommand("workbench.action.files.revert");
-    },
+    // User-confirmed TRUE revert, GATED on this panel becoming active first (see
+    // buildActiveGatedRevert). The platform reload then fires
+    // onDidChangeTextDocument → the reducer reseeds the webview with disk content
+    // AND clears the dirty flag + refreshes VS Code's etag. If the panel never
+    // becomes active, the revert is skipped and the watcher's still-dirty
+    // post-condition surfaces the manual revert toast. The gate makes the host
+    // dispatch the revert only while THIS panel is active; on the 1.94 pin the
+    // argument-less command is still resolved LATER in the renderer against
+    // whatever is active then, so an unrelated editor could only be hit in the
+    // sub-frame cross-process window after a deliberate tab switch — a documented
+    // platform residual, unclosable without a URI-scoped revert API.
+    reloadFromDisk: buildActiveGatedRevert({
+      isDisposed: deps.isDisposed,
+      isActive: deps.isPanelActive,
+      reveal: deps.revealPanel,
+      subscribeViewStateChange: deps.subscribePanelViewStateChange,
+      revert: () => commands.executeCommand("workbench.action.files.revert") as Promise<void>,
+    }),
     showError: deps.showError,
   });
 

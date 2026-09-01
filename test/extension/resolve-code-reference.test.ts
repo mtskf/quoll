@@ -62,6 +62,18 @@ describe("resolveCodeReferenceCandidates", () => {
     expect(candidates[0]).toBe("/repo/packages/a/src/foo.ts");
     expect(candidates).toEqual(["/repo/packages/a/src/foo.ts", "/repo/src/foo.ts"]);
   });
+  it("resolves against the doc's own dir first when the doc is outside every workspace folder", () => {
+    const candidates = resolveCodeReferenceCandidates(
+      "src/foo.ts",
+      deps({
+        documentUri: uri("/outside/docs/notes.md"),
+        workspaceFolderUris: [uri("/ws"), uri("/ws2")],
+      }) as never
+    ).map((c) => c.target.path);
+    // The doc-adjacent file must win over an unrelated workspace root.
+    expect(candidates[0]).toBe("/outside/docs/src/foo.ts");
+    expect(candidates).toEqual(["/outside/docs/src/foo.ts", "/ws/src/foo.ts", "/ws2/src/foo.ts"]);
+  });
   it("falls back to the doc dir when no workspace is open", () => {
     expect(
       resolveCodeReferenceCandidates("src/foo.ts", deps({ workspaceFolderUris: [] }) as never).map(
@@ -71,6 +83,17 @@ describe("resolveCodeReferenceCandidates", () => {
   });
   it("drops a traversal that escapes every base", () => {
     expect(resolveCodeReferenceCandidates("../../etc/passwd", deps() as never)).toEqual([]);
+  });
+  it("still drops a traversal that escapes the doc's own dir when the doc is outside every workspace folder", () => {
+    expect(
+      resolveCodeReferenceCandidates(
+        "../../etc/passwd",
+        deps({
+          documentUri: uri("/outside/docs/notes.md"),
+          workspaceFolderUris: [uri("/ws"), uri("/ws2")],
+        }) as never
+      )
+    ).toEqual([]);
   });
   it("rejects scheme / absolute / backslash / .md", () => {
     expect(resolveCodeReferenceCandidates("http://x/y", deps() as never)).toEqual([]);

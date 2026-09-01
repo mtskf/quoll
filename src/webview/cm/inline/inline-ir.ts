@@ -437,8 +437,12 @@ function tryParseLink(raw: string, start: number): ParsedLink | null {
     if (c === " " || c === "\t" || c === "\n" || c === "<" || c === ">") {
       return null;
     }
-    if (c === "\\" && j + 1 < raw.length) {
+    if (c === "\\" && j + 1 < raw.length && ASCII_PUNCT.test(raw[j + 1])) {
       // Backslash escape — skip the escaped char so a `\)` does not close.
+      // CommonMark §2.4: only ASCII punctuation is escapable; a backslash
+      // before anything else (e.g. `\ `) is a literal backslash, so the
+      // unescaped space then terminates the bare destination and this is
+      // not a link — matching the Lezer write-gate parser.
       j += 2;
       continue;
     }

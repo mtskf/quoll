@@ -1,10 +1,10 @@
 // Single entry point for "does this markdown round-trip safely enough
 // to write to disk?". The validator is framework-agnostic: it walks the
 // Lezer tree (built directly from @lezer/markdown's parser) for URL gating
-// and detects leading frontmatter directly on the raw text. Zero
-// runtime import of prosemirror-*: the predicate it consumes
-// (isAllowedUrl) and the walker (findUnsafeUrl) survive any future
-// removal of the PM schema / bridge.
+// and detects leading frontmatter directly on the raw text. It imports NO
+// editor layer — not @codemirror/*, not the webview — so the authoritative
+// pre-disk gate runs host-side over raw text with no editor instance alive,
+// and swapping the editor layer cannot weaken it.
 
 import { perfNow, perfRecord } from "../shared/perf.js";
 import type { MarkdownError } from "./errors.js";
@@ -19,9 +19,11 @@ export type ValidateForWriteResult = { ok: true } | { ok: false; error: Markdown
 // `FENCE_LINE` predicate (single-sourced from frontmatter.ts).
 const OPENER = /^---[ \t]*\r?\n/;
 
-// Max bytes of the underlying parser-throw message we surface in the
-// user-visible toast. Anything longer is truncated; the full message
-// stays in the host log channel via console.error.
+// Hard cap on the underlying parser-throw message we surface in the
+// user-visible toast, in UTF-16 code units (i.e. `String.prototype.length` —
+// the unit the `slice` below counts), matching the bytes-vs-code-units
+// convention protocol.ts states for its own caps. Anything longer is
+// truncated; the full message stays in the host log channel via console.error.
 const INTERNAL_ERR_MESSAGE_CAP = 200;
 
 export function validateMarkdownForWrite(content: string): ValidateForWriteResult {
@@ -105,7 +107,7 @@ function runValidation(
 // CRLF correctness: tracks line boundaries via `indexOf("\n")` instead
 // of `split("\n")` so the body slice ends precisely at the closing
 // fence's preceding newline regardless of `\r\n` vs `\n` line endings.
-// CLOSER_LINE's `\r?$` absorbs a trailing CR inside the line content;
+// FENCE_LINE's `\r?$` absorbs a trailing CR inside the line content;
 // the body slice's end excludes both `\r` and `\n` of the line
 // terminator before the closer.
 function checkFrontmatter(content: string): MarkdownError | null {

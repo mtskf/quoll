@@ -70,5 +70,65 @@ describe("open-link", function () {
       [],
       "expected the host containment gate to drop an out-of-scope open-link"
     );
+    // Dropped, but NOT silently: the webview already promised this click
+    // (containment is the one gate it cannot run), so the refusal owes the user
+    // a toast. The unit suite pins the message on the pure function; this pins
+    // that the panel actually wires `showError` into that arm — the toast
+    // reaches the real host surface the harness records.
+    const refusal = await harness.waitForError((msg) => msg.includes("points outside"), 5000);
+    assert.ok(
+      !refusal.includes("passwd"),
+      `the refusal toast must not echo the untrusted destination, got ${refusal}`
+    );
+  });
+
+  it("decodes %20 in a relative link and resolves the space-named target", async () => {
+    const harness = await getHarness();
+    await openFixtureWithQuoll("link-source.md");
+    await harness.waitForEvent(isDocumentEvent, 8000);
+
+    const opened: string[] = [];
+    harness.openLinkOverride = (uri): Promise<unknown> => {
+      opened.push(uri.path);
+      return Promise.resolve(undefined);
+    };
+
+    const panel = harness.activePanel;
+    assert.ok(panel);
+    panel.simulateInbound({
+      protocol: PROTOCOL_VERSION,
+      type: "open-link",
+      href: "./my%20notes.md",
+    });
+    await Promise.resolve();
+
+    assert.strictEqual(opened.length, 1);
+    assert.ok(
+      opened[0].endsWith("/my notes.md"),
+      `expected the decoded space-named target, got ${opened[0]}`
+    );
+  });
+
+  it("rejects a percent-encoded traversal after decoding (real Uri.joinPath)", async () => {
+    const harness = await getHarness();
+    await openFixtureWithQuoll("link-source.md");
+    await harness.waitForEvent(isDocumentEvent, 8000);
+
+    const opened: string[] = [];
+    harness.openLinkOverride = (uri): Promise<unknown> => {
+      opened.push(uri.path);
+      return Promise.resolve(undefined);
+    };
+
+    const panel = harness.activePanel;
+    assert.ok(panel);
+    panel.simulateInbound({
+      protocol: PROTOCOL_VERSION,
+      type: "open-link",
+      href: "..%2f..%2f..%2f..%2f..%2f..%2fetc%2fpasswd.md",
+    });
+    await Promise.resolve();
+
+    assert.deepStrictEqual(opened, [], "decoded ../ traversal must be dropped by containment");
   });
 });

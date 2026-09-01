@@ -39,6 +39,10 @@ export type DocumentMessageShape = EnvelopeShape & {
   docVersion: number;
   themeKind: ThemeKindShape;
   canWrite: boolean;
+  // Exclusive pair enforced by the validator (see src/shared/protocol.ts);
+  // typed as independently optional to mirror the source.
+  externalEpoch?: number;
+  epochGeneration?: number;
 };
 
 export type ReadyMessageShape = EnvelopeShape & {
@@ -203,6 +207,10 @@ export type WebviewToHostShape =
 export interface RecordedEventShape {
   readonly message: { type: string } & Record<string, unknown>;
   readonly timestamp: number;
+  /** Sending panel's document URI (see TestHarness.RecordedEvent) — the only
+   *  panel identity on a stream every panel shares. Mandatory there, so
+   *  mandatory here: a routing assertion must never compare two `undefined`s. */
+  readonly uri: string;
 }
 
 export interface RecordedInboundShape {
@@ -242,7 +250,7 @@ export interface TestHarnessShape {
   webviewPostMessageOverride:
     | ((message: { type: string } & Record<string, unknown>) => Thenable<boolean>)
     | null;
-  openExternalOverride: ((url: string) => Thenable<boolean>) | null;
+  openExternalOverride: ((uri: Uri) => Thenable<boolean>) | null;
   openLinkOverride: ((uri: Uri) => Thenable<unknown>) | null;
   openCodeReferenceOverride:
     | ((uri: Uri, line: number | undefined, col: number | undefined) => Thenable<unknown>)

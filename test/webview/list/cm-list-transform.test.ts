@@ -1,8 +1,8 @@
 // @vitest-environment happy-dom
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
-import { forceParsing, syntaxTree } from "@codemirror/language";
+import { syntaxTree } from "@codemirror/language";
 import { EditorSelection, EditorState, type SelectionRange } from "@codemirror/state";
-import { EditorView } from "@codemirror/view";
+import type { EditorView } from "@codemirror/view";
 import { describe, expect, it } from "vitest";
 import {
   classifyItemLines,
@@ -14,11 +14,7 @@ import {
   planOutdentItem,
   renumberRun,
 } from "../../../src/webview/cm/list/list-transform.js";
-
-function forceParse(view: EditorView): EditorView {
-  forceParsing(view, view.state.doc.length, 5_000);
-  return view;
-}
+import { settledMount } from "../helpers/settled-view.js";
 
 function mount(
   doc: string,
@@ -35,7 +31,7 @@ function mount(
       EditorState.readOnly.of(opts.readOnly ?? false),
     ],
   });
-  return forceParse(new EditorView({ state, parent }));
+  return settledMount({ state, parent });
 }
 
 // Resolves the `ListItem` enclosing line `n`'s first non-whitespace column,
