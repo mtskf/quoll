@@ -1,0 +1,326 @@
+// @vitest-environment happy-dom
+// Unit test for withUnstarvedFrontier()'s OWN control flow. The suites that call it drive
+// the success path only, so without this file a weakening of any of its refusals — the
+// all-starved throw above all, which is the one thing keeping an attempt loop from
+// degrading into a silent skip — stays silently green.
+import { markdown } from "@codemirror/lang-markdown";
+import { EditorState } from "@codemirror/state";
+import { EditorView } from "@codemirror/view";
+import { describe, expect, it } from "vitest";
+import { settledMount } from "./settled-view.js";
+import { neverFinishingLanguage } from "./stub-parsers.js";
+import { withUnstarvedFrontier } from "./unstarved-frontier.js";
+
+const DOC = "# h\n\nbody\n";
+
+/** A view whose frontier is COMPLETE: real language, settled to the document end. */
+function settledMarkdown(parent: HTMLElement): EditorView {
+  return settledMount({
+    state: EditorState.create({ doc: DOC, extensions: [markdown()] }),
+    parent,
+  });
+}
+
+/**
+ * A view whose frontier is permanently STARVED. `neverFinishingLanguage()` never
+ * completes, so `syntaxTreeAvailable(state, doc.length)` is false forever — the
+ * deterministic stand-in for the descheduled-process case the real loop exists for. It is
+ * deliberately NOT settled (settling it would throw); the helper only requires that
+ * `mount` hand back a mounted view.
+ */
+function starvedMount(parent: HTMLElement): EditorView {
+  return new EditorView({
+    parent,
+    state: EditorState.create({ doc: DOC, extensions: [neverFinishingLanguage()] }),
+  });
+}
+
+/** Count `destroy()` calls on one view without suppressing the real teardown. */
+function countingDestroy(view: EditorView, tally: { n: number }): EditorView {
+  const real = view.destroy.bind(view);
+  view.destroy = () => {
+    tally.n++;
+    real();
+  };
+  return view;
+}
+
+/** An async `observe`, which the callback type permits but the helper must refuse. */
+function asAsyncObserve(
+  fn: (view: EditorView, gate: () => void) => Promise<void>
+): (view: EditorView, gate: () => void) => void {
+  return fn as unknown as (view: EditorView, gate: () => void) => void;
+}
+
+describe("withUnstarvedFrontier retries a starved attempt from a fresh view", () => {
+  it("runs the observation once, on the first unstarved attempt", () => {
+    let mounts = 0;
+    let observed = 0;
+    withUnstarvedFrontier({
+      what: "the test observation",
+      mount: (parent) => (++mounts === 1 ? starvedMount(parent) : settledMarkdown(parent)),
+      observe: (_view, requireUnstarvedFrontier) => {
+        requireUnstarvedFrontier();
+        observed++;
+      },
+    });
+    expect(mounts).toBe(2); // attempt 1 abandoned, attempt 2 observed
+    expect(observed).toBe(1); // and the observation ran exactly once
+  });
+});
+
+describe("an all-starved run FAILS rather than passing having measured nothing", () => {
+  it("throws, naming the attempt count and what was never observed", () => {
+    let observedPastTheGate = 0;
+    expect(() =>
+      withUnstarvedFrontier({
+        what: "verbatim bounded reuse",
+        attempts: 3,
+        mount: starvedMount,
+        observe: (_view, requireUnstarvedFrontier) => {
+          requireUnstarvedFrontier();
+          observedPastTheGate++;
+        },
+      })
+    ).toThrow(
+      /^withUnstarvedFrontier: all 3 attempts found a starved parse frontier, so verbatim bounded reuse was never observed/
+    );
+    expect(observedPastTheGate).toBe(0);
+  });
+});
+
+describe("an observation that never consults the gate is refused", () => {
+  // The ungated case is the one that can LIE. An oracle comparison on a starved frontier
+  // compares a self-healed full walk to a full walk and goes green having measured nothing.
+  it("throws when observe() returns without calling requireUnstarvedFrontier()", () => {
+    expect(() =>
+      withUnstarvedFrontier({
+        what: "the bounded output",
+        mount: settledMarkdown,
+        observe: () => {
+          /* measures something, but never gates it */
+        },
+      })
+    ).toThrow(/observe\(\) returned without calling requireUnstarvedFrontier\(\)/);
+  });
+
+  it("does not retry the ungated case — it is a test bug, not a starved machine", () => {
+    let mounts = 0;
+    expect(() =>
+      withUnstarvedFrontier({
+        what: "the bounded output",
+        mount: (parent) => {
+          mounts++;
+          return settledMarkdown(parent);
+        },
+        observe: () => {},
+      })
+    ).toThrow();
+    expect(mounts).toBe(1);
+  });
+});
+
+describe("an async observe is refused rather than silently half-run", () => {
+  // TypeScript permits it (a void-returning callback type accepts any return value), and
+  // the helper would otherwise return at the first await, destroying the view out from
+  // under the assertions that had not run yet.
+  it("throws when observe() returns a thenable", () => {
+    expect(() =>
+      withUnstarvedFrontier({
+        what: "the bounded output",
+        mount: settledMarkdown,
+        observe: asAsyncObserve(async (_view, requireUnstarvedFrontier) => {
+          requireUnstarvedFrontier();
+        }),
+      })
+    ).toThrow(/observe\(\) must be synchronous/);
+  });
+
+  it("refuses a bare `.then`-only thenable without tripping over its missing .catch", () => {
+    // The detection admits ANY thenable, and a thenable need only have `.then`. Reaching
+    // for `.catch` on one would raise a TypeError that replaced the message below with a
+    // confusing one, so the helper routes through Promise.resolve().
+    const thenOnly = {
+      // A deliberate bare thenable IS the fixture here; the rule below guards against
+      // creating one by accident, which is the opposite of what this test needs. The
+      // suppression has to be the LAST comment line before the code, or Biome reports it
+      // as unused and the rule still fires.
+      // biome-ignore lint/suspicious/noThenProperty: the fixture must be a bare thenable
+      then(resolve: () => void) {
+        resolve();
+      },
+    };
+    expect(() =>
+      withUnstarvedFrontier({
+        what: "the bounded output",
+        mount: settledMarkdown,
+        observe: ((_view: EditorView, requireUnstarvedFrontier: () => void) => {
+          requireUnstarvedFrontier();
+          return thenOnly;
+        }) as unknown as (view: EditorView, gate: () => void) => void,
+      })
+    ).toThrow(/observe\(\) must be synchronous/);
+  });
+});
+
+describe("a swallowed starved-frontier signal is refused", () => {
+  // A call site that wraps the gate in its own catch would turn a starved frontier into a
+  // successful-looking observation. `gated` cannot see this — it is set before the throw —
+  // so the helper tracks whether the gate actually fired.
+  it("throws when observe() catches the sentinel and returns anyway", () => {
+    expect(() =>
+      withUnstarvedFrontier({
+        what: "the bounded output",
+        attempts: 2,
+        mount: starvedMount,
+        observe: (_view, requireUnstarvedFrontier) => {
+          try {
+            requireUnstarvedFrontier();
+          } catch {
+            /* exactly the mistake this test pins */
+          }
+        },
+      })
+    ).toThrow(/swallowed the starved-frontier signal/);
+  });
+});
+
+describe("an abandoned async continuation cannot poison a later test", () => {
+  // The async refusal throws while the callback is still suspended. Its resumption must
+  // not surface as an unhandled rejection in whatever test happens to run next.
+  it("detaches a genuinely-awaiting observe without an unhandled rejection", async () => {
+    const seen: unknown[] = [];
+    const onRejection = (reason: unknown) => {
+      seen.push(reason);
+    };
+    process.on("unhandledRejection", onRejection);
+    try {
+      expect(() =>
+        withUnstarvedFrontier({
+          what: "the bounded output",
+          mount: settledMarkdown,
+          observe: asAsyncObserve(async (_view, requireUnstarvedFrontier) => {
+            await Promise.resolve();
+            requireUnstarvedFrontier(); // runs after the helper already gave up
+            expect(1).toBe(2); // and would reject
+          }),
+        })
+      ).toThrow(/observe\(\) must be synchronous/);
+      // Let the abandoned continuation resume and settle.
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(seen).toEqual([]);
+    } finally {
+      process.off("unhandledRejection", onRejection);
+    }
+  });
+});
+
+describe("a missing language is reported as such, not retried as starvation", () => {
+  // syntaxTreeAvailable is ALSO false when no Language extension is attached. Without this
+  // separation the helper would burn five attempts and then blame the CPU.
+  it("names the missing language instead of reporting a starved frontier", () => {
+    expect(() =>
+      withUnstarvedFrontier({
+        what: "the bounded output",
+        mount: (parent) =>
+          new EditorView({ parent, state: EditorState.create({ doc: DOC, extensions: [] }) }),
+        observe: (_view, requireUnstarvedFrontier) => {
+          requireUnstarvedFrontier();
+        },
+      })
+    ).toThrow(/^withUnstarvedFrontier: state has no language configured/);
+  });
+});
+
+describe("a real failure is propagated, not retried away", () => {
+  it("rethrows an assertion failure from observe() on the first attempt", () => {
+    let mounts = 0;
+    expect(() =>
+      withUnstarvedFrontier({
+        what: "the test observation",
+        mount: (parent) => {
+          mounts++;
+          return settledMarkdown(parent);
+        },
+        observe: (_view, requireUnstarvedFrontier) => {
+          requireUnstarvedFrontier();
+          expect(1).toBe(2);
+        },
+      })
+    ).toThrow();
+    expect(mounts).toBe(1); // NOT retried — only a starved frontier earns another attempt
+  });
+
+  it("propagates a mount failure without retrying it", () => {
+    // A mount that throws owes the disposal of anything it constructed — the helper never
+    // received a reference. What the helper still owes, and discharges, is the parent.
+    let mounts = 0;
+    const before = document.body.childElementCount;
+    expect(() =>
+      withUnstarvedFrontier({
+        what: "the test observation",
+        mount: () => {
+          mounts++;
+          throw new Error("mount blew up");
+        },
+        observe: (_view, requireUnstarvedFrontier) => {
+          requireUnstarvedFrontier();
+        },
+      })
+    ).toThrow(/mount blew up/);
+    expect(mounts).toBe(1);
+    expect(document.body.childElementCount).toBe(before);
+  });
+});
+
+describe("every attempt cleans up after itself", () => {
+  // Counting destroy() calls, not just DOM children: a helper that removed the parent but
+  // skipped destroy() would pass a childElementCount-only check while leaking CM timers.
+  it("destroys exactly once and removes the parent on the success path", () => {
+    const tally = { n: 0 };
+    const before = document.body.childElementCount;
+    withUnstarvedFrontier({
+      what: "the test observation",
+      mount: (parent) => countingDestroy(settledMarkdown(parent), tally),
+      observe: (_view, requireUnstarvedFrontier) => {
+        requireUnstarvedFrontier();
+      },
+    });
+    expect(tally.n).toBe(1);
+    expect(document.body.childElementCount).toBe(before);
+  });
+
+  it("destroys once per attempt on the all-starved path", () => {
+    const tally = { n: 0 };
+    const before = document.body.childElementCount;
+    expect(() =>
+      withUnstarvedFrontier({
+        what: "the test observation",
+        attempts: 2,
+        mount: (parent) => countingDestroy(starvedMount(parent), tally),
+        observe: (_view, requireUnstarvedFrontier) => {
+          requireUnstarvedFrontier();
+        },
+      })
+    ).toThrow();
+    expect(tally.n).toBe(2);
+    expect(document.body.childElementCount).toBe(before);
+  });
+
+  it("destroys and removes the parent even when observe() throws a real failure", () => {
+    const tally = { n: 0 };
+    const before = document.body.childElementCount;
+    expect(() =>
+      withUnstarvedFrontier({
+        what: "the test observation",
+        mount: (parent) => countingDestroy(settledMarkdown(parent), tally),
+        observe: (_view, requireUnstarvedFrontier) => {
+          requireUnstarvedFrontier();
+          throw new Error("boom");
+        },
+      })
+    ).toThrow(/boom/);
+    expect(tally.n).toBe(1);
+    expect(document.body.childElementCount).toBe(before);
+  });
+});

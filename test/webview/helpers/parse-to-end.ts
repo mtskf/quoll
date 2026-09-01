@@ -1,7 +1,12 @@
 import { ensureSyntaxTree, language } from "@codemirror/language";
 import type { EditorState } from "@codemirror/state";
 
-type ParseCaller = "fullTree" | "settledState" | "settledView" | "settledMount";
+type ParseCaller =
+  | "fullTree"
+  | "settledState"
+  | "settledView"
+  | "settledMount"
+  | "withUnstarvedFrontier";
 
 /**
  * Shared parse step behind `fullTree()` and `settledState()`: advance the state's
