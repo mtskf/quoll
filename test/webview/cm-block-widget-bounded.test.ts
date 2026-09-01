@@ -160,13 +160,15 @@ function checkEquivalence(initial: string, edits: Edit[], oracleSlots: number): 
         // ⚠️ What a `true` rules out is the STARVED-frontier full walk, and nothing more.
         // imageBlockField.update takes its G3 arm — computeFreshFull — whenever
         // leadingFrontmatterEnd changes, BEFORE this predicate is ever consulted
-        // (image-field.ts), so `true` does not mean the bounded path ran. The "G3
-        // frontmatter length shift" row below takes that arm, and what it compares there is
-        // the field's INCREMENTALLY parsed full walk against the oracle's freshly parsed
-        // one — not bounded against full. (Measured 2026-09-02: deleting the G3 arm leaves
-        // every row here green, so this table does not pin that guard either way.) A false
-        // means the frontier was starved, so abandon the attempt instead of comparing a
-        // full walk over a PARTIAL tree against the settled oracle.
+        // (image-field.ts), so `true` does not mean the bounded path ran. The three "G3"
+        // rows below take that arm, and what they compare there is the field's INCREMENTALLY
+        // parsed full walk against the oracle's freshly parsed one — not bounded against
+        // full. That is not a hole: it is how those rows pin the arm, since with the arm
+        // deleted the bounded path runs INSTEAD and gets the answer wrong. But only the two
+        // fence-CROSSING rows do that pinning; the "frontmatter length shift" row stays
+        // green either way (measured 2026-09-02, both claims). A false means the frontier
+        // was starved, so abandon the attempt instead of comparing a full walk over a
+        // PARTIAL tree against the settled oracle.
         if (!syntaxTreeAvailable(view.state, view.state.doc.length)) {
           return false;
         }
@@ -192,6 +194,21 @@ function checkEquivalence(initial: string, edits: Edit[], oracleSlots: number): 
 }
 
 const IMG = "![alt](https://example.com/a.png)";
+
+// The two G3 boundary-crossing rows below share one document pair, and the pair is written
+// as offsets off these constants rather than as literal numbers so renaming the body key
+// cannot silently point the edit at the wrong line. `FM_OPEN` is exactly the opener line
+// plus the one body line, so `FM_OPEN.length` IS line 2's `to`; `FENCE` is the closer line
+// with its preceding newline, so inserting it there ADDS a closer at line 3 and deleting
+// `[FM_OPEN.length, FM_OPEN.length + FENCE.length)` REMOVES it again.
+const FM_OPEN = "---\ntitle: a";
+const FENCE = "\n---";
+// EXPOSED closes the fence at line 3, so the image below it sits outside the frontmatter
+// and renders as a widget. ENCLOSED has no closer until the `---` BELOW the image, so
+// leadingFrontmatterEnd swallows the image and it stays raw source. Each doc is the other's
+// post-edit result, which is what lets one pair cover both directions of the crossing.
+const G3_IMAGE_EXPOSED = `${FM_OPEN}${FENCE}\n\nintro\n\n${IMG}\n\n---\n\nbody`;
+const G3_IMAGE_ENCLOSED = `${FM_OPEN}\n\nintro\n\n${IMG}\n\n---\n\nbody`;
 
 describe("imageBlockField bounded ≡ full", () => {
   // `oracleSlots` is the widget count the settled oracle must hold AFTER the edits —
@@ -252,6 +269,39 @@ describe("imageBlockField bounded ≡ full", () => {
       name: "G3 frontmatter length shift before image",
       initial: `---\ntitle: a\n---\n\n${IMG}\n`,
       edits: [{ changes: { from: 11, insert: "bb" }, cursorAtEnd: true }],
+      oracleSlots: 1,
+    },
+    // The two rows below are the ones that actually pin image-field.ts's G3 arm; the
+    // length-shift row above does not, and cannot. A length-only edit INSIDE the fences
+    // moves leadingFrontmatterEnd by a couple of characters but never past the image, so
+    // eligibility does not flip: with the arm hypothetically deleted, computeExtendedSpan
+    // covers only the frontmatter's own lines, computeBounded re-emits the untouched widget
+    // byte-identically, and the row stays green. What flips eligibility is moving the CLOSER
+    // FENCE across the image, which is what these do — by deleting the closer so the `---`
+    // below the image becomes the closer, and by inserting one back so it stops being the
+    // closer. Both directions are pinned because the two failure shapes are different: the
+    // enclosing direction leaves a STALE widget behind (prev is reused, oracle has none) and
+    // the exposing direction leaves a MISSING one (the image sits outside every bounded
+    // interval, so nothing builds it). Measured 2026-09-02: deleting the G3 arm reds both.
+    //
+    // Neither row carries `cursorAtEnd`. The edit alone crosses the boundary, and the extra
+    // selection dispatch would be a second transaction that re-enters update() with
+    // leadingFrontmatterEnd already equal on both sides — a needless chance for some other
+    // arm to recompute in full and heal the very staleness these rows exist to catch.
+    {
+      name: "G3 closer fence moves below the image — image becomes enclosed",
+      initial: G3_IMAGE_EXPOSED,
+      // Delete the closer line. The `---` below the image becomes the first fence after
+      // line 1, so leadingFrontmatterEnd jumps past the image and demotes it.
+      edits: [{ changes: { from: FM_OPEN.length, to: FM_OPEN.length + FENCE.length } }],
+      oracleSlots: 0, // the image is inside the frontmatter now, so ZERO widgets is the answer
+    },
+    {
+      name: "G3 closer fence moves above the image — image becomes exposed",
+      initial: G3_IMAGE_ENCLOSED,
+      // Insert a closer at line 3. leadingFrontmatterEnd retreats above the image, which
+      // stops being frontmatter body and becomes a standalone image.
+      edits: [{ changes: { from: FM_OPEN.length, insert: FENCE } }],
       oracleSlots: 1,
     },
     {
