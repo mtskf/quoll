@@ -27,7 +27,13 @@ function slots(set: DecorationSet): Slot[] {
   }
   return out;
 }
-function assertEquivalent(actual: Slot[], oracle: Slot[]): void {
+// `expectedSlots` is per-row on purpose. Comparing actual to oracle is vacuous when BOTH
+// are empty, and a field-wide break that emptied imageBlockField would leave the whole
+// table green; but a blanket "non-empty" pin would be wrong too — the "G1 merge" row
+// legitimately ends at zero standalone widgets (the image is demoted to inline). Only the
+// per-row count distinguishes "this row's expected shape" from "the field stopped working".
+function assertEquivalent(actual: Slot[], oracle: Slot[], expectedSlots: number): void {
+  expect(oracle).toHaveLength(expectedSlots);
   expect(actual.map((s) => ({ from: s.from, to: s.to }))).toEqual(
     oracle.map((s) => ({ from: s.from, to: s.to }))
   );
@@ -73,14 +79,14 @@ interface Edit {
 // attempt that gets far enough to compare — measured by breaking computeBounded) nor passes
 // vacuously (an all-starved run throws below), which a vitest-level `{ retry: n }` would
 // fail on both counts.
-function checkEquivalence(initial: string, edits: Edit[]): void {
+function checkEquivalence(initial: string, edits: Edit[], oracleSlots: number): void {
   for (let attempt = 0; attempt < 5; attempt++) {
     if (runOnce()) {
       return;
     }
   }
   throw new Error(
-    "checkEquivalence: every attempt found a starved parse frontier, so the bounded path was never observed"
+    "checkEquivalence: no attempt reached a complete post-edit frontier, so nothing was compared"
   );
 
   /** One attempt. Returns false when the frontier was starved and nothing was compared. */
@@ -97,16 +103,25 @@ function checkEquivalence(initial: string, edits: Edit[]): void {
         if (e.cursorAtEnd) {
           view.dispatch({ selection: EditorSelection.cursor(view.state.doc.length) });
         }
-      }
-      // Anti-masking gate, the sibling of the one cm-decoration-callout-marker-conceal.test.ts
-      // carries. syntaxTreeAvailable reads the parse CONTEXT's `isDone` — the SAME predicate
-      // image-field.ts's docChanged arm uses to decide between computeBounded and its G2
-      // computeFreshFull fallback. True means "the bounded path ran, over a complete tree",
-      // which is what makes the compare below a bounded-vs-full compare rather than an
-      // ambiguous one; false means the frontier was starved, so abandon the attempt instead
-      // of comparing a full walk over a PARTIAL tree against the settled oracle.
-      if (!syntaxTreeAvailable(view.state, view.state.doc.length)) {
-        return false;
+        // Anti-masking gate, PER-DISPATCH like the sibling in
+        // cm-decoration-callout-marker-conceal.test.ts: syntaxTreeAvailable reads the parse
+        // CONTEXT's `isDone`, which reflects only the LAST apply — outside this loop a
+        // starved intermediate edit would take image-field.ts's G2 computeFreshFull arm
+        // unobserved behind a later completing edit.
+        //
+        // ⚠️ What a true rules out is the STARVED-frontier full walk, and nothing more.
+        // imageBlockField.update takes its G3 arm — computeFreshFull — whenever
+        // leadingFrontmatterEnd changes, BEFORE this predicate is ever consulted
+        // (image-field.ts), so `true` does not mean the bounded path ran. The "G3
+        // frontmatter length shift" row below takes that arm, and what it compares there is
+        // the field's INCREMENTALLY parsed full walk against the oracle's freshly parsed
+        // one — not bounded against full. (Measured 2026-09-02: deleting the G3 arm leaves
+        // every row here green, so this table does not pin that guard either way.) A false
+        // means the frontier was starved, so abandon the attempt instead of comparing a
+        // full walk over a PARTIAL tree against the settled oracle.
+        if (!syntaxTreeAvailable(view.state, view.state.doc.length)) {
+          return false;
+        }
       }
       const oracle = settledState(
         EditorState.create({
@@ -117,7 +132,8 @@ function checkEquivalence(initial: string, edits: Edit[]): void {
       );
       assertEquivalent(
         slots(view.state.field(imageBlockField)),
-        slots(oracle.field(imageBlockField))
+        slots(oracle.field(imageBlockField)),
+        oracleSlots
       );
       return true;
     } finally {
@@ -130,31 +146,39 @@ function checkEquivalence(initial: string, edits: Edit[]): void {
 const IMG = "![alt](https://example.com/a.png)";
 
 describe("imageBlockField bounded ≡ full", () => {
-  const cases: Array<{ name: string; initial: string; edits: Edit[] }> = [
+  // `oracleSlots` is the widget count the settled oracle must hold AFTER the edits —
+  // measured, not guessed. See assertEquivalent for why a per-row count and not a blanket
+  // non-empty pin.
+  const cases: Array<{ name: string; initial: string; edits: Edit[]; oracleSlots: number }> = [
     {
       name: "type prose far from an image",
       initial: `# Top\n\nprose\n\n${IMG}\n\nmore`,
       edits: [{ changes: { from: 2, insert: "x" }, selection: EditorSelection.cursor(3) }],
+      oracleSlots: 1,
     },
     {
       name: "introduce a standalone image from scratch",
       initial: "plain text\n",
       edits: [{ changes: { from: 0, to: 10, insert: IMG }, cursorAtEnd: true }],
+      oracleSlots: 1,
     },
     {
       name: "insert an image before an existing one",
       initial: `${IMG}\n\n${IMG}\n`,
       edits: [{ changes: { from: 0, insert: `${IMG}\n\n` }, cursorAtEnd: true }],
+      oracleSlots: 3,
     },
     {
       name: "edit the url inside an image",
       initial: `${IMG}\n\nbelow`,
       edits: [{ changes: { from: 20, insert: "z" }, cursorAtEnd: true }],
+      oracleSlots: 1,
     },
     {
       name: "delete an image",
       initial: `${IMG}\n\nmid\n\n${IMG}\n`,
       edits: [{ changes: { from: 0, to: IMG.length + 1 }, cursorAtEnd: true }],
+      oracleSlots: 1,
     },
     // G1: blank-line toggle ADJACENT to the image flips standalone eligibility
     // without touching the image's bytes.
@@ -162,21 +186,25 @@ describe("imageBlockField bounded ≡ full", () => {
       name: "G1 split: blank line above promotes image to standalone",
       initial: `prose\n${IMG}\n`,
       edits: [{ changes: { from: 5, insert: "\n" }, cursorAtEnd: true }],
+      oracleSlots: 1,
     },
     {
       name: "G1 merge: delete blank line above demotes image",
       initial: `prose\n\n${IMG}\n`,
       edits: [{ changes: { from: 5, to: 6 }, cursorAtEnd: true }],
+      oracleSlots: 0, // the demoted image is inline, so ZERO standalone widgets is the answer
     },
     {
       name: "G1 below: blank line below promotes image",
       initial: `${IMG}\ntext\n`,
       edits: [{ changes: { from: IMG.length, insert: "\n" }, cursorAtEnd: true }],
+      oracleSlots: 1,
     },
     {
       name: "G3 frontmatter length shift before image",
       initial: `---\ntitle: a\n---\n\n${IMG}\n`,
       edits: [{ changes: { from: 11, insert: "bb" }, cursorAtEnd: true }],
+      oracleSlots: 1,
     },
     {
       name: "multi-cursor far apart",
@@ -190,14 +218,16 @@ describe("imageBlockField bounded ≡ full", () => {
           ]),
         },
       ],
+      oracleSlots: 1, // two images, but the cursor at 0 reveals the first one
     },
     {
       name: "selection-only onto then off an image",
       initial: `${IMG}\n\nbelow text`,
       edits: [{ selection: EditorSelection.cursor(3) }, { selection: EditorSelection.cursor(40) }],
+      oracleSlots: 1,
     },
   ];
   for (const c of cases) {
-    it(c.name, () => checkEquivalence(c.initial, c.edits));
+    it(c.name, () => checkEquivalence(c.initial, c.edits, c.oracleSlots));
   }
 });

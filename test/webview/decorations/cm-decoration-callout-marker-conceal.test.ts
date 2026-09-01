@@ -248,6 +248,14 @@ describe("calloutMarkerConcealField — bounded recompute ≡ full recompute", (
 
     /** One attempt. Returns false when the frontier was starved and nothing was compared. */
     function runOnce(): boolean {
+      if (edits.length === 0) {
+        // The gate below is per-dispatch, so a zero-edit call would compare a settled mount
+        // against a settled oracle and report success having exercised no bounded path.
+        // Refuse it at the door rather than let it read as a passing equivalence case.
+        throw new Error(
+          "checkEquivalence: at least one edit is required to exercise the bounded path"
+        );
+      }
       const parent = document.createElement("div");
       document.body.appendChild(parent);
       const view = settledMount(
@@ -264,13 +272,15 @@ describe("calloutMarkerConcealField — bounded recompute ≡ full recompute", (
       try {
         for (const e of edits) {
           view.dispatch(e as never);
-          // Anti-masking (Codex Conf 92): the BOUNDED path must have run on THIS dispatch.
-          // syntaxTreeAvailable reads the parse CONTEXT's `isDone` — the same predicate the
-          // field's docChanged arm uses to choose between computeBoundedRecords and its G2
-          // buildFull fallback — so a true here says the bounded path ran over a complete
-          // tree. A false means the frontier was starved and the field self-healed, which
-          // is not a defect: abandon the attempt rather than compare a full walk to a full
-          // walk. Nothing may settle the view here either — a settle would republish the
+          // Anti-masking (Codex Conf 92): the frontier must be COMPLETE on THIS dispatch.
+          // syntaxTreeAvailable reads the parse CONTEXT's `isDone` — the predicate the
+          // field's docChanged arm ORs with `touchesStructuralReparse` to choose between
+          // computeBoundedRecords and its G2 buildFull fallback. A true therefore rules out
+          // the STARVED-frontier full walk; it does NOT rule out the structural-reparse one,
+          // which the fence-above-callout case below deliberately takes. A false means the
+          // frontier was starved and the field self-healed, which is not a defect: abandon
+          // the attempt rather than compare a full walk to a full walk. Nothing may settle
+          // the view here either — a settle would republish the
           // snapshot and re-enter update() through the tree-identity branch, replacing the
           // bounded records with a full walk and vacating the compare below.
           if (!syntaxTreeAvailable(view.state, view.state.doc.length)) {
