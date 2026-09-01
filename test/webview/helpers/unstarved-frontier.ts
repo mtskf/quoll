@@ -1,4 +1,5 @@
 import { syntaxTreeAvailable } from "@codemirror/language";
+import type { EditorState } from "@codemirror/state";
 import type { EditorView } from "@codemirror/view";
 import { assertHasLanguage } from "./parse-to-end.js";
 
@@ -9,7 +10,26 @@ import { assertHasLanguage } from "./parse-to-end.js";
  * failure. An `Error` subclass rather than a thrown literal so Biome's throw rules stay
  * satisfied, and so an accidental escape surfaces with a stack.
  */
-class StarvedFrontier extends Error {}
+class StarvedFrontier extends Error {
+  // `name` and a body are not decoration. An Error subclass inherits the name "Error" and
+  // a zero-argument construction leaves `message` empty, so without these an escaped
+  // sentinel is reported as a bare `Error:` with nothing in it — half of what the docblock
+  // above promises a reader will see.
+  readonly name = "StarvedFrontier";
+  constructor() {
+    super(
+      "withUnstarvedFrontier: the starved-frontier sentinel escaped the helper — requireUnstarvedFrontier() may only be called synchronously from the observe() body, never from a listener, timer, or deferred callback"
+    );
+  }
+}
+
+/**
+ * Shared by the two swallow detections below — the return path cannot see a swallow that
+ * is followed by a throw, and the catch path cannot see one that is followed by a return,
+ * so both need to say the same thing.
+ */
+const SWALLOWED_SENTINEL_MESSAGE =
+  "withUnstarvedFrontier: observe() swallowed the starved-frontier signal — do not wrap requireUnstarvedFrontier() in your own catch, and do not run it inside expect(...).toThrow()";
 
 /**
  * Run a single bounded-path observation against a freshly mounted view, retrying from a
@@ -27,10 +47,12 @@ class StarvedFrontier extends Error {}
  * Asserting that gate on a SINGLE attempt is what makes those tests load-fragile.
  * CodeMirror gives its post-edit reparse a 20ms WALL-CLOCK budget; under CPU starvation
  * that window can elapse while this process is descheduled, before any real parse work
- * happens. The field then legitimately self-heals with a full walk, the bounded path is
- * not what ran, and a bare `expect(...).toBe(true)` reds on a fact about the machine
- * rather than about the code under test. Measured on a deliberately loaded full-suite run
- * (24 spinners on 8 cores) while PR #388 was in flight.
+ * happens. The field then legitimately takes its G2 fallback and full-walks the
+ * currently-available tree DURING the dispatch, the bounded path is not what ran, and a
+ * bare `expect(...).toBe(true)` reds on a fact about the machine rather than about the
+ * code under test. (The later background-parse "self-heal" is a DIFFERENT branch and never
+ * fires here — nothing settles after the edit, which is the whole point.) Measured on a
+ * deliberately loaded full-suite run (24 spinners on 8 cores) while PR #388 was in flight.
  *
  * ⚠️ This is NOT a retry that hides a regression, and it is NOT a silent skip either:
  *   - a genuine break in the bounded path reds EVERY attempt that gets far enough to
@@ -38,16 +60,27 @@ class StarvedFrontier extends Error {}
  *     propagates out of the first attempt that raises it;
  *   - if every attempt is starved, nothing was measured and this THROWS, so the test can
  *     never pass by having quietly observed nothing.
- * A vitest-level `{ retry: n }` has neither property, which is why it is forbidden
- * repo-wide (`vitest.config.ts`) and why the loop is written out here instead.
+ * A vitest-level `{ retry: n }` has neither property. The global `test.retry` knob is
+ * refused in `vitest.config.ts` for exactly that reason (it masks real regressions); the
+ * per-suite option is the same trade with a narrower blast radius and nothing mechanical
+ * stops it, which is why the loop is written out here instead.
  *
  * Why it is a shared helper rather than a per-file loop. Both properties above live in
  * control flow — a `continue` here, a final `throw` there — and control flow is exactly
  * what a copied loop loses first: ./settled-view.ts documents how this suite's per-file
- * `forceParse` wrappers each dropped the same boolean check. Putting the loop where an
+ * `forceParse` wrappers mostly dropped the same boolean check. Putting the loop where an
  * author using it cannot omit the all-starved throw is the same answer to the same
  * problem. What stays at the call site is the site-specific part: what to mount, what to
  * dispatch, where the frontier must be complete, and what to assert.
+ *
+ * SCOPE: this helper owns the MOUNTED-VIEW form of the loop, and does not yet own every
+ * instance of it. Sites that drive a bare `EditorState` through `state.update()`
+ * (fenced-code/cm-fenced-code-collapse.test.ts's `untilCompleteFrontier`) cannot use it —
+ * they have no view to mount or destroy — and keep their own loop until a state-side twin
+ * earns its own module. ../cm-block-widget-bounded.test.ts's `checkEquivalence` IS
+ * view-based and migratable; it is left for a follow-up so this PR stays one purpose.
+ * Neither is visible to test/build/no-bare-unstarved-gate.test.ts, which by design sees
+ * only the bare `expect(...).toBe(true)` shape.
  *
  * ⚠️ Do NOT wrap `requireUnstarvedFrontier()` in a `try`/`catch` of your own, and do not
  * run it inside `expect(...).toThrow(...)`. Either swallows the sentinel, and a swallowed
@@ -71,21 +104,47 @@ class StarvedFrontier extends Error {}
  * `mount` failing is NOT a starved frontier and is NOT retried — a view that will not
  * settle is a real failure, and retrying it four more times would only bury the message.
  */
-export function withUnstarvedFrontier(options: {
+// `R` is a constrained TYPE PARAMETER rather than a literal `void`: TypeScript ignores a
+// callback's return type only when the target return type is EXACTLY `void`, so an async
+// `observe` is assignable to a `=> void` parameter with no cast at all. The union is what
+// makes it a compile error instead — a bare `R extends void` falls back to the constraint
+// and admits the async form again. The runtime thenable probe below stays as the backstop
+// for a fixture cast through a wider type.
+//
+// Biome's suggested rewrite to a bare `undefined` is NOT equivalent: it would reject the
+// three shapes actually written at the call sites (a block body, a bare `return;`, and the
+// concise void expression `(_v, gate) => gate()`), all of which infer `void`.
+// biome-ignore lint/suspicious/noConfusingVoidType: the union is what refuses an async observe
+export function withUnstarvedFrontier<R extends void | undefined>(options: {
   /** What the observation is, phrased to complete "…was never observed". */
   what: string;
-  /** Build a mounted, settled view on the supplied parent. Use `settledMount()`. */
+  /**
+   * Build a mounted, settled view on the supplied parent. Use `settledMount()`. Called
+   * once per ATTEMPT, so it must be able to build the fixture from scratch each time.
+   */
   mount: (parent: HTMLElement) => EditorView;
   /**
    * The measurement. Call `requireUnstarvedFrontier()` at every point where the parse
    * frontier must be complete for what follows to mean anything; it does not return when
    * the frontier is starved, abandoning the attempt instead.
+   *
+   * ⚠️ Re-run FROM THE TOP on every retry, so it must be free of side effects visible
+   * outside itself — a counter incremented or an array pushed from here is multiplied by
+   * however many attempts a loaded machine starves, i.e. non-deterministically and only
+   * under load. Derive everything the assertions need INSIDE this callback, from the
+   * `view` it is handed.
    */
-  observe: (view: EditorView, requireUnstarvedFrontier: () => void) => void;
+  observe: (view: EditorView, requireUnstarvedFrontier: () => void) => R;
   /** Attempts before giving up and throwing. Five, matching PR #388's measured loop. */
   attempts?: number;
 }): void {
   const { what, mount, observe, attempts = 5 } = options;
+  // A non-positive or fractional count would fall straight through to the all-starved
+  // throw, whose message would then claim a starved frontier was FOUND on attempts that
+  // never ran — the one message here that must not lie about what was measured.
+  if (!Number.isInteger(attempts) || attempts < 1) {
+    throw new Error(`withUnstarvedFrontier: attempts must be a positive integer, got ${attempts}`);
+  }
   for (let attempt = 0; attempt < attempts; attempt++) {
     const parent = document.createElement("div");
     document.body.appendChild(parent);
@@ -96,17 +155,30 @@ export function withUnstarvedFrontier(options: {
       parent.remove();
       throw error;
     }
+    let gated = false;
+    // The state as of the LAST gate call. A gate is only meaningful for the frontier that
+    // existed when it ran, so a dispatch AFTER the last one leaves the state actually
+    // measured ungated — on a starved frontier that is a full walk compared against a full
+    // walk, i.e. the vacuous green this helper exists to refuse. Compared by IDENTITY
+    // rather than by intercepting `dispatch`: reads (`view.state.field(...)`, a separate
+    // `settledState(...)` oracle) do not replace `view.state`, and happy-dom never runs
+    // CodeMirror's background-parse plugin, so nothing else can move it.
+    let stateAtLastGate: EditorState | undefined;
+    // COUNTED, not a boolean, and hoisted OUT of the try so the catch can read it too. At
+    // most ONE sentinel can escape an attempt, so a count above what escaped proves an
+    // earlier one was swallowed — which the return-path check alone cannot see when
+    // observe() swallows and then throws (its own assertion, or a second sentinel).
+    let sentinelsThrown = 0;
     try {
       // A false gate ALSO means "no Language extension attached". Separating that here,
       // once per attempt, keeps a misconfigured extension list from masquerading as five
       // starved attempts and then being reported as CPU starvation.
       assertHasLanguage(view.state, "withUnstarvedFrontier");
-      let gated = false;
-      let starved = false;
       const returned: unknown = observe(view, () => {
         gated = true;
+        stateAtLastGate = view.state;
         if (!syntaxTreeAvailable(view.state, view.state.doc.length)) {
-          starved = true;
+          sentinelsThrown++;
           throw new StarvedFrontier();
         }
       });
@@ -140,10 +212,8 @@ export function withUnstarvedFrontier(options: {
       // wrapping it. `gated` alone cannot see this, being set before the throw. Without
       // this check a swallowed sentinel reads as a successful observation on a starved
       // view.
-      if (starved) {
-        throw new Error(
-          "withUnstarvedFrontier: observe() swallowed the starved-frontier signal — do not wrap requireUnstarvedFrontier() in your own catch, and do not run it inside expect(...).toThrow()"
-        );
+      if (sentinelsThrown > 0) {
+        throw new Error(SWALLOWED_SENTINEL_MESSAGE);
       }
       // An `observe` that never reached the gate measured an UNGATED view, which is the
       // vacuous pass this helper exists to prevent: on a starved frontier the field
@@ -156,14 +226,35 @@ export function withUnstarvedFrontier(options: {
           `withUnstarvedFrontier: observe() returned without calling requireUnstarvedFrontier(), so ${what} was measured on an ungated view`
         );
       }
+      // …and a gate that fired but was then made obsolete by a further dispatch is the
+      // same vacuity wearing a passing gate. See `stateAtLastGate` above.
+      if (view.state !== stateAtLastGate) {
+        throw new Error(
+          `withUnstarvedFrontier: observe() dispatched after its last requireUnstarvedFrontier() call, so ${what} was measured on an ungated frontier`
+        );
+      }
       return;
     } catch (error) {
+      if (sentinelsThrown > (error instanceof StarvedFrontier ? 1 : 0)) {
+        throw new Error(SWALLOWED_SENTINEL_MESSAGE, { cause: error });
+      }
       if (!(error instanceof StarvedFrontier)) {
         throw error;
       }
     } finally {
-      view.destroy();
-      parent.remove();
+      // Two statements in one `finally` are NOT "discharged on every path": a throwing
+      // view.destroy() (CM does NOT guard widget destroy — WidgetView.destroy calls
+      // widget.destroy(dom) bare, and this suite mounts table + fenced-code widgets that
+      // implement it) would skip parent.remove(), leaving the view attached to the shared
+      // happy-dom body for the rest of the file, AND would REPLACE the in-flight assertion
+      // failure this helper exists to surface. Nesting keeps the parent removal
+      // unconditional; the destroy failure still propagates, which is correct — it is a
+      // real defect, not something to swallow.
+      try {
+        view.destroy();
+      } finally {
+        parent.remove();
+      }
     }
   }
   throw new Error(

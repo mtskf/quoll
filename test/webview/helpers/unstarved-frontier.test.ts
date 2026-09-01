@@ -4,7 +4,7 @@
 // all-starved throw above all, which is the one thing keeping an attempt loop from
 // degrading into a silent skip — stays silently green.
 import { markdown } from "@codemirror/lang-markdown";
-import { EditorState } from "@codemirror/state";
+import { Compartment, EditorState } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import { describe, expect, it } from "vitest";
 import { settledMount } from "./settled-view.js";
@@ -45,11 +45,16 @@ function countingDestroy(view: EditorView, tally: { n: number }): EditorView {
   return view;
 }
 
-/** An async `observe`, which the callback type permits but the helper must refuse. */
+/**
+ * An async `observe`, which the helper must refuse. ONE `as`, not `as unknown as`: the
+ * wider form erases the source type, so this fixture would keep compiling — and its claim
+ * would silently become false — however `observe`'s signature changes. The narrow form
+ * breaks on that day and points the next author straight here.
+ */
 function asAsyncObserve(
   fn: (view: EditorView, gate: () => void) => Promise<void>
 ): (view: EditorView, gate: () => void) => void {
-  return fn as unknown as (view: EditorView, gate: () => void) => void;
+  return fn as (view: EditorView, gate: () => void) => void;
 }
 
 describe("withUnstarvedFrontier retries a starved attempt from a fresh view", () => {
@@ -154,12 +159,109 @@ describe("an async observe is refused rather than silently half-run", () => {
       withUnstarvedFrontier({
         what: "the bounded output",
         mount: settledMarkdown,
+        // ONE `as`, for the reason given on asAsyncObserve above.
         observe: ((_view: EditorView, requireUnstarvedFrontier: () => void) => {
           requireUnstarvedFrontier();
           return thenOnly;
-        }) as unknown as (view: EditorView, gate: () => void) => void,
+        }) as (view: EditorView, gate: () => void) => void,
       })
     ).toThrow(/observe\(\) must be synchronous/);
+  });
+
+  it("refuses an async observe at COMPILE time, not only at runtime", () => {
+    // The runtime probe above catches a fixture smuggled in through a cast. This pins the
+    // cheaper half: `observe`'s constrained return type makes the UNCAST async form an
+    // error. The directive is self-verifying — relax the constraint back to a literal
+    // `void` and TypeScript reports it as unused, so `pnpm compile` reds.
+    expect(() =>
+      withUnstarvedFrontier({
+        what: "the bounded output",
+        mount: settledMarkdown,
+        // @ts-expect-error an async observe returns Promise<void>, which R refuses
+        observe: async (_view, requireUnstarvedFrontier) => {
+          requireUnstarvedFrontier();
+        },
+      })
+    ).toThrow(/observe\(\) must be synchronous/);
+  });
+});
+
+describe("every gate call re-reads the frontier, not just the first", () => {
+  // The callout suite's edit loop gates once per dispatch and requires the frontier to be
+  // complete on THIS dispatch — a gate answering from a cached first reading would let a
+  // starved LATER dispatch through and compare a full walk to a full walk. Every fixture
+  // there is single-edit today, so only this test covers the property.
+  it("abandons the attempt when a LATER gate call finds a starved frontier", () => {
+    let reachedSecond = 0;
+    let reachedPast = 0;
+    const lang = new Compartment();
+    expect(() =>
+      withUnstarvedFrontier({
+        what: "the bounded output",
+        attempts: 2,
+        mount: (parent) =>
+          settledMount({
+            state: EditorState.create({ doc: DOC, extensions: [lang.of(markdown())] }),
+            parent,
+          }),
+        observe: (view, requireUnstarvedFrontier) => {
+          requireUnstarvedFrontier(); // settled markdown → complete
+          // Swap in the never-finishing parser: the NEXT frontier read is starved
+          // deterministically, with no dependence on wall-clock timing. (A large insert
+          // does NOT work — 88k chars still parse inside the 20ms budget under happy-dom.)
+          view.dispatch({ effects: lang.reconfigure(neverFinishingLanguage()) });
+          reachedSecond++;
+          requireUnstarvedFrontier(); // must NOT return
+          reachedPast++;
+        },
+      })
+    ).toThrow(/all 2 attempts found a starved parse frontier/);
+    expect(reachedSecond).toBe(2); // both attempts got as far as the second gate
+    expect(reachedPast).toBe(0); // and neither got past it
+  });
+});
+
+describe("a dispatch after the LAST gate is refused", () => {
+  // A gate speaks only for the frontier that existed when it ran. Gating first and
+  // dispatching afterwards passes every other refusal here — gated, unstarved, synchronous
+  // — while the state actually measured was never gated at all.
+  it("throws when observe() dispatches after its final requireUnstarvedFrontier()", () => {
+    expect(() =>
+      withUnstarvedFrontier({
+        what: "the bounded output",
+        mount: settledMarkdown,
+        observe: (view, requireUnstarvedFrontier) => {
+          requireUnstarvedFrontier();
+          view.dispatch({ changes: { from: 0, insert: "x" } });
+        },
+      })
+    ).toThrow(/dispatched after its last requireUnstarvedFrontier\(\) call/);
+  });
+
+  it("still accepts reading the view after the gate, which is the normal shape", () => {
+    // The refusal compares state IDENTITY, so it must not fire on the five call sites,
+    // which all read `view.state` (and settle a separate oracle state) after gating.
+    withUnstarvedFrontier({
+      what: "the test observation",
+      mount: settledMarkdown,
+      observe: (view, requireUnstarvedFrontier) => {
+        requireUnstarvedFrontier();
+        expect(view.state.doc.toString()).toBe(DOC);
+      },
+    });
+  });
+});
+
+describe("an attempt count that could not have measured anything is refused", () => {
+  it("throws rather than reporting a starved frontier on attempts that never ran", () => {
+    expect(() =>
+      withUnstarvedFrontier({
+        what: "the bounded output",
+        attempts: 0,
+        mount: settledMarkdown,
+        observe: (_view, requireUnstarvedFrontier) => requireUnstarvedFrontier(),
+      })
+    ).toThrow(/attempts must be a positive integer, got 0/);
   });
 });
 
@@ -182,6 +284,38 @@ describe("a swallowed starved-frontier signal is refused", () => {
         },
       })
     ).toThrow(/swallowed the starved-frontier signal/);
+  });
+
+  it("throws when observe() swallows one sentinel and lets a later one escape", () => {
+    // The return-path check cannot see this: observe does not RETURN, it throws — and the
+    // thrown sentinel reads as an ordinary starved attempt, so the swallow is retried away
+    // and the run ends blaming the CPU. Detected by COUNTING sentinels instead: only one
+    // can escape an attempt, so two means one was caught.
+    let caught: unknown;
+    try {
+      withUnstarvedFrontier({
+        what: "the bounded output",
+        attempts: 2,
+        mount: starvedMount,
+        observe: (_view, requireUnstarvedFrontier) => {
+          try {
+            requireUnstarvedFrontier();
+          } catch {
+            /* exactly the mistake this test pins */
+          }
+          requireUnstarvedFrontier(); // the second one escapes
+        },
+      });
+    } catch (error) {
+      caught = error;
+    }
+    expect((caught as Error | undefined)?.message).toMatch(/swallowed the starved-frontier signal/);
+    // The sentinel names and explains itself, so the chained cause is readable rather than
+    // a bare `Error:` with an empty body.
+    expect((caught as Error).cause).toMatchObject({
+      name: "StarvedFrontier",
+      message: expect.stringContaining("sentinel escaped the helper"),
+    });
   });
 });
 
@@ -321,6 +455,31 @@ describe("every attempt cleans up after itself", () => {
       })
     ).toThrow(/boom/);
     expect(tally.n).toBe(1);
+    expect(document.body.childElementCount).toBe(before);
+  });
+
+  it("removes the parent even when view.destroy() throws", () => {
+    // CM does not guard widget destroy, and this suite mounts widgets that implement it.
+    // Two statements in one `finally` are sequential: a throwing destroy would strand the
+    // parent on the shared happy-dom body for the rest of the file.
+    const before = document.body.childElementCount;
+    expect(() =>
+      withUnstarvedFrontier({
+        what: "the test observation",
+        mount: (parent) => {
+          const view = settledMarkdown(parent);
+          const real = view.destroy.bind(view);
+          view.destroy = () => {
+            real(); // still tear the view down — only the throw is simulated
+            throw new Error("widget destroy blew up");
+          };
+          return view;
+        },
+        observe: (_view, requireUnstarvedFrontier) => {
+          requireUnstarvedFrontier();
+        },
+      })
+    ).toThrow(/widget destroy blew up/);
     expect(document.body.childElementCount).toBe(before);
   });
 });
