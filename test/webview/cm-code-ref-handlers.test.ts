@@ -16,6 +16,7 @@ import {
 import { codeRefReveal } from "../../src/webview/cm/code-ref/code-ref-reveal.js";
 import { fullTree } from "./helpers/full-tree.js";
 import { settledState } from "./helpers/settled-state.js";
+import { settledMount } from "./helpers/settled-view.js";
 
 function stateFor(doc: string, sel?: number) {
   // `tryOpenCodeRefAt` reads `syntaxTree(state)` (the STATE's own field
@@ -228,7 +229,9 @@ describe("handleCodeRefClick", () => {
       visibleRanges: [{ from: 0, to: doc.length }],
       tree: fullTree(base),
     });
-    return new EditorView({
+    // settledMount: handleCodeRefClick's tryOpenCodeRefAt reads syntaxTree(state) —
+    // an unsettled mount leaves the field on the init-viewport fragment.
+    return settledMount({
       state: EditorState.create({
         doc,
         extensions: [markdown(), EditorView.decorations.of(revealSet)],
@@ -304,7 +307,10 @@ describe("quollCodeRefKeymap precedence", () => {
   function precedenceView(doc: string, caret: number, host: unknown): EditorView {
     const parent = document.createElement("div");
     document.body.appendChild(parent);
-    return new EditorView({
+    // settledMount: openCodeRefAtCaretCommand's tryOpenCodeRefAt reads
+    // syntaxTree(state) — an unsettled mount leaves the field on the
+    // init-viewport fragment.
+    return settledMount({
       state: EditorState.create({
         doc,
         selection: EditorSelection.cursor(caret),
@@ -430,7 +436,10 @@ describe("quollCodeRefClickHandler", () => {
       visibleRanges: [{ from: 0, to: DOC.length }],
       tree: fullTree(base),
     });
-    const view = new EditorView({
+    // settledMount: tryOpenCodeRefAt (via quollCodeRefClickHandler) reads
+    // syntaxTree(state) — an unsettled mount leaves the field on the
+    // init-viewport fragment.
+    const view = settledMount({
       state: EditorState.create({
         doc: DOC,
         extensions: [
@@ -518,7 +527,10 @@ describe("openCodeRefAtCaretCommand", () => {
   function viewWithCaret(doc: string, caret: number): EditorView {
     const parent = document.createElement("div");
     document.body.appendChild(parent);
-    return new EditorView({
+    // settledMount: openCodeRefAtCaretCommand's tryOpenCodeRefAt reads
+    // syntaxTree(state) — an unsettled mount leaves the field on the
+    // init-viewport fragment.
+    return settledMount({
       state: EditorState.create({
         doc,
         selection: EditorSelection.single(caret),

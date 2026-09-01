@@ -367,18 +367,22 @@ describe("buildFencedCollapse", () => {
   it("DD4: auto-expands when a SECONDARY selection head is inside the concealed region", () => {
     const doc = fencedDoc(11);
     const insidePos = EditorState.create({ doc }).doc.line(12).from + 1; // body line 11
-    const state = EditorState.create({
-      doc,
-      // main range index 0 = the OUTSIDE caret; a secondary caret sits inside.
-      selection: EditorSelection.create(
-        [EditorSelection.cursor(0), EditorSelection.cursor(insidePos)],
-        0
-      ),
-      extensions: [
-        markdown({ base: markdownLanguage }),
-        EditorState.allowMultipleSelections.of(true),
-      ],
-    });
+    // State-only (never mounted) — settle so buildFencedRange's syntaxTree(state)
+    // read sees the full FencedCode tree, not the truncated init-viewport snapshot.
+    const state = settledState(
+      EditorState.create({
+        doc,
+        // main range index 0 = the OUTSIDE caret; a secondary caret sits inside.
+        selection: EditorSelection.create(
+          [EditorSelection.cursor(0), EditorSelection.cursor(insidePos)],
+          0
+        ),
+        extensions: [
+          markdown({ base: markdownLanguage }),
+          EditorState.allowMultipleSelections.of(true),
+        ],
+      })
+    );
     const { decorations, liveExpanded } = buildFencedCollapse(state, new Set());
     expect(dump(decorations)[0].isReplace).toBe(false); // expanded via the secondary head
     expect([...liveExpanded]).toEqual([0]);

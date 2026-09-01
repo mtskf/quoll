@@ -30,7 +30,7 @@ import type {
   BuildContext,
   DecorationProvider,
 } from "../../../src/webview/cm/decorations/types.js";
-import { settledView } from "../helpers/settled-view.js";
+import { settledMount, settledView } from "../helpers/settled-view.js";
 
 function tagsOf(set: DecorationSet): string[] {
   const out: string[] = [];
@@ -458,7 +458,10 @@ describe("multi-cursor arbitration regression", () => {
         quollSyntaxReveal(),
       ],
     });
-    const view = new EditorView({ state, parent });
+    // Settle: orchestrator.ts reads syntaxTree(view.state) into ctx.tree.
+    // settledMount, not settledView(new EditorView(…)): the latter strands the
+    // view if the settle throws, since nothing owns it until the assignment.
+    const view = settledMount({ state, parent });
     try {
       // Read the merged decoration set via the EditorView.decorations facet.
       const sources = view.state.facet(EditorView.decorations);

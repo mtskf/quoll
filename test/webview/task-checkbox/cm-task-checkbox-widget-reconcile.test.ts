@@ -2,11 +2,12 @@
 
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
 import { EditorState } from "@codemirror/state";
-import { EditorView } from "@codemirror/view";
+import type { EditorView } from "@codemirror/view";
 import { describe, expect, it } from "vitest";
 
 import { createSyntaxReveal } from "../../../src/webview/cm/decorations/orchestrator.js";
 import { taskCheckboxReveal } from "../../../src/webview/cm/task-checkbox/task-checkbox-reveal.js";
+import { settledMount } from "../helpers/settled-view.js";
 
 describe("CheckboxWidget — CM reconcile invocation contract (updateDOM reuse)", () => {
   // The direct-invocation tests in cm-task-checkbox-widget-toggle.test.ts call
@@ -37,7 +38,9 @@ describe("CheckboxWidget — CM reconcile invocation contract (updateDOM reuse)"
       selection: { anchor },
       extensions: [markdown({ base: markdownLanguage }), createSyntaxReveal([taskCheckboxReveal])],
     });
-    return new EditorView({ state, parent });
+    // orchestrator.ts reads syntaxTree(view.state) to build the reveal — settle
+    // at mount only; a settle after dispatch would mask a broken updateDOM.
+    return settledMount({ state, parent });
   }
 
   it("an insert above a revealed checkbox reuses the SAME span node, re-stamped to the new offset", () => {
