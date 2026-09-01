@@ -99,7 +99,8 @@ function checkEquivalence(initial: string, edits: Edit[], oracleSlots: number): 
     // settled oracle would report success having exercised no bounded path. The predicate is
     // `.every(...)`, so a MIXED array — even one live edit among otherwise-inert ones — passes
     // the door; that is deliberate, since one live edit is enough for the comparison below to
-    // exercise a bounded arm.
+    // be ABLE to exercise a bounded arm. Whether it actually does is decided downstream, by
+    // image-field.ts's own gates — see "What this does NOT rule out" below.
     // What this does NOT rule out: a `selection`/`cursorAtEnd` edit that dispatches something
     // real but whose selection LINE SPAN happens not to change. On a non-docChanged
     // transaction, reaching image-field.ts's `computeBounded` requires first surviving its G3
@@ -147,12 +148,14 @@ function checkEquivalence(initial: string, edits: Edit[], oracleSlots: number): 
         // decorations/cm-decoration-callout-marker-conceal.test.ts says "per-dispatch"
         // because there an `Edit` IS exactly one dispatch.)
         //
-        // Operating rule for this loop: nothing may sit between its two dispatches that
-        // advances the parse or publishes a tree — no settle, no parse-advancing read
-        // (ensureSyntaxTree, a `fullTree` probe, forceParsing, …), no second doc-changing
-        // dispatch, and no `await` or timer flush that yields to the event loop. The gate's
-        // no-op guarantee on the second dispatch depends on this loop staying straight-line
-        // synchronous code; break that shape and the guarantee breaks with it.
+        // Operating rule for this loop: nothing may sit between any two of the dispatches
+        // this loop performs — within a `cursorAtEnd` pair AND across iterations, since the
+        // gate read right below is itself inside that window — that advances the parse or
+        // publishes a tree: no settle, no parse-advancing read (ensureSyntaxTree, a
+        // `fullTree` probe, forceParsing, …), no second doc-changing dispatch, and no `await`
+        // or timer flush that yields to the event loop. The gate's no-op guarantee depends on
+        // this loop staying straight-line synchronous code end to end; break that shape and
+        // the guarantee breaks with it.
         //
         // ⚠️ What a `true` rules out is the STARVED-frontier full walk, and nothing more.
         // imageBlockField.update takes its G3 arm — computeFreshFull — whenever
