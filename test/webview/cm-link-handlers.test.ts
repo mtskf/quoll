@@ -353,6 +353,11 @@ describe("tryOpenLinkAt — already revealed link (caret in link)", () => {
       )
     );
     expect(state.selection.ranges).toHaveLength(2); // the fixture is really multi-cursor
+    // …and the intersecting cursor is the SECONDARY one — the property `mainIndex: 1`
+    // exists for. Without this line a reorder of the two ranges (which makes
+    // EditorSelection.create renormalise and recompute mainIndex) would silently promote
+    // cursor(3) to `main` and re-vacate the test against a `.main`-only regression.
+    expect(state.selection.main.head).toBe(35);
     const posted: unknown[] = [];
     const host = { postMessage: (m: unknown) => posted.push(m) };
     expect(tryOpenLinkAt(state, 3, host, noScroll)).toBe(false);

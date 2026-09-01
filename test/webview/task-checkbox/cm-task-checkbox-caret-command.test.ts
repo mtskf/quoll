@@ -28,9 +28,12 @@ import { settledMount } from "../helpers/settled-view.js";
  *  bare `ensureSyntaxTree` call (the previous shape here) forces the CONTEXT to the doc
  *  end and returns the resulting tree, but never republishes `view.state`'s own snapshot,
  *  leaving that walk flaky under full-suite CPU load. (`findTaskMarkerOnLine` is the other
- *  class: it self-ensures through the caret line and walks the RETURNED tree, so it never
- *  depended on the snapshot.) `settledMount` republishes it and throws instead of settling
- *  for a truncated tree. Optionally read-only. */
+ *  class: it self-ensures through the caret line and walks the RETURNED tree, so it does not
+ *  depend on the snapshot WHEN that ensure succeeds. It is not immune, though — the source
+ *  reads `ensureSyntaxTree(state, line.to, 50) ?? syntaxTree(state)`, so under exactly the
+ *  CPU load discussed here the 50 ms budget can miss and it falls back to the published
+ *  snapshot. A settle helps it too, just less decisively.) `settledMount` republishes it and
+ *  throws instead of settling for a truncated tree. Optionally read-only. */
 function mountView(doc: string, caret: number, readOnly = false): EditorView {
   const parent = document.createElement("div");
   document.body.appendChild(parent);

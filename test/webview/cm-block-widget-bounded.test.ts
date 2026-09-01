@@ -80,6 +80,13 @@ interface Edit {
 // vacuously (an all-starved run throws below), which a vitest-level `{ retry: n }` would
 // fail on both counts.
 function checkEquivalence(initial: string, edits: Edit[], oracleSlots: number): void {
+  if (edits.length === 0) {
+    // The gate inside the attempt is per-`Edit`, so a zero-edit call would compare a
+    // settled mount against a settled oracle and report success having exercised no
+    // bounded path. Refuse it at the door rather than let it read as a passing
+    // equivalence case, exactly as cm-decoration-callout-marker-conceal.test.ts does.
+    throw new Error("checkEquivalence: at least one edit is required to exercise the bounded path");
+  }
   for (let attempt = 0; attempt < 5; attempt++) {
     if (runOnce()) {
       return;
@@ -103,11 +110,17 @@ function checkEquivalence(initial: string, edits: Edit[], oracleSlots: number): 
         if (e.cursorAtEnd) {
           view.dispatch({ selection: EditorSelection.cursor(view.state.doc.length) });
         }
-        // Anti-masking gate, PER-DISPATCH like the sibling in
-        // cm-decoration-callout-marker-conceal.test.ts: syntaxTreeAvailable reads the parse
-        // CONTEXT's `isDone`, which reflects only the LAST apply — outside this loop a
-        // starved intermediate edit would take image-field.ts's G2 computeFreshFull arm
-        // unobserved behind a later completing edit.
+        // Anti-masking gate, once per `Edit` — which on a `cursorAtEnd` row is after TWO
+        // dispatches, not one. (The sibling in cm-decoration-callout-marker-conceal.test.ts
+        // says "per-dispatch" because there an `Edit` IS exactly one dispatch.) That is
+        // equivalent here only because the extra dispatch is SELECTION-ONLY: LanguageState
+        // .apply returns the same LanguageState on a non-docChanged transaction, so it
+        // cannot advance `isDone` and mask a starved doc-changing dispatch.
+        // ⚠️ Adding a second DOC-CHANGING dispatch to this loop would break that, and the
+        // gate would then have to be split to run after each one. syntaxTreeAvailable reads
+        // the parse CONTEXT's `isDone`, which reflects only the LAST apply — outside this
+        // loop a starved intermediate edit would take image-field.ts's G2 computeFreshFull
+        // arm unobserved behind a later completing edit.
         //
         // ⚠️ What a true rules out is the STARVED-frontier full walk, and nothing more.
         // imageBlockField.update takes its G3 arm — computeFreshFull — whenever
