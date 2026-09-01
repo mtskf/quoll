@@ -30,7 +30,8 @@ const RAW_HTML: readonly string[] = [
 
 // Count ImageBlockWidget instances over a doc. Selection at doc end so
 // reveal-on-caret never suppresses the widget (imageBlockField hides the block
-// when the caret intersects the image line — cm-image-field.test.ts:46).
+// when the caret intersects the image line — see the "imageBlockField —
+// reveal-on-caret" describe in test/webview/image/cm-image-field.test.ts).
 function imageWidgetCount(state: EditorState): number {
   let n = 0;
   const cur = state.field(imageBlockField).iter();

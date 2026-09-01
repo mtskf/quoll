@@ -1799,9 +1799,9 @@ describe("editor — external reseed preserves unrelated folds (r)", () => {
     // Canonical "# One" fold range comes from a SEPARATE, fully-parsed oracle state
     // (same doc → same offsets) — never the live view. This is how we fold "# One" at
     // its canonical range without touching the live view's parse context. (foldable
-    // reads syntaxTree(state); ensureSyntaxTree leaves that stale, so refresh the
-    // oracle with an empty update before reading foldable — same reason the call site
-    // uses forceParsing on the live view.)
+    // reads syntaxTree(state), which a bare ensureSyntaxTree leaves stale, so the oracle
+    // goes through `settledState` — it republishes the snapshot and throws if it stays
+    // short — the same reason the call site uses forceParsing on the live view.)
     const oracle = settledState(
       EditorState.create({
         doc,

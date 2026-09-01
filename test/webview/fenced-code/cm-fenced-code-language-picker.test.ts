@@ -489,11 +489,6 @@ describe("fencedCodeLanguagePicker (mounted plugin)", () => {
   });
 });
 
-// Mode-cross via a REAL mounted <select> change event that crosses the ""
-// boundary — the reentrant path (the select's change handler dispatches, which
-// synchronously rebuilds decorations and re-runs updateDOM while the handler is
-// still on the stack). The single DOM shape keeps this an IN-PLACE sync, so the
-// same select is reused (focus preserved) and nothing is silently swallowed.
 describe("quollFencedHeaderBarTheme (spec contract)", () => {
   const OPEN = ".cm-line.quoll-fenced-code-open.quoll-fenced-code-has-language";
   const spec = fencedHeaderBarThemeSpec as Record<string, Record<string, string> | undefined>;
@@ -576,6 +571,11 @@ describe("quollFencedHeaderBarTheme (spec contract)", () => {
   });
 });
 
+// Mode-cross via a REAL mounted <select> change event that crosses the ""
+// boundary — the reentrant path (the select's change handler dispatches, which
+// synchronously rebuilds decorations and re-runs updateDOM while the handler is
+// still on the stack). The single DOM shape keeps this an IN-PLACE sync, so the
+// same select is reused (focus preserved) and nothing is silently swallowed.
 describe("fencedCodeLanguagePicker mounted mode-cross (focus + no stale write)", () => {
   it("''→js via a real change keeps the SAME select and rewrites the doc", () => {
     const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});

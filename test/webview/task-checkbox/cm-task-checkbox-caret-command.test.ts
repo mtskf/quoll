@@ -22,14 +22,15 @@ import {
 import { settledMount } from "../helpers/settled-view.js";
 
 /** Mount a real EditorView with the markdown language, caret at `caret`, and a
- *  FULLY parsed syntax tree. `findTaskMarkerOnLine` reads `syntaxTree(view.state)`
- *  — the VIEW's own field snapshot — so the settle has to republish that
- *  snapshot, not just advance the parse context: a bare `ensureSyntaxTree` call
- *  (the previous shape here) forces the CONTEXT to the doc end and returns the
- *  resulting tree, but never republishes `view.state`'s own snapshot, leaving
- *  the tree walk deterministically flaky under full-suite CPU load exactly as
- *  before. `settledMount` republishes it and throws instead of settling for a
- *  truncated tree. Optionally read-only. */
+ *  FULLY parsed syntax tree. `toggleTaskCheckboxAtCaret`'s Lezer cross-check reads
+ *  `syntaxTree(view.state)` (task-checkbox-command.ts) — the VIEW's own field snapshot —
+ *  so the settle has to republish that snapshot, not just advance the parse context: a
+ *  bare `ensureSyntaxTree` call (the previous shape here) forces the CONTEXT to the doc
+ *  end and returns the resulting tree, but never republishes `view.state`'s own snapshot,
+ *  leaving that walk flaky under full-suite CPU load. (`findTaskMarkerOnLine` is the other
+ *  class: it self-ensures through the caret line and walks the RETURNED tree, so it never
+ *  depended on the snapshot.) `settledMount` republishes it and throws instead of settling
+ *  for a truncated tree. Optionally read-only. */
 function mountView(doc: string, caret: number, readOnly = false): EditorView {
   const parent = document.createElement("div");
   document.body.appendChild(parent);

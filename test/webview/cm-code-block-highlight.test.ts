@@ -5,7 +5,7 @@
 // display-only rendering, and picker<->parser-registry sync. Part B (appended in Task 2)
 // adds the language-scoped styling pins.
 import { EditorState } from "@codemirror/state";
-import type { EditorView } from "@codemirror/view";
+import { EditorView } from "@codemirror/view";
 import { highlightTree, tags as t } from "@lezer/highlight";
 import { afterEach, describe, expect, it } from "vitest";
 import {
@@ -18,7 +18,7 @@ import { LANGUAGE_OPTIONS } from "../../src/webview/cm/fenced-code/fenced-code-l
 import { quollMarkdownLanguage } from "../../src/webview/cm/markdown.js";
 import { quollCodeHighlightSpec } from "../../src/webview/cm/theme.js";
 import { fullTree } from "./helpers/full-tree.js";
-import { settledMount } from "./helpers/settled-view.js";
+import { settledMount, settledView } from "./helpers/settled-view.js";
 
 const lang = quollMarkdownLanguage();
 const FENCED = ["```js", "const x = 1 // hi", "```", ""].join("\n");
@@ -87,7 +87,18 @@ describe("code block nested parsing", () => {
     for (const evil of ["constructor", "__proto__", "toString", "hasOwnProperty", "valueOf"]) {
       expect(codeParserFor(evil)).toBeNull();
     }
-    expect(() => mount(["```constructor", "x", "```", ""].join("\n"))).not.toThrow();
+    // Construction (which runs the initial parse over the ```constructor fence) is what
+    // must not crash; the settle below is a separate step so a parse-budget failure there
+    // is reported as its own throw rather than misattributed to the fence crashing.
+    const doc = ["```constructor", "x", "```", ""].join("\n");
+    let v: EditorView | undefined;
+    expect(() => {
+      const parent = document.createElement("div");
+      document.body.appendChild(parent);
+      v = new EditorView({ parent, state: EditorState.create({ doc, extensions: [lang] }) });
+      view = v;
+    }).not.toThrow();
+    settledView(v as EditorView);
   });
 
   it("skips nested parsing for code blocks over the size cap (protects parse budgets)", () => {
