@@ -58,7 +58,8 @@ import {
   tableBlockField,
   tableSkeletonField,
 } from "../../src/webview/cm/table/index.js";
-import { settledView } from "./helpers/settled-view.js";
+import { settledMount, settledView } from "./helpers/settled-view.js";
+import { withUnstarvedFrontier } from "./helpers/unstarved-frontier.js";
 
 // ── shared slot + equivalence machinery (mirrors cm-block-widget-bounded) ──────
 
@@ -295,37 +296,39 @@ describe("tableBlockField byte-identity: bounded ≡ full", () => {
     it(c.name, () => checkTableEquivalence(c.initial, c.edits));
   }
 
-  // Guaranteed bounded-path pin (mirrors cm-table-skeleton.test.ts's
-  // no-self-heal anchor): a small in-place edit on a complete tree keeps the
-  // frontier at doc end, so boundedUpdate ran during dispatch. Assert the tree
-  // IS available (not conditional) and check the field's output — plus its
-  // byte-anchor — BEFORE any settling, so a broken bounded reuse can't be
-  // masked by a self-heal. This is the case the matrix's conditional guard
-  // cannot guarantee runs.
+  // Guaranteed bounded-path pin (mirrors cm-table-skeleton.test.ts's no-self-heal
+  // anchor): a small in-place edit on a complete tree keeps the frontier at doc end,
+  // so boundedUpdate ran during dispatch. REQUIRE the frontier to be unstarved — rather
+  // than tolerate a starved one as the matrix's conditional guard does — and check the
+  // field's output plus its byte-anchor BEFORE any settling, so a broken bounded reuse
+  // can't be masked by a self-heal. This is the case the matrix cannot guarantee runs.
   it("exercises the bounded path without self-heal masking (revert-check anchor)", () => {
-    const parent = document.createElement("div");
-    document.body.appendChild(parent);
-    const view = new EditorView({
-      state: EditorState.create({ doc: `${T}\n\nprose\n\n${T}`, extensions: tableExts() }),
-      parent,
+    const doc = `${T}\n\nprose\n\n${T}`;
+    withUnstarvedFrontier({
+      what: "boundedUpdate's pre-self-heal output and byte anchor",
+      mount: (parent) =>
+        settledMount(
+          { state: EditorState.create({ doc, extensions: tableExts() }), parent },
+          10_000
+        ),
+      observe: (view, requireUnstarvedFrontier) => {
+        view.dispatch({
+          changes: { from: 0, insert: "x" }, // edit OUTSIDE both tables
+          selection: EditorSelection.cursor(1),
+        });
+        // Starved frontier → the field self-healed with a full walk, so the bounded output
+        // this test exists to check never existed. Abandon the attempt; an all-starved run
+        // throws rather than passing having measured nothing.
+        requireUnstarvedFrontier();
+        // boundedUpdate's output, pre-self-heal, must equal the full walk AND stay
+        // anchored to the document bytes.
+        assertEquivalent(
+          slots(view.state.field(tableBlockField)),
+          tableFullSlots(view.state.doc.toString(), view.state.selection)
+        );
+        assertTableByteAnchored(view.state);
+      },
     });
-    try {
-      settledView(view, 10_000);
-      view.dispatch({
-        changes: { from: 0, insert: "x" }, // edit OUTSIDE both tables
-        selection: EditorSelection.cursor(1),
-      });
-      expect(syntaxTreeAvailable(view.state, view.state.doc.length)).toBe(true);
-      // boundedUpdate's output, pre-self-heal, must equal the full walk AND stay
-      // anchored to the document bytes.
-      assertEquivalent(
-        slots(view.state.field(tableBlockField)),
-        tableFullSlots(view.state.doc.toString(), view.state.selection)
-      );
-      assertTableByteAnchored(view.state);
-    } finally {
-      view.destroy();
-    }
   });
 });
 
