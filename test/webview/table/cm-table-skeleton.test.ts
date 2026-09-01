@@ -9,7 +9,8 @@ import {
   tableModels,
   tableSkeletonField,
 } from "../../../src/webview/cm/table/table-skeleton.js";
-import { settledView } from "../helpers/settled-view.js";
+import { settledMount, settledView } from "../helpers/settled-view.js";
+import { withUnstarvedFrontier } from "../helpers/unstarved-frontier.js";
 
 const exts = (): Extension[] => [markdown({ base: markdownLanguage }), tableSkeletonField];
 
@@ -144,27 +145,28 @@ describe("tableSkeletonField bounded ≡ fullWalk", () => {
     it(c.name, () => checkEquivalence(c.initial, c.edits));
   }
 
-  // R2-2: explicit bounded-path pin — NO forceParsing after the edit, so a broken
+  // R2-2: explicit bounded-path pin — NO settling after the edit, so a broken
   // boundedUpdate (e.g. dropping a reused range) cannot be masked by self-heal.
   it("exercises the bounded path without self-heal masking (revert-check anchor)", () => {
-    const p = document.createElement("div");
-    document.body.appendChild(p);
-    const view = new EditorView({
-      state: EditorState.create({ doc: `${T}\n\nprose\n\n${T}`, extensions: exts() }),
-      parent: p,
+    const doc = `${T}\n\nprose\n\n${T}`;
+    withUnstarvedFrontier({
+      what: "boundedUpdate's pre-self-heal output",
+      mount: (parent) =>
+        settledMount({ state: EditorState.create({ doc, extensions: exts() }), parent }, 10_000),
+      observe: (view, requireUnstarvedFrontier) => {
+        view.dispatch({ changes: { from: 0, insert: "x" } }); // edit OUTSIDE both tables
+        // A small in-place edit on a complete tree normally keeps the frontier at doc end,
+        // which is what makes boundedUpdate the branch that ran. Under CPU starvation the
+        // 20ms reparse budget can elapse before any parse work happens; the field then
+        // self-heals with a full walk, so there is no bounded output to compare and this
+        // attempt is abandoned rather than red. An all-starved run throws.
+        requireUnstarvedFrontier();
+        // boundedUpdate's output, pre-self-heal, must equal the full walk.
+        expect([...view.state.field(tableSkeletonField)]).toEqual(
+          freshOracle(view.state.doc.toString())
+        );
+      },
     });
-    try {
-      settledView(view, 10_000); // fully parsed start
-      view.dispatch({ changes: { from: 0, insert: "x" } }); // edit OUTSIDE both tables
-      // A small in-place edit on a complete tree keeps the frontier at doc end.
-      expect(syntaxTreeAvailable(view.state, view.state.doc.length)).toBe(true);
-      // boundedUpdate's output, pre-self-heal, must equal the full walk.
-      expect([...view.state.field(tableSkeletonField)]).toEqual(
-        freshOracle(view.state.doc.toString())
-      );
-    } finally {
-      view.destroy();
-    }
   });
 });
 
