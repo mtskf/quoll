@@ -27,14 +27,23 @@ import { settledMount } from "./helpers/settled-view.js";
 // under CPU load.
 //
 // `selection` is typed as EditorStateConfig["selection"] rather than a number so the
-// multi-cursor fixture below keeps its EditorSelection; EditorState.create's own default
-// (cursor 0) still applies when it is omitted.
+// multi-cursor fixture below can pass an EditorSelection; a present-but-undefined key
+// takes EditorState.create's own `!config.selection` default branch (cursor 0), the same
+// as an absent one.
 function stateOf(doc: string, selection?: EditorStateConfig["selection"]): EditorState {
   return settledState(
     EditorState.create({
       doc,
-      ...(selection === undefined ? {} : { selection }),
-      extensions: [markdown({ base: markdownLanguage })],
+      selection,
+      extensions: [
+        markdown({ base: markdownLanguage }),
+        // Load-bearing for the multi-cursor fixture below: EditorState.create ends in
+        // `selection.asSingle()` — and every transaction, `settledState`'s empty update
+        // included, re-collapses the same way — unless this facet is set. Without it that
+        // fixture would silently degrade to a single cursor. A no-op for every other
+        // (single-range) call site here.
+        EditorState.allowMultipleSelections.of(true),
+      ],
     })
   );
 }
@@ -332,11 +341,18 @@ describe("tryOpenLinkAt — already revealed link (caret in link)", () => {
     const doc = "[link](https://example.com) and other text";
     const state = stateOf(
       doc,
-      EditorSelection.create([
-        EditorSelection.cursor(3), // inside the link
-        EditorSelection.cursor(35), // far away
-      ])
+      // mainIndex 1: the intersecting cursor must be SECONDARY, otherwise a regression
+      // that read `state.selection.main` instead of `.ranges` (link-handlers.ts's
+      // selectionIntersects) would still find it and this test would stay green.
+      EditorSelection.create(
+        [
+          EditorSelection.cursor(3), // inside the link — secondary
+          EditorSelection.cursor(35), // far away — main
+        ],
+        1
+      )
     );
+    expect(state.selection.ranges).toHaveLength(2); // the fixture is really multi-cursor
     const posted: unknown[] = [];
     const host = { postMessage: (m: unknown) => posted.push(m) };
     expect(tryOpenLinkAt(state, 3, host, noScroll)).toBe(false);

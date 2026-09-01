@@ -143,9 +143,14 @@ describe("findHeadingBySlug", () => {
 });
 
 describe("resolveLinkTarget", () => {
+  // `fullTree`, not `syntaxTree`: resolveLinkTarget is HANDED the tree and only
+  // re-ensures when `reach !== "viewport-only"` (link-resolve.ts), so on the default
+  // reach it walks this snapshot verbatim. A truncated one loses the heading and the
+  // `no-action` rows below would be green for the wrong reason. The three fixtures
+  // further down that DELIBERATELY stay partial are marked as such; this is not one.
   function resolve(doc: string, destination: string, reach: ParseReach = "viewport-only") {
     const state = stateOf(doc);
-    return resolveLinkTarget(state, syntaxTree(state), classifyLinkTarget(destination), reach);
+    return resolveLinkTarget(state, fullTree(state), classifyLinkTarget(destination), reach);
   }
 
   it("passes every non-fragment arm through untouched", () => {
