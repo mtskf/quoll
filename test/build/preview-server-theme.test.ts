@@ -23,12 +23,14 @@
 // Fast by construction: `override` short-circuits loadConfig's file read, and the
 // /instance route only fills the template. No esbuild bundle is built on this path.
 //
-// @ts-nocheck — importing a plain .mjs with no bundled types; vitest runs this
-// transpile-only and tsc does not include test/build/ in `pnpm compile`.
+// The .mjs import below is untyped, so it carries a line-scoped
+// `@ts-expect-error`; everything this file itself authors stays checked by
+// `test/build/tsconfig.json` under `pnpm compile`.
 import type { Server } from "node:http";
 
 import { afterEach, describe, expect, it } from "vitest";
 
+// @ts-expect-error — plain .mjs with no bundled types; vitest transpiles it.
 import { createPreviewServer } from "../../scripts/preview/serve.mjs";
 
 // The <body> stamps a real VS Code webview host applies, restated here as

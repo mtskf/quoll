@@ -8,34 +8,65 @@
 
 [![VS Marketplace version](https://badgen.net/vs-marketplace/v/mtskf.quoll)](https://marketplace.visualstudio.com/items?itemName=mtskf.quoll)
 [![Marketplace installs](https://badgen.net/vs-marketplace/i/mtskf.quoll)](https://marketplace.visualstudio.com/items?itemName=mtskf.quoll)
+[![Marketplace rating](https://badgen.net/vs-marketplace/rating/mtskf.quoll)](https://marketplace.visualstudio.com/items?itemName=mtskf.quoll&ssr=false#review-details)
+[![Open VSX version](https://img.shields.io/open-vsx/v/mtskf/quoll?label=Open%20VSX)](https://open-vsx.org/extension/mtskf/quoll)
 [![License: MIT](https://img.shields.io/github/license/mtskf/quoll)](LICENSE)
 
 <p align="center">
   <img src="images/editor-overview.png" alt="Quoll editing a Markdown file in VS Code: live-rendered headings, a frontmatter panel, a callout, a task list, an editable GFM table, and a fenced code block" width="900">
 </p>
 
+## Why Quoll?
+
+- **Your Markdown stays yours.** The raw text is the only source of truth — every construct round-trips byte-for-byte, with no hidden transforms and no lock-in. What you edit is exactly what lands on disk.
+- **Private by design.** No telemetry, no background network requests. A default-deny content security policy keeps the editor fully local (local images only).
+- **A good neighbour.** Quoll registers as an opt-in editor, so it never hijacks `.md` from your other extensions. Open it per file, or make it your default when you're ready.
+
 ## Features
 
-### Editing
+### Live editing, raw Markdown underneath
 
-- **WYSIWYG Markdown editing** — `.md` files open in a CodeMirror-based live editor. The raw Markdown stays canonical; move the caret into a construct to reveal and edit its source, and away to re-render.
-- **Live editing** — edits sync to the document as you type; VS Code owns the file and saves as usual.
-- **Interactive task lists** — toggle `- [ ]` / `- [x]` checkboxes directly in the rendered view, by click or — with the caret on the task's line — `Ctrl/Cmd+L`.
-- **Editable GFM tables** — render and edit tables from the Markdown source.
+Move the caret into any construct to reveal its source; move away and it re-renders. Type plain Markdown — `**bold**`, `*italic*`, `` `code` `` — and watch it render as you go. Edits sync to the document as you type; VS Code owns the file and saves as usual.
 
-### Blocks & content
+<p align="center">
+  <img src="images/live-reveal.gif" alt="Caret moving into a heading and a bold span reveals their Markdown markers; typing **snacks** renders live" width="900">
+</p>
 
+### Interactive task lists
+
+Toggle `- [ ]` / `- [x]` checkboxes directly in the rendered view — by click, or with `Ctrl/Cmd+L` when the caret is on the task's line. Every click is a real edit to the source.
+
+<p align="center">
+  <img src="images/tasks.gif" alt="Clicking checkboxes in a rendered task list checks and unchecks them" width="900">
+</p>
+
+### Editable GFM tables
+
+Tables render from plain GFM pipes. Click a cell to drop into the source, edit it, and click away to re-render.
+
+<p align="center">
+  <img src="images/table.gif" alt="Clicking a table cell reveals the GFM pipe source; editing a cell and clicking away re-renders the table" width="900">
+</p>
+
+### Document outline
+
+A toggle-able overlay lists the document's headings — click one to jump straight to it, or collapse a chevron to fold its sub-headings. Open it with the top-left button or `Ctrl/Cmd+Alt+O`.
+
+<p align="center">
+  <img src="images/outline.gif" alt="Opening the document outline and clicking a heading jumps to that section" width="900">
+</p>
+
+### And the rest
+
+- **Familiar formatting shortcuts** — `⌘B` bold, `⌘I` italic, `⌘E` code, `⌘K` link, `⌘⇧X` strikethrough (Ctrl on Windows/Linux), plus a whole-document formatter.
 - **Rich blocks, rendered in place** — headings, lists, blockquotes, callouts (`[!TIP]`, `[!NOTE]`, …), images, and fenced code.
 - **Frontmatter panel** — YAML frontmatter renders as a metadata block.
 - **Fenced-code tools** — one-click copy; long blocks collapse behind a "Show more" bar.
-- **Image paste & drop** — pasted or dropped images save under `./assets/` and insert a relative link (writable file-scheme documents).
-
-### Navigation, lint & fit
-
-- **Document outline** — a toggle-able overlay lists the document's headings; click one to jump straight to it, or collapse a heading's chevron to fold its sub-headings (like the Explorer file tree). Open it with the top-left button or `Ctrl/Cmd+Alt+O`.
-- **Switch between rich and text** — flip the active Markdown file between Quoll and VS Code's built-in text editor, in both directions. Use the editor title-bar button (a cat icon on a text editor opens Quoll; a file-code icon on Quoll reopens the text editor), the in-editor top-right button, or `⌘⌥E` (`Ctrl+Alt+E` on Windows/Linux) — the `⌘⌥E` and in-editor-button paths carry your caret position across.
-- **Markdown lint** — advisory findings as inline underlines, with an optional gutter dot and an optional **Problems**-panel mirror.
-- **Theme-aware & opt-in** — follows your light/dark theme, and registers with `priority: option` so it never hijacks `.md` from other extensions.
+- **Image paste & drop** — pasted or dropped images save under `./assets/` and insert a relative link.
+- **Switch between rich and text** — flip between Quoll and the built-in text editor with `⌘⌥E` (`Ctrl+Alt+E`), carrying your caret across.
+- **Markdown lint & spellcheck** — advisory findings as inline underlines, with an optional gutter dot, an optional **Problems**-panel mirror, opt-in prose-style hints, and native spellcheck.
+- **Tune the reading surface** — font family, size, line height, and column width, from the outline sidebar's Settings popover or `settings.json`.
+- **Theme-aware** — follows your light/dark/high-contrast theme.
 
 ## Requirements
 
@@ -44,7 +75,7 @@
 
 ## Install
 
-Install from the [VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=mtskf.quoll):
+Install from the [VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=mtskf.quoll) or [Open VSX](https://open-vsx.org/extension/mtskf/quoll):
 
 - **Extensions view:** open the Extensions view (`Ctrl/Cmd+Shift+X`), search for **Quoll**, and click **Install**.
 - **Quick Open:** press `Ctrl/Cmd+P` and run `ext install mtskf.quoll`.
@@ -74,53 +105,46 @@ Reload the VS Code window after installing.
 
 | Command              | Title                                      | Keybinding       | Notes                                      |
 | -------------------- | ------------------------------------------ | ---------------- | ------------------------------------------ |
-| `quoll.editWith`     | Edit with Quoll                            | —                | Opens the active file in the Quoll editor; also the cat-icon editor title-bar button on a Markdown text editor. |
-| `quoll.toggleEditor` | Quoll: Toggle Between Rich and Text Editor | `⌘⌥E` / `Ctrl+Alt+E` | Swaps between Quoll and the text editor.   |
-| `quoll.reopenInTextEditor` | Quoll: Reopen in Text Editor         | —                | Reopens the current Quoll document in the built-in text editor; the file-code-icon editor title-bar button on Quoll. |
+| `quoll.editWith`     | Edit with Quoll                            | —                | Opens the active file in Quoll; also the **cat**-icon title-bar button on a Markdown text editor. |
+| `quoll.toggleEditor` | Quoll: Toggle Between Rich and Text Editor | `⌘⌥E` / `Ctrl+Alt+E` | Swaps between Quoll and the text editor, carrying your caret position across. |
+| `quoll.reopenInTextEditor` | Quoll: Reopen in Text Editor         | —                | Reopens the current document in the built-in text editor; also the **file-code**-icon title-bar button on Quoll. |
+| `quoll.format`       | Quoll: Format Selection (bold / italic / code / strike / link) | `⌘B` / `⌘I` / `⌘E` / `⌘⇧X` / `⌘K` (Ctrl on Windows/Linux) | Wraps the selection with the chosen inline format inside Quoll. |
+| `quoll.formatDocument` | Quoll: Format Document                   | —                | Normalizes Markdown formatting across the whole document. |
 
-The editor title bar shows a one-click switch button whose direction follows the
-active editor: a **cat** icon on a Markdown text editor opens it in Quoll, and a
-**file-code** icon on Quoll reopens it in the text editor. Two more overlay
-affordances sit in the editor's top-right corner: a button to toggle the
-**document outline** (`Ctrl/Cmd+Alt+O`) and a button to **switch to the text
-editor** (`⌘⌥E` / `Ctrl+Alt+E`). Like the live-reveal below, the outline toggle is
-editor-internal behavior rather than a VS Code command, so it does not appear in
-the keybindings UI.
-
-Inline formatting is plain Markdown — type `**bold**`, `*italic*`, or
-`` `code` `` and the editor live-renders it. Move the caret into a
-construct to reveal its raw Markdown markers for editing; move the caret
-away to re-render. This live-reveal is editor-internal behavior rather than
-a set of VS Code commands, so it does not appear in the keybindings UI.
+Two more overlay buttons sit in the editor's top-right corner: toggle the **document outline** (`Ctrl/Cmd+Alt+O`) and **switch to the text editor** (`⌘⌥E`). The outline toggle and the caret live-reveal are editor-internal behaviour rather than VS Code commands, so they do not appear in the keybindings UI.
 
 ## Settings
 
-Quoll contributes two settings (Settings UI → search "Quoll", or `settings.json`):
+Settings UI → search "Quoll", or `settings.json`. The editor-surface settings are also reachable from the outline sidebar's Settings popover.
 
-- `quoll.lint.problems.enabled` (default `true`) — mirror Quoll's advisory
-  Markdown lint findings into VS Code's **Problems** panel. Turning it off
-  clears those entries and suppresses new ones; the in-editor underlines stay on.
-- `quoll.lint.gutter.enabled` (default `false`) — show a severity-coloured dot
-  in a thin left gutter on each line that has an advisory lint finding. Off by
-  default so the clean centred reading column is unchanged; turning it on adds
-  the gutter without touching the underlines or the Problems mirror.
+Lint & spellcheck:
+
+- `quoll.lint.problems.enabled` (default `true`) — mirror advisory lint findings into VS Code's **Problems** panel; the in-editor underlines stay on either way.
+- `quoll.lint.gutter.enabled` (default `false`) — severity-coloured dot in a thin left gutter on lines with a lint finding.
+- `quoll.lint.prose.enabled` (default `false`) — opt-in writing-style hints (passive voice, filler words, over-long sentences) as info-level squiggles.
+- `quoll.editor.spellcheck` (default `true`) — native spellchecker on the editing surface.
+
+Reading surface:
+
+- `quoll.editor.fontFamily` (default `default`) — inherit your VS Code font, or a curated serif / sans reading font.
+- `quoll.editor.fontSize`, `quoll.editor.lineHeight`, `quoll.editor.contentWidth` — size, spacing, and reading-column width.
 
 ## Known limitations
 
 Quoll is early software. Be aware of the following before relying on it:
 
-- **Markdown round-trips byte-for-byte.** The raw text is canonical, so what you edit equals what's on disk for every construct.
-  - *Line endings:* a file that mixes CRLF/LF, or is CR-only, is shown with one normalized separator (VS Code normalizes on load); opening and saving it without edits leaves the on-disk bytes unchanged.
-  - *Unsafe URLs:* the write-gate refuses to save (a "Cannot save" notice) until an out-of-allowlist link/image destination is fixed — see Images.
-- **Raw HTML is shown as inert source** — displayed as its source, never rendered as live HTML, and preserved byte-for-byte on save. Open with the default text editor for raw-HTML syntax highlighting.
-- **Images have partial support.**
-  - Relative images (`![](./img.png)`) resolve against the document folder and render for **file-scheme** documents only; untitled/git-scheme documents show inert placeholders.
-  - Paste or drop into a writable file-scheme document saves under `./assets/` as a content-hashed PNG/JPEG/GIF/WebP (10 MB cap, type sniffed host-side); read-only documents ignore it.
-  - Images outside the document folder (`../sibling/img.png`) and remote (`https://…`) images are not loaded (`localResourceRoots` scope + CSP); a remote-image opt-in is tracked for a follow-up.
-  - *URL allowlist:* link/image/autolink destinations pass only when schemeless (relative or `#fragment`) or `http:` / `https:` / `mailto:`. Everything else (`javascript:`, `data:`, `file:`, protocol-relative `//host`, control chars) renders an inert placeholder and blocks the save until fixed. The check is by scheme name and covers Markdown destinations only — URLs inside raw HTML aren't checked.
+- **Raw HTML is shown as inert source** — displayed as-is, never rendered as live HTML, and preserved byte-for-byte on save.
+<!-- Write relative image examples as bare paths (`./img.png`), never as Markdown image
+     syntax: vsce rewrites `![](./x.png)` to an absolute GitHub URL when it publishes this
+     README — even inside a code span — which turns a "relative path" example into an
+     absolute one on the Marketplace page. Bare paths are left alone. -->
+
+- **Images have partial support.** Relative image paths (`./img.png`) render for **file-scheme** documents only. Paste/drop saves a content-hashed PNG/JPEG/GIF/WebP under `./assets/` (10 MB cap, type sniffed host-side). Images outside the document folder (`../sibling/img.png`) are not loaded — the resolved path must stay inside the document's own folder (`localResourceRoots`) — and remote (`https://…`) images are blocked by the content security policy; a remote-image opt-in is tracked for a follow-up.
+- **Unsafe URLs block saving.** Link/image destinations pass only when schemeless (relative or `#fragment`) or `http:` / `https:` / `mailto:`. Anything else (`javascript:`, `data:`, `file:`, protocol-relative `//host`) renders inertly and blocks the save with a "Cannot save" notice until fixed. The check covers Markdown destinations only — URLs inside raw HTML aren't checked.
+- **Line endings:** a file that mixes CRLF/LF is shown with one normalized separator (VS Code normalizes on load); opening and saving it without edits leaves the on-disk bytes unchanged.
 - **MDX (`.mdx`) is not supported** — only `.md` files open with the rich editor.
-- **Not implemented:** slash/block-insert menu (no UI to insert tables / lists / headings from scratch), column resizing for tables, diff/git views, and collaborative editing. Single file, single editor only.
-- **Visual rendering is verified by manual smoke.** Automated tests cover the CodeMirror decoration/widget behavior, GFM table round-trips, the host write-gate, the message protocol, and host-side message flows (a `@vscode/test-electron` E2E suite); in-webview visual rendering is not asserted by CI and is checked by manual smoke.
+- **Not implemented:** slash/block-insert menu, column resizing for tables, diff/git views, and collaborative editing. Single file, single editor only.
+- **Visual rendering is verified by manual smoke.** Automated tests cover the editing logic (round-trips, write-gate, message protocol, host E2E flows); in-webview visual rendering is not asserted by CI.
 
 ## Contributing
 

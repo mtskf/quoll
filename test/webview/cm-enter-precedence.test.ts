@@ -18,9 +18,8 @@
 // (same factories, same order) so it pins the real behaviour, not a reconstruction.
 
 import { defaultKeymap } from "@codemirror/commands";
-import { forceParsing } from "@codemirror/language";
 import { EditorSelection, EditorState, Prec } from "@codemirror/state";
-import { EditorView, keymap, runScopeHandlers } from "@codemirror/view";
+import { type EditorView, keymap, runScopeHandlers } from "@codemirror/view";
 import { describe, expect, it } from "vitest";
 
 import { fencedCodeEnterKeymap } from "../../src/webview/cm/fenced-code/fenced-code-enter-keymap.js";
@@ -29,6 +28,7 @@ import {
   listContinuationKeymap,
 } from "../../src/webview/cm/list/list-continuation-keymap.js";
 import { quollMarkdownLanguage } from "../../src/webview/cm/markdown.js";
+import { settledMount } from "./helpers/settled-view.js";
 
 /** Mount the same Enter-relevant extension slice editor.ts composes, in the same
  *  order: language (carries upstream markdownKeymap @ Prec.high) → Quoll list
@@ -46,9 +46,7 @@ function mount(doc: string, caret: number): EditorView {
       Prec.default(keymap.of(defaultKeymap)),
     ],
   });
-  const view = new EditorView({ state, parent });
-  forceParsing(view, view.state.doc.length, 5_000);
-  return view;
+  return settledMount({ state, parent });
 }
 
 function pressEnter(view: EditorView): boolean {
@@ -70,8 +68,7 @@ function quollListDirect(doc: string, caret: number): string {
     selection: EditorSelection.cursor(caret),
     extensions: [quollMarkdownLanguage()],
   });
-  const view = new EditorView({ state, parent });
-  forceParsing(view, view.state.doc.length, 5_000);
+  const view = settledMount({ state, parent });
   continueListOnEnter(view);
   const out = view.state.doc.toString();
   view.destroy();

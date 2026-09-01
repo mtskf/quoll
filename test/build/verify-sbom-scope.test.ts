@@ -1,23 +1,35 @@
 // Non-vacuity pins for scripts/verify-sbom-scope.mjs — the CI gate that keeps
 // the attested SBOM scoped to the shipped runtime closure (no dev tooling,
 // exact resolved versions, declared + known-transitive runtime deps present).
-// @ts-nocheck — importing a plain .mjs with no bundled types; vitest runs it fine.
+// The .mjs import below is untyped, so it carries a line-scoped
+// `@ts-expect-error`; everything this file itself authors stays checked by
+// `test/build/tsconfig.json` under `pnpm compile`.
 import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import {
+// Namespace import so the module specifier — where TS7016 is reported — stays on
+// the same line as the directive; a named import wide enough for all the
+// bindings wraps and leaves the suppression unused (see theme-palettes.test.ts).
+// @ts-expect-error — plain .mjs with no bundled types; vitest transpiles it.
+import * as verifySbomScope from "../../scripts/verify-sbom-scope.mjs";
+
+const {
   checkSbomScope,
   deriveInstalledInventory,
   REQUIRED_TRANSITIVE,
   reconcileSbomInventory,
   resolveReconcileArg,
-} from "../../scripts/verify-sbom-scope.mjs";
+} = verifySbomScope;
+
+// A package as the install tree reports it — the shape both the reconcile
+// helpers and the CLI fixtures pass around.
+type InstalledPackage = { name: string; version: string };
 
 // Minimal SPDX-shaped npm package factory (purl external ref → npm package).
-const pkg = (name, version) => ({
+const pkg = (name: string, version: string) => ({
   name,
   versionInfo: version,
   externalRefs: [
@@ -32,7 +44,7 @@ const pkg = (name, version) => ({
 // Non-npm SPDX package: a purl external ref whose type is npm-unrelated
 // (e.g. pypi). The discriminator in npmPackages() must skip it — so a
 // non-exact version here must NOT trip the exact-version check.
-const nonNpmPkg = (name, version, ecosystem = "pypi") => ({
+const nonNpmPkg = (name: string, version: string, ecosystem = "pypi") => ({
   name,
   versionInfo: version,
   externalRefs: [
@@ -55,7 +67,10 @@ const goodPackages = [
   pkg("crelt", "1.0.6"),
 ];
 
-const run = (packages) =>
+// Both factories emit the same structural shape, so one alias covers either.
+type SpdxPackage = ReturnType<typeof pkg>;
+
+const run = (packages: SpdxPackage[]) =>
   checkSbomScope({ sbom: { packages }, dependencies, devDependencies, requiredTransitive });
 
 describe("checkSbomScope", () => {
@@ -182,7 +197,7 @@ describe("checkSbomScope", () => {
 
 // Build a fake prod staging tree: one real manifest per .pnpm/<dir>, deps as
 // symlinks (which the adapter must skip). Mirrors pnpm's isolated layout.
-function buildStaging(root, packages) {
+function buildStaging(root: string, packages: (InstalledPackage & { deps?: string[] })[]) {
   const dotPnpm = join(root, "node_modules", ".pnpm");
   for (const p of packages) {
     const enc = p.name.replace("/", "+");
@@ -227,7 +242,7 @@ describe("reconcileSbomInventory", () => {
     { name: "@lezer/common", version: "1.5.2" },
     { name: "crelt", version: "1.0.6" },
   ];
-  const sbomOf = (pkgs) => ({ packages: pkgs });
+  const sbomOf = (pkgs: SpdxPackage[]) => ({ packages: pkgs });
 
   it("passes when the SBOM set + versions match the install exactly", () => {
     const r = reconcileSbomInventory({
@@ -407,7 +422,9 @@ describe("deriveInstalledInventory", () => {
       { name: "@codemirror/state", version: "6.6.0", deps: ["@marijn/find-cluster-break"] },
       { name: "crelt", version: "1.0.6" },
     ]);
-    const inv = deriveInstalledInventory(root).sort((a, b) => a.name.localeCompare(b.name));
+    const inv = deriveInstalledInventory(root).sort((a: InstalledPackage, b: InstalledPackage) =>
+      a.name.localeCompare(b.name)
+    );
     expect(inv).toEqual([
       { name: "@codemirror/state", version: "6.6.0" },
       { name: "crelt", version: "1.0.6" },
@@ -450,12 +467,16 @@ describe("verify-sbom-scope CLI exit codes", () => {
     readFileSync(fileURLToPath(new URL("../../package.json", import.meta.url)), "utf8")
   );
 
-  const runCli = (args) => {
+  const runCli = (args: string[]) => {
     try {
       const stdout = execFileSync("node", [SCRIPT, ...args], { encoding: "utf8" });
       return { code: 0, stdout };
     } catch (err) {
-      return { code: err.status, stdout: err.stdout ?? "", stderr: err.stderr ?? "" };
+      // execFileSync throws an Error decorated with the child's exit status and
+      // captured streams; @types/node types the throw as `unknown`, so restate
+      // the three fields this suite actually reads.
+      const failure = err as { status?: number; stdout?: string; stderr?: string };
+      return { code: failure.status, stdout: failure.stdout ?? "", stderr: failure.stderr ?? "" };
     }
   };
 
@@ -466,7 +487,7 @@ describe("verify-sbom-scope CLI exit codes", () => {
     (name) => ({ name, version: "1.0.0" })
   );
 
-  const writeSbom = (file, inv) => {
+  const writeSbom = (file: string, inv: InstalledPackage[]) => {
     const packages = inv.map((p) => ({
       name: p.name,
       versionInfo: p.version,

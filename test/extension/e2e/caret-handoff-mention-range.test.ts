@@ -16,10 +16,16 @@
 
 import * as assert from "node:assert";
 import * as fs from "node:fs/promises";
-import * as os from "node:os";
 import * as path from "node:path";
 import * as vscode from "vscode";
-import { cleanupBetweenTests, getHarness, isDocumentEvent, tick, VIEW_TYPE } from "./harness";
+import {
+  cleanupBetweenTests,
+  getHarness,
+  isDocumentEvent,
+  makeTempDir,
+  tick,
+  VIEW_TYPE,
+} from "./harness";
 
 const PROTOCOL = 1;
 const INSERT_AT_MENTIONED = "claude-code.insertAtMentioned";
@@ -45,7 +51,7 @@ describe("caret-handoff does not clobber the ⌘⌥K mention range", function ()
   });
 
   it("keeps the reveal's line-range selection through the insertAtMentioned read", async () => {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "quoll-e2e-"));
+    const dir = await makeTempDir("mention-range");
     tempFile = path.join(dir, "mention-range.md");
     await fs.writeFile(tempFile, "line0\nline1\nline2\nline3\n");
     const uri = vscode.Uri.file(tempFile);
@@ -136,7 +142,7 @@ describe("caret-handoff does not clobber the ⌘⌥K mention range", function ()
     // (2,5) — so the assertion can only pass if the ordinary switch actually
     // applied the re-reported caret (latch consumed, not stranded; a stranded
     // latch would skip the apply and leave the fresh editor at its default).
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "quoll-e2e-"));
+    const dir = await makeTempDir("mention-range-recovery");
     tempFile = path.join(dir, "mention-range-recovery.md");
     await fs.writeFile(tempFile, "line0\nline1\nline2\nline3\n");
     const uri = vscode.Uri.file(tempFile);

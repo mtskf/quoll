@@ -6,9 +6,13 @@ on:
       - 'v*'
 
 # NOTE: This workflow is ACTIVE. On a pushed `v*` tag it packages one .vsix and publishes
-# it to the VS Code Marketplace (VSCODE_PAT secret, required — configured). The Open VSX
-# step (OPENVSX_PAT secret, optional) is skipped while that secret is unset, so releases
-# currently go to the Marketplace only. The publisher ID (`mtskf`) matches
+# it to BOTH registries: the VS Code Marketplace (VSCODE_PAT) and Open VSX (OPENVSX_PAT).
+# Both secrets are configured and both legs run today. The Open VSX step keeps an
+# `if: ${{ env.OVSX_PAT != '' }}` guard, which means that if that secret is ever removed
+# or emptied this workflow does NOT fail — it silently skips, and releases quietly stop
+# reaching Open VSX with the run still green. That failure mode is why
+# .github/workflows/token-liveness.yml treats OPENVSX_PAT as required and goes red on an
+# empty one. The publisher ID (`mtskf`) matches
 # `package.json.publisher`. Tag pushes trigger a LIVE publish (v0.1.0 shipped 2026-07-02),
 # so never push a `v*` tag until you intend to release that version to users.
 
@@ -150,26 +154,18 @@ jobs:
 
       # Gate: fail the release if the SBOM is not scoped to the shipped runtime
       # (dev tooling leaked in, a declared/known-transitive runtime dep missing,
-      # or non-exact versions). Fail-safe — a misleading attestation never ships.
+      # or non-exact versions), or if it does not RECONCILE against the staging
+      # tree it was generated from — see scripts/verify-sbom-scope.mjs for what
+      # `--reconcile` compares and the evidence behind promoting it to a gate.
+      # Fail-safe — a misleading attestation never ships.
+      #
+      # Deliberately no `|| true`: the script distinguishes clean from a
+      # reconcile diff from could-not-reconcile-at-all by exit code, and
+      # swallowing the status collapses all three into a green step — the
+      # could-not-reconcile run prints none of the diff lines, so it reads as
+      # clean while having verified nothing.
       - name: Verify SBOM is scoped to the shipped runtime
-        run: node scripts/verify-sbom-scope.mjs sbom.spdx.json
-
-      # SHADOW (non-gating) reconciliation. Runs the opt-in --reconcile check
-      # against the same frozen prod staging tree the SBOM was generated from,
-      # comparing the attested SBOM's {name@version} set to the tree's real
-      # package manifests. `|| true` keeps it NON-gating: a mismatch prints to
-      # the run log but never fails a live publish. Purpose: collect evidence
-      # that the manifest-derived inventory equals what the pinned syft (v1.42.3)
-      # catalogs, on real staging trees, BEFORE promoting this to a gate.
-      # ENABLEMENT CRITERIA (do this to make it gating): once the log shows a
-      # clean reconcile across a release (no "unexpected"/"missing"/"version
-      # mismatch" lines), fold `--reconcile "$RUNNER_TEMP/sbom-src"` into the
-      # gating step above and delete this shadow step — in BOTH this file and
-      # ci.yml's `sbom` job, in the same commit, and drop the last entry from
-      # SHARED_STEPS in test/build/publish-workflow-sbom-config.test.ts. The
-      # cross-file equality test fails if only one side flips (by design).
-      - name: Reconcile SBOM against staged install (shadow, non-gating)
-        run: node scripts/verify-sbom-scope.mjs sbom.spdx.json --reconcile "$RUNNER_TEMP/sbom-src" || true
+        run: node scripts/verify-sbom-scope.mjs sbom.spdx.json --reconcile "${RUNNER_TEMP:?RUNNER_TEMP is not set}/sbom-src"
 
       - name: Package .vsix
         run: pnpm exec vsce package --no-dependencies -o extension.vsix

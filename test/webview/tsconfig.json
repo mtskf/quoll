@@ -14,7 +14,9 @@
   //
   // noEmit (inherited): this is a CI gate, not a build step — vitest still
   // runs through its own transpiler. rootDir is the repo root so the
-  // cross-layer imports from ../../src/* resolve.
+  // cross-layer files under ../../src/* stay inside the program's containment
+  // boundary (TS6059) — it plays no part in resolving those imports, which is
+  // moduleResolution's job.
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
     "module": "esnext",

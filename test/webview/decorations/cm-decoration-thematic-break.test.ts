@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
 import { EditorSelection, EditorState } from "@codemirror/state";
-import { type DecorationSet, EditorView } from "@codemirror/view";
+import type { DecorationSet, EditorView } from "@codemirror/view";
 import { describe, expect, it, vi } from "vitest";
 import { quollSyntaxReveal } from "../../../src/webview/cm/decorations/index.js";
 import { thematicBreakReveal } from "../../../src/webview/cm/decorations/thematic-break-reveal.js";
@@ -9,6 +9,7 @@ import { ThematicBreakWidget } from "../../../src/webview/cm/decorations/themati
 import type { BuildContext } from "../../../src/webview/cm/decorations/types.js";
 import { frontmatterBlockField } from "../../../src/webview/cm/frontmatter/frontmatter-field.js";
 import { fullTree } from "../helpers/full-tree.js";
+import { settledMount } from "../helpers/settled-view.js";
 
 vi.mock("../../../src/webview/host.js", () => ({
   getHost: () => ({ postMessage: vi.fn() }),
@@ -300,7 +301,8 @@ function mountWithFrontmatter(doc: string): EditorView {
     selection: EditorSelection.single(doc.length), // caret at very end, off every HR line
     extensions: [markdown({ base: markdownLanguage }), quollSyntaxReveal(), frontmatterBlockField],
   });
-  return new EditorView({ state, parent });
+  // Settle: thematicBreakReveal classifies HorizontalRule off syntaxTree(view.state).
+  return settledMount({ state, parent });
 }
 
 describe("thematic break — orchestrator integration", () => {

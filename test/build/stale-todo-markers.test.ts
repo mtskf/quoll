@@ -16,11 +16,18 @@
 // and absent from CI checkouts, so reading it here would fail in CI — same rule
 // as test/build/todo-hygiene.test.ts.
 //
-// @ts-nocheck — importing a plain .mjs with no bundled types; vitest runs this
-// transpile-only and tsc does not include test/build/ in `pnpm compile`.
+// The .mjs import below is untyped, so it carries a line-scoped
+// `@ts-expect-error`; everything this file itself authors stays checked by
+// `test/build/tsconfig.json` under `pnpm compile`.
 import { describe, expect, it } from "vitest";
 
-import {
+// Namespace import so the module specifier — where TS7016 is reported — stays on
+// the same line as the directive; a named import wide enough for all the
+// bindings wraps and leaves the suppression unused (see theme-palettes.test.ts).
+// @ts-expect-error — plain .mjs with no bundled types; vitest transpiles it.
+import * as staleTodoMarkers from "../../scripts/check-stale-todo-markers.mjs";
+
+const {
   classifyGhError,
   GhTransient,
   GhUnavailable,
@@ -31,7 +38,7 @@ import {
   runScan,
   scanTodo,
   summarize,
-} from "../../scripts/check-stale-todo-markers.mjs";
+} = staleTodoMarkers;
 
 // A fake `ghRunner`, keyed on the argv array. `resolveEntry` issues the branch
 // lookup as two independent `--state`-scoped queries (open, then merged), so
@@ -39,12 +46,27 @@ import {
 // [...] }`. `routes.view[prNumber]` keeps its single form. Any leaf may be a
 // canned value or a 0-arg function (a function lets a route throw
 // GhTransient/GhUnavailable/TypeError to simulate failures).
-function makeGh(routes = {}) {
-  return (args) => {
+// A PR as `gh pr list --json` / `gh pr view --json` report it, trimmed to the
+// fields the scanner reads.
+type GhPr = { state?: string; number?: number; title?: string };
+// A route leaf: a canned value, or a 0-arg function so it can throw instead.
+type GhRoute<T> = T | (() => T);
+type GhState = "open" | "merged";
+type GhRoutes = {
+  list?: Record<string, Partial<Record<GhState, GhRoute<GhPr[]>>>>;
+  view?: Record<string, GhRoute<GhPr>>;
+};
+
+// argv carries an arbitrary string; a guard (not a cast) keeps the two states
+// resolveEntry actually queries pinned in the type.
+const isGhState = (v: string): v is GhState => v === "open" || v === "merged";
+
+function makeGh(routes: GhRoutes = {}) {
+  return (args: string[]) => {
     if (args[0] === "pr" && args[1] === "list") {
       const head = args[args.indexOf("--head") + 1];
       const state = args[args.indexOf("--state") + 1];
-      const r = routes.list?.[head]?.[state];
+      const r = isGhState(state) ? routes.list?.[head]?.[state] : undefined;
       return typeof r === "function" ? r() : (r ?? []);
     }
     if (args[0] === "pr" && args[1] === "view") {
@@ -55,14 +77,20 @@ function makeGh(routes = {}) {
   };
 }
 
+// The per-entry record scanTodo buckets into `stale` / `skipped`, restated down
+// to the one field these assertions read.
+type ScanRecord = { entry: { branch: string } };
+type ScanResult = { stale: ScanRecord[]; aborted: unknown };
+
 // A one-entry / two-entry in-flight TODO fixture. Each entry carries the 🚧
 // glyph, a `(branch: X)` (or `(#N)`) marker, and a **bold** title.
-function todo(...entries) {
+function todo(...entries: string[]) {
   return ["# TODO", "", "## ▶️ Active queue", "", ...entries, ""].join("\n");
 }
-const branchEntry = (branch, title) =>
+const branchEntry = (branch: string, title: string) =>
   `- [ ] 🚧 🐛 [MED] **${title}** (branch: ${branch})\n  - Done when: shipped.`;
-const numberEntry = (n, title) => `- [ ] 🚧 🐛 [MED] **${title}** (#${n})\n  - Done when: shipped.`;
+const numberEntry = (n: number, title: string) =>
+  `- [ ] 🚧 🐛 [MED] **${title}** (#${n})\n  - Done when: shipped.`;
 
 describe("resolveEntry — fix (a): reused branch prefers an OPEN PR", () => {
   it("returns clean when an OPEN PR exists even though an older same-branch PR merged", () => {
@@ -144,8 +172,8 @@ describe("scanTodo — fix (c): a transient error skips one entry, not the whole
       },
     });
     const scan = scanTodo(text, gh);
-    expect(scan.skipped.map((s) => s.entry.branch)).toEqual(["feat/flaky"]);
-    expect(scan.stale.map((s) => s.entry.branch)).toEqual(["feat/done"]);
+    expect(scan.skipped.map((s: ScanRecord) => s.entry.branch)).toEqual(["feat/flaky"]);
+    expect(scan.stale.map((s: ScanRecord) => s.entry.branch)).toEqual(["feat/done"]);
     expect(scan.aborted).toBeNull();
   });
 });
@@ -166,11 +194,18 @@ describe("scanTodo — GhUnavailable stops the loop but preserves already-found 
         },
       },
     });
-    let scan = null;
+    // Captured through a holder: TS narrows a plain `let` to its `null`
+    // initialiser (it cannot see the callback vitest runs), which would make
+    // every field access below an error on `never`.
+    const captured: { scan: ScanResult | null } = { scan: null };
     expect(() => {
-      scan = scanTodo(text, gh);
+      captured.scan = scanTodo(text, gh);
     }).not.toThrow();
-    expect(scan.stale.map((s) => s.entry.branch)).toEqual(["feat/done"]);
+    const scan = captured.scan;
+    if (!scan) {
+      throw new Error("scanTodo returned without assigning a scan");
+    }
+    expect(scan.stale.map((s: ScanRecord) => s.entry.branch)).toEqual(["feat/done"]);
     expect(scan.aborted).toBeTruthy();
     const { exitCode, err } = summarize(scan);
     expect(exitCode).toBe(1);

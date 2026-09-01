@@ -1,9 +1,14 @@
 import * as assert from "node:assert";
 import * as fs from "node:fs/promises";
-import * as os from "node:os";
 import * as path from "node:path";
 import * as vscode from "vscode";
-import { cleanupBetweenTests, getHarness, isDocumentEvent, VIEW_TYPE } from "./harness";
+import {
+  cleanupBetweenTests,
+  getHarness,
+  isDocumentEvent,
+  makeTempDir,
+  VIEW_TYPE,
+} from "./harness";
 
 /**
  * Mixed / CR-only EOL round-trip (TODO: webview-mixed-eol-roundtrip).
@@ -44,7 +49,7 @@ describe("mixed-eol-roundtrip", function () {
   });
 
   async function assertContract(originalBytes: Buffer): Promise<void> {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "quoll-e2e-mixedeol-"));
+    const dir = await makeTempDir("mixedeol");
     tempFile = path.join(dir, "doc.md");
     // `as Uint8Array` bridges a Buffer<ArrayBuffer> vs Uint8Array<ArrayBufferLike>
     // invariance in @types/node@20.16.0 + TS 5.9 (fs/Buffer.equals signatures);

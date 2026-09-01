@@ -2,6 +2,42 @@
 
 All notable changes to Quoll are documented here.
 
+## 0.1.76 — 2026-08-23
+
+### Fixed
+
+- Dragging to select text in a table now keeps the selection when you release the mouse outside the table, and when the document scrolls mid-drag. Previously either case dropped what you had selected and left a plain cursor behind.
+
+## 0.1.75 — 2026-08-21
+
+### Changed
+
+- Internal hardening of the table cell's text-mapping code, plus test coverage around it. Nothing changes in how the editor looks or behaves.
+
+## 0.1.74 — 2026-08-20
+
+### Fixed
+
+- Dragging to select text inside a table cell that contains formatting — bold, a link, inline code, an escaped character — now selects exactly the characters you dragged over. Previously any such cell selected as a whole the moment you dragged inside it.
+
+## 0.1.73 — 2026-08-19
+
+### Changed
+
+- Rewrote the Marketplace page: what Quoll does is now shown in short animations (live Markdown reveal, task checkboxes, table editing, the document outline), and the formatting shortcuts and editor settings that were missing from it are documented. The editor itself is unchanged.
+
+## 0.1.72 — 2026-08-19
+
+### Changed
+
+- Internal robustness work in the image, table and task-checkbox blocks. Nothing changes in how the editor looks or behaves.
+
+## 0.1.71 — 2026-08-12
+
+### Fixed
+
+- Dragging across text in a table now keeps your selection when the raw Markdown appears — previously the selection collapsed to a single cursor the moment the table opened for editing.
+
 ## 0.1.70 — 2026-08-12
 
 ### Added

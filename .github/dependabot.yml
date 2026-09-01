@@ -38,7 +38,9 @@ updates:
           - "version-update:semver-minor"
           - "version-update:semver-patch"
 
-  # First-party + third-party GitHub Actions used by ci.yml / publish.yml.
+  # First-party + third-party GitHub Actions used by the workflows under
+  # .github/workflows/ (`directory: "/"` covers all of them, so a new workflow
+  # needs no entry here).
   # Every action is SHA-pinned; Dependabot bumps the SHA and refreshes the
   # trailing version comment, keeping the pin convention intact.
   - package-ecosystem: github-actions

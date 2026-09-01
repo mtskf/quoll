@@ -1,47 +1,27 @@
 // @vitest-environment happy-dom
+// What `toDOM` produces and what a click on it does: DOM shape, cell escaping,
+// the offset stamps, the link/image URL gates, the resource-base threading that
+// resolves a relative in-cell image, and the collapsed-caret/open-external
+// routing a click on that fresh DOM takes. Two rows here call `updateDOM`, each
+// because it extends material that lives here rather than because it is about
+// reuse: one takes the click AFTER a re-stamp, the other checks that a
+// relative image introduced by a cell edit resolves against the same base the
+// fresh-render rows use. `updateDOM`'s own reuse/refusal contract is
+// cm-table-widget-update.test.ts. Pointer GESTURES (drag, and the untrusted
+// cell-stamp boundary) are cm-table-widget-drag.test.ts / -caret.test.ts.
+// Fixtures: helpers/widget-fixtures.ts.
 import { EditorState } from "@codemirror/state";
 import { EditorView, type EditorView as EditorViewType, WidgetType } from "@codemirror/view";
 import { describe, expect, it } from "vitest";
 
 import { parseTable } from "../../../src/markdown/table/index.js";
 import { PROTOCOL_VERSION } from "../../../src/shared/protocol.js";
-import { quollResourceBaseUri } from "../../../src/webview/cm/image/resource-base.js";
 import {
   openExternalSinkFor,
   quollOpenExternalSink,
 } from "../../../src/webview/cm/open-external.js";
 import { TableBlockWidget } from "../../../src/webview/cm/table/table-widget.js";
-
-function makeWidget(src: string, docFrom = 0): TableBlockWidget {
-  const table = parseTable(src, 0, src.length);
-  if (table === null) {
-    throw new Error("fixture must parse");
-  }
-  return new TableBlockWidget(table, src, docFrom, 0);
-}
-
-/** Minimal view stub — display-only toDOM reads `view.dispatch` and
- *  `view.state.facet(quollResourceBaseUri)` (a real EditorState so facet
- *  reads work; no doc/extensions beyond the optional resource base). */
-function stubView(
-  dispatched?: unknown[],
-  resourceBase?: string,
-  opened?: string[]
-): EditorViewType {
-  const extensions = [];
-  if (resourceBase !== undefined) {
-    extensions.push(quollResourceBaseUri.of(resourceBase));
-  }
-  if (opened !== undefined) {
-    extensions.push(quollOpenExternalSink.of((href: string) => opened.push(href)));
-  }
-  return {
-    state: EditorState.create({ extensions }),
-    dispatch: (tr: unknown) => dispatched?.push(tr),
-  } as unknown as EditorViewType;
-}
-
-const mockView = stubView();
+import { makeWidget, mockView, stubView } from "./helpers/widget-fixtures.js";
 
 describe("TableBlockWidget.toDOM", () => {
   it("renders a wrapper <div> containing <table> with <thead>, <tbody>, and one <tr> per row", () => {
@@ -473,98 +453,26 @@ describe("TableBlockWidget.toDOM", () => {
   });
 });
 
-describe("updateDOM", () => {
-  // Helper: build a widget, render to DOM, then call updateDOM with a new widget.
-  function buildAndUpdate(srcA: string, srcB: string, docFrom = 0) {
-    const dispatched: unknown[] = [];
-    const view = stubView(dispatched);
-    const widgetA = makeWidget(srcA, docFrom);
-    const domA = widgetA.toDOM(view);
-    const widgetB = makeWidget(srcB, docFrom);
-    const result = widgetB.updateDOM(domA, view, widgetA);
-    return { dom: domA, result, dispatched, view };
-  }
-
-  it("returns false when grid structure changes (different row count)", () => {
-    const srcA = "| a | b |\n| - | - |\n| 1 | 2 |";
-    const srcB = "| a | b |\n| - | - |\n| 1 | 2 |\n| 3 | 4 |";
-    const { result } = buildAndUpdate(srcA, srcB);
-    expect(result).toBe(false);
-  });
-
-  it("returns false when grid structure changes (different col count)", () => {
-    const srcA = "| a | b |\n| - | - |\n| 1 | 2 |";
-    const srcB = "| a | b | c |\n| - | - | - |\n| 1 | 2 | 3 |";
-    const { result } = buildAndUpdate(srcA, srcB);
-    expect(result).toBe(false);
-  });
-
-  // Bug 1 (codex) — updateDOM must validate per-body-row cell counts, not just
-  // the header. Revert-check: remove the body-row loop in updateDOM → returns
-  // true → red here.
-  it("returns false when a body row's cell count changes but the header is unchanged (Bug 1)", () => {
-    const srcA = "| a | b |\n| - | - |\n| 1 | 2 |";
-    const srcB = "| a | b |\n| - | - |\n| 1 |";
-    const { result } = buildAndUpdate(srcA, srcB);
-    expect(result).toBe(false);
-  });
-
-  // Bug 3 (codex) — patchRow must clear a stale textAlign when a column's
-  // alignment is removed. Revert-check: restore the `if (a !== null)` guard →
-  // the reused element keeps "center" → red.
-  it("clears stale textAlign when a column's alignment is removed (Bug 3)", () => {
-    const srcA = "| H |\n| :-: |\n| x |";
-    const srcB = "| H |\n| --- |\n| x |";
-    const { dom, result } = buildAndUpdate(srcA, srcB);
-    expect(result).toBe(true);
-    const th = dom.querySelector("thead th") as HTMLElement;
-    const td = dom.querySelector("tbody td") as HTMLElement;
-    expect(th.style.textAlign).toBe("");
-    expect(td.style.textAlign).toBe("");
-  });
-
-  it("re-stamps offsets WITHOUT re-tokenizing cells when the slice is unchanged", () => {
-    const src = "| a | b |\n| - | - |\n| c | d |\n";
-    const a = makeWidget(src, 0);
-    const domA = a.toDOM(mockView);
-    const th0 = domA.querySelectorAll("thead th")[0] as HTMLElement;
-    const cellChild = th0.firstChild; // renderCellInline output node — identity we must preserve
-    expect(cellChild).not.toBeNull();
-
-    const table = parseTable(src, 0, src.length);
-    if (table === null) {
-      throw new Error("fixture must parse");
-    }
-    const shifted = new TableBlockWidget(table, src, 5, 5); // shifted docFrom + nodeFrom, same bytes
-    const reused = shifted.updateDOM(domA, mockView, a);
-
-    expect(reused).toBe(true);
-    expect(th0.firstChild).toBe(cellChild); // same node — no textContent="" + re-render
-    expect((domA as HTMLElement).dataset.docFrom).toBe("5");
-    expect(th0.dataset.cellFrom).toBe("7"); // nodeFrom 5 + 'a' at 2
-  });
-});
-
 describe("resource-base threading (relative in-cell images)", () => {
   const BASE = "https://csp/ws/notes/a.md";
 
   it("toDOM resolves a relative in-cell image against the facet base", () => {
     const src = "| ![p](./img.png) |\n| - |";
-    const dom = makeWidget(src).toDOM(stubView(undefined, BASE));
+    const dom = makeWidget(src).toDOM(stubView([], BASE));
     const img = dom.querySelector<HTMLImageElement>("th img");
     expect(img?.getAttribute("src")).toBe("https://csp/ws/notes/img.png");
   });
 
   it("toDOM renders a traversal in-cell image inert (../ escape)", () => {
     const src = "| ![p](../x.png) |\n| - |";
-    const dom = makeWidget(src).toDOM(stubView(undefined, BASE));
+    const dom = makeWidget(src).toDOM(stubView([], BASE));
     expect(dom.querySelector("img")).toBeNull();
     expect(dom.querySelector("th")?.textContent).toBe("![p](../x.png)");
   });
 
   it("toDOM renders a relative in-cell image inert when no base facet is set", () => {
     const src = "| ![p](./img.png) |\n| - |";
-    const dom = makeWidget(src).toDOM(stubView());
+    const dom = makeWidget(src).toDOM(stubView([]));
     expect(dom.querySelector("img")).toBeNull();
     expect(dom.querySelector("th")?.textContent).toBe("![p](./img.png)");
   });
@@ -572,7 +480,7 @@ describe("resource-base threading (relative in-cell images)", () => {
   it("updateDOM (patchRow) resolves a relative image added by a cell edit", () => {
     const srcA = "| a |\n| - |\n| plain |";
     const srcB = "| a |\n| - |\n| ![p](./img.png) |";
-    const view = stubView(undefined, BASE);
+    const view = stubView([], BASE);
     const widgetA = makeWidget(srcA);
     const dom = widgetA.toDOM(view);
     expect(makeWidget(srcB).updateDOM(dom, view, widgetA)).toBe(true);

@@ -1,7 +1,12 @@
 // @vitest-environment happy-dom
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
-import { EditorSelection, EditorState, type Transaction } from "@codemirror/state";
-import { EditorView } from "@codemirror/view";
+import {
+  EditorSelection,
+  EditorState,
+  type EditorStateConfig,
+  type Transaction,
+} from "@codemirror/state";
+import type { EditorView } from "@codemirror/view";
 import { describe, expect, it, vi } from "vitest";
 
 import { PROTOCOL_VERSION, type WebviewToHost } from "../../src/shared/protocol.js";
@@ -11,14 +16,36 @@ import {
   quollLinkClickHandler,
   tryOpenLinkAt,
 } from "../../src/webview/cm/link-handlers.js";
+import { settledState } from "./helpers/settled-state.js";
+import { settledMount } from "./helpers/settled-view.js";
 
 // ---- tryOpenLinkAt (Task 7) ----
 
-function stateOf(doc: string): EditorState {
-  return EditorState.create({
-    doc,
-    extensions: [markdown({ base: markdownLanguage })],
-  });
+// Settled: tryOpenLinkAt reads `syntaxTree(state)` (link-handlers.ts) — the language
+// field's SNAPSHOT, which a freshly-created state leaves truncated whenever the bounded
+// init parse runs out of budget. An unsettled fixture makes a real Link read as plain text
+// under CPU load.
+//
+// `selection` is typed as EditorStateConfig["selection"] rather than a number so the
+// multi-cursor fixture below can pass an EditorSelection; a present-but-undefined key
+// takes EditorState.create's own `!config.selection` default branch (cursor 0), the same
+// as an absent one.
+function stateOf(doc: string, selection?: EditorStateConfig["selection"]): EditorState {
+  return settledState(
+    EditorState.create({
+      doc,
+      selection,
+      extensions: [
+        markdown({ base: markdownLanguage }),
+        // Load-bearing for the multi-cursor fixture below: EditorState.create ends in
+        // `selection.asSingle()` — and every transaction, `settledState`'s empty update
+        // included, re-collapses the same way — unless this facet is set. Without it that
+        // fixture would silently degrade to a single cursor. A no-op for every other
+        // (single-range) call site here.
+        EditorState.allowMultipleSelections.of(true),
+      ],
+    })
+  );
 }
 
 function posOf(doc: string, marker: string): number {
@@ -299,12 +326,8 @@ describe("tryOpenLinkAt — already revealed link (caret in link)", () => {
   // false so the caller falls through to default CM behaviour.
   it("returns false when state.selection intersects the Link node", () => {
     const doc = "[link](https://example.com)";
-    const state = EditorState.create({
-      doc,
-      // Caret inside the inline content `link`.
-      selection: EditorSelection.single(3),
-      extensions: [markdown({ base: markdownLanguage })],
-    });
+    // Caret inside the inline content `link`.
+    const state = stateOf(doc, EditorSelection.single(3));
     const posted: unknown[] = [];
     const host = { postMessage: (m: unknown) => posted.push(m) };
     // Click at position 3 (same as selection) — but the contract is "if
@@ -316,14 +339,25 @@ describe("tryOpenLinkAt — already revealed link (caret in link)", () => {
 
   it("returns false when any cursor in a multi-cursor selection intersects the Link", () => {
     const doc = "[link](https://example.com) and other text";
-    const state = EditorState.create({
+    const state = stateOf(
       doc,
-      selection: EditorSelection.create([
-        EditorSelection.cursor(3), // inside the link
-        EditorSelection.cursor(35), // far away
-      ]),
-      extensions: [markdown({ base: markdownLanguage })],
-    });
+      // mainIndex 1: the intersecting cursor must be SECONDARY, otherwise a regression
+      // that read `state.selection.main` instead of `.ranges` (link-handlers.ts's
+      // selectionIntersects) would still find it and this test would stay green.
+      EditorSelection.create(
+        [
+          EditorSelection.cursor(3), // inside the link — secondary
+          EditorSelection.cursor(35), // far away — main
+        ],
+        1
+      )
+    );
+    expect(state.selection.ranges).toHaveLength(2); // the fixture is really multi-cursor
+    // …and the intersecting cursor is the SECONDARY one — the property `mainIndex: 1`
+    // exists for. Without this line a reorder of the two ranges (which makes
+    // EditorSelection.create renormalise and recompute mainIndex) would silently promote
+    // cursor(3) to `main` and re-vacate the test against a `.main`-only regression.
+    expect(state.selection.main.head).toBe(35);
     const posted: unknown[] = [];
     const host = { postMessage: (m: unknown) => posted.push(m) };
     expect(tryOpenLinkAt(state, 3, host, noScroll)).toBe(false);
@@ -698,6 +732,10 @@ function makeMockEvent(
 }
 
 describe("handleLinkMouseDown — short-circuit branches", () => {
+  // These four fixtures stay a plain EditorState.create rather than going through
+  // stateOf(): every one returns before handleLinkMouseDown reaches tryOpenLinkAt, so no
+  // tree is ever read and there is nothing for a settle to fix. Settling them anyway
+  // would add a parse — and a parse-budget failure mode — to a test about event.button.
   it("returns false for non-left-button (button !== 0); does NOT preventDefault", () => {
     const state = EditorState.create({
       doc: "[t](https://x)",
@@ -772,10 +810,7 @@ describe("handleLinkMouseDown — short-circuit branches", () => {
   // is intentionally NOT asserted here — the pin is purely on the
   // doc-range guard's "let it through" semantics, not on the open path.
   it("does NOT short-circuit when pos === view.state.doc.length (boundary-inclusive upper edge)", () => {
-    const realState = EditorState.create({
-      doc: "see [t](https://x)",
-      extensions: [markdown({ base: markdownLanguage })],
-    });
+    const realState = stateOf("see [t](https://x)");
     let stateAccessCount = 0;
     const view = {
       get state() {
@@ -804,10 +839,7 @@ describe("handleLinkMouseDown — success / failure paths", () => {
   // mask both the success and unsafe-URL paths.
   it("calls preventDefault AND posts open-external when tryOpenLinkAt succeeds", () => {
     const doc = "see [t](https://example.com)";
-    const state = EditorState.create({
-      doc,
-      extensions: [markdown({ base: markdownLanguage })],
-    });
+    const state = stateOf(doc);
     const event = makeMockEvent(/* button */ 0);
     // Map coords to a pos inside the link's inline text (offset 5 = "[t]"+1).
     const view = makeMockView(state, () => 5);
@@ -821,10 +853,7 @@ describe("handleLinkMouseDown — success / failure paths", () => {
 
   it("does NOT preventDefault and returns false when click hits plain text", () => {
     const doc = "just a paragraph";
-    const state = EditorState.create({
-      doc,
-      extensions: [markdown({ base: markdownLanguage })],
-    });
+    const state = stateOf(doc);
     const event = makeMockEvent(/* button */ 0);
     const view = makeMockView(state, () => 4);
     const posted: WebviewToHost[] = [];
@@ -836,10 +865,7 @@ describe("handleLinkMouseDown — success / failure paths", () => {
 
   it("does NOT preventDefault for unsafe URL clicks (caret-fallthrough preserved)", () => {
     const doc = "see [t](javascript:alert(1))";
-    const state = EditorState.create({
-      doc,
-      extensions: [markdown({ base: markdownLanguage })],
-    });
+    const state = stateOf(doc);
     const event = makeMockEvent(/* button */ 0);
     const view = makeMockView(state, () => 5);
     const posted: WebviewToHost[] = [];
@@ -855,7 +881,10 @@ describe("quollLinkClickHandler — smoke (extension shape is valid)", () => {
     const parent = document.createElement("div");
     document.body.appendChild(parent);
     const posted: WebviewToHost[] = [];
-    const view = new EditorView({
+    // Kept out of stateOf() — it carries the click-handler extension the shared fixture
+    // does not — but still settled, so the mounted view is on the same footing as every
+    // other fixture that a reader could later be pointed at.
+    const view = settledMount({
       parent,
       state: EditorState.create({
         doc: "[link](https://example.com)",
@@ -912,11 +941,7 @@ describe("tryOpenLinkAt — fragments", () => {
 
   it("does not scroll when the caret is already inside the link (revealed state)", () => {
     const doc = "# Sec\n\nsee [jump](#sec) end\n";
-    const state = EditorState.create({
-      doc,
-      extensions: [markdown({ base: markdownLanguage })],
-      selection: EditorSelection.cursor(posOf(doc, "jump")),
-    });
+    const state = stateOf(doc, EditorSelection.cursor(posOf(doc, "jump")));
     const scrolled: number[] = [];
     expect(tryOpenLinkAt(state, posOf(doc, "jump") + 1, noHost, (p) => scrolled.push(p))).toBe(
       false
@@ -937,7 +962,10 @@ describe("handleLinkMouseDown — fragment wiring", () => {
     const parent = document.createElement("div");
     document.body.appendChild(parent);
     const dispatched: Transaction[] = [];
-    const view = new EditorView({
+    // settledMount: handleLinkMouseDown reaches tryOpenLinkAt, which reads
+    // syntaxTree(view.state) — an unsettled mount can miss the heading and turn the
+    // fragment into a caret move.
+    const view = settledMount({
       parent,
       state: EditorState.create({ doc, extensions: [markdown({ base: markdownLanguage })] }),
       // Capture the transaction so the scroll REQUEST is observable: happy-dom
@@ -947,6 +975,9 @@ describe("handleLinkMouseDown — fragment wiring", () => {
         v.update([tr]);
       },
     });
+    // The settle above goes through this same custom dispatch, so its empty transaction
+    // lands in `dispatched`. Clear it: the count assertion below is about the CLICK.
+    dispatched.length = 0;
     // happy-dom has no layout, so posAtCoords cannot be driven from real
     // coords — stub it to the inline-content position the click would hit.
     view.posAtCoords = () => posOf(doc, "jump") + 1;
