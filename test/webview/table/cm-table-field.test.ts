@@ -64,9 +64,10 @@ function mount(
       ...(extraExtensions as never[]),
     ],
   });
-  // Settle: tableBlockField's collectTableRanges reads syntaxTree(state), which
-  // a mounted view never self-heals under happy-dom (no idle time for the
-  // background parse) — force it to the full tree at mount time.
+  // Settle: these extensions register tableBlockField WITHOUT tableSkeletonField,
+  // so resolveModels() takes its fallback arm into tableModels(state) — the
+  // syntaxTree(state) read (table-skeleton.ts). A mounted view never self-heals
+  // under happy-dom, so force the full tree at mount time.
   return settledMount({ state, parent });
 }
 
@@ -445,7 +446,7 @@ describe("tableBlockField — reveal and offset pins", () => {
     const lfText = splitToCmText(raw);
     const parent = document.createElement("div");
     document.body.appendChild(parent);
-    // Settle: same collectTableRanges/syntaxTree(state) reader as mount() above.
+    // Settle: same tableModels(state)/syntaxTree(state) fallback read as mount() above.
     const view = settledMount({
       parent,
       state: EditorState.create({
