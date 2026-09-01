@@ -122,7 +122,7 @@ function checkEquivalence(initial: string, edits: Edit[], oracleSlots: number): 
         // loop a starved intermediate edit would take image-field.ts's G2 computeFreshFull
         // arm unobserved behind a later completing edit.
         //
-        // ⚠️ What a true rules out is the STARVED-frontier full walk, and nothing more.
+        // ⚠️ What a `true` rules out is the STARVED-frontier full walk, and nothing more.
         // imageBlockField.update takes its G3 arm — computeFreshFull — whenever
         // leadingFrontmatterEnd changes, BEFORE this predicate is ever consulted
         // (image-field.ts), so `true` does not mean the bounded path ran. The "G3
