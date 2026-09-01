@@ -14,18 +14,14 @@ vi.mock("@codemirror/language", async (importActual) => {
   return { ...actual, ensureSyntaxTree: vi.fn(actual.ensureSyntaxTree) };
 });
 
-import { ensureSyntaxTree, forceParsing } from "@codemirror/language";
+import { ensureSyntaxTree, syntaxTreeAvailable } from "@codemirror/language";
 
 import {
   autoCloseFenceOnEnter,
   fencedCodeEnterKeymap,
 } from "../../../src/webview/cm/fenced-code/fenced-code-enter-keymap.js";
 import { quollMarkdownLanguage } from "../../../src/webview/cm/markdown.js";
-
-function forceParse(view: EditorView): EditorView {
-  forceParsing(view, view.state.doc.length, 5_000);
-  return view;
-}
+import { settledMount } from "../helpers/settled-view.js";
 
 function mount(
   doc: string,
@@ -44,7 +40,7 @@ function mount(
       ...(opts.withKeymap ? [fencedCodeEnterKeymap()] : []),
     ],
   });
-  return forceParse(new EditorView({ state, parent }));
+  return settledMount({ state, parent });
 }
 
 /** Cursor at the END of 1-based line `n`. */
@@ -264,8 +260,20 @@ describe("autoCloseFenceOnEnter — history + keymap wiring", () => {
 // actually a fenced-block opener (whose extent the parser must resolve anyway).
 // A plain-paragraph Enter must NOT force a parse to end-of-document.
 describe("autoCloseFenceOnEnter — lazy parse (no EOF parse on non-triggers)", () => {
-  // Mount WITHOUT forceParse — a fresh, mostly-unparsed large doc, mirroring a
-  // just-opened file where an eager EOF parse would stall.
+  // Mount WITHOUT settling the parse — deliberately NOT this file's `mount()`, which
+  // builds through `settledMount`. Here we want a fresh, mostly-unparsed large doc,
+  // mirroring a just-opened file where an eager EOF parse would stall.
+  //
+  // ⚠️ The spy is cleared AFTER the mount, so settling this fixture adds no observed
+  // call: the spy-based assertions cannot notice, and before the guards below existed a
+  // settled fixture kept all 20 tests green while the doc silently stopped being
+  // unparsed (measured 2026-08-30). Re-check by wrapping this return in `settledMount`:
+  // three tests must now go red at their `syntaxTreeAvailable` lines.
+  // The three big-doc tests assert the precondition explicitly, rather than
+  // leaving "keep this one unsettled" as a rule the reader has to remember — the same
+  // reasoning that put the settle check inside `settledView` in the first place.
+  // The guard cannot live in this factory: the small `\`\`\`ruby\nputs 1` fixture below is
+  // already fully parsed at mount, and only the big docs have a real unparsed precondition.
   function mountUnparsed(doc: string, caret: number): EditorView {
     const parent = document.createElement("div");
     document.body.appendChild(parent);
@@ -289,6 +297,9 @@ describe("autoCloseFenceOnEnter — lazy parse (no EOF parse on non-triggers)", 
     const view = mountUnparsed(bigProseDoc(), 3); // caret on line 1 (prose)
     const caretLineTo = view.state.doc.lineAt(3).to;
     const docLength = view.state.doc.length;
+    // PRECONDITION: the fixture really is unparsed. Without this, settling it would turn
+    // this test into a duplicate of its `mount()`-based sibling without going red.
+    expect(syntaxTreeAvailable(view.state, docLength)).toBe(false);
     spy.mockClear();
     try {
       expect(autoCloseFenceOnEnter(view)).toBe(false);
@@ -316,6 +327,9 @@ describe("autoCloseFenceOnEnter — lazy parse (no EOF parse on non-triggers)", 
     const bodyLine = view.state.doc.line(2); // "first body line"
     view.dispatch({ selection: EditorSelection.cursor(bodyLine.to) });
     const docLength = view.state.doc.length;
+    // PRECONDITION: the fixture really is unparsed. Without this, settling it would turn
+    // this test into a duplicate of its `mount()`-based sibling without going red.
+    expect(syntaxTreeAvailable(view.state, docLength)).toBe(false);
     spy.mockClear();
     try {
       expect(autoCloseFenceOnEnter(view)).toBe(false);
@@ -338,6 +352,10 @@ describe("autoCloseFenceOnEnter — lazy parse (no EOF parse on non-triggers)", 
     const trailing = Array.from({ length: 4000 }, (_, i) => `after ${i}`).join("\n");
     const doc = `\`\`\`ruby\n${bigBody}\n\`\`\`\n${trailing}`;
     const view = mountUnparsed(doc, 0);
+    // PRECONDITION: same as the two tests above — this one exists to exercise the LAZY
+    // path (its sibling at the top of the file force-parses), so a settled fixture would
+    // silently make it a duplicate.
+    expect(syntaxTreeAvailable(view.state, view.state.doc.length)).toBe(false);
     view.dispatch({ selection: EditorSelection.cursor(view.state.doc.line(1).to) }); // opener line
     try {
       expect(autoCloseFenceOnEnter(view)).toBe(false);

@@ -36,7 +36,7 @@
 // comparison is not vacuous.
 
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
-import { forceParsing, syntaxTreeAvailable } from "@codemirror/language";
+import { syntaxTreeAvailable } from "@codemirror/language";
 import {
   EditorSelection,
   EditorState,
@@ -58,6 +58,7 @@ import {
   tableBlockField,
   tableSkeletonField,
 } from "../../src/webview/cm/table/index.js";
+import { settledView } from "./helpers/settled-view.js";
 
 // ── shared slot + equivalence machinery (mirrors cm-block-widget-bounded) ──────
 
@@ -140,9 +141,10 @@ interface Edit {
 // tableBlockField reads its widget slices from the bounded-maintained
 // tableSkeletonField, so BOTH must be registered for the bounded path to run
 // (absent, buildAll falls back to a full walk and the oracle would be vacuous).
-// A live view + forceParsing is required: the field converges to the fully-
-// parsed result via the tree-identity self-heal branch, exactly as
-// cm-table-skeleton.test.ts drives it.
+// A live view settled through `settledView` is required: settling advances the
+// parse to the doc end AND republishes the tree snapshot, and the field then
+// converges to the fully-parsed result via the tree-identity self-heal branch,
+// exactly as cm-table-skeleton.test.ts drives it.
 
 const tableExts = (): Extension[] => [
   EditorState.allowMultipleSelections.of(true),
@@ -162,7 +164,7 @@ function tableFullSlots(doc: string, selection: EditorSelection): Slot[] {
     parent,
   });
   try {
-    forceParsing(view, view.state.doc.length, 10_000);
+    settledView(view, 10_000);
     return slots(view.state.field(tableBlockField));
   } finally {
     view.destroy();
@@ -177,7 +179,7 @@ function checkTableEquivalence(initial: string, edits: Edit[]): void {
     parent,
   });
   try {
-    forceParsing(view, view.state.doc.length, 10_000);
+    settledView(view, 10_000);
     // create() correctness on the fully-parsed initial doc.
     assertEquivalent(
       slots(view.state.field(tableBlockField)),
@@ -192,7 +194,7 @@ function checkTableEquivalence(initial: string, edits: Edit[]): void {
       const len = view.state.doc.length;
       // Pre-self-heal bounded assertion: when the post-edit tree is already
       // complete, boundedUpdate ran during dispatch — check its output BEFORE
-      // forceParsing so a self-heal can't mask a bounded byte bug (Codex R2-2,
+      // settling so a self-heal can't mask a bounded byte bug (Codex R2-2,
       // cm-table-skeleton.test.ts). Whether or not the tree is synchronously
       // available here is harness-dependent, so this stays conditional and the
       // guaranteed bounded-path pin lives in its own test below.
@@ -203,7 +205,7 @@ function checkTableEquivalence(initial: string, edits: Edit[]): void {
         );
         assertTableByteAnchored(view.state);
       }
-      forceParsing(view, len, 10_000); // publish → converge (also covers the G2 path)
+      settledView(view, 10_000); // publish → converge (also covers the G2 path)
       assertEquivalent(
         slots(view.state.field(tableBlockField)),
         tableFullSlots(view.state.doc.toString(), view.state.selection)
@@ -297,7 +299,7 @@ describe("tableBlockField byte-identity: bounded ≡ full", () => {
   // no-self-heal anchor): a small in-place edit on a complete tree keeps the
   // frontier at doc end, so boundedUpdate ran during dispatch. Assert the tree
   // IS available (not conditional) and check the field's output — plus its
-  // byte-anchor — BEFORE any forceParsing, so a broken bounded reuse can't be
+  // byte-anchor — BEFORE any settling, so a broken bounded reuse can't be
   // masked by a self-heal. This is the case the matrix's conditional guard
   // cannot guarantee runs.
   it("exercises the bounded path without self-heal masking (revert-check anchor)", () => {
@@ -308,7 +310,7 @@ describe("tableBlockField byte-identity: bounded ≡ full", () => {
       parent,
     });
     try {
-      forceParsing(view, view.state.doc.length, 10_000);
+      settledView(view, 10_000);
       view.dispatch({
         changes: { from: 0, insert: "x" }, // edit OUTSIDE both tables
         selection: EditorSelection.cursor(1),
@@ -507,7 +509,7 @@ describe("CRLF-seeded byte-identity: line-ending-aware widget anchors", () => {
       parent,
     });
     try {
-      forceParsing(view, view.state.doc.length, 10_000);
+      settledView(view, 10_000);
       const st = view.state;
       const emitted = slots(st.field(tableBlockField));
       expect(emitted.length).toBe(1); // the table renders (guards against vacuity)

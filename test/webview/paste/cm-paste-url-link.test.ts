@@ -1,13 +1,13 @@
 // @vitest-environment happy-dom
 import { history, undo } from "@codemirror/commands";
-import { ensureSyntaxTree } from "@codemirror/language";
 import { EditorSelection, EditorState } from "@codemirror/state";
-import { EditorView } from "@codemirror/view";
+import type { EditorView } from "@codemirror/view";
 import { describe, expect, it } from "vitest";
 
 import { validateMarkdownForWrite } from "../../../src/markdown/validate-for-write.js";
 import { quollMarkdownLanguage } from "../../../src/webview/cm/markdown.js";
 import { detectPasteLinkUrl, pasteUrlOverSelection } from "../../../src/webview/cm/paste/index.js";
+import { settledMount } from "../helpers/settled-view.js";
 
 describe("detectPasteLinkUrl — URL detection boundary", () => {
   it("accepts a bare http(s) URL (trimming surrounding whitespace)", () => {
@@ -61,13 +61,18 @@ describe("detectPasteLinkUrl — URL detection boundary", () => {
 
 // The Markdown language is mounted so the handler's syntax-context guard
 // (`markdownLanguage.isActiveAt` + the syntaxTree walk) is exercised. The
-// ensureSyntaxTree call is a best-effort, time-budgeted warm-up so the tree is
-// populated at paste time (the handler self-ensures too, so this is a warm-up,
-// not load-bearing).
+// production handler (src/webview/cm/paste/url-link-paste.ts) self-ensures the
+// parse and reads the RETURNED tree, not `view.state`'s own snapshot, so this
+// test was already immune to the truncated-snapshot flake either way — the old
+// bare `ensureSyntaxTree(view.state, …)` call here advanced the parse context
+// but never republished `view.state`'s snapshot, making it a misleading no-op
+// rather than the load-bearing warm-up its comment claimed. `settledMount`
+// replaces it with a real settle (still just a warm-up for this handler, but
+// no longer one that looks load-bearing and isn't).
 function mount(doc: string, anchor: number, head: number, canWrite = true): EditorView {
   const parent = document.createElement("div");
   document.body.appendChild(parent);
-  const view = new EditorView({
+  return settledMount({
     parent,
     state: EditorState.create({
       doc,
@@ -80,8 +85,6 @@ function mount(doc: string, anchor: number, head: number, canWrite = true): Edit
       ],
     }),
   });
-  ensureSyntaxTree(view.state, view.state.doc.length, 5000);
-  return view;
 }
 
 function firePaste(view: EditorView, text: string): Event {
