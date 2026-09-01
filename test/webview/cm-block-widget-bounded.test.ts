@@ -80,12 +80,26 @@ interface Edit {
 // vacuously (an all-starved run throws below), which a vitest-level `{ retry: n }` would
 // fail on both counts.
 function checkEquivalence(initial: string, edits: Edit[], oracleSlots: number): void {
-  if (edits.length === 0) {
-    // The gate inside the attempt is per-`Edit`, so a zero-edit call would compare a
-    // settled mount against a settled oracle and report success having exercised no
-    // bounded path. Refuse it at the door rather than let it read as a passing
-    // equivalence case, exactly as cm-decoration-callout-marker-conceal.test.ts does.
-    throw new Error("checkEquivalence: at least one edit is required to exercise the bounded path");
+  if (edits.every((e) => !e.changes && !e.selection && !e.cursorAtEnd)) {
+    // What this rules out: a call in which NO edit can produce a transaction that even
+    // reaches imageBlockField.update's bounded arms — every dispatch is a literal no-op
+    // (`[]`, `[{}]`, or any array where every `Edit` is the empty object), so `view.dispatch`
+    // changes nothing and comparing the settled mount against the settled oracle reports
+    // success having exercised no bounded path.
+    // What this does NOT rule out: a `selection`/`cursorAtEnd` edit that dispatches something
+    // real but whose selection LINE SPAN happens not to change. image-field.ts's update()
+    // takes the bounded path on a non-docChanged transaction only when
+    // `!selectionLineSpansEqual(tr.startState, tr.state)` — otherwise it returns `prev`
+    // untouched. Deciding that at the door would mean reimplementing that admission check
+    // here (selectionLineSpansEqual / computeExtendedSpan are not exported from
+    // image-field.ts), so this guard is a floor, not a guarantee: it catches the fully inert
+    // call, not every selection-only call that fails to cross a line boundary. The
+    // "selection-only onto then off an image" case below is deliberately NOT inert — moving
+    // the cursor onto and then off the image's line crosses that boundary and exercises
+    // computeBounded via the selection arm, not the docChanged one.
+    throw new Error(
+      "checkEquivalence: at least one edit with `changes`, `selection`, or `cursorAtEnd` is required to exercise the bounded path"
+    );
   }
   for (let attempt = 0; attempt < 5; attempt++) {
     if (runOnce()) {
@@ -113,14 +127,31 @@ function checkEquivalence(initial: string, edits: Edit[], oracleSlots: number): 
         // Anti-masking gate, once per `Edit` — which on a `cursorAtEnd` row is after TWO
         // dispatches, not one. (The sibling in cm-decoration-callout-marker-conceal.test.ts
         // says "per-dispatch" because there an `Edit` IS exactly one dispatch.) That is
-        // equivalent here only because the extra dispatch is SELECTION-ONLY: LanguageState
-        // .apply returns the same LanguageState on a non-docChanged transaction, so it
-        // cannot advance `isDone` and mask a starved doc-changing dispatch.
-        // ⚠️ Adding a second DOC-CHANGING dispatch to this loop would break that, and the
-        // gate would then have to be split to run after each one. syntaxTreeAvailable reads
-        // the parse CONTEXT's `isDone`, which reflects only the LAST apply — outside this
-        // loop a starved intermediate edit would take image-field.ts's G2 computeFreshFull
-        // arm unobserved behind a later completing edit.
+        // equivalent here because LanguageState.apply's short-circuit is a COMPOUND guard,
+        // not "any non-docChanged transaction is a no-op":
+        //   if (!tr.docChanged && this.tree == this.context.tree) return this;
+        // (@codemirror/language dist/index.cjs:530-532). `this.tree` is the SNAPSHOT stashed
+        // when this LanguageState was constructed; `this.context.tree` is the MUTABLE tree
+        // field on the same ParseContext, which ParseContext.work() overwrites in place
+        // (dist/index.cjs:369) whenever something calls work() on that context — including
+        // outside of a dispatch. Nothing between the two dispatches in this loop touches
+        // work(): syntaxTreeAvailable only reads context.isDone(upto) (dist/index.cjs:
+        // 218-221), which inspects treeLen/fragments and mutates nothing, and the idle parse
+        // worker does not run synchronously in this environment. So at the selection-only
+        // dispatch `this.tree` still equals `this.context.tree`, the short-circuit fires, and
+        // the dispatch is a true no-op that cannot advance `isDone`.
+        // ⚠️ That equality is incidental to this loop's shape, not guaranteed by the guard
+        // itself — either of these breaks it and lets a starved doc-changing dispatch through
+        // unnoticed:
+        //   - a second DOC-CHANGING dispatch here (the gate would then have to run after
+        //     each one — syntaxTreeAvailable reflects only the LAST apply, so a starved
+        //     intermediate edit would take image-field.ts's G2 computeFreshFull arm unobserved
+        //     behind a later completing edit);
+        //   - a context-advancing READ inserted into the loop (ensureSyntaxTree, a `fullTree`
+        //     probe, forceParsing, …) — those call context.work() directly, mutating
+        //     `this.context.tree` outside of `apply` and desyncing it from the stashed
+        //     `this.tree`, so the NEXT selection-only dispatch's short-circuit fails and falls
+        //     through to `newCx.work(20)`, silently advancing `isDone` right there.
         //
         // ⚠️ What a `true` rules out is the STARVED-frontier full walk, and nothing more.
         // imageBlockField.update takes its G3 arm — computeFreshFull — whenever
