@@ -12,10 +12,9 @@ import { assertHasLanguage, timeoutMessage, truncatedSnapshotMessage } from "./p
  * browser: its background parse `ViewPlugin` gets idle time and dispatches its own
  * transaction when the parse finishes. happy-dom never runs that worker, so under
  * vitest a mounted view's fields stay built on the init-viewport fragment forever.
- * "It is a live view, so parsing runs" is FALSE here — a comment in
- * cm-fenced-code-language-picker.test.ts states exactly that and is wrong. That comment
- * is still in the tree: correcting it is out of this change's scope and belongs to the
- * follow-up that migrates the remaining hand-rolled settles.
+ * "It is a live view, so parsing runs" is FALSE here — `cm-fenced-code-language-picker.test.ts`
+ * used to say exactly that; it now settles through `settledMount` instead, which is why
+ * every mounted fixture goes through this helper rather than relying on the mount alone.
  *
  * Why the checks live INSIDE this helper rather than at the call sites. `forceParsing`
  * reports failure by RETURNING FALSE, and most of this suite's call sites discarded

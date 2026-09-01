@@ -27,6 +27,8 @@ import {
 } from "../../../src/webview/cm/fenced-code/fenced-code-node.js";
 import { collapseToggleThemeSpec, copyButtonThemeSpec } from "../../../src/webview/cm/theme.js";
 import { fullTree } from "../helpers/full-tree.js";
+import { settledState } from "../helpers/settled-state.js";
+import { settledMount } from "../helpers/settled-view.js";
 
 function firstFencedCode(doc: string): { state: EditorState; node: FencedCodeNode } {
   const state = EditorState.create({
@@ -163,10 +165,14 @@ describe("fencedCodeBody", () => {
 
 describe("fencedCodeBodyAt", () => {
   function makeState(doc: string): EditorState {
-    return EditorState.create({
-      doc,
-      extensions: [markdown({ base: markdownLanguage })],
-    });
+    // `fencedCodeBodyAt` reads `syntaxTree(state)` on the STATE itself, so the
+    // field snapshot has to be settled, not just the underlying tree.
+    return settledState(
+      EditorState.create({
+        doc,
+        extensions: [markdown({ base: markdownLanguage })],
+      })
+    );
   }
 
   it("returns null for openFrom < 0 (out-of-bounds low)", () => {
@@ -642,7 +648,9 @@ function mountFenced(doc: string, caret: number): EditorView {
       fencedCodeCopyButton,
     ],
   });
-  return new EditorView({ state, parent });
+  // `settledMount` republishes the view's own syntax-tree snapshot, which the
+  // reveal/copy-button providers read via `syntaxTree(view.state)`.
+  return settledMount({ state, parent });
 }
 
 describe("fencedCodeCopyButton DOM integration", () => {

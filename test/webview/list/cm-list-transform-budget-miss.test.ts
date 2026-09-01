@@ -9,6 +9,12 @@
 // green. The mock is scoped to THIS file (vitest module mocks are per-file) so
 // it never leaks into the real-tree transform tests; only `ensureSyntaxTree` is
 // overridden, every other `@codemirror/language` export stays real.
+//
+// Because `ensureSyntaxTree` is mocked to always return `null` here, `settledState`
+// / `fullTree` — which settle by calling THROUGH `ensureSyntaxTree` — would THROW
+// in this file. Do NOT route any state here through them. `settledMount` /
+// `settledView` remain safe (used in `mount()` below): they settle a mounted view
+// via `forceParsing`, which this file leaves real and unmocked.
 
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
 import { syntaxTree } from "@codemirror/language";
