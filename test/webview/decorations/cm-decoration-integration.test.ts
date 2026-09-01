@@ -12,6 +12,7 @@ import { linkReveal } from "../../../src/webview/cm/decorations/link-reveal.js";
 import { mountEditor } from "../../../src/webview/editor.js";
 import { initialState, type WebviewState } from "../../../src/webview/state.js";
 import { fullTree } from "../helpers/full-tree.js";
+import { settledMount } from "../helpers/settled-view.js";
 
 vi.mock("../../../src/webview/host.js", () => ({
   getHost: () => ({ postMessage: vi.fn() }),
@@ -33,7 +34,9 @@ function mount(doc: string): EditorView {
       history(), // undo() returns false without this; C5 undo tests would silently pass
     ],
   });
-  return new EditorView({ state, parent });
+  // settledMount: the orchestrator builds its decorations from syntaxTree(view.state),
+  // the language field's SNAPSHOT, which a fresh state leaves truncated under load.
+  return settledMount({ state, parent });
 }
 
 describe("orchestrator integration — providers wired", () => {

@@ -15,13 +15,19 @@ import {
 } from "../../src/webview/cm/code-ref/code-ref-handlers.js";
 import { codeRefReveal } from "../../src/webview/cm/code-ref/code-ref-reveal.js";
 import { fullTree } from "./helpers/full-tree.js";
+import { settledState } from "./helpers/settled-state.js";
 
 function stateFor(doc: string, sel?: number) {
-  return EditorState.create({
-    doc,
-    extensions: [markdown()],
-    selection: sel === undefined ? undefined : { anchor: sel },
-  });
+  // `tryOpenCodeRefAt` reads `syntaxTree(state)` (the STATE's own field
+  // snapshot), not a tree handed to it, so the snapshot itself has to be
+  // settled — `fullTree` alone would leave it truncated.
+  return settledState(
+    EditorState.create({
+      doc,
+      extensions: [markdown()],
+      selection: sel === undefined ? undefined : { anchor: sel },
+    })
+  );
 }
 
 describe("tryOpenCodeRefAt", () => {

@@ -23,6 +23,7 @@ import { EditorSelection, EditorState, type Extension } from "@codemirror/state"
 import { EditorView, runScopeHandlers } from "@codemirror/view";
 import { afterEach, describe, expect, it } from "vitest";
 import { quollMarkdownLanguage } from "../../src/webview/cm/markdown.js";
+import { fullTree } from "./helpers/full-tree.js";
 import { settledState } from "./helpers/settled-state.js";
 import { settledView } from "./helpers/settled-view.js";
 
@@ -261,7 +262,9 @@ describe("quollMarkdownLanguage registers the ==highlight== inline mark", () => 
   it("parses ==text== into a Highlight span (registered in the webview config)", () => {
     const state = EditorState.create({ doc: "==hi==", extensions: [quollLang] });
     const names: string[] = [];
-    syntaxTree(state).iterate({
+    // Walk the returned tree only, so `fullTree` — not `syntaxTree(state)`'s
+    // truncatable init snapshot — is the right read here.
+    fullTree(state).iterate({
       enter: (n) => {
         names.push(n.name);
       },

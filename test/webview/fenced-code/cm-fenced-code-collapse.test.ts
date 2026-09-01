@@ -5,6 +5,8 @@ import { EditorState } from "@codemirror/state";
 import { describe, expect, it } from "vitest";
 import { fencedCodeBodyLineSpan } from "../../../src/webview/cm/fenced-code/fenced-code-body.js";
 import { fullTree } from "../helpers/full-tree.js";
+import { settledState } from "../helpers/settled-state.js";
+import { settledMount } from "../helpers/settled-view.js";
 
 type SyntaxNode = ReturnType<typeof fullTree>["topNode"];
 
@@ -64,12 +66,19 @@ function fencedDoc(bodyLines: number, prefix = ""): string {
   return `${prefix}\`\`\`js\n${body}\n\`\`\`\n`;
 }
 
+// Settled: findCollapsibleFencedBlockAt and buildFencedCollapse both read
+// syntaxTree(state) — the language field's SNAPSHOT, which a freshly-created state
+// leaves truncated whenever the init parse runs out of budget. That is the read the
+// closing describe in this file pins, and the flake docs/LEARNING.md's 2026-08-30 entry
+// tracked here.
 function stateWith(doc: string, caret = 0): EditorState {
-  return EditorState.create({
-    doc,
-    selection: EditorSelection.single(caret),
-    extensions: [markdown({ base: markdownLanguage })],
-  });
+  return settledState(
+    EditorState.create({
+      doc,
+      selection: EditorSelection.single(caret),
+      extensions: [markdown({ base: markdownLanguage })],
+    })
+  );
 }
 
 function firstFencedNode(state: EditorState): SyntaxNode {
@@ -376,16 +385,24 @@ describe("buildFencedCollapse", () => {
   });
 });
 
+// Settled for the same reason plus one more: fencedCodeCollapseField.create() builds its
+// blocks from syntaxTree(state), so a truncated snapshot yields an EMPTY block list and
+// every `expanded` assertion below would hold for the wrong reason.
+//
+// ⚠️ A settle is not permanent. Any docChanged dispatch after this re-truncates the
+// snapshot, so the tests that edit and then read the field re-settle and pin `blocks`.
 function stateWithField(doc: string, caret = 0): EditorState {
-  return EditorState.create({
-    doc,
-    selection: EditorSelection.single(caret),
-    extensions: [
-      markdown({ base: markdownLanguage }),
-      EditorState.allowMultipleSelections.of(true),
-      fencedCodeCollapseField,
-    ],
-  });
+  return settledState(
+    EditorState.create({
+      doc,
+      selection: EditorSelection.single(caret),
+      extensions: [
+        markdown({ base: markdownLanguage }),
+        EditorState.allowMultipleSelections.of(true),
+        fencedCodeCollapseField,
+      ],
+    })
+  );
 }
 
 describe("fencedCodeCollapseField reducer", () => {
@@ -401,6 +418,12 @@ describe("fencedCodeCollapseField reducer", () => {
       changes: { from: 0, to: state.doc.length, insert: fencedDoc(11, "changed\n\n") },
       annotations: hostDocumentReseed.of(true),
     }).state;
+    // The docChanged dispatch above re-truncates the language field's snapshot, so settle
+    // again before reading the field — otherwise the block list can be empty and the
+    // assertion below holds because NOTHING was found rather than because the reseed reset
+    // it. The `blocks` pin makes that distinction observable.
+    state = settledState(state);
+    expect(state.field(fencedCodeCollapseField).blocks).toHaveLength(1);
     // DD3: collapse state reset. Revert-check: drop the reseed branch and the
     // stale key 0 survives → this goes red ([0] instead of []).
     expect([...state.field(fencedCodeCollapseField).expanded]).toEqual([]);
@@ -446,6 +469,11 @@ describe("fencedCodeCollapseField reducer", () => {
     }).state;
     expect([...state.field(fencedCodeCollapseField).expanded]).toEqual([0]);
     state = state.update({ changes: { from: 0, insert: " " } }).state;
+    // Same re-truncation hazard as DD3: settle, then pin that the fence is still a block.
+    // Without the pin an empty `expanded` would be indistinguishable from "the truncated
+    // snapshot lost the FencedCode node", which is not what DD5 is about.
+    state = settledState(state);
+    expect(state.field(fencedCodeCollapseField).blocks).toHaveLength(1);
     expect([...state.field(fencedCodeCollapseField).expanded]).toEqual([]);
   });
 
@@ -481,7 +509,9 @@ function mountCollapse(doc: string, caret = 0, readOnly = false): EditorView {
       fencedCodeCollapseField,
     ],
   });
-  return new EditorView({ state, parent });
+  // settledMount: the field's create() reads syntaxTree(state), and a bare
+  // `new EditorView` publishes whatever the bounded init parse produced.
+  return settledMount({ state, parent });
 }
 
 function toggleButton(view: EditorView): HTMLButtonElement | null {
@@ -740,5 +770,44 @@ describe("quollCollapseToggleTheme", () => {
     const toggle = collapseToggleThemeSpec[".quoll-fenced-collapse-toggle"];
     expect(toggle.opacity).toMatch(/^var\(--quoll-control-rest-opacity/);
     expect(toggle.transition).toMatch(/^var\(--quoll-control-transition/);
+  });
+});
+
+// Non-vacuity for the settle in `stateWith`, taken STRUCTURALLY rather than by hoping a
+// loaded machine reproduces the flake. `LanguageState.init` caps its init viewport at 3000
+// characters, so a document longer than that ALWAYS starts with a truncated snapshot — no
+// CPU contention required. This is the state-reader class of the migration: the production
+// function reads `syntaxTree(state)` itself, so a complete tree in hand is not enough.
+//
+// Revert-check, measured: drop `settledState` from `stateWith` and the third assertion
+// below reds; nothing else in this file changes.
+describe("the collapse harness reads a settled parse, not a truncated snapshot", () => {
+  const PAD = "filler paragraph line\n\n".repeat(200); // > 3000 chars
+  const DOC = fencedDoc(11, PAD);
+  const KEY = PAD.length; // the open fence's line start, well past the init viewport
+
+  /** The same fixture WITHOUT the settle — what `stateWith` used to hand back. */
+  function rawState(): EditorState {
+    return EditorState.create({
+      doc: DOC,
+      extensions: [markdown({ base: markdownLanguage })],
+    });
+  }
+
+  it("a freshly-created state's snapshot is truncated (the precondition)", () => {
+    // Pins the CodeMirror behaviour the guard below rests on. If an upstream change ever
+    // made the init parse complete, this reds instead of silently vacating the guard.
+    const raw = rawState();
+    expect(syntaxTree(raw).length).toBeLessThan(raw.doc.length);
+  });
+
+  it("settling covers the whole doc", () => {
+    const settled = settledState(rawState());
+    expect(syntaxTree(settled).length).toBe(settled.doc.length);
+  });
+
+  it("the truncated snapshot loses the block that the settled one finds", () => {
+    expect(findCollapsibleFencedBlockAt(rawState(), KEY)).toBeNull(); // the flake's shape
+    expect(findCollapsibleFencedBlockAt(stateWith(DOC), KEY)?.key).toBe(KEY);
   });
 });

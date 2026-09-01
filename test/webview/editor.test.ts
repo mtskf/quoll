@@ -1,7 +1,6 @@
 // @vitest-environment happy-dom
 import {
   codeFolding,
-  ensureSyntaxTree,
   foldable,
   foldEffect,
   foldedRanges,
@@ -24,6 +23,8 @@ import { quollOpenExternalSink } from "../../src/webview/cm/open-external.js";
 import { type EditorHandle, mountEditor } from "../../src/webview/editor.js";
 import { type Action, initialState, type WebviewState } from "../../src/webview/state.js";
 import { fullTree } from "./helpers/full-tree.js";
+import { settledState } from "./helpers/settled-state.js";
+import { settledView } from "./helpers/settled-view.js";
 
 // editor.ts CodeMirror-view integration tests (post C3 vanilla mount).
 //
@@ -643,11 +644,10 @@ describe("editor — GFM tree active (n)", () => {
     const { handle, view } = mount();
     const fixture = "~~s~~\n\n| a | b |\n| - | - |\n| 1 | 2 |\n\n- [ ] task";
     handle.applyDocument(fixture, true, 1);
-    const tree = ensureSyntaxTree(view.state, view.state.doc.length, 5000);
-    expect(tree).not.toBeNull();
-    if (tree === null) {
-      throw new Error("syntax tree unavailable");
-    }
+    // fullTree, not a bare ensureSyntaxTree + null check: only the RETURNED tree is
+    // walked here, and fullTree throws with the coverage numbers instead of leaving the
+    // caller to hand-roll the guard.
+    const tree = fullTree(view.state);
     const seen = new Set<string>();
     tree.iterate({
       enter: (node) => {
@@ -1190,7 +1190,7 @@ describe("editor — blockquotes are not foldable through the live editor (wirin
   it("blockquote line yields no foldable range; heading line does", () => {
     const { handle, view } = mount();
     handle.applyDocument("# H\nbody1\nbody2\n\n> quote1\n> quote2\n", true, 1);
-    ensureSyntaxTree(view.state, view.state.doc.length, 5000);
+    settledView(view, 5000);
     const headingLine = view.state.doc.lineAt(0);
     const quotePos = view.state.doc.toString().indexOf("> quote1");
     const quoteLine = view.state.doc.lineAt(quotePos);
@@ -1658,7 +1658,7 @@ describe("editor — external reseed preserves unrelated folds (r)", () => {
     handle.applyDocument(doc, true, 1);
     // Fold "# One" at its CANONICAL range (what foldCode/the gutter would produce),
     // so the fold matches foldable() exactly BEFORE the reseed remaps it.
-    ensureSyntaxTree(view.state, view.state.doc.length, 5000);
+    settledView(view, 5000);
     const line1 = view.state.doc.line(1); // "# One"
     const canonical = foldable(view.state, line1.from, line1.to);
     if (!canonical) {
@@ -1690,7 +1690,7 @@ describe("editor — external reseed preserves unrelated folds (r)", () => {
     const { handle, view } = mount();
     const doc = "# One\n\nalpha\nbravo\n\n# Two\n\ncharlie";
     handle.applyDocument(doc, true, 1);
-    ensureSyntaxTree(view.state, view.state.doc.length, 5000);
+    settledView(view, 5000);
     const line1 = view.state.doc.line(1);
     const canonical = foldable(view.state, line1.from, line1.to);
     if (!canonical) {
@@ -1712,7 +1712,7 @@ describe("editor — external reseed preserves unrelated folds (r)", () => {
     const { handle, view } = mount();
     const doc = "# One\n\n## Sub\n\nfoo\n\n# Two\n\nbar";
     handle.applyDocument(doc, true, 1);
-    ensureSyntaxTree(view.state, view.state.doc.length, 5000);
+    settledView(view, 5000);
     const line1 = view.state.doc.line(1);
     const canonical = foldable(view.state, line1.from, line1.to); // includes "## Sub"
     if (!canonical) {
@@ -1747,7 +1747,7 @@ describe("editor — external reseed preserves unrelated folds (r)", () => {
     // pill on a heading that no longer folds.
     const doc = "intro\n\n# One\n\nalpha\nbravo";
     handle.applyDocument(doc, true, 1);
-    ensureSyntaxTree(view.state, view.state.doc.length, 5000);
+    settledView(view, 5000);
     const line = view.state.doc.line(3); // "# One"
     const canonical = foldable(view.state, line.from, line.to);
     if (!canonical) {
@@ -1802,12 +1802,12 @@ describe("editor — external reseed preserves unrelated folds (r)", () => {
     // reads syntaxTree(state); ensureSyntaxTree leaves that stale, so refresh the
     // oracle with an empty update before reading foldable — same reason the call site
     // uses forceParsing on the live view.)
-    let oracle = EditorState.create({
-      doc,
-      extensions: [quollMarkdownLanguage(), codeFolding()],
-    });
-    ensureSyntaxTree(oracle, oracle.doc.length, 5000);
-    oracle = oracle.update({}).state;
+    const oracle = settledState(
+      EditorState.create({
+        doc,
+        extensions: [quollMarkdownLanguage(), codeFolding()],
+      })
+    );
     const oLine1 = oracle.doc.line(1); // "# One"
     const canonical = foldable(oracle, oLine1.from, oLine1.to);
     if (!canonical) {

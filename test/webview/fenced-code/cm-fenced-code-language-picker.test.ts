@@ -3,12 +3,14 @@
 //
 // happy-dom from line 1: the widget/command/lifecycle tests use document /
 // EditorView / <select>. The pure model tests tolerate it. Every live-view /
-// builder test carries `markdown({ base: markdownLanguage })` so syntaxTree() is
-// populated (without it the picker never resolves) — same idiom as the
-// copy-button suite.
+// builder test carries `markdown({ base: markdownLanguage })`, but the language
+// extension alone only makes syntaxTree() resolvable in principle — under
+// CPU load the field's own snapshot can still be truncated, so `mkView` /
+// `firstFencedCode` additionally settle the parse (`settledMount` /
+// `settledState`) before returning — same idiom as the copy-button suite.
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
 import { EditorSelection, EditorState, type Extension } from "@codemirror/state";
-import { Decoration, type DecorationSet, EditorView } from "@codemirror/view";
+import { Decoration, type DecorationSet, type EditorView } from "@codemirror/view";
 import { describe, expect, it, vi } from "vitest";
 import { blockStyle } from "../../../src/webview/cm/decorations/block-style.js";
 import { quollSyntaxReveal } from "../../../src/webview/cm/decorations/index.js";
@@ -42,9 +44,22 @@ import {
 } from "../../../src/webview/cm/fenced-code/fenced-code-node.js";
 import { fencedHeaderBarThemeSpec } from "../../../src/webview/cm/theme.js";
 import { fullTree } from "../helpers/full-tree.js";
+import { settledState } from "../helpers/settled-state.js";
+import { settledMount } from "../helpers/settled-view.js";
 
 function firstFencedCode(doc: string): { state: EditorState; node: FencedCodeNode } {
-  const state = EditorState.create({ doc, extensions: [markdown({ base: markdownLanguage })] });
+  // Both `settledState` AND `fullTree` here, deliberately: the returned `state`
+  // is later handed to `fenceLanguageTargetAt(state, …)` (the lazy-resolver
+  // describe block below), which reads `syntaxTree(state)` — the STATE's own
+  // field snapshot — so the snapshot itself must be settled or that read can
+  // still see a truncated tree even though `tree` below is complete.
+  // `fullTree` alone would not fix that: it reports the tree `ensureSyntaxTree`
+  // returns, not the state's own published snapshot. Once `state` is already
+  // settled, `fullTree`'s own `ensureSyntaxTree` call is a cheap no-op (the
+  // parse context is already complete), so stacking both costs nothing here.
+  const state = settledState(
+    EditorState.create({ doc, extensions: [markdown({ base: markdownLanguage })] })
+  );
   const tree = fullTree(state);
   let found: FencedCodeNode | null = null;
   tree.iterate({
@@ -107,8 +122,9 @@ function widgetFroms(set: DecorationSet): number[] {
   return out;
 }
 
-// Body-attached live view — parsing runs so syntaxTree() resolves; DOM lifecycle
-// (toDOM/updateDOM/destroy) is driven by CM.
+// Body-attached live view — `settledMount` republishes the view's syntax-tree
+// snapshot so syntaxTree() resolves; DOM lifecycle (toDOM/updateDOM/destroy) is
+// driven by CM.
 function mkView(doc: string, opts: { readOnly?: boolean; extra?: Extension[] } = {}): EditorView {
   const parent = document.createElement("div");
   document.body.appendChild(parent);
@@ -121,7 +137,7 @@ function mkView(doc: string, opts: { readOnly?: boolean; extra?: Extension[] } =
       ...(opts.extra ?? []),
     ],
   });
-  return new EditorView({ state, parent });
+  return settledMount({ state, parent });
 }
 
 function mountPicker(doc: string, extra: Extension[] = []): EditorView {

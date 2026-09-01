@@ -1,12 +1,13 @@
 // @vitest-environment happy-dom
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
 import { EditorSelection, EditorState } from "@codemirror/state";
-import { EditorView } from "@codemirror/view";
+import type { EditorView } from "@codemirror/view";
 import { describe, expect, it } from "vitest";
 
 import { PROTOCOL_VERSION, type WebviewToHost } from "../../../src/shared/protocol.js";
 import { quollSyntaxReveal } from "../../../src/webview/cm/decorations/index.js";
 import { quollLinkClickHandler, tryOpenLinkAt } from "../../../src/webview/cm/link-handlers.js";
+import { settledMount } from "../helpers/settled-view.js";
 
 /** Fragment scroll sink for the non-fragment cases: asserts by exploding, so a
  *  test that unexpectedly takes the fragment arm fails loudly instead of
@@ -18,7 +19,10 @@ const noScroll = () => {
 function mount(doc: string, host: { postMessage(m: WebviewToHost): void }): EditorView {
   const parent = document.createElement("div");
   document.body.appendChild(parent);
-  return new EditorView({
+  // settledMount: tryOpenLinkAt(view.state, …) reads syntaxTree(state) (link-handlers.ts),
+  // which is the language field's SNAPSHOT — truncated on a fresh state under CPU load, so
+  // an unsettled mount can make a real link read as plain text.
+  return settledMount({
     parent,
     state: EditorState.create({
       doc,

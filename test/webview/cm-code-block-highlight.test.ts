@@ -4,9 +4,8 @@
 // activation, prototype-safe lookup (a ```constructor fence must not crash the parse),
 // display-only rendering, and picker<->parser-registry sync. Part B (appended in Task 2)
 // adds the language-scoped styling pins.
-import { ensureSyntaxTree } from "@codemirror/language";
 import { EditorState } from "@codemirror/state";
-import { EditorView } from "@codemirror/view";
+import type { EditorView } from "@codemirror/view";
 import { highlightTree, tags as t } from "@lezer/highlight";
 import { afterEach, describe, expect, it } from "vitest";
 import {
@@ -18,6 +17,8 @@ import {
 import { LANGUAGE_OPTIONS } from "../../src/webview/cm/fenced-code/fenced-code-languages.js";
 import { quollMarkdownLanguage } from "../../src/webview/cm/markdown.js";
 import { quollCodeHighlightSpec } from "../../src/webview/cm/theme.js";
+import { fullTree } from "./helpers/full-tree.js";
+import { settledMount } from "./helpers/settled-view.js";
 
 const lang = quollMarkdownLanguage();
 const FENCED = ["```js", "const x = 1 // hi", "```", ""].join("\n");
@@ -31,8 +32,7 @@ afterEach(() => {
 function mount(doc: string): EditorView {
   const parent = document.createElement("div");
   document.body.appendChild(parent);
-  const v = new EditorView({ parent, state: EditorState.create({ doc, extensions: [lang] }) });
-  ensureSyntaxTree(v.state, v.state.doc.length, 5000);
+  const v = settledMount({ parent, state: EditorState.create({ doc, extensions: [lang] }) });
   view = v;
   return v;
 }
@@ -41,10 +41,7 @@ function mount(doc: string): EditorView {
 // highlightTree directly, exactly as the runtime treeHighlighter does.
 function codeClassesAt(doc: string, needle: string): string[] {
   const state = EditorState.create({ doc, extensions: [lang] });
-  const tree = ensureSyntaxTree(state, state.doc.length, 5000);
-  if (!tree) {
-    throw new Error("no tree");
-  }
+  const tree = fullTree(state);
   const from = doc.indexOf(needle);
   const to = from + needle.length;
   const out: string[] = [];
@@ -65,15 +62,14 @@ function codeClassesAt(doc: string, needle: string): string[] {
 describe("code block nested parsing", () => {
   it("nests a sub-language inside a ```js fence (interior is not a bare CodeText leaf)", () => {
     const state = EditorState.create({ doc: FENCED, extensions: [lang] });
-    const tree = ensureSyntaxTree(state, state.doc.length, 5000);
-    expect(tree).not.toBeNull();
+    const tree = fullTree(state);
     const codeStart = FENCED.indexOf("const");
     const names = new Set<string>();
-    for (let n = tree!.resolveInner(codeStart, 1); n; n = n.parent as typeof n) {
+    for (let n = tree.resolveInner(codeStart, 1); n; n = n.parent as typeof n) {
       names.add(n.type.name);
     }
     expect(names).toContain("FencedCode");
-    expect(tree!.resolveInner(codeStart, 1).type.name).not.toBe("CodeText");
+    expect(tree.resolveInner(codeStart, 1).type.name).not.toBe("CodeText");
   });
 
   it("codeParserFor maps known ids, strips info, and is case-insensitive", () => {
@@ -101,11 +97,10 @@ describe("code block nested parsing", () => {
     const huge = `${"x = 1\n".repeat(10000)}`; // ~60KB of code body
     const doc = `\`\`\`js\n${huge}\`\`\`\n`;
     const state = EditorState.create({ doc, extensions: [lang] });
-    const tree = ensureSyntaxTree(state, state.doc.length, 5000);
-    expect(tree).not.toBeNull();
+    const tree = fullTree(state);
     const codeStart = doc.indexOf("x = 1");
     // Interior stays a bare CodeText leaf — no sub-language mount above the cap.
-    expect(tree!.resolveInner(codeStart, 1).type.name).toBe("CodeText");
+    expect(tree.resolveInner(codeStart, 1).type.name).toBe("CodeText");
   });
 });
 
