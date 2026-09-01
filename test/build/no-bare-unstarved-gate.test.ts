@@ -34,10 +34,25 @@
 // KNOWN GAPS — the match is SYNTACTIC, so each of these slips past it:
 //   - a variable indirection: `const ok = syntaxTreeAvailable(...); expect(ok).toBe(true);`
 //   - an import alias, or a re-exported wrapper around `syntaxTreeAvailable`
-//   - a different matcher: `.toBeTruthy()`, `.toEqual(true)`
-// Closing these would need type resolution rather than a syntax walk, which is more
-// machinery than this rule is worth; `url-choke-point.test.ts` accepts the same limit.
-// This is why the plan keeps a human read of the tree alongside this mechanised check.
+//   - a non-identifier or renamed assertion receiver: `expect.soft(...)`, or an aliased
+//     `import { expect as check }` — the walk requires a bare `expect` identifier
+//   - a different matcher: `.toBeTruthy()`, `.toEqual(true)`, `.toBe(true as const)`, or
+//     the reversed operands `expect(true).toBe(syntaxTreeAvailable(...))`
+//   - a HAND-ROLLED attempt loop (`for (…) { if (runOnce()) return; }` + a trailing throw)
+//     uses the conditional form and is invisible here by design; two live instances remain
+//     in webview/cm-block-widget-bounded.test.ts and
+//     webview/fenced-code/cm-fenced-code-collapse.test.ts
+//   - INSIDE an allowlisted file, swapping a legitimate (post-forced-parse) gate for a bare
+//     post-edit one at another line keeps the count identical — the pin bounds the NUMBER
+//     of gates, not WHICH lines carry them
+// Only the first two would need type resolution rather than a syntax walk, which is more
+// machinery than this rule is worth; `url-choke-point.test.ts` accepts the same limit. The
+// rest are a wider syntactic net or an accounting limit, left open deliberately: this repo
+// writes the gate one way, and each extra shape is another thing to keep in step.
+// `toBeTruthy()` in particular is in live use elsewhere in this suite, so read a green run
+// here as evidence about the `toBe(true)` shape only. The human read of the diff is the
+// backstop for the two allowlisted files — which is why the plan keeps it alongside this
+// mechanised check.
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -154,6 +169,38 @@ describe("the scanner itself is not vacuous", () => {
       []
     );
     expect(findBareGates("// expect(syntaxTreeAvailable(s)).toBe(true);", "x.ts")).toEqual([]);
+  });
+
+  // The walk is the guard's REACH. `census()` reports only files WITH hits, so a walk that
+  // silently stopped descending into a clean subtree would keep every assertion below green
+  // while the guard protected nothing there. Measured: skipping `decorations` and `table`
+  // left all four tests passing — including the allowlist-liveness one, whose only two paths
+  // lie elsewhere. Pin the roster of scanned directories instead: it is short, it changes
+  // only on a deliberate restructure, and it reds the day the walk loses one. Same lesson
+  // no-file-level-ts-nocheck.test.ts learned — do not leave "what is in scope" as the
+  // guard's own unverified answer.
+  it("scans every test subtree, not just the allowlisted ones", () => {
+    const scanned = new Set(
+      scannableFiles(TEST_ROOT).map((abs) => relative(TEST_ROOT, abs).split("\\").join("/"))
+    );
+    const dirs = new Set([...scanned].map((rel) => rel.split("/").slice(0, -1).join("/")));
+    for (const required of [
+      "build",
+      "extension",
+      "markdown",
+      "shared",
+      "webview",
+      "webview/decorations",
+      "webview/table",
+      "webview/fenced-code",
+      "webview/helpers",
+      "webview/cm/fold",
+      "webview-browser",
+    ]) {
+      expect(dirs, `the walk no longer reaches test/${required}`).toContain(required);
+    }
+    // And it reaches this file, which is the cheapest proof the root is right at all.
+    expect(scanned).toContain("build/no-bare-unstarved-gate.test.ts");
   });
 });
 
