@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
 import { syntaxTreeAvailable } from "@codemirror/language";
-import { EditorSelection, EditorState } from "@codemirror/state";
+import { EditorSelection, EditorState, type Extension } from "@codemirror/state";
 import type { DecorationSet, EditorView } from "@codemirror/view";
 import { describe, expect, it } from "vitest";
 import { blockStyle } from "../../../src/webview/cm/decorations/block-style.js";
@@ -51,6 +51,15 @@ function dump(set: DecorationSet): Array<{ from: number; to: number; cls?: strin
   }
   return out;
 }
+
+/** The field under test plus the language it walks. Kept as ONE definition because the
+ *  oracle in `checkEquivalence` below is only a valid oracle while it is configured exactly
+ *  like the live view it is compared against — two lists that drifted apart would quietly
+ *  compare differently-configured fields. */
+const concealExts = (): Extension[] => [
+  markdown({ base: markdownLanguage }),
+  calloutMarkerConcealField,
+];
 
 describe("calloutMarkerConceal — pure predicate", () => {
   it("caret OUTSIDE the block returns the marker line span", () => {
@@ -113,7 +122,7 @@ describe("calloutMarkerConcealField — StateField", () => {
       EditorState.create({
         doc,
         selection: EditorSelection.single(caret),
-        extensions: [markdown({ base: markdownLanguage }), calloutMarkerConcealField],
+        extensions: concealExts(),
       })
     );
   }
@@ -237,6 +246,15 @@ describe("calloutMarkerConcealField — bounded recompute ≡ full recompute", (
     initial: string,
     edits: Array<{ changes?: unknown; selection?: unknown }>
   ): void {
+    if (edits.length === 0) {
+      // The gate inside the attempt is per-dispatch, so a zero-edit call would compare a
+      // settled mount against a settled oracle and report success having exercised no
+      // bounded path. Refuse it at the door rather than let it read as a passing
+      // equivalence case.
+      throw new Error(
+        "checkEquivalence: at least one edit is required to exercise the bounded path"
+      );
+    }
     for (let attempt = 0; attempt < 5; attempt++) {
       if (runOnce()) {
         return;
@@ -248,14 +266,6 @@ describe("calloutMarkerConcealField — bounded recompute ≡ full recompute", (
 
     /** One attempt. Returns false when the frontier was starved and nothing was compared. */
     function runOnce(): boolean {
-      if (edits.length === 0) {
-        // The gate below is per-dispatch, so a zero-edit call would compare a settled mount
-        // against a settled oracle and report success having exercised no bounded path.
-        // Refuse it at the door rather than let it read as a passing equivalence case.
-        throw new Error(
-          "checkEquivalence: at least one edit is required to exercise the bounded path"
-        );
-      }
       const parent = document.createElement("div");
       document.body.appendChild(parent);
       const view = settledMount(
@@ -263,7 +273,7 @@ describe("calloutMarkerConcealField — bounded recompute ≡ full recompute", (
           state: EditorState.create({
             doc: initial,
             selection: EditorSelection.single(0),
-            extensions: [markdown({ base: markdownLanguage }), calloutMarkerConcealField],
+            extensions: concealExts(),
           }),
           parent,
         },
@@ -291,7 +301,7 @@ describe("calloutMarkerConcealField — bounded recompute ≡ full recompute", (
           EditorState.create({
             doc: view.state.doc.toString(),
             selection: view.state.selection,
-            extensions: [markdown({ base: markdownLanguage }), calloutMarkerConcealField],
+            extensions: concealExts(),
           })
         );
         const got = view.state.field(calloutMarkerConcealField);
@@ -454,7 +464,7 @@ describe("calloutMarkerConcealField — bounded reuse is non-vacuous (record ide
           state: EditorState.create({
             doc,
             selection: EditorSelection.single(doc.length),
-            extensions: [markdown({ base: markdownLanguage }), calloutMarkerConcealField],
+            extensions: concealExts(),
           }),
           parent,
         },
