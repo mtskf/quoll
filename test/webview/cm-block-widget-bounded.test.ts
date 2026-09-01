@@ -53,6 +53,14 @@ interface Edit {
   cursorAtEnd?: boolean; // resolve to cursor(doc.length) AFTER the change (avoids RangeError)
 }
 
+// A `changes` object can normalise to an empty ChangeSet — no `insert` and either no `to`
+// or `to === from` — in which case `docChanged` is false and `update()` never reaches a
+// bounded arm at all (image-field.ts:272). `{ changes: { from: 2 } }` and
+// `{ from: 2, to: 2, insert: "" }` are both this shape. The door guard below treats an edit
+// like that as inert, same as an edit with no `changes` at all.
+const inertChanges = (c: Edit["changes"]) =>
+  c !== undefined && !c.insert && (c.to === undefined || c.to === c.from);
+
 // Where the settles go, and — just as load-bearing — where they do NOT.
 //
 // The MOUNT settles: imageBlockField.create() reads syntaxTree(state) (image-field.ts),
@@ -71,13 +79,6 @@ interface Edit {
 // compare into full-vs-full. That trades a flake for a vacuous pass, which is worse.
 // The pin below is what keeps the bounded result trustworthy without a settle.
 //
-// A `changes` object can normalise to an empty ChangeSet — no `insert` and either no `to`
-// or `to === from` — in which case `docChanged` is false and `update()` never reaches a
-// bounded arm at all (image-field.ts:272). `{ changes: { from: 2 } }` and
-// `{ from: 2, to: 2, insert: "" }` are both this shape. The door guard below treats an edit
-// like that as inert, same as an edit with no `changes` at all.
-const inertChanges = (c: Edit["changes"]) =>
-  c !== undefined && !c.insert && (c.to === undefined || c.to === c.from);
 // ⚠️ The comparison is ATTEMPTED rather than asserted on the first try. CodeMirror gives its
 // post-edit reparse a 20ms WALL-CLOCK budget, and under CPU starvation that window can
 // elapse while this process is descheduled; image-field.ts's G2 arm then self-heals with a
