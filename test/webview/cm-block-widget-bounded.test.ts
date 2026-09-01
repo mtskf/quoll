@@ -160,15 +160,16 @@ function checkEquivalence(initial: string, edits: Edit[], oracleSlots: number): 
         // ⚠️ What a `true` rules out is the STARVED-frontier full walk, and nothing more.
         // imageBlockField.update takes its G3 arm — computeFreshFull — whenever
         // leadingFrontmatterEnd changes, BEFORE this predicate is ever consulted
-        // (image-field.ts), so `true` does not mean the bounded path ran. The three "G3"
+        // (image-field.ts), so `true` does not mean the bounded path ran. The five "G3"
         // rows below take that arm, and what they compare there is the field's INCREMENTALLY
         // parsed full walk against the oracle's freshly parsed one — not bounded against
         // full. That is not a hole: it is how those rows pin the arm, since with the arm
-        // deleted the bounded path runs INSTEAD and gets the answer wrong. But only the two
-        // fence-CROSSING rows do that pinning; the "frontmatter length shift" row stays
-        // green either way (measured 2026-09-02, both claims). A false means the frontier
-        // was starved, so abandon the attempt instead of comparing a full walk over a
-        // PARTIAL tree against the settled oracle.
+        // deleted the bounded path runs INSTEAD and gets the answer wrong. But only the four
+        // BOUNDARY-CROSSING rows do that pinning — the two closer-fence ones and the two
+        // opener ones; the "frontmatter length shift" row stays green either way (measured
+        // 2026-09-02, all claims). A false means the frontier was starved, so abandon the
+        // attempt instead of comparing a full walk over a PARTIAL tree against the settled
+        // oracle.
         if (!syntaxTreeAvailable(view.state, view.state.doc.length)) {
           return false;
         }
@@ -209,6 +210,25 @@ const FENCE = "\n---";
 // post-edit result, which is what lets one pair cover both directions of the crossing.
 const G3_IMAGE_EXPOSED = `${FM_OPEN}${FENCE}\n\nintro\n\n${IMG}\n\n---\n\nbody`;
 const G3_IMAGE_ENCLOSED = `${FM_OPEN}\n\nintro\n\n${IMG}\n\n---\n\nbody`;
+
+// The OPENER pair. `detect.ts` starts with an O(1) reject — line 1 must itself be a fence —
+// so a document's frontmatter can also appear and vanish without any closer moving, and
+// that trigger is invisible to a comparison that only looks at where the CLOSER sits. These
+// two docs differ by exactly one dash at offset 0, written as a prefix off the other so the
+// "one dash on line 1, nothing else" invariant is textual rather than a promise in a
+// comment: prepending it IS the edit, and deleting `[0, 1)` is its inverse.
+//
+// The image sits in its OWN blank-line-delimited paragraph on purpose, and that shape is
+// load-bearing rather than cosmetic. Packed directly under `title: a` with no blank line,
+// lines 2-4 lazily merge into a single paragraph that the trailing `---` closes as a SETEXT
+// HEADING, so the image's Lezer parent stops being `Paragraph` and image-field.ts's parent
+// gate (2) excludes it in BOTH states, independently of `fmEnd` — measured 0 -> 0, which
+// pins nothing. The blank lines keep line 1's fence status the sole variable that moves the
+// image across `fmEnd`. Measured 2026-09-02 on built, settled states: PRESENT is fmEnd=52
+// with the image at 14 (enclosed, 0 widgets) and ABSENT is fmEnd=0 (exposed, 1 widget at
+// 13-46), with `parent=Paragraph` on both sides.
+const G3_OPENER_ABSENT = `--\ntitle: a\n\n${IMG}\n\n---\n\nbody`;
+const G3_OPENER_PRESENT = `-${G3_OPENER_ABSENT}`;
 
 describe("imageBlockField bounded ≡ full", () => {
   // `oracleSlots` is the widget count the settled oracle must hold AFTER the edits —
@@ -302,6 +322,38 @@ describe("imageBlockField bounded ≡ full", () => {
       // Insert a closer at line 3. leadingFrontmatterEnd retreats above the image, which
       // stops being frontmatter body and becomes a standalone image.
       edits: [{ changes: { from: FM_OPEN.length, insert: FENCE } }],
+      oracleSlots: 1,
+    },
+    // The OPENER-flip direction of the same arm. The two closer rows above move the fence
+    // that ENDS the frontmatter while line 1 stays a fence in both states; these two move
+    // line 1 itself, so `detectLeadingFrontmatterInState` returns a span on one side and
+    // `null` on the other. That distinction is what these rows exist for: narrowing the G3
+    // check to a closer-only comparison — one that fires only when BOTH states have a span
+    // and their `to` differs — leaves the closer rows green (both sides have a span there)
+    // and reds only these, because on an opener flip the narrowed check never fires and the
+    // bounded path runs instead. computeExtendedSpan covers line 1 and its neighbour, never
+    // the image four lines below, so the two failure shapes mirror the closer pair: the
+    // appearing direction leaves a STALE widget (prev is reused, oracle has none) and the
+    // disappearing direction leaves a MISSING one (nothing rebuilds it). Measured
+    // 2026-09-02: the narrowed arm reds both rows and the closer rows stay green.
+    //
+    // As with the closer pair, neither row carries `cursorAtEnd` — the edit alone crosses
+    // the boundary, and a second selection-only dispatch would re-enter update() with
+    // leadingFrontmatterEnd already equal on both sides.
+    {
+      name: "G3 opener appears on line 1 — image becomes enclosed",
+      initial: G3_OPENER_ABSENT,
+      // Complete line 1's fence. Frontmatter now spans down to the `---` BELOW the image,
+      // so leadingFrontmatterEnd jumps from 0 past the image and demotes it.
+      edits: [{ changes: { from: 0, insert: "-" } }],
+      oracleSlots: 0, // the image is inside the frontmatter now, so ZERO widgets is the answer
+    },
+    {
+      name: "G3 opener disappears from line 1 — image becomes exposed",
+      initial: G3_OPENER_PRESENT,
+      // Break line 1's fence. detect.ts's O(1) reject fires, leadingFrontmatterEnd drops to
+      // 0, and the image stops being frontmatter body and becomes a standalone image.
+      edits: [{ changes: { from: 0, to: 1 } }],
       oracleSlots: 1,
     },
     {
