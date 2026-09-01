@@ -53,11 +53,12 @@ interface Edit {
   cursorAtEnd?: boolean; // resolve to cursor(doc.length) AFTER the change (avoids RangeError)
 }
 
-// A `changes` object can normalise to an empty ChangeSet — no `insert` and either no `to`
-// or `to === from` — in which case `docChanged` is false and `update()` never reaches a
-// bounded arm at all (image-field.ts:272). `{ changes: { from: 2 } }` and
-// `{ from: 2, to: 2, insert: "" }` are both this shape. The door guard below treats an edit
-// like that as inert, same as an edit with no `changes` at all.
+// The two ways a `changes` object normalises to an empty ChangeSet are pinned directly by
+// the door-guard test below (`{ changes: { from: 0 } }` and `{ changes: { from: 0, to: 0 } }`,
+// with and without an explicit `insert: ""`), not restated here. An inert `changes` alone
+// only kills imageBlockField.update's docChanged arm (image-field.ts:272) — paired with a
+// real `selection` on the same `Edit`, it can still reach `computeBounded` through the
+// selection arm (image-field.ts:284); the door guard below requires `!e.selection` too.
 const inertChanges = (c: Edit["changes"]) =>
   c !== undefined && !c.insert && (c.to === undefined || c.to === c.from);
 
@@ -91,12 +92,14 @@ function checkEquivalence(initial: string, edits: Edit[], oracleSlots: number): 
   if (
     edits.every((e) => (!e.changes || inertChanges(e.changes)) && !e.selection && !e.cursorAtEnd)
   ) {
-    // What this rules out: a call in which NO edit can produce a transaction that even
-    // reaches imageBlockField.update's bounded arms — every dispatch is a literal no-op
-    // (`[]`, `[{}]`, an array where every `Edit` is the empty object, or a `changes` object
-    // that normalises to an empty ChangeSet — see `inertChanges` above), so `view.dispatch`
-    // changes nothing and comparing the settled mount against the settled oracle reports
-    // success having exercised no bounded path.
+    // What this rules out: the ALL-inert call — every edit in the array has no `changes` (or
+    // a `changes` object that normalises to an empty ChangeSet, per `inertChanges` above), no
+    // `selection`, and no `cursorAtEnd` (`[]`, `[{}]`, an array of empty-object `Edit`s). Only
+    // then is every dispatch below a literal no-op, so comparing the settled mount against the
+    // settled oracle would report success having exercised no bounded path. The predicate is
+    // `.every(...)`, so a MIXED array — even one live edit among otherwise-inert ones — passes
+    // the door; that is deliberate, since one live edit is enough for the comparison below to
+    // exercise a bounded arm.
     // What this does NOT rule out: a `selection`/`cursorAtEnd` edit that dispatches something
     // real but whose selection LINE SPAN happens not to change. On a non-docChanged
     // transaction, reaching image-field.ts's `computeBounded` requires first surviving its G3
@@ -140,37 +143,16 @@ function checkEquivalence(initial: string, edits: Edit[], oracleSlots: number): 
           view.dispatch({ selection: EditorSelection.cursor(view.state.doc.length) });
         }
         // Anti-masking gate, once per `Edit` — which on a `cursorAtEnd` row is after TWO
-        // dispatches, not one. (The sibling in cm-decoration-callout-marker-conceal.test.ts
-        // says "per-dispatch" because there an `Edit` IS exactly one dispatch.) That is
-        // equivalent here because LanguageState.apply's short-circuit is a COMPOUND guard,
-        // not "any non-docChanged transaction is a no-op":
-        //   if (!tr.docChanged && this.tree == this.context.tree) return this;
-        // (@codemirror/language dist/index.cjs:530-532, verbatim). `this.tree` is the
-        // SNAPSHOT stashed when this LanguageState was constructed; `this.context.tree` is
-        // the MUTABLE field on the same ParseContext.
+        // dispatches, not one. (The sibling in
+        // decorations/cm-decoration-callout-marker-conceal.test.ts says "per-dispatch"
+        // because there an `Edit` IS exactly one dispatch.)
         //
-        // The second conjunct holds between any two dispatches in this loop because nothing
-        // in between advances the parse or publishes a tree: this is straight-line
-        // synchronous code, and the only thing it calls here is syntaxTreeAvailable — a pure
-        // read of `context.isDone(upto)` (dist/index.cjs:218-221). So at the selection-only
-        // dispatch `this.tree` still equals `this.context.tree`, the short-circuit fires, and
-        // the dispatch is a true no-op.
-        //
-        // ⚠️ That is an invariant of THIS LOOP's shape, not a guarantee the guard itself
-        // gives — the general rule is: anything placed between two dispatches that either
-        // advances the parse or publishes a tree can break it. That includes, but is not
-        // limited to:
-        //   - a second DOC-CHANGING dispatch here (syntaxTreeAvailable would then reflect
-        //     only the LAST apply, so a starved intermediate edit could take image-field.ts's
-        //     G2 computeFreshFull arm unobserved behind a later completing edit);
-        //   - a context-advancing READ (ensureSyntaxTree, a `fullTree` probe, forceParsing,
-        //     …) — those call context.work() directly. `settledMount` above calls
-        //     forceParsing too, but only BEFORE this loop starts, and its own dispatch
-        //     republishes the state's tree along with it, so that call is outside this
-        //     hazard's scope;
-        //   - an `await` or a timer flush that yields to the event loop — the idle parse
-        //     worker is scheduled via requestIdle (dist/index.cjs:562-572) and does not run
-        //     synchronously here, but yielding lets it run and call context.work() on its own.
+        // Operating rule for this loop: nothing may sit between its two dispatches that
+        // advances the parse or publishes a tree — no settle, no parse-advancing read
+        // (ensureSyntaxTree, a `fullTree` probe, forceParsing, …), no second doc-changing
+        // dispatch, and no `await` or timer flush that yields to the event loop. The gate's
+        // no-op guarantee on the second dispatch depends on this loop staying straight-line
+        // synchronous code; break that shape and the guarantee breaks with it.
         //
         // ⚠️ What a `true` rules out is the STARVED-frontier full walk, and nothing more.
         // imageBlockField.update takes its G3 arm — computeFreshFull — whenever
@@ -299,6 +281,8 @@ describe("imageBlockField bounded ≡ full", () => {
       [],
       [{}],
       [{ changes: { from: 0 } }], // no `to`/`insert` — normalises to an empty ChangeSet
+      [{ changes: { from: 0, to: 0 } }], // `to === from`, no `insert` — same normalisation
+      [{ changes: { from: 0, to: 0, insert: "" } }], // `to === from` with an explicit empty insert
     ];
     // `prose\n\n${IMG}\n` settles to exactly 1 standalone image slot at rest (measured), so
     // a non-vacuous check on the guard's throw does not depend on it: with the guard
