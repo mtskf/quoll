@@ -165,9 +165,8 @@ function checkEquivalence(initial: string, edits: Edit[], oracleSlots: number): 
         // parsed full walk against the oracle's freshly parsed one — not bounded against
         // full. That is not a hole: it is how those rows pin the arm, since with the arm
         // deleted the bounded path runs INSTEAD and gets the answer wrong. But only the six
-        // BOUNDARY-CROSSING rows do that pinning — the two closer-fence ones, the two opener
-        // ones, and the two closer-existence ones; the "frontmatter length shift" row stays
-        // green either way (measured 2026-09-02, all claims). A false means the frontier was
+        // BOUNDARY-CROSSING rows do that pinning; the "frontmatter length shift" row stays
+        // green either way (measured 2026-09-02, both claims). A false means the frontier was
         // starved, so abandon the attempt instead of comparing a full walk over a PARTIAL
         // tree against the settled oracle.
         if (!syntaxTreeAvailable(view.state, view.state.doc.length)) {
@@ -196,29 +195,30 @@ function checkEquivalence(initial: string, edits: Edit[], oracleSlots: number): 
 
 const IMG = "![alt](https://example.com/a.png)";
 
-// The two G3 CLOSER-FENCE boundary-crossing rows below share one document pair (the
-// opener-flip pair further down, and the closer-existence pair further down still, are
-// the other two directions of the same arm), and the pair is written as offsets off these
-// constants rather than as literal numbers so renaming the body key cannot silently point
-// the edit at the wrong line. `FM_OPEN` is exactly the opener line plus the one body line,
-// so `FM_OPEN.length` IS line 2's `to`; `FENCE` is the closer line with its preceding
-// newline, so inserting it there ADDS a closer at line 3 and deleting
+// Three G3 fixture pairs follow. Each crosses `leadingFrontmatterEnd` by a different
+// mechanism — the closer fence MOVES to another line, line 1's own fence identity FLIPS, or
+// the closer APPEARS/DISAPPEARS while line 1 stays a fence — and each pair is one document
+// plus the edit that produces the other, which is what lets a single pair cover both
+// directions of its crossing.
+
+// The CLOSER-FENCE pair, whose edits are written as offsets off these constants rather than
+// as literal numbers so renaming the body key cannot silently point the edit at the wrong
+// line. `FM_OPEN` is exactly the opener line plus the one body line, so `FM_OPEN.length` IS
+// line 2's `to`; `FENCE` is the closer line with its preceding newline, so inserting it
+// there ADDS a closer at line 3 and deleting
 // `[FM_OPEN.length, FM_OPEN.length + FENCE.length)` REMOVES it again.
 const FM_OPEN = "---\ntitle: a";
 const FENCE = "\n---";
 // EXPOSED closes the fence at line 3, so the image below it sits outside the frontmatter
 // and renders as a widget. ENCLOSED has no closer until the `---` BELOW the image, so
-// leadingFrontmatterEnd swallows the image and it stays raw source. Each doc is the other's
-// post-edit result, which is what lets one pair cover both directions of the crossing.
+// leadingFrontmatterEnd swallows the image and it stays raw source.
 const G3_IMAGE_EXPOSED = `${FM_OPEN}${FENCE}\n\nintro\n\n${IMG}\n\n---\n\nbody`;
 const G3_IMAGE_ENCLOSED = `${FM_OPEN}\n\nintro\n\n${IMG}\n\n---\n\nbody`;
 
 // The OPENER pair. `detect.ts` starts with an O(1) reject — line 1 must itself be a fence —
-// so a document's frontmatter can also appear and vanish without any closer moving, and
-// that trigger is invisible to a comparison that only looks at where the CLOSER sits. These
-// two docs differ by exactly one dash at offset 0, written as a prefix off the other so the
-// "one dash on line 1, nothing else" invariant is textual rather than a promise in a
-// comment: prepending it IS the edit, and deleting `[0, 1)` is its inverse.
+// so these two docs differ by exactly one dash at offset 0, written as a prefix off the
+// other so the "one dash on line 1, nothing else" invariant is textual rather than a promise
+// in a comment: prepending it IS the edit, and deleting `[0, 1)` is its inverse.
 //
 // The image sits in its OWN blank-line-delimited paragraph on purpose, and that shape is
 // load-bearing rather than cosmetic. Packed directly under `title: a` with no blank line,
@@ -232,19 +232,15 @@ const G3_IMAGE_ENCLOSED = `${FM_OPEN}\n\nintro\n\n${IMG}\n\n---\n\nbody`;
 const G3_OPENER_ABSENT = `--\ntitle: a\n\n${IMG}\n\n---\n\nbody`;
 const G3_OPENER_PRESENT = `-${G3_OPENER_ABSENT}`;
 
-// The CLOSER-EXISTENCE-flip pair — the third and last way `fmEnd` can change. The closer
-// pair above moves an ALREADY-PRESENT closer to a different line; the opener pair flips
-// line 1's own fence identity while a closer, if any, never moves. This pair instead makes
-// the closer appear or disappear altogether while line 1 stays a fence in both states, so a
-// check that only fires when both states already have a closer span (the closer pair's
-// shape) or when line 1's fence status flips (the opener pair's shape) never sees this
-// trigger — one side has no span at all. `G3_TRAILING_CLOSER` is `G3_NO_CLOSER` plus its own
-// closer, so appending it IS the edit and deleting
-// `[G3_NO_CLOSER.length, G3_TRAILING_CLOSER.length)` is its inverse. Measured 2026-09-02 on
-// built, settled states: NO_CLOSER is fmEnd=0 (exposed, 1 widget) and TRAILING_CLOSER is
-// fmEnd=58 (enclosed, 0 widgets).
+// The CLOSER-EXISTENCE pair. Line 1 stays a fence in both states and the closer appears or
+// disappears altogether, so one side has no closer span at all. `G3_TRAILING_CLOSER` is
+// `G3_NO_CLOSER` plus `TRAILING_CLOSER`, so inserting that constant at `G3_NO_CLOSER.length`
+// IS the edit and deleting `[G3_NO_CLOSER.length, G3_TRAILING_CLOSER.length)` is its
+// inverse. Measured 2026-09-02 on built, settled states: NO_CLOSER is fmEnd=0 (exposed, 1
+// widget) and TRAILING_CLOSER is fmEnd=58 (enclosed, 0 widgets).
 const G3_NO_CLOSER = `---\ntitle: a\n\n${IMG}\n\nbody`;
-const G3_TRAILING_CLOSER = `${G3_NO_CLOSER}\n\n---`;
+const TRAILING_CLOSER = "\n\n---";
+const G3_TRAILING_CLOSER = `${G3_NO_CLOSER}${TRAILING_CLOSER}`;
 
 describe("imageBlockField bounded ≡ full", () => {
   // `oracleSlots` is the widget count the settled oracle must hold AFTER the edits —
@@ -307,25 +303,25 @@ describe("imageBlockField bounded ≡ full", () => {
       edits: [{ changes: { from: 11, insert: "bb" }, cursorAtEnd: true }],
       oracleSlots: 1,
     },
-    // The two rows below are the ones that pin the CLOSER-FENCE direction of image-field.ts's
-    // G3 arm (the opener-flip pair and the closer-existence pair further down pin the other
-    // two directions); the length-shift row above does not, and cannot. A length-only edit
-    // INSIDE the fences moves leadingFrontmatterEnd by a couple of characters but never past
-    // the image, so eligibility does not flip: with the arm hypothetically deleted,
+    // The six rows below — three pairs, one per fixture pair above — are the ones that pin
+    // image-field.ts's G3 arm; the length-shift row above does not, and cannot. A length-only
+    // edit INSIDE the fences moves leadingFrontmatterEnd by a couple of characters but never
+    // past the image, so eligibility does not flip: with the arm hypothetically deleted,
     // computeExtendedSpan covers only the frontmatter's own lines, computeBounded re-emits
-    // the untouched widget byte-identically, and the row stays green. What flips eligibility
-    // is moving the CLOSER FENCE across the image, which is what these do — by deleting the
-    // closer so the `---` below the image becomes the closer, and by inserting one back so
-    // it stops being the closer. Both directions are pinned because the two failure shapes
-    // are different: the enclosing direction leaves a STALE widget behind (prev is reused,
-    // oracle has none) and the exposing direction leaves a MISSING one (the image sits
-    // outside every bounded interval, so nothing builds it). Measured 2026-09-02: deleting
-    // the G3 arm reds both.
+    // the untouched widget byte-identically, and the row stays green. Each of the six instead
+    // moves the image ACROSS leadingFrontmatterEnd, and every pair covers both directions
+    // because the two failure shapes are different: the enclosing direction leaves a STALE
+    // widget behind (prev is reused, oracle has none) and the exposing direction leaves a
+    // MISSING one (the image sits outside every bounded interval, so nothing builds it).
     //
-    // Neither row carries `cursorAtEnd`. The edit alone crosses the boundary, so appending a
-    // second, selection-only dispatch is unneeded: it would re-enter update() with
-    // leadingFrontmatterEnd already equal on both sides, adding a transaction that exercises
-    // nothing these rows are pinning.
+    // None of the six carries `cursorAtEnd`. The edit alone crosses the boundary, so
+    // appending a second, selection-only dispatch is unneeded: it would re-enter update()
+    // with leadingFrontmatterEnd already equal on both sides, adding a transaction that
+    // exercises nothing these rows are pinning.
+    //
+    // The CLOSER-FENCE pair: delete the closer so the `---` below the image becomes the
+    // closer, and insert one back so it stops being the closer. Measured 2026-09-02: deleting
+    // the G3 arm reds both.
     {
       name: "G3 closer fence moves below the image — image becomes enclosed",
       initial: G3_IMAGE_EXPOSED,
@@ -342,22 +338,13 @@ describe("imageBlockField bounded ≡ full", () => {
       edits: [{ changes: { from: FM_OPEN.length, insert: FENCE } }],
       oracleSlots: 1,
     },
-    // The OPENER-flip direction of the same arm. The two closer rows above move the fence
-    // that ENDS the frontmatter while line 1 stays a fence in both states; these two move
-    // line 1 itself, so `detectLeadingFrontmatterInState` returns a span on one side and
-    // `null` on the other. That distinction is what these rows exist for: narrowing the G3
-    // check to a closer-only comparison — one that fires only when BOTH states have a span
-    // and their `to` differs — leaves the closer rows green (both sides have a span there)
-    // and reds only these, because on an opener flip the narrowed check never fires and the
-    // bounded path runs instead. computeExtendedSpan covers line 1 and its neighbour, never
-    // the image four lines below, so the two failure shapes mirror the closer pair: the
-    // appearing direction leaves a STALE widget (prev is reused, oracle has none) and the
-    // disappearing direction leaves a MISSING one (nothing rebuilds it). Measured
-    // 2026-09-02: the narrowed arm reds both rows and the closer rows stay green.
-    //
-    // As with the closer pair, neither row carries `cursorAtEnd` — the edit alone crosses
-    // the boundary, and a second selection-only dispatch would re-enter update() with
-    // leadingFrontmatterEnd already equal on both sides.
+    // The OPENER-FLIP pair: line 1 itself moves, so `detectLeadingFrontmatterInState` returns
+    // a span on one side and `null` on the other, and computeExtendedSpan covers line 1 and
+    // its neighbour but never the image four lines below. Measured 2026-09-02: narrowing the
+    // G3 check to a closer-only comparison — one that fires only when BOTH states have a span
+    // and their `to` differs — reds both rows below while the closer-fence rows stay green
+    // (both sides have a span there), because on an opener flip the narrowed check never
+    // fires and the bounded path runs instead.
     {
       name: "G3 opener appears on line 1 — image becomes enclosed",
       initial: G3_OPENER_ABSENT,
@@ -374,24 +361,18 @@ describe("imageBlockField bounded ≡ full", () => {
       edits: [{ changes: { from: 0, to: 1 } }],
       oracleSlots: 1,
     },
-    // The CLOSER-EXISTENCE-flip direction of the same arm. The closer pair moves an
-    // ALREADY-PRESENT closer to a different line and the opener pair flips line 1's fence
-    // identity; these two instead make the closer appear or disappear altogether while line
-    // 1 stays a fence in both states, so a check narrowed to "both states already have a
-    // closer span, and their `to` differs" (the closer pair's shape) or to an opener flip
-    // (the opener pair's shape) never fires here — one side has no span at all — and the
-    // bounded path runs instead. Measured 2026-09-02: that narrowed arm reds both rows below
-    // while the closer and opener rows stay green.
-    //
-    // Neither row carries `cursorAtEnd` — the edit alone crosses the boundary, and a second
-    // selection-only dispatch would re-enter update() with leadingFrontmatterEnd already
-    // equal on both sides.
+    // The CLOSER-EXISTENCE pair: the closer appears or disappears altogether while line 1
+    // stays a fence, so one side has no closer span at all. Measured 2026-09-02: narrowing
+    // the G3 check to either of the two shapes above — "both states have a span and their
+    // `to` differs", or "line 1's fence status flipped" — reds both rows below while the
+    // closer-fence and opener rows stay green, because neither narrowed check fires here and
+    // the bounded path runs instead.
     {
       name: "G3 closer appears below the image — image becomes enclosed",
       initial: G3_NO_CLOSER,
       // Append a closer line. leadingFrontmatterEnd jumps from 0 past the image and demotes
       // it.
-      edits: [{ changes: { from: G3_NO_CLOSER.length, insert: "\n\n---" } }],
+      edits: [{ changes: { from: G3_NO_CLOSER.length, insert: TRAILING_CLOSER } }],
       oracleSlots: 0, // the image is inside the frontmatter now, so ZERO widgets is the answer
     },
     {
