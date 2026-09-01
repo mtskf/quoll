@@ -284,10 +284,10 @@ describe("imageBlockField bounded ≡ full", () => {
     // the exposing direction leaves a MISSING one (the image sits outside every bounded
     // interval, so nothing builds it). Measured 2026-09-02: deleting the G3 arm reds both.
     //
-    // Neither row carries `cursorAtEnd`. The edit alone crosses the boundary, and the extra
-    // selection dispatch would be a second transaction that re-enters update() with
-    // leadingFrontmatterEnd already equal on both sides — a needless chance for some other
-    // arm to recompute in full and heal the very staleness these rows exist to catch.
+    // Neither row carries `cursorAtEnd`. The edit alone crosses the boundary, so appending a
+    // second, selection-only dispatch is unneeded: it would re-enter update() with
+    // leadingFrontmatterEnd already equal on both sides, adding a transaction that exercises
+    // nothing these rows are pinning.
     {
       name: "G3 closer fence moves below the image — image becomes enclosed",
       initial: G3_IMAGE_EXPOSED,
