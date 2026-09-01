@@ -1,10 +1,15 @@
 import * as assert from "node:assert";
 import * as fs from "node:fs/promises";
-import * as os from "node:os";
 import * as path from "node:path";
 import * as vscode from "vscode";
 import { PROTOCOL_VERSION } from "./constants";
-import { cleanupBetweenTests, getHarness, isDocumentEvent, VIEW_TYPE } from "./harness";
+import {
+  cleanupBetweenTests,
+  getHarness,
+  isDocumentEvent,
+  makeTempDir,
+  VIEW_TYPE,
+} from "./harness";
 
 describe("minimal-range-apply", function () {
   this.timeout(20000);
@@ -23,7 +28,7 @@ describe("minimal-range-apply", function () {
   });
 
   it("emits a minimal WorkspaceEdit range, not a whole-document replace", async () => {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "quoll-e2e-min-"));
+    const dir = await makeTempDir("min");
     tempFile = path.join(dir, "min.md");
     const base = "# Title\n\nhello world\n";
     await fs.writeFile(tempFile, base);

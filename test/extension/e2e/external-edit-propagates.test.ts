@@ -1,6 +1,5 @@
 import * as assert from "node:assert";
 import * as fs from "node:fs/promises";
-import * as os from "node:os";
 import * as path from "node:path";
 import * as vscode from "vscode";
 import { PROTOCOL_VERSION } from "./constants";
@@ -10,6 +9,7 @@ import {
   getHarness,
   isDocumentAfter,
   isDocumentEvent,
+  makeTempDir,
   tick,
   VIEW_TYPE,
 } from "./harness";
@@ -36,7 +36,7 @@ describe("external-edit-propagates", function () {
   it("propagates an externally-applied WorkspaceEdit as a higher-docVersion Document", async () => {
     // Per-test temp file so a mid-test failure does not leave the
     // shared fixture dirty for subsequent tests.
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "quoll-e2e-"));
+    const dir = await makeTempDir("ext-edit");
     tempFile = path.join(dir, "ext-edit.md");
     await fs.writeFile(tempFile, "# Initial\n\nbody\n");
     const uri = vscode.Uri.file(tempFile);
@@ -75,7 +75,7 @@ describe("external-edit-propagates", function () {
   });
 
   it("coalesces a burst of lock-free external edits into fewer Document posts (latest wins)", async () => {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "quoll-e2e-"));
+    const dir = await makeTempDir("ext-edit-burst");
     tempFile = path.join(dir, "ext-edit-burst.md");
     await fs.writeFile(tempFile, "# Initial\n\nbody\n");
     const uri = vscode.Uri.file(tempFile);
@@ -143,7 +143,7 @@ describe("external-edit-propagates", function () {
   });
 
   it("dispatches a lock-held racing external edit immediately (refused settlement posts the live version)", async () => {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "quoll-e2e-"));
+    const dir = await makeTempDir("lock-race");
     tempFile = path.join(dir, "lock-race.md");
     await fs.writeFile(tempFile, "# Initial\n\nbody\n");
     const uri = vscode.Uri.file(tempFile);

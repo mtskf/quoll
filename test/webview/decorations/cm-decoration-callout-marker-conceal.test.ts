@@ -1,9 +1,8 @@
 // @vitest-environment happy-dom
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
-import { ensureSyntaxTree, syntaxTreeAvailable } from "@codemirror/language";
-import { EditorSelection, EditorState } from "@codemirror/state";
-import type { DecorationSet } from "@codemirror/view";
-import { EditorView } from "@codemirror/view";
+import { syntaxTreeAvailable } from "@codemirror/language";
+import { EditorSelection, EditorState, type Extension } from "@codemirror/state";
+import type { DecorationSet, EditorView } from "@codemirror/view";
 import { describe, expect, it } from "vitest";
 import { blockStyle } from "../../../src/webview/cm/decorations/block-style.js";
 import {
@@ -14,6 +13,8 @@ import { calloutMarkerConcealField } from "../../../src/webview/cm/decorations/c
 import { quollSyntaxReveal } from "../../../src/webview/cm/decorations/index.js";
 import { quollSyntaxExclusionZones } from "../../../src/webview/cm/decorations/orchestrator.js";
 import { fullTree } from "../helpers/full-tree.js";
+import { settledState } from "../helpers/settled-state.js";
+import { settledMount } from "../helpers/settled-view.js";
 
 type SyntaxNode = ReturnType<typeof fullTree>["topNode"];
 
@@ -50,6 +51,15 @@ function dump(set: DecorationSet): Array<{ from: number; to: number; cls?: strin
   }
   return out;
 }
+
+/** The field under test plus the language it walks. Kept as ONE definition because the
+ *  oracle in `checkEquivalence` below is only a valid oracle while it is configured exactly
+ *  like the live view it is compared against — two lists that drifted apart would quietly
+ *  compare differently-configured fields. */
+const concealExts = (): Extension[] => [
+  markdown({ base: markdownLanguage }),
+  calloutMarkerConcealField,
+];
 
 describe("calloutMarkerConceal — pure predicate", () => {
   it("caret OUTSIDE the block returns the marker line span", () => {
@@ -104,12 +114,17 @@ describe("calloutMarkerConceal — pure predicate", () => {
 });
 
 describe("calloutMarkerConcealField — StateField", () => {
+  // Settled: calloutMarkerConcealField.create() reads syntaxTree(state), so on a
+  // truncated init snapshot the field is built over a partial tree and the assertions
+  // below observe an empty decoration set for a reason unrelated to the caret.
   function fieldState(doc: string, caret: number): EditorState {
-    return EditorState.create({
-      doc,
-      selection: EditorSelection.single(caret),
-      extensions: [markdown({ base: markdownLanguage }), calloutMarkerConcealField],
-    });
+    return settledState(
+      EditorState.create({
+        doc,
+        selection: EditorSelection.single(caret),
+        extensions: concealExts(),
+      })
+    );
   }
 
   it("caret OUTSIDE emits the replace + hidden line class and publishes the zone", () => {
@@ -170,8 +185,12 @@ describe("calloutMarkerConcealField — StateField", () => {
     const parent = document.createElement("div");
     document.body.appendChild(parent);
     let view: EditorView | null = null;
+    // settledMount, not a bare `new EditorView`: the decoration-range conflict this test
+    // guards against is thrown while the view builds, so the not-toThrow still covers
+    // construction — and settling additionally republishes the snapshot the assertion
+    // below reads through (`v.state.field(...)` derives from `syntaxTree(state)`).
     expect(() => {
-      view = new EditorView({
+      view = settledMount({
         state: EditorState.create({
           doc,
           selection: EditorSelection.single(doc.indexOf("para") + 1), // caret outside
@@ -202,51 +221,105 @@ describe("calloutMarkerConcealField — bounded recompute ≡ full recompute", (
   // state over the same doc+selection. Callout conceal has NO sticky path-dependent
   // state (records derive purely from tree+selection), so a fresh EditorState.create
   // IS a valid oracle.
+  //
+  // Where the settles go, and where they deliberately do NOT. The MOUNT settles because
+  // calloutMarkerConcealField.create() reads syntaxTree(state): over a truncated init
+  // snapshot the field's initial value is built on a partial tree and the first edit's
+  // bounded path starts from a wrong `prev`. The ORACLE settles because that is what makes
+  // `want` the true full recompute — and it closes a live vacuity, since comparing two
+  // truncated-to-nothing sides passes for the wrong reason. The EDIT LOOP must NOT settle:
+  // `forceParsing` dispatches whenever the completed tree differs from the published
+  // snapshot, and that dispatch drives update()'s tree-identity branch into a full
+  // buildFull — turning this bounded-vs-full compare into full-vs-full. The pin inside the
+  // loop is what keeps the bounded result trustworthy instead.
+  //
+  // ⚠️ The comparison is ATTEMPTED rather than asserted on the first try. CodeMirror gives
+  // its post-edit reparse a 20ms WALL-CLOCK budget, and under CPU starvation that window
+  // can elapse while this process is descheduled — the field then self-heals with a full
+  // walk, so the bounded path is not what ran and there is nothing to compare. Measured on
+  // a deliberately loaded full-suite run (24 spinners on 8 cores): two cases in this
+  // describe red on the pin below, for a reason that is about the machine rather than the
+  // code. Retrying from a fresh view neither hides a regression (a real bounded bug reds
+  // every attempt that gets far enough to compare) nor passes vacuously (an all-starved
+  // run throws at the end), which a vitest-level `{ retry: n }` would fail on both counts.
   function checkEquivalence(
     initial: string,
     edits: Array<{ changes?: unknown; selection?: unknown }>
   ): void {
-    const parent = document.createElement("div");
-    document.body.appendChild(parent);
-    const view = new EditorView({
-      state: EditorState.create({
-        doc: initial,
-        selection: EditorSelection.single(0),
-        extensions: [markdown({ base: markdownLanguage }), calloutMarkerConcealField],
-      }),
-      parent,
-    });
-    try {
-      ensureSyntaxTree(view.state, view.state.doc.length, 10_000);
-      for (const e of edits) {
-        view.dispatch(e as never);
-        // Anti-masking (Codex Conf 92): assert the BOUNDED path ran on THIS dispatch,
-        // BEFORE the ensureSyntaxTree below completes the frontier — otherwise a G2
-        // full-recompute at dispatch time is masked by the later parse and the bounded
-        // path is never actually exercised. Tiny battery docs parse eagerly within
-        // budget, so the post-edit frontier is complete here.
-        expect(syntaxTreeAvailable(view.state, view.state.doc.length)).toBe(true);
-        ensureSyntaxTree(view.state, view.state.doc.length, 10_000);
+    if (edits.length === 0) {
+      // The gate inside the attempt is per-dispatch, so a zero-edit call would compare a
+      // settled mount against a settled oracle and report success having exercised no
+      // bounded path. Refuse it at the door rather than let it read as a passing
+      // equivalence case.
+      throw new Error(
+        "checkEquivalence: at least one edit is required to exercise the bounded path"
+      );
+    }
+    for (let attempt = 0; attempt < 5; attempt++) {
+      if (runOnce()) {
+        return;
       }
-      const oracle = EditorState.create({
-        doc: view.state.doc.toString(),
-        selection: view.state.selection,
-        extensions: [markdown({ base: markdownLanguage }), calloutMarkerConcealField],
-      });
-      ensureSyntaxTree(oracle, oracle.doc.length, 10_000);
-      const got = view.state.field(calloutMarkerConcealField);
-      const want = oracle.field(calloutMarkerConcealField);
-      // PRIMARY (Codex Conf 96): `records` is selection-INDEPENDENT, so comparing it
-      // pins the bounded recompute REGARDLESS of caret position. The fixed caret at 0
-      // sits inside a first-position callout and REVEALS its marker → empty decorations
-      // there — so a divergent record for that callout would be invisible to a
-      // decorations-only compare. The record compare closes that hole; decorations/zones
-      // stay as the derived secondary check (both sides share the same caret).
-      expect(got.records).toEqual(want.records);
-      expect(dump(got.decorations)).toEqual(dump(want.decorations));
-      expect(got.zones).toEqual(want.zones);
-    } finally {
-      view.destroy();
+    }
+    throw new Error(
+      "checkEquivalence: every attempt found a starved parse frontier, so the bounded path was never observed"
+    );
+
+    /** One attempt. Returns false when the frontier was starved and nothing was compared. */
+    function runOnce(): boolean {
+      const parent = document.createElement("div");
+      document.body.appendChild(parent);
+      const view = settledMount(
+        {
+          state: EditorState.create({
+            doc: initial,
+            selection: EditorSelection.single(0),
+            extensions: concealExts(),
+          }),
+          parent,
+        },
+        10_000
+      );
+      try {
+        for (const e of edits) {
+          view.dispatch(e as never);
+          // Anti-masking (Codex Conf 92): the frontier must be COMPLETE on THIS dispatch.
+          // syntaxTreeAvailable reads the parse CONTEXT's `isDone` — the predicate the
+          // field's docChanged arm ORs with `touchesStructuralReparse` to choose between
+          // computeBoundedRecords and its G2 buildFull fallback. A true therefore rules out
+          // the STARVED-frontier full walk; it does NOT rule out the structural-reparse one,
+          // which the fence-above-callout case below deliberately takes. A false means the
+          // frontier was starved and the field self-healed, which is not a defect: abandon
+          // the attempt rather than compare a full walk to a full walk. Nothing may settle
+          // the view here either — a settle would republish the
+          // snapshot and re-enter update() through the tree-identity branch, replacing the
+          // bounded records with a full walk and vacating the compare below.
+          if (!syntaxTreeAvailable(view.state, view.state.doc.length)) {
+            return false;
+          }
+        }
+        const oracle = settledState(
+          EditorState.create({
+            doc: view.state.doc.toString(),
+            selection: view.state.selection,
+            extensions: concealExts(),
+          })
+        );
+        const got = view.state.field(calloutMarkerConcealField);
+        const want = oracle.field(calloutMarkerConcealField);
+        // PRIMARY (Codex Conf 96): `records` is selection-INDEPENDENT, so comparing it
+        // pins the bounded recompute REGARDLESS of caret position. The fixed caret at 0
+        // sits inside a first-position callout and REVEALS its marker → empty decorations
+        // there — so a divergent record for that callout would be invisible to a
+        // decorations-only compare. The record compare closes that hole; decorations/zones
+        // stay as the derived secondary check (both sides share the same caret).
+        expect(got.records).toEqual(want.records);
+        expect(dump(got.decorations)).toEqual(dump(want.decorations));
+        expect(got.zones).toEqual(want.zones);
+        return true;
+      } finally {
+        view.destroy();
+        parent.remove();
+      }
     }
   }
 
@@ -359,29 +432,63 @@ describe("calloutMarkerConcealField — bounded reuse is non-vacuous (record ide
   // RED against Task 1's full walk (fresh objects every docChanged), GREEN once Task 2
   // preserves a zero-shift reused record's object identity. Proves reuse is REAL, not
   // a value-equal coincidence (Codex Conf 95).
+  // ⚠️ The observation is ATTEMPTED, not asserted on the first try, and the difference
+  // matters. CodeMirror gives its post-edit reparse a 20ms WALL-CLOCK budget; under CPU
+  // starvation that window can elapse while this process is descheduled, before any real
+  // parse work happens. The field then legitimately self-heals with a full walk
+  // (callout-marker-conceal.ts's `!syntaxTreeAvailable` arm), so reuse is not what ran and
+  // there is nothing to observe — a fact about the machine, not about the code under test.
+  // Asserting `syntaxTreeAvailable === true` on a single attempt turns that into a red;
+  // measured on a deliberately loaded full-suite run (24 spinners on 8 cores).
+  //
+  // This is NOT a retry that hides a regression, and it is not a silent skip either:
+  //   - a genuine break in bounded reuse reds EVERY attempt that gets far enough to look;
+  //   - if all attempts are starved, `observed` stays 0 and the final expect reds, so the
+  //     test can never pass by having quietly measured nothing.
+  // A vitest-level `{ retry: n }` would have neither property, which is why it is banned
+  // repo-wide (vitest.config.ts) and why the loop is written out here instead.
   it("an untouched far callout's record object survives a below-edit by identity", () => {
     const doc = "> [!NOTE]\n> body\n\nprose";
-    const parent = document.createElement("div");
-    document.body.appendChild(parent);
-    const view = new EditorView({
-      state: EditorState.create({
-        doc,
-        selection: EditorSelection.single(doc.length),
-        extensions: [markdown({ base: markdownLanguage }), calloutMarkerConcealField],
-      }),
-      parent,
-    });
-    try {
-      ensureSyntaxTree(view.state, view.state.doc.length, 10_000);
-      const before = view.state.field(calloutMarkerConcealField).records[0];
-      // Edit BELOW the callout (position doc.length): the record is untouched and does
-      // not shift → the bounded path must return the SAME object.
-      view.dispatch({ changes: { from: view.state.doc.length, insert: "x" } });
-      expect(syntaxTreeAvailable(view.state, view.state.doc.length)).toBe(true); // bounded ran
-      const after = view.state.field(calloutMarkerConcealField).records[0];
-      expect(after).toBe(before); // reused by reference (RED on a full walk)
-    } finally {
-      view.destroy();
+    let observed = 0;
+    for (let attempt = 0; attempt < 5 && observed === 0; attempt++) {
+      const parent = document.createElement("div");
+      document.body.appendChild(parent);
+      // settledMount, not `new EditorView` + a bare ensureSyntaxTree: the field is built at
+      // EditorState.create from syntaxTree(state), and an ensureSyntaxTree that only
+      // advances the parse CONTEXT leaves that snapshot truncated. `records` is then EMPTY
+      // and the identity assertion below compares `undefined` to `undefined` — green
+      // without ever exercising reuse. The toBeDefined() pin makes that failure mode
+      // impossible to reintroduce silently.
+      const view = settledMount(
+        {
+          state: EditorState.create({
+            doc,
+            selection: EditorSelection.single(doc.length),
+            extensions: concealExts(),
+          }),
+          parent,
+        },
+        10_000
+      );
+      try {
+        const before = view.state.field(calloutMarkerConcealField).records[0];
+        expect(before).toBeDefined();
+        // Edit BELOW the callout (position doc.length): the record is untouched and does
+        // not shift → the bounded path must return the SAME object.
+        view.dispatch({ changes: { from: view.state.doc.length, insert: "x" } });
+        if (!syntaxTreeAvailable(view.state, view.state.doc.length)) {
+          continue; // starved frontier → the field self-healed; nothing to observe here
+        }
+        const after = view.state.field(calloutMarkerConcealField).records[0];
+        expect(after).toBe(before); // reused by reference (RED on a full walk)
+        observed++;
+      } finally {
+        view.destroy();
+        parent.remove();
+      }
     }
+    // The bounded path ran at least once. Without this, an all-starved run would pass
+    // having asserted nothing about reuse.
+    expect(observed).toBeGreaterThan(0);
   });
 });

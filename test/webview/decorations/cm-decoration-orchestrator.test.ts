@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
-import { forceParsing, syntaxTree } from "@codemirror/language";
+import { syntaxTree } from "@codemirror/language";
 import {
   Compartment,
   EditorSelection,
@@ -30,6 +30,7 @@ import type {
   BuildContext,
   DecorationProvider,
 } from "../../../src/webview/cm/decorations/types.js";
+import { settledMount, settledView } from "../helpers/settled-view.js";
 
 function tagsOf(set: DecorationSet): string[] {
   const out: string[] = [];
@@ -235,7 +236,7 @@ describe("decoration orchestrator — ViewPlugin", () => {
     try {
       const before = trees.length;
       const beforeTree = syntaxTree(view.state);
-      forceParsing(view, view.state.doc.length, 5_000);
+      settledView(view);
       const afterTree = syntaxTree(view.state);
       // PRECONDITION: forceParsing advanced the tree. If this fires, the doc
       // no longer exceeds the 3000-char init viewport (the mount tree is already
@@ -457,7 +458,10 @@ describe("multi-cursor arbitration regression", () => {
         quollSyntaxReveal(),
       ],
     });
-    const view = new EditorView({ state, parent });
+    // Settle: orchestrator.ts reads syntaxTree(view.state) into ctx.tree.
+    // settledMount, not settledView(new EditorView(…)): the latter strands the
+    // view if the settle throws, since nothing owns it until the assignment.
+    const view = settledMount({ state, parent });
     try {
       // Read the merged decoration set via the EditorView.decorations facet.
       const sources = view.state.facet(EditorView.decorations);

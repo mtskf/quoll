@@ -1,8 +1,7 @@
 // @vitest-environment happy-dom
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
 import { EditorSelection, EditorState } from "@codemirror/state";
-import type { DecorationSet } from "@codemirror/view";
-import { EditorView } from "@codemirror/view";
+import type { DecorationSet, EditorView } from "@codemirror/view";
 import { type Tag, tags as t } from "@lezer/highlight";
 import { describe, expect, it } from "vitest";
 import {
@@ -23,6 +22,7 @@ import {
 import type { BuildContext } from "../../../src/webview/cm/decorations/types.js";
 import { blockStyleThemeSpec, quollHighlightSpec } from "../../../src/webview/cm/theme.js";
 import { fullTree } from "../helpers/full-tree.js";
+import { settledMount } from "../helpers/settled-view.js";
 
 describe("theme.ts — quollHighlightSpec navy+green token contract (palette refresh)", () => {
   // A spec entry's `tag` is a Tag OR a readonly Tag[] (the monospace entry uses
@@ -1118,7 +1118,8 @@ describe("block-style — plugin rebuild triggers (caret move)", () => {
       // resolve the individual instances (Codex 90).
       extensions: [markdown({ base: markdownLanguage }), blockStyle],
     });
-    return new EditorView({ state, parent });
+    // Settle: blockquoteRule / fencedCodePanel read syntaxTree(view.state) via toCtx(view).
+    return settledMount({ state, parent });
   }
 
   it("a selection-only transaction rebuilds the fenced panel but NOT the blockquote rule", () => {

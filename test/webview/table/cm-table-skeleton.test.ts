@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
-import { forceParsing, syntaxTreeAvailable } from "@codemirror/language";
+import { syntaxTreeAvailable } from "@codemirror/language";
 import { EditorState, type Extension } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import { describe, expect, it } from "vitest";
@@ -9,6 +9,7 @@ import {
   tableModels,
   tableSkeletonField,
 } from "../../../src/webview/cm/table/table-skeleton.js";
+import { settledView } from "../helpers/settled-view.js";
 
 const exts = (): Extension[] => [markdown({ base: markdownLanguage }), tableSkeletonField];
 
@@ -21,7 +22,7 @@ function freshOracle(doc: string): TableModel[] {
   document.body.appendChild(p);
   const v = new EditorView({ state: EditorState.create({ doc, extensions: exts() }), parent: p });
   try {
-    forceParsing(v, v.state.doc.length, 10_000);
+    settledView(v, 10_000);
     return tableModels(v.state);
   } finally {
     v.destroy();
@@ -39,7 +40,7 @@ function checkEquivalence(
     parent: p,
   });
   try {
-    forceParsing(view, view.state.doc.length, 10_000);
+    settledView(view, 10_000);
     // create() correctness on the fully-parsed initial doc.
     expect([...view.state.field(tableSkeletonField)]).toEqual(
       freshOracle(view.state.doc.toString())
@@ -55,7 +56,7 @@ function checkEquivalence(
           freshOracle(view.state.doc.toString())
         );
       }
-      forceParsing(view, len, 10_000); // publish → converge (also covers the G2 path)
+      settledView(view, 10_000); // publish → converge (also covers the G2 path)
       expect([...view.state.field(tableSkeletonField)]).toEqual(
         freshOracle(view.state.doc.toString())
       );
@@ -153,7 +154,7 @@ describe("tableSkeletonField bounded ≡ fullWalk", () => {
       parent: p,
     });
     try {
-      forceParsing(view, view.state.doc.length, 10_000); // fully parsed start
+      settledView(view, 10_000); // fully parsed start
       view.dispatch({ changes: { from: 0, insert: "x" } }); // edit OUTSIDE both tables
       // A small in-place edit on a complete tree keeps the frontier at doc end.
       expect(syntaxTreeAvailable(view.state, view.state.doc.length)).toBe(true);

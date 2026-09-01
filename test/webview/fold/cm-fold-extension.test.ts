@@ -7,7 +7,6 @@ import {
   foldCode,
   foldEffect,
   foldedRanges,
-  forceParsing,
   unfoldAll,
   unfoldCode,
   unfoldEffect,
@@ -38,6 +37,7 @@ import {
   expandToEnclosingBlock,
   touchesStructuralReparse,
 } from "../../../src/webview/cm/structural-guard.js";
+import { settledMount, settledView } from "../helpers/settled-view.js";
 
 let view: EditorView | null = null;
 afterEach(() => {
@@ -48,40 +48,35 @@ afterEach(() => {
 function mountDoc(doc: string, extra: readonly unknown[] = []): EditorView {
   const parent = document.createElement("div");
   document.body.appendChild(parent);
-  const v = new EditorView({
+  // Settle the mount parse so the fold fields are built over a COMPLETE tree instead of
+  // the truncated init one — same reason as settleParse below.
+  const v = settledMount({
     parent,
     state: EditorState.create({
       doc,
       extensions: [markdown({ base: markdownLanguage }), quollFolding(), ...(extra as never[])],
     }),
   });
-  // Settle the initial parse AND rebuild fold fields over the complete tree
-  // (forceParsing dispatches an empty tx if the parse advanced). ensureSyntaxTree
-  // alone completes the parse CONTEXT but not the field snapshot, so under load the
-  // mount-time field could be built over a truncated init tree. See settleParse.
-  expect(forceParsing(v, v.state.doc.length, 5000)).toBe(true);
   return v;
 }
 
-// Settle CodeMirror's async parser after an edit so the fold gutter fields are
-// observed against a COMPLETE syntax tree. CM's LanguageState.apply reparses a
-// docChanged with only a hardcoded 20ms `Work.Apply` budget; these fixtures need
-// several parse `advance()` steps, so under full-suite CPU starvation a >20ms
-// scheduler preemption mid-parse makes CM `takeTree()` TRUNCATE the post-edit tree
-// (treeLen < doc.length). The field then correctly falls back to a full rebuild,
-// but the tree-completeness check reads false and a node the edit was
-// meant to reveal can still be missing — the historical load-sensitive flake (memory
-// [[quoll-fold-bounded-equals-full-tests-flaky-under-load]], docs/LEARNING.md).
-// `forceParsing` finishes the parse and, if it advanced, dispatches an empty tx so
-// the field rebuilds over the finished tree — EXACTLY production's async-parse
-// settle path. It is a no-op when the tree already completed within budget (the
-// common, unloaded case), so the bounded recompute path stays exercised there while
-// a red now strictly means a bounded-vs-full contract breach, not a parse-timing race.
+// Settle CodeMirror's async parser after an edit so the fold gutter fields are observed
+// against a COMPLETE syntax tree. `settledView` (../helpers/settled-view.ts) documents
+// the MOUNT-time story — happy-dom never runs CM's background parse worker, so a fresh
+// view never self-heals — and owns the throw contract. It does NOT cover the POST-EDIT
+// path below, which is why this block exists rather than deferring wholesale: CM's
+// LanguageState.apply reparses a docChanged under a hardcoded 20ms
+// `Work.Apply` budget, and these fixtures need several parse `advance()` steps, so under full-suite
+// CPU starvation a >20ms preemption mid-parse makes CM `takeTree()` TRUNCATE the
+// post-edit tree (treeLen < doc.length). The field then correctly falls back to a full
+// rebuild, but the tree-completeness check reads false and a node the edit was meant to
+// reveal can still be missing — the historical load-sensitive flake (memory
+// [[quoll-fold-bounded-equals-full-tests-flaky-under-load]], docs/LEARNING.md). Settling
+// is a no-op once the tree completed within budget (the common, unloaded case), so the
+// bounded recompute path stays exercised there while a red strictly means a
+// bounded-vs-full contract breach, not a parse-timing race.
 function settleParse(v: EditorView): void {
-  // Assert convergence directly: forceParsing returns false if the 5000ms budget
-  // fails to reach doc end. A non-converged settle would otherwise surface as a
-  // confusing "bounded ≠ full" mismatch rather than a clear parse-budget failure.
-  expect(forceParsing(v, v.state.doc.length, 5000)).toBe(true);
+  settledView(v);
 }
 
 // A contributor that churns the facet reference every transaction (mimics
@@ -967,12 +962,14 @@ describe("structural guard under Quoll's production language (quollMarkdownLangu
     const { quollMarkdownLanguage } = await import("../../../src/webview/cm/markdown.js");
     const parent = document.createElement("div");
     document.body.appendChild(parent);
-    const v = new EditorView({
+    // settledMount, not settleParse: this factory settles a view it has not yet handed
+    // back, so on a non-convergent parse the caller has no reference to destroy. Owning
+    // the teardown of what it constructed is exactly settledMount's remit — see the
+    // ownership rule in ../helpers/settled-view.ts. mountDoc above settles the same way.
+    return settledMount({
       parent,
       state: EditorState.create({ doc, extensions: [quollMarkdownLanguage(), quollFolding()] }),
     });
-    settleParse(v); // complete the mount parse + rebuild fields over it (see settleParse)
-    return v;
   }
   async function prodOracle(
     doc: string,

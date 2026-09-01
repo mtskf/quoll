@@ -19,6 +19,7 @@ import { quollFloatingToolbarScroll } from "../../src/webview/cm/floating-toolba
 import { quollMarkdownLanguage } from "../../src/webview/cm/markdown.js";
 import { outlinePlugin, quollOutline } from "../../src/webview/cm/outline/index.js";
 import { quollTheme } from "../../src/webview/cm/theme.js";
+import { settled } from "./helpers/frames.js";
 
 const DOC = "# Alpha\n\nbody\n\n## Beta\n\nmore\n";
 const LONG_DOC = `# Alpha\n\n${"line\n".repeat(400)}\n## Beta\n`;
@@ -60,16 +61,6 @@ function mount(doc: string): { view: EditorView; host: HTMLElement } {
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-/** Drain pending layout/measure work (rAF x4 — the settled() idiom from
- *  list-hang-layout.browser.test.ts). */
-function settled(): Promise<void> {
-  return new Promise((resolve) => {
-    let n = 4;
-    const tick = () => (--n <= 0 ? resolve() : requestAnimationFrame(tick));
-    requestAnimationFrame(tick);
-  });
 }
 
 describe("outline sidebar — real-chromium layout", () => {

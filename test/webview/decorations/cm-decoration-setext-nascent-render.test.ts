@@ -17,11 +17,12 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import process from "node:process";
 import { EditorSelection, EditorState } from "@codemirror/state";
-import { EditorView } from "@codemirror/view";
+import type { EditorView } from "@codemirror/view";
 import { describe, expect, it, vi } from "vitest";
 import { quollSyntaxReveal } from "../../../src/webview/cm/decorations/index.js";
 import { quollMarkdownLanguage } from "../../../src/webview/cm/markdown.js";
 import { quollHighlighting, quollTokenMarkers } from "../../../src/webview/cm/theme.js";
+import { settledMount } from "../helpers/settled-view.js";
 
 vi.mock("../../../src/webview/host.js", () => ({
   getHost: () => ({ postMessage: vi.fn() }),
@@ -33,7 +34,8 @@ const BODY_PX = 14;
 function mount(doc: string): EditorView {
   const parent = document.createElement("div");
   document.body.appendChild(parent);
-  return new EditorView({
+  // Settle: quollSyntaxReveal() + quollHighlighting read syntaxTree(view.state).
+  return settledMount({
     parent,
     state: EditorState.create({
       doc,

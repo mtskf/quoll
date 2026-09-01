@@ -12,7 +12,6 @@
 
 import * as assert from "node:assert";
 import * as fs from "node:fs/promises";
-import * as os from "node:os";
 import * as path from "node:path";
 import * as vscode from "vscode";
 import {
@@ -20,6 +19,7 @@ import {
   getHarness,
   isDocumentAfter,
   isDocumentEvent,
+  makeTempDir,
   VIEW_TYPE,
 } from "./harness";
 
@@ -51,7 +51,7 @@ describe("dirty-doc-disk-conflict", function () {
   // Open the temp file in Quoll, seed, then dirty it via an in-session edit that
   // does NOT match disk. Returns the seed docVersion.
   async function openAndDirty(bodyEdit: string): Promise<number> {
-    tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "quoll-e2e-dirty-conflict-"));
+    tempDir = await makeTempDir("dirty-conflict");
     tempFile = path.join(tempDir, "dirty-conflict.md");
     await fs.writeFile(tempFile, "# Initial\n\nbody\n");
     const uri = vscode.Uri.file(tempFile);

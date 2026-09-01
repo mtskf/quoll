@@ -11,18 +11,25 @@
 // CI. "Passes on current main" is pinned separately by the local
 // `pnpm check:todo-hygiene` run, not by this suite.
 //
-// @ts-nocheck — importing a plain .mjs with no bundled types; vitest runs
-// this transpile-only and tsc does not include test/build/ in `pnpm compile`.
+// The .mjs import below is untyped, so it carries a line-scoped
+// `@ts-expect-error`; everything this file itself authors stays checked by
+// `test/build/tsconfig.json` under `pnpm compile`.
 import { describe, expect, it } from "vitest";
 
-import {
+// Namespace import so the module specifier — where TS7016 is reported — stays on
+// the same line as the directive; a named import wide enough for all the
+// bindings wraps and leaves the suppression unused (see theme-palettes.test.ts).
+// @ts-expect-error — plain .mjs with no bundled types; vitest transpiles it.
+import * as todoHygiene from "../../scripts/check-todo-hygiene.mjs";
+
+const {
   lintBranchMarker,
   lintDoneWhen,
   lintGatedRefs,
   lintNonCheckboxBullets,
   lintTodoText,
   normalizeHeading,
-} from "../../scripts/check-todo-hygiene.mjs";
+} = todoHygiene;
 
 // A fully convention-compliant document that must lint clean.
 const CLEAN = `# TODO
@@ -265,7 +272,7 @@ describe("combined planted violations — one per rule", () => {
 - A stray non-checkbox bullet under an active section.
 `;
     const rules = lintTodoText(doc)
-      .map((v) => v.rule)
+      .map((v: { rule: number }) => v.rule)
       .sort();
     expect(rules).toContain(1);
     expect(rules).toContain(2);

@@ -1,6 +1,5 @@
 import * as assert from "node:assert";
 import * as fs from "node:fs";
-import * as os from "node:os";
 import * as path from "node:path";
 import * as vscode from "vscode";
 import { PROTOCOL_VERSION } from "./constants";
@@ -10,6 +9,7 @@ import {
   getHarness,
   hideQuollByOpeningOtherDoc,
   isDocumentEvent,
+  makeTempDirSync,
   openFixtureWithQuoll,
   tick,
   VIEW_TYPE,
@@ -22,7 +22,7 @@ const isEditRejectedEvent = (e: { message: { type: string } }) =>
 // resumption case, and the revert-check of the deferred-race guard) writes to a
 // throwaway file instead of mutating a committed fixture.
 function tempMd(name: string): vscode.Uri {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "quoll-reject-"));
+  const dir = makeTempDirSync("reject");
   const p = path.join(dir, name);
   fs.writeFileSync(p, "# Title\n\nbody\n", "utf8");
   return vscode.Uri.file(p);

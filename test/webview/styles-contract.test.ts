@@ -90,7 +90,7 @@ describe("styles.css — block-widget margin invariant (CL)", () => {
   const css = readFileSync(new URL("../../src/webview/styles.css", import.meta.url), "utf8");
 
   // The `quoll-block` marker class is the DOM hook (pinned in
-  // cm-table-widget.test.ts); this pins the CSS half — the load-bearing
+  // table/cm-table-widget-render.test.ts); this pins the CSS half — the load-bearing
   // `margin: 0` rule itself. CodeMirror measures block-widget height via
   // getBoundingClientRect() (which excludes margin), so any VERTICAL margin on a
   // quoll-block root reintroduces a click→caret offset for every line
@@ -446,7 +446,7 @@ describe("styles.css — widgets consume the accent tokens (palette refresh use 
       /\.quoll-table-block code\s*\{[^}]*background\s*:\s*var\(--quoll-surface-fill/s
     );
   });
-  // Strikethrough / highlight inside a table cell (cm-table-cell-render renders
+  // Strikethrough / highlight inside a table cell (cell-render.ts renders
   // <del>/<mark>). happy-dom does not apply CSS, so pin the source rule text
   // (same idiom as the table-link/code pins above): <del> line-through, <mark>
   // reusing the shared --quoll-highlight-bg tint. Non-vacuous — both red if the

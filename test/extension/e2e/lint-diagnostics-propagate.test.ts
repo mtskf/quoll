@@ -1,9 +1,8 @@
 import * as assert from "node:assert";
 import * as fs from "node:fs/promises";
-import * as os from "node:os";
 import * as path from "node:path";
 import * as vscode from "vscode";
-import { cleanupBetweenTests, getHarness, VIEW_TYPE } from "./harness";
+import { cleanupBetweenTests, getHarness, makeTempDir, VIEW_TYPE } from "./harness";
 
 // Poll vscode.languages.getDiagnostics(uri) until `predicate` holds or the
 // deadline passes. Lint is debounced (250ms) in the webview, then posted across
@@ -52,7 +51,7 @@ describe("lint-diagnostics-propagate", function () {
   });
 
   it("mirrors lint into Problems with correct range, updates on fix, reopens, clears on close", async () => {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "quoll-lint-e2e-"));
+    const dir = await makeTempDir("lint");
     tempFile = path.join(dir, "heading-skip.md");
     // h1 -> h3 skips h2: heading-increment (MD001-equivalent) warning on "### Skip".
     await fs.writeFile(tempFile, "# Title\n\n### Skip\n");
@@ -113,7 +112,7 @@ describe("lint-diagnostics-propagate", function () {
   });
 
   it("maps ranges correctly for a CRLF document (line/character is EOL-invariant)", async () => {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "quoll-lint-crlf-"));
+    const dir = await makeTempDir("lint-crlf");
     tempFile = path.join(dir, "crlf.md");
     // Same violation, CRLF line endings. An offset-based wire would mis-place
     // the range (CM is LF-internal, the TextDocument is CRLF); line/character
@@ -147,7 +146,7 @@ describe("lint-diagnostics-propagate", function () {
   // (Task 3) and toLintDiagnostics is host-document-independent (Task 2), so the
   // host reproduces exactly the ranges the webview computed for its content.
   it("surfaces a violation introduced by an external edit, at the correct line", async () => {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "quoll-lint-dyn-"));
+    const dir = await makeTempDir("lint-dyn");
     tempFile = path.join(dir, "baseline.md");
     // Line 0 carries a single trailing space → a STABLE `no-trailing-spaces`
     // finding (a single trailing space is flagged; only exactly two on a

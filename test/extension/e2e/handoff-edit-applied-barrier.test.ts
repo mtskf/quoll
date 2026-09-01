@@ -12,7 +12,6 @@
 
 import * as assert from "node:assert";
 import * as fs from "node:fs/promises";
-import * as os from "node:os";
 import * as path from "node:path";
 import * as vscode from "vscode";
 import { PROTOCOL_VERSION } from "./constants";
@@ -21,6 +20,7 @@ import {
   deferred,
   getHarness,
   isDocumentEvent,
+  makeTempDir,
   tick,
   VIEW_TYPE,
 } from "./harness";
@@ -41,7 +41,7 @@ describe("handoff edit-applied barrier", function () {
   // its uri. The seed content is short (3 lines) so the applied 40-line clamp
   // is non-vacuous.
   const openTempDoc = async (): Promise<vscode.Uri> => {
-    tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "quoll-e2e-barrier-"));
+    tempDir = await makeTempDir("barrier");
     const tempFile = path.join(tempDir, "barrier.md");
     await fs.writeFile(tempFile, "# seed\n\nbody\n");
     const uri = vscode.Uri.file(tempFile);

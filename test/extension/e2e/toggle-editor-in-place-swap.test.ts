@@ -8,14 +8,20 @@
 
 import * as assert from "node:assert";
 import * as fs from "node:fs";
-import * as os from "node:os";
 import * as path from "node:path";
 import * as vscode from "vscode";
 import { PROTOCOL_VERSION } from "./constants";
-import { cleanupBetweenTests, getHarness, isDocumentEvent, tick, VIEW_TYPE } from "./harness";
+import {
+  cleanupBetweenTests,
+  getHarness,
+  isDocumentEvent,
+  makeTempDirSync,
+  tick,
+  VIEW_TYPE,
+} from "./harness";
 
 function tempMd(name: string): vscode.Uri {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "quoll-swap-"));
+  const dir = makeTempDirSync("swap");
   const p = path.join(dir, name);
   fs.writeFileSync(p, "# Title\n\nbody\n", "utf8");
   return vscode.Uri.file(p);

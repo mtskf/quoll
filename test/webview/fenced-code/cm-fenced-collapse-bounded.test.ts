@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
-import { forceParsing, syntaxTreeAvailable } from "@codemirror/language";
+import { syntaxTreeAvailable } from "@codemirror/language";
 import {
   EditorSelection,
   EditorState,
@@ -14,6 +14,7 @@ import {
   fencedCodeCollapseFieldFullRecompute,
 } from "../../../src/webview/cm/fenced-code/fenced-code-collapse.js";
 import { setFencedCollapseEffect } from "../../../src/webview/cm/fenced-code/fenced-code-collapse-state.js";
+import { settledView } from "../helpers/settled-view.js";
 
 const exts = (): Extension[] => [
   EditorState.allowMultipleSelections.of(true),
@@ -82,7 +83,7 @@ function run(initial: string, edits: Edit[]): void {
     parent,
   });
   try {
-    forceParsing(view, view.state.doc.length, 10_000);
+    settledView(view, 10_000);
     assertEquivalent(view); // create() equivalence on the fully-parsed initial doc
     for (const e of edits) {
       view.dispatch({
@@ -97,7 +98,7 @@ function run(initial: string, edits: Edit[]): void {
       if (syntaxTreeAvailable(view.state, len)) {
         assertEquivalent(view);
       }
-      forceParsing(view, len, 10_000); // publish → converge (also covers the G2 path)
+      settledView(view, 10_000); // publish → converge (also covers the G2 path)
       assertEquivalent(view);
     }
   } finally {
@@ -373,7 +374,7 @@ it("reuses an untouched far block's record VERBATIM on a bounded keystroke", () 
     parent,
   });
   try {
-    forceParsing(view, view.state.doc.length, 10_000);
+    settledView(view, 10_000);
     const before = view.state.field(fencedCodeCollapseField).blocks[0];
     view.dispatch({
       changes: { from: editPos, insert: "X" },

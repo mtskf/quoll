@@ -18,7 +18,7 @@ function stateOf(doc: string): EditorState {
 
 function lookup(doc: string, slug: string): number | null {
   const state = stateOf(doc);
-  return findHeadingBySlug(state, syntaxTree(state), slug);
+  return findHeadingBySlug(state, fullTree(state), slug);
 }
 
 function lineStartOf(doc: string, needle: string): number {
@@ -74,9 +74,9 @@ describe("findHeadingBySlug", () => {
 
   it("re-resolves against an edited document instead of serving a stale offset", () => {
     const before = stateOf("# Alpha\n\nbody\n");
-    expect(findHeadingBySlug(before, syntaxTree(before), "alpha")).toBe(0);
+    expect(findHeadingBySlug(before, fullTree(before), "alpha")).toBe(0);
     const after = before.update({ changes: { from: 0, insert: "lead-in\n\n" } }).state;
-    expect(findHeadingBySlug(after, syntaxTree(after), "alpha")).toBe("lead-in\n\n".length);
+    expect(findHeadingBySlug(after, fullTree(after), "alpha")).toBe("lead-in\n\n".length);
   });
 
   it("rebuilds when the SAME tree is handed a different document", () => {
@@ -88,7 +88,7 @@ describe("findHeadingBySlug", () => {
     // the case a docLength guard cannot see: same length, dead `alpha` entry
     // served forever. Identity on `state.doc` catches it.
     const before = stateOf("# Alpha\n\nbody\n");
-    const tree = syntaxTree(before);
+    const tree = fullTree(before);
     expect(findHeadingBySlug(before, tree, "alpha")).toBe(0);
     const after = before.update({ changes: { from: 2, to: 7, insert: "Gamma" } }).state;
     expect(after.doc.length).toBe(before.doc.length);
@@ -130,21 +130,27 @@ describe("findHeadingBySlug", () => {
     // rather than a tautology.
     const doc = `# Top\n\n${"filler paragraph text\n\n".repeat(4000)}## Far Heading\n\nend\n`;
     const state = stateOf(doc);
+    // This fixture is DELIBERATELY partial — do not run it through `fullTree` /
+    // `settledState`, which would settle the parse and make this assertion vacuous.
     const partial = ensureSyntaxTree(state, 200, 50) ?? syntaxTree(state);
     expect(partial.length).toBeLessThan(state.doc.length);
     expect(findHeadingBySlug(state, partial, "far-heading")).toBeNull();
-    const complete = ensureSyntaxTree(state, state.doc.length, 5000);
-    expect(complete).not.toBeNull();
-    expect(findHeadingBySlug(state, complete as NonNullable<typeof complete>, "far-heading")).toBe(
+    const complete = fullTree(state);
+    expect(findHeadingBySlug(state, complete, "far-heading")).toBe(
       doc.lastIndexOf("## Far Heading")
     );
   });
 });
 
 describe("resolveLinkTarget", () => {
+  // `fullTree`, not `syntaxTree`: resolveLinkTarget is HANDED the tree and only
+  // re-ensures when `reach !== "viewport-only"` (link-resolve.ts), so on the default
+  // reach it walks this snapshot verbatim. A truncated one loses the heading and the
+  // `no-action` rows below would be green for the wrong reason. The three fixtures
+  // further down that DELIBERATELY stay partial are marked as such; this is not one.
   function resolve(doc: string, destination: string, reach: ParseReach = "viewport-only") {
     const state = stateOf(doc);
-    return resolveLinkTarget(state, syntaxTree(state), classifyLinkTarget(destination), reach);
+    return resolveLinkTarget(state, fullTree(state), classifyLinkTarget(destination), reach);
   }
 
   it("passes every non-fragment arm through untouched", () => {
@@ -182,6 +188,8 @@ describe("resolveLinkTarget", () => {
     // a dead click).
     const doc = `# Top\n\n${"filler paragraph text\n\n".repeat(4000)}## Far Heading\n\nend\n`;
     const state = stateOf(doc);
+    // This fixture is DELIBERATELY partial — do not run it through `fullTree` /
+    // `settledState`, which would settle the parse and make this assertion vacuous.
     const partial = ensureSyntaxTree(state, 200, 50) ?? syntaxTree(state);
     expect(partial.length).toBeLessThan(state.doc.length);
     const target = classifyLinkTarget("#far-heading");
@@ -201,6 +209,9 @@ describe("resolveLinkTarget", () => {
     const doc = `# Top\n\n${"filler paragraph text\n\n".repeat(8000)}## Far Heading\n\nend\n`;
     const target = classifyLinkTarget("#far-heading");
 
+    // `starved` and `fed` both need the TRUNCATED init snapshot — `starved` to
+    // reproduce a starved budget, `fed` as its non-vacuity twin — so neither may
+    // go through `fullTree` / `settledState`, which would settle the parse first.
     const starved = stateOf(doc);
     expect(
       resolveLinkTarget(starved, syntaxTree(starved), target, { completeWithinMs: 1 })
