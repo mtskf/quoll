@@ -389,7 +389,7 @@ it("reuses an untouched far block's record VERBATIM on a bounded keystroke", () 
         selection: EditorSelection.cursor(editPos + 1),
       });
       // The bounded branch must be what ran on THIS dispatch. A starved frontier sends the
-      // field down its full-walk self-heal instead, which allocates a fresh record and
+      // field down its G2 full-walk fallback instead, which allocates a fresh record and
       // would red the identity assertion below for a reason that has nothing to do with
       // reuse — a fact about the machine, not the code. Abandon the attempt rather than
       // measure the wrong path; an all-starved run throws rather than passing quietly.

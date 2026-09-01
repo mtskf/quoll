@@ -233,15 +233,12 @@ describe("calloutMarkerConcealField — bounded recompute ≡ full recompute", (
   // buildFull — turning this bounded-vs-full compare into full-vs-full. The pin inside the
   // loop is what keeps the bounded result trustworthy instead.
   //
-  // ⚠️ The comparison is ATTEMPTED rather than asserted on the first try. CodeMirror gives
-  // its post-edit reparse a 20ms WALL-CLOCK budget, and under CPU starvation that window
-  // can elapse while this process is descheduled — the field then self-heals with a full
-  // walk, so the bounded path is not what ran and there is nothing to compare. Measured on
-  // a deliberately loaded full-suite run (24 spinners on 8 cores): two cases in this
-  // describe red on the pin below, for a reason that is about the machine rather than the
-  // code. Retrying from a fresh view neither hides a regression (a real bounded bug reds
-  // every attempt that gets far enough to compare) nor passes vacuously (an all-starved
-  // run throws at the end), which a vitest-level `{ retry: n }` would fail on both counts.
+  // ⚠️ The comparison is ATTEMPTED rather than asserted on the first try, via
+  // `withUnstarvedFrontier` — its docblock in ../helpers/unstarved-frontier.ts is the single
+  // place that explains the 20ms post-edit budget, why an attempt loop rather than a
+  // vitest-level `{ retry: n }`, and why an all-starved run must throw rather than pass
+  // quietly. File-specific fact: this is the describe PR #388 measured redding under a
+  // deliberately loaded full-suite run (24 spinners on 8 cores).
   function checkEquivalence(
     initial: string,
     edits: Array<{ changes?: unknown; selection?: unknown }>
@@ -452,7 +449,7 @@ describe("calloutMarkerConcealField — bounded reuse is non-vacuous (record ide
         // Edit BELOW the callout (position doc.length): the record is untouched and does
         // not shift → the bounded path must return the SAME object.
         view.dispatch({ changes: { from: view.state.doc.length, insert: "x" } });
-        requireUnstarvedFrontier(); // starved → the field self-healed; nothing to observe
+        requireUnstarvedFrontier(); // starved → the field took its G2 full walk; nothing to observe
         const after = view.state.field(calloutMarkerConcealField).records[0];
         expect(after).toBe(before); // reused by reference (RED on a full walk)
       },

@@ -316,9 +316,9 @@ describe("tableBlockField byte-identity: bounded ≡ full", () => {
           changes: { from: 0, insert: "x" }, // edit OUTSIDE both tables
           selection: EditorSelection.cursor(1),
         });
-        // Starved frontier → the field self-healed with a full walk, so the bounded output
-        // this test exists to check never existed. Abandon the attempt; an all-starved run
-        // throws rather than passing having measured nothing.
+        // Starved frontier → the field took its G2 fallback and full-walked DURING the
+        // dispatch, so the bounded output this test exists to check never existed. Abandon
+        // the attempt; an all-starved run throws rather than passing having measured nothing.
         requireUnstarvedFrontier();
         // boundedUpdate's output, pre-self-heal, must equal the full walk AND stay
         // anchored to the document bytes.

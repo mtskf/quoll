@@ -158,8 +158,9 @@ describe("tableSkeletonField bounded ≡ fullWalk", () => {
         // A small in-place edit on a complete tree normally keeps the frontier at doc end,
         // which is what makes boundedUpdate the branch that ran. Under CPU starvation the
         // 20ms reparse budget can elapse before any parse work happens; the field then
-        // self-heals with a full walk, so there is no bounded output to compare and this
-        // attempt is abandoned rather than red. An all-starved run throws.
+        // takes its G2 fallback and full-walks DURING the dispatch, so there is no bounded
+        // output to compare and this attempt is abandoned rather than red. An all-starved
+        // run throws.
         requireUnstarvedFrontier();
         // boundedUpdate's output, pre-self-heal, must equal the full walk.
         expect([...view.state.field(tableSkeletonField)]).toEqual(
