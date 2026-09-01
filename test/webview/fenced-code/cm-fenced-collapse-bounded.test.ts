@@ -14,7 +14,8 @@ import {
   fencedCodeCollapseFieldFullRecompute,
 } from "../../../src/webview/cm/fenced-code/fenced-code-collapse.js";
 import { setFencedCollapseEffect } from "../../../src/webview/cm/fenced-code/fenced-code-collapse-state.js";
-import { settledView } from "../helpers/settled-view.js";
+import { settledMount, settledView } from "../helpers/settled-view.js";
+import { withUnstarvedFrontier } from "../helpers/unstarved-frontier.js";
 
 const exts = (): Extension[] => [
   EditorState.allowMultipleSelections.of(true),
@@ -354,8 +355,6 @@ describe("fencedCodeCollapseField bounded ≡ full", () => {
 });
 
 it("reuses an untouched far block's record VERBATIM on a bounded keystroke", () => {
-  const parent = document.createElement("div");
-  document.body.appendChild(parent);
   const F = fence(15);
   // Block at the TOP; edit far BELOW it so no position shifts → shiftRecord returns
   // the record verbatim (reference-identity). A full recompute would allocate a NEW
@@ -365,27 +364,40 @@ it("reuses an untouched far block's record VERBATIM on a bounded keystroke", () 
   // span on the top block and force a rebuild — defeating the verbatim-reuse we assert.
   const doc = `${F}\n\nprose tail here\n`;
   const editPos = `${F}\n\nprose tail`.length; // far below the block
-  const view = new EditorView({
-    state: EditorState.create({
-      doc,
-      selection: EditorSelection.cursor(editPos),
-      extensions: exts(),
-    }),
-    parent,
+  withUnstarvedFrontier({
+    what: "verbatim bounded reuse of an untouched far block's record",
+    mount: (parent) =>
+      settledMount(
+        {
+          state: EditorState.create({
+            doc,
+            selection: EditorSelection.cursor(editPos),
+            extensions: exts(),
+          }),
+          parent,
+        },
+        10_000
+      ),
+    observe: (view, requireUnstarvedFrontier) => {
+      const before = view.state.field(fencedCodeCollapseField).blocks[0];
+      // Without this, a truncated snapshot would leave `blocks` empty and the identity
+      // assertion below would compare undefined to undefined — green having exercised no
+      // reuse at all.
+      expect(before).toBeDefined();
+      view.dispatch({
+        changes: { from: editPos, insert: "X" },
+        selection: EditorSelection.cursor(editPos + 1),
+      });
+      // The bounded branch must be what ran on THIS dispatch. A starved frontier sends the
+      // field down its full-walk self-heal instead, which allocates a fresh record and
+      // would red the identity assertion below for a reason that has nothing to do with
+      // reuse — a fact about the machine, not the code. Abandon the attempt rather than
+      // measure the wrong path; an all-starved run throws rather than passing quietly.
+      requireUnstarvedFrontier();
+      const after = view.state.field(fencedCodeCollapseField).blocks[0];
+      expect(after).toBe(before); // SAME object — only verbatim bounded reuse yields this
+      // Oracle (always full) allocates fresh → NOT identical, but VALUE-equal.
+      expect(view.state.field(fencedCodeCollapseFieldFullRecompute).blocks[0]).not.toBe(before);
+    },
   });
-  try {
-    settledView(view, 10_000);
-    const before = view.state.field(fencedCodeCollapseField).blocks[0];
-    view.dispatch({
-      changes: { from: editPos, insert: "X" },
-      selection: EditorSelection.cursor(editPos + 1),
-    });
-    expect(syntaxTreeAvailable(view.state, view.state.doc.length)).toBe(true); // bounded branch ran
-    const after = view.state.field(fencedCodeCollapseField).blocks[0];
-    expect(after).toBe(before); // SAME object — only verbatim bounded reuse yields this
-    // Oracle (always full) allocates fresh → NOT identical, but VALUE-equal.
-    expect(view.state.field(fencedCodeCollapseFieldFullRecompute).blocks[0]).not.toBe(before);
-  } finally {
-    view.destroy();
-  }
 });
