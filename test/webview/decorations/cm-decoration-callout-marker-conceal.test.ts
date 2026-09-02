@@ -304,6 +304,14 @@ describe("calloutMarkerConcealField — bounded recompute ≡ full recompute", (
     });
   }
 
+  it("refuses a zero-edit call rather than reporting a settled-vs-settled pass", () => {
+    // The guard above is the only thing standing between this describe and a case that
+    // compares a settled mount to a settled oracle, exercising no bounded path at all —
+    // the vacuous green the whole suite is built to refuse. Every other test here passes
+    // at least one edit, so without this one the guard has no call site that reaches it.
+    expect(() => checkEquivalence(CALLOUT, [])).toThrow(/at least one edit is required/);
+  });
+
   it("type prose far below a callout (far edit, records position-shift only)", () => {
     checkEquivalence(`${CALLOUT}\n\nprose\n\nmore`, [
       { changes: { from: `${CALLOUT}\n\nprose\n\nmore`.length, insert: "x" } },
