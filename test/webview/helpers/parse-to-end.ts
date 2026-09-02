@@ -1,22 +1,32 @@
 import { ensureSyntaxTree, language } from "@codemirror/language";
 import type { EditorState } from "@codemirror/state";
 
-type ParseCaller =
-  | "fullTree"
-  | "settledState"
-  | "settledView"
-  | "settledMount"
-  | "withUnstarvedFrontier"
-  | "withUnstarvedFrontierState";
+/**
+ * The callers that actually SETTLE a parse, and so the only ones that can reach either of
+ * the two messages below. Written out as its own list rather than filtered out of
+ * `ParseCaller` with an `Exclude<>`: a filter leaves a REMAINDER, so a caller added to the
+ * union and forgotten on the exclusion list would silently be classified as settling. Here
+ * the union below is the SUM of the two sides, and a new caller has to be written into one
+ * of them.
+ *
+ * That keeps each builder's labels within the set of callers that can produce it: exactly
+ * equal for `timeoutMessage`, and one wider than the truth for `truncatedSnapshotMessage`,
+ * which `fullTree()` deliberately does not use (see its note below). That last gap is an
+ * accepted looseness, not an oversight.
+ */
+type SettlingCaller = "fullTree" | "settledState" | "settledView" | "settledMount";
 
 /**
- * The subset that actually SETTLES a parse. Neither `withUnstarvedFrontier` nor
- * `withUnstarvedFrontierState` does — they probe for a language and read the frontier,
- * and never advance a parse — so neither can reach either of the two messages below.
- * Excluding them keeps each builder's label set equal to the set of callers that can
- * actually produce it, which is the whole job this union was given.
+ * The unstarved-frontier forms: they probe for a language and read the frontier, and never
+ * advance a parse, so neither can honestly carry either parse-budget sentence. Exported so
+ * ./unstarved-frontier.ts uses THIS list rather than a second copy of the same literals —
+ * two copies with no type-level link would let one side gain a member while the other kept
+ * classifying it as settling.
  */
-type SettlingCaller = Exclude<ParseCaller, "withUnstarvedFrontier" | "withUnstarvedFrontierState">;
+export type UnstarvedCaller = "withUnstarvedFrontier" | "withUnstarvedFrontierState";
+
+/** Every caller `assertHasLanguage` accepts. Derived, so a new member must choose a side. */
+type ParseCaller = SettlingCaller | UnstarvedCaller;
 
 /**
  * Shared parse step behind `fullTree()` and `settledState()`: advance the state's

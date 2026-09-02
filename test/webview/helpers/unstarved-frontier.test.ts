@@ -1,8 +1,9 @@
 // @vitest-environment happy-dom
-// Unit test for withUnstarvedFrontier()'s OWN control flow. The suites that call it drive
-// the success path only, so without this file a weakening of any of its refusals — the
-// all-starved throw above all, which is the one thing keeping an attempt loop from
-// degrading into a silent skip — stays silently green.
+// Unit test for the OWN control flow of both unstarved-frontier forms — and the only place
+// the refusals of the attempt loop they share (`runUnstarvedAttempts`) are exercised at all.
+// The suites that call them drive the success path only, so without this file a weakening of
+// any of those refusals — the all-starved throw above all, which is the one thing keeping an
+// attempt loop from degrading into a silent skip — stays silently green.
 import { markdown } from "@codemirror/lang-markdown";
 import { Compartment, EditorState } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
@@ -372,6 +373,36 @@ describe("every gate call re-reads the frontier, not just the first", () => {
     ).toThrow(/all 2 attempts found a starved parse frontier/);
     expect(reachedSecond).toBe(2); // both attempts got as far as the second gate
     expect(reachedPast).toBe(0); // and neither got past it
+  });
+
+  it("names a language lost MID-attempt instead of retrying it as starvation", () => {
+    // The sibling above swaps one real Language for another, so it cannot tell a per-GATE
+    // language check from a per-ATTEMPT one. Reconfiguring to `[]` can: `syntaxTreeAvailable`
+    // is ALSO false with no Language attached, so a check that had already run once per
+    // attempt would read the second gate as starvation, retry, and end the run blaming the
+    // CPU. The second gate must throw "no language configured" and NOT retry. Measured: with
+    // the check narrowed to the first gate call this reds, and nothing else in the file does.
+    const lang = new Compartment();
+    let mounts = 0;
+    expect(() =>
+      withUnstarvedFrontier({
+        what: "the bounded output",
+        attempts: 3,
+        mount: (parent) => {
+          mounts++;
+          return settledMount({
+            state: EditorState.create({ doc: DOC, extensions: [lang.of(markdown())] }),
+            parent,
+          });
+        },
+        observe: (view, requireUnstarvedFrontier) => {
+          requireUnstarvedFrontier();
+          view.dispatch({ effects: lang.reconfigure([]) });
+          requireUnstarvedFrontier(); // must NOT be read as starvation
+        },
+      })
+    ).toThrow(/^withUnstarvedFrontier: state has no language configured/);
+    expect(mounts).toBe(1); // and NOT retried
   });
 });
 
@@ -778,6 +809,11 @@ describe("every attempt cleans up after itself", () => {
     // teardown failure would surface INSTEAD of the assertion diff — in a suite that mounts
     // exactly the widgets whose destroy can throw. The destroy failure is still reported,
     // beside the primary one rather than over it.
+    //
+    // The message is the CORE's, not the view form's: the guard lives in the shared
+    // `finally` so that every form inherits it, and the view form's teardown lets its
+    // destroy failure out bare. Anchored, so a form hard-coding the other caller's prefix
+    // could not satisfy this.
     const before = document.body.childElementCount;
     // Spied, not merely silenced: "beside" is half the promise, and without an assertion
     // on it the helper could swallow the teardown failure outright and stay green. (The
@@ -795,7 +831,7 @@ describe("every attempt cleans up after itself", () => {
         })
       ).toThrow(/the real failure/);
       expect(errSpy).toHaveBeenCalledTimes(1);
-      expect(errSpy.mock.calls[0]?.[0]).toMatch(/view\.destroy\(\) ALSO threw/);
+      expect(errSpy.mock.calls[0]?.[0]).toMatch(/^withUnstarvedFrontier: teardown ALSO threw/);
       expect((errSpy.mock.calls[0]?.[1] as Error).message).toMatch(/widget destroy blew up/);
     } finally {
       errSpy.mockRestore();
@@ -894,6 +930,39 @@ describe("withUnstarvedFrontierState carries the same refusals without a view", 
     );
   });
 
+  it("does not report a SWALLOWED gate refusal as never having gated", () => {
+    // The gate's own `assertHasLanguage` runs BEFORE either "the gate fired" record is
+    // written, so a gate refused for a missing language leaves `stateAtLastGate` unset and
+    // `sentinelsThrown` at zero. Swallow it and the loop would otherwise fall through to the
+    // ungated branch and assert something false — that `observe` never called the gate —
+    // sending the reader to look for a missing call that is right there, with the real error
+    // discarded and no `cause`. Counting gate ENTRY separately is what tells the two apart.
+    //
+    // ⚠️ The counter, not `stateAtLastGate = state` moved above the assert: that would be
+    // WORSE — a swallowed language error would then satisfy this form's
+    // `returned === stateAtLastGate` post-check and the whole run would go green.
+    //
+    // The state form is the only reachable place for it: the view form's adapter probes for
+    // a language once per attempt before `observe` runs, so a language-less view is refused
+    // before any gate is entered.
+    expect(() =>
+      withUnstarvedFrontierState({
+        what: "the reducer's own output",
+        observe: (requireUnstarvedFrontier) => {
+          const state = EditorState.create({ doc: DOC, extensions: [] });
+          try {
+            requireUnstarvedFrontier(state);
+          } catch {
+            /* exactly the mistake this test pins */
+          }
+          return state;
+        },
+      })
+    ).toThrow(
+      /^withUnstarvedFrontierState: requireUnstarvedFrontier\(\) was called but its refusal was swallowed/
+    );
+  });
+
   it("does not retry the ungated case", () => {
     let attemptsRun = 0;
     expect(() =>
@@ -973,6 +1042,9 @@ describe("withUnstarvedFrontierState carries the same refusals without a view", 
   });
 
   it("refuses an async observe, and at COMPILE time too", () => {
+    // Anchored on THIS form's prefix, not just on the sentence: one core now serves two
+    // callers, so an unanchored matcher is satisfied by a `caller` hard-coded to the view
+    // form's name and the state form's refusals would point at the wrong helper.
     expect(() =>
       withUnstarvedFrontierState({
         what: "the reducer's own output",
@@ -982,7 +1054,7 @@ describe("withUnstarvedFrontierState carries the same refusals without a view", 
           return state;
         }),
       })
-    ).toThrow(/observe\(\) must be synchronous/);
+    ).toThrow(/^withUnstarvedFrontierState: observe\(\) must be synchronous/);
     expect(() =>
       withUnstarvedFrontierState({
         what: "the reducer's own output",
@@ -993,7 +1065,7 @@ describe("withUnstarvedFrontierState carries the same refusals without a view", 
           return state;
         },
       })
-    ).toThrow(/observe\(\) must be synchronous/);
+    ).toThrow(/^withUnstarvedFrontierState: observe\(\) must be synchronous/);
   });
 
   it("refuses a swallowed sentinel on both the return path and the escape path", () => {
@@ -1012,8 +1084,9 @@ describe("withUnstarvedFrontierState carries the same refusals without a view", 
         },
       })
     );
+    // Anchored on THIS form's prefix, for the reason given on the async pair above.
     expect((returned as Error | undefined)?.message).toMatch(
-      /swallowed the starved-frontier signal/
+      /^withUnstarvedFrontierState: observe\(\) swallowed the starved-frontier signal/
     );
     expect((returned as Error).cause).toBeUndefined(); // raised on the return path
 
@@ -1034,7 +1107,7 @@ describe("withUnstarvedFrontierState carries the same refusals without a view", 
       })
     );
     expect((escaped as Error | undefined)?.message).toMatch(
-      /swallowed the starved-frontier signal/
+      /^withUnstarvedFrontierState: observe\(\) swallowed the starved-frontier signal/
     );
     expect((escaped as Error).cause).toMatchObject({ name: "StarvedFrontier" });
   });

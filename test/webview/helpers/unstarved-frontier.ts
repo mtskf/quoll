@@ -1,7 +1,12 @@
 import { syntaxTreeAvailable } from "@codemirror/language";
 import type { EditorState } from "@codemirror/state";
 import type { EditorView } from "@codemirror/view";
-import { assertHasLanguage } from "./parse-to-end.js";
+// `UnstarvedCaller` is imported rather than declared here, and that direction is deliberate:
+// ./parse-to-end.ts partitions its caller union into the settling and non-settling halves,
+// and this module IS the non-settling half. A second copy of the same two literals would let
+// one side gain a member while the other kept classifying it as settling. It is interpolated
+// into every refusal below so a message names its caller.
+import { assertHasLanguage, type UnstarvedCaller } from "./parse-to-end.js";
 
 /**
  * Sentinel for "this attempt's parse frontier was starved, so there was nothing to
@@ -18,10 +23,12 @@ class StarvedFrontier extends Error {
   readonly name = "StarvedFrontier";
   constructor() {
     super(
-      // No caller prefix: this one class is thrown by both public forms, and it is
-      // constructed inside the shared gate, which is exactly where the two are
-      // indistinguishable. Every message that CAN name its caller does; this one cannot
-      // do so honestly, so it names none.
+      // No caller prefix — a deliberate choice, not an impossibility: the constructing
+      // gate does know its caller (it hands `caller` to assertHasLanguage a few lines up).
+      // The sentinel is an internal control-flow signal absorbed by the shared loop, and
+      // the one path on which a user ever reads this message — an escape via a deferred
+      // callback — is the same mistake in both forms, so the message stays caller-neutral
+      // rather than threading a parameter through a class whose message never varies.
       "the starved-frontier sentinel escaped the helper — requireUnstarvedFrontier() may only be called synchronously from the observe() body, never from a listener, timer, or deferred callback"
     );
   }
@@ -35,13 +42,16 @@ class StarvedFrontier extends Error {
  * right bug — is replaced by the swallow advice, and the return-path swallow refusal is
  * wrapped in a second copy of itself.
  *
- * Siblings with `StarvedFrontier`, NOT a parent of it: the `!(error instanceof
- * StarvedFrontier)` rethrow below must keep seeing the sentinel as its own thing.
+ * Siblings with `StarvedFrontier`, never related to it in either direction. If this class
+ * were a PARENT of the sentinel, an escaping sentinel would satisfy the `!(error instanceof
+ * HelperRefusal)` guard below and the swallow-count detection would stop firing on the
+ * escape path — the "swallowed one sentinel and let a later one escape" case would be
+ * retried away undetected. (The `!(error instanceof StarvedFrontier)` rethrow under it is
+ * unaffected by that direction: `instanceof` walks the prototype chain, so the sentinel is
+ * still absorbed.) If the sentinel were a parent of THIS, that rethrow WOULD be the
+ * casualty — it would absorb the helper's own refusals and retry them.
  */
 class HelperRefusal extends Error {}
-
-/** The two public forms. Interpolated into every refusal so a message names its caller. */
-type UnstarvedCaller = "withUnstarvedFrontier" | "withUnstarvedFrontierState";
 
 /**
  * What the form hands the observation, as the ungated refusal names it. The view form
@@ -63,11 +73,14 @@ const swallowedSentinelMessage = (caller: UnstarvedCaller): string =>
   `${caller}: observe() swallowed the starved-frontier signal — do not wrap requireUnstarvedFrontier() in your own catch, and do not run it inside expect(...).toThrow()`;
 
 /**
- * The attempt loop and every refusal both public forms share. Private: the forms differ
- * only in what they own (a mounted view, or nothing) and in how each words its final
- * "what you handed back is what you gated" check, and both of those are expressed as
- * parameters here so the control flow — the per-attempt abandon and the trailing
- * all-starved throw — exists once.
+ * The attempt loop and every refusal both public forms share. Private: the forms differ in
+ * what they own (a mounted view, or nothing), in what their final "is what you measured
+ * what you gated" check COMPARES (`view.state` vs the state `observe` returned — different
+ * operands, not different prose for one), and in the gate arity each exposes to its caller
+ * (`() => void` vs `(state: EditorState) => void`); the view form additionally probes for a
+ * language once per attempt, before `observe` runs, where the state form has no seam for
+ * one. All of that is expressed as parameters here so the control flow — the per-attempt
+ * abandon and the trailing all-starved throw — exists once.
  *
  * `R` is deliberately UNCONSTRAINED here. Each public form constrains its own `observe`
  * return type, and they constrain it to opposite things: the view form to `void |
@@ -81,9 +94,12 @@ function runUnstarvedAttempts<C, R>(spec: {
   attempts: number;
   /**
    * Build the per-attempt fixture, and return it alongside the teardown it owes. Called
-   * once per ATTEMPT. `teardown` receives whether a failure is already in flight, so a
-   * teardown failure can be reported BESIDE that failure rather than over it — a throwing
-   * `finally` discards the pending exception outright rather than chaining it.
+   * once per ATTEMPT. `teardown` is HANDED whether a failure is already in flight, but it
+   * is not asked to act on that: the core's `finally` owns "a teardown failure must not
+   * REPLACE a failure already in flight" for every form at once, so a `teardown` here may
+   * simply throw. The flag is passed anyway because a form that wants to tear down
+   * DIFFERENTLY under a propagating failure (skipping an assertion of its own, say) can
+   * only know from here.
    * A `begin` that THROWS owes the disposal of whatever it had already constructed: no
    * teardown ever reached this loop.
    */
@@ -115,9 +131,17 @@ function runUnstarvedAttempts<C, R>(spec: {
     // what escaped proves an earlier one was swallowed — which the return-path check alone
     // cannot see when observe() swallows and then throws.
     let sentinelsThrown = 0;
+    // Gate ENTRY, counted before any refusal the gate itself can raise. `stateAtLastGate`
+    // records only a gate that SUCCEEDED, so on its own it cannot tell "never called" from
+    // "called, refused, and the refusal was swallowed" — and the language refusal below is
+    // raised before `sentinelsThrown` too, so nothing else sees that case either. Without
+    // this counter a swallowed language refusal falls through to the ungated branch and is
+    // reported as "you never gated", which is false and points at the wrong bug.
+    let gateCalls = 0;
     let propagating = false;
     try {
       const returned = observe(context, (state) => {
+        gateCalls++;
         // Here rather than only once per attempt, because the state form has no earlier
         // seam: it holds no state until `observe` makes one. `syntaxTreeAvailable` is ALSO
         // false with no Language attached, so without this a misconfigured extension list
@@ -166,7 +190,9 @@ function runUnstarvedAttempts<C, R>(spec: {
       }
       if (stateAtLastGate === undefined) {
         throw new HelperRefusal(
-          `${caller}: observe() returned without calling requireUnstarvedFrontier(), so ${what} was measured on an ungated ${SUBJECT[caller]}`
+          gateCalls > 0
+            ? `${caller}: requireUnstarvedFrontier() was called but its refusal was swallowed — do not wrap it in your own catch, and do not run it inside expect(...).toThrow(); re-run without the catch to see the underlying error`
+            : `${caller}: observe() returned without calling requireUnstarvedFrontier(), so ${what} was measured on an ungated ${SUBJECT[caller]}`
         );
       }
       postCheck(context, stateAtLastGate, returned);
@@ -186,7 +212,29 @@ function runUnstarvedAttempts<C, R>(spec: {
       // a teardown failure below IS the failure and must propagate.
       propagating = false;
     } finally {
-      teardown(propagating);
+      // The core owns "a teardown failure must not REPLACE a failure already in flight":
+      // a throwing `finally` discards the pending exception outright rather than chaining
+      // it. Keeping the guard HERE rather than in each `begin` is what stops a third form
+      // from re-introducing the hazard — the lint rule that used to catch it
+      // (noUnsafeFinally) stopped applying the moment the teardown moved behind a call,
+      // so the property would otherwise rest on each form remembering the convention.
+      try {
+        teardown(propagating);
+      } catch (teardownError) {
+        if (!propagating) {
+          // Nothing is in flight, so this failure IS the failure — and it must not be
+          // written off as "beside a primary one" that does not exist. Re-throwing out of
+          // a `finally` discards the pending completion, which here is either a successful
+          // `return` or an absorbed sentinel; both are things a teardown defect should
+          // override.
+          // biome-ignore lint/correctness/noUnsafeFinally: guarded — nothing is in flight here
+          throw teardownError;
+        }
+        console.error(
+          `${caller}: teardown ALSO threw; the failure being reported is the primary one`,
+          teardownError
+        );
+      }
     }
   }
   throw new Error(
@@ -229,7 +277,8 @@ function runUnstarvedAttempts<C, R>(spec: {
  * stops it, which is why the loop is written out here instead.
  *
  * Why it is a shared helper rather than a per-file loop. Both properties above live in
- * control flow — a `continue` here, a final `throw` there — and control flow is exactly
+ * control flow — the per-attempt abandon (the `catch` that absorbs the sentinel and lets
+ * the `for` iterate) and the trailing all-starved `throw` — and control flow is exactly
  * what a copied loop loses first: ./settled-view.ts documents how this suite's per-file
  * `forceParse` wrappers mostly dropped the same boolean check. Putting the loop where an
  * author using it cannot omit the all-starved throw is the same answer to the same
@@ -239,10 +288,8 @@ function runUnstarvedAttempts<C, R>(spec: {
  * SCOPE: this module owns BOTH forms of the loop, and every instance of it in the suite
  * now routes through one of them. `withUnstarvedFrontier` is for a mounted view;
  * `withUnstarvedFrontierState` is for a bare `EditorState` driven through
- * `state.update()`, which has no view to mount or destroy. They share one attempt loop
- * (`runUnstarvedAttempts`) precisely because the properties worth having — the per-attempt
- * abandon and the trailing all-starved throw — live in control flow, which is what a
- * copied loop loses first.
+ * `state.update()`, which has no view to mount or destroy. They share
+ * `runUnstarvedAttempts` for the reason above.
  *
  * Both forms make the same final claim — what you HAND BACK at the end is what you last
  * gated — and reach it differently, because they own different things. The view form owns
@@ -253,10 +300,11 @@ function runUnstarvedAttempts<C, R>(spec: {
  * ⚠️ Two gaps that claim deliberately leaves open, in BOTH forms. An INTERMEDIATE state
  * no gate witnessed is invisible — `update A; update B; gate` passes while leaving A
  * unverified — so gate after every update the assertions depend on. And an `observe` that
- * derives a third state, asserts on THAT, and hands back the gated one passes too: what is
- * compared is the handed-back state, which is the most either form can see from outside
- * the callback. Neither gap is new machinery to be added later; they are the boundary of
- * what a wrapper around an opaque callback can know.
+ * derives a THIRD state and asserts on that one passes too: what is compared is the state
+ * the form can see at the end — `view.state` in the view form, the returned state in the
+ * state form — which is the most either can know from outside the callback. Neither gap is
+ * new machinery to be added later; they are the boundary of what a wrapper around an opaque
+ * callback can know.
  *
  * ⚠️ Do NOT wrap `requireUnstarvedFrontier()` in a `try`/`catch` of your own, and do not
  * run it inside `expect(...).toThrow(...)`. Either swallows the sentinel, and a swallowed
@@ -289,8 +337,9 @@ function runUnstarvedAttempts<C, R>(spec: {
 // backstop for a fixture cast through a wider type.
 //
 // Biome's suggested rewrite to a bare `undefined` is NOT equivalent: it would reject the
-// three shapes actually written at the call sites (a block body, a bare `return;`, and the
-// concise void expression `(_v, gate) => gate()`), all of which infer `void`.
+// shapes written at the call sites (a block body, and the concise void expression
+// `(_v, gate) => gate()`), both of which infer `void` — as would a bare `return;`, which
+// nothing writes today but which is the natural third.
 // biome-ignore lint/suspicious/noConfusingVoidType: the union is what refuses an async observe
 export function withUnstarvedFrontier<R extends void | undefined>(options: {
   /** What the observation is, phrased to complete "…was never observed". */
@@ -317,8 +366,12 @@ export function withUnstarvedFrontier<R extends void | undefined>(options: {
    * B; gate()` is the clearest instance, satisfying every refusal below while leaving A
    * unverified, because a starved A self-heals with a full walk and an oracle comparison
    * then goes green having exercised nothing. Unlike a swallowed signal, which is refused
-   * structurally, this is NOT enforced: gate after EVERY dispatch. Every call site does
-   * today; a guard that removes the need to remember is tracked in the TODO.
+   * structurally, this is NOT enforced: gate after every dispatch that can move the
+   * frontier. One call site batches two dispatches per gate —
+   * cm-block-widget-bounded.test.ts's `cursorAtEnd` rows — and is sound only because the
+   * second is selection-only and advances no parse; it carries that argument at the call
+   * site. Every other call site gates after each dispatch. A guard that removes the need to
+   * remember is tracked in the TODO.
    */
   observe: (view: EditorView, requireUnstarvedFrontier: () => void) => R;
   /** Attempts before giving up and throwing. Five, matching PR #388's measured loop. */
@@ -343,25 +396,21 @@ export function withUnstarvedFrontier<R extends void | undefined>(options: {
       }
       return {
         context: view,
-        teardown: (propagating) => {
-          // Two statements in one teardown are NOT "discharged on every path": a throwing
+        teardown: () => {
+          // Two statements in sequence are NOT "discharged on every path": a throwing
           // view.destroy() (CM does NOT guard widget destroy — WidgetView.destroy calls
           // widget.destroy(dom) bare, and this suite mounts table + fenced-code widgets
           // that implement it) would skip parent.remove(), leaving the view attached to
-          // the shared happy-dom body for the rest of the file. Nesting keeps the parent
-          // removal unconditional. A throwing destroy is a real defect and still reds the
-          // run — but it must not REPLACE a failure that was already propagating, so it is
-          // reported beside that failure rather than over it.
+          // the shared happy-dom body for the rest of the file. The `finally` is what keeps
+          // the parent removal unconditional, and it must stay nested INSIDE this teardown:
+          // the core catches what escapes here, so hoisting the removal out would let the
+          // core's catch take the destroy failure before the parent was ever removed.
+          //
+          // The destroy failure itself is let out bare. Whether it may replace a failure
+          // already in flight is not this form's decision — the core's `finally` owns that
+          // for every form, which is why `propagating` is not read here.
           try {
             view.destroy();
-          } catch (destroyError) {
-            if (!propagating) {
-              throw destroyError;
-            }
-            console.error(
-              "withUnstarvedFrontier: view.destroy() ALSO threw during teardown; the failure being reported is the primary one",
-              destroyError
-            );
           } finally {
             parent.remove();
           }
@@ -398,7 +447,20 @@ export function withUnstarvedFrontier<R extends void | undefined>(options: {
   });
 }
 
+/**
+ * The view-free twin of `withUnstarvedFrontier()`: run one bounded-path observation against
+ * bare `EditorState`s the callback builds itself, retrying from scratch whenever the parse
+ * frontier came back starved, and THROWING if every attempt was starved.
+ *
+ * Why it exists, why an attempt loop rather than a vitest `{ retry: n }`, and the two gaps
+ * both forms leave open are documented in full on `withUnstarvedFrontier` above — this form
+ * shares its attempt loop (`runUnstarvedAttempts`) and every refusal in it. What differs:
+ * this form owns nothing (an `EditorState` needs no disposal, so there is no `mount` and no
+ * teardown) and it reaches the "what you handed back is what you gated" claim by REQUIRING
+ * `observe` to return the state its assertions read.
+ */
 export function withUnstarvedFrontierState(options: {
+  /** What the observation is, phrased to complete "…was never observed". */
   what: string;
   /**
    * The measurement. Call `requireUnstarvedFrontier(state)` at every point where that
@@ -431,6 +493,7 @@ export function withUnstarvedFrontierState(options: {
    * the assertions depend on.
    */
   observe: (requireUnstarvedFrontier: (state: EditorState) => void) => EditorState;
+  /** Attempts before giving up and throwing. Five, matching PR #388's measured loop. */
   attempts?: number;
 }): void {
   const { what, observe, attempts = 5 } = options;
