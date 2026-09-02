@@ -51,7 +51,7 @@ describe("fencedCodeBodyLineSpan", () => {
   });
 });
 
-import { syntaxTree, syntaxTreeAvailable } from "@codemirror/language";
+import { syntaxTree } from "@codemirror/language";
 import { EditorSelection } from "@codemirror/state";
 import {
   COLLAPSE_THRESHOLD,
@@ -270,6 +270,7 @@ import {
 } from "../../../src/webview/cm/fenced-code/fenced-code-collapse.js";
 import { setFencedCollapseEffect } from "../../../src/webview/cm/fenced-code/fenced-code-collapse-state.js";
 import { hostDocumentReseed } from "../../../src/webview/cm/host-reseed.js";
+import { withUnstarvedFrontierState } from "../helpers/unstarved-frontier.js";
 
 interface DecoDump {
   from: number;
@@ -394,7 +395,7 @@ describe("buildFencedCollapse", () => {
 // every `expanded` assertion below would hold for the wrong reason.
 //
 // ⚠️ A settle is not permanent. Any docChanged dispatch after this re-truncates the
-// snapshot — and re-settling AFTERWARDS is not a fix here, see `untilCompleteFrontier`.
+// snapshot — and re-settling AFTERWARDS is not a fix here, see below.
 function stateWithField(doc: string, caret = 0): EditorState {
   return settledState(
     EditorState.create({
@@ -409,61 +410,61 @@ function stateWithField(doc: string, caret = 0): EditorState {
   );
 }
 
-/** Run `runOnce` until an attempt lands on a COMPLETE post-edit parse frontier; throw if
- *  none of five does. Same shape as `checkEquivalence` in cm-block-widget-bounded.test.ts.
+/** ⚠️ Why these reducer pins run through `withUnstarvedFrontierState` rather than settling
+ *  after the edit. CodeMirror gives its post-edit reparse a 20ms WALL-CLOCK budget, and
+ *  under CPU starvation that window can elapse while this process is descheduled. The
+ *  reducer then walks a PARTIAL tree — DD3 through the reseed branch, DD5 through the
+ *  structural/frontier fallback — finds no `FencedCode`, and `assemble()` rebuilds
+ *  `expanded` from the keys of the blocks it FOUND, i.e. empties it for a reason that has
+ *  nothing to do with the branch under test. A settle placed after that repairs `blocks`
+ *  (through the tree-identity branch, over `prev.expanded = ∅`) and leaves `expanded` at
+ *  `[]` — so BOTH pins go green with the contract never exercised, and DD3's revert-check
+ *  stops holding. The pins therefore read the reducer's OWN output, and a starved attempt
+ *  is abandoned rather than repaired.
  *
- *  ⚠️ Why not "settle after the edit". CodeMirror gives its post-edit reparse a 20ms
- *  WALL-CLOCK budget, and under CPU starvation that window can elapse while this process
- *  is descheduled. The reducer then walks a PARTIAL tree — DD3 through the reseed branch,
- *  DD5 through the structural/frontier fallback — finds no `FencedCode`, and `assemble()`
- *  rebuilds `expanded` from the keys of the blocks it FOUND, i.e. empties it for a reason
- *  that has nothing to do with the branch under test. A settle placed after that repairs
- *  `blocks` (through the tree-identity branch, over `prev.expanded = ∅`) and leaves
- *  `expanded` at `[]` — so BOTH pins go green with the contract never exercised, and DD3's
- *  revert-check stops holding. The pins therefore read the reducer's OWN output, and a
- *  starved attempt is abandoned rather than repaired: a real regression reds every attempt
- *  that gets far enough to assert, and an all-starved run throws instead of passing. */
-function untilCompleteFrontier(runOnce: () => boolean): void {
-  for (let attempt = 0; attempt < 5; attempt++) {
-    if (runOnce()) {
-      return;
-    }
-  }
-  throw new Error("no attempt reached a complete post-edit frontier");
-}
+ *  The loop that does the abandoning lives in helpers/unstarved-frontier.ts, not here: its
+ *  two properties — a real regression reds every attempt that gets far enough to assert,
+ *  and an all-starved run throws instead of passing — are control flow, and a copy of them
+ *  here would be a copy nothing tests. Each `observe` below RETURNS the state it asserts
+ *  on, which is how that helper refuses a gate placed before the last update. */
 
 describe("fencedCodeCollapseField reducer", () => {
   it("DD3: a hostDocumentReseed transaction resets expanded state to all-collapsed", () => {
-    untilCompleteFrontier(() => {
-      let state = stateWithField(fencedDoc(11));
-      // Expand the block.
-      state = state.update({
-        effects: setFencedCollapseEffect.of({ key: 0, expanded: true }),
-      }).state;
-      expect([...state.field(fencedCodeCollapseField).expanded]).toEqual([0]);
-      // Reseed with NEW content (full replace + the reseed annotation). The replacement
-      // keeps the fence at line.from 0 ON PURPOSE: `ChangeDesc.mapPos(0, 1)` over a
-      // whole-doc replace returns 0 (the `pos == posA` arm), so the stale key SURVIVES
-      // branch 2's mapping and matches the new block's key — which is what makes the
-      // revert-check below real. A reseed that prefixed the fence would move the new key
-      // off 0, and `expanded` would come back empty whether or not the reseed branch ran.
-      state = state.update({
-        changes: { from: 0, to: state.doc.length, insert: fencedDoc(12) },
-        annotations: hostDocumentReseed.of(true),
-      }).state;
-      // The docChanged dispatch above re-truncates the language field's snapshot; the
-      // reducer walked whatever tree it left behind. Abandon the attempt when that tree
-      // was short — nothing may settle here (see untilCompleteFrontier).
-      if (!syntaxTreeAvailable(state, state.doc.length)) {
-        return false;
-      }
-      // The frontier was complete, so the reducer saw the fence: an empty `expanded` below
-      // can only mean the reseed reset it, never "the snapshot lost the FencedCode node".
-      expect(state.field(fencedCodeCollapseField).blocks).toHaveLength(1);
-      // DD3: collapse state reset. Revert-check, measured: drop the reseed branch and the
-      // stale key 0 survives → this goes red ([0] instead of []).
-      expect([...state.field(fencedCodeCollapseField).expanded]).toEqual([]);
-      return true;
+    withUnstarvedFrontierState({
+      what: "the reseed branch's reset of expanded",
+      observe: (requireUnstarvedFrontier) => {
+        let state = stateWithField(fencedDoc(11));
+        // Expand the block.
+        state = state.update({
+          effects: setFencedCollapseEffect.of({ key: 0, expanded: true }),
+        }).state;
+        expect([...state.field(fencedCodeCollapseField).expanded]).toEqual([0]);
+        // Reseed with NEW content (full replace + the reseed annotation). The replacement
+        // keeps the fence at line.from 0 ON PURPOSE: `ChangeDesc.mapPos(0, 1)` over a
+        // whole-doc replace returns 0 (the `pos == posA` arm), so the stale key SURVIVES
+        // branch 2's mapping and matches the new block's key — which is what makes the
+        // revert-check below real. A reseed that prefixed the fence would move the new key
+        // off 0, and `expanded` would come back empty whether or not the reseed branch ran.
+        state = state.update({
+          changes: { from: 0, to: state.doc.length, insert: fencedDoc(12) },
+          annotations: hostDocumentReseed.of(true),
+        }).state;
+        // The docChanged update above re-truncates the language field's snapshot; the
+        // reducer walked whatever tree it left behind. Gate on THIS state — a starved one
+        // abandons the attempt, and nothing may settle here (see stateWithField's note).
+        requireUnstarvedFrontier(state);
+        // The frontier was complete, so the reducer saw the fence: an empty `expanded`
+        // below can only mean the reseed reset it, never "the snapshot lost the FencedCode
+        // node".
+        expect(state.field(fencedCodeCollapseField).blocks).toHaveLength(1);
+        // DD3: collapse state reset. Revert-check, measured: drop the reseed branch
+        // (fenced-code-collapse.ts:397) and the stale key 0 survives → this goes red ([0]
+        // instead of []).
+        expect([...state.field(fencedCodeCollapseField).expanded]).toEqual([]);
+        // The state the assertions above read, handed back so the helper can refuse a gate
+        // that was placed before the last update.
+        return state;
+      },
     });
   });
 
@@ -501,21 +502,22 @@ describe("fencedCodeCollapseField reducer", () => {
     // block's line.from (still 0), so the block re-collapses. Lossless + rare.
     // Caret is parked away from the (deep) conceal region, so this is purely the
     // key-drift path, not auto-expand.
-    untilCompleteFrontier(() => {
-      let state = stateWithField(fencedDoc(11), 0);
-      state = state.update({
-        effects: setFencedCollapseEffect.of({ key: 0, expanded: true }),
-      }).state;
-      expect([...state.field(fencedCodeCollapseField).expanded]).toEqual([0]);
-      state = state.update({ changes: { from: 0, insert: " " } }).state;
-      // Same re-truncation hazard as DD3, handled the same way: abandon a starved attempt
-      // instead of settling it away, so the pins below read the reducer's own output.
-      if (!syntaxTreeAvailable(state, state.doc.length)) {
-        return false;
-      }
-      expect(state.field(fencedCodeCollapseField).blocks).toHaveLength(1);
-      expect([...state.field(fencedCodeCollapseField).expanded]).toEqual([]);
-      return true;
+    withUnstarvedFrontierState({
+      what: "the key-drift re-collapse",
+      observe: (requireUnstarvedFrontier) => {
+        let state = stateWithField(fencedDoc(11), 0);
+        state = state.update({
+          effects: setFencedCollapseEffect.of({ key: 0, expanded: true }),
+        }).state;
+        expect([...state.field(fencedCodeCollapseField).expanded]).toEqual([0]);
+        state = state.update({ changes: { from: 0, insert: " " } }).state;
+        // Same re-truncation hazard as DD3, handled the same way: abandon a starved attempt
+        // instead of settling it away, so the pins below read the reducer's own output.
+        requireUnstarvedFrontier(state);
+        expect(state.field(fencedCodeCollapseField).blocks).toHaveLength(1);
+        expect([...state.field(fencedCodeCollapseField).expanded]).toEqual([]);
+        return state;
+      },
     });
   });
 
