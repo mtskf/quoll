@@ -10,11 +10,10 @@ import { assertHasLanguage, timeoutMessage, truncatedSnapshotMessage } from "./p
  *
  * Why a mounted view needs this at all. CodeMirror converges on its own in a real
  * browser: its background parse `ViewPlugin` gets idle time and dispatches its own
- * transaction when the parse finishes. happy-dom never runs that worker, so under
- * vitest a mounted view's fields stay built on the init-viewport fragment forever.
- * "It is a live view, so parsing runs" is FALSE here — `cm-fenced-code-language-picker.test.ts`
- * used to say exactly that; it now settles through `settledMount` instead, which is why
- * every mounted fixture goes through this helper rather than relying on the mount alone.
+ * transaction when the parse finishes. A test that does not wait for that never gets it,
+ * so a mounted view's fields stay built on the init-viewport fragment. "It is a live view,
+ * so parsing runs" is FALSE here — `cm-fenced-code-language-picker.test.ts` used to say
+ * exactly that, and now settles through `settledMount` instead.
  *
  * Why the checks live INSIDE this helper rather than at the call sites. `forceParsing`
  * reports failure by RETURNING FALSE, and most of this suite's call sites discarded

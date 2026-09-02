@@ -1,7 +1,20 @@
 import { ensureSyntaxTree, language } from "@codemirror/language";
 import type { EditorState } from "@codemirror/state";
 
-type ParseCaller = "fullTree" | "settledState" | "settledView" | "settledMount";
+type ParseCaller =
+  | "fullTree"
+  | "settledState"
+  | "settledView"
+  | "settledMount"
+  | "withUnstarvedFrontier";
+
+/**
+ * The subset that actually SETTLES a parse. `withUnstarvedFrontier` only probes for a
+ * language — it never advances a parse — so it can reach neither of the two messages
+ * below. Excluding it keeps each builder's label set equal to the set of callers that can
+ * actually produce it, which is the whole job this union was given.
+ */
+type SettlingCaller = Exclude<ParseCaller, "withUnstarvedFrontier">;
 
 /**
  * Shared parse step behind `fullTree()` and `settledState()`: advance the state's
@@ -49,7 +62,7 @@ type ParseCaller = "fullTree" | "settledState" | "settledView" | "settledMount";
  * Lengths in the messages are UTF-16 code units (what `state.doc.length`
  * counts), not bytes.
  */
-export function parseToEnd(state: EditorState, caller: ParseCaller, budgetMs = 5_000) {
+export function parseToEnd(state: EditorState, caller: SettlingCaller, budgetMs = 5_000) {
   assertHasLanguage(state, caller);
   const tree = ensureSyntaxTree(state, state.doc.length, budgetMs);
   if (tree === null) {
@@ -81,7 +94,11 @@ export function assertHasLanguage(state: EditorState, caller: ParseCaller): void
  * The budget-exhausted message, shared by `parseToEnd` above and by the view-side
  * settle, which reaches the same condition through `forceParsing`'s `false`.
  */
-export function timeoutMessage(caller: ParseCaller, budgetMs: number, docLength: number): string {
+export function timeoutMessage(
+  caller: SettlingCaller,
+  budgetMs: number,
+  docLength: number
+): string {
   return `${caller}: parse did not complete within ${budgetMs}ms for a ${docLength}-code-unit document`;
 }
 
@@ -96,7 +113,7 @@ export function timeoutMessage(caller: ParseCaller, budgetMs: number, docLength:
  * different sentence.
  */
 export function truncatedSnapshotMessage(
-  caller: ParseCaller,
+  caller: SettlingCaller,
   covered: number,
   docLength: number
 ): string {

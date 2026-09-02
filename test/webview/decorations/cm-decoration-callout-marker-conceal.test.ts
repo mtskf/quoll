@@ -1,6 +1,5 @@
 // @vitest-environment happy-dom
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
-import { syntaxTreeAvailable } from "@codemirror/language";
 import { EditorSelection, EditorState, type Extension } from "@codemirror/state";
 import type { DecorationSet, EditorView } from "@codemirror/view";
 import { describe, expect, it } from "vitest";
@@ -15,6 +14,7 @@ import { quollSyntaxExclusionZones } from "../../../src/webview/cm/decorations/o
 import { fullTree } from "../helpers/full-tree.js";
 import { settledState } from "../helpers/settled-state.js";
 import { settledMount } from "../helpers/settled-view.js";
+import { withUnstarvedFrontier } from "../helpers/unstarved-frontier.js";
 
 type SyntaxNode = ReturnType<typeof fullTree>["topNode"];
 
@@ -233,53 +233,45 @@ describe("calloutMarkerConcealField — bounded recompute ≡ full recompute", (
   // buildFull — turning this bounded-vs-full compare into full-vs-full. The pin inside the
   // loop is what keeps the bounded result trustworthy instead.
   //
-  // ⚠️ The comparison is ATTEMPTED rather than asserted on the first try. CodeMirror gives
-  // its post-edit reparse a 20ms WALL-CLOCK budget, and under CPU starvation that window
-  // can elapse while this process is descheduled — the field then self-heals with a full
-  // walk, so the bounded path is not what ran and there is nothing to compare. Measured on
-  // a deliberately loaded full-suite run (24 spinners on 8 cores): two cases in this
-  // describe red on the pin below, for a reason that is about the machine rather than the
-  // code. Retrying from a fresh view neither hides a regression (a real bounded bug reds
-  // every attempt that gets far enough to compare) nor passes vacuously (an all-starved
-  // run throws at the end), which a vitest-level `{ retry: n }` would fail on both counts.
+  // ⚠️ The comparison is ATTEMPTED rather than asserted on the first try, via
+  // `withUnstarvedFrontier` — its docblock in ../helpers/unstarved-frontier.ts is where the
+  // 20ms post-edit budget, why an attempt loop rather than a vitest-level `{ retry: n }`,
+  // and why an all-starved run must throw rather than pass quietly are explained in full.
+  // File-specific fact: this is the describe PR #388 measured redding under a deliberately
+  // loaded full-suite run (24 spinners on 8 cores).
   function checkEquivalence(
     initial: string,
     edits: Array<{ changes?: unknown; selection?: unknown }>
   ): void {
     if (edits.length === 0) {
-      // The gate inside the attempt is per-dispatch, so a zero-edit call would compare a
-      // settled mount against a settled oracle and report success having exercised no
-      // bounded path. Refuse it at the door rather than let it read as a passing
-      // equivalence case.
+      // The gate inside the attempt is per-dispatch, so a zero-edit call exercises no
+      // bounded path at all. This refuses it at the door, naming the actual mistake.
+      // It is no longer the LAST line of defence — since this suite started running its
+      // comparison through `withUnstarvedFrontier`, an empty edit loop never reaches the
+      // gate, so the helper's own ungated refusal catches the case too (measured: deleting
+      // this block reds with "observe() returned without calling
+      // requireUnstarvedFrontier()", not with a settled-vs-settled pass). Keep it anyway:
+      // that backstop reports a gating bug, which sends the reader to the helper rather
+      // than to the missing edit that actually caused it.
       throw new Error(
         "checkEquivalence: at least one edit is required to exercise the bounded path"
       );
     }
-    for (let attempt = 0; attempt < 5; attempt++) {
-      if (runOnce()) {
-        return;
-      }
-    }
-    throw new Error(
-      "checkEquivalence: every attempt found a starved parse frontier, so the bounded path was never observed"
-    );
-
-    /** One attempt. Returns false when the frontier was starved and nothing was compared. */
-    function runOnce(): boolean {
-      const parent = document.createElement("div");
-      document.body.appendChild(parent);
-      const view = settledMount(
-        {
-          state: EditorState.create({
-            doc: initial,
-            selection: EditorSelection.single(0),
-            extensions: concealExts(),
-          }),
-          parent,
-        },
-        10_000
-      );
-      try {
+    withUnstarvedFrontier({
+      what: "the bounded path",
+      mount: (parent) =>
+        settledMount(
+          {
+            state: EditorState.create({
+              doc: initial,
+              selection: EditorSelection.single(0),
+              extensions: concealExts(),
+            }),
+            parent,
+          },
+          10_000
+        ),
+      observe: (view, requireUnstarvedFrontier) => {
         for (const e of edits) {
           view.dispatch(e as never);
           // Anti-masking (Codex Conf 92): the frontier must be COMPLETE on THIS dispatch.
@@ -288,14 +280,12 @@ describe("calloutMarkerConcealField — bounded recompute ≡ full recompute", (
           // computeBoundedRecords and its G2 buildFull fallback. A true therefore rules out
           // the STARVED-frontier full walk; it does NOT rule out the structural-reparse one,
           // which the fence-above-callout case below deliberately takes. A false means the
-          // frontier was starved and the field self-healed, which is not a defect: abandon
-          // the attempt rather than compare a full walk to a full walk. Nothing may settle
-          // the view here either — a settle would republish the
-          // snapshot and re-enter update() through the tree-identity branch, replacing the
-          // bounded records with a full walk and vacating the compare below.
-          if (!syntaxTreeAvailable(view.state, view.state.doc.length)) {
-            return false;
-          }
+          // frontier was starved and the field self-healed, which is not a defect: the
+          // attempt is abandoned rather than comparing a full walk to a full walk. Nothing
+          // may settle the view here either — a settle would republish the snapshot and
+          // re-enter update() through the tree-identity branch, replacing the bounded
+          // records with a full walk and vacating the compare below.
+          requireUnstarvedFrontier();
         }
         const oracle = settledState(
           EditorState.create({
@@ -315,13 +305,17 @@ describe("calloutMarkerConcealField — bounded recompute ≡ full recompute", (
         expect(got.records).toEqual(want.records);
         expect(dump(got.decorations)).toEqual(dump(want.decorations));
         expect(got.zones).toEqual(want.zones);
-        return true;
-      } finally {
-        view.destroy();
-        parent.remove();
-      }
-    }
+      },
+    });
   }
+
+  it("refuses a zero-edit call at the door, naming the missing edit", () => {
+    // What the guard does, and therefore what this pins: a call with no edits is rejected
+    // before the mount, with a message that names the missing edit rather than anything
+    // about gating. Every other test here passes at least one edit, so without this one
+    // the guard has no call site that reaches it.
+    expect(() => checkEquivalence(CALLOUT, [])).toThrow(/at least one edit is required/);
+  });
 
   it("type prose far below a callout (far edit, records position-shift only)", () => {
     checkEquivalence(`${CALLOUT}\n\nprose\n\nmore`, [
@@ -432,63 +426,46 @@ describe("calloutMarkerConcealField — bounded reuse is non-vacuous (record ide
   // RED against Task 1's full walk (fresh objects every docChanged), GREEN once Task 2
   // preserves a zero-shift reused record's object identity. Proves reuse is REAL, not
   // a value-equal coincidence (Codex Conf 95).
-  // ⚠️ The observation is ATTEMPTED, not asserted on the first try, and the difference
-  // matters. CodeMirror gives its post-edit reparse a 20ms WALL-CLOCK budget; under CPU
-  // starvation that window can elapse while this process is descheduled, before any real
-  // parse work happens. The field then legitimately self-heals with a full walk
-  // (callout-marker-conceal.ts's `!syntaxTreeAvailable` arm), so reuse is not what ran and
-  // there is nothing to observe — a fact about the machine, not about the code under test.
-  // Asserting `syntaxTreeAvailable === true` on a single attempt turns that into a red;
-  // measured on a deliberately loaded full-suite run (24 spinners on 8 cores).
-  //
-  // This is NOT a retry that hides a regression, and it is not a silent skip either:
-  //   - a genuine break in bounded reuse reds EVERY attempt that gets far enough to look;
-  //   - if all attempts are starved, `observed` stays 0 and the final expect reds, so the
-  //     test can never pass by having quietly measured nothing.
-  // A vitest-level `{ retry: n }` would have neither property, which is why it is banned
-  // repo-wide (vitest.config.ts) and why the loop is written out here instead.
+  // ⚠️ The observation is ATTEMPTED, not asserted on the first try: CodeMirror gives its
+  // post-edit reparse a 20ms WALL-CLOCK budget, and under CPU starvation that window can
+  // elapse while this process is descheduled. The field then legitimately self-heals with
+  // a full walk (callout-marker-conceal.ts's `!syntaxTreeAvailable` arm), so reuse is not
+  // what ran and there is nothing to observe — a fact about the machine, not about the
+  // code under test. Why an attempt loop rather than a vitest `{ retry: n }`, and why an
+  // all-starved run must fail rather than pass quietly, is explained in full on
+  // `withUnstarvedFrontier` in ../helpers/unstarved-frontier.ts.
   it("an untouched far callout's record object survives a below-edit by identity", () => {
     const doc = "> [!NOTE]\n> body\n\nprose";
-    let observed = 0;
-    for (let attempt = 0; attempt < 5 && observed === 0; attempt++) {
-      const parent = document.createElement("div");
-      document.body.appendChild(parent);
+    withUnstarvedFrontier({
+      what: "bounded reuse by record identity",
       // settledMount, not `new EditorView` + a bare ensureSyntaxTree: the field is built at
       // EditorState.create from syntaxTree(state), and an ensureSyntaxTree that only
       // advances the parse CONTEXT leaves that snapshot truncated. `records` is then EMPTY
       // and the identity assertion below compares `undefined` to `undefined` — green
       // without ever exercising reuse. The toBeDefined() pin makes that failure mode
       // impossible to reintroduce silently.
-      const view = settledMount(
-        {
-          state: EditorState.create({
-            doc,
-            selection: EditorSelection.single(doc.length),
-            extensions: concealExts(),
-          }),
-          parent,
-        },
-        10_000
-      );
-      try {
+      mount: (parent) =>
+        settledMount(
+          {
+            state: EditorState.create({
+              doc,
+              selection: EditorSelection.single(doc.length),
+              extensions: concealExts(),
+            }),
+            parent,
+          },
+          10_000
+        ),
+      observe: (view, requireUnstarvedFrontier) => {
         const before = view.state.field(calloutMarkerConcealField).records[0];
         expect(before).toBeDefined();
         // Edit BELOW the callout (position doc.length): the record is untouched and does
         // not shift → the bounded path must return the SAME object.
         view.dispatch({ changes: { from: view.state.doc.length, insert: "x" } });
-        if (!syntaxTreeAvailable(view.state, view.state.doc.length)) {
-          continue; // starved frontier → the field self-healed; nothing to observe here
-        }
+        requireUnstarvedFrontier(); // starved → the field took its G2 full walk; nothing to observe
         const after = view.state.field(calloutMarkerConcealField).records[0];
         expect(after).toBe(before); // reused by reference (RED on a full walk)
-        observed++;
-      } finally {
-        view.destroy();
-        parent.remove();
-      }
-    }
-    // The bounded path ran at least once. Without this, an all-starved run would pass
-    // having asserted nothing about reuse.
-    expect(observed).toBeGreaterThan(0);
+      },
+    });
   });
 });
