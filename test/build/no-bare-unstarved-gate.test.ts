@@ -122,6 +122,10 @@ function findBareGates(text: string, fileName: string): number[] {
   return hits;
 }
 
+// The extension set is WIDER than the tree it walks: every test file here is `.ts` today,
+// so removing the other three alternatives reds nothing (measured) and no fixture can pin
+// them. They are anticipatory, they cost nothing, and the roster test below — not this
+// regex — is what pins the walk's reach.
 function scannableFiles(dir: string, out: string[] = []): string[] {
   for (const entry of readdirSync(dir)) {
     const abs = join(dir, entry);
@@ -180,15 +184,19 @@ function violationsIn(found: Map<string, number[]>, allow: typeof ALLOW): string
 
 describe("the scanner itself is not vacuous", () => {
   it("flags the forbidden shape, including when a formatter has split it", () => {
-    expect(findBareGates("expect(syntaxTreeAvailable(s, n)).toBe(true);", "x.ts")).toHaveLength(1);
+    // The LINE NUMBERS, not merely the count. They are the whole of what a violation hands
+    // a human to find the offending gate, and a length check leaves them free to be a
+    // constant: replacing the push with `hits.push(0)` survived one (measured). The three
+    // fixtures sit at three DIFFERENT offsets, so no constant satisfies all of them.
+    expect(findBareGates("expect(syntaxTreeAvailable(s, n)).toBe(true);", "x.ts")).toEqual([1]);
     // The case a line-oriented regex misses, which is why this is an AST walk.
     expect(
-      findBareGates("expect(\n  syntaxTreeAvailable(s, n)\n).toBe(true);", "x.ts")
-    ).toHaveLength(1);
+      findBareGates("\nexpect(\n  syntaxTreeAvailable(s, n)\n).toBe(true);", "x.ts")
+    ).toEqual([2]);
     // And the same gate wearing Vitest's optional message argument.
     expect(
-      findBareGates('expect(syntaxTreeAvailable(s, n), "bounded ran").toBe(true);', "x.ts")
-    ).toHaveLength(1);
+      findBareGates('\n\n\nexpect(syntaxTreeAvailable(s, n), "bounded ran").toBe(true);', "x.ts")
+    ).toEqual([4]);
   });
 
   it("does not flag the shapes that are legitimate", () => {
@@ -198,6 +206,11 @@ describe("the scanner itself is not vacuous", () => {
       []
     );
     expect(findBareGates("// expect(syntaxTreeAvailable(s)).toBe(true);", "x.ts")).toEqual([]);
+    // Nobody writes `expect()` with no arguments, so the walk's `>= 1` floor is unreachable
+    // from the real tree and its removal reds nothing (measured). It is still what keeps
+    // `receiver.arguments[0]` from being `undefined` one line later, and a walk that THROWS
+    // fails open exactly as thoroughly as one that misses — so the floor is exercised here.
+    expect(findBareGates("expect().toBe(true);", "x.ts")).toEqual([]);
   });
 
   // The walk is the guard's REACH. `census()` reports only files WITH hits, so a walk that
