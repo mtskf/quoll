@@ -208,14 +208,18 @@ describe("an observation that never consults the gate is refused", () => {
   it("throws when observe() returns without calling requireUnstarvedFrontier()", () => {
     expect(() =>
       withUnstarvedFrontier({
-        what: "the bounded output",
+        // A DISTINCTIVE `what`, not this file's usual generic one: the refusal interpolates
+        // it, and every other fixture passing the same generic phrase let a mutant that
+        // hard-coded that phrase in place of `${what}` survive (measured). A value no
+        // hard-coding would guess is what makes the interpolation observable.
+        what: "an ungated widget census",
         mount: settledMarkdown,
         observe: () => {
           /* measures something, but never gates it */
         },
       })
     ).toThrow(
-      /observe\(\) returned without calling requireUnstarvedFrontier\(\), so the bounded output was measured on an ungated view/
+      /observe\(\) returned without calling requireUnstarvedFrontier\(\), so an ungated widget census was measured on an ungated view/
     );
   });
 
@@ -376,7 +380,8 @@ describe("a state replacement after the LAST gate is refused", () => {
   it("throws when observe() dispatches after its final requireUnstarvedFrontier()", () => {
     expect(() =>
       withUnstarvedFrontier({
-        what: "the bounded output",
+        // Distinctive, for the reason given on the ungated refusal above.
+        what: "a post-dispatch record compare",
         mount: settledMarkdown,
         observe: (view, requireUnstarvedFrontier) => {
           requireUnstarvedFrontier();
@@ -384,7 +389,7 @@ describe("a state replacement after the LAST gate is refused", () => {
         },
       })
     ).toThrow(
-      /replaced its state after the last requireUnstarvedFrontier\(\) call, so the bounded output was measured on an ungated frontier/
+      /replaced its state after the last requireUnstarvedFrontier\(\) call, so a post-dispatch record compare was measured on an ungated frontier/
     );
   });
 
