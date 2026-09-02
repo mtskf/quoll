@@ -146,6 +146,14 @@ export function withUnstarvedFrontier<R extends void | undefined>(options: {
    * however many attempts a loaded machine starves, i.e. non-deterministically and only
    * under load. Derive everything the assertions need INSIDE this callback, from the
    * `view` it is handed.
+   *
+   * ⚠️ A gate speaks ONLY for the frontier at the moment it runs; it does not reach back
+   * over earlier dispatches. `dispatch A; dispatch B; gate()` therefore satisfies every
+   * refusal below while leaving A's bounded run unverified — if A starved, its field
+   * self-heals with a full walk and an oracle comparison still goes green. Unlike a
+   * swallowed signal, which is refused structurally, this one is NOT enforced: gate after
+   * EVERY dispatch. Every call site does today; a guard that removes the need to remember
+   * is tracked in the TODO.
    */
   observe: (view: EditorView, requireUnstarvedFrontier: () => void) => R;
   /** Attempts before giving up and throwing. Five, matching PR #388's measured loop. */

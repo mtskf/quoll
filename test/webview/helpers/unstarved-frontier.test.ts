@@ -340,6 +340,25 @@ describe("an attempt count that could not have measured anything is refused", ()
       })
     ).toThrow(/attempts must be a positive integer, got 0/);
   });
+
+  it("throws on a FRACTIONAL count, which the `< 1` arm alone would let through", () => {
+    // Separate from the case above because they exercise different arms of the same guard.
+    // Without the `Number.isInteger` half, 2.5 runs two attempts and then reports "all 2.5
+    // attempts found a starved parse frontier" — the guard's own comment calls that the one
+    // message here that must not lie about what was measured. `NaN` is worse: the loop runs
+    // zero times and the same sentence claims a frontier was found on attempts that never
+    // happened.
+    for (const attempts of [2.5, Number.NaN]) {
+      expect(() =>
+        withUnstarvedFrontier({
+          what: "the bounded output",
+          attempts,
+          mount: settledMarkdown,
+          observe: (_view, requireUnstarvedFrontier) => requireUnstarvedFrontier(),
+        })
+      ).toThrow(/attempts must be a positive integer/);
+    }
+  });
 });
 
 describe("a swallowed starved-frontier signal is refused", () => {
@@ -399,11 +418,11 @@ describe("a swallowed starved-frontier signal is refused", () => {
 
   it("throws when observe() swallows the sentinel and then fails an assertion of its own", () => {
     // The escaping error is NOT a sentinel, so the counter alone can convict: one sentinel
-    // was thrown and none escaped. This is the only test that reaches the non-sentinel arm
-    // of the catch's threshold. Without that arm, the failure surfaces as the bare assertion
-    // diff below, taken on a starved frontier and carrying no hint that a sentinel was
-    // swallowed — a real failure reported against a meaningless measurement, which is the
-    // misattribution this helper exists to prevent.
+    // was thrown and none escaped. This is the only test that convicts through the
+    // non-sentinel arm of the catch's threshold. Without that arm, the failure surfaces as
+    // the bare assertion diff below, taken on a starved frontier and carrying no hint that
+    // a sentinel was swallowed — a real failure reported against a meaningless measurement,
+    // which is the misattribution this helper exists to prevent.
     const caught = catchError(() =>
       withUnstarvedFrontier({
         what: "the bounded output",
@@ -421,8 +440,10 @@ describe("a swallowed starved-frontier signal is refused", () => {
     );
     expect((caught as Error | undefined)?.message).toMatch(/swallowed the starved-frontier signal/);
     // Chained, not replaced: the reader still gets the assertion diff, now labelled with
-    // the reason it cannot be trusted at face value.
-    expect((caught as Error).cause).toBeDefined();
+    // the reason it cannot be trusted at face value. The diff itself is asserted, not just
+    // its presence — `toBeDefined()` alone would survive a mutant that chained some other
+    // error, and "the reader still gets the diff" is the whole claim.
+    expect(((caught as Error).cause as Error).message).toMatch(/expected 1 to be 2/);
   });
 });
 
