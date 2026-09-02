@@ -39,9 +39,12 @@
 //   - a different matcher: `.toBeTruthy()`, `.toEqual(true)`, `.toBe(true as const)`, or
 //     the reversed operands `expect(true).toBe(syntaxTreeAvailable(...))`
 //   - a HAND-ROLLED attempt loop (`for (…) { if (runOnce()) return; }` + a trailing throw)
-//     uses the conditional form and is invisible here by design; two live instances remain
-//     in webview/cm-block-widget-bounded.test.ts and
-//     webview/fenced-code/cm-fenced-code-collapse.test.ts
+//     uses the conditional form and is invisible here by design. No live instance remains
+//     (both were migrated onto helpers/unstarved-frontier.ts), but nothing MECHANICAL stops
+//     a new one: this guard sees only the bare `expect(...).toBe(true)` shape, so a fresh
+//     copy of the loop would pass it. What makes a copy pointless rather than merely
+//     forbidden is that the helper now covers both the mounted-view and the bare-state
+//     shapes — there is no case left that needs its own loop.
 //   - INSIDE an allowlisted file, swapping a legitimate (post-forced-parse) gate for a bare
 //     post-edit one at another line keeps the count identical — the pin bounds the NUMBER
 //     of gates, not WHICH lines carry them
