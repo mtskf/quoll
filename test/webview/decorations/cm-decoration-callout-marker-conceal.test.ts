@@ -234,11 +234,11 @@ describe("calloutMarkerConcealField — bounded recompute ≡ full recompute", (
   // loop is what keeps the bounded result trustworthy instead.
   //
   // ⚠️ The comparison is ATTEMPTED rather than asserted on the first try, via
-  // `withUnstarvedFrontier` — its docblock in ../helpers/unstarved-frontier.ts is the single
-  // place that explains the 20ms post-edit budget, why an attempt loop rather than a
-  // vitest-level `{ retry: n }`, and why an all-starved run must throw rather than pass
-  // quietly. File-specific fact: this is the describe PR #388 measured redding under a
-  // deliberately loaded full-suite run (24 spinners on 8 cores).
+  // `withUnstarvedFrontier` — its docblock in ../helpers/unstarved-frontier.ts is where the
+  // 20ms post-edit budget, why an attempt loop rather than a vitest-level `{ retry: n }`,
+  // and why an all-starved run must throw rather than pass quietly are explained in full.
+  // File-specific fact: this is the describe PR #388 measured redding under a deliberately
+  // loaded full-suite run (24 spinners on 8 cores).
   function checkEquivalence(
     initial: string,
     edits: Array<{ changes?: unknown; selection?: unknown }>
@@ -419,7 +419,7 @@ describe("calloutMarkerConcealField — bounded reuse is non-vacuous (record ide
   // a full walk (callout-marker-conceal.ts's `!syntaxTreeAvailable` arm), so reuse is not
   // what ran and there is nothing to observe — a fact about the machine, not about the
   // code under test. Why an attempt loop rather than a vitest `{ retry: n }`, and why an
-  // all-starved run must fail rather than pass quietly, is documented once on
+  // all-starved run must fail rather than pass quietly, is explained in full on
   // `withUnstarvedFrontier` in ../helpers/unstarved-frontier.ts.
   it("an untouched far callout's record object survives a below-edit by identity", () => {
     const doc = "> [!NOTE]\n> body\n\nprose";
