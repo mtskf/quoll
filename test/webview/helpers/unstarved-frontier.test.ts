@@ -119,6 +119,14 @@ describe("withUnstarvedFrontier retries a starved attempt from a fresh view", ()
     withUnstarvedFrontier({
       what: "the test observation",
       mount: (parent) => {
+        // ATTACHED, and asserted here rather than by the teardown tests: those read
+        // `document.body.childElementCount` before and after and expect it unchanged, which
+        // a helper that never appended satisfies exactly as well as one that appended and
+        // then removed. That symmetry makes "the parent was removed" unobservable without
+        // first pinning "the parent was there" — a self-cancelling pair of the kind this
+        // helper exists to refuse. `parent.remove()` is a silent no-op on a detached node,
+        // and CodeMirror never consults `isConnected`, so nothing else notices either.
+        expect(parent.parentElement).toBe(document.body);
         expect(parent.childElementCount).toBe(0); // nothing carried over
         expect(parents).not.toContain(parent); // and not the same element again
         parents.push(parent);
