@@ -65,7 +65,7 @@ const swallowedSentinelMessage = (caller: UnstarvedCaller): string =>
 /**
  * The attempt loop and every refusal both public forms share. Private: the forms differ
  * only in what they own (a mounted view, or nothing) and in how each words its final
- * "what you measured is what you gated" check, and both of those are expressed as
+ * "what you handed back is what you gated" check, and both of those are expressed as
  * parameters here so the control flow — the per-attempt abandon and the trailing
  * all-starved throw — exists once.
  *
@@ -91,7 +91,7 @@ function runUnstarvedAttempts<C, R>(spec: {
   /** The measurement. Receives the gate, which must be handed the state it speaks for. */
   observe: (context: C, gate: (state: EditorState) => void) => R;
   /**
-   * The "what you measured is what you gated" check, in the outer form's own terms. Run
+   * The "what you handed back is what you gated" check, in the outer form's own terms. Run
    * after this loop's own refusals — so an async or ungated `observe` is reported as such
    * rather than as a mismatch — and before teardown, so it can still read the fixture.
    */
@@ -263,8 +263,9 @@ function runUnstarvedAttempts<C, R>(spec: {
  * sentinel is exactly the silent skip this helper exists to prevent. This is not left as
  * etiquette: the gate records that it fired, and a swallowed signal is refused below.
  *
- * OWNERSHIP: this helper constructs the parent element and calls `mount`, so it owes both
- * a teardown and discharges it on every path — success, starvation, and a propagating
+ * OWNERSHIP (the VIEW form only — the state form constructs nothing and an `EditorState`
+ * needs no disposal): that form constructs the parent element and calls `mount`, so it
+ * owes both a teardown and discharges it on every path — success, starvation, and a propagating
  * failure alike. `mount` must build its view on the `parent` it is handed and must NOT
  * dispose of it; ownership transfers to this helper the moment `mount` returns. A `mount`
  * that THROWS still owes the disposal of whatever it had already constructed, because no
