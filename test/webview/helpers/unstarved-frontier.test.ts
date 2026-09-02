@@ -8,9 +8,10 @@ import { Compartment, EditorState } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import { describe, expect, it, vi } from "vitest";
 import { timeoutMessage, truncatedSnapshotMessage } from "./parse-to-end.js";
+import { settledState } from "./settled-state.js";
 import { settledMount } from "./settled-view.js";
 import { neverFinishingLanguage } from "./stub-parsers.js";
-import { withUnstarvedFrontier } from "./unstarved-frontier.js";
+import { withUnstarvedFrontier, withUnstarvedFrontierState } from "./unstarved-frontier.js";
 
 const DOC = "# h\n\nbody\n";
 
@@ -800,5 +801,300 @@ describe("every attempt cleans up after itself", () => {
       errSpy.mockRestore();
     }
     expect(document.body.childElementCount).toBe(before);
+  });
+});
+
+/** A settled markdown STATE — the state-side counterpart of `settledMarkdown`. */
+function settledMarkdownState(): EditorState {
+  return settledState(EditorState.create({ doc: DOC, extensions: [markdown()] }));
+}
+
+/**
+ * A state whose frontier is permanently STARVED, for the same reason and by the same
+ * mechanism as `starvedMount` above: `neverFinishingLanguage()` never completes, so the
+ * gate's `syntaxTreeAvailable` read is false forever. Deliberately NOT settled — settling
+ * it would throw, and the state form never settles anything.
+ */
+function starvedState(): EditorState {
+  return EditorState.create({ doc: DOC, extensions: [neverFinishingLanguage()] });
+}
+
+/** The real `observe` option type, so the fixture below cannot drift from it. */
+type StateObserve = Parameters<typeof withUnstarvedFrontierState>[0]["observe"];
+
+/**
+ * An async `observe`, which the helper must refuse. TWO casts, where `asAsyncObserve`
+ * above needs one — and the asymmetry belongs to the type system, not to this file.
+ * `Promise<void>` is comparable to `void` (everything is), so the view form's fixture
+ * converts in one step; `Promise<EditorState>` and `EditorState` share no members, so a
+ * single `as` there is a TS2352 and `as unknown as` is the only spelling that compiles.
+ *
+ * What keeps the claim honest without the narrow-cast trick is the cast TARGET: it is
+ * DERIVED from the option type rather than written out, so changing `observe`'s signature
+ * changes this fixture's meaning with it instead of leaving a stale assertion behind.
+ */
+function asAsyncStateObserve(
+  fn: (gate: (state: EditorState) => void) => Promise<EditorState>
+): StateObserve {
+  return fn as unknown as StateObserve;
+}
+
+describe("withUnstarvedFrontierState carries the same refusals without a view", () => {
+  // The state form owns no fixture, so the teardown half of the view form's contract has
+  // no counterpart here. What it DOES own is every refusal that keeps an attempt loop from
+  // degrading into a silent skip — which is the whole reason the fenced-code reducer suite
+  // stopped hand-rolling one.
+  it("retries a starved attempt and observes on the first unstarved one", () => {
+    let attemptsRun = 0;
+    let observed = 0;
+    withUnstarvedFrontierState({
+      what: "the reducer's own output",
+      observe: (requireUnstarvedFrontier) => {
+        const state = ++attemptsRun === 1 ? starvedState() : settledMarkdownState();
+        requireUnstarvedFrontier(state);
+        observed++;
+        return state;
+      },
+    });
+    expect(attemptsRun).toBe(2); // attempt 1 abandoned…
+    expect(observed).toBe(1); // …and the observation ran exactly once
+  });
+
+  it("throws when every attempt is starved, naming the count and what was never observed", () => {
+    let observedPastTheGate = 0;
+    expect(() =>
+      withUnstarvedFrontierState({
+        what: "the reseed reset",
+        attempts: 3,
+        observe: (requireUnstarvedFrontier) => {
+          const state = starvedState();
+          requireUnstarvedFrontier(state);
+          observedPastTheGate++;
+          return state;
+        },
+      })
+    ).toThrow(
+      /^withUnstarvedFrontierState: all 3 attempts found a starved parse frontier, so the reseed reset was never observed/
+    );
+    expect(observedPastTheGate).toBe(0);
+  });
+
+  it("refuses an observation that never consults the gate", () => {
+    // The `return true` mistake the TODO names, in this form's shape: `return state` is the
+    // natural last statement, and forgetting the gate above it is the one-line slip that
+    // makes an ungated comparison go quietly green. A DISTINCTIVE `what`, so the
+    // interpolation is observable rather than hard-codeable.
+    expect(() =>
+      withUnstarvedFrontierState({
+        what: "an ungated block census",
+        observe: () => settledMarkdownState(),
+      })
+    ).toThrow(
+      /observe\(\) returned without calling requireUnstarvedFrontier\(\), so an ungated block census was measured on an ungated state/
+    );
+  });
+
+  it("does not retry the ungated case", () => {
+    let attemptsRun = 0;
+    expect(() =>
+      withUnstarvedFrontierState({
+        what: "the reducer's own output",
+        observe: () => {
+          attemptsRun++;
+          return settledMarkdownState();
+        },
+      })
+    ).toThrow();
+    expect(attemptsRun).toBe(1);
+  });
+
+  it("refuses a state UPDATED after the last gate, which is this form's whole post-check", () => {
+    // The regression the fenced-code sites are one edit away from: gate, then update once
+    // more, then assert. Every other refusal here is satisfied — gated, unstarved,
+    // synchronous — while the state actually asserted on was never gated. The view form
+    // catches this by owning the view; this form catches it by requiring `observe` to
+    // return what it measured. Nothing else pins it.
+    expect(() =>
+      withUnstarvedFrontierState({
+        // Distinctive, for the reason given on the ungated refusal above.
+        what: "a post-update block census",
+        observe: (requireUnstarvedFrontier) => {
+          const gated = settledMarkdownState();
+          requireUnstarvedFrontier(gated);
+          return gated.update({ changes: { from: 0, insert: "x" } }).state;
+        },
+      })
+    ).toThrow(
+      /observe\(\) returned a state other than the one requireUnstarvedFrontier\(\) last saw, so a post-update block census was measured on an ungated frontier/
+    );
+  });
+
+  it("accepts a second gate that follows an update — the gate-per-update shape", () => {
+    // The refusal speaks for the LAST gate, so re-gating after an update must re-arm it.
+    // Without this, "compare against the last gated state" could be satisfied by a check
+    // that only ever accepted the FIRST gated state, and the call sites — which gate after
+    // their final update — would be refused.
+    let past = 0;
+    withUnstarvedFrontierState({
+      what: "the reducer's own output",
+      observe: (requireUnstarvedFrontier) => {
+        const first = settledMarkdownState();
+        requireUnstarvedFrontier(first);
+        const second = settledState(first.update({ changes: { from: 0, insert: "x" } }).state);
+        requireUnstarvedFrontier(second);
+        past++;
+        return second;
+      },
+    });
+    expect(past).toBe(1);
+  });
+
+  it("re-reads the frontier on every gate call, not just the first", () => {
+    // The fenced-code sites gate once, but the property is the contract: a gate answering
+    // from a cached first reading would let a starved LATER state through.
+    let reachedSecond = 0;
+    let reachedPast = 0;
+    expect(() =>
+      withUnstarvedFrontierState({
+        what: "the reducer's own output",
+        attempts: 2,
+        observe: (requireUnstarvedFrontier) => {
+          requireUnstarvedFrontier(settledMarkdownState());
+          reachedSecond++;
+          const starved = starvedState();
+          requireUnstarvedFrontier(starved); // must NOT return
+          reachedPast++;
+          return starved;
+        },
+      })
+    ).toThrow(/all 2 attempts found a starved parse frontier/);
+    expect(reachedSecond).toBe(2);
+    expect(reachedPast).toBe(0);
+  });
+
+  it("refuses an async observe, and at COMPILE time too", () => {
+    expect(() =>
+      withUnstarvedFrontierState({
+        what: "the reducer's own output",
+        observe: asAsyncStateObserve(async (requireUnstarvedFrontier) => {
+          const state = settledMarkdownState();
+          requireUnstarvedFrontier(state);
+          return state;
+        }),
+      })
+    ).toThrow(/observe\(\) must be synchronous/);
+    expect(() =>
+      withUnstarvedFrontierState({
+        what: "the reducer's own output",
+        // @ts-expect-error an async observe returns Promise<EditorState>, not EditorState
+        observe: async (requireUnstarvedFrontier) => {
+          const state = settledMarkdownState();
+          requireUnstarvedFrontier(state);
+          return state;
+        },
+      })
+    ).toThrow(/observe\(\) must be synchronous/);
+  });
+
+  it("refuses a swallowed sentinel on both the return path and the escape path", () => {
+    const returned = catchError(() =>
+      withUnstarvedFrontierState({
+        what: "the reducer's own output",
+        attempts: 2,
+        observe: (requireUnstarvedFrontier) => {
+          const state = starvedState();
+          try {
+            requireUnstarvedFrontier(state);
+          } catch {
+            /* exactly the mistake this test pins */
+          }
+          return state;
+        },
+      })
+    );
+    expect((returned as Error | undefined)?.message).toMatch(
+      /swallowed the starved-frontier signal/
+    );
+    expect((returned as Error).cause).toBeUndefined(); // raised on the return path
+
+    const escaped = catchError(() =>
+      withUnstarvedFrontierState({
+        what: "the reducer's own output",
+        attempts: 2,
+        observe: (requireUnstarvedFrontier) => {
+          const state = starvedState();
+          try {
+            requireUnstarvedFrontier(state);
+          } catch {
+            /* ditto */
+          }
+          requireUnstarvedFrontier(state); // the second one escapes
+          return state;
+        },
+      })
+    );
+    expect((escaped as Error | undefined)?.message).toMatch(
+      /swallowed the starved-frontier signal/
+    );
+    expect((escaped as Error).cause).toMatchObject({ name: "StarvedFrontier" });
+  });
+
+  it("reports a missing language as such rather than retrying it as starvation", () => {
+    expect(() =>
+      withUnstarvedFrontierState({
+        what: "the reducer's own output",
+        observe: (requireUnstarvedFrontier) => {
+          const state = EditorState.create({ doc: DOC, extensions: [] });
+          requireUnstarvedFrontier(state);
+          return state;
+        },
+      })
+    ).toThrow(/^withUnstarvedFrontierState: state has no language configured/);
+  });
+
+  it("refuses an attempt count that could not have measured anything", () => {
+    for (const attempts of [0, 2.5, Number.NaN]) {
+      expect(() =>
+        withUnstarvedFrontierState({
+          what: "the reducer's own output",
+          attempts,
+          observe: (requireUnstarvedFrontier) => {
+            const state = settledMarkdownState();
+            requireUnstarvedFrontier(state);
+            return state;
+          },
+        })
+      ).toThrow(/attempts must be a positive integer/);
+    }
+  });
+
+  it("propagates a real failure on the first attempt instead of retrying it", () => {
+    let attemptsRun = 0;
+    expect(() =>
+      withUnstarvedFrontierState({
+        what: "the reducer's own output",
+        observe: (requireUnstarvedFrontier) => {
+          attemptsRun++;
+          const state = settledMarkdownState();
+          requireUnstarvedFrontier(state);
+          expect(1).toBe(2);
+          return state;
+        },
+      })
+    ).toThrow();
+    expect(attemptsRun).toBe(1);
+  });
+});
+
+describe("neither form is a settling caller, and the type says so", () => {
+  it("refuses the state form's name in the two parse-budget messages at COMPILE time", () => {
+    // Same argument as the view form's pin above: this helper probes for a language and
+    // never advances a parse, so neither sentence about a parse budget could honestly
+    // carry its name. Both directives are self-verifying — widen `SettlingCaller` and
+    // TypeScript reports them as unused, so `pnpm compile` reds.
+    // @ts-expect-error withUnstarvedFrontierState advances no parse
+    timeoutMessage("withUnstarvedFrontierState", 5, 9);
+    // @ts-expect-error ditto: the snapshot message is about a parse this helper never ran
+    truncatedSnapshotMessage("withUnstarvedFrontierState", 0, 9);
   });
 });

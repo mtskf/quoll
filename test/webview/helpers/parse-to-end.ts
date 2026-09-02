@@ -6,15 +6,17 @@ type ParseCaller =
   | "settledState"
   | "settledView"
   | "settledMount"
-  | "withUnstarvedFrontier";
+  | "withUnstarvedFrontier"
+  | "withUnstarvedFrontierState";
 
 /**
- * The subset that actually SETTLES a parse. `withUnstarvedFrontier` only probes for a
- * language — it never advances a parse — so it can reach neither of the two messages
- * below. Excluding it keeps each builder's label set equal to the set of callers that can
+ * The subset that actually SETTLES a parse. Neither `withUnstarvedFrontier` nor
+ * `withUnstarvedFrontierState` does — they probe for a language and read the frontier,
+ * and never advance a parse — so neither can reach either of the two messages below.
+ * Excluding them keeps each builder's label set equal to the set of callers that can
  * actually produce it, which is the whole job this union was given.
  */
-type SettlingCaller = Exclude<ParseCaller, "withUnstarvedFrontier">;
+type SettlingCaller = Exclude<ParseCaller, "withUnstarvedFrontier" | "withUnstarvedFrontierState">;
 
 /**
  * Shared parse step behind `fullTree()` and `settledState()`: advance the state's

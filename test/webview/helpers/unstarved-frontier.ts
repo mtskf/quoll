@@ -18,7 +18,11 @@ class StarvedFrontier extends Error {
   readonly name = "StarvedFrontier";
   constructor() {
     super(
-      "withUnstarvedFrontier: the starved-frontier sentinel escaped the helper — requireUnstarvedFrontier() may only be called synchronously from the observe() body, never from a listener, timer, or deferred callback"
+      // No caller prefix: this one class is thrown by both public forms, and it is
+      // constructed inside the shared gate, which is exactly where the two are
+      // indistinguishable. Every message that CAN name its caller does; this one cannot
+      // do so honestly, so it names none.
+      "the starved-frontier sentinel escaped the helper — requireUnstarvedFrontier() may only be called synchronously from the observe() body, never from a listener, timer, or deferred callback"
     );
   }
 }
@@ -36,13 +40,159 @@ class StarvedFrontier extends Error {
  */
 class HelperRefusal extends Error {}
 
+/** The two public forms. Interpolated into every refusal so a message names its caller. */
+type UnstarvedCaller = "withUnstarvedFrontier" | "withUnstarvedFrontierState";
+
+/**
+ * What the form hands the observation, as the ungated refusal names it. The view form
+ * measures a VIEW; the state form measures a STATE, and a refusal that told a
+ * fenced-code author their "view" was ungated would be pointing at something that does
+ * not exist in that test.
+ */
+const SUBJECT: Record<UnstarvedCaller, string> = {
+  withUnstarvedFrontier: "view",
+  withUnstarvedFrontierState: "state",
+};
+
 /**
  * Shared by the two swallow detections below — the return path cannot see a swallow that
  * is followed by a throw, and the catch path cannot see one that is followed by a return,
  * so both need to say the same thing.
  */
-const SWALLOWED_SENTINEL_MESSAGE =
-  "withUnstarvedFrontier: observe() swallowed the starved-frontier signal — do not wrap requireUnstarvedFrontier() in your own catch, and do not run it inside expect(...).toThrow()";
+const swallowedSentinelMessage = (caller: UnstarvedCaller): string =>
+  `${caller}: observe() swallowed the starved-frontier signal — do not wrap requireUnstarvedFrontier() in your own catch, and do not run it inside expect(...).toThrow()`;
+
+/**
+ * The attempt loop and every refusal both public forms share. Private: the forms differ
+ * only in what they own (a mounted view, or nothing) and in how each words its final
+ * "what you measured is what you gated" check, and both of those are expressed as
+ * parameters here so the control flow — the per-attempt abandon and the trailing
+ * all-starved throw — exists once.
+ *
+ * `R` is deliberately UNCONSTRAINED here. Each public form constrains its own `observe`
+ * return type, and they constrain it to opposite things: the view form to `void |
+ * undefined` (nothing to return), the state form to `EditorState` (the state it
+ * measured). A constraint here could only be the union of those, which would refuse
+ * neither mistake.
+ */
+function runUnstarvedAttempts<C, R>(spec: {
+  caller: UnstarvedCaller;
+  what: string;
+  attempts: number;
+  /**
+   * Build the per-attempt fixture, and return it alongside the teardown it owes. Called
+   * once per ATTEMPT. `teardown` receives whether a failure is already in flight, so a
+   * teardown failure can be reported BESIDE that failure rather than over it — a throwing
+   * `finally` discards the pending exception outright rather than chaining it.
+   * A `begin` that THROWS owes the disposal of whatever it had already constructed: no
+   * teardown ever reached this loop.
+   */
+  begin: () => { context: C; teardown: (propagating: boolean) => void };
+  /** The measurement. Receives the gate, which must be handed the state it speaks for. */
+  observe: (context: C, gate: (state: EditorState) => void) => R;
+  /**
+   * The "what you measured is what you gated" check, in the outer form's own terms. Run
+   * after this loop's own refusals — so an async or ungated `observe` is reported as such
+   * rather than as a mismatch — and before teardown, so it can still read the fixture.
+   */
+  postCheck: (context: C, stateAtLastGate: EditorState, returned: R) => void;
+}): void {
+  const { caller, what, attempts, begin, observe, postCheck } = spec;
+  // A non-positive or fractional count would fall straight through to the all-starved
+  // throw, whose message would then claim a starved frontier was FOUND on attempts that
+  // never ran — the one message here that must not lie about what was measured.
+  if (!Number.isInteger(attempts) || attempts < 1) {
+    throw new Error(`${caller}: attempts must be a positive integer, got ${attempts}`);
+  }
+  for (let attempt = 0; attempt < attempts; attempt++) {
+    const { context, teardown } = begin();
+    // The state as of the LAST gate call, and — because the gate always sets it — also the
+    // record of WHETHER the gate ever fired. One variable rather than a separate boolean:
+    // they were always set together, and two names for one fact is one more thing a later
+    // edit can leave half-updated.
+    let stateAtLastGate: EditorState | undefined;
+    // COUNTED, not a boolean. At most ONE sentinel can escape an attempt, so a count above
+    // what escaped proves an earlier one was swallowed — which the return-path check alone
+    // cannot see when observe() swallows and then throws.
+    let sentinelsThrown = 0;
+    let propagating = false;
+    try {
+      const returned = observe(context, (state) => {
+        // Here rather than only once per attempt, because the state form has no earlier
+        // seam: it holds no state until `observe` makes one. `syntaxTreeAvailable` is ALSO
+        // false with no Language attached, so without this a misconfigured extension list
+        // masquerades as N starved attempts and is then reported as CPU starvation. The
+        // throw is a plain Error, so the catch below rethrows it rather than retrying.
+        // (The view form ALSO checks before `observe` runs — see its `observe` adapter.)
+        //
+        // ⚠️ Running it per GATE CALL, where the old code ran it once per ATTEMPT, is a
+        // CLASSIFICATION change and not merely a frequency one. If a language extension
+        // goes away MID-attempt (a `Compartment` reconfigured to `[]` between two gates),
+        // the old code had already done its only check and the second gate saw a false
+        // `syntaxTreeAvailable`, so the attempt was abandoned as starved and the run ended
+        // blaming the CPU. This refuses it immediately, with a message that names the
+        // actual cause, and does not retry. That is the intended direction — it is the
+        // same misattribution this helper exists to prevent, one gate later — but nothing
+        // in the suite exercises it: every `Compartment` fixture here swaps one real
+        // `Language` for another, so this paragraph is the reasoning, not a pinned fact.
+        assertHasLanguage(state, caller);
+        stateAtLastGate = state;
+        if (!syntaxTreeAvailable(state, state.doc.length)) {
+          sentinelsThrown++;
+          throw new StarvedFrontier();
+        }
+      });
+      // An async `observe` would silently break every guarantee here: the loop reaches this
+      // line at the callback's first `await`, tears the fixture down out from under the
+      // rest of it, and reports success. Checked BEFORE the two flags: an async callback
+      // suspended before its gate is also ungated, and reporting it as ungated would send
+      // the reader to the wrong bug.
+      if (typeof (returned as { then?: unknown } | undefined)?.then === "function") {
+        // Detach the abandoned continuation before throwing: it resumes on a later
+        // microtask, and an assertion failure there would surface as an unhandled rejection
+        // during an unrelated, later test. `Promise.resolve(...)` rather than
+        // `returned.catch(...)` — the condition above admits ANY thenable, and a thenable
+        // need only have `.then`.
+        void Promise.resolve(returned).catch(() => {});
+        // HelperRefusal, here and on the checks below: the catch's swallow detection must
+        // wrap only what came out of `observe`, never a refusal raised here — which would
+        // relabel this loop's own diagnosis.
+        throw new HelperRefusal(
+          `${caller}: observe() must be synchronous — an async callback is abandoned mid-flight and its assertions never gate the result`
+        );
+      }
+      if (sentinelsThrown > 0) {
+        throw new HelperRefusal(swallowedSentinelMessage(caller));
+      }
+      if (stateAtLastGate === undefined) {
+        throw new HelperRefusal(
+          `${caller}: observe() returned without calling requireUnstarvedFrontier(), so ${what} was measured on an ungated ${SUBJECT[caller]}`
+        );
+      }
+      postCheck(context, stateAtLastGate, returned);
+      return;
+    } catch (error) {
+      propagating = true;
+      if (
+        !(error instanceof HelperRefusal) &&
+        sentinelsThrown > (error instanceof StarvedFrontier ? 1 : 0)
+      ) {
+        throw new Error(swallowedSentinelMessage(caller), { cause: error });
+      }
+      if (!(error instanceof StarvedFrontier)) {
+        throw error;
+      }
+      // The sentinel is absorbed: the attempt is retried, nothing is in flight any more, so
+      // a teardown failure below IS the failure and must propagate.
+      propagating = false;
+    } finally {
+      teardown(propagating);
+    }
+  }
+  throw new Error(
+    `${caller}: all ${attempts} attempts found a starved parse frontier, so ${what} was never observed`
+  );
+}
 
 /**
  * Run a single bounded-path observation against a freshly mounted view, retrying from a
@@ -86,14 +236,27 @@ const SWALLOWED_SENTINEL_MESSAGE =
  * problem. What stays at the call site is the site-specific part: what to mount, what to
  * dispatch, where the frontier must be complete, and what to assert.
  *
- * SCOPE: this helper owns the MOUNTED-VIEW form of the loop, and does not yet own every
- * instance of it. Sites that drive a bare `EditorState` through `state.update()`
- * (fenced-code/cm-fenced-code-collapse.test.ts's `untilCompleteFrontier`) cannot use it —
- * they have no view to mount or destroy — and keep their own loop until a state-side twin
- * earns its own module. ../cm-block-widget-bounded.test.ts's `checkEquivalence` IS
- * view-based and migratable; it is left for a follow-up so this PR stays one purpose.
- * Neither is visible to test/build/no-bare-unstarved-gate.test.ts, which by design sees
- * only the bare `expect(...).toBe(true)` shape.
+ * SCOPE: this module owns BOTH forms of the loop, and every instance of it in the suite
+ * now routes through one of them. `withUnstarvedFrontier` is for a mounted view;
+ * `withUnstarvedFrontierState` is for a bare `EditorState` driven through
+ * `state.update()`, which has no view to mount or destroy. They share one attempt loop
+ * (`runUnstarvedAttempts`) precisely because the properties worth having — the per-attempt
+ * abandon and the trailing all-starved throw — live in control flow, which is what a
+ * copied loop loses first.
+ *
+ * Both forms make the same final claim — what you HAND BACK at the end is what you last
+ * gated — and reach it differently, because they own different things. The view form owns
+ * the view, so it reads `view.state` after `observe` returns. The state form owns nothing
+ * and never sees the caller's local variable, so it REQUIRES `observe` to return the state
+ * its assertions read and compares that.
+ *
+ * ⚠️ Two gaps that claim deliberately leaves open, in BOTH forms. An INTERMEDIATE state
+ * no gate witnessed is invisible — `update A; update B; gate` passes while leaving A
+ * unverified — so gate after every update the assertions depend on. And an `observe` that
+ * derives a third state, asserts on THAT, and hands back the gated one passes too: what is
+ * compared is the handed-back state, which is the most either form can see from outside
+ * the callback. Neither gap is new machinery to be added later; they are the boundary of
+ * what a wrapper around an opaque callback can know.
  *
  * ⚠️ Do NOT wrap `requireUnstarvedFrontier()` in a `try`/`catch` of your own, and do not
  * run it inside `expect(...).toThrow(...)`. Either swallows the sentinel, and a swallowed
@@ -121,8 +284,8 @@ const SWALLOWED_SENTINEL_MESSAGE =
 // callback's return type only when the target return type is EXACTLY `void`, so an async
 // `observe` is assignable to a `=> void` parameter with no cast at all. The union is what
 // makes it a compile error instead — a bare `R extends void` falls back to the constraint
-// and admits the async form again. The runtime thenable probe below stays as the backstop
-// for a fixture cast through a wider type.
+// and admits the async form again. The runtime thenable probe in the core stays as the
+// backstop for a fixture cast through a wider type.
 //
 // Biome's suggested rewrite to a bare `undefined` is NOT equivalent: it would reject the
 // three shapes actually written at the call sites (a block body, a bare `return;`, and the
@@ -161,169 +324,131 @@ export function withUnstarvedFrontier<R extends void | undefined>(options: {
   attempts?: number;
 }): void {
   const { what, mount, observe, attempts = 5 } = options;
-  // A non-positive or fractional count would fall straight through to the all-starved
-  // throw, whose message would then claim a starved frontier was FOUND on attempts that
-  // never ran — the one message here that must not lie about what was measured.
-  if (!Number.isInteger(attempts) || attempts < 1) {
-    throw new Error(`withUnstarvedFrontier: attempts must be a positive integer, got ${attempts}`);
-  }
-  for (let attempt = 0; attempt < attempts; attempt++) {
-    const parent = document.createElement("div");
-    document.body.appendChild(parent);
-    let view: EditorView;
-    try {
-      view = mount(parent);
-    } catch (error) {
-      parent.remove();
-      throw error;
-    }
-    let gated = false;
-    // The state as of the LAST gate call. A gate is only meaningful for the frontier that
-    // existed when it ran, so a state replaced AFTER the last one leaves what was actually
-    // measured ungated — on a starved frontier that is a full walk compared against a full
-    // walk, i.e. the vacuous green this helper exists to refuse.
-    //
-    // Compared by IDENTITY rather than by intercepting `dispatch`, because the question is
-    // WHAT was measured, not how it changed: whatever put a different state on the view
-    // fails the same comparison, and reads (`view.state.field(...)`, a separate
-    // `settledState(...)` oracle) leave it alone and pass. That is the whole claim — it
-    // rests on this comparison and nothing else, so no argument about what could or could
-    // not have moved the state in the meantime is needed, or would be pinned if made.
-    let stateAtLastGate: EditorState | undefined;
-    // COUNTED, not a boolean, and hoisted OUT of the try so the catch can read it too. At
-    // most ONE sentinel can escape an attempt, so a count above what escaped proves an
-    // earlier one was swallowed — which the return-path check alone cannot see when
-    // observe() swallows and then throws (its own assertion, or a second sentinel).
-    let sentinelsThrown = 0;
-    // Whether a failure is in flight as the `finally` below runs. A throwing `finally`
-    // DISCARDS the pending exception outright — it does not chain it, and the replacement
-    // carries no `cause` — so a teardown failure would surface INSTEAD of the assertion diff
-    // this helper exists to show, in a suite that mounts exactly the widgets whose destroy
-    // can throw. Nesting the teardown fixes only the parent-removal half of that; this flag
-    // is the other half.
-    let propagating = false;
-    try {
-      // A false gate ALSO means "no Language extension attached". Separating that here,
-      // once per attempt, keeps a misconfigured extension list from masquerading as five
+  runUnstarvedAttempts<EditorView, R>({
+    caller: "withUnstarvedFrontier",
+    what,
+    attempts,
+    begin: () => {
+      const parent = document.createElement("div");
+      document.body.appendChild(parent);
+      let view: EditorView;
+      try {
+        view = mount(parent);
+      } catch (error) {
+        // `mount` owes the disposal of anything it constructed — no reference reached
+        // here. What THIS function owes, and discharges, is the parent it appended.
+        parent.remove();
+        throw error;
+      }
+      return {
+        context: view,
+        teardown: (propagating) => {
+          // Two statements in one teardown are NOT "discharged on every path": a throwing
+          // view.destroy() (CM does NOT guard widget destroy — WidgetView.destroy calls
+          // widget.destroy(dom) bare, and this suite mounts table + fenced-code widgets
+          // that implement it) would skip parent.remove(), leaving the view attached to
+          // the shared happy-dom body for the rest of the file. Nesting keeps the parent
+          // removal unconditional. A throwing destroy is a real defect and still reds the
+          // run — but it must not REPLACE a failure that was already propagating, so it is
+          // reported beside that failure rather than over it.
+          try {
+            view.destroy();
+          } catch (destroyError) {
+            if (!propagating) {
+              throw destroyError;
+            }
+            console.error(
+              "withUnstarvedFrontier: view.destroy() ALSO threw during teardown; the failure being reported is the primary one",
+              destroyError
+            );
+          } finally {
+            parent.remove();
+          }
+        },
+      };
+    },
+    observe: (view, gate) => {
+      // Once per attempt, BEFORE observe runs, and deliberately in addition to the gate's
+      // own copy: a language-less view must fail as "no language configured" rather than
+      // letting `observe` run up to its first gate and surface whatever it fails on first.
+      // Separating that here keeps a misconfigured extension list from masquerading as N
       // starved attempts and then being reported as CPU starvation.
       assertHasLanguage(view.state, "withUnstarvedFrontier");
-      const returned: unknown = observe(view, () => {
-        gated = true;
-        stateAtLastGate = view.state;
-        if (!syntaxTreeAvailable(view.state, view.state.doc.length)) {
-          sentinelsThrown++;
-          throw new StarvedFrontier();
-        }
-      });
-      // An async `observe` is accepted by TypeScript (a `void`-returning callback type
-      // permits any return value) and would silently break every guarantee here: the
-      // helper reaches this line at the callback's first `await`, destroys the view out
-      // from under the rest of it, and reports success. A sentinel thrown after that point
-      // would miss the catch below entirely.
+      return observe(view, () => gate(view.state));
+    },
+    postCheck: (view, stateAtLastGate) => {
+      // A gate speaks only for the frontier that existed when it ran, so a state replaced
+      // AFTER the last one leaves what was actually measured ungated — on a starved
+      // frontier that is a full walk compared against a full walk, i.e. the vacuous green
+      // this helper exists to refuse.
       //
-      // Checked BEFORE the two flags: an async callback suspended before its gate is also
-      // `!gated`, and reporting it as "ungated" would send the reader to the wrong bug.
-      // All three are refused; only the message differs.
-      if (typeof (returned as { then?: unknown } | undefined)?.then === "function") {
-        // Detach the abandoned continuation before throwing. It resumes on a later
-        // microtask against a view the `finally` below is about to destroy, and an
-        // assertion failure there would surface as an unhandled rejection during an
-        // unrelated, later test — a red with no connection to its cause. Nothing is lost:
-        // the observation it belonged to is already being refused by the throw.
-        //
-        // `Promise.resolve(...)` rather than `returned.catch(...)`: the condition above
-        // admits ANY thenable, and a thenable is only required to have `.then`. Calling
-        // `.catch` on a `.then`-only object throws a TypeError that would replace the
-        // clear message below with a confusing one.
-        void Promise.resolve(returned).catch(() => {});
-        // HelperRefusal, here and on the three throws below: the catch's swallow check must
-        // wrap only what came out of `observe`, never a refusal the helper raised itself —
-        // which would relabel the helper's own diagnosis. `HelperRefusal`'s docblock names
-        // the two distinct ways that goes wrong. Some of the four can reach that check with
-        // a non-zero `sentinelsThrown`, so their marking is load-bearing; all four carry it
-        // so that "the helper never relabels its own refusals" holds structurally, by the
-        // class of the error, rather than resting on which counter values each throw site
-        // happens to be reachable with — an argument a later edit voids silently.
-        throw new HelperRefusal(
-          "withUnstarvedFrontier: observe() must be synchronous — an async callback is destroyed mid-flight and its assertions never gate the result"
-        );
-      }
-      // The gate FIRED but `observe` returned anyway, so the sentinel was caught inside the
-      // callback — a `try {} catch {}` around the gate, or an `expect(...).toThrow()`
-      // wrapping it. `gated` alone cannot see this, being set before the throw. Without
-      // this check a swallowed sentinel reads as a successful observation on a starved
-      // view.
-      if (sentinelsThrown > 0) {
-        throw new HelperRefusal(SWALLOWED_SENTINEL_MESSAGE);
-      }
-      // An `observe` that never reached the gate measured an UNGATED view, which is the
-      // vacuous pass this helper exists to prevent: on a starved frontier the field
-      // self-heals with a full walk, so an oracle comparison would compare a full walk to
-      // a full walk and go quietly green having exercised no bounded path. The identity
-      // sites would merely red; the oracle sites would LIE. Checked after `observe`
-      // returns, because only then is "never called" distinguishable from "not yet".
-      if (!gated) {
-        throw new HelperRefusal(
-          `withUnstarvedFrontier: observe() returned without calling requireUnstarvedFrontier(), so ${what} was measured on an ungated view`
-        );
-      }
-      // …and a gate that fired but was then made obsolete is the same vacuity wearing a
-      // passing gate. See `stateAtLastGate` above. The message says "replaced its state"
-      // rather than "dispatched" because that is what the identity check actually observes:
-      // `EditorView.setState()` replaces the state without dispatching, and naming the
-      // wrong cause in a refusal would send the reader hunting for a dispatch that is not
-      // there.
+      // Compared by IDENTITY rather than by intercepting `dispatch`, because the question
+      // is WHAT was measured, not how it changed: whatever put a different state on the
+      // view fails the same comparison, and reads (`view.state.field(...)`, a separate
+      // `settledState(...)` oracle) leave it alone and pass. The message says "replaced
+      // its state" rather than "dispatched" because that is what this observes:
+      // `EditorView.setState()` replaces the state without dispatching.
       if (view.state !== stateAtLastGate) {
         throw new HelperRefusal(
           `withUnstarvedFrontier: observe() replaced its state after the last requireUnstarvedFrontier() call, so ${what} was measured on an ungated frontier`
         );
       }
-      return;
-    } catch (error) {
-      propagating = true;
-      if (
-        !(error instanceof HelperRefusal) &&
-        sentinelsThrown > (error instanceof StarvedFrontier ? 1 : 0)
-      ) {
-        throw new Error(SWALLOWED_SENTINEL_MESSAGE, { cause: error });
-      }
-      if (!(error instanceof StarvedFrontier)) {
-        throw error;
-      }
-      // The sentinel is absorbed: the attempt is retried, nothing is in flight any more, so
-      // a teardown failure below IS the failure and must propagate.
-      propagating = false;
-    } finally {
-      // Two statements in one `finally` are NOT "discharged on every path": a throwing
-      // view.destroy() (CM does NOT guard widget destroy — WidgetView.destroy calls
-      // widget.destroy(dom) bare, and this suite mounts table + fenced-code widgets that
-      // implement it) would skip parent.remove(), leaving the view attached to the shared
-      // happy-dom body for the rest of the file. Nesting keeps the parent removal
-      // unconditional. A throwing destroy is a real defect and still reds the run — but it
-      // must not REPLACE a failure that was already propagating, so it is reported beside
-      // that failure rather than over it.
-      try {
-        view.destroy();
-      } catch (destroyError) {
-        if (!propagating) {
-          // The rule's harm is a `finally` throw OVERWRITING control flow from the try/catch.
-          // `propagating` is the check for exactly that: this arm runs only when nothing was
-          // in flight, so there is no failure to overwrite — a destroy that throws on the
-          // success path is itself the failure, and the other arm below is what keeps a real
-          // one primary. The suppression must be the LAST comment line or Biome ignores it.
-          // biome-ignore lint/correctness/noUnsafeFinally: guarded — nothing is in flight here
-          throw destroyError;
-        }
-        console.error(
-          "withUnstarvedFrontier: view.destroy() ALSO threw during teardown; the failure being reported is the primary one",
-          destroyError
+    },
+  });
+}
+
+export function withUnstarvedFrontierState(options: {
+  what: string;
+  /**
+   * The measurement. Call `requireUnstarvedFrontier(state)` at every point where that
+   * state's parse frontier must be complete for what follows to mean anything; it does not
+   * return when the frontier is starved, abandoning the attempt instead.
+   *
+   * ⚠️ RETURN THE STATE YOUR ASSERTIONS READ. It is compared against the state the LAST
+   * gate saw, and a mismatch is refused. That is this form's counterpart to the view
+   * form's post-gate check, and it is not paperwork: `gate(s); s = s.update(…);
+   * expect(s…)` satisfies every other refusal here while asserting on a frontier nothing
+   * ever gated — which on a starved run is a full walk compared against a full walk.
+   * The return type is also what refuses an async callback at compile time.
+   *
+   * ⚠️ What that check actually proves is "the state you HANDED BACK is the one you last
+   * gated" — not "your assertions read a gated state". Deriving a third state, asserting
+   * on it, and returning the gated one passes. The wider claim is unprovable from here
+   * (and equally unprovable in the view form, which compares `view.state`), so do not read
+   * a green run as more than it is: the shape this closes is the one both call sites are
+   * one edit away from, gate → update → assert.
+   *
+   * ⚠️ Re-run FROM THE TOP on every retry, so it must be free of side effects visible
+   * outside itself — a counter incremented or an array pushed from here is multiplied by
+   * however many attempts a loaded machine starves, i.e. non-deterministically and only
+   * under load. Build the states this needs INSIDE the callback, as the fenced-code sites
+   * do by calling `stateWithField()` per attempt.
+   *
+   * ⚠️ A gate speaks ONLY for the state it is handed. Gating early and updating twice more
+   * before the final gate leaves the intermediate states unverified; the returned-state
+   * check catches the LAST such gap, not every one. Gate after every update whose frontier
+   * the assertions depend on.
+   */
+  observe: (requireUnstarvedFrontier: (state: EditorState) => void) => EditorState;
+  attempts?: number;
+}): void {
+  const { what, observe, attempts = 5 } = options;
+  runUnstarvedAttempts<undefined, EditorState>({
+    caller: "withUnstarvedFrontierState",
+    what,
+    attempts,
+    // This form owns nothing: the caller builds and rebuilds its own states inside
+    // `observe`, and an EditorState needs no disposal. The no-op is written out rather
+    // than made optional in the core so "who owes the teardown" stays a question every
+    // form answers.
+    begin: () => ({ context: undefined, teardown: () => {} }),
+    observe: (_context, gate) => observe(gate),
+    postCheck: (_context, stateAtLastGate, returned) => {
+      if (returned !== stateAtLastGate) {
+        throw new HelperRefusal(
+          `withUnstarvedFrontierState: observe() returned a state other than the one requireUnstarvedFrontier() last saw, so ${what} was measured on an ungated frontier`
         );
-      } finally {
-        parent.remove();
       }
-    }
-  }
-  throw new Error(
-    `withUnstarvedFrontier: all ${attempts} attempts found a starved parse frontier, so ${what} was never observed`
-  );
+    },
+  });
 }
