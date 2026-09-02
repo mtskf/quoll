@@ -45,6 +45,27 @@ function countingDestroy(view: EditorView, tally: { n: number }): EditorView {
   return view;
 }
 
+/** A settled view whose `destroy()` still tears down for real, then throws. */
+function throwingDestroyMount(parent: HTMLElement): EditorView {
+  const view = settledMarkdown(parent);
+  const real = view.destroy.bind(view);
+  view.destroy = () => {
+    real(); // still tear the view down — only the throw is simulated
+    throw new Error("widget destroy blew up");
+  };
+  return view;
+}
+
+/** Run `fn`, returning what it throws instead of letting it propagate. */
+function catchError(fn: () => void): unknown {
+  try {
+    fn();
+  } catch (error) {
+    return error;
+  }
+  return undefined;
+}
+
 /**
  * An async `observe`, which the helper must refuse. ONE `as`, not `as unknown as`: the
  * wider form erases the source type, so this fixture would keep compiling — and its claim
@@ -307,8 +328,7 @@ describe("a swallowed starved-frontier signal is refused", () => {
   // successful-looking observation. `gated` cannot see this — it is set before the throw —
   // so the helper tracks whether the gate actually fired.
   it("throws when observe() catches the sentinel and returns anyway", () => {
-    let caught: unknown;
-    try {
+    const caught = catchError(() =>
       withUnstarvedFrontier({
         what: "the bounded output",
         attempts: 2,
@@ -320,10 +340,8 @@ describe("a swallowed starved-frontier signal is refused", () => {
             /* exactly the mistake this test pins */
           }
         },
-      });
-    } catch (error) {
-      caught = error;
-    }
+      })
+    );
     expect((caught as Error | undefined)?.message).toMatch(/swallowed the starved-frontier signal/);
     // …and exactly once. This refusal is raised on the RETURN path, so the catch below it
     // sees the helper's own diagnosis; wrapping it would chain a second, identical copy of
@@ -336,8 +354,7 @@ describe("a swallowed starved-frontier signal is refused", () => {
     // thrown sentinel reads as an ordinary starved attempt, so the swallow is retried away
     // and the run ends blaming the CPU. Detected by COUNTING sentinels instead: only one
     // can escape an attempt, so two means one was caught.
-    let caught: unknown;
-    try {
+    const caught = catchError(() =>
       withUnstarvedFrontier({
         what: "the bounded output",
         attempts: 2,
@@ -350,10 +367,8 @@ describe("a swallowed starved-frontier signal is refused", () => {
           }
           requireUnstarvedFrontier(); // the second one escapes
         },
-      });
-    } catch (error) {
-      caught = error;
-    }
+      })
+    );
     expect((caught as Error | undefined)?.message).toMatch(/swallowed the starved-frontier signal/);
     // The sentinel names and explains itself, so the chained cause is readable rather than
     // a bare `Error:` with an empty body.
@@ -511,15 +526,7 @@ describe("every attempt cleans up after itself", () => {
     expect(() =>
       withUnstarvedFrontier({
         what: "the test observation",
-        mount: (parent) => {
-          const view = settledMarkdown(parent);
-          const real = view.destroy.bind(view);
-          view.destroy = () => {
-            real(); // still tear the view down — only the throw is simulated
-            throw new Error("widget destroy blew up");
-          };
-          return view;
-        },
+        mount: throwingDestroyMount,
         observe: (_view, requireUnstarvedFrontier) => {
           requireUnstarvedFrontier();
         },
@@ -537,15 +544,7 @@ describe("every attempt cleans up after itself", () => {
     expect(() =>
       withUnstarvedFrontier({
         what: "the test observation",
-        mount: (parent) => {
-          const view = settledMarkdown(parent);
-          const real = view.destroy.bind(view);
-          view.destroy = () => {
-            real(); // still tear the view down — only the throw is simulated
-            throw new Error("widget destroy blew up");
-          };
-          return view;
-        },
+        mount: throwingDestroyMount,
         observe: (_view, requireUnstarvedFrontier) => {
           requireUnstarvedFrontier();
           throw new Error("the real failure");
