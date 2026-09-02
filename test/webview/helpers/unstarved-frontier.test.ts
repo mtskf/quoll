@@ -124,8 +124,11 @@ describe("withUnstarvedFrontier retries a starved attempt from a fresh view", ()
         // a helper that never appended satisfies exactly as well as one that appended and
         // then removed. That symmetry makes "the parent was removed" unobservable without
         // first pinning "the parent was there" — a self-cancelling pair of the kind this
-        // helper exists to refuse. `parent.remove()` is a silent no-op on a detached node,
-        // and CodeMirror never consults `isConnected`, so nothing else notices either.
+        // helper exists to refuse.
+        //
+        // `document.body` specifically, not merely connected: the teardown oracles count
+        // body's DIRECT children, so appending anywhere else would leave both them and an
+        // `isConnected` check green.
         expect(parent.parentElement).toBe(document.body);
         expect(parent.childElementCount).toBe(0); // nothing carried over
         expect(parents).not.toContain(parent); // and not the same element again
@@ -323,7 +326,7 @@ describe("a dispatch after the LAST gate is refused", () => {
         },
       })
     ).toThrow(
-      /dispatched after its last requireUnstarvedFrontier\(\) call, so the bounded output was measured on an ungated frontier/
+      /replaced its state after the last requireUnstarvedFrontier\(\) call, so the bounded output was measured on an ungated frontier/
     );
   });
 

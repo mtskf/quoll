@@ -183,8 +183,11 @@ export function withUnstarvedFrontier<R extends void | undefined>(options: {
     // measured ungated — on a starved frontier that is a full walk compared against a full
     // walk, i.e. the vacuous green this helper exists to refuse. Compared by IDENTITY
     // rather than by intercepting `dispatch`: reads (`view.state.field(...)`, a separate
-    // `settledState(...)` oracle) do not replace `view.state`, and happy-dom never runs
-    // CodeMirror's background-parse plugin, so nothing else can move it.
+    // `settledState(...)` oracle) do not replace `view.state`. What keeps anything ELSE
+    // from moving it is that `observe` is synchronous and the view is destroyed as the
+    // attempt ends — CodeMirror's parse worker schedules itself through `setTimeout`, which
+    // happy-dom does implement, so nothing here rests on that timer being absent; it rests
+    // on the attempt completing before any timer could fire.
     let stateAtLastGate: EditorState | undefined;
     // COUNTED, not a boolean, and hoisted OUT of the try so the catch can read it too. At
     // most ONE sentinel can escape an attempt, so a count above what escaped proves an
@@ -263,11 +266,15 @@ export function withUnstarvedFrontier<R extends void | undefined>(options: {
           `withUnstarvedFrontier: observe() returned without calling requireUnstarvedFrontier(), so ${what} was measured on an ungated view`
         );
       }
-      // …and a gate that fired but was then made obsolete by a further dispatch is the
-      // same vacuity wearing a passing gate. See `stateAtLastGate` above.
+      // …and a gate that fired but was then made obsolete is the same vacuity wearing a
+      // passing gate. See `stateAtLastGate` above. The message says "replaced its state"
+      // rather than "dispatched" because that is what the identity check actually observes:
+      // `EditorView.setState()` replaces the state without dispatching, and naming the
+      // wrong cause in a refusal would send the reader hunting for a dispatch that is not
+      // there.
       if (view.state !== stateAtLastGate) {
         throw new HelperRefusal(
-          `withUnstarvedFrontier: observe() dispatched after its last requireUnstarvedFrontier() call, so ${what} was measured on an ungated frontier`
+          `withUnstarvedFrontier: observe() replaced its state after the last requireUnstarvedFrontier() call, so ${what} was measured on an ungated frontier`
         );
       }
       return;
