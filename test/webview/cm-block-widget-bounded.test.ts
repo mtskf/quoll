@@ -1,6 +1,5 @@
 // @vitest-environment happy-dom
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
-import { syntaxTreeAvailable } from "@codemirror/language";
 import {
   EditorSelection,
   EditorState,
@@ -12,6 +11,7 @@ import { describe, expect, it } from "vitest";
 import { imageBlockField } from "../../src/webview/cm/image/index.js";
 import { settledState } from "./helpers/settled-state.js";
 import { settledMount } from "./helpers/settled-view.js";
+import { withUnstarvedFrontier } from "./helpers/unstarved-frontier.js";
 
 interface Slot {
   from: number;
@@ -80,14 +80,17 @@ const inertChanges = (c: Edit["changes"]) =>
 // compare into full-vs-full. That trades a flake for a vacuous pass, which is worse.
 // The pin below is what keeps the bounded result trustworthy without a settle.
 //
-// ⚠️ The comparison is ATTEMPTED rather than asserted on the first try. CodeMirror gives its
-// post-edit reparse a 20ms WALL-CLOCK budget, and under CPU starvation that window can
-// elapse while this process is descheduled; image-field.ts's G2 arm then self-heals with a
-// full recompute, so the bounded path is not what ran and there is nothing to compare.
-// Retrying from a fresh view neither hides a regression (a real bounded bug reds every
-// attempt that gets far enough to compare — measured by breaking computeBounded) nor passes
-// vacuously (an all-starved run throws below), which a vitest-level `{ retry: n }` would
-// fail on both counts.
+// ⚠️ The comparison is ATTEMPTED rather than asserted on the first try, which is why this
+// runs through `withUnstarvedFrontier` (helpers/unstarved-frontier.ts) rather than a local
+// loop. CodeMirror gives its post-edit reparse a 20ms WALL-CLOCK budget, and under CPU
+// starvation that window can elapse while this process is descheduled; image-field.ts's G2
+// arm then self-heals with a full recompute, so the bounded path is not what ran and there
+// is nothing to compare. Retrying from a fresh view neither hides a regression (a real
+// bounded bug reds every attempt that gets far enough to compare — measured by breaking
+// computeBounded) nor passes vacuously (an all-starved run throws, and that throw is pinned
+// in helpers/unstarved-frontier.test.ts rather than living unguarded here, which is the
+// whole reason the loop moved), which a vitest-level `{ retry: n }` would fail on both
+// counts.
 function checkEquivalence(initial: string, edits: Edit[], oracleSlots: number): void {
   if (
     edits.every((e) => (!e.changes || inertChanges(e.changes)) && !e.selection && !e.cursorAtEnd)
@@ -120,24 +123,14 @@ function checkEquivalence(initial: string, edits: Edit[], oracleSlots: number): 
       "checkEquivalence: at least one edit with `changes`, `selection`, or `cursorAtEnd` is required to exercise the bounded path"
     );
   }
-  for (let attempt = 0; attempt < 5; attempt++) {
-    if (runOnce()) {
-      return;
-    }
-  }
-  throw new Error(
-    "checkEquivalence: no attempt reached a complete post-edit frontier, so nothing was compared"
-  );
-
-  /** One attempt. Returns false when the frontier was starved and nothing was compared. */
-  function runOnce(): boolean {
-    const parent = document.createElement("div");
-    document.body.appendChild(parent);
-    const view = settledMount(
-      { state: EditorState.create({ doc: initial, extensions: exts() }), parent },
-      10_000
-    );
-    try {
+  withUnstarvedFrontier({
+    what: "the bounded-vs-full slot comparison",
+    mount: (parent) =>
+      settledMount(
+        { state: EditorState.create({ doc: initial, extensions: exts() }), parent },
+        10_000
+      ),
+    observe: (view, requireUnstarvedFrontier) => {
       for (const e of edits) {
         view.dispatch({ changes: e.changes, selection: e.selection });
         if (e.cursorAtEnd) {
@@ -150,29 +143,30 @@ function checkEquivalence(initial: string, edits: Edit[], oracleSlots: number): 
         //
         // Operating rule for this loop: nothing may sit between any two of the dispatches
         // this loop performs — within a `cursorAtEnd` pair AND across iterations, since the
-        // gate read right below is itself inside that window — that advances the parse or
+        // gate call right below is itself inside that window — that advances the parse or
         // publishes a tree: no settle, no parse-advancing read (ensureSyntaxTree, a
-        // `fullTree` probe, forceParsing, …), no second doc-changing dispatch, and no `await`
-        // or timer flush that yields to the event loop. The gate's no-op guarantee depends on
-        // this loop staying straight-line synchronous code end to end; break that shape and
-        // the guarantee breaks with it.
+        // `fullTree` probe, forceParsing, …), no second doc-changing dispatch, and no
+        // `await` or timer flush that yields to the event loop. The gate's no-op guarantee
+        // depends on this loop staying straight-line synchronous code end to end; break
+        // that shape and the guarantee breaks with it.
         //
-        // ⚠️ What a `true` rules out is the STARVED-frontier full walk, and nothing more.
-        // imageBlockField.update takes its G3 arm — computeFreshFull — whenever
+        // ⚠️ What passing the gate rules out is the STARVED-frontier full walk, and nothing
+        // more. imageBlockField.update takes its G3 arm — computeFreshFull — whenever
         // leadingFrontmatterEnd changes, BEFORE this predicate is ever consulted
-        // (image-field.ts), so `true` does not mean the bounded path ran. The seven "G3"
-        // rows below take that arm, and what they compare there is the field's INCREMENTALLY
-        // parsed full walk against the oracle's freshly parsed one — not bounded against
-        // full. That is not a hole: it is how those rows pin the arm, since with the arm
-        // deleted the bounded path runs INSTEAD and gets the answer wrong. But only the six
-        // BOUNDARY-CROSSING rows do that pinning; the "frontmatter length shift" row stays
-        // green either way (measured 2026-09-02, both claims). A false means the frontier was
-        // starved, so abandon the attempt instead of comparing a full walk over a PARTIAL
-        // tree against the settled oracle.
-        if (!syntaxTreeAvailable(view.state, view.state.doc.length)) {
-          return false;
-        }
+        // (image-field.ts), so passing does not mean the bounded path ran. The seven "G3"
+        // rows below take that arm, and what they compare there is the field's
+        // INCREMENTALLY parsed full walk against the oracle's freshly parsed one — not
+        // bounded against full. That is not a hole: it is how those rows pin the arm, since
+        // with the arm deleted the bounded path runs INSTEAD and gets the answer wrong. But
+        // only the six BOUNDARY-CROSSING rows do that pinning; the "frontmatter length
+        // shift" row stays green either way (measured 2026-09-02, both claims). A starved
+        // frontier does not return from the gate: the attempt is abandoned rather than
+        // comparing a full walk over a PARTIAL tree against the settled oracle.
+        requireUnstarvedFrontier();
       }
+      // The oracle is a SEPARATE state, so settling it moves nothing on the view and the
+      // gate above still speaks for what is compared below — which is also what keeps the
+      // helper's post-gate state-identity check satisfied.
       const oracle = settledState(
         EditorState.create({
           doc: view.state.doc.toString(),
@@ -185,12 +179,8 @@ function checkEquivalence(initial: string, edits: Edit[], oracleSlots: number): 
         slots(oracle.field(imageBlockField)),
         oracleSlots
       );
-      return true;
-    } finally {
-      view.destroy();
-      parent.remove();
-    }
-  }
+    },
+  });
 }
 
 const IMG = "![alt](https://example.com/a.png)";
