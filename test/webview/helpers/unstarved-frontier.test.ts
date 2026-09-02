@@ -142,7 +142,9 @@ describe("an observation that never consults the gate is refused", () => {
           /* measures something, but never gates it */
         },
       })
-    ).toThrow(/observe\(\) returned without calling requireUnstarvedFrontier\(\)/);
+    ).toThrow(
+      /observe\(\) returned without calling requireUnstarvedFrontier\(\), so the bounded output was measured on an ungated view/
+    );
   });
 
   it("does not retry the ungated case — it is a test bug, not a starved machine", () => {
@@ -290,7 +292,9 @@ describe("a dispatch after the LAST gate is refused", () => {
           view.dispatch({ changes: { from: 0, insert: "x" } });
         },
       })
-    ).toThrow(/dispatched after its last requireUnstarvedFrontier\(\) call/);
+    ).toThrow(
+      /dispatched after its last requireUnstarvedFrontier\(\) call, so the bounded output was measured on an ungated frontier/
+    );
   });
 
   it("accepts a second gate that follows a dispatch — the gate-per-dispatch shape", () => {
@@ -395,11 +399,11 @@ describe("a swallowed starved-frontier signal is refused", () => {
 
   it("throws when observe() swallows the sentinel and then fails an assertion of its own", () => {
     // The escaping error is NOT a sentinel, so the counter alone can convict: one sentinel
-    // was thrown and none escaped. That is the arm of the catch's threshold that the two
-    // tests above leave untouched — they both escape a StarvedFrontier, so both take the
-    // other arm. Without it, this surfaces as the bare assertion diff below, taken on a
-    // view that was never gated: a real failure reported against a meaningless frontier,
-    // which is the misattribution this helper exists to prevent.
+    // was thrown and none escaped. This is the only test that reaches the non-sentinel arm
+    // of the catch's threshold. Without that arm, the failure surfaces as the bare assertion
+    // diff below, taken on a starved frontier and carrying no hint that a sentinel was
+    // swallowed — a real failure reported against a meaningless measurement, which is the
+    // misattribution this helper exists to prevent.
     const caught = catchError(() =>
       withUnstarvedFrontier({
         what: "the bounded output",

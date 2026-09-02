@@ -225,12 +225,12 @@ export function withUnstarvedFrontier<R extends void | undefined>(options: {
         void Promise.resolve(returned).catch(() => {});
         // HelperRefusal, here and on the three throws below: the catch's swallow check must
         // wrap only what came out of `observe`, never a refusal the helper raised itself —
-        // which would read as a second, identical copy of its own message. Some of the four
-        // can reach that check with a non-zero `sentinelsThrown`, so their marking is
-        // load-bearing; all four carry it so that "the helper never relabels its own refusals"
-        // holds structurally, by the class of the error, rather than resting on which counter
-        // values each throw site happens to be reachable with — an argument a later edit voids
-        // silently.
+        // which would relabel the helper's own diagnosis. `HelperRefusal`'s docblock names
+        // the two distinct ways that goes wrong. Some of the four can reach that check with
+        // a non-zero `sentinelsThrown`, so their marking is load-bearing; all four carry it
+        // so that "the helper never relabels its own refusals" holds structurally, by the
+        // class of the error, rather than resting on which counter values each throw site
+        // happens to be reachable with — an argument a later edit voids silently.
         throw new HelperRefusal(
           "withUnstarvedFrontier: observe() must be synchronous — an async callback is destroyed mid-flight and its assertions never gate the result"
         );
