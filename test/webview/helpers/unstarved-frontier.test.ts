@@ -365,11 +365,12 @@ describe("an attempt count that could not have measured anything is refused", ()
 
   it("throws on a FRACTIONAL count, which the `< 1` arm alone would let through", () => {
     // Separate from the case above because they exercise different arms of the same guard.
-    // Without the `Number.isInteger` half, 2.5 runs two attempts and then reports "all 2.5
-    // attempts found a starved parse frontier" — the guard's own comment calls that the one
-    // message here that must not lie about what was measured. `NaN` is worse: the loop runs
-    // zero times and the same sentence claims a frontier was found on attempts that never
-    // happened.
+    // Without the `Number.isInteger` half, 2.5 runs THREE attempts (`attempt < 2.5` admits
+    // 0, 1 and 2) and then reports "all 2.5 attempts found a starved parse frontier" — a
+    // count that matches neither what ran nor anything else, and the guard's own comment
+    // calls this the one message here that must not lie about what was measured. `NaN` is
+    // worse still: the loop runs zero times and the same sentence claims a frontier was
+    // found on attempts that never happened.
     for (const attempts of [2.5, Number.NaN]) {
       expect(() =>
         withUnstarvedFrontier({
