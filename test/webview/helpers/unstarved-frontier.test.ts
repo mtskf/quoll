@@ -392,6 +392,34 @@ describe("a swallowed starved-frontier signal is refused", () => {
       message: expect.stringContaining("sentinel escaped the helper"),
     });
   });
+
+  it("throws when observe() swallows the sentinel and then fails an assertion of its own", () => {
+    // The escaping error is NOT a sentinel, so the counter alone can convict: one sentinel
+    // was thrown and none escaped. That is the arm of the catch's threshold that the two
+    // tests above leave untouched — they both escape a StarvedFrontier, so both take the
+    // other arm. Without it, this surfaces as the bare assertion diff below, taken on a
+    // view that was never gated: a real failure reported against a meaningless frontier,
+    // which is the misattribution this helper exists to prevent.
+    const caught = catchError(() =>
+      withUnstarvedFrontier({
+        what: "the bounded output",
+        attempts: 2,
+        mount: starvedMount,
+        observe: (_view, requireUnstarvedFrontier) => {
+          try {
+            requireUnstarvedFrontier();
+          } catch {
+            /* exactly the mistake this test pins */
+          }
+          expect(1).toBe(2); // observe's OWN failure, on the ungated view
+        },
+      })
+    );
+    expect((caught as Error | undefined)?.message).toMatch(/swallowed the starved-frontier signal/);
+    // Chained, not replaced: the reader still gets the assertion diff, now labelled with
+    // the reason it cannot be trusted at face value.
+    expect((caught as Error).cause).toBeDefined();
+  });
 });
 
 describe("an abandoned async continuation cannot poison a later test", () => {
