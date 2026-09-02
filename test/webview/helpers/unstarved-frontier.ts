@@ -179,15 +179,16 @@ export function withUnstarvedFrontier<R extends void | undefined>(options: {
     }
     let gated = false;
     // The state as of the LAST gate call. A gate is only meaningful for the frontier that
-    // existed when it ran, so a dispatch AFTER the last one leaves the state actually
+    // existed when it ran, so a state replaced AFTER the last one leaves what was actually
     // measured ungated — on a starved frontier that is a full walk compared against a full
-    // walk, i.e. the vacuous green this helper exists to refuse. Compared by IDENTITY
-    // rather than by intercepting `dispatch`: reads (`view.state.field(...)`, a separate
-    // `settledState(...)` oracle) do not replace `view.state`. What keeps anything ELSE
-    // from moving it is that `observe` is synchronous and the view is destroyed as the
-    // attempt ends — CodeMirror's parse worker schedules itself through `setTimeout`, which
-    // happy-dom does implement, so nothing here rests on that timer being absent; it rests
-    // on the attempt completing before any timer could fire.
+    // walk, i.e. the vacuous green this helper exists to refuse.
+    //
+    // Compared by IDENTITY rather than by intercepting `dispatch`, because the question is
+    // WHAT was measured, not how it changed: whatever put a different state on the view
+    // fails the same comparison, and reads (`view.state.field(...)`, a separate
+    // `settledState(...)` oracle) leave it alone and pass. That is the whole claim — it
+    // rests on this comparison and nothing else, so no argument about what could or could
+    // not have moved the state in the meantime is needed, or would be pinned if made.
     let stateAtLastGate: EditorState | undefined;
     // COUNTED, not a boolean, and hoisted OUT of the try so the catch can read it too. At
     // most ONE sentinel can escape an attempt, so a count above what escaped proves an
