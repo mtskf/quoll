@@ -7,6 +7,7 @@ import { markdown } from "@codemirror/lang-markdown";
 import { Compartment, EditorState } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import { describe, expect, it, vi } from "vitest";
+import { timeoutMessage, truncatedSnapshotMessage } from "./parse-to-end.js";
 import { settledMount } from "./settled-view.js";
 import { neverFinishingLanguage } from "./stub-parsers.js";
 import { withUnstarvedFrontier } from "./unstarved-frontier.js";
@@ -311,6 +312,25 @@ describe("an async observe is refused rather than silently half-run", () => {
         },
       })
     ).toThrow(/observe\(\) must be synchronous/);
+  });
+});
+
+describe("this helper is not a settling caller, and the type says so", () => {
+  it("is refused by the two parse-budget messages at COMPILE time", () => {
+    // ./parse-to-end.ts narrows both message builders to `SettlingCaller`, which EXCLUDES
+    // this helper: it probes for a language and never advances a parse, so neither sentence
+    // about a parse budget could honestly carry its name. Nothing else pins that narrowing
+    // — widening it back to `ParseCaller` left every suite green (measured).
+    //
+    // A positive control first, so the two directives below are known to be refusing this
+    // helper's NAME rather than a call shape that was broken anyway:
+    expect(timeoutMessage("settledView", 5, 9)).toContain("settledView");
+    // The directives are self-verifying in the other direction: widen `SettlingCaller` and
+    // TypeScript reports both as unused, so `pnpm compile` reds.
+    // @ts-expect-error withUnstarvedFrontier advances no parse, so it is not a SettlingCaller
+    timeoutMessage("withUnstarvedFrontier", 5, 9);
+    // @ts-expect-error ditto: the snapshot message is about a parse this helper never ran
+    truncatedSnapshotMessage("withUnstarvedFrontier", 0, 9);
   });
 });
 
