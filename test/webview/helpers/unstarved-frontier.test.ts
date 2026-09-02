@@ -431,8 +431,9 @@ describe("a state replacement after the LAST gate is refused", () => {
   });
 
   it("still accepts reading the view after the gate, which is the normal shape", () => {
-    // The refusal compares state IDENTITY, so it must not fire on the five call sites,
-    // which all read `view.state` (and settle a separate oracle state) after gating.
+    // The refusal compares state IDENTITY, so it must not fire on the ordinary shape the
+    // call sites use: reading `view.state` (and settling a separate oracle state) after
+    // gating. Counting them here would be one more undated census to go stale.
     withUnstarvedFrontier({
       what: "the test observation",
       mount: settledMarkdown,
