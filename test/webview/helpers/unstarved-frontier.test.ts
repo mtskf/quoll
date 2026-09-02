@@ -350,7 +350,18 @@ describe("a state replacement after the LAST gate is refused", () => {
           // Asserted inside the fixture rather than as its own `it`, because a separate
           // test would not be coupled to the state this one actually passes to setState.
           expect(replacement.doc).toBe(view.state.doc);
+          // The other half of the same dependency: this fixture only kills the
+          // dispatch-interception mutant because setState does NOT dispatch. If that ever
+          // changed, the state would still be replaced, this test would still pass, and
+          // that mutant would quietly survive again.
+          let dispatches = 0;
+          const realDispatch = view.dispatch.bind(view);
+          view.dispatch = ((...args: Parameters<typeof realDispatch>) => {
+            dispatches++;
+            return realDispatch(...args);
+          }) as typeof view.dispatch;
           view.setState(replacement);
+          expect(dispatches).toBe(0);
         },
       })
     ).toThrow(
