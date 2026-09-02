@@ -141,6 +141,25 @@ describe("an async observe is refused rather than silently half-run", () => {
     ).toThrow(/observe\(\) must be synchronous/);
   });
 
+  it("names the async bug even when the callback gated before its first await", () => {
+    // The gate fires, throws the sentinel INSIDE the still-suspended callback, and the
+    // helper reaches its thenable check with sentinelsThrown at 1 — which is also what a
+    // swallow looks like from the catch. Without the helper marking its own refusals, the
+    // "must be synchronous" message (checked first precisely so the reader is sent to the
+    // right bug) is relabelled as swallow advice.
+    expect(() =>
+      withUnstarvedFrontier({
+        what: "the bounded output",
+        attempts: 2,
+        mount: starvedMount,
+        observe: asAsyncObserve(async (_view, requireUnstarvedFrontier) => {
+          requireUnstarvedFrontier(); // starved → throws before any await runs
+          await Promise.resolve();
+        }),
+      })
+    ).toThrow(/observe\(\) must be synchronous/);
+  });
+
   it("refuses a bare `.then`-only thenable without tripping over its missing .catch", () => {
     // The detection admits ANY thenable, and a thenable need only have `.then`. Reaching
     // for `.catch` on one would raise a TypeError that replaced the message below with a
@@ -270,7 +289,8 @@ describe("a swallowed starved-frontier signal is refused", () => {
   // successful-looking observation. `gated` cannot see this — it is set before the throw —
   // so the helper tracks whether the gate actually fired.
   it("throws when observe() catches the sentinel and returns anyway", () => {
-    expect(() =>
+    let caught: unknown;
+    try {
       withUnstarvedFrontier({
         what: "the bounded output",
         attempts: 2,
@@ -282,8 +302,15 @@ describe("a swallowed starved-frontier signal is refused", () => {
             /* exactly the mistake this test pins */
           }
         },
-      })
-    ).toThrow(/swallowed the starved-frontier signal/);
+      });
+    } catch (error) {
+      caught = error;
+    }
+    expect((caught as Error | undefined)?.message).toMatch(/swallowed the starved-frontier signal/);
+    // …and exactly once. This refusal is raised on the RETURN path, so the catch below it
+    // sees the helper's own diagnosis; wrapping it would chain a second, identical copy of
+    // the same message as its cause and read as two separate findings.
+    expect((caught as Error).cause).toBeUndefined();
   });
 
   it("throws when observe() swallows one sentinel and lets a later one escape", () => {
@@ -480,6 +507,33 @@ describe("every attempt cleans up after itself", () => {
         },
       })
     ).toThrow(/widget destroy blew up/);
+    expect(document.body.childElementCount).toBe(before);
+  });
+
+  it("keeps observe()'s failure primary when view.destroy() ALSO throws", () => {
+    // A throwing `finally` DISCARDS the pending exception rather than chaining it, so a
+    // teardown failure would surface INSTEAD of the assertion diff — in a suite that mounts
+    // exactly the widgets whose destroy can throw. The destroy failure is still reported,
+    // beside the primary one rather than over it.
+    const before = document.body.childElementCount;
+    expect(() =>
+      withUnstarvedFrontier({
+        what: "the test observation",
+        mount: (parent) => {
+          const view = settledMarkdown(parent);
+          const real = view.destroy.bind(view);
+          view.destroy = () => {
+            real(); // still tear the view down — only the throw is simulated
+            throw new Error("widget destroy blew up");
+          };
+          return view;
+        },
+        observe: (_view, requireUnstarvedFrontier) => {
+          requireUnstarvedFrontier();
+          throw new Error("the real failure");
+        },
+      })
+    ).toThrow(/the real failure/);
     expect(document.body.childElementCount).toBe(before);
   });
 });

@@ -24,6 +24,19 @@ class StarvedFrontier extends Error {
 }
 
 /**
+ * Marks a refusal raised by THIS HELPER, so the catch-side swallow check wraps only errors
+ * that came out of `observe`. Without it the catch relabels the helper's own diagnoses: an
+ * async `observe` that gated before its first `await` leaves `sentinelsThrown` at 1, so the
+ * "must be synchronous" message — deliberately checked first so the reader is sent to the
+ * right bug — is replaced by the swallow advice, and the return-path swallow refusal is
+ * wrapped in a second copy of itself.
+ *
+ * Siblings with `StarvedFrontier`, NOT a parent of it: the `!(error instanceof
+ * StarvedFrontier)` rethrow below must keep seeing the sentinel as its own thing.
+ */
+class HelperRefusal extends Error {}
+
+/**
  * Shared by the two swallow detections below — the return path cannot see a swallow that
  * is followed by a throw, and the catch path cannot see one that is followed by a return,
  * so both need to say the same thing.
@@ -169,6 +182,13 @@ export function withUnstarvedFrontier<R extends void | undefined>(options: {
     // earlier one was swallowed — which the return-path check alone cannot see when
     // observe() swallows and then throws (its own assertion, or a second sentinel).
     let sentinelsThrown = 0;
+    // Whether a failure is in flight as the `finally` below runs. A throwing `finally`
+    // DISCARDS the pending exception outright — it does not chain it, and the replacement
+    // carries no `cause` — so a teardown failure would surface INSTEAD of the assertion diff
+    // this helper exists to show, in a suite that mounts exactly the widgets whose destroy
+    // can throw. Nesting the teardown fixes only the parent-removal half of that; this flag
+    // is the other half.
+    let propagating = false;
     try {
       // A false gate ALSO means "no Language extension attached". Separating that here,
       // once per attempt, keeps a misconfigured extension list from masquerading as five
@@ -203,7 +223,12 @@ export function withUnstarvedFrontier<R extends void | undefined>(options: {
         // `.catch` on a `.then`-only object throws a TypeError that would replace the
         // clear message below with a confusing one.
         void Promise.resolve(returned).catch(() => {});
-        throw new Error(
+        // HelperRefusal, here and on the three throws below: the catch's swallow check must
+        // wrap only what came out of `observe`. Only this one can reach that check with a
+        // non-zero `sentinelsThrown` today (an async callback that gated before its first
+        // `await`); the others are marked so "the helper never relabels its own refusals" is
+        // structural rather than an argument about counter values that a later edit can void.
+        throw new HelperRefusal(
           "withUnstarvedFrontier: observe() must be synchronous — an async callback is destroyed mid-flight and its assertions never gate the result"
         );
       }
@@ -213,7 +238,7 @@ export function withUnstarvedFrontier<R extends void | undefined>(options: {
       // this check a swallowed sentinel reads as a successful observation on a starved
       // view.
       if (sentinelsThrown > 0) {
-        throw new Error(SWALLOWED_SENTINEL_MESSAGE);
+        throw new HelperRefusal(SWALLOWED_SENTINEL_MESSAGE);
       }
       // An `observe` that never reached the gate measured an UNGATED view, which is the
       // vacuous pass this helper exists to prevent: on a starved frontier the field
@@ -222,36 +247,57 @@ export function withUnstarvedFrontier<R extends void | undefined>(options: {
       // sites would merely red; the oracle sites would LIE. Checked after `observe`
       // returns, because only then is "never called" distinguishable from "not yet".
       if (!gated) {
-        throw new Error(
+        throw new HelperRefusal(
           `withUnstarvedFrontier: observe() returned without calling requireUnstarvedFrontier(), so ${what} was measured on an ungated view`
         );
       }
       // …and a gate that fired but was then made obsolete by a further dispatch is the
       // same vacuity wearing a passing gate. See `stateAtLastGate` above.
       if (view.state !== stateAtLastGate) {
-        throw new Error(
+        throw new HelperRefusal(
           `withUnstarvedFrontier: observe() dispatched after its last requireUnstarvedFrontier() call, so ${what} was measured on an ungated frontier`
         );
       }
       return;
     } catch (error) {
-      if (sentinelsThrown > (error instanceof StarvedFrontier ? 1 : 0)) {
+      propagating = true;
+      if (
+        !(error instanceof HelperRefusal) &&
+        sentinelsThrown > (error instanceof StarvedFrontier ? 1 : 0)
+      ) {
         throw new Error(SWALLOWED_SENTINEL_MESSAGE, { cause: error });
       }
       if (!(error instanceof StarvedFrontier)) {
         throw error;
       }
+      // The sentinel is absorbed: the attempt is retried, nothing is in flight any more, so
+      // a teardown failure below IS the failure and must propagate.
+      propagating = false;
     } finally {
       // Two statements in one `finally` are NOT "discharged on every path": a throwing
       // view.destroy() (CM does NOT guard widget destroy — WidgetView.destroy calls
       // widget.destroy(dom) bare, and this suite mounts table + fenced-code widgets that
       // implement it) would skip parent.remove(), leaving the view attached to the shared
-      // happy-dom body for the rest of the file, AND would REPLACE the in-flight assertion
-      // failure this helper exists to surface. Nesting keeps the parent removal
-      // unconditional; the destroy failure still propagates, which is correct — it is a
-      // real defect, not something to swallow.
+      // happy-dom body for the rest of the file. Nesting keeps the parent removal
+      // unconditional. A throwing destroy is a real defect and still reds the run — but it
+      // must not REPLACE a failure that was already propagating, so it is reported beside
+      // that failure rather than over it.
       try {
         view.destroy();
+      } catch (destroyError) {
+        if (!propagating) {
+          // The rule's harm is a `finally` throw OVERWRITING control flow from the try/catch.
+          // `propagating` is the check for exactly that: this arm runs only when nothing was
+          // in flight, so there is no failure to overwrite — a destroy that throws on the
+          // success path is itself the failure, and the other arm below is what keeps a real
+          // one primary. The suppression must be the LAST comment line or Biome ignores it.
+          // biome-ignore lint/correctness/noUnsafeFinally: guarded — nothing is in flight here
+          throw destroyError;
+        }
+        console.error(
+          "withUnstarvedFrontier: view.destroy() ALSO threw during teardown; the failure being reported is the primary one",
+          destroyError
+        );
       } finally {
         parent.remove();
       }
