@@ -342,7 +342,15 @@ describe("a state replacement after the LAST gate is refused", () => {
         mount: settledMarkdown,
         observe: (view, requireUnstarvedFrontier) => {
           requireUnstarvedFrontier();
-          view.setState(EditorState.create({ doc: view.state.doc, extensions: [markdown()] }));
+          const replacement = EditorState.create({ doc: view.state.doc, extensions: [markdown()] });
+          // The whole discriminating power of this test rests on the doc surviving by
+          // IDENTITY, and nothing else here would notice if it stopped: rewriting the line
+          // above to `doc: DOC` still replaces the state, so this test stays green while
+          // the doc-comparison mutant it exists to kill comes back to life (measured).
+          // Asserted inside the fixture rather than as its own `it`, because a separate
+          // test would not be coupled to the state this one actually passes to setState.
+          expect(replacement.doc).toBe(view.state.doc);
+          view.setState(replacement);
         },
       })
     ).toThrow(
