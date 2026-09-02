@@ -311,10 +311,10 @@ describe("every gate call re-reads the frontier, not just the first", () => {
   });
 });
 
-describe("a dispatch after the LAST gate is refused", () => {
+describe("a state replacement after the LAST gate is refused", () => {
   // A gate speaks only for the frontier that existed when it ran. Gating first and
-  // dispatching afterwards passes every other refusal here — gated, unstarved, synchronous
-  // — while the state actually measured was never gated at all.
+  // replacing the state afterwards passes every other refusal here — gated, unstarved,
+  // synchronous — while the state actually measured was never gated at all.
   it("throws when observe() dispatches after its final requireUnstarvedFrontier()", () => {
     expect(() =>
       withUnstarvedFrontier({
@@ -323,6 +323,26 @@ describe("a dispatch after the LAST gate is refused", () => {
         observe: (view, requireUnstarvedFrontier) => {
           requireUnstarvedFrontier();
           view.dispatch({ changes: { from: 0, insert: "x" } });
+        },
+      })
+    ).toThrow(
+      /replaced its state after the last requireUnstarvedFrontier\(\) call, so the bounded output was measured on an ungated frontier/
+    );
+  });
+
+  it("throws when observe() calls setState() — no dispatch, and the doc is untouched", () => {
+    // The refusal claims a STATE replacement, not a dispatch, and this is the fixture that
+    // makes the claim true rather than merely written. `setState` replaces `view.state`
+    // without dispatching, and reusing the existing `Text` keeps `doc` identical by
+    // identity — so a check weakened to compare docs, or reimplemented as a dispatch
+    // interception, would let this through while the test above still passed.
+    expect(() =>
+      withUnstarvedFrontier({
+        what: "the bounded output",
+        mount: settledMarkdown,
+        observe: (view, requireUnstarvedFrontier) => {
+          requireUnstarvedFrontier();
+          view.setState(EditorState.create({ doc: view.state.doc, extensions: [markdown()] }));
         },
       })
     ).toThrow(
