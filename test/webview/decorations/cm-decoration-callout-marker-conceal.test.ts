@@ -244,10 +244,15 @@ describe("calloutMarkerConcealField — bounded recompute ≡ full recompute", (
     edits: Array<{ changes?: unknown; selection?: unknown }>
   ): void {
     if (edits.length === 0) {
-      // The gate inside the attempt is per-dispatch, so a zero-edit call would compare a
-      // settled mount against a settled oracle and report success having exercised no
-      // bounded path. Refuse it at the door rather than let it read as a passing
-      // equivalence case.
+      // The gate inside the attempt is per-dispatch, so a zero-edit call exercises no
+      // bounded path at all. This refuses it at the door, naming the actual mistake.
+      // It is no longer the LAST line of defence — since this suite started running its
+      // comparison through `withUnstarvedFrontier`, an empty edit loop never reaches the
+      // gate, so the helper's own ungated refusal catches the case too (measured: deleting
+      // this block reds with "observe() returned without calling
+      // requireUnstarvedFrontier()", not with a settled-vs-settled pass). Keep it anyway:
+      // that backstop reports a gating bug, which sends the reader to the helper rather
+      // than to the missing edit that actually caused it.
       throw new Error(
         "checkEquivalence: at least one edit is required to exercise the bounded path"
       );
