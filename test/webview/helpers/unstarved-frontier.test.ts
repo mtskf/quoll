@@ -166,9 +166,9 @@ describe("withUnstarvedFrontier retries a starved attempt from a fresh view", ()
 describe("the gate speaks for the DOCUMENT end, not for the part already parsed", () => {
   it("refuses a frontier that is complete at the front and starved at the tail", () => {
     // Every other fixture here is all-or-nothing, so the gate's `upto` argument was free to
-    // shrink: weakening it from `doc.length` to 1 left all 29 tests here and all 89 in the
-    // consuming suites green (measured). This is the only shape that tells the difference,
-    // and it is what "unstarved" is supposed to mean.
+    // shrink: weakening it from `doc.length` to 1 left this file and the consuming suites
+    // green (measured). This is the only shape that tells the difference, and it is what
+    // "unstarved" is supposed to mean.
     expect(() =>
       withUnstarvedFrontier({
         what: "the bounded output",
@@ -326,9 +326,10 @@ describe("this helper is not a settling caller, and the type says so", () => {
     // about a parse budget could honestly carry its name. Nothing else pins that narrowing
     // — widening it back to `ParseCaller` left every suite green (measured).
     //
-    // A positive control first, so the two directives below are known to be refusing this
-    // helper's NAME rather than a call shape that was broken anyway:
+    // One positive control per builder first, so each directive below is known to be
+    // refusing this helper's NAME rather than a call shape that was broken anyway:
     expect(timeoutMessage("settledView", 5, 9)).toContain("settledView");
+    expect(truncatedSnapshotMessage("settledView", 0, 9)).toContain("settledView");
     // The directives are self-verifying in the other direction: widen `SettlingCaller` and
     // TypeScript reports both as unused, so `pnpm compile` reds.
     // @ts-expect-error withUnstarvedFrontier advances no parse, so it is not a SettlingCaller
