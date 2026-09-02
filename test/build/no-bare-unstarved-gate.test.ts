@@ -123,9 +123,13 @@ function findBareGates(text: string, fileName: string): number[] {
 }
 
 // The extension set is WIDER than the tree it walks: every test file here is `.ts` today,
-// so removing the other three alternatives reds nothing (measured) and no fixture can pin
-// them. They are anticipatory, they cost nothing, and the roster test below — not this
-// regex — is what pins the walk's reach.
+// so `mts` and `cts` are anticipatory — removing them reds nothing (measured). `tsx` is
+// not: `test/build/fixtures/reach.tsx` is checked in for the roster test below to name, so
+// narrowing this regex to `/\.ts$/` reds there. That fixture is deliberately EMPTY and
+// holds no test — vitest (`test/**/*.test.ts`) and tsc (`**/*.ts`) both look straight past
+// a `.tsx`, and being collected HERE is the whole of its job. Do not delete it as dead
+// weight. Beyond that one alternative, the roster test — not this regex — is what pins the
+// walk's reach.
 function scannableFiles(dir: string, out: string[] = []): string[] {
   for (const entry of readdirSync(dir)) {
     const abs = join(dir, entry);
@@ -208,8 +212,12 @@ describe("the scanner itself is not vacuous", () => {
     expect(findBareGates("// expect(syntaxTreeAvailable(s)).toBe(true);", "x.ts")).toEqual([]);
     // Nobody writes `expect()` with no arguments, so the walk's `>= 1` floor is unreachable
     // from the real tree and its removal reds nothing (measured). It is still what keeps
-    // `receiver.arguments[0]` from being `undefined` one line later, and a walk that THROWS
-    // fails open exactly as thoroughly as one that misses — so the floor is exercised here.
+    // `receiver.arguments[0]` from being `undefined` one line later, and this fixture is the
+    // only thing that exercises it: without the floor it fails with a TypeError on `.kind`
+    // (measured). That noise is the POINT — a throw reds with a stack, while a MISS is green
+    // and silent, which is the actual fail-open. So do not "harden" the throw away: wrapping
+    // `census()` in a catch that returns an empty Map, or reaching `receiver.arguments[0]`
+    // through `?.`, converts the loud failure into the silent one.
     expect(findBareGates("expect().toBe(true);", "x.ts")).toEqual([]);
   });
 
@@ -241,6 +249,9 @@ describe("the scanner itself is not vacuous", () => {
     }
     // And it reaches this file, which is the cheapest proof the root is right at all.
     expect(scanned).toContain("build/no-bare-unstarved-gate.test.ts");
+    // The `tsx` alternative of the extension regex, which no real test file wears: this
+    // empty fixture is the only file that makes narrowing the regex to `/\.ts$/` red.
+    expect(scanned).toContain("build/fixtures/reach.tsx");
   });
 });
 
