@@ -108,6 +108,28 @@ describe("withUnstarvedFrontier retries a starved attempt from a fresh view", ()
     expect(mounts).toBe(2); // attempt 1 abandoned, attempt 2 observed
     expect(observed).toBe(1); // and the observation ran exactly once
   });
+
+  it("hands every attempt a FRESH, EMPTY parent rather than reusing one", () => {
+    // "From a fresh view" is only half the guarantee — `mount`'s docblock says the fixture
+    // is built from scratch each attempt, and a retry that inherited the abandoned
+    // attempt's DOM would let a widget oracle compare against leftovers. Hoisting the
+    // parent out of the attempt loop leaves every other test in this file green, so
+    // nothing but this pins it.
+    const parents: HTMLElement[] = [];
+    withUnstarvedFrontier({
+      what: "the test observation",
+      mount: (parent) => {
+        expect(parent.childElementCount).toBe(0); // nothing carried over
+        expect(parents).not.toContain(parent); // and not the same element again
+        parents.push(parent);
+        return parents.length === 1 ? starvedMount(parent) : settledMarkdown(parent);
+      },
+      observe: (_view, requireUnstarvedFrontier) => {
+        requireUnstarvedFrontier();
+      },
+    });
+    expect(parents).toHaveLength(2); // the starved attempt really was retried
+  });
 });
 
 describe("an all-starved run FAILS rather than passing having measured nothing", () => {
