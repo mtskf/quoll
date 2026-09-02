@@ -372,13 +372,15 @@ describe("an attempt count that could not have measured anything is refused", ()
   });
 
   it("throws on a FRACTIONAL count, which the `< 1` arm alone would let through", () => {
-    // Separate from the case above because they exercise different arms of the same guard.
-    // Without the `Number.isInteger` half, 2.5 runs THREE attempts (`attempt < 2.5` admits
-    // 0, 1 and 2) and then reports "all 2.5 attempts found a starved parse frontier" — a
-    // count that matches neither what ran nor anything else, and the guard's own comment
-    // calls this the one message here that must not lie about what was measured. `NaN` is
-    // worse still: the loop runs zero times and the same sentence claims a frontier was
-    // found on attempts that never happened.
+    // Separate from the case above because they exercise different arms of the same guard:
+    // `NaN < 1` is false, so only `Number.isInteger` refuses either of these.
+    //
+    // Why the guard is worth having: `attempts` reaches the loop bound and the all-starved
+    // message unchecked, and neither can represent a fractional or NaN count honestly —
+    // `attempt < 2.5` admits 0, 1 and 2, and `attempt < NaN` admits nothing at all, while
+    // the message reports the raw value either way. The guard's own comment calls that the
+    // one message here that must not lie about what was measured, so the count is refused
+    // at the door rather than carried into a sentence that cannot be true.
     for (const attempts of [2.5, Number.NaN]) {
       expect(() =>
         withUnstarvedFrontier({
