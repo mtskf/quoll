@@ -166,9 +166,9 @@ describe("withUnstarvedFrontier retries a starved attempt from a fresh view", ()
 describe("the gate speaks for the DOCUMENT end, not for the part already parsed", () => {
   it("refuses a frontier that is complete at the front and starved at the tail", () => {
     // Every other fixture here is all-or-nothing, so the gate's `upto` argument was free to
-    // shrink: weakening it from `doc.length` to 1 left this file and the consuming suites
-    // green (measured). This is the only shape that tells the difference, and it is what
-    // "unstarved" is supposed to mean.
+    // shrink: weakening it from `doc.length` to 1 left every other test in this file and the
+    // consuming suites green (measured). This is the only shape that tells the difference, and
+    // it is what "unstarved" is supposed to mean.
     expect(() =>
       withUnstarvedFrontier({
         what: "the bounded output",

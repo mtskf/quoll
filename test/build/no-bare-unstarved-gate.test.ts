@@ -215,9 +215,7 @@ describe("the scanner itself is not vacuous", () => {
     // `receiver.arguments[0]` from being `undefined` one line later, and this fixture is the
     // only thing that exercises it: without the floor it fails with a TypeError on `.kind`
     // (measured). That noise is the POINT — a throw reds with a stack, while a MISS is green
-    // and silent, which is the actual fail-open. So do not "harden" the throw away: wrapping
-    // `census()` in a catch that returns an empty Map, or reaching `receiver.arguments[0]`
-    // through `?.`, converts the loud failure into the silent one.
+    // and silent, which is the actual fail-open. So do not "harden" the throw away.
     expect(findBareGates("expect().toBe(true);", "x.ts")).toEqual([]);
   });
 
