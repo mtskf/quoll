@@ -224,10 +224,15 @@ export function withUnstarvedFrontier<R extends void | undefined>(options: {
         // clear message below with a confusing one.
         void Promise.resolve(returned).catch(() => {});
         // HelperRefusal, here and on the three throws below: the catch's swallow check must
-        // wrap only what came out of `observe`. Only this one can reach that check with a
-        // non-zero `sentinelsThrown` today (an async callback that gated before its first
-        // `await`); the others are marked so "the helper never relabels its own refusals" is
-        // structural rather than an argument about counter values that a later edit can void.
+        // wrap only what came out of `observe`. TWO of these reach that check with a non-zero
+        // `sentinelsThrown`: this one (an async callback that gated before its first `await`),
+        // and the swallow refusal below, which is thrown ONLY when the counter is non-zero and
+        // would otherwise be wrapped in a second copy of its own message. The marking on those
+        // two is load-bearing, not defensive. The remaining two are reachable only with
+        // `sentinelsThrown === 0` (`gated` is set before the counter, so an ungated or
+        // post-gate-dispatch return cannot have thrown one) and are marked so "the helper never
+        // relabels its own refusals" is structural rather than an argument about counter values
+        // that a later edit can void.
         throw new HelperRefusal(
           "withUnstarvedFrontier: observe() must be synchronous — an async callback is destroyed mid-flight and its assertions never gate the result"
         );
