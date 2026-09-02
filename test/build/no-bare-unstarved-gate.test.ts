@@ -190,9 +190,9 @@ describe("the scanner itself is not vacuous", () => {
     // fixtures sit at three DIFFERENT offsets, so no constant satisfies all of them.
     expect(findBareGates("expect(syntaxTreeAvailable(s, n)).toBe(true);", "x.ts")).toEqual([1]);
     // The case a line-oriented regex misses, which is why this is an AST walk.
-    expect(
-      findBareGates("\nexpect(\n  syntaxTreeAvailable(s, n)\n).toBe(true);", "x.ts")
-    ).toEqual([2]);
+    expect(findBareGates("\nexpect(\n  syntaxTreeAvailable(s, n)\n).toBe(true);", "x.ts")).toEqual([
+      2,
+    ]);
     // And the same gate wearing Vitest's optional message argument.
     expect(
       findBareGates('\n\n\nexpect(syntaxTreeAvailable(s, n), "bounded ran").toBe(true);', "x.ts")
