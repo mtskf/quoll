@@ -408,10 +408,13 @@ describe("imageBlockField bounded ≡ full", () => {
       [{ changes: { from: 0, to: 0, insert: "" } }], // `to === from` with an explicit empty insert
     ];
     // `prose\n\n${IMG}\n` settles to exactly 1 standalone image slot at rest (measured), so
-    // a non-vacuous check on the guard's throw does not depend on it: with the guard
-    // disabled these edits would dispatch as true no-ops and the comparison below would
-    // pass, not throw, for an unrelated reason (an oracleSlots mismatch on a doc that
-    // doesn't settle to that count at rest).
+    // the four NON-EMPTY inert lists are a non-vacuous check on the guard: with the guard
+    // disabled they dispatch as true no-ops, reach the gate, and the comparison below passes
+    // rather than throwing. The `[]` entry no longer discriminates — since this suite runs
+    // through `withUnstarvedFrontier`, an empty edit loop never reaches the gate and the
+    // helper's own ungated refusal throws instead (same fact recorded in
+    // decorations/cm-decoration-callout-marker-conceal.test.ts). It is kept because the door
+    // guard names the missing edit, where the helper's refusal reports a gating bug.
     for (const edits of inertEditLists) {
       expect(() => checkEquivalence(`prose\n\n${IMG}\n`, edits, 1)).toThrow();
     }

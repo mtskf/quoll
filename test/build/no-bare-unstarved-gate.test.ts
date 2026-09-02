@@ -8,7 +8,8 @@
 // so the gate reds on a fact about the machine. PR #388 measured that (24 spinners on 8
 // cores) and answered it with an attempt loop; three more sites carrying the bare shape
 // were found afterwards and became a TODO entry. This guard is what stops a fourth from
-// appearing: the load-robust shape is `withUnstarvedFrontier()` in
+// appearing: the load-robust shapes are `withUnstarvedFrontier()` (a mounted view) and
+// `withUnstarvedFrontierState()` (a bare EditorState), both in
 // test/webview/helpers/unstarved-frontier.ts.
 //
 // WHY AN AST WALK AND NOT A REGEX: a line-oriented regex is defeated by an ordinary Biome
