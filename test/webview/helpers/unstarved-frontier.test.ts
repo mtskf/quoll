@@ -45,9 +45,12 @@ function countingDestroy(view: EditorView, tally: { n: number }): EditorView {
   return view;
 }
 
-/** A settled view whose `destroy()` still tears down for real, then throws. */
-function throwingDestroyMount(parent: HTMLElement): EditorView {
-  const view = settledMarkdown(parent);
+/**
+ * Make one view's `destroy()` throw. The message lives here alone: two mounts need this
+ * behaviour, and a message duplicated per mount can drift on one side while the other
+ * test's regex keeps matching the copy it was written against.
+ */
+function throwOnDestroy(view: EditorView): EditorView {
   const real = view.destroy.bind(view);
   view.destroy = () => {
     real(); // still tear the view down — only the throw is simulated
@@ -56,20 +59,17 @@ function throwingDestroyMount(parent: HTMLElement): EditorView {
   return view;
 }
 
+/** A settled view whose `destroy()` still tears down for real, then throws. */
+const throwingDestroyMount = (parent: HTMLElement): EditorView =>
+  throwOnDestroy(settledMarkdown(parent));
+
 /**
  * A STARVED view whose `destroy()` still tears down for real, then throws. The combination
  * is what reaches the sentinel-absorbed teardown: a starved attempt is abandoned, so
  * nothing is in flight any more and the destroy failure is the only real failure there.
  */
-function starvedThrowingDestroyMount(parent: HTMLElement): EditorView {
-  const view = starvedMount(parent);
-  const real = view.destroy.bind(view);
-  view.destroy = () => {
-    real(); // still tear the view down — only the throw is simulated
-    throw new Error("widget destroy blew up");
-  };
-  return view;
-}
+const starvedThrowingDestroyMount = (parent: HTMLElement): EditorView =>
+  throwOnDestroy(starvedMount(parent));
 
 /** Run `fn`, returning what it throws instead of letting it propagate. */
 function catchError(fn: () => void): unknown {
