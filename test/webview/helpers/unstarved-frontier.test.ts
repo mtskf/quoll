@@ -35,6 +35,25 @@ function starvedMount(parent: HTMLElement): EditorView {
   });
 }
 
+/**
+ * A frontier complete near the START and starved at the END — the one shape here that is
+ * neither all-parsed nor all-starved, and the only thing that pins the gate's `upto` to the
+ * DOCUMENT end. CodeMirror parses only its init viewport at mount and defers the rest to a
+ * worker that a synchronous test never lets run, so a document far longer than that viewport
+ * settles at the front and stops. Without this, weakening the gate from `doc.length` to any
+ * smaller position passes every test in the file and every consuming suite (measured at 1).
+ *
+ * ⚠️ Coupled to a CM-private constant (the init-viewport size). If upstream changes it this
+ * fixture stops being partial and quietly reverts to all-parsed — retire it rather than
+ * chasing the number. The same caution `stub-parsers.ts` gives about its own coupling.
+ */
+function partiallyParsedMount(parent: HTMLElement): EditorView {
+  return new EditorView({
+    parent,
+    state: EditorState.create({ doc: "para\n\n".repeat(4_000), extensions: [markdown()] }),
+  });
+}
+
 /** Count `destroy()` calls on one view without suppressing the real teardown. */
 function countingDestroy(view: EditorView, tally: { n: number }): EditorView {
   const real = view.destroy.bind(view);
@@ -140,6 +159,25 @@ describe("withUnstarvedFrontier retries a starved attempt from a fresh view", ()
       },
     });
     expect(parents).toHaveLength(2); // the starved attempt really was retried
+  });
+});
+
+describe("the gate speaks for the DOCUMENT end, not for the part already parsed", () => {
+  it("refuses a frontier that is complete at the front and starved at the tail", () => {
+    // Every other fixture here is all-or-nothing, so the gate's `upto` argument was free to
+    // shrink: weakening it from `doc.length` to 1 left all 29 tests here and all 89 in the
+    // consuming suites green (measured). This is the only shape that tells the difference,
+    // and it is what "unstarved" is supposed to mean.
+    expect(() =>
+      withUnstarvedFrontier({
+        what: "the bounded output",
+        attempts: 2,
+        mount: partiallyParsedMount,
+        observe: (_view, requireUnstarvedFrontier) => {
+          requireUnstarvedFrontier(); // must NOT return — the tail is unparsed
+        },
+      })
+    ).toThrow(/all 2 attempts found a starved parse frontier/);
   });
 });
 
