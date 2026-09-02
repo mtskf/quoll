@@ -6,7 +6,7 @@
 import { markdown } from "@codemirror/lang-markdown";
 import { Compartment, EditorState } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { settledMount } from "./settled-view.js";
 import { neverFinishingLanguage } from "./stub-parsers.js";
 import { withUnstarvedFrontier } from "./unstarved-frontier.js";
@@ -48,6 +48,21 @@ function countingDestroy(view: EditorView, tally: { n: number }): EditorView {
 /** A settled view whose `destroy()` still tears down for real, then throws. */
 function throwingDestroyMount(parent: HTMLElement): EditorView {
   const view = settledMarkdown(parent);
+  const real = view.destroy.bind(view);
+  view.destroy = () => {
+    real(); // still tear the view down — only the throw is simulated
+    throw new Error("widget destroy blew up");
+  };
+  return view;
+}
+
+/**
+ * A STARVED view whose `destroy()` still tears down for real, then throws. The combination
+ * is what reaches the sentinel-absorbed teardown: a starved attempt is abandoned, so
+ * nothing is in flight any more and the destroy failure is the only real failure there.
+ */
+function starvedThrowingDestroyMount(parent: HTMLElement): EditorView {
+  const view = starvedMount(parent);
   const real = view.destroy.bind(view);
   view.destroy = () => {
     real(); // still tear the view down — only the throw is simulated
@@ -535,22 +550,57 @@ describe("every attempt cleans up after itself", () => {
     expect(document.body.childElementCount).toBe(before);
   });
 
+  it("propagates a teardown failure from an ABANDONED attempt instead of retrying past it", () => {
+    // The attempt was abandoned because the frontier was starved, so nothing is in flight
+    // any more and this destroy failure IS the failure. Clearing `propagating` on the
+    // sentinel-absorbed path is what says so: leave it set and the throw is written off as
+    // "beside a primary failure" that no longer exists, swallowed into console.error, and
+    // the loop retries — a real teardown defect then surfaces as "the CPU was busy", which
+    // is the exact misattribution this helper exists to prevent.
+    let mounts = 0;
+    expect(() =>
+      withUnstarvedFrontier({
+        what: "the test observation",
+        attempts: 3,
+        mount: (parent) => {
+          mounts++;
+          return starvedThrowingDestroyMount(parent);
+        },
+        observe: (_view, requireUnstarvedFrontier) => {
+          requireUnstarvedFrontier();
+        },
+      })
+    ).toThrow(/widget destroy blew up/); // NOT "all 3 attempts found a starved parse frontier"
+    expect(mounts).toBe(1); // and it stopped at the attempt that failed
+  });
+
   it("keeps observe()'s failure primary when view.destroy() ALSO throws", () => {
     // A throwing `finally` DISCARDS the pending exception rather than chaining it, so a
     // teardown failure would surface INSTEAD of the assertion diff — in a suite that mounts
     // exactly the widgets whose destroy can throw. The destroy failure is still reported,
     // beside the primary one rather than over it.
     const before = document.body.childElementCount;
-    expect(() =>
-      withUnstarvedFrontier({
-        what: "the test observation",
-        mount: throwingDestroyMount,
-        observe: (_view, requireUnstarvedFrontier) => {
-          requireUnstarvedFrontier();
-          throw new Error("the real failure");
-        },
-      })
-    ).toThrow(/the real failure/);
+    // Spied, not merely silenced: "beside" is half the promise, and without an assertion
+    // on it the helper could swallow the teardown failure outright and stay green. (The
+    // mock also keeps the expected stack trace off every passing run.)
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      expect(() =>
+        withUnstarvedFrontier({
+          what: "the test observation",
+          mount: throwingDestroyMount,
+          observe: (_view, requireUnstarvedFrontier) => {
+            requireUnstarvedFrontier();
+            throw new Error("the real failure");
+          },
+        })
+      ).toThrow(/the real failure/);
+      expect(errSpy).toHaveBeenCalledTimes(1);
+      expect(errSpy.mock.calls[0]?.[0]).toMatch(/view\.destroy\(\) ALSO threw/);
+      expect((errSpy.mock.calls[0]?.[1] as Error).message).toMatch(/widget destroy blew up/);
+    } finally {
+      errSpy.mockRestore();
+    }
     expect(document.body.childElementCount).toBe(before);
   });
 });
