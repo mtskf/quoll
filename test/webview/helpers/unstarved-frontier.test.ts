@@ -341,27 +341,32 @@ describe("a state replacement after the LAST gate is refused", () => {
         what: "the bounded output",
         mount: settledMarkdown,
         observe: (view, requireUnstarvedFrontier) => {
-          requireUnstarvedFrontier();
-          const replacement = EditorState.create({ doc: view.state.doc, extensions: [markdown()] });
-          // The whole discriminating power of this test rests on the doc surviving by
-          // IDENTITY, and nothing else here would notice if it stopped: rewriting the line
-          // above to `doc: DOC` still replaces the state, so this test stays green while
-          // the doc-comparison mutant it exists to kill comes back to life (measured).
-          // Asserted inside the fixture rather than as its own `it`, because a separate
-          // test would not be coupled to the state this one actually passes to setState.
-          expect(replacement.doc).toBe(view.state.doc);
-          // The other half of the same dependency: this fixture only kills the
-          // dispatch-interception mutant because setState does NOT dispatch. If that ever
-          // changed, the state would still be replaced, this test would still pass, and
-          // that mutant would quietly survive again.
+          // Instrument BEFORE the gate: the refusal under test speaks for the last gate, so
+          // the control dispatch has to land before it or it would itself be the violation.
           let dispatches = 0;
           const realDispatch = view.dispatch.bind(view);
           view.dispatch = ((...args: Parameters<typeof realDispatch>) => {
             dispatches++;
             return realDispatch(...args);
           }) as typeof view.dispatch;
+          view.dispatch({ changes: { from: 0, insert: "x" } });
+          expect(dispatches).toBe(1); // the counter works…
+          requireUnstarvedFrontier();
+          const replacement = EditorState.create({ doc: view.state.doc, extensions: [markdown()] });
+          // WITHOUT the next line, this test's discriminating power would rest on the doc
+          // surviving by IDENTITY with nothing observing it: rewriting `doc: view.state.doc`
+          // to `doc: DOC` still replaces the state, so the test would stay green while the
+          // doc-comparison mutant it exists to kill came back to life (measured before this
+          // assertion existed). Asserted inside the fixture rather than as its own `it`,
+          // because a separate test would not be coupled to the state this one passes on.
+          expect(replacement.doc).toBe(view.state.doc);
+          // The other half of the same dependency: this fixture kills the
+          // dispatch-interception mutant only because setState does NOT dispatch. Counted
+          // rather than assumed, and counted with a POSITIVE CONTROL first — an unwired
+          // counter reads zero just as convincingly as a working one, which is the
+          // self-cancelling shape this file refuses a few tests above.
           view.setState(replacement);
-          expect(dispatches).toBe(0);
+          expect(dispatches).toBe(1); // …and setState added nothing to it
         },
       })
     ).toThrow(
