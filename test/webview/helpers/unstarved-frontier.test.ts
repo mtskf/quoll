@@ -257,6 +257,24 @@ describe("a dispatch after the LAST gate is refused", () => {
     ).toThrow(/dispatched after its last requireUnstarvedFrontier\(\) call/);
   });
 
+  it("accepts a second gate that follows a dispatch — the gate-per-dispatch shape", () => {
+    // The refusal speaks for the LAST gate, so re-gating after a dispatch must re-arm it.
+    // Every other multi-gate test here ends on a STARVED second gate, which throws before
+    // the identity check runs; only this one exercises its accepting arm.
+    let past = 0;
+    withUnstarvedFrontier({
+      what: "the bounded output",
+      mount: settledMarkdown,
+      observe: (view, requireUnstarvedFrontier) => {
+        requireUnstarvedFrontier();
+        view.dispatch({ changes: { from: 0, insert: "x" } });
+        requireUnstarvedFrontier();
+        past++;
+      },
+    });
+    expect(past).toBe(1);
+  });
+
   it("still accepts reading the view after the gate, which is the normal shape", () => {
     // The refusal compares state IDENTITY, so it must not fire on the five call sites,
     // which all read `view.state` (and settle a separate oracle state) after gating.

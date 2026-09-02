@@ -159,6 +159,25 @@ function census(): Map<string, number[]> {
   return found;
 }
 
+/**
+ * Census + allowlist → the violation lines. Split out of the assertion below so the
+ * comparison itself can be reached by a fixture: against the real tree it is expected to
+ * return nothing, which is exactly the shape that cannot tell a working comparison from one
+ * that never flags anything.
+ */
+function violationsIn(found: Map<string, number[]>, allow: typeof ALLOW): string[] {
+  const violations: string[] = [];
+  for (const [rel, lines] of found) {
+    const allowed = allow.get(rel)?.count ?? 0;
+    if (lines.length > allowed) {
+      violations.push(
+        `${rel}: ${lines.length} gate(s) at line(s) ${lines.join(", ")}, allowed ${allowed}`
+      );
+    }
+  }
+  return violations;
+}
+
 describe("the scanner itself is not vacuous", () => {
   it("flags the forbidden shape, including when a formatter has split it", () => {
     expect(findBareGates("expect(syntaxTreeAvailable(s, n)).toBe(true);", "x.ts")).toHaveLength(1);
@@ -214,16 +233,32 @@ describe("the scanner itself is not vacuous", () => {
 
 describe("no bare syntaxTreeAvailable anti-masking gate", () => {
   it("flags no test file outside the allowlist, and no extra gate inside one", () => {
-    const violations: string[] = [];
-    for (const [rel, lines] of census()) {
-      const allowed = ALLOW.get(rel)?.count ?? 0;
-      if (lines.length > allowed) {
-        violations.push(
-          `${rel}: ${lines.length} gate(s) at line(s) ${lines.join(", ")}, allowed ${allowed}`
-        );
-      }
-    }
-    expect(violations).toEqual([]);
+    expect(violationsIn(census(), ALLOW)).toEqual([]);
+  });
+
+  it("compares census against allowance in both directions", () => {
+    // The assertion above expects an EMPTY list against the real tree, so it stays green
+    // whether the comparison works or flags nothing at all. Two mutants survived it: a
+    // `> allowed + 1` off-by-one and an unlisted-file default of 99 instead of 0. A
+    // synthetic census reaches both arms.
+    const allow = new Map([
+      ["allowed/at-its-count.test.ts", { count: 2, reason: "fixture" }],
+      ["allowed/one-too-many.test.ts", { count: 1, reason: "fixture" }],
+    ]);
+    expect(
+      violationsIn(
+        new Map([
+          ["allowed/at-its-count.test.ts", [10, 20]], // exactly its allowance → not a violation
+        ]),
+        allow
+      )
+    ).toEqual([]);
+    expect(violationsIn(new Map([["webview/unlisted.test.ts", [7]]]), allow)).toEqual([
+      "webview/unlisted.test.ts: 1 gate(s) at line(s) 7, allowed 0",
+    ]);
+    expect(violationsIn(new Map([["allowed/one-too-many.test.ts", [3, 9]]]), allow)).toEqual([
+      "allowed/one-too-many.test.ts: 2 gate(s) at line(s) 3, 9, allowed 1",
+    ]);
   });
 
   it("keeps the allowlist live — every entry still carries exactly the count it excuses", () => {
