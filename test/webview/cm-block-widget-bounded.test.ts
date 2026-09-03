@@ -408,15 +408,24 @@ describe("imageBlockField bounded ≡ full", () => {
       [{ changes: { from: 0, to: 0, insert: "" } }], // `to === from` with an explicit empty insert
     ];
     // `prose\n\n${IMG}\n` settles to exactly 1 standalone image slot at rest (measured), so
-    // the four NON-EMPTY inert lists are a non-vacuous check on the guard: with the guard
-    // disabled they dispatch as true no-ops, reach the gate, and the comparison below passes
-    // rather than throwing. The `[]` entry no longer discriminates — since this suite runs
-    // through `withUnstarvedFrontier`, an empty edit loop never reaches the gate and the
-    // helper's own ungated refusal throws instead (same fact recorded in
-    // decorations/cm-decoration-callout-marker-conceal.test.ts). It is kept because the door
-    // guard names the missing edit, where the helper's refusal reports a gating bug.
+    // this is a non-vacuous check on the guard: with the guard disabled, every one of these
+    // five lists dispatches as true no-ops, reaches the gate, and the comparison below
+    // passes rather than throwing — MEASURED for each row (`false && ...` in place of the
+    // `if` above turns every row in this loop red, `[]` included: the four non-empty rows
+    // stop throwing at all, and `[]` still throws, but as the HELPER's ungated-refusal
+    // message instead of this one, so the exact-message match below catches that row too).
+    // `[]` is kept as its own row rather than folded into the non-empty ones because it
+    // takes a different route through the guard: `Array.prototype.every` on `[]` is
+    // vacuously true without ever calling the predicate, so `[]` is what pins that the guard
+    // treats "no edits at all" as inert by that vacuous truth, not by having evaluated
+    // anything. Today the guard catches it first either way — measured: with the guard
+    // present, `[]` throws THIS function's own message, same as the four non-empty rows,
+    // never reaching `withUnstarvedFrontier` at all (`edits.every(...)` short-circuits the
+    // `if` above before the helper is ever called).
     for (const edits of inertEditLists) {
-      expect(() => checkEquivalence(`prose\n\n${IMG}\n`, edits, 1)).toThrow();
+      expect(() => checkEquivalence(`prose\n\n${IMG}\n`, edits, 1)).toThrow(
+        /^checkEquivalence: at least one edit with `changes`, `selection`, or `cursorAtEnd` is required/
+      );
     }
   });
 });
