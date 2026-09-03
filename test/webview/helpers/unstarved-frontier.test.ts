@@ -77,9 +77,9 @@ function countingDestroy(view: EditorView, tally: { n: number }): EditorView {
 }
 
 /**
- * Make one view's `destroy()` throw. The message lives here alone: two mounts need this
- * behaviour, and a message duplicated per mount can drift on one side while the other
- * test's regex keeps matching the copy it was written against.
+ * Make one view's `destroy()` throw. The message lives here alone: more than one mount
+ * needs this behaviour, and a message duplicated per mount can drift on one side while the
+ * other test's regex keeps matching the copy it was written against.
  */
 function throwOnDestroy(view: EditorView): EditorView {
   const real = view.destroy.bind(view);
@@ -455,8 +455,10 @@ describe("every gate call re-reads the frontier, not just the first", () => {
     // runs, so it only rules out a view that was language-less at attempt START — and the
     // sibling above proves a language can be lost MID-attempt. Swallow that gate's refusal
     // and this form lands on the same gate-entry shortfall, which is why the counters live
-    // in the shared core rather than in one form. Narrowing that check to the state form's
-    // caller leaves every other test here green.
+    // in the shared core rather than in one form. Narrowing the RETURN-PATH shortfall check
+    // to the state form's caller leaves every other test here green (the catch-arm copy of
+    // the same law is pinned separately, by "keeps a swallowed-refusal conviction primary
+    // when view.destroy() ALSO throws").
     const lang = new Compartment();
     let mounts = 0;
     expect(() =>
