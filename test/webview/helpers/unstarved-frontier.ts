@@ -2,10 +2,16 @@ import { syntaxTreeAvailable } from "@codemirror/language";
 import type { EditorState } from "@codemirror/state";
 import type { EditorView } from "@codemirror/view";
 // `UnstarvedCaller` is imported rather than declared here, and that direction is deliberate:
-// ./parse-to-end.ts partitions its caller union into the settling and non-settling halves,
-// and this module IS the non-settling half. A second copy of the same two literals would let
-// one side gain a member while the other kept classifying it as settling. It is interpolated
-// into every refusal below so a message names its caller.
+// ./parse-to-end.ts declares the settling and the non-settling halves side by side and sums
+// them into the union `assertHasLanguage` accepts, and this module IS the non-settling half.
+// A local copy of the same two literals would NOT fail silently — measured, a copy with an
+// extra member reds at `SUBJECT` below and at the gate's `assertHasLanguage` call, and a copy
+// one member short reds at `SUBJECT` and at the `caller` its own form passes — but it would
+// make membership a fact two files have to be kept equal on rather than one fact. Most
+// refusals below interpolate it so the message names its caller; the two post-check refusals
+// spell their prefix out instead, because `caller` is a sibling property of the same object
+// literal and so is not in scope inside a form's `postCheck`, and the sentinel names no
+// caller at all (see its constructor).
 import { assertHasLanguage, type UnstarvedCaller } from "./parse-to-end.js";
 
 /**
@@ -25,11 +31,14 @@ class StarvedFrontier extends Error {
     super(
       // No caller prefix — a deliberate choice, not an impossibility: the constructing
       // gate does know its caller (it hands `caller` to assertHasLanguage a few lines up).
-      // The sentinel is an internal control-flow signal absorbed by the shared loop, and
-      // the one path on which a user ever reads this message — an escape via a deferred
-      // callback — is the same mistake in both forms, so the message stays caller-neutral
-      // rather than threading a parameter through a class whose message never varies.
-      "the starved-frontier sentinel escaped the helper — requireUnstarvedFrontier() may only be called synchronously from the observe() body, never from a listener, timer, or deferred callback"
+      // This message is read on TWO paths, and a prefix would help on neither: as the
+      // `cause` of the swallow refusal it already hangs off a caller-prefixed wrapper (both
+      // forms pin that shape in ./unstarved-frontier.test.ts), and on an escape from a
+      // listener or timer the mistake is the same in both forms. So the message describes
+      // the SIGNAL and both mistakes that surface it, rather than asserting how it got
+      // here, and stays caller-neutral rather than threading a parameter through a class
+      // whose message never varies.
+      "starved-frontier signal from requireUnstarvedFrontier() — it does not return when the frontier is starved, so it must be called synchronously from the observe() body (never from a listener, timer, or deferred callback) and must never be caught"
     );
   }
 }
@@ -43,10 +52,11 @@ class StarvedFrontier extends Error {
  * wrapped in a second copy of itself.
  *
  * Siblings with `StarvedFrontier`, never related to it in either direction. If this class
- * were a PARENT of the sentinel, an escaping sentinel would satisfy the `!(error instanceof
- * HelperRefusal)` guard below and the swallow-count detection would stop firing on the
- * escape path — the "swallowed one sentinel and let a later one escape" case would be
- * retried away undetected. (The `!(error instanceof StarvedFrontier)` rethrow under it is
+ * were a PARENT of the sentinel, an escaping sentinel would MATCH `error instanceof
+ * HelperRefusal`, so the `!(…)` guard below would evaluate FALSE, the `&&` would
+ * short-circuit, and the swallow-count detection would stop firing on the escape path — the
+ * "swallowed one sentinel and let a later one escape" case would be retried away
+ * undetected. (The `!(error instanceof StarvedFrontier)` rethrow under it is
  * unaffected by that direction: `instanceof` walks the prototype chain, so the sentinel is
  * still absorbed.) If the sentinel were a parent of THIS, that rethrow WOULD be the
  * casualty — it would absorb the helper's own refusals and retry them.
@@ -94,16 +104,16 @@ function runUnstarvedAttempts<C, R>(spec: {
   attempts: number;
   /**
    * Build the per-attempt fixture, and return it alongside the teardown it owes. Called
-   * once per ATTEMPT. `teardown` is HANDED whether a failure is already in flight, but it
-   * is not asked to act on that: the core's `finally` owns "a teardown failure must not
-   * REPLACE a failure already in flight" for every form at once, so a `teardown` here may
-   * simply throw. The flag is passed anyway because a form that wants to tear down
-   * DIFFERENTLY under a propagating failure (skipping an assertion of its own, say) can
-   * only know from here.
+   * once per ATTEMPT. A `teardown` here may simply throw: the core's `finally` owns "a
+   * teardown failure must not REPLACE a failure already in flight" for every form at once,
+   * so no form needs to know whether one is propagating — and it is not handed the flag,
+   * because a parameter no implementation reads is one nothing reds on when the core passes
+   * it wrongly. (If a form ever needs to tear down DIFFERENTLY under a propagating failure,
+   * hand it the flag then, and pin the difference.)
    * A `begin` that THROWS owes the disposal of whatever it had already constructed: no
    * teardown ever reached this loop.
    */
-  begin: () => { context: C; teardown: (propagating: boolean) => void };
+  begin: () => { context: C; teardown: () => void };
   /** The measurement. Receives the gate, which must be handed the state it speaks for. */
   observe: (context: C, gate: (state: EditorState) => void) => R;
   /**
@@ -122,22 +132,26 @@ function runUnstarvedAttempts<C, R>(spec: {
   }
   for (let attempt = 0; attempt < attempts; attempt++) {
     const { context, teardown } = begin();
-    // The state as of the LAST gate call, and — because the gate always sets it — also the
-    // record of WHETHER the gate ever fired. One variable rather than a separate boolean:
-    // they were always set together, and two names for one fact is one more thing a later
-    // edit can leave half-updated.
+    // The state as of the LAST gate call. NOT a record of whether the gate ever fired: the
+    // gate's `assertHasLanguage` runs FIRST and can throw before this is ever assigned,
+    // which is what the two entry/exit counters below exist to see.
     let stateAtLastGate: EditorState | undefined;
     // COUNTED, not a boolean. At most ONE sentinel can escape an attempt, so a count above
     // what escaped proves an earlier one was swallowed — which the return-path check alone
     // cannot see when observe() swallows and then throws.
     let sentinelsThrown = 0;
-    // Gate ENTRY, counted before any refusal the gate itself can raise. `stateAtLastGate`
-    // records only a gate that SUCCEEDED, so on its own it cannot tell "never called" from
-    // "called, refused, and the refusal was swallowed" — and the language refusal below is
-    // raised before `sentinelsThrown` too, so nothing else sees that case either. Without
-    // this counter a swallowed language refusal falls through to the ungated branch and is
-    // reported as "you never gated", which is false and points at the wrong bug.
+    // Gate ENTRY and gate COMPLETION, so the three counts here obey one conservation law:
+    // every gate that is ENTERED leaves by exactly one of three routes — it completes, it
+    // throws the sentinel, or `assertHasLanguage` refuses it. Only the third leaves no
+    // record of its own, so a shortfall of `gateCalls` against the other two IS a refusal
+    // that observe() caught. Without it a swallowed language refusal falls through to the
+    // ungated branch and is reported as "you never gated" (false, and points at the wrong
+    // bug), and one FOLLOWED BY a successful gate leaves no trace at all — where the
+    // equivalent swallowed sentinel is always refused.
+    // All three reset per ATTEMPT: a count carried over from an abandoned attempt would
+    // convict the attempt after it.
     let gateCalls = 0;
+    let gatesCompleted = 0;
     let propagating = false;
     try {
       const returned = observe(context, (state) => {
@@ -155,22 +169,22 @@ function runUnstarvedAttempts<C, R>(spec: {
         // the old code had already done its only check and the second gate saw a false
         // `syntaxTreeAvailable`, so the attempt was abandoned as starved and the run ended
         // blaming the CPU. This refuses it immediately, with a message that names the
-        // actual cause, and does not retry. That is the intended direction — it is the
-        // same misattribution this helper exists to prevent, one gate later — but nothing
-        // in the suite exercises it: every `Compartment` fixture here swaps one real
-        // `Language` for another, so this paragraph is the reasoning, not a pinned fact.
+        // actual cause, and does not retry. Pinned by "names a language lost MID-attempt
+        // instead of retrying it as starvation" in ./unstarved-frontier.test.ts — narrow
+        // this to the first gate call of an attempt and that test reds.
         assertHasLanguage(state, caller);
         stateAtLastGate = state;
         if (!syntaxTreeAvailable(state, state.doc.length)) {
           sentinelsThrown++;
           throw new StarvedFrontier();
         }
+        gatesCompleted++;
       });
       // An async `observe` would silently break every guarantee here: the loop reaches this
       // line at the callback's first `await`, tears the fixture down out from under the
-      // rest of it, and reports success. Checked BEFORE the two flags: an async callback
-      // suspended before its gate is also ungated, and reporting it as ungated would send
-      // the reader to the wrong bug.
+      // rest of it, and reports success. Checked BEFORE the counter checks below: an async
+      // callback suspended before its gate is also ungated, and reporting it as ungated
+      // would send the reader to the wrong bug.
       if (typeof (returned as { then?: unknown } | undefined)?.then === "function") {
         // Detach the abandoned continuation before throwing: it resumes on a later
         // microtask, and an assertion failure there would surface as an unhandled rejection
@@ -188,11 +202,27 @@ function runUnstarvedAttempts<C, R>(spec: {
       if (sentinelsThrown > 0) {
         throw new HelperRefusal(swallowedSentinelMessage(caller));
       }
+      // The conservation law from the counter declarations above: a gate that was entered
+      // but is accounted for by neither a completion nor a sentinel was refused by
+      // `assertHasLanguage`, and reaching here means `observe` caught that refusal and
+      // carried on. Independent of what followed it, which is what makes it symmetric with
+      // the sentinel check above — a later successful gate no longer erases it.
+      // `sentinelsThrown` is already known to be zero here; the term is written out anyway
+      // so this check does not silently depend on the ordering of the one above.
+      // RETURN path only: a swallowed refusal followed by an error that ESCAPES `observe`
+      // is not detected, because the catch below sees the same shortfall whether the
+      // refusal was swallowed or IS the error now escaping, and a plain `Error` gives it
+      // nothing to tell those apart with (where the sentinel arm has `instanceof`).
+      if (gateCalls > gatesCompleted + sentinelsThrown) {
+        throw new HelperRefusal(
+          `${caller}: requireUnstarvedFrontier() was called but its refusal was swallowed — do not wrap it in your own catch, and do not run it inside expect(...).toThrow(); re-run without the catch to see the underlying error`
+        );
+      }
+      // Reached only when every gate entry is accounted for, so this is now exactly "no
+      // gate was ever entered" rather than "nothing recorded one".
       if (stateAtLastGate === undefined) {
         throw new HelperRefusal(
-          gateCalls > 0
-            ? `${caller}: requireUnstarvedFrontier() was called but its refusal was swallowed — do not wrap it in your own catch, and do not run it inside expect(...).toThrow(); re-run without the catch to see the underlying error`
-            : `${caller}: observe() returned without calling requireUnstarvedFrontier(), so ${what} was measured on an ungated ${SUBJECT[caller]}`
+          `${caller}: observe() returned without calling requireUnstarvedFrontier(), so ${what} was measured on an ungated ${SUBJECT[caller]}`
         );
       }
       postCheck(context, stateAtLastGate, returned);
@@ -219,7 +249,7 @@ function runUnstarvedAttempts<C, R>(spec: {
       // (noUnsafeFinally) stopped applying the moment the teardown moved behind a call,
       // so the property would otherwise rest on each form remembering the convention.
       try {
-        teardown(propagating);
+        teardown();
       } catch (teardownError) {
         if (!propagating) {
           // Nothing is in flight, so this failure IS the failure — and it must not be
@@ -408,7 +438,7 @@ export function withUnstarvedFrontier<R extends void | undefined>(options: {
           //
           // The destroy failure itself is let out bare. Whether it may replace a failure
           // already in flight is not this form's decision — the core's `finally` owns that
-          // for every form, which is why `propagating` is not read here.
+          // for every form, which is why this form does not decide it.
           try {
             view.destroy();
           } finally {

@@ -180,7 +180,7 @@ describe("the gate speaks for the DOCUMENT end, not for the part already parsed"
           requireUnstarvedFrontier(); // must NOT return — the tail is unparsed
         },
       })
-    ).toThrow(/all 2 attempts found a starved parse frontier/);
+    ).toThrow(/^withUnstarvedFrontier: all 2 attempts found a starved parse frontier/);
   });
 });
 
@@ -221,7 +221,31 @@ describe("an observation that never consults the gate is refused", () => {
         },
       })
     ).toThrow(
-      /observe\(\) returned without calling requireUnstarvedFrontier\(\), so an ungated widget census was measured on an ungated view/
+      /^withUnstarvedFrontier: observe\(\) returned without calling requireUnstarvedFrontier\(\), so an ungated widget census was measured on an ungated view/
+    );
+  });
+
+  it("does not carry a gate call from a starved attempt into the next attempt's diagnosis", () => {
+    // `gateCalls` is per-ATTEMPT, and nothing else observes that: hoisting it out of the
+    // attempt loop leaves every other test in this file green (measured), where hoisting its
+    // neighbour `sentinelsThrown` reds eight. Carried over, attempt 2's ungated `observe` is
+    // convicted of swallowing attempt 1's refusal instead — a message that names a mistake
+    // the caller did not make, in the file whose whole subject is not misattributing one.
+    let attemptsRun = 0;
+    expect(() =>
+      withUnstarvedFrontier({
+        what: "the bounded output",
+        attempts: 2,
+        // attempt 1 starves (and gates); attempt 2 mounts a real language and never gates
+        mount: (parent) => (attemptsRun++ === 0 ? starvedMount(parent) : settledMarkdown(parent)),
+        observe: (_view, requireUnstarvedFrontier) => {
+          if (attemptsRun === 1) {
+            requireUnstarvedFrontier();
+          }
+        },
+      })
+    ).toThrow(
+      /^withUnstarvedFrontier: observe\(\) returned without calling requireUnstarvedFrontier\(\)/
     );
   });
 
@@ -254,7 +278,7 @@ describe("an async observe is refused rather than silently half-run", () => {
           requireUnstarvedFrontier();
         }),
       })
-    ).toThrow(/observe\(\) must be synchronous/);
+    ).toThrow(/^withUnstarvedFrontier: observe\(\) must be synchronous/);
   });
 
   it("names the async bug even when the callback gated before its first await", () => {
@@ -273,7 +297,7 @@ describe("an async observe is refused rather than silently half-run", () => {
           await Promise.resolve();
         }),
       })
-    ).toThrow(/observe\(\) must be synchronous/);
+    ).toThrow(/^withUnstarvedFrontier: observe\(\) must be synchronous/);
   });
 
   it("refuses a bare `.then`-only thenable without tripping over its missing .catch", () => {
@@ -300,7 +324,7 @@ describe("an async observe is refused rather than silently half-run", () => {
           return thenOnly;
         }) as (view: EditorView, gate: () => void) => void,
       })
-    ).toThrow(/observe\(\) must be synchronous/);
+    ).toThrow(/^withUnstarvedFrontier: observe\(\) must be synchronous/);
   });
 
   it("refuses an async observe at COMPILE time, not only at runtime", () => {
@@ -317,7 +341,7 @@ describe("an async observe is refused rather than silently half-run", () => {
           requireUnstarvedFrontier();
         },
       })
-    ).toThrow(/observe\(\) must be synchronous/);
+    ).toThrow(/^withUnstarvedFrontier: observe\(\) must be synchronous/);
   });
 });
 
@@ -370,7 +394,7 @@ describe("every gate call re-reads the frontier, not just the first", () => {
           reachedPast++;
         },
       })
-    ).toThrow(/all 2 attempts found a starved parse frontier/);
+    ).toThrow(/^withUnstarvedFrontier: all 2 attempts found a starved parse frontier/);
     expect(reachedSecond).toBe(2); // both attempts got as far as the second gate
     expect(reachedPast).toBe(0); // and neither got past it
   });
@@ -404,6 +428,42 @@ describe("every gate call re-reads the frontier, not just the first", () => {
     ).toThrow(/^withUnstarvedFrontier: state has no language configured/);
     expect(mounts).toBe(1); // and NOT retried
   });
+
+  it("does not report a SWALLOWED mid-attempt language refusal as never having gated", () => {
+    // The state form has the sibling of this test (below), and this branch is NOT exclusive
+    // to it. This form's adapter probes for a language once per attempt, BEFORE `observe`
+    // runs, so it only rules out a view that was language-less at attempt START — and the
+    // sibling above proves a language can be lost MID-attempt. Swallow that gate's refusal
+    // and this form lands on the same gate-entry shortfall, which is why the counters live
+    // in the shared core rather than in one form. Narrowing that check to the state form's
+    // caller leaves every other test here green.
+    const lang = new Compartment();
+    let mounts = 0;
+    expect(() =>
+      withUnstarvedFrontier({
+        what: "the bounded output",
+        attempts: 3,
+        mount: (parent) => {
+          mounts++;
+          return settledMount({
+            state: EditorState.create({ doc: DOC, extensions: [lang.of(markdown())] }),
+            parent,
+          });
+        },
+        observe: (view, requireUnstarvedFrontier) => {
+          view.dispatch({ effects: lang.reconfigure([]) });
+          try {
+            requireUnstarvedFrontier();
+          } catch {
+            /* exactly the mistake this test pins */
+          }
+        },
+      })
+    ).toThrow(
+      /^withUnstarvedFrontier: requireUnstarvedFrontier\(\) was called but its refusal was swallowed/
+    );
+    expect(mounts).toBe(1); // and NOT retried
+  });
 });
 
 describe("a state replacement after the LAST gate is refused", () => {
@@ -422,7 +482,7 @@ describe("a state replacement after the LAST gate is refused", () => {
         },
       })
     ).toThrow(
-      /replaced its state after the last requireUnstarvedFrontier\(\) call, so a post-dispatch record compare was measured on an ungated frontier/
+      /^withUnstarvedFrontier: observe\(\) replaced its state after the last requireUnstarvedFrontier\(\) call, so a post-dispatch record compare was measured on an ungated frontier/
     );
   });
 
@@ -466,7 +526,7 @@ describe("a state replacement after the LAST gate is refused", () => {
         },
       })
     ).toThrow(
-      /replaced its state after the last requireUnstarvedFrontier\(\) call, so the bounded output was measured on an ungated frontier/
+      /^withUnstarvedFrontier: observe\(\) replaced its state after the last requireUnstarvedFrontier\(\) call, so the bounded output was measured on an ungated frontier/
     );
   });
 
@@ -512,7 +572,7 @@ describe("an attempt count that could not have measured anything is refused", ()
         mount: settledMarkdown,
         observe: (_view, requireUnstarvedFrontier) => requireUnstarvedFrontier(),
       })
-    ).toThrow(/attempts must be a positive integer, got 0/);
+    ).toThrow(/^withUnstarvedFrontier: attempts must be a positive integer, got 0/);
   });
 
   it("throws on a FRACTIONAL count, which the `< 1` arm alone would let through", () => {
@@ -533,7 +593,7 @@ describe("an attempt count that could not have measured anything is refused", ()
           mount: settledMarkdown,
           observe: (_view, requireUnstarvedFrontier) => requireUnstarvedFrontier(),
         })
-      ).toThrow(/attempts must be a positive integer/);
+      ).toThrow(/^withUnstarvedFrontier: attempts must be a positive integer/);
     }
   });
 });
@@ -558,7 +618,9 @@ describe("a swallowed starved-frontier signal is refused", () => {
         },
       })
     );
-    expect((caught as Error | undefined)?.message).toMatch(/swallowed the starved-frontier signal/);
+    expect((caught as Error | undefined)?.message).toMatch(
+      /^withUnstarvedFrontier: observe\(\) swallowed the starved-frontier signal/
+    );
     // …and exactly once. This refusal is raised on the RETURN path, so the catch below it
     // sees the helper's own diagnosis; wrapping it would chain a second, identical copy of
     // the same message as its cause and read as two separate findings.
@@ -585,12 +647,14 @@ describe("a swallowed starved-frontier signal is refused", () => {
         },
       })
     );
-    expect((caught as Error | undefined)?.message).toMatch(/swallowed the starved-frontier signal/);
+    expect((caught as Error | undefined)?.message).toMatch(
+      /^withUnstarvedFrontier: observe\(\) swallowed the starved-frontier signal/
+    );
     // The sentinel names and explains itself, so the chained cause is readable rather than
     // a bare `Error:` with an empty body.
     expect((caught as Error).cause).toMatchObject({
       name: "StarvedFrontier",
-      message: expect.stringContaining("sentinel escaped the helper"),
+      message: expect.stringContaining("starved-frontier signal from requireUnstarvedFrontier()"),
     });
   });
 
@@ -616,7 +680,9 @@ describe("a swallowed starved-frontier signal is refused", () => {
         },
       })
     );
-    expect((caught as Error | undefined)?.message).toMatch(/swallowed the starved-frontier signal/);
+    expect((caught as Error | undefined)?.message).toMatch(
+      /^withUnstarvedFrontier: observe\(\) swallowed the starved-frontier signal/
+    );
     // Chained, not replaced: the reader still gets the assertion diff, now labelled with
     // the reason it cannot be trusted at face value. The diff itself is asserted, not just
     // its presence — `toBeDefined()` alone would survive a mutant that chained some other
@@ -645,7 +711,7 @@ describe("an abandoned async continuation cannot poison a later test", () => {
             expect(1).toBe(2); // and would reject
           }),
         })
-      ).toThrow(/observe\(\) must be synchronous/);
+      ).toThrow(/^withUnstarvedFrontier: observe\(\) must be synchronous/);
       // Let the abandoned continuation resume and settle.
       await new Promise((resolve) => setTimeout(resolve, 0));
       expect(seen).toEqual([]);
@@ -927,7 +993,7 @@ describe("withUnstarvedFrontierState carries the same refusals without a view", 
         observe: () => settledMarkdownState(),
       })
     ).toThrow(
-      /observe\(\) returned without calling requireUnstarvedFrontier\(\), so an ungated block census was measured on an ungated state/
+      /^withUnstarvedFrontierState: observe\(\) returned without calling requireUnstarvedFrontier\(\), so an ungated block census was measured on an ungated state/
     );
   });
 
@@ -937,15 +1003,18 @@ describe("withUnstarvedFrontierState carries the same refusals without a view", 
     // `sentinelsThrown` at zero. Swallow it and the loop would otherwise fall through to the
     // ungated branch and assert something false — that `observe` never called the gate —
     // sending the reader to look for a missing call that is right there, with the real error
-    // discarded and no `cause`. Counting gate ENTRY separately is what tells the two apart.
+    // discarded and no `cause`. Counting gate ENTRY against gate COMPLETION is what tells
+    // the two apart.
     //
-    // ⚠️ The counter, not `stateAtLastGate = state` moved above the assert: that would be
+    // ⚠️ The counters, not `stateAtLastGate = state` moved above the assert: that would be
     // WORSE — a swallowed language error would then satisfy this form's
     // `returned === stateAtLastGate` post-check and the whole run would go green.
     //
-    // The state form is the only reachable place for it: the view form's adapter probes for
-    // a language once per attempt before `observe` runs, so a language-less view is refused
-    // before any gate is entered.
+    // This form is where the branch is EASIEST to reach — it has no seam before its first
+    // gate, so a language-less state is refused INSIDE the gate. It is NOT exclusive to it:
+    // the view form's adapter probes once per attempt, before `observe`, so it only rules
+    // out a view that was language-less at attempt START, and a view whose language is
+    // removed mid-attempt reaches the same shortfall (pinned in that form's describe above).
     expect(() =>
       withUnstarvedFrontierState({
         what: "the reducer's own output",
@@ -957,6 +1026,64 @@ describe("withUnstarvedFrontierState carries the same refusals without a view", 
             /* exactly the mistake this test pins */
           }
           return state;
+        },
+      })
+    ).toThrow(
+      /^withUnstarvedFrontierState: requireUnstarvedFrontier\(\) was called but its refusal was swallowed/
+    );
+  });
+
+  it("refuses a swallowed gate refusal even when a LATER gate succeeds", () => {
+    // The asymmetry this closes. `sentinelsThrown > 0` fires whatever happens afterwards, so
+    // a swallowed SENTINEL was always refused — but a swallowed language refusal left no
+    // record of its own, so following it with a good gate and returning THAT state satisfied
+    // every remaining refusal here and the run went green having gated the wrong state
+    // silently. Only the gate-entry-against-gate-completion shortfall sees it, because only
+    // that survives the later success.
+    expect(() =>
+      withUnstarvedFrontierState({
+        what: "the reducer's own output",
+        observe: (requireUnstarvedFrontier) => {
+          try {
+            requireUnstarvedFrontier(EditorState.create({ doc: DOC, extensions: [] }));
+          } catch {
+            /* exactly the mistake this test pins */
+          }
+          const settled = settledMarkdownState();
+          requireUnstarvedFrontier(settled); // …and this one really is fine
+          return settled;
+        },
+      })
+    ).toThrow(
+      /^withUnstarvedFrontierState: requireUnstarvedFrontier\(\) was called but its refusal was swallowed/
+    );
+  });
+
+  it("does not carry a completed gate from a starved attempt into the next attempt", () => {
+    // The sibling of the view form's `gateCalls` reset test, for the other half of the same
+    // shortfall: hoisting `gatesCompleted` out of the attempt loop lets attempt 1's good gate
+    // pay for attempt 2's swallowed refusal, and attempt 2 is then reported as never having
+    // gated at all. Attempt 1 must both COMPLETE a gate and end starved for the carry-over to
+    // have anything to carry.
+    let attemptsRun = 0;
+    expect(() =>
+      withUnstarvedFrontierState({
+        what: "the reducer's own output",
+        attempts: 2,
+        observe: (requireUnstarvedFrontier) => {
+          if (++attemptsRun === 1) {
+            requireUnstarvedFrontier(settledMarkdownState()); // completes…
+            const starved = starvedState();
+            requireUnstarvedFrontier(starved); // …then abandons the attempt
+            return starved;
+          }
+          const langless = EditorState.create({ doc: DOC, extensions: [] });
+          try {
+            requireUnstarvedFrontier(langless);
+          } catch {
+            /* exactly the mistake this test pins */
+          }
+          return langless;
         },
       })
     ).toThrow(
@@ -995,7 +1122,7 @@ describe("withUnstarvedFrontierState carries the same refusals without a view", 
         },
       })
     ).toThrow(
-      /observe\(\) returned a state other than the one requireUnstarvedFrontier\(\) last saw, so a post-update block census was measured on an ungated frontier/
+      /^withUnstarvedFrontierState: observe\(\) returned a state other than the one requireUnstarvedFrontier\(\) last saw, so a post-update block census was measured on an ungated frontier/
     );
   });
 
@@ -1037,7 +1164,7 @@ describe("withUnstarvedFrontierState carries the same refusals without a view", 
           return starved;
         },
       })
-    ).toThrow(/all 2 attempts found a starved parse frontier/);
+    ).toThrow(/^withUnstarvedFrontierState: all 2 attempts found a starved parse frontier/);
     expect(reachedSecond).toBe(2);
     expect(reachedPast).toBe(0);
   });
@@ -1138,7 +1265,7 @@ describe("withUnstarvedFrontierState carries the same refusals without a view", 
             return state;
           },
         })
-      ).toThrow(/attempts must be a positive integer/);
+      ).toThrow(/^withUnstarvedFrontierState: attempts must be a positive integer/);
     }
   });
 

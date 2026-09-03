@@ -19,9 +19,13 @@ type SettlingCaller = "fullTree" | "settledState" | "settledView" | "settledMoun
 /**
  * The unstarved-frontier forms: they probe for a language and read the frontier, and never
  * advance a parse, so neither can honestly carry either parse-budget sentence. Exported so
- * ./unstarved-frontier.ts uses THIS list rather than a second copy of the same literals —
- * two copies with no type-level link would let one side gain a member while the other kept
- * classifying it as settling.
+ * ./unstarved-frontier.ts names THIS list rather than declaring a second copy of the same
+ * literals — not because a copy would fail silently, which was the `Exclude<>` hazard the
+ * sum above removed. Measured: a copy carrying an extra member reds at that module's
+ * `Record<UnstarvedCaller, string>` and at its `assertHasLanguage` call, and a copy one
+ * member short reds at the same `Record` and at the `caller` its own form passes. What the
+ * export buys is that membership stays ONE fact rather than two that have to be kept equal;
+ * every divergence above is repaired by re-syncing two lists instead of editing one.
  */
 export type UnstarvedCaller = "withUnstarvedFrontier" | "withUnstarvedFrontierState";
 
