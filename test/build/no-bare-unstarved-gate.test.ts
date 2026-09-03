@@ -8,7 +8,8 @@
 // so the gate reds on a fact about the machine. PR #388 measured that (24 spinners on 8
 // cores) and answered it with an attempt loop; three more sites carrying the bare shape
 // were found afterwards and became a TODO entry. This guard is what stops a fourth from
-// appearing: the load-robust shape is `withUnstarvedFrontier()` in
+// appearing: the load-robust shapes are `withUnstarvedFrontier()` (a mounted view) and
+// `withUnstarvedFrontierState()` (a bare EditorState), both in
 // test/webview/helpers/unstarved-frontier.ts.
 //
 // WHY AN AST WALK AND NOT A REGEX: a line-oriented regex is defeated by an ordinary Biome
@@ -39,9 +40,12 @@
 //   - a different matcher: `.toBeTruthy()`, `.toEqual(true)`, `.toBe(true as const)`, or
 //     the reversed operands `expect(true).toBe(syntaxTreeAvailable(...))`
 //   - a HAND-ROLLED attempt loop (`for (…) { if (runOnce()) return; }` + a trailing throw)
-//     uses the conditional form and is invisible here by design; two live instances remain
-//     in webview/cm-block-widget-bounded.test.ts and
-//     webview/fenced-code/cm-fenced-code-collapse.test.ts
+//     uses the conditional form and is invisible here by design. No live instance remains
+//     (both were migrated onto helpers/unstarved-frontier.ts), but nothing MECHANICAL stops
+//     a new one: this guard sees only the bare `expect(...).toBe(true)` shape, so a fresh
+//     copy of the loop would pass it. What makes a copy pointless rather than merely
+//     forbidden is that the helper now covers both the mounted-view and the bare-state
+//     shapes — there is no case left that needs its own loop.
 //   - INSIDE an allowlisted file, swapping a legitimate (post-forced-parse) gate for a bare
 //     post-edit one at another line keeps the count identical — the pin bounds the NUMBER
 //     of gates, not WHICH lines carry them

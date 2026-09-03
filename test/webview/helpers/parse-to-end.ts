@@ -1,20 +1,36 @@
 import { ensureSyntaxTree, language } from "@codemirror/language";
 import type { EditorState } from "@codemirror/state";
 
-type ParseCaller =
-  | "fullTree"
-  | "settledState"
-  | "settledView"
-  | "settledMount"
-  | "withUnstarvedFrontier";
+/**
+ * The callers that actually SETTLE a parse, and so the only ones that can reach either of
+ * the two messages below. Written out as its own list rather than filtered out of
+ * `ParseCaller` with an `Exclude<>`: a filter leaves a REMAINDER, so a caller added to the
+ * union and forgotten on the exclusion list would silently be classified as settling. Here
+ * the union below is the SUM of the two sides, and a new caller has to be written into one
+ * of them.
+ *
+ * That keeps each builder's labels within the set of callers that can produce it: exactly
+ * equal for `timeoutMessage`, and one wider than the truth for `truncatedSnapshotMessage`,
+ * which `fullTree()` deliberately does not use (see its note below). That last gap is an
+ * accepted looseness, not an oversight.
+ */
+type SettlingCaller = "fullTree" | "settledState" | "settledView" | "settledMount";
 
 /**
- * The subset that actually SETTLES a parse. `withUnstarvedFrontier` only probes for a
- * language — it never advances a parse — so it can reach neither of the two messages
- * below. Excluding it keeps each builder's label set equal to the set of callers that can
- * actually produce it, which is the whole job this union was given.
+ * The unstarved-frontier forms: they probe for a language and read the frontier, and never
+ * advance a parse, so neither can honestly carry either parse-budget sentence. Exported so
+ * ./unstarved-frontier.ts names THIS list rather than declaring a second copy of the same
+ * literals — not because a copy would fail silently, which was the `Exclude<>` hazard the
+ * sum above removed. Measured: a copy carrying an extra member reds at that module's
+ * `Record<UnstarvedCaller, string>` and at its `assertHasLanguage` call, and a copy one
+ * member short reds at the same `Record` and at the `caller` its own form passes. What the
+ * export buys is that membership stays ONE fact rather than two that have to be kept equal;
+ * every divergence above is repaired by re-syncing two lists instead of editing one.
  */
-type SettlingCaller = Exclude<ParseCaller, "withUnstarvedFrontier">;
+export type UnstarvedCaller = "withUnstarvedFrontier" | "withUnstarvedFrontierState";
+
+/** Every caller `assertHasLanguage` accepts. Derived, so a new member must choose a side. */
+type ParseCaller = SettlingCaller | UnstarvedCaller;
 
 /**
  * Shared parse step behind `fullTree()` and `settledState()`: advance the state's
@@ -72,15 +88,18 @@ export function parseToEnd(state: EditorState, caller: SettlingCaller, budgetMs 
 }
 
 /**
- * Case (A) above, on its own, so the view-side helpers can reuse it. They settle through
- * `forceParsing`, which needs the VIEW rather than the state, so they cannot call
- * `parseToEnd` at all — but they inherit the same conflation: `forceParsing` is
- * `ensureSyntaxTree` plus a conditional dispatch and collapses to the same falsy result
- * for both causes. Exporting the probe rather than copying it is what keeps every helper
- * that settles a parse reporting a missing language in identical words.
+ * Case (A) above, on its own, so callers that cannot route through `parseToEnd` can reuse
+ * it. The view-side settles cannot: they go through `forceParsing`, which needs the VIEW
+ * rather than the state — and they inherit the same conflation, `forceParsing` being
+ * `ensureSyntaxTree` plus a conditional dispatch and collapsing to the same falsy result
+ * for both causes. The unstarved-frontier forms cannot either, for the opposite reason:
+ * they advance no parse at all and need nothing but the probe. Exporting it rather than
+ * copying it is what keeps every caller in `ParseCaller` reporting a missing language in
+ * identical words.
  *
- * Which helper calls this, and through what, is ./settled-view.ts's business — naming a
- * call chain here only dates the comment the next time that file rearranges one.
+ * Which SITES inside those modules call this, and how many, is their business — a per-site
+ * census here only dates the comment the next time one of them rearranges one. The two
+ * families above are named because they are the reason this is exported at all.
  */
 export function assertHasLanguage(state: EditorState, caller: ParseCaller): void {
   if (state.facet(language) === null) {
