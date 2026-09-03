@@ -226,11 +226,14 @@ describe("an observation that never consults the gate is refused", () => {
   });
 
   it("does not carry a gate call from a starved attempt into the next attempt's diagnosis", () => {
-    // `gateCalls` is per-ATTEMPT, and nothing else observes that: hoisting it out of the
-    // attempt loop leaves every other test in this file green (measured), where hoisting its
-    // neighbour `sentinelsThrown` reds eight. Carried over, attempt 2's ungated `observe` is
-    // convicted of swallowing attempt 1's refusal instead — a message that names a mistake
-    // the caller did not make, in the file whose whole subject is not misattributing one.
+    // `gateCalls` is per-ATTEMPT. Hoisting it out of the attempt loop reds TEN tests in this
+    // file (measured; hoisting its neighbour `sentinelsThrown` reds eleven). Nine of those
+    // only observe THAT a carried-over count convicts — their fixtures starve an attempt, so
+    // the next one inherits a gate call and trips the conservation law however it is worded.
+    // This one is the only one that pins WHICH message comes out: carried over, attempt 2's
+    // ungated `observe` is convicted of swallowing attempt 1's refusal instead — a message
+    // that names a mistake the caller did not make, in the file whose whole subject is not
+    // misattributing one.
     let attemptsRun = 0;
     expect(() =>
       withUnstarvedFrontier({
@@ -250,6 +253,9 @@ describe("an observation that never consults the gate is refused", () => {
   });
 
   it("does not retry the ungated case — it is a test bug, not a starved machine", () => {
+    // Anchored, not a bare `.toThrow()`: `mounts === 1` alone is satisfied by ANY first-
+    // attempt refusal, so an ungated `observe` misdiagnosed as a swallowed one would still
+    // pass here — the exact misattribution this file is about.
     let mounts = 0;
     expect(() =>
       withUnstarvedFrontier({
@@ -260,7 +266,9 @@ describe("an observation that never consults the gate is refused", () => {
         },
         observe: () => {},
       })
-    ).toThrow();
+    ).toThrow(
+      /^withUnstarvedFrontier: observe\(\) returned without calling requireUnstarvedFrontier\(\)/
+    );
     expect(mounts).toBe(1);
   });
 });
@@ -808,7 +816,7 @@ describe("every attempt cleans up after itself", () => {
           requireUnstarvedFrontier();
         },
       })
-    ).toThrow();
+    ).toThrow(/^withUnstarvedFrontier: all 2 attempts found a starved parse frontier/);
     expect(tally.n).toBe(2);
     expect(document.body.childElementCount).toBe(before);
   });
@@ -1007,9 +1015,11 @@ describe("withUnstarvedFrontierState carries the same refusals without a view", 
   });
 
   it("does not report a SWALLOWED gate refusal as never having gated", () => {
-    // The gate's own `assertHasLanguage` runs BEFORE either "the gate fired" record is
-    // written, so a gate refused for a missing language leaves `stateAtLastGate` unset and
-    // `sentinelsThrown` at zero. Swallow it and the loop would otherwise fall through to the
+    // The gate's own `assertHasLanguage` runs AFTER the entry count but BEFORE either of the
+    // other two records, so a gate refused for a missing language leaves `stateAtLastGate`
+    // unset and `sentinelsThrown` at zero while `gateCalls` has already moved — which is
+    // precisely why the shortfall is detectable at all.
+    // Swallow it and the loop would otherwise fall through to the
     // ungated branch and assert something false — that `observe` never called the gate —
     // sending the reader to look for a missing call that is right there, with the real error
     // discarded and no `cause`. Counting gate ENTRY against gate COMPLETION is what tells
@@ -1068,6 +1078,43 @@ describe("withUnstarvedFrontierState carries the same refusals without a view", 
     );
   });
 
+  it("refuses a swallowed gate refusal even when a LATER gate STARVES", () => {
+    // The sibling above covers the swallow followed by a RETURN; this covers the swallow
+    // followed by an escaping SENTINEL, which leaves the loop through its `catch` instead.
+    // Absorbed there, the attempt would be retried — and then either every remaining attempt
+    // starves and the run ends blaming the CPU, or one comes back clean and the swallow is
+    // erased outright, a silent green. The sentinel pays for itself with its own
+    // `sentinelsThrown++`, so the excess left over IS the swallowed refusal, which is why
+    // the catch arm can apply the same conservation law the return path does. `attempts: 2`
+    // with a clean second attempt is what makes the silent-green outcome reachable, so this
+    // fixture reds on BOTH of the ways absorbing it goes wrong.
+    let attemptsRun = 0;
+    expect(() =>
+      withUnstarvedFrontierState({
+        what: "the reducer's own output",
+        attempts: 2,
+        observe: (requireUnstarvedFrontier) => {
+          if (++attemptsRun === 1) {
+            try {
+              requireUnstarvedFrontier(languagelessState());
+            } catch {
+              /* exactly the mistake this test pins */
+            }
+            const starved = starvedState();
+            requireUnstarvedFrontier(starved); // escapes as the sentinel
+            return starved;
+          }
+          const good = settledMarkdownState();
+          requireUnstarvedFrontier(good);
+          return good;
+        },
+      })
+    ).toThrow(
+      /^withUnstarvedFrontierState: requireUnstarvedFrontier\(\) was called but its refusal was swallowed/
+    );
+    expect(attemptsRun).toBe(1); // and NOT retried past it
+  });
+
   it("does not carry a completed gate from a starved attempt into the next attempt", () => {
     // The sibling of the view form's `gateCalls` reset test, for the other half of the same
     // shortfall: hoisting `gatesCompleted` out of the attempt loop lets attempt 1's good gate
@@ -1101,6 +1148,8 @@ describe("withUnstarvedFrontierState carries the same refusals without a view", 
   });
 
   it("does not retry the ungated case", () => {
+    // Anchored for the reason given on the view form's twin: the count alone cannot tell a
+    // right refusal from a wrong one raised on the same attempt.
     let attemptsRun = 0;
     expect(() =>
       withUnstarvedFrontierState({
@@ -1110,7 +1159,9 @@ describe("withUnstarvedFrontierState carries the same refusals without a view", 
           return settledMarkdownState();
         },
       })
-    ).toThrow();
+    ).toThrow(
+      /^withUnstarvedFrontierState: observe\(\) returned without calling requireUnstarvedFrontier\(\)/
+    );
     expect(attemptsRun).toBe(1);
   });
 

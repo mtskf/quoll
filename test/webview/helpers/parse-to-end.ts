@@ -88,15 +88,17 @@ export function parseToEnd(state: EditorState, caller: SettlingCaller, budgetMs 
 }
 
 /**
- * Case (A) above, on its own, so the view-side helpers can reuse it. They settle through
- * `forceParsing`, which needs the VIEW rather than the state, so they cannot call
- * `parseToEnd` at all — but they inherit the same conflation: `forceParsing` is
- * `ensureSyntaxTree` plus a conditional dispatch and collapses to the same falsy result
- * for both causes. Exporting the probe rather than copying it is what keeps every helper
- * that settles a parse reporting a missing language in identical words.
+ * Case (A) above, on its own, so callers that cannot route through `parseToEnd` can reuse
+ * it. The view-side settles cannot: they go through `forceParsing`, which needs the VIEW
+ * rather than the state — and they inherit the same conflation, `forceParsing` being
+ * `ensureSyntaxTree` plus a conditional dispatch and collapsing to the same falsy result
+ * for both causes. The unstarved-frontier forms cannot either, for the opposite reason:
+ * they advance no parse at all and need nothing but the probe. Exporting it rather than
+ * copying it is what keeps every caller in `ParseCaller` reporting a missing language in
+ * identical words.
  *
- * Which helper calls this, and through what, is ./settled-view.ts's business — naming a
- * call chain here only dates the comment the next time that file rearranges one.
+ * Which helper calls this, and through what, is those modules' business — naming a call
+ * chain here only dates the comment the next time one of them rearranges one.
  */
 export function assertHasLanguage(state: EditorState, caller: ParseCaller): void {
   if (state.facet(language) === null) {

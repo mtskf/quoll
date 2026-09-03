@@ -83,6 +83,15 @@ const swallowedSentinelMessage = (caller: UnstarvedCaller): string =>
   `${caller}: observe() swallowed the starved-frontier signal — do not wrap requireUnstarvedFrontier() in your own catch, and do not run it inside expect(...).toThrow()`;
 
 /**
+ * The same, for a swallowed LANGUAGE refusal — which leaves no record of its own, so it is
+ * detected by the gate-entry conservation law rather than by a counter of its own. Shared
+ * for the same reason as its neighbour and by the same split: the return path sees a
+ * swallow followed by a return, the catch path sees one followed by an escaping sentinel.
+ */
+const swallowedRefusalMessage = (caller: UnstarvedCaller): string =>
+  `${caller}: requireUnstarvedFrontier() was called but its refusal was swallowed — do not wrap it in your own catch, and do not run it inside expect(...).toThrow(); re-run without the catch to see the underlying error`;
+
+/**
  * The attempt loop and every refusal both public forms share. Private: the forms differ in
  * what they own (a mounted view, or nothing), in what their final "is what you measured
  * what you gated" check COMPARES (`view.state` vs the state `observe` returned — different
@@ -134,7 +143,7 @@ function runUnstarvedAttempts<C, R>(spec: {
     const { context, teardown } = begin();
     // The state as of the LAST gate call. NOT a record of whether the gate ever fired: the
     // gate's `assertHasLanguage` runs FIRST and can throw before this is ever assigned,
-    // which is what the two entry/exit counters below exist to see.
+    // which is what `gateCalls` and `gatesCompleted` below exist to see.
     let stateAtLastGate: EditorState | undefined;
     // COUNTED, not a boolean. At most ONE sentinel can escape an attempt, so a count above
     // what escaped proves an earlier one was swallowed — which the return-path check alone
@@ -143,8 +152,10 @@ function runUnstarvedAttempts<C, R>(spec: {
     // Gate ENTRY and gate COMPLETION, so the three counts here obey one conservation law:
     // every gate that is ENTERED leaves by exactly one of three routes — it completes, it
     // throws the sentinel, or `assertHasLanguage` refuses it. Only the third leaves no
-    // record of its own, so a shortfall of `gateCalls` against the other two IS a refusal
-    // that observe() caught. Without it a swallowed language refusal falls through to the
+    // record of its own, so gate ENTRIES in EXCESS of the other two counts ARE refusals
+    // that observe() caught. (Only that direction is reachable: `gateCalls++` is the gate's
+    // first statement, so `gateCalls >= gatesCompleted + sentinelsThrown` always holds.)
+    // Without it a swallowed language refusal falls through to the
     // ungated branch and is reported as "you never gated" (false, and points at the wrong
     // bug), and one FOLLOWED BY a successful gate leaves no trace at all — where the
     // equivalent swallowed sentinel is always refused.
@@ -206,17 +217,13 @@ function runUnstarvedAttempts<C, R>(spec: {
       // but is accounted for by neither a completion nor a sentinel was refused by
       // `assertHasLanguage`, and reaching here means `observe` caught that refusal and
       // carried on. Independent of what followed it, which is what makes it symmetric with
-      // the sentinel check above — a later successful gate no longer erases it.
-      // `sentinelsThrown` is already known to be zero here; the term is written out anyway
-      // so this check does not silently depend on the ordering of the one above.
-      // RETURN path only: a swallowed refusal followed by an error that ESCAPES `observe`
-      // is not detected, because the catch below sees the same shortfall whether the
-      // refusal was swallowed or IS the error now escaping, and a plain `Error` gives it
-      // nothing to tell those apart with (where the sentinel arm has `instanceof`).
+      // the sentinel check above — neither a later successful gate nor a later STARVED one
+      // erases it, the second because the catch arm below applies the same law.
+      // `sentinelsThrown` is zero on THIS path, forced by the check above; the term is
+      // written out because the law is one law and the catch arm reaches it with a sentinel
+      // counted, so a copy that dropped the term there would stop convicting.
       if (gateCalls > gatesCompleted + sentinelsThrown) {
-        throw new HelperRefusal(
-          `${caller}: requireUnstarvedFrontier() was called but its refusal was swallowed — do not wrap it in your own catch, and do not run it inside expect(...).toThrow(); re-run without the catch to see the underlying error`
-        );
+        throw new HelperRefusal(swallowedRefusalMessage(caller));
       }
       // Reached only when every gate entry is accounted for, so this is now exactly "no
       // gate was ever entered" rather than "nothing recorded one".
@@ -237,6 +244,21 @@ function runUnstarvedAttempts<C, R>(spec: {
       }
       if (!(error instanceof StarvedFrontier)) {
         throw error;
+      }
+      // The same conservation law as the return path, on the one escape flavour that can
+      // decide it. Past the rethrow above the escaping error IS the sentinel, and the
+      // sentinel already paid for itself with its own `sentinelsThrown++` — so a residual
+      // excess here is provably a refusal `observe` caught earlier in THIS attempt, and is
+      // refused rather than absorbed. Retried instead, the swallow would either be reported
+      // as CPU starvation (every attempt starves) or erased outright by a later clean
+      // attempt (a swallow that does not recur — `observe` re-runs FROM THE TOP, so an
+      // attempt-order-dependent body is not hypothetical).
+      //
+      // A plain `Error` escape gets no such check and is rethrown above: there the excess
+      // is genuinely undecidable, because the escaping error may itself BE the unrecorded
+      // refusal. `instanceof` is what separates the two, and it has already run.
+      if (gateCalls > gatesCompleted + sentinelsThrown) {
+        throw new HelperRefusal(swallowedRefusalMessage(caller));
       }
       // The sentinel is absorbed: the attempt is retried, nothing is in flight any more, so
       // a teardown failure below IS the failure and must propagate.
@@ -342,8 +364,8 @@ function runUnstarvedAttempts<C, R>(spec: {
  * etiquette: the gate records that it fired, and a swallowed signal is refused below.
  *
  * OWNERSHIP (the VIEW form only — the state form constructs nothing and an `EditorState`
- * needs no disposal): that form constructs the parent element and calls `mount`, so it
- * owes both a teardown and discharges it on every path — success, starvation, and a propagating
+ * needs no disposal): that form constructs the parent element and calls `mount`, so it both
+ * owes a teardown and discharges it on every path — success, starvation, and a propagating
  * failure alike. `mount` must build its view on the `parent` it is handed and must NOT
  * dispose of it; ownership transfers to this helper the moment `mount` returns. A `mount`
  * that THROWS still owes the disposal of whatever it had already constructed, because no
@@ -449,10 +471,11 @@ export function withUnstarvedFrontier<R extends void | undefined>(options: {
     },
     observe: (view, gate) => {
       // Once per attempt, BEFORE observe runs, and deliberately in addition to the gate's
-      // own copy: a language-less view must fail as "no language configured" rather than
-      // letting `observe` run up to its first gate and surface whatever it fails on first.
-      // Separating that here keeps a misconfigured extension list from masquerading as N
-      // starved attempts and then being reported as CPU starvation.
+      // own copy — which is what actually keeps a missing language from being reported as
+      // CPU starvation (it throws a plain Error, so the core's catch rethrows rather than
+      // retrying, whether or not this line exists). What THIS one adds is ORDERING: a
+      // language-less view must fail as "no language configured" rather than letting
+      // `observe` run up to its first gate and surface whatever it fails on first.
       assertHasLanguage(view.state, "withUnstarvedFrontier");
       return observe(view, () => gate(view.state));
     },
