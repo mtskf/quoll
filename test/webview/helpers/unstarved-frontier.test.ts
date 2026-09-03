@@ -922,6 +922,15 @@ function starvedState(): EditorState {
   return EditorState.create({ doc: DOC, extensions: [neverFinishingLanguage()] });
 }
 
+/**
+ * A state with NO language attached — what the gate's `assertHasLanguage` refuses. Named
+ * rather than spelled out per call site because `extensions: []` says what the state IS,
+ * not what it is FOR, and it is the "for" that the state-form tests below turn on.
+ */
+function languagelessState(): EditorState {
+  return EditorState.create({ doc: DOC, extensions: [] });
+}
+
 /** The real `observe` option type, so the fixture below cannot drift from it. */
 type StateObserve = Parameters<typeof withUnstarvedFrontierState>[0]["observe"];
 
@@ -1019,7 +1028,7 @@ describe("withUnstarvedFrontierState carries the same refusals without a view", 
       withUnstarvedFrontierState({
         what: "the reducer's own output",
         observe: (requireUnstarvedFrontier) => {
-          const state = EditorState.create({ doc: DOC, extensions: [] });
+          const state = languagelessState();
           try {
             requireUnstarvedFrontier(state);
           } catch {
@@ -1045,7 +1054,7 @@ describe("withUnstarvedFrontierState carries the same refusals without a view", 
         what: "the reducer's own output",
         observe: (requireUnstarvedFrontier) => {
           try {
-            requireUnstarvedFrontier(EditorState.create({ doc: DOC, extensions: [] }));
+            requireUnstarvedFrontier(languagelessState());
           } catch {
             /* exactly the mistake this test pins */
           }
@@ -1077,7 +1086,7 @@ describe("withUnstarvedFrontierState carries the same refusals without a view", 
             requireUnstarvedFrontier(starved); // …then abandons the attempt
             return starved;
           }
-          const langless = EditorState.create({ doc: DOC, extensions: [] });
+          const langless = languagelessState();
           try {
             requireUnstarvedFrontier(langless);
           } catch {
@@ -1245,7 +1254,7 @@ describe("withUnstarvedFrontierState carries the same refusals without a view", 
       withUnstarvedFrontierState({
         what: "the reducer's own output",
         observe: (requireUnstarvedFrontier) => {
-          const state = EditorState.create({ doc: DOC, extensions: [] });
+          const state = languagelessState();
           requireUnstarvedFrontier(state);
           return state;
         },

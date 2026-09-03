@@ -1,17 +1,17 @@
 import { syntaxTreeAvailable } from "@codemirror/language";
 import type { EditorState } from "@codemirror/state";
 import type { EditorView } from "@codemirror/view";
-// `UnstarvedCaller` is imported rather than declared here, and that direction is deliberate:
-// ./parse-to-end.ts declares the settling and the non-settling halves side by side and sums
-// them into the union `assertHasLanguage` accepts, and this module IS the non-settling half.
-// A local copy of the same two literals would NOT fail silently — measured, a copy with an
-// extra member reds at `SUBJECT` below and at the gate's `assertHasLanguage` call, and a copy
-// one member short reds at `SUBJECT` and at the `caller` its own form passes — but it would
-// make membership a fact two files have to be kept equal on rather than one fact. Most
-// refusals below interpolate it so the message names its caller; the two post-check refusals
-// spell their prefix out instead, because `caller` is a sibling property of the same object
-// literal and so is not in scope inside a form's `postCheck`, and the sentinel names no
-// caller at all (see its constructor).
+// `UnstarvedCaller` is imported rather than declared here so membership stays ONE fact:
+// ./parse-to-end.ts sums the settling and non-settling halves into the union
+// `assertHasLanguage` accepts, and this module IS the non-settling half. Its declaration
+// carries the measurement showing a local copy would red rather than drift silently — read
+// it there rather than restating it, since a rationale written out at both ends of one
+// import is itself the two-places-kept-equal shape the export exists to avoid.
+//
+// Most refusals below interpolate it so the message names its caller; the two post-check
+// refusals spell their prefix out instead, because `caller` is a sibling property of the
+// same object literal and so is not in scope inside a form's `postCheck`, and the sentinel
+// names no caller at all (see its constructor).
 import { assertHasLanguage, type UnstarvedCaller } from "./parse-to-end.js";
 
 /**
