@@ -226,14 +226,17 @@ describe("an observation that never consults the gate is refused", () => {
   });
 
   it("does not carry a gate call from a starved attempt into the next attempt's diagnosis", () => {
-    // `gateCalls` is per-ATTEMPT. Hoisting it out of the attempt loop reds TEN tests in this
-    // file (measured; hoisting its neighbour `sentinelsThrown` reds eleven). Nine of those
-    // only observe THAT a carried-over count convicts — their fixtures starve an attempt, so
-    // the next one inherits a gate call and trips the conservation law however it is worded.
-    // This one is the only one that pins WHICH message comes out: carried over, attempt 2's
-    // ungated `observe` is convicted of swallowing attempt 1's refusal instead — a message
-    // that names a mistake the caller did not make, in the file whose whole subject is not
-    // misattributing one.
+    // `gateCalls` is per-ATTEMPT, and since the catch arm also consults the conservation law
+    // that reset is broadly observed: every fixture here that starves an attempt and then
+    // reaches a later one convicts on the carried-over count. No census is written out,
+    // because the number tracks how many unrelated fixtures happen to starve — it moved once
+    // already in this PR and would need re-measuring whenever a test is added.
+    //
+    // What is unique to THIS fixture is its second attempt: it never gates at all. Every
+    // other carry-over lands on an attempt whose `observe` did call the gate, so the wrong
+    // message is merely misplaced. Here it accuses a caller of swallowing a refusal they had
+    // no opportunity to swallow — a message naming a mistake that could not have been made,
+    // in the file whose whole subject is not misattributing one.
     let attemptsRun = 0;
     expect(() =>
       withUnstarvedFrontier({
