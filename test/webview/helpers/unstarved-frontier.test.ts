@@ -57,6 +57,15 @@ function partiallyParsedMount(parent: HTMLElement): EditorView {
   });
 }
 
+/**
+ * A view with NO language attached — the view-form counterpart of `languagelessState()`
+ * below. Deliberately NOT settled (settling asserts a language, defeating the point);
+ * `mount` only has to hand back a mounted view.
+ */
+function languagelessMount(parent: HTMLElement): EditorView {
+  return new EditorView({ parent, state: EditorState.create({ doc: DOC, extensions: [] }) });
+}
+
 /** Count `destroy()` calls on one view without suppressing the real teardown. */
 function countingDestroy(view: EditorView, tally: { n: number }): EditorView {
   const real = view.destroy.bind(view);
@@ -739,8 +748,7 @@ describe("a missing language is reported as such, not retried as starvation", ()
     expect(() =>
       withUnstarvedFrontier({
         what: "the bounded output",
-        mount: (parent) =>
-          new EditorView({ parent, state: EditorState.create({ doc: DOC, extensions: [] }) }),
+        mount: languagelessMount,
         observe: (_view, requireUnstarvedFrontier) => {
           requireUnstarvedFrontier();
         },
@@ -755,8 +763,7 @@ describe("a missing language is reported as such, not retried as starvation", ()
     expect(() =>
       withUnstarvedFrontier({
         what: "the bounded output",
-        mount: (parent) =>
-          new EditorView({ parent, state: EditorState.create({ doc: DOC, extensions: [] }) }),
+        mount: languagelessMount,
         observe: () => {
           throw new Error("observe's own unrelated failure");
         },
