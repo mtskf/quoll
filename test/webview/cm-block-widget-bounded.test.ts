@@ -409,10 +409,10 @@ describe("imageBlockField bounded ≡ full", () => {
     ];
     // `prose\n\n${IMG}\n` settles to exactly 1 standalone image slot at rest (measured), so
     // this is a non-vacuous check on the guard: with the guard disabled, the four non-empty
-    // lists dispatch as true no-ops, reach the gate at :165 inside the `for` loop, and the
-    // comparison below passes rather than throwing. `[]` does not follow that path — its
-    // `for` loop body never runs, so :165 is never reached and `requireUnstarvedFrontier` is
-    // never called — MEASURED for each row (`false && ...` in place of the `if` above turns
+    // lists dispatch as true no-ops, reach the gate inside checkEquivalence's `for` loop, and
+    // the comparison below passes rather than throwing. `[]` does not follow that path — its
+    // `for` loop body never runs, so the gate is never reached and `requireUnstarvedFrontier`
+    // is never called — MEASURED for each row (`false && ...` in place of the `if` above turns
     // every row in this loop red, `[]` included: the four non-empty rows stop throwing at
     // all, and `[]` still throws, but as the HELPER's ungated-refusal message instead of this
     // one, so the exact-message match below catches that row too).

@@ -97,8 +97,9 @@ export function parseToEnd(state: EditorState, caller: SettlingCaller, budgetMs 
  * copying it is what keeps every caller in `ParseCaller` reporting a missing language in
  * identical words.
  *
- * Which helper calls this, and through what, is those modules' business — naming a call
- * chain here only dates the comment the next time one of them rearranges one.
+ * Which SITES inside those modules call this, and how many, is their business — a per-site
+ * census here only dates the comment the next time one of them rearranges one. The two
+ * families above are named because they are the reason this is exported at all.
  */
 export function assertHasLanguage(state: EditorState, caller: ParseCaller): void {
   if (state.facet(language) === null) {
