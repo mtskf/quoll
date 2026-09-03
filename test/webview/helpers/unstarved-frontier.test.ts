@@ -540,8 +540,9 @@ describe("an attempt count that could not have measured anything is refused", ()
 
 describe("a swallowed starved-frontier signal is refused", () => {
   // A call site that wraps the gate in its own catch would turn a starved frontier into a
-  // successful-looking observation. `gated` cannot see this — it is set before the throw —
-  // so the helper tracks whether the gate actually fired.
+  // successful-looking observation. `stateAtLastGate` cannot see this — the gate records the
+  // state BEFORE throwing the sentinel, so a swallowed one leaves the attempt looking gated
+  // — so the helper COUNTS the sentinels it threw instead.
   it("throws when observe() catches the sentinel and returns anyway", () => {
     const caught = catchError(() =>
       withUnstarvedFrontier({
