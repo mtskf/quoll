@@ -747,6 +747,22 @@ describe("a missing language is reported as such, not retried as starvation", ()
       })
     ).toThrow(/^withUnstarvedFrontier: state has no language configured/);
   });
+
+  it("reports the missing language BEFORE observe fails on something else", () => {
+    // The gate's own copy cannot cover this: `observe` never reaches a gate. This pins the
+    // ORDERING the view form's attempt-start probe exists for — without it the reader is
+    // sent to whatever `observe` happened to trip over first, not to the missing extension.
+    expect(() =>
+      withUnstarvedFrontier({
+        what: "the bounded output",
+        mount: (parent) =>
+          new EditorView({ parent, state: EditorState.create({ doc: DOC, extensions: [] }) }),
+        observe: () => {
+          throw new Error("observe's own unrelated failure");
+        },
+      })
+    ).toThrow(/^withUnstarvedFrontier: state has no language configured/);
+  });
 });
 
 describe("a real failure is propagated, not retried away", () => {
@@ -915,6 +931,57 @@ describe("every attempt cleans up after itself", () => {
       errSpy.mockRestore();
     }
     expect(document.body.childElementCount).toBe(before);
+  });
+
+  it("keeps a swallowed-refusal conviction primary when view.destroy() ALSO throws", () => {
+    // The sibling above covers the plain rethrow, where `propagating` is set at the top of
+    // the catch arm and the error leaves immediately. This covers the one path that runs on
+    // PAST that rethrow: a swallowed gate refusal on an attempt that then STARVED, convicted
+    // by the catch arm's conservation check while the sentinel is still being handled. That
+    // conviction is a failure in flight, so `propagating` must stay true until after it.
+    // Hoist `propagating = false` above the check and the `finally` reads the conviction as
+    // "nothing in flight", rethrows the teardown failure over it, and the swallow diagnosis
+    // is discarded outright.
+    const lang = new Compartment();
+    let mounts = 0;
+    // Spied for the same reason as above: "beside, not over" is the property under test.
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      expect(() =>
+        withUnstarvedFrontier({
+          what: "the bounded output",
+          attempts: 2,
+          mount: (parent) => {
+            mounts++;
+            return throwOnDestroy(
+              settledMount({
+                state: EditorState.create({ doc: DOC, extensions: [lang.of(markdown())] }),
+                parent,
+              })
+            );
+          },
+          observe: (view, requireUnstarvedFrontier) => {
+            view.dispatch({ effects: lang.reconfigure([]) });
+            try {
+              requireUnstarvedFrontier();
+            } catch {
+              /* exactly the mistake this test pins */
+            }
+            // Back to a real Language so the next gate is STARVED rather than refused
+            // again: the sentinel is what carries the attempt into the catch arm.
+            view.dispatch({ effects: lang.reconfigure(neverFinishingLanguage()) });
+            requireUnstarvedFrontier(); // escapes as the sentinel
+          },
+        })
+      ).toThrow(
+        /^withUnstarvedFrontier: requireUnstarvedFrontier\(\) was called but its refusal was swallowed/
+      );
+      expect(mounts).toBe(1); // and NOT retried past the swallow
+      expect(errSpy).toHaveBeenCalledTimes(1);
+      expect(errSpy.mock.calls[0]?.[0]).toMatch(/^withUnstarvedFrontier: teardown ALSO threw/);
+    } finally {
+      errSpy.mockRestore();
+    }
   });
 });
 
@@ -1089,8 +1156,10 @@ describe("withUnstarvedFrontierState carries the same refusals without a view", 
     // erased outright, a silent green. The sentinel pays for itself with its own
     // `sentinelsThrown++`, so the excess left over IS the swallowed refusal, which is why
     // the catch arm can apply the same conservation law the return path does. `attempts: 2`
-    // with a clean second attempt is what makes the silent-green outcome reachable, so this
-    // fixture reds on BOTH of the ways absorbing it goes wrong.
+    // with a clean second attempt is what makes the silent-green outcome reachable, and it
+    // is the outcome this fixture produces; the anchored matcher would red on the
+    // CPU-starvation one too, but reaching that needs a second attempt that ALSO starves —
+    // so keep this one clean rather than "strengthening" it into the other fixture.
     let attemptsRun = 0;
     expect(() =>
       withUnstarvedFrontierState({

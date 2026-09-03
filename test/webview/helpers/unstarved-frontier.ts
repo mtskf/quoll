@@ -221,7 +221,11 @@ function runUnstarvedAttempts<C, R>(spec: {
       // erases it, the second because the catch arm below applies the same law.
       // `sentinelsThrown` is zero on THIS path, forced by the check above; the term is
       // written out because the law is one law and the catch arm reaches it with a sentinel
-      // counted, so a copy that dropped the term there would stop convicting.
+      // counted — and dropping the term there could not stop the conviction, only WIDEN it:
+      // `gateCalls > gatesCompleted` fires on a superset. It would convict every ordinary
+      // starved attempt, whose escaped sentinel's own gate entry would then read as the
+      // excess. The term is what keeps innocent starvation from being convicted; it is not
+      // what makes the check fire.
       if (gateCalls > gatesCompleted + sentinelsThrown) {
         throw new HelperRefusal(swallowedRefusalMessage(caller));
       }
@@ -254,9 +258,12 @@ function runUnstarvedAttempts<C, R>(spec: {
       // attempt (a swallow that does not recur — `observe` re-runs FROM THE TOP, so an
       // attempt-order-dependent body is not hypothetical).
       //
-      // A plain `Error` escape gets no such check and is rethrown above: there the excess
-      // is genuinely undecidable, because the escaping error may itself BE the unrecorded
-      // refusal. `instanceof` is what separates the two, and it has already run.
+      // A plain `Error` escape gets no such check and is rethrown above: there an excess of
+      // ONE is undecidable, because the escaping error may itself BE the unrecorded refusal.
+      // (Two or more would still convict — one error accounts for at most one refusal — but
+      // the rethrow above is deliberately unconditional rather than delaying a real failure
+      // to second-guess a count.) `instanceof` is what separates the two, and it has already
+      // run.
       if (gateCalls > gatesCompleted + sentinelsThrown) {
         throw new HelperRefusal(swallowedRefusalMessage(caller));
       }
