@@ -363,8 +363,14 @@ describe("fencedCodeCollapseField bounded ≡ full", () => {
     // Setext alternation and relaxed its indent bound, and now fires on all of these. THIS
     // field deliberately keeps its own narrower STRUCTURAL so that editing inside a fence —
     // where a `#` comment, a `___` rule or a `===` line is ordinary CODE, not a block marker —
-    // stays on the bounded path. These cases are what makes "the two guards diverge on
-    // purpose" observable in behaviour and not only in source text.
+    // stays on the bounded path. ⚠️ These cases pin that the bounded path is CORRECT for
+    // those markers; they cannot pin that it is TAKEN. Step 3 of the reducer routes BOTH the
+    // bounded field and the full-recompute oracle through `buildFullState` when
+    // `touchesStructural` fires (`mode` appears nowhere in that condition), so widening the
+    // fenced STRUCTURAL to the shared one would send both down the same path and leave this
+    // equivalence assertion green. What actually pins the narrowness is the source-text
+    // assertions in cm-lezer-table-internals-tripwire.test.ts ("keeps an ATX / Setext /
+    // underscore-free regex, unlike the shared one").
     ...(
       [
         ["a hash comment", "# comment"],

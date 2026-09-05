@@ -10,8 +10,8 @@
 // specific bug by uniform random mutation has probability ≈ 0, which is why
 // cm-structural-guard-exhaustive.test.ts enumerates instead of sampling.
 import { syntaxTreeAvailable } from "@codemirror/language";
-import { EditorState, type Extension } from "@codemirror/state";
-import type { Decoration } from "@codemirror/view";
+import { EditorState, type Extension, type RangeSet } from "@codemirror/state";
+import type { Decoration, GutterMarker } from "@codemirror/view";
 import { describe, expect, it } from "vitest";
 import { calloutMarkerConcealField } from "../../src/webview/cm/decorations/callout-marker-conceal.js";
 import {
@@ -36,13 +36,17 @@ const extensions = (): Extension[] => [
   calloutMarkerConcealField,
 ];
 
-function serializeGutter(set: {
-  iter(): { value: unknown; from: number; to: number; next(): void };
-}) {
+/** Typed against the fields' REAL value type. `elementClass` is the only thing here that
+ *  distinguishes one gutter marker from another — the three fold fields emit
+ *  `quoll-fold-heading-1..3` at ranges that are identical whichever level is tagged — so a
+ *  hand-rolled `unknown` + cast would let a marker refactor that drops the property degrade
+ *  every entry to `from-to:undefined` on BOTH sides, silently reducing the differential to
+ *  range-only. With the real type that refactor is a compile error. */
+function serializeGutter(set: RangeSet<GutterMarker>) {
   const out: string[] = [];
   const c = set.iter();
   while (c.value) {
-    out.push(`${c.from}-${c.to}:${(c.value as { elementClass: string }).elementClass}`);
+    out.push(`${c.from}-${c.to}:${c.value.elementClass}`);
     c.next();
   }
   return out.join("|");
@@ -157,7 +161,15 @@ describe("structural guard — differential fuzz over the real consumers", () =>
         const inTable = state
           .field(tableSkeletonField)
           .some((m) => pos >= m.blockFrom && pos <= m.blockTo);
-        if (bounded && inTable) {
+        // ⚠️ "inside a `Table` node" alone is NOT enough either: a table's trailing
+        // overshoot line carries no pipe, and such an edit takes the bounded path under the
+        // OLD presence arm too (measured: `inCellBounded` reached 23 with the arm reverted
+        // to `oldSlice.includes("|") || newSlice.includes("|")`, clearing the old `> 20`
+        // threshold). Require the EDITED LINE to carry a `|` as well — that is the exact
+        // class the old arm fired on unconditionally, so it measures 0 under it.
+        const oldLineText = state.doc.lineAt(Math.min(pos, state.doc.length)).text;
+        const newLineText = next.doc.lineAt(Math.min(pos, next.doc.length)).text;
+        if (bounded && inTable && (oldLineText.includes("|") || newLineText.includes("|"))) {
           inCellBounded++; // the class the narrowing recovers
         }
 
@@ -200,9 +212,14 @@ describe("structural guard — differential fuzz over the real consumers", () =>
     expect(boundedPath).toBeGreaterThan(50);
     // TARGETED non-vacuity: `bounded > 50` alone is satisfied by any pipe-free prose edit
     // and would hold for the OLD presence arm too, so it says nothing about this change.
-    // An edit on a line carrying a `|` taking the bounded path is possible ONLY under the
-    // narrowed arm (Codex finding 4).
-    expect(inCellBounded).toBeGreaterThan(20);
+    // An edit on a `|`-bearing line INSIDE a table taking the bounded path is possible ONLY
+    // under the narrowed arm (Codex finding 4). Measured across six seeds
+    // (0x5eed1234 / 1 / 2 / 3 / 999 / 424242, 2026-09-06): 72 / 94 / 86 / 104 / 97 / 72
+    // under the shipped arm and 0 at EVERY seed with the arm reverted to the pre-PR
+    // `oldSlice.includes("|") || newSlice.includes("|")` — under which this assertion reds.
+    // The threshold sits below the lowest shipped reading so seed noise cannot red it, and
+    // far above the 0 the old arm gives.
+    expect(inCellBounded).toBeGreaterThan(50);
     expect(starved).toBeLessThan(compared / 4);
   }, 300_000);
 });
