@@ -1008,13 +1008,55 @@ export const quollCopyButtonTheme = EditorView.theme(copyButtonThemeSpec);
 // Conceal/reveal geometry: in the revealed state the controls share the open fence
 // line's padding box with the bar → aligned. In the concealed state the controls
 // sit in the zero-height `-fence-hidden` row while the bar rides the migrated
-// first-body-line; that row lacks the line's transparent alignment borders, so two
-// :has(+ …) / descendant rules re-add the gap-y (vertical, outer-open only) and the
-// 6px column inset (horizontal) offsets so the fence-hidden controls land on the
-// strip in both states (PR #246 adjacency precedent). Separate EditorView.theme for
-// the same unlayered-override reason as copyButtonThemeSpec; exported plain so the
-// picker suite pins the contract.
-export const fencedHeaderBarThemeSpec = {
+// first-body-line; that row lacks the line's transparent alignment borders, so
+// three re-add rules restore it: two `:has(+ …)` selector lists — one per control
+// (copy button, label) — for the vertical gap-y offset (see concealedGapAnchor),
+// plus one descendant rule for the label's 6px horizontal column inset. Together
+// they land the fence-hidden controls on the strip in both states (PR #246
+// adjacency precedent). Separate EditorView.theme for the same unlayered-override
+// reason as copyButtonThemeSpec; exported plain so the picker suite pins the
+// contract.
+
+/** Selector for a CONCEALED open fence's header controls that must be pushed back
+ *  down by the panel's EXTERNAL --quoll-block-gap-y top border.
+ *
+ *  Why the offset exists: the panel fill uses `background-clip: padding-box`, so a
+ *  visible open edge carrying blockEdgeGapCorner's transparent top border paints its
+ *  surface --quoll-block-gap-y BELOW its border box. The concealed anchor is the
+ *  zero-height `-fence-hidden` row, which sits at that border box's TOP and has no
+ *  such border of its own — so an absolute `top` on it resolves against a datum
+ *  --quoll-block-gap-y too high, and the control hangs out over the panel's rounded
+ *  top edge. Adding the gap back restores the same inset the revealed state gets for
+ *  free (its anchor IS the bordered line).
+ *
+ *  Why the condition is the GAP BORDER, not the language tag: the border is emitted
+ *  by whichever `-outer-open` class marks the panel's true outer boundary, and both
+ *  spellings resolve the SAME --quoll-block-gap-y token via blockEdgeGapCorner — a
+ *  top-level fenced panel gets `quoll-fenced-code-outer-open`, a blockquote-nested one
+ *  gets `quoll-blockquote-outer-open` instead (block-style.ts suppresses fenced
+ *  outer-open inside a quote). The language tag has nothing to do with it, so gating
+ *  on `-has-language` left every BARE block — and every blockquote-nested block, tagged
+ *  or not — uncorrected. Real-pixel evidence for all of these states:
+ *  test/webview-browser/fenced-header-bar.browser.test.ts.
+ *
+ *  A selector LIST (not a compound) is what keeps this safe from double-counting: the
+ *  two classes are mutually exclusive on a fenced open edge, and even if they were not,
+ *  matching two branches applies the one declaration once. Requiring
+ *  `.quoll-fenced-code-open` on the adjacent line keeps the match to a fenced panel's
+ *  own migrated header line rather than any neighbouring outer-open block. */
+const concealedGapAnchor = (control: string): string =>
+  [".quoll-fenced-code-outer-open", ".quoll-blockquote-outer-open"]
+    .map(
+      (outerOpen) =>
+        `.cm-line.quoll-fenced-code-fence-hidden:has(+ .cm-line.quoll-fenced-code-open${outerOpen}) ${control}`
+    )
+    .join(", ");
+
+// Explicitly typed (the sibling specs infer): the two computed template-literal
+// keys below make TS infer a UNION of per-key value shapes, each padding the other
+// keys' properties with `?: undefined`, which no longer satisfies StyleSpec's index
+// signature. The annotation states the shape the spec has always had.
+export const fencedHeaderBarThemeSpec: Record<string, Record<string, string>> = {
   ".cm-line.quoll-fenced-code-open.quoll-fenced-code-has-language": {
     // Self-sufficient positioning context (do NOT rely on copyButtonThemeSpec's).
     position: "relative",
@@ -1127,24 +1169,20 @@ export const fencedHeaderBarThemeSpec = {
   },
   // Concealed-state alignment. The `-fence-hidden` row lacks the line's transparent
   // alignment borders, so absolute offsets resolve to the row's raw left / top edge.
-  //   - VERTICAL: only when the migrated header line is a TRUE outer boundary (its
-  //     transparent --quoll-block-gap-y top border pushes the bar's padding box
-  //     down) — offset both controls down by the gap. Scoped by the NEXT line being
-  //     a has-language outer-open header, so bare blocks are untouched.
+  //   - VERTICAL: {@link concealedGapAnchor} — the offset follows the GAP BORDER, not
+  //     the language tag (a bare block's panel carries the same border).
   //   - HORIZONTAL: the revealed line's 6px transparent left border insets the label;
   //     a plain (non-blockquote) fence-hidden row has none, so re-add the column
   //     inset. A BLOCKQUOTE-nested fence-hidden row ALREADY carries the blockquote's
   //     6px transparent border (same --quoll-column-inset-left token), so it must NOT
   //     re-add it (double-count → the nested label drifts ~6px right) — hence
   //     :not(.quoll-blockquote).
-  ".cm-line.quoll-fenced-code-fence-hidden:has(+ .cm-line.quoll-fenced-code-has-language.quoll-fenced-code-outer-open) .quoll-copy-button":
-    {
-      top: "calc(0.3em + var(--quoll-block-gap-y, 8px))",
-    },
-  ".cm-line.quoll-fenced-code-fence-hidden:has(+ .cm-line.quoll-fenced-code-has-language.quoll-fenced-code-outer-open) .quoll-language-picker-label.is-labeled":
-    {
-      top: "var(--quoll-block-gap-y, 8px)",
-    },
+  [concealedGapAnchor(".quoll-copy-button")]: {
+    top: "calc(0.3em + var(--quoll-block-gap-y, 8px))",
+  },
+  [concealedGapAnchor(".quoll-language-picker-label.is-labeled")]: {
+    top: "var(--quoll-block-gap-y, 8px)",
+  },
   ".cm-line.quoll-fenced-code-fence-hidden:not(.quoll-blockquote) .quoll-language-picker-label.is-labeled":
     {
       left: "calc(0.55em + var(--quoll-column-inset-left, 6px))",
