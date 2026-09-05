@@ -25,6 +25,7 @@
 // so if a future CM ever cloned the transaction per field, each field would just
 // recompute the same verdict — result unchanged, only the sharing lost.
 
+import { syntaxTreeAvailable } from "@codemirror/language";
 import type { EditorState, Transaction } from "@codemirror/state";
 import type { Interval } from "./bounded-recompute.js";
 
@@ -168,6 +169,24 @@ export function touchesStructuralReparse(tr: Transaction): boolean {
   });
   structuralMemo.set(tr, hit);
   return hit;
+}
+
+/** The admission test every changed-range-bounded StateField applies on a docChanged
+ *  transaction before it may reuse records: take the FULL rebuild when either the edit
+ *  could re-shape a block boundary outside the recomputed window (`touchesStructuralReparse`
+ *  — see above), or the post-edit parse frontier is incomplete so the tree cannot be
+ *  trusted outside it (G2).
+ *
+ *  The two terms answer DIFFERENT questions and neither implies the other: a structural
+ *  reparse happens with a COMPLETE frontier, and a starved frontier happens on edits with
+ *  no structural shape at all. Spelling them out per field is what let two fields ship with
+ *  only the second — so this is the only spelling, and
+ *  test/build/frontier-gate-needs-structural-guard.test.ts is what keeps it that way.
+ *
+ *  Callers may OR their own extra risks IN FRONT of this (fold/index.ts adds a facet flip);
+ *  what they must not do is take either term away. */
+export function requiresFullBoundedRebuild(tr: Transaction): boolean {
+  return touchesStructuralReparse(tr) || !syntaxTreeAvailable(tr.state, tr.state.doc.length);
 }
 
 /** Expand [from,to] to the enclosing blank-line-delimited block: line-align, then

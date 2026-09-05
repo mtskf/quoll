@@ -90,7 +90,7 @@ import { quollSyntaxExclusionZones } from "../decorations/orchestrator.js";
 import { pointInExclusionZone } from "../decorations/shared.js";
 import { isRenderableListItem } from "../list/list-geometry.js";
 import { buildSortedRangeSet } from "../sorted-range-set.js";
-import { expandToEnclosingBlock, touchesStructuralReparse } from "../structural-guard.js";
+import { expandToEnclosingBlock, requiresFullBoundedRebuild } from "../structural-guard.js";
 
 const SVG_NS = "http://www.w3.org/2000/svg";
 
@@ -408,11 +408,7 @@ function defineFoldGutterLineClass(spec: FoldGutterFieldSpec): StateField<RangeS
         // outside it — all three need a full rebuild. Otherwise bound the walk to the
         // changed blocks. (`facetChanged` is a constant `false` for a non-zone-aware
         // field, so it never forces a rebuild there.)
-        if (
-          facetChanged ||
-          touchesStructuralReparse(tr) ||
-          !syntaxTreeAvailable(tr.state, tr.state.doc.length)
-        ) {
+        if (facetChanged || requiresFullBoundedRebuild(tr)) {
           return build(tr.state);
         }
         return recompute(value, tr);
