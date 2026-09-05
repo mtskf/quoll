@@ -74,6 +74,94 @@ export function isBlankLine(text: string): boolean {
   return /^[ \t]*$/.test(text);
 }
 
+// ---------------------------------------------------------------------------
+// TABLE-DELIM inputs — mirrors of @lezer/markdown 1.6.4's own table-formation tests
+// (`hasPipe`, `delimiterLine`, `parseRow`). A GFM `Table` exists in that parser iff a leaf
+// block's first line has an unescaped pipe, a following line is delimiter-shaped, and the
+// two lines' `parseRow` cell counts agree — via `TableParser.nextLine` for the ordinary
+// case and via `endLeaf` for a paragraph split by a pipe line.
+//
+// ⚠️ The parser applies `delimiterLine` at TWO call sites with DIFFERENT inputs:
+// `TableParser.nextLine` tests `line.text.slice(line.pos)` (container prefix removed) while
+// `endLeaf` tests `cx.peekLine()` RAW. The regex's only whitespace sensitivity is its `^\|?`
+// anchor, so over every possible `line.pos` the test takes exactly TWO values — "leading
+// whitespace remains" (== raw) and "fully stripped". Both are mirrored, and both are
+// compared, because this arm is a DELTA and NOT a presence test: an over-approximating
+// predicate that pins BOTH sides to `true` erases a real flip, so here the cost of a false
+// match is a MISSED rebuild, not a wasted one. Verified counterexample — ` :---|` →
+// ` |:---|` keeps hasPipe, stripped-delimiter and cell count all constant while the table
+// (and, through it, an enclosing list's extent across a blank line) disappears.
+// `hasPipe` and `parseRow` need no such pairing — but ONLY because of a CROSS-ARM
+// dependency that must not be silently removed: the parser starts them at `line.basePos`
+// while these mirrors start at 0, which agrees exactly when `[0, basePos)` is whitespace.
+// For a line whose prefix is a CONTAINER MARKER it does NOT agree (`> | b` counts 1 to the
+// parser and 2 here, so `> | b` -> `> x | b` flips for the parser and not for the mirror),
+// and that is harmless solely because SHAPE's container alternation
+// `(?:^|\n)[ \t]*(?:[-*+]|\d{1,9}[.)]|>)` fires on every such line before this arm is
+// reached. ⚠️ Narrowing SHAPE's container alternation would make these mirrors unsound
+// without touching them; see the SHAPE follow-up entry in TODO.md. Drift in any of this is
+// caught by cm-lezer-table-internals-tripwire.test.ts; the arm's overall soundness is
+// measured by cm-structural-guard-exhaustive.test.ts.
+
+/** Mirror of `hasPipe`: an unescaped `|` anywhere; `\` escapes the next character. */
+function hasUnescapedPipe(text: string): boolean {
+  for (let i = 0; i < text.length; i++) {
+    const next = text.charCodeAt(i);
+    if (next === 124 /* '|' */) {
+      return true;
+    }
+    if (next === 92 /* '\' */) {
+      i++;
+    }
+  }
+  return false;
+}
+
+/** @lezer/markdown 1.6.4's `delimiterLine` regex, VERBATIM. */
+const TABLE_DELIMITER_LINE = /^\|?(\s*:?-+:?\s*\|)+(\s*:?-+:?\s*)?$/;
+
+/** Mirror of `parseRow`'s return value: cells split on unescaped `|`; a leading pipe opens
+ *  no cell and a trailing pipe closes none; a run of only spaces/tabs is not content.
+ *  Counting raw `|` characters instead would MISS `a | b` → `  | b`, which drops the count
+ *  2 → 1 with the pipe count unchanged — a header edit that breaks a whole table. */
+function tableRowCellCount(text: string): number {
+  let count = 0;
+  let first = true;
+  let cellStart = -1;
+  let esc = false;
+  for (let i = 0; i < text.length; i++) {
+    const next = text.charCodeAt(i);
+    if (next === 124 /* '|' */ && !esc) {
+      if (!first || cellStart > -1) {
+        count++;
+      }
+      first = false;
+      cellStart = -1;
+    } else if (esc || (next !== 32 && next !== 9)) {
+      if (cellStart < 0) {
+        cellStart = i;
+      }
+    }
+    esc = !esc && next === 92 /* '\' */;
+  }
+  if (cellStart > -1) {
+    count++;
+  }
+  return count;
+}
+
+/** The narrowed TABLE-DELIM arm: did this single-line edit change any of the FOUR facts
+ *  lezer forms a `Table` from? Exported so the shape test can pin it directly. */
+export function tableRowShapeChanged(oldText: string, newText: string): boolean {
+  return (
+    hasUnescapedPipe(oldText) !== hasUnescapedPipe(newText) ||
+    TABLE_DELIMITER_LINE.test(oldText) !== TABLE_DELIMITER_LINE.test(newText) ||
+    TABLE_DELIMITER_LINE.test(oldText.replace(/^[ \t]+/, "")) !==
+      TABLE_DELIMITER_LINE.test(newText.replace(/^[ \t]+/, "")) ||
+    tableRowCellCount(oldText) !== tableRowCellCount(newText)
+  );
+}
+
 /** SOUND syntactic over-approximation of "this edit could trigger a STRUCTURAL REPARSE
  *  that re-shapes a block boundary OUTSIDE the changed window". Some consumers bound their
  *  keystroke recompute to the changed blank-line-delimited run (`expandToEnclosingBlock`);
