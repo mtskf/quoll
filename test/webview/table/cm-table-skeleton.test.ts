@@ -163,11 +163,14 @@ describe("tableSkeletonField bounded ≡ fullWalk", () => {
       mount: (parent) =>
         settledMount({ state: EditorState.create({ doc, extensions: exts() }), parent }, 10_000),
       observe: (view, requireUnstarvedFrontier) => {
-        // Offset chosen to land INSIDE the `prose` paragraph. The offset is load-bearing:
-        // an edit on either table's own lines carries a `|`, which trips the structural
-        // guard's TABLE-DELIM arm and routes the dispatch to the FULL walk — leaving this
-        // test comparing full against full and unable to see a broken boundedUpdate. The
-        // negative pin below is what keeps that from drifting back silently.
+        // Offset chosen to land INSIDE the `prose` paragraph, i.e. OUTSIDE both tables'
+        // node ranges. That is what keeps this test on the REUSE half of `boundedUpdate`
+        // (the sibling below puts the edit's span ON a table to exercise the RE-WALK half
+        // instead) — it is no longer about pipe presence: the narrowed TABLE-DELIM arm is
+        // a per-line SHAPE delta (`tableRowShapeChanged`), not "any `|` on the line", so an
+        // in-cell keystroke that leaves a row's shape unchanged stays on the bounded arm
+        // too. The negative pin below still guards against a regression that would route
+        // this specific edit to the FULL walk.
         const proseAt = doc.indexOf("prose") + 2;
         const tr = view.state.update({ changes: { from: proseAt, insert: "x" } });
         expect(touchesStructuralReparse(tr)).toBe(false); // this edit really is on the bounded arm
@@ -204,9 +207,10 @@ describe("tableSkeletonField bounded ≡ fullWalk", () => {
       mount: (parent) =>
         settledMount({ state: EditorState.create({ doc, extensions: exts() }), parent }, 10_000),
       observe: (view, requireUnstarvedFrontier) => {
-        // End of `intro` — prose, so the changed line carries no `|` and no structural
-        // shape. The negative pin keeps that from drifting into the FULL arm, where this
-        // would compare a full walk against a full walk.
+        // End of `intro` — prose, with no table-shape signal (no `|`, no delimiter row, no
+        // cell-count change) for the narrowed TABLE-DELIM arm to fire on, and no other
+        // structural shape either. The negative pin keeps that from drifting into the FULL
+        // arm, where this would compare a full walk against a full walk.
         const tr = view.state.update({ changes: { from: 5, insert: "X" } });
         expect(touchesStructuralReparse(tr)).toBe(false);
         view.dispatch(tr);
