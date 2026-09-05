@@ -540,13 +540,38 @@ describe("quollFencedHeaderBarTheme (spec contract)", () => {
     // Explicit after `font: inherit` so the concealed row's line-height:0 can't clip.
     expect(sel?.lineHeight).toBe("normal");
   });
-  it("offsets fence-hidden controls by the gap when the next line is an outer-open header", () => {
-    const key = Object.keys(fencedHeaderBarThemeSpec).find(
-      (k) => k.includes(":has(") && k.includes("quoll-copy-button")
-    );
-    expect(key).toBeDefined();
-    expect(rule(key as string)?.top).toContain("--quoll-block-gap-y");
-  });
+  // The gap offset keys the correction on the GAP BORDER, not on the language tag:
+  // both `-outer-open` spellings emit the same --quoll-block-gap-y border (a
+  // top-level panel gets the fenced one, a blockquote-nested panel the quote's), and
+  // a bare block's panel carries it just as a tagged one does. Gating on
+  // `-has-language` left every bare and every blockquote-nested block uncorrected —
+  // the button then hung 4px over the panel's rounded top edge. The real-pixel
+  // evidence lives in test/webview-browser/fenced-header-bar.browser.test.ts; this
+  // pins the selector shape so the fix cannot be silently re-narrowed here.
+  for (const [control, prop] of [
+    [".quoll-copy-button", "top"],
+    [".quoll-language-picker-label.is-labeled", "top"],
+  ] as const) {
+    it(`offsets the fence-hidden ${control} by the gap on BOTH outer-open sources`, () => {
+      const key = Object.keys(fencedHeaderBarThemeSpec).find(
+        (k) => k.includes(":has(") && k.endsWith(` ${control}`)
+      );
+      expect(key).toBeDefined();
+      const selector = key as string;
+      expect(rule(selector)?.[prop]).toContain("--quoll-block-gap-y");
+      // One branch per gap-border source, and neither gated on the language tag.
+      const branches = selector.split(", ");
+      expect(branches).toHaveLength(2);
+      expect(branches.some((b) => b.includes(".quoll-fenced-code-outer-open"))).toBe(true);
+      expect(branches.some((b) => b.includes(".quoll-blockquote-outer-open"))).toBe(true);
+      for (const branch of branches) {
+        expect(branch).not.toContain("quoll-fenced-code-has-language");
+        // Anchored on the fence-hidden row, matched against its ADJACENT open edge.
+        expect(branch.startsWith(".cm-line.quoll-fenced-code-fence-hidden:has(+ ")).toBe(true);
+        expect(branch).toContain(".cm-line.quoll-fenced-code-open");
+      }
+    });
+  }
   it("re-adds the column inset to a NON-blockquote fence-hidden labelled wrapper only", () => {
     // The :not(.quoll-blockquote) scope prevents double-counting the inset on a
     // blockquote-nested fence-hidden row (which already carries the quote's border).
