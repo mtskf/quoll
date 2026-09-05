@@ -89,3 +89,52 @@ describe("requiresFullBoundedRebuild", () => {
     });
   });
 });
+
+// The TABLE-DELIM arm's verdicts at the shared admission test. The exhaustive oracle proves
+// the arm is SOUND; these pin that it is also NARROW — every proof above stays green if the
+// arm is widened back to "any pipe", and PERF.md's two rows are claims about this boundary.
+const TABLE_DOC = "| alpha | beta |\n|-------|------|\n| one   | two  |\n";
+
+describe("TABLE-DELIM arm", () => {
+  function verdictOf(doc: string, from: number, to: number, insert: string, expected: boolean) {
+    withUnstarvedFrontierState({
+      what: "the TABLE-DELIM admission verdict",
+      observe: (requireUnstarvedFrontier) => {
+        const tr = settledState(EditorState.create({ doc, extensions: exts() })).update({
+          changes: { from, to, insert },
+        });
+        requireUnstarvedFrontier(tr.state);
+        expect(touchesStructuralReparse(tr)).toBe(expected);
+        return tr.state;
+      },
+    });
+  }
+
+  it("keeps an in-cell keystroke on the bounded path", () => {
+    const at = TABLE_DOC.indexOf("alpha") + 5;
+    verdictOf(TABLE_DOC, at, at, "X", false);
+  });
+
+  it("full-rebuilds when a delimiter row breaks", () => {
+    const at = TABLE_DOC.indexOf("-------") + 2;
+    verdictOf(TABLE_DOC, at, at + 1, "x", true);
+  });
+
+  it("full-rebuilds when the header loses a cell", () => {
+    const at = TABLE_DOC.indexOf("| beta");
+    verdictOf(TABLE_DOC, at, at + 1, " ", true);
+  });
+
+  it("full-rebuilds when a pipe is escaped", () => {
+    const at = TABLE_DOC.indexOf("| beta");
+    verdictOf(TABLE_DOC, at, at, "\\", true);
+  });
+
+  it("full-rebuilds on the raw-only delimiter flip", () => {
+    // ` :---|` → ` |:---|` — invisible to the whitespace-STRIPPED reading, and the whole
+    // enclosing list's extent moves across a blank line when it is missed.
+    const doc = "- item\npara\nhead|\n :---|\n\n  cont\n";
+    const at = doc.indexOf(" :---|") + 1;
+    verdictOf(doc, at, at, "|", true);
+  });
+});
