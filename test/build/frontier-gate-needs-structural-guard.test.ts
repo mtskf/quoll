@@ -80,13 +80,11 @@ import { describe, expect, it } from "vitest";
 const CM_ROOT = fileURLToPath(new URL("../../src/webview/cm", import.meta.url));
 
 /** file (relative to src/webview/cm) → how many reducer-shaped gates it may carry. The
- *  ALLOWLIST block in this file's header owns the reasons; kept there rather than as a
- *  field here so there is one place to read them and none to leave stale. */
+ *  ALLOWLIST block in this file's header owns the reasons; kept there rather than restated
+ *  here — as a field on this Map or as a comment beside each entry — so there is one place
+ *  to read them and none to leave stale. */
 const ALLOW = new Map<string, number>([
-  // the definition of requiresFullBoundedRebuild itself
   ["structural-guard.ts", 1],
-  // documented exception — its other disjunct is the test-oracle mode switch, and its
-  // structural check is a narrower predicate on an earlier arm
   ["fenced-code/fenced-code-collapse.ts", 1],
 ]);
 
@@ -224,6 +222,21 @@ describe("the scanner itself is not vacuous", () => {
         "x.ts"
       )
     ).toEqual([2]);
+  });
+
+  it("reports EVERY gate in a file that carries more than one", () => {
+    // MULTIPLICITY. The allowlist pins an exact count per file, so the whole guard rests on
+    // the walk reporting BOTH gates in a file that carries two — the case "a NEW gate added
+    // to an already-allowlisted file" reduces to. No real file under src/webview/cm carries
+    // two today, and the `violationsIn` controls below feed a synthetic census rather than
+    // running the scanner, so without this fixture nothing exercises the walk past its first
+    // hit: capping `hits` at one entry leaves every other assertion in this file green.
+    expect(
+      findReducerShapedGates(
+        "syntaxTreeAvailable(tr.state, n);\nconst x = 1;\nsyntaxTreeAvailable(view.state, n);",
+        "x.ts"
+      )
+    ).toEqual([1, 3]);
   });
 
   it("does not flag the plain-identifier query shape or a string/comment mention", () => {

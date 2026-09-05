@@ -107,8 +107,13 @@ export function isBlankLine(text: string): boolean {
  *   - For `image/image-field.ts` and `table/table-skeleton.ts`, which admitted on the
  *     frontier term alone before they adopted this pair, the baseline was always-BOUNDED, so
  *     it is a REGRESSION on the keystroke classes that now fire: typing in a list-item body,
- *     a blockquote line, a table cell or an ATX heading, and every Enter. Measured on the
- *     table-heavy fixtures and accepted for this PR (numbers + the scoping follow-up: PERF.md).
+ *     a blockquote line, a table cell or an ATX heading, and every Enter. EACH field's own
+ *     full-walk cost was measured on its own fixtures and accepted for this PR — separately,
+ *     because the two cost curves differ in SHAPE: the table field's grows with document
+ *     size (its full walk re-runs `parseTable` per node), the image field's is essentially
+ *     flat (its walk only re-collects nodes and reuses alt/safeUrl/slice). Sharing this
+ *     guard and this trigger set does NOT imply sharing a cost, so neither number may be
+ *     inferred from the other. Numbers: PERF.md; scoping follow-up: TODO.md.
  *  A delta-based / per-consumer refinement is deferred to that follow-up
  *  (`fenced-code-collapse.ts`'s `insideBlock` + `topLevelBoundaryRisk` is the in-repo
  *  precedent). Exported so the negative-assertion tests can call it

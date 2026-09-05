@@ -58,9 +58,11 @@ interface Edit {
 // The two ways a `changes` object normalises to an empty ChangeSet are pinned directly by
 // the door-guard test below (`{ changes: { from: 0 } }` and `{ changes: { from: 0, to: 0 } }`,
 // with and without an explicit `insert: ""`), not restated here. An inert `changes` alone
-// only kills imageBlockField.update's docChanged arm (image-field.ts:272) — paired with a
-// real `selection` on the same `Edit`, it can still reach `computeBounded` through the
-// selection arm (image-field.ts:284); the door guard below requires `!e.selection` too.
+// only kills imageBlockField.update's docChanged arm (the `if (tr.docChanged)` branch) —
+// paired with a real `selection` on the same `Edit`, it can still reach `computeBounded`
+// through the selection arm (the tail of `update`); the door guard below requires
+// `!e.selection` too. (Named by symbol, not by line: cross-file line numbers in this file
+// drifted twice within one PR.)
 const inertChanges = (c: Edit["changes"]) =>
   c !== undefined && !c.insert && (c.to === undefined || c.to === c.from);
 
@@ -109,8 +111,8 @@ function checkEquivalence(initial: string, edits: Edit[], oracleSlots: number): 
     // What this does NOT rule out: a `selection`/`cursorAtEnd` edit that dispatches something
     // real but whose selection LINE SPAN happens not to change. On a non-docChanged
     // transaction, reaching image-field.ts's `computeBounded` requires first surviving its G3
-    // frontmatter check (:269) and its tree-identity check (:278), and only then finding
-    // `!selectionLineSpansEqual(tr.startState, tr.state)` (:281) — so that inequality is a
+    // `leadingFrontmatterEnd` check and its `syntaxTree` identity check, and only then finding
+    // `!selectionLineSpansEqual(tr.startState, tr.state)` — so that inequality is a
     // NECESSARY condition for the bounded arm, not a sufficient one, and deciding it at the
     // door would mean reimplementing all three checks here (none are exported from
     // image-field.ts). Unlike the `changes` shape above — which `inertChanges` decides from
