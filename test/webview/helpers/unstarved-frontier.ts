@@ -133,9 +133,12 @@ function runUnstarvedAttempts<C, R>(spec: {
   postCheck: (context: C, stateAtLastGate: EditorState, returned: R) => void;
 }): void {
   const { caller, what, attempts, begin, observe, postCheck } = spec;
-  // A non-positive or fractional count would fall straight through to the all-starved
+  // Refused for two DIFFERENT reasons, both about the all-starved throw below telling the
+  // truth. A non-positive count skips the loop entirely and falls straight through to that
   // throw, whose message would then claim a starved frontier was FOUND on attempts that
-  // never ran — the one message here that must not lie about what was measured.
+  // never ran. A fractional count does the opposite — `a < 2.5` runs THREE times — so the
+  // message would under-report the attempts it made. Integer-and-positive is the only shape
+  // for which `attempts` names what was measured.
   if (!Number.isInteger(attempts) || attempts < 1) {
     throw new Error(`${caller}: attempts must be a positive integer, got ${attempts}`);
   }
@@ -310,9 +313,13 @@ function runUnstarvedAttempts<C, R>(spec: {
  * by dispatching one small edit on a fully-parsed view and then reading the field BEFORE
  * anything settles — the whole point being that a self-heal must not mask a bounded bug.
  * That observation is only meaningful when the post-edit parse frontier is COMPLETE,
- * because `syntaxTreeAvailable` is the very predicate those fields OR with their
- * structural-reparse check to choose between the bounded recompute and the full walk. So
- * each of them gates on it.
+ * because `syntaxTreeAvailable` is the very predicate those fields consult to choose
+ * between the bounded recompute and the full walk. Every one of them also carries a
+ * STRUCTURAL check — some OR it into that same condition, some reach the frontier check
+ * only after a separate, earlier structural arm has declined — but no form of that check
+ * can be STARVED, so it is not what this gate speaks for. What the gate speaks for is the
+ * frontier: it is the one input to the choice that a loaded machine can change underneath
+ * the test.
  *
  * Asserting that gate on a SINGLE attempt is what makes those tests load-fragile.
  * CodeMirror gives its post-edit reparse a 20ms WALL-CLOCK budget; under CPU starvation
