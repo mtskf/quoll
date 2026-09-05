@@ -33,7 +33,7 @@ import type { Interval } from "./bounded-recompute.js";
 /** SHAPE over-approximation for a structural reparse — the fenced field's proven
  *  `STRUCTURAL` regex (`fenced-code-collapse.ts`, the #63 precedent: fence delimiters,
  *  list/blockquote container markers, HTML block openers + the unanchored type-1/2/3/5
- *  terminators) PLUS two alternations the fenced field deliberately omits because they
+ *  terminators) PLUS three alternations the fenced field deliberately omits because they
  *  cannot affect FENCE grouping but DO re-shape the block-window consumers' blocks:
  *   - ATX-heading alt `#{1,6}(?:[ \t]|$)`: an in-place single-line edit `x q`→`# q` makes
  *     a heading interrupt a lazy continuation, closing a list and flipping a far `  # h`
@@ -42,9 +42,24 @@ import type { Interval } from "./bounded-recompute.js";
  *   - underscore thematic-break alt `(?:_[ \t]*){3,}`: `___` opens a thematic break that
  *     terminates a preceding paragraph/list run. The `-`/`*` thematic forms are already
  *     caught by the container-marker alt, so only `_` needs adding.
+ *   - Setext-underline alt `=+[ \t]*(?:\n|$)`: typing into a `===` line flips a whole run
+ *     between SetextHeading and Table/Paragraph, and no other arm sees it — the line has no
+ *     pipe, no newline, no `>`, no blank flip, no indent change (bounded-exhaustive oracle
+ *     finding, cm-structural-guard-exhaustive.test.ts). ⚠️ `STRUCTURAL` has NO `m` flag, so a
+ *     line end MUST be spelled `(?:\n|$)` — writing `$` anchors to end-of-STRING and silently
+ *     matches almost nothing.
+ *  Every marker alternation's indent bound is `[ \t]*`, NOT CommonMark's top-level `{0,3}`:
+ *  a line's legal marker indent is relative to its CONTAINER's content indent, and inside a
+ *  nested list `    # h` IS a real heading — a line-in-isolation regex cannot see the
+ *  container, so it must not assume the top-level bound (the container-marker alt already
+ *  used `[ \t]*`; the fence / HTML-open / ATX / underscore alts now match it). Both this and
+ *  the Setext alt were found by the same bounded-exhaustive oracle: it is a DELIBERATE
+ *  conservative regression (a `#`/`` ``` ``/`<tag>`/`___` line indented 4+, or any `===`
+ *  line, now full-rebuilds even inside a fenced or indented code block) accepted because no
+ *  line-in-isolation regex can tell such a line apart from a real container-relative marker.
  *  Purely syntactic: a false match only costs a full rebuild (speed), never correctness. */
 const STRUCTURAL =
-  /(?:^|\n)[ \t]{0,3}(?:`{3,}|~{3,})|(?:^|\n)[ \t]*(?:[-*+]|\d{1,9}[.)]|>)|(?:^|\n)[ \t]{0,3}<[/!?A-Za-z]|<\/(?:script|pre|style|textarea)>|-->|\?>|\]\]>|(?:^|\n)[ \t]{0,3}#{1,6}(?:[ \t]|$)|(?:^|\n)[ \t]{0,3}(?:_[ \t]*){3,}/i;
+  /(?:^|\n)[ \t]*(?:`{3,}|~{3,})|(?:^|\n)[ \t]*(?:[-*+]|\d{1,9}[.)]|>)|(?:^|\n)[ \t]*<[/!?A-Za-z]|<\/(?:script|pre|style|textarea)>|-->|\?>|\]\]>|(?:^|\n)[ \t]*#{1,6}(?:[ \t]|$)|(?:^|\n)[ \t]*(?:_[ \t]*){3,}|(?:^|\n)[ \t]*=+[ \t]*(?:\n|$)/i;
 
 /** A Markdown blank line — the block separator the up/down walk stops at — is one
  *  containing ONLY ASCII spaces / tabs (CommonMark), the set the Lezer parser
