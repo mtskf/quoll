@@ -10,7 +10,11 @@ import { tableRowShapeChanged } from "../../src/webview/cm/structural-guard.js";
 describe("tableRowShapeChanged", () => {
   it.each([
     // [old line, new line, expected]
-    // --- must FIRE: the four facts, one per row ---
+    // --- must FIRE ---
+    // ⚠️ NOT "one fact per row": that labelled the reverted four-fact delta. Under the
+    // hybrid, the first two clauses are a PRESENCE test on a delimiter-shaped line and only
+    // the last two are deltas, so several rows below fire on more than one clause at once.
+    // Which rows isolate which clause is stated per-row, not by this heading.
     ["a b", "a | b", true], //                     hasPipe appears (and cell count 1 -> 2)
     ["a\\|b", "a|b", true], //                     hasPipe appears from behind an escape
     // ⚠️ CLAUSE-ISOLATING rows. Without these two, deleting the hasPipe clause or the

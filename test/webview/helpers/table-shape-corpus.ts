@@ -139,8 +139,9 @@ export interface SingleCharEdit {
   after: string;
   /** The ENUMERATED edit offset — `changes: { from: pos, to: pos + deleted.length,
    *  insert: inserted }`. Carried rather than re-derived by the consumer: a first-difference
-   *  scan lands on a DIFFERENT offset inside a run of identical characters (measured:
-   *  1277 of 75750 edits, 30 of them on a different LINE). The resulting document is the
+   *  scan lands on a DIFFERENT offset inside a run of identical characters (measured
+   *  2026-09-06 over the then-75,750-edit enumeration: 1,277 edits diverged, 30 of them onto
+   *  a different LINE; the corpus has grown since, so read the ratio, not the totals). The resulting document is the
    *  same either way today, so nothing was red — which is precisely why the offset is
    *  exported instead of left to be guessed. */
   pos: number;
