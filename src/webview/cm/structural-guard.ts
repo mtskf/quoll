@@ -98,9 +98,12 @@ export function isBlankLine(text: string): boolean {
 //     rescue it either. A one-character edit there deletes a whole `Table`.
 // So `tableRowShapeChanged` RETREATS TO PRESENCE exactly there: a line that is
 // delimiter-shaped on EITHER side of the edit always fires, no comparison attempted. That is
-// affordable because the class this arm exists to keep bounded is table CELL BODY typing —
-// a header or data row is never delimiter-shaped — and the accepted cost is that editing a
-// delimiter row itself always takes the full walk. ⚠️ Do NOT re-narrow this into a delta
+// affordable because the class this arm exists to keep bounded is table CELL BODY typing,
+// and an ordinary cell row is not delimiter-shaped. ⚠️ "not delimiter-shaped" is a statement
+// about ordinary content, NOT a guarantee: a row whose every cell is a bare dash run —
+// `| - | - |` — does match the regex and so takes the presence path too. That is a perf
+// edge, not a correctness one. The accepted cost is that editing a delimiter row itself
+// always takes the full walk. ⚠️ Do NOT re-narrow this into a delta
 // without a mirror that models EVERY start offset AND the `line.next` gate; the pre-2026-09-06
 // four-fact delta looked sound and lost both classes above with every arm silent.
 //
@@ -191,9 +194,9 @@ function tableRowCellCount(text: string): number {
  *  above: PRESENCE on a delimiter-shaped line (neither the `line.next` gate nor `endLeaf`'s
  *  borrowed `basePos` is a function of that line alone), a DELTA on every other line (where
  *  the only offset dependency left is the whitespace one SHAPE's container alternation
- *  covers). A header or data row is never delimiter-shaped, so typing inside a cell stays on
- *  the bounded path this narrowing exists for. Exported so the shape test can pin it
- *  directly. */
+ *  covers). An ordinary cell row is not delimiter-shaped, so typing inside a cell stays on the
+ *  bounded path this narrowing exists for — with the `| - | - |` edge noted above. Exported
+ *  so the shape test can pin it directly. */
 export function tableRowShapeChanged(oldText: string, newText: string): boolean {
   return (
     isTableDelimiterShaped(oldText) ||

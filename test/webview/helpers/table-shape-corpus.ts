@@ -5,7 +5,8 @@
 // evidence that reaches this bug class — the counterexample that broke rev. 1 of the
 // plan needs a specific document geometry AND one specific offset, which a uniform
 // random fuzz finds with probability ≈ 0 (Fable review, 2026-09-05). It is also cheap:
-// ~44k edits parse in well under a second.
+// the whole enumeration parses in a few seconds (93,672 edits at the time of writing;
+// the oracle prints its own `checked=` count, which is the number to trust over this one).
 export const SHAPE_CORPUS: readonly string[] = [
   // plain tables, trailing-paragraph overshoot, adjacent tables
   "| a | b |\n|---|---|\n| c | d |\ntrailing prose\n\nafter\n",

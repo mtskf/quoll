@@ -42,8 +42,13 @@ describe("tableRowShapeChanged", () => {
     // to `false`, the retreat has been undone and both holes are open again.
     ["|---|---|", "|----|---|", true], //          same delimiter shape, same cell count
     ["|---|---|", "|:--|---|", true], //           alignment only
-    [" :---|", " |:---|", true], //                RAW delimiter-ness only (Fable ex. 1)
-    ["  :-|", "  |:-|", true], //                  RAW delimiter-ness only (Fable ex. 2)
+    // ⚠️ These two ISOLATE NOTHING under the presence retreat — both sides are
+    // delimiter-shaped, so the first two clauses fire and the label they used to carry
+    // ("RAW delimiter-ness only", true when the pre-retreat delta needed the raw read) no
+    // longer describes them. They are kept as the two counterexamples that forced the
+    // retreat, so a future narrowing has to keep answering them.
+    [" :---|", " |:---|", true], //                Fable counterexample 1
+    ["  :-|", "  |:-|", true], //                  Fable counterexample 2
     ["| a | b |", "| a b |", true], //             cell count drops
     ["| a | b |", "| a | b | c |", true], //       cell count rises
     ["a | b", "  | b", true], //                   leading cell empties (count 2 -> 1)

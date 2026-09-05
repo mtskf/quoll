@@ -130,9 +130,12 @@ describe("TABLE-DELIM arm", () => {
     verdictOf(TABLE_DOC, at, at, "\\", true);
   });
 
-  it("full-rebuilds on the raw-only delimiter flip", () => {
-    // ` :---|` → ` |:---|` — invisible to the whitespace-STRIPPED reading, and the whole
-    // enclosing list's extent moves across a blank line when it is missed.
+  it("full-rebuilds on a whitespace-led delimiter flip", () => {
+    // ` :---|` → ` |:---|` — both sides are delimiter-SHAPED, so the presence retreat fires.
+    // ⚠️ NOT "raw-only": the stripped reading of ` :---|` is `:---|`, which also matches. It
+    // was a raw-only flip under the pre-retreat four-fact delta, and the label outlived it.
+    // What the case still pins is the CONSEQUENCE of missing it: the whole enclosing list's
+    // extent moves across a blank line, far outside any changed-range window.
     const doc = "- item\npara\nhead|\n :---|\n\n  cont\n";
     const at = doc.indexOf(" :---|") + 1;
     verdictOf(doc, at, at, "|", true);
