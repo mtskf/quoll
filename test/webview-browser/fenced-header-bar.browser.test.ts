@@ -205,7 +205,7 @@ describe("copy button sits INSIDE the painted panel top in every concealed nesti
       await settled();
       const insets = copyInsets(view);
       expect(insets, "one copy button per fenced block").toHaveLength(1);
-      const inset = insets[0] as number;
+      const inset = insets[0];
       expect(inset, "button top is below the painted panel top").toBeGreaterThan(0);
       expect(Math.abs(inset - EXPECTED_INSET), `inset ${inset}px`).toBeLessThanOrEqual(TOLERANCE);
     });
