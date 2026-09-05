@@ -22,9 +22,11 @@ describe("@lezer/markdown table internals the guard mirrors", () => {
 
   it("still applies that regex to the RAW peeked line in endLeaf", () => {
     // This asymmetry — endLeaf tests `cx.peekLine()` raw while TableParser.nextLine tests
-    // `line.text.slice(line.pos)` — is exactly why the arm compares BOTH a raw and a
-    // stripped delta. If upstream ever normalises it, the fourth fact becomes redundant
-    // and this test is the notice to re-derive rather than to delete.
+    // `line.text.slice(line.pos)` — is why `isTableDelimiterShaped` reads the line BOTH ways
+    // before deciding it is delimiter-shaped. ⚠️ Against the 1.6.4 regex above the raw read
+    // is currently SUBSUMED by the stripped one (proof in that function's doc comment), so
+    // deleting it reds nothing — which is exactly why THIS test, pinning the regex verbatim,
+    // is the notice to re-derive both reads rather than to drop one.
     expect(dist).toMatch(/let next = cx\.peekLine\(\);\s*\n\s*return delimiterLine\.test\(next\)/);
     expect(dist).toContain("delimiterLine.test(lineText = line.text.slice(line.pos))");
   });
@@ -36,10 +38,20 @@ describe("@lezer/markdown table internals the guard mirrors", () => {
 
   it("still starts hasPipe / parseRow at the container-content offset", () => {
     // The mirrors read the WHOLE raw line while the parser starts at `line.pos` /
-    // `line.basePos` / `leaf.content`. That is equivalent only because a prefix the mirrors
-    // additionally scan is whitespace, which holds no pipe and never opens a cell. Pin the
-    // call sites so a future upstream change to those offsets is a red, not a silent
-    // divergence (Codex rev.2, Confidence 87).
+    // `line.basePos` / `leaf.content`. Three cases, not one:
+    //   1. WHITESPACE prefix — equivalent, because it holds no pipe and never opens a cell.
+    //   2. CONTAINER-MARKER prefix (`> | b`) — NOT equivalent: 1 cell to the parser, 2 to
+    //      the mirror. Carried by SHAPE's container alternation firing on such a line
+    //      first, a CROSS-ARM dependency spelled out in structural-guard.ts's TABLE-DELIM
+    //      header ("Narrowing SHAPE's container alternation would make these mirrors
+    //      unsound without touching them").
+    //   3. The FOURTH assertion below — `endLeaf` measures the PEEKED line with the
+    //      PRECEDING line's `basePos`, so a delimiter line LESS indented than its header is
+    //      measured from an offset that is neither whitespace nor a container marker. No
+    //      per-line mirror can reproduce that, which is why the guard retreats to PRESENCE
+    //      on a delimiter-shaped line instead of comparing it.
+    // Pin the call sites so a future upstream change to those offsets is a red, not a
+    // silent divergence (Codex rev.2, Confidence 87).
     expect(dist).toContain("hasPipe(leaf.content, 0)");
     expect(dist).toContain("hasPipe(line.text, line.basePos)");
     expect(dist).toContain("parseRow(cx, line.text, line.pos, content, cx.lineStart)");

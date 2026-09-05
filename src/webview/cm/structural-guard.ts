@@ -81,25 +81,41 @@ export function isBlankLine(text: string): boolean {
 // two lines' `parseRow` cell counts agree — via `TableParser.nextLine` for the ordinary
 // case and via `endLeaf` for a paragraph split by a pipe line.
 //
-// ⚠️ The parser applies `delimiterLine` at TWO call sites with DIFFERENT inputs:
-// `TableParser.nextLine` tests `line.text.slice(line.pos)` (container prefix removed) while
-// `endLeaf` tests `cx.peekLine()` RAW. The regex's only whitespace sensitivity is its `^\|?`
-// anchor, so over every possible `line.pos` the test takes exactly TWO values — "leading
-// whitespace remains" (== raw) and "fully stripped". Both are mirrored, and both are
-// compared, because this arm is a DELTA and NOT a presence test: an over-approximating
-// predicate that pins BOTH sides to `true` erases a real flip, so here the cost of a false
-// match is a MISSED rebuild, not a wasted one. Verified counterexample — ` :---|` →
-// ` |:---|` keeps hasPipe, stripped-delimiter and cell count all constant while the table
-// (and, through it, an enclosing list's extent across a blank line) disappears.
-// `hasPipe` and `parseRow` need no such pairing — but ONLY because of a CROSS-ARM
-// dependency that must not be silently removed: the parser starts them at `line.basePos`
-// while these mirrors start at 0, which agrees exactly when `[0, basePos)` is whitespace.
-// For a line whose prefix is a CONTAINER MARKER it does NOT agree (`> | b` counts 1 to the
-// parser and 2 here, so `> | b` -> `> x | b` flips for the parser and not for the mirror),
-// and that is harmless solely because SHAPE's container alternation
-// `(?:^|\n)[ \t]*(?:[-*+]|\d{1,9}[.)]|>)` fires on every such line before this arm is
-// reached. ⚠️ Narrowing SHAPE's container alternation would make these mirrors unsound
-// without touching them; see the SHAPE follow-up entry in TODO.md. Drift in any of this is
+// ⚠️ A per-line DELTA is sound only where the parser's verdict is a pure function of the ONE
+// line that changed. For a DELIMITER-SHAPED line it is NOT — at EITHER call site, and for a
+// reason no mirror of that line can carry:
+//   - `TableParser.nextLine` reaches `delimiterLine` only behind its own
+//     `line.next == 45 || line.next == 58 || line.next == 124` gate ('-' ':' '|'), where
+//     `line.next` is the first char past the CONTAINER prefix and lezer's `skipSpace`
+//     advances over charCodes 32/9 ONLY. `delimiterLine`'s `\s` also accepts NBSP / U+3000 /
+//     `\f` / `\v`, so a line the regex calls delimiter-shaped can be one the parser never
+//     tests at all — the mirror flips where the parser does not, and vice versa.
+//   - `endLeaf` runs `parseRow(cx, next, line.basePos)`: the PEEKED (delimiter) line measured
+//     from the PRECEDING line's `basePos`. When the delimiter line is LESS indented than its
+//     header — a lazy continuation at indent 0 under a list item at `basePos` 2 — the bytes
+//     in `[0, basePos)` of that line are table CONTENT: not whitespace, so the offset
+//     equivalence argued below does not hold, and not a container marker, so SHAPE does not
+//     rescue it either. A one-character edit there deletes a whole `Table`.
+// So `tableRowShapeChanged` RETREATS TO PRESENCE exactly there: a line that is
+// delimiter-shaped on EITHER side of the edit always fires, no comparison attempted. That is
+// affordable because the class this arm exists to keep bounded is table CELL BODY typing —
+// a header or data row is never delimiter-shaped — and the accepted cost is that editing a
+// delimiter row itself always takes the full walk. ⚠️ Do NOT re-narrow this into a delta
+// without a mirror that models EVERY start offset AND the `line.next` gate; the pre-2026-09-06
+// four-fact delta looked sound and lost both classes above with every arm silent.
+//
+// The other two facts (`hasPipe`, `parseRow` cell count) ARE compared as a DELTA, and that
+// comparison rests on a CROSS-ARM dependency that must not be silently removed: the parser
+// starts them at `line.basePos` while these mirrors start at 0, which agrees exactly when
+// `[0, basePos)` is whitespace. For a line whose prefix is a CONTAINER MARKER it does NOT
+// agree (`> | b` counts 1 to the parser and 2 here, so `> | b` -> `> x | b` flips for the
+// parser and not for the mirror), and that is harmless solely because SHAPE's container
+// alternation `(?:^|\n)[ \t]*(?:[-*+]|\d{1,9}[.)]|>)` fires on every such line before this
+// arm is reached. ⚠️ Narrowing SHAPE's container alternation would make these mirrors unsound
+// without touching them; see the SHAPE follow-up entry in TODO.md. ⚠️ And do NOT
+// "simplify" either DELTA clause with an over-approximating predicate the way a PRESENCE test
+// may be simplified: pinning both sides of a comparison to `true` erases the flip it exists to
+// detect, turning a cheap false positive into a MISSED rebuild. Drift in any of this is
 // caught by cm-lezer-table-internals-tripwire.test.ts; the arm's overall soundness is
 // measured by cm-structural-guard-exhaustive.test.ts.
 
@@ -119,6 +135,27 @@ function hasUnescapedPipe(text: string): boolean {
 
 /** @lezer/markdown 1.6.4's `delimiterLine` regex, VERBATIM. */
 const TABLE_DELIMITER_LINE = /^\|?(\s*:?-+:?\s*\|)+(\s*:?-+:?\s*)?$/;
+
+/** Is this line delimiter-SHAPED? Read BOTH raw (what `endLeaf` tests, on `cx.peekLine()`)
+ *  and with leading spaces/tabs stripped (what `TableParser.nextLine` tests, on
+ *  `line.text.slice(line.pos)`). Those two reads cover every possible `line.pos` ONLY while
+ *  `[0, line.pos)` is WHITESPACE: the regex's sole whitespace sensitivity is its `^\|?`
+ *  anchor, so a partially-stripped prefix reads the same as one of the two. On a
+ *  CONTAINER-PREFIXED line they do not — `> |---|` is false raw AND false stripped while the
+ *  parser, starting past `> `, sees `|---|` and says true. That THIRD value is carried by
+ *  SHAPE's container alternation firing on such a line first; the pairing is no more
+ *  self-contained than the `hasPipe`/`parseRow` offsets above.
+ *  ⚠️ Measured (clause drill, 2026-09-06): against 1.6.4's regex the RAW read is SUBSUMED by
+ *  the stripped one — raw-true IMPLIES stripped-true, because a leading `[ \t]+` can only be
+ *  consumed by the `\s*` that opens the first group (`:?-+` matches no space and `-+` needs a
+ *  dash), so dropping those characters leaves that same match valid. Deleting the raw read
+ *  therefore reds nothing today. It is kept because the two reads mirror two DIFFERENT parser
+ *  call sites and the subsumption is a property of THAT regex, which
+ *  cm-lezer-table-internals-tripwire.test.ts pins verbatim: if upstream changes it, this read
+ *  is what keeps `endLeaf`'s raw input modelled instead of silently unmodelled. */
+function isTableDelimiterShaped(text: string): boolean {
+  return TABLE_DELIMITER_LINE.test(text) || TABLE_DELIMITER_LINE.test(text.replace(/^[ \t]+/, ""));
+}
 
 /** Mirror of `parseRow`'s return value: cells split on unescaped `|`; a leading pipe opens
  *  no cell and a trailing pipe closes none; a run of only spaces/tabs is not content.
@@ -150,14 +187,18 @@ function tableRowCellCount(text: string): number {
   return count;
 }
 
-/** The narrowed TABLE-DELIM arm: did this single-line edit change any of the FOUR facts
- *  lezer forms a `Table` from? Exported so the shape test can pin it directly. */
+/** The narrowed TABLE-DELIM arm — a HYBRID, for the reason spelled out in the mirrors' header
+ *  above: PRESENCE on a delimiter-shaped line (neither the `line.next` gate nor `endLeaf`'s
+ *  borrowed `basePos` is a function of that line alone), a DELTA on every other line (where
+ *  the only offset dependency left is the whitespace one SHAPE's container alternation
+ *  covers). A header or data row is never delimiter-shaped, so typing inside a cell stays on
+ *  the bounded path this narrowing exists for. Exported so the shape test can pin it
+ *  directly. */
 export function tableRowShapeChanged(oldText: string, newText: string): boolean {
   return (
+    isTableDelimiterShaped(oldText) ||
+    isTableDelimiterShaped(newText) ||
     hasUnescapedPipe(oldText) !== hasUnescapedPipe(newText) ||
-    TABLE_DELIMITER_LINE.test(oldText) !== TABLE_DELIMITER_LINE.test(newText) ||
-    TABLE_DELIMITER_LINE.test(oldText.replace(/^[ \t]+/, "")) !==
-      TABLE_DELIMITER_LINE.test(newText.replace(/^[ \t]+/, "")) ||
     tableRowCellCount(oldText) !== tableRowCellCount(newText)
   );
 }
@@ -188,13 +229,15 @@ export function tableRowShapeChanged(oldText: string, newText: string): boolean 
  *     `<!DOCTYPE …>` declaration (a same-line, non-newline, non-shape edit that SHAPE and
  *     the other arms all miss); keying on the `>` being ADDED/REMOVED (not merely present)
  *     keeps it narrow (mirrors the fenced field's cycle-5 type-4 rationale).
- *   - TABLE-DELIM — the changed line's TABLE SHAPE flips (`tableRowShapeChanged`): its
- *     unescaped-pipe presence, its delimiter-row shape read RAW, the same read
- *     whitespace-STRIPPED, or its `parseRow` cell count. Those are the facts
+ *   - TABLE-DELIM — the changed line's TABLE SHAPE flips (`tableRowShapeChanged`). A HYBRID:
+ *     PRESENCE on a line that is delimiter-shaped on either side (raw or `[ \t]`-stripped),
+ *     because two of the parser's inputs there — `nextLine`'s `line.next` gate and
+ *     `endLeaf`'s borrowed `basePos` — are not functions of that line; a DELTA on its
+ *     unescaped-pipe presence and `parseRow` cell count everywhere else. Those are the facts
  *     @lezer/markdown forms a `Table` from, at both of its call sites, so a delimiter
  *     completing/breaking or a header losing a cell — which can CLOSE an enclosing list,
  *     re-shaping a boundary OUTSIDE the changed run — always fires, while typing inside a
- *     cell does not. DELTA-based, unlike SHAPE.
+ *     cell does not.
  *   - BLANK-FLIP — the changed line's blankness flips old↔new (single-line, since
  *     NEWLINE-DELTA already caught every multi-line edit). A blank line terminates a
  *     paragraph / loose list / type-6/7 HTML block between a far heading and its context.
@@ -207,18 +250,20 @@ export function tableRowShapeChanged(oldText: string, newText: string): boolean 
  *  unsound (a stranded chevron). ACCEPTED over-approximation (perf, not soundness): SHAPE is
  *  presence-based, so editing the BODY of a line that already starts with a marker
  *  (`- item`→`- itemx`) trips a full rebuild even though structure is unchanged. TABLE-DELIM
- *  is NOT presence-based — it was, until the bounded-exhaustive oracle existed to prove a
- *  per-line delta sound — so typing inside a table cell stays on the bounded path.
- *  ⚠️ Do NOT "simplify" a DELTA arm with an over-approximating predicate the way a PRESENCE
- *  arm may be: pinning both sides of a comparison to `true` erases the flip it exists to
- *  detect, turning a cheap false positive into a missed rebuild.
+ *  is only PARTLY presence-based — it was wholly so, until the bounded-exhaustive oracle
+ *  existed to prove a per-line delta sound off the delimiter row — so typing inside a table
+ *  cell stays on the bounded path while editing a delimiter row does not.
+ *  ⚠️ Do NOT "simplify" a DELTA clause with an over-approximating predicate the way a
+ *  PRESENCE test may be: pinning both sides of a comparison to `true` erases the flip it
+ *  exists to detect, turning a cheap false positive into a missed rebuild.
  *  What that costs depends on the consumer's PRE-guard baseline:
  *   - For the fold / callout consumers this guard was written for, the baseline was an
  *     always-full rebuild, so presence-based firing is a strict improvement.
  *   - For `image/image-field.ts` and `table/table-skeleton.ts`, which admitted on the
  *     frontier term alone before they adopted this pair, the baseline was always-BOUNDED, so
  *     it is a REGRESSION on the keystroke classes that now fire: typing in a list-item body,
- *     a blockquote line, a table cell or an ATX heading, and every Enter. EACH field's own
+ *     a blockquote line or an ATX heading, and every Enter (an in-cell keystroke is NOT in
+ *     this set — see the TABLE-DELIM note above). EACH field's own
  *     full-walk cost was measured on its own fixtures and accepted for this PR — separately,
  *     because the two cost curves differ in SHAPE: the table field's grows with document
  *     size (its full walk re-runs `parseTable` per node), the image field's is essentially
@@ -272,13 +317,13 @@ export function touchesStructuralReparse(tr: Transaction): boolean {
     // per-line OLD-vs-NEW comparison and depends on that.
     const oldLine = tr.startState.doc.lineAt(fromA);
     const newLine = tr.state.doc.lineAt(fromB);
-    // TABLE-DELIM — the four per-line facts lezer forms a `Table` from (see the mirrors
-    // above). Completing or breaking a delimiter row, or changing a header's cell count,
-    // makes a `Table` appear or vanish and can CLOSE an enclosing list — re-shaping block
-    // structure OUTSIDE the changed run, which SHAPE and the other arms all miss. Keying
-    // on the DELTA of those facts rather than on the mere PRESENCE of a `|` is what keeps
-    // typing inside a table cell — `tableSkeletonField`'s own primary scenario — on the
-    // bounded path.
+    // TABLE-DELIM — the per-line facts lezer forms a `Table` from (see the mirrors above).
+    // Completing or breaking a delimiter row, or changing a header's cell count, makes a
+    // `Table` appear or vanish and can CLOSE an enclosing list — re-shaping block structure
+    // OUTSIDE the changed run, which SHAPE and the other arms all miss. Keying on the DELTA
+    // of pipe presence and cell count, rather than on the mere PRESENCE of a `|` on the
+    // line, is what keeps typing inside a table cell — `tableSkeletonField`'s own primary
+    // scenario — on the bounded path; the delimiter ROW itself stays on presence.
     if (tableRowShapeChanged(oldLine.text, newLine.text)) {
       hit = true;
       return;

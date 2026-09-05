@@ -65,9 +65,10 @@
 // of them moves. ⚠️ PERF: that structural term's SHAPE arm is still PRESENCE-based over
 // the whole changed line, so typing in the body of a list item, a blockquote line, or an
 // ATX heading — and every Enter — still takes the full walk this field's bounding exists
-// to avoid. Its TABLE-DELIM arm is NOT presence-based (a per-line SHAPE-DELTA,
-// `tableRowShapeChanged`), so this field no longer full-rebuilds merely because a `|` sits
-// somewhere else in the document. THIS field's own full-walk cost was measured at
+// to avoid. Its TABLE-DELIM arm is no longer a plain presence test (a per-line SHAPE-DELTA
+// off the delimiter row, `tableRowShapeChanged`), so an edit on a `|`-bearing line elsewhere
+// in the document — a keystroke inside another table's cell that leaves that row's shape
+// unchanged — no longer full-rebuilds this field. THIS field's own full-walk cost was measured at
 // 0.71–0.75 ms/keystroke (19 KB / 150 block images and 154 KB / 1200 block images) —
 // essentially flat in document size, which the table field's is NOT, so neither field's
 // number may be inferred from the other's. Accepted on that measurement, not free: see
