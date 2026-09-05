@@ -8,7 +8,9 @@ import {
 } from "@codemirror/state";
 import type { DecorationSet, WidgetType } from "@codemirror/view";
 import { describe, expect, it } from "vitest";
+import { leadingFrontmatterEnd } from "../../src/webview/cm/frontmatter/detect.js";
 import { imageBlockField } from "../../src/webview/cm/image/index.js";
+import { touchesStructuralReparse } from "../../src/webview/cm/structural-guard.js";
 import { settledState } from "./helpers/settled-state.js";
 import { settledMount } from "./helpers/settled-view.js";
 import { withUnstarvedFrontier } from "./helpers/unstarved-frontier.js";
@@ -56,9 +58,11 @@ interface Edit {
 // The two ways a `changes` object normalises to an empty ChangeSet are pinned directly by
 // the door-guard test below (`{ changes: { from: 0 } }` and `{ changes: { from: 0, to: 0 } }`,
 // with and without an explicit `insert: ""`), not restated here. An inert `changes` alone
-// only kills imageBlockField.update's docChanged arm (image-field.ts:272) — paired with a
-// real `selection` on the same `Edit`, it can still reach `computeBounded` through the
-// selection arm (image-field.ts:284); the door guard below requires `!e.selection` too.
+// only kills imageBlockField.update's docChanged arm (the `if (tr.docChanged)` branch) —
+// paired with a real `selection` on the same `Edit`, it can still reach `computeBounded`
+// through the selection arm (the tail of `update`); the door guard below requires
+// `!e.selection` too. (Named by symbol, not by line: cross-file line numbers in this file
+// drifted twice within one PR.)
 const inertChanges = (c: Edit["changes"]) =>
   c !== undefined && !c.insert && (c.to === undefined || c.to === c.from);
 
@@ -107,8 +111,8 @@ function checkEquivalence(initial: string, edits: Edit[], oracleSlots: number): 
     // What this does NOT rule out: a `selection`/`cursorAtEnd` edit that dispatches something
     // real but whose selection LINE SPAN happens not to change. On a non-docChanged
     // transaction, reaching image-field.ts's `computeBounded` requires first surviving its G3
-    // frontmatter check (:269) and its tree-identity check (:278), and only then finding
-    // `!selectionLineSpansEqual(tr.startState, tr.state)` (:281) — so that inequality is a
+    // `leadingFrontmatterEnd` check and its `syntaxTree` identity check, and only then finding
+    // `!selectionLineSpansEqual(tr.startState, tr.state)` — so that inequality is a
     // NECESSARY condition for the bounded arm, not a sufficient one, and deciding it at the
     // door would mean reimplementing all three checks here (none are exported from
     // image-field.ts). Unlike the `changes` shape above — which `inertChanges` decides from
@@ -394,10 +398,70 @@ describe("imageBlockField bounded ≡ full", () => {
       edits: [{ selection: EditorSelection.cursor(3) }, { selection: EditorSelection.cursor(40) }],
       oracleSlots: 1,
     },
+    {
+      // A structural reparse: an unclosed ``` typed on line 1 swallows the image below
+      // into a FencedCode node, so the Image node vanishes with NO edit inside its own
+      // bytes and with a COMPLETE frontier — the crossing neither the bounded reuse rule
+      // nor G2 can see. Measured on the unguarded field: a stale widget survived at 10-43
+      // against an oracle holding none.
+      name: "structural reparse — an unclosed fence above swallows the image",
+      initial: `intro\n\n${IMG}\n\ntail\n`,
+      edits: [{ changes: { from: 0, insert: "```" } }],
+      oracleSlots: 0,
+    },
+    {
+      // Same crossing, a DIFFERENT Lezer mechanism: an HTML block absorbs the image
+      // instead of a fence swallowing it.
+      name: "structural reparse — an HTML comment above swallows the image",
+      initial: `intro\n\n${IMG}\n\ntail\n`,
+      edits: [{ changes: { from: 0, to: 5, insert: "<!--" } }],
+      oracleSlots: 0,
+    },
+    {
+      // The REVEAL direction: the image starts INSIDE an unclosed fence, and breaking that
+      // fence exposes it. The unguarded field misses the new widget entirely rather than
+      // stranding an old one — a different failure, same root cause.
+      name: "structural reparse — breaking an unclosed fence reveals the image",
+      initial: `\`\`\`\n\n${IMG}\n\ntail\n`,
+      edits: [{ changes: { from: 0, to: 1, insert: "" } }],
+      oracleSlots: 1,
+    },
   ];
   for (const c of cases) {
     it(c.name, () => checkEquivalence(c.initial, c.edits, c.oracleSlots));
   }
+
+  // The guard's breadth (structural-guard.ts) routes many of the rows above to the FULL arm
+  // — a newline delta or a blank-line flip is enough. That is sound, and those rows keep
+  // their value as full-vs-oracle checks, but it thins out the ones that still reach
+  // `computeBounded` through the docChanged arm. Pin the two below so a widened guard or a
+  // re-fixtured row cannot quietly leave this file blind to a bounded regression.
+  //
+  // NOT a claim that these are the only rows on the bounded path: the selection-driven rows
+  // further down reach `computeBounded` through the SELECTION arm, which this guard does not
+  // touch. This pins two; it does not census the file.
+  //
+  // The G3 rows are deliberately NOT here: their edit moves `leadingFrontmatterEnd`, so the
+  // field returns from the frontmatter arm ABOVE this condition and never consults it —
+  // whatever the structural verdict happens to be. It is not uniformly false either: the
+  // rows that open or close a `---` fence cross a newline delta or start their slice with a
+  // container marker, so they read `true`; only the row that shifts a frontmatter VALUE's
+  // length is structurally inert. Pinning either verdict here would say nothing about which
+  // arm the field takes.
+  it("these docChanged cases still reach the bounded arm", () => {
+    const boundedRows = [
+      { doc: "plain text\n", change: { from: 0, to: 10, insert: IMG } },
+      { doc: `${IMG}\n\nbelow`, change: { from: 20, insert: "z" } },
+    ];
+    for (const r of boundedRows) {
+      const state = settledState(EditorState.create({ doc: r.doc, extensions: exts() }));
+      const tr = state.update({ changes: r.change });
+      // Both halves matter: the frontmatter arm must not fire (or the row never reaches the
+      // structural condition), and the structural condition must be false (or it full-walks).
+      expect(leadingFrontmatterEnd(tr.startState)).toBe(leadingFrontmatterEnd(tr.state));
+      expect(touchesStructuralReparse(tr)).toBe(false);
+    }
+  });
 
   it("door guard throws when no edit can produce a doc-visible transaction", () => {
     const inertEditLists: Edit[][] = [

@@ -56,6 +56,19 @@
 //        background-parse publication self-heals via the tree-identity branch).
 //   G3 — a change to `leadingFrontmatterEnd` flips the `from < fmEnd` gate for
 //        images near the top → full recompute.
+// The docChanged arm's admission test is the shared `requiresFullBoundedRebuild`
+// (../structural-guard.js), which ORs G2 above with a structural-reparse check: a block
+// boundary can re-shape OUTSIDE the changed range with the frontier staying COMPLETE,
+// which G2 alone cannot see. Rationale + the check itself live in that file, which also
+// owns the roster of bounded fields that keep a NARROWER structural predicate of their own
+// instead; no copy of that roster is kept here, because a copy goes stale the next time one
+// of them moves. ⚠️ PERF: that structural term is PRESENCE-based over the whole changed
+// line, so typing in the body of a list item, a blockquote line, a table cell or an ATX
+// heading — and every Enter — now takes the full walk this field's bounding exists to
+// avoid. THIS field's own full-walk cost was measured at 0.71–0.75 ms/keystroke (19 KB /
+// 150 block images and 154 KB / 1200 block images) — essentially flat in document size,
+// which the table field's is NOT, so neither field's number may be inferred from the
+// other's. Accepted on that measurement, not free: see PERF.md.
 // A reused widget whose document position SHIFTED is reconstructed with the new
 // docFrom (cheap: same alt/safeUrl/slice, NO re-parse). The small pure leaf
 // helpers (mergeIntervals / lineExpandWithNeighbours / intersects /
@@ -65,7 +78,7 @@
 // ordinal makes bounding it genuinely different) — see the recorded decision in
 // .claude/docs/TODO-archive.md, gated on a future third consumer.
 
-import { syntaxTree, syntaxTreeAvailable } from "@codemirror/language";
+import { syntaxTree } from "@codemirror/language";
 import { type EditorState, StateField, type Transaction } from "@codemirror/state";
 import { Decoration, type DecorationSet, EditorView } from "@codemirror/view";
 import { renderSafeMarkdownDestination } from "../../../markdown/render-safe-markdown-destination.js";
@@ -82,6 +95,7 @@ import {
 import { quollBlockReplaceZones } from "../decorations/orchestrator.js";
 import { leadingFrontmatterEnd } from "../frontmatter/detect.js";
 import { commonMarkAltText } from "../inline/inline-ir.js";
+import { requiresFullBoundedRebuild } from "../structural-guard.js";
 import { ImageBlockWidget } from "./image-widget.js";
 import { quollResourceBaseUri, resolveAgainstBase } from "./resource-base.js";
 
@@ -270,8 +284,11 @@ export const imageBlockField = StateField.define<DecorationSet>({
       return computeFreshFull(tr.state); // G3
     }
     if (tr.docChanged) {
-      if (!syntaxTreeAvailable(tr.state, tr.state.doc.length)) {
-        return computeFreshFull(tr.state); // G2: frontier incomplete
+      // An `Image` node can vanish or appear here with no edit to its own bytes, driven by
+      // a structural reparse outside the changed span with a COMPLETE frontier — see
+      // requiresFullBoundedRebuild in ../structural-guard.ts.
+      if (requiresFullBoundedRebuild(tr)) {
+        return computeFreshFull(tr.state);
       }
       return computeBounded(prev, tr, computeExtendedSpan(tr));
     }

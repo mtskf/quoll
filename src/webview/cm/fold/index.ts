@@ -90,7 +90,7 @@ import { quollSyntaxExclusionZones } from "../decorations/orchestrator.js";
 import { pointInExclusionZone } from "../decorations/shared.js";
 import { isRenderableListItem } from "../list/list-geometry.js";
 import { buildSortedRangeSet } from "../sorted-range-set.js";
-import { expandToEnclosingBlock, touchesStructuralReparse } from "../structural-guard.js";
+import { expandToEnclosingBlock, requiresFullBoundedRebuild } from "../structural-guard.js";
 
 const SVG_NS = "http://www.w3.org/2000/svg";
 
@@ -408,11 +408,7 @@ function defineFoldGutterLineClass(spec: FoldGutterFieldSpec): StateField<RangeS
         // outside it — all three need a full rebuild. Otherwise bound the walk to the
         // changed blocks. (`facetChanged` is a constant `false` for a non-zone-aware
         // field, so it never forces a rebuild there.)
-        if (
-          facetChanged ||
-          touchesStructuralReparse(tr) ||
-          !syntaxTreeAvailable(tr.state, tr.state.doc.length)
-        ) {
+        if (facetChanged || requiresFullBoundedRebuild(tr)) {
           return build(tr.state);
         }
         return recompute(value, tr);
@@ -433,16 +429,16 @@ function defineFoldGutterLineClass(spec: FoldGutterFieldSpec): StateField<RangeS
  *  the `gutterLineClass` facet. Built by `defineFoldGutterLineClass` (NOT zone-aware —
  *  heading row-scale eligibility never depends on exclusion zones). On the keystroke
  *  path (docChanged, parse frontier reached) it recomputes ONLY the changed blocks
- *  instead of re-walking the whole syntax tree, mirroring image-field.ts. Two
- *  full-rebuild fallbacks preserve correctness: (a) a docChanged whose post-edit
- *  frontier is incomplete (`!syntaxTreeAvailable`) can reveal nodes outside the
- *  changed range, and (b) lang-markdown parses asynchronously, so a later
+ *  instead of re-walking the whole syntax tree, mirroring image-field.ts. Full-rebuild
+ *  fallbacks preserve correctness. On docChanged, the shared admission test
+ *  `requiresFullBoundedRebuild` (../structural-guard.js): a post-edit frontier that is
+ *  incomplete (`!syntaxTreeAvailable`) can reveal nodes outside the changed range, and a
+ *  STRUCTURAL reparse re-shapes a block boundary OUTSIDE the changed run — an unclosed
+ *  fence / `<script>` swallowing a far heading, a `<!DOCTYPE …>` terminator, a `#`-ATX
+ *  interrupt (see the guard's doc) — where the bounded window would strand such a
+ *  heading's marker. Off that path, lang-markdown parses asynchronously, so a later
  *  background-parse publication arrives as a NON-docChanged transaction whose tree
- *  identity differs — re-tagging once the real heading nodes land. A third full-rebuild
- *  fallback (touchesStructuralReparse) catches a STRUCTURAL reparse that re-shapes a
- *  block boundary OUTSIDE the changed run — an unclosed fence / `<script>` swallowing a
- *  far heading, a `<!DOCTYPE …>` terminator, a `#`-ATX interrupt (see the guard's doc):
- *  the bounded window would strand such a heading's marker. Eligibility walk:
+ *  identity differs — re-tagging once the real heading nodes land. Eligibility walk:
  *  collectHeadingMarks. Exported for the heading-detection contract test. */
 export const headingFoldGutterLineClass = defineFoldGutterLineClass({
   zoneAware: false,
@@ -548,14 +544,16 @@ function collectListMarks(
  *  collectListMarks). Built by `defineFoldGutterLineClass`
  *  (zone-aware). On the keystroke path (docChanged, parse frontier reached, no facet
  *  flip) it recomputes ONLY the changed blocks instead of re-walking the whole syntax
- *  tree, mirroring headingFoldGutterLineClass. Two full-rebuild fallbacks preserve
- *  correctness: (a) a docChanged whose post-edit frontier is incomplete
- *  (`!syntaxTreeAvailable`) can reveal nodes outside the changed range, and (b)
- *  lang-markdown parses asynchronously, so a later background-parse publication
+ *  tree, mirroring headingFoldGutterLineClass. Full-rebuild fallbacks preserve
+ *  correctness. On docChanged, the shared admission test `requiresFullBoundedRebuild`
+ *  (../structural-guard.js) — a post-edit frontier that is incomplete
+ *  (`!syntaxTreeAvailable`) can reveal nodes outside the changed range, and a STRUCTURAL
+ *  reparse re-shapes a block boundary OUTSIDE the changed run, where the bounded window
+ *  would strand a marker — ORed with a `quollSyntaxExclusionZones` facet flip, because a
+ *  zone boundary shift can re-include / exclude list items outside the changed range. Off
+ *  that path, lang-markdown parses asynchronously, so a later background-parse publication
  *  arrives as a NON-docChanged transaction whose tree identity differs — re-tagging
- *  once the real list nodes land. A third fallback: a docChanged that ALSO flips the
- *  `quollSyntaxExclusionZones` facet takes the full-rebuild path because a zone
- *  boundary shift can re-include / exclude list items outside the changed range. The
+ *  once the real list nodes land. The
  *  non-docChanged facet-flip path (zone contributor that fires on a selection-only
  *  transaction) still full-rebuilds for the same reason. The facet guard compares zone
  *  CONTENT under the change map (exclusionZonesUnchanged), not reference — always-
@@ -649,14 +647,16 @@ function collectHeadingRhythmMarks(
  *  collectHeadingRhythmMarks). Built by `defineFoldGutterLineClass` (zone-aware). On
  *  the keystroke path (docChanged, parse frontier reached, no facet flip) it recomputes
  *  ONLY the changed blocks instead of re-walking the whole syntax tree, mirroring
- *  headingFoldGutterLineClass and listFoldGutterLineClass. Two full-rebuild fallbacks
- *  preserve correctness: (a) a docChanged whose post-edit frontier is incomplete
- *  (`!syntaxTreeAvailable`) can reveal nodes outside the changed range, and (b)
- *  lang-markdown parses asynchronously, so a later background-parse publication arrives
- *  as a NON-docChanged transaction whose tree identity differs — re-tagging once the
- *  real heading nodes land. A third fallback: a docChanged that ALSO flips the
- *  `quollSyntaxExclusionZones` facet takes the full-rebuild path because a zone boundary
- *  shift can re-include / exclude headings outside the changed range. The non-docChanged
+ *  headingFoldGutterLineClass and listFoldGutterLineClass. Full-rebuild fallbacks
+ *  preserve correctness. On docChanged, the shared admission test
+ *  `requiresFullBoundedRebuild` (../structural-guard.js) — a post-edit frontier that is
+ *  incomplete (`!syntaxTreeAvailable`) can reveal nodes outside the changed range, and a
+ *  STRUCTURAL reparse re-shapes a block boundary OUTSIDE the changed run, where the
+ *  bounded window would strand a marker — ORed with a `quollSyntaxExclusionZones` facet
+ *  flip, because a zone boundary shift can re-include / exclude headings outside the
+ *  changed range. Off that path, lang-markdown parses asynchronously, so a later
+ *  background-parse publication arrives as a NON-docChanged transaction whose tree
+ *  identity differs — re-tagging once the real heading nodes land. The non-docChanged
  *  facet-flip path still full-rebuilds for the same reason. The facet guard compares
  *  zone CONTENT under the change map (exclusionZonesUnchanged), not reference — always-
  *  mounted contributors (calloutMarkerConcealField, frontmatter) emit a fresh array on

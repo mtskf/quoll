@@ -286,9 +286,12 @@ describe("an observation that never consults the gate is refused", () => {
 });
 
 describe("an async observe is refused rather than silently half-run", () => {
-  // TypeScript permits it (a void-returning callback type accepts any return value), and
-  // the helper would otherwise return at the first await, destroying the view out from
-  // under the assertions that had not run yet.
+  // TypeScript already REFUSES it — `R extends void | undefined` rejects a
+  // `Promise<void>`, which the `@ts-expect-error` row further down this describe pins at
+  // compile time. This is the runtime half of the same contract, reached deliberately
+  // through the `asAsyncObserve` cast, because the type only guards call sites that are
+  // type-checked: without the runtime refusal the helper would return at the first await,
+  // destroying the view out from under the assertions that had not run yet.
   it("throws when observe() returns a thenable", () => {
     expect(() =>
       withUnstarvedFrontier({
@@ -554,8 +557,9 @@ describe("a state replacement after the LAST gate is refused", () => {
 
   it("accepts a second gate that follows a dispatch — the gate-per-dispatch shape", () => {
     // The refusal speaks for the LAST gate, so re-gating after a dispatch must re-arm it.
-    // Every other multi-gate test here ends on a STARVED second gate, which throws before
-    // the identity check runs; only this one exercises its accepting arm.
+    // A multi-gate test whose second gate is STARVED throws before the identity check ever
+    // runs, so it cannot pin the accepting arm; this one gates on an unstarved frontier
+    // precisely so it can.
     let past = 0;
     withUnstarvedFrontier({
       what: "the bounded output",

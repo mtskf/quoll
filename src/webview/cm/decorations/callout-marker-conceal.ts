@@ -25,13 +25,13 @@
 // (no quollBlockReplaceZones contribution → no atomic skip; a zero-height line may
 // be visually skipped by Arrow keys, which is correct UX — no caret trap exists).
 
-import { syntaxTree, syntaxTreeAvailable } from "@codemirror/language";
+import { syntaxTree } from "@codemirror/language";
 import { type EditorState, StateField, type Transaction } from "@codemirror/state";
 import { Decoration, type DecorationSet, EditorView } from "@codemirror/view";
 
 import { type Interval, intersects, mergeIntervals } from "../bounded-recompute.js";
 import { hostDocumentReseed } from "../host-reseed.js";
-import { expandToEnclosingBlock, touchesStructuralReparse } from "../structural-guard.js";
+import { expandToEnclosingBlock, requiresFullBoundedRebuild } from "../structural-guard.js";
 import { CALLOUT_MARKER_HIDDEN_CLASS, calloutTypeForOutermost } from "./callout.js";
 import { quollSyntaxExclusionZones } from "./orchestrator.js";
 import { intersectsAnySelection } from "./shared.js";
@@ -224,16 +224,15 @@ export const calloutMarkerConcealField = StateField.define<ConcealState>({
       // swallowing the callout below it, a `<!DOCTYPE …>` terminator, an un-list /
       // heading-interrupt re-context, etc.) re-shapes block boundaries OUTSIDE the
       // changed run, so a callout's Blockquote-ness can flip WITHOUT any edit inside its
-      // block — the changed-range bounded window would strand the stale record. G2: if
-      // the post-edit parser frontier is incomplete, a docChanged transaction can also
-      // reveal Blockquote nodes OUTSIDE the changed range, so the bounded reuse is
-      // unsound. Either → walk the CURRENTLY-AVAILABLE tree over the whole doc instead
-      // (NOT a guaranteed-complete parse — the same self-heal contract the sibling block
-      // + fold-gutter fields use: a later background-parse publication arrives as a
-      // !docChanged tree-identity change and re-walks to converge). buildFull over an
-      // incomplete frontier is still a superset-safe fallback: it never bounds away a
-      // node the bounded path would have missed.
-      if (touchesStructuralReparse(tr) || !syntaxTreeAvailable(tr.state, tr.state.doc.length)) {
+      // block — the changed-range bounded window would strand the stale record.
+      // `requiresFullBoundedRebuild` (../structural-guard.ts) also covers the G2 case (an
+      // incomplete post-edit parse frontier). Either → walk the CURRENTLY-AVAILABLE tree
+      // over the whole doc instead (NOT a guaranteed-complete parse — the same self-heal
+      // contract the sibling block + fold-gutter fields use: a later background-parse
+      // publication arrives as a !docChanged tree-identity change and re-walks to
+      // converge). buildFull over an incomplete frontier is still a superset-safe
+      // fallback: it never bounds away a node the bounded path would have missed.
+      if (requiresFullBoundedRebuild(tr)) {
         return deriveState(buildFull(tr.state), tr.state);
       }
       const records = computeBoundedRecords(prev.records, tr, computeExtendedSpan(tr));

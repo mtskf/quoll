@@ -1,10 +1,15 @@
 // Shared Markdown "structural reparse" guard for the changed-range-bounded
-// StateFields that key their keystroke recompute off a block's blank-line-
-// delimited run (the three fold-gutter fields in fold/index.ts + the callout
-// marker-conceal field). These fields assume a block's identity can only change
-// from WITHIN its own run; Markdown block boundaries are NOT stable under edits,
-// so `touchesStructuralReparse` is the SOUND over-approximation that routes an
-// edit which could re-shape a boundary OUTSIDE the changed run to a FULL rebuild.
+// StateFields — any field that recomputes only a WINDOW around the change and
+// reuses its records outside it, whether that window is a block's blank-line-
+// delimited run or the changed lines plus a neighbour. Every such field assumes a
+// block's identity can only change from WITHIN the window it recomputed. Markdown
+// block boundaries are NOT stable under edits, so `touchesStructuralReparse` is
+// the SOUND over-approximation that routes an edit which could re-shape a boundary
+// OUTSIDE that window to a FULL rebuild. Consumers import the PAIRED admission
+// test `requiresFullBoundedRebuild` (below) rather than either term on its own or
+// a hand-rolled predicate; `git grep requiresFullBoundedRebuild src/` is the live
+// consumer list, and no count is kept here because a count goes stale the next time
+// a field is added.
 //
 // Fenced-code collapse (fenced-code/fenced-code-collapse.ts) does NOT import this:
 // it keeps a NARROWER STRUCTURAL (no ATX/underscore alts) plus its own
@@ -14,13 +19,14 @@
 //
 // The dual old/new line-slice scan is memoised per Transaction (a WeakMap keyed
 // on `tr`): in @codemirror/state 6.6.x CodeMirror hands the SAME Transaction to
-// every StateField.update() in one dispatch, so the four fold/callout fields share
-// ONE scan per keystroke. The WeakMap holds `tr` weakly (entries GC with the
+// every StateField.update() in one dispatch, so every consumer of this predicate
+// shares ONE scan. The WeakMap holds `tr` weakly (entries GC with the
 // transaction — no eviction, no leak). The sharing is an efficiency win, not a
 // correctness dependency: `touchesStructuralReparse` is a pure function of `tr`,
 // so if a future CM ever cloned the transaction per field, each field would just
 // recompute the same verdict — result unchanged, only the sharing lost.
 
+import { syntaxTreeAvailable } from "@codemirror/language";
 import type { EditorState, Transaction } from "@codemirror/state";
 import type { Interval } from "./bounded-recompute.js";
 
@@ -28,7 +34,7 @@ import type { Interval } from "./bounded-recompute.js";
  *  `STRUCTURAL` regex (`fenced-code-collapse.ts`, the #63 precedent: fence delimiters,
  *  list/blockquote container markers, HTML block openers + the unanchored type-1/2/3/5
  *  terminators) PLUS two alternations the fenced field deliberately omits because they
- *  cannot affect FENCE grouping but DO re-shape the fold fields' blocks:
+ *  cannot affect FENCE grouping but DO re-shape the block-window consumers' blocks:
  *   - ATX-heading alt `#{1,6}(?:[ \t]|$)`: an in-place single-line edit `x q`→`# q` makes
  *     a heading interrupt a lazy continuation, closing a list and flipping a far `  # h`
  *     from ListItem to Document (Fable parser-verified, Conf 95). NEWLINE-DELTA below does
@@ -54,10 +60,11 @@ export function isBlankLine(text: string): boolean {
 }
 
 /** SOUND syntactic over-approximation of "this edit could trigger a STRUCTURAL REPARSE
- *  that re-shapes a block boundary OUTSIDE the changed run". The three fold-gutter fields
- *  bound their keystroke recompute to the changed blank-line-delimited run
- *  (`expandToEnclosingBlock`), which assumes a block's identity can only change from WITHIN
- *  its own run. Markdown block boundaries are NOT stable under edits, so that assumption
+ *  that re-shapes a block boundary OUTSIDE the changed window". Some consumers bound their
+ *  keystroke recompute to the changed blank-line-delimited run (`expandToEnclosingBlock`);
+ *  others bound it to the changed lines plus a neighbour. Either way, the field assumes a
+ *  block's identity can only change from WITHIN the window it recomputed. Markdown block
+ *  boundaries are NOT stable under edits, so that assumption
  *  can strand/miss a fold chevron: an unclosed ``` fence swallows the blocks below it; a
  *  `<!DOCTYPE …>` type-4 HTML declaration swallows until its `>`; un-listing (`- a`→`a`)
  *  re-contexts a nested `  # h` to top-level; etc. When this fires, the field falls back to
@@ -65,8 +72,9 @@ export function isBlankLine(text: string): boolean {
  *
  *  Mirrors the fenced field's guard (`touchesStructural` dual old/new line-expanded slice
  *  scan + `topLevelBoundaryRisk`'s newline/`>`/blank arms), FOLDED into one pass and with
- *  NO `insideBlock` gate: the fold fields are record-less (no reused per-block record to
- *  scope an in-body edit against), so ANY top-level structural trigger ⇒ full rebuild.
+ *  NO `insideBlock` gate: unlike the fenced field, this guard does not scope a trigger
+ *  against a consumer's own reused per-block record, so ANY top-level structural trigger
+ *  ⇒ full rebuild regardless of whether a given consumer holds reusable records at all.
  *  Fires when, for ANY changed range, ANY arm matches:
  *   - SHAPE — STRUCTURAL matches the OLD or NEW line-expanded slice.
  *   - NEWLINE-DELTA — the edit inserts or deletes a `\n`. A multi-line interior edit can
@@ -90,13 +98,29 @@ export function isBlankLine(text: string): boolean {
  *  On a non-docChanged transaction `iterChangedRanges` yields nothing → returns false.
  *
  *  SOUND over-approximation: false full-rebuilds only cost speed; UNDER-triggering would be
- *  unsound (a stranded chevron). ACCEPTED over-approximation (perf, not soundness): SHAPE is
- *  presence-based, so editing the BODY of a line that already starts with a marker
- *  (`- item`→`- itemx`) trips a full rebuild even though structure is unchanged — a strict
- *  improvement over the pre-PR always-full-rebuild baseline; a delta-based refinement is
- *  deferred to a perf follow-up. Exported so the negative-assertion tests can call it
+ *  unsound (a stranded chevron). ACCEPTED over-approximation (perf, not soundness): SHAPE and
+ *  TABLE-DELIM are presence-based, so editing the BODY of a line that already starts with a
+ *  marker (`- item`→`- itemx`) or sits inside a table row trips a full rebuild even though
+ *  structure is unchanged. What that costs depends on the consumer's PRE-guard baseline:
+ *   - For the fold / callout consumers this guard was written for, the baseline was an
+ *     always-full rebuild, so presence-based firing is a strict improvement.
+ *   - For `image/image-field.ts` and `table/table-skeleton.ts`, which admitted on the
+ *     frontier term alone before they adopted this pair, the baseline was always-BOUNDED, so
+ *     it is a REGRESSION on the keystroke classes that now fire: typing in a list-item body,
+ *     a blockquote line, a table cell or an ATX heading, and every Enter. EACH field's own
+ *     full-walk cost was measured on its own fixtures and accepted for this PR — separately,
+ *     because the two cost curves differ in SHAPE: the table field's grows with document
+ *     size (its full walk re-runs `parseTable` per node), the image field's is essentially
+ *     flat — for a reason that was NOT isolated. It is specifically NOT reuse: the image
+ *     field's full walk re-derives alt/safeUrl/slice fresh per node (`buildRange` takes no
+ *     `prev`); the reuse lives only on `computeBounded`'s position-shift branch. Sharing
+ *     this guard and this trigger set does NOT imply sharing a cost, so neither number may
+ *     be inferred from the other. Numbers: PERF.md; scoping follow-up: TODO.md.
+ *  A delta-based / per-consumer refinement is deferred to that follow-up
+ *  (`fenced-code-collapse.ts`'s `insideBlock` + `topLevelBoundaryRisk` is the in-repo
+ *  precedent). Exported so the negative-assertion tests can call it
  *  directly (pinning that plain prose typing stays on the bounded hot path).
- *  Memoised per Transaction so the four fold/callout fields share one dual-slice scan per
+ *  Memoised per Transaction so every consumer shares one dual-slice scan per
  *  dispatch (one scan per dispatch under CM 6.6.x). */
 const structuralMemo = new WeakMap<Transaction, boolean>();
 export function touchesStructuralReparse(tr: Transaction): boolean {
@@ -136,7 +160,7 @@ export function touchesStructuralReparse(tr: Transaction): boolean {
     // CLOSE an enclosing list while FORMING a Table, re-shaping the block
     // structure OUTSIDE the changed run — a same-line, non-newline, non-shape
     // edit that SHAPE and the other arms all miss (it splits a list / forms a
-    // table block that the fold fields and block widgets read). Over-approximate
+    // table block that the bounded consumers read). Over-approximate
     // on any `|` in the changed line (a table cell/delimiter separator); a false
     // match only costs a full rebuild (speed), never correctness — same contract
     // as the other arms. Completeness is also guaranteed at the parser level:
@@ -162,6 +186,24 @@ export function touchesStructuralReparse(tr: Transaction): boolean {
   });
   structuralMemo.set(tr, hit);
   return hit;
+}
+
+/** The admission test every changed-range-bounded StateField applies on a docChanged
+ *  transaction before it may reuse records: take the FULL rebuild when either the edit
+ *  could re-shape a block boundary outside the recomputed window (`touchesStructuralReparse`
+ *  — see above), or the post-edit parse frontier is incomplete so the tree cannot be
+ *  trusted outside it (G2).
+ *
+ *  The two terms answer DIFFERENT questions and neither implies the other: a structural
+ *  reparse happens with a COMPLETE frontier, and a starved frontier happens on edits with
+ *  no structural shape at all. Spelling them out per field is what let two fields ship with
+ *  only the second — so this is the only spelling, and
+ *  test/build/frontier-gate-needs-structural-guard.test.ts is what keeps it that way.
+ *
+ *  Callers may OR their own extra risks IN FRONT of this (fold/index.ts adds a facet flip);
+ *  what they must not do is take either term away. */
+export function requiresFullBoundedRebuild(tr: Transaction): boolean {
+  return touchesStructuralReparse(tr) || !syntaxTreeAvailable(tr.state, tr.state.doc.length);
 }
 
 /** Expand [from,to] to the enclosing blank-line-delimited block: line-align, then

@@ -4,6 +4,7 @@ import { syntaxTreeAvailable } from "@codemirror/language";
 import { EditorState, type Extension } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import { describe, expect, it } from "vitest";
+import { touchesStructuralReparse } from "../../../src/webview/cm/structural-guard.js";
 import {
   type TableModel,
   tableModels,
@@ -145,8 +146,16 @@ describe("tableSkeletonField bounded ≡ fullWalk", () => {
     it(c.name, () => checkEquivalence(c.initial, c.edits));
   }
 
-  // R2-2: explicit bounded-path pin — NO settling after the edit, so a broken
-  // boundedUpdate (e.g. dropping a reused range) cannot be masked by self-heal.
+  // R2-2: explicit bounded-path pins — NO settling after the edit, so a broken
+  // boundedUpdate cannot be masked by self-heal.
+  //
+  // `boundedUpdate` has two halves and one anchor reaches only one of them, so there are
+  // two. The REUSE half maps a model whose range falls outside the span; the RE-WALK half
+  // runs `collectTableRanges` + `buildModel` over the span and lets that result win on a
+  // colliding node `from`. An anchor whose span holds no `Table` node exercises the first
+  // and leaves the second running on an empty range (measured: zero nodes collected), which
+  // is green whatever the re-walk does. The sibling below puts the span ON a table so the
+  // model is NOT reused and the re-walk is what produces it.
   it("exercises the bounded path without self-heal masking (revert-check anchor)", () => {
     const doc = `${T}\n\nprose\n\n${T}`;
     withUnstarvedFrontier({
@@ -154,7 +163,15 @@ describe("tableSkeletonField bounded ≡ fullWalk", () => {
       mount: (parent) =>
         settledMount({ state: EditorState.create({ doc, extensions: exts() }), parent }, 10_000),
       observe: (view, requireUnstarvedFrontier) => {
-        view.dispatch({ changes: { from: 0, insert: "x" } }); // edit OUTSIDE both tables
+        // Offset chosen to land INSIDE the `prose` paragraph. The offset is load-bearing:
+        // an edit on either table's own lines carries a `|`, which trips the structural
+        // guard's TABLE-DELIM arm and routes the dispatch to the FULL walk — leaving this
+        // test comparing full against full and unable to see a broken boundedUpdate. The
+        // negative pin below is what keeps that from drifting back silently.
+        const proseAt = doc.indexOf("prose") + 2;
+        const tr = view.state.update({ changes: { from: proseAt, insert: "x" } });
+        expect(touchesStructuralReparse(tr)).toBe(false); // this edit really is on the bounded arm
+        view.dispatch(tr);
         // A small in-place edit on a complete tree normally keeps the frontier at doc end,
         // which is what makes boundedUpdate the branch that ran. Under CPU starvation the
         // 20ms reparse budget can elapse before any parse work happens; the field then
@@ -169,6 +186,89 @@ describe("tableSkeletonField bounded ≡ fullWalk", () => {
       },
     });
   });
+
+  it("exercises the bounded RE-WALK arm without self-heal masking (revert-check anchor)", () => {
+    // The table starts on the line directly below the edit, so G1's ±1-line expansion pulls
+    // the table's FIRST LINE into the span (measured: span `{0,16}` against a model at
+    // `{7,36}`). That is enough on both sides: the mapped model intersects the span, so it
+    // is not reused — and that term is the ONLY thing carrying this side here, because the
+    // sibling `touchesRange` guard measures `false` (the insert ends at old offset 5, one
+    // short of the old model's `from` of 6, and CM's `touchesRange` needs `end >= from`);
+    // and `collectTableRanges` returns every Table node OVERLAPPING the interval — not only
+    // contained ones — so the span re-walk plus `buildModel` rebuilds the whole model. Same
+    // offset as the settled `insert a char in prose immediately before a table` row above;
+    // what this adds is the absence of settling, so the self-heal cannot supply the answer.
+    const doc = `intro\n${T}`;
+    withUnstarvedFrontier({
+      what: "boundedUpdate's pre-self-heal output on the re-walk arm",
+      mount: (parent) =>
+        settledMount({ state: EditorState.create({ doc, extensions: exts() }), parent }, 10_000),
+      observe: (view, requireUnstarvedFrontier) => {
+        // End of `intro` — prose, so the changed line carries no `|` and no structural
+        // shape. The negative pin keeps that from drifting into the FULL arm, where this
+        // would compare a full walk against a full walk.
+        const tr = view.state.update({ changes: { from: 5, insert: "X" } });
+        expect(touchesStructuralReparse(tr)).toBe(false);
+        view.dispatch(tr);
+        requireUnstarvedFrontier();
+        expect([...view.state.field(tableSkeletonField)]).toEqual(
+          freshOracle(view.state.doc.toString())
+        );
+      },
+    });
+  });
+
+  // Structural reparse: an edit re-shapes block boundaries OUTSIDE the changed span while
+  // the post-edit frontier stays COMPLETE. Neither guard the field had could see it — the
+  // bounded reuse rule (`!touched && !intersects(span, …)`) only looks at the changed
+  // lines ±1, and G2 never fires because the frontier is not starved. Both directions are
+  // covered: a node that VANISHES leaves a stale model behind, and a node that APPEARS is
+  // missed entirely. Each row's mechanism is distinct at the Lezer level (fence pairing,
+  // HTML-block absorption, fence RE-pairing), not three spellings of one bug.
+  //
+  // These go through `withUnstarvedFrontier`, NOT `checkEquivalence`: that harness skips
+  // its pre-settle comparison when the frontier is starved and self-heals in its post-
+  // settle one, so a structural row there would pass vacuously under CPU load.
+  const structuralCases: Array<{
+    name: string;
+    doc: string;
+    edit: { from: number; to?: number; insert?: string };
+  }> = [
+    {
+      name: "an unclosed ``` fence opened above swallows the table",
+      doc: `intro\n\n${T}\ntail\n`,
+      edit: { from: 0, insert: "```" },
+    },
+    {
+      name: "an HTML comment opened above swallows the table",
+      doc: `intro\n\n${T}\ntail\n`,
+      edit: { from: 0, to: 5, insert: "<!--" },
+    },
+    {
+      name: "breaking an unclosed fence above REVEALS a table that was inside it",
+      doc: `\`\`\`\n\n${T}\ntail\n`,
+      edit: { from: 0, to: 1, insert: "" },
+    },
+  ];
+  for (const c of structuralCases) {
+    it(`structural reparse: ${c.name}`, () => {
+      withUnstarvedFrontier({
+        what: "the post-structural-edit models, pre-self-heal",
+        mount: (parent) =>
+          settledMount(
+            { state: EditorState.create({ doc: c.doc, extensions: exts() }), parent },
+            10_000
+          ),
+        observe: (view, requireUnstarvedFrontier) => {
+          view.dispatch({ changes: c.edit });
+          requireUnstarvedFrontier();
+          expect([...view.state.field(tableSkeletonField)]).toEqual(
+            freshOracle(view.state.doc.toString())
+          );
+        },
+      });
+    });
+  }
 });
 
 describe("list-nested table detection (real Lezer language)", () => {

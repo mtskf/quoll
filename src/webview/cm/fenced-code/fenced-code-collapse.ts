@@ -430,6 +430,15 @@ function defineField(mode: BuildMode): StateField<CollapseState> {
       }
       // 4. Hot path: a plain docChanged rebuilds changed-range-bounded, with the G2
       //    frontier fallback (an incomplete parse can reveal nodes outside the span).
+      //    The structural-reparse fallback is deliberately NOT part of this condition, the
+      //    way it is in the fields that import ../structural-guard.js: here it is step 3
+      //    above, which has already returned by the time control reaches this line. That
+      //    guard is narrower than the shared predicate on purpose — this field's hot path
+      //    is editing INSIDE a code fence, where a `#` comment or a `___` line must stay
+      //    bounded; ../structural-guard.ts's header owns that rationale.
+      //    `mode === "full"` below is NOT a structural check either: it is the switch that
+      //    makes the test-only full-recompute oracle, and it is never true for the field
+      //    wired into editor.ts.
       if (tr.docChanged) {
         if (mode === "full" || !syntaxTreeAvailable(tr.state, tr.state.doc.length)) {
           return buildFullState(tr.state, working);
