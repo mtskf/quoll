@@ -284,10 +284,9 @@ export const imageBlockField = StateField.define<DecorationSet>({
       return computeFreshFull(tr.state); // G3
     }
     if (tr.docChanged) {
-      // Was `!syntaxTreeAvailable(...)` alone, which is only half the admission test: a
-      // structural reparse re-shapes block boundaries OUTSIDE the changed span, so an
-      // `Image` node can vanish or appear with no edit to its own bytes and with a
-      // COMPLETE frontier. See ../structural-guard.ts.
+      // An `Image` node can vanish or appear here with no edit to its own bytes, driven by
+      // a structural reparse outside the changed span with a COMPLETE frontier — see
+      // requiresFullBoundedRebuild in ../structural-guard.ts.
       if (requiresFullBoundedRebuild(tr)) {
         return computeFreshFull(tr.state);
       }
