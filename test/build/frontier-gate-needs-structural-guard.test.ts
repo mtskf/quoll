@@ -231,6 +231,11 @@ describe("the scanner itself is not vacuous", () => {
     // two today, and the `violationsIn` controls below feed a synthetic census rather than
     // running the scanner, so without this fixture nothing exercises the walk past its first
     // hit: capping `hits` at one entry leaves every other assertion in this file green.
+    // ⚠️ To check that by mutation, the cap has to go at the TOP of `visit` (`if (hits.length)
+    // return;`, before the `match` call) so the walk stops descending AND stops visiting
+    // siblings. A `return` placed after the push only skips that node's descendants; siblings
+    // are still visited, both gates are still found, and this fixture stays green — so that
+    // spelling proves nothing. Measured both ways while reviewing this file.
     expect(
       findReducerShapedGates(
         "syntaxTreeAvailable(tr.state, n);\nconst x = 1;\nsyntaxTreeAvailable(view.state, n);",
