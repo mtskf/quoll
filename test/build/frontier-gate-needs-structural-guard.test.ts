@@ -79,22 +79,38 @@ import { describe, expect, it } from "vitest";
 
 const CM_ROOT = fileURLToPath(new URL("../../src/webview/cm", import.meta.url));
 
-const ALLOW = new Map<string, { count: number; reason: string }>([
-  [
-    "structural-guard.ts",
-    { count: 1, reason: "the definition of requiresFullBoundedRebuild itself" },
-  ],
-  [
-    "fenced-code/fenced-code-collapse.ts",
-    {
-      count: 1,
-      reason:
-        "documented exception — its other disjunct is the test-oracle mode switch, and its structural check is a narrower predicate on an earlier arm",
-    },
-  ],
+/** file (relative to src/webview/cm) → how many reducer-shaped gates it may carry. The
+ *  ALLOWLIST block in this file's header owns the reasons; kept there rather than as a
+ *  field here so there is one place to read them and none to leave stale. */
+const ALLOW = new Map<string, number>([
+  // the definition of requiresFullBoundedRebuild itself
+  ["structural-guard.ts", 1],
+  // documented exception — its other disjunct is the test-oracle mode switch, and its
+  // structural check is a narrower predicate on an earlier arm
+  ["fenced-code/fenced-code-collapse.ts", 1],
 ]);
 
-function isReducerShapedCall(node: ts.Node): node is ts.CallExpression {
+/** 1-based line numbers of every node in `text` that `match` accepts. The one AST walk
+ *  the three shape queries below share — each differs only in its `match`, so writing the
+ *  traversal once is what keeps them from drifting apart. */
+function matchingNodeLines(
+  text: string,
+  fileName: string,
+  match: (node: ts.Node) => boolean
+): number[] {
+  const sf = ts.createSourceFile(fileName, text, ts.ScriptTarget.Latest, true);
+  const hits: number[] = [];
+  const visit = (node: ts.Node): void => {
+    if (match(node)) {
+      hits.push(sf.getLineAndCharacterOfPosition(node.getStart(sf)).line + 1);
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(sf);
+  return hits;
+}
+
+function isReducerShapedCall(node: ts.Node): boolean {
   return (
     ts.isCallExpression(node) &&
     ts.isIdentifier(node.expression) &&
@@ -108,40 +124,23 @@ function isReducerShapedCall(node: ts.Node): node is ts.CallExpression {
 /** 1-based line numbers of every reducer-shaped `syntaxTreeAvailable(<expr>.state, …)`
  *  call in `text`. Not exported: this file's own tests below are its only consumer. */
 function findReducerShapedGates(text: string, fileName: string): number[] {
-  const sf = ts.createSourceFile(fileName, text, ts.ScriptTarget.Latest, true);
-  const hits: number[] = [];
-  const visit = (node: ts.Node): void => {
-    if (isReducerShapedCall(node)) {
-      hits.push(sf.getLineAndCharacterOfPosition(node.getStart(sf)).line + 1);
-    }
-    ts.forEachChild(node, visit);
-  };
-  visit(sf);
-  return hits;
+  return matchingNodeLines(text, fileName, isReducerShapedCall);
 }
 
 /** True if `text` calls `requiresFullBoundedRebuild` at least once, as a bare
  *  identifier call (`requiresFullBoundedRebuild(tr)`), not merely mentions the name in a
  *  comment or string. */
 function callsRequiresFullBoundedRebuild(text: string, fileName: string): boolean {
-  const sf = ts.createSourceFile(fileName, text, ts.ScriptTarget.Latest, true);
-  let found = false;
-  const visit = (node: ts.Node): void => {
-    if (found) {
-      return;
-    }
-    if (
-      ts.isCallExpression(node) &&
-      ts.isIdentifier(node.expression) &&
-      node.expression.text === "requiresFullBoundedRebuild"
-    ) {
-      found = true;
-      return;
-    }
-    ts.forEachChild(node, visit);
-  };
-  visit(sf);
-  return found;
+  return (
+    matchingNodeLines(
+      text,
+      fileName,
+      (node) =>
+        ts.isCallExpression(node) &&
+        ts.isIdentifier(node.expression) &&
+        node.expression.text === "requiresFullBoundedRebuild"
+    ).length > 0
+  );
 }
 
 /** True if `text` contains an EXPORTED function declaration named `name` — either
@@ -149,24 +148,16 @@ function callsRequiresFullBoundedRebuild(text: string, fileName: string): boolea
  *  modifier check on the declaration itself (this codebase only uses the inline form, so
  *  only that shape is checked). */
 function exportsFunctionDeclaration(text: string, fileName: string, name: string): boolean {
-  const sf = ts.createSourceFile(fileName, text, ts.ScriptTarget.Latest, true);
-  let found = false;
-  const visit = (node: ts.Node): void => {
-    if (found) {
-      return;
-    }
-    if (
-      ts.isFunctionDeclaration(node) &&
-      node.name?.text === name &&
-      (ts.getCombinedModifierFlags(node) & ts.ModifierFlags.Export) !== 0
-    ) {
-      found = true;
-      return;
-    }
-    ts.forEachChild(node, visit);
-  };
-  visit(sf);
-  return found;
+  return (
+    matchingNodeLines(
+      text,
+      fileName,
+      (node) =>
+        ts.isFunctionDeclaration(node) &&
+        node.name?.text === name &&
+        (ts.getCombinedModifierFlags(node) & ts.ModifierFlags.Export) !== 0
+    ).length > 0
+  );
 }
 
 function scannableFiles(dir: string, out: string[] = []): string[] {
@@ -206,14 +197,14 @@ function census(): Map<string, number[]> {
 function violationsIn(found: Map<string, number[]>, allow: typeof ALLOW): string[] {
   const violations: string[] = [];
   for (const [rel, lines] of found) {
-    const allowed = allow.get(rel)?.count ?? 0;
+    const allowed = allow.get(rel) ?? 0;
     if (lines.length !== allowed) {
       violations.push(
         `${rel}: ${lines.length} reducer-shaped gate(s) at line(s) ${lines.join(", ")}, allowed ${allowed}`
       );
     }
   }
-  for (const [rel, { count }] of allow) {
+  for (const [rel, count] of allow) {
     if (!found.has(rel) && count > 0) {
       violations.push(`${rel}: 0 reducer-shaped gate(s) found, allowlist expects ${count}`);
     }
@@ -282,8 +273,8 @@ describe("the scanner itself is not vacuous", () => {
   });
 
   it("compares census against allowance in both directions", () => {
-    const atCount = new Map([["allowed/at-its-count.ts", { count: 2, reason: "fixture" }]]);
-    const oneAllowed = new Map([["allowed/one-too-many.ts", { count: 1, reason: "fixture" }]]);
+    const atCount = new Map([["allowed/at-its-count.ts", 2]]);
+    const oneAllowed = new Map([["allowed/one-too-many.ts", 1]]);
 
     // Exactly at its allowance → not a violation.
     expect(violationsIn(new Map([["allowed/at-its-count.ts", [10, 20]]]), atCount)).toEqual([]);
@@ -328,7 +319,7 @@ describe("the frontier gate has exactly one reducer-shaped spelling", () => {
 
   it("keeps the allowlist live — every entry still carries exactly the count it excuses", () => {
     const found = census();
-    for (const [rel, { count }] of ALLOW) {
+    for (const [rel, count] of ALLOW) {
       expect(found.get(rel)?.length ?? 0, `${rel} allowlist count is stale`).toBe(count);
     }
   });
