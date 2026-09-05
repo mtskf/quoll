@@ -21,10 +21,12 @@
 // table's `to` into a following non-blank paragraph —
 // [[quoll-lezer-table-to-overshoots-trailing-line]]); G2 (`!syntaxTreeAvailable`
 // → full walk; the later background-parse publication, a `!docChanged`
-// tree-identity change, full-walks again to self-heal). Soundness (bounded ≡
+// tree-identity change, full-walks again to self-heal); G-STRUCT
+// (`touchesStructuralReparse` → full walk; a structural reparse re-shapes
+// boundaries outside the span with a complete frontier). Soundness (bounded ≡
 // fullWalk, ranges AND parses) is pinned by cm-table-skeleton.test.ts.
 
-import { syntaxTree, syntaxTreeAvailable } from "@codemirror/language";
+import { syntaxTree } from "@codemirror/language";
 import { type EditorState, StateField, type Transaction } from "@codemirror/state";
 import { parseTable, type Table } from "../../../markdown/table/index.js";
 import {
@@ -33,6 +35,7 @@ import {
   lineExpandWithNeighbours,
   mergeIntervals,
 } from "../bounded-recompute.js";
+import { requiresFullBoundedRebuild } from "../structural-guard.js";
 import { collectTableRanges } from "./table-ranges.js";
 
 export interface TableModel {
@@ -155,8 +158,12 @@ export const tableSkeletonField = StateField.define<readonly TableModel[]>({
   create: (state) => tableModels(state),
   update: (prev, tr) => {
     if (tr.docChanged) {
-      if (!syntaxTreeAvailable(tr.state, tr.state.doc.length)) {
-        return tableModels(tr.state); // G2
+      // Was `!syntaxTreeAvailable(...)` alone, which is only half the admission test: a
+      // structural reparse re-shapes block boundaries OUTSIDE the changed span, so a
+      // `Table` node can vanish or appear with no edit to its own bytes and with a
+      // COMPLETE frontier. See ../structural-guard.ts.
+      if (requiresFullBoundedRebuild(tr)) {
+        return tableModels(tr.state);
       }
       return boundedUpdate(prev, tr, extendedSpan(tr));
     }
