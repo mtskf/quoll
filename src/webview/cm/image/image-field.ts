@@ -56,6 +56,10 @@
 //        background-parse publication self-heals via the tree-identity branch).
 //   G3 — a change to `leadingFrontmatterEnd` flips the `from < fmEnd` gate for
 //        images near the top → full recompute.
+// The docChanged arm's admission test is `requiresFullBoundedRebuild` (shared with the
+// table fields via ../structural-guard.js), which ORs G2 above with a structural-reparse
+// check: a block boundary can re-shape OUTSIDE the changed range with the frontier staying
+// COMPLETE, which G2 alone cannot see. Rationale + the check itself live in that file.
 // A reused widget whose document position SHIFTED is reconstructed with the new
 // docFrom (cheap: same alt/safeUrl/slice, NO re-parse). The small pure leaf
 // helpers (mergeIntervals / lineExpandWithNeighbours / intersects /
@@ -65,7 +69,7 @@
 // ordinal makes bounding it genuinely different) — see the recorded decision in
 // .claude/docs/TODO-archive.md, gated on a future third consumer.
 
-import { syntaxTree, syntaxTreeAvailable } from "@codemirror/language";
+import { syntaxTree } from "@codemirror/language";
 import { type EditorState, StateField, type Transaction } from "@codemirror/state";
 import { Decoration, type DecorationSet, EditorView } from "@codemirror/view";
 import { renderSafeMarkdownDestination } from "../../../markdown/render-safe-markdown-destination.js";
@@ -82,6 +86,7 @@ import {
 import { quollBlockReplaceZones } from "../decorations/orchestrator.js";
 import { leadingFrontmatterEnd } from "../frontmatter/detect.js";
 import { commonMarkAltText } from "../inline/inline-ir.js";
+import { requiresFullBoundedRebuild } from "../structural-guard.js";
 import { ImageBlockWidget } from "./image-widget.js";
 import { quollResourceBaseUri, resolveAgainstBase } from "./resource-base.js";
 
@@ -270,8 +275,12 @@ export const imageBlockField = StateField.define<DecorationSet>({
       return computeFreshFull(tr.state); // G3
     }
     if (tr.docChanged) {
-      if (!syntaxTreeAvailable(tr.state, tr.state.doc.length)) {
-        return computeFreshFull(tr.state); // G2: frontier incomplete
+      // Was `!syntaxTreeAvailable(...)` alone, which is only half the admission test: a
+      // structural reparse re-shapes block boundaries OUTSIDE the changed span, so an
+      // `Image` node can vanish or appear with no edit to its own bytes and with a
+      // COMPLETE frontier. See ../structural-guard.ts.
+      if (requiresFullBoundedRebuild(tr)) {
+        return computeFreshFull(tr.state);
       }
       return computeBounded(prev, tr, computeExtendedSpan(tr));
     }

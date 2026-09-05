@@ -8,7 +8,9 @@ import {
 } from "@codemirror/state";
 import type { DecorationSet, WidgetType } from "@codemirror/view";
 import { describe, expect, it } from "vitest";
+import { leadingFrontmatterEnd } from "../../src/webview/cm/frontmatter/detect.js";
 import { imageBlockField } from "../../src/webview/cm/image/index.js";
+import { touchesStructuralReparse } from "../../src/webview/cm/structural-guard.js";
 import { settledState } from "./helpers/settled-state.js";
 import { settledMount } from "./helpers/settled-view.js";
 import { withUnstarvedFrontier } from "./helpers/unstarved-frontier.js";
@@ -394,10 +396,66 @@ describe("imageBlockField bounded ≡ full", () => {
       edits: [{ selection: EditorSelection.cursor(3) }, { selection: EditorSelection.cursor(40) }],
       oracleSlots: 1,
     },
+    {
+      // A structural reparse: an unclosed ``` typed on line 1 swallows the image below
+      // into a FencedCode node, so the Image node vanishes with NO edit inside its own
+      // bytes and with a COMPLETE frontier — the crossing neither the bounded reuse rule
+      // nor G2 can see. Measured on the unguarded field: a stale widget survived at 10-43
+      // against an oracle holding none.
+      name: "structural reparse — an unclosed fence above swallows the image",
+      initial: `intro\n\n${IMG}\n\ntail\n`,
+      edits: [{ changes: { from: 0, insert: "```" } }],
+      oracleSlots: 0,
+    },
+    {
+      // Same crossing, a DIFFERENT Lezer mechanism: an HTML block absorbs the image
+      // instead of a fence swallowing it.
+      name: "structural reparse — an HTML comment above swallows the image",
+      initial: `intro\n\n${IMG}\n\ntail\n`,
+      edits: [{ changes: { from: 0, to: 5, insert: "<!--" } }],
+      oracleSlots: 0,
+    },
+    {
+      // The REVEAL direction: the image starts INSIDE an unclosed fence, and breaking that
+      // fence exposes it. The unguarded field misses the new widget entirely rather than
+      // stranding an old one — a different failure, same root cause.
+      name: "structural reparse — breaking an unclosed fence reveals the image",
+      initial: `\`\`\`\n\n${IMG}\n\ntail\n`,
+      edits: [{ changes: { from: 0, to: 1, insert: "" } }],
+      oracleSlots: 1,
+    },
   ];
   for (const c of cases) {
     it(c.name, () => checkEquivalence(c.initial, c.edits, c.oracleSlots));
   }
+
+  // The guard's breadth (structural-guard.ts) routes many of the rows above to the FULL arm
+  // — a newline delta or a blank-line flip is enough. That is sound, and those rows keep
+  // their value as full-vs-oracle checks, but it thins out the ones that still reach
+  // `computeBounded` through the docChanged arm. Pin the two below so a widened guard or a
+  // re-fixtured row cannot quietly leave this file blind to a bounded regression.
+  //
+  // NOT a claim that these are the only rows on the bounded path: the selection-driven rows
+  // further down reach `computeBounded` through the SELECTION arm, which this guard does not
+  // touch. This pins two; it does not census the file.
+  //
+  // The G3 rows are deliberately NOT here: their edit moves `leadingFrontmatterEnd`, so the
+  // field returns from the frontmatter arm ABOVE this condition and never consults it. A
+  // `toBe(false)` on one of them would be green and would mean nothing.
+  it("these docChanged cases still reach the bounded arm", () => {
+    const boundedRows = [
+      { doc: "plain text\n", change: { from: 0, to: 10, insert: IMG } },
+      { doc: `${IMG}\n\nbelow`, change: { from: 20, insert: "z" } },
+    ];
+    for (const r of boundedRows) {
+      const state = settledState(EditorState.create({ doc: r.doc, extensions: exts() }));
+      const tr = state.update({ changes: r.change });
+      // Both halves matter: the frontmatter arm must not fire (or the row never reaches the
+      // structural condition), and the structural condition must be false (or it full-walks).
+      expect(leadingFrontmatterEnd(tr.startState)).toBe(leadingFrontmatterEnd(tr.state));
+      expect(touchesStructuralReparse(tr)).toBe(false);
+    }
+  });
 
   it("door guard throws when no edit can produce a doc-visible transaction", () => {
     const inertEditLists: Edit[][] = [
