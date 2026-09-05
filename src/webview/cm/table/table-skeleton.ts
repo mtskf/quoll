@@ -24,12 +24,19 @@
 // which ORs G2 (an incomplete post-edit frontier → full walk; the later
 // background-parse publication, a `!docChanged` tree-identity change, full-walks
 // again to self-heal) with G-STRUCT (a structural reparse re-shapes boundaries
-// outside the span with a complete frontier → full walk). ⚠️ PERF: G-STRUCT is
-// PRESENCE-based over the whole changed line, and a table cell's line always
-// carries a `|`, so typing INSIDE a cell takes the full walk — exactly the
-// whole-tree materialisation + per-table `parseTable` this field exists to skip.
-// Measured and accepted, not free: see PERF.md. Soundness (bounded ≡ fullWalk,
-// ranges AND parses) is pinned by cm-table-skeleton.test.ts.
+// outside the span with a complete frontier → full walk). ⚠️ PERF: G-STRUCT's
+// TABLE-DELIM arm is a per-line SHAPE-DELTA (`tableRowShapeChanged`), not a
+// presence test over the whole changed line, so typing INSIDE a cell whose row
+// shape is unchanged stays on the bounded path this field exists to protect.
+// The full walk is taken when the edited line — ANY row, not only a header —
+// flips one of the facts lezer forms a `Table` from: it is delimiter-SHAPED on
+// either side (read RAW or `[ \t]`-stripped, a PRESENCE retreat), its
+// unescaped-pipe presence flips (a `\|` escape in prose or in a cell), or its
+// `parseRow` cell count changes. G-STRUCT's OTHER arm (SHAPE) is still
+// presence-based, so a list-item body, a blockquote line, an ATX heading, or any
+// Enter still takes the full walk regardless of this field. Measured and accepted,
+// not free: see PERF.md. Soundness (bounded ≡ fullWalk, ranges AND parses) is
+// pinned by cm-table-skeleton.test.ts.
 
 import { syntaxTree } from "@codemirror/language";
 import { type EditorState, StateField, type Transaction } from "@codemirror/state";
