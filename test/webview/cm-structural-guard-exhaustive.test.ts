@@ -75,13 +75,13 @@ function blockIdentity(doc: string): string {
   return out.join(",");
 }
 
-/** Run the real guard over a real single-character transaction. */
-function armsFire(before: string, after: string, pos: number, delLen: number, insert: string) {
-  const state = settledState(
-    EditorState.create({ doc: before, extensions: [quollMarkdownLanguage()] })
-  );
-  const tr = state.update({ changes: { from: pos, to: pos + delLen, insert } });
-  void after;
+/** Run the real guard over a real single-character transaction. The base state is built ONCE
+ *  per corpus document by the caller: it depends only on `doc`, `EditorState` is immutable
+ *  (`state.update()` does not mutate the base), and `touchesStructuralReparse` reads only
+ *  `tr.changes` / `tr.startState.doc` / `tr.state.doc` — never the syntax tree — so
+ *  re-settling it per edit bought nothing and cost one full parse per enumerated edit. */
+function armsFire(base: EditorState, pos: number, delLen: number, insert: string) {
+  const tr = base.update({ changes: { from: pos, to: pos + delLen, insert } });
   return touchesStructuralReparse(tr);
 }
 
@@ -92,9 +92,9 @@ describe("touchesStructuralReparse — bounded-exhaustive differential oracle", 
     const residual: string[] = [];
     for (const doc of SHAPE_CORPUS) {
       const before = blockIdentity(doc);
+      const base = settledState(EditorState.create({ doc, extensions: [quollMarkdownLanguage()] }));
       forEachSingleCharEdit(doc, (e) => {
-        const pos = firstDifference(e.before, e.after);
-        const fired = armsFire(e.before, e.after, pos, e.deleted.length, e.inserted);
+        const fired = armsFire(base, e.pos, e.deleted.length, e.inserted);
         checked++;
         if (fired) {
           return;
@@ -104,7 +104,7 @@ describe("touchesStructuralReparse — bounded-exhaustive differential oracle", 
         if (after !== before) {
           residual.push(
             `doc=${JSON.stringify(doc)} edit=${JSON.stringify(e.deleted)}->` +
-              `${JSON.stringify(e.inserted)}@${pos}\n  before: ${before}\n  after:  ${after}`
+              `${JSON.stringify(e.inserted)}@${e.pos}\n  before: ${before}\n  after:  ${after}`
           );
         }
       });
@@ -116,13 +116,3 @@ describe("touchesStructuralReparse — bounded-exhaustive differential oracle", 
     expect(silent).toBeGreaterThan(checked / 10);
   }, 600_000);
 });
-
-function firstDifference(a: string, b: string): number {
-  const n = Math.min(a.length, b.length);
-  for (let i = 0; i < n; i++) {
-    if (a[i] !== b[i]) {
-      return i;
-    }
-  }
-  return n;
-}
