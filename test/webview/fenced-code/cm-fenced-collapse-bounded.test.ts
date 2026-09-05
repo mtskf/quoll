@@ -67,6 +67,17 @@ function fence(body: number, lang = "js"): string {
   return `\`\`\`${lang}\n${Array.from({ length: body }, (_, i) => `code line ${i}`).join("\n")}\n\`\`\``;
 }
 
+// `fencedBlockGeometry` returns null (no tracked record at all) for any fence with
+// `bodyLineCount <= COLLAPSE_THRESHOLD` (10) — a marker line alone in a 1-3 line body
+// would never produce a record on EITHER field, making an equivalence assertion pass
+// vacuously regardless of any bug. Embed the marker inside an 11-line body (one line
+// over threshold) so the block is tracked and the edit exercises the bounded geometry
+// recompute for real.
+function fenceWithBodyMarker(marker: string, lang = "py"): string {
+  const body = Array.from({ length: 11 }, (_, i) => (i === 2 ? marker : `code line ${i}`));
+  return `\`\`\`${lang}\n${body.join("\n")}\n\`\`\`\n`;
+}
+
 interface Edit {
   changes?: { from: number; to?: number; insert?: string };
   // `EditorSelection.cursor(...)` yields a SelectionRange; `.create(...)` an
@@ -348,6 +359,27 @@ describe("fencedCodeCollapseField bounded ≡ full", () => {
         },
       ],
     },
+    // The SHARED structural guard (../structural-guard.ts) gained an ATX, an underscore and a
+    // Setext alternation and relaxed its indent bound, and now fires on all of these. THIS
+    // field deliberately keeps its own narrower STRUCTURAL so that editing inside a fence —
+    // where a `#` comment, a `___` rule or a `===` line is ordinary CODE, not a block marker —
+    // stays on the bounded path. These cases are what makes "the two guards diverge on
+    // purpose" observable in behaviour and not only in source text.
+    ...(
+      [
+        ["a hash comment", "# comment"],
+        ["an equals line", "==="],
+        ["an underscore rule", "___"],
+        ["a four-space-indented hash", "    # deep"],
+      ] as const
+    ).map(([label, marker]) => {
+      const doc = fenceWithBodyMarker(marker);
+      return {
+        name: `fenced hot path: editing ${label} inside a fence stays equivalent`,
+        initial: doc,
+        edits: [{ changes: { from: doc.indexOf(marker) + marker.length, insert: "x" } }],
+      };
+    }),
   ];
   for (const c of cases) {
     it(c.name, () => run(c.initial, c.edits));
