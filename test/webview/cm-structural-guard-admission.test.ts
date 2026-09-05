@@ -23,7 +23,10 @@
 // which is why `test/build/no-bare-unstarved-gate.test.ts` forbids that shape outright.
 // Both rows go through `withUnstarvedFrontierState`, which abandons and retries a starved
 // attempt and THROWS if every attempt is starved — so this can neither flake nor pass
-// having observed nothing.
+// having observed nothing. Each row builds its Transaction FIRST and hands `tr.state` — the
+// very state `requiresFullBoundedRebuild` reads its frontier term off — to the gate. A
+// second `EditorState.create(…)` would carry its own ParseContext and its own 20ms budget,
+// so gating one state would say nothing about the other.
 //
 // Row 2 needs the opposite and is deliberately NOT wrapped: `neverFinishingLanguage()` never
 // completes, so its frontier is starved by construction and stays that way under any load.
@@ -44,30 +47,21 @@ import { withUnstarvedFrontierState } from "./helpers/unstarved-frontier.js";
 const DOC = "prose paragraph here\n\nmore text\n";
 const exts = (): Extension[] => [markdown({ base: markdownLanguage })];
 
-/** Build the post-edit state fresh inside the callback: `withUnstarvedFrontierState` re-runs
- *  its observation from the top on every retry, so anything built outside would be shared
- *  across attempts. */
-function edited(change: { from: number; to?: number; insert?: string }): EditorState {
-  return settledState(EditorState.create({ doc: DOC, extensions: exts() })).update({
-    changes: change,
-  }).state;
-}
-
 describe("requiresFullBoundedRebuild", () => {
   it("row 1 — structural edit, complete frontier => true (the term block-widget fields lacked)", () => {
     withUnstarvedFrontierState({
       what: "the admission verdict on a structural edit",
       observe: (requireUnstarvedFrontier) => {
-        const state = edited({ from: 0, insert: "```" });
-        requireUnstarvedFrontier(state);
-        // Re-derive the transaction the helper is asked about from the same base, so the
-        // verdict below is read off the state the gate just spoke for.
+        // Build the transaction fresh inside the callback (the helper re-runs this from the
+        // top on every retry), then gate the state it carries — the one the verdict below is
+        // read off.
         const tr = settledState(EditorState.create({ doc: DOC, extensions: exts() })).update({
           changes: { from: 0, insert: "```" },
         });
+        requireUnstarvedFrontier(tr.state);
         expect(touchesStructuralReparse(tr)).toBe(true);
         expect(requiresFullBoundedRebuild(tr)).toBe(true);
-        return state;
+        return tr.state;
       },
     });
   });
@@ -84,14 +78,13 @@ describe("requiresFullBoundedRebuild", () => {
     withUnstarvedFrontierState({
       what: "the admission verdict on a structurally inert edit",
       observe: (requireUnstarvedFrontier) => {
-        const state = edited({ from: 10, insert: "x" });
-        requireUnstarvedFrontier(state);
         const tr = settledState(EditorState.create({ doc: DOC, extensions: exts() })).update({
           changes: { from: 10, insert: "x" },
         });
+        requireUnstarvedFrontier(tr.state);
         expect(touchesStructuralReparse(tr)).toBe(false);
         expect(requiresFullBoundedRebuild(tr)).toBe(false);
-        return state;
+        return tr.state;
       },
     });
   });

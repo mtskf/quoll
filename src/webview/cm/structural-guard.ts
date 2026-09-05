@@ -5,10 +5,11 @@
 // block's identity can only change from WITHIN the window it recomputed. Markdown
 // block boundaries are NOT stable under edits, so `touchesStructuralReparse` is
 // the SOUND over-approximation that routes an edit which could re-shape a boundary
-// OUTSIDE that window to a FULL rebuild. Import it rather than hand-rolling a
-// second predicate; `git grep touchesStructuralReparse src/` is the live consumer
-// list, and no count is kept here because a count goes stale the next time a field
-// is added.
+// OUTSIDE that window to a FULL rebuild. Consumers import the PAIRED admission
+// test `requiresFullBoundedRebuild` (below) rather than either term on its own or
+// a hand-rolled predicate; `git grep requiresFullBoundedRebuild src/` is the live
+// consumer list, and no count is kept here because a count goes stale the next time
+// a field is added.
 //
 // Fenced-code collapse (fenced-code/fenced-code-collapse.ts) does NOT import this:
 // it keeps a NARROWER STRUCTURAL (no ATX/underscore alts) plus its own
@@ -97,11 +98,20 @@ export function isBlankLine(text: string): boolean {
  *  On a non-docChanged transaction `iterChangedRanges` yields nothing → returns false.
  *
  *  SOUND over-approximation: false full-rebuilds only cost speed; UNDER-triggering would be
- *  unsound (a stranded chevron). ACCEPTED over-approximation (perf, not soundness): SHAPE is
- *  presence-based, so editing the BODY of a line that already starts with a marker
- *  (`- item`→`- itemx`) trips a full rebuild even though structure is unchanged — a strict
- *  improvement over the pre-PR always-full-rebuild baseline; a delta-based refinement is
- *  deferred to a perf follow-up. Exported so the negative-assertion tests can call it
+ *  unsound (a stranded chevron). ACCEPTED over-approximation (perf, not soundness): SHAPE and
+ *  TABLE-DELIM are presence-based, so editing the BODY of a line that already starts with a
+ *  marker (`- item`→`- itemx`) or sits inside a table row trips a full rebuild even though
+ *  structure is unchanged. What that costs depends on the consumer's PRE-guard baseline:
+ *   - For the fold / callout consumers this guard was written for, the baseline was an
+ *     always-full rebuild, so presence-based firing is a strict improvement.
+ *   - For `image/image-field.ts` and `table/table-skeleton.ts`, which admitted on the
+ *     frontier term alone before they adopted this pair, the baseline was always-BOUNDED, so
+ *     it is a REGRESSION on the keystroke classes that now fire: typing in a list-item body,
+ *     a blockquote line, a table cell or an ATX heading, and every Enter. Measured on the
+ *     table-heavy fixtures and accepted for this PR (numbers + the scoping follow-up: PERF.md).
+ *  A delta-based / per-consumer refinement is deferred to that follow-up
+ *  (`fenced-code-collapse.ts`'s `insideBlock` + `topLevelBoundaryRisk` is the in-repo
+ *  precedent). Exported so the negative-assertion tests can call it
  *  directly (pinning that plain prose typing stays on the bounded hot path).
  *  Memoised per Transaction so every consumer shares one dual-slice scan per
  *  dispatch (one scan per dispatch under CM 6.6.x). */

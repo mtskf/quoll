@@ -56,10 +56,14 @@
 //        background-parse publication self-heals via the tree-identity branch).
 //   G3 — a change to `leadingFrontmatterEnd` flips the `from < fmEnd` gate for
 //        images near the top → full recompute.
-// The docChanged arm's admission test is `requiresFullBoundedRebuild` (shared with the
-// table fields via ../structural-guard.js), which ORs G2 above with a structural-reparse
-// check: a block boundary can re-shape OUTSIDE the changed range with the frontier staying
-// COMPLETE, which G2 alone cannot see. Rationale + the check itself live in that file.
+// The docChanged arm's admission test is the shared `requiresFullBoundedRebuild`
+// (../structural-guard.js — every changed-range-bounded field routes through it), which ORs
+// G2 above with a structural-reparse check: a block boundary can re-shape OUTSIDE the
+// changed range with the frontier staying COMPLETE, which G2 alone cannot see. Rationale +
+// the check itself live in that file. ⚠️ PERF: that structural term is PRESENCE-based over
+// the whole changed line, so typing in the body of a list item, a blockquote line, a table
+// cell or an ATX heading — and every Enter — now takes the full walk this field's bounding
+// exists to avoid. Measured and accepted, not free: see PERF.md.
 // A reused widget whose document position SHIFTED is reconstructed with the new
 // docFrom (cheap: same alt/safeUrl/slice, NO re-parse). The small pure leaf
 // helpers (mergeIntervals / lineExpandWithNeighbours / intersects /

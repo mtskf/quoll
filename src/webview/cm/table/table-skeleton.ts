@@ -19,12 +19,17 @@
 // toggle adjacent to a table merges/splits it or (un)absorbs a trailing
 // paragraph WITHOUT touching the table's own bytes; lezer also overshoots a
 // table's `to` into a following non-blank paragraph —
-// [[quoll-lezer-table-to-overshoots-trailing-line]]); G2 (`!syntaxTreeAvailable`
-// → full walk; the later background-parse publication, a `!docChanged`
-// tree-identity change, full-walks again to self-heal); G-STRUCT
-// (`touchesStructuralReparse` → full walk; a structural reparse re-shapes
-// boundaries outside the span with a complete frontier). Soundness (bounded ≡
-// fullWalk, ranges AND parses) is pinned by cm-table-skeleton.test.ts.
+// [[quoll-lezer-table-to-overshoots-trailing-line]]); and, on the docChanged arm,
+// the shared admission test `requiresFullBoundedRebuild` (../structural-guard.js),
+// which ORs G2 (an incomplete post-edit frontier → full walk; the later
+// background-parse publication, a `!docChanged` tree-identity change, full-walks
+// again to self-heal) with G-STRUCT (a structural reparse re-shapes boundaries
+// outside the span with a complete frontier → full walk). ⚠️ PERF: G-STRUCT is
+// PRESENCE-based over the whole changed line, and a table cell's line always
+// carries a `|`, so typing INSIDE a cell takes the full walk — exactly the
+// whole-tree materialisation + per-table `parseTable` this field exists to skip.
+// Measured and accepted, not free: see PERF.md. Soundness (bounded ≡ fullWalk,
+// ranges AND parses) is pinned by cm-table-skeleton.test.ts.
 
 import { syntaxTree } from "@codemirror/language";
 import { type EditorState, StateField, type Transaction } from "@codemirror/state";

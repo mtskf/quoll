@@ -7,8 +7,8 @@
 // frontier half of the admission test and no structural-reparse half, because the OR was
 // hand-spelled per field instead of named once. `requiresFullBoundedRebuild` (structural-
 // guard.ts) is the fix — a single function that pairs both terms so a caller cannot invoke
-// one without the other. This guard is what stops a SIXTH hand-spelled copy (or a fifth
-// one that gets a term wrong) from reappearing: if a new bounded field writes
+// one without the other. This guard is what stops a NEW hand-spelled copy (or one that
+// gets a term wrong) from reappearing: if a new bounded field writes
 // `!syntaxTreeAvailable(tr.state, tr.state.doc.length)` directly instead of importing the
 // helper, this test names the offending file.
 //

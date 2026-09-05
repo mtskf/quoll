@@ -440,8 +440,12 @@ describe("imageBlockField bounded ≡ full", () => {
   // touch. This pins two; it does not census the file.
   //
   // The G3 rows are deliberately NOT here: their edit moves `leadingFrontmatterEnd`, so the
-  // field returns from the frontmatter arm ABOVE this condition and never consults it. A
-  // `toBe(false)` on one of them would be green and would mean nothing.
+  // field returns from the frontmatter arm ABOVE this condition and never consults it —
+  // whatever the structural verdict happens to be. It is not uniformly false either: the
+  // rows that open or close a `---` fence cross a newline delta or start their slice with a
+  // container marker, so they read `true`; only the row that shifts a frontmatter VALUE's
+  // length is structurally inert. Pinning either verdict here would say nothing about which
+  // arm the field takes.
   it("these docChanged cases still reach the bounded arm", () => {
     const boundedRows = [
       { doc: "plain text\n", change: { from: 0, to: 10, insert: IMG } },

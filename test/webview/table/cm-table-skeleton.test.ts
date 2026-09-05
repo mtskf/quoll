@@ -146,8 +146,16 @@ describe("tableSkeletonField bounded ≡ fullWalk", () => {
     it(c.name, () => checkEquivalence(c.initial, c.edits));
   }
 
-  // R2-2: explicit bounded-path pin — NO settling after the edit, so a broken
-  // boundedUpdate (e.g. dropping a reused range) cannot be masked by self-heal.
+  // R2-2: explicit bounded-path pins — NO settling after the edit, so a broken
+  // boundedUpdate cannot be masked by self-heal.
+  //
+  // `boundedUpdate` has two halves and one anchor reaches only one of them, so there are
+  // two. The REUSE half maps a model whose range falls outside the span; the RE-WALK half
+  // runs `collectTableRanges` + `buildModel` over the span and lets that result win on a
+  // colliding node `from`. An anchor whose span holds no `Table` node exercises the first
+  // and leaves the second running on an empty range (measured: zero nodes collected), which
+  // is green whatever the re-walk does. The sibling below puts the span ON a table so the
+  // model is NOT reused and the re-walk is what produces it.
   it("exercises the bounded path without self-heal masking (revert-check anchor)", () => {
     const doc = `${T}\n\nprose\n\n${T}`;
     withUnstarvedFrontier({
@@ -172,6 +180,33 @@ describe("tableSkeletonField bounded ≡ fullWalk", () => {
         // run throws.
         requireUnstarvedFrontier();
         // boundedUpdate's output, pre-self-heal, must equal the full walk.
+        expect([...view.state.field(tableSkeletonField)]).toEqual(
+          freshOracle(view.state.doc.toString())
+        );
+      },
+    });
+  });
+
+  it("exercises the bounded RE-WALK arm without self-heal masking (revert-check anchor)", () => {
+    // The table starts on the line directly below the edit, so G1's ±1-line expansion pulls
+    // the whole table into the span (measured: span `{0,16}` against a model at `{7,36}`).
+    // The reuse test therefore fails for that model and the only thing that can put it back
+    // is the span re-walk — `collectTableRanges` over the interval plus `buildModel`. Same
+    // offset as the settled `insert a char in prose immediately before a table` row above;
+    // what this adds is the absence of settling, so the self-heal cannot supply the answer.
+    const doc = `intro\n${T}`;
+    withUnstarvedFrontier({
+      what: "boundedUpdate's pre-self-heal output on the re-walk arm",
+      mount: (parent) =>
+        settledMount({ state: EditorState.create({ doc, extensions: exts() }), parent }, 10_000),
+      observe: (view, requireUnstarvedFrontier) => {
+        // End of `intro` — prose, so the changed line carries no `|` and no structural
+        // shape. The negative pin keeps that from drifting into the FULL arm, where this
+        // would compare a full walk against a full walk.
+        const tr = view.state.update({ changes: { from: 5, insert: "X" } });
+        expect(touchesStructuralReparse(tr)).toBe(false);
+        view.dispatch(tr);
+        requireUnstarvedFrontier();
         expect([...view.state.field(tableSkeletonField)]).toEqual(
           freshOracle(view.state.doc.toString())
         );
