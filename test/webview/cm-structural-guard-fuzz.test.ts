@@ -214,7 +214,7 @@ describe("structural guard — differential fuzz over the real consumers", () =>
     // and would hold for the OLD presence arm too, so it says nothing about this change.
     // An edit on a `|`-bearing line INSIDE a table taking the bounded path is possible ONLY
     // under the narrowed arm (Codex finding 4). Measured across six seeds
-    // (0x5eed1234 / 1 / 2 / 3 / 999 / 424242, 2026-09-06): 72 / 94 / 86 / 104 / 97 / 72
+    // (0x5eed1234 / 1 / 2 / 3 / 999 / 424242, 2026-09-06): 77 / 96 / 94 / 95 / 79 / 81
     // under the shipped arm and 0 at EVERY seed with the arm reverted to the pre-PR
     // `oldSlice.includes("|") || newSlice.includes("|")` — under which this assertion reds.
     // The threshold sits below the lowest shipped reading so seed noise cannot red it, and

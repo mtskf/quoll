@@ -5,7 +5,7 @@
 // evidence that reaches this bug class — the counterexample that broke rev. 1 of the
 // plan needs a specific document geometry AND one specific offset, which a uniform
 // random fuzz finds with probability ≈ 0 (Fable review, 2026-09-05). It is also cheap:
-// the whole enumeration parses in a few seconds (93,672 edits at the time of writing;
+// the whole enumeration parses in a few seconds (91,471 edits at the time of writing;
 // the oracle prints its own `checked=` count, which is the number to trust over this one).
 export const SHAPE_CORPUS: readonly string[] = [
   // plain tables, trailing-paragraph overshoot, adjacent tables
@@ -81,11 +81,15 @@ export const SHAPE_CORPUS: readonly string[] = [
   // HEADER's basePos and `[0, basePos)` of the delimiter line is table BYTES (`|-`), neither
   // whitespace nor a container marker. A one-character edit inside the delimiter run
   // (`|--|-` → `|- |-`) deletes the whole `Table` while an offset-0 four-fact delta stays
-  // constant — reproduced against the real parser, 2026-09-06. These are the geometries the
-  // PRESENCE retreat in `tableRowShapeChanged` exists for; without them the oracle is blind
-  // to it (no other entry pairs an indented header with a less-indented delimiter).
+  // constant — reproduced against the real parser, 2026-09-06. This is the geometry the
+  // PRESENCE retreat in `tableRowShapeChanged` exists for, and ONE line carries it: no other
+  // entry pairs an indented header with a less-indented delimiter. Measured, so it stays at
+  // one: revert the retreat to the pre-2026-09-06 four-fact delta AND drop the Unicode
+  // whitespace from ALPHABET (which isolates this class from the `\s`-vs-`skipSpace` one),
+  // and the oracle reports 4 residuals, ALL of them on THIS document. A second
+  // lazy-continuation document was tried and dropped again — 2,201 extra enumerated edits,
+  // and no class it was the only carrier of (ablation, 2026-09-06).
   "- l\n  h | e\n|--|-\n  r1\n  r2\n",
-  "- item one\n  head | er\n|---|--\n  row\n\ntail\n",
   // Setext next to a table, images, headings, fence, callout, HTML block
   "prose lead\n| a | b |\n|---|---|\nsetext under\n===\n",
   "![alt](img.png)\n\n| a | b |\n|---|---|\n\n- ![in list](x.png)\n\n![tail](y.png)\n",
@@ -132,7 +136,6 @@ const ALPHABET = [
 ] as const;
 
 export interface SingleCharEdit {
-  before: string;
   after: string;
   /** The ENUMERATED edit offset — `changes: { from: pos, to: pos + deleted.length,
    *  insert: inserted }`. Carried rather than re-derived by the consumer: a first-difference
@@ -150,7 +153,6 @@ export function forEachSingleCharEdit(doc: string, visit: (e: SingleCharEdit) =>
   for (let pos = 0; pos <= doc.length; pos++) {
     for (const ch of ALPHABET) {
       visit({
-        before: doc,
         after: doc.slice(0, pos) + ch + doc.slice(pos),
         pos,
         inserted: ch,
@@ -161,7 +163,6 @@ export function forEachSingleCharEdit(doc: string, visit: (e: SingleCharEdit) =>
   for (let pos = 0; pos < doc.length; pos++) {
     const deleted = doc[pos] as string;
     visit({
-      before: doc,
       after: doc.slice(0, pos) + doc.slice(pos + 1),
       pos,
       inserted: "",
@@ -172,7 +173,6 @@ export function forEachSingleCharEdit(doc: string, visit: (e: SingleCharEdit) =>
         continue;
       }
       visit({
-        before: doc,
         after: doc.slice(0, pos) + ch + doc.slice(pos + 1),
         pos,
         inserted: ch,

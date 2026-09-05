@@ -115,10 +115,7 @@ export function isBlankLine(text: string): boolean {
 // parser and not for the mirror), and that is harmless solely because SHAPE's container
 // alternation `(?:^|\n)[ \t]*(?:[-*+]|\d{1,9}[.)]|>)` fires on every such line before this
 // arm is reached. ⚠️ Narrowing SHAPE's container alternation would make these mirrors unsound
-// without touching them; see the SHAPE follow-up entry in TODO.md. ⚠️ And do NOT
-// "simplify" either DELTA clause with an over-approximating predicate the way a PRESENCE test
-// may be simplified: pinning both sides of a comparison to `true` erases the flip it exists to
-// detect, turning a cheap false positive into a MISSED rebuild. Drift in any of this is
+// without touching them; see the SHAPE follow-up entry in TODO.md. Drift in any of this is
 // caught by cm-lezer-table-internals-tripwire.test.ts; the arm's overall soundness is
 // measured by cm-structural-guard-exhaustive.test.ts.
 
@@ -194,9 +191,7 @@ function tableRowCellCount(text: string): number {
  *  above: PRESENCE on a delimiter-shaped line (neither the `line.next` gate nor `endLeaf`'s
  *  borrowed `basePos` is a function of that line alone), a DELTA on every other line (where
  *  the only offset dependency left is the whitespace one SHAPE's container alternation
- *  covers). An ordinary cell row is not delimiter-shaped, so typing inside a cell stays on the
- *  bounded path this narrowing exists for — with the `| - | - |` edge noted above. Exported
- *  so the shape test can pin it directly. */
+ *  covers). Exported so the shape test can pin it directly. */
 export function tableRowShapeChanged(oldText: string, newText: string): boolean {
   return (
     isTableDelimiterShaped(oldText) ||

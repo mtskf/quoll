@@ -32,11 +32,11 @@
 // flips one of the facts lezer forms a `Table` from: it is delimiter-SHAPED on
 // either side (read RAW or `[ \t]`-stripped, a PRESENCE retreat), its
 // unescaped-pipe presence flips (a `\|` escape in prose or in a cell), or its
-// `parseRow` cell count changes. G-STRUCT's OTHER arm (SHAPE) is still presence-based, so
-// a list-item body, a blockquote line, an ATX heading, or any Enter still takes
-// the full walk regardless of this field. Measured and accepted, not free: see
-// PERF.md. Soundness (bounded ≡ fullWalk, ranges AND parses) is pinned by
-// cm-table-skeleton.test.ts.
+// `parseRow` cell count changes. G-STRUCT's OTHER arm (SHAPE) is still
+// presence-based, so a list-item body, a blockquote line, an ATX heading, or any
+// Enter still takes the full walk regardless of this field. Measured and accepted,
+// not free: see PERF.md. Soundness (bounded ≡ fullWalk, ranges AND parses) is
+// pinned by cm-table-skeleton.test.ts.
 
 import { syntaxTree } from "@codemirror/language";
 import { type EditorState, StateField, type Transaction } from "@codemirror/state";

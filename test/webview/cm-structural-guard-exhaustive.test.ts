@@ -21,7 +21,11 @@ import { describe, expect, it } from "vitest";
 import { quollMarkdownLanguage } from "../../src/webview/cm/markdown.js";
 import { touchesStructuralReparse } from "../../src/webview/cm/structural-guard.js";
 import { settledState } from "./helpers/settled-state.js";
-import { forEachSingleCharEdit, SHAPE_CORPUS } from "./helpers/table-shape-corpus.js";
+import {
+  forEachSingleCharEdit,
+  SHAPE_CORPUS,
+  type SingleCharEdit,
+} from "./helpers/table-shape-corpus.js";
 
 // The block node kinds the six bounded consumers key their reused records on.
 const WATCHED = new Set([
@@ -80,9 +84,9 @@ function blockIdentity(doc: string): string {
  *  (`state.update()` does not mutate the base), and `touchesStructuralReparse` reads only
  *  `tr.changes` / `tr.startState.doc` / `tr.state.doc` — never the syntax tree — so
  *  re-settling it per edit bought nothing and cost one full parse per enumerated edit. */
-function armsFire(base: EditorState, pos: number, delLen: number, insert: string) {
-  const tr = base.update({ changes: { from: pos, to: pos + delLen, insert } });
-  return touchesStructuralReparse(tr);
+function armsFire(base: EditorState, e: SingleCharEdit): boolean {
+  const changes = { from: e.pos, to: e.pos + e.deleted.length, insert: e.inserted };
+  return touchesStructuralReparse(base.update({ changes }));
 }
 
 describe("touchesStructuralReparse — bounded-exhaustive differential oracle", () => {
@@ -94,7 +98,7 @@ describe("touchesStructuralReparse — bounded-exhaustive differential oracle", 
       const before = blockIdentity(doc);
       const base = settledState(EditorState.create({ doc, extensions: [quollMarkdownLanguage()] }));
       forEachSingleCharEdit(doc, (e) => {
-        const fired = armsFire(base, e.pos, e.deleted.length, e.inserted);
+        const fired = armsFire(base, e);
         checked++;
         if (fired) {
           return;
