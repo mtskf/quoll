@@ -2,6 +2,12 @@
 
 All notable changes to Quoll are documented here.
 
+## 0.1.77 — 2026-09-05
+
+### Fixed
+
+- The copy button on a code block no longer hangs over the block's top edge and its rounded corner. It sat too high on blocks without a language tag, and on code blocks nested inside a quote, whenever the cursor was outside the block.
+
 ## 0.1.76 — 2026-08-23
 
 ### Fixed
