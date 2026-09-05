@@ -1008,12 +1008,14 @@ export const quollCopyButtonTheme = EditorView.theme(copyButtonThemeSpec);
 // Conceal/reveal geometry: in the revealed state the controls share the open fence
 // line's padding box with the bar → aligned. In the concealed state the controls
 // sit in the zero-height `-fence-hidden` row while the bar rides the migrated
-// first-body-line; that row lacks the line's transparent alignment borders, so two
-// :has(+ …) / descendant rules re-add the gap-y (vertical, see concealedGapAnchor)
-// and the 6px column inset (horizontal) offsets so the fence-hidden controls land on
-// the strip in both states (PR #246 adjacency precedent). Separate EditorView.theme
-// for the same unlayered-override reason as copyButtonThemeSpec; exported plain so
-// the picker suite pins the contract.
+// first-body-line; that row lacks the line's transparent alignment borders, so
+// three re-add rules restore it: two `:has(+ …)` selector lists — one per control
+// (copy button, label) — for the vertical gap-y offset (see concealedGapAnchor),
+// plus one descendant rule for the label's 6px horizontal column inset. Together
+// they land the fence-hidden controls on the strip in both states (PR #246
+// adjacency precedent). Separate EditorView.theme for the same unlayered-override
+// reason as copyButtonThemeSpec; exported plain so the picker suite pins the
+// contract.
 
 /** Selector for a CONCEALED open fence's header controls that must be pushed back
  *  down by the panel's EXTERNAL --quoll-block-gap-y top border.
