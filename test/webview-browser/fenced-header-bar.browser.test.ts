@@ -143,7 +143,7 @@ function paintedPanelTop(view: EditorView, control: HTMLElement): number {
   const lines = [...view.contentDOM.querySelectorAll<HTMLElement>(".cm-line")];
   const anchor = control.closest(".cm-line") as HTMLElement | null;
   for (let i = anchor === null ? 0 : lines.indexOf(anchor); i < lines.length; i++) {
-    const line = lines[i] as HTMLElement;
+    const line = lines[i];
     if (line.classList.contains("quoll-fenced-code-open")) {
       return (
         line.getBoundingClientRect().top + Number.parseFloat(getComputedStyle(line).borderTopWidth)
@@ -172,7 +172,7 @@ describe("copy button sits INSIDE the painted panel top in every concealed nesti
   // Each case is a doc whose caret parks OUTSIDE every fenced block (reading mode →
   // concealed fences), except where the name says otherwise. The bug this pins was
   // concealed-only: revealed anchors are the bordered open line itself.
-  const cases: Array<{ name: string; doc: string; caret?: number; expected?: number }> = [
+  const cases: Array<{ name: string; doc: string; caret?: number }> = [
     { name: "bare block, concealed (the reported bug)", doc: "```\nconst a = 1;\n```\n\npara" },
     { name: "language-tagged block, concealed", doc: "```js\nconst a = 1;\n```\n\npara" },
     { name: "bare block, revealed", doc: "```\nconst a = 1;\n```\n\npara", caret: 2 },
