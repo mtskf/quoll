@@ -111,9 +111,11 @@ export function isBlankLine(text: string): boolean {
  *     full-walk cost was measured on its own fixtures and accepted for this PR — separately,
  *     because the two cost curves differ in SHAPE: the table field's grows with document
  *     size (its full walk re-runs `parseTable` per node), the image field's is essentially
- *     flat (its walk only re-collects nodes and reuses alt/safeUrl/slice). Sharing this
- *     guard and this trigger set does NOT imply sharing a cost, so neither number may be
- *     inferred from the other. Numbers: PERF.md; scoping follow-up: TODO.md.
+ *     flat — for a reason that was NOT isolated. It is specifically NOT reuse: the image
+ *     field's full walk re-derives alt/safeUrl/slice fresh per node (`buildRange` takes no
+ *     `prev`); the reuse lives only on `computeBounded`'s position-shift branch. Sharing
+ *     this guard and this trigger set does NOT imply sharing a cost, so neither number may
+ *     be inferred from the other. Numbers: PERF.md; scoping follow-up: TODO.md.
  *  A delta-based / per-consumer refinement is deferred to that follow-up
  *  (`fenced-code-collapse.ts`'s `insideBlock` + `topLevelBoundaryRisk` is the in-repo
  *  precedent). Exported so the negative-assertion tests can call it

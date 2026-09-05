@@ -190,10 +190,12 @@ describe("tableSkeletonField bounded ≡ fullWalk", () => {
   it("exercises the bounded RE-WALK arm without self-heal masking (revert-check anchor)", () => {
     // The table starts on the line directly below the edit, so G1's ±1-line expansion pulls
     // the table's FIRST LINE into the span (measured: span `{0,16}` against a model at
-    // `{7,36}`). That is enough on both sides: the mapped model intersects the span (and the
-    // change also boundary-touches its `from`), so it is not reused; and `collectTableRanges`
-    // returns every Table node OVERLAPPING the interval — not only contained ones — so the
-    // span re-walk plus `buildModel` rebuilds the whole model. Same
+    // `{7,36}`). That is enough on both sides: the mapped model intersects the span, so it
+    // is not reused — and that term is the ONLY thing carrying this side here, because the
+    // sibling `touchesRange` guard measures `false` (the insert ends at old offset 5, one
+    // short of the old model's `from` of 6, and CM's `touchesRange` needs `end >= from`);
+    // and `collectTableRanges` returns every Table node OVERLAPPING the interval — not only
+    // contained ones — so the span re-walk plus `buildModel` rebuilds the whole model. Same
     // offset as the settled `insert a char in prose immediately before a table` row above;
     // what this adds is the absence of settling, so the self-heal cannot supply the answer.
     const doc = `intro\n${T}`;
