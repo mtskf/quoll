@@ -574,6 +574,74 @@ describe("createRevertRescueWiring — alive tab-close rescue", () => {
     expect(t.dispatched).toContain(42); // alive path still reseeds
   });
 
+  // The remaining nullable combination on this path: the content read WORKED (so
+  // the compare says diverged) while the version getter died — leaving nothing to
+  // resync TO. Log, do not dispatch; a fabricated version would be posted as an
+  // authoritative document label.
+  it("diverged with an UNOBSERVED version logs but dispatches no resync", async () => {
+    const t = wire();
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    vi.spyOn(workspace, "applyEdit").mockImplementation(async () => {
+      t.doc.text = "SOMETHING ELSE"; // != the restore content → diverged
+      t.doc.versionThrows = true;
+      return true;
+    });
+    armRevert(t);
+    t.fireTabClose();
+    await flush();
+
+    expect(t.dispatched).toEqual([]); // no version → nothing to resync to
+    expect(t.showErrors).toEqual([]); // a divergence with an ok apply is not a failure
+    expect(warnSpy).toHaveBeenCalled();
+  });
+
+  // A VERSION-only read failure keeps the tag `applied` (the CONTENT was
+  // verified), so a tag-keyed warn would be silent here while the reducer path
+  // logs it. Still a silent SUCCESS for the user — but visible for triage.
+  it("a VERSION-only read failure warns on the rescue path too (symmetry with the reducer path)", async () => {
+    const t = wire();
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    vi.spyOn(workspace, "applyEdit").mockImplementation(async () => {
+      t.doc.text = "DIRTY"; // the restore LANDS → the content compare says applied
+      t.doc.versionThrows = true; // only the version getter dies; getText still works
+      return true;
+    });
+    armRevert(t);
+    t.fireTabClose();
+    await flush();
+
+    expect(t.showErrors).toEqual([]);
+    expect(t.dispatched).toEqual([]);
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining("post-apply verification read failed"),
+      expect.anything()
+    );
+  });
+
+  // The `.catch` arm's own stringification must be TOTAL: if describing the
+  // failure throws, the restore's only user-visible signal disappears — on the
+  // path whose whole job is to be the last line of defence.
+  it("a hostile Error.message in the rejection arm still toasts and reseeds", async () => {
+    const t = wire();
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const hostile = new Error("prefix boom");
+    Object.defineProperty(hostile, "message", {
+      get: () => ({
+        toString() {
+          throw new Error("message boom");
+        },
+      }),
+    });
+    t.doc.eolThrows = hostile;
+    t.doc.version = 42;
+    armRevert(t);
+    t.fireTabClose();
+    await flush();
+
+    expect(t.showErrors.length).toBe(1); // the toast survived
+    expect(t.dispatched).toContain(42); // and so did the reseed
+  });
+
   it("skips the alive rescue when already disposed", async () => {
     const t = wire();
     const applySpy = vi.spyOn(workspace, "applyEdit");
