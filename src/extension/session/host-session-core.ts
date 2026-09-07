@@ -175,7 +175,12 @@ export type HostSessionEvent =
       // Plan S6 (finding #7): the verified write executor detected that the
       // landed content differs from the intended content on an `ok` apply — a
       // stale-offset splice (S5: desktop MISPLACES) OR an external edit that won
-      // the apply→settle race. Undefined/false = clean apply. When true the
+      // the apply→settle race. Undefined/false = no divergence was DETECTED,
+      // which is TWO states, not one: a clean apply (the compare ran and matched)
+      // OR an UNVERIFIED settlement (`appliedUnverified`, `currentContent === null`)
+      // where no compare could run at all. The separate `observed === null`
+      // handling below, not this flag, is what covers the second — do not read a
+      // `false` here as proof of a clean apply and drop it as redundant. When true the
       // settlement routes through the ok-but-mismatch convergence shape (epoch++
       // + authoritative resync + a distinct diverged log, NO error toast — a
       // deliberate conflict resolution must not read as "save failed"). It is a

@@ -66,9 +66,14 @@ export interface DocumentWriteAdapter {
  *  threw so the divergence check could not run). The session wrapper and the
  *  rescue map 1:1 from these (see callers). */
 export type DocumentWriteTag =
-  | "applied" // apply ok, landed content === intended → maps to reducer `ok`
+  // ⚠️ "pipeline ok" means the pipeline COMPLETED without failing, NOT that an
+  // apply landed: the no-op short-circuit reaches `applied` / `appliedUnverified`
+  // without ever calling `build` or `apply` (see `settle`'s ⚠️ note below), so on
+  // that path there is no landing and no compare. `diverged` is the exception —
+  // it is only reachable through a compare that actually ran.
+  | "applied" // pipeline ok, settled content === intended (or nothing to apply) → reducer `ok`
   | "diverged" // apply ok, landed content !== intended → `ok` + divergedAfterApply
-  | "appliedUnverified" // apply ok, the settle-time CONTENT read threw → `ok`, UNVERIFIED
+  | "appliedUnverified" // pipeline ok, the settle-time CONTENT read threw → `ok`, UNVERIFIED
   | "applyRefused" // apply resolved false → reducer `refused`
   | "buildThrew" // build() threw → reducer `constructThrew`
   | "applyThrew" // apply() threw synchronously → reducer `applyThrew`

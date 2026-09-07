@@ -417,11 +417,21 @@ export function createEffectExecutor(deps: EffectExecutorDeps): EffectExecutor {
       // two-argument `.then(onFulfilled, onRejected)`, and `onRejected` never sees
       // `onFulfilled`'s throw (same limitation stated at `readCanWrite` above, and
       // the repo-wide "Update loop guard" invariant). That is exactly why the
-      // fulfilment arm's throw sources are neutralised AT THE SOURCE instead:
-      // `readCanWrite` is guarded, `errorMessage` is guarded, and the reseed's
-      // `buildSeedDocument` is guarded inside `runEffects`. Anything still able to
-      // throw up there strands the lock, so do not add one on the assumption that
-      // this arm catches it.
+      // fulfilment arm's throw sources are neutralised AT THE SOURCE instead — and
+      // the consequence of an unguarded one differs by WHERE it sits:
+      //   - BEFORE `deps.dispatch` (`readCanWrite`, evaluated while building the
+      //     event object): the throw skips the dispatch entirely, so
+      //     `applyEditSettled` never fires and the WRITE LOCK IS STRANDED.
+      //   - INSIDE `runEffects` (the reseed's `buildSeedDocument`, the settlement
+      //     `showError`): the panel commits the reduced state BEFORE running
+      //     effects, so the lock is already released; a throw there costs an
+      //     unhandled rejection plus the abandoned rest of the effect list and the
+      //     skipped post-`runEffects` `editSettledBarrier.settle(...)` — see the
+      //     `case "showError"` comment, which states the same thing.
+      // Do not add an unguarded call in either place on the assumption that this
+      // arm catches it. (`errorMessage` is guarded too, but it belongs to THIS
+      // arm — its only call site is the dispatch below, inside this arm's own
+      // `try` — not to the fulfilment one; see its definition.)
       // Without this arm the rejection is left UNHANDLED by `void`
       // (`void` does not catch — it only discards the promise reference),
       // `applyEditSettled` never fires, and `pendingApplyBaseVersion` — which ONLY

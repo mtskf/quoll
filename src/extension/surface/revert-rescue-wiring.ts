@@ -227,10 +227,13 @@ export function createRevertRescueWiring(deps: RevertRescueWiringDeps): RevertRe
     void executeDocumentWrite(writeAdapter, content)
       .then((outcome) => {
         // Keyed on `settleReadFailure`, NOT on the `appliedUnverified` tag: a
-        // VERSION-only read failure keeps the tag `applied` (the content WAS
-        // verified) while still costing us the version to resync to, so a
-        // tag-keyed warn would leave that partial loss silent here while the
-        // reducer path logs it.
+        // VERSION-only read failure never downgrades the tag, so a tag-keyed warn
+        // would be silent for `diverged` + an unread version — precisely the case
+        // where the diverged arm below skips its resync for want of a version to
+        // resync to. (It would be silent for `applied` + an unread version too,
+        // but that costs nothing HERE: this module's `applied` arm is a bare
+        // `return` that never resyncs and never reads `settledVersion`. The
+        // reducer path is where a missing version on `applied` actually bites.)
         //
         // SPLIT BY OUTCOME FAMILY, exactly as effect-executor's pair of warns is,
         // and for the same reason: the failure family (applyRefused / applyThrew /

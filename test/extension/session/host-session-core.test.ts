@@ -67,7 +67,9 @@ const settled = (over: Partial<Extract<HostSessionEvent, { type: "applyEditSettl
     currentContent: "cur",
     // Canonical pre-apply snapshot (non-ok epoch baseline). Defaults equal to
     // currentContent so a non-ok settlement reads as "no foreign bytes" unless a
-    // test overrides it — mirrors the executor passing "" on the OK hot path.
+    // test overrides it. NOTE: the executor passes the REAL canonical snapshot on
+    // every RESOLVED settlement, ok and non-ok alike; the inert "" placeholder
+    // exists ONLY on the pipeline-REJECTION arm, whose currentContent is null.
     preApplyContent: "cur",
     ...over,
   }) as const;
