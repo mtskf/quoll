@@ -16,8 +16,12 @@
 // hazard lives INSIDE the applyEdit RPC and ext-host model lag (S5 verdict:
 // desktop MISPLACES a stale-offset splice, LEARNING.md 2026-07-25), visible
 // only AFTER the apply settles. This layer cannot un-land a bad splice nor
-// restore bytes it clobbered; it detects the divergence (up to a coincidental
-// byte-match escape) and lets every caller converge on one authoritative state.
+// restore bytes it clobbered; it detects the divergence and lets every caller
+// converge on one authoritative state. TWO escapes from that detection, both
+// reported honestly rather than hidden: a wrong splice whose final bytes
+// COINCIDENTALLY equal the intended bytes (reported `applied` — indistinguishable
+// by bytes), and a settle-time content read that THROWS, where no compare runs at
+// all (reported `appliedUnverified` — landed, unverified, never `diverged`).
 //
 // The adapter is the ONLY VS Code touch, so this module stays `vscode`-free and
 // unit-testable against a fake. Every read/build/apply is injected; the module
@@ -80,7 +84,20 @@ export type DocumentWriteTag =
  *  rather than reading a fabricated value as a verified one.
  *  `message` (why the WRITE failed) is present only on the throw/reject tags;
  *  `settleReadFailure` (why the VERIFICATION is missing) is orthogonal to it and
- *  can accompany ANY tag. */
+ *  can accompany ANY tag.
+ *
+ *  ⚠️ The tag↔observation correlation is enforced at RUNTIME, not by this type.
+ *  `{ tag: "applied", settledContent: null }` is representable here; two lines in
+ *  `settle()`/`executeDocumentWrite` are what keep it from being CONSTRUCTED — the
+ *  `applied → appliedUnverified` downgrade, and the `settledContent === null`
+ *  early return that skips the divergence compare. Both are covered by tests
+ *  (`execute-write.test.ts`'s "settle() is TOTAL" describe goes red if either is
+ *  removed), so the gap is compile-time enforcement only. Making it structural
+ *  means splitting this into a discriminated union (a content-observed arm that
+ *  excludes `appliedUnverified`, an unobserved arm that excludes
+ *  `applied`/`diverged` and requires `settleReadFailure`) — deliberately deferred:
+ *  it is an exported type and the change ripples into every consumer and test
+ *  fake, which is its own PR. */
 export interface DocumentWriteOutcome {
   readonly tag: DocumentWriteTag;
   readonly intendedContent: string;
@@ -141,9 +158,14 @@ export async function executeDocumentWrite(
 
   // Read the settled snapshot + tag the outcome. Wrapped in the `host:settle-
   // verify` perf stage (the canonical settled read is the O(n) cost the S3a
-  // gate measured). For `applied`/`diverged` the caller passes the resolved tag
-  // after comparing; for the failure tags the settled read is the unchanged (or
-  // partially-changed) document.
+  // gate measured). Callers pass a PROVISIONAL tag, never a resolved one — there
+  // is no "compare, then call `settle`" flow in this module, and `settle` is
+  // never called with `"diverged"` at all. Two things resolve it afterwards:
+  // `settle` itself downgrades `applied → appliedUnverified` when the content read
+  // threw (see the ⚠️ note below), and the CALL SITE re-tags `diverged` with a
+  // `{ ...settled, tag: "diverged" }` spread once it has both bytes to compare.
+  // For the failure tags the settled read is the unchanged (or partially-changed)
+  // document.
   //
   // TOTAL by construction: both verification reads are individually guarded. A
   // throw here used to reject the WHOLE pipeline, and since `ok = true` the apply
@@ -210,7 +232,9 @@ export async function executeDocumentWrite(
   // canonical currentContent compare; only a mixed-EOL literal-buffer match
   // could reach here). Settle `applied` with the UNCHANGED document WITHOUT
   // submitting an empty WorkspaceEdit (the ok/refused of an empty edit is not
-  // API-guaranteed). settledContent === intendedContent here, so never diverged.
+  // API-guaranteed). Never `diverged`: this path runs no compare at all. It yields
+  // `applied`, or `appliedUnverified` if the settle-time content read throws — the
+  // arrangement that makes `appliedUnverified` reachable with NOTHING applied.
   if (span.from === span.to && span.insert.length === 0) {
     return settle("applied");
   }

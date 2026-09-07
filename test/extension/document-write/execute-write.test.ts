@@ -83,16 +83,21 @@ function makeFake(opts: FakeOptions) {
   return { adapter, calls, d };
 }
 
-/** Assert the outcome carries all four verification-time snapshots. The two
- *  PRE-apply ones are always observed (they are taken in the synchronous prefix);
- *  the two SETTLE-time ones are `null` when their read threw — NOT OBSERVED, never
- *  fabricated. The observed-value contract is not relaxed by this: the happy-path
- *  describes above keep explicit `toBe(...)` assertions on both settled fields. */
+/** Assert the outcome carries all four verification-time snapshots, OBSERVED.
+ *  ⚠️ Deliberately STRICT on the two settle-time fields. Accepting `null` here
+ *  would vacate the contract this helper exists for: every call site below runs
+ *  with WORKING settle reads, so `null` from any of them means the executor
+ *  stopped reading the settled document for that tag — the observation the whole
+ *  outcome shape is built around. (Measured: with a nullable-tolerant helper,
+ *  nulling both settle snapshots for every non-`applied` tag leaves the suite
+ *  green.) The NOT-OBSERVED cases are real, and they are pinned SEPARATELY with
+ *  explicit `toBeNull()` in the "settle is TOTAL" describe, where a read is
+ *  actually made to throw. */
 function expectFourSnapshots(o: DocumentWriteOutcome): void {
   expect(typeof o.intendedContent).toBe("string");
   expect(typeof o.preApplyContent).toBe("string");
-  expect(o.settledContent === null || typeof o.settledContent === "string").toBe(true);
-  expect(o.settledVersion === null || typeof o.settledVersion === "number").toBe(true);
+  expect(typeof o.settledContent).toBe("string");
+  expect(typeof o.settledVersion).toBe("number");
 }
 
 describe("executeDocumentWrite — tag mapping", () => {
@@ -360,6 +365,7 @@ describe("executeDocumentWrite — settle() is TOTAL (a verification read must n
     const { adapter } = makeFake({ initial: "old", onApply: land("new"), readThrowsValue: exotic });
     const o = await executeDocumentWrite(adapter, "new");
     expect(o.tag).toBe("appliedUnverified");
+    expect(o.settledContent).toBeNull(); // NOT OBSERVED, even for an exotic throw
     expect(o.settleReadFailure).toContain("unknown error");
   });
 
@@ -370,6 +376,27 @@ describe("executeDocumentWrite — settle() is TOTAL (a verification read must n
       readThrows: { canonical: true, version: true },
     });
     await expect(executeDocumentWrite(adapter, "new")).resolves.toBeDefined();
+  });
+
+  it("the NO-OP short-circuit also produces appliedUnverified when the settle read throws", async () => {
+    // The claim "`appliedUnverified` does NOT mean an apply landed" is load-bearing
+    // in three comments (execute-write's `settle`, effect-executor's
+    // `toApplyEditOutcome`, revert-rescue-wiring's `appliedUnverified` arm), all of
+    // which tell callers how to read the tag — and every OTHER appliedUnverified
+    // test in this file goes through a real apply. This is the arrangement that
+    // makes the claim true: the no-op short-circuit reaches `settle("applied")`
+    // WITHOUT submitting an edit at all, so the downgrade fires with nothing
+    // applied.
+    const { adapter, calls } = makeFake({
+      initial: "same",
+      readThrows: { canonical: true },
+    });
+    const o = await executeDocumentWrite(adapter, "same");
+    expect(o.tag).toBe("appliedUnverified");
+    expect(o.settledContent).toBeNull();
+    expect(calls).not.toContain("build"); // nothing was ever submitted...
+    expect(calls).not.toContain("apply"); // ...so the tag is not a landing claim
+    expect(o.message).toBeUndefined(); // and it is not a failure either
   });
 
   it("an UNVERIFIED landing is never re-tagged diverged", async () => {
