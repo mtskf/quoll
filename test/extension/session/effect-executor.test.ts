@@ -288,28 +288,51 @@ describe("effect-executor runApplyEdit (wrapper mapping)", () => {
 
   // Settlement is the write lock's ONLY release valve (host-session-core clears
   // `pendingApplyBaseVersion` on `applyEditSettled` and nowhere else but
-  // dispose), so BOTH promise arms must reach `dispatch`. execute-write documents
-  // its reads as non-throwing but takes them OUTSIDE its try blocks, so a seam
-  // that breaks that assumption rejects the whole pipeline — previously left
+  // dispose), so BOTH promise arms must reach `dispatch`. execute-write GUARDS its
+  // two settle-time verification reads individually now, so the surviving
+  // rejection source is its SYNCHRONOUS prefix (`readText` / `canonicalize`) —
+  // which runs before anything can land, so a rejection there really does
+  // describe a write that never happened. Previously such a rejection was left
   // unhandled by the bare `void ….then(onFulfilled)` (`void` discards the promise
   // reference, it does not catch) and the lock was held for the session.
-  it("pipeline rejection (settle-time read throws) STILL settles, as a non-ok outcome", async () => {
+  it("pipeline rejection (synchronous-prefix read throws) STILL settles, as a non-ok outcome", async () => {
     const dispatch = await runApply({
-      readCanonical: () => {
-        throw new Error("boom-settle");
+      readText: () => {
+        throw new Error("boom-read");
       },
     });
     expect(dispatch).toHaveBeenCalledWith(
       expect.objectContaining({
         type: "applyEditSettled",
-        outcome: expect.objectContaining({ kind: "rejected", message: "boom-settle" }),
-        // Empty snapshots are SAFE only because the outcome is non-ok: `canDrain`
-        // requires `ok` so they never reach `decideEdit`, and the non-ok
-        // foreign-bytes check compares these two against each other (equal → no
-        // spurious epoch bump).
-        currentContent: "",
+        outcome: expect.objectContaining({ kind: "rejected", message: "boom-read" }),
+        // NOT OBSERVED — nothing was read, so the settlement says so rather than
+        // fabricating bytes. Safe because the outcome is non-ok (`canDrain`
+        // requires `ok`, so it never reaches `decideEdit`) and because the
+        // foreign-bytes check reads `null` as "not foreign" → no spurious epoch
+        // bump.
+        currentContent: null,
         preApplyContent: "",
         canWrite: false,
+      })
+    );
+  });
+
+  // A settle-time read failure after a LANDED apply is the OPPOSITE case: the
+  // pipeline resolves, and mapping it to a failure kind would toast "Failed to
+  // save" for a write that succeeded.
+  it("a settle-time read throw settles as ok/UNVERIFIED, never as a rejection", async () => {
+    const dispatch = await runApply({
+      readCanonical: () => {
+        throw new Error("boom-settle");
+      },
+      readVersion: () => 7,
+    });
+    expect(dispatch).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "applyEditSettled",
+        outcome: { kind: "ok", documentVersion: 7 },
+        currentContent: null,
+        divergedAfterApply: false,
       })
     );
   });
@@ -344,7 +367,7 @@ describe("effect-executor runApplyEdit (wrapper mapping)", () => {
       },
     };
     const dispatch = await runApply({
-      readCanonical: () => {
+      readText: () => {
         throw hostile;
       },
     });
@@ -371,8 +394,8 @@ describe("effect-executor runApplyEdit (wrapper mapping)", () => {
     });
     const dispatch = await runApply(
       {
-        readCanonical: () => {
-          throw new Error("boom-settle");
+        readText: () => {
+          throw new Error("boom-read");
         },
       },
       { canWrite }
@@ -380,7 +403,7 @@ describe("effect-executor runApplyEdit (wrapper mapping)", () => {
     expect(dispatch).toHaveBeenCalledWith(
       expect.objectContaining({
         type: "applyEditSettled",
-        outcome: expect.objectContaining({ kind: "rejected", message: "boom-settle" }),
+        outcome: expect.objectContaining({ kind: "rejected", message: "boom-read" }),
         canWrite: false,
       })
     );

@@ -9,10 +9,26 @@
 // behind a bare `console.warn` and never written — silent, toast-free data loss
 // for that panel.
 //
-// The unit-level mapping (rejection → non-ok settlement, empty snapshots,
+// The unit-level mapping (rejection → non-ok settlement, unobserved snapshots,
 // guarded `canWrite`) is pinned in effect-executor.test.ts. THIS file wires the
 // real reducer to the real executor so the assertion is the user-visible one:
 // after a failed settlement the NEXT keystroke still reaches the document.
+//
+// SPLIT CONTRACT (since `settle()` became total). A settle-time read failure is
+// no longer a pipeline rejection, so what the user sees depends on whether the
+// WRITE failed:
+//   - the apply LANDED and only the verification read broke → an UNVERIFIED-ok
+//     settlement: the lock is released, a triage warn is logged, and there is NO
+//     "Failed to save" toast (reporting a write that succeeded as failed is the
+//     defect this file now pins against).
+//   - the write genuinely did NOT land (a refusal / a rejected apply / a throw in
+//     the synchronous prefix) → the failure family is unchanged: toast, then the
+//     authoritative reseed.
+// A SECOND, different toast exists on the correlated arrangement: when the same
+// broken seam also makes `buildSeedDocument` throw, the ack Document cannot be
+// built, and the executor emits one latched "could not re-sync" notification.
+// That is a reseed-delivery failure at another layer — never assert `h.errors`
+// is empty under `armSettleFailure(true)`; filter for the message you mean.
 
 import { describe, expect, it } from "vitest";
 
@@ -44,13 +60,38 @@ const flushSettle = async (): Promise<void> => {
 // whose settle-time canonical read can be armed to throw. `build` is the write
 // ATTEMPT probe: it runs only once the reducer has ACCEPTED an edit and issued
 // the `applyEdit` effect, so a stashed (lock-blocked) keystroke leaves no entry.
-function harness() {
+interface HarnessOptions {
+  /** `workspace.applyEdit` resolves FALSE — a genuinely failed write, so the
+   *  failure family (toast + reseed) is the expected behaviour. */
+  applyRefuses?: boolean;
+  /** The injected `showError` throws AFTER recording the attempt (models a window
+   *  API failing while the host tears down). `errorAttempts` still counts it, so a
+   *  test can distinguish "attempted" from "displayed". */
+  showErrorThrows?: boolean;
+}
+
+// `armSettleFailure` arms two different seams:
+//   "read-only" — ONLY the executor's settle-time canonical read throws, so the
+//                 reseed still builds and the webview really does get its
+//                 Document (and really could post again).
+//   true        — the CORRELATED case: the same broken seam also makes
+//                 `buildSeedDocument` throw, as it does in production where both
+//                 bottom out in `canonicalDocumentText(document)`.
+type SettleFailureMode = boolean | "read-only";
+
+function harness(options: HarnessOptions = {}) {
   const core = createHostSessionCore(ctx, { validateForWrite: okValidate });
   const doc = { version: 1, text: "" };
   const attempts: string[] = [];
   const errors: string[] = [];
   const seedBuilds: string[] = [];
-  let failSettle = false;
+  const documents: { docVersion: number; externalEpoch: number; epochGeneration: number }[] = [];
+  let errorAttempts = 0;
+  let settleFailure: SettleFailureMode = false;
+  // The span the last `build` produced — `apply` replays it against the live
+  // buffer so the fake document really LANDS the edit (version bump included),
+  // which is what makes an ok settlement carry a live version.
+  let pendingSpan: { from: number; to: number; insert: string } | null = null;
 
   let live: HostSessionState = core.initialState(doc.version);
   const dispatchEvent = createDrainingDispatcher((event: HostSessionEvent) => {
@@ -66,7 +107,13 @@ function harness() {
     dispatch: dispatchEvent,
     send: async () => true,
     recordEvent: () => {},
-    showError: (message) => errors.push(message),
+    showError: (message) => {
+      errorAttempts += 1;
+      errors.push(message);
+      if (options.showErrorThrows) {
+        throw new Error("toast failed");
+      }
+    },
     canWrite: () => true,
     // Gated on the SAME `failSettle` flag as `readCanonical` on purpose: in
     // production both bottom out in `canonicalDocumentText(document)` (the panel
@@ -79,9 +126,10 @@ function harness() {
     // putting the toast BEFORE the reseed.
     buildSeedDocument: (docVersion, externalEpoch, epochGeneration) => {
       seedBuilds.push(`v${docVersion}`);
-      if (failSettle) {
+      if (settleFailure === true) {
         throw new Error("boom-seed");
       }
+      documents.push({ docVersion, externalEpoch, epochGeneration });
       return {
         protocol: 1,
         type: "document",
@@ -113,7 +161,7 @@ function harness() {
       // calls it OUTSIDE any try — a seam that breaks that assumption (a
       // disposed document, a broken canonicaliser) rejects the whole pipeline.
       readCanonical: () => {
-        if (failSettle) {
+        if (settleFailure !== false) {
           throw new Error("boom-settle");
         }
         return doc.text;
@@ -121,9 +169,29 @@ function harness() {
       canonicalize: (text) => text,
       build: (span) => {
         attempts.push(span.insert);
+        pendingSpan = { from: span.from, to: span.to, insert: span.insert };
         return {};
       },
-      apply: async () => true,
+      // A FAITHFUL apply: it LANDS the built span into the fake buffer, bumps the
+      // version, and — mirroring revert-rescue-wiring's lock-held branch — feeds
+      // the reducer a `documentChanged` IMMEDIATELY, before resolving. VS Code
+      // fires that change event before the applyEdit promise resolves, so the
+      // reducer usually already holds the new version at settlement time.
+      apply: async () => {
+        if (options.applyRefuses) {
+          return false;
+        }
+        if (pendingSpan !== null) {
+          doc.text =
+            doc.text.slice(0, pendingSpan.from) +
+            pendingSpan.insert +
+            doc.text.slice(pendingSpan.to);
+          pendingSpan = null;
+        }
+        doc.version += 1;
+        dispatchEvent({ type: "documentChanged", documentVersion: doc.version });
+        return true;
+      },
     },
     openExternal: () => {},
   });
@@ -132,9 +200,34 @@ function harness() {
     errors,
     attempts,
     seedBuilds,
+    documents,
+    /** Every `showError` CALL, counted even when the injected toast throws — so a
+     *  test can tell "attempted once" from "displayed once". */
+    get errorAttempts() {
+      return errorAttempts;
+    },
     state: () => live,
-    armSettleFailure: (on: boolean) => {
-      failSettle = on;
+    /** The live document version the fake buffer is actually at. */
+    docVersion: () => doc.version,
+    /** The identity triple a webview would have from the last seed — what
+     *  `edit-sync` stamps its buffered keystrokes with. */
+    identity: () => ({
+      docVersion: live.lastAppliedDocVersion,
+      externalEpoch: live.externalEpoch,
+      epochGeneration: live.epochGeneration,
+    }),
+    armSettleFailure: (mode: SettleFailureMode) => {
+      settleFailure = mode;
+    },
+    /** A FOREIGN edit, on the panel's real path for one: mutate the buffer, bump
+     *  the version, and dispatch `documentChanged` LOCK-FREE. This is the only
+     *  honest way to re-trigger a reseed after a correlated failure — the webview
+     *  never got its Document, so its single-flight `editInFlight` is still set
+     *  and a real one could not post another Edit. */
+    externalEdit: (text: string) => {
+      doc.text = text;
+      doc.version += 1;
+      dispatchEvent({ type: "documentChanged", documentVersion: doc.version });
     },
     // One keystroke, shaped as the panel shapes it: base = the version the
     // webview last received, document snapshots read live at dispatch time.
@@ -151,52 +244,57 @@ function harness() {
   };
 }
 
-describe("applyEdit settlement: a rejected write pipeline releases the host write lock", () => {
+describe("applyEdit settlement: a settle-time read failure releases the host write lock", () => {
   it("the NEXT edit after a settle-time throw is still ATTEMPTED as a write", async () => {
     const h = harness();
 
-    // Edit #1 — the apply lands but the settle-time canonical read throws, so
-    // `executeDocumentWrite` REJECTS.
-    h.armSettleFailure(true);
+    // Edit #1 — the apply LANDS and only the settle-time canonical read throws.
+    // "read-only" (not the correlated arm) on purpose: the reseed still builds, so
+    // the webview really does get its Document and really could post again, which
+    // is what makes the second keystroke below a sequence a user can produce.
+    h.armSettleFailure("read-only");
     h.type("a");
     await flushSettle();
     expect(h.attempts).toEqual(["a"]);
 
-    // The failed settlement must still release the lock. Under the old one-armed
-    // `.then` the rejection was swallowed and this stayed held forever.
+    // The unverified settlement must still release the lock. Under the old
+    // one-armed `.then` the rejection was swallowed and this stayed held forever.
     expect(isWriteLockHeld(h.state())).toBe(false);
 
-    // ...and the user is TOLD the save failed (a non-ok settlement's toast),
-    // rather than the panel silently going read-only.
-    expect(h.errors.some((m) => m.includes("Failed to save"))).toBe(true);
+    // ...and the user is NOT told the save failed: the apply landed, only its
+    // verification did not. Reporting a successful write as failed is the defect
+    // this file now pins against.
+    expect(h.errors.filter((m) => m.includes("Failed to save"))).toEqual([]);
 
     // Edit #2 — the settle-time read works again. THE assertion: with the lock
     // stranded this keystroke is stashed behind a bare console.warn and never
     // written, so `build` never runs and `attempts` stays at just ["a"].
-    //
-    // The subject here is deliberately narrow — that a second write is ATTEMPTED
-    // at all. It does NOT settle cleanly: `apply` is a stub that never mutates
-    // `doc`, so at edit #2 the pre-apply text is still "" and the settle-time
-    // canonical read returns "" while the intended content is "ab" → the write
-    // pipeline tags the outcome `diverged` (an ok apply whose landed bytes
-    // differ), the core bumps `externalEpoch` and logs the divergence.
-    //
-    // That stub is also why the probe reads `["a", "ab"]` and not `["a", "b"]`:
-    // `build` records the minimal SPAN's insert, which is computed against the
-    // (never-updated) pre-apply text. A fake that actually applied would record
-    // the delta "b" instead — and if it also advanced `doc.version` the way VS
-    // Code does, edit #2 would stop being attempted at all: a non-ok settlement
-    // leaves `lastAppliedDocVersion` at 1 (which is what `type()` sends as its
-    // base, standing in for the version the fake webview last acked) while the
-    // live version resyncs to 2, so `decideEdit` would rule it `stale` before
-    // reaching `build`. A faithful harness therefore has to model the webview's
-    // acked version too — a bigger change than this regression is worth pinning.
+    // `build` records the minimal SPAN's insert, so a faithful apply (which the
+    // harness now performs) makes the second entry the delta "b".
     h.armSettleFailure(false);
     h.type("ab");
     await flushSettle();
 
-    expect(h.attempts).toEqual(["a", "ab"]);
+    expect(h.attempts).toEqual(["a", "b"]);
     expect(isWriteLockHeld(h.state())).toBe(false);
+  });
+
+  // The CORRELATED arrangement of the same subject. Here the broken seam also
+  // makes `buildSeedDocument` throw, so no Document reached the webview and its
+  // single-flight `editInFlight` is still set — a real webview could not post
+  // another Edit, so this test deliberately does NOT type again (that would
+  // "prove" a recovery the user cannot reach). What it pins is what IS reachable:
+  // the lock is released and a landed write is not reported as a failed save.
+  it("a correlated settle-time throw releases the lock without a save-failure toast", async () => {
+    const h = harness();
+
+    h.armSettleFailure(true);
+    h.type("a");
+    await flushSettle();
+
+    expect(h.attempts).toEqual(["a"]);
+    expect(isWriteLockHeld(h.state())).toBe(false);
+    expect(h.errors.filter((m) => m.includes("Failed to save"))).toEqual([]);
   });
 
   // The toast is the ONLY user-visible signal that a save failed, and the
@@ -209,7 +307,10 @@ describe("applyEdit settlement: a rejected write pipeline releases the host writ
   // effects run) but the user is told nothing: the silent-failure mode this whole
   // file exists to prevent.
   it("still reports the failure when the reseed throws on the same broken seam", async () => {
-    const h = harness();
+    // Arranged over a GENUINELY failed apply now: a settle-read failure alone is
+    // no longer a save failure, so it emits no toast to order against. The broken
+    // read is kept armed because it is what makes `buildSeedDocument` throw.
+    const h = harness({ applyRefuses: true });
 
     h.armSettleFailure(true);
     h.type("a");
@@ -217,27 +318,28 @@ describe("applyEdit settlement: a rejected write pipeline releases the host writ
 
     // Non-vacuity: the reseed really was attempted (and really threw) on this
     // path. If the harness ever stops routing `buildSeedDocument` through
-    // `failSettle`, this goes red rather than passing for the wrong reason.
+    // `settleFailure`, this goes red rather than passing for the wrong reason.
     expect(h.seedBuilds.length).toBeGreaterThan(0);
 
-    expect(h.errors.filter((m) => m.includes("Failed to save"))).toHaveLength(1);
+    expect(h.errors.filter((m) => m.includes("could not save"))).toHaveLength(1);
     expect(isWriteLockHeld(h.state())).toBe(false);
   });
 
-  // The rejection arm settles with a PAIRED `""`/`""` (`currentContent` /
-  // `preApplyContent`) because the read seams are what threw. That pairing is
-  // load-bearing: the non-ok foreign-bytes check compares the two against each
-  // other, so equal empties mean "nothing foreign intervened" and the epoch must
-  // NOT advance. Filling in real bytes on one side only would bump it, and the
-  // reseed that follows would invalidate the webview's replay buffer — dropping
-  // the very keystrokes the toast tells the user to retry.
+  // A settlement whose content read threw carries an UNOBSERVED (`null`)
+  // snapshot. That is load-bearing: the foreign-bytes check reads "not observed"
+  // as NOT FOREIGN, so the epoch must NOT advance. Fabricating bytes instead
+  // would bump it, and the reseed that follows would invalidate the webview's
+  // replay buffer — dropping the very keystrokes the toast tells the user to
+  // retry.
   //
   // The stash is not what makes the epoch check observable (`foreignAtSettle`
   // never reads it) — it is here to drive the OTHER half of the same settlement:
   // the release path with a stash present, which must drop the undrainable
   // keystroke, clear the lock, and still surface exactly one toast.
-  it("a stash waiting at a rejected settlement is released without a spurious epoch bump", async () => {
-    const h = harness();
+  it("a stash waiting at a failed settlement is released without a spurious epoch bump", async () => {
+    // A genuinely failed apply: the toast below belongs to the FAILURE, not to
+    // the unobserved snapshot (an unverified landing emits none).
+    const h = harness({ applyRefuses: true });
 
     h.armSettleFailure(true);
     h.type("a");
@@ -260,6 +362,6 @@ describe("applyEdit settlement: a rejected write pipeline releases the host writ
     expect(isWriteLockHeld(h.state())).toBe(false);
     // A failed save never drains the stash — it surfaces as the toast instead,
     // exactly once.
-    expect(h.errors.filter((m) => m.includes("Failed to save"))).toHaveLength(1);
+    expect(h.errors.filter((m) => m.includes("could not save"))).toHaveLength(1);
   });
 });

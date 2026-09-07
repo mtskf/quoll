@@ -12,14 +12,41 @@ const flush = (): Promise<void> => new Promise((resolve) => setImmediate(resolve
 // asserted — the WorkspaceEdit build is exercised by e2e). isDirty is settable.
 // `getTextThrows` models the document tearing down mid-restore (the dispose-time
 // rescue's real hazard): every subsequent read — including the executor's
-// settle-time canonical read — throws, rejecting the restore pipeline.
+// settle-time canonical read — throws. Since `settle()` became total that no
+// longer rejects the pipeline; it resolves as an UNVERIFIED restore instead.
+// Two narrower breakages exist so the remaining seams can be driven apart:
+//   `versionThrows` — ONLY the `version` getter dies (hence the getter/private
+//                     field pair), so the content read still verifies and the tag
+//                     stays `applied`/`diverged` with an unobserved version.
+//   `eolThrows`     — the `eol` getter throws, breaking `canonicalizeText(text,
+//                     document.eol)` in the executor's SYNCHRONOUS prefix. That is
+//                     the arm's only remaining rejection source, so it is what
+//                     keeps the `.catch` non-vacuous. Set it to an `Error` to
+//                     control the thrown value, or `true` for a default one.
 function makeDoc() {
   return {
     text: "DISK",
-    version: 1,
+    _version: 1,
     isDirty: false,
     getTextThrows: false,
+    versionThrows: false,
+    eolThrows: false as boolean | Error,
     uri: { scheme: "file", toString: () => "file:///doc.md" },
+    get version(): number {
+      if (this.versionThrows) {
+        throw new Error("version is gone");
+      }
+      return this._version;
+    },
+    set version(v: number) {
+      this._version = v;
+    },
+    get eol(): number {
+      if (this.eolThrows) {
+        throw this.eolThrows instanceof Error ? this.eolThrows : new Error("eol is gone");
+      }
+      return 1;
+    },
     getText(): string {
       if (this.getTextThrows) {
         throw new Error("document is gone");
@@ -125,9 +152,10 @@ function armRevert(t: Wired): void {
 }
 
 // Mock applyEdit so the RPC resolves OK but the document dies while it is in
-// flight: every later read — including the executor's settle-time canonical read,
-// which runs OUTSIDE its try blocks — throws, so the restore pipeline REJECTS.
-// The shared arrangement for the rejection-arm tests.
+// flight: every later read — including the executor's settle-time canonical read
+// — throws. The apply has already LANDED by then, so this is a missing
+// VERIFICATION, not a failed restore: the pipeline resolves `appliedUnverified`.
+// The shared arrangement for the unverified-restore tests.
 function mockApplyThenKillDocument(t: Wired): void {
   vi.spyOn(workspace, "applyEdit").mockImplementation(async () => {
     t.doc.getTextThrows = true;
@@ -239,13 +267,13 @@ describe("createRevertRescueWiring — dispose rescue", () => {
     expect(t.dispatched).toEqual([]); // NO resync — disposed, no webview to converge
   });
 
-  // The rejection arm on the path it exists for: the dispose-time rescue runs
-  // while the document is tearing down, so the executor's settle-time reads can
-  // throw. That must surface as a failed restore (toast), not vanish into an
-  // unhandled rejection that reads as a successful one.
-  it("dispose-path settle-time THROW (pipeline rejects) still toasts the failed restore", async () => {
+  // The dispose-time rescue runs while the document is tearing down, so the
+  // executor's settle-time reads can throw. The apply has already LANDED by then,
+  // so this is a missing VERIFICATION and must NOT be reported as a failed
+  // restore — but it must not be silent either.
+  it("dispose-path settle-time THROW is an UNVERIFIED restore: warns, NO toast", async () => {
     const t = wire();
-    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
     mockApplyThenKillDocument(t);
     armRevert(t);
 
@@ -255,8 +283,8 @@ describe("createRevertRescueWiring — dispose rescue", () => {
     t.wiring.rescueOnDispose();
     await flush();
 
-    expect(errSpy).toHaveBeenCalled();
-    expect(t.showErrors.length).toBe(1);
+    expect(warnSpy).toHaveBeenCalled(); // visible for triage
+    expect(t.showErrors).toEqual([]); // the restore LANDED — not a failure
     expect(t.dispatched).toEqual([]); // dispose path never reseeds (no onFailure)
   });
 
@@ -491,38 +519,59 @@ describe("createRevertRescueWiring — alive tab-close rescue", () => {
     expect(t.showErrors[0]).toContain("boom");
   });
 
-  // REJECTION ARM. The restore pipeline is fire-and-forget on the data-loss path,
-  // and its settle-time reads run outside the executor's own try blocks — so a
-  // document torn down while the applyEdit RPC is in flight rejects the whole
-  // pipeline. Without a rejection arm that becomes an unhandled rejection: no
-  // toast, no reseed, and the user reads a failed restore as a successful one.
-  it("on a settle-time THROW (pipeline rejects) shows an error AND reseeds via onFailure", async () => {
+  // A document torn down while the applyEdit RPC is in flight breaks the
+  // settle-time reads AFTER the restore has landed. That is an UNVERIFIED restore,
+  // not a failed one: no toast, no `onFailure` reseed — the bytes are in the live
+  // editor and the restore's own change event reposts them.
+  it("on a settle-time THROW the alive path treats it as UNVERIFIED: no toast, no onFailure", async () => {
     const t = wire();
-    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
     t.doc.version = 42;
     mockApplyThenKillDocument(t);
     armRevert(t);
     t.fireTabClose();
     await flush();
 
-    expect(errSpy).toHaveBeenCalled(); // the rejection is logged, not swallowed
-    expect(t.showErrors.length).toBe(1);
-    expect(t.showErrors[0]).toContain("document is gone"); // detail carried for triage
-    expect(t.dispatched).toContain(42); // alive path still reseeds
+    expect(warnSpy).toHaveBeenCalled(); // visible for triage, not swallowed
+    expect(t.showErrors).toEqual([]);
+    expect(t.dispatched).toEqual([]); // no resync of our own
   });
 
   it("a THROWING showError in the rejection arm still lets onFailure reseed (deps guarded individually)", async () => {
+    // Re-arranged over a GENUINE failure (applyEdit resolves false): the
+    // individual-guard property is real, but a settle-read failure no longer
+    // reaches the failure family, so it would no longer toast at all.
     const t = wire();
     vi.spyOn(console, "error").mockImplementation(() => {});
     t.doc.version = 42;
     t.showErrorThrows.value = true; // the toast itself fails
-    mockApplyThenKillDocument(t);
+    vi.spyOn(workspace, "applyEdit").mockResolvedValue(false);
     armRevert(t);
     t.fireTabClose();
     await flush();
 
     expect(t.showErrors.length).toBe(1); // the toast was attempted
     expect(t.dispatched).toContain(42); // and its throw did NOT swallow the reseed
+  });
+
+  // The pipeline's `.catch` arm is now reachable ONLY from the executor's
+  // synchronous prefix (`readText` / `canonicalize`) — the settle-time reads are
+  // individually guarded and can no longer reject. Without this pin the arm's
+  // guards go untested and vacuous. `eolThrows` breaks
+  // `canonicalizeText(text, document.eol)` in that prefix, which precedes the
+  // apply — so the restore genuinely did not land and the failure family applies.
+  it("the pipeline's rejection arm still toasts and reseeds (synchronous-prefix throw)", async () => {
+    const t = wire();
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    armRevert(t);
+    t.doc.version = 42;
+    t.doc.eolThrows = true;
+    t.fireTabClose();
+    await flush();
+
+    expect(errSpy).toHaveBeenCalled(); // the rejection is logged, not swallowed
+    expect(t.showErrors.length).toBe(1);
+    expect(t.dispatched).toContain(42); // alive path still reseeds
   });
 
   it("skips the alive rescue when already disposed", async () => {
