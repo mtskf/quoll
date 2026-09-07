@@ -44,6 +44,7 @@ import {
   isWriteLockHeld,
 } from "../../../src/extension/session/host-session-core.js";
 import type { HostToWebview } from "../../../src/shared/protocol.js";
+import { createEditSync } from "../../../src/webview/cm/edit-sync.js";
 
 const ctx = { uriString: "file:///x.md", fsPath: "/x.md" };
 const okValidate = () => ({ ok: true }) as const;
@@ -483,5 +484,104 @@ describe("applyEdit settlement: the correlated reseed failure stays contained", 
     } finally {
       errorSpy.mockRestore();
     }
+  });
+});
+
+// CROSS-LAYER pins. The identity pair the host ACTUALLY emits is fed into a REAL
+// `createEditSync` holding a buffered keystroke. A bumped `externalEpoch` trips
+// edit-sync's `recordedEpoch > buf.epoch` rule and DROPS that buffer — the data
+// loss this whole change exists to prevent.
+describe("applyEdit settlement: a landed write is acked, not toasted", () => {
+  it("a settle-time read failure after a LANDED apply is not reported as a failed save", async () => {
+    const h = harness();
+    h.armSettleFailure("read-only");
+    h.type("a");
+    await flushSettle();
+    expect(h.errors).toEqual([]); // the apply landed — no false alarm
+    expect(isWriteLockHeld(h.state())).toBe(false);
+    expect(h.documents.at(-1)?.docVersion).toBe(h.docVersion()); // the ack carries the LIVE version
+  });
+
+  it("a genuinely FAILED apply still toasts, even when the settle read also throws", async () => {
+    // Non-vacuity guard for the expectation flipped above.
+    const h = harness({ applyRefuses: true });
+    h.armSettleFailure("read-only");
+    h.type("a");
+    await flushSettle();
+    expect(h.errors.some((m) => m.includes("could not save"))).toBe(true);
+  });
+
+  it("the webview replay buffer SURVIVES a settle-time read failure", async () => {
+    const h = harness();
+    let webviewDoc = "";
+    const posted: { content: string; baseDocVersion: number }[] = [];
+    const sync = createEditSync({
+      getDoc: () => webviewDoc,
+      post: (content, baseDocVersion) => {
+        posted.push({ content, baseDocVersion });
+        return true;
+      },
+      scheduleFlush: (run) => run(),
+    });
+
+    const seed = h.identity();
+    // VACUITY HAZARD: if the seed snapshot carried no identity pair, edit-sync's
+    // "both absent -> replay" legacy arm would replay REGARDLESS of any epoch move
+    // and this test would pass for the wrong reason. Pin that the pair is present.
+    expect(seed.epochGeneration).toEqual(expect.any(Number));
+    expect(seed.externalEpoch).toEqual(expect.any(Number));
+    sync.onHostSnapshot(seed.docVersion, true, seed.externalEpoch, seed.epochGeneration);
+
+    webviewDoc = "a";
+    sync.onLocalChange(); // posts edit #1 -> in flight
+    webviewDoc = "ab";
+    sync.onLocalChange(); // BUFFERED behind it, stamped with the current pair
+    expect(posted).toEqual([{ content: "a", baseDocVersion: seed.docVersion }]);
+
+    h.armSettleFailure("read-only");
+    h.type("a");
+    await flushSettle();
+
+    const ack = h.documents.at(-1);
+    if (ack === undefined) {
+      throw new Error("the settlement posted no Document");
+    }
+    sync.onHostSnapshot(ack.docVersion, true, ack.externalEpoch, ack.epochGeneration);
+    sync.onReducerCommit(false);
+
+    expect(posted).toEqual([
+      { content: "a", baseDocVersion: seed.docVersion },
+      { content: "ab", baseDocVersion: ack.docVersion }, // THE assertion: it replayed
+    ]);
+    expect(ack.externalEpoch).toBe(seed.externalEpoch); // ...and why
+  });
+
+  it("NEGATIVE pin: the same wiring DOES drop the buffer when the epoch advances", () => {
+    // Proves the pin above is not passing through edit-sync's pair-less legacy arm:
+    // identical shape, but the ack carries `externalEpoch + 1`.
+    const h = harness();
+    let webviewDoc = "";
+    const posted: { content: string; baseDocVersion: number }[] = [];
+    const sync = createEditSync({
+      getDoc: () => webviewDoc,
+      post: (content, baseDocVersion) => {
+        posted.push({ content, baseDocVersion });
+        return true;
+      },
+      scheduleFlush: (run) => run(),
+    });
+
+    const seed = h.identity();
+    sync.onHostSnapshot(seed.docVersion, true, seed.externalEpoch, seed.epochGeneration);
+    webviewDoc = "a";
+    sync.onLocalChange();
+    webviewDoc = "ab";
+    sync.onLocalChange();
+    expect(posted).toHaveLength(1);
+
+    sync.onHostSnapshot(seed.docVersion + 1, true, seed.externalEpoch + 1, seed.epochGeneration);
+    sync.onReducerCommit(false);
+
+    expect(posted).toHaveLength(1); // no replay
   });
 });
