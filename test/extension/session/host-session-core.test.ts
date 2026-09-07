@@ -312,6 +312,64 @@ describe("host-session-core: applyEditSettled", () => {
     expect(r.effects).toEqual([]);
     expect(r.state).toEqual(disposed);
   });
+
+  // The settle-time verification reads are individually guarded in
+  // `execute-write.ts`, so an UNOBSERVED snapshot arrives here as `null` rather
+  // than as a pipeline rejection. Each of the three decisions that used to derive
+  // its safety from an observed snapshot must now answer for `null`, and each
+  // answers CONSERVATIVELY.
+  it("an ok settlement with an UNKNOWN version leaves lastAppliedDocVersion alone (never rewinds, never fabricates)", () => {
+    // NO documentChanged is injected here on purpose: the production resync that
+    // usually raises the version is another module's incidental behaviour, so the
+    // reducer must be correct without it. What it must NOT do is move the version
+    // on an unobserved read. (A `-1` sentinel would be assigned VERBATIM — the
+    // settlement self-advance is exempt from `resyncLiveVersion`'s `max` clamp —
+    // and rewind the version.)
+    const r = core.transition(
+      locked,
+      settled({ outcome: { kind: "ok", documentVersion: null }, currentContent: null })
+    );
+    expect(r.state.lastAppliedDocVersion).toBe(1); // unchanged — not rewound, not invented
+    expect(r.state.externalEpoch).toBe(locked.externalEpoch); // unobserved is NOT foreign
+    expect(isWriteLockHeld(r.state)).toBe(false); // the lock is still released
+  });
+
+  it("an UNOBSERVED settlement with a write IN FLIGHT still does not bump the epoch", () => {
+    // The distinguishing arrangement: `inFlightContent` is set, so the ok-branch
+    // foreign-bytes compare is live and only the `observed !== null` guard keeps
+    // it from firing. Treating a missing snapshot as foreign is the REJECTED
+    // variant — it bumps the epoch and edit-sync drops the webview's replay
+    // buffer. The no-op short-circuit lands here too: it reaches an unverified
+    // `ok` WITHOUT submitting an apply, so the version legitimately does not move
+    // and there is no evidence of anything foreign.
+    const inFlight = base({
+      pendingApplyBaseVersion: 1,
+      lastAppliedDocVersion: 1,
+      inFlightContent: "edit1",
+    });
+    const r = core.transition(
+      inFlight,
+      settled({ outcome: { kind: "ok", documentVersion: null }, currentContent: null })
+    );
+    expect(r.state.externalEpoch).toBe(inFlight.externalEpoch);
+    expect(r.state.lastAppliedDocVersion).toBe(1);
+  });
+
+  it("a DIVERGED settlement with an unobserved version bumps the epoch but does not move the version", () => {
+    // The remaining nullable combination: `readVersion` threw while the CONTENT
+    // read worked, so the divergence verdict is real evidence (epoch++) while the
+    // version is simply unknown (no advance).
+    const r = core.transition(
+      locked,
+      settled({
+        outcome: { kind: "ok", documentVersion: null },
+        currentContent: "other",
+        divergedAfterApply: true,
+      })
+    );
+    expect(r.state.externalEpoch).toBe(locked.externalEpoch + 1);
+    expect(r.state.lastAppliedDocVersion).toBe(locked.lastAppliedDocVersion);
+  });
 });
 
 describe("host-session-core: applyEditSettled drain", () => {
@@ -371,6 +429,34 @@ describe("host-session-core: applyEditSettled drain", () => {
       },
       pDoc(5, 1),
     ]);
+  });
+
+  it("an UNOBSERVED settlement does not drain a waiting stash, and says so", () => {
+    // The drain's safety condition is an OBSERVED equality — "the settled document
+    // IS edit #1's exact result" — which is what keeps an external edit that won
+    // the apply→settle race from being clobbered by the stash. Without the
+    // observation that condition cannot be established, so the stash is dropped.
+    // The version is deliberately OBSERVED here (`documentVersion: 2`) so this
+    // isolates the CONTENT being unobserved.
+    const r = core.transition(
+      lockedWithStash("edit1", "edit1plus"),
+      settled({ outcome: { kind: "ok", documentVersion: 2 }, currentContent: null })
+    );
+    expect(r.state.pendingEdit).toBeNull(); // released
+    expect(r.effects.some((e) => e.type === "applyEdit")).toBe(false); // but NOT written
+    expect(r.effects.some((e) => e.type === "showError")).toBe(false); // not a failure
+    // ...and not silent: post-dispose the stash is the keystroke's only carrier.
+    expect(r.effects).toContainEqual({
+      type: "logWarn",
+      message:
+        "[quoll] unverified settle: pending stash dropped because the settled document could not be read",
+      detail: { stashBase: 1, settledDocVersion: 2 },
+    });
+    // An unobserved snapshot is NOT a mismatch — claiming "external edit won the
+    // race" without having read the document would be a fabricated diagnosis.
+    expect(
+      r.effects.some((e) => e.type === "logWarn" && e.message.includes("ok-but-mismatch"))
+    ).toBe(false);
   });
 
   it("non-ok outcome with a stash → NO drain, normal failure handling (stash dropped)", () => {

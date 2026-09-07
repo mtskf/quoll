@@ -337,6 +337,63 @@ describe("effect-executor runApplyEdit (wrapper mapping)", () => {
     );
   });
 
+  // The verification-loss warn is keyed on `settleReadFailure`, NOT on the
+  // `appliedUnverified` tag: a VERSION-only failure keeps the tag `applied` (the
+  // content WAS verified) while still suppressing the self-advance, so a
+  // tag-keyed warn would make that partial loss silent.
+  it("a VERSION-only read failure still warns, though the tag stays applied", async () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const dispatch = await runApply({
+        readCanonical: () => "new",
+        readVersion: () => {
+          throw new Error("boom-version");
+        },
+      });
+      expect(dispatch).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: "applyEditSettled",
+          outcome: { kind: "ok", documentVersion: null },
+          currentContent: "new", // the CONTENT was observed
+        })
+      );
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringContaining("post-apply verification read failed"),
+        expect.stringContaining("boom-version")
+      );
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  // A FAILURE tag keeps its own outcome, and its triage line must stay NEUTRAL:
+  // pairing "treating it as an UNVERIFIED save" with a "Failed to save" toast
+  // would put two contradictory claims side by side for one event.
+  it("a settle read that fails on a FAILED apply warns without claiming an unverified save", async () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const dispatch = await runApply({
+        apply: async () => false,
+        readCanonical: () => {
+          throw new Error("boom-settle");
+        },
+      });
+      expect(dispatch).toHaveBeenCalledWith(
+        expect.objectContaining({ type: "applyEditSettled", outcome: { kind: "refused" } })
+      );
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringContaining("the outcome itself is unchanged"),
+        expect.stringContaining("boom-settle")
+      );
+      expect(warnSpy).not.toHaveBeenCalledWith(
+        expect.stringContaining("UNVERIFIED save"),
+        expect.anything()
+      );
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
   it("pipeline rejection settles EVEN when disposed (stash-drain safety)", async () => {
     const dispatch = await runApply(
       {
