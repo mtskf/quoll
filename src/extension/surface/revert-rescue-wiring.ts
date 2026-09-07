@@ -167,6 +167,20 @@ export function createRevertRescueWiring(deps: RevertRescueWiringDeps): RevertRe
     }
   };
 
+  /** Total stringifier — `err.message` / `String(err)` can themselves throw for a
+   *  hostile value, and this arm is the last line of defence for a failed restore:
+   *  if describing the failure can fail, the toast and the reseed never happen.
+   *  (`execute-write.ts` has an identical module-private helper; duplicated rather
+   *  than exported so neither module grows a cross-layer dependency on the other's
+   *  internals.) */
+  const describeError = (err: unknown): string => {
+    try {
+      return String(err instanceof Error ? err.message : err);
+    } catch {
+      return "unknown error";
+    }
+  };
+
   // Terminal handling for a restore that did NOT land — shared by the failure
   // family and the rejection arm. Toast first (the user-facing signal is the one
   // guarantee that must survive), then let the ALIVE path reseed via `onFailure`
@@ -188,13 +202,19 @@ export function createRevertRescueWiring(deps: RevertRescueWiringDeps): RevertRe
   // rescue. Per-outcome policy (Plan S6, finding #8), mapping the tagged outcome
   // WITHOUT re-reading the document (the outcome carries its settled version):
   //   - applied  → SILENT success (the surviving/live editor holds the bytes).
+  //   - appliedUnverified → the pipeline COMPLETED but the settle-time content
+  //                read threw, so verification could not run. Treated exactly as
+  //                `applied` plus a triage warn — see that arm.
   //   - diverged → applyEdit landed but the document ended up holding OTHER
   //                bytes. This is NOT a failure: it can be a legitimate successor
   //                edit landing between the RPC settling and this `.then`, or a
   //                stale-offset splice. Mirror the reducer's diverged rule — log
   //                + converge via a resync (NO toast; a divergence with an ok
   //                apply must not read as "save failed"). Resync only when alive
-  //                (the dispose path has no webview left to reseed).
+  //                (the dispose path has no webview left to reseed) AND when the
+  //                settled VERSION was OBSERVED — a resync labels the
+  //                authoritative document with a version, and there is no honest
+  //                substitute for one whose read threw.
   //   - the failure family (applyRefused / applyThrew / applyRejected /
   //                buildThrew) → the restore genuinely did not land: toast + let
   //                the ALIVE path reseed via `onFailure` (the dispose path passes
@@ -206,8 +226,51 @@ export function createRevertRescueWiring(deps: RevertRescueWiringDeps): RevertRe
   const applyRestoreEdit = (content: string, onFailure?: () => void): void => {
     void executeDocumentWrite(writeAdapter, content)
       .then((outcome) => {
+        // Keyed on `settleReadFailure`, NOT on the `appliedUnverified` tag: a
+        // VERSION-only read failure never downgrades the tag, so a tag-keyed warn
+        // would be silent for `diverged` + an unread version — precisely the case
+        // where the diverged arm below skips its resync for want of a version to
+        // resync to. (It would be silent for `applied` + an unread version too,
+        // but that costs nothing HERE: this module's `applied` arm is a bare
+        // `return` that never resyncs and never reads `settledVersion`. The
+        // reducer path is where a missing version on `applied` actually bites.)
+        //
+        // SPLIT BY OUTCOME FAMILY, exactly as effect-executor's pair of warns is,
+        // and for the same reason: the failure family (applyRefused / applyThrew /
+        // applyRejected / buildThrew) also reaches `settle(...)` and can therefore
+        // carry a `settleReadFailure` — a plausible pairing, since the dispose-time
+        // teardown that breaks the read is what makes the restore fail. An
+        // unbounded "restore completed" would then be logged beside
+        // `reportRestoreFailure`'s "could not restore your unsaved changes" toast:
+        // two contradictory triage claims about one event.
+        if (outcome.settleReadFailure !== undefined) {
+          const completed =
+            outcome.tag === "applied" ||
+            outcome.tag === "appliedUnverified" ||
+            outcome.tag === "diverged";
+          console.warn(
+            completed
+              ? "[quoll] revert-rescue: restore completed but the post-apply verification read failed"
+              : `[quoll] revert-rescue: the verification read also failed on a ${outcome.tag} restore; the outcome itself is unchanged`,
+            outcome.settleReadFailure
+          );
+        }
         switch (outcome.tag) {
           case "applied":
+            return;
+          case "appliedUnverified":
+            // The restore pipeline COMPLETED without failing; only the settle-time
+            // content read did, so the post-apply verification could not run. (Not
+            // necessarily a landed apply: the no-op short-circuit — restore content
+            // already equal to the live document — reaches this tag too. Either way
+            // nothing failed, so the handling is the same.) Treat it exactly as
+            // `applied` — silent success: the surviving/live editor holds the bytes
+            // and the restore's own change event reposts the authoritative
+            // document. No toast (the restore did not fail) and no resync of our
+            // own, mirroring the `applied` arm. (This path's convergence rides the
+            // module's own change-event handler, whose lock-free `documentChanged`
+            // is pre-existing behaviour.) The warn above covers triage, consistent
+            // with the diverged arm's log-only decision.
             return;
           case "diverged":
             // applyEdit landed but the document holds OTHER bytes. Alive: converge
@@ -237,13 +300,20 @@ export function createRevertRescueWiring(deps: RevertRescueWiringDeps): RevertRe
             console.warn(
               "[quoll] revert-rescue: restore diverged after apply (racing successor edit or stale-offset splice); converging via resync"
             );
-            if (!deps.isDisposed()) {
-              // Guarded: a throwing reducer dispatch must not fall through to the
-              // `.catch` below, which would toast "could not restore" for an apply
-              // that DID land — contradicting the log-only diverged decision above.
-              runGuarded("dispatchDocumentChanged", () =>
-                deps.dispatchDocumentChanged(outcome.settledVersion)
-              );
+            {
+              // NOT OBSERVED ⇒ nothing to resync TO. A fabricated version would
+              // be posted as an authoritative document label; there is no honest
+              // substitute for a version we could not read, so log only (the warn
+              // above already fired for the failed read).
+              const settledVersion = outcome.settledVersion;
+              if (!deps.isDisposed() && settledVersion !== null) {
+                // Guarded: a throwing reducer dispatch must not fall through to the
+                // `.catch` below, which would toast "could not restore" for an apply
+                // that DID land — contradicting the log-only diverged decision above.
+                runGuarded("dispatchDocumentChanged", () =>
+                  deps.dispatchDocumentChanged(settledVersion)
+                );
+              }
             }
             return;
           case "applyRefused":
@@ -271,22 +341,27 @@ export function createRevertRescueWiring(deps: RevertRescueWiringDeps): RevertRe
         // below is about the PROMISE, so it deliberately avoids that word.)
         //
         //   (a) `executeDocumentWrite` REJECTED, so the `.then` handler never ran.
-        //       Reachable because that module runs `readText` / `canonicalize` and
-        //       its verification reads `readCanonical` / `readVersion` OUTSIDE its
-        //       own try blocks — its documented assumption that they do not throw
+        //       Its two SETTLE-time reads are individually guarded now, so they are
+        //       no longer a rejection source (a broken verification read resolves as
+        //       `appliedUnverified` / a null snapshot instead). What remains is the
+        //       SYNCHRONOUS prefix — `readText` / `canonicalize` — which still runs
+        //       outside any try; its documented assumption that those do not throw
         //       holds for a LIVE document, not one tearing down under us at dispose.
+        //       A rejection from there is honest: it precedes the apply, so nothing
+        //       landed.
         //   (b) `executeDocumentWrite` RESOLVED and the `.then` handler itself threw.
-        //       NOT a closed set, by design: it is every unguarded call reachable
-        //       from a switch case. Today that means the exhaustiveness guard's
+        //       NOT a closed set, by design: it is every unguarded call in that
+        //       handler. Today that means the exhaustiveness guard's
         //       `default: never` throw (compile-time unreachable under normal TS
-        //       builds) and the diverged arm's `deps.isDisposed()` check and
+        //       builds), the shared verification-read `console.warn` at the top,
+        //       and the diverged arm's `deps.isDisposed()` check and
         //       `console.warn`, which sit outside `runGuarded` — but a case that
         //       later grows an unguarded call joins (b) without touching this note.
         //
         // Hence the log text says only THAT the restore failed, never WHEN: a
         // (b)-family throw happened after a perfectly good write.
         console.error("[quoll] revert-rescue: restore pipeline failed", err);
-        reportRestoreFailure(err instanceof Error ? err.message : String(err), onFailure);
+        reportRestoreFailure(describeError(err), onFailure);
       });
   };
 

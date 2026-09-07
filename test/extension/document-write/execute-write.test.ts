@@ -18,6 +18,12 @@ interface FakeOptions {
   onApply?: (d: { text: string; version: number }) => boolean | Promise<boolean>;
   /** build() throws when set. */
   buildThrows?: boolean;
+  /** Break one or both SETTLE-time verification reads (the seams a tearing-down
+   *  document breaks in production). Each throws an `Error` naming itself. */
+  readThrows?: { canonical?: boolean; version?: boolean };
+  /** Throw THIS value from `readCanonical` instead of an `Error` — for the
+   *  exotic-rejection-value pin (a value whose `toString` itself raises). */
+  readThrowsValue?: unknown;
 }
 
 /** onApply that models a CLEAN landing of `text` (bumps version, resolves true). */
@@ -37,10 +43,19 @@ function makeFake(opts: FakeOptions) {
     },
     readVersion: () => {
       calls.push("readVersion");
+      if (opts.readThrows?.version) {
+        throw new Error("version boom");
+      }
       return d.version;
     },
     readCanonical: () => {
       calls.push("readCanonical");
+      if (opts.readThrowsValue !== undefined) {
+        throw opts.readThrowsValue;
+      }
+      if (opts.readThrows?.canonical) {
+        throw new Error("canonical boom");
+      }
       return d.text;
     },
     canonicalize: (t) => {
@@ -68,8 +83,16 @@ function makeFake(opts: FakeOptions) {
   return { adapter, calls, d };
 }
 
-/** Assert the outcome carries all four verification-time snapshots as strings/
- *  number (contract: every terminal outcome populates them). */
+/** Assert the outcome carries all four verification-time snapshots, OBSERVED.
+ *  ⚠️ Deliberately STRICT on the two settle-time fields. Accepting `null` here
+ *  would vacate the contract this helper exists for: every call site below runs
+ *  with WORKING settle reads, so `null` from any of them means the executor
+ *  stopped reading the settled document for that tag — the observation the whole
+ *  outcome shape is built around. (Measured: with a nullable-tolerant helper,
+ *  nulling both settle snapshots for every non-`applied` tag leaves the suite
+ *  green.) The NOT-OBSERVED cases are real, and they are pinned SEPARATELY with
+ *  explicit `toBeNull()` in the "settle is TOTAL" describe, where a read is
+ *  actually made to throw. */
 function expectFourSnapshots(o: DocumentWriteOutcome): void {
   expect(typeof o.intendedContent).toBe("string");
   expect(typeof o.preApplyContent).toBe("string");
@@ -270,5 +293,122 @@ describe("executeDocumentWrite — EOL canonicalisation is load-bearing (false-d
     // Pins the canonicalise(oldText) call — the non-ok epoch baseline depends on
     // it; a raw passthrough would mismatch the canonical settlement read.
     expect(o.preApplyContent).toBe("pre\r\napply\r\n");
+  });
+});
+
+describe("executeDocumentWrite — settle() is TOTAL (a verification read must not sink a landed write)", () => {
+  it("landed apply + readCanonical throws -> appliedUnverified at the LIVE version, no rejection", async () => {
+    const { adapter, d } = makeFake({
+      initial: "old",
+      onApply: land("new"),
+      readThrows: { canonical: true },
+    });
+    const o = await executeDocumentWrite(adapter, "new");
+    expect(o.tag).toBe("appliedUnverified");
+    expect(o.settledVersion).toBe(d.version); // the version read still worked
+    expect(o.settledContent).toBeNull(); // NOT OBSERVED — never fabricated
+    expect(o.settleReadFailure).toContain("canonical boom");
+    expect(o.message).toBeUndefined(); // an unverified landing is not a write failure
+  });
+
+  it("landed apply + readVersion throws -> settledVersion is null, never a fabricated number", async () => {
+    const { adapter } = makeFake({
+      initial: "old",
+      onApply: land("new"),
+      readThrows: { version: true },
+    });
+    const o = await executeDocumentWrite(adapter, "new");
+    expect(o.tag).toBe("applied"); // the CONTENT read worked -> verification ran
+    expect(o.settledContent).toBe("new");
+    expect(o.settledVersion).toBeNull();
+    expect(o.settleReadFailure).toContain("version boom");
+  });
+
+  it("landed apply + BOTH reads throw -> appliedUnverified, both snapshots null, both errors reported", async () => {
+    const { adapter } = makeFake({
+      initial: "old",
+      onApply: land("new"),
+      readThrows: { canonical: true, version: true },
+    });
+    const o = await executeDocumentWrite(adapter, "new");
+    expect(o.tag).toBe("appliedUnverified");
+    expect(o.settledContent).toBeNull();
+    expect(o.settledVersion).toBeNull();
+    expect(o.settleReadFailure).toContain("canonical boom");
+    expect(o.settleReadFailure).toContain("version boom");
+  });
+
+  it("a FAILED apply + a throwing settle read keeps its own tag and message", async () => {
+    const { adapter } = makeFake({
+      initial: "old",
+      onApply: () => Promise.reject(new Error("apply boom")),
+      readThrows: { canonical: true },
+    });
+    const o = await executeDocumentWrite(adapter, "new");
+    // The primary cause is the triage payload — a broken verification read must
+    // neither overwrite it nor launder a failed write as an unverified landing.
+    expect(o.tag).toBe("applyRejected");
+    expect(o.message).toContain("apply boom");
+    expect(o.settledContent).toBeNull();
+    expect(o.settleReadFailure).toContain("canonical boom");
+  });
+
+  it("a settle read that throws an EXOTIC value still resolves (the message helper is total too)", async () => {
+    // Regression pin for the second-order hole: describing the failure must not
+    // itself be able to fail. `String(err)` / `err.message` can throw for a value
+    // with a raising getter or `toString`.
+    const exotic = {
+      toString() {
+        throw new Error("toString boom");
+      },
+    };
+    const { adapter } = makeFake({ initial: "old", onApply: land("new"), readThrowsValue: exotic });
+    const o = await executeDocumentWrite(adapter, "new");
+    expect(o.tag).toBe("appliedUnverified");
+    expect(o.settledContent).toBeNull(); // NOT OBSERVED, even for an exotic throw
+    expect(o.settleReadFailure).toContain("unknown error");
+  });
+
+  it("a settle-time read failure NEVER rejects the pipeline", async () => {
+    const { adapter } = makeFake({
+      initial: "old",
+      onApply: land("new"),
+      readThrows: { canonical: true, version: true },
+    });
+    await expect(executeDocumentWrite(adapter, "new")).resolves.toBeDefined();
+  });
+
+  it("the NO-OP short-circuit also produces appliedUnverified when the settle read throws", async () => {
+    // The claim "`appliedUnverified` does NOT mean an apply landed" is load-bearing
+    // in three comments (execute-write's `settle`, effect-executor's
+    // `toApplyEditOutcome`, revert-rescue-wiring's `appliedUnverified` arm), all of
+    // which tell callers how to read the tag — and every OTHER appliedUnverified
+    // test in this file goes through a real apply. This is the arrangement that
+    // makes the claim true: the no-op short-circuit reaches `settle("applied")`
+    // WITHOUT submitting an edit at all, so the downgrade fires with nothing
+    // applied.
+    const { adapter, calls } = makeFake({
+      initial: "same",
+      readThrows: { canonical: true },
+    });
+    const o = await executeDocumentWrite(adapter, "same");
+    expect(o.tag).toBe("appliedUnverified");
+    expect(o.settledContent).toBeNull();
+    expect(calls).not.toContain("build"); // nothing was ever submitted...
+    expect(calls).not.toContain("apply"); // ...so the tag is not a landing claim
+    expect(o.message).toBeUndefined(); // and it is not a failure either
+  });
+
+  it("an UNVERIFIED landing is never re-tagged diverged", async () => {
+    // Non-vacuity for the rejected "missing snapshot => foreign" variant at its
+    // source: `diverged` forces the reducer's foreign-bytes verdict, which drops
+    // the webview replay buffer.
+    const { adapter } = makeFake({
+      initial: "old",
+      onApply: land("SOMETHING ELSE"),
+      readThrows: { canonical: true },
+    });
+    const o = await executeDocumentWrite(adapter, "new");
+    expect(o.tag).toBe("appliedUnverified");
   });
 });

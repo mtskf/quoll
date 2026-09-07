@@ -67,7 +67,9 @@ const settled = (over: Partial<Extract<HostSessionEvent, { type: "applyEditSettl
     currentContent: "cur",
     // Canonical pre-apply snapshot (non-ok epoch baseline). Defaults equal to
     // currentContent so a non-ok settlement reads as "no foreign bytes" unless a
-    // test overrides it — mirrors the executor passing "" on the OK hot path.
+    // test overrides it. NOTE: the executor passes the REAL canonical snapshot on
+    // every RESOLVED settlement, ok and non-ok alike; the inert "" placeholder
+    // exists ONLY on the pipeline-REJECTION arm, whose currentContent is null.
     preApplyContent: "cur",
     ...over,
   }) as const;
@@ -312,6 +314,64 @@ describe("host-session-core: applyEditSettled", () => {
     expect(r.effects).toEqual([]);
     expect(r.state).toEqual(disposed);
   });
+
+  // The settle-time verification reads are individually guarded in
+  // `execute-write.ts`, so an UNOBSERVED snapshot arrives here as `null` rather
+  // than as a pipeline rejection. Each of the three decisions that used to derive
+  // its safety from an observed snapshot must now answer for `null`, and each
+  // answers CONSERVATIVELY.
+  it("an ok settlement with an UNKNOWN version leaves lastAppliedDocVersion alone (never rewinds, never fabricates)", () => {
+    // NO documentChanged is injected here on purpose: the production resync that
+    // usually raises the version is another module's incidental behaviour, so the
+    // reducer must be correct without it. What it must NOT do is move the version
+    // on an unobserved read. (A `-1` sentinel would be assigned VERBATIM — the
+    // settlement self-advance is exempt from `resyncLiveVersion`'s `max` clamp —
+    // and rewind the version.)
+    const r = core.transition(
+      locked,
+      settled({ outcome: { kind: "ok", documentVersion: null }, currentContent: null })
+    );
+    expect(r.state.lastAppliedDocVersion).toBe(1); // unchanged — not rewound, not invented
+    expect(r.state.externalEpoch).toBe(locked.externalEpoch); // unobserved is NOT foreign
+    expect(isWriteLockHeld(r.state)).toBe(false); // the lock is still released
+  });
+
+  it("an UNOBSERVED settlement with a write IN FLIGHT still does not bump the epoch", () => {
+    // The distinguishing arrangement: `inFlightContent` is set, so the ok-branch
+    // foreign-bytes compare is live and only the `observed !== null` guard keeps
+    // it from firing. Treating a missing snapshot as foreign is the REJECTED
+    // variant — it bumps the epoch and edit-sync drops the webview's replay
+    // buffer. The no-op short-circuit lands here too: it reaches an unverified
+    // `ok` WITHOUT submitting an apply, so the version legitimately does not move
+    // and there is no evidence of anything foreign.
+    const inFlight = base({
+      pendingApplyBaseVersion: 1,
+      lastAppliedDocVersion: 1,
+      inFlightContent: "edit1",
+    });
+    const r = core.transition(
+      inFlight,
+      settled({ outcome: { kind: "ok", documentVersion: null }, currentContent: null })
+    );
+    expect(r.state.externalEpoch).toBe(inFlight.externalEpoch);
+    expect(r.state.lastAppliedDocVersion).toBe(1);
+  });
+
+  it("a DIVERGED settlement with an unobserved version bumps the epoch but does not move the version", () => {
+    // The remaining nullable combination: `readVersion` threw while the CONTENT
+    // read worked, so the divergence verdict is real evidence (epoch++) while the
+    // version is simply unknown (no advance).
+    const r = core.transition(
+      locked,
+      settled({
+        outcome: { kind: "ok", documentVersion: null },
+        currentContent: "other",
+        divergedAfterApply: true,
+      })
+    );
+    expect(r.state.externalEpoch).toBe(locked.externalEpoch + 1);
+    expect(r.state.lastAppliedDocVersion).toBe(locked.lastAppliedDocVersion);
+  });
 });
 
 describe("host-session-core: applyEditSettled drain", () => {
@@ -371,6 +431,34 @@ describe("host-session-core: applyEditSettled drain", () => {
       },
       pDoc(5, 1),
     ]);
+  });
+
+  it("an UNOBSERVED settlement does not drain a waiting stash, and says so", () => {
+    // The drain's safety condition is an OBSERVED equality — "the settled document
+    // IS edit #1's exact result" — which is what keeps an external edit that won
+    // the apply→settle race from being clobbered by the stash. Without the
+    // observation that condition cannot be established, so the stash is dropped.
+    // The version is deliberately OBSERVED here (`documentVersion: 2`) so this
+    // isolates the CONTENT being unobserved.
+    const r = core.transition(
+      lockedWithStash("edit1", "edit1plus"),
+      settled({ outcome: { kind: "ok", documentVersion: 2 }, currentContent: null })
+    );
+    expect(r.state.pendingEdit).toBeNull(); // released
+    expect(r.effects.some((e) => e.type === "applyEdit")).toBe(false); // but NOT written
+    expect(r.effects.some((e) => e.type === "showError")).toBe(false); // not a failure
+    // ...and not silent: post-dispose the stash is the keystroke's only carrier.
+    expect(r.effects).toContainEqual({
+      type: "logWarn",
+      message:
+        "[quoll] unverified settle: pending stash dropped because the settled document could not be read",
+      detail: { stashBase: 1, settledDocVersion: 2 },
+    });
+    // An unobserved snapshot is NOT a mismatch — claiming "external edit won the
+    // race" without having read the document would be a fabricated diagnosis.
+    expect(
+      r.effects.some((e) => e.type === "logWarn" && e.message.includes("ok-but-mismatch"))
+    ).toBe(false);
   });
 
   it("non-ok outcome with a stash → NO drain, normal failure handling (stash dropped)", () => {
@@ -526,6 +614,72 @@ describe("host-session-core: applyEditSettled drain", () => {
         detail: { stashBase: 1, settledDocVersion: 2 },
       },
     ]);
+  });
+
+  it("POST-DISPOSE UNOBSERVED settle WITH a stash → showError: the dropped edit is not silent", () => {
+    // REGRESSION PIN. Before the settle-time reads were guarded, this exact
+    // physical event (the settle-time canonical read threw) rejected the pipeline
+    // and settled `rejected`, so its "Failed to save" toast reached the user
+    // through the dispose filter. Guarding the reads makes the settlement `ok`,
+    // whose baseEffects carry no toast at all — so without a toast of its own
+    // this branch drops the stashed edit with nothing but a `logWarn`, and
+    // post-dispose there is no webview replay buffer left to carry it.
+    const r = core.transition(
+      lockedWithStash("edit1", "edit1plus", { disposed: true }),
+      settled({ outcome: { kind: "ok", documentVersion: 2 }, currentContent: null })
+    );
+    const toasts = r.effects.filter((e) => e.type === "showError");
+    expect(toasts).toHaveLength(1);
+    // The wording must not re-introduce the false alarm that guarding the reads
+    // removed: the apply LANDED, only its verification is missing.
+    expect(toasts[0]).toMatchObject({ message: expect.stringContaining("could not verify") });
+    expect(toasts[0]).toMatchObject({ message: expect.not.stringContaining("Failed to save") });
+    // ...and it is IN ADDITION to the triage log, not instead of it.
+    expect(
+      r.effects.some((e) => e.type === "logWarn" && e.message.includes("unverified settle"))
+    ).toBe(true);
+  });
+
+  it("ALIVE UNOBSERVED settle WITH a stash → NO toast (the webview replay buffer still carries it)", () => {
+    // The other half of the same gate. Alive, the settlement deliberately does not
+    // invalidate the webview's single-flight replay buffer, so the edit is
+    // re-posted after the ack and a toast would be a false alarm. Dropping the
+    // `state.disposed` gate above turns this red.
+    const r = core.transition(
+      lockedWithStash("edit1", "edit1plus"),
+      settled({ outcome: { kind: "ok", documentVersion: 2 }, currentContent: null })
+    );
+    expect(r.effects.some((e) => e.type === "showError")).toBe(false);
+    expect(
+      r.effects.some((e) => e.type === "logWarn" && e.message.includes("unverified settle"))
+    ).toBe(true);
+  });
+
+  it("POST-DISPOSE ok-but-MISMATCH settle WITH a stash → still NO toast (external won is a resolution, not a loss)", () => {
+    // Non-vacuity for the new toast's CONDITION, not just its presence: the
+    // neighbouring post-dispose drop arm must stay silent. Widening the gate to
+    // "any post-dispose stash drop" turns this red.
+    const r = core.transition(
+      lockedWithStash("edit1", "edit1plus", { disposed: true }),
+      settled({ outcome: { kind: "ok", documentVersion: 2 }, currentContent: "external" })
+    );
+    expect(r.effects.some((e) => e.type === "showError")).toBe(false);
+  });
+
+  it("POST-DISPOSE REJECTED settle (unobserved) WITH a stash → the 'Failed to save' toast ONLY, never both", () => {
+    // Non-vacuity for the `kind === "ok"` conjunct of `unobservedStashDrop`.
+    // This is the executor's rejection-arm settlement shape verbatim: a pipeline
+    // rejection dispatches `kind: "rejected"` together with `currentContent: null`,
+    // so EVERY other conjunct of the unverified-drop predicate holds and only the
+    // ok-gate keeps the "saved but could not verify" toast off it. Two toasts here
+    // would contradict each other about one event: the save FAILED, so there is no
+    // save left to describe as unverified.
+    const r = core.transition(
+      lockedWithStash("edit1", "edit1plus", { disposed: true }),
+      settled({ outcome: { kind: "rejected", message: "boom" }, currentContent: null })
+    );
+    const toasts = r.effects.filter((e) => e.type === "showError");
+    expect(toasts).toEqual([{ type: "showError", message: "Failed to save: boom" }]);
   });
 
   it("POST-DISPOSE settle with NO stash → strict no-op, state unchanged", () => {

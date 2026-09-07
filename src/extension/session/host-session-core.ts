@@ -95,7 +95,12 @@ export function isWriteLockHeld(state: HostSessionState): boolean {
 }
 
 export type ApplyEditOutcome =
-  | { readonly kind: "ok"; readonly documentVersion: number }
+  // `documentVersion: null` ⇔ the settle-time version read threw, so no
+  // post-apply version was OBSERVED. The settlement then leaves
+  // `lastAppliedDocVersion` alone: a fabricated value (a `-1` sentinel) would be
+  // assigned VERBATIM here — the self-advance is the documented exemption from
+  // `resyncLiveVersion`'s `max` clamp — and REWIND the version.
+  | { readonly kind: "ok"; readonly documentVersion: number | null }
   | { readonly kind: "refused" }
   | { readonly kind: "constructThrew"; readonly message: string }
   | { readonly kind: "applyThrew"; readonly message: string }
@@ -126,28 +131,30 @@ export type HostSessionEvent =
       // is unconditional — no skip-unless-stash), so `currentContent` is the
       // canonical settled document (the pre-S3a empty-when-no-stash optimisation
       // is gone; restoring it would drop the epoch verify).
-      // ONE EXCEPTION: the executor's pipeline-rejection arm settles with
-      // `""`/`""` because the read seams themselves are what threw — it has no
-      // trustworthy snapshot to send and MUST NOT re-read (that would strand the
-      // lock on the recovery path). The two empties are PAIRED deliberately: for
-      // a non-ok outcome the foreign-bytes check below compares `currentContent`
-      // against `preApplyContent`, so equal empties mean "nothing foreign
-      // intervened" and no epoch bump. The pairing is LOAD-BEARING: filling in
-      // real bytes on only one side would flip `foreignAtSettle`, bump the epoch,
-      // and the resulting reseed would invalidate the webview's replay buffer —
-      // silently dropping the very keystrokes the failure toast tells the user to
-      // retry.
-      // ACCEPTED RESIDUAL RISK: with both sides empty the foreign-bytes check is
-      // VACUOUS on this path, so a foreign edit that raced the failed apply is
-      // NOT detected here and the epoch does not advance. The webview therefore
-      // keeps its replay buffer live and can re-post over that foreign edit on
-      // the user's retry. This is deliberate — the alternative (re-reading the
-      // document to get honest bytes) goes through the seam that just threw and
-      // strands the write lock, which is strictly worse. Note this is about the
-      // EPOCH only; the empties reaching `decideEdit` is separately impossible
-      // because `canDrain` requires an `ok` outcome.
+      // `null` ⇔ NOT OBSERVED. Two producers send it: the executor's settle-time
+      // CONTENT read threw (an UNVERIFIED settlement — the apply may well have
+      // landed), and the pipeline-rejection arm, which has no trustworthy
+      // snapshot at all and MUST NOT re-read (that would strand the lock on the
+      // recovery path — the read seams are the candidate throw sources).
+      // `null` is deliberate rather than a stand-in value: the foreign-bytes
+      // check below reads it as NOT FOREIGN, and `canDrain` refuses to drain
+      // without an OBSERVED equality. Sending fabricated bytes instead would flip
+      // `foreignAtSettle`, bump the epoch, and the resulting reseed would
+      // invalidate the webview's replay buffer — silently dropping the very
+      // keystrokes the failure toast tells the user to retry.
+      // ACCEPTED RESIDUAL RISK, now TYPED rather than accidental: with no
+      // observation the foreign-bytes check cannot fire, so a foreign edit that
+      // raced the apply is NOT detected here and the epoch does not advance. (It
+      // used to fall out of the rejection arm's two equal empties; the same
+      // verdict is now the explicit answer for "not observed".) The webview
+      // therefore keeps its replay buffer live and can re-post over that foreign
+      // edit on the user's retry. This is deliberate — the alternative
+      // (re-reading the document to get honest bytes) goes through the seam that
+      // just threw and strands the write lock, which is strictly worse. Note this
+      // is about the EPOCH only; `null` reaching `decideEdit` is separately
+      // impossible because `canDrain` requires an OBSERVED snapshot.
       readonly canWrite: boolean;
-      readonly currentContent: string;
+      readonly currentContent: string | null;
       // Canonical pre-apply document snapshot (the executor's `oldText`,
       // canonicalised). The settlement foreign-bytes check (site 2) uses it as
       // the baseline for a NON-OK outcome: a transiently failed save leaves the
@@ -155,11 +162,25 @@ export type HostSessionEvent =
       // means nothing foreign intervened (the retry buffer must stay replayable);
       // a mismatch means a foreign edit raced the failed apply → epoch++. For an
       // OK outcome the baseline is `inFlightContent` instead, so this is unused.
+      // ⚠️ NOT always the executor's snapshot: the pipeline-REJECTION producer
+      // (effect-executor's rejection arm) has no trustworthy snapshot and MUST NOT
+      // re-read, so it sends an INERT `""` placeholder rather than widening this
+      // field to `string | null`. Inert because the sole reader (the non-ok
+      // foreign-bytes compare below) sits inside the `observed !== null` conjunct,
+      // which a rejection settlement — whose `currentContent` is `null` by
+      // construction — can never satisfy. Keep it that way: if a future reader
+      // moves outside that conjunct, this field must become nullable first,
+      // because `""` there would read as an empty pre-apply document.
       readonly preApplyContent: string;
       // Plan S6 (finding #7): the verified write executor detected that the
       // landed content differs from the intended content on an `ok` apply — a
       // stale-offset splice (S5: desktop MISPLACES) OR an external edit that won
-      // the apply→settle race. Undefined/false = clean apply. When true the
+      // the apply→settle race. Undefined/false = no divergence was DETECTED,
+      // which is TWO states, not one: a clean apply (the compare ran and matched)
+      // OR an UNVERIFIED settlement (`appliedUnverified`, `currentContent === null`)
+      // where no compare could run at all. The separate `observed === null`
+      // handling below, not this flag, is what covers the second — do not read a
+      // `false` here as proof of a clean apply and drop it as redundant. When true the
       // settlement routes through the ok-but-mismatch convergence shape (epoch++
       // + authoritative resync + a distinct diverged log, NO error toast — a
       // deliberate conflict resolution must not read as "save failed"). It is a
@@ -563,8 +584,12 @@ export function createHostSessionCore(context: HostSessionContext, deps: HostSes
           pendingEdit: null,
           inFlightContent: null,
         };
+        // NOT OBSERVED (`documentVersion === null`) ⇒ NO advance. This assignment
+        // is verbatim (the documented exemption from `resyncLiveVersion`'s `max`
+        // clamp), so any stand-in value would REWIND the version rather than be
+        // clamped away.
         const versioned: HostSessionState =
-          event.outcome.kind === "ok"
+          event.outcome.kind === "ok" && event.outcome.documentVersion !== null
             ? { ...released, lastAppliedDocVersion: event.outcome.documentVersion }
             : released;
 
@@ -599,11 +624,17 @@ export function createHostSessionCore(context: HostSessionContext, deps: HostSes
         // this disjunct is belt-and-braces — but it keeps the convergence driven
         // by the executor's authoritative verdict, not a re-derived heuristic.
         const divergedAfterApply = event.outcome.kind === "ok" && event.divergedAfterApply === true;
+        // NOT OBSERVED (`currentContent === null`) ⇒ NOT foreign. Treating a
+        // missing snapshot as foreign is the REJECTED variant: it bumps the epoch
+        // and edit-sync drops the webview's replay buffer, destroying buffered
+        // keystrokes for a write that most likely landed exactly as intended.
+        const observed = event.currentContent;
         const foreignAtSettle =
           divergedAfterApply ||
-          (event.outcome.kind === "ok"
-            ? inFlight !== null && !contentMatches(event.currentContent, inFlight)
-            : !contentMatches(event.currentContent, event.preApplyContent));
+          (observed !== null &&
+            (event.outcome.kind === "ok"
+              ? inFlight !== null && !contentMatches(observed, inFlight)
+              : !contentMatches(observed, event.preApplyContent)));
         const settled: HostSessionState = foreignAtSettle
           ? { ...versioned, externalEpoch: versioned.externalEpoch + 1 }
           : versioned;
@@ -621,11 +652,21 @@ export function createHostSessionCore(context: HostSessionContext, deps: HostSes
         // misread a plain edit on a CRLF-eol single-line doc as "external won"
         // and DROP the stash instead of draining it (the webview's OWN acked
         // lineage, not a foreign edit).
+        // NOT OBSERVED ⇒ NO drain. The drain's safety condition is an OBSERVED
+        // equality — "the settled document IS edit #1's exact result" — which is
+        // what keeps an external edit that won the apply→settle race from being
+        // clobbered by the stash. Without the observation that condition cannot
+        // be established, so the stash is dropped exactly as it is for a failed
+        // save. While the panel is alive the keystroke still survives in the
+        // webview's replay buffer (which this settlement deliberately does not
+        // invalidate) and is re-posted after the ack; post-dispose the stash is
+        // its only carrier, which is why the drop is LOGGED below.
         const canDrain =
           stash !== null &&
           event.outcome.kind === "ok" &&
           inFlight !== null &&
-          contentMatches(event.currentContent, inFlight);
+          observed !== null &&
+          contentMatches(observed, inFlight);
 
         if (!canDrain) {
           // Post-dispose the no-stash case already returned above, so a stash
@@ -637,44 +678,101 @@ export function createHostSessionCore(context: HostSessionContext, deps: HostSes
           // [showError]; an ok-but-mismatch (external won) is a valid
           // resolution, not a failure → also []. Alive: full effects.
           const baseEffects = settlementEffects(event.outcome, settled, heldBase, state.context);
-          // Diagnostic log for the post-apply divergence. `divergedAfterApply`
-          // (Plan S6) takes precedence and is emitted even with NO stash — a
-          // wrong-offset splice / lost external race must be visible for triage
-          // regardless of whether a keystroke was queued. The narrower
-          // ok-but-mismatch log (external edit won a stash's apply→settle race)
-          // stays for the non-diverged case. Neither is a save failure, so
-          // neither adds a showError (the ok baseEffects carry none).
-          const extraEffects: HostSessionEffect[] = divergedAfterApply
-            ? [
+          // Diagnostic log for the post-apply divergence. THREE arms, in this
+          // order — and the `null` semantics are written LITERALLY here so nobody
+          // "fixes" a condition with `observed ?? ""`:
+          //  1. `divergedAfterApply` (Plan S6) takes precedence and is emitted
+          //     even with NO stash — a wrong-offset splice / lost external race
+          //     must be visible for triage regardless of whether a keystroke was
+          //     queued.
+          //  2. An UNOBSERVED settlement holding a stash: `canDrain` refused for
+          //     want of an observation, so the keystroke is dropped. Post-dispose
+          //     the stash was its only carrier, so the loss must be observable.
+          //  3. The narrower ok-but-mismatch log (external edit won a stash's
+          //     apply→settle race), which now REQUIRES an observation: claiming
+          //     "external edit won the race" without having read the document
+          //     would be a fabricated diagnosis, and an unobserved snapshot is not
+          //     a mismatch.
+          // None is a save failure, so none adds a showError (the ok baseEffects
+          // carry none) — an unverified landing is not a failed save. Arm 2
+          // POST-DISPOSE is the exception and gets its own toast below: there the
+          // log is the whole signal and nobody is left to read it.
+          const unobservedStashDrop =
+            !divergedAfterApply &&
+            stash !== null &&
+            event.outcome.kind === "ok" &&
+            observed === null;
+          // Arms 2 and 3 share one guard — a stash present on an `ok`
+          // settlement — stated ONCE below; only the observation splits them.
+          let extraEffects: HostSessionEffect[] = [];
+          if (divergedAfterApply) {
+            extraEffects = [
+              {
+                type: "logWarn",
+                message:
+                  "[quoll] divergedAfterApply on settle: applyEdit landed content differs from intended (racing splice or external write); converging on authoritative content, epoch bumped",
+                detail: {
+                  stashBase: stash?.baseDocVersion ?? null,
+                  settledDocVersion: settled.lastAppliedDocVersion,
+                },
+              },
+            ];
+          } else if (stash !== null && event.outcome.kind === "ok") {
+            const detail = {
+              stashBase: stash.baseDocVersion,
+              settledDocVersion: settled.lastAppliedDocVersion,
+            };
+            if (observed === null) {
+              // Arm 2 — the same predicate as `unobservedStashDrop` above (this
+              // branch has already excluded `divergedAfterApply`), which is what
+              // drives the post-dispose toast below.
+              extraEffects = [
                 {
                   type: "logWarn",
                   message:
-                    "[quoll] divergedAfterApply on settle: applyEdit landed content differs from intended (racing splice or external write); converging on authoritative content, epoch bumped",
-                  detail: {
-                    stashBase: stash?.baseDocVersion ?? null,
-                    settledDocVersion: settled.lastAppliedDocVersion,
-                  },
+                    "[quoll] unverified settle: pending stash dropped because the settled document could not be read",
+                  detail,
                 },
-              ]
-            : stash !== null &&
-                event.outcome.kind === "ok" &&
-                !contentMatches(event.currentContent, inFlight)
-              ? [
-                  {
-                    type: "logWarn",
-                    message:
-                      "[quoll] ok-but-mismatch on settle: external edit won the race, pending stash dropped",
-                    detail: {
-                      stashBase: stash.baseDocVersion,
-                      settledDocVersion: settled.lastAppliedDocVersion,
-                    },
-                  },
-                ]
-              : [];
+              ];
+            } else if (!contentMatches(observed, inFlight)) {
+              extraEffects = [
+                {
+                  type: "logWarn",
+                  message:
+                    "[quoll] ok-but-mismatch on settle: external edit won the race, pending stash dropped",
+                  detail,
+                },
+              ];
+            }
+          }
           if (state.disposed) {
             return {
               state: settled,
-              effects: [...extraEffects, ...baseEffects.filter((e) => e.type === "showError")],
+              effects: [
+                // POST-DISPOSE the stash was the dropped edit's ONLY carrier (no
+                // webview, so no replay buffer to fall back on), so the loss must
+                // stay USER-VISIBLE — not just logged. Before the settle-time
+                // reads were guarded, this same physical event rejected the
+                // pipeline and produced a `rejected` outcome, whose "Failed to
+                // save" toast survived the dispose filter below; making the
+                // settlement `ok` removed that toast and left the drop silent.
+                // The wording must NOT re-introduce the false alarm the guarding
+                // fixed: the apply LANDED, it is the VERIFICATION that is
+                // missing, and what was dropped is the edit stashed BEHIND it.
+                // ALIVE deliberately stays toast-free — there the webview's
+                // single-flight replay buffer (which this settlement does not
+                // invalidate) still holds the edit and re-posts it after the ack.
+                ...(unobservedStashDrop
+                  ? [
+                      {
+                        type: "showError" as const,
+                        message: `Quoll saved your change to ${state.context.fsPath} but could not verify it before the editor closed, so a later unsaved edit was dropped. Reopen the file to check its contents.`,
+                      },
+                    ]
+                  : []),
+                ...extraEffects,
+                ...baseEffects.filter((e) => e.type === "showError"),
+              ],
             };
           }
           return {
@@ -693,7 +791,9 @@ export function createHostSessionCore(context: HostSessionContext, deps: HostSes
           lastAppliedDocVersion: settled.lastAppliedDocVersion,
           canWrite: event.canWrite,
           content: stash.content,
-          currentContent: event.currentContent,
+          // `canDrain` already narrowed `observed` to `string` — the drain is
+          // unreachable without an OBSERVED settled snapshot.
+          currentContent: observed,
           markdownValidator: validateForWrite,
         });
         switch (verdict.kind) {

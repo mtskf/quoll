@@ -288,30 +288,138 @@ describe("effect-executor runApplyEdit (wrapper mapping)", () => {
 
   // Settlement is the write lock's ONLY release valve (host-session-core clears
   // `pendingApplyBaseVersion` on `applyEditSettled` and nowhere else but
-  // dispose), so BOTH promise arms must reach `dispatch`. execute-write documents
-  // its reads as non-throwing but takes them OUTSIDE its try blocks, so a seam
-  // that breaks that assumption rejects the whole pipeline — previously left
+  // dispose), so BOTH promise arms must reach `dispatch`. execute-write GUARDS its
+  // two settle-time verification reads individually now, so the surviving
+  // rejection source is its SYNCHRONOUS prefix (`readText` / `canonicalize`) —
+  // which runs before anything can land, so a rejection there really does
+  // describe a write that never happened. Previously such a rejection was left
   // unhandled by the bare `void ….then(onFulfilled)` (`void` discards the promise
   // reference, it does not catch) and the lock was held for the session.
-  it("pipeline rejection (settle-time read throws) STILL settles, as a non-ok outcome", async () => {
+  it("pipeline rejection (synchronous-prefix read throws) STILL settles, as a non-ok outcome", async () => {
     const dispatch = await runApply({
-      readCanonical: () => {
-        throw new Error("boom-settle");
+      readText: () => {
+        throw new Error("boom-read");
       },
     });
     expect(dispatch).toHaveBeenCalledWith(
       expect.objectContaining({
         type: "applyEditSettled",
-        outcome: expect.objectContaining({ kind: "rejected", message: "boom-settle" }),
-        // Empty snapshots are SAFE only because the outcome is non-ok: `canDrain`
-        // requires `ok` so they never reach `decideEdit`, and the non-ok
-        // foreign-bytes check compares these two against each other (equal → no
-        // spurious epoch bump).
-        currentContent: "",
+        outcome: expect.objectContaining({ kind: "rejected", message: "boom-read" }),
+        // NOT OBSERVED — nothing was read, so the settlement says so rather than
+        // fabricating bytes. Safe because the outcome is non-ok (`canDrain`
+        // requires `ok`, so it never reaches `decideEdit`) and because the
+        // foreign-bytes check reads `null` as "not foreign" → no spurious epoch
+        // bump.
+        currentContent: null,
         preApplyContent: "",
         canWrite: false,
       })
     );
+  });
+
+  // A settle-time read failure after a LANDED apply is the OPPOSITE case: the
+  // pipeline resolves, and mapping it to a failure kind would toast "Failed to
+  // save" for a write that succeeded.
+  it("a settle-time read throw settles as ok/UNVERIFIED, never as a rejection", async () => {
+    const dispatch = await runApply({
+      readCanonical: () => {
+        throw new Error("boom-settle");
+      },
+      readVersion: () => 7,
+    });
+    expect(dispatch).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "applyEditSettled",
+        outcome: { kind: "ok", documentVersion: 7 },
+        currentContent: null,
+        divergedAfterApply: false,
+      })
+    );
+  });
+
+  // The verification-loss warn is keyed on `settleReadFailure`, NOT on the
+  // `appliedUnverified` tag: a VERSION-only failure keeps the tag `applied` (the
+  // content WAS verified) while still suppressing the self-advance, so a
+  // tag-keyed warn would make that partial loss silent.
+  it("a VERSION-only read failure still warns, though the tag stays applied", async () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const dispatch = await runApply({
+        readCanonical: () => "new",
+        readVersion: () => {
+          throw new Error("boom-version");
+        },
+      });
+      expect(dispatch).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: "applyEditSettled",
+          outcome: { kind: "ok", documentVersion: null },
+          currentContent: "new", // the CONTENT was observed
+        })
+      );
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringContaining("settle-time verification read failed"),
+        expect.stringContaining("boom-version")
+      );
+      // ...and it must name the MISSING OBSERVATION rather than deliver a verdict
+      // on the save. This arrangement is precisely where a blanket verdict is
+      // false: `readCanonical` succeeded, the divergence compare ran, the tag
+      // stayed `applied` — the save WAS verified, only the self-advance is
+      // suppressed. "treating it as an UNVERIFIED save" here would assert the
+      // verified/unverified conflation the rest of the pipeline removes.
+      expect(warnSpy).not.toHaveBeenCalledWith(
+        expect.stringContaining("UNVERIFIED save"),
+        expect.anything()
+      );
+      // ...and it must say so CONDITIONALLY. On this very arrangement the CONTENT
+      // was read, the tag stayed `applied`, and the reducer's `canDrain` can pass
+      // — so a flat "no stash drain" would be a false triage claim about the
+      // settlement the reader is looking at.
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringContaining("no drain unless the settled CONTENT was read"),
+        expect.anything()
+      );
+      expect(warnSpy).not.toHaveBeenCalledWith(
+        expect.stringContaining("no stash drain"),
+        expect.anything()
+      );
+      // The no-op short-circuit reaches this same family without submitting an
+      // edit, so the warn must not claim a landing either.
+      expect(warnSpy).not.toHaveBeenCalledWith(
+        expect.stringContaining("applyEdit completed"),
+        expect.anything()
+      );
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  // A FAILURE tag keeps its own outcome, and its triage line must stay NEUTRAL:
+  // pairing "treating it as an UNVERIFIED save" with a "Failed to save" toast
+  // would put two contradictory claims side by side for one event.
+  it("a settle read that fails on a FAILED apply warns without claiming an unverified save", async () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const dispatch = await runApply({
+        apply: async () => false,
+        readCanonical: () => {
+          throw new Error("boom-settle");
+        },
+      });
+      expect(dispatch).toHaveBeenCalledWith(
+        expect.objectContaining({ type: "applyEditSettled", outcome: { kind: "refused" } })
+      );
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringContaining("the outcome itself is unchanged"),
+        expect.stringContaining("boom-settle")
+      );
+      expect(warnSpy).not.toHaveBeenCalledWith(
+        expect.stringContaining("UNVERIFIED save"),
+        expect.anything()
+      );
+    } finally {
+      warnSpy.mockRestore();
+    }
   });
 
   it("pipeline rejection settles EVEN when disposed (stash-drain safety)", async () => {
@@ -344,7 +452,7 @@ describe("effect-executor runApplyEdit (wrapper mapping)", () => {
       },
     };
     const dispatch = await runApply({
-      readCanonical: () => {
+      readText: () => {
         throw hostile;
       },
     });
@@ -371,8 +479,8 @@ describe("effect-executor runApplyEdit (wrapper mapping)", () => {
     });
     const dispatch = await runApply(
       {
-        readCanonical: () => {
-          throw new Error("boom-settle");
+        readText: () => {
+          throw new Error("boom-read");
         },
       },
       { canWrite }
@@ -380,7 +488,7 @@ describe("effect-executor runApplyEdit (wrapper mapping)", () => {
     expect(dispatch).toHaveBeenCalledWith(
       expect.objectContaining({
         type: "applyEditSettled",
-        outcome: expect.objectContaining({ kind: "rejected", message: "boom-settle" }),
+        outcome: expect.objectContaining({ kind: "rejected", message: "boom-read" }),
         canWrite: false,
       })
     );
@@ -632,6 +740,53 @@ describe("effect-executor runEffects other cases", () => {
     const { runEffects } = createEffectExecutor(makeDeps({ showError }));
     runEffects([{ type: "showError", message: "nope" }]);
     expect(showError).toHaveBeenCalledWith("nope");
+  });
+
+  // `runEffects` MUST NOT UNWIND. The reducer emits every non-ok settlement as
+  // [showError, postDocument] (toast first — see `settlementEffects`' ORDER note),
+  // and since `settle()` became total the correlated case (a failure tag whose
+  // settle read also threw) resolves through the UNWRAPPED fulfilment arm rather
+  // than the rejection arm's try/catch. `window.showErrorMessage` can throw
+  // SYNCHRONOUSLY (the same assumption the reseed-build guard already makes, and
+  // `showSafely` only absorbs the Thenable's async rejection), and
+  // `createDrainingDispatcher` has try/finally with NO catch — so an unguarded
+  // throw here escapes as an unhandled rejection AND abandons the rest of the
+  // list.
+  it("showError: a SYNCHRONOUS throw is contained — logged, and the following effects still run", async () => {
+    const rejections: unknown[] = [];
+    const onUnhandled = (r: unknown) => rejections.push(r);
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    process.on("unhandledRejection", onUnhandled);
+    try {
+      const send = vi.fn(async () => true);
+      const showError = vi.fn(() => {
+        throw new Error("toast failed");
+      });
+      const { runEffects } = createEffectExecutor(makeDeps({ send, showError }));
+
+      // The exact shape `settlementEffects` emits for a non-ok settlement.
+      expect(() =>
+        runEffects([
+          { type: "showError", message: "Failed to save: boom" },
+          { type: "postDocument", docVersion: 3, externalEpoch: 0, epochGeneration: 1 },
+        ])
+      ).not.toThrow();
+
+      expect(showError).toHaveBeenCalledOnce(); // the attempt really happened
+      // (b) the ack Document that FOLLOWS the toast still went out — the property
+      // an unwinding effect loop destroys.
+      expect(send).toHaveBeenCalled();
+      // (c) the throw is not swallowed silently.
+      expect(errorSpy).toHaveBeenCalledWith(
+        expect.stringContaining("showError threw"),
+        expect.anything()
+      );
+      await Promise.resolve();
+      expect(rejections).toEqual([]); // (a) nothing escaped
+    } finally {
+      process.off("unhandledRejection", onUnhandled);
+      errorSpy.mockRestore();
+    }
   });
 
   it("openExternal: forwards href to deps.openExternal", () => {
