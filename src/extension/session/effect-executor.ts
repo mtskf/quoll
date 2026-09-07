@@ -367,28 +367,25 @@ export function createEffectExecutor(deps: EffectExecutorDeps): EffectExecutor {
         // failure family keeps a signal too, in NEUTRAL wording — the read
         // failure is worth seeing there as well, it just must not claim the write
         // was treated as an unverified save.
-        const okFamily =
-          result.tag === "applied" ||
-          result.tag === "diverged" ||
-          result.tag === "appliedUnverified";
-        if (result.settleReadFailure !== undefined && !okFamily) {
-          console.warn(
-            `[quoll] the settlement verification read also failed on a ${result.tag} outcome; the outcome itself is unchanged`,
-            result.settleReadFailure
-          );
-        }
-        if (okFamily && result.settleReadFailure !== undefined) {
-          // Both consequences are stated CONDITIONALLY because this branch is
-          // keyed on `settleReadFailure`, not on the tag, so it also covers the
-          // VERSION-only failure — where `readCanonical` succeeded, the tag stays
-          // `applied`, `currentContent` IS observed, and the reducer's `canDrain`
-          // can therefore pass. A flat "no stash drain" would be false there.
+        if (result.settleReadFailure !== undefined) {
+          const okFamily =
+            result.tag === "applied" ||
+            result.tag === "diverged" ||
+            result.tag === "appliedUnverified";
+          // The ok-family consequences are stated CONDITIONALLY because this
+          // branch is keyed on `settleReadFailure`, not on the tag, so it also
+          // covers the VERSION-only failure — where `readCanonical` succeeded,
+          // the tag stays `applied`, `currentContent` IS observed, and the
+          // reducer's `canDrain` can therefore pass. A flat "no stash drain"
+          // would be false there.
           // "the write pipeline completed" rather than "applyEdit completed": the
           // no-op short-circuit reaches this family WITHOUT submitting an edit, so
           // caller warn text must not make a landing claim (execute-write.ts's
           // ⚠️ note at `settle`).
           console.warn(
-            "[quoll] the write pipeline completed (no failure) but a post-apply verification read failed; treating it as an UNVERIFIED save. Drain and version advance are each gated on their OWN observation: no drain unless the settled CONTENT was read, no version advance unless the VERSION was read",
+            okFamily
+              ? "[quoll] the write pipeline completed (no failure) but a post-apply verification read failed; treating it as an UNVERIFIED save. Drain and version advance are each gated on their OWN observation: no drain unless the settled CONTENT was read, no version advance unless the VERSION was read"
+              : `[quoll] the settlement verification read also failed on a ${result.tag} outcome; the outcome itself is unchanged`,
             result.settleReadFailure
           );
         }

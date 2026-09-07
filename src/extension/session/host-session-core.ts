@@ -697,46 +697,49 @@ export function createHostSessionCore(context: HostSessionContext, deps: HostSes
             stash !== null &&
             event.outcome.kind === "ok" &&
             observed === null;
-          const extraEffects: HostSessionEffect[] = divergedAfterApply
-            ? [
+          // Arms 2 and 3 share one guard — a stash present on an `ok`
+          // settlement — stated ONCE below; only the observation splits them.
+          let extraEffects: HostSessionEffect[] = [];
+          if (divergedAfterApply) {
+            extraEffects = [
+              {
+                type: "logWarn",
+                message:
+                  "[quoll] divergedAfterApply on settle: applyEdit landed content differs from intended (racing splice or external write); converging on authoritative content, epoch bumped",
+                detail: {
+                  stashBase: stash?.baseDocVersion ?? null,
+                  settledDocVersion: settled.lastAppliedDocVersion,
+                },
+              },
+            ];
+          } else if (stash !== null && event.outcome.kind === "ok") {
+            const detail = {
+              stashBase: stash.baseDocVersion,
+              settledDocVersion: settled.lastAppliedDocVersion,
+            };
+            if (observed === null) {
+              // Arm 2 — the same predicate as `unobservedStashDrop` above (this
+              // branch has already excluded `divergedAfterApply`), which is what
+              // drives the post-dispose toast below.
+              extraEffects = [
                 {
                   type: "logWarn",
                   message:
-                    "[quoll] divergedAfterApply on settle: applyEdit landed content differs from intended (racing splice or external write); converging on authoritative content, epoch bumped",
-                  detail: {
-                    stashBase: stash?.baseDocVersion ?? null,
-                    settledDocVersion: settled.lastAppliedDocVersion,
-                  },
+                    "[quoll] unverified settle: pending stash dropped because the settled document could not be read",
+                  detail,
                 },
-              ]
-            : stash !== null && event.outcome.kind === "ok" && observed === null
-              ? [
-                  {
-                    type: "logWarn",
-                    message:
-                      "[quoll] unverified settle: pending stash dropped because the settled document could not be read",
-                    detail: {
-                      stashBase: stash.baseDocVersion,
-                      settledDocVersion: settled.lastAppliedDocVersion,
-                    },
-                  },
-                ]
-              : stash !== null &&
-                  event.outcome.kind === "ok" &&
-                  observed !== null &&
-                  !contentMatches(observed, inFlight)
-                ? [
-                    {
-                      type: "logWarn",
-                      message:
-                        "[quoll] ok-but-mismatch on settle: external edit won the race, pending stash dropped",
-                      detail: {
-                        stashBase: stash.baseDocVersion,
-                        settledDocVersion: settled.lastAppliedDocVersion,
-                      },
-                    },
-                  ]
-                : [];
+              ];
+            } else if (!contentMatches(observed, inFlight)) {
+              extraEffects = [
+                {
+                  type: "logWarn",
+                  message:
+                    "[quoll] ok-but-mismatch on settle: external edit won the race, pending stash dropped",
+                  detail,
+                },
+              ];
+            }
+          }
           if (state.disposed) {
             return {
               state: settled,
