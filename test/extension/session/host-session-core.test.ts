@@ -614,6 +614,56 @@ describe("host-session-core: applyEditSettled drain", () => {
     ]);
   });
 
+  it("POST-DISPOSE UNOBSERVED settle WITH a stash → showError: the dropped edit is not silent", () => {
+    // REGRESSION PIN. Before the settle-time reads were guarded, this exact
+    // physical event (the settle-time canonical read threw) rejected the pipeline
+    // and settled `rejected`, so its "Failed to save" toast reached the user
+    // through the dispose filter. Guarding the reads makes the settlement `ok`,
+    // whose baseEffects carry no toast at all — so without a toast of its own
+    // this branch drops the stashed edit with nothing but a `logWarn`, and
+    // post-dispose there is no webview replay buffer left to carry it.
+    const r = core.transition(
+      lockedWithStash("edit1", "edit1plus", { disposed: true }),
+      settled({ outcome: { kind: "ok", documentVersion: 2 }, currentContent: null })
+    );
+    const toasts = r.effects.filter((e) => e.type === "showError");
+    expect(toasts).toHaveLength(1);
+    // The wording must not re-introduce the false alarm that guarding the reads
+    // removed: the apply LANDED, only its verification is missing.
+    expect(toasts[0]).toMatchObject({ message: expect.stringContaining("could not verify") });
+    expect(toasts[0]).toMatchObject({ message: expect.not.stringContaining("Failed to save") });
+    // ...and it is IN ADDITION to the triage log, not instead of it.
+    expect(
+      r.effects.some((e) => e.type === "logWarn" && e.message.includes("unverified settle"))
+    ).toBe(true);
+  });
+
+  it("ALIVE UNOBSERVED settle WITH a stash → NO toast (the webview replay buffer still carries it)", () => {
+    // The other half of the same gate. Alive, the settlement deliberately does not
+    // invalidate the webview's single-flight replay buffer, so the edit is
+    // re-posted after the ack and a toast would be a false alarm. Dropping the
+    // `state.disposed` gate above turns this red.
+    const r = core.transition(
+      lockedWithStash("edit1", "edit1plus"),
+      settled({ outcome: { kind: "ok", documentVersion: 2 }, currentContent: null })
+    );
+    expect(r.effects.some((e) => e.type === "showError")).toBe(false);
+    expect(
+      r.effects.some((e) => e.type === "logWarn" && e.message.includes("unverified settle"))
+    ).toBe(true);
+  });
+
+  it("POST-DISPOSE ok-but-MISMATCH settle WITH a stash → still NO toast (external won is a resolution, not a loss)", () => {
+    // Non-vacuity for the new toast's CONDITION, not just its presence: the
+    // neighbouring post-dispose drop arm must stay silent. Widening the gate to
+    // "any post-dispose stash drop" turns this red.
+    const r = core.transition(
+      lockedWithStash("edit1", "edit1plus", { disposed: true }),
+      settled({ outcome: { kind: "ok", documentVersion: 2 }, currentContent: "external" })
+    );
+    expect(r.effects.some((e) => e.type === "showError")).toBe(false);
+  });
+
   it("POST-DISPOSE settle with NO stash → strict no-op, state unchanged", () => {
     const disposed = base({ disposed: true });
     const r = core.transition(disposed, settled({ outcome: { kind: "ok", documentVersion: 9 } }));

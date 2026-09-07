@@ -162,6 +162,15 @@ export type HostSessionEvent =
       // means nothing foreign intervened (the retry buffer must stay replayable);
       // a mismatch means a foreign edit raced the failed apply → epoch++. For an
       // OK outcome the baseline is `inFlightContent` instead, so this is unused.
+      // ⚠️ NOT always the executor's snapshot: the pipeline-REJECTION producer
+      // (effect-executor's rejection arm) has no trustworthy snapshot and MUST NOT
+      // re-read, so it sends an INERT `""` placeholder rather than widening this
+      // field to `string | null`. Inert because the sole reader (the non-ok
+      // foreign-bytes compare below) sits inside the `observed !== null` conjunct,
+      // which a rejection settlement — whose `currentContent` is `null` by
+      // construction — can never satisfy. Keep it that way: if a future reader
+      // moves outside that conjunct, this field must become nullable first,
+      // because `""` there would read as an empty pre-apply document.
       readonly preApplyContent: string;
       // Plan S6 (finding #7): the verified write executor detected that the
       // landed content differs from the intended content on an `ok` apply — a
@@ -680,7 +689,14 @@ export function createHostSessionCore(context: HostSessionContext, deps: HostSes
           //     would be a fabricated diagnosis, and an unobserved snapshot is not
           //     a mismatch.
           // None is a save failure, so none adds a showError (the ok baseEffects
-          // carry none) — an unverified landing is not a failed save.
+          // carry none) — an unverified landing is not a failed save. Arm 2
+          // POST-DISPOSE is the exception and gets its own toast below: there the
+          // log is the whole signal and nobody is left to read it.
+          const unobservedStashDrop =
+            !divergedAfterApply &&
+            stash !== null &&
+            event.outcome.kind === "ok" &&
+            observed === null;
           const extraEffects: HostSessionEffect[] = divergedAfterApply
             ? [
                 {
@@ -724,7 +740,31 @@ export function createHostSessionCore(context: HostSessionContext, deps: HostSes
           if (state.disposed) {
             return {
               state: settled,
-              effects: [...extraEffects, ...baseEffects.filter((e) => e.type === "showError")],
+              effects: [
+                // POST-DISPOSE the stash was the dropped edit's ONLY carrier (no
+                // webview, so no replay buffer to fall back on), so the loss must
+                // stay USER-VISIBLE — not just logged. Before the settle-time
+                // reads were guarded, this same physical event rejected the
+                // pipeline and produced a `rejected` outcome, whose "Failed to
+                // save" toast survived the dispose filter below; making the
+                // settlement `ok` removed that toast and left the drop silent.
+                // The wording must NOT re-introduce the false alarm the guarding
+                // fixed: the apply LANDED, it is the VERIFICATION that is
+                // missing, and what was dropped is the edit stashed BEHIND it.
+                // ALIVE deliberately stays toast-free — there the webview's
+                // single-flight replay buffer (which this settlement does not
+                // invalidate) still holds the edit and re-posts it after the ack.
+                ...(unobservedStashDrop
+                  ? [
+                      {
+                        type: "showError" as const,
+                        message: `Quoll saved your change to ${state.context.fsPath} but could not verify it before the editor closed, so a later unsaved edit was dropped. Reopen the file to check its contents.`,
+                      },
+                    ]
+                  : []),
+                ...extraEffects,
+                ...baseEffects.filter((e) => e.type === "showError"),
+              ],
             };
           }
           return {
