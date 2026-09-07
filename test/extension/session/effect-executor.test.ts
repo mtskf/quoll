@@ -361,6 +361,24 @@ describe("effect-executor runApplyEdit (wrapper mapping)", () => {
         expect.stringContaining("post-apply verification read failed"),
         expect.stringContaining("boom-version")
       );
+      // ...and it must say so CONDITIONALLY. On this very arrangement the CONTENT
+      // was read, the tag stayed `applied`, and the reducer's `canDrain` can pass
+      // — so a flat "no stash drain" would be a false triage claim about the
+      // settlement the reader is looking at.
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringContaining("no drain unless the settled CONTENT was read"),
+        expect.anything()
+      );
+      expect(warnSpy).not.toHaveBeenCalledWith(
+        expect.stringContaining("no stash drain"),
+        expect.anything()
+      );
+      // The no-op short-circuit reaches this same family without submitting an
+      // edit, so the warn must not claim a landing either.
+      expect(warnSpy).not.toHaveBeenCalledWith(
+        expect.stringContaining("applyEdit completed"),
+        expect.anything()
+      );
     } finally {
       warnSpy.mockRestore();
     }
@@ -712,6 +730,53 @@ describe("effect-executor runEffects other cases", () => {
     const { runEffects } = createEffectExecutor(makeDeps({ showError }));
     runEffects([{ type: "showError", message: "nope" }]);
     expect(showError).toHaveBeenCalledWith("nope");
+  });
+
+  // `runEffects` MUST NOT UNWIND. The reducer emits every non-ok settlement as
+  // [showError, postDocument] (toast first — see `settlementEffects`' ORDER note),
+  // and since `settle()` became total the correlated case (a failure tag whose
+  // settle read also threw) resolves through the UNWRAPPED fulfilment arm rather
+  // than the rejection arm's try/catch. `window.showErrorMessage` can throw
+  // SYNCHRONOUSLY (the same assumption the reseed-build guard already makes, and
+  // `showSafely` only absorbs the Thenable's async rejection), and
+  // `createDrainingDispatcher` has try/finally with NO catch — so an unguarded
+  // throw here escapes as an unhandled rejection AND abandons the rest of the
+  // list.
+  it("showError: a SYNCHRONOUS throw is contained — logged, and the following effects still run", async () => {
+    const rejections: unknown[] = [];
+    const onUnhandled = (r: unknown) => rejections.push(r);
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    process.on("unhandledRejection", onUnhandled);
+    try {
+      const send = vi.fn(async () => true);
+      const showError = vi.fn(() => {
+        throw new Error("toast failed");
+      });
+      const { runEffects } = createEffectExecutor(makeDeps({ send, showError }));
+
+      // The exact shape `settlementEffects` emits for a non-ok settlement.
+      expect(() =>
+        runEffects([
+          { type: "showError", message: "Failed to save: boom" },
+          { type: "postDocument", docVersion: 3, externalEpoch: 0, epochGeneration: 1 },
+        ])
+      ).not.toThrow();
+
+      expect(showError).toHaveBeenCalledOnce(); // the attempt really happened
+      // (b) the ack Document that FOLLOWS the toast still went out — the property
+      // an unwinding effect loop destroys.
+      expect(send).toHaveBeenCalled();
+      // (c) the throw is not swallowed silently.
+      expect(errorSpy).toHaveBeenCalledWith(
+        expect.stringContaining("showError threw"),
+        expect.anything()
+      );
+      await Promise.resolve();
+      expect(rejections).toEqual([]); // (a) nothing escaped
+    } finally {
+      process.off("unhandledRejection", onUnhandled);
+      errorSpy.mockRestore();
+    }
   });
 
   it("openExternal: forwards href to deps.openExternal", () => {

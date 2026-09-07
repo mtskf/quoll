@@ -26,9 +26,10 @@
 //     authoritative reseed.
 // A SECOND, different toast exists on the correlated arrangement: when the same
 // broken seam also makes `buildSeedDocument` throw, the ack Document cannot be
-// built, and the executor emits one latched "could not re-sync" notification.
-// That is a reseed-delivery failure at another layer — never assert `h.errors`
-// is empty under `armSettleFailure(true)`; filter for the message you mean.
+// built, and the executor emits one latched "could not update the editor view"
+// notification (latched per INCIDENT — a successful build re-arms it). That is a
+// reseed-delivery failure at another layer — never assert `h.errors` is empty
+// under `armSettleFailure(true)`; filter for the message you mean.
 
 import { describe, expect, it, vi } from "vitest";
 
@@ -89,6 +90,11 @@ function harness(options: HarnessOptions = {}) {
   const documents: { docVersion: number; externalEpoch: number; epochGeneration: number }[] = [];
   let errorAttempts = 0;
   let settleFailure: SettleFailureMode = false;
+  // The executor's SYNCHRONOUS prefix. Since `settle()` became total this is the
+  // one remaining way to make `executeDocumentWrite` REJECT, and so the only way
+  // this file can reach `runApplyEdit`'s rejection arm — the write lock's sole
+  // release valve on that path.
+  let readTextFailure = false;
   // The span the last `build` produced — `apply` replays it against the live
   // buffer so the fake document really LANDS the edit (version bump included),
   // which is what makes an ok settlement carry a live version.
@@ -156,7 +162,12 @@ function harness(options: HarnessOptions = {}) {
     buildTheme: (themeKind) => ({ protocol: 1, type: "theme", themeKind }) as HostToWebview,
     buildEditRejected: (error) => ({ protocol: 1, type: "edit-rejected", error }) as HostToWebview,
     applyEditSeam: {
-      readText: () => doc.text,
+      readText: () => {
+        if (readTextFailure) {
+          throw new Error("boom-read");
+        }
+        return doc.text;
+      },
       readVersion: () => doc.version,
       // The settle-time verification read. execute-write GUARDS it individually,
       // so a broken seam (a disposed document, a broken canonicaliser) yields an
@@ -220,6 +231,11 @@ function harness(options: HarnessOptions = {}) {
     armSettleFailure: (mode: SettleFailureMode) => {
       settleFailure = mode;
     },
+    /** Break the executor's SYNCHRONOUS prefix, which is what makes
+     *  `executeDocumentWrite` REJECT rather than resolve. */
+    armReadTextFailure: (on: boolean) => {
+      readTextFailure = on;
+    },
     /** A FOREIGN edit, on the panel's real path for one: mutate the buffer, bump
      *  the version, and dispatch `documentChanged` LOCK-FREE. This is the only
      *  honest way to re-trigger a reseed after a correlated failure — the webview
@@ -280,6 +296,44 @@ describe("applyEdit settlement: a settle-time read failure releases the host wri
     expect(isWriteLockHeld(h.state())).toBe(false);
   });
 
+  // THE REJECTION ARM, end to end. Everything above drives an outcome the pipeline
+  // RESOLVES — since `settle()` became total, a settle-time read failure no longer
+  // rejects it. So the arm this whole file was written for (the `.then`'s second
+  // argument, the write lock's only release valve on a rejected pipeline) is
+  // reached from exactly one seam now: the SYNCHRONOUS prefix, before anything can
+  // land. Measured: without this test, neutering the rejection arm leaves every
+  // test in this file green, so the integration-level lock-release contract the
+  // header claims was pinned nowhere but in the executor's own unit tests.
+  it("a REJECTED pipeline (a throwing synchronous prefix) releases the lock and toasts once", async () => {
+    const h = harness();
+
+    h.armReadTextFailure(true);
+    h.type("a");
+    await flushSettle();
+
+    // Non-vacuity: the write really was never attempted — `readText` throws before
+    // `build` runs, so this is a rejection, not a resolved failure tag.
+    expect(h.attempts).toEqual([]);
+    // (1) the lock is released. Under the old one-armed `.then` the rejection was
+    // left unhandled by `void` and this stayed held for the rest of the session.
+    expect(isWriteLockHeld(h.state())).toBe(false);
+    // (2) ...and a write that never happened IS reported as a failed save — the
+    // rejection arm is telling the truth here, unlike the resolved settle-read
+    // failures above.
+    const toasts = h.errors.filter((m) => m.includes("Failed to save"));
+    expect(toasts).toHaveLength(1);
+    expect(toasts[0]).toContain("boom-read");
+
+    // (3) the user-visible consequence the file's header claims: the NEXT
+    // keystroke still reaches the document. With the lock stranded it would be
+    // stashed behind a bare console.warn and never written.
+    h.armReadTextFailure(false);
+    h.type("ab");
+    await flushSettle();
+    expect(h.attempts).toEqual(["ab"]);
+    expect(isWriteLockHeld(h.state())).toBe(false);
+  });
+
   // The CORRELATED arrangement of the same subject. Here the broken seam also
   // makes `buildSeedDocument` throw, so no Document reached the webview and its
   // single-flight `editInFlight` is still set — a real webview could not post
@@ -300,13 +354,17 @@ describe("applyEdit settlement: a settle-time read failure releases the host wri
 
   // The toast is the ONLY user-visible signal that a save failed, and the
   // settlement's own reseed is what puts it at risk: `buildSeedDocument` re-runs
-  // the broken read and throws, unwinding `runEffects` part-way through the
-  // effect list. This pins the ORDER that makes the toast survive that —
-  // `settlementEffects` emits `showError` BEFORE `postDocument` on every non-ok
-  // outcome, so the notification is already out when the reseed blows up. Order
-  // them the other way and the lock is still released (state is committed before
-  // effects run) but the user is told nothing: the silent-failure mode this whole
-  // file exists to prevent.
+  // the broken read and throws.
+  //
+  // ⚠️ What this test measures is CONTAINMENT, not order. Since `runEffects`'
+  // `postDocument` case started catching the build throw and `break`ing, the
+  // effect loop CONTINUES past the failed reseed, so the toast is delivered
+  // whatever its position in the list. (Measured: reversing the `refused` arm's
+  // effect order leaves every test in this file green; only
+  // `host-session-core.test.ts`'s exact `toEqual` on the effect list goes red.)
+  // The toast-before-reseed ORDER is a real invariant and it is still pinned —
+  // just not here: `host-session-core.test.ts` owns it (`expectToastBeforeReseed`).
+  // Do not "restore" an ordering assertion to this test; pin it there.
   it("still reports the failure when the reseed throws on the same broken seam", async () => {
     // Arranged over a GENUINELY failed apply now: a settle-read failure alone is
     // no longer a save failure, so it emits no toast to order against. The broken
@@ -405,7 +463,7 @@ describe("applyEdit settlement: the correlated reseed failure stays contained", 
     }
   });
 
-  it("the correlated failure is not SILENT: at most ONE notification attempt, ever", async () => {
+  it("the correlated failure is not SILENT: at most ONE notification attempt per INCIDENT", async () => {
     // The delta this fix would otherwise introduce: before it, this scenario
     // produced a (wrong) "Failed to save" toast; an unverified landing has no
     // toast by design, so without this signal the user is told NOTHING while the
@@ -418,23 +476,64 @@ describe("applyEdit settlement: the correlated reseed failure stays contained", 
       await flushSettle();
       // NOT a save-failure toast: `settlementEffects`' ok arm still emits none.
       // This one reports that the ack Document could not be BUILT, i.e. the editor
-      // could not be re-synced — a different failure at a different layer.
+      // view could not be updated — a different failure at a different layer.
       expect(h.errors.filter((m) => m.includes("Failed to save"))).toEqual([]);
-      expect(h.errors.filter((m) => m.includes("re-sync"))).toHaveLength(1);
+      expect(h.errors.filter((m) => m.includes("could not update the editor view"))).toHaveLength(
+        1
+      );
       // Re-trigger through a REAL host-side path (a foreign edit's lock-free
       // documentChanged): after the failed reseed the webview never got its
       // Document, so a real one could not post another Edit — `h.type()` here
-      // would model a sequence the user cannot produce.
+      // would model a sequence the user cannot produce. The seam is still broken,
+      // so this is the SAME incident and must stay latched.
       h.externalEdit("外部から書き換え");
-      expect(h.errors.filter((m) => m.includes("re-sync"))).toHaveLength(1); // latched, no storm
+      expect(h.errors.filter((m) => m.includes("could not update the editor view"))).toHaveLength(
+        1
+      );
     } finally {
       errorSpy.mockRestore();
     }
   });
 
-  it("a THROWING toast is contained and never retried (the latch is spent on the attempt)", async () => {
+  it("a RECOVERED seam re-arms the latch: a second incident gets its own notification", async () => {
+    // The complement of the pin above, and the reason the latch is per-incident
+    // rather than per-session. A panel lives for hours; latching forever means one
+    // transient early hiccup consumes the session's ONLY user-visible signal for a
+    // state this module documents as one that must not be silent.
+    const h = harness();
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      // Incident 1.
+      h.armSettleFailure(true);
+      h.type("a");
+      await flushSettle();
+      expect(h.errors.filter((m) => m.includes("could not update the editor view"))).toHaveLength(
+        1
+      );
+
+      // The seam RECOVERS: a successful build (driven from a real host-side path,
+      // a foreign edit's lock-free documentChanged) proves it and re-arms.
+      h.armSettleFailure(false);
+      const postedBefore = h.documents.length;
+      h.externalEdit("recovered");
+      expect(h.documents.length).toBeGreaterThan(postedBefore); // non-vacuity: it really built
+
+      // Incident 2 — a NEW failure after a proven recovery.
+      h.armSettleFailure(true);
+      h.externalEdit("broken again");
+      expect(h.errors.filter((m) => m.includes("could not update the editor view"))).toHaveLength(
+        2
+      );
+    } finally {
+      errorSpy.mockRestore();
+    }
+  });
+
+  it("a THROWING toast is contained and not retried within the incident (the latch is spent on the attempt)", async () => {
     // The property latch-before trades away is "the user always gets told"; what it
-    // must still guarantee is that failing to tell them cannot escape or repeat.
+    // must still guarantee is that failing to tell them cannot escape or repeat
+    // while the seam stays broken. (Across incidents it CAN repeat — that is the
+    // re-arm, pinned above; here the seam never recovers, so it must not.)
     const h = harness({ showErrorThrows: true });
     const rejections: unknown[] = [];
     const onUnhandled = (r: unknown) => rejections.push(r);

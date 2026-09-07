@@ -211,7 +211,10 @@ export function createRevertRescueWiring(deps: RevertRescueWiringDeps): RevertRe
   //                stale-offset splice. Mirror the reducer's diverged rule — log
   //                + converge via a resync (NO toast; a divergence with an ok
   //                apply must not read as "save failed"). Resync only when alive
-  //                (the dispose path has no webview left to reseed).
+  //                (the dispose path has no webview left to reseed) AND when the
+  //                settled VERSION was OBSERVED — a resync labels the
+  //                authoritative document with a version, and there is no honest
+  //                substitute for one whose read threw.
   //   - the failure family (applyRefused / applyThrew / applyRejected /
   //                buildThrew) → the restore genuinely did not land: toast + let
   //                the ALIVE path reseed via `onFailure` (the dispose path passes
@@ -227,10 +230,25 @@ export function createRevertRescueWiring(deps: RevertRescueWiringDeps): RevertRe
         // VERSION-only read failure keeps the tag `applied` (the content WAS
         // verified) while still costing us the version to resync to, so a
         // tag-keyed warn would leave that partial loss silent here while the
-        // reducer path logs it. Symmetric with effect-executor's ok-family warn.
+        // reducer path logs it.
+        //
+        // SPLIT BY OUTCOME FAMILY, exactly as effect-executor's pair of warns is,
+        // and for the same reason: the failure family (applyRefused / applyThrew /
+        // applyRejected / buildThrew) also reaches `settle(...)` and can therefore
+        // carry a `settleReadFailure` — a plausible pairing, since the dispose-time
+        // teardown that breaks the read is what makes the restore fail. An
+        // unbounded "restore completed" would then be logged beside
+        // `reportRestoreFailure`'s "could not restore your unsaved changes" toast:
+        // two contradictory triage claims about one event.
         if (outcome.settleReadFailure !== undefined) {
+          const completed =
+            outcome.tag === "applied" ||
+            outcome.tag === "appliedUnverified" ||
+            outcome.tag === "diverged";
           console.warn(
-            "[quoll] revert-rescue: restore completed but the post-apply verification read failed",
+            completed
+              ? "[quoll] revert-rescue: restore completed but the post-apply verification read failed"
+              : `[quoll] revert-rescue: the verification read also failed on a ${outcome.tag} restore; the outcome itself is unchanged`,
             outcome.settleReadFailure
           );
         }

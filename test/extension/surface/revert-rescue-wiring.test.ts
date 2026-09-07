@@ -288,6 +288,46 @@ describe("createRevertRescueWiring — dispose rescue", () => {
     expect(t.dispatched).toEqual([]); // dispose path never reseeds (no onFailure)
   });
 
+  // The CORRELATED failure the unbounded warn got wrong: the same tearing-down
+  // document that breaks the settle-time read is what makes the restore fail, so a
+  // FAILURE-family outcome carrying a `settleReadFailure` is plausible, not
+  // hypothetical. The user gets "could not restore your unsaved changes"; the log
+  // beside it must not say the restore completed.
+  it("dispose-path FAILED restore + a throwing settle read: the warn does NOT claim the restore completed", async () => {
+    const t = wire();
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    // applyEdit REFUSES and kills the document in the same call, so the outcome is
+    // `applyRefused` AND carries a settleReadFailure.
+    vi.spyOn(workspace, "applyEdit").mockImplementation(async () => {
+      t.doc.getTextThrows = true;
+      return false;
+    });
+    armRevert(t);
+
+    t.writeLock.held = false;
+    t.wiring.prepareDispose();
+    t.disposedFlag.value = true;
+    t.wiring.rescueOnDispose();
+    await flush();
+
+    // The restore genuinely did not land, so the failure family's toast still fires
+    // exactly once — this test does not weaken that.
+    expect(t.showErrors).toHaveLength(1);
+    expect(t.showErrors[0]).toContain("could not restore");
+    // Non-vacuity: the verification warn really did fire on this path (otherwise
+    // the negative assertion below would pass for the wrong reason).
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining("the outcome itself is unchanged"),
+      expect.anything()
+    );
+    // THE assertion: no "restore completed" claim beside the "could not restore"
+    // toast.
+    expect(warnSpy).not.toHaveBeenCalledWith(
+      expect.stringContaining("restore completed"),
+      expect.anything()
+    );
+  });
+
   it("skips loudly (no rescue) when rescueOnDispose is called WITHOUT prepareDispose (call-order guard)", async () => {
     const t = wire();
     const applySpy = vi.spyOn(workspace, "applyEdit");

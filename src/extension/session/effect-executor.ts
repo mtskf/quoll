@@ -101,9 +101,14 @@ export function createEffectExecutor(deps: EffectExecutorDeps): EffectExecutor {
   let hostMountReported = false;
 
   // Per-panel latch for the reseed-build failure notification (see the
-  // `postDocument` guard). One notification ATTEMPT per session, ever — a
-  // persistently broken document seam can fire once per settlement, and a toast
-  // per settlement is user-visible spam.
+  // `postDocument` guard). One notification ATTEMPT per INCIDENT — a persistently
+  // broken document seam can fire once per settlement, and a toast per settlement
+  // is user-visible spam. The latch is RE-ARMED by a successful build (see the
+  // `postDocument` case): a success proves the seam recovered, so the next failure
+  // is a new incident and deserves its own signal. Without that, one transient
+  // hiccup early in a panel's life would consume the session's only user-visible
+  // signal for a state this module documents as one that must NOT be silent — and
+  // panels live for hours.
   let reseedBuildFailureReported = false;
 
   // Alias for the injected open-external delegate (see the `openExternal` effect
@@ -373,8 +378,17 @@ export function createEffectExecutor(deps: EffectExecutorDeps): EffectExecutor {
           );
         }
         if (okFamily && result.settleReadFailure !== undefined) {
+          // Both consequences are stated CONDITIONALLY because this branch is
+          // keyed on `settleReadFailure`, not on the tag, so it also covers the
+          // VERSION-only failure — where `readCanonical` succeeded, the tag stays
+          // `applied`, `currentContent` IS observed, and the reducer's `canDrain`
+          // can therefore pass. A flat "no stash drain" would be false there.
+          // "the write pipeline completed" rather than "applyEdit completed": the
+          // no-op short-circuit reaches this family WITHOUT submitting an edit, so
+          // caller warn text must not make a landing claim (execute-write.ts's
+          // ⚠️ note at `settle`).
           console.warn(
-            "[quoll] applyEdit completed but the post-apply verification read failed; treating it as an UNVERIFIED save (no stash drain; no version advance unless the version itself was observed)",
+            "[quoll] the write pipeline completed (no failure) but a post-apply verification read failed; treating it as an UNVERIFIED save. Drain and version advance are each gated on their OWN observation: no drain unless the settled CONTENT was read, no version advance unless the VERSION was read",
             result.settleReadFailure
           );
         }
@@ -390,11 +404,20 @@ export function createEffectExecutor(deps: EffectExecutorDeps): EffectExecutor {
       // REJECTION ARM — the write lock's only release valve. `executeDocumentWrite`
       // now GUARDS its two settle-time verification reads individually, so those
       // can no longer reject the pipeline (a settle-read failure resolves as an
-      // UNVERIFIED settlement instead). The reachable rejection sources are what
+      // UNVERIFIED settlement instead). The ONE reachable rejection source is what
       // is left outside a try: the SYNCHRONOUS prefix (`readText` /
       // `canonicalize`, which run before anything can land, so a rejection there
-      // really does describe a write that never happened) and a throw from the
-      // `.then` handler itself. Without this arm the rejection is left UNHANDLED by `void`
+      // really does describe a write that never happened).
+      // ⚠️ This arm does NOT cover a throw from its own SIBLING — this is the
+      // two-argument `.then(onFulfilled, onRejected)`, and `onRejected` never sees
+      // `onFulfilled`'s throw (same limitation stated at `readCanWrite` above, and
+      // the repo-wide "Update loop guard" invariant). That is exactly why the
+      // fulfilment arm's throw sources are neutralised AT THE SOURCE instead:
+      // `readCanWrite` is guarded, `errorMessage` is guarded, and the reseed's
+      // `buildSeedDocument` is guarded inside `runEffects`. Anything still able to
+      // throw up there strands the lock, so do not add one on the assumption that
+      // this arm catches it.
+      // Without this arm the rejection is left UNHANDLED by `void`
       // (`void` does not catch — it only discards the promise reference),
       // `applyEditSettled` never fires, and `pendingApplyBaseVersion` — which ONLY
       // this event clears (host-session-core `applyEditSettled`; dispose is the
@@ -424,6 +447,14 @@ export function createEffectExecutor(deps: EffectExecutorDeps): EffectExecutor {
             // `null` as "not foreign", exactly as the paired `""`/`""` used to by
             // accident of two equal empties; now it is the TYPED answer.
             currentContent: null,
+            // INERT PLACEHOLDER, not a snapshot — and deliberately NOT the `null`
+            // its sibling above became. Its single reader (host-session-core's
+            // non-ok foreign-bytes compare) is inside the `currentContent !== null`
+            // conjunct, which this settlement can never satisfy, so the value is
+            // unreachable and widening the event field to `string | null` would buy
+            // nothing but churn across the event type and its fakes. Documented at
+            // the field, so a reader who moves outside that conjunct knows to make
+            // it nullable first.
             preApplyContent: "",
           });
         } catch (dispatchErr) {
@@ -494,16 +525,18 @@ export function createEffectExecutor(deps: EffectExecutorDeps): EffectExecutor {
             // before it, the same scenario at least produced a (wrong) "Failed to
             // save" toast. Hence the one-shot signal below — the failure is
             // host-side and persistent-looking, and reloading the window is the
-            // user's actual remedy. Latched to once per session so a repeatedly
-            // broken seam cannot storm the user.
+            // user's actual remedy. Latched to once per INCIDENT so a repeatedly
+            // broken seam cannot storm the user, while a seam that recovers and
+            // breaks again still gets a fresh signal (the re-arm below).
             console.error(
               "[quoll] failed to build the Document to post; skipping this reseed",
               err
             );
             if (!reseedBuildFailureReported) {
               // The latch is set BEFORE the attempt, so the guarantee is "at most
-              // ONE notification attempt, ever" — not "exactly one toast". Both
-              // placements lose something and this is the safer loss:
+              // ONE notification attempt per incident" — not "exactly one toast".
+              // ⛔ Do NOT move this to latch-after-success. Both placements lose
+              // something and this is the safer loss:
               //   - latch-before: a single synchronous failure leaves only the log
               //     line above. Bounded, and by then the window API is broken.
               //   - latch-after-success: a `showError` that DISPLAYS and then
@@ -523,8 +556,14 @@ export function createEffectExecutor(deps: EffectExecutorDeps): EffectExecutor {
               // unguarded call here would re-open the exact hole this closes. Same
               // discipline as revert-rescue-wiring's per-dep `runGuarded`.
               try {
+                // Wording that is true on BOTH paths this effect serves. The
+                // reducer emits `postDocument` for the FIRST SEED too
+                // (host-session-core's `ready` arm), not only for settlement acks,
+                // and the executor cannot tell them apart — so an unconditional
+                // "Recent edits may not be saved" would tell a user their edits
+                // might be lost at first load, before they had typed anything.
                 deps.showError(
-                  "Quoll could not re-sync the editor. Recent edits may not be saved — reload the window (Developer: Reload Window)."
+                  "Quoll could not update the editor view. If you have unsaved changes they may not have been saved — reload the window (Developer: Reload Window)."
                 );
               } catch (toastErr) {
                 console.error("[quoll] failed to report the reseed build failure", toastErr);
@@ -535,6 +574,13 @@ export function createEffectExecutor(deps: EffectExecutorDeps): EffectExecutor {
           if (QUOLL_PERF) {
             perfRecord("host:doc-build", perfNow() - buildStart);
           }
+          // RE-ARM the notification latch: the build just succeeded, so the seam
+          // recovered and any later failure is a NEW incident, not a repeat of the
+          // one already reported. Orthogonal to the latch-before-attempt decision
+          // above (which bounds a SINGLE incident); without this, one transient
+          // early hiccup would leave every later real incident structurally
+          // silent for the life of the panel.
+          reseedBuildFailureReported = false;
           post(documentMessage);
           // First postDocument is the seed; report once it (and its
           // host:postMessage) is recorded so host:mount carries both stages.
@@ -584,7 +630,25 @@ export function createEffectExecutor(deps: EffectExecutorDeps): EffectExecutor {
           runApplyEdit(effect.content);
           break;
         case "showError":
-          deps.showError(effect.message);
+          // GUARDED, and NOT redundant with the `deps.showError` guard inside the
+          // `postDocument` builder catch above: that one protects the executor's
+          // OWN reseed-build notification, this one the REDUCER's settlement toast,
+          // which every non-ok settlement emits BEFORE its `postDocument` (see
+          // `settlementEffects`' ORDER note). The containment matters here since
+          // `settle()` became total: the correlated case — a failure tag whose
+          // settle read ALSO threw — used to land in the rejection arm's
+          // `try/catch`, and now resolves through the UNWRAPPED fulfilment arm.
+          // `createDrainingDispatcher` has `try`/`finally` and no `catch`, so a
+          // SYNCHRONOUS `window.showErrorMessage` throw would both escape as an
+          // unhandled rejection and abandon the rest of this effect list —
+          // including the ack `postDocument` — plus the panel's post-`runEffects`
+          // `editSettledBarrier.settle(...)`. No latch: this is per-effect
+          // containment, not notification suppression.
+          try {
+            deps.showError(effect.message);
+          } catch (err) {
+            console.error("[quoll] showError threw while running settlement effects", err);
+          }
           break;
         case "logWarn":
           console.warn(effect.message, effect.detail);
