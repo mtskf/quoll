@@ -30,7 +30,7 @@
 // That is a reseed-delivery failure at another layer — never assert `h.errors`
 // is empty under `armSettleFailure(true)`; filter for the message you mean.
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import {
   createEffectExecutor,
@@ -115,7 +115,7 @@ function harness(options: HarnessOptions = {}) {
       }
     },
     canWrite: () => true,
-    // Gated on the SAME `failSettle` flag as `readCanonical` on purpose: in
+    // Gated on the SAME `settleFailure` flag as `readCanonical` on purpose: in
     // production both bottom out in `canonicalDocumentText(document)` (the panel
     // wires `buildSeedDocument` → `canonicalDocumentText` and
     // `applyEditSeam.readCanonical` → the same function), so a seam that breaks
@@ -157,9 +157,9 @@ function harness(options: HarnessOptions = {}) {
     applyEditSeam: {
       readText: () => doc.text,
       readVersion: () => doc.version,
-      // The settle-time read. execute-write documents it as non-throwing and
-      // calls it OUTSIDE any try — a seam that breaks that assumption (a
-      // disposed document, a broken canonicaliser) rejects the whole pipeline.
+      // The settle-time verification read. execute-write GUARDS it individually,
+      // so a broken seam (a disposed document, a broken canonicaliser) yields an
+      // UNVERIFIED settlement rather than rejecting the whole pipeline.
       readCanonical: () => {
         if (settleFailure !== false) {
           throw new Error("boom-settle");
@@ -363,5 +363,125 @@ describe("applyEdit settlement: a settle-time read failure releases the host wri
     // A failed save never drains the stash — it surfaces as the toast instead,
     // exactly once.
     expect(h.errors.filter((m) => m.includes("could not save"))).toHaveLength(1);
+  });
+});
+
+// CORRELATED FAILURE. In production the settle-time throw comes from
+// `canonicalDocumentText(document)`, and `buildSeedDocument` bottoms out in the
+// SAME function. Before `settle()` became total that pair landed in the GUARDED
+// rejection arm; now the settlement is `ok`, so its ack `postDocument` re-runs
+// the broken read on the UNGUARDED fulfilment arm — and `createDrainingDispatcher`
+// has `try`/`finally` with no `catch`, so an escaping throw becomes an unhandled
+// rejection with no toast, no triage log, and a skipped `editSettledBarrier`.
+// The guard lives in `effect-executor.ts`'s `postDocument` case; these are its
+// pins.
+describe("applyEdit settlement: the correlated reseed failure stays contained", () => {
+  it("a correlated failure (the reseed throws on the same broken seam) is contained, not an unhandled rejection", async () => {
+    const h = harness();
+    const rejections: unknown[] = [];
+    const onUnhandled = (r: unknown) => rejections.push(r);
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    process.on("unhandledRejection", onUnhandled);
+    try {
+      h.armSettleFailure(true); // BOTH the settle read and buildSeedDocument throw
+      h.type("a");
+      await flushSettle();
+      expect(h.seedBuilds.length).toBeGreaterThan(0); // non-vacuity: the reseed WAS attempted
+      expect(rejections).toEqual([]); // ...and its throw did not escape
+      // A `catch { break; }` that loses the triage payload would also satisfy the
+      // assertion above, so pin the log itself.
+      expect(errorSpy).toHaveBeenCalledWith(
+        expect.stringContaining("failed to build the Document"),
+        expect.anything()
+      );
+      expect(isWriteLockHeld(h.state())).toBe(false);
+      // A landed write must not be reported as a FAILED SAVE. The reseed-delivery
+      // toast is a different signal and is asserted in the next test.
+      expect(h.errors.filter((m) => m.includes("Failed to save"))).toEqual([]);
+    } finally {
+      process.off("unhandledRejection", onUnhandled);
+      errorSpy.mockRestore();
+    }
+  });
+
+  it("the correlated failure is not SILENT: at most ONE notification attempt, ever", async () => {
+    // The delta this fix would otherwise introduce: before it, this scenario
+    // produced a (wrong) "Failed to save" toast; an unverified landing has no
+    // toast by design, so without this signal the user is told NOTHING while the
+    // webview's single flight stalls.
+    const h = harness();
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      h.armSettleFailure(true);
+      h.type("a");
+      await flushSettle();
+      // NOT a save-failure toast: `settlementEffects`' ok arm still emits none.
+      // This one reports that the ack Document could not be BUILT, i.e. the editor
+      // could not be re-synced — a different failure at a different layer.
+      expect(h.errors.filter((m) => m.includes("Failed to save"))).toEqual([]);
+      expect(h.errors.filter((m) => m.includes("re-sync"))).toHaveLength(1);
+      // Re-trigger through a REAL host-side path (a foreign edit's lock-free
+      // documentChanged): after the failed reseed the webview never got its
+      // Document, so a real one could not post another Edit — `h.type()` here
+      // would model a sequence the user cannot produce.
+      h.externalEdit("外部から書き換え");
+      expect(h.errors.filter((m) => m.includes("re-sync"))).toHaveLength(1); // latched, no storm
+    } finally {
+      errorSpy.mockRestore();
+    }
+  });
+
+  it("a THROWING toast is contained and never retried (the latch is spent on the attempt)", async () => {
+    // The property latch-before trades away is "the user always gets told"; what it
+    // must still guarantee is that failing to tell them cannot escape or repeat.
+    const h = harness({ showErrorThrows: true });
+    const rejections: unknown[] = [];
+    const onUnhandled = (r: unknown) => rejections.push(r);
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    process.on("unhandledRejection", onUnhandled);
+    try {
+      h.armSettleFailure(true);
+      h.type("a");
+      await flushSettle();
+      expect(rejections).toEqual([]); // (a) did not escape
+      expect(errorSpy).toHaveBeenCalledWith(
+        expect.stringContaining("failed to report the reseed build failure"),
+        expect.anything()
+      ); // (b) recorded
+      expect(h.errorAttempts).toBe(1); // the ONE attempt really happened
+      const attemptsBefore = h.errorAttempts;
+      h.externalEdit("外部から書き換え");
+      expect(h.errorAttempts).toBe(attemptsBefore); // (c) never retried
+    } finally {
+      process.off("unhandledRejection", onUnhandled);
+      errorSpy.mockRestore();
+    }
+  });
+
+  it("a later SUCCESSFUL build still posts — the guard does not poison the reseed path", async () => {
+    // The anti-deadlock property that IS guaranteed: once the seam recovers, the
+    // next Document is built and posted, which is what un-sticks the webview's
+    // single flight. (That the webview stays stalled while the seam stays broken
+    // is a pre-existing consequence of no Document arriving, not something this
+    // guard introduces.)
+    //
+    // ⚠️ The trigger must be a REAL host-side one. Calling `h.type(...)` again
+    // would bypass the very gate under discussion: a real webview cannot post
+    // another Edit while its `editInFlight` is still set. Drive it from an
+    // external document change instead — the lock-free `documentChanged` the panel
+    // dispatches for a foreign edit, which reposts the authoritative Document.
+    const h = harness();
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      h.armSettleFailure(true);
+      h.type("a");
+      await flushSettle();
+      const postedBefore = h.documents.length;
+      h.armSettleFailure(false);
+      h.externalEdit("外部から書き換え"); // bumps doc.version + dispatches documentChanged
+      expect(h.documents.length).toBeGreaterThan(postedBefore);
+    } finally {
+      errorSpy.mockRestore();
+    }
   });
 });
