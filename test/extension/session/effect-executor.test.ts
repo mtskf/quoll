@@ -358,8 +358,18 @@ describe("effect-executor runApplyEdit (wrapper mapping)", () => {
         })
       );
       expect(warnSpy).toHaveBeenCalledWith(
-        expect.stringContaining("post-apply verification read failed"),
+        expect.stringContaining("settle-time verification read failed"),
         expect.stringContaining("boom-version")
+      );
+      // ...and it must name the MISSING OBSERVATION rather than deliver a verdict
+      // on the save. This arrangement is precisely where a blanket verdict is
+      // false: `readCanonical` succeeded, the divergence compare ran, the tag
+      // stayed `applied` — the save WAS verified, only the self-advance is
+      // suppressed. "treating it as an UNVERIFIED save" here would assert the
+      // verified/unverified conflation the rest of the pipeline removes.
+      expect(warnSpy).not.toHaveBeenCalledWith(
+        expect.stringContaining("UNVERIFIED save"),
+        expect.anything()
       );
       // ...and it must say so CONDITIONALLY. On this very arrangement the CONTENT
       // was read, the tag stayed `applied`, and the reducer's `canDrain` can pass

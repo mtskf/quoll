@@ -362,11 +362,11 @@ export function createEffectExecutor(deps: EffectExecutorDeps): EffectExecutor {
         //
         // Bounded to the ok-mapping family on purpose. A failure tag already
         // reports itself through its own message and its "Failed to save" toast;
-        // adding "treating it as an UNVERIFIED save" to the SAME settlement would
-        // put two contradictory triage claims side by side for one event. The
-        // failure family keeps a signal too, in NEUTRAL wording — the read
-        // failure is worth seeing there as well, it just must not claim the write
-        // was treated as an unverified save.
+        // adding a "the save completed" claim to the SAME settlement would put two
+        // contradictory triage claims side by side for one event. The failure
+        // family keeps a signal too, in NEUTRAL wording — the read failure is
+        // worth seeing there as well, it just must not claim anything about how
+        // the write itself was treated.
         if (result.settleReadFailure !== undefined) {
           const okFamily =
             result.tag === "applied" ||
@@ -382,9 +382,17 @@ export function createEffectExecutor(deps: EffectExecutorDeps): EffectExecutor {
           // no-op short-circuit reaches this family WITHOUT submitting an edit, so
           // caller warn text must not make a landing claim (execute-write.ts's
           // ⚠️ note at `settle`).
+          // It must not deliver a VERDICT on the save either ("treating it as an
+          // UNVERIFIED save" was the old wording): on the VERSION-only path the
+          // CONTENT was read, the divergence compare ran and the tag stayed
+          // `applied` — the save WAS verified, and only the self-advance is
+          // suppressed. So name WHICH observation is missing and let each one gate
+          // its own consequence. Naming the tag here would mislead symmetrically:
+          // `diverged` is only reachable WITH an observed content, so "the tag is
+          // now appliedUnverified" is false for part of this very family.
           console.warn(
             okFamily
-              ? "[quoll] the write pipeline completed (no failure) but a post-apply verification read failed; treating it as an UNVERIFIED save. Drain and version advance are each gated on their OWN observation: no drain unless the settled CONTENT was read, no version advance unless the VERSION was read"
+              ? "[quoll] the write pipeline completed (no failure) but a settle-time verification read failed. Each missing observation gates only its OWN consequence: no drain unless the settled CONTENT was read (settledContent !== null), no version advance unless the VERSION was read (settledVersion !== null)"
               : `[quoll] the settlement verification read also failed on a ${result.tag} outcome; the outcome itself is unchanged`,
             result.settleReadFailure
           );

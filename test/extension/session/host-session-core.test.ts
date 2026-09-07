@@ -664,6 +664,22 @@ describe("host-session-core: applyEditSettled drain", () => {
     expect(r.effects.some((e) => e.type === "showError")).toBe(false);
   });
 
+  it("POST-DISPOSE REJECTED settle (unobserved) WITH a stash → the 'Failed to save' toast ONLY, never both", () => {
+    // Non-vacuity for the `kind === "ok"` conjunct of `unobservedStashDrop`.
+    // This is the executor's rejection-arm settlement shape verbatim: a pipeline
+    // rejection dispatches `kind: "rejected"` together with `currentContent: null`,
+    // so EVERY other conjunct of the unverified-drop predicate holds and only the
+    // ok-gate keeps the "saved but could not verify" toast off it. Two toasts here
+    // would contradict each other about one event: the save FAILED, so there is no
+    // save left to describe as unverified.
+    const r = core.transition(
+      lockedWithStash("edit1", "edit1plus", { disposed: true }),
+      settled({ outcome: { kind: "rejected", message: "boom" }, currentContent: null })
+    );
+    const toasts = r.effects.filter((e) => e.type === "showError");
+    expect(toasts).toEqual([{ type: "showError", message: "Failed to save: boom" }]);
+  });
+
   it("POST-DISPOSE settle with NO stash → strict no-op, state unchanged", () => {
     const disposed = base({ disposed: true });
     const r = core.transition(disposed, settled({ outcome: { kind: "ok", documentVersion: 9 } }));
