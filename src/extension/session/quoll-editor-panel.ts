@@ -364,15 +364,15 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
       isDisposed: () => disposed,
     });
 
-    // Queued, non-recursive dispatch. `step` runs one transition, COMMITS the
-    // resulting state, then runs its effects and settles the barrier; the
-    // unit-tested createDrainingDispatcher owns the queue + draining guard, so a
-    // re-entrant feedback dispatch (an
-    // effect that re-enters the core — applyEdit settlement, edit-rejected
-    // delivery failure, construct/apply sync-throw) is flat / FIFO rather
-    // than a recursive stack. `dispatch` is declared with definite-assignment
-    // so the effect executors below can close over it — they are only invoked
-    // once a dispatch is in flight, after this assignment.
+    // Queued, non-recursive dispatch. `step` (composed below) runs one
+    // transition, COMMITS the resulting state, then runs its effects and settles
+    // the barrier; the unit-tested createDrainingDispatcher owns the queue +
+    // draining guard, so a re-entrant feedback dispatch (an effect that re-enters
+    // the core — applyEdit settlement, edit-rejected delivery failure,
+    // construct/apply sync-throw) is flat / FIFO rather than a recursive stack.
+    // `dispatch` is declared with definite-assignment so the effect executors
+    // below can close over it — they are only invoked once a dispatch is in
+    // flight, after this assignment.
     let dispatch!: (event: HostSessionEvent) => void;
     // The transition + effects + barrier release live in host-session-step.ts so
     // the throwing-effects branch has unit-test reach (this closure is
@@ -385,13 +385,13 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
     // (the ack Document is already posted). Note WHY that ordering is NOT what
     // keeps a stash drain deferred: the re-acquired lock
     // (`pendingApplyBaseVersion`) is part of the STATE the reducer returns
-    // (host-session-core's `applyEditSettled` drain arm), which
-    // `commitTransition` commits BEFORE the effect list — the `applyEdit`
-    // EFFECT never touches `state`, so `isWriteLockHeld(state)` reads true
-    // either way. Side channels are async
-    // (`void handle…` / `void openInTextEditor…`) and do not synchronously
-    // re-enter dispatch, so this cannot recurse into the active drain loop; the
-    // barrier also isolates any synchronous thunk throw via onError.
+    // (host-session-core's `applyEditSettled` drain arm), which `commitTransition`
+    // commits BEFORE the effect list — the `applyEdit` EFFECT never touches
+    // `state`, so `isWriteLockHeld(state)` reads true either way. Side channels
+    // are async (`void handle…` / `void openInTextEditor…`) and do not
+    // synchronously re-enter dispatch, so this cannot recurse into the active
+    // drain loop; the barrier also isolates any synchronous thunk throw via
+    // onError.
     const step = createHostSessionStep({
       commitTransition: (event) => {
         const result = core.transition(state, event);
