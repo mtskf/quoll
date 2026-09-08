@@ -186,6 +186,39 @@ export function createEffectExecutor<TEdit>(deps: EffectExecutorDeps<TEdit>): Ef
     );
   };
 
+  // Guarded ONE-SHOT retry of the version read at settlement DISPATCH — the
+  // single documented exception to "callers never re-read the document
+  // CONTENT" (the caller contract is narrowed to content by this change). Be
+  // precise about what the version is used for: it LABELS the ack, feeds the
+  // Math.max advance, and is an input to the reducer's content-unobserved
+  // version-delta epoch verdict. It never enters the byte-level divergence
+  // compare. Re-reading it here is sound because this callback runs microtasks
+  // after the pipeline's own settle-time read with no possibility of an
+  // interleaved document event on the single-threaded extension host — the
+  // retry observes the same live version the settle read would have, so it
+  // cannot attribute a LATER edit to this settlement. The retry is what keeps a
+  // TRANSIENT settle-time failure on the normal path (ack at the live version)
+  // instead of the withhold branch; a PERSISTENT failure yields null and the
+  // reducer withholds. Guarded because this runs while BUILDING the settlement
+  // event — an unguarded throw here would skip the dispatch and strand the
+  // write lock (same placement rule as readCanWrite).
+  //
+  // Name it `readVersionGuarded` (NOT "retry"): it is the ONE guarded version
+  // reader, with ONE contract — `number | null`, null ⇔ unobserved, never a
+  // fabricated value — serving BOTH the settlement-dispatch retry above and
+  // `sendEditRejected`'s recovery dispatches below.
+  const readVersionGuarded = (): number | null => {
+    try {
+      return deps.applyEditSeam.readVersion();
+    } catch (err) {
+      console.warn(
+        "[quoll] guarded readVersion failed; the label stays UNOBSERVED (null — never a fabricated number)",
+        err
+      );
+      return null;
+    }
+  };
+
   // Edit-rejected delivery with a resync fallback re-entering the core,
   // carrying the per-delivery `id` (Codex N2/N6). If the webview refuses,
   // detaches, or `send()` throws, dispatching `editRejectedDeliveryFailed(id)`
@@ -197,9 +230,10 @@ export function createEffectExecutor<TEdit>(deps: EffectExecutorDeps<TEdit>): Ef
   // clobber the live banner nor force an unsolicited reseed. When the clear
   // DOES fire, the user's typed content is overwritten — same "external wins"
   // semantics as for an `onDidChangeTextDocument` race. The event carries the
-  // LIVE document version (readVersion at this dispatch, read synchronously with
-  // the reseed's live bytes) so the recovery Document's version matches its
-  // bytes — never the possibly-stale stored version.
+  // document version read via the guarded `readVersionGuarded`; if that read
+  // fails the event carries `null` and the reducer clears the rejection
+  // WITHOUT reseeding — no Document at an unobserved label — signalling
+  // through the shared resync-failure latch.
   const sendEditRejected = (error: MarkdownError, id: number): void => {
     if (deps.isDisposed()) {
       return;
@@ -219,7 +253,7 @@ export function createEffectExecutor<TEdit>(deps: EffectExecutorDeps<TEdit>): Ef
       deps.dispatch({
         type: "editRejectedDeliveryFailed",
         id,
-        documentVersion: deps.applyEditSeam.readVersion(),
+        documentVersion: readVersionGuarded(),
       });
       return;
     }
@@ -243,7 +277,7 @@ export function createEffectExecutor<TEdit>(deps: EffectExecutorDeps<TEdit>): Ef
         deps.dispatch({
           type: "editRejectedDeliveryFailed",
           id,
-          documentVersion: deps.applyEditSeam.readVersion(),
+          documentVersion: readVersionGuarded(),
         });
       },
       (err: unknown) => {
@@ -254,7 +288,7 @@ export function createEffectExecutor<TEdit>(deps: EffectExecutorDeps<TEdit>): Ef
         deps.dispatch({
           type: "editRejectedDeliveryFailed",
           id,
-          documentVersion: deps.applyEditSeam.readVersion(),
+          documentVersion: readVersionGuarded(),
         });
       }
     );
@@ -354,22 +388,24 @@ export function createEffectExecutor<TEdit>(deps: EffectExecutorDeps<TEdit>): Ef
   // write pipeline. The lock is already set by the `accept` transition; the
   // pipeline (snapshot → span → build → apply → post-apply verify) lives in
   // `executeDocumentWrite`, and this only MAPS the immutable tagged outcome onto
-  // an `applyEditSettled` event. It NEVER re-reads the document — `currentContent`
-  // / `preApplyContent` / the settled version all come from the outcome's
-  // verify-time snapshots (a re-read could observe a later edit and mis-attribute
-  // divergence). `canWrite` is read here (an FS/config read, not a document read)
-  // for the stash-drain re-gate. The settlement lands in a fresh drain (the
-  // pipeline is async) and fires EVEN post-dispose: a stashed one-more-char edit
-  // can only drain on settlement, which fires AFTER onDidDispose (the core stays
-  // a strict no-op post-dispose unless a stash is waiting; webview-bound posts
-  // self-suppress via post()'s disposed guard).
+  // an `applyEditSettled` event. It never re-reads the document CONTENT —
+  // `currentContent` / `preApplyContent` come from the outcome's verify-time
+  // snapshots (a content re-read could observe a later edit and mis-attribute
+  // divergence); the guarded `readVersionGuarded` version read is the single
+  // documented exception, sound for the reasons at its definition. `canWrite`
+  // is read here (an FS/config read, not a document read) for the stash-drain
+  // re-gate. The settlement lands in a fresh drain (the pipeline is async) and
+  // fires EVEN post-dispose: a stashed one-more-char edit can only drain on
+  // settlement, which fires AFTER onDidDispose (the core stays a strict no-op
+  // post-dispose unless a stash is waiting; webview-bound posts self-suppress
+  // via post()'s disposed guard).
   const runApplyEdit = (content: string): void => {
     void executeDocumentWrite(deps.applyEditSeam, content).then(
       (result) => {
         deps.dispatch({
           type: "applyEditSettled",
           outcome: toApplyEditOutcome(result),
-          settledVersion: result.settledVersion,
+          settledVersion: result.settledVersion ?? readVersionGuarded(),
           canWrite: readCanWrite(),
           currentContent: result.settledContent,
           preApplyContent: result.preApplyContent,
@@ -462,25 +498,27 @@ export function createEffectExecutor<TEdit>(deps: EffectExecutorDeps<TEdit>): Ef
       // sole other path) — stays held for the session: every later inbound edit is
       // stashed behind a bare warn and never saved. Silent, toast-free data loss.
       // Settling with a NON-OK outcome is what makes it safe: `canDrain` requires
-      // `ok`, so the unobserved snapshot below never reaches `decideEdit`, and the
-      // non-ok foreign-bytes check reads a `null` `currentContent` as NOT OBSERVED
-      // ⇒ not foreign, so no spurious epoch bump. The
-      // user gets the same `Failed to save:` toast + authoritative reseed as any
-      // other failed write, instead of a panel that has quietly stopped saving.
+      // `ok`, so the unobserved snapshot below never reaches `decideEdit`, and
+      // the content check reads `null` as unobserved; foreign evidence, if any,
+      // comes from the version-delta fallback. The user gets the same
+      // `Failed to save:` toast + authoritative reseed as any other failed
+      // write, instead of a panel that has quietly stopped saving.
       //
-      // ⚠️ This arm MUST NOT re-read the document or `canWrite()` — those seams are
-      // the candidate throw sources, and a throw HERE strands the lock exactly as
-      // before (the "fix" would reintroduce the bug on its own recovery path).
-      // `canWrite` is unused for a non-ok settlement, so pass the conservative
-      // `false` rather than reading it.
+      // ⚠️ This arm MUST NOT re-read the document CONTENT or `canWrite()` —
+      // those seams are the candidate throw sources, and a throw HERE strands
+      // the lock exactly as before (the "fix" would reintroduce the bug on its
+      // own recovery path). The guarded `readVersionGuarded` is the one
+      // permitted read: it cannot throw, and the version it returns labels the
+      // settlement (see its definition for why that use is sound). `canWrite`
+      // is unused for a non-ok settlement, so pass the conservative `false`
+      // rather than reading it.
       (err: unknown) => {
         console.error("[quoll] verified write pipeline rejected; releasing the write lock", err);
         try {
           deps.dispatch({
             type: "applyEditSettled",
             outcome: { kind: "rejected", message: errorMessage(err) },
-            // NOT OBSERVED on this arm until the Task-2 dispatch retry lands here.
-            settledVersion: null,
+            settledVersion: readVersionGuarded(),
             canWrite: false,
             // NOT OBSERVED — nothing was read, so say nothing rather than
             // fabricating an empty document. The non-ok foreign-bytes check reads

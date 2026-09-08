@@ -29,8 +29,13 @@
 // (see the adapter's doc comment). Every read/build/apply is injected; the module
 // never re-reads outside the adapter, and — the caller contract — the returned
 // outcome CARRIES its verification-time snapshots so callers map from those
-// fields and NEVER re-read the document (a wrapper re-read can observe a later
-// edit and mis-attribute divergence).
+// fields and never re-read the document CONTENT (a wrapper content re-read can
+// observe a later edit and mis-attribute divergence). The session wrapper's
+// guarded settlement-dispatch `readVersion()` retry is the single documented
+// exception — the version labels the settlement and feeds the reducer's
+// version-delta epoch verdict, never the byte-level divergence compare; it is
+// safe because no document event can interleave between the pipeline's settle
+// and the dispatch on the single-threaded extension host.
 
 import { perfNow, perfRecord } from "../../shared/perf.js";
 import type { MinimalEditSpan } from "./minimal-edit.js";
@@ -102,7 +107,9 @@ export type DocumentWriteTag =
   | "applyRejected"; // apply() promise rejected → reducer `rejected`
 
 /** Immutable verified-write outcome. Carries the four verification-time
- *  snapshots so callers map WITHOUT re-reading the document. Contents are
+ *  snapshots so callers map WITHOUT re-reading the document CONTENT (the
+ *  session wrapper's guarded version read is the documented exception — see
+ *  the module header). Contents are
  *  canonical (EOL-normalised to the document's EOL). EVERY terminal outcome —
  *  including `buildThrew`, which never touched the document — populates all four
  *  fields, but the two SETTLE-time ones are NULLABLE: `null` means the read threw

@@ -318,14 +318,17 @@ describe("effect-executor runApplyEdit (wrapper mapping)", () => {
       expect.objectContaining({
         type: "applyEditSettled",
         outcome: expect.objectContaining({ kind: "rejected", message: "boom-read" }),
-        // TASK-1-ONLY value: nothing was read BY THE PIPELINE (Task 2's guarded
-        // dispatch retry — not present yet — is what later labels this arm).
-        settledVersion: null,
-        // NOT OBSERVED — nothing was read, so the settlement says so rather than
-        // fabricating bytes. Safe because the outcome is non-ok (`canDrain`
+        // Nothing was read BY THE PIPELINE — the guarded dispatch retry
+        // (readVersionGuarded) labelled the settlement instead, against the
+        // seam's default healthy `readVersion: () => 1`. The unobserved case
+        // (the retry itself fails) is pinned by the dedicated persistent-
+        // failure test below.
+        settledVersion: 1,
+        // NOT OBSERVED — content was not read, so the settlement says so rather
+        // than fabricating bytes. Safe because the outcome is non-ok (`canDrain`
         // requires `ok`, so it never reaches `decideEdit`) and because the
-        // foreign-bytes check reads `null` as "not foreign" → no spurious epoch
-        // bump.
+        // foreign-bytes check reads `null` as unobserved; foreign evidence, if
+        // any, comes from the version-delta fallback.
         currentContent: null,
         preApplyContent: "",
         canWrite: false,
@@ -507,8 +510,9 @@ describe("effect-executor runApplyEdit (wrapper mapping)", () => {
       expect.objectContaining({
         type: "applyEditSettled",
         outcome: expect.objectContaining({ kind: "rejected", message: "boom-read" }),
-        // TASK-1-ONLY value; see the "pipeline rejection … STILL settles" test.
-        settledVersion: null,
+        // The guarded dispatch retry labels this too; see the
+        // "pipeline rejection … STILL settles" test.
+        settledVersion: 1,
         canWrite: false,
       })
     );
@@ -537,18 +541,105 @@ describe("effect-executor runApplyEdit (wrapper mapping)", () => {
     );
   });
 
-  // Contract: the wrapper maps from the OUTCOME and does not re-read the
-  // document. For an ok settlement the executor reads the settled version once
-  // (inside verify); the wrapper must NOT read it again (a re-read could observe
-  // a later edit and mis-version the settlement).
-  it("does NOT re-read the document version after the outcome (maps from settledVersion)", async () => {
+  // Contract: the wrapper maps from the OUTCOME's settled version. The dispatch
+  // retry (readVersionGuarded) fires ONLY when the settle-time read failed — a
+  // healthy seam like this one's never does, so the version is read exactly
+  // once. An UNCONDITIONAL re-read would make this call count 2 and redden.
+  it("maps from settledVersion; the dispatch retry fires only when the settle read failed", async () => {
     const readVersion = vi.fn(() => 5);
     const dispatch = await runApply({ readVersion });
-    // Exactly one version read — the executor's verify. The wrapper adds none.
+    // Exactly one version read — the executor's verify. The retry is conditional.
     expect(readVersion).toHaveBeenCalledTimes(1);
     expect(dispatch).toHaveBeenCalledWith(
       expect.objectContaining({ outcome: { kind: "ok" }, settledVersion: 5 })
     );
+  });
+
+  // The settlement-dispatch retry (liveness): a TRANSIENT version-read failure
+  // must not withhold the ack. The retried value is a LABEL and an input to the
+  // reducer's content-unobserved version-delta verdict; that is sound because
+  // the retry runs microtasks after the settle-time read with no possibility of
+  // an interleaved document event on the single-threaded extension host — it
+  // observes the same live version the settle read would have.
+  it("retries readVersion once at dispatch when the settle read failed, and the event carries the retried value", async () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      let calls = 0;
+      const readVersion = vi.fn(() => {
+        calls += 1;
+        if (calls === 1) {
+          throw new Error("boom-version-transient");
+        }
+        return 9;
+      });
+      const dispatch = await runApply({ readVersion, readCanonical: () => "new" });
+      expect(readVersion).toHaveBeenCalledTimes(2); // settle read (threw) + ONE dispatch retry
+      expect(dispatch).toHaveBeenCalledWith(
+        expect.objectContaining({ type: "applyEditSettled", settledVersion: 9 })
+      );
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  it("a PERSISTENT version-read failure settles with settledVersion null (the retry is guarded, no throw)", async () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const readVersion = vi.fn(() => {
+        throw new Error("boom-version");
+      });
+      const dispatch = await runApply({ readVersion, readCanonical: () => "new" });
+      expect(readVersion).toHaveBeenCalledTimes(2); // one settle read + one retry, never more
+      expect(dispatch).toHaveBeenCalledWith(
+        expect.objectContaining({ type: "applyEditSettled", settledVersion: null })
+      );
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  it("the REJECTION arm also retries (guarded): a working version seam labels even a rejected pipeline", async () => {
+    const readVersion = vi.fn(() => 4);
+    const dispatch = await runApply({
+      readText: () => {
+        throw new Error("boom-read");
+      },
+      readVersion,
+    });
+    expect(dispatch).toHaveBeenCalledWith(
+      expect.objectContaining({
+        outcome: expect.objectContaining({ kind: "rejected" }),
+        settledVersion: 4,
+      })
+    );
+  });
+
+  it("the REJECTION arm's retry failing does not strand the lock (settles with settledVersion null)", async () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const readVersion = vi.fn(() => {
+        throw new Error("boom-version");
+      });
+      const dispatch = await runApply({
+        readText: () => {
+          throw new Error("boom-read");
+        },
+        readVersion,
+      });
+      // The retry WAS attempted, exactly once (the pipeline itself never reads
+      // the version on a synchronous-prefix rejection). This is what makes the
+      // test red before the retry exists — the value assertion alone is
+      // already satisfied by Task 1's hardcoded null (Explore r2 New-1).
+      expect(readVersion).toHaveBeenCalledTimes(1);
+      expect(dispatch).toHaveBeenCalledWith(
+        expect.objectContaining({
+          outcome: expect.objectContaining({ kind: "rejected" }),
+          settledVersion: null,
+        })
+      );
+    } finally {
+      warnSpy.mockRestore();
+    }
   });
 });
 
@@ -696,6 +787,101 @@ describe("effect-executor sendEditRejected (via postEditRejected effect)", () =>
       id: 42,
       documentVersion: 11,
     });
+  });
+
+  // sendEditRejected's recovery dispatch shares this PR's failure model: its
+  // three dispatch sites run exactly when delivery is failing, and readVersion
+  // is a documented throw source (Fable r2 85 + error-handler r2 85,
+  // independently). The dispatch MUST still fire (a stuck pending rejection
+  // suppresses visible-edge resync) — but with `documentVersion: null`, NEVER a
+  // fabricated number (Codex r3 99: a stored-version fallback would ship live
+  // bytes at a stale label through the recovery reseed).
+  it("recovery dispatch survives a broken readVersion at the SYNC-throw site: dispatches with an UNOBSERVED version", () => {
+    const dispatch = vi.fn();
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      runReject({
+        send: () => {
+          throw new Error("sync transport throw");
+        },
+        dispatch,
+        applyEditSeam: {
+          ...seamFor(),
+          readVersion: () => {
+            throw new Error("boom-version");
+          },
+        },
+      });
+      expect(dispatch).toHaveBeenCalledWith({
+        type: "editRejectedDeliveryFailed",
+        id: 42,
+        documentVersion: null,
+      });
+    } finally {
+      errorSpy.mockRestore();
+      warnSpy.mockRestore();
+    }
+  });
+
+  // The .then sites are the more insidious mode: unguarded, their throw became
+  // an UNHANDLED REJECTION and the dispatch never fired (Explore r3 T2).
+  it("recovery dispatch survives a broken readVersion at the delivery-REFUSED site: dispatches with an UNOBSERVED version", async () => {
+    const dispatch = vi.fn();
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      runReject({
+        send: vi.fn(async () => false),
+        dispatch,
+        applyEditSeam: {
+          ...seamFor(),
+          readVersion: () => {
+            throw new Error("boom-version");
+          },
+        },
+      });
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(dispatch).toHaveBeenCalledWith({
+        type: "editRejectedDeliveryFailed",
+        id: 42,
+        documentVersion: null,
+      });
+    } finally {
+      errorSpy.mockRestore();
+      warnSpy.mockRestore();
+    }
+  });
+
+  // The THIRD site (the .then onRejected arm) — same shape, pinned for
+  // completeness so no dispatch site is unguarded-by-regression (Codex r4 93).
+  it("recovery dispatch survives a broken readVersion at the delivery-REJECTED site: dispatches with an UNOBSERVED version", async () => {
+    const dispatch = vi.fn();
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      runReject({
+        send: () => Promise.reject(new Error("detached")),
+        dispatch,
+        applyEditSeam: {
+          ...seamFor(),
+          readVersion: () => {
+            throw new Error("boom-version");
+          },
+        },
+      });
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(dispatch).toHaveBeenCalledWith({
+        type: "editRejectedDeliveryFailed",
+        id: 42,
+        documentVersion: null,
+      });
+    } finally {
+      errorSpy.mockRestore();
+      warnSpy.mockRestore();
+    }
   });
 });
 
