@@ -757,8 +757,16 @@ export function createHostSessionCore(context: HostSessionContext, deps: HostSes
                 // save" toast survived the dispose filter below; making the
                 // settlement `ok` removed that toast and left the drop silent.
                 // The wording must NOT re-introduce the false alarm the guarding
-                // fixed: the apply LANDED, it is the VERIFICATION that is
-                // missing, and what was dropped is the edit stashed BEHIND it.
+                // fixed: the write pipeline COMPLETED without failing, it is the
+                // VERIFICATION that is missing, and what was dropped is the edit
+                // stashed BEHIND it. Deliberately not "the apply landed" — the
+                // no-op short-circuit (execute-write.ts) reaches this family
+                // WITHOUT submitting an edit at all, so `appliedUnverified` is not
+                // a landing claim and its ⚠️ note at `settle` binds caller text
+                // too. The TOAST BODY below is unaffected and stays as written:
+                // that path's own precondition is that the document already holds
+                // the intended bytes, so "saved your change" is true for the user
+                // on every route into this arm.
                 // ALIVE deliberately stays toast-free — there the webview's
                 // single-flight replay buffer (which this settlement does not
                 // invalidate) still holds the edit and re-posts it after the ack.

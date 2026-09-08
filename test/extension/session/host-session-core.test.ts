@@ -631,7 +631,9 @@ describe("host-session-core: applyEditSettled drain", () => {
     const toasts = r.effects.filter((e) => e.type === "showError");
     expect(toasts).toHaveLength(1);
     // The wording must not re-introduce the false alarm that guarding the reads
-    // removed: the apply LANDED, only its verification is missing.
+    // removed: the write pipeline COMPLETED, only its verification is missing.
+    // (Not "the apply landed" — the no-op short-circuit reaches this same family
+    // without submitting an edit; see execute-write.ts's ⚠️ note at `settle`.)
     expect(toasts[0]).toMatchObject({ message: expect.stringContaining("could not verify") });
     expect(toasts[0]).toMatchObject({ message: expect.not.stringContaining("Failed to save") });
     // ...and it is IN ADDITION to the triage log, not instead of it.

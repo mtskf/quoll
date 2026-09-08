@@ -17,7 +17,10 @@
 // SPLIT CONTRACT (since `settle()` became total). A settle-time read failure is
 // no longer a pipeline rejection, so what the user sees depends on whether the
 // WRITE failed:
-//   - the apply LANDED and only the verification read broke → an UNVERIFIED-ok
+//   - the write pipeline COMPLETED (the apply landed — or, on the no-op
+//     short-circuit, nothing was submitted at all: `appliedUnverified` is not a
+//     landing claim, per execute-write.ts's ⚠️ note at `settle`) and only the
+//     verification read broke → an UNVERIFIED-ok
 //     settlement: the lock is released, a triage warn is logged, and there is NO
 //     "Failed to save" toast (reporting a write that succeeded as failed is the
 //     defect this file now pins against).
