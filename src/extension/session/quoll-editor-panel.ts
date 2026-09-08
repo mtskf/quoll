@@ -122,6 +122,7 @@ import {
   type HostSessionEvent,
   isWriteLockHeld,
 } from "./host-session-core.js";
+import { createHostSessionStep } from "./host-session-step.js";
 import { themeKindFromColorTheme } from "./theme-kind.js";
 
 // Full dotted id of the setting that gates the host→Problems lint mirror.
@@ -363,32 +364,47 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
       isDisposed: () => disposed,
     });
 
-    // Queued, non-recursive dispatch. `step` runs one transition + its
-    // effects + the state mutation; the unit-tested createDrainingDispatcher
-    // owns the queue + draining guard, so a re-entrant feedback dispatch (an
-    // effect that re-enters the core — applyEdit settlement, edit-rejected
-    // delivery failure, construct/apply sync-throw) is flat / FIFO rather
-    // than a recursive stack. `dispatch` is declared with definite-assignment
-    // so the effect executors below can close over it — they are only invoked
-    // once a dispatch is in flight, after this assignment.
+    // Queued, non-recursive dispatch. `step` (composed below) runs one
+    // transition, COMMITS the resulting state, then runs its effects and settles
+    // the barrier; the unit-tested createDrainingDispatcher owns the queue +
+    // draining guard, so a re-entrant feedback dispatch (an effect that re-enters
+    // the core — applyEdit settlement, edit-rejected delivery failure,
+    // construct/apply sync-throw) is flat / FIFO rather than a recursive stack.
+    // `dispatch` is declared with definite-assignment so the effect executors
+    // below can close over it — they are only invoked once a dispatch is in
+    // flight, after this assignment.
     let dispatch!: (event: HostSessionEvent) => void;
-    const step = (event: HostSessionEvent): void => {
-      const result = core.transition(state, event);
-      state = result.state;
-      runEffects(result.effects);
-      // Drain any side channel deferred behind the write lock once a SUCCESSFUL
-      // settlement has released it. `applied` is false only for a FAILED apply
-      // settlement — then the deferred thunk is dropped (the edit never landed,
-      // so it would read pre-edit state). Placed AFTER runEffects so a
-      // settlement that re-acquires the lock via the stash drain (its
-      // `applyEdit` effect ran above, re-setting the lock in `state`) keeps the
-      // barrier deferred. Side channels are async (`void handle…` /
-      // `void openInTextEditor…`) and do not synchronously re-enter dispatch, so
-      // this cannot recurse into the active drain loop; the barrier also
-      // isolates any synchronous thunk throw via onError.
-      const editApplied = !(event.type === "applyEditSettled" && event.outcome.kind !== "ok");
-      editSettledBarrier.settle(editApplied);
-    };
+    // The transition + effects + barrier release live in host-session-step.ts so
+    // the throwing-effects branch has unit-test reach (this closure is
+    // vscode-bound). Contract recap, since the ordering here is load-bearing:
+    // the settle runs UNCONDITIONALLY — a throwing effect used to skip it and
+    // strand a deferred side channel — and its `applied` verdict is read from
+    // the EVENT, false only for a FAILED apply settlement (then the deferred
+    // thunk is dropped: the edit never landed, so it would read pre-edit state).
+    // It still runs AFTER the effects so a deferred side channel observes them
+    // (the ack Document is already posted). Note WHY that ordering is NOT what
+    // keeps a stash drain deferred: the re-acquired lock
+    // (`pendingApplyBaseVersion`) is part of the STATE the reducer returns
+    // (host-session-core's `applyEditSettled` drain arm), which `commitTransition`
+    // commits BEFORE the effect list — the `applyEdit` EFFECT never touches
+    // `state`, so `isWriteLockHeld(state)` reads true either way. Side channels
+    // are async (`void handle…` / `void openInTextEditor…`) and do not
+    // synchronously re-enter dispatch, so this cannot recurse into the active
+    // drain loop; the barrier also isolates any synchronous thunk throw via
+    // onError.
+    const step = createHostSessionStep({
+      commitTransition: (event) => {
+        const result = core.transition(state, event);
+        state = result.state;
+        return result.effects;
+      },
+      // `runEffects` is LATE-BOUND: the executor that owns it is destructured
+      // BELOW this point, so it must be reached through a lambda (a direct
+      // reference here would be a TDZ error). `editSettledBarrier` is already
+      // constructed above; its lambda is plain delegation.
+      runEffects: (effects) => runEffects(effects),
+      settleEditBarrier: (applied) => editSettledBarrier.settle(applied),
+    });
     dispatch = createDrainingDispatcher<HostSessionEvent>(step);
 
     // canWriteNow gates host-side writes to on-disk file: documents only

@@ -61,9 +61,12 @@ const flushSettle = async (): Promise<void> => {
   }
 };
 
-// Reducer + executor wired exactly as the panel wires them, over a fake document
-// whose settle-time canonical read can be armed to throw. `build` is the write
-// ATTEMPT probe: it runs only once the reducer has ACCEPTED an edit and issued
+// Reducer + executor wired as the panel wires them MINUS the barrier: the panel
+// composes these through `createHostSessionStep` (commit → runEffects →
+// unconditional `editSettledBarrier.settle`), pinned separately in
+// host-session-step.test.ts. This file is about the reducer↔executor pair over a
+// fake document whose settle-time canonical read can be armed to throw. `build`
+// is the write ATTEMPT probe: it runs only once the reducer has ACCEPTED an edit and issued
 // the `applyEdit` effect, so a stashed (lock-blocked) keystroke leaves no entry.
 interface HarnessOptions {
   /** `workspace.applyEdit` resolves FALSE — a genuinely failed write, so the
@@ -434,7 +437,9 @@ describe("applyEdit settlement: a settle-time read failure releases the host wri
 // rejection arm; now the settlement is `ok`, so its ack `postDocument` re-runs
 // the broken read on the UNGUARDED fulfilment arm — and `createDrainingDispatcher`
 // has `try`/`finally` with no `catch`, so an escaping throw becomes an unhandled
-// rejection with no toast, no triage log, and a skipped `editSettledBarrier`.
+// rejection with no toast and no triage log. (It would NOT skip the barrier: the
+// panel's `step` settles unconditionally — see host-session-step.ts — but the ack
+// Document is still lost, which is what these pins are about.)
 // The guard lives in `effect-executor.ts`'s `postDocument` case; these are its
 // pins.
 describe("applyEdit settlement: the correlated reseed failure stays contained", () => {
