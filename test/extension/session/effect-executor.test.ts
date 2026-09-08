@@ -204,7 +204,8 @@ describe("effect-executor runApplyEdit (wrapper mapping)", () => {
     expect(dispatch).toHaveBeenCalledWith(
       expect.objectContaining({
         type: "applyEditSettled",
-        outcome: { kind: "ok", documentVersion: 8 },
+        outcome: { kind: "ok" },
+        settledVersion: 8,
         currentContent: "new", // from the outcome's settledContent, not a re-read
         preApplyContent: "old", // canonical pre-apply, populated for ok too
         divergedAfterApply: false,
@@ -217,7 +218,8 @@ describe("effect-executor runApplyEdit (wrapper mapping)", () => {
     expect(dispatch).toHaveBeenCalledWith(
       expect.objectContaining({
         type: "applyEditSettled",
-        outcome: { kind: "ok", documentVersion: 8 },
+        outcome: { kind: "ok" },
+        settledVersion: 8,
         currentContent: "CORRUPTED",
         divergedAfterApply: true,
       })
@@ -284,7 +286,8 @@ describe("effect-executor runApplyEdit (wrapper mapping)", () => {
     expect(dispatch).toHaveBeenCalledWith(
       expect.objectContaining({
         type: "applyEditSettled",
-        outcome: { kind: "ok", documentVersion: 9 },
+        outcome: { kind: "ok" },
+        settledVersion: 9,
       })
     );
   });
@@ -315,6 +318,9 @@ describe("effect-executor runApplyEdit (wrapper mapping)", () => {
       expect.objectContaining({
         type: "applyEditSettled",
         outcome: expect.objectContaining({ kind: "rejected", message: "boom-read" }),
+        // TASK-1-ONLY value: nothing was read BY THE PIPELINE (Task 2's guarded
+        // dispatch retry — not present yet — is what later labels this arm).
+        settledVersion: null,
         // NOT OBSERVED — nothing was read, so the settlement says so rather than
         // fabricating bytes. Safe because the outcome is non-ok (`canDrain`
         // requires `ok`, so it never reaches `decideEdit`) and because the
@@ -340,7 +346,8 @@ describe("effect-executor runApplyEdit (wrapper mapping)", () => {
     expect(dispatch).toHaveBeenCalledWith(
       expect.objectContaining({
         type: "applyEditSettled",
-        outcome: { kind: "ok", documentVersion: 7 },
+        outcome: { kind: "ok" },
+        settledVersion: 7,
         currentContent: null,
         divergedAfterApply: false,
       })
@@ -363,7 +370,8 @@ describe("effect-executor runApplyEdit (wrapper mapping)", () => {
       expect(dispatch).toHaveBeenCalledWith(
         expect.objectContaining({
           type: "applyEditSettled",
-          outcome: { kind: "ok", documentVersion: null },
+          outcome: { kind: "ok" },
+          settledVersion: null,
           currentContent: "new", // the CONTENT was observed
         })
       );
@@ -499,6 +507,8 @@ describe("effect-executor runApplyEdit (wrapper mapping)", () => {
       expect.objectContaining({
         type: "applyEditSettled",
         outcome: expect.objectContaining({ kind: "rejected", message: "boom-read" }),
+        // TASK-1-ONLY value; see the "pipeline rejection … STILL settles" test.
+        settledVersion: null,
         canWrite: false,
       })
     );
@@ -520,7 +530,8 @@ describe("effect-executor runApplyEdit (wrapper mapping)", () => {
     expect(dispatch).toHaveBeenCalledWith(
       expect.objectContaining({
         type: "applyEditSettled",
-        outcome: { kind: "ok", documentVersion: 8 },
+        outcome: { kind: "ok" },
+        settledVersion: 8,
         canWrite: false,
       })
     );
@@ -536,7 +547,7 @@ describe("effect-executor runApplyEdit (wrapper mapping)", () => {
     // Exactly one version read — the executor's verify. The wrapper adds none.
     expect(readVersion).toHaveBeenCalledTimes(1);
     expect(dispatch).toHaveBeenCalledWith(
-      expect.objectContaining({ outcome: { kind: "ok", documentVersion: 5 } })
+      expect.objectContaining({ outcome: { kind: "ok" }, settledVersion: 5 })
     );
   });
 });
@@ -840,5 +851,46 @@ describe("effect-executor runEffects other cases", () => {
     themeKind = "dark"; // theme changes AFTER the factory was built
     runEffects([{ type: "postDocument", docVersion: 2, externalEpoch: 0, epochGeneration: 1 }]);
     expect(seen).toEqual(["light", "dark"]);
+  });
+});
+
+describe("effect-executor showResyncFailure (withheld settlement ack)", () => {
+  it("toasts once, and shares its latch with the postDocument build-failure guard", () => {
+    const showError = vi.fn();
+    const buildSeedDocument = vi.fn(() => {
+      throw new Error("boom-seed");
+    });
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const { runEffects } = createEffectExecutor(makeDeps({ showError, buildSeedDocument }));
+      runEffects([{ type: "showResyncFailure" }]);
+      runEffects([{ type: "showResyncFailure" }]); // same incident → latched
+      expect(showError).toHaveBeenCalledTimes(1);
+      // The OTHER trigger is latched by the SAME flag: a failing reseed build in
+      // the same incident must not toast a second time.
+      runEffects([{ type: "postDocument", docVersion: 1, externalEpoch: 0, epochGeneration: 7 }]);
+      expect(showError).toHaveBeenCalledTimes(1);
+    } finally {
+      errorSpy.mockRestore();
+    }
+  });
+
+  it("a THROWING toast is contained and spends the latch", () => {
+    const showError = vi.fn(() => {
+      throw new Error("toast failed");
+    });
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const { runEffects } = createEffectExecutor(makeDeps({ showError }));
+      expect(() => runEffects([{ type: "showResyncFailure" }])).not.toThrow();
+      runEffects([{ type: "showResyncFailure" }]);
+      expect(showError).toHaveBeenCalledTimes(1);
+      expect(errorSpy).toHaveBeenCalledWith(
+        expect.stringContaining("failed to report the withheld settlement ack"),
+        expect.anything()
+      );
+    } finally {
+      errorSpy.mockRestore();
+    }
   });
 });

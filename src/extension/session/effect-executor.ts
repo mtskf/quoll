@@ -43,6 +43,13 @@ import type {
   HostSessionState,
 } from "./host-session-core.js";
 
+// One user-facing message for BOTH "the webview could not be resynced" families
+// (reseed build failure / withheld settlement ack) — same incident semantics,
+// same latch, so the wording must stay true for both: the view could not be
+// updated, and unsaved changes MAY not have been saved.
+const RESYNC_FAILURE_MESSAGE =
+  "Quoll could not update the editor view. If you have unsaved changes they may not have been saved — reload the window (Developer: Reload Window).";
+
 /** The VS Code build+apply+verify seam for the write executor (Plan S6). The
  *  pipeline itself lives in `document-write/execute-write.ts`; this alias keeps
  *  the panel's inline wiring + the executor deps stable. `TEdit` is the edit
@@ -104,16 +111,18 @@ export function createEffectExecutor<TEdit>(deps: EffectExecutorDeps<TEdit>): Ef
   // first.
   let hostMountReported = false;
 
-  // Per-panel latch for the reseed-build failure notification (see the
-  // `postDocument` guard). One notification ATTEMPT per INCIDENT — a persistently
-  // broken document seam can fire once per settlement, and a toast per settlement
-  // is user-visible spam. The latch is RE-ARMED by a successful build (see the
-  // `postDocument` case): a success proves the seam recovered, so the next failure
-  // is a new incident and deserves its own signal. Without that, one transient
-  // hiccup early in a panel's life would consume the session's only user-visible
-  // signal for a state this module documents as one that must NOT be silent — and
-  // panels live for hours.
-  let reseedBuildFailureReported = false;
+  // Per-panel latch shared by TWO triggers that both mean "the webview could not
+  // be resynced": the `postDocument` reseed-build failure guard, and
+  // `showResyncFailure` (a withheld settlement ack — host-session-core's
+  // ackLabelObserved gate). One notification ATTEMPT per INCIDENT — either
+  // failure mode can recur once per settlement, and a toast per settlement is
+  // user-visible spam. The latch is RE-ARMED by a successful `postDocument`
+  // build (see that case): a success proves the seam recovered, so the next
+  // failure is a new incident and deserves its own signal. Without that, one
+  // transient hiccup early in a panel's life would consume the session's only
+  // user-visible signal for a state this module documents as one that must NOT
+  // be silent — and panels live for hours.
+  let resyncFailureReported = false;
 
   // Alias for the injected open-external delegate (see the `openExternal` effect
   // case for why it is called via this local rather than `deps.openExternal(...)`).
@@ -265,12 +274,11 @@ export function createEffectExecutor<TEdit>(deps: EffectExecutorDeps<TEdit>): Ef
       // completed (an apply resolved ok, or the no-op short-circuit submitted
       // nothing) and only the verification read failed. Mapping it to a failure
       // kind would toast "Failed to save" for a write that did not fail, and
-      // skip the self-advance. `documentVersion` rides through as `null` when the
-      // version was not observed — the reducer then leaves the version alone (no
-      // fabrication, no rewind); when it WAS observed the normal self-advance
-      // applies.
+      // skip the self-advance. The settled version rides on the EVENT, not the
+      // outcome (one representation for every outcome kind — v9 unification), so
+      // this outcome carries no version at all.
       case "appliedUnverified":
-        return { kind: "ok", documentVersion: result.settledVersion };
+        return { kind: "ok" };
       case "applyRefused":
         return { kind: "refused" };
       case "buildThrew":
@@ -361,6 +369,7 @@ export function createEffectExecutor<TEdit>(deps: EffectExecutorDeps<TEdit>): Ef
         deps.dispatch({
           type: "applyEditSettled",
           outcome: toApplyEditOutcome(result),
+          settledVersion: result.settledVersion,
           canWrite: readCanWrite(),
           currentContent: result.settledContent,
           preApplyContent: result.preApplyContent,
@@ -470,6 +479,8 @@ export function createEffectExecutor<TEdit>(deps: EffectExecutorDeps<TEdit>): Ef
           deps.dispatch({
             type: "applyEditSettled",
             outcome: { kind: "rejected", message: errorMessage(err) },
+            // NOT OBSERVED on this arm until the Task-2 dispatch retry lands here.
+            settledVersion: null,
             canWrite: false,
             // NOT OBSERVED — nothing was read, so say nothing rather than
             // fabricating an empty document. The non-ok foreign-bytes check reads
@@ -565,7 +576,7 @@ export function createEffectExecutor<TEdit>(deps: EffectExecutorDeps<TEdit>): Ef
               "[quoll] failed to build the Document to post; skipping this reseed",
               err
             );
-            if (!reseedBuildFailureReported) {
+            if (!resyncFailureReported) {
               // The latch is set BEFORE the attempt, so the guarantee is "at most
               // ONE notification attempt per incident" — not "exactly one toast".
               // ⛔ Do NOT move this to latch-after-success. Both placements lose
@@ -582,7 +593,7 @@ export function createEffectExecutor<TEdit>(deps: EffectExecutorDeps<TEdit>): Ef
               //     repo alone.
               // Spam is the worse failure, and this placement removes it
               // structurally rather than by argument about VS Code internals.
-              reseedBuildFailureReported = true;
+              resyncFailureReported = true;
               // GUARDED: this call sits INSIDE the boundary that exists to stop a
               // throw from escaping `runEffects`, and `window.showErrorMessage`'s
               // SYNCHRONOUS throw is not absorbed by the panel's wrapper — an
@@ -595,9 +606,7 @@ export function createEffectExecutor<TEdit>(deps: EffectExecutorDeps<TEdit>): Ef
                 // and the executor cannot tell them apart — so an unconditional
                 // "Recent edits may not be saved" would tell a user their edits
                 // might be lost at first load, before they had typed anything.
-                deps.showError(
-                  "Quoll could not update the editor view. If you have unsaved changes they may not have been saved — reload the window (Developer: Reload Window)."
-                );
+                deps.showError(RESYNC_FAILURE_MESSAGE);
               } catch (toastErr) {
                 console.error("[quoll] failed to report the reseed build failure", toastErr);
               }
@@ -613,7 +622,7 @@ export function createEffectExecutor<TEdit>(deps: EffectExecutorDeps<TEdit>): Ef
           // above (which bounds a SINGLE incident); without this, one transient
           // early hiccup would leave every later real incident structurally
           // silent for the life of the panel.
-          reseedBuildFailureReported = false;
+          resyncFailureReported = false;
           post(documentMessage);
           // First postDocument is the seed; report once it (and its
           // host:postMessage) is recorded so host:mount carries both stages.
@@ -700,6 +709,22 @@ export function createEffectExecutor<TEdit>(deps: EffectExecutorDeps<TEdit>): Ef
           // binding, so it stays OUT of that guard's file allowlist — keeping the
           // guard able to flag a future raw binding call added here by mistake.
           runOpenExternal(effect.href);
+          break;
+        case "showResyncFailure":
+          // A withheld settlement ack (host-session-core's ackLabelObserved gate).
+          // Same latch as the postDocument build-failure guard: both report "the
+          // webview could not be resynced", and one incident must not toast twice.
+          // Latch-before-attempt + guarded showError for the same reasons as the
+          // build guard (a throwing toast must neither escape runEffects nor
+          // retry within the incident).
+          if (!resyncFailureReported) {
+            resyncFailureReported = true;
+            try {
+              deps.showError(RESYNC_FAILURE_MESSAGE);
+            } catch (err) {
+              console.error("[quoll] failed to report the withheld settlement ack", err);
+            }
+          }
           break;
         default: {
           // Exhaustiveness guard — a new HostSessionEffect variant without

@@ -87,8 +87,8 @@ export function isEditApplied(event: HostSessionEvent): boolean {
   }
   switch (event.outcome.kind) {
     case "ok":
-      // Includes the UNVERIFIED landing (`documentVersion: null`): the write
-      // completed and only the verification read broke (PR #399).
+      // Includes the UNVERIFIED landing (the event's `settledVersion` is null):
+      // the write completed and only the verification read broke (PR #399).
       return true;
     case "refused":
     case "constructThrew":

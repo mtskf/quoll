@@ -95,12 +95,7 @@ export function isWriteLockHeld(state: HostSessionState): boolean {
 }
 
 export type ApplyEditOutcome =
-  // `documentVersion: null` ⇔ the settle-time version read threw, so no
-  // post-apply version was OBSERVED. The settlement then leaves
-  // `lastAppliedDocVersion` alone: a fabricated value (a `-1` sentinel) would be
-  // assigned VERBATIM here — the self-advance is the documented exemption from
-  // `resyncLiveVersion`'s `max` clamp — and REWIND the version.
-  | { readonly kind: "ok"; readonly documentVersion: number | null }
+  | { readonly kind: "ok" }
   | { readonly kind: "refused" }
   | { readonly kind: "constructThrew"; readonly message: string }
   | { readonly kind: "applyThrew"; readonly message: string }
@@ -124,6 +119,14 @@ export type HostSessionEvent =
   | {
       readonly type: "applyEditSettled";
       readonly outcome: ApplyEditOutcome;
+      // The settle-time OBSERVED document version — ONE representation for every
+      // outcome kind (v9 unification: `outcome.documentVersion` and a separate
+      // event field would let the self-advance and the ack gate read different
+      // values). `null` ⇔ NOT OBSERVED: the executor's settle-time read AND its
+      // guarded settlement-dispatch retry both failed. Never a fabricated number —
+      // the advance below is inside a `!== null` guard, so `null` cannot reach a
+      // version assignment.
+      readonly settledVersion: number | null;
       // Fresh live snapshots taken by the executor at settlement time so the
       // stash drain can re-run the FULL decideEdit gates (canWrite + canonical
       // current text) AND the epoch foreign-bytes check (site 2). Since S3a the
@@ -136,19 +139,23 @@ export type HostSessionEvent =
       // landed), and the pipeline-rejection arm, which has no trustworthy
       // snapshot at all and MUST NOT re-read (that would strand the lock on the
       // recovery path — the read seams are the candidate throw sources).
-      // `null` is deliberate rather than a stand-in value: the foreign-bytes
-      // check below reads it as NOT FOREIGN, and `canDrain` refuses to drain
-      // without an OBSERVED equality. Sending fabricated bytes instead would flip
-      // `foreignAtSettle`, bump the epoch, and the resulting reseed would
+      // `null` is deliberate rather than a stand-in value: without OBSERVED
+      // bytes the foreign-bytes check below falls back to the version-delta
+      // evidence at site 2, and `canDrain` refuses to drain without an OBSERVED
+      // equality. Sending fabricated bytes instead would flip `foreignAtSettle`
+      // on a clean save, bump the epoch, and the resulting reseed would
       // invalidate the webview's replay buffer — silently dropping the very
       // keystrokes the failure toast tells the user to retry.
-      // ACCEPTED RESIDUAL RISK, now TYPED rather than accidental: with no
-      // observation the foreign-bytes check cannot fire, so a foreign edit that
-      // raced the apply is NOT detected here and the epoch does not advance. (It
-      // used to fall out of the rejection arm's two equal empties; the same
-      // verdict is now the explicit answer for "not observed".) The webview
-      // therefore keeps its replay buffer live and can re-post over that foreign
-      // edit on the user's retry. This is deliberate — the alternative
+      // ACCEPTED RESIDUAL RISK, now TYPED rather than accidental and NARROWER
+      // than before: the version-delta fallback (site 2) supplies positive
+      // foreign evidence whenever the version moved beyond our own
+      // contribution, so the residual narrows to "content unobserved AND delta
+      // ≤ own contribution" — a foreign edit raced the apply but left the
+      // version exactly where our own contribution would have. (It used to
+      // fall out of the rejection arm's two equal empties; the same verdict is
+      // now the explicit answer for "not observed".) In that narrower residual
+      // the webview keeps its replay buffer live and can re-post over the
+      // foreign edit on the user's retry. This is deliberate — the alternative
       // (re-reading the document to get honest bytes) goes through the seam that
       // just threw and strands the write lock, which is strictly worse. Note this
       // is about the EPOCH only; `null` reaching `decideEdit` is separately
@@ -192,7 +199,11 @@ export type HostSessionEvent =
   | {
       readonly type: "editRejectedDeliveryFailed";
       readonly id: number;
-      readonly documentVersion: number;
+      // `null` ⇔ the recovery read was unobserved (the executor's guarded
+      // readVersionGuarded failed) — the arm clears the rejection (a stuck
+      // pending rejection is the deadlock this event exists to break) but
+      // WITHHOLDS the recovery reseed rather than fabricating a label.
+      readonly documentVersion: number | null;
     }
   | { readonly type: "disposed" };
 
@@ -224,7 +235,10 @@ export type HostSessionEffect =
   | { readonly type: "applyEdit"; readonly content: string; readonly baseDocVersion: number }
   | { readonly type: "showError"; readonly message: string }
   | { readonly type: "logWarn"; readonly message: string; readonly detail: Record<string, unknown> }
-  | { readonly type: "openExternal"; readonly href: string };
+  | { readonly type: "openExternal"; readonly href: string }
+  // User-visible signal for a withheld settlement ack; the executor latches it
+  // per incident together with the reseed-build failure.
+  | { readonly type: "showResyncFailure" };
 
 export interface HostSessionResult {
   readonly state: HostSessionState;
@@ -276,8 +290,9 @@ function contentMatches(a: string, b: string | null): boolean {
  *  the webview did not produce it), whereas a lock-HELD advance is usually the
  *  in-flight apply's own echo and is adjudicated by the settlement check
  *  instead. This is the SINGLE version-raising path in the reducer; the only
- *  other `lastAppliedDocVersion` write is the settlement `ok` self-advance (the
- *  sole documented exemption, fenced by the invariant test). */
+ *  other write is the settlement advance (`advanced` — `Math.max` over
+ *  `event.settledVersion` for EVERY outcome kind, clamp-consistent with this
+ *  helper, no longer an exemption — fenced by the invariant test). */
 function resyncLiveVersion(state: HostSessionState, liveVersion: number): HostSessionState {
   const raised = Math.max(state.lastAppliedDocVersion, liveVersion);
   const foreignAdvance =
@@ -300,10 +315,36 @@ const postDoc = (s: HostSessionState, docVersion: number): HostSessionEffect => 
   epochGeneration: s.epochGeneration,
 });
 
-// Per-outcome settlement effects: the ack Document (+ non-ok diagnostics).
-// Extracted so the applyEditSettled arm can SUPPRESS these wholesale when
-// disposed (the webview is gone) and REPLACE them with drain effects when a
-// stash drains.
+// The withhold pair — what a settlement emits INSTEAD of its ack Document when
+// no source observed a post-apply version. Not silent: the logWarn is the triage
+// record (fires every time), and showResyncFailure is the user-visible signal,
+// latched per incident by the EXECUTOR (the reducer is pure and cannot hold a
+// latch) — the same latch as the reseed-build failure, so the two "webview could
+// not be resynced" families cannot double-toast one incident.
+function withholdAckEffects(
+  settled: HostSessionState,
+  heldBase: number | null,
+  context: HostSessionContext
+): HostSessionEffect[] {
+  return [
+    {
+      type: "logWarn",
+      message:
+        "[quoll] settlement ack withheld: no post-apply document version was observed (settle-time read and dispatch retry failed; no lock-held resync arrived) — posting would pair live bytes with a stale label",
+      detail: {
+        uri: context.uriString,
+        heldBase,
+        lastAppliedDocVersion: settled.lastAppliedDocVersion,
+      },
+    },
+    { type: "showResyncFailure" },
+  ];
+}
+
+// Per-outcome settlement effects: the ack Document (or its withhold pair, gated
+// on `ackLabelObserved`) + non-ok diagnostics. Extracted so the applyEditSettled
+// arm can SUPPRESS these wholesale when disposed (the webview is gone) and
+// REPLACE them with drain effects when a stash drains.
 //
 // ORDER IS LOAD-BEARING on every non-ok arm: the failure `showError` comes
 // BEFORE the ack `postDocument`. The two are independent surfaces — `showError`
@@ -321,11 +362,15 @@ function settlementEffects(
   outcome: ApplyEditOutcome,
   settled: HostSessionState,
   heldBase: number | null,
-  context: HostSessionContext
+  context: HostSessionContext,
+  ackLabelObserved: boolean
 ): HostSessionEffect[] {
+  const ack = ackLabelObserved
+    ? [postDoc(settled, settled.lastAppliedDocVersion)]
+    : withholdAckEffects(settled, heldBase, context);
   switch (outcome.kind) {
     case "ok":
-      return [postDoc(settled, settled.lastAppliedDocVersion)];
+      return ack;
     case "refused":
       return [
         {
@@ -337,15 +382,12 @@ function settlementEffects(
           type: "showError",
           message: `Quoll could not save ${context.fsPath}. Reload the file or try again.`,
         },
-        postDoc(settled, settled.lastAppliedDocVersion),
+        ...ack,
       ];
     case "constructThrew":
     case "applyThrew":
     case "rejected":
-      return [
-        { type: "showError", message: `Failed to save: ${outcome.message}` },
-        postDoc(settled, settled.lastAppliedDocVersion),
-      ];
+      return [{ type: "showError", message: `Failed to save: ${outcome.message}` }, ...ack];
     default: {
       const _exhaustive: never = outcome;
       throw new Error(
@@ -563,6 +605,11 @@ export function createHostSessionCore(context: HostSessionContext, deps: HostSes
         // told). A clean `ok` settle (incl. the applyEdit no-op on a GC'd
         // sole-editor document) has no showError, so no false alarm.
         if (state.disposed && state.pendingEdit === null) {
+          // `ackLabelObserved` is passed the literal `true` here — the
+          // `.filter(e => e.type === "showError")` below keeps only toasts
+          // either way, so the argument is inert. `true` is chosen so the
+          // withhold pair (a webview-facing signal) is never even constructed
+          // for a disposed panel.
           const effects =
             event.outcome.kind === "ok"
               ? []
@@ -570,7 +617,8 @@ export function createHostSessionCore(context: HostSessionContext, deps: HostSes
                   event.outcome,
                   state,
                   state.pendingApplyBaseVersion,
-                  state.context
+                  state.context,
+                  true
                 ).filter((e) => e.type === "showError");
           return { state, effects };
         }
@@ -584,14 +632,18 @@ export function createHostSessionCore(context: HostSessionContext, deps: HostSes
           pendingEdit: null,
           inFlightContent: null,
         };
-        // NOT OBSERVED (`documentVersion === null`) ⇒ NO advance. This assignment
-        // is verbatim (the documented exemption from `resyncLiveVersion`'s `max`
-        // clamp), so any stand-in value would REWIND the version rather than be
-        // clamped away.
-        const versioned: HostSessionState =
-          event.outcome.kind === "ok" && event.outcome.documentVersion !== null
-            ? { ...released, lastAppliedDocVersion: event.outcome.documentVersion }
-            : released;
+        // Unified settle-time version advance — EVERY outcome kind, one source
+        // (`event.settledVersion`), raised via Math.max so an observed version can
+        // never REWIND the label (unlike the old ok-only verbatim assignment, this
+        // is clamp-consistent with `resyncLiveVersion`; deliberately NOT routed
+        // through that helper — the lock was just released above, so its lock-free
+        // foreign-advance branch would double-count the epoch against site 2
+        // below). NOT OBSERVED (`null`) ⇒ NO advance, no fabrication, no rewind.
+        const advanced =
+          event.settledVersion !== null
+            ? Math.max(released.lastAppliedDocVersion, event.settledVersion)
+            : released.lastAppliedDocVersion;
+        const versioned: HostSessionState = { ...released, lastAppliedDocVersion: advanced };
 
         // Site 2 — settlement foreign-bytes check ⇒ epoch++, baseline per
         // outcome. OK: baseline is `inFlightContent` (the apply's target); a
@@ -624,20 +676,53 @@ export function createHostSessionCore(context: HostSessionContext, deps: HostSes
         // this disjunct is belt-and-braces — but it keeps the convergence driven
         // by the executor's authoritative verdict, not a re-derived heuristic.
         const divergedAfterApply = event.outcome.kind === "ok" && event.divergedAfterApply === true;
-        // NOT OBSERVED (`currentContent === null`) ⇒ NOT foreign. Treating a
-        // missing snapshot as foreign is the REJECTED variant: it bumps the epoch
-        // and edit-sync drops the webview's replay buffer, destroying buffered
-        // keystrokes for a write that most likely landed exactly as intended.
+        // content unobserved ⇒ the verdict falls back to POSITIVE version-delta
+        // evidence (below); treating MISSING evidence as foreign remains the
+        // rejected variant.
         const observed = event.currentContent;
+        // Content-unobserved fallback: POSITIVE version-delta evidence only. Our
+        // own write contributes exactly one version increment on an ok apply and
+        // zero otherwise. "+1 per content change" is de facto, NOT an API
+        // contract — VS Code guarantees only that `TextDocument.version`
+        // strictly increases per change; it holds for Quoll's write shape (a
+        // single-replace WorkspaceEdit producing one content change event). If
+        // it ever drifts, the failure direction is bounded and stated honestly:
+        // a multi-increment OWN edit is misread as foreign → one spurious epoch
+        // bump → the webview reseeds and its replay buffer is dropped (buffered-
+        // keystroke loss, never corruption); a foreign edit batched into zero
+        // extra increments is MISSED → no bump, which is exactly the
+        // pre-existing accepted residual for an unobserved settlement. A delta
+        // BEYOND our contribution proves something foreign also moved the
+        // document. "No advance" is NOT evidence (`!ownEditOnly` would
+        // re-import the rejected "missing ⇒ foreign" through the back door and
+        // drop the replay buffer for a write that landed exactly as intended).
+        const ownContribution = event.outcome.kind === "ok" ? 1 : 0;
         const foreignAtSettle =
           divergedAfterApply ||
-          (observed !== null &&
-            (event.outcome.kind === "ok"
+          (observed !== null
+            ? event.outcome.kind === "ok"
               ? inFlight !== null && !contentMatches(observed, inFlight)
-              : !contentMatches(observed, event.preApplyContent)));
+              : !contentMatches(observed, event.preApplyContent)
+            : heldBase !== null && versioned.lastAppliedDocVersion > heldBase + ownContribution);
         const settled: HostSessionState = foreignAtSettle
           ? { ...versioned, externalEpoch: versioned.externalEpoch + 1 }
           : versioned;
+
+        // The ack-label gate. The ack Document pairs LIVE bytes (buildSeedDocument
+        // reads the document at effect time) with the reducer's version label, so
+        // the label must be backed by a real `document.version` OBSERVATION:
+        //   - the settle-time/retry read succeeded (`settledVersion !== null`), or
+        //   - the version advanced under the lock (a lock-held documentChanged /
+        //     edit resync — the wiring snapshots the live version into those
+        //     events, so the raised label IS an observation; withholding here
+        //     would break the lock-held deferral contract and leave a quiet
+        //     document with no repost ever).
+        // Byte equality is deliberately NOT evidence: an undone foreign edit
+        // leaves identical bytes at a HIGHER version, and acking that label lets
+        // the webview base its next Edit on it → stale verdict → lock-free
+        // forward advance → epoch bump → replay buffer dropped.
+        const ackLabelObserved =
+          event.settledVersion !== null || (heldBase !== null && settled.lastAppliedDocVersion > heldBase);
 
         // Drain is SAFE only when a stash is waiting, edit #1 applied cleanly
         // (`ok`), and the settled document is EXACTLY edit #1's result
@@ -659,8 +744,11 @@ export function createHostSessionCore(context: HostSessionContext, deps: HostSes
         // be established, so the stash is dropped exactly as it is for a failed
         // save. While the panel is alive the keystroke still survives in the
         // webview's replay buffer (which this settlement deliberately does not
-        // invalidate) and is re-posted after the ack; post-dispose the stash is
-        // its only carrier, which is why the drop is LOGGED below.
+        // invalidate) — re-posted once a later OBSERVED Document arrives; when
+        // the ack itself is withheld (unobserved label) the single flight stays
+        // parked until an observed documentChanged/ready Document lands (the
+        // quiet-document residual the follow-up TODO entry carries). Post-dispose
+        // the stash is its only carrier, which is why the drop is LOGGED below.
         const canDrain =
           stash !== null &&
           event.outcome.kind === "ok" &&
@@ -677,7 +765,13 @@ export function createHostSessionCore(context: HostSessionContext, deps: HostSes
           // not less. A clean `ok` settle has no showError → []; a failure →
           // [showError]; an ok-but-mismatch (external won) is a valid
           // resolution, not a failure → also []. Alive: full effects.
-          const baseEffects = settlementEffects(event.outcome, settled, heldBase, state.context);
+          const baseEffects = settlementEffects(
+            event.outcome,
+            settled,
+            heldBase,
+            state.context,
+            ackLabelObserved
+          );
           // Diagnostic log for the post-apply divergence. THREE arms, in this
           // order — and the `null` semantics are written LITERALLY here so nobody
           // "fixes" a condition with `observed ?? ""`:
@@ -846,6 +940,18 @@ export function createHostSessionCore(context: HostSessionContext, deps: HostSes
               // webview's docVersion bookkeeping (so the next retry lands on a
               // live base instead of stale-rejecting). Mirrors the `ready`-arm
               // redelivery precedent.
+              //
+              // UNLIKE the readonly/stale/no-op repost above, this arm is
+              // DELIBERATELY NOT gated on `ackLabelObserved` (round-2 reversal —
+              // see the plan's dispositions table): in the unobserved-label
+              // corner (version unread twice + no lock-held resync + the stash
+              // parse-failing) every reviewed local variant, a Document-free
+              // degrade included, converges to the same terminal state anyway —
+              // without an observation no correct label-advance exists, and a
+              // `ready` replay redelivers at the STORED label with no resync
+              // regardless. A durable fix needs rejection-state provenance +
+              // observed-version catch-up — its own slice, tracked in the
+              // follow-up TODO entry.
               effects: state.disposed
                 ? [{ type: "showError", message: `Cannot save: ${verdict.error.message}` }]
                 : [
@@ -866,10 +972,17 @@ export function createHostSessionCore(context: HostSessionContext, deps: HostSes
           case "stale":
           case "no-op":
             // Nothing to write. Repost the authoritative (settled) Document so
-            // the webview reseeds — suppressed post-dispose.
+            // the webview reseeds — suppressed post-dispose, and WITHHELD when
+            // the label is unobserved (same gate as settlementEffects: this
+            // repost is an ack Document too, and canDrain's observed CONTENT is
+            // not version evidence).
             return {
               state: settled,
-              effects: state.disposed ? [] : [postDoc(settled, settled.lastAppliedDocVersion)],
+              effects: state.disposed
+                ? []
+                : ackLabelObserved
+                  ? [postDoc(settled, settled.lastAppliedDocVersion)]
+                  : withholdAckEffects(settled, heldBase, state.context),
             };
           default: {
             const _exhaustive: never = verdict;
@@ -891,6 +1004,28 @@ export function createHostSessionCore(context: HostSessionContext, deps: HostSes
         // unsolicited reseed.
         if (state.rejection.kind !== "pending" || state.rejection.id !== event.id) {
           return { state, effects: [] };
+        }
+        if (event.documentVersion === null) {
+          // UNOBSERVED recovery read (the executor's guarded readVersionGuarded
+          // failed): same answer as the settlement ack gate — the recovery
+          // reseed pairs LIVE bytes with the version label, so no observation ⇒
+          // no Document. The rejection is still CLEARED (a stuck pending
+          // rejection suppresses visible-edge resync — the deadlock this arm
+          // exists to break); the user is signalled through the shared latch,
+          // and the next OBSERVED Document (documentChanged / ready / edit
+          // resync) converges.
+          return {
+            state: { ...state, rejection: NONE },
+            effects: [
+              {
+                type: "logWarn",
+                message:
+                  "[quoll] edit-rejected recovery reseed withheld: the live document version could not be read; rejection cleared, awaiting an observed Document",
+                detail: { uri: state.context.uriString, id: event.id },
+              },
+              { type: "showResyncFailure" },
+            ],
+          };
         }
         // Resync to the live snapshot before the recovery reseed (see the
         // `ready` arm) — the reseed posts live bytes, so it must carry the
