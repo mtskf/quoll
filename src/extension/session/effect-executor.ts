@@ -46,9 +46,9 @@ import type {
 /** The VS Code build+apply+verify seam for the write executor (Plan S6). The
  *  pipeline itself lives in `document-write/execute-write.ts`; this alias keeps
  *  the panel's inline wiring + the executor deps stable. `TEdit` is the edit
- *  object the seam builds and applies — the executor never inspects one, it only
- *  forwards the seam to `executeDocumentWrite`, so the parameter is threaded
- *  (not erased to `unknown`) purely to keep the caller's build↔apply pair
+ *  object the seam builds and applies. The executor never inspects one — it only
+ *  forwards the seam to `executeDocumentWrite` — so the parameter is threaded
+ *  (not erased to `unknown`) purely to keep the CALLER's build↔apply pair
  *  checked. Production infers it as `WorkspaceEdit` from the panel's literal. */
 export type ApplyEditSeam<TEdit> = DocumentWriteAdapter<TEdit>;
 
