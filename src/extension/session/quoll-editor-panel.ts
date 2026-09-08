@@ -364,9 +364,10 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
       isDisposed: () => disposed,
     });
 
-    // Queued, non-recursive dispatch. `step` runs one transition + its
-    // effects + the state mutation; the unit-tested createDrainingDispatcher
-    // owns the queue + draining guard, so a re-entrant feedback dispatch (an
+    // Queued, non-recursive dispatch. `step` runs one transition, COMMITS the
+    // resulting state, then runs its effects and settles the barrier; the
+    // unit-tested createDrainingDispatcher owns the queue + draining guard, so a
+    // re-entrant feedback dispatch (an
     // effect that re-enters the core — applyEdit settlement, edit-rejected
     // delivery failure, construct/apply sync-throw) is flat / FIFO rather
     // than a recursive stack. `dispatch` is declared with definite-assignment
@@ -380,9 +381,14 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
     // strand a deferred side channel — and its `applied` verdict is read from
     // the EVENT, false only for a FAILED apply settlement (then the deferred
     // thunk is dropped: the edit never landed, so it would read pre-edit state).
-    // It still runs AFTER the effects, so a settlement that re-acquires the lock
-    // via the stash drain (its `applyEdit` effect ran, re-setting the lock in
-    // `state`) keeps the barrier deferred. Side channels are async
+    // It still runs AFTER the effects so a deferred side channel observes them
+    // (the ack Document is already posted). Note WHY that ordering is NOT what
+    // keeps a stash drain deferred: the re-acquired lock
+    // (`pendingApplyBaseVersion`) is part of the STATE the reducer returns
+    // (host-session-core's `applyEditSettled` drain arm), which
+    // `commitTransition` commits BEFORE the effect list — the `applyEdit`
+    // EFFECT never touches `state`, so `isWriteLockHeld(state)` reads true
+    // either way. Side channels are async
     // (`void handle…` / `void openInTextEditor…`) and do not synchronously
     // re-enter dispatch, so this cannot recurse into the active drain loop; the
     // barrier also isolates any synchronous thunk throw via onError.
@@ -392,8 +398,10 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
         state = result.state;
         return result.effects;
       },
-      // Late-bound lambdas: `runEffects` and `editSettledBarrier` are closed over
-      // and the executor is constructed BELOW this point.
+      // `runEffects` is LATE-BOUND: the executor that owns it is destructured
+      // BELOW this point, so it must be reached through a lambda (a direct
+      // reference here would be a TDZ error). `editSettledBarrier` is already
+      // constructed above; its lambda is plain delegation.
       runEffects: (effects) => runEffects(effects),
       settleEditBarrier: (applied) => editSettledBarrier.settle(applied),
     });

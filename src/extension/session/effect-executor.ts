@@ -488,11 +488,12 @@ export function createEffectExecutor<TEdit>(deps: EffectExecutorDeps<TEdit>): Ef
           });
         } catch (dispatchErr) {
           // CORRELATED FAILURE — LAST LINE OF DEFENCE. `runEffects`'s
-          // `postDocument` case now GUARDS its `buildSeedDocument` call (see
-          // there), so the known correlated seam no longer unwinds `runEffects`:
-          // it returns normally and the panel's post-effects
-          // `editSettledBarrier.settle(...)` still runs. This catch remains for
-          // any OTHER throwing effect on the rejection path. Two halves are
+          // `postDocument` case GUARDS its `buildSeedDocument` call (see there),
+          // so the known correlated seam no longer unwinds `runEffects` and the
+          // rest of the effect list survives. That guard is about the EFFECT
+          // LIST, not the barrier — the barrier release never depended on it
+          // (see below). This catch remains for any OTHER throwing effect on the
+          // rejection path. Two halves are
           // already safe without any rescue here: the write lock (the panel's
           // `step` commits the new state BEFORE running effects) and the
           // user-visible toast (`settlementEffects` emits `showError` BEFORE the
@@ -665,9 +666,10 @@ export function createEffectExecutor<TEdit>(deps: EffectExecutorDeps<TEdit>): Ef
           // OWN reseed-build notification, this one the REDUCER's settlement toast,
           // which every non-ok settlement emits BEFORE its `postDocument` (see
           // `settlementEffects`' ORDER note). The containment matters here since
-          // `settle()` became total: the correlated case — a failure tag whose
-          // settle read ALSO threw — used to land in the rejection arm's
-          // `try/catch`, and now resolves through the UNWRAPPED fulfilment arm.
+          // `execute-write.ts`'s `settle()` became total: the correlated case —
+          // a failure tag whose settle read ALSO threw — used to land in the
+          // rejection arm's `try/catch`, and now resolves through the UNWRAPPED
+          // fulfilment arm.
           // `createDrainingDispatcher` has `try`/`finally` and no `catch`, so a
           // SYNCHRONOUS `window.showErrorMessage` throw would both escape as an
           // unhandled rejection and abandon the rest of this effect list —
