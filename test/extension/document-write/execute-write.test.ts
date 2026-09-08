@@ -4,6 +4,7 @@ import {
   type DocumentWriteOutcome,
   executeDocumentWrite,
 } from "../../../src/extension/document-write/execute-write.js";
+import type { MinimalEditSpan } from "../../../src/extension/document-write/minimal-edit.js";
 
 // A mutable fake document + adapter with a CALL LOG. `apply` mutates `text`
 // (and bumps `version`) via the injected `onApply`, so a test can model a clean
@@ -36,7 +37,7 @@ const land = (text: string) => (d: { text: string; version: number }) => {
 function makeFake(opts: FakeOptions) {
   const calls: string[] = [];
   const d = { text: opts.initial, version: 1 };
-  const adapter: DocumentWriteAdapter = {
+  const adapter: DocumentWriteAdapter<MinimalEditSpan> = {
     readText: () => {
       calls.push("readText");
       return d.text;
@@ -158,7 +159,7 @@ describe("executeDocumentWrite — tag mapping", () => {
     });
     // The synchronous throw is inside the deferred `.then`, so model a sync
     // throw by making `apply` itself throw before returning a Thenable.
-    const throwingAdapter: DocumentWriteAdapter = {
+    const throwingAdapter: DocumentWriteAdapter<MinimalEditSpan> = {
       ...adapter,
       apply: () => {
         throw new Error("apply boom");
@@ -260,7 +261,7 @@ describe("executeDocumentWrite — EOL canonicalisation is load-bearing (false-d
   const toCrlf = (t: string) => t.replace(/\r\n|\r|\n/g, "\r\n");
   // `landsClean` models VS Code storing the inserted LF target normalised to the
   // doc's CRLF EOL on a successful apply.
-  function crlfAdapter(docText: string, target: string): DocumentWriteAdapter {
+  function crlfAdapter(docText: string, target: string): DocumentWriteAdapter<MinimalEditSpan> {
     const doc = { text: docText };
     return {
       readText: () => doc.text,

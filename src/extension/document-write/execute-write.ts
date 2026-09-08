@@ -24,7 +24,9 @@
 // all (reported `appliedUnverified` — landed, unverified, never `diverged`).
 //
 // The adapter is the ONLY VS Code touch, so this module stays `vscode`-free and
-// unit-testable against a fake. Every read/build/apply is injected; the module
+// unit-testable against a fake — including at the TYPE level: the seam names no
+// VS Code type, not even the ambient `Thenable` global `@types/vscode` installs
+// (see the adapter's doc comment). Every read/build/apply is injected; the module
 // never re-reads outside the adapter, and — the caller contract — the returned
 // outcome CARRIES its verification-time snapshots so callers map from those
 // fields and NEVER re-read the document (a wrapper re-read can observe a later
@@ -34,10 +36,30 @@ import { perfNow, perfRecord } from "../../shared/perf.js";
 import type { MinimalEditSpan } from "./minimal-edit.js";
 import { minimalEditSpan } from "./minimal-edit.js";
 
-/** The injected VS Code seam. `readText` = the raw live buffer (pre-apply OLD
- *  text, offsets map to it via `positionAt` inside `build`). `readCanonical` =
- *  the EOL-normalised document text (`canonicalDocumentText`). `canonicalize` =
- *  the string-level EOL normaliser to the document's EOL. `build` may throw
+/** The injected VS Code seam, generic in `TEdit` — the edit object `build`
+ *  produces and `apply` consumes. The pipeline never inspects an edit; it only
+ *  hands `build`'s output straight to `apply`. Threading ONE type parameter
+ *  through both says exactly that, and it is what lets a caller wire a concrete
+ *  `WorkspaceEdit` seam with no cast at either end. `unknown` on both sides used
+ *  to erase the relation, so every call site re-asserted it with `edit as
+ *  WorkspaceEdit` — a cast the compiler could not check.
+ *
+ *  ⚠️ Deliberately NO default type argument. A default (`= unknown`) would let a
+ *  bare `DocumentWriteAdapter` annotation silently re-erase the relation, and —
+ *  because `apply` is a property, so contravariant under `strictFunctionTypes` —
+ *  it would then REJECT a correctly typed literal, inviting the casts back. With
+ *  no default, tsc asks for the type argument instead.
+ *
+ *  `apply` returns `PromiseLike<boolean>`, NOT `Thenable<boolean>`: VS Code's
+ *  `Thenable` is an ambient global from `@types/vscode` (`interface Thenable<T>
+ *  extends PromiseLike<T> {}`), so naming it here would make this module's
+ *  `vscode`-free claim false at the type level while buying nothing — every
+ *  `Thenable` a caller passes in IS a `PromiseLike`.
+ *
+ *  Seam by seam: `readText` = the raw live buffer (pre-apply OLD text, offsets
+ *  map to it via `positionAt` inside `build`). `readCanonical` = the
+ *  EOL-normalised document text (`canonicalDocumentText`). `canonicalize` = the
+ *  string-level EOL normaliser to the document's EOL. `build` may throw
  *  (→ buildThrew); `apply` may throw synchronously (→ applyThrew), reject
  *  (→ applyRejected), or resolve false (→ applyRefused) / true (→ applied |
  *  diverged | appliedUnverified).
@@ -51,13 +73,13 @@ import { minimalEditSpan } from "./minimal-edit.js";
  *     are the SETTLE-time verification reads, and by then an apply may already
  *     have LANDED; a throw there is a missing VERIFICATION, not a failed write.
  *     Each is individually guarded inside `settle()` (see there). */
-export interface DocumentWriteAdapter {
+export interface DocumentWriteAdapter<TEdit> {
   readText: () => string;
   readVersion: () => number;
   readCanonical: () => string;
   canonicalize: (text: string) => string;
-  build: (span: MinimalEditSpan) => unknown;
-  apply: (edit: unknown) => Thenable<boolean>;
+  build: (span: MinimalEditSpan) => TEdit;
+  apply: (edit: TEdit) => PromiseLike<boolean>;
 }
 
 /** Complete outcome tag set — one per today's five `ApplyEditOutcome` kinds,
@@ -143,8 +165,8 @@ function errorMessage(err: unknown): string {
  *  caller (applyRestoreEdit) runs lock-free by design and relies on this same-
  *  tick property plus its own `isWriteLockHeld` skip-gate. Either way the
  *  freshness contract of the prior inline `runApplyEdit` is preserved. */
-export async function executeDocumentWrite(
-  adapter: DocumentWriteAdapter,
+export async function executeDocumentWrite<TEdit>(
+  adapter: DocumentWriteAdapter<TEdit>,
   content: string
 ): Promise<DocumentWriteOutcome> {
   // Pre-apply snapshot, taken synchronously in the caller's tick (see above:
@@ -244,7 +266,7 @@ export async function executeDocumentWrite(
     return settle("applied");
   }
 
-  let edit: unknown;
+  let edit: TEdit;
   try {
     // positionAt clamps out-of-range offsets (never throws) and minimalEditSpan
     // is pure — so buildThrew stays unreachable in practice; the arm is
@@ -254,7 +276,7 @@ export async function executeDocumentWrite(
     return settle("buildThrew", errorMessage(err));
   }
 
-  let pending: Thenable<boolean>;
+  let pending: PromiseLike<boolean>;
   const applyStart = QUOLL_PERF ? perfNow() : 0;
   try {
     pending = adapter.apply(edit);

@@ -136,7 +136,7 @@ export function createRevertRescueWiring(deps: RevertRescueWiringDeps): RevertRe
   // direct WorkspaceEdit OUTSIDE the reducer (like image-write), but now routes
   // through the shared post-apply-verifying executor so a stale-offset splice
   // (#8) is DETECTED at settlement instead of masquerading as a silent success.
-  const writeAdapter: DocumentWriteAdapter = {
+  const writeAdapter: DocumentWriteAdapter<WorkspaceEdit> = {
     readText: () => document.getText(),
     readVersion: () => document.version,
     readCanonical: () => canonicalDocumentText(document),
@@ -150,7 +150,7 @@ export function createRevertRescueWiring(deps: RevertRescueWiringDeps): RevertRe
       );
       return edit;
     },
-    apply: (edit) => workspace.applyEdit(edit as WorkspaceEdit),
+    apply: (edit) => workspace.applyEdit(edit),
   };
 
   // Every dep the restore settlement invokes is itself a candidate throw source

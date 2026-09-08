@@ -16,14 +16,15 @@
 // are where the load-bearing e2e-mirror drift lives.
 //
 // This file also hosts unrelated tsc-enforced type-level pins for source
-// modules (the "handoff type pins", "table model type pins", and "status-bar
-// type pins" describe blocks below). They are NOT part of the e2e-mirror
-// equality guard above: each pins a source-module type contract with a
-// tsc-checked assertion — an AssertEqual identity check or a
-// `@ts-expect-error` directive — which is non-vacuous only because
-// `pnpm compile` type-checks THIS file.
+// modules (the "handoff type pins", "table model type pins", "status-bar
+// type pins", and "document-write adapter type pins" describe blocks
+// below). They are NOT part of the e2e-mirror equality guard above: each
+// pins a source-module type contract with a tsc-checked assertion — an
+// AssertEqual identity check or a `@ts-expect-error` directive — which is
+// non-vacuous only because `pnpm compile` type-checks THIS file.
 
 import { describe, expect, it } from "vitest";
+import type { DocumentWriteAdapter } from "../../src/extension/document-write/execute-write";
 import {
   clampHandoffSelection,
   type HandleContextHandoffPayload,
@@ -194,5 +195,40 @@ describe("status-bar type pins", () => {
     // assignment fails to typecheck and `pnpm compile` goes red.
     const _check: AssertEqual<EndOfLineValue, 1 | 2> = true;
     expect(_check).toBe(true);
+  });
+});
+
+describe("document-write adapter type pins", () => {
+  // A stand-in for production's `WorkspaceEdit`. Nothing here inspects an edit —
+  // the point is only that ONE type flows from `build` into `apply`.
+  type Marker = { readonly marker: "edit" };
+
+  it("threads one edit type from build into apply (no erasure to unknown)", () => {
+    // The adapter's whole job at the type level is to say "whatever `build`
+    // makes is what `apply` takes". Both sides used to be `unknown`, which
+    // erased that relation and forced every call site to re-assert it with an
+    // unchecked `edit as WorkspaceEdit`. Revert either side to `unknown` and the
+    // matching assertion below evaluates to `false`, so the `= true` assignment
+    // fails and `pnpm compile` goes red.
+    //
+    // ⚠️ The sibling half of that change — `apply` returning `PromiseLike` rather
+    // than the ambient `Thenable` `@types/vscode` installs — is NOT pinnable
+    // here, and the omission is deliberate rather than forgotten: `Thenable<T>`
+    // is declared as `interface Thenable<T> extends PromiseLike<T> {}`, i.e.
+    // structurally identical, so no type-level assertion can tell the two apart.
+    const _build: AssertEqual<ReturnType<DocumentWriteAdapter<Marker>["build"]>, Marker> = true;
+    const _apply: AssertEqual<Parameters<DocumentWriteAdapter<Marker>["apply"]>[0], Marker> = true;
+    expect(_build && _apply).toBe(true);
+  });
+
+  it("requires the edit type argument — no default that silently re-erases it", () => {
+    // A default (`<TEdit = unknown>`) would restore the erasure for every bare
+    // annotation, AND — `apply` being a property, so contravariant under
+    // strictFunctionTypes — would then REJECT a correctly typed literal, which is
+    // what invites the casts back. Revert-check: add a default and the directive
+    // below becomes unused → tsc errors (TS2578) at this file.
+    // @ts-expect-error — DocumentWriteAdapter requires its edit type argument.
+    type _Bare = DocumentWriteAdapter;
+    expect(true).toBe(true);
   });
 });

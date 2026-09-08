@@ -469,8 +469,8 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
         },
         apply: (edit) =>
           this.harness?.applyEditOverride
-            ? this.harness.applyEditOverride(edit as WorkspaceEdit)
-            : workspace.applyEdit(edit as WorkspaceEdit),
+            ? this.harness.applyEditOverride(edit)
+            : workspace.applyEdit(edit),
       },
       // The production closure builds the encoding-preserving `Uri` via
       // `buildExternalUri` (WHATWG split + `Uri.from`, preserving `%2F`/`+`)
