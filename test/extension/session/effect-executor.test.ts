@@ -9,9 +9,16 @@ import type { HostToWebview } from "../../../src/shared/protocol.js";
 
 const themeMsg: HostToWebview = { protocol: 1, type: "theme", themeKind: "dark" };
 
+// The seam's edit type. The executor never inspects an edit — it only forwards
+// the seam to `executeDocumentWrite`, which hands `build`'s output straight to
+// `apply` — so an opaque marker stands in for production's `WorkspaceEdit` and
+// still exercises the build→apply type linkage.
+type FakeEdit = { readonly fake: "edit" };
+const fakeEdit: FakeEdit = { fake: "edit" };
+
 // Minimal deps factory — overridable per test. Unused seams throw if hit so a
 // test that accidentally reaches them fails loudly instead of silently passing.
-function makeDeps(over: Partial<EffectExecutorDeps> = {}): EffectExecutorDeps {
+function makeDeps(over: Partial<EffectExecutorDeps<FakeEdit>> = {}): EffectExecutorDeps<FakeEdit> {
   return {
     isDisposed: () => false,
     getState: () => {
@@ -50,7 +57,7 @@ function makeDeps(over: Partial<EffectExecutorDeps> = {}): EffectExecutorDeps {
       readVersion: () => 0,
       readCanonical: () => "",
       canonicalize: (text) => text,
-      build: () => ({}),
+      build: () => fakeEdit,
       apply: async () => true,
     },
     openExternal: vi.fn(),
@@ -156,13 +163,13 @@ const flushSettle = async (): Promise<void> => {
 // A verified-write seam (adapter) modelling one settlement. Defaults land
 // content "new" cleanly (settled === intended → applied). readText "old" keeps
 // the span non-no-op for content !== "old".
-function seamFor(over: Partial<EffectExecutorDeps["applyEditSeam"]> = {}) {
+function seamFor(over: Partial<EffectExecutorDeps<FakeEdit>["applyEditSeam"]> = {}) {
   return {
     readText: () => "old",
     readVersion: () => 1,
     readCanonical: () => "new",
     canonicalize: (t: string) => t,
-    build: () => ({}),
+    build: () => fakeEdit,
     apply: async () => true,
     ...over,
   };
@@ -170,8 +177,8 @@ function seamFor(over: Partial<EffectExecutorDeps["applyEditSeam"]> = {}) {
 
 // Run one applyEdit through the wrapper and return the dispatch spy.
 async function runApply(
-  seamOver: Partial<EffectExecutorDeps["applyEditSeam"]> = {},
-  depsOver: Partial<EffectExecutorDeps> = {},
+  seamOver: Partial<EffectExecutorDeps<FakeEdit>["applyEditSeam"]> = {},
+  depsOver: Partial<EffectExecutorDeps<FakeEdit>> = {},
   content = "new"
 ) {
   const dispatch = vi.fn();
@@ -537,7 +544,7 @@ describe("effect-executor sendEditRejected (via postEditRejected effect)", () =>
   // readVersion → 11 so the editRejectedDeliveryFailed dispatch's documentVersion
   // is a distinctive value read from the live seam (not the stale
   // lastAppliedDocVersion 3) — the recovery reseed must carry the live version.
-  function runReject(over: Partial<EffectExecutorDeps> = {}) {
+  function runReject(over: Partial<EffectExecutorDeps<FakeEdit>> = {}) {
     const { runEffects } = createEffectExecutor(
       makeDeps({
         getState: () => ({ lastAppliedDocVersion: 3 }) as unknown as HostSessionState,
@@ -546,7 +553,7 @@ describe("effect-executor sendEditRejected (via postEditRejected effect)", () =>
           readVersion: () => 11,
           readCanonical: () => "",
           canonicalize: (t) => t,
-          build: () => ({}),
+          build: () => fakeEdit,
           apply: async () => true,
         },
         ...over,

@@ -45,10 +45,14 @@ import type {
 
 /** The VS Code build+apply+verify seam for the write executor (Plan S6). The
  *  pipeline itself lives in `document-write/execute-write.ts`; this alias keeps
- *  the panel's inline wiring + the executor deps stable. */
-export type ApplyEditSeam = DocumentWriteAdapter;
+ *  the panel's inline wiring + the executor deps stable. `TEdit` is the edit
+ *  object the seam builds and applies — the executor never inspects one, it only
+ *  forwards the seam to `executeDocumentWrite`, so the parameter is threaded
+ *  (not erased to `unknown`) purely to keep the caller's build↔apply pair
+ *  checked. Production infers it as `WorkspaceEdit` from the panel's literal. */
+export type ApplyEditSeam<TEdit> = DocumentWriteAdapter<TEdit>;
 
-export interface EffectExecutorDeps {
+export interface EffectExecutorDeps<TEdit> {
   isDisposed: () => boolean;
   /** Read for the `sendEditRejected` delivery-refused warn log
    *  (`lastAppliedDocVersion`) — the executor's only state read. The stash
@@ -81,7 +85,7 @@ export interface EffectExecutorDeps {
   ) => HostToWebview;
   buildTheme: (themeKind: ThemeKind) => HostToWebview;
   buildEditRejected: (error: MarkdownError) => HostToWebview;
-  applyEditSeam: ApplyEditSeam;
+  applyEditSeam: ApplyEditSeam<TEdit>;
   /** Wraps handleOpenExternal(href, {openExternal, showError}). */
   openExternal: (href: string) => void;
 }
@@ -94,7 +98,7 @@ export interface EffectExecutor {
   runEffects: (effects: readonly HostSessionEffect[]) => void;
 }
 
-export function createEffectExecutor(deps: EffectExecutorDeps): EffectExecutor {
+export function createEffectExecutor<TEdit>(deps: EffectExecutorDeps<TEdit>): EffectExecutor {
   // Per-panel (per-createEffectExecutor-call) flag — NOT a module singleton.
   // A module-scope flag would suppress `host:mount` for every panel after the
   // first.
