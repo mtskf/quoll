@@ -17,6 +17,7 @@ All notable changes to Quoll are documented here.
 ## 0.1.75 — 2026-08-21
 
 ### Changed
+- settle the two settle-contract drifts PR #399 cycle 2 left behind (#400)
 
 - Internal hardening of the table cell's text-mapping code, plus test coverage around it. Nothing changes in how the editor looks or behaves.
 
