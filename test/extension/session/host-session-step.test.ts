@@ -110,6 +110,29 @@ describe("createHostSessionStep", () => {
     }
   });
 
+  // The outer `switch`'s default arm is unreachable by type — `HostSessionEvent`
+  // is a closed union — so we cast past the type system to exercise it, the same
+  // move as the reducer exhaustiveness guard in test/webview/state.test.ts. The
+  // previous implementation was an early `if (event.type !== "applyEditSettled")
+  // { return true; }`, which answered an unknown member with the DRAIN verdict;
+  // reverting to it turns this test red, which is what makes the switch a real
+  // behavioural change and not a reformat. The other half — a NEW union member
+  // failing to compile — is checked by a different oracle (`tsc`, via the
+  // `never` assignment), and cannot be pinned here.
+  it("treats an UNKNOWN event type as NOT applied, and says so", () => {
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const unknown = { type: "no-such-event" } as unknown as HostSessionEvent;
+    try {
+      expect(isEditApplied(unknown)).toBe(false);
+      expect(spy).toHaveBeenCalledWith(
+        "[quoll] unhandled HostSessionEvent for the barrier verdict; treating the edit as NOT applied",
+        unknown
+      );
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
   it("does not settle when the transition itself throws", () => {
     const settles: boolean[] = [];
     const step = createHostSessionStep({
