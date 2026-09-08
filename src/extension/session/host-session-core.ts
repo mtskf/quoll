@@ -122,8 +122,11 @@ export type HostSessionEvent =
       // The settle-time OBSERVED document version — ONE representation for every
       // outcome kind (v9 unification: `outcome.documentVersion` and a separate
       // event field would let the self-advance and the ack gate read different
-      // values). `null` ⇔ NOT OBSERVED: the executor's settle-time read AND its
-      // guarded settlement-dispatch retry both failed. Never a fabricated number —
+      // values). `null` ⇔ NOT OBSERVED: EVERY guarded version read this
+      // settlement made failed. How many that is depends on the producer — TWO
+      // on the resolved path (the pipeline's settle-time read plus the executor's
+      // guarded dispatch retry), ONE on the pipeline-rejection arm, which never
+      // reaches a settle read at all. Never a fabricated number —
       // the advance below is inside a `!== null` guard, so `null` cannot reach a
       // version assignment.
       readonly settledVersion: number | null;
@@ -289,10 +292,11 @@ function contentMatches(a: string, b: string | null): boolean {
  *  lock-free advance is FOREIGN by construction (no self-apply is in flight, so
  *  the webview did not produce it), whereas a lock-HELD advance is usually the
  *  in-flight apply's own echo and is adjudicated by the settlement check
- *  instead. This is the SINGLE version-raising path in the reducer; the only
- *  other write is the settlement advance (`advanced` — `Math.max` over
- *  `event.settledVersion` for EVERY outcome kind, clamp-consistent with this
- *  helper, no longer an exemption — fenced by the invariant test). */
+ *  instead. This is ONE of the reducer's TWO version-raising paths; the other is
+ *  the settlement advance (`advanced` — `Math.max` over `event.settledVersion`
+ *  for EVERY outcome kind since this PR, clamp-consistent with this helper and
+ *  no longer an ok-only exemption). There are exactly two, and the invariant
+ *  test's allowed-RHS roster is what fences a third from appearing. */
 function resyncLiveVersion(state: HostSessionState, liveVersion: number): HostSessionState {
   const raised = Math.max(state.lastAppliedDocVersion, liveVersion);
   const foreignAdvance =
@@ -316,11 +320,14 @@ const postDoc = (s: HostSessionState, docVersion: number): HostSessionEffect => 
 });
 
 // The withhold pair — what a settlement emits INSTEAD of its ack Document when
-// no source observed a post-apply version. Not silent: the logWarn is the triage
-// record (fires every time), and showResyncFailure is the user-visible signal,
-// latched per incident by the EXECUTOR (the reducer is pure and cannot hold a
-// latch) — the same latch as the reseed-build failure, so the two "webview could
-// not be resynced" families cannot double-toast one incident.
+// no source observed a post-apply version. Not silent WHILE THE PANEL IS ALIVE:
+// the logWarn is the triage record and showResyncFailure is the user-visible
+// signal, latched per incident by the EXECUTOR (the reducer is pure and cannot
+// hold a latch) — the same latch as the reseed-build failure, so the two
+// "webview could not be resynced" families cannot double-toast one incident.
+// POST-DISPOSE both are stripped by the undrainable arm's showError filter
+// below, deliberately: there is no view left to resync, and the only loss worth
+// reporting there (a dropped stash) has its own toast.
 function withholdAckEffects(
   settled: HostSessionState,
   heldBase: number | null,
@@ -330,7 +337,7 @@ function withholdAckEffects(
     {
       type: "logWarn",
       message:
-        "[quoll] settlement ack withheld: no post-apply document version was observed (settle-time read and dispatch retry failed; no lock-held resync arrived) — posting would pair live bytes with a stale label",
+        "[quoll] settlement ack withheld: no post-apply document version was observed (every guarded version read for this settlement failed; no lock-held resync arrived) — posting would pair live bytes with a stale label",
       detail: {
         uri: context.uriString,
         heldBase,
@@ -339,6 +346,22 @@ function withholdAckEffects(
     },
     { type: "showResyncFailure" },
   ];
+}
+
+// The ack a settlement posts: the authoritative Document when the label rests on
+// a real observation, the withhold pair when it does not. ONE owner for that
+// choice — both ack sites (the per-outcome effects below and the drain's
+// readonly/stale/no-op repost) call this, so a third site cannot grow its own
+// copy of the ternary and quietly diverge from the gate.
+function ackEffects(
+  ackLabelObserved: boolean,
+  settled: HostSessionState,
+  heldBase: number | null,
+  context: HostSessionContext
+): HostSessionEffect[] {
+  return ackLabelObserved
+    ? [postDoc(settled, settled.lastAppliedDocVersion)]
+    : withholdAckEffects(settled, heldBase, context);
 }
 
 // Per-outcome settlement effects: the ack Document (or its withhold pair, gated
@@ -351,13 +374,17 @@ function withholdAckEffects(
 // is a VS Code window toast, `postDocument` a webview-bound message — so there
 // is no coupling to respect (the "Document before edit-rejected" constraint on
 // `postRejectedDraft` is a different pair, both webview-bound and read by the
-// same webview reducer). Toast-first matters because the reseed is the effect
-// MOST likely to unwind `runEffects`: `buildSeedDocument` bottoms out in
-// `canonicalDocumentText(document)`, the very seam whose throw produces a
-// `rejected` outcome, so on that correlated failure the reseed re-runs the
-// broken read and throws. Emitted second, the toast — the only user-visible
-// signal that the save failed — would go down with it. `ok` has no toast to
-// order, so its single effect is unchanged.
+// same webview reducer). Toast-first is DEFENCE IN DEPTH, not the only guard:
+// the reseed is the effect most likely to throw (`buildSeedDocument` bottoms out
+// in `canonicalDocumentText(document)`), but the executor catches a builder
+// throw and continues the effect loop, and its `showError` call is guarded too,
+// so a later toast still reaches the user — the sibling test says so explicitly
+// ("the toast arrives regardless of order; do not put an order assert back
+// here"). The correlated failure is also narrower since `settle()` became
+// total: a throwing `readCanonical` now resolves as an UNVERIFIED ok, and only
+// the pipeline's synchronous prefix still produces `rejected`. Keep the order
+// anyway — it costs nothing and removes the dependency on those guards. `ok` has
+// no toast to order, so its single effect is unchanged.
 function settlementEffects(
   outcome: ApplyEditOutcome,
   settled: HostSessionState,
@@ -365,9 +392,7 @@ function settlementEffects(
   context: HostSessionContext,
   ackLabelObserved: boolean
 ): HostSessionEffect[] {
-  const ack = ackLabelObserved
-    ? [postDoc(settled, settled.lastAppliedDocVersion)]
-    : withholdAckEffects(settled, heldBase, context);
+  const ack = ackEffects(ackLabelObserved, settled, heldBase, context);
   switch (outcome.kind) {
     case "ok":
       return ack;
@@ -608,8 +633,14 @@ export function createHostSessionCore(context: HostSessionContext, deps: HostSes
           // `ackLabelObserved` is passed the literal `true` here — the
           // `.filter(e => e.type === "showError")` below keeps only toasts
           // either way, so the argument is inert. `true` is chosen so the
-          // withhold pair (a webview-facing signal) is never even constructed
-          // for a disposed panel.
+          // withhold pair is never even constructed for a disposed panel. Note
+          // what that pair actually is: a logWarn plus `showResyncFailure`,
+          // which the executor turns into a VS Code WINDOW TOAST — not a
+          // webview-bound message (same distinction as the `showError` note
+          // above). It is suppressed here for a different reason than the ack:
+          // post-dispose there is no view left to resync, so telling the user it
+          // could not be resynced is noise. A dropped stash is the one loss that
+          // still matters post-dispose, and it gets its own toast below.
           const effects =
             event.outcome.kind === "ok"
               ? []
@@ -696,6 +727,16 @@ export function createHostSessionCore(context: HostSessionContext, deps: HostSes
         // document. "No advance" is NOT evidence (`!ownEditOnly` would
         // re-import the rejected "missing ⇒ foreign" through the back door and
         // drop the replay buffer for a write that landed exactly as intended).
+        // ⚠️ `ok` does NOT mean "+1" in every case: a real apply contributes one
+        // increment, but the no-op short-circuit (execute-write.ts) settles
+        // `applied` WITHOUT submitting an edit, so its contribution is 0. The
+        // outcome kind cannot tell them apart, so this takes the LARGER of the
+        // two — an over-stated allowance, which errs towards "not foreign" and
+        // therefore towards keeping the replay buffer. That over-statement is
+        // harmless rather than a missed foreign +1: the no-op path returns BEFORE
+        // execute-write's only `await`, so the whole heldBase → settle-read window
+        // is one synchronous tick on the single-threaded host and no external edit
+        // can interleave to spend the extra allowance.
         const ownContribution = event.outcome.kind === "ok" ? 1 : 0;
         const foreignAtSettle =
           divergedAfterApply ||
@@ -721,6 +762,23 @@ export function createHostSessionCore(context: HostSessionContext, deps: HostSes
         // leaves identical bytes at a HIGHER version, and acking that label lets
         // the webview base its next Edit on it → stale verdict → lock-free
         // forward advance → epoch bump → replay buffer dropped.
+        // ACCEPTED RESIDUAL on the second disjunct: it proves the version was
+        // OBSERVED, not that the observation is POST-APPLY. `resyncLiveVersion`
+        // raises the label for whoever moved the document — `onDidChangeTextDocument`
+        // carries no producer and the lock-held wiring snapshots only the version —
+        // so "our own echo arrived" and "a FOREIGN edit landed while our echo
+        // never did" are the SAME reducer state (heldBase V, label V+1, ok,
+        // settledVersion null). In the second reading the ack pairs live bytes
+        // with a label that is one edit behind, the same mislabel class the gate
+        // narrows elsewhere. It is not closable HERE: no predicate can separate
+        // states that are identical, and every narrowing considered also withholds
+        // the central case (own echo, delta exactly 1), which is the receiving end
+        // of the lock-held deferral contract — withhold it and a quiet document
+        // never gets a repost at all. The failure stays bounded (stale verdict →
+        // epoch bump → replay-buffer drop, no corruption), needs a triple
+        // coincidence to reach, and is strictly better than the pre-gate
+        // behaviour, which posted the STORED label unconditionally. The durable
+        // fix is the liveness backstop tracked in the follow-up TODO entry.
         const ackLabelObserved =
           event.settledVersion !== null ||
           (heldBase !== null && settled.lastAppliedDocVersion > heldBase);
@@ -750,11 +808,25 @@ export function createHostSessionCore(context: HostSessionContext, deps: HostSes
         // parked until an observed documentChanged/ready Document lands (the
         // quiet-document residual the follow-up TODO entry carries). Post-dispose
         // the stash is its only carrier, which is why the drop is LOGGED below.
+        // The ack-label gate applies HERE TOO, for a different reason than the
+        // ack: re-basing the stash onto the settled label is only sound when that
+        // label is a real observation. Without one the re-acquired `heldBase` is a
+        // known-stale LOWER BOUND, so the NEXT settlement's version-delta fallback
+        // counts our own unobserved increment as foreign (spurious epoch bump →
+        // the webview drops the replay buffer holding the very keystrokes the
+        // failure toast tells the user to retry).
+        // POST-DISPOSE is exempt, and deliberately so: the drain does NOT
+        // re-acquire the lock there (the `accept` arm below returns `settled`
+        // unchanged), so no later settlement ever reads that base — there is no
+        // stale re-base to be unsound, no webview to mislabel, and the stash is
+        // the dropped keystroke's ONLY carrier. Gating it there would trade a
+        // structurally-unreachable epoch bump for real data loss.
         const canDrain =
           stash !== null &&
           event.outcome.kind === "ok" &&
           inFlight !== null &&
           observed !== null &&
+          (ackLabelObserved || state.disposed) &&
           contentMatches(observed, inFlight);
 
         if (!canDrain) {
@@ -788,6 +860,11 @@ export function createHostSessionCore(context: HostSessionContext, deps: HostSes
           //     "external edit won the race" without having read the document
           //     would be a fabricated diagnosis, and an unobserved snapshot is not
           //     a mismatch.
+          //  4. The settled document IS edit #1's exact result — the drain was
+          //     safe on the CONTENT and only the ack LABEL was never observed, so
+          //     `canDrain` refused rather than re-base onto a stale one. ALIVE
+          //     only: post-dispose the gate is lifted (see `canDrain`), so there
+          //     the keystroke is written instead of logged.
           // None is a save failure, so none adds a showError (the ok baseEffects
           // carry none) — an unverified landing is not a failed save. Arm 2
           // POST-DISPOSE is the exception and gets its own toast below: there the
@@ -835,6 +912,19 @@ export function createHostSessionCore(context: HostSessionContext, deps: HostSes
                   type: "logWarn",
                   message:
                     "[quoll] ok-but-mismatch on settle: external edit won the race, pending stash dropped",
+                  detail,
+                },
+              ];
+            } else if (!ackLabelObserved) {
+              // Arm 4 — no toast even though a keystroke was dropped: while the
+              // panel is ALIVE the webview's replay buffer (which this settlement
+              // does not invalidate) still carries it and re-posts once an
+              // observed Document lands. Same reasoning as arm 2's ALIVE half.
+              extraEffects = [
+                {
+                  type: "logWarn",
+                  message:
+                    "[quoll] unlabelled settle: pending stash dropped because no post-apply document version was observed (re-basing it onto the stale label would make the next settlement read our own increment as foreign)",
                   detail,
                 },
               ];
@@ -942,17 +1032,20 @@ export function createHostSessionCore(context: HostSessionContext, deps: HostSes
               // live base instead of stale-rejecting). Mirrors the `ready`-arm
               // redelivery precedent.
               //
-              // UNLIKE the readonly/stale/no-op repost above, this arm is
-              // DELIBERATELY NOT gated on `ackLabelObserved` (round-2 reversal —
-              // see the plan's dispositions table): in the unobserved-label
-              // corner (version unread twice + no lock-held resync + the stash
-              // parse-failing) every reviewed local variant, a Document-free
-              // degrade included, converges to the same terminal state anyway —
-              // without an observation no correct label-advance exists, and a
-              // `ready` replay redelivers at the STORED label with no resync
-              // regardless. A durable fix needs rejection-state provenance +
-              // observed-version catch-up — its own slice, tracked in the
-              // follow-up TODO entry.
+              // UNLIKE the readonly/stale/no-op repost BELOW (the next case in
+              // this switch), this arm carries NO `ackLabelObserved` ternary of
+              // its own — and no longer needs one. `canDrain` requires an
+              // observed label while the panel is alive, so this draft Document
+              // cannot be reached at an unobserved one; post-dispose, where the
+              // drain gate is lifted, the arm posts no Document at all. The
+              // unobserved-label corner this comment used to accept as a residual
+              // (version unread + no lock-held resync + the stash parse-failing)
+              // is therefore closed BY CONSTRUCTION rather than by a local gate —
+              // which is what the reviewed local variants, a Document-free
+              // degrade included, all failed to achieve (a `ready` replay
+              // redelivers at the STORED label with no resync regardless). What
+              // remains is the ack gate's own residual, stated at its definition:
+              // an observed label is not proof of a POST-APPLY observation.
               effects: state.disposed
                 ? [{ type: "showError", message: `Cannot save: ${verdict.error.message}` }]
                 : [
@@ -976,14 +1069,16 @@ export function createHostSessionCore(context: HostSessionContext, deps: HostSes
             // the webview reseeds — suppressed post-dispose, and WITHHELD when
             // the label is unobserved (same gate as settlementEffects: this
             // repost is an ack Document too, and canDrain's observed CONTENT is
-            // not version evidence).
+            // not version evidence). Since `canDrain` itself now requires an
+            // observed label while the panel is alive, the withhold branch is
+            // structurally unreachable from here — the shared `ackEffects` is
+            // kept anyway so the two ack sites cannot drift apart if that
+            // relationship ever changes.
             return {
               state: settled,
               effects: state.disposed
                 ? []
-                : ackLabelObserved
-                  ? [postDoc(settled, settled.lastAppliedDocVersion)]
-                  : withholdAckEffects(settled, heldBase, state.context),
+                : ackEffects(ackLabelObserved, settled, heldBase, state.context),
             };
           default: {
             const _exhaustive: never = verdict;
@@ -1069,8 +1164,15 @@ export function createHostSessionCore(context: HostSessionContext, deps: HostSes
         // Promise settles. Posting here would emit a Document at the new
         // version while the lock is still held (Codex N1). Defer the post:
         // record the observed version and let the settlement repost the
-        // authoritative version EXACTLY ONCE (its `ok`/`refused`/throw arms
-        // all postDocument from the released state).
+        // authoritative version EXACTLY ONCE.
+        // That repost is CONDITIONAL now — every settlement arm's ack is gated on
+        // `ackLabelObserved`, and a draining stash replaces it with an applyEdit —
+        // and the deferral stays safe because the raise recorded HERE is itself
+        // the observation that licenses the ack: the wiring snapshots a real
+        // `document.version` into this event, so a settlement that never manages
+        // a read of its own still finds `lastAppliedDocVersion > heldBase` and
+        // posts. Withholding on that disjunct would leave this deferred post with
+        // no receiver at all.
         if (resynced.pendingApplyBaseVersion !== null) {
           return { state: resynced, effects: [] };
         }

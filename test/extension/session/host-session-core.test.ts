@@ -1420,6 +1420,31 @@ describe("host-session-core: settlement ack-label gate (ackLabelObserved)", () =
     expect(r.effects.some((e) => e.type === "showResyncFailure")).toBe(false);
   });
 
+  it("a lock-held raise licenses the ack even though the raise's PRODUCER is unattributable (accepted residual)", () => {
+    // Same disjunct as the test above, but composed from the two events that
+    // produce it instead of a hand-placed `lastAppliedDocVersion`, so the trace
+    // is the real one: a `documentChanged` arrives while the lock is held and
+    // raises the label, then the settlement observes nothing at all.
+    // ⚠️ The reducer cannot tell WHO raised it. `resyncLiveVersion` takes no
+    // producer (VS Code's change event carries none, and the lock-held wiring
+    // snapshots only the version), so this same state is reached both by our own
+    // apply's echo — the central, correct case the deferral contract depends on —
+    // and by a FOREIGN edit landing while our echo never arrived, where the ack
+    // then labels live bytes one version behind. Today we ack in BOTH: the states
+    // are identical, so no predicate separates them, and withholding would kill
+    // the deferral contract's only receiver. Accepted residual; the backstop is
+    // the liveness TODO entry. Narrowing this disjunct turns this test red on
+    // purpose — that is the conversation it exists to force.
+    const raised = core.transition(locked, { type: "documentChanged", documentVersion: 2 });
+    const r = core.transition(
+      raised.state,
+      settled({ settledVersion: null, currentContent: null })
+    );
+    expect(reseedIn(r.effects)).toEqual(pDoc(2));
+    expect(r.effects.some((e) => e.type === "showResyncFailure")).toBe(false);
+    expect(r.state.externalEpoch).toBe(0); // delta 1 === our own contribution
+  });
+
   it("byte equality does NOT license the ack (undone foreign edit leaves identical bytes at a higher version)", () => {
     // Content observed and EQUAL to the in-flight bytes — still withheld without a version observation.
     const r = core.transition(locked, settled({ settledVersion: null, currentContent: "edit1" }));
@@ -1556,30 +1581,101 @@ describe("host-session-core: content-unobserved epoch verdict is positive versio
     const r = core.transition(locked, settled({ settledVersion: null, currentContent: null }));
     expect(r.state.externalEpoch).toBe(0);
   });
+
+  it("a label RAISED under the lock supplies the delta even when the settlement observed nothing", () => {
+    // Composed from two events rather than hand-placed state, because the point
+    // is WHERE the evidence comes from: the settlement itself observed neither
+    // the version nor the content, and the only number the verdict can use is the
+    // one a lock-held `documentChanged` wrote into `lastAppliedDocVersion`.
+    // heldBase 1 → raised to 3 (delta 2) → beyond our own +1 → foreign.
+    // A verdict that read `event.settledVersion` instead of the reducer's label
+    // would score 0 here and leave the epoch at 0, while the sibling tests above
+    // (which DO observe a version) stay green — this is the arm that catches it.
+    const raised = core.transition(locked, { type: "documentChanged", documentVersion: 3 });
+    expect(raised.effects).toEqual([]); // deferred: the lock is still held
+    expect(raised.state.externalEpoch).toBe(0); // a lock-held advance never bumps
+    const r = core.transition(
+      raised.state,
+      settled({ settledVersion: null, currentContent: null })
+    );
+    expect(r.state.lastAppliedDocVersion).toBe(3);
+    expect(r.state.externalEpoch).toBe(1);
+    expect(reseedIn(r.effects)).toEqual(pDoc(3, 1));
+  });
 });
 
-describe("host-session-core: the drain's repost arm carries the same gate", () => {
-  it("a drained no-op verdict withholds its repost when the label is unobserved", () => {
-    // Stash present; ok; content OBSERVED equal to inFlight (canDrain passes);
-    // version unobserved and no lock-held advance. decideEdit(no-op: stash bytes
-    // === settled bytes) would repost — the gate withholds it.
-    const s = base({
+describe("host-session-core: an unobserved ack label refuses the drain (ALIVE)", () => {
+  // The stash re-bases onto `settled.lastAppliedDocVersion`. Without an observed
+  // label that base is a known-stale LOWER BOUND, so the NEXT settlement's
+  // version-delta fallback reads our own unobserved increment as foreign and
+  // bumps the epoch — which drops the webview replay buffer holding the very
+  // keystrokes the user is being told to retry. So `canDrain` requires the same
+  // observation the ack does, and the stash is dropped exactly as it is for an
+  // unobserved CONTENT. Alive, the keystroke survives in the replay buffer.
+  const lockedStash = (stash: string) =>
+    base({
       pendingApplyBaseVersion: 1,
       inFlightContent: "edit1",
-      pendingEdit: { content: "edit1", baseDocVersion: 1 },
+      pendingEdit: { content: stash, baseDocVersion: 1 },
     });
-    const r = core.transition(s, settled({ settledVersion: null, currentContent: "edit1" }));
+  const unobserved = settled({ settledVersion: null, currentContent: "edit1" });
+
+  it("an accept-shaped stash is NOT applied: the stash is dropped and the ack withheld", () => {
+    const r = core.transition(lockedStash("edit1-more"), unobserved);
+    expect(r.effects.some((e) => e.type === "applyEdit")).toBe(false);
+    expect(r.state.pendingEdit).toBeNull();
+    expect(r.state.pendingApplyBaseVersion).toBeNull(); // lock NOT re-acquired
+    expect(r.effects.find((e) => e.type === "postDocument")).toBeUndefined();
+    expect(r.effects.some((e) => e.type === "showResyncFailure")).toBe(true);
+    // Not silent: the drop is its own triage record, distinct from the
+    // unobserved-CONTENT one (here the content WAS read and matched).
+    expect(
+      r.effects.some((e) => e.type === "logWarn" && e.message.includes("unlabelled settle"))
+    ).toBe(true);
+    expect(r.effects.some((e) => e.type === "showError")).toBe(false); // not a failed save
+  });
+
+  it("a parse-failing stash never reaches decideEdit: no rejected draft is posted at a stale label", () => {
+    // NEGATIVE pin for the parse-failed drain arm, which carries no gate of its
+    // own. Ungated it would redeliver `postRejectedDraft` stamped with the stored
+    // (unobserved) version; the drain gate is what makes that unreachable while
+    // the panel is alive. The BEHAVIOUR of the arm is unchanged — what this pins
+    // is that the arm is not entered.
+    const r = core.transition(lockedStash("hasBAD"), unobserved);
+    expect(r.effects.find((e) => e.type === "postRejectedDraft")).toBeUndefined();
+    expect(r.state.rejection).toEqual({ kind: "none" });
+    expect(r.state.nextRejectionId).toBe(1); // no delivery id was minted
+    expect(r.effects.some((e) => e.type === "showResyncFailure")).toBe(true);
+  });
+
+  it("a no-op-shaped stash withholds the repost the drain arm would have made", () => {
+    const r = core.transition(lockedStash("edit1"), unobserved);
     expect(r.effects.find((e) => e.type === "postDocument")).toBeUndefined();
     expect(r.effects.some((e) => e.type === "showResyncFailure")).toBe(true);
   });
 
-  it("a drained ACCEPT still applies (the drain is a new write, not an ack — never withheld)", () => {
+  it("an OBSERVED label drains normally: the accept still applies (the drain is a write, not an ack)", () => {
+    // Positive control for all three above — only the observation differs.
+    const r = core.transition(
+      lockedStash("edit1-more"),
+      settled({ settledVersion: 2, currentContent: "edit1" })
+    );
+    expect(r.effects).toEqual([{ type: "applyEdit", content: "edit1-more", baseDocVersion: 2 }]);
+  });
+
+  it("POST-DISPOSE the gate is LIFTED: the stash still drains at an unobserved label", () => {
+    // Post-dispose the drain does not re-acquire the lock, so no later settlement
+    // reads the re-based label — the stale-re-base harm is structurally absent —
+    // while the stash is the dropped keystroke's ONLY carrier (no webview, no
+    // replay buffer). Gating it there would trade an unreachable epoch bump for
+    // real data loss. Dropping the `|| state.disposed` disjunct turns this red.
     const s = base({
-      pendingApplyBaseVersion: 1,
+      disposed: true,
+      pendingApplyBaseVersion: null, // the dispose transition already cleared it
       inFlightContent: "edit1",
       pendingEdit: { content: "edit1-more", baseDocVersion: 1 },
     });
     const r = core.transition(s, settled({ settledVersion: null, currentContent: "edit1" }));
-    expect(r.effects.some((e) => e.type === "applyEdit")).toBe(true);
+    expect(r.effects).toEqual([{ type: "applyEdit", content: "edit1-more", baseDocVersion: 1 }]);
   });
 });
