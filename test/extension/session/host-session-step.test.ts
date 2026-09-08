@@ -222,6 +222,60 @@ describe("createHostSessionStep", () => {
     expect(() => step(themeChanged)).toThrow(effectErr);
   });
 
+  // The panel does NOT inject `onSettleError` (see its `createHostSessionStep`
+  // call), so the DEFAULT reporter is the only one production ever runs. Every
+  // other test here injects one, which leaves that default unobserved — deleting
+  // it was measured to keep the rest of this file green.
+  it("reports a settle throw through the DEFAULT reporter when none is injected", () => {
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const effectErr = new Error("effect threw");
+    const settleErr = new Error("settle threw");
+    const step = createHostSessionStep({
+      commitTransition: () => [],
+      runEffects: () => {
+        throw effectErr;
+      },
+      settleEditBarrier: () => {
+        throw settleErr;
+      },
+      // no onSettleError — this is the panel's wiring
+    });
+    expect(() => step(themeChanged)).toThrow(effectErr);
+    expect(spy).toHaveBeenCalledWith("[quoll] edit-settled barrier threw", settleErr);
+    spy.mockRestore();
+  });
+
+  // `effectsError` is BOXED on purpose. Every other test throws an `Error`, so an
+  // unboxed `let effectsError: unknown = null` stays green throughout — this is
+  // the only case that separates "the effects threw a falsy value" from "the
+  // effects completed", and getting it wrong hands the caller the SETTLE error
+  // (the recovery path masking the failure it was recovering from).
+  it("keeps a FALSY effect error (throw null) when the settle also throws", () => {
+    const settleErr = new Error("settle threw");
+    const reported: unknown[] = [];
+    const step = createHostSessionStep({
+      commitTransition: () => [],
+      runEffects: () => {
+        // A non-Error throw is the whole point of this test: it is the value the
+        // boxing exists for, so the rule is suppressed rather than satisfied.
+        // biome-ignore lint/style/useThrowOnlyError: pins the falsy-throw contract
+        throw null;
+      },
+      settleEditBarrier: () => {
+        throw settleErr;
+      },
+      onSettleError: (err) => reported.push(err),
+    });
+    let thrown: unknown = "NOTHING THROWN";
+    try {
+      step(themeChanged);
+    } catch (err) {
+      thrown = err;
+    }
+    expect(thrown).toBe(null); // the effect error, not the settle error
+    expect(reported).toEqual([settleErr]);
+  });
+
   // Also pins today's dispatcher behaviour on a throwing step: a re-entrant
   // dispatch issued before the throw stays QUEUED and is only drained by the
   // next external dispatch. That residue is a separate, pre-existing gap
@@ -235,7 +289,10 @@ describe("createHostSessionStep", () => {
     dispatch = createDrainingDispatcher<HostSessionEvent>(
       createHostSessionStep({
         commitTransition: (event) => {
-          seen.push(event.type);
+          // Qualify the theme events by themeKind: on `event.type` alone the
+          // stale re-entrant event and the new one collapse to the same string,
+          // and a LIFO drain would read identical to a FIFO one.
+          seen.push(event.type === "themeChanged" ? `themeChanged:${event.themeKind}` : event.type);
           return [];
         },
         runEffects: () => {
@@ -254,7 +311,11 @@ describe("createHostSessionStep", () => {
     expect(settles).toEqual([false]); // settled despite the throw
     expect(seen).toEqual(["applyEditSettled"]); // the re-entrant event is still queued
     dispatch(themeChanged); // the drain guard was released by the dispatcher's finally
-    expect(seen).toEqual(["applyEditSettled", "themeChanged", "themeChanged"]); // stale, then new
+    expect(seen).toEqual([
+      "applyEditSettled",
+      "themeChanged:light", // the stale re-entrant event, drained FIRST
+      "themeChanged:dark",
+    ]);
     expect(settles).toEqual([false, true, true]);
   });
 
@@ -273,6 +334,11 @@ describe("createHostSessionStep", () => {
       .replace(/^(.*?)\/\/.*$/gm, "$1");
     expect(panel).toContain('createHostSessionStep } from "./host-session-step.js"');
     expect(panel).toContain("const step = createHostSessionStep({");
+    // The barrier's SOLE release site: pin that the panel really hands the
+    // factory the live barrier's `settle`, not a stub. Two loose substrings
+    // rather than one exact line, so reformatting cannot vacate the pin.
+    expect(panel).toContain("settleEditBarrier:");
+    expect(panel).toMatch(/settleEditBarrier:[\s\S]{0,80}editSettledBarrier\.settle\(/);
     expect(panel).toContain("createDrainingDispatcher<HostSessionEvent>(step)");
   });
 });

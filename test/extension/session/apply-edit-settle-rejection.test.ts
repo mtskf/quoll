@@ -61,9 +61,12 @@ const flushSettle = async (): Promise<void> => {
   }
 };
 
-// Reducer + executor wired exactly as the panel wires them, over a fake document
-// whose settle-time canonical read can be armed to throw. `build` is the write
-// ATTEMPT probe: it runs only once the reducer has ACCEPTED an edit and issued
+// Reducer + executor wired as the panel wires them MINUS the barrier: the panel
+// composes these through `createHostSessionStep` (commit → runEffects →
+// unconditional `editSettledBarrier.settle`), pinned separately in
+// host-session-step.test.ts. This file is about the reducer↔executor pair over a
+// fake document whose settle-time canonical read can be armed to throw. `build`
+// is the write ATTEMPT probe: it runs only once the reducer has ACCEPTED an edit and issued
 // the `applyEdit` effect, so a stashed (lock-blocked) keystroke leaves no entry.
 interface HarnessOptions {
   /** `workspace.applyEdit` resolves FALSE — a genuinely failed write, so the
