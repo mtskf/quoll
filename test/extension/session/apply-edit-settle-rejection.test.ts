@@ -741,7 +741,9 @@ describe("applyEdit settlement: the ack-label gate end to end", () => {
       expect(h.docVersion()).toBe(2);
       expect(h.documents.length).toBe(postedBefore); // WITHHELD
       expect(h.state().lastAppliedDocVersion).toBe(1); // no fabricated advance
-      expect(h.errors.filter((m) => m.includes("could not update the editor view"))).toHaveLength(1);
+      expect(h.errors.filter((m) => m.includes("could not update the editor view"))).toHaveLength(
+        1
+      );
       expect(h.errors.filter((m) => m.includes("Failed to save"))).toEqual([]); // the write did not fail
       expect(isWriteLockHeld(h.state())).toBe(false);
     } finally {
@@ -786,7 +788,9 @@ describe("applyEdit settlement: the ack-label gate end to end", () => {
       h.armVersionFailure(2);
       h.type("a");
       await flushSettle();
-      expect(h.errors.filter((m) => m.includes("could not update the editor view"))).toHaveLength(1);
+      expect(h.errors.filter((m) => m.includes("could not update the editor view"))).toHaveLength(
+        1
+      );
       // The seam recovers; a REAL host-side path (foreign edit → lock-free
       // documentChanged) posts a Document successfully, which re-arms the latch.
       const postedBefore = h.documents.length;
@@ -797,7 +801,9 @@ describe("applyEdit settlement: the ack-label gate end to end", () => {
       h.armVersionFailure(2);
       h.type("recovered!");
       await flushSettle();
-      expect(h.errors.filter((m) => m.includes("could not update the editor view"))).toHaveLength(2);
+      expect(h.errors.filter((m) => m.includes("could not update the editor view"))).toHaveLength(
+        2
+      );
     } finally {
       warnSpy.mockRestore();
     }

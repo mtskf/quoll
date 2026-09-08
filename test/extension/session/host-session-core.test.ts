@@ -304,7 +304,10 @@ describe("host-session-core: applyEditSettled", () => {
     "applyThrew",
     "rejected",
   ] as const)("%s → release lock, showError(message) + postDocument", (kind) => {
-    const r = core.transition(locked, settled({ outcome: { kind, message: "boom" }, settledVersion: 1 }));
+    const r = core.transition(
+      locked,
+      settled({ outcome: { kind, message: "boom" }, settledVersion: 1 })
+    );
     expect(r.state.pendingApplyBaseVersion).toBeNull();
     expectToastBeforeReseed(r.effects);
     expect(r.effects).toEqual([{ type: "showError", message: "Failed to save: boom" }, pDoc(1)]);
@@ -331,10 +334,7 @@ describe("host-session-core: applyEditSettled", () => {
     // LOW sentinel could not rewind it either way; `null` is used instead of any
     // sentinel because a fabricated HIGH value would wrongly read as an observed
     // advance and license the ack gate.)
-    const r = core.transition(
-      locked,
-      settled({ settledVersion: null, currentContent: null })
-    );
+    const r = core.transition(locked, settled({ settledVersion: null, currentContent: null }));
     expect(r.state.lastAppliedDocVersion).toBe(1); // unchanged — not rewound, not invented
     expect(r.state.externalEpoch).toBe(locked.externalEpoch); // unobserved is NOT foreign
     expect(isWriteLockHeld(r.state)).toBe(false); // the lock is still released
@@ -353,10 +353,7 @@ describe("host-session-core: applyEditSettled", () => {
       lastAppliedDocVersion: 1,
       inFlightContent: "edit1",
     });
-    const r = core.transition(
-      inFlight,
-      settled({ settledVersion: null, currentContent: null })
-    );
+    const r = core.transition(inFlight, settled({ settledVersion: null, currentContent: null }));
     expect(r.state.externalEpoch).toBe(inFlight.externalEpoch);
     expect(r.state.lastAppliedDocVersion).toBe(1);
   });
@@ -1183,10 +1180,7 @@ describe("host-session-core: externalEpoch (S3a)", () => {
       lastAppliedDocVersion: 1,
       inFlightContent: "applied",
     });
-    const r = core.transition(
-      locked,
-      settled({ settledVersion: 2, currentContent: "applied" })
-    );
+    const r = core.transition(locked, settled({ settledVersion: 2, currentContent: "applied" }));
     expect(r.state.externalEpoch).toBe(0);
     expect(r.effects).toEqual([pDoc(2)]);
   });
@@ -1202,10 +1196,7 @@ describe("host-session-core: externalEpoch (S3a)", () => {
       lastAppliedDocVersion: 1,
       inFlightContent: "a\nb",
     });
-    const r = core.transition(
-      locked,
-      settled({ settledVersion: 2, currentContent: "a\r\nb" })
-    );
+    const r = core.transition(locked, settled({ settledVersion: 2, currentContent: "a\r\nb" }));
     expect(r.state.externalEpoch).toBe(0);
     expect(r.effects).toEqual([pDoc(2)]);
   });
@@ -1235,10 +1226,7 @@ describe("host-session-core: externalEpoch (S3a)", () => {
       lastAppliedDocVersion: 1,
       inFlightContent: "target",
     });
-    const r = core.transition(
-      locked,
-      settled({ settledVersion: 2, currentContent: "foreign" })
-    );
+    const r = core.transition(locked, settled({ settledVersion: 2, currentContent: "foreign" }));
     expect(r.state.externalEpoch).toBe(1);
     expect(r.effects).toEqual([pDoc(2, 1)]);
   });
@@ -1422,7 +1410,11 @@ describe("host-session-core: settlement ack-label gate (ackLabelObserved)", () =
 
   it("POSTS the ack when the version advanced under the lock (lock-held documentChanged was a real observation)", () => {
     // documentChanged during the lock raised lastApplied 1→2 (no epoch bump, lock-held branch).
-    const s = base({ pendingApplyBaseVersion: 1, inFlightContent: "edit1", lastAppliedDocVersion: 2 });
+    const s = base({
+      pendingApplyBaseVersion: 1,
+      inFlightContent: "edit1",
+      lastAppliedDocVersion: 2,
+    });
     const r = core.transition(s, settled({ settledVersion: null, currentContent: null }));
     expect(reseedIn(r.effects)).toEqual(pDoc(2));
     expect(r.effects.some((e) => e.type === "showResyncFailure")).toBe(false);
@@ -1476,7 +1468,11 @@ describe("host-session-core: settlement ack-label gate (ackLabelObserved)", () =
       rejection: { kind: "pending", id: 7, content: "draft", error: unsafe },
       nextRejectionId: 8,
     });
-    const r = core.transition(s, { type: "editRejectedDeliveryFailed", id: 7, documentVersion: null });
+    const r = core.transition(s, {
+      type: "editRejectedDeliveryFailed",
+      id: 7,
+      documentVersion: null,
+    });
     expect(r.state.rejection).toEqual({ kind: "none" }); // no deadlock: pending is cleared
     expect(r.effects.find((e) => e.type === "postDocument")).toBeUndefined(); // no fabricated label
     expect(r.effects.some((e) => e.type === "showResyncFailure")).toBe(true);
@@ -1488,7 +1484,11 @@ describe("host-session-core: settlement ack-label gate (ackLabelObserved)", () =
       rejection: { kind: "pending", id: 9, content: "draft", error: unsafe },
       nextRejectionId: 10,
     });
-    const r = core.transition(s, { type: "editRejectedDeliveryFailed", id: 7, documentVersion: null });
+    const r = core.transition(s, {
+      type: "editRejectedDeliveryFailed",
+      id: 7,
+      documentVersion: null,
+    });
     expect(r.state).toBe(s);
     expect(r.effects).toEqual([]);
   });
@@ -1527,7 +1527,11 @@ describe("host-session-core: unified settledVersion advance (every outcome, Math
   });
 
   it("Math.max never rewinds: an observed settledVersion LOWER than lastApplied leaves it untouched", () => {
-    const s = base({ pendingApplyBaseVersion: 2, inFlightContent: "edit1", lastAppliedDocVersion: 3 });
+    const s = base({
+      pendingApplyBaseVersion: 2,
+      inFlightContent: "edit1",
+      lastAppliedDocVersion: 3,
+    });
     const r = core.transition(s, settled({ settledVersion: 2, currentContent: null }));
     expect(r.state.lastAppliedDocVersion).toBe(3);
   });
@@ -1578,5 +1582,4 @@ describe("host-session-core: the drain's repost arm carries the same gate", () =
     const r = core.transition(s, settled({ settledVersion: null, currentContent: "edit1" }));
     expect(r.effects.some((e) => e.type === "applyEdit")).toBe(true);
   });
-
 });

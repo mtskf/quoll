@@ -722,7 +722,8 @@ export function createHostSessionCore(context: HostSessionContext, deps: HostSes
         // the webview base its next Edit on it → stale verdict → lock-free
         // forward advance → epoch bump → replay buffer dropped.
         const ackLabelObserved =
-          event.settledVersion !== null || (heldBase !== null && settled.lastAppliedDocVersion > heldBase);
+          event.settledVersion !== null ||
+          (heldBase !== null && settled.lastAppliedDocVersion > heldBase);
 
         // Drain is SAFE only when a stash is waiting, edit #1 applied cleanly
         // (`ok`), and the settled document is EXACTLY edit #1's result

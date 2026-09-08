@@ -31,7 +31,10 @@ import {
 } from "../../../src/extension/session/host-session-step.js";
 
 // The executor's real settlement event, minus the optional `divergedAfterApply`.
-const settled = (outcome: ApplyEditOutcome, settledVersion: number | null = null): HostSessionEvent => ({
+const settled = (
+  outcome: ApplyEditOutcome,
+  settledVersion: number | null = null
+): HostSessionEvent => ({
   type: "applyEditSettled",
   outcome,
   settledVersion,
