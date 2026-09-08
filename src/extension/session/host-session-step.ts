@@ -57,7 +57,13 @@ export interface HostSessionStepDeps {
  *  landing that actually succeeded. */
 export function isEditApplied(event: HostSessionEvent): boolean {
   switch (event.type) {
-    // No apply is in flight for these, so nothing is pending a verdict.
+    // Not apply settlements, so none of these deliver a failed-apply verdict.
+    // An apply MAY still be in flight when several of these arrive (a
+    // lock-held `edit` stash, a `documentChanged` echo of the in-flight
+    // apply, a lock-held `ready`/`viewStateVisible`) — `true` then lets
+    // `settle` fall into its own WAIT arm (still locked), never DRAIN, since
+    // only `applyEditSettled` (settled in this same step) and `disposed`
+    // (dropped via the barrier's own `isDisposed` check) ever release the lock.
     case "seed":
     case "ready":
     case "edit":
