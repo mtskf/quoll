@@ -46,7 +46,12 @@ import type {
 // One user-facing message for BOTH "the webview could not be resynced" families
 // (reseed build failure / withheld settlement ack) — same incident semantics,
 // same latch, so the wording must stay true for both: the view could not be
-// updated, and unsaved changes MAY not have been saved.
+// updated, and unsaved changes MAY not have been saved. It must also stay true
+// on both paths the RESEED trigger serves: the reducer emits `postDocument` for
+// the FIRST SEED too (host-session-core's `ready` arm), not only for settlement
+// acks, and the executor cannot tell them apart — so an unconditional "Recent
+// edits may not be saved" would tell a user their edits might be lost at first
+// load, before they had typed anything.
 const RESYNC_FAILURE_MESSAGE =
   "Quoll could not update the editor view. If you have unsaved changes they may not have been saved — reload the window (Developer: Reload Window).";
 
@@ -123,6 +128,43 @@ export function createEffectExecutor<TEdit>(deps: EffectExecutorDeps<TEdit>): Ef
   // user-visible signal for a state this module documents as one that must NOT
   // be silent — and panels live for hours.
   let resyncFailureReported = false;
+
+  // The ONE place that spends that latch — both triggers report their incident
+  // through here, so the protocol below cannot drift between them. `failureLog`
+  // is the only thing the two paths differ in: the trigger-specific label for a
+  // toast that itself throws.
+  //
+  // The latch is set BEFORE the attempt, so the guarantee is "at most ONE
+  // notification attempt per incident" — not "exactly one toast".
+  // ⛔ Do NOT move this to latch-after-success. Both placements lose something
+  // and this is the safer loss:
+  //   - latch-before: a single synchronous failure leaves only the caller's log
+  //     line. Bounded, and by then the window API is broken.
+  //   - latch-after-success: a `showError` that DISPLAYS and then throws is never
+  //     latched, so a persistently broken seam re-toasts on every failure —
+  //     user-visible spam on a path that can fire once per settlement.
+  //     `showError` evaluates `window.showErrorMessage(message)` BEFORE
+  //     `showSafely` wraps it, and `showSafely` only absorbs the Thenable's async
+  //     rejection, so display-then-throw cannot be ruled out from this repo alone.
+  // Spam is the worse failure, and this placement removes it structurally rather
+  // than by argument about VS Code internals.
+  //
+  // GUARDED: the reseed caller sits INSIDE the boundary that exists to stop a
+  // throw from escaping `runEffects`, and `window.showErrorMessage`'s SYNCHRONOUS
+  // throw is not absorbed by the panel's wrapper — an unguarded call here would
+  // re-open the exact hole this closes. Same discipline as
+  // revert-rescue-wiring's per-dep `runGuarded`.
+  const reportResyncFailure = (failureLog: string): void => {
+    if (resyncFailureReported) {
+      return;
+    }
+    resyncFailureReported = true;
+    try {
+      deps.showError(RESYNC_FAILURE_MESSAGE);
+    } catch (err) {
+      console.error(failureLog, err);
+    }
+  };
 
   // Alias for the injected open-external delegate (see the `openExternal` effect
   // case for why it is called via this local rather than `deps.openExternal(...)`).
@@ -633,41 +675,7 @@ export function createEffectExecutor<TEdit>(deps: EffectExecutorDeps<TEdit>): Ef
               "[quoll] failed to build the Document to post; skipping this reseed",
               err
             );
-            if (!resyncFailureReported) {
-              // The latch is set BEFORE the attempt, so the guarantee is "at most
-              // ONE notification attempt per incident" — not "exactly one toast".
-              // ⛔ Do NOT move this to latch-after-success. Both placements lose
-              // something and this is the safer loss:
-              //   - latch-before: a single synchronous failure leaves only the log
-              //     line above. Bounded, and by then the window API is broken.
-              //   - latch-after-success: a `showError` that DISPLAYS and then
-              //     throws is never latched, so a persistently broken seam
-              //     re-toasts on every failed reseed — user-visible spam on a path
-              //     that can fire once per settlement. `showError` evaluates
-              //     `window.showErrorMessage(message)` BEFORE `showSafely` wraps
-              //     it, and `showSafely` only absorbs the Thenable's async
-              //     rejection, so display-then-throw cannot be ruled out from this
-              //     repo alone.
-              // Spam is the worse failure, and this placement removes it
-              // structurally rather than by argument about VS Code internals.
-              resyncFailureReported = true;
-              // GUARDED: this call sits INSIDE the boundary that exists to stop a
-              // throw from escaping `runEffects`, and `window.showErrorMessage`'s
-              // SYNCHRONOUS throw is not absorbed by the panel's wrapper — an
-              // unguarded call here would re-open the exact hole this closes. Same
-              // discipline as revert-rescue-wiring's per-dep `runGuarded`.
-              try {
-                // Wording that is true on BOTH paths this effect serves. The
-                // reducer emits `postDocument` for the FIRST SEED too
-                // (host-session-core's `ready` arm), not only for settlement acks,
-                // and the executor cannot tell them apart — so an unconditional
-                // "Recent edits may not be saved" would tell a user their edits
-                // might be lost at first load, before they had typed anything.
-                deps.showError(RESYNC_FAILURE_MESSAGE);
-              } catch (toastErr) {
-                console.error("[quoll] failed to report the reseed build failure", toastErr);
-              }
-            }
+            reportResyncFailure("[quoll] failed to report the reseed build failure");
             break;
           }
           if (QUOLL_PERF) {
@@ -675,8 +683,9 @@ export function createEffectExecutor<TEdit>(deps: EffectExecutorDeps<TEdit>): Ef
           }
           // RE-ARM the notification latch: the build just succeeded, so the seam
           // recovered and any later failure is a NEW incident, not a repeat of the
-          // one already reported. Orthogonal to the latch-before-attempt decision
-          // above (which bounds a SINGLE incident); without this, one transient
+          // one already reported. Orthogonal to `reportResyncFailure`'s
+          // latch-before-attempt decision (which bounds a SINGLE incident, for
+          // BOTH triggers); without this, one transient
           // early hiccup would leave every later real incident structurally
           // silent for the life of the panel.
           resyncFailureReported = false;
@@ -729,9 +738,9 @@ export function createEffectExecutor<TEdit>(deps: EffectExecutorDeps<TEdit>): Ef
           runApplyEdit(effect.content);
           break;
         case "showError":
-          // GUARDED, and NOT redundant with the `deps.showError` guard inside the
-          // `postDocument` builder catch above: that one protects the executor's
-          // OWN reseed-build notification, this one the REDUCER's settlement toast,
+          // GUARDED, and NOT redundant with the `deps.showError` guard inside
+          // `reportResyncFailure`: that one protects the executor's OWN
+          // resync-failure notification, this one the REDUCER's settlement toast,
           // which every non-ok settlement emits BEFORE its `postDocument` (see
           // `settlementEffects`' ORDER note). The containment matters here since
           // `execute-write.ts`'s `settle()` became total: the correlated case —
@@ -773,15 +782,9 @@ export function createEffectExecutor<TEdit>(deps: EffectExecutorDeps<TEdit>): Ef
           // webview could not be resynced", and one incident must not toast twice.
           // Latch-before-attempt + guarded showError for the same reasons as the
           // build guard (a throwing toast must neither escape runEffects nor
-          // retry within the incident).
-          if (!resyncFailureReported) {
-            resyncFailureReported = true;
-            try {
-              deps.showError(RESYNC_FAILURE_MESSAGE);
-            } catch (err) {
-              console.error("[quoll] failed to report the withheld settlement ack", err);
-            }
-          }
+          // retry within the incident) — which is why both go through the one
+          // `reportResyncFailure` above rather than each keeping a copy.
+          reportResyncFailure("[quoll] failed to report the withheld settlement ack");
           break;
         default: {
           // Exhaustiveness guard — a new HostSessionEffect variant without
