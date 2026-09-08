@@ -354,6 +354,22 @@ export function createEffectExecutor(deps: EffectExecutorDeps): EffectExecutor {
   const runApplyEdit = (content: string): void => {
     void executeDocumentWrite(deps.applyEditSeam, content).then(
       (result) => {
+        deps.dispatch({
+          type: "applyEditSettled",
+          outcome: toApplyEditOutcome(result),
+          canWrite: readCanWrite(),
+          currentContent: result.settledContent,
+          preApplyContent: result.preApplyContent,
+          divergedAfterApply: result.tag === "diverged",
+        });
+        // ⚠️ ORDER IS LOAD-BEARING — this warn sits AFTER `deps.dispatch`, and
+        // must stay there. Anything evaluated on the way INTO the dispatch runs
+        // before `applyEditSettled` fires, so a throw at that position skips the
+        // dispatch and STRANDS THE WRITE LOCK for the session (the rejection arm
+        // below cannot catch its sibling's throw; same reasoning as `readCanWrite`
+        // there). Past the dispatch the panel has already committed the reduced
+        // state and released the lock, so a throw here costs at most an unhandled
+        // rejection.
         // Keyed on `settleReadFailure` rather than on the single
         // `appliedUnverified` tag, because a VERSION-only read failure keeps the
         // tag `applied` (the content was verified) while still suppressing the
@@ -397,14 +413,6 @@ export function createEffectExecutor(deps: EffectExecutorDeps): EffectExecutor {
             result.settleReadFailure
           );
         }
-        deps.dispatch({
-          type: "applyEditSettled",
-          outcome: toApplyEditOutcome(result),
-          canWrite: readCanWrite(),
-          currentContent: result.settledContent,
-          preApplyContent: result.preApplyContent,
-          divergedAfterApply: result.tag === "diverged",
-        });
       },
       // REJECTION ARM — the write lock's only release valve. `executeDocumentWrite`
       // now GUARDS its two settle-time verification reads individually, so those
