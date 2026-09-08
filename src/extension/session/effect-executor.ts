@@ -437,9 +437,11 @@ export function createEffectExecutor<TEdit>(deps: EffectExecutorDeps<TEdit>): Ef
       //   - INSIDE `runEffects` (the reseed's `buildSeedDocument`, the settlement
       //     `showError`): the panel commits the reduced state BEFORE running
       //     effects, so the lock is already released; a throw there costs an
-      //     unhandled rejection plus the abandoned rest of the effect list and the
-      //     skipped post-`runEffects` `editSettledBarrier.settle(...)` — see the
-      //     `case "showError"` comment, which states the same thing.
+      //     unhandled rejection plus the abandoned rest of the effect list. It no
+      //     longer costs the barrier release: the panel's `step`
+      //     (host-session-step.ts) settles UNCONDITIONALLY, with the verdict read
+      //     from the event — see the `case "showError"` comment, which states the
+      //     same thing.
       // Do not add an unguarded call in either place on the assumption that this
       // arm catches it. (`errorMessage` is guarded too, but it belongs to THIS
       // arm — its only call site is the dispatch below, inside this arm's own
@@ -496,14 +498,12 @@ export function createEffectExecutor<TEdit>(deps: EffectExecutorDeps<TEdit>): Ef
           // user-visible toast (`settlementEffects` emits `showError` BEFORE the
           // reseed for every non-ok outcome — see the ORDER note there; that is
           // why this catch does NOT re-raise a toast and cannot double-toast).
-          // Still NOT rescued if some other effect throws: the panel's `step`
-          // calls `editSettledBarrier.settle(...)` AFTER `runEffects`, and that is
-          // its only settle site, so such a throw skips it. Side-channel thunks
-          // deferred behind the barrier (handoff / switch-to-text) are then
-          // neither dropped per the failed-apply contract nor drained — they run
-          // at the NEXT settle, against a document this edit never landed in.
-          // Pre-existing panel-lifecycle gap, tracked separately (fixing it means
-          // a try/finally in `step`).
+          // The barrier is safe too, whichever effect throws: the panel's `step`
+          // (host-session-step.ts) settles UNCONDITIONALLY, so side-channel thunks
+          // deferred behind it (handoff / switch-to-text) are DROPPED per the
+          // failed-apply contract rather than surviving to run at the NEXT settle
+          // against a document this edit never landed in. What a throw still costs
+          // is the abandoned rest of the effect list plus an unhandled rejection.
           // Log only, and deliberately WITHOUT `deps.uriString()`: this catch is
           // the last line of defence, and that injected seam could throw too —
           // which would turn the log into an unhandled rejection. The cause's
@@ -539,8 +539,11 @@ export function createEffectExecutor<TEdit>(deps: EffectExecutorDeps<TEdit>): Ef
             // the effect most likely to re-run a broken read. Unwinding
             // `runEffects` here would (a) escape the FULFILMENT arm as an
             // unhandled rejection, since `createDrainingDispatcher` has
-            // `try/finally` and NO `catch`, and (b) skip the panel's post-effects
-            // `editSettledBarrier.settle`. Only the injected BUILDER is guarded,
+            // `try/finally` and NO `catch`, and (b) abandon the rest of the effect
+            // list. It would NOT skip the barrier release — the panel's `step`
+            // settles unconditionally — but the ack Document is exactly the effect
+            // worth keeping, so contain the throw here rather than relying on that
+            // backstop. Only the injected BUILDER is guarded,
             // so a reducer bug still surfaces (the exhaustiveness guard below).
             //
             // ⚠️ The Document does NOT reach the webview either way — an escaping
@@ -668,8 +671,9 @@ export function createEffectExecutor<TEdit>(deps: EffectExecutorDeps<TEdit>): Ef
           // `createDrainingDispatcher` has `try`/`finally` and no `catch`, so a
           // SYNCHRONOUS `window.showErrorMessage` throw would both escape as an
           // unhandled rejection and abandon the rest of this effect list —
-          // including the ack `postDocument` — plus the panel's post-`runEffects`
-          // `editSettledBarrier.settle(...)`. No latch: this is per-effect
+          // including the ack `postDocument`. The barrier release survives either
+          // way (the panel's `step` settles unconditionally), so this guard is
+          // about the effect list, not the barrier. No latch: this is per-effect
           // containment, not notification suppression.
           try {
             deps.showError(effect.message);

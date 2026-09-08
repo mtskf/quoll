@@ -434,7 +434,9 @@ describe("applyEdit settlement: a settle-time read failure releases the host wri
 // rejection arm; now the settlement is `ok`, so its ack `postDocument` re-runs
 // the broken read on the UNGUARDED fulfilment arm — and `createDrainingDispatcher`
 // has `try`/`finally` with no `catch`, so an escaping throw becomes an unhandled
-// rejection with no toast, no triage log, and a skipped `editSettledBarrier`.
+// rejection with no toast and no triage log. (It would NOT skip the barrier: the
+// panel's `step` settles unconditionally — see host-session-step.ts — but the ack
+// Document is still lost, which is what these pins are about.)
 // The guard lives in `effect-executor.ts`'s `postDocument` case; these are its
 // pins.
 describe("applyEdit settlement: the correlated reseed failure stays contained", () => {

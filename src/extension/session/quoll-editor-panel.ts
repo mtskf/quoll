@@ -122,6 +122,7 @@ import {
   type HostSessionEvent,
   isWriteLockHeld,
 } from "./host-session-core.js";
+import { createHostSessionStep } from "./host-session-step.js";
 import { themeKindFromColorTheme } from "./theme-kind.js";
 
 // Full dotted id of the setting that gates the host→Problems lint mirror.
@@ -372,23 +373,30 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
     // so the effect executors below can close over it — they are only invoked
     // once a dispatch is in flight, after this assignment.
     let dispatch!: (event: HostSessionEvent) => void;
-    const step = (event: HostSessionEvent): void => {
-      const result = core.transition(state, event);
-      state = result.state;
-      runEffects(result.effects);
-      // Drain any side channel deferred behind the write lock once a SUCCESSFUL
-      // settlement has released it. `applied` is false only for a FAILED apply
-      // settlement — then the deferred thunk is dropped (the edit never landed,
-      // so it would read pre-edit state). Placed AFTER runEffects so a
-      // settlement that re-acquires the lock via the stash drain (its
-      // `applyEdit` effect ran above, re-setting the lock in `state`) keeps the
-      // barrier deferred. Side channels are async (`void handle…` /
-      // `void openInTextEditor…`) and do not synchronously re-enter dispatch, so
-      // this cannot recurse into the active drain loop; the barrier also
-      // isolates any synchronous thunk throw via onError.
-      const editApplied = !(event.type === "applyEditSettled" && event.outcome.kind !== "ok");
-      editSettledBarrier.settle(editApplied);
-    };
+    // The transition + effects + barrier release live in host-session-step.ts so
+    // the throwing-effects branch has unit-test reach (this closure is
+    // vscode-bound). Contract recap, since the ordering here is load-bearing:
+    // the settle runs UNCONDITIONALLY — a throwing effect used to skip it and
+    // strand a deferred side channel — and its `applied` verdict is read from
+    // the EVENT, false only for a FAILED apply settlement (then the deferred
+    // thunk is dropped: the edit never landed, so it would read pre-edit state).
+    // It still runs AFTER the effects, so a settlement that re-acquires the lock
+    // via the stash drain (its `applyEdit` effect ran, re-setting the lock in
+    // `state`) keeps the barrier deferred. Side channels are async
+    // (`void handle…` / `void openInTextEditor…`) and do not synchronously
+    // re-enter dispatch, so this cannot recurse into the active drain loop; the
+    // barrier also isolates any synchronous thunk throw via onError.
+    const step = createHostSessionStep({
+      commitTransition: (event) => {
+        const result = core.transition(state, event);
+        state = result.state;
+        return result.effects;
+      },
+      // Late-bound lambdas: `runEffects` and `editSettledBarrier` are closed over
+      // and the executor is constructed BELOW this point.
+      runEffects: (effects) => runEffects(effects),
+      settleEditBarrier: (applied) => editSettledBarrier.settle(applied),
+    });
     dispatch = createDrainingDispatcher<HostSessionEvent>(step);
 
     // canWriteNow gates host-side writes to on-disk file: documents only
