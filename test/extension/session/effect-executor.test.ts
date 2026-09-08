@@ -593,6 +593,14 @@ describe("effect-executor runApplyEdit (wrapper mapping)", () => {
       expect(dispatch).toHaveBeenCalledWith(
         expect.objectContaining({ type: "applyEditSettled", settledVersion: null })
       );
+      // The guarded reader serves three call families with different
+      // consequences, so its warn NAMES the site — without it this line is
+      // indistinguishable from a withheld edit-rejected recovery reseed.
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringContaining("guarded readVersion failed"),
+        { site: "settlement-retry" },
+        expect.anything()
+      );
     } finally {
       warnSpy.mockRestore();
     }

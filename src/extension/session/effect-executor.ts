@@ -205,14 +205,29 @@ export function createEffectExecutor<TEdit>(deps: EffectExecutorDeps<TEdit>): Ef
   //
   // Name it `readVersionGuarded` (NOT "retry"): it is the ONE guarded version
   // reader, with ONE contract — `number | null`, null ⇔ unobserved, never a
-  // fabricated value — serving BOTH the settlement-dispatch retry above and
-  // `sendEditRejected`'s recovery dispatches below.
-  const readVersionGuarded = (): number | null => {
+  // fabricated value — serving THREE call families, only one of which is a
+  // retry:
+  //   1. the resolved settlement's RETRY (`runApplyEdit`'s fulfilment arm), the
+  //      one the paragraph above describes: the pipeline already read the version
+  //      once and that read threw.
+  //   2. the pipeline-REJECTION arm's FIRST read: that settlement never reached a
+  //      settle-time read at all, so this is the only version read it ever makes
+  //      (not a second chance at one).
+  //   3. `sendEditRejected`'s three recovery dispatches below (sync throw /
+  //      delivery refused / delivery rejected), labelling the reseed that clears
+  //      a stuck rejection.
+  // The consequences differ per family, so the call site is NAMED and travels on
+  // the warn: without it three unrelated outcomes collapse into one log line and
+  // triage cannot tell "the retry lost a transient" from "the recovery reseed was
+  // withheld". Pass a literal — this runs on a failure path and must not evaluate
+  // anything that can throw.
+  const readVersionGuarded = (site: string): number | null => {
     try {
       return deps.applyEditSeam.readVersion();
     } catch (err) {
       console.warn(
         "[quoll] guarded readVersion failed; the label stays UNOBSERVED (null — never a fabricated number)",
+        { site },
         err
       );
       return null;
@@ -253,7 +268,7 @@ export function createEffectExecutor<TEdit>(deps: EffectExecutorDeps<TEdit>): Ef
       deps.dispatch({
         type: "editRejectedDeliveryFailed",
         id,
-        documentVersion: readVersionGuarded(),
+        documentVersion: readVersionGuarded("edit-rejected-recovery:sync-throw"),
       });
       return;
     }
@@ -277,7 +292,7 @@ export function createEffectExecutor<TEdit>(deps: EffectExecutorDeps<TEdit>): Ef
         deps.dispatch({
           type: "editRejectedDeliveryFailed",
           id,
-          documentVersion: readVersionGuarded(),
+          documentVersion: readVersionGuarded("edit-rejected-recovery:refused"),
         });
       },
       (err: unknown) => {
@@ -288,7 +303,7 @@ export function createEffectExecutor<TEdit>(deps: EffectExecutorDeps<TEdit>): Ef
         deps.dispatch({
           type: "editRejectedDeliveryFailed",
           id,
-          documentVersion: readVersionGuarded(),
+          documentVersion: readVersionGuarded("edit-rejected-recovery:rejected"),
         });
       }
     );
@@ -405,7 +420,7 @@ export function createEffectExecutor<TEdit>(deps: EffectExecutorDeps<TEdit>): Ef
         deps.dispatch({
           type: "applyEditSettled",
           outcome: toApplyEditOutcome(result),
-          settledVersion: result.settledVersion ?? readVersionGuarded(),
+          settledVersion: result.settledVersion ?? readVersionGuarded("settlement-retry"),
           canWrite: readCanWrite(),
           currentContent: result.settledContent,
           preApplyContent: result.preApplyContent,
@@ -501,8 +516,12 @@ export function createEffectExecutor<TEdit>(deps: EffectExecutorDeps<TEdit>): Ef
       // `ok`, so the unobserved snapshot below never reaches `decideEdit`, and
       // the content check reads `null` as unobserved; foreign evidence, if any,
       // comes from the version-delta fallback. The user gets the same
-      // `Failed to save:` toast + authoritative reseed as any other failed
-      // write, instead of a panel that has quietly stopped saving.
+      // `Failed to save:` toast as any other failed write, instead of a panel
+      // that has quietly stopped saving. The reseed that normally follows it is
+      // CONDITIONAL, and this arm is the likeliest place to lose it: the guarded
+      // read below is the settlement's ONLY version read, so if it also fails and
+      // no lock-held resync arrived, the reducer withholds the ack Document and
+      // reports through the shared resync-failure latch instead.
       //
       // ⚠️ This arm MUST NOT re-read the document CONTENT or `canWrite()` —
       // those seams are the candidate throw sources, and a throw HERE strands
@@ -518,7 +537,7 @@ export function createEffectExecutor<TEdit>(deps: EffectExecutorDeps<TEdit>): Ef
           deps.dispatch({
             type: "applyEditSettled",
             outcome: { kind: "rejected", message: errorMessage(err) },
-            settledVersion: readVersionGuarded(),
+            settledVersion: readVersionGuarded("rejection-arm-first-read"),
             canWrite: false,
             // NOT OBSERVED — nothing was read, so say nothing rather than
             // fabricating an empty document. The non-ok foreign-bytes check reads
