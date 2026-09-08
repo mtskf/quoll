@@ -9,10 +9,13 @@ import type { HostToWebview } from "../../../src/shared/protocol.js";
 
 const themeMsg: HostToWebview = { protocol: 1, type: "theme", themeKind: "dark" };
 
-// The seam's edit type. The executor never inspects an edit — it only forwards
-// the seam to `executeDocumentWrite`, which hands `build`'s output straight to
-// `apply` — so an opaque marker stands in for production's `WorkspaceEdit` and
-// still exercises the build→apply type linkage.
+// The seam's edit type. The executor never inspects an edit — it only
+// forwards the seam to `executeDocumentWrite`, which hands `build`'s output
+// straight to `apply` — so an opaque marker stands in for production's
+// `WorkspaceEdit`.
+// ⚠️ NOT a compile-time guard: this file is in no `pnpm compile` tsc program
+// and vitest is transpile-only, so this annotation documents intent only.
+// The build→apply linkage is pinned in test/extension/types-equality.test.ts.
 type FakeEdit = { readonly fake: "edit" };
 const fakeEdit: FakeEdit = { fake: "edit" };
 
