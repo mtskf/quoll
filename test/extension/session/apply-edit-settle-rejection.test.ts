@@ -40,8 +40,17 @@
 // `dropLockHeldDocumentChanged` below) — the settlement withholds its ack rather
 // than pairing live bytes with a stale label, and reports through the SAME
 // shared latch. So: never assert `h.errors` is empty under `armSettleFailure(true)`
-// OR a withheld-ack arrangement (`armVersionFailure`); filter for the message you
-// mean.
+// OR under a WITHHELD-ACK arrangement — `armVersionFailure(2+)` (persistent: the
+// settle read and the dispatch retry both fail) TOGETHER WITH
+// `dropLockHeldDocumentChanged`, which is what removes the other observation
+// source. Filter for the message you mean instead.
+// ⚠️ `armVersionFailure` ALONE is not that arrangement, and two tests below turn
+// on the difference: `armVersionFailure(1)` is a TRANSIENT failure the dispatch
+// retry recovers, and `armVersionFailure(2)` WITHOUT the drop still gets its
+// label from the lock-held `documentChanged`. Both ack normally, so
+// `expect(h.errors).toEqual([])` is exactly the assertion there — "the ack was
+// licensed" means no toast of any kind. Weakening those two to a filtered check
+// would stop pinning the recovery.
 
 import { describe, expect, it, vi } from "vitest";
 

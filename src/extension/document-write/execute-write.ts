@@ -214,12 +214,16 @@ export async function executeDocumentWrite<TEdit>(
   //     settled document IS edit #1's exact result") pass with no observation
   //     behind it, so a stash could clobber an external edit that the verified
   //     path deliberately lets win.
-  //   - A numeric version sentinel (`-1`) would be assigned VERBATIM by the
-  //     settlement `ok` self-advance and REWIND the version.
+  //   - A numeric version sentinel (`-1`) is CLAMPED AWAY by the settlement's
+  //     `Math.max` advance, so it could not rewind the label — it would do
+  //     something worse: ANY fabricated number satisfies `settledVersion !== null`
+  //     and FABRICATES the `ackLabelObserved` observation, so the settlement acks
+  //     LIVE bytes under a made-up label.
   // Every consumer is therefore forced by the compiler to answer for `null`, and
-  // each answers conservatively: no self-advance, no epoch bump ("missing
-  // snapshot ⇒ foreign" is a REJECTED variant — it drops the webview's replay
-  // buffer), no drain.
+  // each answers conservatively PER MISSING OBSERVATION: content unobserved ⇒ no
+  // drain, and the epoch verdict falls back to POSITIVE version-delta evidence
+  // ("missing evidence ⇒ foreign" stays the REJECTED variant); version unobserved
+  // ⇒ no advance and the ack is WITHHELD, never posted at a stale label.
   const settle = (tag: DocumentWriteTag, message?: string): DocumentWriteOutcome => {
     const verifyStart = QUOLL_PERF ? perfNow() : 0;
     const readFailures: string[] = [];
