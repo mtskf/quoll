@@ -42,11 +42,19 @@ export interface HostSessionStepDeps {
    *  rescue below is conditioned on the throwing event being the settlement
    *  itself — on the LIVE path (the panel still alive, still typed into) the
    *  only event that ever releases the lock (see `isEditApplied`'s
-   *  `applyEditSettled` / `disposed` comment). The core's `disposed` arm also
-   *  clears the lock, but only on teardown, where the barrier's own
-   *  `isDisposed()` check already drops the deferred thunks regardless of
-   *  verdict — so a throw there needs no rescue. Today such a throw is
-   *  defensive-only: the injected write validator is fail-closed
+   *  `applyEditSettled` / `disposed` comment). A throw from the `disposed`
+   *  transition needs no rescue of its own, but NOT because the barrier drops
+   *  anything IN THIS STEP: the panel sets its local `disposed` flag BEFORE
+   *  dispatching the `disposed` event (`quoll-editor-panel.ts`'s
+   *  `onDidDispose`), so `editSettledBarrier`'s `isDisposed()` already reads
+   *  true regardless of whether this transition throws. If an apply was in
+   *  flight, THAT apply's own `applyEditSettled` step still arrives later
+   *  (its dispatch fires post-dispose, in every outcome arm — see
+   *  `effect-executor.ts`'s `runApplyEdit` header), and it is THAT later,
+   *  independent step's call to `settleEditBarrier` — finding `isDisposed()`
+   *  true — that drops the deferred thunks. The drop is real; it just rides
+   *  the in-flight apply's own settlement, not this one. Today such a throw
+   *  is defensive-only: the injected write validator is fail-closed
    *  (validate-for-write.ts turns parser throws into verdicts), which leaves
    *  only the reducer's own exhaustive-arm throws. */
   readonly commitTransition: (event: HostSessionEvent) => readonly HostSessionEffect[];
@@ -130,11 +138,18 @@ export function isEditApplied(event: HostSessionEvent): boolean {
  *  `HostSessionEvent["type"]`, same idiom as `isEditApplied`'s outer switch:
  *  a new union member must answer this explicitly instead of silently
  *  falling through to "no rescue needed", which would reintroduce the exact
- *  stranding this module exists to fix. `disposed` answers false: its own
- *  transition arm is trivial (never throws), and even if it did, the
- *  barrier's `settle` already drops its deferred thunks via its own
- *  `isDisposed()` check regardless of verdict (see `edit-settled-barrier.ts`),
- *  so no rescue is needed there either. */
+ *  stranding this module exists to fix. `disposed` answers false: if no apply
+ *  was in flight, the lock was not held and there is nothing to strand; if one
+ *  WAS in flight, its own `applyEditSettled` step still arrives later
+ *  regardless of whether this `disposed` transition throws (that dispatch
+ *  fires post-dispose, in every outcome arm — see `effect-executor.ts`'s
+ *  `runApplyEdit` header). By the time THAT step calls `settleEditBarrier`,
+ *  the panel's local `disposed` flag is already true (set before the
+ *  `disposed` event is dispatched — `quoll-editor-panel.ts`'s
+ *  `onDidDispose`), so the barrier's own `isDisposed()` check
+ *  (`edit-settled-barrier.ts`) drops the deferred thunks there — a later,
+ *  independent step, not this one. So no rescue is needed for a throw from
+ *  `disposed` itself. */
 function releasesWriteLockOnCommit(event: HostSessionEvent): boolean {
   switch (event.type) {
     case "applyEditSettled":
@@ -196,10 +211,16 @@ export function createHostSessionStep(
    *  that retries lands in `editSettledBarrier.run()`, finds the lock still
    *  held, and re-defers behind it — stranded again until dispose.
    *
-   *  Conditioned on the settlement for a reason: on any other event the lock is
-   *  held by an apply whose own settlement is still coming, and that settlement
-   *  will legitimately DRAIN these thunks — dropping them here would destroy
-   *  work the barrier promised to run. */
+   *  Conditioned on the settlement for a reason: on any other event, if the
+   *  lock is held it is held by an apply whose own settlement is still coming
+   *  (see `releasesWriteLockOnCommit`'s doc), and that later, independent
+   *  settlement is the legitimate resolution — DRAIN (run them) on the live
+   *  path, or DROP them via the barrier's own `isDisposed()` check if
+   *  `disposed` won the race first (see its case above; `edit-settled-barrier.ts`
+   *  treats DRAIN and DROP as distinct outcomes of `settle`, so this is not the
+   *  same thing happening twice). Rescuing here, ahead of that resolution,
+   *  would destroy work the barrier still owes — either running the thunks or
+   *  releasing their at-receipt guards through `onDrop`. */
   const rescueStrandedSideChannels = (event: HostSessionEvent): void => {
     if (!releasesWriteLockOnCommit(event)) {
       return;
