@@ -41,9 +41,9 @@ export interface HostSessionStepDeps {
    *  that never happened, and a blind `settle(false)` would DROP deferred
    *  thunks that a still-pending real settlement would otherwise resolve on
    *  its own terms — DRAIN, DROP, or WAIT, per `edit-settled-barrier.ts`'s
-   *  `settle`. The rescue below is conditioned on the throwing event being the settlement
-   *  itself — on the LIVE path (the panel still alive, still typed into) the
-   *  only event that ever releases the lock (see `isEditApplied`'s
+   *  `settle`. The rescue below is conditioned on the throwing event being the
+   *  settlement itself — on the LIVE path (the panel still alive, still typed
+   *  into) the only event that ever releases the lock (see `isEditApplied`'s
    *  `applyEditSettled` / `disposed` comment). A throw from the `disposed`
    *  transition needs no rescue of its own, but NOT because the barrier drops
    *  anything IN THIS STEP: the panel sets its local `disposed` flag BEFORE
