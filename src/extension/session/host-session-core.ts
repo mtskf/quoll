@@ -1314,22 +1314,75 @@ export function createHostSessionCore(context: HostSessionContext, deps: HostSes
 /** Queue-draining, non-recursive event dispatcher (Codex R2). `step(event)`
  *  runs one transition + its effects; an effect that synchronously
  *  re-dispatches enqueues behind the active loop and is drained AFTER
- *  `step` returns — flat, FIFO, never a recursive stack. */
+ *  `step` returns — flat, FIFO, never a recursive stack.
+ *
+ *  FAILURE POLICY — a throwing `step` does NOT cancel the rest of the drain.
+ *  Scheduling is this primitive's ONLY job, so its contract is "every accepted
+ *  event gets exactly one `step` ATTEMPT" — an attempt, not a success: this is
+ *  scheduling, not transactional recovery. A sibling event's failure is not a
+ *  reason to break it. The two rejected alternatives:
+ *    - ABANDON the queue (today's shape: reset `draining`, keep the entries).
+ *      The residue is not lost, it is DEFERRED — the next external dispatch
+ *      drains it first, arbitrarily later, against a state it was never
+ *      computed for. A stale replay is the worst of the three outcomes.
+ *    - CLEAR the queue. Dropping accepted events is silent state loss, and for
+ *      the host session it is unsafe by construction: `applyEditSettled` is the
+ *      write lock's ONLY release site (see `edit-settled-barrier.ts`), so
+ *      dropping one strands the lock and the side channels deferred behind it.
+ *  Continuing leaves a WELL-FORMED state from either throw site inside `step`:
+ *  a throwing TRANSITION leaves the committed state untouched, and a throwing
+ *  EFFECT runs after the transition has already committed. See
+ *  `host-session-step.ts`. What continuing does NOT do — and must not be read
+ *  as doing — is REPAIR the failed event: the rest of that event's effect list
+ *  stays abandoned, and a throw from an `applyEditSettled` TRANSITION still
+ *  strands the write lock (that cost is owned and tracked by
+ *  `HostSessionStepDeps.commitTransition`, and no queue policy can pay it).
+ *  Draining on is simply the least-bad of the three, not a rescue.
+ *
+ *  ⚠️ LIVENESS is unchanged and still the caller's to keep: a `step` that
+ *  re-dispatches on every pass never empties the queue and this loop never
+ *  returns — now also on the failure path, where the accumulated errors are
+ *  never rethrown either. A bounded drain would trade that for the silent
+ *  event loss this policy exists to avoid, so the bound stays where it always
+ *  was: no effect may re-dispatch unconditionally.
+ *
+ *  Errors are neither swallowed nor allowed to displace each other: the drain
+ *  finishes first, then a lone failure is rethrown AS-IS (callers keep the
+ *  error identity and its triage payload) and several are rethrown together as
+ *  an `AggregateError`. The throw still escapes to the caller, so the
+ *  unhandled-rejection reasoning in `effect-executor.ts` is unchanged — only
+ *  its timing moves to the end of the drain. */
 export function createDrainingDispatcher<Ev>(step: (event: Ev) => void): (event: Ev) => void {
   const queue: Ev[] = [];
   let draining = false;
   return (event: Ev): void => {
     queue.push(event);
     if (draining) {
+      // Already inside a drain — including a drain that is currently unwinding
+      // a `step` throw, since the loop below catches per step and keeps going.
       return;
     }
     draining = true;
+    const errors: unknown[] = [];
     try {
       while (queue.length > 0) {
-        step(queue.shift() as Ev);
+        try {
+          step(queue.shift() as Ev);
+        } catch (err) {
+          errors.push(err);
+        }
       }
     } finally {
+      // Released BEFORE the rethrow below, so a caller that dispatches from its
+      // own catch handler starts a fresh drain rather than silently enqueueing
+      // behind a loop that has already exited.
       draining = false;
+    }
+    if (errors.length === 1) {
+      throw errors[0];
+    }
+    if (errors.length > 1) {
+      throw new AggregateError(errors, "[quoll] host session drain: multiple steps threw");
     }
   };
 }
