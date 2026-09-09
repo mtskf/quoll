@@ -2,6 +2,14 @@
 
 All notable changes to Quoll are documented here.
 
+## 0.1.78 — 2026-09-09
+
+### Fixed
+
+- Tables and standalone images now re-render correctly when an unclosed code fence or HTML block starts or stops swallowing them. Previously the block could keep showing its old shape, or go missing from the rendered view, until you edited it again.
+- Quoll no longer reports "Failed to save" when the save itself succeeded and only its follow-up check of the saved file was unavailable. If a queued edit really was lost because the editor closed mid-save, the message now says that and asks you to reopen the file.
+- After an unexpected internal error during a save, a pending switch to the plain text editor — or a pending cursor handoff — no longer runs afterwards against a document that never received your edit.
+
 ## 0.1.77 — 2026-09-05
 
 ### Fixed
@@ -17,7 +25,6 @@ All notable changes to Quoll are documented here.
 ## 0.1.75 — 2026-08-21
 
 ### Changed
-- settle the two settle-contract drifts PR #399 cycle 2 left behind (#400)
 
 - Internal hardening of the table cell's text-mapping code, plus test coverage around it. Nothing changes in how the editor looks or behaves.
 
