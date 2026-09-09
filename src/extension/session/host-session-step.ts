@@ -55,8 +55,8 @@ export interface HostSessionStepDeps {
   readonly settleEditBarrier: (applied: boolean) => void;
   /** Reports a throw from `settleEditBarrier` that would otherwise MASK the
    *  error it ran alongside — either a transition throw (the rescue settle in
-   *  the catch block below) or an effect throw (the drain settle after
-   *  `runEffects`). Defaults to console.error. */
+   *  `rescueStrandedSideChannels` below) or an effect throw (the drain settle
+   *  after `runEffects`). Defaults to console.error. */
   readonly onSettleError?: (err: unknown) => void;
 }
 
@@ -180,41 +180,47 @@ export function createHostSessionStep(
     }
   };
 
+  /** Release the deferred side channels that a THROWING TRANSITION would
+   *  otherwise strand. The transition unwound BEFORE the panel committed the
+   *  state it would have returned. When the throwing event is the SETTLEMENT,
+   *  that leaves the write lock (`pendingApplyBaseVersion`) HELD with no second
+   *  settlement ever coming: the deferred side channels would sit in the
+   *  barrier forever and their at-receipt guards (the Codex single-flight)
+   *  would never release. `settle(false)` is the ONLY verdict that can free
+   *  them, since `true` consults the still-held lock and takes the barrier's
+   *  WAIT arm instead of dropping anything.
+   *
+   *  What this rescue pays for is a ONE-SHOT guard/thunk release, not a
+   *  "retry works now" fix: it never clears `pendingApplyBaseVersion`
+   *  (releasing the lock itself is a separate follow-up), so a side channel
+   *  that retries lands in `editSettledBarrier.run()`, finds the lock still
+   *  held, and re-defers behind it — stranded again until dispose.
+   *
+   *  Conditioned on the settlement for a reason: on any other event the lock is
+   *  held by an apply whose own settlement is still coming, and that settlement
+   *  will legitimately DRAIN these thunks — dropping them here would destroy
+   *  work the barrier promised to run. */
+  const rescueStrandedSideChannels = (event: HostSessionEvent): void => {
+    if (!releasesWriteLockOnCommit(event)) {
+      return;
+    }
+    try {
+      deps.settleEditBarrier(false);
+    } catch (settleErr) {
+      // Same rule as the effect-throw path in the step below: the recovery must
+      // not step on the failure it is recovering from. The transition error is
+      // the root cause and the triage payload, so it is the one that propagates
+      // (the caller rethrows it right after this returns).
+      reportSettleError(settleErr);
+    }
+  };
+
   return (event: HostSessionEvent): void => {
     let effects: readonly HostSessionEffect[];
     try {
       effects = deps.commitTransition(event);
     } catch (transitionErr) {
-      // The transition unwound BEFORE the panel committed the state it would
-      // have returned. When the throwing event is the SETTLEMENT, that leaves
-      // the write lock (`pendingApplyBaseVersion`) HELD with no second
-      // settlement ever coming: the deferred side channels would sit in the
-      // barrier forever and their at-receipt guards (the Codex single-flight)
-      // would never release. `settle(false)` is the ONLY verdict that can free
-      // them, since `true` consults the still-held lock and takes the
-      // barrier's WAIT arm instead of dropping anything.
-      //
-      // What this rescue pays for is a ONE-SHOT guard/thunk release, not a
-      // "retry works now" fix: it never clears `pendingApplyBaseVersion`
-      // (releasing the lock itself is a separate follow-up), so a side
-      // channel that retries lands in `editSettledBarrier.run()`, finds the
-      // lock still held, and re-defers behind it — stranded again until
-      // dispose.
-      //
-      // Conditioned on the settlement for a reason: on any other event the lock
-      // is held by an apply whose own settlement is still coming, and that
-      // settlement will legitimately DRAIN these thunks — dropping them here
-      // would destroy work the barrier promised to run.
-      if (releasesWriteLockOnCommit(event)) {
-        try {
-          deps.settleEditBarrier(false);
-        } catch (settleErr) {
-          // Same rule as the effect path below: the recovery must not step on
-          // the failure it is recovering from. The transition error is the root
-          // cause and the triage payload, so it is the one that propagates.
-          reportSettleError(settleErr);
-        }
-      }
+      rescueStrandedSideChannels(event);
       throw transitionErr;
     }
     // Read the verdict from the EVENT: it must survive a throwing effect list,
