@@ -328,10 +328,10 @@ const postDoc = (s: HostSessionState, docVersion: number): HostSessionEffect => 
 // POST-DISPOSE the pair never reaches the executor, by TWO different routes:
 // the no-stash arm (`state.disposed && state.pendingEdit === null`, the early
 // return in the `applyEditSettled` case) passes `ackLabelObserved: true` so the
-// pair is not even
-// constructed, and the undrainable arm keeps only `showError`s from the
-// settlement effects. Deliberate in both: there is no view left to resync, and
-// the only loss worth reporting there (a dropped stash) has its own toast.
+// pair is not even constructed, and the undrainable arm keeps only `showError`s
+// from the settlement effects. Deliberate in both: there is no view left to
+// resync, and the only loss worth reporting there (a dropped stash) has its own
+// toast.
 function withholdAckEffects(
   settled: HostSessionState,
   heldBase: number | null,
@@ -386,11 +386,11 @@ function ackEffects(
 // measures that CONTAINMENT and deliberately keeps no ordering assert of its own.
 // The ORDER itself IS still pinned, in `host-session-core.test.ts`
 // (`expectToastBeforeReseed`) — keep it there. The correlated failure is also
-// narrower since `settle()` became
-// total: a throwing `readCanonical` now resolves as an UNVERIFIED ok, and only
-// the pipeline's synchronous prefix still produces `rejected`. Keep the order
-// anyway — it costs nothing and removes the dependency on those guards. `ok` has
-// no toast to order, so its single effect is unchanged.
+// narrower since `settle()` became total: a throwing `readCanonical` now
+// resolves as an UNVERIFIED ok, and only the pipeline's synchronous prefix still
+// produces `rejected`. Keep the order anyway — it costs nothing and removes the
+// dependency on those guards. `ok` has no toast to order, so its single effect
+// is unchanged.
 function settlementEffects(
   outcome: ApplyEditOutcome,
   settled: HostSessionState,
@@ -780,10 +780,10 @@ export function createHostSessionCore(context: HostSessionContext, deps: HostSes
         // already bumps the epoch — that half is diagnosed, not residual.) In the
         // residual reading the ack pairs live bytes with a label one edit behind,
         // the same mislabel class the gate narrows elsewhere. It is not closable
-        // HERE, and every narrowing considered also withholds
-        // the central case (own echo, delta exactly 1), which is the receiving end
-        // of the lock-held deferral contract — withhold it and a quiet document
-        // never gets a repost at all. The failure stays bounded (stale verdict →
+        // HERE, and every narrowing considered also withholds the central case
+        // (own echo, delta exactly 1), which is the receiving end of the
+        // lock-held deferral contract — withhold it and a quiet document never
+        // gets a repost at all. The failure stays bounded (stale verdict →
         // epoch bump → replay-buffer drop, no corruption), needs a triple
         // coincidence to reach, and is strictly better than the pre-gate
         // behaviour, which posted the STORED label unconditionally. The durable
@@ -805,7 +805,8 @@ export function createHostSessionCore(context: HostSessionContext, deps: HostSes
         // misread a plain edit on a CRLF-eol single-line doc as "external won"
         // and DROP the stash instead of draining it (the webview's OWN acked
         // lineage, not a foreign edit).
-        // NOT OBSERVED ⇒ NO drain. The drain's safety condition is an OBSERVED
+        // CONTENT NOT OBSERVED ⇒ NO drain (the ack LABEL is a separate
+        // question, taken up next). The drain's safety condition is an OBSERVED
         // equality — "the settled document IS edit #1's exact result" — which is
         // what keeps an external edit that won the apply→settle race from being
         // clobbered by the stash. Without the observation that condition cannot
@@ -874,20 +875,22 @@ export function createHostSessionCore(context: HostSessionContext, deps: HostSes
           //     must be visible for triage regardless of whether a keystroke was
           //     queued.
           //  2. An UNOBSERVED settlement holding a stash: `canDrain` refused for
-          //     want of an observation, so the keystroke is dropped. Post-dispose
-          //     the stash was its only carrier, so the loss must be observable.
+          //     want of a CONTENT observation, so the keystroke is dropped.
+          //     Post-dispose the stash was its only carrier, so the loss must be
+          //     observable.
           //  3. The narrower ok-but-mismatch log (external edit won a stash's
           //     apply→settle race), which now REQUIRES an observation: claiming
           //     "external edit won the race" without having read the document
           //     would be a fabricated diagnosis, and an unobserved snapshot is not
           //     a mismatch.
-          // There is deliberately no fourth arm for "the content matched but the
-          // ack label was never observed": that configuration DRAINS (see
-          // `canDrain`), so it never reaches this branch at all.
           // None is a save failure, so none adds a showError (the ok baseEffects
           // carry none) — an unverified landing is not a failed save. Arm 2
           // POST-DISPOSE is the exception and gets its own toast below: there the
           // log is the whole signal and nobody is left to read it.
+          //
+          // There is deliberately no fourth arm for "the content matched but the
+          // ack label was never observed": that configuration DRAINS (see
+          // `canDrain`), so it never reaches this branch at all.
           const unobservedStashDrop =
             !divergedAfterApply &&
             stash !== null &&
