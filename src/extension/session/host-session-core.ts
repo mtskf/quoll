@@ -393,6 +393,32 @@ function ackEffects(
 // produces `rejected`. Keep the order anyway — it costs nothing and removes the
 // dependency on those guards. `ok` has no toast to order, so its single effect
 // is unchanged.
+// A settlement's user-visible FAILURE toasts, and the ONE owner of their text.
+// Split out because the disposed-no-stash arm wants exactly these and nothing
+// else: asking `settlementEffects` for the full set and filtering it down to
+// `showError` made that arm depend on the filter for its correctness, and
+// forced it to hand the ack gate a fabricated `ackLabelObserved: true` for an
+// ack it never wanted built. `ok` has no toast — a settlement that succeeded is
+// not a failure, and an unverified landing is not a failed save.
+function failureToasts(
+  outcome: ApplyEditOutcome,
+  context: HostSessionContext
+): HostSessionEffect[] {
+  switch (outcome.kind) {
+    case "ok":
+      return [];
+    case "refused":
+      return [
+        {
+          type: "showError",
+          message: `Quoll could not save ${context.fsPath}. Reload the file or try again.`,
+        },
+      ];
+    default:
+      return [{ type: "showError", message: `Failed to save: ${outcome.message}` }];
+  }
+}
+
 function settlementEffects(
   outcome: ApplyEditOutcome,
   settled: HostSessionState,
@@ -411,16 +437,13 @@ function settlementEffects(
           message: "[quoll] applyEdit returned false",
           detail: { uri: context.uriString, baseDocVersion: heldBase },
         },
-        {
-          type: "showError",
-          message: `Quoll could not save ${context.fsPath}. Reload the file or try again.`,
-        },
+        ...failureToasts(outcome, context),
         ...ack,
       ];
     case "constructThrew":
     case "applyThrew":
     case "rejected":
-      return [{ type: "showError", message: `Failed to save: ${outcome.message}` }, ...ack];
+      return [...failureToasts(outcome, context), ...ack];
     default: {
       const _exhaustive: never = outcome;
       throw new Error(
@@ -638,28 +661,18 @@ export function createHostSessionCore(context: HostSessionContext, deps: HostSes
         // told). A clean `ok` settle (incl. the applyEdit no-op on a GC'd
         // sole-editor document) has no showError, so no false alarm.
         if (state.disposed && state.pendingEdit === null) {
-          // `ackLabelObserved` is passed the literal `true` here — the
-          // `.filter(e => e.type === "showError")` below keeps only toasts
-          // either way, so the argument is inert. `true` is chosen so the
-          // withhold pair is never even constructed for a disposed panel. Note
-          // what that pair actually is: a logWarn plus `showResyncFailure`,
-          // which the executor turns into a VS Code WINDOW TOAST — not a
-          // webview-bound message (same distinction as the `showError` note
-          // above). It is suppressed here for a different reason than the ack:
-          // post-dispose there is no view left to resync, so telling the user it
-          // could not be resynced is noise. A dropped stash is the one loss that
-          // still matters post-dispose, and it gets its own toast below.
-          const effects =
-            event.outcome.kind === "ok"
-              ? []
-              : settlementEffects(
-                  event.outcome,
-                  state,
-                  state.pendingApplyBaseVersion,
-                  state.context,
-                  true
-                ).filter((e) => e.type === "showError");
-          return { state, effects };
+          // Toasts ONLY, built directly rather than filtered out of the full
+          // settlement effects: this arm has no ack to gate, so it must not have
+          // to name an ack-label observation it does not have. What it drops
+          // along the way is the withhold pair — a logWarn plus
+          // `showResyncFailure`, which the executor turns into a VS Code WINDOW
+          // TOAST, not a webview-bound message (same distinction as the
+          // `showError` note above). That suppression is for a DIFFERENT reason
+          // than the ack's: post-dispose there is no view left to resync, so
+          // telling the user it could not be resynced is noise. A dropped stash
+          // is the one loss that still matters post-dispose, and it gets its own
+          // toast below.
+          return { state, effects: failureToasts(event.outcome, state.context) };
         }
         const heldBase = state.pendingApplyBaseVersion;
         const stash = state.pendingEdit;
@@ -1012,6 +1025,30 @@ export function createHostSessionCore(context: HostSessionContext, deps: HostSes
           currentContent: observed,
           markdownValidator: validateForWrite,
         });
+        // The drain's own triage record for the STALE RE-BASE residual the
+        // `canDrain` comment accepts. Every other degraded path in this file
+        // logs; without this the one path that WRITES at a base it knows to be a
+        // lower bound would be the exception, and a later spurious epoch bump
+        // could not be attributed to the drain that caused it. NOT added to the
+        // readonly/stale/no-op arm below — that arm already logs the same
+        // incident through `withholdAckEffects`. NOT emitted post-dispose
+        // either: there the `accept` arm deliberately does not re-acquire the
+        // lock, so neither consequence named below can occur (no later
+        // settlement reads this base, and no draft goes out).
+        const staleReBaseWarn: HostSessionEffect[] = ackLabelObserved
+          ? []
+          : [
+              {
+                type: "logWarn",
+                message:
+                  "[quoll] unlabelled drain: the pending stash was re-based onto an UNOBSERVED settlement label (a known-stale lower bound). The bytes land; the residual is that a later settlement which also misses its CONTENT read can score our own increment as foreign (one spurious epoch bump → replay-buffer drop), and a parse-failed draft goes out stamped with this stale label",
+                detail: {
+                  uri: state.context.uriString,
+                  heldBase,
+                  lastAppliedDocVersion: settled.lastAppliedDocVersion,
+                },
+              },
+            ];
         switch (verdict.kind) {
           case "accept":
             // Re-acquire the lock + track the drained content as the new
@@ -1026,6 +1063,7 @@ export function createHostSessionCore(context: HostSessionContext, deps: HostSes
                     inFlightContent: stash.content,
                   },
               effects: [
+                ...(state.disposed ? [] : staleReBaseWarn),
                 {
                   type: "applyEdit",
                   content: stash.content,
@@ -1072,6 +1110,7 @@ export function createHostSessionCore(context: HostSessionContext, deps: HostSes
               effects: state.disposed
                 ? [{ type: "showError", message: `Cannot save: ${verdict.error.message}` }]
                 : [
+                    ...staleReBaseWarn,
                     {
                       type: "postRejectedDraft",
                       content: stash.content,

@@ -1629,7 +1629,17 @@ describe("host-session-core: an unobserved ack label still DRAINS (bytes first)"
 
   it("an accept-shaped stash IS applied: the keystroke is written at the stale base", () => {
     const r = core.transition(lockedStash("edit1-more"), unobserved);
-    expect(r.effects).toEqual([{ type: "applyEdit", content: "edit1-more", baseDocVersion: 1 }]);
+    // EXHAUSTIVE: the write, preceded by the drain's own record of the residual
+    // it is accepting. The record is what lets a later spurious epoch bump be
+    // attributed to the drain that caused it.
+    expect(r.effects).toEqual([
+      {
+        type: "logWarn",
+        message: expect.stringContaining("unlabelled drain"),
+        detail: { uri: ctx.uriString, heldBase: 1, lastAppliedDocVersion: 1 },
+      },
+      { type: "applyEdit", content: "edit1-more", baseDocVersion: 1 },
+    ]);
     expect(r.state.pendingEdit).toBeNull();
     // The lock IS re-acquired — this is what makes the label's catch-up
     // lock-HELD in the test below, and so what keeps the epoch still.
@@ -1645,6 +1655,24 @@ describe("host-session-core: an unobserved ack label still DRAINS (bytes first)"
     expect(
       r.effects.some((e) => e.type === "logWarn" && e.message.includes("unlabelled settle"))
     ).toBe(false);
+  });
+
+  it("ACCEPTED RESIDUAL: a second content-unobserved settlement scores our own increment as foreign — ONE bump, bytes already landed", () => {
+    // The residual the describe header STATES, measured rather than asserted
+    // away. It takes a SECOND independent read failure to reach: the drained
+    // apply's own settlement must also miss its CONTENT read, so the epoch
+    // verdict falls back to the version delta — which reads the re-acquired
+    // base as EXACT while it is really a lower bound.
+    const drained = core.transition(lockedStash("edit1-more"), unobserved);
+    expect(drained.state.pendingApplyBaseVersion).toBe(1); // the stale lower bound
+    const second = core.transition(
+      drained.state,
+      settled({ settledVersion: 3, currentContent: null })
+    );
+    expect(second.state.externalEpoch).toBe(1); // exactly ONE spurious bump
+    expect(second.state.lastAppliedDocVersion).toBe(3);
+    expect(second.state.pendingEdit).toBeNull(); // nothing further dropped
+    expect(reseedIn(second.effects)).toEqual(pDoc(3, 1)); // the ack still goes out
   });
 
   it("the drain re-acquires the lock, so the label's catch-up is LOCK-HELD and spends no epoch", () => {
@@ -1703,6 +1731,11 @@ describe("host-session-core: an unobserved ack label still DRAINS (bytes first)"
     expect(r.state.rejection).toEqual({ kind: "pending", id: 1, content: "hasBAD", error: unsafe });
     expect(r.state.nextRejectionId).toBe(2); // a delivery id WAS minted
     expect(r.effects.some((e) => e.type === "showError")).toBe(true);
+    // The stale label the draft carries is exactly what the drain's record
+    // names, so this arm carries it too.
+    expect(
+      r.effects.some((e) => e.type === "logWarn" && e.message.includes("unlabelled drain"))
+    ).toBe(true);
   });
 
   it("a no-op-shaped stash withholds the repost the drain arm makes", () => {
@@ -1719,6 +1752,9 @@ describe("host-session-core: an unobserved ack label still DRAINS (bytes first)"
       lockedStash("edit1-more"),
       settled({ settledVersion: 2, currentContent: "edit1" })
     );
+    // NEGATIVE pin, by exhaustive equality: no "unlabelled drain" record here.
+    // There is no residual to report when the base rests on an observation, so
+    // an unconditional record would cry wolf on the ordinary path.
     expect(r.effects).toEqual([{ type: "applyEdit", content: "edit1-more", baseDocVersion: 2 }]);
   });
 
@@ -1734,6 +1770,10 @@ describe("host-session-core: an unobserved ack label still DRAINS (bytes first)"
       pendingEdit: { content: "edit1-more", baseDocVersion: 1 },
     });
     const r = core.transition(s, settled({ settledVersion: null, currentContent: "edit1" }));
+    // NEGATIVE pin on the "unlabelled drain" record, by exhaustive equality: the
+    // label is unobserved here too, but with no lock re-acquired neither
+    // consequence that record names can occur (no later settlement reads this
+    // base, and no draft goes out), so reporting one would be a false claim.
     expect(r.effects).toEqual([{ type: "applyEdit", content: "edit1-more", baseDocVersion: 1 }]);
     expect(r.state.pendingApplyBaseVersion).toBeNull(); // lock NOT re-acquired
   });
