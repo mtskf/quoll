@@ -370,29 +370,6 @@ function ackEffects(
     : withholdAckEffects(settled, heldBase, context);
 }
 
-// Per-outcome settlement effects: the ack Document (or its withhold pair, gated
-// on `ackLabelObserved`) + non-ok diagnostics. Extracted so the applyEditSettled
-// arm can SUPPRESS these wholesale when disposed (the webview is gone) and
-// REPLACE them with drain effects when a stash drains.
-//
-// ORDER IS LOAD-BEARING on every non-ok arm: the failure `showError` comes
-// BEFORE the ack `postDocument`. The two are independent surfaces — `showError`
-// is a VS Code window toast, `postDocument` a webview-bound message — so there
-// is no coupling to respect (the "Document before edit-rejected" constraint on
-// `postRejectedDraft` is a different pair, both webview-bound and read by the
-// same webview reducer). Toast-first is DEFENCE IN DEPTH, not the only guard:
-// the reseed is the effect most likely to throw (`buildSeedDocument` bottoms out
-// in `canonicalDocumentText(document)`), but the executor catches a builder
-// throw and continues the effect loop, and its `showError` call is guarded too,
-// so a later toast still reaches the user — `apply-edit-settle-rejection.test.ts`
-// measures that CONTAINMENT and deliberately keeps no ordering assert of its own.
-// The ORDER itself IS still pinned, in `host-session-core.test.ts`
-// (`expectToastBeforeReseed`) — keep it there. The correlated failure is also
-// narrower since `settle()` became total: a throwing `readCanonical` now
-// resolves as an UNVERIFIED ok, and only the pipeline's synchronous prefix still
-// produces `rejected`. Keep the order anyway — it costs nothing and removes the
-// dependency on those guards. `ok` has no toast to order, so its single effect
-// is unchanged.
 // A settlement's user-visible FAILURE toasts, and the ONE owner of their text.
 // Split out because the disposed-no-stash arm wants exactly these and nothing
 // else: asking `settlementEffects` for the full set and filtering it down to
@@ -419,6 +396,29 @@ function failureToasts(
   }
 }
 
+// Per-outcome settlement effects: the ack Document (or its withhold pair, gated
+// on `ackLabelObserved`) + non-ok diagnostics. Extracted so the applyEditSettled
+// arm can SUPPRESS these wholesale when disposed (the webview is gone) and
+// REPLACE them with drain effects when a stash drains.
+//
+// ORDER IS LOAD-BEARING on every non-ok arm: the failure `showError` comes
+// BEFORE the ack `postDocument`. The two are independent surfaces — `showError`
+// is a VS Code window toast, `postDocument` a webview-bound message — so there
+// is no coupling to respect (the "Document before edit-rejected" constraint on
+// `postRejectedDraft` is a different pair, both webview-bound and read by the
+// same webview reducer). Toast-first is DEFENCE IN DEPTH, not the only guard:
+// the reseed is the effect most likely to throw (`buildSeedDocument` bottoms out
+// in `canonicalDocumentText(document)`), but the executor catches a builder
+// throw and continues the effect loop, and its `showError` call is guarded too,
+// so a later toast still reaches the user — `apply-edit-settle-rejection.test.ts`
+// measures that CONTAINMENT and deliberately keeps no ordering assert of its own.
+// The ORDER itself IS still pinned, in `host-session-core.test.ts`
+// (`expectToastBeforeReseed`) — keep it there. The correlated failure is also
+// narrower since `settle()` became total: a throwing `readCanonical` now
+// resolves as an UNVERIFIED ok, and only the pipeline's synchronous prefix still
+// produces `rejected`. Keep the order anyway — it costs nothing and removes the
+// dependency on those guards. `ok` has no toast to order, so its single effect
+// is unchanged.
 function settlementEffects(
   outcome: ApplyEditOutcome,
   settled: HostSessionState,
@@ -1035,20 +1035,24 @@ export function createHostSessionCore(context: HostSessionContext, deps: HostSes
         // either: there the `accept` arm deliberately does not re-acquire the
         // lock, so neither consequence named below can occur (no later
         // settlement reads this base, and no draft goes out).
-        const staleReBaseWarn: HostSessionEffect[] = ackLabelObserved
-          ? []
-          : [
-              {
-                type: "logWarn",
-                message:
-                  "[quoll] unlabelled drain: the pending stash was re-based onto an UNOBSERVED settlement label (a known-stale lower bound). The bytes land; the residual is that a later settlement which also misses its CONTENT read can score our own increment as foreign (one spurious epoch bump → replay-buffer drop), and a parse-failed draft goes out stamped with this stale label",
-                detail: {
-                  uri: state.context.uriString,
-                  heldBase,
-                  lastAppliedDocVersion: settled.lastAppliedDocVersion,
+        // Both exclusions live HERE, in the one place the record is built, so no
+        // call site can carry half the gate: an arm that spreads it emits it
+        // exactly when it is warranted.
+        const staleReBaseWarn: HostSessionEffect[] =
+          ackLabelObserved || state.disposed
+            ? []
+            : [
+                {
+                  type: "logWarn",
+                  message:
+                    "[quoll] unlabelled drain: the pending stash was re-based onto an UNOBSERVED settlement label (a known-stale lower bound). The bytes land; the residual is that a later settlement which also misses its CONTENT read can score our own increment as foreign (one spurious epoch bump → replay-buffer drop), and a parse-failed draft goes out stamped with this stale label",
+                  detail: {
+                    uri: state.context.uriString,
+                    heldBase,
+                    lastAppliedDocVersion: settled.lastAppliedDocVersion,
+                  },
                 },
-              },
-            ];
+              ];
         switch (verdict.kind) {
           case "accept":
             // Re-acquire the lock + track the drained content as the new
@@ -1063,7 +1067,7 @@ export function createHostSessionCore(context: HostSessionContext, deps: HostSes
                     inFlightContent: stash.content,
                   },
               effects: [
-                ...(state.disposed ? [] : staleReBaseWarn),
+                ...staleReBaseWarn,
                 {
                   type: "applyEdit",
                   content: stash.content,
