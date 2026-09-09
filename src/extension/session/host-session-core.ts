@@ -1326,9 +1326,13 @@ export function createHostSessionCore(context: HostSessionContext, deps: HostSes
  *      drains it first, arbitrarily later, against a state it was never
  *      computed for. A stale replay is the worst of the three outcomes.
  *    - CLEAR the queue. Dropping accepted events is silent state loss, and for
- *      the host session it is unsafe by construction: `applyEditSettled` is the
- *      write lock's ONLY release site (see `edit-settled-barrier.ts`), so
- *      dropping one strands the lock and the side channels deferred behind it.
+ *      the host session it is unsafe by construction: `applyEditSettled` is
+ *      the write lock's ONLY release site while the panel is alive (this
+ *      file's own `disposed` case also clears `pendingApplyBaseVersion`, but
+ *      only on teardown — see `isWriteLockHeld` above and `effect-executor.ts`'s
+ *      header comment), so dropping an `applyEditSettled` strands the lock and
+ *      the side channels deferred behind it for the rest of a still-alive
+ *      session.
  *  Continuing leaves a WELL-FORMED state from either throw site inside `step`:
  *  a throwing TRANSITION leaves the committed state untouched, and a throwing
  *  EFFECT runs after the transition has already committed. See

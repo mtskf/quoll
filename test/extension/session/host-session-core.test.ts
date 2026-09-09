@@ -1131,6 +1131,9 @@ describe("createDrainingDispatcher", () => {
     // only the completed drain can produce.
     expect(thrown).toBeInstanceOf(AggregateError);
     expect((thrown as AggregateError).errors).toEqual([first, second]);
+    expect((thrown as AggregateError).message).toBe(
+      "[quoll] host session drain: multiple steps threw"
+    );
   });
 
   // The rethrow counts ENTRIES, not truthiness, so a step that throws a falsy

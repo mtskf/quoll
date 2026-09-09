@@ -307,7 +307,7 @@ describe("createHostSessionStep", () => {
   // unit-tested in host-session-core.test.ts): a re-entrant dispatch issued
   // before the throw is drained inside the SAME dispatch, so it can never be
   // replayed later against a diverged state — and every drained step still
-  // settles the barrier. Until PR #404 the drain abandoned that event and the
+  // settles the barrier. Until PR #405 the drain abandoned that event and the
   // next external dispatch drained it first; these assertions were the measured
   // baseline of that residue.
   it("settles through the real dispatcher and drains the throw's residue in the same dispatch", () => {
