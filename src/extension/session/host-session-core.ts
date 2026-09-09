@@ -325,9 +325,13 @@ const postDoc = (s: HostSessionState, docVersion: number): HostSessionEffect => 
 // signal, latched per incident by the EXECUTOR (the reducer is pure and cannot
 // hold a latch) — the same latch as the reseed-build failure, so the two
 // "webview could not be resynced" families cannot double-toast one incident.
-// POST-DISPOSE both are stripped by the undrainable arm's showError filter
-// below, deliberately: there is no view left to resync, and the only loss worth
-// reporting there (a dropped stash) has its own toast.
+// POST-DISPOSE the pair never reaches the executor, by TWO different routes:
+// the no-stash arm (`state.disposed && state.pendingEdit === null`, the early
+// return in the `applyEditSettled` case) passes `ackLabelObserved: true` so the
+// pair is not even
+// constructed, and the undrainable arm keeps only `showError`s from the
+// settlement effects. Deliberate in both: there is no view left to resync, and
+// the only loss worth reporting there (a dropped stash) has its own toast.
 function withholdAckEffects(
   settled: HostSessionState,
   heldBase: number | null,
@@ -378,9 +382,11 @@ function ackEffects(
 // the reseed is the effect most likely to throw (`buildSeedDocument` bottoms out
 // in `canonicalDocumentText(document)`), but the executor catches a builder
 // throw and continues the effect loop, and its `showError` call is guarded too,
-// so a later toast still reaches the user — the sibling test says so explicitly
-// ("the toast arrives regardless of order; do not put an order assert back
-// here"). The correlated failure is also narrower since `settle()` became
+// so a later toast still reaches the user — `apply-edit-settle-rejection.test.ts`
+// measures that CONTAINMENT and deliberately keeps no ordering assert of its own.
+// The ORDER itself IS still pinned, in `host-session-core.test.ts`
+// (`expectToastBeforeReseed`) — keep it there. The correlated failure is also
+// narrower since `settle()` became
 // total: a throwing `readCanonical` now resolves as an UNVERIFIED ok, and only
 // the pipeline's synchronous prefix still produces `rejected`. Keep the order
 // anyway — it costs nothing and removes the dependency on those guards. `ok` has
@@ -766,12 +772,15 @@ export function createHostSessionCore(context: HostSessionContext, deps: HostSes
         // OBSERVED, not that the observation is POST-APPLY. `resyncLiveVersion`
         // raises the label for whoever moved the document — `onDidChangeTextDocument`
         // carries no producer and the lock-held wiring snapshots only the version —
-        // so "our own echo arrived" and "a FOREIGN edit landed while our echo
-        // never did" are the SAME reducer state (heldBase V, label V+1, ok,
-        // settledVersion null). In the second reading the ack pairs live bytes
-        // with a label that is one edit behind, the same mislabel class the gate
-        // narrows elsewhere. It is not closable HERE: no predicate can separate
-        // states that are identical, and every narrowing considered also withholds
+        // so when the CONTENT is also unobserved, "our own echo arrived" and "a
+        // FOREIGN edit landed while our echo never did" are the SAME reducer state
+        // (heldBase V, label V+1, ok, settledVersion null, currentContent null)
+        // and no predicate can separate them. (With an OBSERVED content the
+        // foreign reading shows up as a byte mismatch and `foreignAtSettle`
+        // already bumps the epoch — that half is diagnosed, not residual.) In the
+        // residual reading the ack pairs live bytes with a label one edit behind,
+        // the same mislabel class the gate narrows elsewhere. It is not closable
+        // HERE, and every narrowing considered also withholds
         // the central case (own echo, delta exactly 1), which is the receiving end
         // of the lock-held deferral contract — withhold it and a quiet document
         // never gets a repost at all. The failure stays bounded (stale verdict →
@@ -808,25 +817,37 @@ export function createHostSessionCore(context: HostSessionContext, deps: HostSes
         // parked until an observed documentChanged/ready Document lands (the
         // quiet-document residual the follow-up TODO entry carries). Post-dispose
         // the stash is its only carrier, which is why the drop is LOGGED below.
-        // The ack-label gate applies HERE TOO, for a different reason than the
-        // ack: re-basing the stash onto the settled label is only sound when that
-        // label is a real observation. Without one the re-acquired `heldBase` is a
-        // known-stale LOWER BOUND, so the NEXT settlement's version-delta fallback
-        // counts our own unobserved increment as foreign (spurious epoch bump →
-        // the webview drops the replay buffer holding the very keystrokes the
-        // failure toast tells the user to retry).
-        // POST-DISPOSE is exempt, and deliberately so: the drain does NOT
-        // re-acquire the lock there (the `accept` arm below returns `settled`
-        // unchanged), so no later settlement ever reads that base — there is no
-        // stale re-base to be unsound, no webview to mislabel, and the stash is
-        // the dropped keystroke's ONLY carrier. Gating it there would trade a
-        // structurally-unreachable epoch bump for real data loss.
+        // The ACK LABEL is deliberately NOT a conjunct below: the drain is a new
+        // WRITE, not an ack, and its safety rests on the CONTENT evidence above.
+        // One review cycle added `(ackLabelObserved || state.disposed)` here and
+        // it was reverted after two independent advisors traced the fault depth.
+        // REFUSING at an unobserved label drops the keystroke, and the only
+        // carrier left — the webview's replay buffer — is destroyed by the
+        // ORDINARY continuation: the apply DID move the document, so its
+        // `documentChanged` almost always arrives, and with the lock already
+        // released it reads as a lock-free forward advance, bumps the epoch, and
+        // `edit-sync.ts`'s `recordedEpoch > buf.epoch` drops the buffer. No
+        // second fault is needed, so the refusal is a DETERMINISTIC loss.
+        // DRAINING self-heals on that same continuation instead: the `accept` arm
+        // re-acquires the lock at the settled base, so the late echo lands
+        // LOCK-HELD (no bump) and its raise is itself the observation that
+        // licenses the next ack.
+        // ACCEPTED RESIDUAL — the stale re-base. Without an observation the
+        // re-acquired base is a known-stale LOWER BOUND, so a later settlement's
+        // version-delta fallback can read our own increment as foreign. Reaching
+        // that needs a SECOND, independent read failure: the DRAINED apply's own
+        // settlement must ALSO miss its CONTENT read (with the content observed,
+        // `contentMatches` scores the increment correctly as ours) while
+        // observing a version beyond `heldBase + ownContribution`. The cost is
+        // then one spurious epoch bump — a replay-buffer drop, never corruption —
+        // with the drained keystroke ALREADY on the document. Strictly shallower
+        // harm at a strictly deeper fault. The durable fix is the liveness
+        // backstop tracked in the follow-up TODO entry.
         const canDrain =
           stash !== null &&
           event.outcome.kind === "ok" &&
           inFlight !== null &&
           observed !== null &&
-          (ackLabelObserved || state.disposed) &&
           contentMatches(observed, inFlight);
 
         if (!canDrain) {
@@ -860,11 +881,9 @@ export function createHostSessionCore(context: HostSessionContext, deps: HostSes
           //     "external edit won the race" without having read the document
           //     would be a fabricated diagnosis, and an unobserved snapshot is not
           //     a mismatch.
-          //  4. The settled document IS edit #1's exact result — the drain was
-          //     safe on the CONTENT and only the ack LABEL was never observed, so
-          //     `canDrain` refused rather than re-base onto a stale one. ALIVE
-          //     only: post-dispose the gate is lifted (see `canDrain`), so there
-          //     the keystroke is written instead of logged.
+          // There is deliberately no fourth arm for "the content matched but the
+          // ack label was never observed": that configuration DRAINS (see
+          // `canDrain`), so it never reaches this branch at all.
           // None is a save failure, so none adds a showError (the ok baseEffects
           // carry none) — an unverified landing is not a failed save. Arm 2
           // POST-DISPOSE is the exception and gets its own toast below: there the
@@ -912,19 +931,6 @@ export function createHostSessionCore(context: HostSessionContext, deps: HostSes
                   type: "logWarn",
                   message:
                     "[quoll] ok-but-mismatch on settle: external edit won the race, pending stash dropped",
-                  detail,
-                },
-              ];
-            } else if (!ackLabelObserved) {
-              // Arm 4 — no toast even though a keystroke was dropped: while the
-              // panel is ALIVE the webview's replay buffer (which this settlement
-              // does not invalidate) still carries it and re-posts once an
-              // observed Document lands. Same reasoning as arm 2's ALIVE half.
-              extraEffects = [
-                {
-                  type: "logWarn",
-                  message:
-                    "[quoll] unlabelled settle: pending stash dropped because no post-apply document version was observed (re-basing it onto the stale label would make the next settlement read our own increment as foreign)",
                   detail,
                 },
               ];
@@ -1033,19 +1039,19 @@ export function createHostSessionCore(context: HostSessionContext, deps: HostSes
               // redelivery precedent.
               //
               // UNLIKE the readonly/stale/no-op repost BELOW (the next case in
-              // this switch), this arm carries NO `ackLabelObserved` ternary of
-              // its own — and no longer needs one. `canDrain` requires an
-              // observed label while the panel is alive, so this draft Document
-              // cannot be reached at an unobserved one; post-dispose, where the
-              // drain gate is lifted, the arm posts no Document at all. The
-              // unobserved-label corner this comment used to accept as a residual
-              // (version unread + no lock-held resync + the stash parse-failing)
-              // is therefore closed BY CONSTRUCTION rather than by a local gate —
-              // which is what the reviewed local variants, a Document-free
-              // degrade included, all failed to achieve (a `ready` replay
-              // redelivers at the STORED label with no resync regardless). What
-              // remains is the ack gate's own residual, stated at its definition:
-              // an observed label is not proof of a POST-APPLY observation.
+              // this switch), this arm is DELIBERATELY NOT gated on
+              // `ackLabelObserved` (round-2 reversal — see the plan's
+              // dispositions table): in the unobserved-label corner (version
+              // unread + no lock-held resync + the stash parse-failing) every
+              // reviewed local variant, a Document-free degrade included,
+              // converges to the same terminal state anyway — without an
+              // observation no correct label-advance exists, and a `ready` replay
+              // redelivers at the STORED label with no resync regardless. So this
+              // draft CAN go out stamped with a stale label; that is an ACCEPTED
+              // RESIDUAL, reachable because `canDrain` gates on CONTENT evidence
+              // only (see its comment). A durable fix needs rejection-state
+              // provenance + observed-version catch-up — its own slice, tracked in
+              // the follow-up TODO entry.
               effects: state.disposed
                 ? [{ type: "showError", message: `Cannot save: ${verdict.error.message}` }]
                 : [
@@ -1069,11 +1075,10 @@ export function createHostSessionCore(context: HostSessionContext, deps: HostSes
             // the webview reseeds — suppressed post-dispose, and WITHHELD when
             // the label is unobserved (same gate as settlementEffects: this
             // repost is an ack Document too, and canDrain's observed CONTENT is
-            // not version evidence). Since `canDrain` itself now requires an
-            // observed label while the panel is alive, the withhold branch is
-            // structurally unreachable from here — the shared `ackEffects` is
-            // kept anyway so the two ack sites cannot drift apart if that
-            // relationship ever changes.
+            // not version evidence). Both branches are LIVE: `canDrain` gates on
+            // content, not on the label, so a drain that lands here at an
+            // unobserved label takes the withhold arm. The shared `ackEffects` is
+            // what keeps this site and `settlementEffects` from drifting apart.
             return {
               state: settled,
               effects: state.disposed

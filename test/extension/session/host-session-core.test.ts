@@ -1604,14 +1604,21 @@ describe("host-session-core: content-unobserved epoch verdict is positive versio
   });
 });
 
-describe("host-session-core: an unobserved ack label refuses the drain (ALIVE)", () => {
-  // The stash re-bases onto `settled.lastAppliedDocVersion`. Without an observed
-  // label that base is a known-stale LOWER BOUND, so the NEXT settlement's
-  // version-delta fallback reads our own unobserved increment as foreign and
-  // bumps the epoch — which drops the webview replay buffer holding the very
-  // keystrokes the user is being told to retry. So `canDrain` requires the same
-  // observation the ack does, and the stash is dropped exactly as it is for an
-  // unobserved CONTENT. Alive, the keystroke survives in the replay buffer.
+describe("host-session-core: an unobserved ack label still DRAINS (bytes first)", () => {
+  // `canDrain` gates on CONTENT evidence, never on the ack label: the drain is a
+  // new WRITE, not an ack. One review cycle added an `ackLabelObserved` conjunct
+  // and it was reverted — refusing the drain drops the keystroke, and the only
+  // carrier left (the webview replay buffer) is destroyed by the ORDINARY
+  // continuation, because the apply DID move the document and its later
+  // `documentChanged` then reads as a lock-free forward advance ⇒ epoch++ ⇒
+  // `edit-sync.ts`'s `recordedEpoch > buf.epoch` drop. Draining instead
+  // self-heals: the `accept` arm re-acquires the lock, so that same echo lands
+  // LOCK-HELD and bumps nothing.
+  // What the drain accepts is the STALE RE-BASE residual — the re-acquired base
+  // is a lower bound, so a later settlement that ALSO misses its content read can
+  // score our own increment as foreign (one spurious bump, bytes already landed).
+  // The tests below pin BOTH halves: the write happens, and the residual is
+  // stated rather than asserted away.
   const lockedStash = (stash: string) =>
     base({
       pendingApplyBaseVersion: 1,
@@ -1620,42 +1627,90 @@ describe("host-session-core: an unobserved ack label refuses the drain (ALIVE)",
     });
   const unobserved = settled({ settledVersion: null, currentContent: "edit1" });
 
-  it("an accept-shaped stash is NOT applied: the stash is dropped and the ack withheld", () => {
+  it("an accept-shaped stash IS applied: the keystroke is written at the stale base", () => {
     const r = core.transition(lockedStash("edit1-more"), unobserved);
-    expect(r.effects.some((e) => e.type === "applyEdit")).toBe(false);
+    expect(r.effects).toEqual([{ type: "applyEdit", content: "edit1-more", baseDocVersion: 1 }]);
     expect(r.state.pendingEdit).toBeNull();
-    expect(r.state.pendingApplyBaseVersion).toBeNull(); // lock NOT re-acquired
-    expect(r.effects.find((e) => e.type === "postDocument")).toBeUndefined();
-    expect(r.effects.some((e) => e.type === "showResyncFailure")).toBe(true);
-    // Not silent: the drop is its own triage record, distinct from the
-    // unobserved-CONTENT one (here the content WAS read and matched).
+    // The lock IS re-acquired — this is what makes the label's catch-up
+    // lock-HELD in the test below, and so what keeps the epoch still.
+    expect(r.state.pendingApplyBaseVersion).toBe(1);
+    expect(r.state.inFlightContent).toBe("edit1-more");
+    expect(r.state.externalEpoch).toBe(0);
+    // NEGATIVE pin on the diagnostic the reverted gate needed: with the drain
+    // running there is no dropped keystroke to log, so the arm must stay gone.
     expect(
       r.effects.some((e) => e.type === "logWarn" && e.message.includes("unlabelled settle"))
-    ).toBe(true);
-    expect(r.effects.some((e) => e.type === "showError")).toBe(false); // not a failed save
+    ).toBe(false);
   });
 
-  it("a parse-failing stash never reaches decideEdit: no rejected draft is posted at a stale label", () => {
-    // NEGATIVE pin for the parse-failed drain arm, which carries no gate of its
-    // own. Ungated it would redeliver `postRejectedDraft` stamped with the stored
-    // (unobserved) version; the drain gate is what makes that unreachable while
-    // the panel is alive. The BEHAVIOUR of the arm is unchanged — what this pins
-    // is that the arm is not entered.
+  it("the drain re-acquires the lock, so the label's catch-up is LOCK-HELD and spends no epoch", () => {
+    // The validator's cycle-2 trace, pinned in the direction the adjudication
+    // chose. Under the reverted gate this state had `pendingApplyBaseVersion:
+    // null`, so this same `documentChanged` was a lock-FREE forward advance:
+    // epoch 1, and `edit-sync.ts:288` then drops the replay buffer holding the
+    // keystroke the refusal had just dropped. Re-adding the conjunct to
+    // `canDrain` turns this red.
+    const r = core.transition(lockedStash("edit1-more"), unobserved);
+    const after = core.transition(r.state, { type: "documentChanged", documentVersion: 2 });
+    expect(after.effects).toEqual([]); // deferred: the lock is held
+    expect(after.state.externalEpoch).toBe(0);
+    expect(after.state.lastAppliedDocVersion).toBe(2);
+  });
+
+  it("the drained apply's own settlement catches the label up; the late echo is then a no-op", () => {
+    // The other half of the convergence: the drain's applyEdit settles WITH an
+    // observation, which advances the label to the live version and acks there.
+    // The delayed `documentChanged` for that same edit is then version-identical
+    // and no-ops, so the epoch is invariant across the whole catch-up — no
+    // spurious bump anywhere on this path.
+    const r = core.transition(lockedStash("edit1-more"), unobserved);
+    // PREMISE, pinned so it cannot be vacated silently: step 2 is the DRAINED
+    // apply's settlement. Without the drain the lock is free and `inFlightContent`
+    // null, and everything below still passes while measuring a different event.
+    expect(r.state.inFlightContent).toBe("edit1-more");
+    const s2 = core.transition(
+      r.state,
+      settled({ settledVersion: 2, currentContent: "edit1-more" })
+    );
+    expect(reseedIn(s2.effects)).toEqual(pDoc(2));
+    expect(s2.state.externalEpoch).toBe(0);
+    const after = core.transition(s2.state, { type: "documentChanged", documentVersion: 2 });
+    expect(after.effects).toEqual([]);
+    expect(after.state.externalEpoch).toBe(0);
+  });
+
+  it("a parse-failing stash DOES reach decideEdit: the draft is redelivered at the STORED label", () => {
+    // The ACCEPTED RESIDUAL, pinned LITERALLY rather than asserted away: with no
+    // observation the draft Document carries `docVersion: 1` — the stored label,
+    // which may be one edit behind the live document. Every LOCAL gate for this
+    // was reviewed and rejected (a `ready` replay redelivers at the stored label
+    // with no resync regardless); the durable fix is the liveness-backstop TODO
+    // entry. If that entry lands, this expectation is what must change.
     const r = core.transition(lockedStash("hasBAD"), unobserved);
-    expect(r.effects.find((e) => e.type === "postRejectedDraft")).toBeUndefined();
-    expect(r.state.rejection).toEqual({ kind: "none" });
-    expect(r.state.nextRejectionId).toBe(1); // no delivery id was minted
-    expect(r.effects.some((e) => e.type === "showResyncFailure")).toBe(true);
+    expect(r.effects.find((e) => e.type === "postRejectedDraft")).toEqual({
+      type: "postRejectedDraft",
+      content: "hasBAD",
+      error: unsafe,
+      docVersion: 1,
+      externalEpoch: 0,
+      epochGeneration: GEN,
+      id: 1,
+    });
+    expect(r.state.rejection).toEqual({ kind: "pending", id: 1, content: "hasBAD", error: unsafe });
+    expect(r.state.nextRejectionId).toBe(2); // a delivery id WAS minted
+    expect(r.effects.some((e) => e.type === "showError")).toBe(true);
   });
 
-  it("a no-op-shaped stash withholds the repost the drain arm would have made", () => {
+  it("a no-op-shaped stash withholds the repost the drain arm makes", () => {
+    // The drain RUNS here and reaches the `no-op` verdict; what withholds the
+    // repost is the ACK gate (`ackEffects`), not `canDrain`. This is the pin that
+    // keeps that withhold branch from being deleted as unreachable.
     const r = core.transition(lockedStash("edit1"), unobserved);
     expect(r.effects.find((e) => e.type === "postDocument")).toBeUndefined();
     expect(r.effects.some((e) => e.type === "showResyncFailure")).toBe(true);
   });
 
-  it("an OBSERVED label drains normally: the accept still applies (the drain is a write, not an ack)", () => {
-    // Positive control for all three above — only the observation differs.
+  it("an OBSERVED label drains the same way — only the re-base is not stale", () => {
     const r = core.transition(
       lockedStash("edit1-more"),
       settled({ settledVersion: 2, currentContent: "edit1" })
@@ -1663,12 +1718,11 @@ describe("host-session-core: an unobserved ack label refuses the drain (ALIVE)",
     expect(r.effects).toEqual([{ type: "applyEdit", content: "edit1-more", baseDocVersion: 2 }]);
   });
 
-  it("POST-DISPOSE the gate is LIFTED: the stash still drains at an unobserved label", () => {
-    // Post-dispose the drain does not re-acquire the lock, so no later settlement
-    // reads the re-based label — the stale-re-base harm is structurally absent —
-    // while the stash is the dropped keystroke's ONLY carrier (no webview, no
-    // replay buffer). Gating it there would trade an unreachable epoch bump for
-    // real data loss. Dropping the `|| state.disposed` disjunct turns this red.
+  it("POST-DISPOSE drains the same way — there the stash is the keystroke's ONLY carrier", () => {
+    // Same drain, different stakes: no webview means no replay buffer, so the
+    // stash is the sole carrier. The `accept` arm deliberately does NOT re-acquire
+    // the lock here (no more edits arrive), which is why no later settlement ever
+    // reads this base.
     const s = base({
       disposed: true,
       pendingApplyBaseVersion: null, // the dispose transition already cleared it
@@ -1677,5 +1731,6 @@ describe("host-session-core: an unobserved ack label refuses the drain (ALIVE)",
     });
     const r = core.transition(s, settled({ settledVersion: null, currentContent: "edit1" }));
     expect(r.effects).toEqual([{ type: "applyEdit", content: "edit1-more", baseDocVersion: 1 }]);
+    expect(r.state.pendingApplyBaseVersion).toBeNull(); // lock NOT re-acquired
   });
 });
