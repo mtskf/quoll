@@ -180,6 +180,26 @@ describe("createHostSessionStep", () => {
     }
   });
 
+  // Mutation coverage: `releasesWriteLockOnCommit`'s `disposed` case answers
+  // false, but no other test in this suite drives a `disposed` event through
+  // `step` — so a mutation that moved `disposed` into the same rescue arm as
+  // `applyEditSettled` passed the whole suite unnoticed. `disposed` needs no
+  // rescue of its own here: see `releasesWriteLockOnCommit`'s doc for why the
+  // drop, if any, rides a LATER, independent `applyEditSettled` step instead.
+  it("does not attempt the rescue when a disposed transition throws", () => {
+    const settles: boolean[] = [];
+    const step = createHostSessionStep({
+      commitTransition: () => {
+        throw new Error("teardown bug");
+      },
+      runEffects: () => {},
+      settleEditBarrier: (applied) => settles.push(applied),
+    });
+    const disposed: HostSessionEvent = { type: "disposed" };
+    expect(() => step(disposed)).toThrow("teardown bug");
+    expect(settles).toEqual([]);
+  });
+
   // The rescue's OTHER direction, and the reason it cannot be an unconditional
   // `settle(false)`: this throw did not happen on the settlement, so the write
   // lock is still held by an apply whose OWN settlement is still coming — and
