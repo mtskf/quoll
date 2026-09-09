@@ -200,6 +200,55 @@ describe("createHostSessionStep", () => {
     expect(settles).toEqual([]);
   });
 
+  // The two-step claim from this module's header / `releasesWriteLockOnCommit`'s
+  // doc, chained through a REAL barrier for the first time: a throwing
+  // `disposed` transition needs no rescue of its own, because the in-flight
+  // apply's OWN, later, independent `applyEditSettled` step still arrives and
+  // its `settleEditBarrier` call finds `isDisposed()` already true — so the
+  // drop is real, it just rides that later step. `edit-settled-barrier.test.ts`
+  // pins the barrier's `isDisposed`-drop in isolation, and the test right above
+  // pins only that the `disposed` step itself skips the rescue (a stub
+  // `settleEditBarrier`, no real barrier, no follow-up step); neither chains
+  // both steps through one real barrier or checks the MID-state in between.
+  it("drops a deferred side channel via the real barrier when the in-flight apply's own settlement arrives after a disposed transition throws", () => {
+    let locked = true;
+    let panelDisposed = false;
+    const ran = vi.fn();
+    const dropped = vi.fn();
+    const barrier = createEditSettledBarrier({
+      isLocked: () => locked,
+      isDisposed: () => panelDisposed,
+      onError: () => {},
+    });
+    barrier.run(ran, dropped); // deferred: still locked
+
+    const step = createHostSessionStep({
+      commitTransition: (event) => {
+        if (event.type === "disposed") {
+          throw new Error("teardown bug");
+        }
+        locked = false; // the in-flight apply's own settlement releases the lock
+        return [];
+      },
+      runEffects: () => {},
+      settleEditBarrier: (applied) => barrier.settle(applied),
+    });
+
+    // Flips BEFORE the throwing step, mirroring `quoll-editor-panel.ts`'s
+    // `onDidDispose`, which sets the panel's local `disposed` flag before
+    // dispatching the `disposed` event — so `isDisposed()` already reads true
+    // by the time any later settlement checks it.
+    panelDisposed = true;
+    expect(() => step({ type: "disposed" })).toThrow("teardown bug");
+    // Mid-state: the throwing `disposed` step itself drops/runs nothing.
+    expect(dropped).not.toHaveBeenCalled();
+    expect(ran).not.toHaveBeenCalled();
+
+    step(settled({ kind: "ok" }, 3)); // the apply's own settlement, arriving later
+    expect(dropped).toHaveBeenCalledTimes(1);
+    expect(ran).not.toHaveBeenCalled();
+  });
+
   // The rescue's OTHER direction, and the reason it cannot be an unconditional
   // `settle(false)`: this throw did not happen on the settlement, so the write
   // lock is still held by an apply whose OWN settlement is still coming — and
