@@ -43,6 +43,18 @@ import type {
   HostSessionState,
 } from "./host-session-core.js";
 
+// One user-facing message for BOTH "the webview could not be resynced" families
+// (reseed build failure / withheld settlement ack) — same incident semantics,
+// same latch, so the wording must stay true for both: the view could not be
+// updated, and unsaved changes MAY not have been saved. It must also stay true
+// on both paths the RESEED trigger serves: the reducer emits `postDocument` for
+// the FIRST SEED too (host-session-core's `ready` arm), not only for settlement
+// acks, and the executor cannot tell them apart — so an unconditional "Recent
+// edits may not be saved" would tell a user their edits might be lost at first
+// load, before they had typed anything.
+const RESYNC_FAILURE_MESSAGE =
+  "Quoll could not update the editor view. If you have unsaved changes they may not have been saved — reload the window (Developer: Reload Window).";
+
 /** The VS Code build+apply+verify seam for the write executor (Plan S6). The
  *  pipeline itself lives in `document-write/execute-write.ts`; this alias keeps
  *  the panel's inline wiring + the executor deps stable. `TEdit` is the edit
@@ -104,16 +116,56 @@ export function createEffectExecutor<TEdit>(deps: EffectExecutorDeps<TEdit>): Ef
   // first.
   let hostMountReported = false;
 
-  // Per-panel latch for the reseed-build failure notification (see the
-  // `postDocument` guard). One notification ATTEMPT per INCIDENT — a persistently
-  // broken document seam can fire once per settlement, and a toast per settlement
-  // is user-visible spam. The latch is RE-ARMED by a successful build (see the
-  // `postDocument` case): a success proves the seam recovered, so the next failure
-  // is a new incident and deserves its own signal. Without that, one transient
-  // hiccup early in a panel's life would consume the session's only user-visible
-  // signal for a state this module documents as one that must NOT be silent — and
-  // panels live for hours.
-  let reseedBuildFailureReported = false;
+  // Per-panel latch shared by TWO triggers that both mean "the webview could not
+  // be resynced": the `postDocument` reseed-build failure guard, and
+  // `showResyncFailure` (a withheld settlement ack — host-session-core's
+  // ackLabelObserved gate). One notification ATTEMPT per INCIDENT — either
+  // failure mode can recur once per settlement, and a toast per settlement is
+  // user-visible spam. The latch is RE-ARMED by a successful `postDocument`
+  // build (see that case): a success proves the seam recovered, so the next
+  // failure is a new incident and deserves its own signal. Without that, one
+  // transient hiccup early in a panel's life would consume the session's only
+  // user-visible signal for a state this module documents as one that must NOT
+  // be silent — and panels live for hours.
+  let resyncFailureReported = false;
+
+  // The ONE place that spends that latch — both triggers report their incident
+  // through here, so the protocol below cannot drift between them. `failureLog`
+  // is the only thing the two paths differ in: the trigger-specific label for a
+  // toast that itself throws.
+  //
+  // The latch is set BEFORE the attempt, so the guarantee is "at most ONE
+  // notification attempt per incident" — not "exactly one toast".
+  // ⛔ Do NOT move this to latch-after-success. Both placements lose something
+  // and this is the safer loss:
+  //   - latch-before: a single synchronous failure leaves only the caller's log
+  //     line. Bounded, and by then the window API is broken.
+  //   - latch-after-success: a `showError` that DISPLAYS and then throws is never
+  //     latched, so a persistently broken seam re-toasts on every failure —
+  //     user-visible spam on a path that can fire once per settlement.
+  //     `showError` evaluates `window.showErrorMessage(message)` BEFORE
+  //     `showSafely` wraps it, and `showSafely` only absorbs the Thenable's async
+  //     rejection, so display-then-throw cannot be ruled out from this repo alone.
+  // Spam is the worse failure, and this placement removes it structurally rather
+  // than by argument about VS Code internals.
+  //
+  // GUARDED: BOTH callers sit INSIDE the boundary that exists to stop a throw
+  // from escaping `runEffects` (the `postDocument` build-failure guard and the
+  // `showResyncFailure` effect), and `window.showErrorMessage`'s SYNCHRONOUS
+  // throw is not absorbed by the panel's wrapper — an unguarded call here would
+  // re-open the exact hole this closes. Same discipline as
+  // revert-rescue-wiring's per-dep `runGuarded`.
+  const reportResyncFailure = (failureLog: string): void => {
+    if (resyncFailureReported) {
+      return;
+    }
+    resyncFailureReported = true;
+    try {
+      deps.showError(RESYNC_FAILURE_MESSAGE);
+    } catch (err) {
+      console.error(failureLog, err);
+    }
+  };
 
   // Alias for the injected open-external delegate (see the `openExternal` effect
   // case for why it is called via this local rather than `deps.openExternal(...)`).
@@ -177,6 +229,72 @@ export function createEffectExecutor<TEdit>(deps: EffectExecutorDeps<TEdit>): Ef
     );
   };
 
+  // Guarded ONE-SHOT retry of the version read at settlement DISPATCH — the
+  // single documented exception to "callers never re-read the document
+  // CONTENT" (the caller contract is narrowed to content by this change). Be
+  // precise about what the version is used for: it LABELS the ack, feeds the
+  // Math.max advance, and is an input to the reducer's content-unobserved
+  // version-delta epoch verdict. It never enters the byte-level divergence
+  // compare. Re-reading it here is sound because this callback runs microtasks
+  // after the pipeline's own settle-time read with no possibility of an
+  // interleaved document event on the single-threaded extension host — the
+  // retry observes the same live version the settle read would have, so it
+  // cannot attribute a LATER edit to this settlement. The retry is what keeps a
+  // TRANSIENT settle-time failure on the normal path (ack at the live version)
+  // instead of the withhold branch; a PERSISTENT failure yields null, and the
+  // reducer then withholds UNLESS a lock-held resync already raised the label
+  // (the second disjunct of `ackLabelObserved`). Guarded because this runs while
+  // BUILDING the settlement event — an unguarded throw here would skip the
+  // dispatch and strand the write lock (same placement rule as readCanWrite).
+  //
+  // Name it `readVersionGuarded` (NOT "retry"): it is the ONE guarded version
+  // reader, with ONE contract — `number | null`, null ⇔ unobserved, never a
+  // fabricated value — serving THREE call families, only one of which is a
+  // retry:
+  //   1. the resolved settlement's RETRY (`runApplyEdit`'s fulfilment arm), the
+  //      one the paragraph above describes: the pipeline already read the version
+  //      once and that read threw.
+  //   2. the pipeline-REJECTION arm's FIRST read: that settlement never reached a
+  //      settle-time read at all, so this is the only version read it ever makes
+  //      (not a second chance at one).
+  //   3. `sendEditRejected`'s three recovery dispatches below (sync throw /
+  //      delivery refused / delivery rejected), labelling the reseed that clears
+  //      a stuck rejection.
+  // The consequences differ per family, so the call site is NAMED and travels on
+  // the warn: without it three unrelated outcomes collapse into one log line and
+  // triage cannot tell "the retry lost a transient" from "the recovery reseed was
+  // withheld".
+  //
+  // The roster IS the contract: a closed set of triage tokens, one per call
+  // SITE (not one per family — family 3 alone owns three of the five, one per
+  // recovery dispatch). Typing it as a union (not `string`) makes ONE of the two
+  // invariants the compiler's job: an off-roster token is rejected. The other
+  // stays a CONVENTION the compiler cannot hold — pass a LITERAL, never a
+  // computed expression, because this runs on a failure path and must not
+  // evaluate anything that can throw (a helper returning the union, or a ternary
+  // over two valid tokens, type-checks fine and would re-open exactly that hole).
+  // The union also cannot catch a copy-paste that stamps one VALID token onto
+  // the wrong arm (the three adjacent recovery sites are exactly that shape), so
+  // each site also has a per-site assertion in `effect-executor.test.ts`.
+  type GuardedVersionReadSite =
+    | "settlement-retry"
+    | "rejection-arm-first-read"
+    | "edit-rejected-recovery:sync-throw"
+    | "edit-rejected-recovery:refused"
+    | "edit-rejected-recovery:rejected";
+  const readVersionGuarded = (site: GuardedVersionReadSite): number | null => {
+    try {
+      return deps.applyEditSeam.readVersion();
+    } catch (err) {
+      console.warn(
+        "[quoll] guarded readVersion failed; the label stays UNOBSERVED (null — never a fabricated number)",
+        { site },
+        err
+      );
+      return null;
+    }
+  };
+
   // Edit-rejected delivery with a resync fallback re-entering the core,
   // carrying the per-delivery `id` (Codex N2/N6). If the webview refuses,
   // detaches, or `send()` throws, dispatching `editRejectedDeliveryFailed(id)`
@@ -188,9 +306,10 @@ export function createEffectExecutor<TEdit>(deps: EffectExecutorDeps<TEdit>): Ef
   // clobber the live banner nor force an unsolicited reseed. When the clear
   // DOES fire, the user's typed content is overwritten — same "external wins"
   // semantics as for an `onDidChangeTextDocument` race. The event carries the
-  // LIVE document version (readVersion at this dispatch, read synchronously with
-  // the reseed's live bytes) so the recovery Document's version matches its
-  // bytes — never the possibly-stale stored version.
+  // document version read via the guarded `readVersionGuarded`; if that read
+  // fails the event carries `null` and the reducer clears the rejection
+  // WITHOUT reseeding — no Document at an unobserved label — signalling
+  // through the shared resync-failure latch.
   const sendEditRejected = (error: MarkdownError, id: number): void => {
     if (deps.isDisposed()) {
       return;
@@ -210,7 +329,7 @@ export function createEffectExecutor<TEdit>(deps: EffectExecutorDeps<TEdit>): Ef
       deps.dispatch({
         type: "editRejectedDeliveryFailed",
         id,
-        documentVersion: deps.applyEditSeam.readVersion(),
+        documentVersion: readVersionGuarded("edit-rejected-recovery:sync-throw"),
       });
       return;
     }
@@ -234,7 +353,7 @@ export function createEffectExecutor<TEdit>(deps: EffectExecutorDeps<TEdit>): Ef
         deps.dispatch({
           type: "editRejectedDeliveryFailed",
           id,
-          documentVersion: deps.applyEditSeam.readVersion(),
+          documentVersion: readVersionGuarded("edit-rejected-recovery:refused"),
         });
       },
       (err: unknown) => {
@@ -245,7 +364,7 @@ export function createEffectExecutor<TEdit>(deps: EffectExecutorDeps<TEdit>): Ef
         deps.dispatch({
           type: "editRejectedDeliveryFailed",
           id,
-          documentVersion: deps.applyEditSeam.readVersion(),
+          documentVersion: readVersionGuarded("edit-rejected-recovery:rejected"),
         });
       }
     );
@@ -265,12 +384,11 @@ export function createEffectExecutor<TEdit>(deps: EffectExecutorDeps<TEdit>): Ef
       // completed (an apply resolved ok, or the no-op short-circuit submitted
       // nothing) and only the verification read failed. Mapping it to a failure
       // kind would toast "Failed to save" for a write that did not fail, and
-      // skip the self-advance. `documentVersion` rides through as `null` when the
-      // version was not observed — the reducer then leaves the version alone (no
-      // fabrication, no rewind); when it WAS observed the normal self-advance
-      // applies.
+      // skip the self-advance. The settled version rides on the EVENT, not the
+      // outcome (one representation for every outcome kind — v9 unification), so
+      // this outcome carries no version at all.
       case "appliedUnverified":
-        return { kind: "ok", documentVersion: result.settledVersion };
+        return { kind: "ok" };
       case "applyRefused":
         return { kind: "refused" };
       case "buildThrew":
@@ -346,21 +464,24 @@ export function createEffectExecutor<TEdit>(deps: EffectExecutorDeps<TEdit>): Ef
   // write pipeline. The lock is already set by the `accept` transition; the
   // pipeline (snapshot → span → build → apply → post-apply verify) lives in
   // `executeDocumentWrite`, and this only MAPS the immutable tagged outcome onto
-  // an `applyEditSettled` event. It NEVER re-reads the document — `currentContent`
-  // / `preApplyContent` / the settled version all come from the outcome's
-  // verify-time snapshots (a re-read could observe a later edit and mis-attribute
-  // divergence). `canWrite` is read here (an FS/config read, not a document read)
-  // for the stash-drain re-gate. The settlement lands in a fresh drain (the
-  // pipeline is async) and fires EVEN post-dispose: a stashed one-more-char edit
-  // can only drain on settlement, which fires AFTER onDidDispose (the core stays
-  // a strict no-op post-dispose unless a stash is waiting; webview-bound posts
-  // self-suppress via post()'s disposed guard).
+  // an `applyEditSettled` event. It never re-reads the document CONTENT —
+  // `currentContent` / `preApplyContent` come from the outcome's verify-time
+  // snapshots (a content re-read could observe a later edit and mis-attribute
+  // divergence); the guarded `readVersionGuarded` version read is the single
+  // documented exception, sound for the reasons at its definition. `canWrite`
+  // is read here (an FS/config read, not a document read) for the stash-drain
+  // re-gate. The settlement lands in a fresh drain (the pipeline is async) and
+  // fires EVEN post-dispose: a stashed one-more-char edit can only drain on
+  // settlement, which fires AFTER onDidDispose (the core stays a strict no-op
+  // post-dispose unless a stash is waiting; webview-bound posts self-suppress
+  // via post()'s disposed guard).
   const runApplyEdit = (content: string): void => {
     void executeDocumentWrite(deps.applyEditSeam, content).then(
       (result) => {
         deps.dispatch({
           type: "applyEditSettled",
           outcome: toApplyEditOutcome(result),
+          settledVersion: result.settledVersion ?? readVersionGuarded("settlement-retry"),
           canWrite: readCanWrite(),
           currentContent: result.settledContent,
           preApplyContent: result.preApplyContent,
@@ -376,9 +497,10 @@ export function createEffectExecutor<TEdit>(deps: EffectExecutorDeps<TEdit>): Ef
         // rejection.
         // Keyed on `settleReadFailure` rather than on the single
         // `appliedUnverified` tag, because a VERSION-only read failure keeps the
-        // tag `applied` (the content was verified) while still suppressing the
-        // self-advance — exactly the partial verification loss triage needs to
-        // see, and tag-keyed logging would make it silent.
+        // tag `applied` (the content was verified) while still putting the
+        // self-advance at risk — it is suppressed only if the guarded dispatch
+        // retry above ALSO fails. That partial verification loss is what triage
+        // needs to see, and tag-keyed logging would make it silent.
         //
         // Bounded to the ok-mapping family on purpose. A failure tag already
         // reports itself through its own message and its "Failed to save" toast;
@@ -405,14 +527,15 @@ export function createEffectExecutor<TEdit>(deps: EffectExecutorDeps<TEdit>): Ef
           // It must not deliver a VERDICT on the save either ("treating it as an
           // UNVERIFIED save" was the old wording): on the VERSION-only path the
           // CONTENT was read, the divergence compare ran and the tag stayed
-          // `applied` — the save WAS verified, and only the self-advance is
-          // suppressed. So name WHICH observation is missing and let each one gate
-          // its own consequence. Naming the tag here would mislead symmetrically:
+          // `applied` — the save WAS verified, and only the self-advance is at
+          // risk (suppressed only if the guarded dispatch retry also failed). So
+          // name WHICH observation is missing and let each one gate its own
+          // consequence. Naming the tag here would mislead symmetrically:
           // `diverged` is only reachable WITH an observed content, so "the tag is
           // now appliedUnverified" is false for part of this very family.
           console.warn(
             okFamily
-              ? "[quoll] the write pipeline completed (no failure) but a settle-time verification read failed. Each missing observation gates only its OWN consequence: no drain unless the settled CONTENT was read (settledContent !== null), no version advance unless the VERSION was read (settledVersion !== null)"
+              ? "[quoll] the write pipeline completed (no failure) but a settle-time verification read failed. Each missing observation gates only its OWN consequence: no drain unless the settled CONTENT was read (the event's currentContent !== null), no version advance unless SOME source observed the version (the event's settledVersion !== null — the pipeline's settle read or the guarded dispatch retry), and the ack Document is withheld unless some source observed a post-apply version"
               : `[quoll] the settlement verification read also failed on a ${result.tag} outcome; the outcome itself is unchanged`,
             result.settleReadFailure
           );
@@ -453,23 +576,31 @@ export function createEffectExecutor<TEdit>(deps: EffectExecutorDeps<TEdit>): Ef
       // sole other path) — stays held for the session: every later inbound edit is
       // stashed behind a bare warn and never saved. Silent, toast-free data loss.
       // Settling with a NON-OK outcome is what makes it safe: `canDrain` requires
-      // `ok`, so the unobserved snapshot below never reaches `decideEdit`, and the
-      // non-ok foreign-bytes check reads a `null` `currentContent` as NOT OBSERVED
-      // ⇒ not foreign, so no spurious epoch bump. The
-      // user gets the same `Failed to save:` toast + authoritative reseed as any
-      // other failed write, instead of a panel that has quietly stopped saving.
+      // `ok`, so the unobserved snapshot below never reaches `decideEdit`, and
+      // the content check reads `null` as unobserved; foreign evidence, if any,
+      // comes from the version-delta fallback. The user gets the same
+      // `Failed to save:` toast as any other failed write, instead of a panel
+      // that has quietly stopped saving. The reseed that normally follows it is
+      // CONDITIONAL, and this arm is the likeliest place to lose it: the guarded
+      // read below is the settlement's ONLY version read, so if it also fails and
+      // no lock-held resync arrived, the reducer withholds the ack Document and
+      // reports through the shared resync-failure latch instead.
       //
-      // ⚠️ This arm MUST NOT re-read the document or `canWrite()` — those seams are
-      // the candidate throw sources, and a throw HERE strands the lock exactly as
-      // before (the "fix" would reintroduce the bug on its own recovery path).
-      // `canWrite` is unused for a non-ok settlement, so pass the conservative
-      // `false` rather than reading it.
+      // ⚠️ This arm MUST NOT re-read the document CONTENT or `canWrite()` —
+      // those seams are the candidate throw sources, and a throw HERE strands
+      // the lock exactly as before (the "fix" would reintroduce the bug on its
+      // own recovery path). The guarded `readVersionGuarded` is the one
+      // permitted read: it cannot throw, and the version it returns labels the
+      // settlement (see its definition for why that use is sound). `canWrite`
+      // is unused for a non-ok settlement, so pass the conservative `false`
+      // rather than reading it.
       (err: unknown) => {
         console.error("[quoll] verified write pipeline rejected; releasing the write lock", err);
         try {
           deps.dispatch({
             type: "applyEditSettled",
             outcome: { kind: "rejected", message: errorMessage(err) },
+            settledVersion: readVersionGuarded("rejection-arm-first-read"),
             canWrite: false,
             // NOT OBSERVED — nothing was read, so say nothing rather than
             // fabricating an empty document. The non-ok foreign-bytes check reads
@@ -565,43 +696,7 @@ export function createEffectExecutor<TEdit>(deps: EffectExecutorDeps<TEdit>): Ef
               "[quoll] failed to build the Document to post; skipping this reseed",
               err
             );
-            if (!reseedBuildFailureReported) {
-              // The latch is set BEFORE the attempt, so the guarantee is "at most
-              // ONE notification attempt per incident" — not "exactly one toast".
-              // ⛔ Do NOT move this to latch-after-success. Both placements lose
-              // something and this is the safer loss:
-              //   - latch-before: a single synchronous failure leaves only the log
-              //     line above. Bounded, and by then the window API is broken.
-              //   - latch-after-success: a `showError` that DISPLAYS and then
-              //     throws is never latched, so a persistently broken seam
-              //     re-toasts on every failed reseed — user-visible spam on a path
-              //     that can fire once per settlement. `showError` evaluates
-              //     `window.showErrorMessage(message)` BEFORE `showSafely` wraps
-              //     it, and `showSafely` only absorbs the Thenable's async
-              //     rejection, so display-then-throw cannot be ruled out from this
-              //     repo alone.
-              // Spam is the worse failure, and this placement removes it
-              // structurally rather than by argument about VS Code internals.
-              reseedBuildFailureReported = true;
-              // GUARDED: this call sits INSIDE the boundary that exists to stop a
-              // throw from escaping `runEffects`, and `window.showErrorMessage`'s
-              // SYNCHRONOUS throw is not absorbed by the panel's wrapper — an
-              // unguarded call here would re-open the exact hole this closes. Same
-              // discipline as revert-rescue-wiring's per-dep `runGuarded`.
-              try {
-                // Wording that is true on BOTH paths this effect serves. The
-                // reducer emits `postDocument` for the FIRST SEED too
-                // (host-session-core's `ready` arm), not only for settlement acks,
-                // and the executor cannot tell them apart — so an unconditional
-                // "Recent edits may not be saved" would tell a user their edits
-                // might be lost at first load, before they had typed anything.
-                deps.showError(
-                  "Quoll could not update the editor view. If you have unsaved changes they may not have been saved — reload the window (Developer: Reload Window)."
-                );
-              } catch (toastErr) {
-                console.error("[quoll] failed to report the reseed build failure", toastErr);
-              }
-            }
+            reportResyncFailure("[quoll] failed to report the reseed build failure");
             break;
           }
           if (QUOLL_PERF) {
@@ -609,11 +704,12 @@ export function createEffectExecutor<TEdit>(deps: EffectExecutorDeps<TEdit>): Ef
           }
           // RE-ARM the notification latch: the build just succeeded, so the seam
           // recovered and any later failure is a NEW incident, not a repeat of the
-          // one already reported. Orthogonal to the latch-before-attempt decision
-          // above (which bounds a SINGLE incident); without this, one transient
+          // one already reported. Orthogonal to `reportResyncFailure`'s
+          // latch-before-attempt decision (which bounds a SINGLE incident, for
+          // BOTH triggers); without this, one transient
           // early hiccup would leave every later real incident structurally
           // silent for the life of the panel.
-          reseedBuildFailureReported = false;
+          resyncFailureReported = false;
           post(documentMessage);
           // First postDocument is the seed; report once it (and its
           // host:postMessage) is recorded so host:mount carries both stages.
@@ -663,9 +759,9 @@ export function createEffectExecutor<TEdit>(deps: EffectExecutorDeps<TEdit>): Ef
           runApplyEdit(effect.content);
           break;
         case "showError":
-          // GUARDED, and NOT redundant with the `deps.showError` guard inside the
-          // `postDocument` builder catch above: that one protects the executor's
-          // OWN reseed-build notification, this one the REDUCER's settlement toast,
+          // GUARDED, and NOT redundant with the `deps.showError` guard inside
+          // `reportResyncFailure`: that one protects the executor's OWN
+          // resync-failure notification, this one the REDUCER's settlement toast,
           // which every non-ok settlement emits BEFORE its `postDocument` (see
           // `settlementEffects`' ORDER note). The containment matters here since
           // `execute-write.ts`'s `settle()` became total: the correlated case —
@@ -700,6 +796,16 @@ export function createEffectExecutor<TEdit>(deps: EffectExecutorDeps<TEdit>): Ef
           // binding, so it stays OUT of that guard's file allowlist — keeping the
           // guard able to flag a future raw binding call added here by mistake.
           runOpenExternal(effect.href);
+          break;
+        case "showResyncFailure":
+          // A withheld settlement ack (host-session-core's ackLabelObserved gate).
+          // Same latch as the postDocument build-failure guard: both report "the
+          // webview could not be resynced", and one incident must not toast twice.
+          // Latch-before-attempt + guarded showError for the same reasons as the
+          // build guard (a throwing toast must neither escape runEffects nor
+          // retry within the incident) — which is why both go through the one
+          // `reportResyncFailure` above rather than each keeping a copy.
+          reportResyncFailure("[quoll] failed to report the withheld settlement ack");
           break;
         default: {
           // Exhaustiveness guard — a new HostSessionEffect variant without

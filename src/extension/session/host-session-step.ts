@@ -87,8 +87,12 @@ export function isEditApplied(event: HostSessionEvent): boolean {
   }
   switch (event.outcome.kind) {
     case "ok":
-      // Includes the UNVERIFIED landing (`documentVersion: null`): the write
-      // completed and only the verification read broke (PR #399).
+      // Includes the UNVERIFIED landing (the event's `currentContent` is null —
+      // the settle-time CONTENT read is what downgrades `applied` to
+      // `appliedUnverified`): the write completed and only the verification read
+      // broke (PR #399). A version-only read failure is NOT that case: it leaves
+      // the tag `applied` and only gates the ack label, so `settledVersion` says
+      // nothing about whether the edit was applied.
       return true;
     case "refused":
     case "constructThrew":

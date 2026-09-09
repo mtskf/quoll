@@ -23,7 +23,8 @@
 //     verification read broke → an UNVERIFIED-ok
 //     settlement: the lock is released, a triage warn is logged, and there is NO
 //     "Failed to save" toast (reporting a write that succeeded as failed is the
-//     defect this file now pins against).
+//     defect this file now pins against) — but see the ack-label-gate caveat below:
+//     the ABSENCE of a version observation is its own, separate signal.
 //   - the write genuinely did NOT land (a refusal / a rejected apply / a throw in
 //     the synchronous prefix) → the failure family is unchanged: toast, then the
 //     authoritative reseed.
@@ -31,8 +32,25 @@
 // broken seam also makes `buildSeedDocument` throw, the ack Document cannot be
 // built, and the executor emits one latched "could not update the editor view"
 // notification (latched per INCIDENT — a successful build re-arms it). That is a
-// reseed-delivery failure at another layer — never assert `h.errors` is empty
-// under `armSettleFailure(true)`; filter for the message you mean.
+// reseed-delivery failure at another layer.
+// A THIRD trigger for that SAME latched toast (the ack-label gate,
+// host-session-core's `ackLabelObserved`): when no source observed a post-apply
+// version — the settle-time read AND the executor's dispatch retry both failed,
+// AND no lock-held `documentChanged` arrived (`armVersionFailure` +
+// `dropLockHeldDocumentChanged` below) — the settlement withholds its ack rather
+// than pairing live bytes with a stale label, and reports through the SAME
+// shared latch. So: never assert `h.errors` is empty under `armSettleFailure(true)`
+// OR under a WITHHELD-ACK arrangement — `armVersionFailure(2+)` (persistent: the
+// settle read and the dispatch retry both fail) TOGETHER WITH
+// `dropLockHeldDocumentChanged`, which is what removes the other observation
+// source. Filter for the message you mean instead.
+// ⚠️ `armVersionFailure` ALONE is not that arrangement, and two tests below turn
+// on the difference: `armVersionFailure(1)` is a TRANSIENT failure the dispatch
+// retry recovers, and `armVersionFailure(2)` WITHOUT the drop still gets its
+// label from the lock-held `documentChanged`. Both ack normally, so
+// `expect(h.errors).toEqual([])` is exactly the assertion there — "the ack was
+// licensed" means no toast of any kind. Weakening those two to a filtered check
+// would stop pinning the recovery.
 
 import { describe, expect, it, vi } from "vitest";
 
@@ -76,6 +94,15 @@ interface HarnessOptions {
    *  API failing while the host tears down). `errorAttempts` still counts it, so a
    *  test can distinguish "attempted" from "displayed". */
   showErrorThrows?: boolean;
+  /** EVENT-DELIVERY-LOSS FAULT INJECTION, not production equivalence (Codex r2
+   *  88): the apply LANDS (buffer + version bump) but the lock-held
+   *  `documentChanged` is DROPPED. Production wiring dispatches that event
+   *  IMMEDIATELY while the lock is held (revert-rescue-wiring bypasses the
+   *  trailing debounce), so the usual case is covered by a lock-held resync —
+   *  but that mitigation is incidental, not a contract (the prior plan's
+   *  Established fact 2), and the ack-label gate exists for the fault where
+   *  the event never arrives. This arm injects that fault. */
+  dropLockHeldDocumentChanged?: boolean;
 }
 
 // `armSettleFailure` arms two different seams:
@@ -101,6 +128,7 @@ function harness(options: HarnessOptions = {}) {
   // this file can reach `runApplyEdit`'s rejection arm — the write lock's sole
   // release valve on that path.
   let readTextFailure = false;
+  let versionFailures = 0; // remaining readVersion calls that will throw (0 = healthy)
   // The span the last `build` produced — `apply` replays it against the live
   // buffer so the fake document really LANDS the edit (version bump included),
   // which is what makes an ok settlement carry a live version.
@@ -174,7 +202,13 @@ function harness(options: HarnessOptions = {}) {
         }
         return doc.text;
       },
-      readVersion: () => doc.version,
+      readVersion: () => {
+        if (versionFailures > 0) {
+          versionFailures -= 1;
+          throw new Error("boom-version");
+        }
+        return doc.version;
+      },
       // The settle-time verification read. execute-write GUARDS it individually,
       // so a broken seam (a disposed document, a broken canonicaliser) yields an
       // UNVERIFIED settlement rather than rejecting the whole pipeline.
@@ -207,7 +241,9 @@ function harness(options: HarnessOptions = {}) {
           pendingSpan = null;
         }
         doc.version += 1;
-        dispatchEvent({ type: "documentChanged", documentVersion: doc.version });
+        if (!options.dropLockHeldDocumentChanged) {
+          dispatchEvent({ type: "documentChanged", documentVersion: doc.version });
+        }
         return true;
       },
     },
@@ -241,6 +277,12 @@ function harness(options: HarnessOptions = {}) {
      *  `executeDocumentWrite` REJECT rather than resolve. */
     armReadTextFailure: (on: boolean) => {
       readTextFailure = on;
+    },
+    /** Arm the NEXT n readVersion calls to throw (settle read = 1st, dispatch
+     *  retry = 2nd). n=1 models a TRANSIENT failure the retry recovers; n>=2 a
+     *  PERSISTENT one that reaches the withhold branch. */
+    armVersionFailure: (n: number) => {
+      versionFailures = n;
     },
     /** A FOREIGN edit, on the panel's real path for one: mutate the buffer, bump
      *  the version, and dispatch `documentChanged` LOCK-FREE. This is the only
@@ -690,5 +732,89 @@ describe("applyEdit settlement: a landed write is acked, not toasted", () => {
     sync.onReducerCommit(false);
 
     expect(posted).toHaveLength(1); // no replay
+  });
+});
+
+describe("applyEdit settlement: the ack-label gate end to end", () => {
+  it("an UNOBSERVABLE version withholds the mislabelled ack: no Document, one latched toast, lock released", async () => {
+    const h = harness({ dropLockHeldDocumentChanged: true });
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      h.armVersionFailure(2); // settle read AND dispatch retry
+      const postedBefore = h.documents.length;
+      h.type("a");
+      await flushSettle();
+      // The apply LANDED (live doc at v2) but no source observed a version — the
+      // OLD behaviour posted live "a" bytes labelled docVersion 1, which the
+      // webview would base an Edit on → stale → epoch bump → replay buffer drop.
+      expect(h.docVersion()).toBe(2);
+      expect(h.documents.length).toBe(postedBefore); // WITHHELD
+      expect(h.state().lastAppliedDocVersion).toBe(1); // no fabricated advance
+      expect(h.errors.filter((m) => m.includes("could not update the editor view"))).toHaveLength(
+        1
+      );
+      expect(h.errors.filter((m) => m.includes("Failed to save"))).toEqual([]); // the write did not fail
+      expect(isWriteLockHeld(h.state())).toBe(false);
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  it("a TRANSIENT version-read failure recovers through the dispatch retry: the ack posts at the live version", async () => {
+    const h = harness({ dropLockHeldDocumentChanged: true });
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      h.armVersionFailure(1); // settle read throws; the dispatch retry succeeds
+      h.type("a");
+      await flushSettle();
+      expect(h.documents.at(-1)?.docVersion).toBe(h.docVersion()); // ack at LIVE v2
+      expect(h.state().externalEpoch).toBe(0); // own +1 delta is not foreign
+      expect(h.errors).toEqual([]); // no toast of any kind
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  it("a lock-held documentChanged licenses the ack even when every version read fails", async () => {
+    const h = harness(); // fault NOT injected: apply dispatches the lock-held documentChanged
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      h.armVersionFailure(2);
+      h.type("a");
+      await flushSettle();
+      expect(h.documents.at(-1)?.docVersion).toBe(h.docVersion()); // label from the lock-held resync
+      expect(h.errors).toEqual([]); // observed → no withhold toast
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  it("the withhold latch is per incident and shared: a recovered reseed re-arms it", async () => {
+    const h = harness({ dropLockHeldDocumentChanged: true });
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      // Incident 1: withheld ack → one toast.
+      h.armVersionFailure(2);
+      h.type("a");
+      await flushSettle();
+      expect(h.errors.filter((m) => m.includes("could not update the editor view"))).toHaveLength(
+        1
+      );
+      // The seam recovers; a REAL host-side path (foreign edit → lock-free
+      // documentChanged) posts a Document successfully, which re-arms the latch.
+      const postedBefore = h.documents.length;
+      h.externalEdit("recovered");
+      expect(h.documents.length).toBeGreaterThan(postedBefore);
+      // Incident 2: the webview reseeded (its single flight cleared), so a second
+      // keystroke is a sequence a real webview can produce.
+      h.armVersionFailure(2);
+      h.type("recovered!");
+      await flushSettle();
+      expect(h.errors.filter((m) => m.includes("could not update the editor view"))).toHaveLength(
+        2
+      );
+    } finally {
+      warnSpy.mockRestore();
+    }
   });
 });

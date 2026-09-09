@@ -62,7 +62,8 @@ const edit = (over: Partial<Extract<HostSessionEvent, { type: "edit" }>> = {}) =
 const settled = (over: Partial<Extract<HostSessionEvent, { type: "applyEditSettled" }>> = {}) =>
   ({
     type: "applyEditSettled",
-    outcome: { kind: "ok", documentVersion: 2 },
+    outcome: { kind: "ok" },
+    settledVersion: 2,
     canWrite: true,
     currentContent: "cur",
     // Canonical pre-apply snapshot (non-ok epoch baseline). Defaults equal to
@@ -278,14 +279,14 @@ describe("host-session-core: applyEditSettled", () => {
     rejection: { kind: "pending", id: 1, content: "d", error: unsafe },
   });
   it("ok → release lock, advance version, clear rejection, postDocument(newV)", () => {
-    const r = core.transition(locked, settled({ outcome: { kind: "ok", documentVersion: 2 } }));
+    const r = core.transition(locked, settled({ settledVersion: 2 }));
     expect(r.state.pendingApplyBaseVersion).toBeNull();
     expect(r.state.lastAppliedDocVersion).toBe(2);
     expect(r.state.rejection).toEqual({ kind: "none" });
     expect(r.effects).toEqual([pDoc(2)]);
   });
   it("refused → release lock, logWarn(heldBase) + showError(fsPath) + postDocument", () => {
-    const r = core.transition(locked, settled({ outcome: { kind: "refused" } }));
+    const r = core.transition(locked, settled({ outcome: { kind: "refused" }, settledVersion: 1 }));
     expect(r.state.pendingApplyBaseVersion).toBeNull();
     expectToastBeforeReseed(r.effects);
     expect(r.effects[0]).toMatchObject({
@@ -303,14 +304,17 @@ describe("host-session-core: applyEditSettled", () => {
     "applyThrew",
     "rejected",
   ] as const)("%s → release lock, showError(message) + postDocument", (kind) => {
-    const r = core.transition(locked, settled({ outcome: { kind, message: "boom" } }));
+    const r = core.transition(
+      locked,
+      settled({ outcome: { kind, message: "boom" }, settledVersion: 1 })
+    );
     expect(r.state.pendingApplyBaseVersion).toBeNull();
     expectToastBeforeReseed(r.effects);
     expect(r.effects).toEqual([{ type: "showError", message: "Failed to save: boom" }, pDoc(1)]);
   });
   it("settle after dispose → no effects, state unchanged", () => {
     const disposed = base({ disposed: true, pendingApplyBaseVersion: null });
-    const r = core.transition(disposed, settled({ outcome: { kind: "ok", documentVersion: 9 } }));
+    const r = core.transition(disposed, settled({ settledVersion: 9 }));
     expect(r.effects).toEqual([]);
     expect(r.state).toEqual(disposed);
   });
@@ -324,13 +328,13 @@ describe("host-session-core: applyEditSettled", () => {
     // NO documentChanged is injected here on purpose: the production resync that
     // usually raises the version is another module's incidental behaviour, so the
     // reducer must be correct without it. What it must NOT do is move the version
-    // on an unobserved read. (A `-1` sentinel would be assigned VERBATIM — the
-    // settlement self-advance is exempt from `resyncLiveVersion`'s `max` clamp —
-    // and rewind the version.)
-    const r = core.transition(
-      locked,
-      settled({ outcome: { kind: "ok", documentVersion: null }, currentContent: null })
-    );
+    // on an unobserved read. (The settlement advance is now `Math.max`-clamped —
+    // the hoisted `advanced` const applies for EVERY outcome kind, no longer an
+    // ok-only verbatim exemption from `resyncLiveVersion`'s clamp — so a fabricated
+    // LOW sentinel could not rewind it either way; `null` is used instead of any
+    // sentinel because a fabricated HIGH value would wrongly read as an observed
+    // advance and license the ack gate.)
+    const r = core.transition(locked, settled({ settledVersion: null, currentContent: null }));
     expect(r.state.lastAppliedDocVersion).toBe(1); // unchanged — not rewound, not invented
     expect(r.state.externalEpoch).toBe(locked.externalEpoch); // unobserved is NOT foreign
     expect(isWriteLockHeld(r.state)).toBe(false); // the lock is still released
@@ -349,10 +353,7 @@ describe("host-session-core: applyEditSettled", () => {
       lastAppliedDocVersion: 1,
       inFlightContent: "edit1",
     });
-    const r = core.transition(
-      inFlight,
-      settled({ outcome: { kind: "ok", documentVersion: null }, currentContent: null })
-    );
+    const r = core.transition(inFlight, settled({ settledVersion: null, currentContent: null }));
     expect(r.state.externalEpoch).toBe(inFlight.externalEpoch);
     expect(r.state.lastAppliedDocVersion).toBe(1);
   });
@@ -364,7 +365,7 @@ describe("host-session-core: applyEditSettled", () => {
     const r = core.transition(
       locked,
       settled({
-        outcome: { kind: "ok", documentVersion: null },
+        settledVersion: null,
         currentContent: "other",
         divergedAfterApply: true,
       })
@@ -388,7 +389,7 @@ describe("host-session-core: applyEditSettled drain", () => {
   it("ALIVE ok, currentContent === inFlightContent → drain accept: applyEdit(stash) re-based, NO ack Document", () => {
     const r = core.transition(
       lockedWithStash("edit1", "edit1plus"),
-      settled({ outcome: { kind: "ok", documentVersion: 2 }, currentContent: "edit1" })
+      settled({ settledVersion: 2, currentContent: "edit1" })
     );
     expect(r.state.pendingEdit).toBeNull();
     expect(r.state.pendingApplyBaseVersion).toBe(2); // re-acquired (alive)
@@ -405,7 +406,7 @@ describe("host-session-core: applyEditSettled drain", () => {
     // (contentMatches). Reproduces the pre-fix skew: red without contentMatches.
     const r = core.transition(
       lockedWithStash("a\nb", "a\nb-plus"),
-      settled({ outcome: { kind: "ok", documentVersion: 2 }, currentContent: "a\r\nb" })
+      settled({ settledVersion: 2, currentContent: "a\r\nb" })
     );
     expect(r.state.pendingEdit).toBeNull();
     expect(r.state.pendingApplyBaseVersion).toBe(2); // re-acquired (alive) = drained
@@ -416,7 +417,7 @@ describe("host-session-core: applyEditSettled drain", () => {
   it("EXTERNAL edit raced (currentContent !== inFlightContent) → NO drain, logWarn + repost authoritative Document (external wins)", () => {
     const r = core.transition(
       lockedWithStash("edit1", "edit1plus"),
-      settled({ outcome: { kind: "ok", documentVersion: 5 }, currentContent: "external-content" })
+      settled({ settledVersion: 5, currentContent: "external-content" })
     );
     expect(r.state.pendingEdit).toBeNull();
     expect(r.state.pendingApplyBaseVersion).toBeNull();
@@ -442,7 +443,7 @@ describe("host-session-core: applyEditSettled drain", () => {
     // isolates the CONTENT being unobserved.
     const r = core.transition(
       lockedWithStash("edit1", "edit1plus"),
-      settled({ outcome: { kind: "ok", documentVersion: 2 }, currentContent: null })
+      settled({ settledVersion: 2, currentContent: null })
     );
     expect(r.state.pendingEdit).toBeNull(); // released
     expect(r.effects.some((e) => e.type === "applyEdit")).toBe(false); // but NOT written
@@ -467,7 +468,12 @@ describe("host-session-core: applyEditSettled drain", () => {
       // Clean failure: the doc is still at the pre-apply snapshot (currentContent
       // === preApplyContent), so NO foreign bytes intervened → epoch unchanged
       // (0). The retry buffer must stay replayable.
-      settled({ outcome: { kind: "refused" }, currentContent: "edit1", preApplyContent: "edit1" })
+      settled({
+        outcome: { kind: "refused" },
+        settledVersion: 1,
+        currentContent: "edit1",
+        preApplyContent: "edit1",
+      })
     );
     expect(r.state.pendingEdit).toBeNull();
     expect(reseedIn(r.effects)).toEqual(pDoc(1));
@@ -478,7 +484,7 @@ describe("host-session-core: applyEditSettled drain", () => {
   it("drain no-op (stash content === settled currentContent) → repost Document only", () => {
     const r = core.transition(
       lockedWithStash("same", "same"),
-      settled({ outcome: { kind: "ok", documentVersion: 2 }, currentContent: "same" })
+      settled({ settledVersion: 2, currentContent: "same" })
     );
     expect(r.effects).toEqual([pDoc(2)]);
   });
@@ -486,7 +492,7 @@ describe("host-session-core: applyEditSettled drain", () => {
   it("drain parse-failed (ALIVE) → postRejectedDraft(draft, settled version) + showError, rejection pending", () => {
     const r = core.transition(
       lockedWithStash("edit1", "hasBAD"),
-      settled({ outcome: { kind: "ok", documentVersion: 2 }, currentContent: "edit1" })
+      settled({ settledVersion: 2, currentContent: "edit1" })
     );
     expect(r.state.rejection).toMatchObject({ kind: "pending", id: 1, content: "hasBAD" });
     // The draft is redelivered as a Document at the SETTLED version so the
@@ -517,7 +523,7 @@ describe("host-session-core: applyEditSettled drain", () => {
     // base and is NOT stale-rejected.
     const drained = core.transition(
       lockedWithStash("edit1", "hasBAD"),
-      settled({ outcome: { kind: "ok", documentVersion: 2 }, currentContent: "edit1" })
+      settled({ settledVersion: 2, currentContent: "edit1" })
     );
     const draftDoc = drained.effects.find((e) => e.type === "postRejectedDraft");
     expect(draftDoc).toBeDefined();
@@ -547,7 +553,7 @@ describe("host-session-core: applyEditSettled drain", () => {
   it("drain parse-failed (ALIVE) round-trip NEGATIVE: a retry still on the PRE-drain version IS stale-rejected (reproduces finding #2 without the fix)", () => {
     const drained = core.transition(
       lockedWithStash("edit1", "hasBAD"),
-      settled({ outcome: { kind: "ok", documentVersion: 2 }, currentContent: "edit1" })
+      settled({ settledVersion: 2, currentContent: "edit1" })
     );
     // Simulate the OLD (pre-fix) webview: it never learned the settled
     // version, so it retries with the stale pre-drain base (1) while the
@@ -567,7 +573,7 @@ describe("host-session-core: applyEditSettled drain", () => {
     const r = core.transition(
       lockedWithStash("edit1", "edit1plus"),
       settled({
-        outcome: { kind: "ok", documentVersion: 2 },
+        settledVersion: 2,
         canWrite: false,
         currentContent: "edit1",
       })
@@ -578,7 +584,7 @@ describe("host-session-core: applyEditSettled drain", () => {
   it("POST-DISPOSE ok drain accept → applyEdit only, NO lock re-acquired, NO webview post", () => {
     const r = core.transition(
       lockedWithStash("edit1", "edit1plus", { disposed: true }),
-      settled({ outcome: { kind: "ok", documentVersion: 2 }, currentContent: "edit1" })
+      settled({ settledVersion: 2, currentContent: "edit1" })
     );
     expect(r.state.pendingApplyBaseVersion).toBeNull(); // NOT re-acquired (Codex #5)
     expect(r.effects).toEqual([{ type: "applyEdit", content: "edit1plus", baseDocVersion: 2 }]);
@@ -587,7 +593,7 @@ describe("host-session-core: applyEditSettled drain", () => {
   it("POST-DISPOSE drain parse-failed → showError only (postEditRejected suppressed)", () => {
     const r = core.transition(
       lockedWithStash("edit1", "hasBAD", { disposed: true }),
-      settled({ outcome: { kind: "ok", documentVersion: 2 }, currentContent: "edit1" })
+      settled({ settledVersion: 2, currentContent: "edit1" })
     );
     expect(r.effects).toHaveLength(1);
     expect(r.effects[0]).toMatchObject({ type: "showError" });
@@ -596,7 +602,11 @@ describe("host-session-core: applyEditSettled drain", () => {
   it("POST-DISPOSE non-ok WITH a stash → showError only (failed save still surfaced), NO webview post", () => {
     const r = core.transition(
       lockedWithStash("edit1", "edit1plus", { disposed: true }),
-      settled({ outcome: { kind: "rejected", message: "boom" }, currentContent: "edit1" })
+      settled({
+        outcome: { kind: "rejected", message: "boom" },
+        settledVersion: 1,
+        currentContent: "edit1",
+      })
     );
     expect(r.effects).toEqual([{ type: "showError", message: "Failed to save: boom" }]);
   });
@@ -604,7 +614,7 @@ describe("host-session-core: applyEditSettled drain", () => {
   it("POST-DISPOSE ok but external-mismatch WITH a stash → logWarn only, no toast (external won, webview-bound effects suppressed)", () => {
     const r = core.transition(
       lockedWithStash("edit1", "edit1plus", { disposed: true }),
-      settled({ outcome: { kind: "ok", documentVersion: 2 }, currentContent: "external" })
+      settled({ settledVersion: 2, currentContent: "external" })
     );
     expect(r.effects).toEqual([
       {
@@ -626,7 +636,7 @@ describe("host-session-core: applyEditSettled drain", () => {
     // post-dispose there is no webview replay buffer left to carry it.
     const r = core.transition(
       lockedWithStash("edit1", "edit1plus", { disposed: true }),
-      settled({ outcome: { kind: "ok", documentVersion: 2 }, currentContent: null })
+      settled({ settledVersion: 2, currentContent: null })
     );
     const toasts = r.effects.filter((e) => e.type === "showError");
     expect(toasts).toHaveLength(1);
@@ -649,7 +659,7 @@ describe("host-session-core: applyEditSettled drain", () => {
     // `state.disposed` gate above turns this red.
     const r = core.transition(
       lockedWithStash("edit1", "edit1plus"),
-      settled({ outcome: { kind: "ok", documentVersion: 2 }, currentContent: null })
+      settled({ settledVersion: 2, currentContent: null })
     );
     expect(r.effects.some((e) => e.type === "showError")).toBe(false);
     expect(
@@ -663,7 +673,7 @@ describe("host-session-core: applyEditSettled drain", () => {
     // "any post-dispose stash drop" turns this red.
     const r = core.transition(
       lockedWithStash("edit1", "edit1plus", { disposed: true }),
-      settled({ outcome: { kind: "ok", documentVersion: 2 }, currentContent: "external" })
+      settled({ settledVersion: 2, currentContent: "external" })
     );
     expect(r.effects.some((e) => e.type === "showError")).toBe(false);
   });
@@ -678,7 +688,11 @@ describe("host-session-core: applyEditSettled drain", () => {
     // save left to describe as unverified.
     const r = core.transition(
       lockedWithStash("edit1", "edit1plus", { disposed: true }),
-      settled({ outcome: { kind: "rejected", message: "boom" }, currentContent: null })
+      settled({
+        outcome: { kind: "rejected", message: "boom" },
+        settledVersion: 1,
+        currentContent: null,
+      })
     );
     const toasts = r.effects.filter((e) => e.type === "showError");
     expect(toasts).toEqual([{ type: "showError", message: "Failed to save: boom" }]);
@@ -686,7 +700,7 @@ describe("host-session-core: applyEditSettled drain", () => {
 
   it("POST-DISPOSE settle with NO stash → strict no-op, state unchanged", () => {
     const disposed = base({ disposed: true });
-    const r = core.transition(disposed, settled({ outcome: { kind: "ok", documentVersion: 9 } }));
+    const r = core.transition(disposed, settled({ settledVersion: 9 }));
     expect(r.effects).toEqual([]);
     expect(r.state).toEqual(disposed);
   });
@@ -695,7 +709,7 @@ describe("host-session-core: applyEditSettled drain", () => {
     const disposed = base({ disposed: true });
     const r = core.transition(
       disposed,
-      settled({ outcome: { kind: "rejected", message: "boom" } })
+      settled({ outcome: { kind: "rejected", message: "boom" }, settledVersion: 1 })
     );
     expect(r.effects).toEqual([{ type: "showError", message: "Failed to save: boom" }]);
     expect(r.state).toEqual(disposed);
@@ -830,7 +844,7 @@ describe("host-session-core: traces", () => {
       edit({ content: "good", currentContent: "cur", baseDocVersion: 1, documentVersion: 1 }),
       // Clean settlement: the settled doc IS the applied bytes ("good"), so the
       // epoch does NOT advance (site 2 baseline = inFlightContent).
-      settled({ outcome: { kind: "ok", documentVersion: 2 }, currentContent: "good" })
+      settled({ settledVersion: 2, currentContent: "good" })
     );
     expect(batches[0]).toEqual([{ type: "applyEdit", content: "good", baseDocVersion: 1 }]);
     expect(batches[1]).toEqual([pDoc(2)]);
@@ -846,7 +860,7 @@ describe("host-session-core: traces", () => {
       // The deferred documentChanged is the in-flight apply's OWN echo (lock
       // held → no epoch bump), and the settled doc IS the applied bytes → clean,
       // epoch 0.
-      settled({ outcome: { kind: "ok", documentVersion: 2 }, currentContent: "good" })
+      settled({ settledVersion: 2, currentContent: "good" })
     );
     expect(batches[0]).toEqual([{ type: "applyEdit", content: "good", baseDocVersion: 1 }]);
     expect(batches[1]).toEqual([]); // <-- deferred: NO post while the lock is held
@@ -863,7 +877,7 @@ describe("host-session-core: traces", () => {
       base({ lastAppliedDocVersion: 1 }),
       edit({ content: "good", currentContent: "cur", baseDocVersion: 1, documentVersion: 1 }),
       { type: "documentChanged", documentVersion: 2 }, // fires before the Promise settles, lock still held
-      settled({ outcome: { kind: "refused" } })
+      settled({ outcome: { kind: "refused" }, settledVersion: 1 })
     );
     expect(batches[1]).toEqual([]); // deferred: NO post while the lock is held
     // The refused arm reseeds from released.lastAppliedDocVersion — which MUST be
@@ -879,7 +893,7 @@ describe("host-session-core: traces", () => {
       base({ lastAppliedDocVersion: 1 }),
       edit({ content: "good", currentContent: "cur", baseDocVersion: 1, documentVersion: 1 }),
       { type: "ready", documentVersion: 1 },
-      settled({ outcome: { kind: "ok", documentVersion: 2 }, currentContent: "good" })
+      settled({ settledVersion: 2, currentContent: "good" })
     );
     expect(batches[1].map((e) => e.type)).toEqual(["logWarn"]); // ready dropped while locked
     expect(batches[2]).toEqual([pDoc(2)]);
@@ -889,7 +903,7 @@ describe("host-session-core: traces", () => {
     const { state, batches } = run(
       base({ lastAppliedDocVersion: 1 }),
       edit({ content: "good", currentContent: "cur", baseDocVersion: 1, documentVersion: 1 }),
-      settled({ outcome: { kind: "constructThrew", message: "lineAt blew up" } })
+      settled({ outcome: { kind: "constructThrew", message: "lineAt blew up" }, settledVersion: 1 })
     );
     expect(batches[0]).toEqual([{ type: "applyEdit", content: "good", baseDocVersion: 1 }]);
     expectToastBeforeReseed(batches[1]);
@@ -1014,7 +1028,7 @@ describe("host-session-core: traces", () => {
     const { batches, state } = run(
       base({ pendingApplyBaseVersion: 1, lastAppliedDocVersion: 1 }),
       { type: "disposed" },
-      settled({ outcome: { kind: "ok", documentVersion: 2 } })
+      settled({ settledVersion: 2 })
     );
     expect(batches[0]).toEqual([]);
     expect(batches[1]).toEqual([]);
@@ -1166,10 +1180,7 @@ describe("host-session-core: externalEpoch (S3a)", () => {
       lastAppliedDocVersion: 1,
       inFlightContent: "applied",
     });
-    const r = core.transition(
-      locked,
-      settled({ outcome: { kind: "ok", documentVersion: 2 }, currentContent: "applied" })
-    );
+    const r = core.transition(locked, settled({ settledVersion: 2, currentContent: "applied" }));
     expect(r.state.externalEpoch).toBe(0);
     expect(r.effects).toEqual([pDoc(2)]);
   });
@@ -1185,10 +1196,7 @@ describe("host-session-core: externalEpoch (S3a)", () => {
       lastAppliedDocVersion: 1,
       inFlightContent: "a\nb",
     });
-    const r = core.transition(
-      locked,
-      settled({ outcome: { kind: "ok", documentVersion: 2 }, currentContent: "a\r\nb" })
-    );
+    const r = core.transition(locked, settled({ settledVersion: 2, currentContent: "a\r\nb" }));
     expect(r.state.externalEpoch).toBe(0);
     expect(r.effects).toEqual([pDoc(2)]);
   });
@@ -1203,6 +1211,7 @@ describe("host-session-core: externalEpoch (S3a)", () => {
       locked,
       settled({
         outcome: { kind: "refused" },
+        settledVersion: 1,
         currentContent: "a\r\nb",
         preApplyContent: "a\nb",
       })
@@ -1217,10 +1226,7 @@ describe("host-session-core: externalEpoch (S3a)", () => {
       lastAppliedDocVersion: 1,
       inFlightContent: "target",
     });
-    const r = core.transition(
-      locked,
-      settled({ outcome: { kind: "ok", documentVersion: 2 }, currentContent: "foreign" })
-    );
+    const r = core.transition(locked, settled({ settledVersion: 2, currentContent: "foreign" }));
     expect(r.state.externalEpoch).toBe(1);
     expect(r.effects).toEqual([pDoc(2, 1)]);
   });
@@ -1235,6 +1241,7 @@ describe("host-session-core: externalEpoch (S3a)", () => {
       locked,
       settled({
         outcome: { kind: "refused" },
+        settledVersion: 1,
         currentContent: "pre-apply",
         preApplyContent: "pre-apply",
       })
@@ -1253,6 +1260,7 @@ describe("host-session-core: externalEpoch (S3a)", () => {
       locked,
       settled({
         outcome: { kind: "refused" },
+        settledVersion: 1,
         currentContent: "foreign-bytes",
         preApplyContent: "pre-apply",
       })
@@ -1273,7 +1281,7 @@ describe("host-session-core: externalEpoch (S3a)", () => {
     const r = core.transition(
       locked,
       settled({
-        outcome: { kind: "ok", documentVersion: 2 },
+        settledVersion: 2,
         currentContent: "misplaced-splice",
         divergedAfterApply: true,
       })
@@ -1306,7 +1314,7 @@ describe("host-session-core: externalEpoch (S3a)", () => {
     const r = core.transition(
       locked,
       settled({
-        outcome: { kind: "ok", documentVersion: 2 },
+        settledVersion: 2,
         currentContent: "target",
         divergedAfterApply: true,
       })
@@ -1343,13 +1351,15 @@ describe("host-session-core: externalEpoch (S3a)", () => {
   });
 
   // Structural backstop: the ONLY writes to `lastAppliedDocVersion` are the
-  // single `resyncLiveVersion` helper, `initialState`, and the settlement `ok`
-  // self-advance (the sole documented exemption). A future hand-rolled arm that
-  // raises the version directly (bypassing the helper, re-opening the epoch
-  // under-advance that reintroduces finding #4 silently) adds a new RHS token
-  // here and reddens. Comments are stripped first so a rule-shaped literal in a
-  // doc-comment cannot vacuate the guard (LEARNING: source-contract grep).
-  it("INVARIANT: lastAppliedDocVersion is only written by resyncLiveVersion / initialState / settlement-ok", () => {
+  // single `resyncLiveVersion` helper, `initialState`, and the settlement
+  // advance. The advance is now the hoisted `advanced` const applied via
+  // `Math.max` to EVERY outcome kind (no longer an ok-only verbatim exemption).
+  // A future hand-rolled arm that raises the version directly (bypassing the
+  // helper, re-opening the epoch under-advance that reintroduces finding #4
+  // silently) adds a new RHS token here and reddens. Comments are stripped
+  // first so a rule-shaped literal in a doc-comment cannot vacuate the guard
+  // (LEARNING: source-contract grep).
+  it("INVARIANT: lastAppliedDocVersion is only written by resyncLiveVersion / initialState / settlement-advance", () => {
     const source = readFileSync(
       new URL("../../../src/extension/session/host-session-core.ts", import.meta.url),
       "utf8"
@@ -1365,21 +1375,449 @@ describe("host-session-core: externalEpoch (S3a)", () => {
       m[1].trim().replace(/[;,}\s]+$/, "")
     );
     // Allowed RHS tokens:
-    //  - `raised`                         → resyncLiveVersion (the one helper)
-    //  - `docVersion`                     → initialState seed
-    //  - `event.outcome.documentVersion`  → settlement `ok` self-advance (exempt)
-    //  - `number`                         → the readonly field type declaration
+    //  - `raised`     → resyncLiveVersion (the one helper)
+    //  - `docVersion` → initialState seed
+    //  - `advanced`   → the settlement advance, Math.max over event.settledVersion
+    //                   for EVERY outcome kind (no longer an ok-only exemption)
+    //  - `number`     → the readonly field type declaration
     //  - `resynced.lastAppliedDocVersion` / `settled.lastAppliedDocVersion`
-    //                                     → decideEdit ARGS (reads, not writes)
+    //                 → decideEdit ARGS (reads, not writes)
     const allowed = new Set([
       "raised",
       "docVersion",
-      "event.outcome.documentVersion",
+      "advanced",
       "number",
       "resynced.lastAppliedDocVersion",
       "settled.lastAppliedDocVersion",
     ]);
     const disallowed = rhs.filter((token) => !allowed.has(token));
     expect(disallowed).toEqual([]);
+  });
+});
+
+describe("host-session-core: settlement ack-label gate (ackLabelObserved)", () => {
+  const locked = base({ pendingApplyBaseVersion: 1, inFlightContent: "edit1" });
+
+  it("WITHHOLDS the ack when no source observed a post-apply version (ok, unobserved settle + no lock-held advance)", () => {
+    const r = core.transition(locked, settled({ settledVersion: null, currentContent: null }));
+    expect(r.effects.find((e) => e.type === "postDocument")).toBeUndefined();
+    expect(r.effects.some((e) => e.type === "showResyncFailure")).toBe(true);
+    expect(r.effects.some((e) => e.type === "logWarn")).toBe(true);
+    // No fabricated advance, no spurious epoch bump.
+    expect(r.state.lastAppliedDocVersion).toBe(1);
+    expect(r.state.externalEpoch).toBe(0);
+  });
+
+  it("POSTS the ack when the version advanced under the lock (lock-held documentChanged was a real observation)", () => {
+    // documentChanged during the lock raised lastApplied 1→2 (no epoch bump, lock-held branch).
+    const s = base({
+      pendingApplyBaseVersion: 1,
+      inFlightContent: "edit1",
+      lastAppliedDocVersion: 2,
+    });
+    const r = core.transition(s, settled({ settledVersion: null, currentContent: null }));
+    expect(reseedIn(r.effects)).toEqual(pDoc(2));
+    expect(r.effects.some((e) => e.type === "showResyncFailure")).toBe(false);
+  });
+
+  it("a lock-held raise licenses the ack even though the raise's PRODUCER is unattributable (accepted residual)", () => {
+    // Same disjunct as the test above, but composed from the two events that
+    // produce it instead of a hand-placed `lastAppliedDocVersion`, so the trace
+    // is the real one: a `documentChanged` arrives while the lock is held and
+    // raises the label, then the settlement observes nothing at all.
+    // ⚠️ The reducer cannot tell WHO raised it. `resyncLiveVersion` takes no
+    // producer (VS Code's change event carries none, and the lock-held wiring
+    // snapshots only the version), so this same state is reached both by our own
+    // apply's echo — the central, correct case the deferral contract depends on —
+    // and by a FOREIGN edit landing while our echo never arrived, where the ack
+    // then labels live bytes one version behind. Today we ack in BOTH: the states
+    // are identical, so no predicate separates them, and withholding would kill
+    // the deferral contract's only receiver. Accepted residual; the backstop is
+    // the liveness TODO entry. Narrowing this disjunct turns this test red on
+    // purpose — that is the conversation it exists to force.
+    const raised = core.transition(locked, { type: "documentChanged", documentVersion: 2 });
+    const r = core.transition(
+      raised.state,
+      settled({ settledVersion: null, currentContent: null })
+    );
+    expect(reseedIn(r.effects)).toEqual(pDoc(2));
+    expect(r.effects.some((e) => e.type === "showResyncFailure")).toBe(false);
+    expect(r.state.externalEpoch).toBe(0); // delta 1 === our own contribution
+  });
+
+  it("byte equality does NOT license the ack (undone foreign edit leaves identical bytes at a higher version)", () => {
+    // Content observed and EQUAL to the in-flight bytes — still withheld without a version observation.
+    const r = core.transition(locked, settled({ settledVersion: null, currentContent: "edit1" }));
+    expect(r.effects.find((e) => e.type === "postDocument")).toBeUndefined();
+    expect(r.effects.some((e) => e.type === "showResyncFailure")).toBe(true);
+  });
+
+  it("non-ok arms get the same gate: refused + unobserved version withholds the ack but KEEPS the failure toast", () => {
+    const r = core.transition(
+      locked,
+      settled({ outcome: { kind: "refused" }, settledVersion: null, currentContent: null })
+    );
+    expect(r.effects.find((e) => e.type === "postDocument")).toBeUndefined();
+    expect(r.effects.some((e) => e.type === "showError")).toBe(true);
+    expect(r.effects.some((e) => e.type === "showResyncFailure")).toBe(true);
+  });
+
+  it("the no-op short-circuit's UNCHANGED observed version licenses the ack (delta 0 is not foreign)", () => {
+    // settledVersion === heldBase: nothing was applied, the observation confirms the label.
+    const r = core.transition(locked, settled({ settledVersion: 1, currentContent: null }));
+    expect(reseedIn(r.effects)).toEqual(pDoc(1));
+    expect(r.state.externalEpoch).toBe(0);
+  });
+
+  it("POST-DISPOSE the withhold pair is suppressed with the rest of the webview-bound effects", () => {
+    // Disposed + no stash + unobserved version. The early return builds
+    // `failureToasts(outcome, context)` directly and never reaches
+    // `settlementEffects`, so neither the ack nor the withhold pair is
+    // CONSTRUCTED here at all — there is no ack-label gate on this path to
+    // observe. What this pins is that non-construction: `ok` leaves no effects
+    // at all, `refused` leaves toasts and nothing else.
+    const disposed = base({ disposed: true, pendingApplyBaseVersion: null });
+    const ok = core.transition(disposed, settled({ settledVersion: null, currentContent: null }));
+    expect(ok.effects).toEqual([]);
+    const refused = core.transition(
+      disposed,
+      settled({ outcome: { kind: "refused" }, settledVersion: null, currentContent: null })
+    );
+    expect(refused.effects.every((e) => e.type === "showError")).toBe(true);
+    expect(refused.effects.length).toBeGreaterThan(0);
+  });
+
+  it("editRejectedDeliveryFailed with an UNOBSERVED version clears the rejection but WITHHOLDS the recovery reseed", () => {
+    // The recovery reseed pairs LIVE bytes with the version label, so an
+    // unobserved version gets the same answer as the settlement ack gate.
+    // (`unsafe` is the file's existing MarkdownError fixture, :18.)
+    const s = base({
+      rejection: { kind: "pending", id: 7, content: "draft", error: unsafe },
+      nextRejectionId: 8,
+    });
+    const r = core.transition(s, {
+      type: "editRejectedDeliveryFailed",
+      id: 7,
+      documentVersion: null,
+    });
+    expect(r.state.rejection).toEqual({ kind: "none" }); // no deadlock: pending is cleared
+    expect(r.effects.find((e) => e.type === "postDocument")).toBeUndefined(); // no fabricated label
+    expect(r.effects.some((e) => e.type === "showResyncFailure")).toBe(true);
+    expect(r.state.lastAppliedDocVersion).toBe(1); // nothing observed, nothing advanced
+  });
+
+  it("editRejectedDeliveryFailed null-version STILL respects the id guard (stale failure is a no-op)", () => {
+    const s = base({
+      rejection: { kind: "pending", id: 9, content: "draft", error: unsafe },
+      nextRejectionId: 10,
+    });
+    const r = core.transition(s, {
+      type: "editRejectedDeliveryFailed",
+      id: 7,
+      documentVersion: null,
+    });
+    expect(r.state).toBe(s);
+    expect(r.effects).toEqual([]);
+  });
+
+  it("after a null-version recovery the next OBSERVED event reseeds normally (convergence)", () => {
+    // Two steps: the withheld recovery clears the rejection, so a later
+    // lock-free documentChanged takes the normal resync path — observed label
+    // + the foreign-advance epoch bump ride the reseed. (Codex r4 90.)
+    const s = base({
+      rejection: { kind: "pending", id: 7, content: "draft", error: unsafe },
+      nextRejectionId: 8,
+    });
+    const withheld = core.transition(s, {
+      type: "editRejectedDeliveryFailed",
+      id: 7,
+      documentVersion: null,
+    });
+    const r = core.transition(withheld.state, { type: "documentChanged", documentVersion: 2 });
+    expect(reseedIn(r.effects)).toEqual(pDoc(2, 1));
+  });
+});
+
+describe("host-session-core: unified settledVersion advance (every outcome, Math.max)", () => {
+  const locked = base({ pendingApplyBaseVersion: 1, inFlightContent: "edit1" });
+
+  it("a NON-OK settlement with an observed version advances via Math.max and acks at the observed label", () => {
+    // refused + a foreign edit raced the failed apply: doc moved 1→2, content unobserved.
+    const r = core.transition(
+      locked,
+      settled({ outcome: { kind: "refused" }, settledVersion: 2, currentContent: null })
+    );
+    expect(r.state.lastAppliedDocVersion).toBe(2);
+    // delta 1 > heldBase + 0 → positive foreign evidence → epoch bump rides the ack.
+    expect(r.state.externalEpoch).toBe(1);
+    expect(reseedIn(r.effects)).toEqual(pDoc(2, 1));
+  });
+
+  it("Math.max never rewinds: an observed settledVersion LOWER than lastApplied leaves it untouched", () => {
+    const s = base({
+      pendingApplyBaseVersion: 2,
+      inFlightContent: "edit1",
+      lastAppliedDocVersion: 3,
+    });
+    const r = core.transition(s, settled({ settledVersion: 2, currentContent: null }));
+    expect(r.state.lastAppliedDocVersion).toBe(3);
+  });
+});
+
+describe("host-session-core: content-unobserved epoch verdict is positive version-delta evidence only", () => {
+  const locked = base({ pendingApplyBaseVersion: 1, inFlightContent: "edit1" });
+
+  it("ok + unobserved content: delta === own contribution (+1) is NOT foreign", () => {
+    const r = core.transition(locked, settled({ settledVersion: 2, currentContent: null }));
+    expect(r.state.externalEpoch).toBe(0);
+    expect(reseedIn(r.effects)).toEqual(pDoc(2));
+  });
+
+  it("ok + unobserved content: delta BEYOND own contribution IS foreign (epoch++ rides the ack)", () => {
+    const r = core.transition(locked, settled({ settledVersion: 3, currentContent: null }));
+    expect(r.state.externalEpoch).toBe(1);
+    expect(reseedIn(r.effects)).toEqual(pDoc(3, 1));
+  });
+
+  it("no advance at all stays NOT foreign (missing ⇒ foreign is the rejected variant)", () => {
+    const r = core.transition(locked, settled({ settledVersion: null, currentContent: null }));
+    expect(r.state.externalEpoch).toBe(0);
+  });
+
+  it("a label RAISED under the lock supplies the delta even when the settlement observed nothing", () => {
+    // Composed from two events rather than hand-placed state, because the point
+    // is WHERE the evidence comes from: the settlement itself observed neither
+    // the version nor the content, and the only number the verdict can use is the
+    // one a lock-held `documentChanged` wrote into `lastAppliedDocVersion`.
+    // heldBase 1 → raised to 3 (delta 2) → beyond our own +1 → foreign.
+    // A verdict that read `event.settledVersion` instead of the reducer's label
+    // would score 0 here and leave the epoch at 0, while the sibling tests above
+    // (which DO observe a version) stay green — this is the arm that catches it.
+    const raised = core.transition(locked, { type: "documentChanged", documentVersion: 3 });
+    expect(raised.effects).toEqual([]); // deferred: the lock is still held
+    expect(raised.state.externalEpoch).toBe(0); // a lock-held advance never bumps
+    const r = core.transition(
+      raised.state,
+      settled({ settledVersion: null, currentContent: null })
+    );
+    expect(r.state.lastAppliedDocVersion).toBe(3);
+    expect(r.state.externalEpoch).toBe(1);
+    expect(reseedIn(r.effects)).toEqual(pDoc(3, 1));
+  });
+});
+
+describe("host-session-core: an unobserved ack label still DRAINS (bytes first)", () => {
+  // `canDrain` gates on CONTENT evidence, never on the ack label: the drain is a
+  // new WRITE, not an ack. One review cycle added an `ackLabelObserved` conjunct
+  // and it was reverted — refusing the drain drops the keystroke, and the only
+  // carrier left (the webview replay buffer) is destroyed by the ORDINARY
+  // continuation, because the apply DID move the document and its later
+  // `documentChanged` then reads as a lock-free forward advance ⇒ epoch++ ⇒
+  // `edit-sync.ts`'s `recordedEpoch > buf.epoch` drop. Draining instead
+  // self-heals: the `accept` arm re-acquires the lock, so that same echo lands
+  // LOCK-HELD and bumps nothing.
+  // What the drain accepts is the STALE RE-BASE residual — the re-acquired base
+  // is a lower bound, so a later settlement that ALSO misses its content read can
+  // score our own increment as foreign (one spurious bump, bytes already landed).
+  // The tests below pin BOTH halves: the write happens, and the residual is
+  // stated rather than asserted away.
+  const lockedStash = (stash: string) =>
+    base({
+      pendingApplyBaseVersion: 1,
+      inFlightContent: "edit1",
+      pendingEdit: { content: stash, baseDocVersion: 1 },
+    });
+  const unobserved = settled({ settledVersion: null, currentContent: "edit1" });
+  // The EXACT pair `withholdAckEffects` builds at an unobserved label, shared by
+  // the two readonly/stale/no-op tests below so their exhaustive `toEqual`s
+  // cannot drift apart. `lockedStash` fixes both numbers in the detail.
+  const withheldAck = [
+    {
+      type: "logWarn",
+      message: expect.stringContaining(
+        "settlement ack withheld: no post-apply document version was observed"
+      ),
+      detail: { uri: ctx.uriString, heldBase: 1, lastAppliedDocVersion: 1 },
+    },
+    { type: "showResyncFailure" },
+  ];
+
+  it("an accept-shaped stash IS applied: the keystroke is written at the stale base", () => {
+    const r = core.transition(lockedStash("edit1-more"), unobserved);
+    // EXHAUSTIVE: the write, preceded by the drain's own record of the residual
+    // it is accepting. The record is what lets a later spurious epoch bump be
+    // attributed to the drain that caused it.
+    expect(r.effects).toEqual([
+      {
+        type: "logWarn",
+        message: expect.stringContaining("unlabelled drain"),
+        detail: { uri: ctx.uriString, heldBase: 1, lastAppliedDocVersion: 1 },
+      },
+      { type: "applyEdit", content: "edit1-more", baseDocVersion: 1 },
+    ]);
+    // ARM-SPECIFIC clause: this is the `accept` verdict, so the bytes DID land —
+    // pinned separately from the `parse-failed` arm's "no bytes land" wording,
+    // and in the same shape that arm uses.
+    expect(
+      r.effects.find((e) => e.type === "logWarn" && e.message.includes("unlabelled drain"))
+    ).toEqual(expect.objectContaining({ message: expect.stringContaining("The bytes land") }));
+    expect(r.state.pendingEdit).toBeNull();
+    // The lock IS re-acquired — this is what makes the label's catch-up
+    // lock-HELD in the test below, and so what keeps the epoch still.
+    expect(r.state.pendingApplyBaseVersion).toBe(1);
+    expect(r.state.inFlightContent).toBe("edit1-more");
+    expect(r.state.externalEpoch).toBe(0);
+    // The reverted arm-4 token, kept NAMED rather than kept as a guard: with the
+    // drain's own "unlabelled drain" record now in the array above, the
+    // exhaustive `toEqual` is what would catch arm 4 coming back (a third
+    // effect). This line survives so the two tokens cannot be confused — arm 4's
+    // "unlabelled settle" reported a REFUSED drain's dropped keystroke, and with
+    // the drain running there is no dropped keystroke to report.
+    expect(
+      r.effects.some((e) => e.type === "logWarn" && e.message.includes("unlabelled settle"))
+    ).toBe(false);
+  });
+
+  it("ACCEPTED RESIDUAL: a second content-unobserved settlement scores our own increment as foreign — ONE bump, bytes already landed", () => {
+    // The residual the describe header STATES, measured rather than asserted
+    // away. It takes a SECOND independent read failure to reach: the drained
+    // apply's own settlement must also miss its CONTENT read, so the epoch
+    // verdict falls back to the version delta — which reads the re-acquired
+    // base as EXACT while it is really a lower bound.
+    const drained = core.transition(lockedStash("edit1-more"), unobserved);
+    expect(drained.state.pendingApplyBaseVersion).toBe(1); // the stale lower bound
+    const second = core.transition(
+      drained.state,
+      settled({ settledVersion: 3, currentContent: null })
+    );
+    expect(second.state.externalEpoch).toBe(1); // exactly ONE spurious bump
+    expect(second.state.lastAppliedDocVersion).toBe(3);
+    expect(second.state.pendingEdit).toBeNull(); // nothing further dropped
+    expect(reseedIn(second.effects)).toEqual(pDoc(3, 1)); // the ack still goes out
+  });
+
+  it("the drain re-acquires the lock, so the label's catch-up is LOCK-HELD and spends no epoch", () => {
+    // The validator's cycle-2 trace, pinned in the direction the adjudication
+    // chose. Under the reverted gate this state had `pendingApplyBaseVersion:
+    // null`, so this same `documentChanged` was a lock-FREE forward advance:
+    // epoch 1, and `edit-sync.ts`'s `recordedEpoch > buf.epoch` drop check then
+    // discards the replay buffer holding the keystroke the refusal had just
+    // dropped. Re-adding the conjunct to `canDrain` turns this red.
+    const r = core.transition(lockedStash("edit1-more"), unobserved);
+    const after = core.transition(r.state, { type: "documentChanged", documentVersion: 2 });
+    expect(after.effects).toEqual([]); // deferred: the lock is held
+    expect(after.state.externalEpoch).toBe(0);
+    expect(after.state.lastAppliedDocVersion).toBe(2);
+  });
+
+  it("the drained apply's own settlement catches the label up; the late echo is then a no-op", () => {
+    // The other half of the convergence: the drain's applyEdit settles WITH an
+    // observation, which advances the label to the live version and acks there.
+    // The delayed `documentChanged` for that same edit is then version-identical
+    // and no-ops, so the epoch is invariant across the whole catch-up — no
+    // spurious bump anywhere on this path.
+    const r = core.transition(lockedStash("edit1-more"), unobserved);
+    // PREMISE, pinned so it cannot be vacated silently: step 2 is the DRAINED
+    // apply's settlement. Without the drain the lock is free and `inFlightContent`
+    // null, and everything below still passes while measuring a different event.
+    expect(r.state.inFlightContent).toBe("edit1-more");
+    const s2 = core.transition(
+      r.state,
+      settled({ settledVersion: 2, currentContent: "edit1-more" })
+    );
+    expect(reseedIn(s2.effects)).toEqual(pDoc(2));
+    expect(s2.state.externalEpoch).toBe(0);
+    const after = core.transition(s2.state, { type: "documentChanged", documentVersion: 2 });
+    expect(after.effects).toEqual([]);
+    expect(after.state.externalEpoch).toBe(0);
+  });
+
+  it("a parse-failing stash DOES reach decideEdit: the draft is redelivered at the STORED label", () => {
+    // The ACCEPTED RESIDUAL, pinned LITERALLY rather than asserted away: with no
+    // observation the draft Document carries `docVersion: 1` — the stored label,
+    // which may be one edit behind the live document. Every LOCAL gate for this
+    // was reviewed and rejected (a `ready` replay redelivers at the stored label
+    // with no resync regardless); the durable fix is the liveness-backstop TODO
+    // entry. If that entry lands, this expectation is what must change.
+    const r = core.transition(lockedStash("hasBAD"), unobserved);
+    expect(r.effects.find((e) => e.type === "postRejectedDraft")).toEqual({
+      type: "postRejectedDraft",
+      content: "hasBAD",
+      error: unsafe,
+      docVersion: 1,
+      externalEpoch: 0,
+      epochGeneration: GEN,
+      id: 1,
+    });
+    expect(r.state.rejection).toEqual({ kind: "pending", id: 1, content: "hasBAD", error: unsafe });
+    expect(r.state.nextRejectionId).toBe(2); // a delivery id WAS minted
+    expect(r.effects.some((e) => e.type === "showError")).toBe(true);
+    // The stale label the draft carries is exactly what the drain's record
+    // names, so this arm carries it too — and its ARM-SPECIFIC clause says NO
+    // bytes land, pinned separately from the `accept` arm's "The bytes land"
+    // wording. One assertion covers both: a missing record fails the `toEqual`.
+    expect(
+      r.effects.find((e) => e.type === "logWarn" && e.message.includes("unlabelled drain"))
+    ).toEqual(expect.objectContaining({ message: expect.stringContaining("no bytes land") }));
+  });
+
+  it("a no-op-shaped stash withholds the repost the drain arm makes (EXHAUSTIVE: no stray 'unlabelled drain' log)", () => {
+    // The drain RUNS here and reaches the `no-op` verdict; what withholds the
+    // repost is the ACK gate (`ackEffects`), not `canDrain`. This is the pin that
+    // keeps that withhold branch from being deleted as unreachable. EXHAUSTIVE
+    // now (not just a partial find/some pair): this readonly/stale/no-op arm
+    // deliberately does NOT spread `staleReBaseWarn` (that residual is already
+    // logged through `withholdAckEffects`, the `withheldAck` pair above) — a
+    // `toEqual` is what would catch a future "for consistency" regression that
+    // spreads it in anyway.
+    const r = core.transition(lockedStash("edit1"), unobserved);
+    expect(r.effects).toEqual(withheldAck);
+  });
+
+  it("a readonly-shaped stash withholds the repost the drain arm makes, at an UNOBSERVED label", () => {
+    // The `readonly` sibling of the test above: `canWrite: false` also lands in
+    // the readonly/stale/no-op arm, and the only existing `canWrite: false`
+    // drain test uses an OBSERVED label (line ~572) — this is the missing
+    // UNOBSERVED-label case named by the describe header.
+    const r = core.transition(
+      lockedStash("edit1-more-ro"),
+      settled({ settledVersion: null, currentContent: "edit1", canWrite: false })
+    );
+    expect(r.effects).toEqual(withheldAck);
+    // NEGATIVE: no "unlabelled drain" record leaks into this arm.
+    expect(
+      r.effects.some((e) => e.type === "logWarn" && e.message.includes("unlabelled drain"))
+    ).toBe(false);
+  });
+
+  it("an OBSERVED label drains the same way — only the re-base is not stale", () => {
+    const r = core.transition(
+      lockedStash("edit1-more"),
+      settled({ settledVersion: 2, currentContent: "edit1" })
+    );
+    // NEGATIVE pin, by exhaustive equality: no "unlabelled drain" record here.
+    // There is no residual to report when the base rests on an observation, so
+    // an unconditional record would cry wolf on the ordinary path.
+    expect(r.effects).toEqual([{ type: "applyEdit", content: "edit1-more", baseDocVersion: 2 }]);
+  });
+
+  it("POST-DISPOSE drains the same way — there the stash is the keystroke's ONLY carrier", () => {
+    // Same drain, different stakes: no webview means no replay buffer, so the
+    // stash is the sole carrier. The `accept` arm deliberately does NOT re-acquire
+    // the lock here (no more edits arrive), which is why no later settlement ever
+    // reads this base.
+    const s = base({
+      disposed: true,
+      pendingApplyBaseVersion: null, // the dispose transition already cleared it
+      inFlightContent: "edit1",
+      pendingEdit: { content: "edit1-more", baseDocVersion: 1 },
+    });
+    const r = core.transition(s, settled({ settledVersion: null, currentContent: "edit1" }));
+    // NEGATIVE pin on the "unlabelled drain" record, by exhaustive equality: the
+    // label is unobserved here too, but with no lock re-acquired neither
+    // consequence that record names can occur (no later settlement reads this
+    // base, and no draft goes out), so reporting one would be a false claim.
+    expect(r.effects).toEqual([{ type: "applyEdit", content: "edit1-more", baseDocVersion: 1 }]);
+    expect(r.state.pendingApplyBaseVersion).toBeNull(); // lock NOT re-acquired
   });
 });

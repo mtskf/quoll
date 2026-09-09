@@ -29,8 +29,13 @@
 // (see the adapter's doc comment). Every read/build/apply is injected; the module
 // never re-reads outside the adapter, and — the caller contract — the returned
 // outcome CARRIES its verification-time snapshots so callers map from those
-// fields and NEVER re-read the document (a wrapper re-read can observe a later
-// edit and mis-attribute divergence).
+// fields and never re-read the document CONTENT (a wrapper content re-read can
+// observe a later edit and mis-attribute divergence). The session wrapper's
+// guarded settlement-dispatch `readVersion()` retry is the single documented
+// exception — the version labels the settlement and feeds the reducer's
+// version-delta epoch verdict, never the byte-level divergence compare; it is
+// safe because no document event can interleave between the pipeline's settle
+// and the dispatch on the single-threaded extension host.
 
 import { perfNow, perfRecord } from "../../shared/perf.js";
 import type { MinimalEditSpan } from "./minimal-edit.js";
@@ -102,7 +107,9 @@ export type DocumentWriteTag =
   | "applyRejected"; // apply() promise rejected → reducer `rejected`
 
 /** Immutable verified-write outcome. Carries the four verification-time
- *  snapshots so callers map WITHOUT re-reading the document. Contents are
+ *  snapshots so callers map WITHOUT re-reading the document CONTENT (the
+ *  session wrapper's guarded version read is the documented exception — see
+ *  the module header). Contents are
  *  canonical (EOL-normalised to the document's EOL). EVERY terminal outcome —
  *  including `buildThrew`, which never touched the document — populates all four
  *  fields, but the two SETTLE-time ones are NULLABLE: `null` means the read threw
@@ -207,12 +214,16 @@ export async function executeDocumentWrite<TEdit>(
   //     settled document IS edit #1's exact result") pass with no observation
   //     behind it, so a stash could clobber an external edit that the verified
   //     path deliberately lets win.
-  //   - A numeric version sentinel (`-1`) would be assigned VERBATIM by the
-  //     settlement `ok` self-advance and REWIND the version.
+  //   - A numeric version sentinel (`-1`) is CLAMPED AWAY by the settlement's
+  //     `Math.max` advance, so it could not rewind the label — it would do
+  //     something worse: ANY fabricated number satisfies `settledVersion !== null`
+  //     and FABRICATES the `ackLabelObserved` observation, so the settlement acks
+  //     LIVE bytes under a made-up label.
   // Every consumer is therefore forced by the compiler to answer for `null`, and
-  // each answers conservatively: no self-advance, no epoch bump ("missing
-  // snapshot ⇒ foreign" is a REJECTED variant — it drops the webview's replay
-  // buffer), no drain.
+  // each answers conservatively PER MISSING OBSERVATION: content unobserved ⇒ no
+  // drain, and the epoch verdict falls back to POSITIVE version-delta evidence
+  // ("missing evidence ⇒ foreign" stays the REJECTED variant); version unobserved
+  // ⇒ no advance and the ack is WITHHELD, never posted at a stale label.
   const settle = (tag: DocumentWriteTag, message?: string): DocumentWriteOutcome => {
     const verifyStart = QUOLL_PERF ? perfNow() : 0;
     const readFailures: string[] = [];

@@ -31,9 +31,13 @@ import {
 } from "../../../src/extension/session/host-session-step.js";
 
 // The executor's real settlement event, minus the optional `divergedAfterApply`.
-const settled = (outcome: ApplyEditOutcome): HostSessionEvent => ({
+const settled = (
+  outcome: ApplyEditOutcome,
+  settledVersion: number | null = null
+): HostSessionEvent => ({
   type: "applyEditSettled",
   outcome,
+  settledVersion,
   canWrite: true,
   currentContent: null,
   preApplyContent: "",
@@ -90,12 +94,12 @@ describe("createHostSessionStep", () => {
         throw boom;
       },
     });
-    expect(() => h.step(settled({ kind: "ok", documentVersion: 3 }))).toThrow(boom);
+    expect(() => h.step(settled({ kind: "ok" }, 3))).toThrow(boom);
     expect(h.settles).toEqual([true]);
   });
 
   it("treats an UNVERIFIED landing as applied", () => {
-    expect(isEditApplied(settled({ kind: "ok", documentVersion: null }))).toBe(true);
+    expect(isEditApplied(settled({ kind: "ok" }))).toBe(true);
   });
 
   it("treats every non-ok outcome as NOT applied", () => {
@@ -197,7 +201,7 @@ describe("createHostSessionStep", () => {
       },
       settleEditBarrier: (applied) => barrier.settle(applied),
     });
-    expect(() => step(settled({ kind: "ok", documentVersion: 3 }))).toThrow();
+    expect(() => step(settled({ kind: "ok" }, 3))).toThrow();
     expect(ran).toHaveBeenCalledTimes(1);
     expect(dropped).not.toHaveBeenCalled();
   });
