@@ -193,7 +193,11 @@ export type HostSessionEvent =
       // `false` here as proof of a clean apply and drop it as redundant. When true the
       // settlement routes through the ok-but-mismatch convergence shape (epoch++
       // + authoritative resync + a distinct diverged log, NO error toast — a
-      // deliberate conflict resolution must not read as "save failed"). It is a
+      // deliberate conflict resolution must not read as "save failed"). The resync
+      // half still rides the ack-label gate: `diverged` proves the CONTENT read
+      // succeeded, NOT the version read (`settle()` guards the two separately), so
+      // an unobserved label swaps that Document for the withhold pair — the epoch
+      // bump and the diverged log run either way. It is a
       // belt-and-braces annotation: a genuine divergence ALSO trips the byte
       // compare below, but driving convergence off the explicit flag keeps the
       // reducer honest even if the compare is inconclusive.

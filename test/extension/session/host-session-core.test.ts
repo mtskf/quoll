@@ -1470,10 +1470,12 @@ describe("host-session-core: settlement ack-label gate (ackLabelObserved)", () =
   });
 
   it("POST-DISPOSE the withhold pair is suppressed with the rest of the webview-bound effects", () => {
-    // Disposed + no stash + unobserved version. What this guards is the early
-    // return's `.filter(showError)` — it strips the ack AND the withhold pair
-    // alike, so the literal `ackLabelObserved` argument at that call site is
-    // deliberately unobservable from here (it is inert by construction).
+    // Disposed + no stash + unobserved version. The early return builds
+    // `failureToasts(outcome, context)` directly and never reaches
+    // `settlementEffects`, so neither the ack nor the withhold pair is
+    // CONSTRUCTED here at all — there is no ack-label gate on this path to
+    // observe. What this pins is that non-construction: `ok` leaves no effects
+    // at all, `refused` leaves toasts and nothing else.
     const disposed = base({ disposed: true, pendingApplyBaseVersion: null });
     const ok = core.transition(disposed, settled({ settledVersion: null, currentContent: null }));
     expect(ok.effects).toEqual([]);
