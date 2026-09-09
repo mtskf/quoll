@@ -672,8 +672,9 @@ export function createEffectExecutor<TEdit>(deps: EffectExecutorDeps<TEdit>): Ef
             // a settlement UNVERIFIED — so the ack for an unverified landing is
             // the effect most likely to re-run a broken read. Unwinding
             // `runEffects` here would (a) escape the FULFILMENT arm as an
-            // unhandled rejection, since `createDrainingDispatcher` has
-            // `try/finally` and NO `catch`, and (b) abandon the rest of the effect
+            // unhandled rejection, since `createDrainingDispatcher` catches a
+            // throwing `step` only to finish its drain and RETHROWS afterwards
+            // (its failure policy), and (b) abandon the rest of the effect
             // list. It would NOT skip the barrier release — the panel's `step`
             // settles unconditionally — but the ack Document is exactly the effect
             // worth keeping, so contain the throw here rather than relying on that
@@ -767,9 +768,10 @@ export function createEffectExecutor<TEdit>(deps: EffectExecutorDeps<TEdit>): Ef
           // `execute-write.ts`'s `settle()` became total: the correlated case —
           // a failure tag whose settle read ALSO threw — used to land in the
           // rejection arm's `try/catch`, and now resolves through the UNWRAPPED
-          // fulfilment arm. `createDrainingDispatcher` has `try`/`finally` and no
-          // `catch`, so a SYNCHRONOUS `window.showErrorMessage` throw would both
-          // escape as an unhandled rejection and abandon the rest of this effect
+          // fulfilment arm. `createDrainingDispatcher` rethrows a throwing `step`
+          // once its drain is empty, so a SYNCHRONOUS `window.showErrorMessage`
+          // throw would both escape as an unhandled rejection (only later, at the
+          // end of that drain) and abandon the rest of this effect
           // list — including the ack `postDocument`. The barrier release survives
           // either way (the panel's `step` settles unconditionally), so this guard
           // is about the effect list, not the barrier. No latch: this is

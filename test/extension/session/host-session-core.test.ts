@@ -1077,6 +1077,98 @@ describe("createDrainingDispatcher", () => {
     dispatch("two");
     expect(seen).toEqual(["one", "two"]);
   });
+
+  // FAILURE POLICY on a throwing `step` (see the dispatcher's own comment). The
+  // queue is drained to EMPTY before the error leaves the dispatcher, so an
+  // event a doomed step already enqueued can never be replayed later against a
+  // diverged state. Before this policy the drain abandoned the queue and `seen`
+  // stopped at ["a"].
+  it("drains the queue to empty when a step throws, then rethrows that error", () => {
+    const seen: string[] = [];
+    const boom = new Error("step threw");
+    let dispatch!: (e: string) => void;
+    dispatch = createDrainingDispatcher<string>((event) => {
+      seen.push(event);
+      if (event === "a") {
+        dispatch("b"); // enqueued behind the active drain...
+        throw boom; // ...and abandoned by the throw, before this policy
+      }
+    });
+    let thrown: unknown = "NOTHING THROWN";
+    try {
+      dispatch("a");
+    } catch (err) {
+      thrown = err;
+    }
+    // Identity, not just shape: a single failure must reach the caller as the
+    // very error the step threw, so existing handlers keep their triage payload.
+    expect(thrown).toBe(boom);
+    expect(seen).toEqual(["a", "b"]);
+    // ...and NO residue survives into the next dispatch (the released `draining`
+    // guard starts a fresh drain that sees only its own event).
+    dispatch("c");
+    expect(seen).toEqual(["a", "b", "c"]);
+  });
+
+  it("aggregates when more than one step throws in the same drain", () => {
+    const first = new Error("first");
+    const second = new Error("second");
+    let dispatch!: (e: string) => void;
+    dispatch = createDrainingDispatcher<string>((event) => {
+      if (event === "a") {
+        dispatch("b");
+        throw first;
+      }
+      throw second;
+    });
+    let thrown: unknown = "NOTHING THROWN";
+    try {
+      dispatch("a");
+    } catch (err) {
+      thrown = err;
+    }
+    // Every failure survives: swallowing the later ones would hide a fault that
+    // only the completed drain can produce.
+    expect(thrown).toBeInstanceOf(AggregateError);
+    expect((thrown as AggregateError).errors).toEqual([first, second]);
+    expect((thrown as AggregateError).message).toBe(
+      "[quoll] host session drain: multiple steps threw"
+    );
+  });
+
+  // The rethrow counts ENTRIES, not truthiness, so a step that throws a falsy
+  // value still reaches the caller as that value rather than as "no failure".
+  it("rethrows a falsy thrown value instead of treating the drain as clean", () => {
+    const dispatch = createDrainingDispatcher<string>(() => {
+      // A non-Error throw is the ASSERTION here, not sloppiness: it is exactly
+      // the value a truthiness-based rethrow would swallow.
+      // biome-ignore lint/style/useThrowOnlyError: the non-Error throw is the fixture
+      throw undefined;
+    });
+    let caught = false;
+    let thrown: unknown = "NOTHING THROWN";
+    try {
+      dispatch("a");
+    } catch (err) {
+      caught = true;
+      thrown = err;
+    }
+    expect(caught).toBe(true);
+    expect(thrown).toBeUndefined();
+  });
+
+  it("throws nothing when every queued step succeeds", () => {
+    const seen: string[] = [];
+    let dispatch!: (e: string) => void;
+    dispatch = createDrainingDispatcher<string>((event) => {
+      seen.push(event);
+      if (event === "a") {
+        dispatch("b");
+      }
+    });
+    expect(() => dispatch("a")).not.toThrow();
+    expect(seen).toEqual(["a", "b"]);
+  });
 });
 
 describe("host-session-core: stale-version resync", () => {

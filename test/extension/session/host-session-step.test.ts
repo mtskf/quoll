@@ -303,12 +303,14 @@ describe("createHostSessionStep", () => {
     expect(reported).toEqual([settleErr]);
   });
 
-  // Also pins today's dispatcher behaviour on a throwing step: a re-entrant
-  // dispatch issued before the throw stays QUEUED and is only drained by the
-  // next external dispatch. That residue is a separate, pre-existing gap
-  // (tracked as its own TODO); these assertions are its measured baseline, so
-  // changing that policy must consciously update them.
-  it("settles through the real dispatcher and pins today's queue residue on a throw", () => {
+  // Also pins the dispatcher's FAILURE POLICY end-to-end (the policy itself is
+  // unit-tested in host-session-core.test.ts): a re-entrant dispatch issued
+  // before the throw is drained inside the SAME dispatch, so it can never be
+  // replayed later against a diverged state — and every drained step still
+  // settles the barrier. Until PR #405 the drain abandoned that event and the
+  // next external dispatch drained it first; these assertions were the measured
+  // baseline of that residue.
+  it("settles through the real dispatcher and drains the throw's residue in the same dispatch", () => {
     const settles: boolean[] = [];
     const seen: string[] = [];
     let dispatch!: (event: HostSessionEvent) => void;
@@ -335,14 +337,12 @@ describe("createHostSessionStep", () => {
       })
     );
     expect(() => dispatch(settled({ kind: "refused" }))).toThrow();
-    expect(settles).toEqual([false]); // settled despite the throw
-    expect(seen).toEqual(["applyEditSettled"]); // the re-entrant event is still queued
+    // The throw reaches the caller only AFTER the queue is empty: the settle for
+    // the failed apply, then the re-entrant event's own step and settle.
+    expect(seen).toEqual(["applyEditSettled", "themeChanged:light"]);
+    expect(settles).toEqual([false, true]); // settled despite the throw
     dispatch(themeChanged); // the drain guard was released by the dispatcher's finally
-    expect(seen).toEqual([
-      "applyEditSettled",
-      "themeChanged:light", // the stale re-entrant event, drained FIRST
-      "themeChanged:dark",
-    ]);
+    expect(seen).toEqual(["applyEditSettled", "themeChanged:light", "themeChanged:dark"]);
     expect(settles).toEqual([false, true, true]);
   });
 
