@@ -40,11 +40,15 @@ export interface HostSessionStepDeps {
    *  that never happened, and a blind `settle(false)` would DROP deferred
    *  thunks that a still-pending real settlement would legitimately drain. The
    *  rescue below is conditioned on the throwing event being the settlement
-   *  itself, the only event that ever releases the lock. Today such a throw is
-   *  defensive-only: the
-   *  injected write validator is fail-closed (validate-for-write.ts turns
-   *  parser throws into verdicts), which leaves only the reducer's own
-   *  exhaustive-arm throws. */
+   *  itself — on the LIVE path (the panel still alive, still typed into) the
+   *  only event that ever releases the lock (see `isEditApplied`'s
+   *  `applyEditSettled` / `disposed` comment). The core's `disposed` arm also
+   *  clears the lock, but only on teardown, where the barrier's own
+   *  `isDisposed()` check already drops the deferred thunks regardless of
+   *  verdict — so a throw there needs no rescue. Today such a throw is
+   *  defensive-only: the injected write validator is fail-closed
+   *  (validate-for-write.ts turns parser throws into verdicts), which leaves
+   *  only the reducer's own exhaustive-arm throws. */
   readonly commitTransition: (event: HostSessionEvent) => readonly HostSessionEffect[];
   readonly runEffects: (effects: readonly HostSessionEffect[]) => void;
   /** `editSettledBarrier.settle` — the deferred side channels' ONLY release. */
