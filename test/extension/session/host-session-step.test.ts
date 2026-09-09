@@ -137,7 +137,7 @@ describe("createHostSessionStep", () => {
     }
   });
 
-  it("does not settle when the transition itself throws", () => {
+  it("does not settle when a NON-settlement transition throws", () => {
     const settles: boolean[] = [];
     const step = createHostSessionStep({
       commitTransition: () => {
@@ -148,6 +148,148 @@ describe("createHostSessionStep", () => {
     });
     expect(() => step(themeChanged)).toThrow("reducer bug");
     expect(settles).toEqual([]);
+  });
+
+  // The rescue's OTHER direction, and the reason it cannot be an unconditional
+  // `settle(false)`: this throw did not happen on the settlement, so the write
+  // lock is still held by an apply whose OWN settlement is still coming — and
+  // that settlement will legitimately DRAIN these thunks. Dropping them here
+  // would destroy work the barrier promised to run.
+  it("leaves deferred side channels for the real settlement when a NON-settlement transition throws", () => {
+    let locked = true;
+    const ran = vi.fn();
+    const dropped = vi.fn();
+    const barrier = createEditSettledBarrier({
+      isLocked: () => locked,
+      isDisposed: () => false,
+      onError: () => {},
+    });
+    barrier.run(ran, dropped);
+
+    const step = createHostSessionStep({
+      commitTransition: (event) => {
+        if (event.type === "themeChanged") {
+          throw new Error("reducer bug");
+        }
+        locked = false; // the real settlement releases the write lock
+        return [];
+      },
+      runEffects: () => {},
+      settleEditBarrier: (applied) => barrier.settle(applied),
+    });
+
+    expect(() => step(themeChanged)).toThrow("reducer bug");
+    expect(dropped).not.toHaveBeenCalled();
+    expect(ran).not.toHaveBeenCalled();
+
+    step(settled({ kind: "ok" }, 3)); // the apply's own settlement still arrives
+    expect(ran).toHaveBeenCalledTimes(1);
+    expect(dropped).not.toHaveBeenCalled();
+  });
+
+  // The stranding this module used to accept: an `applyEditSettled` transition
+  // that throws unwinds BEFORE the panel commits the new state, so the write
+  // lock (`pendingApplyBaseVersion`) stays HELD with no second settlement ever
+  // coming — the deferred side channels were neither dropped nor drained, and
+  // their at-receipt guards (the Codex single-flight) never released.
+  it("drops the deferred side channels when an applyEditSettled transition throws", () => {
+    const ran = vi.fn();
+    const dropped = vi.fn();
+    const barrier = createEditSettledBarrier({
+      // Still locked, and STAYS locked: the throw unwound before the panel
+      // assigned the state the transition would have returned.
+      isLocked: () => true,
+      isDisposed: () => false,
+      onError: () => {},
+    });
+    barrier.run(ran, dropped);
+
+    const step = createHostSessionStep({
+      commitTransition: () => {
+        throw new Error("reducer bug");
+      },
+      runEffects: () => {},
+      settleEditBarrier: (applied) => barrier.settle(applied),
+    });
+
+    expect(() => step(settled({ kind: "ok" }, 3))).toThrow("reducer bug");
+    expect(dropped).toHaveBeenCalledTimes(1);
+    expect(ran).not.toHaveBeenCalled();
+
+    barrier.settle(true); // nothing left to resurrect
+    expect(ran).not.toHaveBeenCalled();
+  });
+
+  // `settle(false)`, not `settle(true)`: the state was never committed, so the
+  // lock still reads HELD and a `true` verdict would take the barrier's WAIT arm
+  // and strand the thunks exactly as before. This pins the verdict itself, so a
+  // rescue that passes `true` goes red even where the drop is unobservable.
+  it("rescues an applyEditSettled transition throw with the FAILED verdict", () => {
+    const settles: boolean[] = [];
+    const step = createHostSessionStep({
+      commitTransition: () => {
+        throw new Error("reducer bug");
+      },
+      runEffects: () => {},
+      settleEditBarrier: (applied) => settles.push(applied),
+    });
+    expect(() => step(settled({ kind: "ok" }, 3))).toThrow("reducer bug");
+    expect(settles).toEqual([false]);
+  });
+
+  // Same rule as the effect-throw path: the recovery must not step on the
+  // failure it is recovering from. The transition error is the triage payload.
+  it("keeps the transition error when the rescue settle also throws", () => {
+    const transitionErr = new Error("reducer bug");
+    const settleErr = new Error("settle threw");
+    const reported: unknown[] = [];
+    const step = createHostSessionStep({
+      commitTransition: () => {
+        throw transitionErr;
+      },
+      runEffects: () => {},
+      settleEditBarrier: () => {
+        throw settleErr;
+      },
+      onSettleError: (err) => reported.push(err),
+    });
+    expect(() => step(settled({ kind: "ok" }, 3))).toThrow(transitionErr);
+    expect(reported).toEqual([settleErr]);
+  });
+
+  // A reporter throw cannot displace the transition error either (the DEFAULT
+  // reporter is a console call, which a broken host environment breaks).
+  it("keeps the transition error when the rescue settle AND the reporter throw", () => {
+    const transitionErr = new Error("reducer bug");
+    const step = createHostSessionStep({
+      commitTransition: () => {
+        throw transitionErr;
+      },
+      runEffects: () => {},
+      settleEditBarrier: () => {
+        throw new Error("settle threw");
+      },
+      onSettleError: () => {
+        throw new Error("reporter threw");
+      },
+    });
+    expect(() => step(settled({ kind: "ok" }, 3))).toThrow(transitionErr);
+  });
+
+  // The effects must NOT run when the transition threw: there is no effect list
+  // (the transition never returned one) and the state they would act on was
+  // never committed.
+  it("does not run the effects when the transition throws", () => {
+    const runEffects = vi.fn();
+    const step = createHostSessionStep({
+      commitTransition: () => {
+        throw new Error("reducer bug");
+      },
+      runEffects,
+      settleEditBarrier: () => {},
+    });
+    expect(() => step(settled({ kind: "ok" }, 3))).toThrow("reducer bug");
+    expect(runEffects).not.toHaveBeenCalled();
   });
 
   it("drops a deferred side channel when a failed settlement's effects throw", () => {

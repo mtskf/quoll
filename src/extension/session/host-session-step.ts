@@ -15,6 +15,15 @@
 // against a document this edit never landed in. The verdict comes from the
 // EVENT (see `isEditApplied`), so it does not care which effects completed.
 //
+// Why a THROWING TRANSITION is settled too, but only on `applyEditSettled`:
+// that transition unwinds before the panel commits the state it would have
+// returned, so the write lock stays HELD and no second settlement is coming —
+// the same stranding, reached one step earlier. The rescue is a FAILED verdict
+// (`settle(false)`), because a `true` one consults the still-held lock and
+// takes the barrier's WAIT arm. It must stay conditional: on any other event
+// the lock belongs to an apply whose own settlement is still pending and will
+// legitimately drain those thunks.
+//
 // Why this is NOT a bare `try/finally`: a throw from the settle would then
 // REPLACE the effect error and take the triage payload with it. Same rule as
 // docs/LEARNING.md 2026-08-09 — the recovery path must not step on the failure
@@ -26,17 +35,16 @@ import type { HostSessionEffect, HostSessionEvent } from "./host-session-core.js
 
 export interface HostSessionStepDeps {
   /** Run the reducer transition and COMMIT the resulting state; returns the
-   *  effects to run. Deliberately OUTSIDE the settle guard below: settling a
+   *  effects to run. A throw here is NOT settled unconditionally: settling a
    *  step whose transition threw would hand the barrier a verdict for a step
-   *  that never happened — and a blind `settle(false)` here could DROP deferred
-   *  thunks that a still-pending real settlement would legitimately drain.
-   *  KNOWN COST, accepted for now (this is NOT "nothing is lost"): if an
-   *  `applyEditSettled` transition itself throws, the write lock stays HELD
-   *  with no settlement coming, stranding the deferred side channels — neither
-   *  dropped nor drained. Tracked in docs/TODO.md. Today that throw is
-   *  defensive-only: the injected write validator is fail-closed
-   *  (validate-for-write.ts turns parser throws into verdicts), which leaves
-   *  only the reducer's own exhaustive-arm throws. */
+   *  that never happened, and a blind `settle(false)` would DROP deferred
+   *  thunks that a still-pending real settlement would legitimately drain. The
+   *  rescue below is conditioned on the throwing event being the settlement
+   *  itself, the only event that ever releases the lock. Today such a throw is
+   *  defensive-only: the
+   *  injected write validator is fail-closed (validate-for-write.ts turns
+   *  parser throws into verdicts), which leaves only the reducer's own
+   *  exhaustive-arm throws. */
   readonly commitTransition: (event: HostSessionEvent) => readonly HostSessionEffect[];
   readonly runEffects: (effects: readonly HostSessionEffect[]) => void;
   /** `editSettledBarrier.settle` — the deferred side channels' ONLY release. */
@@ -117,8 +125,49 @@ export function createHostSessionStep(
     deps.onSettleError ??
     ((err: unknown) => console.error("[quoll] edit-settled barrier threw", err));
 
+  const reportSettleError = (settleErr: unknown): void => {
+    // The report is itself isolated — an injected reporter that throws (the
+    // DEFAULT is a console call, which is exactly what a broken host
+    // environment breaks) would otherwise escape and displace the error it was
+    // reporting on.
+    try {
+      onSettleError(settleErr);
+    } catch {
+      // Deliberately inert: a second console call could fail for the same
+      // reason this one did, and the caller's own error is the payload.
+    }
+  };
+
   return (event: HostSessionEvent): void => {
-    const effects = deps.commitTransition(event);
+    let effects: readonly HostSessionEffect[];
+    try {
+      effects = deps.commitTransition(event);
+    } catch (transitionErr) {
+      // The transition unwound BEFORE the panel committed the state it would
+      // have returned. When the throwing event is the SETTLEMENT, that leaves
+      // the write lock (`pendingApplyBaseVersion`) HELD with no second
+      // settlement ever coming: the deferred side channels would sit in the
+      // barrier forever and their at-receipt guards (the Codex single-flight)
+      // would never release. Drop them so the guards are freed and the user can
+      // retry — `settle(false)` is the ONLY verdict that can, since `true`
+      // consults the still-held lock and takes the barrier's WAIT arm.
+      //
+      // Conditioned on the settlement for a reason: on any other event the lock
+      // is held by an apply whose own settlement is still coming, and that
+      // settlement will legitimately DRAIN these thunks — dropping them here
+      // would destroy work the barrier promised to run.
+      if (event.type === "applyEditSettled") {
+        try {
+          deps.settleEditBarrier(false);
+        } catch (settleErr) {
+          // Same rule as the effect path below: the recovery must not step on
+          // the failure it is recovering from. The transition error is the root
+          // cause and the triage payload, so it is the one that propagates.
+          reportSettleError(settleErr);
+        }
+      }
+      throw transitionErr;
+    }
     // Read the verdict from the EVENT: it must survive a throwing effect list,
     // and it depends on nothing the effects touch.
     const editApplied = isEditApplied(event);
@@ -137,16 +186,8 @@ export function createHostSessionStep(
         throw settleErr;
       }
       // Both threw: the effect error is the root cause and the triage payload,
-      // so it wins; this one is reported rather than swallowed. The report is
-      // itself isolated — an injected reporter that throws (the DEFAULT is a
-      // console call, which is exactly what a broken host environment breaks)
-      // would otherwise escape here and displace the error it was reporting on.
-      try {
-        onSettleError(settleErr);
-      } catch {
-        // Deliberately inert: a second console call could fail for the same
-        // reason this one did, and the effect error thrown below is the payload.
-      }
+      // so it wins; this one is reported rather than swallowed.
+      reportSettleError(settleErr);
     }
     if (effectsError !== null) {
       throw effectsError.err;
