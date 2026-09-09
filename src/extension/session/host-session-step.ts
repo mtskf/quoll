@@ -22,7 +22,8 @@
 // (`settle(false)`), because a `true` one consults the still-held lock and
 // takes the barrier's WAIT arm. It must stay conditional: on any other event
 // the lock belongs to an apply whose own settlement is still pending and will
-// legitimately drain those thunks.
+// resolve legitimately through the barrier's own DRAIN / DROP / WAIT arms
+// (`edit-settled-barrier.ts`'s `settle`), not through this rescue.
 //
 // Why this is NOT a bare `try/finally`: a throw from the settle would then
 // REPLACE the effect error and take the triage payload with it. Same rule as
@@ -38,8 +39,9 @@ export interface HostSessionStepDeps {
    *  effects to run. A throw here is NOT settled unconditionally: settling a
    *  step whose transition threw would hand the barrier a verdict for a step
    *  that never happened, and a blind `settle(false)` would DROP deferred
-   *  thunks that a still-pending real settlement would legitimately drain. The
-   *  rescue below is conditioned on the throwing event being the settlement
+   *  thunks that a still-pending real settlement would otherwise resolve on
+   *  its own terms — DRAIN, DROP, or WAIT, per `edit-settled-barrier.ts`'s
+   *  `settle`. The rescue below is conditioned on the throwing event being the settlement
    *  itself — on the LIVE path (the panel still alive, still typed into) the
    *  only event that ever releases the lock (see `isEditApplied`'s
    *  `applyEditSettled` / `disposed` comment). A throw from the `disposed`
@@ -214,13 +216,13 @@ export function createHostSessionStep(
    *  Conditioned on the settlement for a reason: on any other event, if the
    *  lock is held it is held by an apply whose own settlement is still coming
    *  (see `releasesWriteLockOnCommit`'s doc), and that later, independent
-   *  settlement is the legitimate resolution — DRAIN (run them) on the live
-   *  path, or DROP them via the barrier's own `isDisposed()` check if
-   *  `disposed` won the race first (see its case above; `edit-settled-barrier.ts`
-   *  treats DRAIN and DROP as distinct outcomes of `settle`, so this is not the
-   *  same thing happening twice). Rescuing here, ahead of that resolution,
-   *  would destroy work the barrier still owes — either running the thunks or
-   *  releasing their at-receipt guards through `onDrop`. */
+   *  settlement is the legitimate resolution, via one of `edit-settled-barrier.ts`'s
+   *  `settle` arms: DRAIN (run them) if it lands applied on the live path, DROP
+   *  them (a single arm covering two causes — the apply failed, or `disposed`
+   *  won the race first, both read as `deps.isDisposed() || !applied`), or WAIT
+   *  if a stash-drain re-acquired the lock. Rescuing here, ahead of that
+   *  resolution, would destroy work the barrier still owes — either running the
+   *  thunks or releasing their at-receipt guards through `onDrop`. */
   const rescueStrandedSideChannels = (event: HostSessionEvent): void => {
     if (!releasesWriteLockOnCommit(event)) {
       return;
