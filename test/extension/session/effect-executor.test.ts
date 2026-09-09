@@ -404,6 +404,14 @@ describe("effect-executor runApplyEdit (wrapper mapping)", () => {
         expect.stringContaining("no stash drain"),
         expect.anything()
       );
+      // ...and it must name the ACK consequence too: `settledVersion` is the ONE
+      // signal `ackLabelObserved` reads off this event (host-session-core.ts), so
+      // a VERSION-only failure is exactly the case where the ack Document is
+      // withheld absent that observation.
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringContaining("the ack Document is withheld"),
+        expect.anything()
+      );
       // The no-op short-circuit reaches this same family without submitting an
       // edit, so the warn must not claim a landing either.
       expect(warnSpy).not.toHaveBeenCalledWith(
