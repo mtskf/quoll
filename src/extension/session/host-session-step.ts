@@ -53,8 +53,10 @@ export interface HostSessionStepDeps {
   readonly runEffects: (effects: readonly HostSessionEffect[]) => void;
   /** `editSettledBarrier.settle` — the deferred side channels' ONLY release. */
   readonly settleEditBarrier: (applied: boolean) => void;
-  /** Reports a throw from `settleEditBarrier` that would otherwise MASK an
-   *  effect throw. Defaults to console.error. */
+  /** Reports a throw from `settleEditBarrier` that would otherwise MASK the
+   *  error it ran alongside — either a transition throw (the rescue settle in
+   *  the catch block below) or an effect throw (the drain settle after
+   *  `runEffects`). Defaults to console.error. */
   readonly onSettleError?: (err: unknown) => void;
 }
 
