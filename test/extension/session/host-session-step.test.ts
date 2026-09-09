@@ -150,6 +150,36 @@ describe("createHostSessionStep", () => {
     expect(settles).toEqual([]);
   });
 
+  // The rescue condition is its own exhaustive switch (`releasesWriteLockOnCommit`,
+  // not exported), same idiom as `isEditApplied`'s outer switch and the same
+  // reason: an unknown event must answer explicitly rather than silently
+  // skipping the rescue, which would reintroduce the stranding this module
+  // exists to fix. As with `isEditApplied`'s own unknown-event test, the real
+  // guard is `tsc`'s `never` assignment (a NEW union member fails compilation);
+  // this only pins the runtime default arm's own behaviour.
+  it("does not attempt the rescue for an UNKNOWN event type, and says so", () => {
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const settles: boolean[] = [];
+    const step = createHostSessionStep({
+      commitTransition: () => {
+        throw new Error("reducer bug");
+      },
+      runEffects: () => {},
+      settleEditBarrier: (applied) => settles.push(applied),
+    });
+    const unknown = { type: "no-such-event" } as unknown as HostSessionEvent;
+    try {
+      expect(() => step(unknown)).toThrow("reducer bug");
+      expect(settles).toEqual([]);
+      expect(spy).toHaveBeenCalledWith(
+        "[quoll] unhandled HostSessionEvent while deciding whether a transition throw needs the write-lock rescue",
+        unknown
+      );
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
   // The rescue's OTHER direction, and the reason it cannot be an unconditional
   // `settle(false)`: this throw did not happen on the settlement, so the write
   // lock is still held by an apply whose OWN settlement is still coming — and

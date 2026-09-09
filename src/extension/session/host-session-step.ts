@@ -122,6 +122,42 @@ export function isEditApplied(event: HostSessionEvent): boolean {
   }
 }
 
+/** True iff a throw from `commitTransition(event)` leaves the write lock
+ *  (`pendingApplyBaseVersion`) HELD with no future settlement ever coming —
+ *  the one case the rescue below must cover. Exhaustive over
+ *  `HostSessionEvent["type"]`, same idiom as `isEditApplied`'s outer switch:
+ *  a new union member must answer this explicitly instead of silently
+ *  falling through to "no rescue needed", which would reintroduce the exact
+ *  stranding this module exists to fix. `disposed` answers false: its own
+ *  transition arm is trivial (never throws), and even if it did, the
+ *  barrier's `settle` already drops its deferred thunks via its own
+ *  `isDisposed()` check regardless of verdict (see `edit-settled-barrier.ts`),
+ *  so no rescue is needed there either. */
+function releasesWriteLockOnCommit(event: HostSessionEvent): boolean {
+  switch (event.type) {
+    case "applyEditSettled":
+      return true;
+    case "seed":
+    case "ready":
+    case "edit":
+    case "openExternal":
+    case "documentChanged":
+    case "themeChanged":
+    case "viewStateVisible":
+    case "editRejectedDeliveryFailed":
+    case "disposed":
+      return false;
+    default: {
+      const _exhaustive: never = event;
+      console.error(
+        "[quoll] unhandled HostSessionEvent while deciding whether a transition throw needs the write-lock rescue",
+        _exhaustive
+      );
+      return false;
+    }
+  }
+}
+
 export function createHostSessionStep(
   deps: HostSessionStepDeps
 ): (event: HostSessionEvent) => void {
@@ -160,7 +196,7 @@ export function createHostSessionStep(
       // is held by an apply whose own settlement is still coming, and that
       // settlement will legitimately DRAIN these thunks — dropping them here
       // would destroy work the barrier promised to run.
-      if (event.type === "applyEditSettled") {
+      if (releasesWriteLockOnCommit(event)) {
         try {
           deps.settleEditBarrier(false);
         } catch (settleErr) {
