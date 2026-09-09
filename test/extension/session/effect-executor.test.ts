@@ -420,6 +420,14 @@ describe("effect-executor runApplyEdit (wrapper mapping)", () => {
         expect.stringContaining("no stash drain"),
         expect.anything()
       );
+      // ...and the version clause must attribute WHICH sources can supply the
+      // observation (settle read OR the guarded dispatch retry) rather than a
+      // flat "the VERSION was read" — this is the delta a revert of the
+      // version clause's reword must turn red.
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringContaining("the pipeline's settle read or the guarded dispatch retry"),
+        expect.anything()
+      );
       // ...and it must name the ACK consequence too: `settledVersion` is the ONE
       // signal `ackLabelObserved` reads off this event (host-session-core.ts), so
       // a VERSION-only failure is exactly the case where the ack Document is
