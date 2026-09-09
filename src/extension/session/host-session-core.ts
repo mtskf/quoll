@@ -1052,10 +1052,14 @@ export function createHostSessionCore(context: HostSessionContext, deps: HostSes
             : [
                 {
                   type: "logWarn",
+                  // Shared incident sentence, then the arm's own consequence —
+                  // written as ONE owner for the shared half so the two arms
+                  // cannot drift apart on what the incident WAS.
                   message:
-                    verdict.kind === "accept"
-                      ? "[quoll] unlabelled drain: the pending stash was re-based onto an UNOBSERVED settlement label (a known-stale lower bound). The bytes land; the residual is that a later settlement which also misses its CONTENT read can score our own increment as foreign (one spurious epoch bump → replay-buffer drop)"
-                      : "[quoll] unlabelled drain: the pending stash was re-based onto an UNOBSERVED settlement label (a known-stale lower bound). The stash did not validate, so no bytes land; the residual is that its rejected draft goes out stamped with this stale label",
+                    "[quoll] unlabelled drain: the pending stash was re-based onto an UNOBSERVED settlement label (a known-stale lower bound). " +
+                    (verdict.kind === "accept"
+                      ? "The bytes land; the residual is that a later settlement which also misses its CONTENT read can score our own increment as foreign (one spurious epoch bump → replay-buffer drop)"
+                      : "The stash did not validate, so no bytes land; the residual is that its rejected draft goes out stamped with this stale label"),
                   detail: {
                     uri: state.context.uriString,
                     heldBase,

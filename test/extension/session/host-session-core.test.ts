@@ -1626,6 +1626,19 @@ describe("host-session-core: an unobserved ack label still DRAINS (bytes first)"
       pendingEdit: { content: stash, baseDocVersion: 1 },
     });
   const unobserved = settled({ settledVersion: null, currentContent: "edit1" });
+  // The EXACT pair `withholdAckEffects` builds at an unobserved label, shared by
+  // the two readonly/stale/no-op tests below so their exhaustive `toEqual`s
+  // cannot drift apart. `lockedStash` fixes both numbers in the detail.
+  const withheldAck = [
+    {
+      type: "logWarn",
+      message: expect.stringContaining(
+        "settlement ack withheld: no post-apply document version was observed"
+      ),
+      detail: { uri: ctx.uriString, heldBase: 1, lastAppliedDocVersion: 1 },
+    },
+    { type: "showResyncFailure" },
+  ];
 
   it("an accept-shaped stash IS applied: the keystroke is written at the stale base", () => {
     const r = core.transition(lockedStash("edit1-more"), unobserved);
@@ -1641,8 +1654,11 @@ describe("host-session-core: an unobserved ack label still DRAINS (bytes first)"
       { type: "applyEdit", content: "edit1-more", baseDocVersion: 1 },
     ]);
     // ARM-SPECIFIC clause: this is the `accept` verdict, so the bytes DID land —
-    // pinned separately from the `parse-failed` arm's "no bytes land" wording.
-    expect((r.effects[0] as { message: string }).message).toContain("The bytes land");
+    // pinned separately from the `parse-failed` arm's "no bytes land" wording,
+    // and in the same shape that arm uses.
+    expect(
+      r.effects.find((e) => e.type === "logWarn" && e.message.includes("unlabelled drain"))
+    ).toEqual(expect.objectContaining({ message: expect.stringContaining("The bytes land") }));
     expect(r.state.pendingEdit).toBeNull();
     // The lock IS re-acquired — this is what makes the label's catch-up
     // lock-HELD in the test below, and so what keeps the epoch still.
@@ -1735,12 +1751,9 @@ describe("host-session-core: an unobserved ack label still DRAINS (bytes first)"
     expect(r.state.nextRejectionId).toBe(2); // a delivery id WAS minted
     expect(r.effects.some((e) => e.type === "showError")).toBe(true);
     // The stale label the draft carries is exactly what the drain's record
-    // names, so this arm carries it too.
-    expect(
-      r.effects.some((e) => e.type === "logWarn" && e.message.includes("unlabelled drain"))
-    ).toBe(true);
-    // ARM-SPECIFIC clause: this is the `parse-failed` verdict, so NO bytes land —
-    // pinned separately from the `accept` arm's "The bytes land" wording.
+    // names, so this arm carries it too — and its ARM-SPECIFIC clause says NO
+    // bytes land, pinned separately from the `accept` arm's "The bytes land"
+    // wording. One assertion covers both: a missing record fails the `toEqual`.
     expect(
       r.effects.find((e) => e.type === "logWarn" && e.message.includes("unlabelled drain"))
     ).toEqual(expect.objectContaining({ message: expect.stringContaining("no bytes land") }));
@@ -1752,19 +1765,11 @@ describe("host-session-core: an unobserved ack label still DRAINS (bytes first)"
     // keeps that withhold branch from being deleted as unreachable. EXHAUSTIVE
     // now (not just a partial find/some pair): this readonly/stale/no-op arm
     // deliberately does NOT spread `staleReBaseWarn` (that residual is already
-    // logged through `withholdAckEffects` below) — a `toEqual` is what would
-    // catch a future "for consistency" regression that spreads it in anyway.
+    // logged through `withholdAckEffects`, the `withheldAck` pair above) — a
+    // `toEqual` is what would catch a future "for consistency" regression that
+    // spreads it in anyway.
     const r = core.transition(lockedStash("edit1"), unobserved);
-    expect(r.effects).toEqual([
-      {
-        type: "logWarn",
-        message: expect.stringContaining(
-          "settlement ack withheld: no post-apply document version was observed"
-        ),
-        detail: { uri: ctx.uriString, heldBase: 1, lastAppliedDocVersion: 1 },
-      },
-      { type: "showResyncFailure" },
-    ]);
+    expect(r.effects).toEqual(withheldAck);
   });
 
   it("a readonly-shaped stash withholds the repost the drain arm makes, at an UNOBSERVED label", () => {
@@ -1776,16 +1781,7 @@ describe("host-session-core: an unobserved ack label still DRAINS (bytes first)"
       lockedStash("edit1-more-ro"),
       settled({ settledVersion: null, currentContent: "edit1", canWrite: false })
     );
-    expect(r.effects).toEqual([
-      {
-        type: "logWarn",
-        message: expect.stringContaining(
-          "settlement ack withheld: no post-apply document version was observed"
-        ),
-        detail: { uri: ctx.uriString, heldBase: 1, lastAppliedDocVersion: 1 },
-      },
-      { type: "showResyncFailure" },
-    ]);
+    expect(r.effects).toEqual(withheldAck);
     // NEGATIVE: no "unlabelled drain" record leaks into this arm.
     expect(
       r.effects.some((e) => e.type === "logWarn" && e.message.includes("unlabelled drain"))
