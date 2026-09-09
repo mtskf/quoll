@@ -266,12 +266,13 @@ export function createEffectExecutor<TEdit>(deps: EffectExecutorDeps<TEdit>): Ef
   // withheld".
   //
   // The roster IS the contract: a closed set of triage tokens, one per call
-  // family. Typing it as a union (not `string`) makes ONE of the two invariants
-  // the compiler's job: an off-roster token is rejected. The other stays a
-  // CONVENTION the compiler cannot hold — pass a LITERAL, never a computed
-  // expression, because this runs on a failure path and must not evaluate
-  // anything that can throw (a helper returning the union, or a ternary over two
-  // valid tokens, type-checks fine and would re-open exactly that hole).
+  // SITE (not one per family — family 3 alone owns three of the five, one per
+  // recovery dispatch). Typing it as a union (not `string`) makes ONE of the two
+  // invariants the compiler's job: an off-roster token is rejected. The other
+  // stays a CONVENTION the compiler cannot hold — pass a LITERAL, never a
+  // computed expression, because this runs on a failure path and must not
+  // evaluate anything that can throw (a helper returning the union, or a ternary
+  // over two valid tokens, type-checks fine and would re-open exactly that hole).
   // The union also cannot catch a copy-paste that stamps one VALID token onto
   // the wrong arm (the three adjacent recovery sites are exactly that shape), so
   // each site also has a per-site assertion in `effect-executor.test.ts`.
