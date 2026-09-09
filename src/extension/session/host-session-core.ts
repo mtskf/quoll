@@ -391,8 +391,16 @@ function failureToasts(
           message: `Quoll could not save ${context.fsPath}. Reload the file or try again.`,
         },
       ];
-    default:
+    case "constructThrew":
+    case "applyThrew":
+    case "rejected":
       return [{ type: "showError", message: `Failed to save: ${outcome.message}` }];
+    default: {
+      const _exhaustive: never = outcome;
+      throw new Error(
+        `[quoll] unhandled ApplyEditOutcome: ${(_exhaustive as { kind: string }).kind}`
+      );
+    }
   }
 }
 
@@ -1045,7 +1053,9 @@ export function createHostSessionCore(context: HostSessionContext, deps: HostSes
                 {
                   type: "logWarn",
                   message:
-                    "[quoll] unlabelled drain: the pending stash was re-based onto an UNOBSERVED settlement label (a known-stale lower bound). The bytes land; the residual is that a later settlement which also misses its CONTENT read can score our own increment as foreign (one spurious epoch bump → replay-buffer drop), and a parse-failed draft goes out stamped with this stale label",
+                    verdict.kind === "accept"
+                      ? "[quoll] unlabelled drain: the pending stash was re-based onto an UNOBSERVED settlement label (a known-stale lower bound). The bytes land; the residual is that a later settlement which also misses its CONTENT read can score our own increment as foreign (one spurious epoch bump → replay-buffer drop)"
+                      : "[quoll] unlabelled drain: the pending stash was re-based onto an UNOBSERVED settlement label (a known-stale lower bound). The stash did not validate, so no bytes land; the residual is that its rejected draft goes out stamped with this stale label",
                   detail: {
                     uri: state.context.uriString,
                     heldBase,

@@ -1640,6 +1640,9 @@ describe("host-session-core: an unobserved ack label still DRAINS (bytes first)"
       },
       { type: "applyEdit", content: "edit1-more", baseDocVersion: 1 },
     ]);
+    // ARM-SPECIFIC clause: this is the `accept` verdict, so the bytes DID land —
+    // pinned separately from the `parse-failed` arm's "no bytes land" wording.
+    expect((r.effects[0] as { message: string }).message).toContain("The bytes land");
     expect(r.state.pendingEdit).toBeNull();
     // The lock IS re-acquired — this is what makes the label's catch-up
     // lock-HELD in the test below, and so what keeps the epoch still.
@@ -1736,6 +1739,11 @@ describe("host-session-core: an unobserved ack label still DRAINS (bytes first)"
     expect(
       r.effects.some((e) => e.type === "logWarn" && e.message.includes("unlabelled drain"))
     ).toBe(true);
+    // ARM-SPECIFIC clause: this is the `parse-failed` verdict, so NO bytes land —
+    // pinned separately from the `accept` arm's "The bytes land" wording.
+    expect(
+      r.effects.find((e) => e.type === "logWarn" && e.message.includes("unlabelled drain"))
+    ).toEqual(expect.objectContaining({ message: expect.stringContaining("no bytes land") }));
   });
 
   it("a no-op-shaped stash withholds the repost the drain arm makes", () => {
