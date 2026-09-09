@@ -325,13 +325,15 @@ const postDoc = (s: HostSessionState, docVersion: number): HostSessionEffect => 
 // signal, latched per incident by the EXECUTOR (the reducer is pure and cannot
 // hold a latch) — the same latch as the reseed-build failure, so the two
 // "webview could not be resynced" families cannot double-toast one incident.
-// POST-DISPOSE the pair never reaches the executor, by TWO different routes:
+// POST-DISPOSE the pair never reaches the executor, by THREE different routes:
 // the no-stash arm (`state.disposed && state.pendingEdit === null`, the early
-// return in the `applyEditSettled` case) passes `ackLabelObserved: true` so the
-// pair is not even constructed, and the undrainable arm keeps only `showError`s
-// from the settlement effects. Deliberate in both: there is no view left to
-// resync, and the only loss worth reporting there (a dropped stash) has its own
-// toast.
+// return in the `applyEditSettled` case) builds only failure toasts, so the pair
+// is not even constructed; the undrainable arm keeps only `showError`s from the
+// settlement effects; and a stash that DRAINS post-dispose never calls
+// `ackEffects` at all (the drain's readonly/stale/no-op arm returns `[]` when
+// disposed, and its accept / parse-failed arms post no Document). Deliberate in
+// all three: there is no view left to resync, and the only loss worth reporting
+// there (a dropped stash) has its own toast.
 function withholdAckEffects(
   settled: HostSessionState,
   heldBase: number | null,
@@ -820,8 +822,10 @@ export function createHostSessionCore(context: HostSessionContext, deps: HostSes
         // the stash is its only carrier, which is why the drop is LOGGED below.
         // The ACK LABEL is deliberately NOT a conjunct below: the drain is a new
         // WRITE, not an ack, and its safety rests on the CONTENT evidence above.
-        // One review cycle added `(ackLabelObserved || state.disposed)` here and
-        // it was reverted after two independent advisors traced the fault depth.
+        // ⛔ Do NOT re-add an `(ackLabelObserved || state.disposed)` conjunct here
+        // (added in one review cycle and reverted after two independent advisors
+        // traced the fault depth; `host-session-core.test.ts`'s "the drain
+        // re-acquires the lock, so the label's catch-up is LOCK-HELD" goes red).
         // REFUSING at an unobserved label drops the keystroke, and the only
         // carrier left — the webview's replay buffer — is destroyed by the
         // ORDINARY continuation: the apply DID move the document, so its
@@ -842,8 +846,14 @@ export function createHostSessionCore(context: HostSessionContext, deps: HostSes
         // observing a version beyond `heldBase + ownContribution`. The cost is
         // then one spurious epoch bump — a replay-buffer drop, never corruption —
         // with the drained keystroke ALREADY on the document. Strictly shallower
-        // harm at a strictly deeper fault. The durable fix is the liveness
-        // backstop tracked in the follow-up TODO entry.
+        // harm at a strictly deeper fault. Tracked in the follow-up TODO entry —
+        // but NOT closed by that entry's ack-timeout / reseed-retry half, which
+        // only unsticks a quiet document that can no longer post: the mis-scoring
+        // happens inside the NEXT settlement's version-delta fallback above,
+        // which reads `heldBase` as EXACT and has no input a timeout or a retry
+        // can reach. Closing it needs the entry's OTHER half — base provenance
+        // (observed vs. lower bound), or an observed-version catch-up before the
+        // re-base.
         const canDrain =
           stash !== null &&
           event.outcome.kind === "ok" &&
@@ -958,9 +968,13 @@ export function createHostSessionCore(context: HostSessionContext, deps: HostSes
                 // WITHOUT submitting an edit at all, so `appliedUnverified` is not
                 // a landing claim and its ⚠️ note at `settle` binds caller text
                 // too. The TOAST BODY below is unaffected and stays as written:
-                // that path's own precondition is that the document already holds
-                // the intended bytes, so "saved your change" is true for the user
-                // on every route into this arm.
+                // on the no-op route the document already holds the intended
+                // bytes, and on the landed-but-unverified route the apply
+                // resolved ok — which is why the toast pairs "saved your change"
+                // with "could not verify it" and tells the user to reopen and
+                // check. Do not drop that hedge: without the settle-time read a
+                // misplaced splice (execute-write.ts's S5 escape) cannot be ruled
+                // out.
                 // ALIVE deliberately stays toast-free — there the webview's
                 // single-flight replay buffer (which this settlement does not
                 // invalidate) still holds the edit and re-posts it after the ack.

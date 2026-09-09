@@ -241,10 +241,11 @@ export function createEffectExecutor<TEdit>(deps: EffectExecutorDeps<TEdit>): Ef
   // retry observes the same live version the settle read would have, so it
   // cannot attribute a LATER edit to this settlement. The retry is what keeps a
   // TRANSIENT settle-time failure on the normal path (ack at the live version)
-  // instead of the withhold branch; a PERSISTENT failure yields null and the
-  // reducer withholds. Guarded because this runs while BUILDING the settlement
-  // event — an unguarded throw here would skip the dispatch and strand the
-  // write lock (same placement rule as readCanWrite).
+  // instead of the withhold branch; a PERSISTENT failure yields null, and the
+  // reducer then withholds UNLESS a lock-held resync already raised the label
+  // (the second disjunct of `ackLabelObserved`). Guarded because this runs while
+  // BUILDING the settlement event — an unguarded throw here would skip the
+  // dispatch and strand the write lock (same placement rule as readCanWrite).
   //
   // Name it `readVersionGuarded` (NOT "retry"): it is the ONE guarded version
   // reader, with ONE contract — `number | null`, null ⇔ unobserved, never a
@@ -265,13 +266,15 @@ export function createEffectExecutor<TEdit>(deps: EffectExecutorDeps<TEdit>): Ef
   // withheld".
   //
   // The roster IS the contract: a closed set of triage tokens, one per call
-  // family. Typing it as a union (not `string`) makes both invariants the
-  // compiler's job — an off-roster token is rejected, and so is any computed
-  // non-literal expression, which matters because this runs on a failure path
-  // and must not evaluate anything that can throw. What the union CANNOT catch
-  // is a copy-paste that stamps one VALID token onto the wrong arm (the three
-  // adjacent recovery sites are exactly that shape), so each site also has a
-  // per-site assertion in `effect-executor.test.ts`.
+  // family. Typing it as a union (not `string`) makes ONE of the two invariants
+  // the compiler's job: an off-roster token is rejected. The other stays a
+  // CONVENTION the compiler cannot hold — pass a LITERAL, never a computed
+  // expression, because this runs on a failure path and must not evaluate
+  // anything that can throw (a helper returning the union, or a ternary over two
+  // valid tokens, type-checks fine and would re-open exactly that hole).
+  // The union also cannot catch a copy-paste that stamps one VALID token onto
+  // the wrong arm (the three adjacent recovery sites are exactly that shape), so
+  // each site also has a per-site assertion in `effect-executor.test.ts`.
   type GuardedVersionReadSite =
     | "settlement-retry"
     | "rejection-arm-first-read"
@@ -493,9 +496,10 @@ export function createEffectExecutor<TEdit>(deps: EffectExecutorDeps<TEdit>): Ef
         // rejection.
         // Keyed on `settleReadFailure` rather than on the single
         // `appliedUnverified` tag, because a VERSION-only read failure keeps the
-        // tag `applied` (the content was verified) while still suppressing the
-        // self-advance — exactly the partial verification loss triage needs to
-        // see, and tag-keyed logging would make it silent.
+        // tag `applied` (the content was verified) while still putting the
+        // self-advance at risk — it is suppressed only if the guarded dispatch
+        // retry above ALSO fails. That partial verification loss is what triage
+        // needs to see, and tag-keyed logging would make it silent.
         //
         // Bounded to the ok-mapping family on purpose. A failure tag already
         // reports itself through its own message and its "Failed to save" toast;
@@ -522,9 +526,10 @@ export function createEffectExecutor<TEdit>(deps: EffectExecutorDeps<TEdit>): Ef
           // It must not deliver a VERDICT on the save either ("treating it as an
           // UNVERIFIED save" was the old wording): on the VERSION-only path the
           // CONTENT was read, the divergence compare ran and the tag stayed
-          // `applied` — the save WAS verified, and only the self-advance is
-          // suppressed. So name WHICH observation is missing and let each one gate
-          // its own consequence. Naming the tag here would mislead symmetrically:
+          // `applied` — the save WAS verified, and only the self-advance is at
+          // risk (suppressed only if the guarded dispatch retry also failed). So
+          // name WHICH observation is missing and let each one gate its own
+          // consequence. Naming the tag here would mislead symmetrically:
           // `diverged` is only reachable WITH an observed content, so "the tag is
           // now appliedUnverified" is false for part of this very family.
           console.warn(

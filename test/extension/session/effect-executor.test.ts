@@ -359,7 +359,10 @@ describe("effect-executor runApplyEdit (wrapper mapping)", () => {
 
   // The verification-loss warn is keyed on `settleReadFailure`, NOT on the
   // `appliedUnverified` tag: a VERSION-only failure keeps the tag `applied` (the
-  // content WAS verified) while still suppressing the self-advance, so a
+  // content WAS verified) while still putting the self-advance at risk — it is
+  // suppressed only when the guarded dispatch retry ALSO fails, which is the
+  // arrangement below (`readVersion` throws on every call; the transient
+  // counterpart is the retry test further down, where the event carries 9). A
   // tag-keyed warn would make that partial loss silent.
   it("a VERSION-only read failure still warns, though the tag stays applied", async () => {
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});

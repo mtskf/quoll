@@ -1636,8 +1636,12 @@ describe("host-session-core: an unobserved ack label still DRAINS (bytes first)"
     expect(r.state.pendingApplyBaseVersion).toBe(1);
     expect(r.state.inFlightContent).toBe("edit1-more");
     expect(r.state.externalEpoch).toBe(0);
-    // NEGATIVE pin on the diagnostic the reverted gate needed: with the drain
-    // running there is no dropped keystroke to log, so the arm must stay gone.
+    // The reverted arm-4 token, kept NAMED rather than kept as a guard: with the
+    // drain's own "unlabelled drain" record now in the array above, the
+    // exhaustive `toEqual` is what would catch arm 4 coming back (a third
+    // effect). This line survives so the two tokens cannot be confused — arm 4's
+    // "unlabelled settle" reported a REFUSED drain's dropped keystroke, and with
+    // the drain running there is no dropped keystroke to report.
     expect(
       r.effects.some((e) => e.type === "logWarn" && e.message.includes("unlabelled settle"))
     ).toBe(false);
@@ -1647,9 +1651,9 @@ describe("host-session-core: an unobserved ack label still DRAINS (bytes first)"
     // The validator's cycle-2 trace, pinned in the direction the adjudication
     // chose. Under the reverted gate this state had `pendingApplyBaseVersion:
     // null`, so this same `documentChanged` was a lock-FREE forward advance:
-    // epoch 1, and `edit-sync.ts:288` then drops the replay buffer holding the
-    // keystroke the refusal had just dropped. Re-adding the conjunct to
-    // `canDrain` turns this red.
+    // epoch 1, and `edit-sync.ts`'s `recordedEpoch > buf.epoch` drop check then
+    // discards the replay buffer holding the keystroke the refusal had just
+    // dropped. Re-adding the conjunct to `canDrain` turns this red.
     const r = core.transition(lockedStash("edit1-more"), unobserved);
     const after = core.transition(r.state, { type: "documentChanged", documentVersion: 2 });
     expect(after.effects).toEqual([]); // deferred: the lock is held
