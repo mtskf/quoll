@@ -188,9 +188,16 @@ export function createHostSessionStep(
       // the write lock (`pendingApplyBaseVersion`) HELD with no second
       // settlement ever coming: the deferred side channels would sit in the
       // barrier forever and their at-receipt guards (the Codex single-flight)
-      // would never release. Drop them so the guards are freed and the user can
-      // retry — `settle(false)` is the ONLY verdict that can, since `true`
-      // consults the still-held lock and takes the barrier's WAIT arm.
+      // would never release. `settle(false)` is the ONLY verdict that can free
+      // them, since `true` consults the still-held lock and takes the
+      // barrier's WAIT arm instead of dropping anything.
+      //
+      // What this rescue pays for is a ONE-SHOT guard/thunk release, not a
+      // "retry works now" fix: it never clears `pendingApplyBaseVersion`
+      // (releasing the lock itself is a separate follow-up), so a side
+      // channel that retries lands in `editSettledBarrier.run()`, finds the
+      // lock still held, and re-defers behind it — stranded again until
+      // dispose.
       //
       // Conditioned on the settlement for a reason: on any other event the lock
       // is held by an apply whose own settlement is still coming, and that
