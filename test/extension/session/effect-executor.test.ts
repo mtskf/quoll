@@ -340,21 +340,34 @@ describe("effect-executor runApplyEdit (wrapper mapping)", () => {
   // pipeline resolves, and mapping it to a failure kind would toast "Failed to
   // save" for a write that succeeded.
   it("a settle-time read throw settles as ok/UNVERIFIED, never as a rejection", async () => {
-    const dispatch = await runApply({
-      readCanonical: () => {
-        throw new Error("boom-settle");
-      },
-      readVersion: () => 7,
-    });
-    expect(dispatch).toHaveBeenCalledWith(
-      expect.objectContaining({
-        type: "applyEditSettled",
-        outcome: { kind: "ok" },
-        settledVersion: 7,
-        currentContent: null,
-        divergedAfterApply: false,
-      })
-    );
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const dispatch = await runApply({
+        readCanonical: () => {
+          throw new Error("boom-settle");
+        },
+        readVersion: () => 7,
+      });
+      expect(dispatch).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: "applyEditSettled",
+          outcome: { kind: "ok" },
+          settledVersion: 7,
+          currentContent: null,
+          divergedAfterApply: false,
+        })
+      );
+      // MIRROR of the version-only test's "no stash drain" negative pin. Here a
+      // VERSION was observed, so `ackLabelObserved` is true and the ack Document
+      // IS posted — the clause must stay CONDITIONAL rather than deliver a
+      // verdict on this event.
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringContaining("the ack Document is withheld unless some source observed"),
+        expect.anything()
+      );
+    } finally {
+      warnSpy.mockRestore();
+    }
   });
 
   // The verification-loss warn is keyed on `settleReadFailure`, NOT on the

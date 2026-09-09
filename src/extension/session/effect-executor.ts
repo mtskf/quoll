@@ -534,7 +534,7 @@ export function createEffectExecutor<TEdit>(deps: EffectExecutorDeps<TEdit>): Ef
           // now appliedUnverified" is false for part of this very family.
           console.warn(
             okFamily
-              ? "[quoll] the write pipeline completed (no failure) but a settle-time verification read failed. Each missing observation gates only its OWN consequence: no drain unless the settled CONTENT was read (settledContent !== null), no version advance unless the VERSION was read (settledVersion !== null), and the ack Document is withheld unless some source observed a post-apply version"
+              ? "[quoll] the write pipeline completed (no failure) but a settle-time verification read failed. Each missing observation gates only its OWN consequence: no drain unless the settled CONTENT was read (the event's currentContent !== null), no version advance unless SOME source observed the version (the event's settledVersion !== null — the pipeline's settle read or the guarded dispatch retry), and the ack Document is withheld unless some source observed a post-apply version"
               : `[quoll] the settlement verification read also failed on a ${result.tag} outcome; the outcome itself is unchanged`,
             result.settleReadFailure
           );
