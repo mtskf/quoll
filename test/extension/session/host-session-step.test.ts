@@ -289,21 +289,35 @@ describe("createHostSessionStep", () => {
 
   // A reporter throw cannot displace the transition error either (the DEFAULT
   // reporter is a console call, which a broken host environment breaks).
+  //
+  // `toThrow(transitionErr)` alone is vacuous here: it stays green even with
+  // the whole rescue block deleted, since a deleted rescue still rethrows
+  // `transitionErr` unmodified. The `settles` / `reported` assertions are
+  // what actually pin that the rescue RAN (measured: reverting the rescue
+  // block turns them red while leaving `toThrow` passing — see the PR's
+  // revert-check notes).
   it("keeps the transition error when the rescue settle AND the reporter throw", () => {
     const transitionErr = new Error("reducer bug");
+    const settleErr = new Error("settle threw");
+    const settles: boolean[] = [];
+    const reported: unknown[] = [];
     const step = createHostSessionStep({
       commitTransition: () => {
         throw transitionErr;
       },
       runEffects: () => {},
-      settleEditBarrier: () => {
-        throw new Error("settle threw");
+      settleEditBarrier: (applied) => {
+        settles.push(applied);
+        throw settleErr;
       },
-      onSettleError: () => {
+      onSettleError: (err) => {
+        reported.push(err);
         throw new Error("reporter threw");
       },
     });
     expect(() => step(settled({ kind: "ok" }, 3))).toThrow(transitionErr);
+    expect(settles).toEqual([false]);
+    expect(reported).toEqual([settleErr]);
   });
 
   // The effects must NOT run when the transition threw: there is no effect list
