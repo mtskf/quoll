@@ -1339,8 +1339,10 @@ export function createHostSessionCore(context: HostSessionContext, deps: HostSes
  *  `host-session-step.ts`. What continuing does NOT do — and must not be read
  *  as doing — is REPAIR the failed event: the rest of that event's effect list
  *  stays abandoned, and a throw from an `applyEditSettled` TRANSITION still
- *  strands the write lock (that cost is owned and tracked by
- *  `HostSessionStepDeps.commitTransition`, and no queue policy can pay it).
+ *  leaves the write lock HELD, since the state that would have released it was
+ *  never committed (no queue policy can pay that; what `step` DOES pay is the
+ *  side channels deferred behind that lock — it drops them so their at-receipt
+ *  guards release, see `HostSessionStepDeps.commitTransition`).
  *  Draining on is simply the least-bad of the three, not a rescue.
  *
  *  ⚠️ LIVENESS is unchanged and still the caller's to keep: a `step` that
