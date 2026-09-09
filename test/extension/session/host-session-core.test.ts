@@ -1746,13 +1746,50 @@ describe("host-session-core: an unobserved ack label still DRAINS (bytes first)"
     ).toEqual(expect.objectContaining({ message: expect.stringContaining("no bytes land") }));
   });
 
-  it("a no-op-shaped stash withholds the repost the drain arm makes", () => {
+  it("a no-op-shaped stash withholds the repost the drain arm makes (EXHAUSTIVE: no stray 'unlabelled drain' log)", () => {
     // The drain RUNS here and reaches the `no-op` verdict; what withholds the
     // repost is the ACK gate (`ackEffects`), not `canDrain`. This is the pin that
-    // keeps that withhold branch from being deleted as unreachable.
+    // keeps that withhold branch from being deleted as unreachable. EXHAUSTIVE
+    // now (not just a partial find/some pair): this readonly/stale/no-op arm
+    // deliberately does NOT spread `staleReBaseWarn` (that residual is already
+    // logged through `withholdAckEffects` below) — a `toEqual` is what would
+    // catch a future "for consistency" regression that spreads it in anyway.
     const r = core.transition(lockedStash("edit1"), unobserved);
-    expect(r.effects.find((e) => e.type === "postDocument")).toBeUndefined();
-    expect(r.effects.some((e) => e.type === "showResyncFailure")).toBe(true);
+    expect(r.effects).toEqual([
+      {
+        type: "logWarn",
+        message: expect.stringContaining(
+          "settlement ack withheld: no post-apply document version was observed"
+        ),
+        detail: { uri: ctx.uriString, heldBase: 1, lastAppliedDocVersion: 1 },
+      },
+      { type: "showResyncFailure" },
+    ]);
+  });
+
+  it("a readonly-shaped stash withholds the repost the drain arm makes, at an UNOBSERVED label", () => {
+    // The `readonly` sibling of the test above: `canWrite: false` also lands in
+    // the readonly/stale/no-op arm, and the only existing `canWrite: false`
+    // drain test uses an OBSERVED label (line ~572) — this is the missing
+    // UNOBSERVED-label case named by the describe header.
+    const r = core.transition(
+      lockedStash("edit1-more-ro"),
+      settled({ settledVersion: null, currentContent: "edit1", canWrite: false })
+    );
+    expect(r.effects).toEqual([
+      {
+        type: "logWarn",
+        message: expect.stringContaining(
+          "settlement ack withheld: no post-apply document version was observed"
+        ),
+        detail: { uri: ctx.uriString, heldBase: 1, lastAppliedDocVersion: 1 },
+      },
+      { type: "showResyncFailure" },
+    ]);
+    // NEGATIVE: no "unlabelled drain" record leaks into this arm.
+    expect(
+      r.effects.some((e) => e.type === "logWarn" && e.message.includes("unlabelled drain"))
+    ).toBe(false);
   });
 
   it("an OBSERVED label drains the same way — only the re-base is not stale", () => {
