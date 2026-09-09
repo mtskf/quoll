@@ -149,8 +149,9 @@ export function createEffectExecutor<TEdit>(deps: EffectExecutorDeps<TEdit>): Ef
   // Spam is the worse failure, and this placement removes it structurally rather
   // than by argument about VS Code internals.
   //
-  // GUARDED: the reseed caller sits INSIDE the boundary that exists to stop a
-  // throw from escaping `runEffects`, and `window.showErrorMessage`'s SYNCHRONOUS
+  // GUARDED: BOTH callers sit INSIDE the boundary that exists to stop a throw
+  // from escaping `runEffects` (the `postDocument` build-failure guard and the
+  // `showResyncFailure` effect), and `window.showErrorMessage`'s SYNCHRONOUS
   // throw is not absorbed by the panel's wrapper — an unguarded call here would
   // re-open the exact hole this closes. Same discipline as
   // revert-rescue-wiring's per-dep `runGuarded`.
@@ -261,9 +262,23 @@ export function createEffectExecutor<TEdit>(deps: EffectExecutorDeps<TEdit>): Ef
   // The consequences differ per family, so the call site is NAMED and travels on
   // the warn: without it three unrelated outcomes collapse into one log line and
   // triage cannot tell "the retry lost a transient" from "the recovery reseed was
-  // withheld". Pass a literal — this runs on a failure path and must not evaluate
-  // anything that can throw.
-  const readVersionGuarded = (site: string): number | null => {
+  // withheld".
+  //
+  // The roster IS the contract: a closed set of triage tokens, one per call
+  // family. Typing it as a union (not `string`) makes both invariants the
+  // compiler's job — an off-roster token is rejected, and so is any computed
+  // non-literal expression, which matters because this runs on a failure path
+  // and must not evaluate anything that can throw. What the union CANNOT catch
+  // is a copy-paste that stamps one VALID token onto the wrong arm (the three
+  // adjacent recovery sites are exactly that shape), so each site also has a
+  // per-site assertion in `effect-executor.test.ts`.
+  type GuardedVersionReadSite =
+    | "settlement-retry"
+    | "rejection-arm-first-read"
+    | "edit-rejected-recovery:sync-throw"
+    | "edit-rejected-recovery:refused"
+    | "edit-rejected-recovery:rejected";
+  const readVersionGuarded = (site: GuardedVersionReadSite): number | null => {
     try {
       return deps.applyEditSeam.readVersion();
     } catch (err) {
@@ -514,7 +529,7 @@ export function createEffectExecutor<TEdit>(deps: EffectExecutorDeps<TEdit>): Ef
           // now appliedUnverified" is false for part of this very family.
           console.warn(
             okFamily
-              ? "[quoll] the write pipeline completed (no failure) but a settle-time verification read failed. Each missing observation gates only its OWN consequence: no drain unless the settled CONTENT was read (settledContent !== null), no version advance unless the VERSION was read (settledVersion !== null)"
+              ? "[quoll] the write pipeline completed (no failure) but a settle-time verification read failed. Each missing observation gates only its OWN consequence: no drain unless the settled CONTENT was read (settledContent !== null), no version advance unless the VERSION was read (settledVersion !== null), and the ack Document is withheld unless some source observed a post-apply version"
               : `[quoll] the settlement verification read also failed on a ${result.tag} outcome; the outcome itself is unchanged`,
             result.settleReadFailure
           );

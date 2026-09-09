@@ -645,6 +645,13 @@ describe("effect-executor runApplyEdit (wrapper mapping)", () => {
           settledVersion: null,
         })
       );
+      // The site token is per-ARM, and the union type cannot catch a valid token
+      // stamped onto the wrong arm — only this assertion can.
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringContaining("guarded readVersion failed"),
+        { site: "rejection-arm-first-read" },
+        expect.anything()
+      );
     } finally {
       warnSpy.mockRestore();
     }
@@ -826,6 +833,11 @@ describe("effect-executor sendEditRejected (via postEditRejected effect)", () =>
         id: 42,
         documentVersion: null,
       });
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringContaining("guarded readVersion failed"),
+        { site: "edit-rejected-recovery:sync-throw" },
+        expect.anything()
+      );
     } finally {
       errorSpy.mockRestore();
       warnSpy.mockRestore();
@@ -856,6 +868,11 @@ describe("effect-executor sendEditRejected (via postEditRejected effect)", () =>
         id: 42,
         documentVersion: null,
       });
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringContaining("guarded readVersion failed"),
+        { site: "edit-rejected-recovery:refused" },
+        expect.anything()
+      );
     } finally {
       errorSpy.mockRestore();
       warnSpy.mockRestore();
@@ -886,6 +903,11 @@ describe("effect-executor sendEditRejected (via postEditRejected effect)", () =>
         id: 42,
         documentVersion: null,
       });
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringContaining("guarded readVersion failed"),
+        { site: "edit-rejected-recovery:rejected" },
+        expect.anything()
+      );
     } finally {
       errorSpy.mockRestore();
       warnSpy.mockRestore();
