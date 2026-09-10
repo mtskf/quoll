@@ -1360,12 +1360,14 @@ export function createHostSessionCore(context: HostSessionContext, deps: HostSes
         // there — same reasoning as the settlement's dispose arms). Alive it
         // goes through the SHARED `ackEffects`, so the ack-label gate keeps one
         // owner. Posting is what un-parks the webview's single flight.
-        return {
-          state: recovered,
-          effects: state.disposed
-            ? [toast, triage]
-            : [toast, ...ackEffects(ackLabelObserved, recovered, heldBase, state.context), triage],
-        };
+        //
+        // ONE list, so the toast-first / triage-last order the comments above
+        // justify cannot be fixed on one branch and missed on the other: the
+        // dispose difference is the ack half alone.
+        const ack = state.disposed
+          ? []
+          : ackEffects(ackLabelObserved, recovered, heldBase, state.context);
+        return { state: recovered, effects: [toast, ...ack, triage] };
       }
       case "editRejectedDeliveryFailed": {
         // Per-delivery identity (Codex N2/N6): only the delivery this failure

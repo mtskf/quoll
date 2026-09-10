@@ -548,13 +548,13 @@ export function createEffectExecutor<TEdit>(deps: EffectExecutorDeps<TEdit>): Ef
           );
         }
       },
-      // REJECTION ARM — the write lock's release valve for a REJECTED pipeline. `executeDocumentWrite`
-      // now GUARDS its two settle-time verification reads individually, so those
-      // can no longer reject the pipeline (a settle-read failure resolves as an
-      // UNVERIFIED settlement instead). The ONE reachable rejection source is what
-      // is left outside a try: the SYNCHRONOUS prefix (`readText` /
-      // `canonicalize`, which run before anything can land, so a rejection there
-      // really does describe a write that never happened).
+      // REJECTION ARM — the write lock's release valve for a REJECTED pipeline.
+      // `executeDocumentWrite` now GUARDS its two settle-time verification reads
+      // individually, so those can no longer reject the pipeline (a settle-read
+      // failure resolves as an UNVERIFIED settlement instead). The ONE reachable
+      // rejection source is what is left outside a try: the SYNCHRONOUS prefix
+      // (`readText` / `canonicalize`, which run before anything can land, so a
+      // rejection there really does describe a write that never happened).
       // ⚠️ This arm does NOT cover a throw from its own SIBLING — this is the
       // two-argument `.then(onFulfilled, onRejected)`, and `onRejected` never sees
       // `onFulfilled`'s throw (same limitation stated at `readCanWrite` above, and

@@ -59,8 +59,8 @@ export interface HostSessionStepDeps {
    *  dispatched, so it can never arrive here as a throwing INPUT (see
    *  `host-session-core.ts:1215`, "THE SECOND LIVE WRITE-LOCK RELEASE SITE").
    *  When the settlement's commit THREW, that recovery is what releases the lock
-   *  (see `isEditApplied`'s `applyEditSettled` / `disposed` comment). A throw from the `disposed`
-   *  transition needs no rescue of its own, but NOT because the barrier drops
+   *  (see `isEditApplied`'s `applyEditSettled` / `disposed` comment). A throw from the
+   *  `disposed` transition needs no rescue of its own, but NOT because the barrier drops
    *  anything IN THIS STEP: the panel sets its local `disposed` flag BEFORE
    *  dispatching the `disposed` event (`quoll-editor-panel.ts`'s
    *  `onDidDispose`), so `editSettledBarrier`'s `isDisposed()` already reads
@@ -177,8 +177,8 @@ export function isEditApplied(event: HostSessionEvent): boolean {
   }
 }
 
-/** The settlement whose commit-throw needs rescuing, or `null` when no rescue
- *  is needed. */
+/** The one event whose commit-throw needs rescuing — what
+ *  `releasesWriteLockOnCommit` hands back when it selects one. */
 type SettlementEvent = Extract<HostSessionEvent, { readonly type: "applyEditSettled" }>;
 
 /** Non-null iff a throw from `commitTransition(event)` WOULD leave the write
@@ -339,12 +339,12 @@ export function createHostSessionStep(
    *  root cause and the triage payload, so neither the recovery commit nor its
    *  effects may displace it. */
   const recoverStrandedWriteLock = (event: HostSessionEvent): void => {
-    // ONE decision, carried as a value: `releasesWriteLockOnCommit` hands back
-    // the settlement it selected, so the version below comes from the narrowed
-    // event and there is no second `event.type === …` test to keep in step with
-    // the first. `settledVersion` may still be `null` — that is the settlement's
-    // OWN unobserved label (⇒ the reducer withholds the ack rather than pairing
-    // live bytes with a fabricated one), not a fallback invented here.
+    // ONE decision, carried as a value — the gate and the version below both
+    // come from this single call (why it returns the event rather than a
+    // boolean: `releasesWriteLockOnCommit`'s doc). `settledVersion` may still be
+    // `null`: that is the settlement's OWN unobserved label (⇒ the reducer
+    // withholds the ack rather than pairing live bytes with a fabricated one),
+    // not a fallback invented here.
     const settlement = releasesWriteLockOnCommit(event);
     if (settlement === null) {
       return;

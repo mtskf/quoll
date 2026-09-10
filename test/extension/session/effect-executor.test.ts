@@ -303,13 +303,14 @@ describe("effect-executor runApplyEdit (wrapper mapping)", () => {
   // (host-session-core clears `pendingApplyBaseVersion` on `applyEditSettled`,
   // on the `settlementTransitionFailed` recovery for a settlement whose
   // transition THREW, and on dispose — neither of the last two can stand in for
-  // a settlement that resolved), so BOTH promise arms must reach `dispatch`. execute-write GUARDS its
-  // two settle-time verification reads individually now, so the surviving
-  // rejection source is its SYNCHRONOUS prefix (`readText` / `canonicalize`) —
-  // which runs before anything can land, so a rejection there really does
-  // describe a write that never happened. Previously such a rejection was left
-  // unhandled by the bare `void ….then(onFulfilled)` (`void` discards the promise
-  // reference, it does not catch) and the lock was held for the session.
+  // a settlement that resolved), so BOTH promise arms must reach `dispatch`.
+  // execute-write GUARDS its two settle-time verification reads individually
+  // now, so the surviving rejection source is its SYNCHRONOUS prefix
+  // (`readText` / `canonicalize`) — which runs before anything can land, so a
+  // rejection there really does describe a write that never happened.
+  // Previously such a rejection was left unhandled by the bare
+  // `void ….then(onFulfilled)` (`void` discards the promise reference, it does
+  // not catch) and the lock was held for the session.
   it("pipeline rejection (synchronous-prefix read throws) STILL settles, as a non-ok outcome", async () => {
     const dispatch = await runApply({
       readText: () => {

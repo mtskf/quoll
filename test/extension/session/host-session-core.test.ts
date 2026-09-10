@@ -1948,6 +1948,18 @@ describe("host-session-core: settlementTransitionFailed (write-lock recovery)", 
       lastAppliedDocVersion: 5,
       ...over,
     });
+  // Edit #2, stashed behind the in-flight apply. ONE literal: every test below
+  // that needs a stash needs the same one, and the drop is what they differ on.
+  const STASH = { content: "edit1+x", baseDocVersion: 5 };
+  // POST-DISPOSE the `disposed` transition has already cleared the lock, so
+  // these cases start lock-FREE — the one structural difference from `locked`.
+  const afterDispose = (over: Partial<HostSessionState> = {}) =>
+    base({ disposed: true, pendingApplyBaseVersion: null, ...over });
+  // The `message` of a `showError` / `logWarn` effect. A MISSING effect throws
+  // here instead of reading as an empty string — which is what keeps the
+  // `not.toContain` assertions below from passing vacuously on an absent one.
+  const messageOf = (effect: HostSessionEffect | undefined): string =>
+    (effect as { message: string }).message;
 
   it("RELEASES the write lock and clears the in-flight content", () => {
     const r = core.transition(locked(), recovery());
@@ -1973,20 +1985,17 @@ describe("host-session-core: settlementTransitionFailed (write-lock recovery)", 
   });
 
   it("DROPS the stash and records it in the triage log", () => {
-    const r = core.transition(
-      locked({ pendingEdit: { content: "edit1+x", baseDocVersion: 5 } }),
-      recovery()
-    );
+    const r = core.transition(locked({ pendingEdit: STASH }), recovery());
     expect(r.state.pendingEdit).toBeNull();
     const warn = r.effects.find((e) => e.type === "logWarn");
     expect(warn).toBeDefined();
-    expect((warn as { message: string }).message).toContain("DROPPED");
+    expect(messageOf(warn)).toContain("DROPPED");
   });
 
   it("logs the release even with no stash to lose", () => {
     const warn = core.transition(locked(), recovery()).effects.find((e) => e.type === "logWarn");
     expect(warn).toBeDefined();
-    expect((warn as { message: string }).message).not.toContain("DROPPED");
+    expect(messageOf(warn)).not.toContain("DROPPED");
   });
 
   // The throwing transition abandoned its effect list, which on any non-ok
@@ -1994,8 +2003,8 @@ describe("host-session-core: settlementTransitionFailed (write-lock recovery)", 
   it("ALWAYS toasts the internal error, even with no stash", () => {
     const toast = core.transition(locked(), recovery()).effects.find((e) => e.type === "showError");
     expect(toast).toBeDefined();
-    expect((toast as { message: string }).message).toContain("internal error");
-    expect((toast as { message: string }).message).toContain("/x.md"); // ctx.fsPath
+    expect(messageOf(toast)).toContain("internal error");
+    expect(messageOf(toast)).toContain("/x.md"); // ctx.fsPath
   });
 
   // The webview's replay buffer still holds the bytes on the alive path
@@ -2004,9 +2013,9 @@ describe("host-session-core: settlementTransitionFailed (write-lock recovery)", 
   // here. Same gate as the settlement arm's own unobservedStashDrop toast.
   it("does NOT claim a dropped edit on the ALIVE path, even when a stash was dropped", () => {
     const toast = core
-      .transition(locked({ pendingEdit: { content: "edit1+x", baseDocVersion: 5 } }), recovery())
+      .transition(locked({ pendingEdit: STASH }), recovery())
       .effects.find((e) => e.type === "showError");
-    expect((toast as { message: string }).message).not.toContain("dropped");
+    expect(messageOf(toast)).not.toContain("dropped");
   });
 
   // The POSITIVE half of the pair above, and the reason the gate is "will an ack
@@ -2016,12 +2025,9 @@ describe("host-session-core: settlementTransitionFailed (write-lock recovery)", 
   // webview drops that buffer (`recordedEpoch > buf.epoch`, edit-sync.ts). The
   // stash really was the last carrier, alive or not, so the toast must say so.
   it("CLAIMS the dropped edit on the ALIVE path when the ack is WITHHELD (no Document will ever replay it)", () => {
-    const r = core.transition(
-      locked({ pendingEdit: { content: "edit1+x", baseDocVersion: 5 } }),
-      recovery(null)
-    );
+    const r = core.transition(locked({ pendingEdit: STASH }), recovery(null));
     const toast = r.effects.find((e) => e.type === "showError");
-    expect((toast as { message: string }).message).toContain("dropped");
+    expect(messageOf(toast)).toContain("dropped");
     // WHY it is a loss — the withhold pair, not an ack Document.
     expect(r.effects.some((e) => e.type === "postDocument")).toBe(false);
     expect(r.effects.some((e) => e.type === "showResyncFailure")).toBe(true);
@@ -2047,8 +2053,8 @@ describe("host-session-core: settlementTransitionFailed (write-lock recovery)", 
     // `ackLabelObserved` used to leave the whole suite green.
     const toast = r.effects.find((e) => e.type === "showError");
     expect(toast).toBeDefined();
-    expect((toast as { message: string }).message).toContain("internal error");
-    expect((toast as { message: string }).message).toContain("/x.md"); // ctx.fsPath
+    expect(messageOf(toast)).toContain("internal error");
+    expect(messageOf(toast)).toContain("/x.md"); // ctx.fsPath
   });
 
   it("still ACKS at an unobserved settled version when a lock-held resync already raised the label", () => {
@@ -2059,28 +2065,21 @@ describe("host-session-core: settlementTransitionFailed (write-lock recovery)", 
   // Post-dispose the retained replay buffer went with the iframe, so here the
   // stash really was the only carrier and the toast says so.
   it("POST-DISPOSE drops the stash, CLAIMS the loss, and posts no Document", () => {
-    const r = core.transition(
-      base({
-        disposed: true,
-        pendingApplyBaseVersion: null, // the dispose transition already cleared it
-        pendingEdit: { content: "edit1+x", baseDocVersion: 5 },
-      }),
-      recovery(6)
-    );
+    const r = core.transition(afterDispose({ pendingEdit: STASH }), recovery(6));
     expect(r.state.pendingEdit).toBeNull();
     const toast = r.effects.find((e) => e.type === "showError");
-    expect((toast as { message: string }).message).toContain("internal error");
-    expect((toast as { message: string }).message).toContain("dropped");
+    expect(messageOf(toast)).toContain("internal error");
+    expect(messageOf(toast)).toContain("dropped");
     expect(r.effects.some((e) => e.type === "postDocument")).toBe(false);
     expect(r.effects.some((e) => e.type === "showResyncFailure")).toBe(false);
   });
 
   it("POST-DISPOSE with no stash still toasts the internal error, without claiming a loss", () => {
     const toast = core
-      .transition(base({ disposed: true, pendingApplyBaseVersion: null }), recovery(6))
+      .transition(afterDispose(), recovery(6))
       .effects.find((e) => e.type === "showError");
     expect(toast).toBeDefined();
-    expect((toast as { message: string }).message).not.toContain("dropped");
+    expect(messageOf(toast)).not.toContain("dropped");
   });
 
   // Post-dispose the `disposed` arm has ALREADY cleared the lock, so
@@ -2088,10 +2087,7 @@ describe("host-session-core: settlementTransitionFailed (write-lock recovery)", 
   // epoch. Harmless (the state is discarded and no Document goes out) but
   // pinned so the arm's comment cannot claim otherwise and drift.
   it("POST-DISPOSE the resync reads as a lock-free advance and bumps the epoch (harmless, pinned)", () => {
-    const r = core.transition(
-      base({ disposed: true, pendingApplyBaseVersion: null, lastAppliedDocVersion: 5 }),
-      recovery(6)
-    );
+    const r = core.transition(afterDispose({ lastAppliedDocVersion: 5 }), recovery(6));
     expect(r.state.externalEpoch).toBe(1);
   });
 
@@ -2101,19 +2097,12 @@ describe("host-session-core: settlementTransitionFailed (write-lock recovery)", 
   // therefore precedes it.
   it("orders the triage log LAST, behind the user-visible signal and the un-park Document", () => {
     const alive = core
-      .transition(locked({ pendingEdit: { content: "edit1+x", baseDocVersion: 5 } }), recovery(6))
+      .transition(locked({ pendingEdit: STASH }), recovery(6))
       .effects.map((e) => e.type);
     expect(alive.indexOf("showError")).toBeLessThan(alive.indexOf("postDocument"));
     expect(alive.indexOf("postDocument")).toBeLessThan(alive.indexOf("logWarn"));
     const dead = core
-      .transition(
-        base({
-          disposed: true,
-          pendingApplyBaseVersion: null,
-          pendingEdit: { content: "edit1+x", baseDocVersion: 5 },
-        }),
-        recovery(6)
-      )
+      .transition(afterDispose({ pendingEdit: STASH }), recovery(6))
       .effects.map((e) => e.type);
     expect(dead.indexOf("showError")).toBeLessThan(dead.indexOf("logWarn"));
   });

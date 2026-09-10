@@ -6,10 +6,9 @@
 // promise reference; it does not catch). `applyEditSettled` is the only event
 // that clears `pendingApplyBaseVersion` for a settlement that COMPLETES
 // (`settlementTransitionFailed` covers one whose transition threw; dispose
-// aside), so the lock
-// stayed held for the rest of the session and every later edit was stashed
-// behind a bare `console.warn` and never written — silent, toast-free data loss
-// for that panel.
+// aside), so the lock stayed held for the rest of the session and every later
+// edit was stashed behind a bare `console.warn` and never written — silent,
+// toast-free data loss for that panel.
 //
 // The unit-level mapping (rejection → non-ok settlement, unobserved snapshots,
 // guarded `canWrite`) is pinned in effect-executor.test.ts. THIS file wires the
