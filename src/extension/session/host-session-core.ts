@@ -1395,8 +1395,8 @@ export function createHostSessionCore(context: HostSessionContext, deps: HostSes
         if (!lostStash && (state.disposed || ackLabelObserved)) {
           // GENUINELY LOSS-FREE, which is why this is the only branch keyed on
           // BOTH halves. Exactly two states reach it:
-          //   - an ack IS coming (`ackLabelObserved`), so the retained replay
-          //     buffer gets replayed. Nothing was lost.
+          //   - ALIVE with an ack coming (`ackLabelObserved`), so the retained
+          //     replay buffer gets replayed. Nothing was lost.
           //   - POST-DISPOSE with nothing stashed: no stash to drop, and the
           //     in-flight bytes went with the iframe, so there is no remedy left
           //     to advise beyond checking the file.
@@ -1416,8 +1416,8 @@ export function createHostSessionCore(context: HostSessionContext, deps: HostSes
         } else {
           // ALIVE with a WITHHELD ack — HEDGED, and keyed on that alone, so it
           // covers BOTH carriers: a dropped stash AND (with no stash) the
-          // webview's in-flight bytes. The wording therefore asserts no stash,
-          // because in the second state there is none. This arm is
+          // webview's in-flight bytes. The wording therefore never presupposes
+          // a stash, because in the second state there is none. This arm is
           // outcome-blind, and one corner really does land the bytes (the
           // never-advancing document above), so MAY is the strongest honest
           // claim. "may not have been saved" is deliberately the SAME phrase
