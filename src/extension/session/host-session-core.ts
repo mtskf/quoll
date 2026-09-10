@@ -212,6 +212,28 @@ export type HostSessionEvent =
       // WITHHOLDS the recovery reseed rather than fabricating a label.
       readonly documentVersion: number | null;
     }
+  | {
+      // A throwing `applyEditSettled` TRANSITION unwinds before the panel
+      // commits the state that would have released the write lock (the panel's
+      // `commitTransition` assigns `state` only on a normal return), so the lock
+      // stays HELD with no second settlement coming. This event is that
+      // recovery, committed from `host-session-step.ts`'s catch — NOT a VS Code
+      // input. It carries no `ApplyEditOutcome` on purpose: the outcome switch
+      // (`failureToasts`) is itself one of the throw sources being recovered
+      // from, so the arm below stays outcome-blind.
+      readonly type: "settlementTransitionFailed";
+      // The THROWING SETTLEMENT's own `settledVersion`, passed through by the
+      // step — NOT a fresh read. Same contract as there (`null` ⇔ NOT OBSERVED,
+      // never a fabricated number) and the same value the successful settlement
+      // would have used for its `advanced` label, so the recovery reproduces
+      // that decision instead of re-deriving one. Nothing can interleave
+      // between the event's construction and the throw (the executor builds it,
+      // dispatches it, and the transition throws synchronously on the
+      // single-threaded host), so it is also still the LIVE version here.
+      // Reusing it keeps `effect-executor.ts`'s "ONE guarded version reader"
+      // contract true: the recovery adds no read seam of its own.
+      readonly settledVersion: number | null;
+    }
   | { readonly type: "disposed" };
 
 export type HostSessionEffect =
@@ -344,6 +366,12 @@ function withholdAckEffects(
   context: HostSessionContext
 ): HostSessionEffect[] {
   return [
+    // FIRST: the executor runs `logWarn` UNGUARDED (`console.warn`, no `try`)
+    // and `runEffects` wraps no effect for it, so a throw there would abandon
+    // whatever follows — and what follows must not be the incident's only
+    // user-visible signal. Same rule as the settlement's toast-before-reseed
+    // order, applied to the withhold pair.
+    { type: "showResyncFailure" },
     {
       type: "logWarn",
       message:
@@ -354,7 +382,6 @@ function withholdAckEffects(
         lastAppliedDocVersion: settled.lastAppliedDocVersion,
       },
     },
-    { type: "showResyncFailure" },
   ];
 }
 
@@ -487,9 +514,21 @@ export function createHostSessionCore(context: HostSessionContext, deps: HostSes
   function transition(state: HostSessionState, event: HostSessionEvent): HostSessionResult {
     // Post-dispose guard: every async settlement / stray listener is a no-op —
     // EXCEPT applyEditSettled, which must still be able to DRAIN a stashed
-    // pending edit (the in-flight-apply + dispose data-loss race). Its arm
-    // stays a strict no-op when no stash is waiting.
-    if (state.disposed && event.type !== "disposed" && event.type !== "applyEditSettled") {
+    // pending edit (the in-flight-apply + dispose data-loss race), and
+    // settlementTransitionFailed, which must still DROP that stash and tell the
+    // user (post-dispose the stash is the edit's only carrier — the webview's
+    // retained replay buffer is gone with the iframe — and the `disposed` arm's
+    // `effects: []` is what used to make the loss silent). With NO stash waiting
+    // neither arm touches the stash or resyncs the webview; the HOST-side
+    // signals are the exception — a failed settlement keeps its toast, and the
+    // recovery keeps its internal-error toast plus triage, because after a close
+    // a VS Code window toast is the only surface left.
+    if (
+      state.disposed &&
+      event.type !== "disposed" &&
+      event.type !== "applyEditSettled" &&
+      event.type !== "settlementTransitionFailed"
+    ) {
       return { state, effects: [] };
     }
 
@@ -1172,6 +1211,117 @@ export function createHostSessionCore(context: HostSessionContext, deps: HostSes
         }
       }
 
+      case "settlementTransitionFailed": {
+        // THE SECOND LIVE WRITE-LOCK RELEASE SITE (the first is the settlement
+        // itself; `disposed` also clears it, but only on teardown). It exists
+        // because a throwing settlement TRANSITION leaves the lock held with no
+        // second settlement coming — see the event member's comment.
+        //
+        // The arm is deliberately a PURE FIELD RESET plus effects: no
+        // `decideEdit`, no outcome switch, no document read. Each of those is a
+        // throw source of the transition being recovered from, and a recovery
+        // that re-enters the seam that just threw can throw the recovery away
+        // (docs/LEARNING.md 2026-08-09). That is ALSO why the stash is DROPPED
+        // rather than re-run: `canDrain`'s safety condition ("the settled
+        // document IS edit #1's exact result") needs an OBSERVED canonical
+        // snapshot this arm must not go and read.
+        const heldBase = state.pendingApplyBaseVersion;
+        const stash = state.pendingEdit;
+        // Resync BEFORE the release so that ON THE ALIVE PATH
+        // `resyncLiveVersion`'s lock-free foreign-advance branch cannot fire:
+        // an advance seen here is almost always the in-flight apply's OWN echo,
+        // and bumping `externalEpoch` for it would make the webview drop the
+        // replay buffer still holding the user's keystrokes. POST-DISPOSE the
+        // `disposed` arm has already cleared the lock, so the branch DOES fire
+        // and the epoch bumps — harmless there (the state is discarded and no
+        // Document goes out), and pinned by a test so this note cannot drift.
+        // `null` ⇒ no resync at all (no fabricated version).
+        const resynced =
+          event.settledVersion !== null ? resyncLiveVersion(state, event.settledVersion) : state;
+        const recovered: HostSessionState = {
+          ...resynced,
+          pendingApplyBaseVersion: null,
+          inFlightContent: null,
+          pendingEdit: null,
+          rejection: NONE,
+        };
+        // The settlement's own gate, computed the same way: our carried version
+        // is an observation, OR a lock-held resync already raised the label
+        // beyond the held base (that raise IS an observation — the wiring
+        // snapshots the live version into those events).
+        const ackLabelObserved =
+          event.settledVersion !== null ||
+          (heldBase !== null && recovered.lastAppliedDocVersion > heldBase);
+        // UNCONDITIONAL, because the throwing transition ABANDONED its effect
+        // list — and on every non-ok outcome that list began with the
+        // save-failure `showError` (`settlementEffects`' toast-before-reseed
+        // order). This toast stands in for the one that was owed. Outcome-BLIND
+        // wording: the arm never learns whether the write landed, so it claims
+        // neither.
+        //
+        // The LOSS CLAUSE is the only conditional part, and it is
+        // POST-DISPOSE-ONLY. Alive, the dropped stash is not a loss: the webview
+        // still holds those bytes in the replay buffer `forcePost` RETAINED
+        // under single-flight (`webview/cm/edit-sync.ts`), and the ack below is
+        // the next ack that replays them — claiming a dropped edit there would
+        // be a false alarm. After a close that buffer is gone with the iframe
+        // and the stash was the only carrier. Same gate as the settlement arm's
+        // `unobservedStashDrop` toast; the withheld-ack corner keeps its own
+        // signal via `showResyncFailure`.
+        //
+        // ACCEPTED RESIDUAL, stated here because this arm is where it is
+        // created: the settlement's site-2 foreign-bytes check would have
+        // bumped `externalEpoch` when an external edit raced the apply, and
+        // this arm cannot — it is outcome-blind and must not read. So for a
+        // non-ok settlement that BOTH raced a foreign edit and threw, the
+        // same-epoch Document keeps the replay buffer alive and its replay can
+        // land on top of the foreign bytes, inverting "external wins". Paying it
+        // is worse either way: deciding needs a read through the seam that just
+        // threw, and bumping unconditionally drops the replay buffer on EVERY
+        // recovery — a deterministic loss on the common path to cover a
+        // double-fault race that needs a type violation to reach at all. That
+        // throw source is exactly one: `failureToasts`' `default` (the drain's
+        // two sources sit behind `canDrain`'s content match, which by
+        // construction means no foreign edit raced).
+        const lostStash = state.disposed && stash !== null;
+        const toast: HostSessionEffect = {
+          type: "showError",
+          message:
+            `Quoll hit an internal error while completing a save of ${state.context.fsPath}.` +
+            (lostStash ? " A later unsaved edit was dropped." : "") +
+            " Reopen the file to check its contents.",
+        };
+        // Triage LAST: the executor runs `logWarn` UNGUARDED (`console.warn`, no
+        // `try`) and `runEffects` wraps no effect for it, so a throw here must
+        // not be able to abandon the user-visible signal or the un-park
+        // Document. Detail key `recoveredVersion`, NOT `lastAppliedDocVersion`:
+        // the invariant test greps that identifier's `:` form over
+        // comment-stripped source, and a detail key of that name would read as a
+        // hand-rolled version write and redden it.
+        const triage: HostSessionEffect = {
+          type: "logWarn",
+          message:
+            "[quoll] settlement transition threw; the write lock was force-released by the recovery arm" +
+            (stash !== null ? " and the pending stash was DROPPED" : ""),
+          detail: {
+            uri: state.context.uriString,
+            heldBase,
+            stashBase: stash?.baseDocVersion ?? null,
+            recoveredVersion: recovered.lastAppliedDocVersion,
+          },
+        };
+        // The resync half is suppressed post-dispose (no view left to resync,
+        // and the withhold pair's "could not resync" signal would be noise
+        // there — same reasoning as the settlement's dispose arms). Alive it
+        // goes through the SHARED `ackEffects`, so the ack-label gate keeps one
+        // owner. Posting is what un-parks the webview's single flight.
+        return {
+          state: recovered,
+          effects: state.disposed
+            ? [toast, triage]
+            : [toast, ...ackEffects(ackLabelObserved, recovered, heldBase, state.context), triage],
+        };
+      }
       case "editRejectedDeliveryFailed": {
         // Per-delivery identity (Codex N2/N6): only the delivery this failure
         // was issued for may be cleared. A stale failure whose id no longer
@@ -1195,14 +1345,17 @@ export function createHostSessionCore(context: HostSessionContext, deps: HostSes
           // resync) converges.
           return {
             state: { ...state, rejection: NONE },
+            // Same ordering rule as `withholdAckEffects` (this is an inline
+            // copy of that pair): the user-visible signal precedes the one
+            // effect the executor runs unguarded.
             effects: [
+              { type: "showResyncFailure" },
               {
                 type: "logWarn",
                 message:
                   "[quoll] edit-rejected recovery reseed withheld: the live document version could not be read; rejection cleared, awaiting an observed Document",
                 detail: { uri: state.context.uriString, id: event.id },
               },
-              { type: "showResyncFailure" },
             ],
           };
         }
@@ -1327,9 +1480,10 @@ export function createHostSessionCore(context: HostSessionContext, deps: HostSes
  *      computed for. A stale replay is the worst of the three outcomes.
  *    - CLEAR the queue. Dropping accepted events is silent state loss, and for
  *      the host session it is unsafe by construction: `applyEditSettled` is
- *      the write lock's ONLY release site while the panel is alive (this
- *      file's own `disposed` case also clears `pendingApplyBaseVersion`, but
- *      only on teardown — see `isWriteLockHeld` above and `effect-executor.ts`'s
+ *      the write lock's release site for a settlement that COMPLETES (the
+ *      `settlementTransitionFailed` recovery arm releases it when a settlement
+ *      transition THROWS, and this file's own `disposed` case clears it on
+ *      teardown — see `isWriteLockHeld` above and `effect-executor.ts`'s
  *      header comment), so dropping an `applyEditSettled` strands the lock and
  *      the side channels deferred behind it for the rest of a still-alive
  *      session.
@@ -1338,11 +1492,12 @@ export function createHostSessionCore(context: HostSessionContext, deps: HostSes
  *  EFFECT runs after the transition has already committed. See
  *  `host-session-step.ts`. What continuing does NOT do — and must not be read
  *  as doing — is REPAIR the failed event: the rest of that event's effect list
- *  stays abandoned, and a throw from an `applyEditSettled` TRANSITION still
- *  leaves the write lock HELD, since the state that would have released it was
- *  never committed (no queue policy can pay that; what `step` DOES pay is the
- *  side channels deferred behind that lock — it drops them so their at-receipt
- *  guards release, see `HostSessionStepDeps.commitTransition`).
+ *  stays abandoned. A throw from an `applyEditSettled` TRANSITION is not paid
+ *  by any queue policy either — the state that would have released the lock was
+ *  never committed. What pays it is the step's own recovery
+ *  (`host-session-step.ts` commits `settlementTransitionFailed`, which releases
+ *  the lock and disposes of the stash) together with the side-channel drop it
+ *  performs alongside — see `HostSessionStepDeps.commitWriteLockRecovery`.
  *  Draining on is simply the least-bad of the three, not a rescue.
  *
  *  ⚠️ LIVENESS is unchanged and still the caller's to keep: a `step` that
