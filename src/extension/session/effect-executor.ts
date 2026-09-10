@@ -201,9 +201,10 @@ export function createEffectExecutor<TEdit>(deps: EffectExecutorDeps<TEdit>): Ef
   //
   // ORDER RULE (the second, independent half of the pair — cited by name from
   // the `postDocument` build-failure guard, since the ⚠️ above is a different
-  // claim): reducer-side effect order puts the user-visible signal ahead of the
-  // triage log. It stays load-bearing because a future edit can remove a
-  // per-effect guard.
+  // claim): THREE reducer-side sites put the user-visible signal ahead of the
+  // triage log. NOT a universal — `settlementEffects`' `refused` arm and the
+  // drain's parse-failed arm deliberately log FIRST. Load-bearing where it does
+  // hold, because a future edit can remove a per-effect guard.
   const reportContained = (report: () => void): void => {
     try {
       report();
@@ -994,28 +995,32 @@ export function createEffectExecutor<TEdit>(deps: EffectExecutorDeps<TEdit>): Ef
           // containment gives up is the LOG LINE, not the containment — see
           // `reportContained`'s ⚠️; that is a separate limit, not this one.)
           //
-          // What is still open is ONE position class, and it is not a console
-          // call: three effects evaluate their INJECTED BUILDER outside every
-          // `try`, because `post` guards only `deps.send(message)` and not the
-          // argument handed to it:
-          //   - `case "postRejectedDraft"` → `deps.buildRejectedDraft(...)`
-          //   - `case "postTheme"`         → `deps.buildTheme(...)`
-          //   - `sendEditRejected`         → `deps.buildEditRejected(error)`,
-          //     evaluated before that function's own `try`.
-          // `case "postDocument"` is the precedent that DOES guard its builder,
-          // which is what makes the other three a gap rather than a convention.
-          // The sharpest consequence is on the drain's parse-failed arm
-          // (`[...staleReBaseWarn, postRejectedDraft, showError]`): a throwing
-          // `buildRejectedDraft` abandons the `Cannot save:` toast AND leaves
-          // `rejection: { kind: "pending" }` committed with no delivery and no
-          // `editRejectedDeliveryFailed` — the deadlock `sendEditRejected`'s own
-          // header says it exists to prevent. That gap is OPEN (pre-existing),
-          // and it is deliberately NOT closed by wrapping, because the builder's
-          // RESULT is what the effect needs: containment there has to decide what
-          // the arm does when the message cannot be built at all, which is a new
-          // failure path rather than a reuse of this one. Tracked as its own
-          // entry in `docs/TODO.md` ("Contain the injected-builder evaluations in
-          // `runEffects`") — a comment is grep-able but is not a task queue.
+          // What is still open is TWO position classes, and one of them IS a
+          // console call:
+          //   1. Three effects evaluate their INJECTED BUILDER outside every
+          //      `try`, because `post` guards `deps.send(message)` and not the
+          //      argument handed to it: `postRejectedDraft` →
+          //      `deps.buildRejectedDraft`, `postTheme` → `deps.buildTheme`,
+          //      `sendEditRejected` → `deps.buildEditRejected` (before that
+          //      function's own `try`). `case "postDocument"` DOES guard its
+          //      builder, which is what makes these three a gap rather than a
+          //      convention. Sharpest on the drain's parse-failed arm
+          //      (`[...staleReBaseWarn, postRejectedDraft, showError]`): a
+          //      throwing `buildRejectedDraft` abandons the `Cannot save:` toast
+          //      AND leaves `rejection: { kind: "pending" }` committed with no
+          //      delivery and no `editRejectedDeliveryFailed`. NOT closed by
+          //      wrapping: the builder's RESULT is what the effect needs, so
+          //      containment has to decide what the arm does when the message
+          //      cannot be built at all — a new failure path, not a reuse.
+          //   2. `case "openExternal"` → `runOpenExternal(effect.href)`, a bare
+          //      side effect with NO guard, whose delegate reports through bare
+          //      `console.warn` ×2 + bare `console.error` + `deps.showError`
+          //      outside its own `try` (`links/handle-open-external.ts`) — so
+          //      this class DOES include console calls. Left open: the reducer
+          //      emits `openExternal` as the SOLE effect of its one list, so
+          //      there is no tail to abandon.
+          // Both OPEN (pre-existing), tracked in `docs/TODO.md` ("Contain the
+          // injected-builder evaluations in `runEffects`").
           try {
             console.warn(effect.message, effect.detail);
           } catch (err) {

@@ -2064,6 +2064,35 @@ describe("host-session-core: settlementTransitionFailed (write-lock recovery)", 
     expect(r.effects.some((e) => e.type === "showResyncFailure")).toBe(true);
   });
 
+  // The SAME hedge with NO stash to lose, which is the state PR #409 cycle 4
+  // re-keyed. `lostStash` requires `stash !== null`, so this state used to land
+  // in the no-loss branch and be told to "Reopen the file" — an instruction that
+  // DESTROYS the buffer holding the at-risk bytes. Nothing was stashed, but the
+  // recovery still fired mid-apply and the arm is outcome-blind, so the
+  // webview's IN-FLIGHT bytes sit under the same conditional four-step loss as a
+  // stash (no ack ⇒ no replay ⇒ the next lock-free advance bumps the epoch ⇒
+  // `edit-sync.ts` drops the buffer). The branch is now keyed on
+  // `alive && !ackLabelObserved`, which is why the wording no longer names a
+  // stash. The `not.toContain("Reopen the file")` assertion is the one that
+  // fails against the old condition — the rest of the pair would read the old
+  // message as merely quiet rather than wrong.
+  it("HEDGES on the ALIVE path with a WITHHELD ack even when there is NO stash (the in-flight bytes sit under the same loss, and 'reopen' would destroy them)", () => {
+    const r = core.transition(locked(), recovery(null)); // no `pendingEdit` at all
+    const toast = r.effects.find((e) => e.type === "showError");
+    expect(messageOf(toast)).toContain("may not have been saved");
+    expect(messageOf(toast)).toContain("copy any text you can still see");
+    expect(messageOf(toast)).toContain("before reloading the window");
+    // The buffer-destroying instruction must be GONE, not merely accompanied.
+    expect(messageOf(toast)).not.toContain("Reopen the file");
+    // Still outcome-blind: the hedge may not harden into the definite claim, and
+    // it must not presuppose the stash this state does not have.
+    expect(messageOf(toast)).not.toContain("dropped");
+    expect(messageOf(toast)).not.toContain("A later unsaved edit");
+    // WHY it is a loss at all — the ack really is withheld, so nothing replays.
+    expect(r.effects.some((e) => e.type === "postDocument")).toBe(false);
+    expect(r.effects.some((e) => e.type === "showResyncFailure")).toBe(true);
+  });
+
   // The hedge's justification is a CROSS-MODULE claim, stated in three comments
   // (`host-session-core.ts`'s withhold pair and this arm, plus the test above):
   // the wording reuses `RESYNC_FAILURE_MESSAGE`'s own certainty phrase so the two

@@ -246,7 +246,8 @@ describe("host-session step type pins", () => {
     // collapses to `never` on a typo and reddens its callers — so without this
     // pin one commit ships two derives with OPPOSITE failure modes.
     //
-    // It takes TWO assertions to say this, because either one alone is
+    // It takes TWO assertions to say this — and a third, below, to close the
+    // one vacuity the pair shares — because either one alone is
     // satisfiable without the invariant holding. `Extract<T, U>` answers `never`
     // for two different reasons — the union really excludes the member
     // (intended), or the literal matches nothing at all (vacuous) — and it cannot
@@ -268,14 +269,11 @@ describe("host-session step type pins", () => {
     //   - mistype `RecoveryEventType` → TS2322 (`_recoveryIsARealMember`; this is
     //     also the rename-and-forget case, where `Exclude` stops removing
     //     anything and the exclusion question alone would still answer `never`).
-    // ⚠️ ONE vacuity survives, and it is NOT a typo: `type RecoveryEventType =
-    // never` makes BOTH questions trivially true and leaves exit 0 (measured).
-    // Any misspelling is a non-empty string literal, so it always reddens one
-    // half — only the degenerate `never` escapes, which no typo produces but a
-    // refactor that computes this type (e.g. an intersection that collapses)
-    // could. Closing it costs one more assertion (`[RecoveryEventType] extends
-    // [never] ? … : …`); it is left open deliberately and recorded here rather
-    // than claimed shut.
+    //   - `type RecoveryEventType = never` → TS2322 (`_aliasIsNotNever`). That
+    //     degenerate value makes the two questions above trivially true, and no
+    //     typo produces it (every misspelling is a non-empty literal, which
+    //     always reddens one half) — but a refactor that COMPUTES this type
+    //     could, so the third assertion asks the alias about itself.
     type RecoveryEventType = "settlementTransitionFailed";
     const _recoveryIsARealMember: AssertEqual<
       Extract<HostSessionEvent, { readonly type: RecoveryEventType }>["type"],
@@ -285,8 +283,13 @@ describe("host-session step type pins", () => {
       Extract<HostSessionInputEvent, { readonly type: RecoveryEventType }>,
       never
     > = true;
+    const _aliasIsNotNever: AssertEqual<
+      [RecoveryEventType] extends [never] ? true : false,
+      false
+    > = true;
     expect(_recoveryIsARealMember).toBe(true);
     expect(_excludesRecovery).toBe(true);
+    expect(_aliasIsNotNever).toBe(true);
   });
 });
 
