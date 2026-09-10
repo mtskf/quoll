@@ -860,11 +860,11 @@ export function createEffectExecutor<TEdit>(deps: EffectExecutorDeps<TEdit>): Ef
             //
             // 2. The SIGNAL now goes FIRST, matching the module's own ORDER RULE
             //    (named in `reportContained`'s header) and the reducer-side sites
-            //    that cite it. ⚠️ Be honest about its status: while the wrap holds, this
-            //    order is UNOBSERVABLE — a contained log is absorbed either
+            //    that cite it. ⚠️ Be honest about its status: while the wrap holds,
+            //    this order is UNOBSERVABLE — a contained log is absorbed either
             //    way, so no test in the shipped configuration can tell the two
-            //    orders apart, and the suite stays green if someone puts the
-            //    log back in front. Its value is a counterfactual, and that
+            //    orders apart, and the suite stays green if someone puts the log
+            //    back in front. Its value is a counterfactual, and that
             //    counterfactual IS measured: with the wrap removed, log-first
             //    gives `toastAttempts: 0` and signal-first gives
             //    `toastAttempts: 1`. So this is what keeps the user-visible
