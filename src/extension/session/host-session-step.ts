@@ -57,7 +57,10 @@ export interface HostSessionStepDeps {
    *  (`HostSessionInputEvent`): the other live release site,
    *  `settlementTransitionFailed`, IS this rescue's own commit — never
    *  dispatched, so it can never arrive here as a throwing INPUT (see
-   *  `host-session-core.ts:1215`, "THE SECOND LIVE WRITE-LOCK RELEASE SITE").
+   *  `host-session-core.ts`'s `settlementTransitionFailed` arm, "THE SECOND
+   *  LIVE WRITE-LOCK RELEASE SITE"). No line number: the quoted marker is
+   *  unique repo-wide, while a number goes stale on the next edit above it —
+   *  as this one did, inside the very PR that added it.
    *  When the settlement's commit THREW, that recovery is what releases the lock
    *  (see `isEditApplied`'s `applyEditSettled` / `disposed` comment). A throw from the
    *  `disposed` transition needs no rescue of its own, but NOT because the barrier drops
@@ -104,9 +107,16 @@ export interface HostSessionStepDeps {
   readonly onSettleError?: (err: unknown) => void;
 }
 
-/** The barrier verdict for `event`: false ⇔ this step is a FAILED apply
- *  settlement, whose deferred side channels must be DROPPED (the edit did not
- *  land, so they would read pre-edit bytes). Exhaustive over BOTH discriminants
+/** The barrier verdict for `event`: `false` means DROP the deferred side
+ *  channels (the edit cannot be shown to have landed, so they would read
+ *  pre-edit bytes). It is NOT a biconditional on "failed apply settlement" —
+ *  three different arms answer `false`, and only the first is one:
+ *    - `applyEditSettled` with a non-ok outcome (the failed settlement proper);
+ *    - `settlementTransitionFailed`, the write-lock recovery, which is
+ *      outcome-blind and so may never claim the edit landed;
+ *    - both exhaustive `default` arms, which log and answer conservatively for
+ *      a member nobody taught this function about.
+ *  Exhaustive over BOTH discriminants
  *  — `HostSessionEvent["type"]` and `ApplyEditOutcome["kind"]` — on purpose: a
  *  new member must make this decision explicitly, and the `never` assignment
  *  turns "forgot to" into a `pnpm compile` error instead of leaving it to the

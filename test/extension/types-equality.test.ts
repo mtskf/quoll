@@ -30,6 +30,7 @@ import {
   type HandleContextHandoffPayload,
   type HandoffRevealSelection,
 } from "../../src/extension/handoff/handle-context-handoff";
+import type { HostSessionInputEvent } from "../../src/extension/session/host-session-core";
 import type { HostSessionStepDeps } from "../../src/extension/session/host-session-step";
 import type { EndOfLineValue } from "../../src/extension/status-bar";
 import type { PanelControls } from "../../src/extension/test-harness";
@@ -225,6 +226,31 @@ describe("host-session step type pins", () => {
       Required<Pick<HostSessionStepDeps, "commitWriteLockRecovery">>
     > = true;
     expect(_check).toBe(true);
+  });
+
+  it("keeps `settlementTransitionFailed` OUT of the dispatchable event union", () => {
+    // `HostSessionInputEvent` derives from `Exclude`, and `Exclude<T, U>` is
+    // `T extends U ? never : T` — a non-matching `U` returns `T` UNCHANGED with
+    // no error, so the derive is fail-OPEN. Measured BEFORE this pin existed: a
+    // one-character typo in the excluded literal left the whole of `pnpm compile`
+    // green AND re-admitted the forbidden
+    // `deps.dispatch({ type: "settlementTransitionFailed", … })`,
+    // which is the dispatch the type exists to forbid (a queued recovery lands
+    // behind a sibling that takes the lock-held stash arm, and the recovery then
+    // drops that stash). The sibling derive in the same commit,
+    // `host-session-step.ts`'s `SettlementEvent` `Extract`, is fail-CLOSED — it
+    // collapses to `never` on a typo and reddens its callers — so without this
+    // pin one commit ships two derives with OPPOSITE failure modes.
+    //
+    // This observes the exclusion EXPRESSION, not just its intent: it asks what
+    // the union actually contains. Revert-check: mistype the literal in
+    // `host-session-core.ts`'s `Exclude` and this resolves to `false`, failing
+    // the `= true` assignment (measured: TS2322 here, exit 0 without it).
+    const _excludesRecovery: AssertEqual<
+      Extract<HostSessionInputEvent, { readonly type: "settlementTransitionFailed" }>,
+      never
+    > = true;
+    expect(_excludesRecovery).toBe(true);
   });
 });
 

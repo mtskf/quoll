@@ -390,11 +390,15 @@ function withholdAckEffects(
   context: HostSessionContext
 ): HostSessionEffect[] {
   return [
-    // FIRST: the executor runs `logWarn` UNGUARDED (`console.warn`, no `try`)
-    // and `runEffects` wraps no effect for it, so a throw there would abandon
-    // whatever follows — and what follows must not be the incident's only
-    // user-visible signal. Same rule as the settlement's toast-before-reseed
-    // order, applied to the withhold pair.
+    // FIRST — and no longer because the executor leaves `logWarn` unguarded: it
+    // does not (`effect-executor.ts`'s `case "logWarn"` contains the throw). The
+    // order is DEFENCE IN DEPTH. That containment reports its own failure through
+    // a SECOND console call, which can fail for the same reason the first did
+    // (`reportContained`'s inert catch is the honest admission of this), so the
+    // incident's only user-visible signal must not sit behind the log. The
+    // reducer-side half holds even if the executor's per-effect guard is ever
+    // removed. Same rule as the settlement's toast-before-reseed order, applied
+    // to the withhold pair.
     { type: "showResyncFailure" },
     {
       type: "logWarn",
@@ -904,11 +908,20 @@ export function createHostSessionCore(context: HostSessionContext, deps: HostSes
         // be established, so the stash is dropped exactly as it is for a failed
         // save. While the panel is alive the keystroke still survives in the
         // webview's replay buffer (which this settlement deliberately does not
-        // invalidate) — re-posted once a later OBSERVED Document arrives; when
-        // the ack itself is withheld (unobserved label) the single flight stays
-        // parked until an observed documentChanged/ready Document lands (the
-        // quiet-document residual the follow-up TODO entry carries). Post-dispose
-        // the stash is its only carrier, which is why the drop is LOGGED below.
+        // invalidate) — but "survives" is bounded, and the bound is the ACK:
+        //   - with an ack Document, that Document is what replays it;
+        //   - with the ack WITHHELD (unobserved label), nothing replays it here,
+        //     and survival then depends on whether the epoch moves before an
+        //     observed documentChanged/ready Document lands. The ORDINARY
+        //     continuation is what can end it: this settlement releases the lock,
+        //     so the apply's own echo reads as a lock-free forward advance, bumps
+        //     `externalEpoch`, and the webview drops the buffer — the mechanism
+        //     spelled out for the neighbouring REFUSAL case below, where it makes
+        //     that refusal a deterministic loss. On a document whose version never
+        //     advances again the epoch stays put and the buffer is still replayed
+        //     (the quiet-document residual the follow-up TODO entry carries).
+        // Post-dispose the stash is its only carrier, which is why the drop is
+        // LOGGED below.
         // The ACK LABEL is deliberately NOT a conjunct below: the drain is a new
         // WRITE, not an ack, and its safety rests on the CONTENT evidence above.
         // ⛔ Do NOT re-add an `(ackLabelObserved || state.disposed)` conjunct here
@@ -1309,7 +1322,26 @@ export function createHostSessionCore(context: HostSessionContext, deps: HostSes
         //     four-file chain is exactly the claim that goes stale silently.
         //     `showResyncFailure` does not cover it — that says the view could
         //     not be resynced, not that an edit was dropped.
-        // Same gate as the settlement arm's `unobservedStashDrop` toast.
+        //     ⚠️ STEP (3) IS CONDITIONAL, and that is why the clause hedges
+        //     rather than asserts: `resyncLiveVersion` bumps `externalEpoch` only
+        //     on a lock-free FORWARD advance (`liveVersion >
+        //     lastAppliedDocVersion`), so on a document whose version never moves
+        //     again the epoch stays put, the next same-epoch Document REPLAYS the
+        //     retained buffer (`edit-sync.ts`'s `shouldDropBufferedForEpoch`
+        //     returns false for "same generation, epoch unchanged") and the bytes
+        //     land after all. Outcome-blind, this arm cannot tell the two apart.
+        // ⚠️ NOT the same gate as the settlement arm's `unobservedStashDrop`
+        // toast, and the two are NOT reconciled by this change. That toast is
+        // still emitted only inside the settlement arm's `if (state.disposed)`
+        // branch, so in the structurally identical ALIVE state (ok, unobserved
+        // content, unobserved version, stash present) the settlement arm emits NO
+        // showError at all — measured. The divergence is deliberate for now:
+        // widening that arm alone would hand the alive path a second toast that
+        // contradicts `RESYNC_FAILURE_MESSAGE` on remedy, and its loss is
+        // near-DETERMINISTIC there (the apply landed) rather than uncertain, so it
+        // cannot reuse this wording either. Unifying the two behind one shared
+        // predicate — with one incident yielding one remedy — is a follow-up
+        // slice, stated here so the gap stays findable instead of silent.
         //
         // ACCEPTED RESIDUAL, stated here because this arm is where it is
         // created: the settlement's site-2 foreign-bytes check would have
@@ -1329,17 +1361,47 @@ export function createHostSessionCore(context: HostSessionContext, deps: HostSes
         // a replay buffer). The drain's two sources sit behind `canDrain`'s
         // content match, which by construction means no foreign edit raced.
         const lostStash = stash !== null && (state.disposed || !ackLabelObserved);
+        // THREE branches, each ending in its own instruction rather than sharing
+        // an appended one: a toast carrying three imperatives (copy, reload,
+        // reopen) is a toast nobody follows.
+        //   1. NO LOSS — just the closing instruction.
+        //   2. POST-DISPOSE — DEFINITE. There is no webview, so the stash was the
+        //      edit's only carrier and nothing can replay it. "Reopen" is the only
+        //      available action; there is nothing left on screen to copy.
+        //   3. ALIVE with a WITHHELD ack — HEDGED. This arm is outcome-blind, and
+        //      one corner really does land the bytes (the never-advancing document
+        //      above), so MAY is the strongest honest claim. "may not have been
+        //      saved" is deliberately the SAME phrase `RESYNC_FAILURE_MESSAGE`
+        //      uses, so if both toasts appear they cannot contradict each other on
+        //      certainty; and the remedy composes with that toast's "reload the
+        //      window" as an ORDER (copy, THEN reload) instead of a conflict. It
+        //      must also stand alone: `showResyncFailure` is latched per panel, so
+        //      the resync toast is NOT guaranteed to appear beside this one.
+        //
+        // ⚠️ Do NOT copy branch 3's hedge onto the settlement arm's
+        // `unobservedStashDrop` toast. The two arms are alike in STATE and
+        // OPPOSITE in the CERTAINTY of the loss: there the apply LANDED
+        // (`outcome.kind === "ok"`), so its echo `documentChanged` arrives
+        // lock-free, bumps `externalEpoch` and drops the replay buffer — the
+        // near-DETERMINISTIC loss the settlement block's own "No second fault is
+        // needed" note describes. A settlement-side message needs its own design,
+        // not this wording.
+        const lossClause = !lostStash
+          ? " Reopen the file to check its contents."
+          : state.disposed
+            ? " A later unsaved edit was dropped. Reopen the file to check its contents."
+            : " A later unsaved edit may not have been saved — copy any text you can still see in the editor before reloading the window.";
         const toast: HostSessionEffect = {
           type: "showError",
-          message:
-            `Quoll hit an internal error while completing a save of ${state.context.fsPath}.` +
-            (lostStash ? " A later unsaved edit was dropped." : "") +
-            " Reopen the file to check its contents.",
+          message: `Quoll hit an internal error while completing a save of ${state.context.fsPath}.${lossClause}`,
         };
-        // Triage LAST: the executor runs `logWarn` UNGUARDED (`console.warn`, no
-        // `try`) and `runEffects` wraps no effect for it, so a throw here must
-        // not be able to abandon the user-visible signal or the un-park
-        // Document. Detail key `recoveredVersion`, NOT `lastAppliedDocVersion`:
+        // Triage LAST, as DEFENCE IN DEPTH rather than because the executor runs
+        // `logWarn` unguarded — it contains the throw (`effect-executor.ts`'s
+        // `case "logWarn"`). What that containment cannot promise is its own
+        // report: it goes out through a second console call that can fail exactly
+        // as the first did, so the ordering keeps the user-visible signal and the
+        // un-park Document out from behind the log either way.
+        // Detail key `recoveredVersion`, NOT `lastAppliedDocVersion`:
         // the invariant test greps that identifier's `:` form over
         // comment-stripped source, and a detail key of that name would read as a
         // hand-rolled version write and redden it.
@@ -1393,8 +1455,10 @@ export function createHostSessionCore(context: HostSessionContext, deps: HostSes
           return {
             state: { ...state, rejection: NONE },
             // Same ordering rule as `withholdAckEffects` (this is an inline
-            // copy of that pair): the user-visible signal precedes the one
-            // effect the executor runs unguarded.
+            // copy of that pair): the user-visible signal precedes the triage
+            // log, as defence in depth behind the executor's own per-effect
+            // containment — see that helper for why the containment does not
+            // make the order redundant.
             effects: [
               { type: "showResyncFailure" },
               {

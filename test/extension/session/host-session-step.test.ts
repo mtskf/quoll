@@ -253,11 +253,17 @@ describe("createHostSessionStep", () => {
   });
 
   // LEARNING 2026-09-09: an exhaustive switch only catches a MISSING member,
-  // never one placed in the wrong arm — so the FALSE side of
+  // never one placed in the wrong arm — so the `null` side of
   // `releasesWriteLockOnCommit` needs its own behavioural pin. Moving
-  // `settlementTransitionFailed` to the `true` arm would make a throwing
-  // recovery recover itself. The console.error guard is what makes this
-  // non-vacuous: the DEFAULT arm also answers `false`, and logs.
+  // `settlementTransitionFailed` into the arm that RETURNS THE EVENT would make a
+  // throwing recovery recover itself. For THIS member tsc now helps: since the
+  // helper returns `SettlementEvent | null`, the move is a `TS2322` ("missing the
+  // following properties … outcome, canWrite, currentContent, preApplyContent") —
+  // measured. The general hazard stands, though, since a member that happens to
+  // be structurally compatible would still slip through, which is why the runtime
+  // pin stays. The console.error spy is what makes it non-vacuous: the DEFAULT
+  // arm also answers `null`, and logs — so asserting only "no recovery" would
+  // pass for a member that fell through to the default instead.
   it("does NOT recover a throwing RECOVERY transition (no rescue of the rescue)", () => {
     const spy = vi.spyOn(console, "error").mockImplementation(() => {});
     const recovered = vi.fn(() => [] as readonly HostSessionEffect[]);
