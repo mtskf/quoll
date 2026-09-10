@@ -22,8 +22,10 @@ import { createEditSettledBarrier } from "../../../src/extension/session/edit-se
 import {
   type ApplyEditOutcome,
   createDrainingDispatcher,
+  createHostSessionCore,
   type HostSessionEffect,
   type HostSessionEvent,
+  isWriteLockHeld,
 } from "../../../src/extension/session/host-session-core.js";
 import {
   createHostSessionStep,
@@ -777,5 +779,132 @@ describe("createHostSessionStep", () => {
     expect(panel).toContain("settleEditBarrier:");
     expect(panel).toMatch(/settleEditBarrier:[\s\S]{0,80}editSettledBarrier\.settle\(/);
     expect(panel).toContain("createDrainingDispatcher<HostSessionEvent>(step)");
+  });
+
+  // The panel's composition, end to end: real core + real step + real barrier +
+  // real dispatcher, with the panel's own `state` closure. Pins BOTH halves of
+  // the fix — the lock release and the stash disposition — plus the durable (no
+  // longer one-shot) side-channel release.
+  it("releases the lock and disposes of the stash through the real panel composition", () => {
+    const core = createHostSessionCore(
+      { uriString: "file:///t.md", fsPath: "/t.md" },
+      {
+        // Throws for the STASH content only: the drain reaches decideEdit →
+        // validator and the settlement transition throws. A later edit must
+        // still be able to validate, or the "next edit" assertion below could
+        // never pass for the right reason.
+        validateForWrite: (content: string) => {
+          if (content === "edit1+x") {
+            throw new Error("validator blew up");
+          }
+          return { ok: true } as const;
+        },
+        mintEpochGeneration: () => 7,
+      }
+    );
+    // Edit #1 in flight (lock held at base 5), edit #2 stashed behind it.
+    let state = {
+      ...core.initialState(5),
+      pendingApplyBaseVersion: 5,
+      inFlightContent: "edit1",
+      pendingEdit: { content: "edit1+x", baseDocVersion: 5 },
+    };
+    const effects: HostSessionEffect[] = [];
+    const barrier = createEditSettledBarrier({
+      isLocked: () => isWriteLockHeld(state),
+      isDisposed: () => false,
+      onError: () => {},
+    });
+    const commit = (event: HostSessionEvent): readonly HostSessionEffect[] => {
+      const result = core.transition(state, event);
+      state = result.state;
+      return result.effects;
+    };
+    const step = createHostSessionStep({
+      commitTransition: commit,
+      commitWriteLockRecovery: (settledVersion) =>
+        commit({ type: "settlementTransitionFailed", settledVersion }),
+      runEffects: (list) => effects.push(...list),
+      settleEditBarrier: (applied) => barrier.settle(applied),
+    });
+    const dispatch = createDrainingDispatcher<HostSessionEvent>(step);
+
+    const deferred = vi.fn();
+    const droppedGuard = vi.fn();
+    barrier.run(deferred, droppedGuard); // deferred behind the held lock
+
+    expect(() =>
+      dispatch({
+        type: "applyEditSettled",
+        outcome: { kind: "ok" },
+        settledVersion: 6,
+        canWrite: true,
+        currentContent: "edit1",
+        preApplyContent: "seed",
+      })
+    ).toThrow("validator blew up");
+
+    // 1. the lock is RELEASED (it was held for the panel's life before this fix)
+    expect(isWriteLockHeld(state)).toBe(false);
+    // 2. the stash is gone, the internal error reached the user (standing in for
+    //    the save-failure toast the throw abandoned) WITHOUT claiming a loss the
+    //    replay buffer will undo, and the webview is un-parked at the settled
+    //    label so that buffer can re-post those bytes
+    expect(state.pendingEdit).toBeNull();
+    const toast = effects.find((e) => e.type === "showError");
+    expect((toast as { message: string }).message).toContain("internal error");
+    expect((toast as { message: string }).message).not.toContain("dropped");
+    expect(effects.some((e) => e.type === "postDocument" && e.docVersion === 6)).toBe(true);
+    // 3. the deferred side channel was dropped (guard released) …
+    expect(droppedGuard).toHaveBeenCalledTimes(1);
+    expect(deferred).not.toHaveBeenCalled();
+    // … and the release is DURABLE: a RETRY runs immediately instead of
+    // re-deferring behind a lock nothing would release.
+    const retried = vi.fn();
+    barrier.run(retried);
+    expect(retried).toHaveBeenCalledTimes(1);
+    // 4. the panel can accept and persist the NEXT edit
+    effects.length = 0;
+    dispatch({
+      type: "edit",
+      baseDocVersion: state.lastAppliedDocVersion,
+      content: "next",
+      documentVersion: state.lastAppliedDocVersion,
+      canWrite: true,
+      currentContent: "edit1",
+    });
+    expect(effects.some((e) => e.type === "applyEdit" && e.content === "next")).toBe(true);
+  });
+
+  // Catches a revert of the panel wiring. A source-contract pin, not an
+  // executable one, for the same reason the neighbouring composition pin is:
+  // this closure is vscode-bound and cannot be constructed in a unit test.
+  it("is the panel's write-lock recovery wiring", () => {
+    const panel = readFileSync(
+      new URL("../../../src/extension/session/quoll-editor-panel.ts", import.meta.url),
+      "utf8"
+    )
+      .replace(/\/\*[\s\S]*?\*\//g, "")
+      .replace(/^(.*?)\/\/.*$/gm, "$1");
+    expect(panel).toContain("commitWriteLockRecovery:");
+    // The recovery must go through the panel's own committing lambda (so the
+    // release happens in the REDUCER, never by patching `state`) and carry the
+    // settlement's version through.
+    expect(panel).toMatch(
+      /commitWriteLockRecovery:\s*\(settledVersion\)\s*=>\s*commitTransition\(\{/
+    );
+    // NEGATIVE pin over the recovery lambda's ACTUAL span, not a character
+    // window: slice from `commitWriteLockRecovery:` to the next dep property
+    // (`runEffects:`) and assert the read seams are absent inside it. The
+    // `not.toBe("")` guard is what keeps the pin from going vacuous if the
+    // properties are ever renamed or reordered.
+    const recoveryWiring = panel.match(/commitWriteLockRecovery:([\s\S]*?)runEffects:/)?.[1] ?? "";
+    expect(recoveryWiring).not.toBe("");
+    expect(recoveryWiring).toContain('type: "settlementTransitionFailed"');
+    expect(recoveryWiring).toContain("settledVersion");
+    // The panel's `applyEditSeam.readVersion` keeps its own `document.version`
+    // read — that is why the pin is scoped to this span rather than the file.
+    expect(recoveryWiring).not.toContain("document.version");
+    expect(recoveryWiring).not.toContain("readVersionGuarded");
   });
 });
