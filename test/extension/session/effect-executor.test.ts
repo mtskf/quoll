@@ -641,6 +641,89 @@ describe("effect-executor runApplyEdit (wrapper mapping)", () => {
     }
   });
 
+  // ISSUE 2 (cycle 2). The guards on `readVersion` / `canWrite` make those seams
+  // safe to read while BUILDING the settlement event — but each guard reported
+  // through a bare console call, at a position this module's own positional rule
+  // calls out: anything evaluated on the way INTO `deps.dispatch` runs before
+  // `applyEditSettled` fires, so a throw there skips the dispatch and strands the
+  // write lock. That made a SINGLE console failure sufficient, on the path whose
+  // entire job is to release the lock.
+  //
+  // Both seams throw here, and so does the console in both directions, so the
+  // test is red if EITHER report escapes containment — one test covering two call
+  // sites, each independently revert-checkable.
+  it("a throwing console cannot skip the settlement dispatch when the fulfilment arm's guarded reads fail", async () => {
+    // The warn throws on its FIRST call only, and that call is
+    // `readVersionGuarded`'s — the PRE-dispatch position under test. The
+    // fulfilment arm's second warn (the `settleReadFailure` triage line) sits
+    // AFTER `deps.dispatch` and is deliberately left unguarded, its documented
+    // cost being an unhandled rejection; making it throw here would assert that
+    // documented cost instead of this containment, and would fail the run on the
+    // unhandled rejection it is supposed to produce.
+    let warnCalls = 0;
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {
+      warnCalls += 1;
+      if (warnCalls === 1) {
+        throw new Error("console.warn failed");
+      }
+    });
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {
+      throw new Error("console.error failed");
+    });
+    try {
+      const dispatch = await runApply(
+        {
+          readVersion: () => {
+            throw new Error("boom-version");
+          },
+          readCanonical: () => "new",
+        },
+        {
+          canWrite: () => {
+            throw new Error("boom-canWrite");
+          },
+        }
+      );
+      // THE assertion: the lock-releasing event still went out. Both unobserved
+      // values are the conservative ones the guards promise.
+      expect(dispatch).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: "applyEditSettled",
+          settledVersion: null,
+          canWrite: false,
+        })
+      );
+    } finally {
+      warnSpy.mockRestore();
+      errorSpy.mockRestore();
+    }
+  });
+
+  // The same defect on the REJECTION arm, where it was worst: that arm's leading
+  // `console.error` sat OUTSIDE its own `try`, so one throwing console call
+  // skipped the dispatch on the arm its own comment calls "the write lock's
+  // release valve". No second fault needed.
+  it("the rejection arm's leading log cannot skip the dispatch", async () => {
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {
+      throw new Error("console.error failed");
+    });
+    try {
+      const dispatch = await runApply({
+        readText: () => {
+          throw new Error("boom-read");
+        },
+      });
+      expect(dispatch).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: "applyEditSettled",
+          outcome: expect.objectContaining({ kind: "rejected" }),
+        })
+      );
+    } finally {
+      errorSpy.mockRestore();
+    }
+  });
+
   it("the REJECTION arm also retries (guarded): a working version seam labels even a rejected pipeline", async () => {
     const readVersion = vi.fn(() => 4);
     const dispatch = await runApply({
@@ -1048,9 +1131,12 @@ describe("effect-executor runEffects other cases", () => {
       // (b) the ack Document that FOLLOWS the toast still went out — the property
       // an unwinding effect loop destroys.
       expect(send).toHaveBeenCalled();
-      // (c) the throw is not swallowed silently.
+      // (c) the throw is not swallowed silently, and the report carries the
+      // incident's IDENTITY — which toast was lost. The bare catch discarded it,
+      // leaving triage with "a toast threw" and no way to tell WHICH.
       expect(errorSpy).toHaveBeenCalledWith(
         expect.stringContaining("showError threw"),
+        "Failed to save: boom",
         expect.anything()
       );
       await Promise.resolve();
@@ -1119,13 +1205,68 @@ describe("effect-executor runEffects other cases", () => {
       expect(warnSpy).toHaveBeenCalledOnce(); // the attempt really happened
       // THE assertion: the write survived the throwing log.
       expect(build).toHaveBeenCalledOnce();
-      // …and the throw is not swallowed silently.
+      // …and the throw is not swallowed silently, WITH the identity of the log
+      // line that was lost (the bare catch reported neither).
       expect(errorSpy).toHaveBeenCalledWith(
         expect.stringContaining("logWarn threw"),
+        "[quoll] unlabelled drain",
         expect.anything()
       );
       await Promise.resolve();
     } finally {
+      warnSpy.mockRestore();
+      errorSpy.mockRestore();
+    }
+  });
+
+  // ISSUE 1 (cycle 2): the guard added above reports its own failure through a
+  // SECOND console call, and until this test that fallback was itself unguarded.
+  // VS Code patches the console as ONE IPC family, so "console.warn throws but
+  // console.error is fine" is the optimistic case — the correlated case is BOTH,
+  // and there the throw escaped `runEffects` from inside the very guard meant to
+  // contain it. The effect list is the drain `accept` arm's verbatim shape, so
+  // the cost is the WRITE plus a lock stranded for the panel's life.
+  it("logWarn: the guard's OWN fallback report cannot unwind — BOTH console methods throwing still runs the applyEdit that FOLLOWS", async () => {
+    const rejections: unknown[] = [];
+    const onUnhandled = (r: unknown) => rejections.push(r);
+    process.on("unhandledRejection", onUnhandled);
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {
+      throw new Error("console.warn failed");
+    });
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {
+      throw new Error("console.error failed too");
+    });
+    try {
+      const build = vi.fn(() => fakeEdit);
+      const { runEffects } = createEffectExecutor(
+        makeDeps({
+          applyEditSeam: {
+            readText: () => "",
+            readVersion: () => 6,
+            readCanonical: () => "drained",
+            canonicalize: (text) => text,
+            build,
+            apply: async () => true,
+          },
+        })
+      );
+
+      expect(() =>
+        runEffects([
+          { type: "logWarn", message: "[quoll] unlabelled drain", detail: {} },
+          { type: "applyEdit", content: "drained", baseDocVersion: 6 },
+        ])
+      ).not.toThrow();
+
+      // Both attempts really happened — the primary log and its fallback report.
+      expect(warnSpy).toHaveBeenCalledOnce();
+      expect(errorSpy).toHaveBeenCalledOnce();
+      // THE assertion: the write survived a console that fails in BOTH directions.
+      expect(build).toHaveBeenCalledOnce();
+      await Promise.resolve();
+      expect(rejections).toEqual([]);
+    } finally {
+      process.off("unhandledRejection", onUnhandled);
       warnSpy.mockRestore();
       errorSpy.mockRestore();
     }
