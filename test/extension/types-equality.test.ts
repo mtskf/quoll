@@ -17,11 +17,12 @@
 //
 // This file also hosts unrelated tsc-enforced type-level pins for source
 // modules (the "handoff type pins", "table model type pins", "status-bar
-// type pins", and "document-write adapter type pins" describe blocks
-// below). They are NOT part of the e2e-mirror equality guard above: each
-// pins a source-module type contract with a tsc-checked assertion — an
-// AssertEqual identity check or a `@ts-expect-error` directive — which is
-// non-vacuous only because `pnpm compile` type-checks THIS file.
+// type pins", "host-session step type pins", and "document-write adapter
+// type pins" describe blocks below). They are NOT part of the e2e-mirror
+// equality guard above: each pins a source-module type contract with a
+// tsc-checked assertion — an AssertEqual identity check or a
+// `@ts-expect-error` directive — which is non-vacuous only because
+// `pnpm compile` type-checks THIS file.
 
 import { describe, expect, it } from "vitest";
 import type { DocumentWriteAdapter } from "../../src/extension/document-write/execute-write";
@@ -30,6 +31,11 @@ import {
   type HandleContextHandoffPayload,
   type HandoffRevealSelection,
 } from "../../src/extension/handoff/handle-context-handoff";
+import type {
+  HostSessionEvent,
+  HostSessionInputEvent,
+} from "../../src/extension/session/host-session-core";
+import type { HostSessionStepDeps } from "../../src/extension/session/host-session-step";
 import type { EndOfLineValue } from "../../src/extension/status-bar";
 import type { PanelControls } from "../../src/extension/test-harness";
 import type { Cell, DelimiterCell, DelimiterRow, Row, Table } from "../../src/markdown/table/model";
@@ -195,6 +201,95 @@ describe("status-bar type pins", () => {
     // assignment fails to typecheck and `pnpm compile` goes red.
     const _check: AssertEqual<EndOfLineValue, 1 | 2> = true;
     expect(_check).toBe(true);
+  });
+});
+
+describe("host-session step type pins", () => {
+  it("keeps HostSessionStepDeps' write-lock recovery dep REQUIRED", () => {
+    // `commitWriteLockRecovery` is the panel's only path to releasing a write
+    // lock that a THROWING `applyEditSettled` transition left held. The dep's
+    // own doc says "REQUIRED, not optional: a no-op default would let a call
+    // site forget the wiring and keep the stranded-lock bug with every test
+    // green" — and until this pin, nothing enforced it. Adding `?` plus a
+    // `?? (() => [])` default compiles clean, and because
+    // `test/extension/session/` is in NO tsconfig (vitest is transpile-only
+    // there), a harness that omits the dep raises a runtime `TypeError` that
+    // `recoverStrandedWriteLock`'s own `try` funnels into `onSettleError` — the
+    // test still PASSES while measuring no recovery at all.
+    //
+    // Lives here for the reason the status-bar and table-model pins spell out:
+    // this file is type-checked by `pnpm compile`, so the assertion is
+    // non-vacuous. `Required<T>` is homomorphic, so the identity holds only
+    // while the picked member carries no `?`. Revert-check: add `?` to
+    // `commitWriteLockRecovery` and this resolves to `false`, failing the
+    // `= true` assignment. The technique's non-vacuity is measured against the
+    // deliberately OPTIONAL `onSettleError`, for which the same assertion
+    // fails — that member is the control, and is deliberately not pinned here.
+    const _check: AssertEqual<
+      Pick<HostSessionStepDeps, "commitWriteLockRecovery">,
+      Required<Pick<HostSessionStepDeps, "commitWriteLockRecovery">>
+    > = true;
+    expect(_check).toBe(true);
+  });
+
+  it("keeps `settlementTransitionFailed` OUT of the dispatchable event union", () => {
+    // `HostSessionInputEvent` derives from `Exclude`, and `Exclude<T, U>` is
+    // `T extends U ? never : T` — a non-matching `U` returns `T` UNCHANGED with
+    // no error, so the derive is fail-OPEN. Measured BEFORE this pin existed: a
+    // one-character typo in the excluded literal left the whole of `pnpm compile`
+    // green AND re-admitted the forbidden
+    // `deps.dispatch({ type: "settlementTransitionFailed", … })`,
+    // which is the dispatch the type exists to forbid (a queued recovery lands
+    // behind a sibling that takes the lock-held stash arm, and the recovery then
+    // drops that stash). The sibling derive in the same commit,
+    // `host-session-step.ts`'s `SettlementEvent` `Extract`, is fail-CLOSED — it
+    // collapses to `never` on a typo and reddens its callers — so without this
+    // pin one commit ships two derives with OPPOSITE failure modes.
+    //
+    // It takes TWO assertions to say this — and a third, below, to close the
+    // one vacuity the pair shares — because either one alone is
+    // satisfiable without the invariant holding. `Extract<T, U>` answers `never`
+    // for two different reasons — the union really excludes the member
+    // (intended), or the literal matches nothing at all (vacuous) — and it cannot
+    // distinguish them. The cause is structural, and the sibling pin above is the
+    // contrast that proves it: `Pick<T, K>` declares `K extends keyof T`, so ITS
+    // key typo is a TS2344, while `Extract`'s `U` is unconstrained — which is
+    // exactly why `Exclude` is fail-OPEN at the source in the first place.
+    //
+    // So: ONE literal, asked TWO questions. It must be a REAL member of the WIDE
+    // union, AND absent from the narrow one. Writing the literal ONCE is what
+    // makes that a biconditional rather than a convention — with a literal per
+    // assertion, mistyping the exclusion side's copy leaves the membership side
+    // reading its own correct copy, and the pair goes green while the guard is
+    // silently disarmed (measured: exit 0). There is no pair to keep in sync now.
+    //
+    // Measured on THIS form (`tsc -p test/extension/tsconfig.unit.json`):
+    //   - mistype `host-session-core.ts`'s `Exclude` literal → TS2322
+    //     (`_excludesRecovery`);
+    //   - mistype `RecoveryEventType` → TS2322 (`_recoveryIsARealMember`; this is
+    //     also the rename-and-forget case, where `Exclude` stops removing
+    //     anything and the exclusion question alone would still answer `never`).
+    //   - `type RecoveryEventType = never` → TS2322 (`_aliasIsNotNever`). That
+    //     degenerate value makes the two questions above trivially true, and no
+    //     typo produces it (every misspelling is a non-empty literal, which
+    //     always reddens one half) — but a refactor that COMPUTES this type
+    //     could, so the third assertion asks the alias about itself.
+    type RecoveryEventType = "settlementTransitionFailed";
+    const _recoveryIsARealMember: AssertEqual<
+      Extract<HostSessionEvent, { readonly type: RecoveryEventType }>["type"],
+      RecoveryEventType
+    > = true;
+    const _excludesRecovery: AssertEqual<
+      Extract<HostSessionInputEvent, { readonly type: RecoveryEventType }>,
+      never
+    > = true;
+    const _aliasIsNotNever: AssertEqual<
+      [RecoveryEventType] extends [never] ? true : false,
+      false
+    > = true;
+    expect(_recoveryIsARealMember).toBe(true);
+    expect(_excludesRecovery).toBe(true);
+    expect(_aliasIsNotNever).toBe(true);
   });
 });
 

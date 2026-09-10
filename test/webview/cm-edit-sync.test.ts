@@ -935,6 +935,11 @@ describe("cm edit-sync — epoch-bounded buffers (S3b)", () => {
     expect(s.posted.length).toBe(1); // no replay post
   });
 
+  // Also the RECEIVING-side pin for host-session-core's `settlementTransitionFailed`
+  // recovery: that arm posts a same-epoch Document precisely so this replay
+  // happens, which is what keeps a dropped stash from being a data loss on the
+  // alive path (see .claude/docs/LEARNING.md 2026-09-11). Deleting this test
+  // leaves that claim unverified — re-home it rather than dropping it.
   it("(h) replays a buffer on a same-generation, same-epoch settlement (stale-recovery preserved)", () => {
     const s = setup();
     s.sync.onHostSnapshot(1, true, 5, 42);

@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 
 import { describe, expect, it } from "vitest";
 
+import { RESYNC_FAILURE_MESSAGE } from "../../../src/extension/session/effect-executor.js";
 import {
   createDrainingDispatcher,
   createHostSessionCore,
@@ -1598,6 +1599,20 @@ describe("host-session-core: settlement ack-label gate (ackLabelObserved)", () =
     expect(r.state.lastAppliedDocVersion).toBe(1); // nothing observed, nothing advanced
   });
 
+  // The swap that put `showResyncFailure` first has no other pin: this arm's
+  // existing tests all use `.some()` / `.find()` / `toEqual([])`, so nothing
+  // would notice it reverting.
+  it("orders the withheld recovery's user-visible signal AHEAD of its triage log", () => {
+    const s = base({
+      rejection: { kind: "pending", id: 7, content: "draft", error: unsafe },
+      nextRejectionId: 8,
+    });
+    const kinds = core
+      .transition(s, { type: "editRejectedDeliveryFailed", id: 7, documentVersion: null })
+      .effects.map((e) => e.type);
+    expect(kinds.indexOf("showResyncFailure")).toBeLessThan(kinds.indexOf("logWarn"));
+  });
+
   it("editRejectedDeliveryFailed null-version STILL respects the id guard (stale failure is a no-op)", () => {
     const s = base({
       rejection: { kind: "pending", id: 9, content: "draft", error: unsafe },
@@ -1723,7 +1738,13 @@ describe("host-session-core: an unobserved ack label still DRAINS (bytes first)"
   // The EXACT pair `withholdAckEffects` builds at an unobserved label, shared by
   // the two readonly/stale/no-op tests below so their exhaustive `toEqual`s
   // cannot drift apart. `lockedStash` fixes both numbers in the detail.
+  // ORDER: the user-visible `showResyncFailure` precedes the `logWarn`. The
+  // reason lives with the code that builds this pair — `withholdAckEffects` in
+  // `host-session-core.ts` — and is deliberately NOT restated here: a verbatim
+  // copy of that rationale is an altitude that goes stale on its own, which is
+  // what happened to the previous version of this comment.
   const withheldAck = [
+    { type: "showResyncFailure" },
     {
       type: "logWarn",
       message: expect.stringContaining(
@@ -1731,7 +1752,6 @@ describe("host-session-core: an unobserved ack label still DRAINS (bytes first)"
       ),
       detail: { uri: ctx.uriString, heldBase: 1, lastAppliedDocVersion: 1 },
     },
-    { type: "showResyncFailure" },
   ];
 
   it("an accept-shaped stash IS applied: the keystroke is written at the stale base", () => {
@@ -1911,5 +1931,310 @@ describe("host-session-core: an unobserved ack label still DRAINS (bytes first)"
     // base, and no draft goes out), so reporting one would be a false claim.
     expect(r.effects).toEqual([{ type: "applyEdit", content: "edit1-more", baseDocVersion: 1 }]);
     expect(r.state.pendingApplyBaseVersion).toBeNull(); // lock NOT re-acquired
+  });
+});
+
+// A throwing `applyEditSettled` TRANSITION unwinds before the panel commits the
+// state that would have released the write lock, so PR #406's barrier rescue
+// paid only the deferred side channels' guards: the lock stayed HELD for the
+// panel's life, every later edit piled into a `pendingEdit` with no drain, and
+// at dispose that stash was lost silently. This arm is the recovery.
+describe("host-session-core: settlementTransitionFailed (write-lock recovery)", () => {
+  const recovery = (settledVersion: number | null = 6): HostSessionEvent => ({
+    type: "settlementTransitionFailed",
+    settledVersion,
+  });
+  const locked = (over: Partial<HostSessionState> = {}) =>
+    base({
+      pendingApplyBaseVersion: 5,
+      inFlightContent: "edit1",
+      lastAppliedDocVersion: 5,
+      ...over,
+    });
+  // Edit #2, stashed behind the in-flight apply. ONE literal: every test below
+  // that needs a stash needs the same one, and the drop is what they differ on.
+  const STASH = { content: "edit1+x", baseDocVersion: 5 };
+  // POST-DISPOSE the `disposed` transition has already cleared the lock, so
+  // these cases start lock-FREE — the one structural difference from `locked`.
+  const afterDispose = (over: Partial<HostSessionState> = {}) =>
+    base({ disposed: true, pendingApplyBaseVersion: null, ...over });
+  // The `message` of a `showError` / `logWarn` effect. A MISSING effect throws
+  // here instead of reading as an empty string — which is what keeps the
+  // `not.toContain` assertions below from passing vacuously on an absent one.
+  const messageOf = (effect: HostSessionEffect | undefined): string =>
+    (effect as { message: string }).message;
+
+  // The NO-LOSS verdict, asserted as ONE thing everywhere it is claimed, so the
+  // rule cannot be half-applied at a new site: NEITHER loss clause may appear —
+  // checking only "dropped" would read the HEDGE as a pass — and the no-loss
+  // branch's own closing instruction must be there, since the trailing sentence
+  // is absorbed per branch rather than appended to all of them.
+  const expectNoLossClaim = (toast: HostSessionEffect | undefined): void => {
+    expect(messageOf(toast)).not.toContain("dropped");
+    expect(messageOf(toast)).not.toContain("may not have been saved");
+    expect(messageOf(toast)).toContain("Reopen the file to check its contents.");
+  };
+
+  it("RELEASES the write lock and clears the in-flight content", () => {
+    const r = core.transition(locked(), recovery());
+    expect(isWriteLockHeld(r.state)).toBe(false);
+    expect(r.state.inFlightContent).toBeNull();
+  });
+
+  it("accepts and applies the NEXT edit after the recovery (the lock really is free)", () => {
+    const recovered = core.transition(locked(), recovery(6)).state;
+    const next = core.transition(recovered, {
+      type: "edit",
+      baseDocVersion: 6,
+      content: "next",
+      documentVersion: 6,
+      canWrite: true,
+      currentContent: "edit1",
+    });
+    expect(next.effects).toContainEqual({
+      type: "applyEdit",
+      content: "next",
+      baseDocVersion: 6,
+    });
+  });
+
+  it("DROPS the stash and records it in the triage log", () => {
+    const r = core.transition(locked({ pendingEdit: STASH }), recovery());
+    expect(r.state.pendingEdit).toBeNull();
+    const warn = r.effects.find((e) => e.type === "logWarn");
+    expect(warn).toBeDefined();
+    expect(messageOf(warn)).toContain("DROPPED");
+  });
+
+  it("logs the release even with no stash to lose", () => {
+    const warn = core.transition(locked(), recovery()).effects.find((e) => e.type === "logWarn");
+    expect(warn).toBeDefined();
+    expect(messageOf(warn)).not.toContain("DROPPED");
+  });
+
+  // The throwing transition abandoned its effect list, which on any non-ok
+  // outcome began with the save-failure toast — so the recovery always speaks.
+  it("ALWAYS toasts the internal error, even with no stash", () => {
+    const toast = core.transition(locked(), recovery()).effects.find((e) => e.type === "showError");
+    expect(toast).toBeDefined();
+    expect(messageOf(toast)).toContain("internal error");
+    expect(messageOf(toast)).toContain("/x.md"); // ctx.fsPath
+  });
+
+  // The webview's replay buffer still holds the bytes on the alive path
+  // (edit-sync.ts's forcePost RETAINS it under single-flight) and the ack below
+  // is the next ack that replays them — so the toast must claim NO loss here,
+  // neither the definite one nor the hedge (`expectNoLossClaim` rules out both;
+  // now that two clauses exist, checking only "dropped" would read the hedge as
+  // a pass).
+  it("claims NO loss at all on the ALIVE path with an ack coming, even when a stash was dropped", () => {
+    const toast = core
+      .transition(locked({ pendingEdit: STASH }), recovery())
+      .effects.find((e) => e.type === "showError");
+    expectNoLossClaim(toast);
+  });
+
+  // The POSITIVE half of the pair above, and the reason the gate is "will an ack
+  // go out?" rather than "are we alive?". At an UNOBSERVED label the ack is
+  // WITHHELD, so nothing replays the retained buffer — and once this arm clears
+  // the lock, the next lock-free resync bumps `externalEpoch` and the webview
+  // drops that buffer (`recordedEpoch > buf.epoch`, edit-sync.ts).
+  //
+  // HEDGED, not definite: this arm is outcome-blind, and there is a corner where
+  // the bytes still land — `resyncLiveVersion` bumps the epoch only on a forward
+  // advance, so a document whose version never moves keeps the same epoch and the
+  // next same-epoch Document REPLAYS the buffer (`shouldDropBufferedForEpoch`).
+  // The wording is pinned POSITIVELY (not merely as the absence of "dropped")
+  // because a silent regression to the definite claim is the failure mode here,
+  // and an absence-only assertion cannot see it. "may not have been saved" is
+  // also the exact phrase `RESYNC_FAILURE_MESSAGE` uses, so the two toasts agree
+  // on certainty when both appear.
+  it("HEDGES the loss on the ALIVE path when the ack is WITHHELD (outcome-blind, so it must not claim the edit was dropped)", () => {
+    const r = core.transition(locked({ pendingEdit: STASH }), recovery(null));
+    const toast = r.effects.find((e) => e.type === "showError");
+    expect(messageOf(toast)).toContain("may not have been saved");
+    // The remedy that PRESERVES the bytes, stated before the reload the resync
+    // toast advises — and self-sufficient, since that toast is latched per panel
+    // and may not appear at all.
+    expect(messageOf(toast)).toContain("copy any text you can still see");
+    expect(messageOf(toast)).toContain("before reloading the window");
+    expect(messageOf(toast)).not.toContain("dropped");
+    // WHY it is a loss at all — the withhold pair, not an ack Document.
+    expect(r.effects.some((e) => e.type === "postDocument")).toBe(false);
+    expect(r.effects.some((e) => e.type === "showResyncFailure")).toBe(true);
+  });
+
+  // The SAME hedge with NO stash to lose, which is the state PR #409 cycle 4
+  // re-keyed. `lostStash` requires `stash !== null`, so this state used to land
+  // in the no-loss branch and be told to "Reopen the file" — an instruction that
+  // DESTROYS the buffer holding the at-risk bytes. Nothing was stashed, but the
+  // recovery still fired mid-apply and the arm is outcome-blind, so the
+  // webview's IN-FLIGHT bytes sit under the same conditional four-step loss as a
+  // stash (no ack ⇒ no replay ⇒ the next lock-free advance bumps the epoch ⇒
+  // `edit-sync.ts` drops the buffer). The branch is now keyed on
+  // `alive && !ackLabelObserved`, which is why the wording no longer names a
+  // stash. Several of the wording assertions go red against the old condition,
+  // and `expect` throws at the first one, so the assertion that REDDENS is not
+  // the assertion that matters: the one that catches the old condition as
+  // WRONG rather than merely quiet is `not.toContain("Reopen the file")` — the
+  // positive assertions only observe a missing hedge, while that one observes
+  // a buffer-destroying instruction being handed to the user. Measure which
+  // assertions react before scoping a mutation off this comment; do not treat
+  // this note as a census.
+  it("HEDGES on the ALIVE path with a WITHHELD ack even when there is NO stash (the in-flight bytes sit under the same loss, and 'reopen' would destroy them)", () => {
+    const r = core.transition(locked(), recovery(null)); // no `pendingEdit` at all
+    const toast = r.effects.find((e) => e.type === "showError");
+    expect(messageOf(toast)).toContain("may not have been saved");
+    expect(messageOf(toast)).toContain("copy any text you can still see");
+    expect(messageOf(toast)).toContain("before reloading the window");
+    // The buffer-destroying instruction must be GONE, not merely accompanied.
+    expect(messageOf(toast)).not.toContain("Reopen the file");
+    // Still outcome-blind: the hedge may not harden into the definite claim, and
+    // it must not presuppose the stash this state does not have.
+    expect(messageOf(toast)).not.toContain("dropped");
+    expect(messageOf(toast)).not.toContain("A later unsaved edit");
+    // WHY it is a loss at all — the ack really is withheld, so nothing replays.
+    expect(r.effects.some((e) => e.type === "postDocument")).toBe(false);
+    expect(r.effects.some((e) => e.type === "showResyncFailure")).toBe(true);
+  });
+
+  // The hedge's justification is a CROSS-MODULE claim, stated in three comments
+  // (`host-session-core.ts`'s withhold pair and this arm, plus the test above):
+  // the wording reuses `RESYNC_FAILURE_MESSAGE`'s own certainty phrase so the two
+  // toasts — which this very state emits TOGETHER — cannot disagree. Until this
+  // test the phrase lived as a bare literal in two modules with nothing coupling
+  // them: rewording the executor's constant left every test green (measured), so
+  // the RATIONALE for the whole hedge branch could go stale in silence. Pinned
+  // against the real constant rather than by restating the literal a third time.
+  it("keeps the alive hedge on the SAME certainty phrase as RESYNC_FAILURE_MESSAGE (the two toasts can co-occur)", () => {
+    const SHARED_HEDGE = "may not have been saved";
+    expect(RESYNC_FAILURE_MESSAGE).toContain(SHARED_HEDGE);
+    const r = core.transition(locked({ pendingEdit: STASH }), recovery(null));
+    // The co-occurrence the claim is about: this one state builds both.
+    expect(r.effects.some((e) => e.type === "showResyncFailure")).toBe(true);
+    expect(messageOf(r.effects.find((e) => e.type === "showError"))).toContain(SHARED_HEDGE);
+  });
+
+  // PR #409 cycle 2: the loss gate is the SHARED `ackLabelObserved`, whose
+  // second disjunct is "a lock-held resync already raised the label beyond the
+  // held base". Keying the clause on the raw `event.settledVersion` instead is
+  // undetectable by every other test in this suite (measured: 335/335 still
+  // green), because the two directions already pinned — disposed-only and
+  // unconditional — both keep the disjunction intact. THIS is the state that
+  // separates the two spellings: alive, stash present, `settledVersion === null`,
+  // and the label nonetheless observed. The ack Document DOES go out here, so the
+  // retained buffer WILL be replayed and there is no loss to report.
+  it("a lock-held resync's raise licenses the ack, so a dropped stash draws NO loss claim (the gate is ackLabelObserved, not the raw settledVersion)", () => {
+    const r = core.transition(
+      locked({ lastAppliedDocVersion: 6, pendingEdit: STASH }),
+      recovery(null)
+    );
+    // The ack really is coming — this is what makes the absence of a loss claim
+    // correct rather than merely quiet.
+    expect(r.effects).toContainEqual(pDoc(6));
+    expect(r.effects.some((e) => e.type === "showResyncFailure")).toBe(false);
+    const toast = r.effects.find((e) => e.type === "showError");
+    // BOTH clauses must be absent, which is why this goes through the shared
+    // helper: the raw-field spelling would produce the HEDGE here, so an
+    // assertion that only looked for "dropped" would stay green against exactly
+    // the mutation this test exists to catch.
+    expectNoLossClaim(toast);
+    expect(messageOf(toast)).toContain("internal error");
+  });
+
+  it("resyncs the label to the settled version and reposts the authoritative Document — without bumping the epoch (the advance is the in-flight apply's own echo)", () => {
+    const r = core.transition(locked(), recovery(6));
+    expect(r.state.lastAppliedDocVersion).toBe(6);
+    expect(r.state.externalEpoch).toBe(0);
+    expect(r.effects).toContainEqual(pDoc(6));
+  });
+
+  it("WITHHOLDS the Document when the settled version was NOT observed and no lock-held resync raised the label", () => {
+    const r = core.transition(locked(), recovery(null));
+    expect(r.state.lastAppliedDocVersion).toBe(5);
+    expect(r.effects.some((e) => e.type === "postDocument")).toBe(false);
+    expect(r.effects.some((e) => e.type === "showResyncFailure")).toBe(true);
+    // The internal-error toast is UNCONDITIONAL — it stands in for the
+    // save-failure `showError` the throwing transition abandoned, so the ack
+    // gate must never suppress it. This is the only PRESENCE pin on that toast
+    // at an unobserved label: the ordering test below reads it through
+    // `indexOf`, which absorbs absence as `-1`, so gating the toast on
+    // `ackLabelObserved` used to leave the whole suite green.
+    const toast = r.effects.find((e) => e.type === "showError");
+    expect(toast).toBeDefined();
+    expect(messageOf(toast)).toContain("internal error");
+    expect(messageOf(toast)).toContain("/x.md"); // ctx.fsPath
+  });
+
+  it("still ACKS at an unobserved settled version when a lock-held resync already raised the label", () => {
+    const r = core.transition(locked({ lastAppliedDocVersion: 6 }), recovery(null));
+    expect(r.effects).toContainEqual(pDoc(6));
+  });
+
+  // Post-dispose the retained replay buffer went with the iframe, so here the
+  // stash really was the only carrier — nothing left to replay it, and no remedy
+  // that could preserve the bytes. That is why this branch keeps the DEFINITE
+  // claim while the alive one hedges, and why its instruction is "reopen" rather
+  // than the alive branch's "copy before reloading": there is nothing left to
+  // copy from.
+  it("POST-DISPOSE drops the stash, CLAIMS the loss DEFINITELY, and posts no Document", () => {
+    const r = core.transition(afterDispose({ pendingEdit: STASH }), recovery(6));
+    expect(r.state.pendingEdit).toBeNull();
+    const toast = r.effects.find((e) => e.type === "showError");
+    expect(messageOf(toast)).toContain("internal error");
+    expect(messageOf(toast)).toContain("A later unsaved edit was dropped.");
+    // NOT the hedge: the definite wording is correct here, and must not drift
+    // into the uncertain one alongside the alive branch.
+    expect(messageOf(toast)).not.toContain("may not have been saved");
+    expect(messageOf(toast)).toContain("Reopen the file to check its contents.");
+    expect(r.effects.some((e) => e.type === "postDocument")).toBe(false);
+    expect(r.effects.some((e) => e.type === "showResyncFailure")).toBe(false);
+  });
+
+  it("POST-DISPOSE with no stash still toasts the internal error, without claiming a loss", () => {
+    const toast = core
+      .transition(afterDispose(), recovery(6))
+      .effects.find((e) => e.type === "showError");
+    expect(toast).toBeDefined();
+    expectNoLossClaim(toast);
+  });
+
+  // Post-dispose the `disposed` arm has ALREADY cleared the lock, so
+  // `resyncLiveVersion` sees a lock-FREE forward advance and does bump the
+  // epoch. Harmless (the state is discarded and no Document goes out) but
+  // pinned so the arm's comment cannot claim otherwise and drift.
+  it("POST-DISPOSE the resync reads as a lock-free advance and bumps the epoch (harmless, pinned)", () => {
+    const r = core.transition(afterDispose({ lastAppliedDocVersion: 5 }), recovery(6));
+    expect(r.state.externalEpoch).toBe(1);
+  });
+
+  // The executor CONTAINS a throwing `logWarn` (`effect-executor.ts`'s
+  // `case "logWarn"`), so this order is defence in depth rather than the only
+  // line of defence: the containment reports its own failure through a second
+  // console call that can fail identically, and the reducer-side order holds even
+  // if that guard is ever removed. Everything the user or the webview needs
+  // therefore precedes the log.
+  it("orders the triage log LAST, behind the user-visible signal and the un-park Document", () => {
+    const alive = core
+      .transition(locked({ pendingEdit: STASH }), recovery(6))
+      .effects.map((e) => e.type);
+    expect(alive.indexOf("showError")).toBeLessThan(alive.indexOf("postDocument"));
+    expect(alive.indexOf("postDocument")).toBeLessThan(alive.indexOf("logWarn"));
+    const dead = core
+      .transition(afterDispose({ pendingEdit: STASH }), recovery(6))
+      .effects.map((e) => e.type);
+    expect(dead.indexOf("showError")).toBeLessThan(dead.indexOf("logWarn"));
+  });
+
+  it("keeps every user-visible effect ahead of every triage log, even at an unobserved label", () => {
+    const kinds = core.transition(locked(), recovery(null)).effects.map((e) => e.type);
+    const iErr = kinds.indexOf("showError");
+    const iResync = kinds.indexOf("showResyncFailure");
+    // PRESENCE first, then order. `indexOf` answers -1 for a missing effect, and
+    // -1 is less than every real index — so ordering alone would read a DELETED
+    // user-visible effect as "correctly ahead of the log".
+    expect(iErr).toBeGreaterThanOrEqual(0);
+    expect(iResync).toBeGreaterThanOrEqual(0);
+    expect(Math.max(iErr, iResync)).toBeLessThan(kinds.indexOf("logWarn"));
   });
 });

@@ -119,7 +119,9 @@ import { createEffectExecutor } from "./effect-executor.js";
 import {
   createDrainingDispatcher,
   createHostSessionCore,
+  type HostSessionEffect,
   type HostSessionEvent,
+  type HostSessionInputEvent,
   isWriteLockHeld,
 } from "./host-session-core.js";
 import { createHostSessionStep } from "./host-session-step.js";
@@ -373,7 +375,12 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
     // `dispatch` is declared with definite-assignment so the effect executors
     // below can close over it — they are only invoked once a dispatch is in
     // flight, after this assignment.
-    let dispatch!: (event: HostSessionEvent) => void;
+    // Typed `HostSessionInputEvent`, not `HostSessionEvent`: the write-lock
+    // recovery is COMMITTED (see `commitWriteLockRecovery` below), never queued,
+    // and that exclusion is now enforced by the type rather than by this comment
+    // — a dispatched recovery would land behind a sibling whose lock-held stash
+    // arm then loses its stash to it.
+    let dispatch!: (event: HostSessionInputEvent) => void;
     // The transition + effects + barrier release live in host-session-step.ts so
     // the throwing-effects branch has unit-test reach (this closure is
     // vscode-bound). Contract recap, since the ordering here is load-bearing:
@@ -392,12 +399,26 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
     // synchronously re-enter dispatch, so this cannot recurse into the active
     // drain loop; the barrier also isolates any synchronous thunk throw via
     // onError.
+    // ONE state-committing lambda, shared by the normal transition and the
+    // write-lock recovery, so the two cannot drift on how state is committed.
+    const commitTransition = (event: HostSessionEvent): readonly HostSessionEffect[] => {
+      const result = core.transition(state, event);
+      state = result.state;
+      return result.effects;
+    };
     const step = createHostSessionStep({
-      commitTransition: (event) => {
-        const result = core.transition(state, event);
-        state = result.state;
-        return result.effects;
-      },
+      commitTransition,
+      // Committed when an `applyEditSettled` TRANSITION throws: the panel never
+      // assigned the state that would have released the write lock, so without
+      // this the lock stays held for the rest of this panel's life and every
+      // later edit piles into a stash with no drain. Same lambda, so the
+      // release goes through the REDUCER — the panel never patches `state`
+      // itself (host-session-core.ts's header). The version is the throwing
+      // settlement's own observation, handed over by the step; nothing is
+      // re-read here (a second guarded reader would falsify
+      // `effect-executor.ts`'s "ONE guarded version reader" contract).
+      commitWriteLockRecovery: (settledVersion) =>
+        commitTransition({ type: "settlementTransitionFailed", settledVersion }),
       // `runEffects` is LATE-BOUND: the executor that owns it is destructured
       // BELOW this point, so it must be reached through a lambda (a direct
       // reference here would be a TDZ error). `editSettledBarrier` is already
@@ -405,7 +426,7 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
       runEffects: (effects) => runEffects(effects),
       settleEditBarrier: (applied) => editSettledBarrier.settle(applied),
     });
-    dispatch = createDrainingDispatcher<HostSessionEvent>(step);
+    dispatch = createDrainingDispatcher<HostSessionInputEvent>(step);
 
     // canWriteNow gates host-side writes to on-disk file: documents only
     // (see src/extension/session/can-host-write.ts). Re-checked at post time so

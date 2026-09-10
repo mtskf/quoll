@@ -24,9 +24,12 @@
 // settlement to drain a stashed last-keystroke edit (the
 // "type-one-more-char-then-close" data-loss race). For the same reason BOTH
 // promise arms of the settlement must reach `dispatch`: on the live path
-// `applyEditSettled` is the only event that releases the host write lock (the
-// core's `disposed` arm also clears `pendingApplyBaseVersion`, but that fires
-// only on teardown, so it cannot rescue a panel the user is still typing into).
+// `applyEditSettled` is the only event that releases the host write lock for a
+// settlement that COMPLETES (the core's `settlementTransitionFailed` recovery
+// releases it when a settlement TRANSITION throws — committed by
+// `host-session-step.ts`, never by this module; the `disposed` arm also clears
+// `pendingApplyBaseVersion`, but that fires only on teardown, so neither can
+// substitute for dispatching this event from BOTH arms).
 
 import type { MarkdownError } from "../../markdown/errors.js";
 import { perfNow, perfRecord, perfReport } from "../../shared/perf.js";
@@ -39,7 +42,7 @@ import { executeDocumentWrite } from "../document-write/execute-write.js";
 import type {
   ApplyEditOutcome,
   HostSessionEffect,
-  HostSessionEvent,
+  HostSessionInputEvent,
   HostSessionState,
 } from "./host-session-core.js";
 
@@ -52,7 +55,15 @@ import type {
 // acks, and the executor cannot tell them apart — so an unconditional "Recent
 // edits may not be saved" would tell a user their edits might be lost at first
 // load, before they had typed anything.
-const RESYNC_FAILURE_MESSAGE =
+//
+// EXPORTED for one reason: the reducer's recovery arm hedges its own loss clause
+// with this message's "may not have been saved" phrase ON PURPOSE, so the two
+// toasts cannot disagree about certainty when both appear. That is a CROSS-MODULE
+// wording contract, justified in three comments and — until it was exported —
+// pinned by nothing: rewording this literal left the whole suite green (measured).
+// `host-session-core.test.ts` now asserts the shared phrase against this constant
+// instead of restating it.
+export const RESYNC_FAILURE_MESSAGE =
   "Quoll could not update the editor view. If you have unsaved changes they may not have been saved — reload the window (Developer: Reload Window).";
 
 /** The VS Code build+apply+verify seam for the write executor (Plan S6). The
@@ -74,7 +85,11 @@ export interface EffectExecutorDeps<TEdit> {
   /** document.uri.toString() — for the sendEditRejected delivery-refused warn
    *  payload, kept byte-identical. */
   uriString: () => string;
-  dispatch: (event: HostSessionEvent) => void;
+  /** INPUT events only. `settlementTransitionFailed` is excluded by the type
+   *  (`HostSessionInputEvent`) because a dispatched recovery would queue behind
+   *  a sibling whose lock-held stash arm then loses its stash to it — it is
+   *  committed directly from the step's catch instead. */
+  dispatch: (event: HostSessionInputEvent) => void;
   /** Harness-resolved postMessage surface (harness override ?? webview.postMessage). */
   send: (message: HostToWebview) => Thenable<boolean>;
   /** harness?.recordEvent ?? noop — called only on an accepted (ok=true) send. */
@@ -129,6 +144,78 @@ export function createEffectExecutor<TEdit>(deps: EffectExecutorDeps<TEdit>): Ef
   // be silent — and panels live for hours.
   let resyncFailureReported = false;
 
+  // ONE owner for a report made from a position where a throw MUST NOT unwind:
+  // inside a guard whose whole purpose is containment, or on the way INTO the
+  // dispatch that releases the write lock. VS Code patches the console as a
+  // SINGLE IPC family, so the fallback report can fail for exactly the reason
+  // the primary call did — which is why the inner catch is deliberately INERT.
+  // Same shape and same rationale as `host-session-step.ts`'s
+  // `reportSecondaryError`: containing the throw IS the remedy, because the
+  // alternative is worse at every call site below — it either abandons the rest
+  // of the effect list (on the drain `accept` arm that costs the WRITE and
+  // strands the lock) or skips the settlement dispatch outright.
+  //
+  // Declared FIRST, ahead of its users, on purpose: "ONE owner" is a claim this
+  // module makes about itself, and a reader who meets the owner only after two
+  // of its call sites cannot check that claim by reading downward.
+  //
+  // Takes a THUNK rather than pre-formatted arguments, for two reasons: each
+  // site keeps its own console LEVEL and payload shape (the per-site triage
+  // tokens stay exactly as they were), and ARGUMENT EVALUATION happens inside
+  // the `try` too — a template literal, a throwing getter, or an INJECTED SEAM
+  // READ that throws while building the payload would otherwise re-open the same
+  // hole one layer out. The delivery-refused site is the one that actually needs
+  // that second reason: its payload reads `deps.uriString()` and
+  // `deps.getState()`, so both live inside the thunk.
+  //
+  // ⚠️ NOT a completeness claim — and be precise about WHICH half is
+  // best-effort, because the imprecise version reads as licence to skip the
+  // guard. The THROW is fully contained: the report, argument evaluation
+  // included, runs inside the `try`, so nothing synchronous escapes this
+  // function. The REPORT is what is best-effort — a console broken as one IPC
+  // family loses the fallback line too, which is what the inert catch below
+  // admits.
+  //
+  // The one call shape for which the containment claim would be FALSE is an
+  // ASYNC thunk: `() => void` accepts `async () => {…}` by void-return
+  // bivariance and the returned promise is discarded, so its rejection escapes
+  // as an unhandled rejection — the outcome this helper exists to prevent. That
+  // is held by LOCALITY rather than by the type: the helper is module-private
+  // and every call site below is a literal synchronous arrow around one
+  // `console.*` call. The obvious tightenings do not work (both measured):
+  // `<R extends void>` still accepts an async thunk, since void-return inference
+  // collapses `R` to `void`, and `() => undefined` rejects every real site. So a
+  // future async call site is a REVIEW catch, not a compile error.
+  //
+  // This module still makes console calls that do NOT route through here. After
+  // this increment every one of them is in one of two safe shapes, and the RULE
+  // is what to check against — not the roster, which rots:
+  //   (a) the call is the LAST thing its position owes, so a throw costs at most
+  //       an unhandled rejection: `post`'s two `.then` log arms, the settlement
+  //       fulfilment arm's post-dispatch warn (see the ORDER note there), and the
+  //       rejection arm's last-line-of-defence catch.
+  //   (b) the call is a PRIMARY report with its own `try`, whose `catch` routes
+  //       the fallback through here: `case "logWarn"`'s `console.warn`.
+  // A new console call that is neither — one with a dispatch, a toast, or a
+  // Document still owed after it — belongs in this owner.
+  //
+  // ORDER RULE (the second, independent half of the pair — cited by name from
+  // the `postDocument` build-failure guard, since the ⚠️ above is a different
+  // claim): where a reducer-side list pairs a signal with a triage log, the
+  // signal goes first — defence in depth against a future edit removing a
+  // per-effect guard. Cited by name from `withholdAckEffects`, the
+  // `settlementTransitionFailed` arm, and the `editRejectedDeliveryFailed`
+  // unobserved arm — CONSUMERS, not a census: other lists satisfy it uncited
+  // (the disposed `unobservedStashDrop` toast) or invert it on purpose
+  // (`settlementEffects`' `refused` arm, the drain's parse-failed arm).
+  const reportContained = (report: () => void): void => {
+    try {
+      report();
+    } catch {
+      // Deliberately inert — see above.
+    }
+  };
+
   // The ONE place that spends that latch — both triggers report their incident
   // through here, so the protocol below cannot drift between them. `failureLog`
   // is the only thing the two paths differ in: the trigger-specific label for a
@@ -163,7 +250,14 @@ export function createEffectExecutor<TEdit>(deps: EffectExecutorDeps<TEdit>): Ef
     try {
       deps.showError(RESYNC_FAILURE_MESSAGE);
     } catch (err) {
-      console.error(failureLog, err);
+      // CONTAINED, for the same correlated-console reason as `case "showError"`'s
+      // fallback and with the sharper claim that this function's own header makes:
+      // BOTH callers sit inside a boundary a throw must not unwind, so reporting
+      // through a bare console left this guard able to break the very containment
+      // it exists to provide. The abandoned tail is triage only — the pair that
+      // carries `showResyncFailure` emits it FIRST — which is why this cost the
+      // log line rather than the signal or the lock.
+      reportContained(() => console.error(failureLog, err));
     }
   };
 
@@ -202,9 +296,18 @@ export function createEffectExecutor<TEdit>(deps: EffectExecutorDeps<TEdit>): Ef
     try {
       pending = deps.send(message);
     } catch (err) {
-      console.error("[quoll] host→webview postMessage threw synchronously", err, {
-        type: message.type,
-      });
+      // CONTAINED: this catch is the reason a sync transport throw does not
+      // unwind the caller, and a bare report let it unwind anyway. What that
+      // costs depends on the caller: `case "postRejectedDraft"` runs
+      // `sendEditRejected` IMMEDIATELY after this `post`, so an escape here took
+      // the failure-aware banner delivery, its `editRejectedDeliveryFailed`
+      // recovery dispatch, and the arm's trailing `Cannot save:` toast with it —
+      // leaving a `pending` rejection the panel cannot clear on its own.
+      reportContained(() =>
+        console.error("[quoll] host→webview postMessage threw synchronously", err, {
+          type: message.type,
+        })
+      );
       return;
     }
     if (QUOLL_PERF) {
@@ -286,10 +389,18 @@ export function createEffectExecutor<TEdit>(deps: EffectExecutorDeps<TEdit>): Ef
     try {
       return deps.applyEditSeam.readVersion();
     } catch (err) {
-      console.warn(
-        "[quoll] guarded readVersion failed; the label stays UNOBSERVED (null — never a fabricated number)",
-        { site },
-        err
+      // CONTAINED: this reader is called while BUILDING the settlement event
+      // (`runApplyEdit`'s fulfilment arm and the rejection arm both), so a throw
+      // from the report itself would skip the dispatch and strand the write lock
+      // — the same failure the guard around `readVersion` exists to prevent, one
+      // layer out. Level and payload unchanged: the per-site triage token is
+      // pinned site by site in `effect-executor.test.ts`.
+      reportContained(() =>
+        console.warn(
+          "[quoll] guarded readVersion failed; the label stays UNOBSERVED (null — never a fabricated number)",
+          { site },
+          err
+        )
       );
       return null;
     }
@@ -325,7 +436,17 @@ export function createEffectExecutor<TEdit>(deps: EffectExecutorDeps<TEdit>): Ef
     try {
       pending = deps.send(message);
     } catch (err) {
-      console.error("[quoll] edit-rejected delivery threw synchronously; resync fallback", err);
+      // CONTAINED: every report in this function sits on the way INTO the
+      // dispatch that clears the rejection, so a throwing console skipped the
+      // recovery entirely — measured as `dispatched: []`. From there the webview
+      // holds a banner it can never resolve and its single flight stays parked
+      // (`editInFlight` clears only on a Document or an `edit-rejected`), while
+      // the pending rejection suppresses visible-edge resync. The host makes no
+      // further attempt of its own; recovery waits on an external
+      // `documentChanged` or a webview reload (`ready`).
+      reportContained(() =>
+        console.error("[quoll] edit-rejected delivery threw synchronously; resync fallback", err)
+      );
       deps.dispatch({
         type: "editRejectedDeliveryFailed",
         id,
@@ -346,10 +467,17 @@ export function createEffectExecutor<TEdit>(deps: EffectExecutorDeps<TEdit>): Ef
           deps.recordEvent(message);
           return;
         }
-        console.warn("[quoll] edit-rejected delivery refused; resync fallback", {
-          uri: deps.uriString(),
-          docVersion: deps.getState().lastAppliedDocVersion,
-        });
+        // CONTAINED — same position class as the sync-throw arm above, and this
+        // is the site that needs the thunk's SECOND reason: the payload reads
+        // two injected seams (`deps.uriString()`, `deps.getState()`), so leaving
+        // them outside would put two more throw sources on the way into the
+        // dispatch. Inside the thunk they are contained with the log itself.
+        reportContained(() =>
+          console.warn("[quoll] edit-rejected delivery refused; resync fallback", {
+            uri: deps.uriString(),
+            docVersion: deps.getState().lastAppliedDocVersion,
+          })
+        );
         deps.dispatch({
           type: "editRejectedDeliveryFailed",
           id,
@@ -360,7 +488,13 @@ export function createEffectExecutor<TEdit>(deps: EffectExecutorDeps<TEdit>): Ef
         if (deps.isDisposed()) {
           return;
         }
-        console.error("[quoll] edit-rejected delivery rejected; resync fallback", err);
+        // CONTAINED — the third of this function's three recovery dispatches,
+        // wrapped for the same reason. In the two `.then` arms an escape is the
+        // more insidious mode: it becomes an unhandled rejection rather than a
+        // visible throw, so the missing dispatch is the only symptom.
+        reportContained(() =>
+          console.error("[quoll] edit-rejected delivery rejected; resync fallback", err)
+        );
         deps.dispatch({
           type: "editRejectedDeliveryFailed",
           id,
@@ -455,7 +589,13 @@ export function createEffectExecutor<TEdit>(deps: EffectExecutorDeps<TEdit>): Ef
     try {
       return deps.canWrite();
     } catch (err) {
-      console.error("[quoll] canWrite() threw at applyEdit settlement; assuming read-only", err);
+      // CONTAINED for the same reason as `readVersionGuarded`: this is evaluated
+      // while building the settlement event object, so a throwing report would
+      // skip `deps.dispatch` and strand the lock — turning the guard that makes
+      // this seam safe into the thing that breaks it.
+      reportContained(() =>
+        console.error("[quoll] canWrite() threw at applyEdit settlement; assuming read-only", err)
+      );
       return false;
     }
   };
@@ -541,13 +681,13 @@ export function createEffectExecutor<TEdit>(deps: EffectExecutorDeps<TEdit>): Ef
           );
         }
       },
-      // REJECTION ARM — the write lock's only release valve. `executeDocumentWrite`
-      // now GUARDS its two settle-time verification reads individually, so those
-      // can no longer reject the pipeline (a settle-read failure resolves as an
-      // UNVERIFIED settlement instead). The ONE reachable rejection source is what
-      // is left outside a try: the SYNCHRONOUS prefix (`readText` /
-      // `canonicalize`, which run before anything can land, so a rejection there
-      // really does describe a write that never happened).
+      // REJECTION ARM — the write lock's release valve for a REJECTED pipeline.
+      // `executeDocumentWrite` now GUARDS its two settle-time verification reads
+      // individually, so those can no longer reject the pipeline (a settle-read
+      // failure resolves as an UNVERIFIED settlement instead). The ONE reachable
+      // rejection source is what is left outside a try: the SYNCHRONOUS prefix
+      // (`readText` / `canonicalize`, which run before anything can land, so a
+      // rejection there really does describe a write that never happened).
       // ⚠️ This arm does NOT cover a throw from its own SIBLING — this is the
       // two-argument `.then(onFulfilled, onRejected)`, and `onRejected` never sees
       // `onFulfilled`'s throw (same limitation stated at `readCanWrite` above, and
@@ -571,9 +711,11 @@ export function createEffectExecutor<TEdit>(deps: EffectExecutorDeps<TEdit>): Ef
       // `try` — not to the fulfilment one; see its definition.)
       // Without this arm the rejection is left UNHANDLED by `void`
       // (`void` does not catch — it only discards the promise reference),
-      // `applyEditSettled` never fires, and `pendingApplyBaseVersion` — which ONLY
-      // this event clears (host-session-core `applyEditSettled`; dispose is the
-      // sole other path) — stays held for the session: every later inbound edit is
+      // `applyEditSettled` never fires, and `pendingApplyBaseVersion` — which
+      // this event is the only COMPLETING releaser of (host-session-core's
+      // `settlementTransitionFailed` recovery releases it only when a settlement
+      // transition threw, which is not this case, and dispose only on
+      // teardown) — stays held for the session: every later inbound edit is
       // stashed behind a bare warn and never saved. Silent, toast-free data loss.
       // Settling with a NON-OK outcome is what makes it safe: `canDrain` requires
       // `ok`, so the unobserved snapshot below never reaches `decideEdit`, and
@@ -595,7 +737,15 @@ export function createEffectExecutor<TEdit>(deps: EffectExecutorDeps<TEdit>): Ef
       // is unused for a non-ok settlement, so pass the conservative `false`
       // rather than reading it.
       (err: unknown) => {
-        console.error("[quoll] verified write pipeline rejected; releasing the write lock", err);
+        // CONTAINED, and this one is the arm's own release valve: the call sits
+        // BEFORE the `try` below, so an unguarded throw here skipped the dispatch
+        // entirely — a SINGLE console failure stranding the write lock on the very
+        // path whose job is to release it. Kept outside the `try` on purpose: the
+        // triage line must be emitted before the dispatch it describes, and the
+        // catch below is for a throwing EFFECT, not for this log.
+        reportContained(() =>
+          console.error("[quoll] verified write pipeline rejected; releasing the write lock", err)
+        );
         try {
           deps.dispatch({
             type: "applyEditSettled",
@@ -675,11 +825,13 @@ export function createEffectExecutor<TEdit>(deps: EffectExecutorDeps<TEdit>): Ef
             // unhandled rejection, since `createDrainingDispatcher` catches a
             // throwing `step` only to finish its drain and RETHROWS afterwards
             // (its failure policy), and (b) abandon the rest of the effect
-            // list. It would NOT skip the barrier release — the panel's `step`
-            // settles unconditionally — but the ack Document is exactly the effect
-            // worth keeping, so contain the throw here rather than relying on that
-            // backstop. Only the injected BUILDER is guarded, so a reducer bug
-            // still surfaces (the exhaustiveness guard below).
+            // list. It would NOT skip the barrier release here — `step` settles it
+            // regardless of what `runEffects` does; the one gap, `isEditApplied`
+            // itself throwing, sits BEFORE `runEffects` runs at all
+            // (`host-session-step.ts:390`) — but the ack Document is exactly the
+            // effect worth keeping, so contain the throw here rather than relying
+            // on that backstop. Only the injected BUILDER is guarded, so a reducer
+            // bug still surfaces (the exhaustiveness guard below).
             //
             // ⚠️ The Document does NOT reach the webview either way — an escaping
             // throw would have skipped the `post()` just the same — and the
@@ -693,11 +845,40 @@ export function createEffectExecutor<TEdit>(deps: EffectExecutorDeps<TEdit>): Ef
             // user's actual remedy. Latched to once per INCIDENT so a repeatedly
             // broken seam cannot storm the user, while a seam that recovers and
             // breaks again still gets a fresh signal (the re-arm below).
-            console.error(
-              "[quoll] failed to build the Document to post; skipping this reseed",
-              err
-            );
+            //
+            // TWO separate fixes here, and they are justified by DIFFERENT
+            // evidence — keep them apart, because conflating them is how an
+            // honest number turns into an overclaim.
+            //
+            // 1. The log is CONTAINED. This catch exists to stop a throw from
+            //    unwinding `runEffects`, and reporting through a bare console
+            //    re-opened exactly that hole: with a throwing `console.error`
+            //    the guard produced NO toast attempt at all (measured:
+            //    `toastAttempts: 0`), making the state this comment says must
+            //    not be SILENT, silent. That number is the evidence for the
+            //    WRAP, and it is what `effect-executor.test.ts` pins.
+            //
+            // 2. The SIGNAL now goes FIRST, matching the module's own ORDER RULE
+            //    (named in `reportContained`'s header) and the reducer-side sites
+            //    that cite it. ⚠️ Be honest about its status: while the wrap holds,
+            //    this order is UNOBSERVABLE — a contained log is absorbed either
+            //    way, so no test in the shipped configuration can tell the two
+            //    orders apart, and the suite stays green if someone puts the log
+            //    back in front. Its value is a counterfactual, and that
+            //    counterfactual IS measured: with the wrap removed, log-first
+            //    gives `toastAttempts: 0` and signal-first gives
+            //    `toastAttempts: 1`. So this is what keeps the user-visible
+            //    signal in the one configuration where fix 1 is gone — defence
+            //    in depth, on the same footing as `settlementEffects`'
+            //    toast-before-reseed note, which likewise declines to rely on
+            //    the executor's containment.
             reportResyncFailure("[quoll] failed to report the reseed build failure");
+            reportContained(() =>
+              console.error(
+                "[quoll] failed to build the Document to post; skipping this reseed",
+                err
+              )
+            );
             break;
           }
           if (QUOLL_PERF) {
@@ -773,17 +954,88 @@ export function createEffectExecutor<TEdit>(deps: EffectExecutorDeps<TEdit>): Ef
           // throw would both escape as an unhandled rejection (only later, at the
           // end of that drain) and abandon the rest of this effect
           // list — including the ack `postDocument`. The barrier release survives
-          // either way (the panel's `step` settles unconditionally), so this guard
-          // is about the effect list, not the barrier. No latch: this is
+          // either way — `step` settles it regardless of `runEffects` (the
+          // `postDocument` catch above names the one gap) — so this guard is
+          // about the effect list, not the barrier. No latch: this is
           // per-effect containment, not notification suppression.
           try {
             deps.showError(effect.message);
           } catch (err) {
-            console.error("[quoll] showError threw while running settlement effects", err);
+            // The fallback report goes through `reportContained`: a `console`
+            // broken badly enough to take `window.showErrorMessage` with it is
+            // the correlated case, and an escaping throw HERE would abandon the
+            // rest of the list — the ack `postDocument` included. The message
+            // travels with it so triage keeps the incident's identity (which
+            // toast was lost), which the bare catch used to discard.
+            reportContained(() =>
+              console.error(
+                "[quoll] showError threw while running settlement effects",
+                effect.message,
+                err
+              )
+            );
           }
           break;
         case "logWarn":
-          console.warn(effect.message, effect.detail);
+          // GUARDED for the same reason as `showError` above, and this case is
+          // where the rule matters most: several reducer arms emit a triage
+          // `logWarn` AHEAD of the effect that actually pays the incident — the
+          // drain `accept` arm's `[...staleReBaseWarn, applyEdit]`
+          // (host-session-core's `applyEditSettled` case) and `refused`'s
+          // `[logWarn, ...toasts, ...ack]`. An escaping throw there unwinds
+          // `runEffects` and abandons the rest of the list, and in the drain arm
+          // that costs the WRITE: the committed state already re-acquired the
+          // lock, so a dropped `applyEdit` means no settlement is ever
+          // dispatched and the lock is stranded for the panel's life — the same
+          // stranding `settlementTransitionFailed` exists to repair, except that
+          // recovery hangs off the TRANSITION catch (`host-session-step.ts`) and
+          // cannot see a `runEffects` throw at all. No latch: per-effect
+          // containment, not notification suppression.
+          //
+          // ⚠️ This does NOT close the class — do not restore a claim that it
+          // does. Be exact about what "the class" is: it is every position in
+          // `runEffects` from which a throw can unwind the effect loop, and
+          // guarding the effects whose body is a bare side effect closes only
+          // the ones whose body is a bare side effect. (What per-effect
+          // containment gives up is the LOG LINE, not the containment — see
+          // `reportContained`'s ⚠️; that is a separate limit, not this one.)
+          //
+          // What is still open is TWO position classes, and one of them IS a
+          // console call:
+          //   1. Three effects evaluate their INJECTED BUILDER outside every
+          //      `try`, because `post` guards `deps.send(message)` and not the
+          //      argument handed to it: `postRejectedDraft` →
+          //      `deps.buildRejectedDraft`, `postTheme` → `deps.buildTheme`,
+          //      `sendEditRejected` → `deps.buildEditRejected` (before that
+          //      function's own `try`). `case "postDocument"` DOES guard its
+          //      builder, which is what makes these three a gap rather than a
+          //      convention. Sharpest on the drain's parse-failed arm
+          //      (`[...staleReBaseWarn, postRejectedDraft, showError]`): a
+          //      throwing `buildRejectedDraft` abandons the `Cannot save:` toast
+          //      AND leaves `rejection: { kind: "pending" }` committed with no
+          //      delivery and no `editRejectedDeliveryFailed`. NOT closed by
+          //      wrapping: the builder's RESULT is what the effect needs, so
+          //      containment has to decide what the arm does when the message
+          //      cannot be built at all — a new failure path, not a reuse.
+          //   2. `case "openExternal"` → `runOpenExternal(effect.href)`, a bare
+          //      side effect with NO guard, whose delegate reports through bare
+          //      `console.warn` ×2 + bare `console.error` + `deps.showError`
+          //      outside its own `try` (`links/handle-open-external.ts`) — so
+          //      this class DOES include console calls. Left open: the reducer
+          //      emits `openExternal` as the SOLE effect of its one list, so
+          //      there is no tail to abandon.
+          // Both OPEN (pre-existing), tracked in `docs/TODO.md` ("Contain the
+          // injected-builder evaluations in `runEffects`").
+          try {
+            console.warn(effect.message, effect.detail);
+          } catch (err) {
+            // Same containment as `showError`'s, for the same correlated-console
+            // reason, and carrying the message so the lost log line is still
+            // identifiable in triage.
+            reportContained(() =>
+              console.error("[quoll] logWarn threw while running effects", effect.message, err)
+            );
+          }
           break;
         case "openExternal":
           // No additional logging here — isAllowedUrl rejection +
