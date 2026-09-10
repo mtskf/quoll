@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 
 import { describe, expect, it } from "vitest";
 
+import { RESYNC_FAILURE_MESSAGE } from "../../../src/extension/session/effect-executor.js";
 import {
   createDrainingDispatcher,
   createHostSessionCore,
@@ -1737,11 +1738,11 @@ describe("host-session-core: an unobserved ack label still DRAINS (bytes first)"
   // The EXACT pair `withholdAckEffects` builds at an unobserved label, shared by
   // the two readonly/stale/no-op tests below so their exhaustive `toEqual`s
   // cannot drift apart. `lockedStash` fixes both numbers in the detail.
-  // ORDER: the user-visible `showResyncFailure` precedes the `logWarn`. Not
-  // because the executor runs the latter unguarded — it contains the throw — but
-  // as defence in depth: that containment reports through a second console call
-  // which can fail the same way, so the incident's only visible signal must not
-  // sit behind the log.
+  // ORDER: the user-visible `showResyncFailure` precedes the `logWarn`. The
+  // reason lives with the code that builds this pair — `withholdAckEffects` in
+  // `host-session-core.ts` — and is deliberately NOT restated here: a verbatim
+  // copy of that rationale is an altitude that goes stale on its own, which is
+  // what happened to the previous version of this comment.
   const withheldAck = [
     { type: "showResyncFailure" },
     {
@@ -2063,7 +2064,24 @@ describe("host-session-core: settlementTransitionFailed (write-lock recovery)", 
     expect(r.effects.some((e) => e.type === "showResyncFailure")).toBe(true);
   });
 
-  // ISSUE 6 (cycle 2): the loss gate is the SHARED `ackLabelObserved`, whose
+  // The hedge's justification is a CROSS-MODULE claim, stated in three comments
+  // (`host-session-core.ts`'s withhold pair and this arm, plus the test above):
+  // the wording reuses `RESYNC_FAILURE_MESSAGE`'s own certainty phrase so the two
+  // toasts — which this very state emits TOGETHER — cannot disagree. Until this
+  // test the phrase lived as a bare literal in two modules with nothing coupling
+  // them: rewording the executor's constant left every test green (measured), so
+  // the RATIONALE for the whole hedge branch could go stale in silence. Pinned
+  // against the real constant rather than by restating the literal a third time.
+  it("keeps the alive hedge on the SAME certainty phrase as RESYNC_FAILURE_MESSAGE (the two toasts can co-occur)", () => {
+    const SHARED_HEDGE = "may not have been saved";
+    expect(RESYNC_FAILURE_MESSAGE).toContain(SHARED_HEDGE);
+    const r = core.transition(locked({ pendingEdit: STASH }), recovery(null));
+    // The co-occurrence the claim is about: this one state builds both.
+    expect(r.effects.some((e) => e.type === "showResyncFailure")).toBe(true);
+    expect(messageOf(r.effects.find((e) => e.type === "showError"))).toContain(SHARED_HEDGE);
+  });
+
+  // PR #409 cycle 2: the loss gate is the SHARED `ackLabelObserved`, whose
   // second disjunct is "a lock-held resync already raised the label beyond the
   // held base". Keying the clause on the raw `event.settledVersion` instead is
   // undetectable by every other test in this suite (measured: 335/335 still

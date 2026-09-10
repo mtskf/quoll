@@ -17,8 +17,9 @@
 //
 // This file also hosts unrelated tsc-enforced type-level pins for source
 // modules (the "handoff type pins", "table model type pins", "status-bar
-// type pins", and "document-write adapter type pins" describe blocks
-// below). They are NOT part of the e2e-mirror equality guard above: each
+// type pins", "host-session step type pins", and "document-write adapter
+// type pins" describe blocks below). They are NOT part of the e2e-mirror
+// equality guard above: each
 // pins a source-module type contract with a tsc-checked assertion — an
 // AssertEqual identity check or a `@ts-expect-error` directive — which is
 // non-vacuous only because `pnpm compile` type-checks THIS file.
@@ -30,7 +31,10 @@ import {
   type HandleContextHandoffPayload,
   type HandoffRevealSelection,
 } from "../../src/extension/handoff/handle-context-handoff";
-import type { HostSessionInputEvent } from "../../src/extension/session/host-session-core";
+import type {
+  HostSessionEvent,
+  HostSessionInputEvent,
+} from "../../src/extension/session/host-session-core";
 import type { HostSessionStepDeps } from "../../src/extension/session/host-session-step";
 import type { EndOfLineValue } from "../../src/extension/status-bar";
 import type { PanelControls } from "../../src/extension/test-harness";
@@ -242,14 +246,46 @@ describe("host-session step type pins", () => {
     // collapses to `never` on a typo and reddens its callers — so without this
     // pin one commit ships two derives with OPPOSITE failure modes.
     //
-    // This observes the exclusion EXPRESSION, not just its intent: it asks what
-    // the union actually contains. Revert-check: mistype the literal in
-    // `host-session-core.ts`'s `Exclude` and this resolves to `false`, failing
-    // the `= true` assignment (measured: TS2322 here, exit 0 without it).
+    // It takes TWO assertions to say this, because either one alone is
+    // satisfiable without the invariant holding. `Extract<T, U>` answers `never`
+    // for two different reasons — the union really excludes the member
+    // (intended), or the literal matches nothing at all (vacuous) — and it cannot
+    // distinguish them. The cause is structural, and the sibling pin above is the
+    // contrast that proves it: `Pick<T, K>` declares `K extends keyof T`, so ITS
+    // key typo is a TS2344, while `Extract`'s `U` is unconstrained — which is
+    // exactly why `Exclude` is fail-OPEN at the source in the first place.
+    //
+    // So: ONE literal, asked TWO questions. It must be a REAL member of the WIDE
+    // union, AND absent from the narrow one. Writing the literal ONCE is what
+    // makes that a biconditional rather than a convention — with a literal per
+    // assertion, mistyping the exclusion side's copy leaves the membership side
+    // reading its own correct copy, and the pair goes green while the guard is
+    // silently disarmed (measured: exit 0). There is no pair to keep in sync now.
+    //
+    // Measured on THIS form (`tsc -p test/extension/tsconfig.unit.json`):
+    //   - mistype `host-session-core.ts`'s `Exclude` literal → TS2322
+    //     (`_excludesRecovery`);
+    //   - mistype `RecoveryEventType` → TS2322 (`_recoveryIsARealMember`; this is
+    //     also the rename-and-forget case, where `Exclude` stops removing
+    //     anything and the exclusion question alone would still answer `never`).
+    // ⚠️ ONE vacuity survives, and it is NOT a typo: `type RecoveryEventType =
+    // never` makes BOTH questions trivially true and leaves exit 0 (measured).
+    // Any misspelling is a non-empty string literal, so it always reddens one
+    // half — only the degenerate `never` escapes, which no typo produces but a
+    // refactor that computes this type (e.g. an intersection that collapses)
+    // could. Closing it costs one more assertion (`[RecoveryEventType] extends
+    // [never] ? … : …`); it is left open deliberately and recorded here rather
+    // than claimed shut.
+    type RecoveryEventType = "settlementTransitionFailed";
+    const _recoveryIsARealMember: AssertEqual<
+      Extract<HostSessionEvent, { readonly type: RecoveryEventType }>["type"],
+      RecoveryEventType
+    > = true;
     const _excludesRecovery: AssertEqual<
-      Extract<HostSessionInputEvent, { readonly type: "settlementTransitionFailed" }>,
+      Extract<HostSessionInputEvent, { readonly type: RecoveryEventType }>,
       never
     > = true;
+    expect(_recoveryIsARealMember).toBe(true);
     expect(_excludesRecovery).toBe(true);
   });
 });

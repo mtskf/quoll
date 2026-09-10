@@ -396,12 +396,14 @@ function withholdAckEffects(
   return [
     // FIRST — and no longer because the executor leaves `logWarn` unguarded: it
     // does not (`effect-executor.ts`'s `case "logWarn"` contains the throw). The
-    // order is DEFENCE IN DEPTH. That containment reports its own failure through
-    // a SECOND console call, which can fail for the same reason the first did
-    // (`reportContained`'s inert catch is the honest admission of this), so the
-    // incident's only user-visible signal must not sit behind the log. The
-    // reducer-side half holds even if the executor's per-effect guard is ever
-    // removed. Same rule as the settlement's toast-before-reseed order, applied
+    // order is DEFENCE IN DEPTH, and what it defends against is NOT a failing
+    // fallback console call: that one is absorbed by `reportContained`'s inert
+    // catch, so the effect loop still reaches the next effect and the signal
+    // still goes out. It defends against the guard being REMOVED by a future
+    // edit, and against the positions `effect-executor.ts`'s `case "logWarn"` ⚠️
+    // lists as still unprotected. The reducer-side half holds in both cases,
+    // which is why the incident's only user-visible signal does not sit behind
+    // the log. Same rule as the settlement's toast-before-reseed order, applied
     // to the withhold pair.
     { type: "showResyncFailure" },
     {
@@ -1081,9 +1083,19 @@ export function createHostSessionCore(context: HostSessionContext, deps: HostSes
                 // check. Do not drop that hedge: without the settle-time read a
                 // misplaced splice (execute-write.ts's S5 escape) cannot be ruled
                 // out.
-                // ALIVE deliberately stays toast-free — there the webview's
+                // ALIVE stays toast-free WHEN AN ACK GOES OUT: the webview's
                 // single-flight replay buffer (which this settlement does not
-                // invalidate) still holds the edit and re-posts it after the ack.
+                // invalidate) still holds the edit, and the ack Document below
+                // re-posts it. ⚠️ NOT unconditional — with the LABEL also
+                // unobserved the ack is WITHHELD (`withholdAckEffects`, no
+                // `postDocument` at all), nothing replays the buffer here, and
+                // the apply's own lock-free echo then bumps `externalEpoch` and
+                // drops it (`canDrain`'s "with the ack WITHHELD" note spells out
+                // the chain link by link). That sub-case is silent by DECISION,
+                // not by safety — the deliberate, unreconciled divergence
+                // recorded at the `settlementTransitionFailed` arm's ⚠️ ("NOT the
+                // same gate as the settlement arm's `unobservedStashDrop`
+                // toast").
                 ...(unobservedStashDrop
                   ? [
                       {
@@ -1380,7 +1392,25 @@ export function createHostSessionCore(context: HostSessionContext, deps: HostSes
         // not this wording.
         let lossClause: string;
         if (!lostStash) {
-          // NO LOSS — just the closing instruction.
+          // NO *STASH* LOSS — not "no loss", and the difference is real. This
+          // branch is reached two ways, and only the first is loss-free:
+          //   - an ack IS coming (`ackLabelObserved`), so the retained replay
+          //     buffer gets replayed. Nothing was lost.
+          //   - alive, ack WITHHELD, but `stash === null` — `lostStash` requires
+          //     a stash, so this state lands here too. The recovery still fired
+          //     mid-apply and this arm is outcome-blind, so the webview's
+          //     IN-FLIGHT bytes sit under exactly the same conditional four-step
+          //     loss the ⚠️ above spells out for a stash. "may not have been
+          //     saved" would be as true of them as of a stash.
+          // ⚠️ ACCEPTED RESIDUAL, deliberately not fixed here: widening the
+          // hedge means re-keying these branches on `ackLabelObserved` instead of
+          // `lostStash`, which moves `expectNoLossClaim`'s three call sites and
+          // the loss-gate pins together — a diverging change, where this cycle
+          // was scoped to reusing an already-reviewed mechanism. Tracked in
+          // `docs/TODO.md` ("Give the alive + withheld-ack case with NO stash the
+          // same copy-first warning the stashed case gets"). Stated here because
+          // this is where the gap lives, and because the instruction below tells
+          // that user to REOPEN — which destroys the buffer holding those bytes.
           lossClause = " Reopen the file to check its contents.";
         } else if (state.disposed) {
           // POST-DISPOSE — DEFINITE. There is no webview, so the stash was the
@@ -1391,12 +1421,15 @@ export function createHostSessionCore(context: HostSessionContext, deps: HostSes
           // ALIVE with a WITHHELD ack — HEDGED. This arm is outcome-blind, and
           // one corner really does land the bytes (the never-advancing document
           // above), so MAY is the strongest honest claim. "may not have been
-          // saved" is deliberately the SAME phrase `RESYNC_FAILURE_MESSAGE` uses,
-          // so if both toasts appear they cannot contradict each other on
-          // certainty; and the remedy composes with that toast's "reload the
-          // window" as an ORDER (copy, THEN reload) instead of a conflict. It
-          // must also stand alone: `showResyncFailure` is latched per panel, so
-          // the resync toast is NOT guaranteed to appear beside this one.
+          // saved" is deliberately the SAME phrase `RESYNC_FAILURE_MESSAGE` uses
+          // (pinned against that constant in `host-session-core.test.ts`), so if
+          // both toasts appear they cannot contradict each other on certainty.
+          // The remedy is SELF-SUFFICIENT rather than sequenced: presentation
+          // order in the notification stack is not ours to choose, so this toast
+          // names both steps (copy, then reload) on its own and never relies on
+          // being read before or after the resync toast. It has to stand alone
+          // anyway — `showResyncFailure` is latched per panel, so that toast is
+          // NOT guaranteed to appear beside this one.
           lossClause =
             " A later unsaved edit may not have been saved — copy any text you can still see in the editor before reloading the window.";
         }

@@ -110,7 +110,8 @@ export interface HostSessionStepDeps {
 /** The barrier verdict for `event`: `false` means DROP the deferred side
  *  channels (the edit cannot be shown to have landed, so they would read
  *  pre-edit bytes). It is NOT a biconditional on "failed apply settlement" —
- *  three different arms answer `false`, and only the first is one:
+ *  three different REASONS answer `false` — four arms, since the last reason
+ *  owns two — and only the first is a failed settlement:
  *    - `applyEditSettled` with a non-ok outcome (the failed settlement proper);
  *    - `settlementTransitionFailed`, the write-lock recovery, which is
  *      outcome-blind and so may never claim the edit landed;

@@ -641,7 +641,7 @@ describe("effect-executor runApplyEdit (wrapper mapping)", () => {
     }
   });
 
-  // ISSUE 2 (cycle 2). The guards on `readVersion` / `canWrite` make those seams
+  // PR #409 cycle 2. The guards on `readVersion` / `canWrite` make those seams
   // safe to read while BUILDING the settlement event — but each guard reported
   // through a bare console call, at a position this module's own positional rule
   // calls out: anything evaluated on the way INTO `deps.dispatch` runs before
@@ -1029,6 +1029,126 @@ describe("effect-executor sendEditRejected (via postEditRejected effect)", () =>
       warnSpy.mockRestore();
     }
   });
+
+  // The THREE tests below are the same shape as the three above, one altitude
+  // down: those pin that a broken `readVersion` cannot stop the recovery
+  // dispatch, these pin that a broken CONSOLE cannot either. Each recovery
+  // dispatch had a bare report ahead of it, so one console fault skipped the
+  // dispatch — measured as `dispatched: []`. Without the dispatch the rejection
+  // stays `pending`: the webview keeps a banner it cannot resolve, its single
+  // flight stays parked, and visible-edge resync is suppressed by the pending
+  // gate, so nothing the HOST does clears it. One test per site, because a wrap
+  // with no pin of its own is the one that regresses (measured for the
+  // `showError` sibling).
+  it("recovery dispatch survives a throwing console at the SYNC-THROW site", () => {
+    const dispatch = vi.fn();
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {
+      throw new Error("console.error failed");
+    });
+    try {
+      runReject({
+        send: () => {
+          throw new Error("sync transport throw");
+        },
+        dispatch,
+      });
+      expect(errorSpy).toHaveBeenCalledOnce(); // the throwing report really ran
+      expect(dispatch).toHaveBeenCalledWith({
+        type: "editRejectedDeliveryFailed",
+        id: 42,
+        documentVersion: 11,
+      });
+    } finally {
+      errorSpy.mockRestore();
+    }
+  });
+
+  it("recovery dispatch survives a throwing console at the delivery-REFUSED site (no unhandled rejection)", async () => {
+    const rejections: unknown[] = [];
+    const onUnhandled = (r: unknown) => rejections.push(r);
+    process.on("unhandledRejection", onUnhandled);
+    // This site's primary report is a `console.warn`, and `reportContained`'s
+    // catch is inert — so there is no second console call to observe here, only
+    // the dispatch that must still happen.
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {
+      throw new Error("console.warn failed");
+    });
+    try {
+      const dispatch = vi.fn();
+      runReject({ send: vi.fn(async () => false), dispatch });
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(warnSpy).toHaveBeenCalled();
+      expect(dispatch).toHaveBeenCalledWith({
+        type: "editRejectedDeliveryFailed",
+        id: 42,
+        documentVersion: 11,
+      });
+      await Promise.resolve();
+      expect(rejections).toEqual([]);
+    } finally {
+      process.off("unhandledRejection", onUnhandled);
+      warnSpy.mockRestore();
+    }
+  });
+
+  // The delivery-refused site is the ONE whose payload reads injected seams
+  // (`deps.uriString()` / `deps.getState().lastAppliedDocVersion`). Wrapping the
+  // console call while leaving those reads OUTSIDE the thunk would contain only
+  // half the site: argument evaluation happens before the call, so a throwing
+  // seam would skip the dispatch exactly as a throwing console did. This pins the
+  // reads as being inside.
+  it("recovery dispatch survives a THROWING SEAM READ in the delivery-refused payload (the reads are inside the thunk)", async () => {
+    const dispatch = vi.fn();
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      runReject({
+        send: vi.fn(async () => false),
+        dispatch,
+        getState: () => {
+          throw new Error("getState failed");
+        },
+      });
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(dispatch).toHaveBeenCalledWith({
+        type: "editRejectedDeliveryFailed",
+        id: 42,
+        documentVersion: 11,
+      });
+      // The log line itself is the acceptable loss: the payload could not be
+      // built, so nothing was warned.
+      expect(warnSpy).not.toHaveBeenCalled();
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  it("recovery dispatch survives a throwing console at the delivery-REJECTED site (no unhandled rejection)", async () => {
+    const rejections: unknown[] = [];
+    const onUnhandled = (r: unknown) => rejections.push(r);
+    process.on("unhandledRejection", onUnhandled);
+    const dispatch = vi.fn();
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {
+      throw new Error("console.error failed");
+    });
+    try {
+      runReject({ send: () => Promise.reject(new Error("detached")), dispatch });
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(errorSpy).toHaveBeenCalledOnce();
+      expect(dispatch).toHaveBeenCalledWith({
+        type: "editRejectedDeliveryFailed",
+        id: 42,
+        documentVersion: 11,
+      });
+      await Promise.resolve();
+      expect(rejections).toEqual([]);
+    } finally {
+      process.off("unhandledRejection", onUnhandled);
+      errorSpy.mockRestore();
+    }
+  });
 });
 
 describe("effect-executor runEffects other cases", () => {
@@ -1145,6 +1265,87 @@ describe("effect-executor runEffects other cases", () => {
     }
   });
 
+  // Sibling of the logWarn both-consoles-throw test below, for the arm whose
+  // abandoned tail is the ack `postDocument`. Until this test, `case "showError"`
+  // was the ONE `reportContained` call site with no pin of its own: reverting it
+  // to a bare `console.error` left the whole file green (measured), which is
+  // exactly the asymmetry that makes an unpinned guard the one that regresses.
+  it("showError: the guard's OWN fallback report cannot unwind — BOTH console methods throwing still runs the postDocument that FOLLOWS", async () => {
+    const rejections: unknown[] = [];
+    const onUnhandled = (r: unknown) => rejections.push(r);
+    process.on("unhandledRejection", onUnhandled);
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {
+      throw new Error("console.error failed too");
+    });
+    try {
+      const send = vi.fn(async () => true);
+      const showError = vi.fn(() => {
+        throw new Error("toast failed");
+      });
+      const { runEffects } = createEffectExecutor(makeDeps({ send, showError }));
+
+      // The exact shape `settlementEffects` emits for a non-ok settlement.
+      expect(() =>
+        runEffects([
+          { type: "showError", message: "Failed to save: boom" },
+          { type: "postDocument", docVersion: 3, externalEpoch: 0, epochGeneration: 1 },
+        ])
+      ).not.toThrow();
+
+      expect(showError).toHaveBeenCalledOnce(); // the attempt really happened
+      expect(errorSpy).toHaveBeenCalledOnce(); // …and so did its fallback report
+      // THE assertion: the ack Document survived a console that fails in BOTH
+      // directions.
+      expect(send).toHaveBeenCalled();
+      await Promise.resolve();
+      expect(rejections).toEqual([]);
+    } finally {
+      process.off("unhandledRejection", onUnhandled);
+      errorSpy.mockRestore();
+    }
+  });
+
+  // `post`'s SYNC-THROW catch is a containment boundary like the two above, and
+  // it reported through a bare console until this test. The cost is not confined
+  // to `post`: `case "postRejectedDraft"` calls `post` and then, on the very next
+  // line, `sendEditRejected` — so an escape from this catch takes the whole
+  // remainder of the effect list with it. Pinned with the generic shape (a post
+  // effect followed by another effect) so the property is the effect loop's, not
+  // one arm's.
+  it("post: a throwing report inside the sync-throw catch cannot unwind — the effect that FOLLOWS still runs", async () => {
+    const rejections: unknown[] = [];
+    const onUnhandled = (r: unknown) => rejections.push(r);
+    process.on("unhandledRejection", onUnhandled);
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {
+      throw new Error("console.error failed too");
+    });
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const send = vi.fn(() => {
+        throw new Error("sync transport throw");
+      });
+      const { runEffects } = createEffectExecutor(makeDeps({ send }));
+
+      expect(() =>
+        runEffects([
+          { type: "postTheme", themeKind: "dark" },
+          { type: "logWarn", message: "[quoll] the tail that must survive", detail: {} },
+        ])
+      ).not.toThrow();
+
+      expect(send).toHaveBeenCalledOnce(); // the throwing attempt really happened
+      expect(errorSpy).toHaveBeenCalledOnce(); // …and so did its contained report
+      // THE assertion: the effect loop reached the next effect.
+      expect(warnSpy).toHaveBeenCalledWith("[quoll] the tail that must survive", {});
+      await Promise.resolve();
+      expect(rejections).toEqual([]);
+    } finally {
+      process.off("unhandledRejection", onUnhandled);
+      errorSpy.mockRestore();
+      warnSpy.mockRestore();
+    }
+  });
+
   it("openExternal: forwards href to deps.openExternal", () => {
     const openExternal = vi.fn();
     const { runEffects } = createEffectExecutor(makeDeps({ openExternal }));
@@ -1231,7 +1432,7 @@ describe("effect-executor runEffects other cases", () => {
     }
   });
 
-  // ISSUE 1 (cycle 2): the guard added above reports its own failure through a
+  // PR #409 cycle 2: the guard added above reports its own failure through a
   // SECOND console call, and until this test that fallback was itself unguarded.
   // VS Code patches the console as ONE IPC family, so "console.warn throws but
   // console.error is fine" is the optimistic case — the correlated case is BOTH,
@@ -1332,6 +1533,82 @@ describe("effect-executor showResyncFailure (withheld settlement ack)", () => {
       );
     } finally {
       errorSpy.mockRestore();
+    }
+  });
+
+  // The reseed build-failure guard's own comment says the state it creates must
+  // NOT be SILENT — and it used to place a BARE `console.error` AHEAD of the
+  // toast that is the whole signal, so one console fault broke that condition
+  // (measured: `toastAttempts: 0`). Both halves of the fix are pinned here at
+  // once, because either one alone leaves the property false: the toast now goes
+  // FIRST (the module's own order rule — user-visible signal ahead of triage
+  // log), and the log is contained.
+  it("postDocument build failure: a throwing console still leaves ONE toast attempt (signal ahead of the log)", () => {
+    const showError = vi.fn();
+    const buildSeedDocument = vi.fn(() => {
+      throw new Error("boom-seed");
+    });
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {
+      throw new Error("console.error failed");
+    });
+    try {
+      const { runEffects } = createEffectExecutor(
+        makeDeps({ showError, buildSeedDocument, send: vi.fn(async () => true) })
+      );
+      expect(() =>
+        runEffects([{ type: "postDocument", docVersion: 1, externalEpoch: 0, epochGeneration: 1 }])
+      ).not.toThrow();
+      // THE assertion: the user-visible signal was attempted despite the console
+      // failing. ⚠️ This observes the CONTAINMENT, not the statement order — with
+      // the log contained, the signal is reached from either position. The order
+      // is deliberate but unobservable here; see the guard's own comment for the
+      // configuration that separates them, and note that this test stays GREEN if
+      // someone puts the log back in front.
+      expect(showError).toHaveBeenCalledOnce();
+      expect(errorSpy).toHaveBeenCalledOnce();
+    } finally {
+      errorSpy.mockRestore();
+    }
+  });
+
+  // `reportResyncFailure`'s OWN fallback was the last bare report in the module,
+  // and it sits in the most correlated position of all: it runs only because
+  // `deps.showError` just threw. Both callers are inside a boundary a throw must
+  // not unwind, so an escape here abandoned the rest of the effect list — for the
+  // withhold pair that is the triage `logWarn`, which is emitted AFTER the
+  // signal. Two faults, both consoles included, and the tail must still run.
+  it("the resync-failure guard's OWN fallback cannot unwind — a throwing toast AND a throwing console still run the effect that FOLLOWS", async () => {
+    const rejections: unknown[] = [];
+    const onUnhandled = (r: unknown) => rejections.push(r);
+    process.on("unhandledRejection", onUnhandled);
+    const showError = vi.fn(() => {
+      throw new Error("toast failed");
+    });
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {
+      throw new Error("console.error failed too");
+    });
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const { runEffects } = createEffectExecutor(makeDeps({ showError }));
+      // The VERBATIM shape `withholdAckEffects` builds: the signal, then triage.
+      expect(() =>
+        runEffects([
+          { type: "showResyncFailure" },
+          { type: "logWarn", message: "[quoll] settlement ack withheld", detail: {} },
+        ])
+      ).not.toThrow();
+
+      expect(showError).toHaveBeenCalledOnce(); // the toast attempt happened
+      expect(errorSpy).toHaveBeenCalledOnce(); // …and so did its contained report
+      // THE assertion: the triage line that FOLLOWS survived a console failing in
+      // both directions.
+      expect(warnSpy).toHaveBeenCalledWith("[quoll] settlement ack withheld", {});
+      await Promise.resolve();
+      expect(rejections).toEqual([]);
+    } finally {
+      process.off("unhandledRejection", onUnhandled);
+      errorSpy.mockRestore();
+      warnSpy.mockRestore();
     }
   });
 });
