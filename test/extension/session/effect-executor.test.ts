@@ -1030,15 +1030,16 @@ describe("effect-executor sendEditRejected (via postEditRejected effect)", () =>
     }
   });
 
-  // The THREE tests below are the same shape as the three above, one altitude
-  // down: those pin that a broken `readVersion` cannot stop the recovery
-  // dispatch, these pin that a broken CONSOLE cannot either. Each recovery
+  // FOUR tests below: THREE that are the same shape as the three above, one
+  // altitude down — those pin that a broken `readVersion` cannot stop the
+  // recovery dispatch, these pin that a broken CONSOLE cannot either — plus one
+  // for the payload's own seam reads (it carries its own comment). Each recovery
   // dispatch had a bare report ahead of it, so one console fault skipped the
   // dispatch — measured as `dispatched: []`. Without the dispatch the rejection
   // stays `pending`: the webview keeps a banner it cannot resolve, its single
   // flight stays parked, and visible-edge resync is suppressed by the pending
-  // gate, so nothing the HOST does clears it. One test per site, because a wrap
-  // with no pin of its own is the one that regresses (measured for the
+  // gate, so nothing the HOST does clears it. One console test per site, because
+  // a wrap with no pin of its own is the one that regresses (measured for the
   // `showError` sibling).
   it("recovery dispatch survives a throwing console at the SYNC-THROW site", () => {
     const dispatch = vi.fn();

@@ -19,10 +19,10 @@
 // modules (the "handoff type pins", "table model type pins", "status-bar
 // type pins", "host-session step type pins", and "document-write adapter
 // type pins" describe blocks below). They are NOT part of the e2e-mirror
-// equality guard above: each
-// pins a source-module type contract with a tsc-checked assertion — an
-// AssertEqual identity check or a `@ts-expect-error` directive — which is
-// non-vacuous only because `pnpm compile` type-checks THIS file.
+// equality guard above: each pins a source-module type contract with a
+// tsc-checked assertion — an AssertEqual identity check or a
+// `@ts-expect-error` directive — which is non-vacuous only because
+// `pnpm compile` type-checks THIS file.
 
 import { describe, expect, it } from "vitest";
 import type { DocumentWriteAdapter } from "../../src/extension/document-write/execute-write";

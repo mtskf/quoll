@@ -199,9 +199,11 @@ export function createEffectExecutor<TEdit>(deps: EffectExecutorDeps<TEdit>): Ef
   // A new console call that is neither — one with a dispatch, a toast, or a
   // Document still owed after it — belongs in this owner.
   //
-  // Reducer-side effect ORDER — user-visible signal ahead of triage log — is the
-  // second, independent half of the pair, and it stays load-bearing because a
-  // future edit can remove a per-effect guard.
+  // ORDER RULE (the second, independent half of the pair — cited by name from
+  // the `postDocument` build-failure guard, since the ⚠️ above is a different
+  // claim): reducer-side effect order puts the user-visible signal ahead of the
+  // triage log. It stays load-bearing because a future edit can remove a
+  // per-effect guard.
   const reportContained = (report: () => void): void => {
     try {
       report();
@@ -837,6 +839,7 @@ export function createEffectExecutor<TEdit>(deps: EffectExecutorDeps<TEdit>): Ef
             // user's actual remedy. Latched to once per INCIDENT so a repeatedly
             // broken seam cannot storm the user, while a seam that recovers and
             // breaks again still gets a fresh signal (the re-arm below).
+            //
             // TWO separate fixes here, and they are justified by DIFFERENT
             // evidence — keep them apart, because conflating them is how an
             // honest number turns into an overclaim.
@@ -849,20 +852,21 @@ export function createEffectExecutor<TEdit>(deps: EffectExecutorDeps<TEdit>): Ef
             //    not be SILENT, silent. That number is the evidence for the
             //    WRAP, and it is what `effect-executor.test.ts` pins.
             //
-            // 2. The SIGNAL now goes FIRST, matching the module's own order rule
-            //    (`reportContained`'s ⚠️) and the three reducer-side sites that
-            //    already order signal ahead of triage log. ⚠️ Be honest about
-            //    its status: while the wrap holds, this order is UNOBSERVABLE —
-            //    a contained log is absorbed either way, so no test in the
-            //    shipped configuration can tell the two orders apart, and the
-            //    suite stays green if someone puts the log back in front. Its
-            //    value is a counterfactual, and that counterfactual IS measured:
-            //    with the wrap removed, log-first gives `toastAttempts: 0` and
-            //    signal-first gives `toastAttempts: 1`. So this is what keeps the
-            //    user-visible signal in the one configuration where fix 1 is
-            //    gone — defence in depth, on the same footing as
-            //    `settlementEffects`' toast-before-reseed note, which likewise
-            //    declines to rely on the executor's containment.
+            // 2. The SIGNAL now goes FIRST, matching the module's own ORDER RULE
+            //    (named in `reportContained`'s header) and the three
+            //    reducer-side sites that already order signal ahead of triage
+            //    log. ⚠️ Be honest about its status: while the wrap holds, this
+            //    order is UNOBSERVABLE — a contained log is absorbed either
+            //    way, so no test in the shipped configuration can tell the two
+            //    orders apart, and the suite stays green if someone puts the
+            //    log back in front. Its value is a counterfactual, and that
+            //    counterfactual IS measured: with the wrap removed, log-first
+            //    gives `toastAttempts: 0` and signal-first gives
+            //    `toastAttempts: 1`. So this is what keeps the user-visible
+            //    signal in the one configuration where fix 1 is gone — defence
+            //    in depth, on the same footing as `settlementEffects`'
+            //    toast-before-reseed note, which likewise declines to rely on
+            //    the executor's containment.
             reportResyncFailure("[quoll] failed to report the reseed build failure");
             reportContained(() =>
               console.error(
