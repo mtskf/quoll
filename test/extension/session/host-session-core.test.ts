@@ -2073,9 +2073,14 @@ describe("host-session-core: settlementTransitionFailed (write-lock recovery)", 
   // stash (no ack ⇒ no replay ⇒ the next lock-free advance bumps the epoch ⇒
   // `edit-sync.ts` drops the buffer). The branch is now keyed on
   // `alive && !ackLabelObserved`, which is why the wording no longer names a
-  // stash. The `not.toContain("Reopen the file")` assertion is the one that
-  // fails against the old condition — the rest of the pair would read the old
-  // message as merely quiet rather than wrong.
+  // stash. Several of the wording assertions go red against the old condition,
+  // and `expect` throws at the first one, so the assertion that REDDENS is not
+  // the assertion that matters: the one that catches the old condition as
+  // WRONG rather than merely quiet is `not.toContain("Reopen the file")` — the
+  // positive assertions only observe a missing hedge, while that one observes
+  // a buffer-destroying instruction being handed to the user. Measure which
+  // assertions react before scoping a mutation off this comment; do not treat
+  // this note as a census.
   it("HEDGES on the ALIVE path with a WITHHELD ack even when there is NO stash (the in-flight bytes sit under the same loss, and 'reopen' would destroy them)", () => {
     const r = core.transition(locked(), recovery(null)); // no `pendingEdit` at all
     const toast = r.effects.find((e) => e.type === "showError");

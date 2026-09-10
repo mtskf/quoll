@@ -1414,10 +1414,8 @@ export function createHostSessionCore(context: HostSessionContext, deps: HostSes
           // available action; there is nothing left on screen to copy.
           lossClause = " A later unsaved edit was dropped. Reopen the file to check its contents.";
         } else {
-          // ALIVE with a WITHHELD ack — HEDGED, and keyed on that alone, so it
-          // covers BOTH carriers: a dropped stash AND (with no stash) the
-          // webview's in-flight bytes. The wording therefore never presupposes
-          // a stash, because in the second state there is none. This arm is
+          // ALIVE with a WITHHELD ack — HEDGED (the ⚠️ above already covers why
+          // this spans both carriers and drops the word "stash"). This arm is
           // outcome-blind, and one corner really does land the bytes (the
           // never-advancing document above), so MAY is the strongest honest
           // claim. "may not have been saved" is deliberately the SAME phrase

@@ -201,10 +201,13 @@ export function createEffectExecutor<TEdit>(deps: EffectExecutorDeps<TEdit>): Ef
   //
   // ORDER RULE (the second, independent half of the pair — cited by name from
   // the `postDocument` build-failure guard, since the ⚠️ above is a different
-  // claim): THREE reducer-side sites put the user-visible signal ahead of the
-  // triage log. NOT a universal — `settlementEffects`' `refused` arm and the
-  // drain's parse-failed arm deliberately log FIRST. Load-bearing where it does
-  // hold, because a future edit can remove a per-effect guard.
+  // claim): where a reducer-side list pairs a signal with a triage log, the
+  // signal goes first — defence in depth against a future edit removing a
+  // per-effect guard. Cited by name from `withholdAckEffects`, the
+  // `settlementTransitionFailed` arm, and the `editRejectedDeliveryFailed`
+  // unobserved arm — CONSUMERS, not a census: other lists satisfy it uncited
+  // (the disposed `unobservedStashDrop` toast) or invert it on purpose
+  // (`settlementEffects`' `refused` arm, the drain's parse-failed arm).
   const reportContained = (report: () => void): void => {
     try {
       report();
@@ -822,11 +825,13 @@ export function createEffectExecutor<TEdit>(deps: EffectExecutorDeps<TEdit>): Ef
             // unhandled rejection, since `createDrainingDispatcher` catches a
             // throwing `step` only to finish its drain and RETHROWS afterwards
             // (its failure policy), and (b) abandon the rest of the effect
-            // list. It would NOT skip the barrier release — the panel's `step`
-            // settles unconditionally — but the ack Document is exactly the effect
-            // worth keeping, so contain the throw here rather than relying on that
-            // backstop. Only the injected BUILDER is guarded, so a reducer bug
-            // still surfaces (the exhaustiveness guard below).
+            // list. It would NOT skip the barrier release here — `step` settles it
+            // regardless of what `runEffects` does; the one gap, `isEditApplied`
+            // itself throwing, sits BEFORE `runEffects` runs at all
+            // (`host-session-step.ts:390`) — but the ack Document is exactly the
+            // effect worth keeping, so contain the throw here rather than relying
+            // on that backstop. Only the injected BUILDER is guarded, so a reducer
+            // bug still surfaces (the exhaustiveness guard below).
             //
             // ⚠️ The Document does NOT reach the webview either way — an escaping
             // throw would have skipped the `post()` just the same — and the
@@ -854,9 +859,8 @@ export function createEffectExecutor<TEdit>(deps: EffectExecutorDeps<TEdit>): Ef
             //    WRAP, and it is what `effect-executor.test.ts` pins.
             //
             // 2. The SIGNAL now goes FIRST, matching the module's own ORDER RULE
-            //    (named in `reportContained`'s header) and the three
-            //    reducer-side sites that already order signal ahead of triage
-            //    log. ⚠️ Be honest about its status: while the wrap holds, this
+            //    (named in `reportContained`'s header) and the reducer-side sites
+            //    that cite it. ⚠️ Be honest about its status: while the wrap holds, this
             //    order is UNOBSERVABLE — a contained log is absorbed either
             //    way, so no test in the shipped configuration can tell the two
             //    orders apart, and the suite stays green if someone puts the
@@ -950,8 +954,9 @@ export function createEffectExecutor<TEdit>(deps: EffectExecutorDeps<TEdit>): Ef
           // throw would both escape as an unhandled rejection (only later, at the
           // end of that drain) and abandon the rest of this effect
           // list — including the ack `postDocument`. The barrier release survives
-          // either way (the panel's `step` settles unconditionally), so this guard
-          // is about the effect list, not the barrier. No latch: this is
+          // either way — `step` settles it regardless of `runEffects` (the
+          // `postDocument` catch above names the one gap) — so this guard is
+          // about the effect list, not the barrier. No latch: this is
           // per-effect containment, not notification suppression.
           try {
             deps.showError(effect.message);
