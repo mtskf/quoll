@@ -857,29 +857,26 @@ export function createEffectExecutor<TEdit>(deps: EffectExecutorDeps<TEdit>): Ef
           break;
         case "logWarn":
           // GUARDED for the same reason as `showError` above, and this case is
-          // where the rule matters most. It USED TO BE the one case whose entire
-          // body was a bare side effect with no `try` around it, and several
-          // reducer arms emit a triage `logWarn` AHEAD of the effect that
-          // actually pays the incident — the drain `accept` arm's
-          // `[...staleReBaseWarn, applyEdit]` (host-session-core's
-          // `applyEditSettled` case) and `refused`'s `[logWarn, ...toasts,
-          // ...ack]`. An escaping throw there unwinds `runEffects` and abandons
-          // the rest of the list, and in the drain arm that costs the WRITE: the
-          // committed state already re-acquired the lock, so a dropped
-          // `applyEdit` means no settlement is ever dispatched and the lock is
-          // stranded for the panel's life — the same stranding
-          // `settlementTransitionFailed` exists to repair, except that recovery
-          // hangs off the TRANSITION catch (`host-session-step.ts`) and cannot
-          // see a `runEffects` throw at all. No latch: per-effect containment,
-          // not notification suppression.
+          // where the rule matters most: several reducer arms emit a triage
+          // `logWarn` AHEAD of the effect that actually pays the incident — the
+          // drain `accept` arm's `[...staleReBaseWarn, applyEdit]`
+          // (host-session-core's `applyEditSettled` case) and `refused`'s
+          // `[logWarn, ...toasts, ...ack]`. An escaping throw there unwinds
+          // `runEffects` and abandons the rest of the list, and in the drain arm
+          // that costs the WRITE: the committed state already re-acquired the
+          // lock, so a dropped `applyEdit` means no settlement is ever
+          // dispatched and the lock is stranded for the panel's life — the same
+          // stranding `settlementTransitionFailed` exists to repair, except that
+          // recovery hangs off the TRANSITION catch (`host-session-step.ts`) and
+          // cannot see a `runEffects` throw at all. No latch: per-effect
+          // containment, not notification suppression.
           //
-          // ⚠️ This does NOT close the class, and the earlier claim that it did
-          // ("fixes the whole class at one seam") was wrong twice over. First,
-          // containment is best-effort: the fallback report can fail the same way
-          // (see `reportContained`). Second, the effects whose body is a bare
-          // side effect are not the only unprotected position — three effects
-          // evaluate their INJECTED BUILDER outside every `try`, because `post`
-          // guards only `deps.send(message)` and not the argument handed to it:
+          // ⚠️ This does NOT close the class — do not restore a claim that it
+          // does. Containment is best-effort (see `reportContained`'s own ⚠️),
+          // AND the effects whose body is a bare side effect are not the only
+          // unprotected position: three effects evaluate their INJECTED BUILDER
+          // outside every `try`, because `post` guards only `deps.send(message)`
+          // and not the argument handed to it:
           //   - `case "postRejectedDraft"` → `deps.buildRejectedDraft(...)`
           //   - `case "postTheme"`         → `deps.buildTheme(...)`
           //   - `sendEditRejected`         → `deps.buildEditRejected(error)`,

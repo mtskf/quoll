@@ -653,19 +653,17 @@ describe("effect-executor runApplyEdit (wrapper mapping)", () => {
   // test is red if EITHER report escapes containment — one test covering two call
   // sites, each independently revert-checkable.
   it("a throwing console cannot skip the settlement dispatch when the fulfilment arm's guarded reads fail", async () => {
-    // The warn throws on its FIRST call only, and that call is
-    // `readVersionGuarded`'s — the PRE-dispatch position under test. The
-    // fulfilment arm's second warn (the `settleReadFailure` triage line) sits
-    // AFTER `deps.dispatch` and is deliberately left unguarded, its documented
-    // cost being an unhandled rejection; making it throw here would assert that
-    // documented cost instead of this containment, and would fail the run on the
-    // unhandled rejection it is supposed to produce.
-    let warnCalls = 0;
-    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {
-      warnCalls += 1;
-      if (warnCalls === 1) {
-        throw new Error("console.warn failed");
-      }
+    // The warn throws on its FIRST call only (a `…Once` implementation ahead of
+    // a no-op base), and that call is `readVersionGuarded`'s — the PRE-dispatch
+    // position under test. The fulfilment arm's second warn (the
+    // `settleReadFailure` triage line) sits AFTER `deps.dispatch` and is
+    // deliberately left unguarded, its documented cost being an unhandled
+    // rejection; making it throw here would assert that documented cost instead
+    // of this containment, and would fail the run on the unhandled rejection it
+    // is supposed to produce.
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    warnSpy.mockImplementationOnce(() => {
+      throw new Error("console.warn failed");
     });
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {
       throw new Error("console.error failed");
@@ -1161,46 +1159,60 @@ describe("effect-executor runEffects other cases", () => {
     expect(send).not.toHaveBeenCalled();
   });
 
-  // `logWarn` used to be the ONE case `runEffects` ran with no `try` of its own,
-  // and the effect list below is the drain `accept` arm's VERBATIM shape
-  // (host-session-core's `applyEditSettled` case returns
-  // `[...staleReBaseWarn, applyEdit]`): a triage log AHEAD of the write. That
-  // ordering is what makes an unguarded throw here cost more than a lost log —
-  // the committed state has already RE-ACQUIRED the write lock, so an abandoned
-  // `applyEdit` means no `applyEditSettled` is ever dispatched and the lock is
-  // stranded for the panel's life. The `settlementTransitionFailed` recovery
-  // does NOT cover it: that hangs off the transition catch in
+  // The triage line the fixture below logs — also the identity the fallback
+  // report must carry, so it is spelled once and asserted from here.
+  const drainLogMessage = "[quoll] unlabelled drain";
+
+  // The drain `accept` arm's VERBATIM effect shape (host-session-core's
+  // `applyEditSettled` case returns `[...staleReBaseWarn, applyEdit]`): a triage
+  // log AHEAD of the write, `logWarn` being the case `runEffects` once ran with
+  // no `try` of its own. Shared by the two containment tests below so the one
+  // fixture they both rest on cannot drift apart.
+  //
+  // That ordering is what makes a throw from the log cost more than a lost line
+  // — the committed state has already RE-ACQUIRED the write lock, so an
+  // abandoned `applyEdit` means no `applyEditSettled` is ever dispatched and the
+  // lock is stranded for the panel's life. The `settlementTransitionFailed`
+  // recovery does NOT cover it: that hangs off the transition catch in
   // `host-session-step.ts` and never sees a `runEffects` throw.
   //
-  // The write is observed through the seam's `build`, which is safe to assert
-  // synchronously: `execute-write.ts`'s pipeline runs `readText → span → build →
+  // Running the list is part of the fixture, non-throw assertion included: that
+  // is the property BOTH tests exist to hold. Returns the seam's `build`, which
+  // is how the write is observed — safe to assert synchronously because
+  // `execute-write.ts`'s pipeline runs `readText → span → build →
   // apply-initiation` BEFORE its first `await` (see that module's header).
+  const runDrainShapedLogWarnThenWrite = () => {
+    const build = vi.fn(() => fakeEdit);
+    const { runEffects } = createEffectExecutor(
+      makeDeps({
+        applyEditSeam: {
+          readText: () => "",
+          readVersion: () => 6,
+          readCanonical: () => "drained",
+          canonicalize: (text) => text,
+          build,
+          apply: async () => true,
+        },
+      })
+    );
+
+    expect(() =>
+      runEffects([
+        { type: "logWarn", message: drainLogMessage, detail: {} },
+        { type: "applyEdit", content: "drained", baseDocVersion: 6 },
+      ])
+    ).not.toThrow();
+
+    return build;
+  };
+
   it("logWarn: a throwing console.warn is contained — logged, and the applyEdit that FOLLOWS still runs", async () => {
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {
       throw new Error("console.warn failed");
     });
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     try {
-      const build = vi.fn(() => fakeEdit);
-      const { runEffects } = createEffectExecutor(
-        makeDeps({
-          applyEditSeam: {
-            readText: () => "",
-            readVersion: () => 6,
-            readCanonical: () => "drained",
-            canonicalize: (text) => text,
-            build,
-            apply: async () => true,
-          },
-        })
-      );
-
-      expect(() =>
-        runEffects([
-          { type: "logWarn", message: "[quoll] unlabelled drain", detail: {} },
-          { type: "applyEdit", content: "drained", baseDocVersion: 6 },
-        ])
-      ).not.toThrow();
+      const build = runDrainShapedLogWarnThenWrite();
 
       expect(warnSpy).toHaveBeenCalledOnce(); // the attempt really happened
       // THE assertion: the write survived the throwing log.
@@ -1209,7 +1221,7 @@ describe("effect-executor runEffects other cases", () => {
       // line that was lost (the bare catch reported neither).
       expect(errorSpy).toHaveBeenCalledWith(
         expect.stringContaining("logWarn threw"),
-        "[quoll] unlabelled drain",
+        drainLogMessage,
         expect.anything()
       );
       await Promise.resolve();
@@ -1224,8 +1236,8 @@ describe("effect-executor runEffects other cases", () => {
   // VS Code patches the console as ONE IPC family, so "console.warn throws but
   // console.error is fine" is the optimistic case — the correlated case is BOTH,
   // and there the throw escaped `runEffects` from inside the very guard meant to
-  // contain it. The effect list is the drain `accept` arm's verbatim shape, so
-  // the cost is the WRITE plus a lock stranded for the panel's life.
+  // contain it. The shared fixture is the drain `accept` arm's verbatim shape,
+  // so the cost is the WRITE plus a lock stranded for the panel's life.
   it("logWarn: the guard's OWN fallback report cannot unwind — BOTH console methods throwing still runs the applyEdit that FOLLOWS", async () => {
     const rejections: unknown[] = [];
     const onUnhandled = (r: unknown) => rejections.push(r);
@@ -1237,26 +1249,7 @@ describe("effect-executor runEffects other cases", () => {
       throw new Error("console.error failed too");
     });
     try {
-      const build = vi.fn(() => fakeEdit);
-      const { runEffects } = createEffectExecutor(
-        makeDeps({
-          applyEditSeam: {
-            readText: () => "",
-            readVersion: () => 6,
-            readCanonical: () => "drained",
-            canonicalize: (text) => text,
-            build,
-            apply: async () => true,
-          },
-        })
-      );
-
-      expect(() =>
-        runEffects([
-          { type: "logWarn", message: "[quoll] unlabelled drain", detail: {} },
-          { type: "applyEdit", content: "drained", baseDocVersion: 6 },
-        ])
-      ).not.toThrow();
+      const build = runDrainShapedLogWarnThenWrite();
 
       // Both attempts really happened — the primary log and its fallback report.
       expect(warnSpy).toHaveBeenCalledOnce();

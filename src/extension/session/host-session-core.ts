@@ -1369,21 +1369,8 @@ export function createHostSessionCore(context: HostSessionContext, deps: HostSes
         // THREE branches, each ending in its own instruction rather than sharing
         // an appended one: a toast carrying three imperatives (copy, reload,
         // reopen) is a toast nobody follows.
-        //   1. NO LOSS — just the closing instruction.
-        //   2. POST-DISPOSE — DEFINITE. There is no webview, so the stash was the
-        //      edit's only carrier and nothing can replay it. "Reopen" is the only
-        //      available action; there is nothing left on screen to copy.
-        //   3. ALIVE with a WITHHELD ack — HEDGED. This arm is outcome-blind, and
-        //      one corner really does land the bytes (the never-advancing document
-        //      above), so MAY is the strongest honest claim. "may not have been
-        //      saved" is deliberately the SAME phrase `RESYNC_FAILURE_MESSAGE`
-        //      uses, so if both toasts appear they cannot contradict each other on
-        //      certainty; and the remedy composes with that toast's "reload the
-        //      window" as an ORDER (copy, THEN reload) instead of a conflict. It
-        //      must also stand alone: `showResyncFailure` is latched per panel, so
-        //      the resync toast is NOT guaranteed to appear beside this one.
         //
-        // ⚠️ Do NOT copy branch 3's hedge onto the settlement arm's
+        // ⚠️ Do NOT copy the ALIVE branch's hedge onto the settlement arm's
         // `unobservedStashDrop` toast. The two arms are alike in STATE and
         // OPPOSITE in the CERTAINTY of the loss: there the apply LANDED
         // (`outcome.kind === "ok"`), so its echo `documentChanged` arrives
@@ -1391,21 +1378,36 @@ export function createHostSessionCore(context: HostSessionContext, deps: HostSes
         // near-DETERMINISTIC loss the settlement block's own "No second fault is
         // needed" note describes. A settlement-side message needs its own design,
         // not this wording.
-        const lossClause = !lostStash
-          ? " Reopen the file to check its contents."
-          : state.disposed
-            ? " A later unsaved edit was dropped. Reopen the file to check its contents."
-            : " A later unsaved edit may not have been saved — copy any text you can still see in the editor before reloading the window.";
+        let lossClause: string;
+        if (!lostStash) {
+          // NO LOSS — just the closing instruction.
+          lossClause = " Reopen the file to check its contents.";
+        } else if (state.disposed) {
+          // POST-DISPOSE — DEFINITE. There is no webview, so the stash was the
+          // edit's only carrier and nothing can replay it. "Reopen" is the only
+          // available action; there is nothing left on screen to copy.
+          lossClause = " A later unsaved edit was dropped. Reopen the file to check its contents.";
+        } else {
+          // ALIVE with a WITHHELD ack — HEDGED. This arm is outcome-blind, and
+          // one corner really does land the bytes (the never-advancing document
+          // above), so MAY is the strongest honest claim. "may not have been
+          // saved" is deliberately the SAME phrase `RESYNC_FAILURE_MESSAGE` uses,
+          // so if both toasts appear they cannot contradict each other on
+          // certainty; and the remedy composes with that toast's "reload the
+          // window" as an ORDER (copy, THEN reload) instead of a conflict. It
+          // must also stand alone: `showResyncFailure` is latched per panel, so
+          // the resync toast is NOT guaranteed to appear beside this one.
+          lossClause =
+            " A later unsaved edit may not have been saved — copy any text you can still see in the editor before reloading the window.";
+        }
         const toast: HostSessionEffect = {
           type: "showError",
           message: `Quoll hit an internal error while completing a save of ${state.context.fsPath}.${lossClause}`,
         };
-        // Triage LAST, as DEFENCE IN DEPTH rather than because the executor runs
-        // `logWarn` unguarded — it contains the throw (`effect-executor.ts`'s
-        // `case "logWarn"`). What that containment cannot promise is its own
-        // report: it goes out through a second console call that can fail exactly
-        // as the first did, so the ordering keeps the user-visible signal and the
-        // un-park Document out from behind the log either way.
+        // Triage LAST, keeping the user-visible signal and the un-park Document
+        // out from behind the log — the same DEFENCE-IN-DEPTH ordering rule as
+        // `withholdAckEffects`', and see that helper for why the executor's own
+        // per-effect containment does not make it redundant.
         // Detail key `recoveredVersion`, NOT `lastAppliedDocVersion`:
         // the invariant test greps that identifier's `:` form over
         // comment-stripped source, and a detail key of that name would read as a

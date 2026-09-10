@@ -1963,6 +1963,17 @@ describe("host-session-core: settlementTransitionFailed (write-lock recovery)", 
   const messageOf = (effect: HostSessionEffect | undefined): string =>
     (effect as { message: string }).message;
 
+  // The NO-LOSS verdict, asserted as ONE thing everywhere it is claimed, so the
+  // rule cannot be half-applied at a new site: NEITHER loss clause may appear —
+  // checking only "dropped" would read the HEDGE as a pass — and the no-loss
+  // branch's own closing instruction must be there, since the trailing sentence
+  // is absorbed per branch rather than appended to all of them.
+  const expectNoLossClaim = (toast: HostSessionEffect | undefined): void => {
+    expect(messageOf(toast)).not.toContain("dropped");
+    expect(messageOf(toast)).not.toContain("may not have been saved");
+    expect(messageOf(toast)).toContain("Reopen the file to check its contents.");
+  };
+
   it("RELEASES the write lock and clears the in-flight content", () => {
     const r = core.transition(locked(), recovery());
     expect(isWriteLockHeld(r.state)).toBe(false);
@@ -2012,18 +2023,14 @@ describe("host-session-core: settlementTransitionFailed (write-lock recovery)", 
   // The webview's replay buffer still holds the bytes on the alive path
   // (edit-sync.ts's forcePost RETAINS it under single-flight) and the ack below
   // is the next ack that replays them — so the toast must claim NO loss here,
-  // neither the definite one nor the hedge. Asserting the absence of BOTH
-  // clauses is what keeps this test meaningful now that two exist: checking only
-  // "dropped" would read the hedge as a pass.
+  // neither the definite one nor the hedge (`expectNoLossClaim` rules out both;
+  // now that two clauses exist, checking only "dropped" would read the hedge as
+  // a pass).
   it("claims NO loss at all on the ALIVE path with an ack coming, even when a stash was dropped", () => {
     const toast = core
       .transition(locked({ pendingEdit: STASH }), recovery())
       .effects.find((e) => e.type === "showError");
-    expect(messageOf(toast)).not.toContain("dropped");
-    expect(messageOf(toast)).not.toContain("may not have been saved");
-    // The no-loss branch still closes with its own instruction — the trailing
-    // sentence is absorbed per branch, not appended to all of them.
-    expect(messageOf(toast)).toContain("Reopen the file to check its contents.");
+    expectNoLossClaim(toast);
   });
 
   // The POSITIVE half of the pair above, and the reason the gate is "will an ack
@@ -2075,11 +2082,11 @@ describe("host-session-core: settlementTransitionFailed (write-lock recovery)", 
     expect(r.effects).toContainEqual(pDoc(6));
     expect(r.effects.some((e) => e.type === "showResyncFailure")).toBe(false);
     const toast = r.effects.find((e) => e.type === "showError");
-    // BOTH clauses must be absent: the raw-field spelling would produce the
-    // hedge here, so an assertion that only looked for "dropped" would stay green
-    // against exactly the mutation this test exists to catch.
-    expect(messageOf(toast)).not.toContain("dropped");
-    expect(messageOf(toast)).not.toContain("may not have been saved");
+    // BOTH clauses must be absent, which is why this goes through the shared
+    // helper: the raw-field spelling would produce the HEDGE here, so an
+    // assertion that only looked for "dropped" would stay green against exactly
+    // the mutation this test exists to catch.
+    expectNoLossClaim(toast);
     expect(messageOf(toast)).toContain("internal error");
   });
 
@@ -2137,9 +2144,7 @@ describe("host-session-core: settlementTransitionFailed (write-lock recovery)", 
       .transition(afterDispose(), recovery(6))
       .effects.find((e) => e.type === "showError");
     expect(toast).toBeDefined();
-    expect(messageOf(toast)).not.toContain("dropped");
-    expect(messageOf(toast)).not.toContain("may not have been saved");
-    expect(messageOf(toast)).toContain("Reopen the file to check its contents.");
+    expectNoLossClaim(toast);
   });
 
   // Post-dispose the `disposed` arm has ALREADY cleared the lock, so
