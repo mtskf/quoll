@@ -424,15 +424,20 @@ describe("createHostSessionStep", () => {
 
   // The stranding this module used to accept: an `applyEditSettled` transition
   // that throws unwinds BEFORE the panel commits the new state, so the write
-  // lock (`pendingApplyBaseVersion`) stays HELD with no second settlement ever
-  // coming — the deferred side channels were neither dropped nor drained, and
-  // their at-receipt guards (the Codex single-flight) never released.
+  // lock (`pendingApplyBaseVersion`) WOULD stay held with no second settlement
+  // ever coming — the deferred side channels neither dropped nor drained, their
+  // at-receipt guards (the Codex single-flight) never released. Both halves are
+  // paid now (the recovery releases the lock, this drop releases the guards);
+  // this test isolates the DROP.
   it("drops the deferred side channels when an applyEditSettled transition throws", () => {
     const ran = vi.fn();
     const dropped = vi.fn();
     const barrier = createEditSettledBarrier({
-      // Still locked, and STAYS locked: the throw unwound before the panel
-      // assigned the state the transition would have returned.
+      // The stub PINS the lock as held so the DROP is observable on its own:
+      // in production the recovery releases it in the same catch, which the
+      // real-composition test further down measures. Keep the two separate —
+      // isolating the drop from the release is why this test still earns its
+      // place.
       isLocked: () => true,
       isDisposed: () => false,
       onError: () => {},

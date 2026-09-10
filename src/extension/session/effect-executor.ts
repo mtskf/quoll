@@ -24,9 +24,12 @@
 // settlement to drain a stashed last-keystroke edit (the
 // "type-one-more-char-then-close" data-loss race). For the same reason BOTH
 // promise arms of the settlement must reach `dispatch`: on the live path
-// `applyEditSettled` is the only event that releases the host write lock (the
-// core's `disposed` arm also clears `pendingApplyBaseVersion`, but that fires
-// only on teardown, so it cannot rescue a panel the user is still typing into).
+// `applyEditSettled` is the only event that releases the host write lock for a
+// settlement that COMPLETES (the core's `settlementTransitionFailed` recovery
+// releases it when a settlement TRANSITION throws — committed by
+// `host-session-step.ts`, never by this module; the `disposed` arm also clears
+// `pendingApplyBaseVersion`, but that fires only on teardown, so neither can
+// substitute for dispatching this event from BOTH arms).
 
 import type { MarkdownError } from "../../markdown/errors.js";
 import { perfNow, perfRecord, perfReport } from "../../shared/perf.js";
@@ -541,7 +544,7 @@ export function createEffectExecutor<TEdit>(deps: EffectExecutorDeps<TEdit>): Ef
           );
         }
       },
-      // REJECTION ARM — the write lock's only release valve. `executeDocumentWrite`
+      // REJECTION ARM — the write lock's release valve for a REJECTED pipeline. `executeDocumentWrite`
       // now GUARDS its two settle-time verification reads individually, so those
       // can no longer reject the pipeline (a settle-read failure resolves as an
       // UNVERIFIED settlement instead). The ONE reachable rejection source is what
@@ -571,9 +574,11 @@ export function createEffectExecutor<TEdit>(deps: EffectExecutorDeps<TEdit>): Ef
       // `try` — not to the fulfilment one; see its definition.)
       // Without this arm the rejection is left UNHANDLED by `void`
       // (`void` does not catch — it only discards the promise reference),
-      // `applyEditSettled` never fires, and `pendingApplyBaseVersion` — which ONLY
-      // this event clears (host-session-core `applyEditSettled`; dispose is the
-      // sole other path) — stays held for the session: every later inbound edit is
+      // `applyEditSettled` never fires, and `pendingApplyBaseVersion` — which
+      // this event is the only COMPLETING releaser of (host-session-core's
+      // `settlementTransitionFailed` recovery releases it only when a settlement
+      // transition threw, which is not this case, and dispose only on
+      // teardown) — stays held for the session: every later inbound edit is
       // stashed behind a bare warn and never saved. Silent, toast-free data loss.
       // Settling with a NON-OK outcome is what makes it safe: `canDrain` requires
       // `ok`, so the unobserved snapshot below never reaches `decideEdit`, and

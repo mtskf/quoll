@@ -299,9 +299,11 @@ describe("effect-executor runApplyEdit (wrapper mapping)", () => {
     );
   });
 
-  // Settlement is the write lock's ONLY release valve (host-session-core clears
-  // `pendingApplyBaseVersion` on `applyEditSettled` and nowhere else but
-  // dispose), so BOTH promise arms must reach `dispatch`. execute-write GUARDS its
+  // Settlement is the write lock's only COMPLETING release valve
+  // (host-session-core clears `pendingApplyBaseVersion` on `applyEditSettled`,
+  // on the `settlementTransitionFailed` recovery for a settlement whose
+  // transition THREW, and on dispose — neither of the last two can stand in for
+  // a settlement that resolved), so BOTH promise arms must reach `dispatch`. execute-write GUARDS its
   // two settle-time verification reads individually now, so the surviving
   // rejection source is its SYNCHRONOUS prefix (`readText` / `canonicalize`) —
   // which runs before anything can land, so a rejection there really does
