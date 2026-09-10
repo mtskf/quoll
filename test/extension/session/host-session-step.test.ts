@@ -53,6 +53,7 @@ const harness = (opts: { effects?: () => void; settle?: () => void } = {}) => {
       order.push("commit");
       return [] as readonly HostSessionEffect[];
     },
+    commitWriteLockRecovery: () => [],
     runEffects: () => {
       order.push("effects");
       opts.effects?.();
@@ -143,6 +144,7 @@ describe("createHostSessionStep", () => {
       commitTransition: () => {
         throw new Error("reducer bug");
       },
+      commitWriteLockRecovery: () => [],
       runEffects: () => {},
       settleEditBarrier: (applied) => settles.push(applied),
     });
@@ -164,6 +166,7 @@ describe("createHostSessionStep", () => {
       commitTransition: () => {
         throw new Error("reducer bug");
       },
+      commitWriteLockRecovery: () => [],
       runEffects: () => {},
       settleEditBarrier: (applied) => settles.push(applied),
     });
@@ -186,12 +189,141 @@ describe("createHostSessionStep", () => {
   // `applyEditSettled` passed the whole suite unnoticed. `disposed` needs no
   // rescue of its own here: see `releasesWriteLockOnCommit`'s doc for why the
   // drop, if any, rides a LATER, independent `applyEditSettled` step instead.
+  // The half PR #406 did not pay: the rescue released the deferred side
+  // channels' at-receipt guards but never the lock itself, so the payment was
+  // one-shot — a retried side channel re-deferred behind a lock nothing would
+  // ever release.
+  it("commits the write-lock recovery when an applyEditSettled transition throws — BEFORE the barrier settle", () => {
+    const order: string[] = [];
+    const step = createHostSessionStep({
+      commitTransition: () => {
+        order.push("commit");
+        throw new Error("reducer bug");
+      },
+      commitWriteLockRecovery: () => {
+        order.push("recover");
+        return [{ type: "logWarn", message: "m", detail: {} }] as readonly HostSessionEffect[];
+      },
+      runEffects: () => order.push("effects"),
+      settleEditBarrier: () => order.push("settle"),
+    });
+    expect(() => step(settled({ kind: "ok" }, 3))).toThrow("reducer bug");
+    expect(order).toEqual(["commit", "recover", "effects", "settle"]);
+  });
+
+  // The label the recovery re-bases on is the THROWING SETTLEMENT's own
+  // observed version, passed through — not a fresh read. Pins the pass-through
+  // (both a value and the unobserved `null`), which is what keeps the recovery
+  // free of a second guarded version reader.
+  it("passes the throwing settlement's settledVersion through to the recovery", () => {
+    const seen: (number | null)[] = [];
+    const mk = () =>
+      createHostSessionStep({
+        commitTransition: () => {
+          throw new Error("reducer bug");
+        },
+        commitWriteLockRecovery: (settledVersion) => {
+          seen.push(settledVersion);
+          return [];
+        },
+        runEffects: () => {},
+        settleEditBarrier: () => {},
+      });
+    expect(() => mk()(settled({ kind: "ok" }, 7))).toThrow("reducer bug");
+    expect(() => mk()(settled({ kind: "ok" }, null))).toThrow("reducer bug");
+    expect(seen).toEqual([7, null]);
+  });
+
+  it("does NOT attempt the write-lock recovery when a NON-settlement transition throws", () => {
+    const recovered = vi.fn(() => [] as readonly HostSessionEffect[]);
+    const step = createHostSessionStep({
+      commitTransition: () => {
+        throw new Error("reducer bug");
+      },
+      commitWriteLockRecovery: recovered,
+      runEffects: () => {},
+      settleEditBarrier: () => {},
+    });
+    expect(() => step(themeChanged)).toThrow("reducer bug");
+    expect(recovered).not.toHaveBeenCalled();
+  });
+
+  // LEARNING 2026-09-09: an exhaustive switch only catches a MISSING member,
+  // never one placed in the wrong arm — so the FALSE side of
+  // `releasesWriteLockOnCommit` needs its own behavioural pin. Moving
+  // `settlementTransitionFailed` to the `true` arm would make a throwing
+  // recovery recover itself. The console.error guard is what makes this
+  // non-vacuous: the DEFAULT arm also answers `false`, and logs.
+  it("does NOT recover a throwing RECOVERY transition (no rescue of the rescue)", () => {
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const recovered = vi.fn(() => [] as readonly HostSessionEffect[]);
+    const step = createHostSessionStep({
+      commitTransition: () => {
+        throw new Error("reducer bug");
+      },
+      commitWriteLockRecovery: recovered,
+      runEffects: () => {},
+      settleEditBarrier: () => {},
+    });
+    expect(() => step({ type: "settlementTransitionFailed", settledVersion: 3 })).toThrow(
+      "reducer bug"
+    );
+    expect(recovered).not.toHaveBeenCalled();
+    expect(spy).not.toHaveBeenCalled();
+    spy.mockRestore();
+  });
+
+  it("keeps the transition error when the recovery COMMIT throws, and reports the recovery failure", () => {
+    const reported: unknown[] = [];
+    const step = createHostSessionStep({
+      commitTransition: () => {
+        throw new Error("reducer bug");
+      },
+      commitWriteLockRecovery: () => {
+        throw new Error("recovery threw");
+      },
+      runEffects: () => {},
+      settleEditBarrier: () => {},
+      onSettleError: (err) => reported.push(err),
+    });
+    expect(() => step(settled({ kind: "ok" }, 3))).toThrow("reducer bug");
+    expect((reported[0] as Error).message).toBe("recovery threw");
+  });
+
+  it("keeps the transition error when the recovery EFFECTS throw, and still settles the barrier", () => {
+    const reported: unknown[] = [];
+    const settles: boolean[] = [];
+    const step = createHostSessionStep({
+      commitTransition: () => {
+        throw new Error("reducer bug");
+      },
+      commitWriteLockRecovery: () =>
+        [{ type: "showResyncFailure" }] as readonly HostSessionEffect[],
+      runEffects: () => {
+        throw new Error("recovery effect threw");
+      },
+      settleEditBarrier: (applied) => settles.push(applied),
+      onSettleError: (err) => reported.push(err),
+    });
+    expect(() => step(settled({ kind: "ok" }, 3))).toThrow("reducer bug");
+    expect((reported[0] as Error).message).toBe("recovery effect threw");
+    expect(settles).toEqual([false]);
+  });
+
+  // Same non-vacuity reasoning as the "no rescue of the rescue" test above.
+  it("treats the recovery event itself as NOT applied, from an explicit arm", () => {
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    expect(isEditApplied({ type: "settlementTransitionFailed", settledVersion: 3 })).toBe(false);
+    expect(spy).not.toHaveBeenCalled();
+    spy.mockRestore();
+  });
   it("does not attempt the rescue when a disposed transition throws", () => {
     const settles: boolean[] = [];
     const step = createHostSessionStep({
       commitTransition: () => {
         throw new Error("teardown bug");
       },
+      commitWriteLockRecovery: () => [],
       runEffects: () => {},
       settleEditBarrier: (applied) => settles.push(applied),
     });
@@ -230,6 +362,7 @@ describe("createHostSessionStep", () => {
         locked = false; // the in-flight apply's own settlement releases the lock
         return [];
       },
+      commitWriteLockRecovery: () => [],
       runEffects: () => {},
       settleEditBarrier: (applied) => barrier.settle(applied),
     });
@@ -273,6 +406,7 @@ describe("createHostSessionStep", () => {
         locked = false; // the real settlement releases the write lock
         return [];
       },
+      commitWriteLockRecovery: () => [],
       runEffects: () => {},
       settleEditBarrier: (applied) => barrier.settle(applied),
     });
@@ -307,6 +441,7 @@ describe("createHostSessionStep", () => {
       commitTransition: () => {
         throw new Error("reducer bug");
       },
+      commitWriteLockRecovery: () => [],
       runEffects: () => {},
       settleEditBarrier: (applied) => barrier.settle(applied),
     });
@@ -329,6 +464,7 @@ describe("createHostSessionStep", () => {
       commitTransition: () => {
         throw new Error("reducer bug");
       },
+      commitWriteLockRecovery: () => [],
       runEffects: () => {},
       settleEditBarrier: (applied) => settles.push(applied),
     });
@@ -346,6 +482,7 @@ describe("createHostSessionStep", () => {
       commitTransition: () => {
         throw transitionErr;
       },
+      commitWriteLockRecovery: () => [],
       runEffects: () => {},
       settleEditBarrier: () => {
         throw settleErr;
@@ -374,6 +511,7 @@ describe("createHostSessionStep", () => {
       commitTransition: () => {
         throw transitionErr;
       },
+      commitWriteLockRecovery: () => [],
       runEffects: () => {},
       settleEditBarrier: (applied) => {
         settles.push(applied);
@@ -392,17 +530,25 @@ describe("createHostSessionStep", () => {
   // The effects must NOT run when the transition threw: there is no effect list
   // (the transition never returned one) and the state they would act on was
   // never committed.
-  it("does not run the effects when the transition throws", () => {
+  // Was "does not run the effects when the transition throws". The recovery
+  // calls the SAME `runEffects` dep, so a bare not-called assertion is no
+  // longer the right pin — but the INTENT (the throwing transition's own effect
+  // list never runs) still is, and a distinct recovery effect makes it stronger
+  // than the original: exactly one call, carrying the recovery's list.
+  it("runs the RECOVERY's effects but never the throwing transition's own", () => {
     const runEffects = vi.fn();
+    const recoveryEffect = { type: "logWarn", message: "recovery", detail: {} } as const;
     const step = createHostSessionStep({
       commitTransition: () => {
         throw new Error("reducer bug");
       },
+      commitWriteLockRecovery: () => [recoveryEffect],
       runEffects,
       settleEditBarrier: () => {},
     });
     expect(() => step(settled({ kind: "ok" }, 3))).toThrow("reducer bug");
-    expect(runEffects).not.toHaveBeenCalled();
+    expect(runEffects).toHaveBeenCalledTimes(1);
+    expect(runEffects).toHaveBeenCalledWith([recoveryEffect]);
   });
 
   it("drops a deferred side channel when a failed settlement's effects throw", () => {
@@ -422,6 +568,7 @@ describe("createHostSessionStep", () => {
         locked = false; // the settlement released the write lock
         return [];
       },
+      commitWriteLockRecovery: () => [],
       runEffects: () => {
         throw new Error("ack reseed threw");
       },
@@ -451,6 +598,7 @@ describe("createHostSessionStep", () => {
         locked = false;
         return [];
       },
+      commitWriteLockRecovery: () => [],
       runEffects: () => {
         throw new Error("ack reseed threw");
       },
@@ -491,6 +639,7 @@ describe("createHostSessionStep", () => {
     const effectErr = new Error("effect threw");
     const step = createHostSessionStep({
       commitTransition: () => [],
+      commitWriteLockRecovery: () => [],
       runEffects: () => {
         throw effectErr;
       },
@@ -514,6 +663,7 @@ describe("createHostSessionStep", () => {
     const settleErr = new Error("settle threw");
     const step = createHostSessionStep({
       commitTransition: () => [],
+      commitWriteLockRecovery: () => [],
       runEffects: () => {
         throw effectErr;
       },
@@ -523,7 +673,10 @@ describe("createHostSessionStep", () => {
       // no onSettleError — this is the panel's wiring
     });
     expect(() => step(themeChanged)).toThrow(effectErr);
-    expect(spy).toHaveBeenCalledWith("[quoll] edit-settled barrier threw", settleErr);
+    expect(spy).toHaveBeenCalledWith(
+      "[quoll] edit-settled barrier or write-lock recovery threw",
+      settleErr
+    );
     spy.mockRestore();
   });
 
@@ -537,6 +690,7 @@ describe("createHostSessionStep", () => {
     const reported: unknown[] = [];
     const step = createHostSessionStep({
       commitTransition: () => [],
+      commitWriteLockRecovery: () => [],
       runEffects: () => {
         // A non-Error throw is the whole point of this test: it is the value the
         // boxing exists for, so the rule is suppressed rather than satisfied.
@@ -579,6 +733,7 @@ describe("createHostSessionStep", () => {
           seen.push(event.type === "themeChanged" ? `themeChanged:${event.themeKind}` : event.type);
           return [];
         },
+        commitWriteLockRecovery: () => [],
         runEffects: () => {
           if (!firstEffects) {
             return;

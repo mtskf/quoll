@@ -25,6 +25,13 @@
 // resolve legitimately through the barrier's own DRAIN / DROP / WAIT arms
 // (`edit-settled-barrier.ts`'s `settle`), not through this rescue.
 //
+// Since the follow-up slice, that same catch ALSO commits the write-lock
+// recovery (`settlementTransitionFailed`) BEFORE it settles: the barrier drop
+// only releases the deferred thunks' at-receipt guards, and without releasing
+// the LOCK that release was one-shot — a retried side channel re-deferred
+// behind a lock nothing would ever release, and every later edit piled into a
+// stash with no drain.
+//
 // Why this is NOT a bare `try/finally`: a throw from the settle would then
 // REPLACE the effect error and take the triage payload with it. Same rule as
 // docs/LEARNING.md 2026-08-09 — the recovery path must not step on the failure
@@ -42,8 +49,9 @@ export interface HostSessionStepDeps {
    *  thunks that a still-pending real settlement would otherwise resolve on
    *  its own terms — DRAIN, DROP, or WAIT, per `edit-settled-barrier.ts`'s
    *  `settle`. The rescue below is conditioned on the throwing event being the
-   *  settlement itself — on the LIVE path (the panel still alive, still typed
-   *  into) the only event that ever releases the lock (see `isEditApplied`'s
+   *  settlement itself — the only event whose NORMAL commit releases the lock on
+   *  the LIVE path (the panel still alive, still typed into); when that commit
+   *  THREW, the write-lock recovery is what releases it (see `isEditApplied`'s
    *  `applyEditSettled` / `disposed` comment). A throw from the `disposed`
    *  transition needs no rescue of its own, but NOT because the barrier drops
    *  anything IN THIS STEP: the panel sets its local `disposed` flag BEFORE
@@ -58,15 +66,30 @@ export interface HostSessionStepDeps {
    *  the in-flight apply's own settlement, not this one. Today such a throw
    *  is defensive-only: the injected write validator is fail-closed
    *  (validate-for-write.ts turns parser throws into verdicts), which leaves
-   *  only the reducer's own exhaustive-arm throws. */
+   *  only the reducer's own exhaustive-arm throws.
+   *
+   *  A throw from `applyEditSettled` itself IS paid, but not here: see
+   *  `commitWriteLockRecovery` and `recoverStrandedWriteLock`, which release the
+   *  write lock and dispose of the stash before the barrier is settled. */
   readonly commitTransition: (event: HostSessionEvent) => readonly HostSessionEffect[];
+  /** Commit the `settlementTransitionFailed` recovery transition and return its
+   *  effects — the panel's own state-committing lambda, called with the THROWING
+   *  SETTLEMENT's `settledVersion` so the recovery re-bases on the label that
+   *  settlement already observed (no second version read anywhere; see the event
+   *  member's comment in `host-session-core.ts`). REQUIRED, not optional: a
+   *  no-op default would let a call site forget the wiring and keep the
+   *  stranded-lock bug with every test green. */
+  readonly commitWriteLockRecovery: (settledVersion: number | null) => readonly HostSessionEffect[];
   readonly runEffects: (effects: readonly HostSessionEffect[]) => void;
   /** `editSettledBarrier.settle` — the deferred side channels' ONLY release. */
   readonly settleEditBarrier: (applied: boolean) => void;
-  /** Reports a throw from `settleEditBarrier` that would otherwise MASK the
-   *  error it ran alongside — either a transition throw (the rescue settle in
-   *  `rescueStrandedSideChannels` below) or an effect throw (the drain settle
-   *  after `runEffects`). Defaults to console.error. */
+  /** Reports a throw that would otherwise MASK the error it ran alongside:
+   *  from `settleEditBarrier` (the rescue settle in
+   *  `rescueStrandedSideChannels` below, or the drain settle after
+   *  `runEffects`) or from the write-lock recovery `recoverStrandedWriteLock`
+   *  runs beside it (its commit or its effects). ONE channel for all of them on
+   *  purpose — every caller has the same contract: report, never propagate,
+   *  never displace the root cause. Defaults to console.error. */
   readonly onSettleError?: (err: unknown) => void;
 }
 
@@ -86,8 +109,10 @@ export function isEditApplied(event: HostSessionEvent): boolean {
     // lock-held `edit` stash, a `documentChanged` echo of the in-flight
     // apply, a lock-held `ready`/`viewStateVisible`) — `true` then lets
     // `settle` fall into its own WAIT arm (still locked), never DRAIN, since
-    // only `applyEditSettled` (settled in this same step) and `disposed`
-    // (dropped via the barrier's own `isDisposed` check) ever release the lock.
+    // only `applyEditSettled` (settled in this same step), the
+    // `settlementTransitionFailed` recovery committed when that settlement's
+    // transition THREW, and `disposed` (dropped via the barrier's own
+    // `isDisposed` check) ever release the lock.
     case "seed":
     case "ready":
     case "edit":
@@ -98,6 +123,13 @@ export function isEditApplied(event: HostSessionEvent): boolean {
     case "editRejectedDeliveryFailed":
     case "disposed":
       return true;
+    // The write-lock recovery: outcome-blind by design, so it can never claim
+    // the edit landed. `false` ⇒ DROP the deferred side channels, the same
+    // verdict the throwing settlement's own rescue passes. Today the recovery is
+    // committed directly from the step's catch rather than stepped, so this is
+    // the safe answer for a future call site that DOES step it.
+    case "settlementTransitionFailed":
+      return false;
     case "applyEditSettled":
       break;
     default: {
@@ -134,9 +166,11 @@ export function isEditApplied(event: HostSessionEvent): boolean {
   }
 }
 
-/** True iff a throw from `commitTransition(event)` leaves the write lock
- *  (`pendingApplyBaseVersion`) HELD with no future settlement ever coming —
- *  the one case the rescue below must cover. Exhaustive over
+/** True iff a throw from `commitTransition(event)` WOULD leave the write lock
+ *  (`pendingApplyBaseVersion`) held with no future settlement ever coming —
+ *  the one case the two recoveries below must cover (`recoverStrandedWriteLock`
+ *  releases the lock and disposes of the stash; `rescueStrandedSideChannels`
+ *  drops the deferred thunks). Exhaustive over
  *  `HostSessionEvent["type"]`, same idiom as `isEditApplied`'s outer switch:
  *  a new union member must answer this explicitly instead of silently
  *  falling through to "no rescue needed", which would reintroduce the exact
@@ -156,6 +190,11 @@ function releasesWriteLockOnCommit(event: HostSessionEvent): boolean {
   switch (event.type) {
     case "applyEditSettled":
       return true;
+    // The recovery itself: `false` on purpose. Its arm is a pure field reset
+    // with no `decideEdit`, no outcome switch and no document read — nothing
+    // that can throw the way the settlement can — and `true` would make a
+    // throwing recovery recover itself, unbounded.
+    case "settlementTransitionFailed":
     case "seed":
     case "ready":
     case "edit":
@@ -182,15 +221,16 @@ export function createHostSessionStep(
 ): (event: HostSessionEvent) => void {
   const onSettleError =
     deps.onSettleError ??
-    ((err: unknown) => console.error("[quoll] edit-settled barrier threw", err));
+    ((err: unknown) =>
+      console.error("[quoll] edit-settled barrier or write-lock recovery threw", err));
 
-  const reportSettleError = (settleErr: unknown): void => {
+  const reportSecondaryError = (secondaryErr: unknown): void => {
     // The report is itself isolated — an injected reporter that throws (the
     // DEFAULT is a console call, which is exactly what a broken host
     // environment breaks) would otherwise escape and displace the error it was
     // reporting on.
     try {
-      onSettleError(settleErr);
+      onSettleError(secondaryErr);
     } catch {
       // Deliberately inert: a second console call could fail for the same
       // reason this one did, and the caller's own error is the payload.
@@ -207,11 +247,14 @@ export function createHostSessionStep(
    *  them, since `true` consults the still-held lock and takes the barrier's
    *  WAIT arm instead of dropping anything.
    *
-   *  What this rescue pays for is a ONE-SHOT guard/thunk release, not a
-   *  "retry works now" fix: it never clears `pendingApplyBaseVersion`
-   *  (releasing the lock itself is a separate follow-up), so a side channel
-   *  that retries lands in `editSettledBarrier.run()`, finds the lock still
-   *  held, and re-defers behind it — stranded again until dispose.
+   *  Paired with the write-lock recovery committed just before it: the lock is
+   *  already RELEASED by the time these thunks are dropped, so a side channel
+   *  that retries after its `onDrop` finds `isLocked()` false in
+   *  `editSettledBarrier.run()` and executes immediately instead of
+   *  re-deferring behind a lock nothing will ever release. The verdict here is
+   *  still `false` — a DROP, never a drain: the recovery is outcome-blind and
+   *  cannot establish that the edit landed, so running a deferred handoff
+   *  against the document would be a guess.
    *
    *  Conditioned on the settlement for a reason: on any other event, if the
    *  lock is held it is held by an apply whose own settlement is still coming
@@ -234,7 +277,56 @@ export function createHostSessionStep(
       // not step on the failure it is recovering from. The transition error is
       // the root cause and the triage payload, so it is the one that propagates
       // (the caller rethrows it right after this returns).
-      reportSettleError(settleErr);
+      reportSecondaryError(settleErr);
+    }
+  };
+
+  /** Release the write lock a THROWING TRANSITION would otherwise strand.
+   *  `commitTransition` unwound before the panel assigned the state it would
+   *  have returned, so when the throwing event is the SETTLEMENT the lock
+   *  (`pendingApplyBaseVersion`) stays HELD with no second settlement coming:
+   *  every later inbound edit is stashed into a `pendingEdit` whose only drain
+   *  is the settlement that already threw, and at dispose that stash is lost
+   *  silently. Committing `settlementTransitionFailed` releases the lock,
+   *  disposes of the stash, and reposts the authoritative Document.
+   *
+   *  The version it re-bases on is the throwing event's OWN `settledVersion`,
+   *  passed through rather than re-read: it is the label the settlement itself
+   *  would have used, nothing can interleave before the throw, and it keeps
+   *  `effect-executor.ts`'s "ONE guarded version reader" contract true.
+   *
+   *  Committed DIRECTLY rather than dispatched: a dispatched recovery would
+   *  queue BEHIND any sibling event already waiting in the drain, which would
+   *  then take the lock-held stash arm only to have its stash dropped by the
+   *  recovery landing afterwards. Direct commit releases the lock before
+   *  anything else can observe it, and it keeps the dispatcher's contract
+   *  ("one `step` ATTEMPT per accepted event") intact — this is part of the
+   *  failing step, not a new event.
+   *
+   *  Isolated for the same reason as the settle: the transition error is the
+   *  root cause and the triage payload, so neither the recovery commit nor its
+   *  effects may displace it. */
+  const recoverStrandedWriteLock = (event: HostSessionEvent): void => {
+    if (!releasesWriteLockOnCommit(event)) {
+      return;
+    }
+    // `releasesWriteLockOnCommit` is true for the settlement ONLY, so this
+    // narrowing restates that decision rather than making a second one — but
+    // TypeScript cannot see it through a boolean, and the fallback is the
+    // conservative `null` (NOT OBSERVED ⇒ the reducer withholds the ack rather
+    // than pairing live bytes with a fabricated label).
+    const settledVersion = event.type === "applyEditSettled" ? event.settledVersion : null;
+    let recoveryEffects: readonly HostSessionEffect[];
+    try {
+      recoveryEffects = deps.commitWriteLockRecovery(settledVersion);
+    } catch (recoveryErr) {
+      reportSecondaryError(recoveryErr);
+      return;
+    }
+    try {
+      deps.runEffects(recoveryEffects);
+    } catch (effectErr) {
+      reportSecondaryError(effectErr);
     }
   };
 
@@ -243,6 +335,9 @@ export function createHostSessionStep(
     try {
       effects = deps.commitTransition(event);
     } catch (transitionErr) {
+      // Lock FIRST, side channels second: the drop `rescueStrandedSideChannels`
+      // performs is only durable once the lock is free.
+      recoverStrandedWriteLock(event);
       rescueStrandedSideChannels(event);
       throw transitionErr;
     }
@@ -265,7 +360,7 @@ export function createHostSessionStep(
       }
       // Both threw: the effect error is the root cause and the triage payload,
       // so it wins; this one is reported rather than swallowed.
-      reportSettleError(settleErr);
+      reportSecondaryError(settleErr);
     }
     if (effectsError !== null) {
       throw effectsError.err;
