@@ -2009,6 +2009,24 @@ describe("host-session-core: settlementTransitionFailed (write-lock recovery)", 
     expect((toast as { message: string }).message).not.toContain("dropped");
   });
 
+  // The POSITIVE half of the pair above, and the reason the gate is "will an ack
+  // go out?" rather than "are we alive?". At an UNOBSERVED label the ack is
+  // WITHHELD, so nothing ever replays the retained buffer — and once this arm
+  // clears the lock, the next lock-free resync bumps `externalEpoch` and the
+  // webview drops that buffer (`recordedEpoch > buf.epoch`, edit-sync.ts). The
+  // stash really was the last carrier, alive or not, so the toast must say so.
+  it("CLAIMS the dropped edit on the ALIVE path when the ack is WITHHELD (no Document will ever replay it)", () => {
+    const r = core.transition(
+      locked({ pendingEdit: { content: "edit1+x", baseDocVersion: 5 } }),
+      recovery(null)
+    );
+    const toast = r.effects.find((e) => e.type === "showError");
+    expect((toast as { message: string }).message).toContain("dropped");
+    // WHY it is a loss — the withhold pair, not an ack Document.
+    expect(r.effects.some((e) => e.type === "postDocument")).toBe(false);
+    expect(r.effects.some((e) => e.type === "showResyncFailure")).toBe(true);
+  });
+
   it("resyncs the label to the settled version and reposts the authoritative Document — without bumping the epoch (the advance is the in-flight apply's own echo)", () => {
     const r = core.transition(locked(), recovery(6));
     expect(r.state.lastAppliedDocVersion).toBe(6);
@@ -2021,6 +2039,16 @@ describe("host-session-core: settlementTransitionFailed (write-lock recovery)", 
     expect(r.state.lastAppliedDocVersion).toBe(5);
     expect(r.effects.some((e) => e.type === "postDocument")).toBe(false);
     expect(r.effects.some((e) => e.type === "showResyncFailure")).toBe(true);
+    // The internal-error toast is UNCONDITIONAL — it stands in for the
+    // save-failure `showError` the throwing transition abandoned, so the ack
+    // gate must never suppress it. This is the only PRESENCE pin on that toast
+    // at an unobserved label: the ordering test below reads it through
+    // `indexOf`, which absorbs absence as `-1`, so gating the toast on
+    // `ackLabelObserved` used to leave the whole suite green.
+    const toast = r.effects.find((e) => e.type === "showError");
+    expect(toast).toBeDefined();
+    expect((toast as { message: string }).message).toContain("internal error");
+    expect((toast as { message: string }).message).toContain("/x.md"); // ctx.fsPath
   });
 
   it("still ACKS at an unobserved settled version when a lock-held resync already raised the label", () => {
@@ -2092,7 +2120,13 @@ describe("host-session-core: settlementTransitionFailed (write-lock recovery)", 
 
   it("keeps every user-visible effect ahead of every unguarded log, even at an unobserved label", () => {
     const kinds = core.transition(locked(), recovery(null)).effects.map((e) => e.type);
-    const lastVisible = Math.max(kinds.indexOf("showError"), kinds.indexOf("showResyncFailure"));
-    expect(lastVisible).toBeLessThan(kinds.indexOf("logWarn"));
+    const iErr = kinds.indexOf("showError");
+    const iResync = kinds.indexOf("showResyncFailure");
+    // PRESENCE first, then order. `indexOf` answers -1 for a missing effect, and
+    // -1 is less than every real index — so ordering alone would read a DELETED
+    // user-visible effect as "correctly ahead of the log".
+    expect(iErr).toBeGreaterThanOrEqual(0);
+    expect(iResync).toBeGreaterThanOrEqual(0);
+    expect(Math.max(iErr, iResync)).toBeLessThan(kinds.indexOf("logWarn"));
   });
 });

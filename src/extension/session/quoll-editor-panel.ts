@@ -121,6 +121,7 @@ import {
   createHostSessionCore,
   type HostSessionEffect,
   type HostSessionEvent,
+  type HostSessionInputEvent,
   isWriteLockHeld,
 } from "./host-session-core.js";
 import { createHostSessionStep } from "./host-session-step.js";
@@ -374,7 +375,12 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
     // `dispatch` is declared with definite-assignment so the effect executors
     // below can close over it — they are only invoked once a dispatch is in
     // flight, after this assignment.
-    let dispatch!: (event: HostSessionEvent) => void;
+    // Typed `HostSessionInputEvent`, not `HostSessionEvent`: the write-lock
+    // recovery is COMMITTED (see `commitWriteLockRecovery` below), never queued,
+    // and that exclusion is now enforced by the type rather than by this comment
+    // — a dispatched recovery would land behind a sibling whose lock-held stash
+    // arm then loses its stash to it.
+    let dispatch!: (event: HostSessionInputEvent) => void;
     // The transition + effects + barrier release live in host-session-step.ts so
     // the throwing-effects branch has unit-test reach (this closure is
     // vscode-bound). Contract recap, since the ordering here is load-bearing:
@@ -420,7 +426,7 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
       runEffects: (effects) => runEffects(effects),
       settleEditBarrier: (applied) => editSettledBarrier.settle(applied),
     });
-    dispatch = createDrainingDispatcher<HostSessionEvent>(step);
+    dispatch = createDrainingDispatcher<HostSessionInputEvent>(step);
 
     // canWriteNow gates host-side writes to on-disk file: documents only
     // (see src/extension/session/can-host-write.ts). Re-checked at post time so

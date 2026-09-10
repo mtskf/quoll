@@ -42,7 +42,7 @@ import { executeDocumentWrite } from "../document-write/execute-write.js";
 import type {
   ApplyEditOutcome,
   HostSessionEffect,
-  HostSessionEvent,
+  HostSessionInputEvent,
   HostSessionState,
 } from "./host-session-core.js";
 
@@ -77,7 +77,11 @@ export interface EffectExecutorDeps<TEdit> {
   /** document.uri.toString() — for the sendEditRejected delivery-refused warn
    *  payload, kept byte-identical. */
   uriString: () => string;
-  dispatch: (event: HostSessionEvent) => void;
+  /** INPUT events only. `settlementTransitionFailed` is excluded by the type
+   *  (`HostSessionInputEvent`) because a dispatched recovery would queue behind
+   *  a sibling whose lock-held stash arm then loses its stash to it — it is
+   *  committed directly from the step's catch instead. */
+  dispatch: (event: HostSessionInputEvent) => void;
   /** Harness-resolved postMessage surface (harness override ?? webview.postMessage). */
   send: (message: HostToWebview) => Thenable<boolean>;
   /** harness?.recordEvent ?? noop — called only on an accepted (ok=true) send. */
@@ -788,7 +792,28 @@ export function createEffectExecutor<TEdit>(deps: EffectExecutorDeps<TEdit>): Ef
           }
           break;
         case "logWarn":
-          console.warn(effect.message, effect.detail);
+          // GUARDED for the same reason as `showError` above, and this case is
+          // where the rule matters most: it is the ONLY effect with no `try` of
+          // its own, and several reducer arms emit a triage `logWarn` AHEAD of
+          // the effect that actually pays the incident — the drain `accept`
+          // arm's `[...staleReBaseWarn, applyEdit]` (host-session-core's
+          // `applyEditSettled` case) and `refused`'s `[logWarn, ...toasts,
+          // ...ack]`. An escaping throw there unwinds `runEffects` and abandons
+          // the rest of the list, and in the drain arm that costs the WRITE: the
+          // committed state already re-acquired the lock, so a dropped
+          // `applyEdit` means no settlement is ever dispatched and the lock is
+          // stranded for the panel's life — the same stranding
+          // `settlementTransitionFailed` exists to repair, except that recovery
+          // hangs off the TRANSITION catch (`host-session-step.ts`) and cannot
+          // see a `runEffects` throw at all. Containment here fixes the whole
+          // class at one seam instead of asking every effect list to order
+          // around an unguarded case. No latch: per-effect containment, not
+          // notification suppression.
+          try {
+            console.warn(effect.message, effect.detail);
+          } catch (err) {
+            console.error("[quoll] logWarn threw while running effects", err);
+          }
           break;
         case "openExternal":
           // No additional logging here — isAllowedUrl rejection +

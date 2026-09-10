@@ -236,6 +236,25 @@ export type HostSessionEvent =
     }
   | { readonly type: "disposed" };
 
+/** Every event a DISPATCHER may carry. `settlementTransitionFailed` is excluded
+ *  BY CONSTRUCTION: it is COMMITTED directly from `host-session-step.ts`'s
+ *  transition catch, never queued — a dispatched recovery would land BEHIND a
+ *  sibling already waiting in the drain, which would then take the lock-held
+ *  stash arm only to have its stash dropped by the recovery landing afterwards
+ *  (`recoverStrandedWriteLock`'s doc). Until this type existed, that contract
+ *  was prose only: injecting the dispatch into `effect-executor.ts` type-checked
+ *  CLEAN (measured).
+ *
+ *  DERIVED with `Exclude`, not written out as a parallel union: a new member is
+ *  then carried automatically and only the EXCLUSION has to be stated, so the
+ *  two types cannot drift. `commitTransition` / `commitWriteLockRecovery` keep
+ *  the WIDE `HostSessionEvent` — committing the recovery is the one legitimate
+ *  path and must stay expressible. */
+export type HostSessionInputEvent = Exclude<
+  HostSessionEvent,
+  { readonly type: "settlementTransitionFailed" }
+>;
+
 export type HostSessionEffect =
   | {
       readonly type: "postDocument";
@@ -345,21 +364,26 @@ const postDoc = (s: HostSessionState, docVersion: number): HostSessionEffect => 
   epochGeneration: s.epochGeneration,
 });
 
-// The withhold pair — what a settlement emits INSTEAD of its ack Document when
-// no source observed a post-apply version. Not silent WHILE THE PANEL IS ALIVE:
-// the logWarn is the triage record and showResyncFailure is the user-visible
-// signal, latched per incident by the EXECUTOR (the reducer is pure and cannot
-// hold a latch) — the same latch as the reseed-build failure, so the two
-// "webview could not be resynced" families cannot double-toast one incident.
-// POST-DISPOSE the pair never reaches the executor, by THREE different routes:
+// The withhold pair — what a settlement, or the `settlementTransitionFailed`
+// recovery, emits INSTEAD of its ack Document when no source observed a
+// post-apply version. Not silent WHILE THE PANEL IS ALIVE: the logWarn is the
+// triage record and showResyncFailure is the user-visible signal, latched per
+// incident by the EXECUTOR (the reducer is pure and cannot hold a latch) — the
+// same latch as the reseed-build failure, so the two "webview could not be
+// resynced" families cannot double-toast one incident. ⚠️ It is NOT the signal
+// for a LOST EDIT: the recovery arm gates its own "A later unsaved edit was
+// dropped." clause on this same withheld-ack condition, precisely because
+// "could not resync" does not say that.
+// POST-DISPOSE the pair never reaches the executor, by FOUR different routes:
 // the no-stash arm (`state.disposed && state.pendingEdit === null`, the early
 // return in the `applyEditSettled` case) builds only failure toasts, so the pair
 // is not even constructed; the undrainable arm keeps only `showError`s from the
-// settlement effects; and a stash that DRAINS post-dispose never calls
+// settlement effects; a stash that DRAINS post-dispose never calls
 // `ackEffects` at all (the drain's readonly/stale/no-op arm returns `[]` when
-// disposed, and its accept / parse-failed arms post no Document). Deliberate in
-// all three: there is no view left to resync, and the only loss worth reporting
-// there (a dropped stash) has its own toast.
+// disposed, and its accept / parse-failed arms post no Document); and the
+// recovery arm, whose disposed branch emits only its toast + triage and never
+// calls `ackEffects`. Deliberate in all four: there is no view left to resync,
+// and the only loss worth reporting there (a dropped stash) has its own toast.
 function withholdAckEffects(
   settled: HostSessionState,
   heldBase: number | null,
@@ -385,11 +409,12 @@ function withholdAckEffects(
   ];
 }
 
-// The ack a settlement posts: the authoritative Document when the label rests on
-// a real observation, the withhold pair when it does not. ONE owner for that
-// choice — both ack sites (the per-outcome effects below and the drain's
-// readonly/stale/no-op repost) call this, so a third site cannot grow its own
-// copy of the ternary and quietly diverge from the gate.
+// The ack a settlement — or the write-lock recovery — posts: the authoritative
+// Document when the label rests on a real observation, the withhold pair when it
+// does not. ONE owner for that choice: all THREE ack sites call this (the
+// per-outcome effects below, the drain's readonly/stale/no-op repost, and the
+// `settlementTransitionFailed` arm), so no site can grow its own copy of the
+// ternary and quietly diverge from the gate.
 function ackEffects(
   ackLabelObserved: boolean,
   settled: HostSessionState,
@@ -1253,21 +1278,38 @@ export function createHostSessionCore(context: HostSessionContext, deps: HostSes
           event.settledVersion !== null ||
           (heldBase !== null && recovered.lastAppliedDocVersion > heldBase);
         // UNCONDITIONAL, because the throwing transition ABANDONED its effect
-        // list — and on every non-ok outcome that list began with the
-        // save-failure `showError` (`settlementEffects`' toast-before-reseed
-        // order). This toast stands in for the one that was owed. Outcome-BLIND
-        // wording: the arm never learns whether the write landed, so it claims
-        // neither.
+        // list — and every non-ok outcome OWED a save-failure `showError` ahead
+        // of its ack (`settlementEffects`' toast-before-reseed order; the
+        // `refused` arm puts a triage `logWarn` first, so "owed before the ack"
+        // is the true form, not "began the list"). This toast stands in for the
+        // one that was owed. Outcome-BLIND wording: the arm never learns whether
+        // the write landed, so it claims neither.
         //
-        // The LOSS CLAUSE is the only conditional part, and it is
-        // POST-DISPOSE-ONLY. Alive, the dropped stash is not a loss: the webview
-        // still holds those bytes in the replay buffer `forcePost` RETAINED
-        // under single-flight (`webview/cm/edit-sync.ts`), and the ack below is
-        // the next ack that replays them — claiming a dropped edit there would
-        // be a false alarm. After a close that buffer is gone with the iframe
-        // and the stash was the only carrier. Same gate as the settlement arm's
-        // `unobservedStashDrop` toast; the withheld-ack corner keeps its own
-        // signal via `showResyncFailure`.
+        // The LOSS CLAUSE is the only conditional part, and its gate is "will
+        // ANY ack Document go out to replay those bytes?" — NOT merely "are we
+        // alive?". Alive WITH AN ACK the dropped stash is not a loss: the
+        // webview still holds those bytes in the replay buffer `forcePost`
+        // RETAINED under single-flight (`webview/cm/edit-sync.ts`), and the ack
+        // below is the next ack that replays them — claiming a dropped edit
+        // there would be a false alarm.
+        //
+        // The two branches with NO ack are both losses, for different reasons:
+        //   - POST-DISPOSE the retained buffer went with the iframe, so the
+        //     stash was the edit's only carrier.
+        //   - ALIVE but `!ackLabelObserved`, the ack is WITHHELD
+        //     (`withholdAckEffects` — no `postDocument` at all), and from there
+        //     the bytes are lost in four steps, each in a different file:
+        //     (1) no ack Document ⇒ the retained replay buffer is never
+        //     replayed; (2) this arm sets `pendingApplyBaseVersion: null`, which
+        //     makes the lock-free `foreignAdvance` branch of `resyncLiveVersion`
+        //     reachable again; (3) the next `viewStateVisible` / `documentChanged`
+        //     takes it and bumps `externalEpoch`; (4) the webview then satisfies
+        //     `recordedEpoch > buf.epoch` and DROPS the buffer
+        //     (`webview/cm/edit-sync.ts`). Spelled out link by link because a
+        //     four-file chain is exactly the claim that goes stale silently.
+        //     `showResyncFailure` does not cover it — that says the view could
+        //     not be resynced, not that an edit was dropped.
+        // Same gate as the settlement arm's `unobservedStashDrop` toast.
         //
         // ACCEPTED RESIDUAL, stated here because this arm is where it is
         // created: the settlement's site-2 foreign-bytes check would have
@@ -1279,11 +1321,14 @@ export function createHostSessionCore(context: HostSessionContext, deps: HostSes
         // is worse either way: deciding needs a read through the seam that just
         // threw, and bumping unconditionally drops the replay buffer on EVERY
         // recovery — a deterministic loss on the common path to cover a
-        // double-fault race that needs a type violation to reach at all. That
-        // throw source is exactly one: `failureToasts`' `default` (the drain's
-        // two sources sit behind `canDrain`'s content match, which by
-        // construction means no foreign edit raced).
-        const lostStash = state.disposed && stash !== null;
+        // double-fault race that needs a type violation to reach at all. The
+        // throw source is one of the two exhaustive-guard `default`s — the
+        // `settlementEffects` switch, which is the one the ALIVE non-ok path
+        // this residual describes actually reaches, or `failureToasts`' own on
+        // the disposed-no-stash early return (where there is neither a stash nor
+        // a replay buffer). The drain's two sources sit behind `canDrain`'s
+        // content match, which by construction means no foreign edit raced.
+        const lostStash = stash !== null && (state.disposed || !ackLabelObserved);
         const toast: HostSessionEffect = {
           type: "showError",
           message:

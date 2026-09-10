@@ -30,6 +30,7 @@ import {
   type HandleContextHandoffPayload,
   type HandoffRevealSelection,
 } from "../../src/extension/handoff/handle-context-handoff";
+import type { HostSessionStepDeps } from "../../src/extension/session/host-session-step";
 import type { EndOfLineValue } from "../../src/extension/status-bar";
 import type { PanelControls } from "../../src/extension/test-harness";
 import type { Cell, DelimiterCell, DelimiterRow, Row, Table } from "../../src/markdown/table/model";
@@ -194,6 +195,35 @@ describe("status-bar type pins", () => {
     // `number` and this assertion evaluates to `false` — the `= true`
     // assignment fails to typecheck and `pnpm compile` goes red.
     const _check: AssertEqual<EndOfLineValue, 1 | 2> = true;
+    expect(_check).toBe(true);
+  });
+});
+
+describe("host-session step type pins", () => {
+  it("keeps HostSessionStepDeps' write-lock recovery dep REQUIRED", () => {
+    // `commitWriteLockRecovery` is the panel's only path to releasing a write
+    // lock that a THROWING `applyEditSettled` transition left held. The dep's
+    // own doc says "REQUIRED, not optional: a no-op default would let a call
+    // site forget the wiring and keep the stranded-lock bug with every test
+    // green" — and until this pin, nothing enforced it. Adding `?` plus a
+    // `?? (() => [])` default compiles clean, and because
+    // `test/extension/session/` is in NO tsconfig (vitest is transpile-only
+    // there), a harness that omits the dep raises a runtime `TypeError` that
+    // `recoverStrandedWriteLock`'s own `try` funnels into `onSettleError` — the
+    // test still PASSES while measuring no recovery at all.
+    //
+    // Lives here for the reason the status-bar and table-model pins spell out:
+    // this file is type-checked by `pnpm compile`, so the assertion is
+    // non-vacuous. `Required<T>` is homomorphic, so the identity holds only
+    // while the picked member carries no `?`. Revert-check: add `?` to
+    // `commitWriteLockRecovery` and this resolves to `false`, failing the
+    // `= true` assignment. The technique's non-vacuity is measured against the
+    // deliberately OPTIONAL `onSettleError`, for which the same assertion
+    // fails — that member is the control, and is deliberately not pinned here.
+    const _check: AssertEqual<
+      Pick<HostSessionStepDeps, "commitWriteLockRecovery">,
+      Required<Pick<HostSessionStepDeps, "commitWriteLockRecovery">>
+    > = true;
     expect(_check).toBe(true);
   });
 });

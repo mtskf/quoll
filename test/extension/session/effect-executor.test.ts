@@ -1074,6 +1074,62 @@ describe("effect-executor runEffects other cases", () => {
     expect(send).not.toHaveBeenCalled();
   });
 
+  // `logWarn` used to be the ONE case `runEffects` ran with no `try` of its own,
+  // and the effect list below is the drain `accept` arm's VERBATIM shape
+  // (host-session-core's `applyEditSettled` case returns
+  // `[...staleReBaseWarn, applyEdit]`): a triage log AHEAD of the write. That
+  // ordering is what makes an unguarded throw here cost more than a lost log —
+  // the committed state has already RE-ACQUIRED the write lock, so an abandoned
+  // `applyEdit` means no `applyEditSettled` is ever dispatched and the lock is
+  // stranded for the panel's life. The `settlementTransitionFailed` recovery
+  // does NOT cover it: that hangs off the transition catch in
+  // `host-session-step.ts` and never sees a `runEffects` throw.
+  //
+  // The write is observed through the seam's `build`, which is safe to assert
+  // synchronously: `execute-write.ts`'s pipeline runs `readText → span → build →
+  // apply-initiation` BEFORE its first `await` (see that module's header).
+  it("logWarn: a throwing console.warn is contained — logged, and the applyEdit that FOLLOWS still runs", async () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {
+      throw new Error("console.warn failed");
+    });
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const build = vi.fn(() => fakeEdit);
+      const { runEffects } = createEffectExecutor(
+        makeDeps({
+          applyEditSeam: {
+            readText: () => "",
+            readVersion: () => 6,
+            readCanonical: () => "drained",
+            canonicalize: (text) => text,
+            build,
+            apply: async () => true,
+          },
+        })
+      );
+
+      expect(() =>
+        runEffects([
+          { type: "logWarn", message: "[quoll] unlabelled drain", detail: {} },
+          { type: "applyEdit", content: "drained", baseDocVersion: 6 },
+        ])
+      ).not.toThrow();
+
+      expect(warnSpy).toHaveBeenCalledOnce(); // the attempt really happened
+      // THE assertion: the write survived the throwing log.
+      expect(build).toHaveBeenCalledOnce();
+      // …and the throw is not swallowed silently.
+      expect(errorSpy).toHaveBeenCalledWith(
+        expect.stringContaining("logWarn threw"),
+        expect.anything()
+      );
+      await Promise.resolve();
+    } finally {
+      warnSpy.mockRestore();
+      errorSpy.mockRestore();
+    }
+  });
+
   // Codex #5: builder freshness. The seed builder must be CALLED at each
   // postDocument (reading live theme/canWrite), not memoised at factory
   // construction. Flip a live value between factory build and the effect, and

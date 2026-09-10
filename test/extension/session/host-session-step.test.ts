@@ -186,9 +186,11 @@ describe("createHostSessionStep", () => {
   });
 
   // Mutation coverage: `releasesWriteLockOnCommit`'s `disposed` case answers
-  // false, but no other test in this suite drives a `disposed` event through
+  // `null`, but no other test in this suite drives a `disposed` event through
   // `step` — so a mutation that moved `disposed` into the same rescue arm as
-  // `applyEditSettled` passed the whole suite unnoticed. `disposed` needs no
+  // `applyEditSettled` passed the whole suite unnoticed. (Since that helper
+  // returns the SETTLEMENT rather than a boolean, tsc now rejects such a move
+  // outright; this test still covers the runtime behaviour.) `disposed` needs no
   // rescue of its own here: see `releasesWriteLockOnCommit`'s doc for why the
   // drop, if any, rides a LATER, independent `applyEditSettled` step instead.
   // The half PR #406 did not pay: the rescue released the deferred side
@@ -275,8 +277,9 @@ describe("createHostSessionStep", () => {
     spy.mockRestore();
   });
 
-  it("keeps the transition error when the recovery COMMIT throws, and reports the recovery failure", () => {
+  it("keeps the transition error when the recovery COMMIT throws, and still DROPS the side channels", () => {
     const reported: unknown[] = [];
+    const settles: boolean[] = [];
     const step = createHostSessionStep({
       commitTransition: () => {
         throw new Error("reducer bug");
@@ -285,11 +288,19 @@ describe("createHostSessionStep", () => {
         throw new Error("recovery threw");
       },
       runEffects: () => {},
-      settleEditBarrier: () => {},
+      settleEditBarrier: (applied) => settles.push(applied),
       onSettleError: (err) => reported.push(err),
     });
     expect(() => step(settled({ kind: "ok" }, 3))).toThrow("reducer bug");
     expect((reported[0] as Error).message).toBe("recovery threw");
+    // A FAILING recovery must not cost the side-channel DROP — that release is
+    // the half PR #406 already paid for, and it is independent of whether the
+    // lock got freed: the barrier's `settle` reaches its drop arm on
+    // `isDisposed() || !applied` BEFORE it ever consults `isLocked()`. Without
+    // this assertion the two failures compound — gating the rescue on the
+    // recovery's success left all 335 `test/extension/session` tests green
+    // while re-stranding the deferred thunks' at-receipt guards.
+    expect(settles).toEqual([false]);
   });
 
   it("keeps the transition error when the recovery EFFECTS throw, and still settles the barrier", () => {
@@ -461,10 +472,16 @@ describe("createHostSessionStep", () => {
     expect(ran).not.toHaveBeenCalled();
   });
 
-  // `settle(false)`, not `settle(true)`: the state was never committed, so the
-  // lock still reads HELD and a `true` verdict would take the barrier's WAIT arm
-  // and strand the thunks exactly as before. This pins the verdict itself, so a
-  // rescue that passes `true` goes red even where the drop is unobservable.
+  // `settle(false)`, not `settle(true)`: the recovery cannot establish that the
+  // edit landed (it is outcome-blind), so the thunks must be DROPPED, never
+  // drained. ⚠️ Do not read the stub below as the production mechanism: the
+  // `commitWriteLockRecovery: () => []` stub does NOT release the lock, so in
+  // THIS test a `true` verdict would merely WAIT. In production the recovery
+  // frees the lock in the same catch (see the note ~25 lines above), so `true`
+  // would take the barrier's DRAIN arm and RUN the thunks — the worse failure,
+  // and the one this pins against. Pinning the VERDICT rather than the drop is
+  // what makes a rescue that passes `true` go red even where the drop is
+  // unobservable.
   it("rescues an applyEditSettled transition throw with the FAILED verdict", () => {
     const settles: boolean[] = [];
     const step = createHostSessionStep({
@@ -783,7 +800,11 @@ describe("createHostSessionStep", () => {
     // rather than one exact line, so reformatting cannot vacate the pin.
     expect(panel).toContain("settleEditBarrier:");
     expect(panel).toMatch(/settleEditBarrier:[\s\S]{0,80}editSettledBarrier\.settle\(/);
-    expect(panel).toContain("createDrainingDispatcher<HostSessionEvent>(step)");
+    // `HostSessionInputEvent`, NOT `HostSessionEvent`: the dispatcher's element
+    // type EXCLUDES `settlementTransitionFailed`, which is committed from the
+    // step's catch rather than queued. Pinning the narrow literal is what stops
+    // a future widening back to the full union from going unnoticed.
+    expect(panel).toContain("createDrainingDispatcher<HostSessionInputEvent>(step)");
   });
 
   // The panel's composition, end to end: real core + real step + real barrier +
