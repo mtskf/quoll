@@ -371,9 +371,13 @@ const postDoc = (s: HostSessionState, docVersion: number): HostSessionEffect => 
 // incident by the EXECUTOR (the reducer is pure and cannot hold a latch) — the
 // same latch as the reseed-build failure, so the two "webview could not be
 // resynced" families cannot double-toast one incident. ⚠️ It is NOT the signal
-// for a LOST EDIT: the recovery arm gates its own "A later unsaved edit was
-// dropped." clause on this same withheld-ack condition, precisely because
-// "could not resync" does not say that.
+// for a LOST EDIT: the recovery arm gates its own loss clause on this same
+// withheld-ack condition, precisely because "could not resync" does not say
+// that. On the path that reaches HERE — alive, ack withheld — that clause is the
+// HEDGED one ("may not have been saved"), which deliberately reuses this pair's
+// own `RESYNC_FAILURE_MESSAGE` phrasing so the two toasts cannot disagree about
+// certainty when both appear. The DEFINITE wording belongs to the post-dispose
+// branch, where this pair is never built at all (see the four routes below).
 // POST-DISPOSE the pair never reaches the executor, by FOUR different routes:
 // the no-stash arm (`state.disposed && state.pendingEdit === null`, the early
 // return in the `applyEditSettled` case) builds only failure toasts, so the pair
@@ -1306,9 +1310,10 @@ export function createHostSessionCore(context: HostSessionContext, deps: HostSes
         // below is the next ack that replays them — claiming a dropped edit
         // there would be a false alarm.
         //
-        // The two branches with NO ack are both losses, for different reasons:
+        // The two branches with NO ack both report a loss, for different reasons
+        // and — this is what the wording turns on — with different CERTAINTY:
         //   - POST-DISPOSE the retained buffer went with the iframe, so the
-        //     stash was the edit's only carrier.
+        //     stash was the edit's only carrier. CERTAIN.
         //   - ALIVE but `!ackLabelObserved`, the ack is WITHHELD
         //     (`withholdAckEffects` — no `postDocument` at all), and from there
         //     the bytes are lost in four steps, each in a different file:
