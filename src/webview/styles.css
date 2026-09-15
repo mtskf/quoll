@@ -247,6 +247,15 @@ html body {
     flex: 0 0 auto;
   }
 
+  /* Live-region slot for edit-sync notices (discarded pending edits / repeated
+   * resyncs). Present from mount and only ever emptied, so screen readers have
+   * the region before any text lands (W3C ARIA22). `flex: 0 0 auto` mirrors
+   * .quoll-banner-host — top chrome must never steal the editor's bounded
+   * height. Empty ⇒ zero height, so an idle session shows no gap. */
+  .quoll-notice-host {
+    flex: 0 0 auto;
+  }
+
   /* Notion-style reading column host. The editor font-size is owned by the CM
    * theme's "&" (.cm-editor) declaration (cm/theme.ts) — an element's OWN
    * declaration beats inheritance, so a font-size set HERE never reached the

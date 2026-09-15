@@ -127,33 +127,23 @@ export function mountShell(root: HTMLElement, opts: ShellOptions): ShellHandle {
   bannerHost.className = "quoll-banner-host";
   main.appendChild(bannerHost);
 
-  // Clustering escalation tripwire notice (S3b). A low-alarm, once-per-session,
-  // user-visible hint surfaced when identity transitions cluster (edit-sync
-  // fires onResyncStorm at ≥3 within 5 min). It lives OUTSIDE bannerHost so the
-  // reducer-driven renderBanners (replaceChildren) never clobbers it, and is NOT
-  // reducer state — it is an edit-sync lifecycle event, not a document error.
-  // Latched by edit-sync (fires at most once) and here (idempotent).
-  let resyncNoticeShown = false;
-  function showResyncNotice(): void {
-    if (resyncNoticeShown) {
-      return;
-    }
-    resyncNoticeShown = true;
-    const notice = document.createElement("div");
-    notice.className = "quoll-resync-notice";
-    notice.setAttribute("role", "status");
-    const text = document.createElement("span");
-    text.textContent =
-      "Quoll re-synced with the editor host repeatedly — recent keystrokes may not have been saved.";
-    const dismiss = document.createElement("button");
-    dismiss.type = "button";
-    dismiss.className = "quoll-resync-notice-dismiss";
-    dismiss.setAttribute("aria-label", "Dismiss");
-    dismiss.textContent = "×";
-    dismiss.addEventListener("click", () => notice.remove());
-    notice.append(text, dismiss);
-    main.appendChild(notice);
-  }
+  // ONE notice slot shared by the two edit-sync lifecycle signals — the S3b
+  // clustering tripwire (onResyncStorm) and a discarded pre-ack buffer
+  // (onLocalEditDiscarded). It lives OUTSIDE bannerHost so the reducer-driven
+  // renderBanners (replaceChildren) never clobbers it, and it is NOT reducer
+  // state — neither signal is a document error.
+  //
+  // The CONTAINER is created here, at mount, and is never removed — only
+  // emptied. A live region inserted at the same moment as its text is not
+  // reliably announced (W3C ARIA22), which is the flaw the previous
+  // one-element-per-notice shape carried. Same technique as the outline panel's
+  // announcer, but visible rather than visually hidden.
+  const noticeHost = document.createElement("div");
+  noticeHost.className = "quoll-notice-host";
+  noticeHost.setAttribute("role", "status");
+  noticeHost.setAttribute("aria-atomic", "true");
+  main.appendChild(noticeHost);
+
   // The editor mounts its own .quoll-editor div as a child of bannerHost's
   // sibling; we hand it `main` as the parent so it sits inside <main>.
   root.appendChild(main);
@@ -164,6 +154,76 @@ export function mountShell(root: HTMLElement, opts: ShellOptions): ShellHandle {
   let mountReported = false;
   let sessionReported = false;
   let shellDisposed = false;
+
+  // Notice slot behaviour. Declared AFTER `shellDisposed` because the deferred
+  // storm render reads it.
+  //
+  // Two classes, TWO texts, deliberately not merged into one sentence: a storm
+  // can fire with no input and no discard at all (pinned in shell.test.ts), so a
+  // shared wording would either soften a CERTAIN loss to "may", or assert a loss
+  // the storm case cannot prove.
+  //
+  // The latches are INDEPENDENT. Storm is once-per-session and OUTLIVES a
+  // dismiss (edit-sync latches too; `stormNoticeShown` is the display-side
+  // half). Discard is NOT latched — every discard the user has not already been
+  // told about is a fresh loss — but a repeat discard while the notice is still
+  // on screen is AGGREGATED: the DOM and the text are left untouched, because
+  // re-rendering an identical notice reads as a new, second loss.
+  //
+  // No auto-fade: a real byte loss that disappears on a timer is back to being
+  // no signal at all.
+  const NOTICE_TEXT = {
+    discard:
+      "Quoll discarded pending edits while syncing this document. Review your recent changes and reapply anything missing; Undo cannot restore discarded edits.",
+    storm:
+      "Quoll has repeatedly re-synced this document. Review your recent changes; some may not have been saved.",
+  } as const;
+  type NoticeKind = keyof typeof NOTICE_TEXT;
+  let noticeKind: NoticeKind | null = null;
+  let stormNoticeShown = false;
+  function showNotice(kind: NoticeKind): void {
+    if (noticeKind === kind) {
+      return; // aggregate: the slot already says exactly this
+    }
+    const notice = document.createElement("div");
+    notice.className = `quoll-resync-notice quoll-notice-${kind}`;
+    const text = document.createElement("span");
+    text.textContent = NOTICE_TEXT[kind];
+    const dismiss = document.createElement("button");
+    dismiss.type = "button";
+    dismiss.className = "quoll-resync-notice-dismiss";
+    dismiss.setAttribute("aria-label", "Dismiss");
+    dismiss.textContent = "×";
+    dismiss.addEventListener("click", () => {
+      noticeHost.replaceChildren();
+      noticeKind = null;
+    });
+    notice.append(text, dismiss);
+    noticeHost.replaceChildren(notice);
+    noticeKind = kind;
+  }
+  function showDiscardNotice(): void {
+    showNotice("discard");
+  }
+  function showStormNotice(): void {
+    if (stormNoticeShown) {
+      return;
+    }
+    stormNoticeShown = true; // latched up-front: the deferred render cannot queue twice
+    // PRIORITY: within one Document, edit-sync fires the storm (from
+    // onHostSnapshot, during applyDocument) BEFORE the discard (from the
+    // post-commit drain) — both synchronously, in the same task. Deferring only
+    // the storm's RENDER by one microtask lets the discard, which states a
+    // CERTAIN loss, claim the shared slot; a storm that would only restate it
+    // more weakly is then never drawn — not even transiently, which shell.test.ts
+    // records DOM mutations to pin.
+    queueMicrotask(() => {
+      if (shellDisposed || noticeKind === "discard") {
+        return;
+      }
+      showNotice("storm");
+    });
+  }
   // Single-fire session report: pagehide AND dispose can both run when VS Code
   // destroys the webview, so latch to avoid a duplicate `[quoll][perf]` line.
   // The perfReport call is bare-`if (QUOLL_PERF)`-guarded INSIDE the function
@@ -266,7 +326,8 @@ export function mountShell(root: HTMLElement, opts: ShellOptions): ShellHandle {
     resourceBaseUri,
     getState: () => state,
     dispatch,
-    onResyncStorm: showResyncNotice,
+    onResyncStorm: showStormNotice,
+    onLocalEditDiscarded: showDiscardNotice,
   });
 
   const unsubscribe = subscribeToHost((message) => {

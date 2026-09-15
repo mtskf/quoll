@@ -190,16 +190,34 @@ describe("shell — S3b epoch-bounded acceptance ordering", () => {
     deliver(buildDocument({ docVersion: 1, content: "s", externalEpoch: 0, epochGeneration: 3 }));
     expect(container?.querySelectorAll(".quoll-resync-notice").length).toBe(0);
     deliver(buildDocument({ docVersion: 1, content: "s", externalEpoch: 0, epochGeneration: 4 }));
+    await Promise.resolve(); // storm renders one microtask late (a discard wins the frame)
     const notices = container?.querySelectorAll(".quoll-resync-notice");
     expect(notices?.length).toBe(1);
-    expect(notices?.[0].textContent).toContain("re-synced with the editor host repeatedly");
+    expect(notices?.[0].textContent).toContain("has repeatedly re-synced this document");
     // Latched: a further transition does not add a second notice.
     deliver(buildDocument({ docVersion: 1, content: "s", externalEpoch: 0, epochGeneration: 5 }));
+    await Promise.resolve();
     expect(container?.querySelectorAll(".quoll-resync-notice").length).toBe(1);
-    // Dismiss button removes the notice.
+    // Dismiss empties the slot — but the CONTAINER stays (it is the live region).
     const notice = container?.querySelector(".quoll-resync-notice") as HTMLElement;
     (notice.querySelector(".quoll-resync-notice-dismiss") as HTMLButtonElement).click();
     expect(container?.querySelectorAll(".quoll-resync-notice").length).toBe(0);
+    expect(container?.querySelectorAll(".quoll-notice-host").length).toBe(1);
+    // The once-per-session latch OUTLIVES the dismiss: a later transition must
+    // not resurrect the storm notice.
+    deliver(buildDocument({ docVersion: 1, content: "s", externalEpoch: 0, epochGeneration: 6 }));
+    await Promise.resolve();
+    expect(container?.querySelectorAll(".quoll-resync-notice").length).toBe(0);
+  });
+
+  it("mounts an empty live-region notice slot before anything is announced", async () => {
+    // W3C ARIA22: a live region inserted at the same moment as its text is not
+    // reliably announced. The container must pre-exist and stay empty.
+    await mount();
+    const host = container?.querySelector(".quoll-notice-host");
+    expect(host).not.toBeNull();
+    expect(host?.getAttribute("role")).toBe("status");
+    expect(host?.childElementCount).toBe(0);
   });
 
   it("shows NO resync-storm notice for a single identity transition", async () => {
@@ -254,6 +272,191 @@ describe("shell — S3b epoch-bounded acceptance ordering", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  // The drop arm these cover is the one place the webview THROWS AWAY bytes the
+  // user typed: a foreign writer advanced the epoch, so the held pre-ack buffer
+  // mirrors the host's external-wins policy instead of replaying over it. The
+  // reseed carries addToHistory.of(false), so Undo cannot bring them back — which
+  // is why a devtools-only console.warn was not an acceptable record.
+  it("surfaces ONE visible notice when a same-generation epoch advance discards pending input", async () => {
+    await mount();
+    vi.useFakeTimers();
+    try {
+      deliver(
+        buildDocument({ docVersion: 1, content: "s", externalEpoch: 0, epochGeneration: 11 })
+      );
+      const view = mountedView();
+      view.dispatch({ changes: { from: view.state.doc.length, insert: "x" } });
+      vi.advanceTimersByTime(300); // posts "sx" — in flight
+      view.dispatch({ changes: { from: view.state.doc.length, insert: "y" } });
+      vi.advanceTimersByTime(300); // buffers "sxy" — pre-ack, stamped {epoch 0, gen 11}
+      expect(container?.querySelectorAll(".quoll-resync-notice").length).toBe(0);
+      // A foreign writer's bytes land: SAME generation, epoch 0→1 → the buffer is
+      // discarded rather than replayed over them.
+      deliver(
+        buildDocument({ docVersion: 2, content: "external", externalEpoch: 1, epochGeneration: 11 })
+      );
+      const shown = container?.querySelectorAll(".quoll-resync-notice");
+      expect(shown?.length).toBe(1);
+      expect(shown?.[0].textContent).toContain("discarded pending edits");
+      expect(shown?.[0].classList.contains("quoll-notice-discard")).toBe(true);
+      expect(readDoc()).toBe("external"); // external-wins, unchanged by the notice
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("notifies for input still inside the debounce window (the cancelPendingFlush capture path)", async () => {
+    // The OTHER route into the drop arm, and the one a flush-first test cannot
+    // reach: a keystroke typed <300 ms before a foreign Document arrives is
+    // captured by applyDocument's cancelPendingFlush(), stamped with the OLD
+    // identity, and then dropped on the drain. No Edit was ever posted here.
+    await mount();
+    vi.useFakeTimers();
+    try {
+      deliver(
+        buildDocument({ docVersion: 1, content: "s", externalEpoch: 0, epochGeneration: 11 })
+      );
+      const view = mountedView();
+      view.dispatch({ changes: { from: view.state.doc.length, insert: "z" } });
+      // NO timer advance — the flush is still pending.
+      deliver(
+        buildDocument({ docVersion: 2, content: "external", externalEpoch: 1, epochGeneration: 11 })
+      );
+      const shown = container?.querySelectorAll(".quoll-resync-notice");
+      expect(shown?.length).toBe(1);
+      expect(shown?.[0].textContent).toContain("discarded pending edits");
+      expect(readDoc()).toBe("external");
+      // The discarded keystroke must not be posted later either.
+      vi.advanceTimersByTime(300);
+      const posted = postMessage.mock.calls
+        .map(([m]) => m as { type?: string; content?: string })
+        .filter((m) => m.type === "edit");
+      expect(posted.some((m) => m.content === "sz")).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("aggregates a repeat discard into the notice already shown, and re-shows after dismiss", async () => {
+    await mount();
+    vi.useFakeTimers();
+    try {
+      deliver(
+        buildDocument({ docVersion: 1, content: "s", externalEpoch: 0, epochGeneration: 11 })
+      );
+      const typeTwice = (a: string, b: string): void => {
+        const view = mountedView();
+        view.dispatch({ changes: { from: view.state.doc.length, insert: a } });
+        vi.advanceTimersByTime(300); // posts — in flight
+        view.dispatch({ changes: { from: view.state.doc.length, insert: b } });
+        vi.advanceTimersByTime(300); // buffers — pre-ack
+      };
+      typeTwice("x", "y");
+      deliver(
+        buildDocument({ docVersion: 2, content: "e1", externalEpoch: 1, epochGeneration: 11 })
+      );
+      const first = container?.querySelector(".quoll-resync-notice") as HTMLElement;
+      expect(first).not.toBeNull();
+      // A SECOND discard while the notice is on screen → aggregated: SAME element.
+      // Re-rendering an identical notice would read as a new, second loss.
+      typeTwice("a", "b");
+      deliver(
+        buildDocument({ docVersion: 3, content: "e2", externalEpoch: 2, epochGeneration: 11 })
+      );
+      expect(container?.querySelectorAll(".quoll-resync-notice").length).toBe(1);
+      expect(container?.querySelector(".quoll-resync-notice")).toBe(first); // not re-created
+      // Dismiss → the slot empties; a NEW discard shows it again (no session latch).
+      (first.querySelector(".quoll-resync-notice-dismiss") as HTMLButtonElement).click();
+      expect(container?.querySelectorAll(".quoll-resync-notice").length).toBe(0);
+      typeTwice("c", "d");
+      deliver(
+        buildDocument({ docVersion: 4, content: "e3", externalEpoch: 3, epochGeneration: 11 })
+      );
+      expect(container?.querySelectorAll(".quoll-resync-notice").length).toBe(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("shows NO discard notice when a reseed discards nothing", async () => {
+    await mount();
+    deliver(buildDocument({ docVersion: 1, content: "s", externalEpoch: 0, epochGeneration: 11 }));
+    // Foreign epoch advance with NO pending local input — nothing to discard.
+    deliver(
+      buildDocument({ docVersion: 2, content: "external", externalEpoch: 1, epochGeneration: 11 })
+    );
+    await Promise.resolve();
+    expect(container?.querySelectorAll(".quoll-resync-notice").length).toBe(0);
+  });
+
+  it("never inserts the storm notice — not even transiently — when a discard coincides", async () => {
+    // Asserting only the FINAL state would pass even with the microtask deferral
+    // deleted (storm inserted, then replaced by discard). Record the mutations so
+    // a broken priority rule is actually red.
+    //
+    // ⚠️ The observer callback must ACCUMULATE: awaiting a microtask delivers the
+    // pending records to the callback and EMPTIES the queue, so a
+    // `new MutationObserver(() => {})` plus a post-await `takeRecords()` reads
+    // empty and the discard assertion below fails against a CORRECT
+    // implementation. Collect in the callback, then fold in the leftovers.
+    await mount();
+    vi.useFakeTimers();
+    try {
+      deliver(buildDocument({ docVersion: 1, content: "s", externalEpoch: 0, epochGeneration: 1 }));
+      deliver(buildDocument({ docVersion: 1, content: "s", externalEpoch: 0, epochGeneration: 2 }));
+      deliver(buildDocument({ docVersion: 1, content: "s", externalEpoch: 0, epochGeneration: 3 }));
+      const view = mountedView();
+      view.dispatch({ changes: { from: view.state.doc.length, insert: "x" } });
+      vi.advanceTimersByTime(300);
+      view.dispatch({ changes: { from: view.state.doc.length, insert: "y" } });
+      vi.advanceTimersByTime(300); // buffer held, stamped {gen 3}
+      const addedClasses: string[] = [];
+      const collect = (records: MutationRecord[]): void => {
+        for (const record of records) {
+          for (const node of Array.from(record.addedNodes)) {
+            if (node instanceof HTMLElement) {
+              addedClasses.push(node.className);
+            }
+          }
+        }
+      };
+      const observer = new MutationObserver(collect);
+      observer.observe(container as Node, { childList: true, subtree: true });
+      // The 4th transition crosses the storm threshold AND supersedes the buffer.
+      deliver(buildDocument({ docVersion: 1, content: "t", externalEpoch: 0, epochGeneration: 4 }));
+      await Promise.resolve(); // let the deferred storm render run (or decline to)
+      collect(observer.takeRecords()); // anything the callback has not drained yet
+      observer.disconnect();
+      expect(addedClasses.some((c) => c.includes("quoll-notice-storm"))).toBe(false);
+      expect(addedClasses.some((c) => c.includes("quoll-notice-discard"))).toBe(true);
+      const shown = container?.querySelectorAll(".quoll-resync-notice");
+      expect(shown?.length).toBe(1);
+      expect(shown?.[0].textContent).toContain("discarded pending edits");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not render a deferred storm notice after the shell is disposed", async () => {
+    await mount();
+    // Hold the slot itself: dispose() detaches `main`, so ANY query rooted at
+    // `container` or `document` reads 0 whether or not the guard works — that is
+    // exactly the vacuous assertion this test exists to avoid. The detached host
+    // still receives children when the guard is missing, so assert on it.
+    const host = container?.querySelector(".quoll-notice-host") as HTMLElement;
+    expect(host).not.toBeNull();
+    deliver(buildDocument({ docVersion: 1, content: "s", externalEpoch: 0, epochGeneration: 1 }));
+    deliver(buildDocument({ docVersion: 1, content: "s", externalEpoch: 0, epochGeneration: 2 }));
+    deliver(buildDocument({ docVersion: 1, content: "s", externalEpoch: 0, epochGeneration: 3 }));
+    // The 4th transition queues the deferred storm render...
+    deliver(buildDocument({ docVersion: 1, content: "s", externalEpoch: 0, epochGeneration: 4 }));
+    // ...and the webview is torn down before the microtask runs.
+    handle?.dispose();
+    handle = null; // afterEach must not dispose twice
+    await Promise.resolve();
+    expect(host.childElementCount).toBe(0);
   });
 });
 
