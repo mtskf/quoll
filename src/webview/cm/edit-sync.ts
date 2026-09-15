@@ -78,6 +78,21 @@ export type EditSyncOptions = {
    *  host repeatedly — recent keystrokes may not have been saved"). Never fired
    *  per-transition; latched after the first alarm. Defaults to a no-op. */
   onResyncStorm?: () => void;
+  /** Fired each time `replayIfNeeded` DROPS a held pre-ack replay buffer because
+   *  the host's Document lineage superseded it (a same-generation foreign epoch
+   *  advance, or an identity transition). Those bytes are gone: the reseed
+   *  transaction carries `Transaction.addToHistory.of(false)`, so Undo cannot
+   *  bring them back either. The `console.warn` beside the call is the triage
+   *  signal (lengths, lineage); this callback is the USER-visible one — the shell
+   *  renders a notice. Fired per drop, NOT latched here: "is a notice already on
+   *  screen" is only knowable on the display side, so the aggregation rule lives
+   *  in shell.ts. Zero arguments by design — the notice says the same thing
+   *  regardless of how much was lost.
+   *
+   *  CALLED AFTER the buffer is already dropped, and wrapped in a local
+   *  try/catch — see the call site for why the two halves are independent.
+   *  Defaults to a no-op. */
+  onLocalEditDiscarded?: () => void;
 };
 
 export type EditSync = {
@@ -563,6 +578,28 @@ export function createEditSync(opts: EditSyncOptions): EditSync {
         liveLength: opts.getDoc().length,
       });
       buffered = null;
+      // USER-visible counterpart to the warn above: a webview devtools console is
+      // not a signal a normal user can see, and this arm is a real content loss.
+      // TWO INDEPENDENT properties hold here, each answering a different failure:
+      //   - The POSITION (after `buffered = null`) answers RE-ENTRANCY. A
+      //     notifier that synchronously re-enters the drain — the shell's
+      //     dispatch wrapper can — would otherwise find the same buffer still
+      //     held and announce the same bytes a second time. Settling the state
+      //     first makes the drop unobservable to whatever the notifier does next.
+      //   - The LOCAL CATCH answers EXCEPTION ESCAPE. The drain runs inside the
+      //     shell's dispatch chain, whose contract is that a committed transition
+      //     does not throw (shell.ts's dispatch doc). A failed NOTICE must not
+      //     take the editor's sync loop down with it, so it degrades to a logged
+      //     error.
+      // Neither subsumes the other: with the catch alone a re-entrant notifier
+      // still double-fires, and with the ordering alone a DOM exception still
+      // escapes into the dispatch chain. Both are pinned in cm-edit-sync.test.ts
+      // ("RE-ENTRANT notifier" / "THROWING notifier").
+      try {
+        opts.onLocalEditDiscarded?.();
+      } catch (err) {
+        console.error("[quoll] onLocalEditDiscarded threw", err);
+      }
     }
     if (buffered === null || !seeded || editInFlight || !canWrite || !canPost()) {
       return;
