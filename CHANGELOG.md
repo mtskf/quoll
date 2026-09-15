@@ -2,6 +2,16 @@
 
 All notable changes to Quoll are documented here.
 
+## 0.1.79 — 2026-09-15
+
+### Fixed
+
+- Keystrokes typed while a save was still in flight are no longer lost when something else writes the same file with byte-identical content. They used to stay on screen as though saved, disappear when the file was closed, and could reappear later as outdated text.
+- After an unexpected internal error during a save, Quoll no longer stops saving for the rest of the session. Every later edit used to be held back with nothing left to release it; the editor now recovers, tells you what happened, and accepts the next edit.
+- When a save fails, the text the failure message asks you to retry is no longer at risk of being discarded from the editor before you can retry it.
+- A pending switch to the plain text editor, or a pending cursor handoff, no longer waits forever when the save it was queued behind fails unexpectedly — it is released so you can trigger it again.
+- The message shown after a failed save now distinguishes an edit that really was lost from one the editor still holds, and tells you what to do in each case.
+
 ## 0.1.78 — 2026-09-09
 
 ### Fixed
