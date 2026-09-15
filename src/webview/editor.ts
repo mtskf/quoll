@@ -124,6 +124,11 @@ export type EditorOptions = {
    *  The shell wires it to a low-alarm user-visible notice. Passed straight
    *  through to edit-sync's `onResyncStorm`. */
   onResyncStorm?: () => void;
+  /** Fired each time edit-sync discards a held pre-ack replay buffer whose
+   *  lineage the host superseded. The shell wires it to a user-visible notice
+   *  (edit-sync's console.warn is devtools-only, which is no signal for a normal
+   *  user). Passed straight through to edit-sync's `onLocalEditDiscarded`. */
+  onLocalEditDiscarded?: () => void;
 };
 
 export type EditorHandle = {
@@ -308,6 +313,7 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
     canPost: () => canPostEdit(opts.getState()),
     post: (content, baseDocVersion) => postEditMessage(opts.dispatch, content, baseDocVersion),
     onResyncStorm: opts.onResyncStorm,
+    onLocalEditDiscarded: opts.onLocalEditDiscarded,
   });
 
   const imagePaste = createImagePasteDrop({
