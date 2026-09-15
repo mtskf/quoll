@@ -332,6 +332,101 @@ describe("editor — ok-ack while ahead does not reseed backwards (d2)", () => {
   });
 });
 
+// (d3) The ok-ack fold must ALSO require identity-lineage continuity, not just
+// a content match. A host Document whose content happens to equal our in-flight
+// bytes but which arrives on a DIFFERENT lineage (same-generation epoch advance,
+// or a new epochGeneration) is a foreign snapshot, not our ack: edit-sync's
+// replay buffer is dropped for exactly that pair (shouldDropBufferedForEpoch),
+// so folding the visible reseed away would strand the user's ahead-of-host
+// keystrokes on screen with nothing left to post them — they look saved, are
+// not, and resurface on the NEXT keystroke as bytes the host already superseded
+// (external-wins — NOT an `edit-rejected`; no banner is involved).
+// Display and replay must agree on one rule; see ARCHITECTURE.md §3/§5/§7.
+describe("editor — ok-ack fold requires identity-lineage continuity (d3)", () => {
+  // Types "2" (posted) then "3" (buffered) on top of a "D1" seed carrying the
+  // given identity pair, leaving the editor AHEAD of the in-flight "D12".
+  function seedAndRunAhead(handle: EditorHandle, view: EditorView, epoch: number, gen: number) {
+    handle.applyDocument("D1", true, 1, epoch, gen);
+    view.dispatch({ changes: { from: view.state.doc.length, insert: "2" } });
+    vi.advanceTimersByTime(300); // posts "D12" — in flight
+    view.dispatch({ changes: { from: view.state.doc.length, insert: "3" } });
+    vi.advanceTimersByTime(300); // buffers "D123" (single-flight)
+    expect(editPosts()).toHaveLength(1);
+    expect(view.state.sliceDoc()).toBe("D123");
+  }
+
+  it("a content-equal Document on a same-generation EPOCH ADVANCE reseeds instead of folding", () => {
+    // Revert-check: drop the lineage conjunct from foldsOkAck → this reds
+    // (the doc keeps the unsavable "D123").
+    vi.useFakeTimers();
+    const { handle, view, commit } = mount();
+    seedAndRunAhead(handle, view, 0, 11);
+    // Another writer produced the same "D12" bytes → epoch 0→1, same generation.
+    // Content matches our in-flight edit, but it is NOT our ack.
+    handle.applyDocument("D12", true, 2, 1, 11);
+    expect(view.state.sliceDoc()).toBe("D12"); // reseeded to the host's bytes
+    // The drain drops the stale-lineage buffer, so nothing replays "D123".
+    commit(false);
+    expect(editPosts()).toHaveLength(1);
+  });
+
+  it("the discarded keystroke does not resurface on the next input after an epoch advance", () => {
+    // The display/replay agreement is what makes this hold: because the reseed
+    // ran, the next Edit is built off the host's "D12", not a live buffer still
+    // carrying the dropped "3".
+    vi.useFakeTimers();
+    const { handle, view, commit } = mount();
+    seedAndRunAhead(handle, view, 0, 11);
+    handle.applyDocument("D12", true, 2, 1, 11);
+    commit(false); // buffer dropped — no replay
+    view.dispatch({ changes: { from: view.state.doc.length, insert: "4" } });
+    vi.advanceTimersByTime(300);
+    const contents = editPosts().map((m) => (m as { content: string }).content);
+    expect(contents).toContain("D124");
+    expect(contents).not.toContain("D1234"); // the dropped "3" stays dropped
+    expect(contents).not.toContain("D123");
+  });
+
+  it("a content-equal Document on a NEW GENERATION reseeds instead of folding", () => {
+    vi.useFakeTimers();
+    const { handle, view, commit } = mount();
+    seedAndRunAhead(handle, view, 0, 11);
+    // Host restarted: fresh generation, epoch back at 0. Identity transition.
+    handle.applyDocument("D12", true, 1, 0, 22);
+    expect(view.state.sliceDoc()).toBe("D12");
+    // ...and the stale-lineage buffer is dropped with it, so nothing replays
+    // "D123" over the new host session. Asserting BOTH halves is the point:
+    // display (the reseed) and replay (the drop) must agree on one rule, and
+    // a test that stops at sliceDoc() pins only the display half.
+    commit(false);
+    expect(editPosts()).toHaveLength(1);
+  });
+
+  it("a content-equal Document that DROPS the pair (legacy host) reseeds instead of folding", () => {
+    vi.useFakeTimers();
+    const { handle, view, commit } = mount();
+    seedAndRunAhead(handle, view, 0, 11);
+    // present→absent is an identity transition too (edit-sync drops the buffer).
+    handle.applyDocument("D12", true, 2);
+    expect(view.state.sliceDoc()).toBe("D12");
+    commit(false);
+    expect(editPosts()).toHaveLength(1);
+  });
+
+  it("a normal SAME-LINEAGE ack still folds and keeps the ahead keystrokes", () => {
+    // The own-edit ack never bumps the epoch (host-session-core), so the fold
+    // path — the whole point of (d2) — must survive the new conjunct.
+    vi.useFakeTimers();
+    const { handle, view, commit } = mount();
+    seedAndRunAhead(handle, view, 0, 11);
+    handle.applyDocument("D12", true, 2, 0, 11);
+    expect(view.state.sliceDoc()).toBe("D123"); // no visible rewind
+    commit(false);
+    expect(editPosts()).toHaveLength(2);
+    expect((editPosts()[1] as { content: string }).content).toBe("D123");
+  });
+});
+
 // (e) CRLF round-trip — uniform CRLF + LF round-trip + DEFENSIVE mixed/CR-only
 // seam normalization. The host seeds canonicalDocumentText(document) (see
 // document-canonical.ts), so these raw mixed/CR-only inputs never reach the

@@ -361,7 +361,7 @@ describe("cm edit-sync", () => {
   });
 });
 
-describe("cm edit-sync — echoesInFlightEdit", () => {
+describe("cm edit-sync — acksInFlightEdit", () => {
   const ack = (s: ReturnType<typeof setup>, v: number, canWrite = true) => {
     s.sync.onHostSnapshot(v, canWrite);
     s.sync.onReducerCommit(false);
@@ -370,25 +370,25 @@ describe("cm edit-sync — echoesInFlightEdit", () => {
   it("is false before anything is posted", () => {
     const s = setup();
     s.sync.onHostSnapshot(1, true);
-    expect(s.sync.echoesInFlightEdit("hello")).toBe(false);
+    expect(s.sync.acksInFlightEdit("hello", undefined, undefined)).toBe(false);
   });
 
   it("is true for the exact bytes of the Edit currently in flight", () => {
     const s = setup();
     s.sync.onHostSnapshot(1, true);
     s.type("hello world"); // posts, editInFlight = true
-    expect(s.sync.echoesInFlightEdit("hello world")).toBe(true);
+    expect(s.sync.acksInFlightEdit("hello world", undefined, undefined)).toBe(true);
     // A different string (a genuine external divergence) never matches.
-    expect(s.sync.echoesInFlightEdit("something else")).toBe(false);
+    expect(s.sync.acksInFlightEdit("something else", undefined, undefined)).toBe(false);
   });
 
   it("clears when the reducer commit acks the in-flight Edit", () => {
     const s = setup();
     s.sync.onHostSnapshot(1, true);
     s.type("a"); // posts, editInFlight = true
-    expect(s.sync.echoesInFlightEdit("a")).toBe(true);
+    expect(s.sync.acksInFlightEdit("a", undefined, undefined)).toBe(true);
     ack(s, 2); // ack clears editInFlight
-    expect(s.sync.echoesInFlightEdit("a")).toBe(false);
+    expect(s.sync.acksInFlightEdit("a", undefined, undefined)).toBe(false);
   });
 
   it("tracks the newest in-flight bytes across a buffered replay", () => {
@@ -396,10 +396,10 @@ describe("cm edit-sync — echoesInFlightEdit", () => {
     s.sync.onHostSnapshot(1, true);
     s.type("a"); // posts "a", editInFlight = true
     s.type("ab"); // buffered while in flight
-    expect(s.sync.echoesInFlightEdit("a")).toBe(true); // still "a" in flight
+    expect(s.sync.acksInFlightEdit("a", undefined, undefined)).toBe(true); // still "a" in flight
     ack(s, 2); // ack "a" → replay drains "ab" → "ab" now in flight
-    expect(s.sync.echoesInFlightEdit("ab")).toBe(true);
-    expect(s.sync.echoesInFlightEdit("a")).toBe(false);
+    expect(s.sync.acksInFlightEdit("ab", undefined, undefined)).toBe(true);
+    expect(s.sync.acksInFlightEdit("a", undefined, undefined)).toBe(false);
   });
 
   it("clears when a post fails (no phantom in-flight echo)", () => {
@@ -407,7 +407,116 @@ describe("cm edit-sync — echoesInFlightEdit", () => {
     s.sync.onHostSnapshot(1, true);
     s.setPostOk(false);
     s.type("x"); // post returns false → not in flight
-    expect(s.sync.echoesInFlightEdit("x")).toBe(false);
+    expect(s.sync.acksInFlightEdit("x", undefined, undefined)).toBe(false);
+  });
+
+  // The identity-lineage conjunct. Content equality alone does not make a
+  // Document ours: another writer can land byte-identical bytes, and the host
+  // reports that as a foreign epoch advance (or a new generation after a host
+  // restart). These cases MUST agree with shouldDropBufferedForEpoch — the two
+  // read the same `supersedesIdentity` rule so the reseed path never folds a
+  // Document whose replay buffer is about to be dropped.
+  // Revert-check: delete the `!supersedesIdentity(...)` conjunct → every
+  // `toBe(false)` expectation BELOW THIS COMMENT goes red — 6 expectations
+  // spread across 5 of the `it` blocks that follow (the earlier `toBe(false)`
+  // cases in this describe test the content conjunct instead, and the
+  // epoch-REGRESSION case below expects `toBe(true)`; both stay green).
+  // Measured, not derived: within THIS file the mutation reds exactly those 5
+  // tests. It also reds the display-side pins that read the same conjunct
+  // through foldsOkAck — editor.test.ts's (d3) block (4) and shell.test.ts's
+  // "forwards the Document's externalEpoch VALUE" (1), 10 in total — which is
+  // the point: display and replay share one rule.
+  it("is false when a content-equal Document advances the epoch in the same generation", () => {
+    const s = setup();
+    s.sync.onHostSnapshot(1, true, 0, 11);
+    s.type("hello world");
+    expect(s.sync.acksInFlightEdit("hello world", 0, 11)).toBe(true); // our lineage
+    expect(s.sync.acksInFlightEdit("hello world", 1, 11)).toBe(false); // foreign bytes
+  });
+
+  it("is true when a content-equal Document's epoch sits BEHIND ours in the same generation", () => {
+    const s = setup();
+    s.sync.onHostSnapshot(1, true, 5, 11);
+    s.type("hello world");
+    // Same generation, epoch 5 → 3. A within-generation regression is not a
+    // foreign advance, so our lineage continues and the ok-ack still folds.
+    // This is the arm that separates supersedesIdentity's `>` from `!==`; the
+    // EQUAL cases elsewhere in this describe (epoch 0 → 0, 3 → 3) separate it
+    // from `>=`, so between them the comparison is pinned from both sides.
+    expect(s.sync.acksInFlightEdit("hello world", 3, 11)).toBe(true);
+  });
+
+  it("is false when a content-equal Document arrives on a new generation", () => {
+    const s = setup();
+    s.sync.onHostSnapshot(1, true, 3, 11);
+    s.type("hello world");
+    // A host restart mints a fresh generation and restarts the epoch at 0 —
+    // magnitude is meaningless across generations, so even a LOWER epoch is a
+    // transition, not an ack.
+    expect(s.sync.acksInFlightEdit("hello world", 0, 22)).toBe(false);
+    expect(s.sync.acksInFlightEdit("hello world", 3, 11)).toBe(true);
+  });
+
+  it("is false on either half of a present/absent pair mismatch", () => {
+    const withPair = setup();
+    withPair.sync.onHostSnapshot(1, true, 0, 11);
+    withPair.type("hello world");
+    // present→absent (a legacy host took over).
+    expect(withPair.sync.acksInFlightEdit("hello world", undefined, undefined)).toBe(false);
+
+    const legacy = setup();
+    legacy.sync.onHostSnapshot(1, true); // no pair recorded
+    legacy.type("hello world");
+    // absent→present (a pair-emitting host took over).
+    expect(legacy.sync.acksInFlightEdit("hello world", 0, 11)).toBe(false);
+    // absent→absent stays the legacy unconditional-fold behaviour.
+    expect(legacy.sync.acksInFlightEdit("hello world", undefined, undefined)).toBe(true);
+  });
+
+  it("agrees with the replay-buffer drop rule on the same Document", () => {
+    // Non-vacuity for the shared-rule claim: for a same-generation epoch
+    // advance, the fold is refused AND the buffer is dropped; for the
+    // unchanged pair, the fold is allowed AND the buffer replays.
+    const advanced = setup();
+    advanced.sync.onHostSnapshot(1, true, 0, 11);
+    advanced.type("a"); // posts "a"
+    advanced.type("ab"); // buffered behind it, stamped at epoch 0
+    expect(advanced.sync.acksInFlightEdit("a", 1, 11)).toBe(false);
+    advanced.sync.onHostSnapshot(2, true, 1, 11);
+    advanced.sync.onReducerCommit(false);
+    expect(advanced.posted.map((p) => p.content)).toEqual(["a"]); // "ab" dropped
+
+    const same = setup();
+    same.sync.onHostSnapshot(1, true, 0, 11);
+    same.type("a");
+    same.type("ab");
+    expect(same.sync.acksInFlightEdit("a", 0, 11)).toBe(true);
+    same.sync.onHostSnapshot(2, true, 0, 11);
+    same.sync.onReducerCommit(false);
+    expect(same.posted.map((p) => p.content)).toEqual(["a", "ab"]); // replayed
+  });
+
+  it("agrees with the drop rule even when the buffer's stamp lags the recorded pair", () => {
+    // DELIBERATELY the reverse of production's call order: applyDocument asks
+    // acksInFlightEdit FIRST and only then calls onHostSnapshot, so today the
+    // held buffer's stamp always equals the recorded pair and this state is
+    // unreachable. Recording the snapshot first is how the test MANUFACTURES the
+    // divergence — a buffer stamped one epoch behind what the host has since
+    // recorded — because that divergence is exactly what the fold must survive:
+    // display and replay have to reach the same verdict from the stamp, not from
+    // the "stamp === recorded" invariant (which holds only while every accepted
+    // Document is followed by a drain). Do not "fix" the order back.
+    const lagged = setup();
+    lagged.sync.onHostSnapshot(1, true, 0, 11);
+    lagged.type("a"); // posts "a", in flight
+    lagged.type("ab"); // buffered behind it, stamped at epoch 0
+    lagged.sync.onHostSnapshot(2, true, 1, 11); // recorded advances; no drain yet
+    // The buffer is now doomed (its stamp lost the epoch race), so the display
+    // must NOT fold this Document away as our ack even though the recorded pair
+    // alone would call it our own lineage.
+    expect(lagged.sync.acksInFlightEdit("a", 1, 11)).toBe(false);
+    lagged.sync.onReducerCommit(false);
+    expect(lagged.posted.map((p) => p.content)).toEqual(["a"]); // "ab" dropped
   });
 });
 
@@ -731,13 +840,13 @@ describe("cm edit-sync — flush (teardown)", () => {
     }
   });
 
-  it("echoesInFlightEdit recognises the force-posted content after an idle flush (alive hide→show)", () => {
+  it("acksInFlightEdit recognises the force-posted content after an idle flush (alive hide→show)", () => {
     // flush()'s success branch sets inFlightContent so a subsequent ok-ack that
     // echoes the force-posted bytes is recognised as an echo (and folded by
     // applyDocument) rather than reseeding backwards — the same protection
     // trySend/replayIfNeeded give, but reached through the teardown/hide path.
     // Revert-check: delete `inFlightContent = content;` from flush's ok branch →
-    // this test goes red (echoesInFlightEdit returns false).
+    // this test goes red (acksInFlightEdit returns false).
     vi.useFakeTimers();
     try {
       let doc = "seed";
@@ -749,7 +858,7 @@ describe("cm edit-sync — flush (teardown)", () => {
       doc = "seed+edit";
       sync.onLocalChange(); // timer pending, idle (no prior in-flight)
       sync.flush(); // force-posts "seed+edit"; must record it as in-flight
-      expect(sync.echoesInFlightEdit("seed+edit")).toBe(true);
+      expect(sync.acksInFlightEdit("seed+edit", undefined, undefined)).toBe(true);
     } finally {
       vi.useRealTimers();
     }
@@ -880,6 +989,19 @@ describe("cm edit-sync — recordedIdentity", () => {
   it("records null for an omitted pair (old-host tolerance)", () => {
     const s = setup();
     s.sync.onHostSnapshot(1, true); // legacy host: no pair
+    expect(s.sync.recordedIdentity()).toEqual({ epoch: null, generation: null });
+  });
+
+  it("records a PARTIAL pair as fully absent, like the incoming path normalizes it", () => {
+    // The wire pair is exclusive (protocol.ts's validator drops a half-pair), so
+    // this is defence in depth, not a reachable message. It matters because
+    // presence is read off `generation` alone: recording {epoch: 5, generation:
+    // null} verbatim would leave the epoch live in comparisons while the pair
+    // counted as absent — a state no incoming Document can be in, since
+    // incomingIdentity() normalizes the same shape to both-absent. ONE
+    // constructor, so the recorded and incoming sides cannot disagree.
+    const s = setup();
+    s.sync.onHostSnapshot(1, true, 5); // epoch without a generation
     expect(s.sync.recordedIdentity()).toEqual({ epoch: null, generation: null });
   });
 
@@ -1265,6 +1387,53 @@ describe("cm edit-sync — readonly hard drops are traced", () => {
         ],
       ]);
       expectNoContentLeak(warn);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+});
+
+// The module's OTHER content-discarding path: replayIfNeeded drops a held buffer
+// whose stamped lineage the host has moved past. Like the readonly hard drops it
+// destroys bytes the user typed, so its trace must say HOW MUCH was lost — not
+// only which lineage lost it — while never putting the bytes themselves in the
+// console.
+describe("cm edit-sync — stale-buffer drops are traced", () => {
+  const SECRET = "SECRET-BYTES"; // 12 chars
+  type WarnSpy = MockInstance<typeof console.warn>;
+  const warnArgs = (spy: WarnSpy) =>
+    spy.mock.calls.filter((c) => String(c[0]).includes("stale replay buffer"));
+
+  it("reports the dropped and live lengths (not the bytes) when a foreign epoch lands", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const s = setup();
+      s.sync.onHostSnapshot(1, true, 0, 11); // seed on generation 11, epoch 0
+      s.type(SECRET); // posts at v1, editInFlight = true
+      s.type(`${SECRET}x`); // single-flight: buffered (len 13), stamped at epoch 0
+      expect(s.posted.length).toBe(1);
+      // Stand in for the reseed the foreign Document triggers (editor.ts owns
+      // that): the live doc becomes the host's bytes while the buffer still
+      // holds the user's ahead-of-host ones — the state where the two lengths
+      // genuinely disagree, so neither number can stand for the other.
+      s.setDoc("hi"); // len 2
+      s.sync.onHostSnapshot(2, true, 1, 11); // same generation, epoch advanced
+      s.sync.onReducerCommit(false); // drain → the stale buffer is dropped
+      expect(s.posted.length).toBe(1); // nothing replayed over the foreign bytes
+      expect(warnArgs(warn)).toEqual([
+        [
+          expect.stringContaining("stale replay buffer"),
+          {
+            stampGeneration: 11,
+            stampEpoch: 0,
+            recordedGeneration: 11,
+            recordedEpoch: 1,
+            droppedLength: SECRET.length + 1,
+            liveLength: 2,
+          },
+        ],
+      ]);
+      expect(JSON.stringify(warnArgs(warn))).not.toContain(SECRET);
     } finally {
       warn.mockRestore();
     }

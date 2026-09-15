@@ -208,6 +208,53 @@ describe("shell — S3b epoch-bounded acceptance ordering", () => {
     deliver(buildDocument({ docVersion: 1, content: "s", externalEpoch: 0, epochGeneration: 2 }));
     expect(container?.querySelectorAll(".quoll-resync-notice").length).toBe(0);
   });
+
+  it("forwards the Document's externalEpoch VALUE, not just its presence", async () => {
+    // Pins the wire→applyDocument 4th argument (externalEpoch) BY VALUE. Every
+    // other `externalEpoch` field in this file is inert with respect to that
+    // argument: those cases turn on a generation change (isIdentityTransition
+    // reads generation only) or on docVersion ordering, so the epoch value could
+    // be forwarded as a constant and they would all stay green. S3b's foldsOkAck
+    // (the display path) is the first reader of the epoch VALUE, which is what
+    // makes the gap load-bearing — hence a fold-refusal is the probe.
+    // Revert-check: pin shell.ts's applyDocument `externalEpoch` argument (the
+    // 4th) to a constant 0 → the incoming epoch matches the recorded one on the
+    // same generation, the ok-ack folds, and the doc keeps "sxy" instead of
+    // reseeding to "sx".
+    await mount();
+    vi.useFakeTimers();
+    try {
+      deliver(
+        buildDocument({
+          docVersion: 1,
+          content: "s",
+          canWrite: true,
+          externalEpoch: 0,
+          epochGeneration: 11,
+        })
+      );
+      const view = mountedView();
+      view.dispatch({ changes: { from: view.state.doc.length, insert: "x" } });
+      vi.advanceTimersByTime(300); // posts "sx" — in flight
+      view.dispatch({ changes: { from: view.state.doc.length, insert: "y" } });
+      vi.advanceTimersByTime(300); // buffers "sxy" — the editor is AHEAD
+      expect(readDoc()).toBe("sxy");
+      // Another writer produced byte-identical "sx": SAME generation, epoch 0→1.
+      // Content-equal but foreign, so it is a reseed, not our ack.
+      deliver(
+        buildDocument({
+          docVersion: 2,
+          content: "sx",
+          canWrite: true,
+          externalEpoch: 1,
+          epochGeneration: 11,
+        })
+      );
+      expect(readDoc()).toBe("sx");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
 
 describe("shell — theme toggles <html> classList", () => {
