@@ -339,7 +339,8 @@ describe("editor — ok-ack while ahead does not reseed backwards (d2)", () => {
 // replay buffer is dropped for exactly that pair (shouldDropBufferedForEpoch),
 // so folding the visible reseed away would strand the user's ahead-of-host
 // keystrokes on screen with nothing left to post them — they look saved, are
-// not, and resurface on the NEXT keystroke as bytes the host already rejected.
+// not, and resurface on the NEXT keystroke as bytes the host already superseded
+// (external-wins — NOT an `edit-rejected`; no banner is involved).
 // Display and replay must agree on one rule; see ARCHITECTURE.md §3/§5/§7.
 describe("editor — ok-ack fold requires identity-lineage continuity (d3)", () => {
   // Types "2" (posted) then "3" (buffered) on top of a "D1" seed carrying the
@@ -388,20 +389,28 @@ describe("editor — ok-ack fold requires identity-lineage continuity (d3)", () 
 
   it("a content-equal Document on a NEW GENERATION reseeds instead of folding", () => {
     vi.useFakeTimers();
-    const { handle, view } = mount();
+    const { handle, view, commit } = mount();
     seedAndRunAhead(handle, view, 0, 11);
     // Host restarted: fresh generation, epoch back at 0. Identity transition.
     handle.applyDocument("D12", true, 1, 0, 22);
     expect(view.state.sliceDoc()).toBe("D12");
+    // ...and the stale-lineage buffer is dropped with it, so nothing replays
+    // "D123" over the new host session. Asserting BOTH halves is the point:
+    // display (the reseed) and replay (the drop) must agree on one rule, and
+    // a test that stops at sliceDoc() pins only the display half.
+    commit(false);
+    expect(editPosts()).toHaveLength(1);
   });
 
   it("a content-equal Document that DROPS the pair (legacy host) reseeds instead of folding", () => {
     vi.useFakeTimers();
-    const { handle, view } = mount();
+    const { handle, view, commit } = mount();
     seedAndRunAhead(handle, view, 0, 11);
     // present→absent is an identity transition too (edit-sync drops the buffer).
     handle.applyDocument("D12", true, 2);
     expect(view.state.sliceDoc()).toBe("D12");
+    commit(false);
+    expect(editPosts()).toHaveLength(1);
   });
 
   it("a normal SAME-LINEAGE ack still folds and keeps the ahead keystrokes", () => {
