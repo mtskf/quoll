@@ -416,8 +416,11 @@ describe("cm edit-sync — acksInFlightEdit", () => {
   // restart). These cases MUST agree with shouldDropBufferedForEpoch — the two
   // read the same `supersedesIdentity` rule so the reseed path never folds a
   // Document whose replay buffer is about to be dropped.
-  // Revert-check: delete the `!supersedesIdentity(...)` conjunct → the four
-  // false-expectations below go red.
+  // Revert-check: delete the `!supersedesIdentity(...)` conjunct → every
+  // `toBe(false)` expectation BELOW THIS COMMENT goes red — 6 expectations
+  // spread across the 5 `it` blocks that follow (the earlier `toBe(false)`
+  // cases in this describe test the content conjunct instead, and stay green).
+  // Measured, not derived: the mutation reds exactly those 5 tests.
   it("is false when a content-equal Document advances the epoch in the same generation", () => {
     const s = setup();
     s.sync.onHostSnapshot(1, true, 0, 11);
@@ -474,6 +477,29 @@ describe("cm edit-sync — acksInFlightEdit", () => {
     same.sync.onHostSnapshot(2, true, 0, 11);
     same.sync.onReducerCommit(false);
     expect(same.posted.map((p) => p.content)).toEqual(["a", "ab"]); // replayed
+  });
+
+  it("agrees with the drop rule even when the buffer's stamp lags the recorded pair", () => {
+    // DELIBERATELY the reverse of production's call order: applyDocument asks
+    // acksInFlightEdit FIRST and only then calls onHostSnapshot, so today the
+    // held buffer's stamp always equals the recorded pair and this state is
+    // unreachable. Recording the snapshot first is how the test MANUFACTURES the
+    // divergence — a buffer stamped one epoch behind what the host has since
+    // recorded — because that divergence is exactly what the fold must survive:
+    // display and replay have to reach the same verdict from the stamp, not from
+    // the "stamp === recorded" invariant (which holds only while every accepted
+    // Document is followed by a drain). Do not "fix" the order back.
+    const lagged = setup();
+    lagged.sync.onHostSnapshot(1, true, 0, 11);
+    lagged.type("a"); // posts "a", in flight
+    lagged.type("ab"); // buffered behind it, stamped at epoch 0
+    lagged.sync.onHostSnapshot(2, true, 1, 11); // recorded advances; no drain yet
+    // The buffer is now doomed (its stamp lost the epoch race), so the display
+    // must NOT fold this Document away as our ack even though the recorded pair
+    // alone would call it our own lineage.
+    expect(lagged.sync.acksInFlightEdit("a", 1, 11)).toBe(false);
+    lagged.sync.onReducerCommit(false);
+    expect(lagged.posted.map((p) => p.content)).toEqual(["a"]); // "ab" dropped
   });
 });
 
@@ -949,6 +975,19 @@ describe("cm edit-sync — recordedIdentity", () => {
     expect(s.sync.recordedIdentity()).toEqual({ epoch: null, generation: null });
   });
 
+  it("records a PARTIAL pair as fully absent, like the incoming path normalizes it", () => {
+    // The wire pair is exclusive (protocol.ts's validator drops a half-pair), so
+    // this is defence in depth, not a reachable message. It matters because
+    // presence is read off `generation` alone: recording {epoch: 5, generation:
+    // null} verbatim would leave the epoch live in comparisons while the pair
+    // counted as absent — a state no incoming Document can be in, since
+    // incomingIdentity() normalizes the same shape to both-absent. ONE
+    // constructor, so the recorded and incoming sides cannot disagree.
+    const s = setup();
+    s.sync.onHostSnapshot(1, true, 5); // epoch without a generation
+    expect(s.sync.recordedIdentity()).toEqual({ epoch: null, generation: null });
+  });
+
   it("updates the recorded pair on each accepted snapshot", () => {
     const s = setup();
     s.sync.onHostSnapshot(1, true, 0, 999);
@@ -1331,6 +1370,53 @@ describe("cm edit-sync — readonly hard drops are traced", () => {
         ],
       ]);
       expectNoContentLeak(warn);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+});
+
+// The module's OTHER content-discarding path: replayIfNeeded drops a held buffer
+// whose stamped lineage the host has moved past. Like the readonly hard drops it
+// destroys bytes the user typed, so its trace must say HOW MUCH was lost — not
+// only which lineage lost it — while never putting the bytes themselves in the
+// console.
+describe("cm edit-sync — stale-buffer drops are traced", () => {
+  const SECRET = "SECRET-BYTES"; // 12 chars
+  type WarnSpy = MockInstance<typeof console.warn>;
+  const warnArgs = (spy: WarnSpy) =>
+    spy.mock.calls.filter((c) => String(c[0]).includes("stale replay buffer"));
+
+  it("reports the dropped and live lengths (not the bytes) when a foreign epoch lands", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const s = setup();
+      s.sync.onHostSnapshot(1, true, 0, 11); // seed on generation 11, epoch 0
+      s.type(SECRET); // posts at v1, editInFlight = true
+      s.type(`${SECRET}x`); // single-flight: buffered (len 13), stamped at epoch 0
+      expect(s.posted.length).toBe(1);
+      // Stand in for the reseed the foreign Document triggers (editor.ts owns
+      // that): the live doc becomes the host's bytes while the buffer still
+      // holds the user's ahead-of-host ones — the state where the two lengths
+      // genuinely disagree, so neither number can stand for the other.
+      s.setDoc("hi"); // len 2
+      s.sync.onHostSnapshot(2, true, 1, 11); // same generation, epoch advanced
+      s.sync.onReducerCommit(false); // drain → the stale buffer is dropped
+      expect(s.posted.length).toBe(1); // nothing replayed over the foreign bytes
+      expect(warnArgs(warn)).toEqual([
+        [
+          expect.stringContaining("stale replay buffer"),
+          {
+            stampGeneration: 11,
+            stampEpoch: 0,
+            recordedGeneration: 11,
+            recordedEpoch: 1,
+            droppedLength: SECRET.length + 1,
+            liveLength: 2,
+          },
+        ],
+      ]);
+      expect(JSON.stringify(warnArgs(warn))).not.toContain(SECRET);
     } finally {
       warn.mockRestore();
     }
