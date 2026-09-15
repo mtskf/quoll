@@ -418,15 +418,32 @@ describe("cm edit-sync — acksInFlightEdit", () => {
   // Document whose replay buffer is about to be dropped.
   // Revert-check: delete the `!supersedesIdentity(...)` conjunct → every
   // `toBe(false)` expectation BELOW THIS COMMENT goes red — 6 expectations
-  // spread across the 5 `it` blocks that follow (the earlier `toBe(false)`
-  // cases in this describe test the content conjunct instead, and stay green).
-  // Measured, not derived: the mutation reds exactly those 5 tests.
+  // spread across 5 of the `it` blocks that follow (the earlier `toBe(false)`
+  // cases in this describe test the content conjunct instead, and the
+  // epoch-REGRESSION case below expects `toBe(true)`; both stay green).
+  // Measured, not derived: within THIS file the mutation reds exactly those 5
+  // tests. It also reds the display-side pins that read the same conjunct
+  // through foldsOkAck — editor.test.ts's (d3) block (4) and shell.test.ts's
+  // "forwards the Document's externalEpoch VALUE" (1), 10 in total — which is
+  // the point: display and replay share one rule.
   it("is false when a content-equal Document advances the epoch in the same generation", () => {
     const s = setup();
     s.sync.onHostSnapshot(1, true, 0, 11);
     s.type("hello world");
     expect(s.sync.acksInFlightEdit("hello world", 0, 11)).toBe(true); // our lineage
     expect(s.sync.acksInFlightEdit("hello world", 1, 11)).toBe(false); // foreign bytes
+  });
+
+  it("is true when a content-equal Document's epoch sits BEHIND ours in the same generation", () => {
+    const s = setup();
+    s.sync.onHostSnapshot(1, true, 5, 11);
+    s.type("hello world");
+    // Same generation, epoch 5 → 3. A within-generation regression is not a
+    // foreign advance, so our lineage continues and the ok-ack still folds.
+    // This is the arm that separates supersedesIdentity's `>` from `!==`; the
+    // EQUAL cases elsewhere in this describe (epoch 0 → 0, 3 → 3) separate it
+    // from `>=`, so between them the comparison is pinned from both sides.
+    expect(s.sync.acksInFlightEdit("hello world", 3, 11)).toBe(true);
   });
 
   it("is false when a content-equal Document arrives on a new generation", () => {

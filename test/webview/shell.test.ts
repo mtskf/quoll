@@ -210,16 +210,17 @@ describe("shell — S3b epoch-bounded acceptance ordering", () => {
   });
 
   it("forwards the Document's externalEpoch VALUE, not just its presence", async () => {
-    // Pins the wire→applyDocument 5th argument BY VALUE. Every other
-    // `externalEpoch` field in this file is inert with respect to that argument:
-    // those cases turn on a generation change (isIdentityTransition reads
-    // generation only) or on docVersion ordering, so the epoch value could be
-    // forwarded as a constant and they would all stay green. S3b's foldsOkAck
+    // Pins the wire→applyDocument 4th argument (externalEpoch) BY VALUE. Every
+    // other `externalEpoch` field in this file is inert with respect to that
+    // argument: those cases turn on a generation change (isIdentityTransition
+    // reads generation only) or on docVersion ordering, so the epoch value could
+    // be forwarded as a constant and they would all stay green. S3b's foldsOkAck
     // (the display path) is the first reader of the epoch VALUE, which is what
     // makes the gap load-bearing — hence a fold-refusal is the probe.
-    // Revert-check: pin shell.ts's applyDocument 5th argument to a constant 0 →
-    // the incoming epoch matches the recorded one on the same generation, the
-    // ok-ack folds, and the doc keeps "sxy" instead of reseeding to "sx".
+    // Revert-check: pin shell.ts's applyDocument `externalEpoch` argument (the
+    // 4th) to a constant 0 → the incoming epoch matches the recorded one on the
+    // same generation, the ok-ack folds, and the doc keeps "sxy" instead of
+    // reseeding to "sx".
     await mount();
     vi.useFakeTimers();
     try {

@@ -47,8 +47,13 @@ type BufferedEdit = DocumentIdentity & { content: string };
 /** A Document's (externalEpoch, epochGeneration) pair in edit-sync's internal
  *  form. The wire pair is EXCLUSIVE (both present or both absent — validator-
  *  authoritative, see protocol.ts); absence is carried as `null` on BOTH fields
- *  so a single comparison rule can read stamps and incoming Documents alike. */
-type DocumentIdentity = { epoch: number | null; generation: number | null };
+ *  so a single comparison rule can read stamps and incoming Documents alike.
+ *  Both fields are `readonly`: a pair is REPLACED as a whole (its one write
+ *  site builds a fresh pair through `incomingIdentity`), never amended one wing
+ *  at a time, so "advance the epoch and leave the generation behind" cannot be
+ *  written. Constructing a half-pair LITERAL still type-checks — closing that
+ *  needs a sum type, which costs more test churn than the hole is worth. */
+type DocumentIdentity = { readonly epoch: number | null; readonly generation: number | null };
 
 export type EditSyncOptions = {
   /** Current editor doc as a raw Markdown string. */
@@ -80,7 +85,10 @@ export type EditSync = {
   /** A host Document arrived — RECORD-ONLY metadata. Sets the version +
    *  canWrite edit-sync echoes on the next Edit. Does NOT touch
    *  editInFlight and does NOT drain (that is onReducerCommit's job).
-   *  Stale (older docVersion) Documents are ignored. `canWrite` is the
+   *  Stale (older docVersion) Documents are ignored ONLY within one host
+   *  identity: on an identity transition (and before the first snapshot) the
+   *  incoming version/pair is adopted unconditionally, because version ordering
+   *  is meaningful only within one generation (S3b). `canWrite` is the
    *  FRESH value threaded from message.canWrite. Called synchronously
    *  from applyDocument.
    *
@@ -275,27 +283,33 @@ export function createEditSync(opts: EditSyncOptions): EditSync {
   let buffered: BufferedEdit | null = null;
   let timer: ReturnType<typeof setTimeout> | null = null;
   // Document identity pair from the most recent accepted host snapshot (S3a
-  // recorded it; S3b now acts on it). `null` before the first snapshot / when
-  // the host omits the pair. Read in replayIfNeeded's drop check, at each buffer
-  // capture (via stampBuffer), by isIdentityTransition, and — via
-  // recordedIdentity(), as the no-buffer-held fallback — by acksInFlightEdit's
-  // lineage conjunct. So BOTH the replay side and the display (ok-ack fold) side
-  // read it, not the replay side alone.
-  let recordedEpoch: number | null = null;
-  let recordedGeneration: number | null = null;
+  // recorded it; S3b now acts on it). Both fields are `null` before the first
+  // snapshot / when the host omits the pair. Read in replayIfNeeded's drop
+  // check, at each buffer capture (via stampBuffer), by isIdentityTransition,
+  // and — via recordedIdentity(), as the no-buffer-held fallback — by
+  // acksInFlightEdit's lineage conjunct. So BOTH the replay side and the
+  // display (ok-ack fold) side read it, not the replay side alone.
+  // ONE variable holding the PAIR, not two independent wings: with two `let`s a
+  // write could land on one and miss the other, leaving the wings disagreeing
+  // about presence (which is read off `generation` alone). Here every write
+  // names the whole pair — the initializer below and the adoption in
+  // onHostSnapshot are the only two — and `DocumentIdentity`'s `readonly`
+  // fields stop the pair being amended in place afterwards.
+  let recorded: DocumentIdentity = { epoch: null, generation: null };
   const now = opts.now ?? (() => Date.now());
   // Rolling window of identity-transition timestamps + once-per-session latch
   // for the clustering escalation tripwire (S3b).
   const identityTransitionTimes: number[] = [];
   let resyncStormAlarmed = false;
 
-  // The recorded pair in internal form — the ONE accessor for recordedEpoch /
-  // recordedGeneration, so the stamp, the drop check and the exported reader all
-  // see the same shape. Exported as-is; see the EditSync.recordedIdentity JSDoc.
-  const recordedIdentity = (): DocumentIdentity => ({
-    epoch: recordedEpoch,
-    generation: recordedGeneration,
-  });
+  // The recorded pair in internal form — the ONE place `recorded` is handed out
+  // as a `DocumentIdentity`, so the stamp, the drop check and the exported
+  // reader all see the same shape (the two console logs read the fields direct).
+  // Exported as-is; see the EditSync.recordedIdentity JSDoc. Returns a COPY, not
+  // the live object: this is a public member, and `readonly` is a compile-time
+  // guarantee only, so handing out a reference to internal state would let a JS
+  // caller mutate this module's recorded lineage.
+  const recordedIdentity = (): DocumentIdentity => ({ ...recorded });
 
   // Wire pair → internal pair. THE constructor for both directions — incoming
   // Documents and the pair onHostSnapshot records — so the two sides cannot
@@ -308,13 +322,15 @@ export function createEditSync(opts: EditSyncOptions): EditSync {
       ? { epoch: null, generation: null }
       : { epoch, generation };
 
-  // Stamp a captured buffer with the identity pair CURRENT at capture time. The
-  // four capture sites (trySend, cancelPendingFlush, flush, failed-post) route
-  // through this so a buffer triggered by a foreign Document — captured BEFORE
-  // onHostSnapshot records the incoming pair (applyDocument calls
-  // cancelPendingFlush first) — is stamped one epoch behind and correctly
-  // dropped at the next drain. Stamping from the incoming message instead would
-  // launder foreign-triggered captures as current.
+  // Stamp a captured buffer with the identity pair CURRENT at capture time. All
+  // four capturing functions route through this — trySend, replayIfNeeded and
+  // flush (each including its failed-post retry arm) plus cancelPendingFlush,
+  // which captures without ever posting — so a buffer triggered by a foreign
+  // Document, captured BEFORE onHostSnapshot records the incoming pair
+  // (applyDocument calls cancelPendingFlush first), is stamped one epoch behind
+  // and correctly dropped at the next drain.
+  // Stamping from the incoming message instead would launder foreign-triggered
+  // captures as current.
   const stampBuffer = (content: string): BufferedEdit => ({
     content,
     ...recordedIdentity(),
@@ -355,7 +371,12 @@ export function createEditSync(opts: EditSyncOptions): EditSync {
   // DIRECTIONAL, unlike identityChanged: only the epoch arm asks which side is
   // ahead, so a swapped call inverts exactly that arm and nothing else — no type
   // error, and no symptom until a same-generation foreign advance arrives. The
-  // named fields, not argument positions, are what keep the call sites honest.
+  // named fields, not argument positions, are what keep the call sites readable
+  // and typo-proof; the DIRECTION is held by behaviour, not by the naming.
+  // Measured: swapping `from`/`to` reds 7 tests either way — the acksInFlightEdit
+  // swap reds 4 in cm-edit-sync.test.ts plus 2 in editor.test.ts's (d3) block
+  // and 1 in shell.test.ts; the shouldDropBufferedForEpoch swap reds 5 in
+  // cm-edit-sync.test.ts plus the same 2. Do not delete those in a tidy-up.
   //
   // Two consumers read it, and they MUST agree — that is the point of sharing
   // one predicate rather than two hand-written copies. `shouldDropBufferedForEpoch`
@@ -534,8 +555,8 @@ export function createEditSync(opts: EditSyncOptions): EditSync {
       console.warn("[quoll] dropping stale replay buffer (foreign epoch / identity transition)", {
         stampGeneration: buffered.generation,
         stampEpoch: buffered.epoch,
-        recordedGeneration,
-        recordedEpoch,
+        recordedGeneration: recorded.generation,
+        recordedEpoch: recorded.epoch,
         droppedLength: buffered.content.length,
         liveLength: opts.getDoc().length,
       });
@@ -583,9 +604,9 @@ export function createEditSync(opts: EditSyncOptions): EditSync {
         // tripwire. The held buffer (if any) is dropped later in
         // replayIfNeeded, which compares its stamp against the new pair.
         console.info("[quoll] identity transition — adopting new host session", {
-          fromGeneration: recordedGeneration,
+          fromGeneration: recorded.generation,
           toGeneration: nextGeneration ?? null,
-          fromEpoch: recordedEpoch,
+          fromEpoch: recorded.epoch,
           toEpoch: nextEpoch ?? null,
         });
         noteIdentityTransition();
@@ -599,9 +620,7 @@ export function createEditSync(opts: EditSyncOptions): EditSync {
       // pure-absent (legacy) session on today's replay behaviour — and a partial
       // pair normalizes to both-absent instead of being recorded verbatim, which
       // would leave `epoch` silently dead (presence is read off `generation`).
-      const adopted = incomingIdentity(nextEpoch, nextGeneration);
-      recordedEpoch = adopted.epoch;
-      recordedGeneration = adopted.generation;
+      recorded = incomingIdentity(nextEpoch, nextGeneration);
     },
     // The SINGLE post-commit drain. `committedEditInFlight` is the
     // reducer's committed `state.editInFlight` — the single source of
