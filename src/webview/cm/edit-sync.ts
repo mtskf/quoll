@@ -289,6 +289,25 @@ export function createEditSync(opts: EditSyncOptions): EditSync {
   const identityTransitionTimes: number[] = [];
   let resyncStormAlarmed = false;
 
+  // The recorded pair in internal form — the ONE accessor for recordedEpoch /
+  // recordedGeneration, so the stamp, the drop check and the exported reader all
+  // see the same shape. Exported as-is; see the EditSync.recordedIdentity JSDoc.
+  const recordedIdentity = (): DocumentIdentity => ({
+    epoch: recordedEpoch,
+    generation: recordedGeneration,
+  });
+
+  // Wire pair → internal pair. THE constructor for both directions — incoming
+  // Documents and the pair onHostSnapshot records — so the two sides cannot
+  // normalize differently. The EXCLUSIVE-pair contract is enforced at the
+  // boundary validator, so a partial pair cannot arrive from a validated
+  // message; normalizing one to absent is the conservative read anyway (against
+  // a present recorded pair it makes presence differ → supersedes).
+  const incomingIdentity = (epoch?: number, generation?: number): DocumentIdentity =>
+    epoch === undefined || generation === undefined
+      ? { epoch: null, generation: null }
+      : { epoch, generation };
+
   // Stamp a captured buffer with the identity pair CURRENT at capture time. The
   // four capture sites (trySend, cancelPendingFlush, flush, failed-post) route
   // through this so a buffer triggered by a foreign Document — captured BEFORE
@@ -298,8 +317,7 @@ export function createEditSync(opts: EditSyncOptions): EditSync {
   // launder foreign-triggered captures as current.
   const stampBuffer = (content: string): BufferedEdit => ({
     content,
-    epoch: recordedEpoch,
-    generation: recordedGeneration,
+    ...recordedIdentity(),
   });
 
   // Do two pairs name DIFFERENT Document identities? The ONE presence/generation
@@ -353,22 +371,6 @@ export function createEditSync(opts: EditSyncOptions): EditSync {
     from: DocumentIdentity;
     to: DocumentIdentity;
   }): boolean => identityChanged(from, to) || (to.epoch ?? 0) > (from.epoch ?? 0);
-
-  const recordedIdentity = (): DocumentIdentity => ({
-    epoch: recordedEpoch,
-    generation: recordedGeneration,
-  });
-
-  // Wire pair → internal pair. THE constructor for both directions — incoming
-  // Documents and the pair onHostSnapshot records — so the two sides cannot
-  // normalize differently. The EXCLUSIVE-pair contract is enforced at the
-  // boundary validator, so a partial pair cannot arrive from a validated
-  // message; normalizing one to absent is the conservative read anyway (against
-  // a present recorded pair it makes presence differ → supersedes).
-  const incomingIdentity = (epoch?: number, generation?: number): DocumentIdentity =>
-    epoch === undefined || generation === undefined
-      ? { epoch: null, generation: null }
-      : { epoch, generation };
 
   // Should a held buffer be dropped rather than replayed? Its STAMP is the pair
   // recorded at capture time; the currently recorded pair is where the host has
