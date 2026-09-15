@@ -214,9 +214,13 @@ describe("shell — S3b epoch-bounded acceptance ordering", () => {
     // W3C ARIA22: a live region inserted at the same moment as its text is not
     // reliably announced. The container must pre-exist and stay empty.
     await mount();
+    // `aria-atomic` belongs to the same contract: happy-dom cannot verify actual
+    // announcement, so pinning the attributes is the only mechanism available —
+    // and an unpinned one silently drops out of this test's detection boundary.
     const host = container?.querySelector(".quoll-notice-host");
     expect(host).not.toBeNull();
     expect(host?.getAttribute("role")).toBe("status");
+    expect(host?.getAttribute("aria-atomic")).toBe("true");
     expect(host?.childElementCount).toBe(0);
   });
 
@@ -436,6 +440,67 @@ describe("shell — S3b epoch-bounded acceptance ordering", () => {
       expect(shown?.[0].textContent).toContain("discarded pending edits");
     } finally {
       vi.useRealTimers();
+    }
+  });
+
+  it("a later discard REPLACES a storm notice already on screen", async () => {
+    // The sibling test above only exercises null → "discard". This one pins the
+    // OTHER direction of the shared slot: "storm" → "discard". Without it,
+    // widening showNotice's aggregation guard from `noticeKind === kind` to
+    // `noticeKind !== null` — the reading "never overwrite a filled slot" — keeps
+    // the whole file green while leaving the user looking at the weaker storm
+    // wording ("some may not have been saved") at the moment a loss is certain.
+    await mount();
+    vi.useFakeTimers();
+    try {
+      deliver(buildDocument({ docVersion: 1, content: "s", externalEpoch: 0, epochGeneration: 1 }));
+      deliver(buildDocument({ docVersion: 1, content: "s", externalEpoch: 0, epochGeneration: 2 }));
+      deliver(buildDocument({ docVersion: 1, content: "s", externalEpoch: 0, epochGeneration: 3 }));
+      deliver(buildDocument({ docVersion: 1, content: "s", externalEpoch: 0, epochGeneration: 4 }));
+      await Promise.resolve(); // the storm renders one microtask late
+      const stormNotice = container?.querySelector(".quoll-resync-notice") as HTMLElement;
+      expect(stormNotice).not.toBeNull();
+      expect(stormNotice.classList.contains("quoll-notice-storm")).toBe(true);
+      // Now produce a real discard while that storm notice still holds the slot.
+      const view = mountedView();
+      view.dispatch({ changes: { from: view.state.doc.length, insert: "x" } });
+      vi.advanceTimersByTime(300); // posts — in flight
+      view.dispatch({ changes: { from: view.state.doc.length, insert: "y" } });
+      vi.advanceTimersByTime(300); // buffer held, stamped {gen 4}
+      deliver(
+        buildDocument({ docVersion: 2, content: "external", externalEpoch: 1, epochGeneration: 4 })
+      );
+      const shown = container?.querySelectorAll(".quoll-resync-notice");
+      expect(shown?.length).toBe(1);
+      expect(shown?.[0].classList.contains("quoll-notice-discard")).toBe(true);
+      expect(shown?.[0].textContent).toContain("discarded pending edits");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("logs a tagged error when the deferred storm render throws", async () => {
+    // The render runs in a microtask, so a throw escapes as an UNATTRIBUTED
+    // uncaught error — indistinguishable from the intentional discard-priority
+    // decline beside it. The `[quoll]` tag is the whole point (same treatment as
+    // edit-sync's onLocalEditDiscarded call site).
+    await mount();
+    deliver(buildDocument({ docVersion: 1, content: "s", externalEpoch: 0, epochGeneration: 1 }));
+    deliver(buildDocument({ docVersion: 1, content: "s", externalEpoch: 0, epochGeneration: 2 }));
+    deliver(buildDocument({ docVersion: 1, content: "s", externalEpoch: 0, epochGeneration: 3 }));
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    const createElement = vi.spyOn(document, "createElement").mockImplementation((): never => {
+      throw new Error("boom");
+    });
+    try {
+      // Queues the deferred storm render; the microtask below is what throws.
+      deliver(buildDocument({ docVersion: 1, content: "s", externalEpoch: 0, epochGeneration: 4 }));
+      await Promise.resolve();
+      expect(errors).toHaveBeenCalledTimes(1);
+      expect(String(errors.mock.calls[0]?.[0])).toContain("[quoll]");
+    } finally {
+      createElement.mockRestore();
+      errors.mockRestore();
     }
   });
 
