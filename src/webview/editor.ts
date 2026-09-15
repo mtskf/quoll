@@ -885,7 +885,20 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
       // of what we posted, so an echo match means the acked content is a strict
       // ancestor of the buffer — never a genuine external divergence (whose
       // content never matches our posted bytes), which still reseeds.
-      const foldsOkAck = aheadOfHost && canWrite && sync.echoesInFlightEdit(rawText);
+      //
+      // `acksInFlightEdit` answers content-echo AND identity-lineage continuity
+      // in ONE call, against the pair recorded BEFORE this snapshot (hence the
+      // call sits above `onHostSnapshot`). Both halves are load-bearing: content
+      // equality alone does not make a Document ours — another writer can land
+      // byte-identical bytes, which the host reports as a foreign epoch advance
+      // (or a new generation after a host restart), and edit-sync then DROPS the
+      // replay buffer for exactly that pair. Folding there would leave the
+      // ahead-of-host keystrokes on screen with nothing left to post them: they
+      // look saved, are not, and resurface on the next keystroke as bytes the
+      // host already superseded. Display and replay must obey one rule — see
+      // `supersedesIdentity` in cm/edit-sync.ts.
+      const foldsOkAck =
+        aheadOfHost && canWrite && sync.acksInFlightEdit(rawText, externalEpoch, epochGeneration);
       const needsReseed = aheadOfHost && !foldsOkAck;
       // Capture BEFORE the reseed. The needsReseed branch issues a wholesale
       // `0..doc.length` replace; CodeMirror's default selection mapping

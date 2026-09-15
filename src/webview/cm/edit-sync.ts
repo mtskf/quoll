@@ -42,7 +42,13 @@ const IDENTITY_FLAP_THRESHOLD = 3;
  *  or any identity transition — the webview then mirrors the host's external-
  *  wins policy instead of clobbering it one round-trip later. `epoch`/`generation`
  *  are `null` when captured under a legacy (pair-less) host. */
-type BufferedEdit = { content: string; epoch: number | null; generation: number | null };
+type BufferedEdit = DocumentIdentity & { content: string };
+
+/** A Document's (externalEpoch, epochGeneration) pair in edit-sync's internal
+ *  form. The wire pair is EXCLUSIVE (both present or both absent — validator-
+ *  authoritative, see protocol.ts); absence is carried as `null` on BOTH fields
+ *  so a single comparison rule can read stamps and incoming Documents alike. */
+type DocumentIdentity = { epoch: number | null; generation: number | null };
 
 export type EditSyncOptions = {
   /** Current editor doc as a raw Markdown string. */
@@ -196,19 +202,38 @@ export type EditSync = {
    *  panel may dispose and the host stash / retained buffer are the last
    *  authorities. No-op when nothing was typed in the debounce window. */
   flushIfIdle: () => void;
-  /** True when `content` is byte-identical to the Edit currently awaiting its
-   *  ack (single-flight → at most one). The reseed path (editor.ts
-   *  applyDocument) uses this to recognise a host Document that merely ECHOES
-   *  our own in-flight edit back — an ok-ack. When the live buffer has since
-   *  advanced past those bytes (the user kept typing during the in-flight
-   *  window), reseeding the doc back to the acked content would visibly rewind
+  /** Is this incoming Document the ack of our own in-flight Edit? TWO conditions,
+   *  deliberately answered by ONE call so a caller cannot check half of it:
+   *
+   *  1. `content` is byte-identical to the Edit currently awaiting its ack
+   *     (single-flight → at most one). False whenever nothing is in flight, so a
+   *     genuine external divergence — which never matches our posted bytes —
+   *     still reseeds.
+   *  2. The Document's identity pair CONTINUES the lineage we recorded (same
+   *     generation, epoch not advanced). Content equality alone does not make a
+   *     Document ours: another writer can produce byte-identical bytes, and the
+   *     host then reports a foreign epoch advance / a new generation. Pass the
+   *     incoming pair BEFORE `onHostSnapshot` records it (applyDocument's order),
+   *     so the comparison is incoming-vs-previous. Both arguments are required —
+   *     pass `undefined` explicitly for a legacy pair-less host.
+   *
+   *  The reseed path (editor.ts applyDocument) uses this to recognise a host
+   *  Document that merely ECHOES our own in-flight edit back. When the live
+   *  buffer has since advanced past those bytes (the user kept typing during the
+   *  in-flight window), reseeding back to the acked content would visibly rewind
    *  the newer keystrokes; folding the ack into version bookkeeping instead lets
    *  the buffered edit replay them forward. Because the live buffer is always a
-   *  descendant of what we posted, an echo match means the acked content is a
-   *  strict ancestor of the buffer, so skipping the visible reseed is safe.
-   *  False whenever nothing is in flight (so genuine external divergence — which
-   *  never matches our posted bytes — still reseeds). */
-  echoesInFlightEdit: (content: string) => boolean;
+   *  descendant of what we posted, an echo match on our own lineage means the
+   *  acked content is a strict ancestor of the buffer, so skipping the visible
+   *  reseed is safe. Condition 2 is what keeps that reasoning true: it holds the
+   *  fold to exactly the Documents whose replay buffer `replayIfNeeded` will
+   *  still replay — on a superseded lineage the buffer is DROPPED, so folding
+   *  would leave the ahead keystrokes visible but unsavable. */
+  acksInFlightEdit: (
+    content: string,
+    externalEpoch: number | undefined,
+    epochGeneration: number | undefined
+  ) => boolean;
   /** The Document identity pair (externalEpoch, epochGeneration) recorded from
    *  the most recent accepted host snapshot — `null` before the first snapshot
    *  or when the host omitted the pair (old-host tolerance). RECORD-ONLY in
@@ -236,7 +261,7 @@ export function createEditSync(opts: EditSyncOptions): EditSync {
   let editInFlight = false;
   // The content of the Edit currently awaiting its ack — non-null EXACTLY while
   // `editInFlight` is true (paired with every editInFlight assignment below).
-  // Read by `echoesInFlightEdit` so the reseed path can recognise an ok-ack.
+  // Read by `acksInFlightEdit` so the reseed path can recognise an ok-ack.
   let inFlightContent: string | null = null;
   let buffered: BufferedEdit | null = null;
   let timer: ReturnType<typeof setTimeout> | null = null;
@@ -265,28 +290,58 @@ export function createEditSync(opts: EditSyncOptions): EditSync {
     generation: recordedGeneration,
   });
 
-  // Should a held buffer be dropped rather than replayed? Compares the buffer's
-  // STAMP against the currently recorded pair (S3b, one rule at one choke point):
-  //   - both absent (legacy throughout)      → replay (today's behaviour)
-  //   - stamp present ⊕ recorded present      → identity transition → DROP
-  //   - different generation                  → identity transition → DROP
-  //   - same generation, recorded epoch ahead → foreign bytes landed → DROP
-  //   - same generation, epoch unchanged      → stale-recovery replay (no foreign
-  //     bytes; the flush→stale-reject→replay recovery path stays green)
-  const shouldDropBufferedForEpoch = (buf: BufferedEdit): boolean => {
-    const stampPresent = buf.generation !== null;
-    const recordedPresent = recordedGeneration !== null;
-    if (!stampPresent && !recordedPresent) {
+  // Does identity pair `next` SUPERSEDE `prev` — i.e. has the host's Document
+  // lineage moved on from `prev`, so content belonging to `prev` is no longer
+  // ours to carry forward? ONE rule at ONE choke point (S3b):
+  //   - both absent (legacy throughout)      → no (today's behaviour)
+  //   - present ⊕ present                     → identity transition → yes
+  //   - different generation                 → identity transition → yes
+  //   - same generation, next epoch ahead    → foreign bytes landed → yes
+  //   - same generation, epoch unchanged     → no (our own lineage continues)
+  // `epoch` is compared for magnitude only WITHIN one generation; `generation`
+  // is identity, never ordering (protocol.ts's DocumentMessage doc).
+  //
+  // Two consumers read it, and they MUST agree — that is the point of sharing
+  // one predicate rather than two hand-written copies. `shouldDropBufferedForEpoch`
+  // decides whether a held REPLAY BUFFER survives; `acksInFlightEdit` decides
+  // whether the reseed path may fold a content-echoing Document away as our ack.
+  // If the display folded where the buffer is dropped, the user's ahead-of-host
+  // keystrokes would stay on screen with nothing left to post them — visibly
+  // present, never saved, and resurfacing on the next keystroke.
+  const supersedesIdentity = (prev: DocumentIdentity, next: DocumentIdentity): boolean => {
+    const prevPresent = prev.generation !== null;
+    const nextPresent = next.generation !== null;
+    if (!prevPresent && !nextPresent) {
       return false;
     }
-    if (stampPresent !== recordedPresent) {
+    if (prevPresent !== nextPresent) {
       return true;
     }
-    if (buf.generation !== recordedGeneration) {
+    if (prev.generation !== next.generation) {
       return true;
     }
-    return (recordedEpoch ?? 0) > (buf.epoch ?? 0);
+    return (next.epoch ?? 0) > (prev.epoch ?? 0);
   };
+
+  const recordedIdentity = (): DocumentIdentity => ({
+    epoch: recordedEpoch,
+    generation: recordedGeneration,
+  });
+
+  // Wire pair → internal pair. The EXCLUSIVE-pair contract is enforced at the
+  // boundary validator, so a partial pair cannot arrive from a validated
+  // message; normalizing one to absent is the conservative read anyway (against
+  // a present recorded pair it makes presence differ → supersedes).
+  const incomingIdentity = (epoch?: number, generation?: number): DocumentIdentity =>
+    epoch === undefined || generation === undefined
+      ? { epoch: null, generation: null }
+      : { epoch, generation };
+
+  // Should a held buffer be dropped rather than replayed? Its STAMP is the pair
+  // recorded at capture time; the currently recorded pair is where the host has
+  // since got to. Replay only while the stamp's lineage still leads.
+  const shouldDropBufferedForEpoch = (buf: BufferedEdit): boolean =>
+    supersedesIdentity(buf, recordedIdentity());
 
   // Pure identity-transition predicate — see the EditSync.isIdentityTransition
   // JSDoc. Reads (never mutates) the recorded pair, so the shell's pre-apply
@@ -613,8 +668,11 @@ export function createEditSync(opts: EditSyncOptions): EditSync {
         trySend();
       }
     },
-    echoesInFlightEdit: (content) => inFlightContent !== null && content === inFlightContent,
-    recordedIdentity: () => ({ epoch: recordedEpoch, generation: recordedGeneration }),
+    acksInFlightEdit: (content, externalEpoch, epochGeneration) =>
+      inFlightContent !== null &&
+      content === inFlightContent &&
+      !supersedesIdentity(recordedIdentity(), incomingIdentity(externalEpoch, epochGeneration)),
+    recordedIdentity,
     isIdentityTransition,
   };
 }

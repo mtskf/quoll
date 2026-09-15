@@ -361,7 +361,7 @@ describe("cm edit-sync", () => {
   });
 });
 
-describe("cm edit-sync — echoesInFlightEdit", () => {
+describe("cm edit-sync — acksInFlightEdit", () => {
   const ack = (s: ReturnType<typeof setup>, v: number, canWrite = true) => {
     s.sync.onHostSnapshot(v, canWrite);
     s.sync.onReducerCommit(false);
@@ -370,25 +370,25 @@ describe("cm edit-sync — echoesInFlightEdit", () => {
   it("is false before anything is posted", () => {
     const s = setup();
     s.sync.onHostSnapshot(1, true);
-    expect(s.sync.echoesInFlightEdit("hello")).toBe(false);
+    expect(s.sync.acksInFlightEdit("hello", undefined, undefined)).toBe(false);
   });
 
   it("is true for the exact bytes of the Edit currently in flight", () => {
     const s = setup();
     s.sync.onHostSnapshot(1, true);
     s.type("hello world"); // posts, editInFlight = true
-    expect(s.sync.echoesInFlightEdit("hello world")).toBe(true);
+    expect(s.sync.acksInFlightEdit("hello world", undefined, undefined)).toBe(true);
     // A different string (a genuine external divergence) never matches.
-    expect(s.sync.echoesInFlightEdit("something else")).toBe(false);
+    expect(s.sync.acksInFlightEdit("something else", undefined, undefined)).toBe(false);
   });
 
   it("clears when the reducer commit acks the in-flight Edit", () => {
     const s = setup();
     s.sync.onHostSnapshot(1, true);
     s.type("a"); // posts, editInFlight = true
-    expect(s.sync.echoesInFlightEdit("a")).toBe(true);
+    expect(s.sync.acksInFlightEdit("a", undefined, undefined)).toBe(true);
     ack(s, 2); // ack clears editInFlight
-    expect(s.sync.echoesInFlightEdit("a")).toBe(false);
+    expect(s.sync.acksInFlightEdit("a", undefined, undefined)).toBe(false);
   });
 
   it("tracks the newest in-flight bytes across a buffered replay", () => {
@@ -396,10 +396,10 @@ describe("cm edit-sync — echoesInFlightEdit", () => {
     s.sync.onHostSnapshot(1, true);
     s.type("a"); // posts "a", editInFlight = true
     s.type("ab"); // buffered while in flight
-    expect(s.sync.echoesInFlightEdit("a")).toBe(true); // still "a" in flight
+    expect(s.sync.acksInFlightEdit("a", undefined, undefined)).toBe(true); // still "a" in flight
     ack(s, 2); // ack "a" → replay drains "ab" → "ab" now in flight
-    expect(s.sync.echoesInFlightEdit("ab")).toBe(true);
-    expect(s.sync.echoesInFlightEdit("a")).toBe(false);
+    expect(s.sync.acksInFlightEdit("ab", undefined, undefined)).toBe(true);
+    expect(s.sync.acksInFlightEdit("a", undefined, undefined)).toBe(false);
   });
 
   it("clears when a post fails (no phantom in-flight echo)", () => {
@@ -407,7 +407,73 @@ describe("cm edit-sync — echoesInFlightEdit", () => {
     s.sync.onHostSnapshot(1, true);
     s.setPostOk(false);
     s.type("x"); // post returns false → not in flight
-    expect(s.sync.echoesInFlightEdit("x")).toBe(false);
+    expect(s.sync.acksInFlightEdit("x", undefined, undefined)).toBe(false);
+  });
+
+  // The identity-lineage conjunct. Content equality alone does not make a
+  // Document ours: another writer can land byte-identical bytes, and the host
+  // reports that as a foreign epoch advance (or a new generation after a host
+  // restart). These cases MUST agree with shouldDropBufferedForEpoch — the two
+  // read the same `supersedesIdentity` rule so the reseed path never folds a
+  // Document whose replay buffer is about to be dropped.
+  // Revert-check: delete the `!supersedesIdentity(...)` conjunct → the four
+  // false-expectations below go red.
+  it("is false when a content-equal Document advances the epoch in the same generation", () => {
+    const s = setup();
+    s.sync.onHostSnapshot(1, true, 0, 11);
+    s.type("hello world");
+    expect(s.sync.acksInFlightEdit("hello world", 0, 11)).toBe(true); // our lineage
+    expect(s.sync.acksInFlightEdit("hello world", 1, 11)).toBe(false); // foreign bytes
+  });
+
+  it("is false when a content-equal Document arrives on a new generation", () => {
+    const s = setup();
+    s.sync.onHostSnapshot(1, true, 3, 11);
+    s.type("hello world");
+    // A host restart mints a fresh generation and restarts the epoch at 0 —
+    // magnitude is meaningless across generations, so even a LOWER epoch is a
+    // transition, not an ack.
+    expect(s.sync.acksInFlightEdit("hello world", 0, 22)).toBe(false);
+    expect(s.sync.acksInFlightEdit("hello world", 3, 11)).toBe(true);
+  });
+
+  it("is false on either half of a present/absent pair mismatch", () => {
+    const withPair = setup();
+    withPair.sync.onHostSnapshot(1, true, 0, 11);
+    withPair.type("hello world");
+    // present→absent (a legacy host took over).
+    expect(withPair.sync.acksInFlightEdit("hello world", undefined, undefined)).toBe(false);
+
+    const legacy = setup();
+    legacy.sync.onHostSnapshot(1, true); // no pair recorded
+    legacy.type("hello world");
+    // absent→present (a pair-emitting host took over).
+    expect(legacy.sync.acksInFlightEdit("hello world", 0, 11)).toBe(false);
+    // absent→absent stays the legacy unconditional-fold behaviour.
+    expect(legacy.sync.acksInFlightEdit("hello world", undefined, undefined)).toBe(true);
+  });
+
+  it("agrees with the replay-buffer drop rule on the same Document", () => {
+    // Non-vacuity for the shared-rule claim: for a same-generation epoch
+    // advance, the fold is refused AND the buffer is dropped; for the
+    // unchanged pair, the fold is allowed AND the buffer replays.
+    const advanced = setup();
+    advanced.sync.onHostSnapshot(1, true, 0, 11);
+    advanced.type("a"); // posts "a"
+    advanced.type("ab"); // buffered behind it, stamped at epoch 0
+    expect(advanced.sync.acksInFlightEdit("a", 1, 11)).toBe(false);
+    advanced.sync.onHostSnapshot(2, true, 1, 11);
+    advanced.sync.onReducerCommit(false);
+    expect(advanced.posted.map((p) => p.content)).toEqual(["a"]); // "ab" dropped
+
+    const same = setup();
+    same.sync.onHostSnapshot(1, true, 0, 11);
+    same.type("a");
+    same.type("ab");
+    expect(same.sync.acksInFlightEdit("a", 0, 11)).toBe(true);
+    same.sync.onHostSnapshot(2, true, 0, 11);
+    same.sync.onReducerCommit(false);
+    expect(same.posted.map((p) => p.content)).toEqual(["a", "ab"]); // replayed
   });
 });
 
@@ -731,13 +797,13 @@ describe("cm edit-sync — flush (teardown)", () => {
     }
   });
 
-  it("echoesInFlightEdit recognises the force-posted content after an idle flush (alive hide→show)", () => {
+  it("acksInFlightEdit recognises the force-posted content after an idle flush (alive hide→show)", () => {
     // flush()'s success branch sets inFlightContent so a subsequent ok-ack that
     // echoes the force-posted bytes is recognised as an echo (and folded by
     // applyDocument) rather than reseeding backwards — the same protection
     // trySend/replayIfNeeded give, but reached through the teardown/hide path.
     // Revert-check: delete `inFlightContent = content;` from flush's ok branch →
-    // this test goes red (echoesInFlightEdit returns false).
+    // this test goes red (acksInFlightEdit returns false).
     vi.useFakeTimers();
     try {
       let doc = "seed";
@@ -749,7 +815,7 @@ describe("cm edit-sync — flush (teardown)", () => {
       doc = "seed+edit";
       sync.onLocalChange(); // timer pending, idle (no prior in-flight)
       sync.flush(); // force-posts "seed+edit"; must record it as in-flight
-      expect(sync.echoesInFlightEdit("seed+edit")).toBe(true);
+      expect(sync.acksInFlightEdit("seed+edit", undefined, undefined)).toBe(true);
     } finally {
       vi.useRealTimers();
     }
