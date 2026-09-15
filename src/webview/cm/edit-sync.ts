@@ -48,11 +48,12 @@ type BufferedEdit = DocumentIdentity & { content: string };
  *  form. The wire pair is EXCLUSIVE (both present or both absent — validator-
  *  authoritative, see protocol.ts); absence is carried as `null` on BOTH fields
  *  so a single comparison rule can read stamps and incoming Documents alike.
- *  Both fields are `readonly`: a pair is REPLACED as a whole (its one write
- *  site builds a fresh pair through `incomingIdentity`), never amended one wing
- *  at a time, so "advance the epoch and leave the generation behind" cannot be
- *  written. Constructing a half-pair LITERAL still type-checks — closing that
- *  needs a sum type, which costs more test churn than the hole is worth. */
+ *  Both fields are `readonly`: a pair is REPLACED as a whole, never amended one
+ *  wing at a time, so "advance the epoch and leave the generation behind"
+ *  cannot be written. (Where the recorded pair's writes live is recorded at its
+ *  declaration, not duplicated here — a second copy is what drifts.)
+ *  Constructing a half-pair LITERAL still type-checks — closing that needs a
+ *  sum type, which costs more test churn than the hole is worth. */
 type DocumentIdentity = { readonly epoch: number | null; readonly generation: number | null };
 
 export type EditSyncOptions = {
@@ -303,8 +304,9 @@ export function createEditSync(opts: EditSyncOptions): EditSync {
   let resyncStormAlarmed = false;
 
   // The recorded pair in internal form — the ONE place `recorded` is handed out
-  // as a `DocumentIdentity`, so the stamp, the drop check and the exported
-  // reader all see the same shape (the two console logs read the fields direct).
+  // as a `DocumentIdentity`, so every reader listed at its declaration above
+  // sees the same shape (the two console logs read the fields direct; that list
+  // is not repeated here, because a second copy is what goes stale).
   // Exported as-is; see the EditSync.recordedIdentity JSDoc. Returns a COPY, not
   // the live object: this is a public member, and `readonly` is a compile-time
   // guarantee only, so handing out a reference to internal state would let a JS
