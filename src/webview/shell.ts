@@ -192,13 +192,29 @@ export function mountShell(root: HTMLElement, opts: ShellOptions): ShellHandle {
   type NoticeKind = keyof typeof NOTICE_TEXT;
   // Which claim wins the shared slot: higher is stronger. `Record<NoticeKind, …>`
   // is TOTAL, so adding a kind to NOTICE_TEXT without ranking it is a compile
-  // error — the priority rule cannot silently fall behind the kind set.
+  // error — the priority rule cannot silently fall behind the kind set. That
+  // only guarantees the ranking is DECLARED for every kind, though; it is
+  // ENFORCED in exactly one place — the guard inside `showNotice` below — so a
+  // kind's rank governs every writer that calls through it, not only whichever
+  // call site happens to remember to check.
   const NOTICE_PRIORITY: Record<NoticeKind, number> = { discard: 2, storm: 1 };
   let noticeKind: NoticeKind | null = null;
   let stormNoticeShown = false;
   function showNotice(kind: NoticeKind): void {
     if (noticeKind === kind) {
       return; // aggregate: the slot already says exactly this
+    }
+    // Choke point for NOTICE_PRIORITY: every writer (showDiscardNotice,
+    // showStormNotice's deferred render, and any future notice producer) calls
+    // through here, so this is the one place the ranking has to be checked for
+    // it to actually govern who may claim the slot — re-deriving the check at
+    // each call site would let a future call site forget it. Today this can
+    // only decline a WEAKER kind trying to restate a stronger one already
+    // shown (discard is already the max priority, so this never fires yet);
+    // it exists so the next kind added above discard is protected by
+    // construction, not by discard happening to still be the strongest.
+    if (noticeKind !== null && NOTICE_PRIORITY[noticeKind] > NOTICE_PRIORITY[kind]) {
+      return; // a strictly stronger claim holds the slot — never restate it more weakly
     }
     const notice = document.createElement("div");
     notice.className = `quoll-resync-notice quoll-notice-${kind}`;
