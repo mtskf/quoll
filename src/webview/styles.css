@@ -229,10 +229,12 @@ html body {
     color: var(--vscode-editor-foreground);
   }
 
-  /* Column stack: the save-policy banner strip (.quoll-banner-host) is the first
-   * child and takes only its content height; .quoll-editor is the second child
-   * and flexes to fill the rest. `flex-direction: column` (not the default row)
-   * is what puts the banner ABOVE the editor rather than beside it. */
+  /* Column stack: two fixed-height chrome strips come first — the save-policy
+   * banner (.quoll-banner-host) then the edit-sync notice slot
+   * (.quoll-notice-host), each taking only its content height — and
+   * .quoll-editor is the LAST child, flexing to fill the rest.
+   * `flex-direction: column` (not the default row) is what puts the chrome
+   * ABOVE the editor rather than beside it. */
   main {
     width: 100%;
     height: 100%;
@@ -322,10 +324,14 @@ html body {
     background-color: var(--vscode-inputValidation-errorBackground, transparent);
   }
 
-  /* Clustering escalation tripwire notice (S3b). A low-alarm, once-per-session
-   * hint shown when identity transitions cluster (host restarts / re-resolves
-   * repeatedly). Distinct from .quoll-banner: it is NOT reducer-driven (it is an
-   * edit-sync lifecycle event) and carries its own dismiss control. Styled to
+  /* Shared surface for BOTH edit-sync lifecycle notices — the discarded
+   * pre-ack buffer (.quoll-notice-discard, not latched: every fresh loss
+   * re-shows it) and the clustering escalation tripwire
+   * (.quoll-notice-storm, once-per-session). shell.ts owns which one is in
+   * the slot; the two modifier classes exist for that distinction and
+   * currently carry no rules of their own — so a tweak HERE changes both,
+   * including the certain-loss discard notice. Distinct from .quoll-banner:
+   * NOT reducer-driven, and it carries its own dismiss control. Styled to
    * match the warning banner so the two read as one system. */
   .quoll-resync-notice {
     display: flex;

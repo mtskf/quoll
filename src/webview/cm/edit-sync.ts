@@ -74,8 +74,8 @@ export type EditSyncOptions = {
   now?: () => number;
   /** Fired ONCE per session when identity transitions cluster (≥3 within the
    *  5-minute window) — the clustering escalation tripwire (S3b). The wiring
-   *  surfaces a low-alarm user-visible notice ("Quoll re-synced with the editor
-   *  host repeatedly — recent keystrokes may not have been saved"). Never fired
+   *  surfaces a low-alarm user-visible notice; the shell owns the wording
+   *  (`NOTICE_TEXT.storm` in shell.ts) and the display-side latch. Never fired
    *  per-transition; latched after the first alarm. Defaults to a no-op. */
   onResyncStorm?: () => void;
   /** Fired each time `replayIfNeeded` DROPS a held pre-ack replay buffer because
