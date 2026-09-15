@@ -194,9 +194,11 @@ export function mountShell(root: HTMLElement, opts: ShellOptions): ShellHandle {
   // is TOTAL, so adding a kind to NOTICE_TEXT without ranking it is a compile
   // error — the priority rule cannot silently fall behind the kind set. That
   // only guarantees the ranking is DECLARED for every kind, though; it is
-  // ENFORCED in exactly one place — the guard inside `showNotice` below — so a
-  // kind's rank governs every writer that calls through it, not only whichever
-  // call site happens to remember to check.
+  // ENFORCED in exactly one place — inside `showNotice` below — so no call
+  // site (including showStormNotice's deferred render) re-derives its own
+  // copy of the check. A second copy at a call site isn't merely redundant:
+  // it can shadow the real one and make it permanently unreachable, which is
+  // exactly what happened here before this comment was corrected.
   const NOTICE_PRIORITY: Record<NoticeKind, number> = { discard: 2, storm: 1 };
   let noticeKind: NoticeKind | null = null;
   let stormNoticeShown = false;
@@ -208,10 +210,14 @@ export function mountShell(root: HTMLElement, opts: ShellOptions): ShellHandle {
     // showStormNotice's deferred render, and any future notice producer) calls
     // through here, so this is the one place the ranking has to be checked for
     // it to actually govern who may claim the slot — re-deriving the check at
-    // each call site would let a future call site forget it. Today this can
-    // only decline a WEAKER kind trying to restate a stronger one already
-    // shown (discard is already the max priority, so this never fires yet);
-    // it exists so the next kind added above discard is protected by
+    // each call site would let a future call site forget it (and, as happened
+    // once, shadow this one — see the NOTICE_PRIORITY comment above). Today
+    // this declines showNotice("storm") whenever a discard already holds the
+    // slot (discard outranks storm) — the exact case shell.test.ts pins as
+    // "never inserts the storm notice … when a discard coincides".
+    // showDiscardNotice itself is never declined here: discard is already the
+    // max priority in the current kind set, so no noticeKind can outrank it —
+    // this guard exists so the next kind added above discard is protected by
     // construction, not by discard happening to still be the strongest.
     if (noticeKind !== null && NOTICE_PRIORITY[noticeKind] > NOTICE_PRIORITY[kind]) {
       return; // a strictly stronger claim holds the slot — never restate it more weakly
@@ -252,16 +258,14 @@ export function mountShell(root: HTMLElement, opts: ShellOptions): ShellHandle {
       if (shellDisposed) {
         return;
       }
-      // A stronger (or equal) claim already holds the slot — do not restate it
-      // more weakly. Today the only such claim is "discard".
-      if (noticeKind !== null && NOTICE_PRIORITY[noticeKind] >= NOTICE_PRIORITY.storm) {
-        return;
-      }
       try {
+        // showNotice's own priority choke point is what may decline this call
+        // (a stronger claim, e.g. "discard", already holds the slot) — that
+        // check is NOT re-derived here.
         showNotice("storm");
       } catch (err) {
         // An unattributed uncaught error in a microtask is indistinguishable
-        // from the intentional discard-priority decline above. The latch is
+        // from showNotice's intentional priority decline. The latch is
         // deliberately NOT released: edit-sync latches resyncStormAlarmed
         // before calling onResyncStorm, so there is no second call to retry.
         console.error("[quoll] storm notice render failed", err);
