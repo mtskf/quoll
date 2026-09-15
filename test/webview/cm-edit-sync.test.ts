@@ -8,6 +8,7 @@ function setup(opts?: {
   failPost?: boolean;
   now?: () => number;
   onResyncStorm?: () => void;
+  onLocalEditDiscarded?: () => void;
 }) {
   let doc = "hello";
   const posted: Posted[] = [];
@@ -29,6 +30,7 @@ function setup(opts?: {
     scheduleFlush: (run) => run(),
     now: opts?.now,
     onResyncStorm: opts?.onResyncStorm,
+    onLocalEditDiscarded: opts?.onLocalEditDiscarded,
   });
   return {
     sync,
@@ -1241,6 +1243,96 @@ describe("cm edit-sync — epoch-bounded buffers (S3b)", () => {
   it("treats the first snapshot as an adoption, not a transition (no tripwire count)", () => {
     const s = setup();
     expect(s.sync.isIdentityTransition(0, 111)).toBe(false); // before any snapshot
+  });
+
+  // The buffer drop above is a REAL content loss, and its only record used to be
+  // a console.warn — a webview devtools console is not a signal a normal user can
+  // see. `onLocalEditDiscarded` is the user-visible counterpart; the shell renders
+  // a notice from it. These tests pin WHEN it fires and, just as importantly, that
+  // a misbehaving notifier cannot corrupt the drain it is called from.
+  it("fires onLocalEditDiscarded exactly once when a foreign epoch advance drops the buffer", () => {
+    const onLocalEditDiscarded = vi.fn();
+    const s = setup({ onLocalEditDiscarded });
+    s.sync.onHostSnapshot(1, true, 0, 42);
+    s.type("a"); // posts at v1, in flight
+    s.type("ab"); // buffered, stamped {epoch:0, gen:42}
+    expect(onLocalEditDiscarded).not.toHaveBeenCalled();
+    ackPair(s, 2, 1, 42); // same generation, epoch 0→1 → foreign bytes won
+    expect(onLocalEditDiscarded).toHaveBeenCalledTimes(1);
+    expect(s.posted.length).toBe(1); // dropped, not replayed
+  });
+
+  it("does NOT fire onLocalEditDiscarded when the buffer survives and replays", () => {
+    const onLocalEditDiscarded = vi.fn();
+    const s = setup({ onLocalEditDiscarded });
+    s.sync.onHostSnapshot(1, true, 5, 42);
+    s.type("a");
+    s.type("ab");
+    ackPair(s, 2, 5, 42); // same generation, SAME epoch → replay
+    expect(onLocalEditDiscarded).not.toHaveBeenCalled();
+    expect(s.posted.length).toBe(2);
+  });
+
+  it("does NOT fire onLocalEditDiscarded on an identity transition with no buffer held", () => {
+    const onLocalEditDiscarded = vi.fn();
+    const s = setup({ onLocalEditDiscarded });
+    s.sync.onHostSnapshot(1, true, 0, 42);
+    ackPair(s, 1, 0, 43); // transition, but nothing was buffered
+    expect(onLocalEditDiscarded).not.toHaveBeenCalled();
+  });
+
+  it("a THROWING notifier neither escapes the drain nor strands the dropped buffer", () => {
+    // The notifier is a DISPLAY-side side effect wired by the shell, and a DOM
+    // failure in it must not reach the sync loop. This test owns the CATCH half
+    // only: the throw does not propagate into the caller (production's caller is
+    // the shell's dispatch chain) and it is logged rather than swallowed
+    // silently. The ORDERING half (call after `buffered = null`) is owned by the
+    // re-entrancy test below — with the catch present, a throw cannot strand the
+    // buffer from either position, so this test cannot discriminate order.
+    const onLocalEditDiscarded = vi.fn(() => {
+      throw new Error("notice failed");
+    });
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const s = setup({ onLocalEditDiscarded });
+    s.sync.onHostSnapshot(1, true, 0, 42);
+    s.type("a");
+    s.type("ab");
+    expect(() => ackPair(s, 2, 1, 42)).not.toThrow();
+    expect(onLocalEditDiscarded).toHaveBeenCalledTimes(1);
+    expect(errorSpy).toHaveBeenCalled();
+    // Second drain: nothing left to drop → no second notice.
+    s.sync.onReducerCommit(false);
+    expect(onLocalEditDiscarded).toHaveBeenCalledTimes(1);
+    expect(s.posted.length).toBe(1);
+    errorSpy.mockRestore();
+  });
+
+  it("a RE-ENTRANT notifier fires exactly once for one dropped buffer", () => {
+    // A notifier that synchronously re-enters the drain (the shell's dispatch
+    // wrapper can do this) must not see the same buffer twice. THIS is the test
+    // that owns the call-after-drop ordering: move the call above
+    // `buffered = null` and the re-entrant drain finds the buffer still held.
+    //
+    // The notifier must re-enter the SAME instance it belongs to, which is why
+    // `target` is a mutable binding assigned right after `setup` returns rather
+    // than a second `setup()` call.
+    let target: ReturnType<typeof setup> | null = null;
+    let calls = 0;
+    const s = setup({
+      onLocalEditDiscarded: () => {
+        calls++;
+        if (calls === 1) {
+          target?.sync.onReducerCommit(false); // re-enter the drain mid-notice
+        }
+      },
+    });
+    target = s;
+    s.sync.onHostSnapshot(1, true, 0, 42);
+    s.type("a");
+    s.type("ab");
+    ackPair(s, 2, 1, 42);
+    expect(calls).toBe(1);
+    expect(s.posted.length).toBe(1);
   });
 });
 

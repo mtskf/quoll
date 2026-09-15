@@ -2,6 +2,12 @@
 
 All notable changes to Quoll are documented here.
 
+## 0.1.80 — 2026-09-15
+
+### Fixed
+
+- Quoll now tells you when edits that were still waiting to be sent are discarded as the document re-syncs, instead of dropping them silently. The notice explains that Undo cannot bring those edits back, so you can reapply anything missing.
+
 ## 0.1.79 — 2026-09-15
 
 ### Fixed
