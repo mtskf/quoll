@@ -160,8 +160,12 @@ export function mountShell(root: HTMLElement, opts: ShellOptions): ShellHandle {
   //
   // Two classes, TWO texts, deliberately not merged into one sentence: a storm
   // can fire with no input and no discard at all (pinned in shell.test.ts), so a
-  // shared wording would either soften a CERTAIN loss to "may", or assert a loss
-  // the storm case cannot prove.
+  // shared wording would either soften a near-certain loss to "may", or assert a
+  // loss the storm case cannot prove. ("Near-certain", not absolute: if the
+  // foreign write happens to be byte-identical to the live doc, applyDocument
+  // skips the reseed (aheadOfHost === false) yet the stamped buffer is still
+  // superseded and dropped — the notice then names a discard that cost the user
+  // nothing. Accepted: the alternative is under-reporting a real loss.)
   //
   // The latches are INDEPENDENT. Storm is once-per-session and OUTLIVES a
   // dismiss (edit-sync latches too; `stormNoticeShown` is the display-side
@@ -169,6 +173,13 @@ export function mountShell(root: HTMLElement, opts: ShellOptions): ShellHandle {
   // told about is a fresh loss — but a repeat discard while the notice is still
   // on screen is AGGREGATED: the DOM and the text are left untouched, because
   // re-rendering an identical notice reads as a new, second loss.
+  //
+  // Consequence of the shared slot, in BOTH directions: a discard REPLACES a
+  // storm notice (showNotice's replaceChildren), and since `stormNoticeShown`
+  // latched when the storm first fired, that storm is never drawn again. That
+  // is deliberate — the discard states a certain loss and the storm would only
+  // restate it more weakly — but it means "the storm notice disappeared" is
+  // expected behaviour, not a bug to chase.
   //
   // No auto-fade: a real byte loss that disappears on a timer is back to being
   // no signal at all.
@@ -179,6 +190,10 @@ export function mountShell(root: HTMLElement, opts: ShellOptions): ShellHandle {
       "Quoll has repeatedly re-synced this document. Review your recent changes; some may not have been saved.",
   } as const;
   type NoticeKind = keyof typeof NOTICE_TEXT;
+  // Which claim wins the shared slot: higher is stronger. `Record<NoticeKind, …>`
+  // is TOTAL, so adding a kind to NOTICE_TEXT without ranking it is a compile
+  // error — the priority rule cannot silently fall behind the kind set.
+  const NOTICE_PRIORITY: Record<NoticeKind, number> = { discard: 2, storm: 1 };
   let noticeKind: NoticeKind | null = null;
   let stormNoticeShown = false;
   function showNotice(kind: NoticeKind): void {
@@ -218,10 +233,23 @@ export function mountShell(root: HTMLElement, opts: ShellOptions): ShellHandle {
     // more weakly is then never drawn — not even transiently, which shell.test.ts
     // records DOM mutations to pin.
     queueMicrotask(() => {
-      if (shellDisposed || noticeKind === "discard") {
+      if (shellDisposed) {
         return;
       }
-      showNotice("storm");
+      // A stronger (or equal) claim already holds the slot — do not restate it
+      // more weakly. Today the only such claim is "discard".
+      if (noticeKind !== null && NOTICE_PRIORITY[noticeKind] >= NOTICE_PRIORITY.storm) {
+        return;
+      }
+      try {
+        showNotice("storm");
+      } catch (err) {
+        // An unattributed uncaught error in a microtask is indistinguishable
+        // from the intentional discard-priority decline above. The latch is
+        // deliberately NOT released: edit-sync latches resyncStormAlarmed
+        // before calling onResyncStorm, so there is no second call to retry.
+        console.error("[quoll] storm notice render failed", err);
+      }
     });
   }
   // Single-fire session report: pagehide AND dispose can both run when VS Code
