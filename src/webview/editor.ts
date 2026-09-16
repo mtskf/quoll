@@ -124,10 +124,14 @@ export type EditorOptions = {
    *  The shell wires it to a low-alarm user-visible notice. Passed straight
    *  through to edit-sync's `onResyncStorm`. */
   onResyncStorm?: () => void;
-  /** Fired each time edit-sync discards a held pre-ack replay buffer whose
-   *  lineage the host superseded. The shell wires it to a user-visible notice
-   *  (edit-sync's console.warn is devtools-only, which is no signal for a normal
-   *  user). Passed straight through to edit-sync's `onLocalEditDiscarded`. */
+  /** Fired from edit-sync's drain when un-acked local bytes were actually LOST —
+   *  from EITHER holder it carries them in (a held pre-ack replay buffer, or an
+   *  Edit posted and not yet acked). NOT once per discard: a superseded holder
+   *  whose bytes the authoritative document still carries fires nothing. At most
+   *  once per drain. The shell wires it to a user-visible notice (edit-sync's
+   *  console.warn is devtools-only, which is no signal for a normal user).
+   *  The full rule lives on `EditSyncOptions.onLocalEditDiscarded` (cm/edit-sync.ts)
+   *  — do not restate it here; this is a pass-through. */
   onLocalEditDiscarded?: () => void;
 };
 

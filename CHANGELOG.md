@@ -6,7 +6,7 @@ All notable changes to Quoll are documented here.
 
 ### Fixed
 
-- Quoll now tells you when edits are discarded as the document re-syncs — whether they were still waiting to be sent or had been sent and not yet confirmed — instead of dropping them silently. The notice explains that Undo cannot bring those edits back, so you can reapply anything missing, and it no longer appears when the re-synced document comes back with exactly your text.
+- Quoll now tells you when edits are discarded as the document re-syncs — whether they were still waiting to be sent or had been sent and not yet confirmed — instead of dropping them silently. The notice explains that Undo cannot bring those edits back, so you can reapply anything missing, and it stays silent when the re-synced document comes back carrying exactly your text.
 
 ## 0.1.79 — 2026-09-15
 

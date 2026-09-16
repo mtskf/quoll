@@ -128,7 +128,8 @@ export function mountShell(root: HTMLElement, opts: ShellOptions): ShellHandle {
   main.appendChild(bannerHost);
 
   // ONE notice slot shared by the two edit-sync lifecycle signals — the S3b
-  // clustering tripwire (onResyncStorm) and a discarded pre-ack buffer
+  // clustering tripwire (onResyncStorm) and discarded un-acked local bytes from
+  // EITHER holder, the pre-ack replay buffer or an Edit still awaiting its ack
   // (onLocalEditDiscarded). It lives OUTSIDE bannerHost so the reducer-driven
   // renderBanners (replaceChildren) never clobbers it, and it is NOT reducer
   // state — neither signal is a document error.

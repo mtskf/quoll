@@ -24,6 +24,7 @@ import {
   validateMarkdownForWrite,
 } from "../../markdown/validate-for-write.js";
 import type { ThemeKind } from "../../shared/protocol.js";
+import { sameTextIgnoringEol } from "../../shared/text-equality.js";
 import { decideEdit } from "./edit-decision.js";
 
 export interface HostSessionContext {
@@ -318,15 +319,18 @@ function defaultMintEpochGeneration(): number {
  *  facet; the other (`currentContent`/`preApplyContent`) is canonicalised to
  *  `document.eol`. A pure byte compare would misread an EOL-only difference
  *  (a plain edit on a CRLF-eol doc whose webview facet is still LF) as
- *  foreign bytes. The `a === b` fast path keeps the common byte-identical
- *  settle allocation-free; the normalise runs only when the strings already
- *  differ. */
+ *  foreign bytes.
+ *  The comparison itself is `sameTextIgnoringEol` (src/shared/), which the
+ *  webview's loss judgement asks of the same document — ONE definition, so the
+ *  two sides cannot drift. This wrapper adds only the NULLABLE operand, which is
+ *  local to the host's state shape: `b` is a held `inFlightContent` /
+ *  `preApplyContent` that may be absent, and absent never matches. */
 function contentMatches(a: string, b: string | null): boolean {
   // a is always a string here → a null operand never matches
   if (b === null) {
     return false;
   }
-  return a === b || a.replace(/\r\n|\r|\n/g, "\n") === b.replace(/\r\n|\r|\n/g, "\n");
+  return sameTextIgnoringEol(a, b);
 }
 
 /** Resync `lastAppliedDocVersion` to the live document version, raising it as
