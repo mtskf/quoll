@@ -110,9 +110,12 @@ const resolveCliProjectTarget = (target: string): string =>
 // Sweeping a base instead of skipping it is not a harmless over-approximation:
 // `tsconfig.base.json` declares no `include`, so on its own it resolves the
 // DEFAULT include — measured at 570 files, among them `test/markdown` (29) and
-// 3 of `test/shared`'s 4 files (all but `eol-pair-table.ts`, now swept via
+// 5 of `test/shared`'s 6 files (all but `eol-pair-table.ts`, now swept via
 // `test/webview/tsconfig.json`'s explicit include), which no real program
-// type-checks. Directives there change nothing, so reporting them would be
+// type-checks. ⚠️ The "6" is a count, so recount before reusing it — the
+// previous "4" was measured before `eol-pair-table.ts` / `text-equality.test.ts`
+// landed, and a correct-the-comments commit carried the stale number forward
+// (caught by measurement, PR #412 cycle 3). Directives there change nothing, so reporting them would be
 // pure false alarm.
 //
 // Letting tsc resolve `extends` rather than reading the raw field is the same
