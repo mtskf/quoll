@@ -474,6 +474,39 @@ describe("shell — S3b epoch-bounded acceptance ordering", () => {
     }
   });
 
+  it("shows NO notice when the host reposts different bytes on the SAME lineage", async () => {
+    // The shape the host's stale / no-op / readonly repost arm produces routinely
+    // — and the one negative case that rests on the SUPERSESSION conjunct alone,
+    // because the content conjunct is already false (the document is NOT carrying
+    // our bytes). The sibling silences above all come from content equality, so
+    // dropping the lineage test would leave them green while every ordinary
+    // repost announced "Quoll discarded pending edits" to the user.
+    // `resyncLiveVersion` (host-session-core) bumps `externalEpoch` only on a
+    // genuine foreign advance, so a repost carries the SAME epoch and generation:
+    // the lineage never moved, and the claim this notice makes ("something else
+    // won, your bytes are not in the document") is not in evidence.
+    await mount();
+    vi.useFakeTimers();
+    try {
+      deliver(
+        buildDocument({ docVersion: 1, content: "s", externalEpoch: 0, epochGeneration: 11 })
+      );
+      const view = mountedView();
+      view.dispatch({ changes: { from: view.state.doc.length, insert: "x" } });
+      vi.advanceTimersByTime(300); // posts "sx" — in flight, nothing buffered
+      deliver(
+        buildDocument({ docVersion: 2, content: "s-host", externalEpoch: 0, epochGeneration: 11 })
+      );
+      await Promise.resolve();
+      expect(container?.querySelectorAll(".quoll-resync-notice").length).toBe(0);
+      // The reseed really happened, so the silence is NOT the content conjunct
+      // quietly standing in for the lineage one.
+      expect(readDoc()).toBe("s-host");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("ACCEPTED RESIDUAL: the forked flush window loses a keystroke with no notice", async () => {
     // Pins behaviour this notice cannot fix, so the gap is discoverable instead
     // of surprising. `flush()` force-posts while an Edit is in flight and keeps
@@ -483,9 +516,23 @@ describe("shell — S3b epoch-bounded acceptance ordering", () => {
     // reseeded view instead of descending from the bytes in flight — and that
     // forked Edit is what overwrites them, on disk, notice or no notice.
     // The underlying defect (a non-folded ack reseeds the view while the replay
-    // posts forward) is tracked as its own TODO entry; if a future change makes
-    // this notice fire here, that is an IMPROVEMENT — update this pin, do not
-    // "restore" the silence.
+    // posts forward) is tracked as its own TODO entry.
+    //
+    // A NOTICE FIRING HERE IS NOT THE IMPROVEMENT MARKER. The final ack below
+    // moves no lineage, so a notice would announce a discard while the newest
+    // held bytes are in flight to the host — the false alarm the same-lineage
+    // tests in this file and in cm-edit-sync.test.ts exist to forbid. The
+    // improvement marker is the REWIND going away: when the fold/rewind defect
+    // is fixed, the "z" descends from "sxy" and `readDoc()` becomes "sxyz".
+    // At that point update the posts / doc assertions — the SILENCE stays.
+    //
+    // (An earlier version of this pin ended on a foreign `v3 "sxz" e1` Document
+    // instead. That state is improbable though reachable — an external writer
+    // landing exactly the forked bytes produces it — but its silence came from
+    // the CONTENT-equality rule, which the sibling test "shows NO notice when
+    // the foreign write lands exactly the user's newest bytes" already pins.
+    // The continuation below is the host's own, and its silence is the
+    // residual's real mechanism: nothing was superseded.)
     await mount();
     vi.useFakeTimers();
     try {
@@ -504,25 +551,35 @@ describe("shell — S3b epoch-bounded acceptance ordering", () => {
       );
       // The user types on that view: the result FORKS — it has no "y".
       view.dispatch({ changes: { from: view.state.doc.length, insert: "z" } });
-      vi.advanceTimersByTime(300);
+      vi.advanceTimersByTime(300); // in flight is "sxy", so "sxz" only BUFFERS
+      // The host's own continuation: the replayed "sxy" Edit's ack, on the SAME
+      // lineage (an own-edit ack never bumps the epoch). It content-matches the
+      // in-flight bytes, so it FOLDS — the view is not reseeded and keeps the
+      // fork, and the drain posts the buffered "sxz" forward.
       deliver(
-        buildDocument({ docVersion: 3, content: "sxz", externalEpoch: 1, epochGeneration: 11 })
+        buildDocument({ docVersion: 3, content: "sxy", externalEpoch: 0, epochGeneration: 11 })
       );
       await Promise.resolve();
-      // No notice: the newest held bytes ARE the document. The "y" is gone anyway.
+      // No notice — and now for the residual's REAL reason: the newest held bytes
+      // ("sxz") sit on an unmoved lineage, so nothing was superseded. The "y" is
+      // gone from the document all the same, which is the loss this notice cannot
+      // see and the TODO exists to fix.
       expect(container?.querySelectorAll(".quoll-resync-notice").length).toBe(0);
       // MEASURED, so the pin cannot go vacuous if the harness ever settles this
-      // differently: the Edits posted are ["sx", "sxy", "sxy"] (the debounced
-      // post, the flush force-post, then the retained buffer's replay) and the
-      // view ends at "sxz" — i.e. the "z" really was typed onto the reseeded
-      // "sx", so the branch has no "y" in it. Assert both, not just the silence.
-      const posted = postMessage.mock.calls
-        .map(([m]) => m as { type?: string; content?: string })
-        .filter((m) => m.type === "edit")
-        .map((m) => m.content);
-      expect(posted).toEqual(["sx", "sxy", "sxy"]);
+      // differently: the Edits posted are ["sx", "sxy", "sxy", "sxz"] (the
+      // debounced post, the flush force-post, the retained buffer's replay, then
+      // the fork) and the view ends at "sxz" — i.e. the "z" really was typed onto
+      // the reseeded "sx", so the branch has no "y" in it. Assert both, not just
+      // the silence.
+      const editMessages = postMessage.mock.calls
+        .map(([m]) => m as { type?: string; content?: string; baseDocVersion?: number })
+        .filter((m) => m.type === "edit");
+      expect(editMessages.map((m) => m.content)).toEqual(["sx", "sxy", "sxy", "sxz"]);
+      // The fork is posted against the version the fold left recorded, so the
+      // rewind is invisible to the host — it accepts the forked bytes as a normal
+      // descendant of v3. That is precisely why no notice can be expected here.
+      expect(editMessages[3].baseDocVersion).toBe(3);
       expect(readDoc()).toBe("sxz"); // forked off "sx": the "y" is gone
-      expect(posted.some((c) => c === "sxz")).toBe(false);
     } finally {
       vi.useRealTimers();
     }

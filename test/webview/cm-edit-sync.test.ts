@@ -843,12 +843,13 @@ describe("cm edit-sync — flush (teardown)", () => {
   });
 
   it("acksInFlightEdit recognises the force-posted content after an idle flush (alive hide→show)", () => {
-    // flush()'s success branch sets inFlightContent so a subsequent ok-ack that
-    // echoes the force-posted bytes is recognised as an echo (and folded by
-    // applyDocument) rather than reseeding backwards — the same protection
-    // trySend/replayIfNeeded give, but reached through the teardown/hide path.
-    // Revert-check: delete `inFlightContent = content;` from flush's ok branch →
-    // this test goes red (acksInFlightEdit returns false).
+    // flush()'s success branch records the force-posted bytes as the in-flight
+    // holder so a subsequent ok-ack that echoes them is recognised as an echo
+    // (and folded by applyDocument) rather than reseeding backwards — the same
+    // protection trySend/replayIfNeeded give, but reached through the
+    // teardown/hide path.
+    // Revert-check: delete `inFlight = stampHeld(content);` from flush's ok
+    // branch → this test goes red (acksInFlightEdit returns false).
     vi.useFakeTimers();
     try {
       let doc = "seed";
@@ -1226,6 +1227,49 @@ describe("cm edit-sync — epoch-bounded buffers (S3b)", () => {
     expect(onResyncStorm).not.toHaveBeenCalled();
   });
 
+  it("(g) a THROWING storm notifier does not abort the identity adoption", () => {
+    // The storm notice fires from onHostSnapshot BEFORE the incoming version /
+    // canWrite / seeded / recorded pair are adopted, so an escaping throw would
+    // strand `recorded` a generation behind — and the very next drain would then
+    // find the held buffer's stamp still matching, replay it over the foreign
+    // bytes, and say nothing. It would also escape into host.ts's unguarded
+    // message handler. Hence the local catch, and hence the two assertions that
+    // look past "it did not throw": the pair was adopted, and the drain drops.
+    let clock = 1000;
+    const onResyncStorm = vi.fn(() => {
+      throw new Error("storm notice failed");
+    });
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    // Silences the stale-buffer drop trace only — that path has its own tests.
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const s = setup({ now: () => clock, onResyncStorm });
+      s.sync.onHostSnapshot(1, true, 0, 1); // seed — not a transition
+      clock += 1000;
+      s.sync.onHostSnapshot(1, true, 0, 2); // transition 1
+      clock += 1000;
+      s.sync.onHostSnapshot(1, true, 0, 3); // transition 2
+      s.type("a"); // posts at v1 — in flight
+      s.type("ab"); // buffered, stamped {epoch: 0, generation: 3}
+      s.setDoc("foreign"); // the reseed production performs before the drain
+      clock += 1000;
+      // Transition 3 → the latched notice fires and throws.
+      expect(() => s.sync.onHostSnapshot(2, true, 0, 4)).not.toThrow();
+      expect(onResyncStorm).toHaveBeenCalledTimes(1);
+      expect(errorSpy).toHaveBeenCalledWith("[quoll] onResyncStorm threw", expect.any(Error));
+      // The adoption completed despite the throw — this is the assertion that
+      // makes the test more than a try/catch smoke test.
+      expect(s.sync.recordedIdentity()).toEqual({ epoch: 0, generation: 4 });
+      // ...so the drain judges the buffer against the NEW pair and drops it
+      // instead of replaying "ab" over the foreign bytes.
+      s.sync.onReducerCommit(false);
+      expect(s.posted.length).toBe(1);
+    } finally {
+      warnSpy.mockRestore();
+      errorSpy.mockRestore();
+    }
+  });
+
   it("isIdentityTransition is a pure predicate (no side effects, agrees across calls)", () => {
     const onResyncStorm = vi.fn();
     const s = setup({ onResyncStorm });
@@ -1245,11 +1289,15 @@ describe("cm edit-sync — epoch-bounded buffers (S3b)", () => {
     expect(s.sync.isIdentityTransition(0, 111)).toBe(false); // before any snapshot
   });
 
-  // The buffer drop above is a REAL content loss, and its only record used to be
-  // a console.warn — a webview devtools console is not a signal a normal user can
-  // see. `onLocalEditDiscarded` is the user-visible counterpart; the shell renders
-  // a notice from it. These tests pin WHEN it fires and, just as importantly, that
-  // a misbehaving notifier cannot corrupt the drain it is called from.
+  // The buffer drop above THROWS AWAY bytes the user typed, and its only record
+  // used to be a console.warn — a webview devtools console is not a signal a
+  // normal user can see. `onLocalEditDiscarded` is the user-visible counterpart,
+  // fired only when that discard was a real LOSS: the authoritative document does
+  // not carry the NEWEST held bytes. There is no drop → notice bijection — the
+  // drop is unconditional, the notice is not — so these tests pin WHEN it fires,
+  // when it deliberately STAYS SILENT, and — just as importantly — that a
+  // misbehaving notifier cannot corrupt the drain it is called from. The shell
+  // renders a notice from it.
   it("fires onLocalEditDiscarded exactly once when a foreign epoch advance drops the buffer", () => {
     const onLocalEditDiscarded = vi.fn();
     const s = setup({ onLocalEditDiscarded });
@@ -1428,11 +1476,24 @@ describe("cm edit-sync — epoch-bounded buffers (S3b)", () => {
     expect(onLocalEditDiscarded).not.toHaveBeenCalled();
   });
 
-  it("does NOT fire onLocalEditDiscarded on an ordinary ack", () => {
+  it("does NOT fire onLocalEditDiscarded on a same-lineage ack while the doc is ahead", () => {
+    // The everyday shape: the user kept typing THROUGH the in-flight window, so
+    // by the time our own ack lands the live doc has moved past the bytes we
+    // posted. Deliberately rests on ONE conjunct so it can fail — the lineage
+    // does not move, while the content test is already false. (An earlier version
+    // acked with the doc still equal to the posted bytes, which made BOTH
+    // conjuncts false: it read as a negative pin while being unable to fail under
+    // any single-conjunct regression.)
+    // Role split, so the three same-lineage silences stay distinguishable: the
+    // test above drives FOREIGN repost bytes at the unit level, this one drives
+    // OUR OWN newer descendant bytes, and the real-seam pins live in
+    // shell.test.ts / editor.test.ts ("reposts different bytes on the SAME
+    // lineage") because the regression's symptom is a spurious user notice.
     const onLocalEditDiscarded = vi.fn();
     const s = setup({ onLocalEditDiscarded });
     s.sync.onHostSnapshot(1, true, 0, 42);
     s.type("a");
+    s.setDoc("ab"); // typed during the in-flight window
     ackPair(s, 2, 0, 42); // same lineage — our ack
     expect(onLocalEditDiscarded).not.toHaveBeenCalled();
   });
@@ -1684,6 +1745,74 @@ describe("cm edit-sync — stale-buffer drops are traced", () => {
         ],
       ]);
       expect(JSON.stringify(warnArgs(warn))).not.toContain(SECRET);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+});
+
+// The THIRD content-discarding path, and the one this PR's notice exists for: the
+// drain judges a loss on the settled IN-FLIGHT Edit when no buffer is held. It
+// destroys typed bytes exactly as the two paths above do, so it owes the same
+// record — otherwise a support report of the user notice is triageable for one
+// holder and not for the other. ONE warn per drain: whichever holder lost.
+describe("cm edit-sync — in-flight discards are traced", () => {
+  const SECRET = "SECRET-BYTES"; // 12 chars
+  type WarnSpy = MockInstance<typeof console.warn>;
+  const inFlightWarns = (spy: WarnSpy) =>
+    spy.mock.calls.filter((c) => String(c[0]).includes("un-acked in-flight Edit"));
+  const bufferWarns = (spy: WarnSpy) =>
+    spy.mock.calls.filter((c) => String(c[0]).includes("stale replay buffer"));
+  const ackPair = (s: ReturnType<typeof setup>, v: number, epoch: number, generation: number) => {
+    s.sync.onHostSnapshot(v, true, epoch, generation);
+    s.sync.onReducerCommit(false);
+  };
+
+  it("reports both lineage pairs and both lengths (not the bytes) when the in-flight Edit is lost", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const s = setup();
+      s.sync.onHostSnapshot(1, true, 0, 11); // seed on generation 11, epoch 0
+      s.type(SECRET); // posts at v1 — in flight, NOTHING buffered
+      expect(s.posted.length).toBe(1);
+      // Stand in for the reseed the foreign Document triggers (editor.ts owns
+      // it): the live doc becomes the host's bytes while the settled in-flight
+      // Edit still holds the user's, so the two lengths genuinely disagree.
+      s.setDoc("hi"); // len 2
+      ackPair(s, 2, 1, 11); // same generation, epoch advanced → foreign bytes won
+      expect(inFlightWarns(warn)).toEqual([
+        [
+          expect.stringContaining("un-acked in-flight Edit"),
+          {
+            stampGeneration: 11,
+            stampEpoch: 0,
+            recordedGeneration: 11,
+            recordedEpoch: 1,
+            droppedLength: SECRET.length,
+            liveLength: 2,
+          },
+        ],
+      ]);
+      expect(JSON.stringify(inFlightWarns(warn))).not.toContain(SECRET);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("does NOT double-record: a lost BUFFER traces once, on the buffer branch only", () => {
+    // Both branches run in one drain when a held buffer is the lost subject, so
+    // the notice arm must stay quiet about a holder the drop already recorded.
+    // Two warns for one discard would read in a support report as two losses.
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const s = setup();
+      s.sync.onHostSnapshot(1, true, 0, 11);
+      s.type(SECRET); // posts — in flight
+      s.type(`${SECRET}x`); // buffered: the NEWEST held bytes, stamped at epoch 0
+      s.setDoc("hi"); // the reseed
+      ackPair(s, 2, 1, 11); // buffer dropped AND lost (the doc carries neither)
+      expect(bufferWarns(warn)).toHaveLength(1);
+      expect(inFlightWarns(warn)).toEqual([]);
     } finally {
       warn.mockRestore();
     }

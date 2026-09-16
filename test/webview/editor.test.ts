@@ -515,7 +515,32 @@ describe("editor — a superseded in-flight Edit is reported once (d4)", () => {
     expect(onLocalEditDiscarded).toHaveBeenCalledTimes(1);
   });
 
-  it("does NOT notify on the ordinary same-lineage ack", () => {
+  it("does NOT notify when the host reposts different bytes on the SAME lineage", () => {
+    // The seam-level pin for the supersession conjunct, and the shape the host's
+    // stale / no-op repost arm produces routinely: the lineage is unmoved but the
+    // document is NOT carrying our bytes, so the CONTENT conjunct is already
+    // false and only the lineage test keeps this quiet. Drop that conjunct and
+    // every ordinary repost notifies the user of a loss that did not happen.
+    vi.useFakeTimers();
+    const onLocalEditDiscarded = vi.fn();
+    const { handle, view, commit } = mount({ onLocalEditDiscarded });
+    seedAndPost(handle, view, 0, 11);
+    handle.applyDocument("HOST-OTHER", true, 2, 0, 11); // same pair, different bytes
+    // The reseed really happened, so the silence cannot be the content conjunct
+    // standing in for the lineage one.
+    expect(view.state.sliceDoc()).toBe("HOST-OTHER");
+    commit(false);
+    expect(onLocalEditDiscarded).not.toHaveBeenCalled();
+  });
+
+  it("CHARACTERISATION: the ordinary same-lineage ack notifies nothing", () => {
+    // Labelled honestly: BOTH conjuncts are false here (the lineage did not move
+    // AND the document carries exactly the bytes we posted), so no single-conjunct
+    // regression can red it — it is not a pin for either half. It stays because it
+    // documents the everyday path end-to-end and would still catch a gross
+    // regression that notifies unconditionally. The single-conjunct detectors at
+    // this seam are the test above (lineage) and the "epoch advance carries the
+    // in-flight bytes" test (content).
     vi.useFakeTimers();
     const onLocalEditDiscarded = vi.fn();
     const { handle, view, commit } = mount({ onLocalEditDiscarded });
