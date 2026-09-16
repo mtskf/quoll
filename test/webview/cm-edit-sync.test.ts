@@ -1257,6 +1257,11 @@ describe("cm edit-sync — epoch-bounded buffers (S3b)", () => {
     s.type("a"); // posts at v1, in flight
     s.type("ab"); // buffered, stamped {epoch:0, gen:42}
     expect(onLocalEditDiscarded).not.toHaveBeenCalled();
+    // Model production: applyDocument reseeds the view to the host's bytes
+    // BEFORE the reducer commit drains. Leaving the doc at "ab" would assert a
+    // state production cannot reach — and one the loss rule correctly reads as
+    // "nothing lost", since the document would be carrying the buffered bytes.
+    s.setDoc("external");
     ackPair(s, 2, 1, 42); // same generation, epoch 0→1 → foreign bytes won
     expect(onLocalEditDiscarded).toHaveBeenCalledTimes(1);
     expect(s.posted.length).toBe(1); // dropped, not replayed
@@ -1297,6 +1302,7 @@ describe("cm edit-sync — epoch-bounded buffers (S3b)", () => {
     s.sync.onHostSnapshot(1, true, 0, 42);
     s.type("a");
     s.type("ab");
+    s.setDoc("external"); // the reseed production always performs first
     expect(() => ackPair(s, 2, 1, 42)).not.toThrow();
     expect(onLocalEditDiscarded).toHaveBeenCalledTimes(1);
     expect(errorSpy).toHaveBeenCalled();
@@ -1330,9 +1336,161 @@ describe("cm edit-sync — epoch-bounded buffers (S3b)", () => {
     s.sync.onHostSnapshot(1, true, 0, 42);
     s.type("a");
     s.type("ab");
+    s.setDoc("external"); // the reseed production always performs first
     ackPair(s, 2, 1, 42);
     expect(calls).toBe(1);
     expect(s.posted.length).toBe(1);
+  });
+
+  // The SECOND holder of un-acked local bytes: the Edit already posted and
+  // awaiting its ack. `buffered` is null on this path (the debounce fired to
+  // post, so cancelPendingFlush captures nothing), so the drop arm never runs —
+  // this was silent before. The subject the rule judges is the NEWEST held
+  // content, so these tests drive both the in-flight-only case and the case
+  // where a newer buffer makes an older posted snapshot irrelevant.
+  it("fires onLocalEditDiscarded once when a foreign epoch advance discards the in-flight Edit", () => {
+    const onLocalEditDiscarded = vi.fn();
+    const s = setup({ onLocalEditDiscarded });
+    s.sync.onHostSnapshot(1, true, 0, 42);
+    s.type("a"); // posts at v1, in flight; nothing buffered
+    s.setDoc("foreign"); // reseeded: the host's bytes are not ours
+    ackPair(s, 2, 1, 42);
+    expect(onLocalEditDiscarded).toHaveBeenCalledTimes(1);
+    expect(s.posted.length).toBe(1); // nothing left to replay
+  });
+
+  it("does NOT fire onLocalEditDiscarded when the authoritative document carries our in-flight bytes", () => {
+    // The byte-identical foreign write, and the host-restart-after-apply case:
+    // the lineage moved on, but the document still holds what we posted, so the
+    // notice would be a false alarm.
+    const onLocalEditDiscarded = vi.fn();
+    const s = setup({ onLocalEditDiscarded });
+    s.sync.onHostSnapshot(1, true, 0, 42);
+    s.type("a"); // posts "a"
+    ackPair(s, 2, 1, 42); // epoch advanced; getDoc() is still "a"
+    expect(onLocalEditDiscarded).not.toHaveBeenCalled();
+  });
+
+  it("does NOT fire onLocalEditDiscarded on an EOL-only difference", () => {
+    // The host canonicalises a Document to document.eol while the webview posts
+    // its own lineSeparator bytes, so an EOL-only skew is routine — not a loss.
+    // Mirrors the host's own EOL-insensitive contentMatches.
+    const onLocalEditDiscarded = vi.fn();
+    const s = setup({ onLocalEditDiscarded });
+    s.sync.onHostSnapshot(1, true, 0, 42);
+    s.type("a\nb"); // posts LF bytes
+    s.setDoc("a\r\nb"); // the host came back CRLF at a new epoch
+    ackPair(s, 2, 1, 42);
+    expect(onLocalEditDiscarded).not.toHaveBeenCalled();
+  });
+
+  it("does NOT fire onLocalEditDiscarded when a Document carries the force-posted bytes", () => {
+    // flush() posts even while an Edit is in flight and RETAINS the buffer, so
+    // both holders end up holding the same bytes under a stale stamp. A foreign
+    // Document that happens to carry exactly those bytes costs the user nothing:
+    // the buffer is still dropped (it must be), but there is nothing to report.
+    const onLocalEditDiscarded = vi.fn();
+    const s = setup({ onLocalEditDiscarded });
+    s.sync.onHostSnapshot(1, true, 0, 42);
+    s.type("a"); // posts "a" — in flight
+    s.type("ab"); // buffered "ab"
+    s.sync.flush(); // force-posts "ab", retains the buffer (in-flight contention)
+    ackPair(s, 2, 1, 42); // epoch advanced; getDoc() is "ab" — exactly what we hold
+    expect(onLocalEditDiscarded).not.toHaveBeenCalled();
+  });
+
+  it("does NOT fire onLocalEditDiscarded when a NEWER buffer survives an older in-flight snapshot", () => {
+    // The false positive a per-holder disjunction produces, and the reason the
+    // rule has ONE subject. The buffer is the newer snapshot, so when the host is
+    // holding its bytes the user has nothing to reapply — whatever became of the
+    // older posted snapshot.
+    const onLocalEditDiscarded = vi.fn();
+    const s = setup({ onLocalEditDiscarded });
+    s.sync.onHostSnapshot(1, true, 0, 42);
+    s.type("a"); // posts "a" — in flight
+    s.type("ab"); // buffered "ab" — the newest local bytes
+    s.setDoc("ab"); // the foreign write landed exactly the user's latest bytes
+    ackPair(s, 2, 1, 42); // epoch advanced → buffer dropped, but nothing lost
+    expect(onLocalEditDiscarded).not.toHaveBeenCalled();
+  });
+
+  it("does NOT fire onLocalEditDiscarded on a SAME-LINEAGE Document that differs from the held bytes", () => {
+    // Content mismatch WITHOUT supersession — a same-epoch authoritative repost.
+    // The lineage did not move, so the claim this notice makes is not in
+    // evidence. This is the pin that keeps the lineage conjunct honest: without
+    // it, every ordinary repost would notify.
+    const onLocalEditDiscarded = vi.fn();
+    const s = setup({ onLocalEditDiscarded });
+    s.sync.onHostSnapshot(1, true, 0, 42);
+    s.type("a"); // posts "a" — in flight
+    s.setDoc("host-side-other"); // reposted content, SAME epoch and generation
+    ackPair(s, 2, 0, 42);
+    expect(onLocalEditDiscarded).not.toHaveBeenCalled();
+  });
+
+  it("does NOT fire onLocalEditDiscarded on an ordinary ack", () => {
+    const onLocalEditDiscarded = vi.fn();
+    const s = setup({ onLocalEditDiscarded });
+    s.sync.onHostSnapshot(1, true, 0, 42);
+    s.type("a");
+    ackPair(s, 2, 0, 42); // same lineage — our ack
+    expect(onLocalEditDiscarded).not.toHaveBeenCalled();
+  });
+
+  it("fires on an identity transition that did not carry the in-flight bytes, not on one that did", () => {
+    const lost = vi.fn();
+    const s1 = setup({ onLocalEditDiscarded: lost });
+    s1.sync.onHostSnapshot(1, true, 0, 42);
+    s1.type("a");
+    s1.setDoc("fresh-host-doc"); // new generation, content not ours
+    ackPair(s1, 1, 0, 43);
+    expect(lost).toHaveBeenCalledTimes(1);
+
+    const kept = vi.fn();
+    const s2 = setup({ onLocalEditDiscarded: kept });
+    s2.sync.onHostSnapshot(1, true, 0, 42);
+    s2.type("a"); // host applied "a", then restarted
+    ackPair(s2, 1, 0, 43); // new generation, content IS ours
+    expect(kept).not.toHaveBeenCalled();
+  });
+
+  it("a THROWING notifier on the in-flight path neither escapes the drain nor re-fires", () => {
+    const onLocalEditDiscarded = vi.fn(() => {
+      throw new Error("notice failed");
+    });
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const s = setup({ onLocalEditDiscarded });
+    s.sync.onHostSnapshot(1, true, 0, 42);
+    s.type("a");
+    s.setDoc("foreign");
+    expect(() => ackPair(s, 2, 1, 42)).not.toThrow();
+    expect(onLocalEditDiscarded).toHaveBeenCalledTimes(1);
+    expect(errorSpy).toHaveBeenCalled();
+    // The holder is settled, not re-announced, and the sync loop still works.
+    s.sync.onReducerCommit(false);
+    expect(onLocalEditDiscarded).toHaveBeenCalledTimes(1);
+    s.type("foreign+");
+    expect(s.posted.length).toBe(2);
+    errorSpy.mockRestore();
+  });
+
+  it("a RE-ENTRANT notifier on the in-flight path fires exactly once", () => {
+    let target: ReturnType<typeof setup> | null = null;
+    let calls = 0;
+    const s = setup({
+      onLocalEditDiscarded: () => {
+        calls++;
+        if (calls === 1) {
+          target?.sync.onReducerCommit(false); // re-enter the drain mid-notice
+        }
+      },
+    });
+    target = s;
+    s.sync.onHostSnapshot(1, true, 0, 42);
+    s.type("a");
+    s.setDoc("foreign");
+    ackPair(s, 2, 1, 42);
+    expect(calls).toBe(1);
   });
 });
 

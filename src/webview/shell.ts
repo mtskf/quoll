@@ -161,11 +161,15 @@ export function mountShell(root: HTMLElement, opts: ShellOptions): ShellHandle {
   // Two classes, TWO texts, deliberately not merged into one sentence: a storm
   // can fire with no input and no discard at all (pinned in shell.test.ts), so a
   // shared wording would either soften a near-certain loss to "may", or assert a
-  // loss the storm case cannot prove. ("Near-certain", not absolute: if the
-  // foreign write happens to be byte-identical to the live doc, applyDocument
-  // skips the reseed (aheadOfHost === false) yet the stamped buffer is still
-  // superseded and dropped — the notice then names a discard that cost the user
-  // nothing. Accepted: the alternative is under-reporting a real loss.)
+  // loss the storm case cannot prove. (Narrowed by the one-subject drain
+  // judgement in cm/edit-sync.ts: a superseded holder whose bytes the
+  // authoritative document carries VERBATIM (line endings aside) — the
+  // byte-identical foreign write, a foreign write equal to the user's latest
+  // keystrokes, an EOL-only skew — is no longer reported as a discard. Any OTHER
+  // difference still reports, so "your edit was applied and then something else
+  // was appended" still shows the notice: the claim is only that the document is
+  // not carrying the user's bytes as written, and whether they were never
+  // applied, overwritten, or added to is not decidable in the webview.)
   //
   // The latches are INDEPENDENT. Storm is once-per-session and OUTLIVES a
   // dismiss (edit-sync latches too; `stormNoticeShown` is the display-side
