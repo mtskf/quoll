@@ -30,8 +30,9 @@
 //
 // ⚠️ The `\r` ban is a CONSTRAINT on these two files, chosen deliberately: a
 // `\r` mention in src/webview/cm/edit-sync.ts or
-// src/extension/session/host-session-core.ts must live in a FULL-LINE comment,
-// because the line-comment strip below is `^[ \t]*`-anchored and a trailing
+// src/extension/session/host-session-core.ts must live in a comment the strip
+// removes — a FULL-LINE `//` comment or any `/* */` block — because the
+// line-comment strip below is `^[ \t]*`-anchored and a trailing
 // `// … \r …` would red the ban. Un-anchoring the strip was the alternative and
 // is worse: `//` inside a string literal (a URL) would swallow the rest of that
 // line, and a re-inlined fold sitting after it would pass the absence check

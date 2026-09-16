@@ -7,11 +7,13 @@
 // this is the single definition so they cannot drift. One-sided drift is
 // user-visible on EITHER side, and the symptoms are per-side. The host's
 // predicate gates the externalEpoch bump (foreignAtSettle): NARROW it and a
-// routine EOL skew scores the webview's own ack as foreign — the epoch advances
-// and the webview drops the replay buffer, which is unconditional on content,
-// discarding un-acked keystrokes for nothing, with only a console.warn and no
-// user notice; WIDEN it and genuine foreign bytes read as ours, so no epoch
-// advances and a stale buffer replays over them. The webview's predicate is the
+// routine EOL skew scores the webview's own ack as foreign — the epoch advances,
+// the view is reseeded back to the acked bytes (no fold on a moved lineage) and
+// the webview drops the replay buffer unconditionally, so keystrokes typed
+// during the in-flight window are lost for nothing — a REAL loss the notice then
+// correctly announces (the webview's own predicate, unchanged, sees the Document
+// does not carry them); WIDEN it and genuine foreign bytes read as ours, so no
+// epoch advances and a stale buffer replays over them. The webview's predicate is the
 // notice's SECOND conjunct: NARROW it and an epoch advance whose Document does
 // carry the bytes announces a discard that did not happen; WIDEN it and a real
 // loss goes unannounced.

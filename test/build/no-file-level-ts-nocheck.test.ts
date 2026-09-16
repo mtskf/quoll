@@ -110,8 +110,10 @@ const resolveCliProjectTarget = (target: string): string =>
 // Sweeping a base instead of skipping it is not a harmless over-approximation:
 // `tsconfig.base.json` declares no `include`, so on its own it resolves the
 // DEFAULT include — measured at 570 files, among them `test/markdown` (29) and
-// `test/shared` (4), which no real program type-checks. Directives there change
-// nothing, so reporting them would be pure false alarm.
+// 3 of `test/shared`'s 4 files (all but `eol-pair-table.ts`, now swept via
+// `test/webview/tsconfig.json`'s explicit include), which no real program
+// type-checks. Directives there change nothing, so reporting them would be
+// pure false alarm.
 //
 // Letting tsc resolve `extends` rather than reading the raw field is the same
 // reflex as the rest of this guard, and the difference is measurable:
