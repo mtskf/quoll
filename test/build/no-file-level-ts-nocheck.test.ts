@@ -109,14 +109,17 @@ const resolveCliProjectTarget = (target: string): string =>
 //
 // Sweeping a base instead of skipping it is not a harmless over-approximation:
 // `tsconfig.base.json` declares no `include`, so on its own it resolves the
-// DEFAULT include — measured at 570 files, among them `test/markdown` (29) and
-// 5 of `test/shared`'s 6 files (all but `eol-pair-table.ts`, now swept via
-// `test/webview/tsconfig.json`'s explicit include), which no real program
-// type-checks. ⚠️ The "6" is a count, so recount before reusing it — the
-// previous "4" was measured before `eol-pair-table.ts` / `text-equality.test.ts`
-// landed, and a correct-the-comments commit carried the stale number forward
-// (caught by measurement, PR #412 cycle 3). Directives there change nothing,
-// so reporting them would be pure false alarm.
+// DEFAULT include — measured at 594 files (PR #412 cycle 4), among them
+// `test/markdown` (29) and 5 of `test/shared`'s 6 files (all but
+// `eol-pair-table.ts`, now swept via `test/webview/tsconfig.json`'s explicit
+// include), which no real program type-checks. ⚠️ EVERY number in this sentence
+// is a count — recount all three before reusing any of them. Both have already
+// gone stale once: the total read "570" and the `test/shared` figure read "4",
+// both measured 2026-08-30, and two successive correct-the-comments commits each
+// fixed one and carried the other forward. Recount with the guard's own
+// mechanism (`ts.parseJsonConfigFileContent` over `tsconfig.base.json`), not by
+// eye. Directives there change nothing, so reporting them would be pure false
+// alarm.
 //
 // Letting tsc resolve `extends` rather than reading the raw field is the same
 // reflex as the rest of this guard, and the difference is measurable:
