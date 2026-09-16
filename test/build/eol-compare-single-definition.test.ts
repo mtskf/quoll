@@ -73,6 +73,12 @@ const stripComments = (src: string): string =>
  *  make it fire on unrelated code. */
 const EOL_FOLD = /\.replace\(\s*\/\\r\\n\|\\r\|\\n\/g\s*,\s*"\\n"\s*\)/g;
 
+/** The import a consumer must carry, spelled once: the inert fixture below
+ *  asserts against the SAME pattern the consumer test uses, so "the strip fools
+ *  it" is a statement about the real assertion and not a look-alike. */
+const SHARED_IMPORT =
+  /import\s*\{\s*sameTextIgnoringEol\s*\}\s*from\s*"\.\.\/\.\.\/shared\/text-equality\.js"/;
+
 const SHARED = "../../src/shared/text-equality.ts";
 const CONSUMERS = [
   ["webview", "../../src/webview/cm/edit-sync.ts"],
@@ -102,37 +108,34 @@ describe("build: the EOL-insensitive compare has ONE definition", () => {
       '// import { sameTextIgnoringEol } from "../../shared/text-equality.js";',
       '/* a.replace(/\\r\\n|\\r|\\n/g, "\\n") === b.replace(/\\r\\n|\\r|\\n/g, "\\n") */',
     ].join("\n");
+    const stripped = stripComments(disguised);
     // Un-stripped, both halves are fooled by the comments.
-    expect(disguised).toMatch(/import\s*\{\s*sameTextIgnoringEol\s*\}/);
+    expect(disguised).toMatch(SHARED_IMPORT);
     expect(disguised.match(EOL_FOLD) ?? []).toHaveLength(2);
     // Stripped, neither is.
-    expect(stripComments(disguised)).not.toMatch(/import\s*\{\s*sameTextIgnoringEol\s*\}/);
-    expect(stripComments(disguised).match(EOL_FOLD) ?? []).toHaveLength(0);
+    expect(stripped).not.toMatch(SHARED_IMPORT);
+    expect(stripped.match(EOL_FOLD) ?? []).toHaveLength(0);
   });
 
   for (const [side, path] of CONSUMERS) {
     it(`the ${side} side imports it instead of carrying a copy`, () => {
       const src = stripComments(read(path));
-      expect(src).toMatch(
-        /import\s*\{\s*sameTextIgnoringEol\s*\}\s*from\s*"\.\.\/\.\.\/shared\/text-equality\.js"/
-      );
+      expect(src).toMatch(SHARED_IMPORT);
       // Imported AND called — an unused import beside a local copy is the defect,
       // and the import assertion alone cannot see it.
-      expect(src.match(/\bsameTextIgnoringEol\(/g) ?? []).not.toHaveLength(0);
+      expect(src).toMatch(/\bsameTextIgnoringEol\(/);
       // The point of the guard: no second implementation beside the import.
       // A THIRD copy would be the same defect, and lands in whichever of these
       // two files asks the question — the wider tree normalises EOLs for other
       // purposes, which is why the scope stays at these two (see EOL_FOLD).
       expect(src.match(EOL_FOLD) ?? []).toHaveLength(0);
       // No LITERAL `\r` anywhere. EOL_FOLD is deliberately one idiom, so on its
-      // own it is evadable: measured at dccbb48, `/\r\n?|\n/g` (the spelling
-      // src/webview/cm/seed.ts itself uses), a hoisted regex const and split/join
-      // all pass it while keeping the import. Neither consumer touches `\r` at all
-      // (measured: 0 occurrences in both, comments included), so a fold spelled
-      // with a literal `\r` reads as a copy whatever its regex shape. ⚠️ Escape
-      // forms (`\x0D`, `\u000D`) and borrowing `splitToCmText` from `./seed.js`
-      // evade BOTH assertions — measured, and recorded in the header rather than
-      // papered over. Full-line comments only — see the header.
+      // own it is evadable; this covers every fold that writes `\r` out, whatever
+      // its regex shape, because neither consumer touches `\r` at all (measured
+      // at dccbb48: 0 occurrences in both, comments included). Which spellings
+      // this does and does NOT catch, the measured evasions, and the full-line-
+      // comment constraint it imposes on these two files are all in the header —
+      // not restated here.
       expect(src).not.toMatch(/\\r/);
     });
   }
