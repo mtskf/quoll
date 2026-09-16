@@ -115,8 +115,8 @@ const resolveCliProjectTarget = (target: string): string =>
 // type-checks. ⚠️ The "6" is a count, so recount before reusing it — the
 // previous "4" was measured before `eol-pair-table.ts` / `text-equality.test.ts`
 // landed, and a correct-the-comments commit carried the stale number forward
-// (caught by measurement, PR #412 cycle 3). Directives there change nothing, so reporting them would be
-// pure false alarm.
+// (caught by measurement, PR #412 cycle 3). Directives there change nothing,
+// so reporting them would be pure false alarm.
 //
 // Letting tsc resolve `extends` rather than reading the raw field is the same
 // reflex as the rest of this guard, and the difference is measurable:
