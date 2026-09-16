@@ -549,6 +549,36 @@ describe("editor — a superseded in-flight Edit is reported once (d4)", () => {
     commit(false);
     expect(onLocalEditDiscarded).not.toHaveBeenCalled();
   });
+
+  it("ACCEPTED RESIDUAL: a readonly ack + re-grant replay leaves the VIEW behind", () => {
+    // The drain's `!canWrite` guard retains the buffer while the reseed already
+    // moved the view back; the replay's own ack then FOLDS, so the view never
+    // catches up. Disk gets the bytes, the screen does not, and no notice fires
+    // (the lineage never moved). MEASURED so the residual is discoverable: when
+    // the fold/rewind defect is fixed the view becomes "sxy" — update this pin,
+    // do not "restore" the staleness. The silence stays either way.
+    // This is the ONLY test in the tree that observes screen/disk divergence,
+    // which is why it exists beside the TODO: this trigger loses nothing on
+    // disk, so a Done-when phrased as "the in-flight bytes are not lost" cannot
+    // catch a regression in it.
+    vi.useFakeTimers();
+    const onLocalEditDiscarded = vi.fn();
+    const { handle, view, commit } = mount({ onLocalEditDiscarded });
+    handle.applyDocument("s", true, 1, 0, 11);
+    view.dispatch({ changes: { from: view.state.doc.length, insert: "x" } });
+    vi.advanceTimersByTime(300); // posts "sx" — in flight
+    view.dispatch({ changes: { from: view.state.doc.length, insert: "y" } });
+    vi.advanceTimersByTime(300); // buffers "sxy"
+    handle.applyDocument("s", false, 2, 0, 11); // write revoked: reseed, buffer held
+    commit(false);
+    handle.applyDocument("s", true, 2, 0, 11); // re-granted: the drain posts "sxy"
+    commit(false);
+    handle.applyDocument("sxy", true, 3, 0, 11); // our own ack → folds
+    commit(false);
+    expect(editPosts().map((m) => (m as { content: string }).content)).toEqual(["sx", "sxy"]);
+    expect(view.state.sliceDoc()).toBe("s"); // the screen is BEHIND the saved bytes
+    expect(onLocalEditDiscarded).not.toHaveBeenCalled();
+  });
 });
 
 // (e) CRLF round-trip — uniform CRLF + LF round-trip + DEFENSIVE mixed/CR-only

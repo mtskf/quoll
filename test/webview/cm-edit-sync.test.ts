@@ -1479,9 +1479,10 @@ describe("cm edit-sync — epoch-bounded buffers (S3b)", () => {
   it("does NOT fire onLocalEditDiscarded on a same-lineage ack while the doc is ahead", () => {
     // The everyday shape: the user kept typing THROUGH the in-flight window, so
     // by the time our own ack lands the live doc has moved past the bytes we
-    // posted. Deliberately rests on ONE conjunct so it can fail — the lineage
-    // does not move, while the content test is already false. (An earlier version
-    // acked with the doc still equal to the posted bytes, which made BOTH
+    // posted. Deliberately rests on ONE conjunct so it can fail: the lineage
+    // conjunct is FALSE while the "document does not carry our bytes" conjunct
+    // is TRUE, so dropping the lineage test alone turns this red. (An earlier
+    // version acked with the doc still equal to the posted bytes, making BOTH
     // conjuncts false: it read as a negative pin while being unable to fail under
     // any single-conjunct regression.)
     // Role split, so the three same-lineage silences stay distinguishable: the

@@ -5,9 +5,16 @@
 // `lostToSupersession`, "does the authoritative document still carry these
 // un-acked bytes?"). The two were byte-identical hand copies, regex included;
 // this is the single definition so they cannot drift. One-sided drift is
-// user-visible in BOTH directions — widen the host's and the webview announces
-// a discard on every epoch advance, widen the webview's and a real loss goes
-// unannounced.
+// user-visible on EITHER side, and the symptoms are per-side. The host's
+// predicate gates the externalEpoch bump (foreignAtSettle): NARROW it and a
+// routine EOL skew scores the webview's own ack as foreign — the epoch advances
+// and the webview drops the replay buffer, which is unconditional on content,
+// discarding un-acked keystrokes for nothing, with only a console.warn and no
+// user notice; WIDEN it and genuine foreign bytes read as ours, so no epoch
+// advances and a stale buffer replays over them. The webview's predicate is the
+// notice's SECOND conjunct: NARROW it and an epoch advance whose Document does
+// carry the bytes announces a discard that did not happen; WIDEN it and a real
+// loss goes unannounced.
 // Pure + dependency-free so it crosses the host/webview bundle boundary from
 // src/shared/ (no vscode, no DOM).
 

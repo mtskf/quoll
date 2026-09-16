@@ -7,10 +7,14 @@
 //
 // WHY a shared table rather than a copy per side: the two predicates used to be
 // byte-identical hand copies with nothing pinning them together, and one-sided
-// drift is user-visible in both directions (widen the host's and the webview
-// announces a discard on every epoch advance; widen the webview's and a real loss
-// goes unannounced). A row added here is a row both sides must satisfy — a row
-// cannot be added to one side only.
+// drift is user-visible on either side, with per-side symptoms — the full
+// argument lives on src/shared/text-equality.ts; do not restate it here. A row
+// added here is a row both sides must satisfy — a row cannot be added to one
+// side only.
+//
+// Type-checked by test/webview/tsconfig.json, which names this file explicitly:
+// both consumers are themselves transpile-only, so nothing else gives it a
+// program and the `readonly`/`EolPair` contract below would be decorative.
 //
 // NOT a test file: vitest collects `test/**/*.test.ts`, and importing a test file
 // would re-register its suites inside the importing file.

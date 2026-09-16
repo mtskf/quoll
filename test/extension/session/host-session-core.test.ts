@@ -722,9 +722,11 @@ describe("host-session-core: applyEditSettled drain", () => {
   // IS observable here: this drain accepts (re-acquires the lock, emits applyEdit)
   // exactly when the settled content matches `inFlightContent`, and reposts the
   // authoritative Document as external-wins when it does not — which is what the
-  // EOL row directly above drives for one pair. The whole table runs through the
-  // reducer here, and its expected verdict is read BOTH from the hand-written
-  // table and from `sameTextIgnoringEol` itself, so either kind of drift reds:
+  // single-pair test "ALIVE ok, currentContent matches inFlightContent ONLY by
+  // EOL (CRLF-canonical vs LF-raw)" earlier in this file drives. The whole table
+  // runs through the reducer here, and its expected verdict is read BOTH from
+  // the hand-written table and from `sameTextIgnoringEol` itself, so either kind
+  // of drift reds:
   // re-inlining a host-local predicate (the verdict stops agreeing with the shared
   // function) or widening/narrowing the shared function (the verdict stops
   // agreeing with the table). The webview's half of the same table is

@@ -323,8 +323,9 @@ function defaultMintEpochGeneration(): number {
  *  The comparison itself is `sameTextIgnoringEol` (src/shared/), which the
  *  webview's loss judgement asks of the same document — ONE definition, so the
  *  two sides cannot drift. This wrapper adds only the NULLABLE operand, which is
- *  local to the host's state shape: `b` is a held `inFlightContent` /
- *  `preApplyContent` that may be absent, and absent never matches. */
+ *  local to the host's state shape: `b` is `inFlightContent`, which is `null`
+ *  while no Edit is held (the other `b`, `preApplyContent`, is never null — see
+ *  its field comment), and absent never matches. */
 function contentMatches(a: string, b: string | null): boolean {
   // a is always a string here → a null operand never matches
   if (b === null) {

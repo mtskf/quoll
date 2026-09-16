@@ -115,12 +115,13 @@ export type EditSyncOptions = {
    *  `Transaction.addToHistory.of(false)`, so Undo cannot bring them back, and
    *  the host answers a `stale` Edit by reposting the authoritative Document
    *  rather than with an `edit-rejected` banner, so nothing else would say so.
-   *  The `console.warn` beside the buffer drop is the triage signal for that
-   *  holder (lengths, lineage); this callback is the USER-visible one — the shell
-   *  renders a notice. At most ONE call per drain, NOT latched here: "is a notice
-   *  already on screen" is only knowable on the display side, so the aggregation
-   *  rule lives in shell.ts. Zero arguments by design — the notice says the same
-   *  thing regardless of how much was lost.
+   *  A `console.warn` beside each holder's discard (the buffer drop and the
+   *  in-flight discard, one per drain) is the triage signal (lengths, lineage);
+   *  this callback is the USER-visible one — the shell renders a notice. At most
+   *  ONE call per drain, NOT latched here: "is a notice already on screen" is
+   *  only knowable on the display side, so the aggregation rule lives in
+   *  shell.ts. Zero arguments by design — the notice says the same thing
+   *  regardless of how much was lost.
    *
    *  CALLED AFTER both holders have settled, and wrapped in a local try/catch —
    *  see the call site for why the two halves are independent.
@@ -370,8 +371,9 @@ export function createEditSync(opts: EditSyncOptions): EditSync {
 
   // The recorded pair in internal form — the ONE place `recorded` is handed out
   // as a `DocumentIdentity`, so every reader listed at its declaration above
-  // sees the same shape (the two console logs read the fields direct; that list
-  // is not repeated here, because a second copy is what goes stale).
+  // sees the same shape (the three console logs — the buffer drop, the in-flight
+  // discard, and the identity-transition adoption — read the fields direct; that
+  // list is not repeated here, because a second copy is what goes stale).
   // Exported as-is; see the EditSync.recordedIdentity JSDoc. Returns a COPY, not
   // the live object: this is a public member, and `readonly` is a compile-time
   // guarantee only, so handing out a reference to internal state would let a JS
