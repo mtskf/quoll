@@ -18,9 +18,15 @@
 // to it and quietly stops using the shared one. This file is that missing half:
 // it pins the STRUCTURE — one definition, both sides importing it, and imported
 // is not enough: each consumer must also CALL it. A re-inlined copy reds two
-// ways, so it cannot come back quietly: the exact idiom trips the EOL_FOLD
-// count, and ANY other spelling (`/\r\n?|\n/`, a hoisted regex const,
-// split/join) trips the `\r` ban, because neither consumer mentions `\r` at all.
+// ways: the exact idiom trips the EOL_FOLD count, and any spelling that writes
+// `\r` LITERALLY (`/\r\n?|\n/`, a hoisted regex const, split/join) trips the
+// `\r` ban, because neither consumer mentions `\r` at all.
+// ⚠️ NOT every spelling. Measured evasions that stay GREEN: `\x0D`, `\u000D`,
+// and re-using `splitToCmText` from `./seed.js` (which normalises EOLs as a side
+// effect of building a CM Text). So the honest claim is "an exact-idiom or
+// literal-`\r` copy cannot come back quietly", not "no copy can" — the guard
+// narrows the ways back in, it does not close them. Two independent advisors
+// measured this against an earlier draft that claimed "ANY other spelling".
 //
 // ⚠️ The `\r` ban is a CONSTRAINT on these two files, chosen deliberately: a
 // `\r` mention in src/webview/cm/edit-sync.ts or
@@ -118,13 +124,15 @@ describe("build: the EOL-insensitive compare has ONE definition", () => {
       // two files asks the question — the wider tree normalises EOLs for other
       // purposes, which is why the scope stays at these two (see EOL_FOLD).
       expect(src.match(EOL_FOLD) ?? []).toHaveLength(0);
-      // No EOL handling of ANY spelling. EOL_FOLD is deliberately one idiom, so
-      // on its own it is evadable: measured at dccbb48, `/\r\n?|\n/g` (the
-      // spelling src/webview/cm/seed.ts itself uses), a hoisted regex const and
-      // split/join all pass it while keeping the import. Neither consumer touches
-      // `\r` at all (measured: 0 occurrences in both, comments included), so any
-      // re-inlined fold reads as a copy whatever its spelling. Full-line comments
-      // only — see the header.
+      // No LITERAL `\r` anywhere. EOL_FOLD is deliberately one idiom, so on its
+      // own it is evadable: measured at dccbb48, `/\r\n?|\n/g` (the spelling
+      // src/webview/cm/seed.ts itself uses), a hoisted regex const and split/join
+      // all pass it while keeping the import. Neither consumer touches `\r` at all
+      // (measured: 0 occurrences in both, comments included), so a fold spelled
+      // with a literal `\r` reads as a copy whatever its regex shape. ⚠️ Escape
+      // forms (`\x0D`, `\u000D`) and borrowing `splitToCmText` from `./seed.js`
+      // evade BOTH assertions — measured, and recorded in the header rather than
+      // papered over. Full-line comments only — see the header.
       expect(src).not.toMatch(/\\r/);
     });
   }
