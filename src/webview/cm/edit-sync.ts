@@ -695,7 +695,11 @@ export function createEditSync(opts: EditSyncOptions): EditSync {
     // boolean latch, which a throwing `view.dispatch` could strand into a false
     // notice on the NEXT, healthy ack.
     const newest = buffered ?? settledInFlight;
-    const lost = newest !== null && lostToSupersession(newest);
+    // Held as the SUBJECT (null when nothing was lost) rather than as a boolean
+    // beside it: the verdict and the holder the warn below has to name are then
+    // one value, so the type carries "a loss always has a subject" instead of a
+    // second null check re-asserting it.
+    const lostSubject = newest !== null && lostToSupersession(newest) ? newest : null;
     // Captured BEFORE the drop so the notice arm below can tell whether this
     // branch already left a record for this drain — ONE warn per drain, for
     // whichever holder lost.
@@ -722,24 +726,25 @@ export function createEditSync(opts: EditSyncOptions): EditSync {
       });
       buffered = null;
     }
-    if (lost) {
-      if (droppedBuffer === null && newest !== null) {
+    if (lostSubject !== null) {
+      if (droppedBuffer === null) {
         // The OTHER holder. A surviving buffer can never be the lost subject —
         // `lostToSupersession`'s first conjunct IS the drop predicate — so
-        // reaching here means no buffer was held and `newest` is the Edit the ack
-        // just settled: posted, never acked, and the host's lineage has moved past
-        // it without carrying the bytes. Same contract as the buffer drop above,
-        // applied to this module's other content-discarding path, so a support
-        // report of the user notice is triageable for BOTH holders rather than one.
+        // reaching here means no buffer was held and the subject is the Edit the
+        // ack just settled: posted, never acked, and the host's lineage has moved
+        // past it without carrying the bytes. Same contract as the buffer drop
+        // above, applied to this module's other content-discarding path, so a
+        // support report of the user notice is triageable for BOTH holders rather
+        // than one.
         // Length and lineage only: document bytes must never reach the console.
         console.warn(
           "[quoll] discarding an un-acked in-flight Edit (foreign epoch / identity transition)",
           {
-            stampGeneration: newest.generation,
-            stampEpoch: newest.epoch,
+            stampGeneration: lostSubject.generation,
+            stampEpoch: lostSubject.epoch,
             recordedGeneration: recorded.generation,
             recordedEpoch: recorded.epoch,
-            droppedLength: newest.content.length,
+            droppedLength: lostSubject.content.length,
             liveLength: opts.getDoc().length,
           }
         );
