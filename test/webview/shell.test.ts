@@ -384,6 +384,150 @@ describe("shell — S3b epoch-bounded acceptance ordering", () => {
     }
   });
 
+  it("surfaces ONE notice when a foreign epoch advance discards an Edit still in flight", async () => {
+    // The sibling test above holds a BUFFER as well; this one holds only the
+    // in-flight Edit (the debounce fired, nothing typed after), which is the path
+    // that was silent end-to-end.
+    await mount();
+    vi.useFakeTimers();
+    try {
+      deliver(
+        buildDocument({ docVersion: 1, content: "s", externalEpoch: 0, epochGeneration: 11 })
+      );
+      const view = mountedView();
+      view.dispatch({ changes: { from: view.state.doc.length, insert: "x" } });
+      vi.advanceTimersByTime(300); // posts "sx" — in flight, nothing buffered
+      expect(container?.querySelectorAll(".quoll-resync-notice").length).toBe(0);
+      deliver(
+        buildDocument({ docVersion: 2, content: "external", externalEpoch: 1, epochGeneration: 11 })
+      );
+      const shown = container?.querySelectorAll(".quoll-resync-notice");
+      expect(shown?.length).toBe(1);
+      expect(shown?.[0].textContent).toContain("discarded pending edits");
+      expect(shown?.[0].classList.contains("quoll-notice-discard")).toBe(true);
+      expect(readDoc()).toBe("external");
+      // The lost bytes are not smuggled back on the next keystroke either.
+      view.dispatch({ changes: { from: view.state.doc.length, insert: "!" } });
+      vi.advanceTimersByTime(300);
+      const posted = postMessage.mock.calls
+        .map(([m]) => m as { type?: string; content?: string })
+        .filter((m) => m.type === "edit");
+      expect(posted.filter((m) => m.content === "sx").length).toBe(1); // posted once, never replayed
+      expect(posted.some((m) => m.content === "external!")).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("shows NO notice when the foreign write lands exactly the user's newest bytes", async () => {
+    // The ordered-holders case end-to-end: the buffer holds "sxy" (newest), the
+    // in-flight Edit holds the ancestor "sx", and the foreign Document carries
+    // "sxy". The buffer is still dropped — it must be — but the user's text is
+    // all there, so a notice would be a false alarm. This is the exact sequence
+    // two reviewers measured against a per-holder disjunction.
+    await mount();
+    vi.useFakeTimers();
+    try {
+      deliver(
+        buildDocument({ docVersion: 1, content: "s", externalEpoch: 0, epochGeneration: 11 })
+      );
+      const view = mountedView();
+      view.dispatch({ changes: { from: view.state.doc.length, insert: "x" } });
+      vi.advanceTimersByTime(300); // posts "sx" — in flight
+      view.dispatch({ changes: { from: view.state.doc.length, insert: "y" } });
+      vi.advanceTimersByTime(300); // buffers "sxy" — the newest local bytes
+      deliver(
+        buildDocument({ docVersion: 2, content: "sxy", externalEpoch: 1, epochGeneration: 11 })
+      );
+      await Promise.resolve();
+      expect(container?.querySelectorAll(".quoll-resync-notice").length).toBe(0);
+      expect(readDoc()).toBe("sxy");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("shows NO notice when a pagehide flush is echoed back by the host", async () => {
+    // The flush() variant of the same shape: flush force-posts "sxy" while "sx"
+    // is in flight and RETAINS the buffer, so both holders hold "sxy" under a
+    // stale stamp. `pagehide` is the trigger the file's existing teardown-flush
+    // test uses.
+    await mount();
+    vi.useFakeTimers();
+    try {
+      deliver(
+        buildDocument({ docVersion: 1, content: "s", externalEpoch: 0, epochGeneration: 11 })
+      );
+      const view = mountedView();
+      view.dispatch({ changes: { from: view.state.doc.length, insert: "x" } });
+      vi.advanceTimersByTime(300); // posts "sx" — in flight
+      view.dispatch({ changes: { from: view.state.doc.length, insert: "y" } }); // in the debounce window
+      window.dispatchEvent(new Event("pagehide")); // → flushPending → sync.flush()
+      deliver(
+        buildDocument({ docVersion: 2, content: "sxy", externalEpoch: 1, epochGeneration: 11 })
+      );
+      await Promise.resolve();
+      expect(container?.querySelectorAll(".quoll-resync-notice").length).toBe(0);
+      expect(readDoc()).toBe("sxy");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("ACCEPTED RESIDUAL: the forked flush window loses a keystroke with no notice", async () => {
+    // Pins behaviour this notice cannot fix, so the gap is discoverable instead
+    // of surprising. `flush()` force-posts while an Edit is in flight and keeps
+    // the buffer; the earlier Edit's own ack then no longer matches the in-flight
+    // content, so it is NOT folded and the view is reseeded BACK to it while the
+    // drain replays forward. A keystroke typed in that window branches off the
+    // reseeded view instead of descending from the bytes in flight — and that
+    // forked Edit is what overwrites them, on disk, notice or no notice.
+    // The underlying defect (a non-folded ack reseeds the view while the replay
+    // posts forward) is tracked as its own TODO entry; if a future change makes
+    // this notice fire here, that is an IMPROVEMENT — update this pin, do not
+    // "restore" the silence.
+    await mount();
+    vi.useFakeTimers();
+    try {
+      deliver(
+        buildDocument({ docVersion: 1, content: "s", externalEpoch: 0, epochGeneration: 11 })
+      );
+      const view = mountedView();
+      view.dispatch({ changes: { from: view.state.doc.length, insert: "x" } });
+      vi.advanceTimersByTime(300); // posts "sx" — in flight
+      view.dispatch({ changes: { from: view.state.doc.length, insert: "y" } }); // in the debounce window
+      window.dispatchEvent(new Event("pagehide")); // flush force-posts "sxy", keeps the buffer
+      // The FIRST Edit's ack, same lineage — no longer matches the in-flight
+      // "sxy", so the view is reseeded to "sx" and the drain replays "sxy".
+      deliver(
+        buildDocument({ docVersion: 2, content: "sx", externalEpoch: 0, epochGeneration: 11 })
+      );
+      // The user types on that view: the result FORKS — it has no "y".
+      view.dispatch({ changes: { from: view.state.doc.length, insert: "z" } });
+      vi.advanceTimersByTime(300);
+      deliver(
+        buildDocument({ docVersion: 3, content: "sxz", externalEpoch: 1, epochGeneration: 11 })
+      );
+      await Promise.resolve();
+      // No notice: the newest held bytes ARE the document. The "y" is gone anyway.
+      expect(container?.querySelectorAll(".quoll-resync-notice").length).toBe(0);
+      // MEASURED, so the pin cannot go vacuous if the harness ever settles this
+      // differently: the Edits posted are ["sx", "sxy", "sxy"] (the debounced
+      // post, the flush force-post, then the retained buffer's replay) and the
+      // view ends at "sxz" — i.e. the "z" really was typed onto the reseeded
+      // "sx", so the branch has no "y" in it. Assert both, not just the silence.
+      const posted = postMessage.mock.calls
+        .map(([m]) => m as { type?: string; content?: string })
+        .filter((m) => m.type === "edit")
+        .map((m) => m.content);
+      expect(posted).toEqual(["sx", "sxy", "sxy"]);
+      expect(readDoc()).toBe("sxz"); // forked off "sx": the "y" is gone
+      expect(posted.some((c) => c === "sxz")).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("shows NO discard notice when a reseed discards nothing", async () => {
     await mount();
     deliver(buildDocument({ docVersion: 1, content: "s", externalEpoch: 0, epochGeneration: 11 }));
