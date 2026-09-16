@@ -115,11 +115,9 @@ const resolveCliProjectTarget = (target: string): string =>
 // include), which no real program type-checks. ⚠️ EVERY number in this sentence
 // is a count — recount all three before reusing any of them. Both have already
 // gone stale once: the total read "570" and the `test/shared` figure read "4",
-// both measured 2026-08-30, and two successive correct-the-comments commits each
-// fixed one and carried the other forward. Recount with the guard's own
-// mechanism (`ts.parseJsonConfigFileContent` over `tsconfig.base.json`), not by
-// eye. Directives there change nothing, so reporting them would be pure false
-// alarm.
+// both measured 2026-08-30 and both since corrected. Recount with the guard's own
+// `readProject` helper (this file), run against `tsconfig.base.json`, not by eye.
+// Directives there change nothing, so reporting them would be pure false alarm.
 //
 // Letting tsc resolve `extends` rather than reading the raw field is the same
 // reflex as the rest of this guard, and the difference is measurable:
