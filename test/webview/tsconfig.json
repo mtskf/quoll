@@ -38,6 +38,10 @@
     // explicitly so a fixture consumed by the host/markdown/shared suites alone
     // still gets a program instead of being silently transpile-only.
     "../fixtures/**/*.ts",
+    // Same reason: the EOL pair table is consumed only by suites that are
+    // themselves transpile-only (test/shared/ and test/extension/session/ are in
+    // no tsconfig), so nothing else gives it a program.
+    "../shared/eol-pair-table.ts",
     "../../src/webview/**/*.ts",
     "../../src/markdown/**/*.ts",
     "../../src/shared/**/*.ts"

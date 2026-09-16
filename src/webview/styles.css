@@ -324,9 +324,9 @@ html body {
     background-color: var(--vscode-inputValidation-errorBackground, transparent);
   }
 
-  /* Shared surface for BOTH edit-sync lifecycle notices — the discarded
-   * pre-ack buffer (.quoll-notice-discard, not latched: every fresh loss
-   * re-shows it) and the clustering escalation tripwire
+  /* Shared surface for BOTH edit-sync lifecycle notices — discarded un-acked
+   * local edits, buffered or in flight (.quoll-notice-discard, not latched:
+   * every fresh loss re-shows it) and the clustering escalation tripwire
    * (.quoll-notice-storm, once-per-session). shell.ts owns which one is in
    * the slot; the two modifier classes exist for that distinction and
    * currently carry no rules of their own — so a tweak HERE changes both,

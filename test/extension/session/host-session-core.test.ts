@@ -14,6 +14,8 @@ import {
 } from "../../../src/extension/session/host-session-core.js";
 import type { MarkdownError } from "../../../src/markdown/errors.js";
 import type { ValidateForWriteResult } from "../../../src/markdown/validate-for-write.js";
+import { sameTextIgnoringEol } from "../../../src/shared/text-equality.js";
+import { EOL_PAIRS } from "../../shared/eol-pair-table.js";
 
 const ctx = { uriString: "file:///x.md", fsPath: "/x.md" };
 const unsafe: MarkdownError = {
@@ -714,6 +716,38 @@ describe("host-session-core: applyEditSettled drain", () => {
     );
     expect(r.effects).toEqual([{ type: "showError", message: "Failed to save: boom" }]);
     expect(r.state).toEqual(disposed);
+  });
+
+  // LOCKSTEP with the webview. `contentMatches` is not exported, but its verdict
+  // IS observable here: this drain accepts (re-acquires the lock, emits applyEdit)
+  // exactly when the settled content matches `inFlightContent`, and reposts the
+  // authoritative Document as external-wins when it does not — which is what the
+  // single-pair test "ALIVE ok, currentContent matches inFlightContent ONLY by
+  // EOL (CRLF-canonical vs LF-raw)" earlier in this file drives. The whole table
+  // runs through the reducer here, and its expected verdict is read BOTH from
+  // the hand-written table and from `sameTextIgnoringEol` itself, so either kind
+  // of drift reds:
+  // re-inlining a host-local predicate (the verdict stops agreeing with the shared
+  // function) or widening/narrowing the shared function (the verdict stops
+  // agreeing with the table). The webview's half of the same table is
+  // test/shared/text-equality.test.ts + cm-edit-sync.test.ts's EOL-only test.
+  describe("EOL-insensitive compare stays in lockstep with src/shared", () => {
+    for (const { label, a, b, expected } of EOL_PAIRS) {
+      it(`${label}: the drain ${expected ? "ACCEPTS" : "treats it as external-wins"}`, () => {
+        // `a` is the settled canonical content (document.eol), `b` the raw
+        // webview bytes held as inFlightContent — the production operand roles.
+        const r = core.transition(
+          lockedWithStash(b, `${b}-plus`),
+          settled({ settledVersion: 2, currentContent: a })
+        );
+        const drained = r.state.pendingApplyBaseVersion !== null;
+        expect(drained).toBe(expected);
+        expect(drained).toBe(sameTextIgnoringEol(a, b));
+        // A second, independent observable of the same verdict: the drain's
+        // applyEdit effect exists iff it accepted.
+        expect(r.effects.some((e) => e.type === "applyEdit")).toBe(expected);
+      });
+    }
   });
 });
 

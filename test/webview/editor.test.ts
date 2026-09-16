@@ -99,7 +99,12 @@ type MountResult = {
 };
 
 function mount(
-  opts: { state?: WebviewState; onDispatch?: (action: Action) => void; nonce?: string } = {}
+  opts: {
+    state?: WebviewState;
+    onDispatch?: (action: Action) => void;
+    nonce?: string;
+    onLocalEditDiscarded?: () => void;
+  } = {}
 ): MountResult {
   let state = opts.state ?? makeState();
   const dispatch: (action: Action) => void = opts.onDispatch ?? (() => {});
@@ -108,6 +113,7 @@ function mount(
     nonce: opts.nonce ?? "test-nonce",
     getState: () => state,
     dispatch,
+    onLocalEditDiscarded: opts.onLocalEditDiscarded,
   });
   mounted.push(handle);
   const mountEl = container?.querySelector(".quoll-editor") as HTMLElement | null;
@@ -424,6 +430,154 @@ describe("editor — ok-ack fold requires identity-lineage continuity (d3)", () 
     commit(false);
     expect(editPosts()).toHaveLength(2);
     expect((editPosts()[1] as { content: string }).content).toBe("D123");
+  });
+});
+
+// (d4) The in-flight holder end-to-end: applyDocument reseeds over an Edit that
+// was posted and never acked, and the drain reports it exactly once. The (d3)
+// block above covers the buffered holder on the same Documents; what is new here
+// is that NOTHING is buffered — the debounce had already fired — and that the
+// notice fires only when the authoritative document does not carry the bytes.
+describe("editor — a superseded in-flight Edit is reported once (d4)", () => {
+  function seedAndPost(handle: EditorHandle, view: EditorView, epoch: number, gen: number) {
+    handle.applyDocument("D1", true, 1, epoch, gen);
+    view.dispatch({ changes: { from: view.state.doc.length, insert: "2" } });
+    vi.advanceTimersByTime(300); // posts "D12" — in flight, nothing buffered
+    expect(editPosts()).toHaveLength(1);
+  }
+
+  it("notifies once when a foreign epoch advance reseeds over the in-flight Edit", () => {
+    vi.useFakeTimers();
+    const onLocalEditDiscarded = vi.fn();
+    const { handle, view, commit } = mount({ onLocalEditDiscarded });
+    seedAndPost(handle, view, 0, 11);
+    handle.applyDocument("FOREIGN", true, 2, 1, 11);
+    expect(view.state.sliceDoc()).toBe("FOREIGN"); // the reseed really happened
+    commit(false);
+    expect(onLocalEditDiscarded).toHaveBeenCalledTimes(1);
+    // ...and nothing re-posts the lost bytes afterwards.
+    view.dispatch({ changes: { from: view.state.doc.length, insert: "!" } });
+    vi.advanceTimersByTime(300);
+    const contents = editPosts().map((m) => (m as { content: string }).content);
+    expect(contents).toContain("FOREIGN!");
+    // "D12" was legitimately posted ONCE by seedAndPost; what must not happen is
+    // a REPLAY of it after the reseed. Assert the count, not absence.
+    expect(contents.filter((c) => c === "D12").length).toBe(1);
+  });
+
+  it("does NOT notify when a newer buffered keystroke survives the epoch advance", () => {
+    // The ordered-holders case through the real seam: the user typed once more
+    // after the post, so the buffer holds the newest bytes — and the foreign
+    // write landed exactly those. Nothing to reapply, so nothing to say.
+    vi.useFakeTimers();
+    const onLocalEditDiscarded = vi.fn();
+    const { handle, view, commit } = mount({ onLocalEditDiscarded });
+    seedAndPost(handle, view, 0, 11);
+    view.dispatch({ changes: { from: view.state.doc.length, insert: "3" } });
+    vi.advanceTimersByTime(300); // buffers "D123" (single-flight)
+    handle.applyDocument("D123", true, 2, 1, 11); // foreign write == the newest bytes
+    commit(false);
+    expect(onLocalEditDiscarded).not.toHaveBeenCalled();
+  });
+
+  it("does NOT notify when the epoch advance carries the in-flight bytes", () => {
+    vi.useFakeTimers();
+    const onLocalEditDiscarded = vi.fn();
+    const { handle, view, commit } = mount({ onLocalEditDiscarded });
+    seedAndPost(handle, view, 0, 11);
+    handle.applyDocument("D12", true, 2, 1, 11); // content IS ours
+    commit(false);
+    expect(onLocalEditDiscarded).not.toHaveBeenCalled();
+  });
+
+  it("notifies on a readonly Document that supersedes the in-flight Edit", () => {
+    // The reseed does not care about canWrite (needsReseed = aheadOfHost &&
+    // !foldsOkAck), so the bytes are just as gone. The buffered holder already
+    // notifies here — its drop runs before the drain's !canWrite guard — and the
+    // two holders must not disagree about whether a loss is worth naming.
+    vi.useFakeTimers();
+    const onLocalEditDiscarded = vi.fn();
+    const { handle, view, commit } = mount({ onLocalEditDiscarded });
+    seedAndPost(handle, view, 0, 11);
+    handle.applyDocument("FOREIGN", false, 2, 1, 11);
+    expect(view.state.sliceDoc()).toBe("FOREIGN");
+    commit(false);
+    expect(onLocalEditDiscarded).toHaveBeenCalledTimes(1);
+  });
+
+  it("notifies on a NEW GENERATION Document that does not carry the in-flight Edit", () => {
+    vi.useFakeTimers();
+    const onLocalEditDiscarded = vi.fn();
+    const { handle, view, commit } = mount({ onLocalEditDiscarded });
+    seedAndPost(handle, view, 0, 11);
+    handle.applyDocument("RESTARTED", true, 1, 0, 22); // identity transition
+    commit(false);
+    expect(onLocalEditDiscarded).toHaveBeenCalledTimes(1);
+  });
+
+  it("does NOT notify when the host reposts different bytes on the SAME lineage", () => {
+    // The seam-level pin for the supersession conjunct, and the shape the host's
+    // stale / no-op repost arm produces routinely: the lineage is unmoved but the
+    // document is NOT carrying our bytes, so the CONTENT conjunct is already
+    // false and only the lineage test keeps this quiet. Drop that conjunct and
+    // every ordinary repost notifies the user of a loss that did not happen.
+    vi.useFakeTimers();
+    const onLocalEditDiscarded = vi.fn();
+    const { handle, view, commit } = mount({ onLocalEditDiscarded });
+    seedAndPost(handle, view, 0, 11);
+    handle.applyDocument("HOST-OTHER", true, 2, 0, 11); // same pair, different bytes
+    // The reseed really happened, so the silence cannot be the content conjunct
+    // standing in for the lineage one.
+    expect(view.state.sliceDoc()).toBe("HOST-OTHER");
+    commit(false);
+    expect(onLocalEditDiscarded).not.toHaveBeenCalled();
+  });
+
+  it("CHARACTERISATION: the ordinary same-lineage ack notifies nothing", () => {
+    // Labelled honestly: BOTH conjuncts are false here (the lineage did not move
+    // AND the document carries exactly the bytes we posted), so no single-conjunct
+    // regression can red it — it is not a pin for either half. It stays because it
+    // documents the everyday path end-to-end and would still catch a gross
+    // regression that notifies unconditionally. The single-conjunct detectors at
+    // this seam are the test above (lineage) and the "epoch advance carries the
+    // in-flight bytes" test (content).
+    vi.useFakeTimers();
+    const onLocalEditDiscarded = vi.fn();
+    const { handle, view, commit } = mount({ onLocalEditDiscarded });
+    seedAndPost(handle, view, 0, 11);
+    handle.applyDocument("D12", true, 2, 0, 11); // our own ack
+    commit(false);
+    expect(onLocalEditDiscarded).not.toHaveBeenCalled();
+  });
+
+  it("ACCEPTED RESIDUAL: a readonly ack + re-grant replay leaves the VIEW behind", () => {
+    // The drain's `!canWrite` guard retains the buffer while the reseed already
+    // moved the view back; the replay's own ack then FOLDS, so the view never
+    // catches up. Disk gets the bytes, the screen does not, and no notice fires
+    // (the lineage never moved). MEASURED so the residual is discoverable: when
+    // the fold/rewind defect is fixed the view becomes "sxy" — update this pin,
+    // do not "restore" the staleness. The silence stays either way.
+    // This is the ONLY test in the tree that observes screen/disk divergence,
+    // which is why it exists beside the TODO: this trigger loses nothing on
+    // disk, so a Done-when phrased as "the in-flight bytes are not lost" cannot
+    // catch a regression in it.
+    vi.useFakeTimers();
+    const onLocalEditDiscarded = vi.fn();
+    const { handle, view, commit } = mount({ onLocalEditDiscarded });
+    handle.applyDocument("s", true, 1, 0, 11);
+    view.dispatch({ changes: { from: view.state.doc.length, insert: "x" } });
+    vi.advanceTimersByTime(300); // posts "sx" — in flight
+    view.dispatch({ changes: { from: view.state.doc.length, insert: "y" } });
+    vi.advanceTimersByTime(300); // buffers "sxy"
+    handle.applyDocument("s", false, 2, 0, 11); // write revoked: reseed, buffer held
+    commit(false);
+    handle.applyDocument("s", true, 2, 0, 11); // re-granted: the drain posts "sxy"
+    commit(false);
+    handle.applyDocument("sxy", true, 3, 0, 11); // our own ack → folds
+    commit(false);
+    expect(editPosts().map((m) => (m as { content: string }).content)).toEqual(["sx", "sxy"]);
+    expect(view.state.sliceDoc()).toBe("s"); // the screen is BEHIND the saved bytes
+    expect(onLocalEditDiscarded).not.toHaveBeenCalled();
   });
 });
 
