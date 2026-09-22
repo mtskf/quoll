@@ -57,8 +57,9 @@ export function runFormatDocument(view: EditorView): boolean {
   if (edits.length === 0 || formatted === source) {
     return false;
   }
-  // The size check must read Quoll's EOL facet, not state.lineBreak — see
-  // outboundContentLength's JSDoc for why the type alone does not say so.
+  // The size check must read the DOCUMENT's EOL (state.facet(quollDocumentEol)):
+  // the type rejects a plain `string`, but it cannot say WHICH of the two
+  // DocumentEol values this call must read. See outboundContentLength's JSDoc.
   if (outboundContentLength(formatted, view.state.facet(quollDocumentEol)) > MAX_CONTENT_LENGTH) {
     // postEditMessage would refuse to post the oversized (CRLF-serialized) content
     // and show the webview serialize-error banner, leaving the doc formatted but

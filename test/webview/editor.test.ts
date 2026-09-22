@@ -679,7 +679,10 @@ describe("editor — CRLF/LF round-trip uniform scope (e)", () => {
   it("LF seed round-trips byte-identically", () => {
     const { handle, view } = mount();
     handle.applyDocument("a\nb\nc", true, 1);
-    expect(view.state.sliceDoc()).toBe("a\nb\nc");
+    // Outbound bytes, not sliceDoc(): EditorState.lineSeparator is never
+    // provided, so sliceDoc() always renders LF regardless of what
+    // detectLineSeparator returned (see the sibling CRLF/CR-only cases above).
+    expect(hostBytes(view)).toBe("a\nb\nc");
     expect(view.state.doc.lines).toBe(3);
     expect(view.state.doc.line(1).text).toBe("a");
   });
