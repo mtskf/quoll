@@ -595,13 +595,8 @@ describe("editor — a superseded in-flight Edit is reported once (d4)", () => {
   });
 });
 
-// (e) CRLF round-trip — uniform CRLF + LF round-trip + DEFENSIVE mixed/CR-only
-// seam normalization. The host seeds canonicalDocumentText(document) (see
-// document-canonical.ts), so these raw mixed/CR-only inputs never reach the
-// seam in production (pinned by document-canonical.test.ts + the
-// mixed-eol-roundtrip e2e); these cases characterize the fallback, not a
-// user-facing path.
-// The getDoc/liveDoc pairing, which no fixture-level assertion can see.
+// The two outbound serializer reads — `getDoc` and `liveDoc` — which no
+// fixture-level assertion can see.
 //
 // ⚠️ The two reads are NOT symmetric, so one test cannot gate both (measured by
 // two independent reviewers):
@@ -609,7 +604,8 @@ describe("editor — a superseded in-flight Edit is reported once (d4)", () => {
 //     the host echo against them byte-exactly (`content === inFlight.content`,
 //     edit-sync.ts:957). Serialize it with the wrong EOL and every ack looks
 //     foreign -> reseed -> the keystroke rewind the fold exists to prevent.
-//   - `liveDoc` feeds ONLY `aheadOfHost` (editor.ts:928). An LF-only liveDoc is
+//   - `liveDoc` feeds ONLY `aheadOfHost` (editor.ts, `applyDocument`:
+//     `const aheadOfHost = liveDoc !== rawText`). An LF-only liveDoc is
 //     benign while the editor is ahead; it shows up instead as a FALSE
 //     aheadOfHost on an identical snapshot, which enters the reseed branch and
 //     collapses a multi-range selection to its main range.
@@ -658,6 +654,12 @@ describe("editor — the outbound serializer pairing (getDoc / liveDoc)", () => 
   });
 });
 
+// (e) CRLF round-trip — uniform CRLF + LF round-trip + DEFENSIVE mixed/CR-only
+// seam normalization. The host seeds canonicalDocumentText(document) (see
+// document-canonical.ts), so these raw mixed/CR-only inputs never reach the
+// seam in production (pinned by document-canonical.test.ts + the
+// mixed-eol-roundtrip e2e); these cases characterize the fallback, not a
+// user-facing path.
 describe("editor — CRLF/LF round-trip uniform scope (e)", () => {
   it("CRLF seed is byte-identical and the line model is clean (no stray \\r in line 1)", () => {
     // Two separate questions now, where sliceDoc() used to answer both: the CM
@@ -695,11 +697,15 @@ describe("editor — CRLF/LF round-trip uniform scope (e)", () => {
   it("CR-only seed defensively normalizes to LF (host seeds canonical; raw CR-only is unreachable in prod)", () => {
     const { handle, view } = mount();
     handle.applyDocument("a\rb\rc", true, 1);
-    // detectLineSeparator returns "\n" when no "\r\n" is present, so the
-    // split-on-/\r\n?|\n/ + sliceDoc() rejoin yields LF. The host never
-    // delivers raw CR-only bytes (it seeds canonicalDocumentText), so this
+    // The split on /\r\n?|\n/ drops the lone CRs, so the CM interior is LF.
+    // ⚠️ sliceDoc() cannot observe the detection: with no lineSeparator facet it
+    // renders LF whatever detectLineSeparator returned, so an assertion on it
+    // would stay green even for "\r\n". Assert the OUTBOUND read, which can see
+    // it: with no "\r\n" in the source detectLineSeparator picks "\n". The host
+    // never delivers raw CR-only bytes (it seeds canonicalDocumentText), so this
     // pins the seam's defensive behavior, not a user-facing path.
-    expect(view.state.sliceDoc()).toBe("a\nb\nc");
+    expect(view.state.doc.lines).toBe(3);
+    expect(hostBytes(view)).toBe("a\nb\nc");
   });
 });
 

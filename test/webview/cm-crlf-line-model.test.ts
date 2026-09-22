@@ -241,14 +241,20 @@ describe("Quoll's own multi-line insert paths, in a CRLF document", () => {
     // Format used to carry its own EOL join — the one site in the webview that
     // did — and dispatched a pre-joined string. It no longer does
     // (format-document-command.ts): its multi-line insert takes the same
-    // default-splitter path as every other insert here. This pin is what makes
-    // that equivalence observable, so re-introducing a bespoke join for a CRLF
-    // document reds.
+    // default-splitter path as every other insert here.
+    //
+    // ⚠️ This does NOT catch a re-introduced bespoke join: CM's default splitter
+    // consumes `\r\n`, so a CRLF-joined insert yields the same clean line model.
+    // What it does catch is the insert landing as one collapsed line.
     const { handle, view } = mount();
     handle.applyDocument("| a | bbbb |\r\n| - | - |\r\n| 1 | 2 |\r\n", true, 1);
     handle.runFormatDocument();
+    // The format LANDED — the seed is already 4 clean lines, so without this the
+    // assertions below are equally true of a document nothing happened to.
+    // (Values measured, and the same ones the direct-call pin in
+    // format/cm-format-document-command.test.ts asserts.)
+    expectLineModel(view.state.doc, ["| a   | bbbb |", "| --- | ---- |", "| 1   | 2    |", ""]);
     expectCleanLineModel(view.state.doc);
-    expect(view.state.doc.lines).toBe(4);
   });
 });
 
@@ -321,8 +327,11 @@ describe("CodeMirror's own multi-line insert paths, in a CRLF document", () => {
   });
 
   it("a CRLF-carrying string pasted into an LF document leaves no stray \\r", () => {
-    // The LF-side twin: today's facet for an LF document is "\n", so a literal
-    // "\r\n" split never happens and the \r stays inside the line text.
+    // The LF-side twin of the CRLF cases above. Under the OLD arrangement an LF
+    // document's EditorState.lineSeparator was "\n", so a pasted "\r\n" was
+    // never split at the pair and the "\r" survived inside the line text. With
+    // no lineSeparator provided, CM's default /\r\n?|\n/ splits the pair and no
+    // stray \r remains.
     const { handle, view } = mount();
     handle.applyDocument("ab\ncd", true, 1);
     view.dispatch({ selection: EditorSelection.cursor(1) });
