@@ -6,7 +6,7 @@ import {
   foldedRanges,
   syntaxTreeAvailable,
 } from "@codemirror/language";
-import { EditorState } from "@codemirror/state";
+import { EditorSelection, EditorState } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MAX_CONTENT_LENGTH, PROTOCOL_VERSION } from "../../src/shared/protocol.js";
@@ -20,6 +20,7 @@ import { editorPrefsField } from "../../src/webview/cm/editor-prefs.js";
 import { buildListHangIndent, listHangIndent } from "../../src/webview/cm/list/list-hang-indent.js";
 import { quollMarkdownLanguage } from "../../src/webview/cm/markdown.js";
 import { quollOpenExternalSink } from "../../src/webview/cm/open-external.js";
+import { quollDocumentEol, serializeDocument } from "../../src/webview/cm/seed.js";
 import { type EditorHandle, mountEditor } from "../../src/webview/editor.js";
 import { type Action, initialState, type WebviewState } from "../../src/webview/state.js";
 import { fullTree } from "./helpers/full-tree.js";
@@ -65,6 +66,19 @@ const mounted: EditorHandle[] = [];
 
 function makeState(overrides: Partial<WebviewState> = {}): WebviewState {
   return { ...initialState, ready: true, docVersion: 1, canWrite: true, ...overrides };
+}
+
+/** What the HOST would receive for this view — the document rendered with its
+ *  own EOL.
+ *
+ *  ⚠️ Not `view.state.sliceDoc()`. That used to answer this because
+ *  `EditorState.lineSeparator` rendered it, but Quoll no longer provides that
+ *  facet (it would downgrade CodeMirror's insert splitter and corrupt the line
+ *  model — see src/webview/cm/seed.ts), so `sliceDoc()` now renders LF for every
+ *  document. The interior line model and the outbound bytes are two different
+ *  questions; assert each with the reader that answers it. */
+function hostBytes(view: EditorView): string {
+  return serializeDocument(view.state.doc, view.state.facet(quollDocumentEol));
 }
 
 beforeEach(() => {
@@ -587,15 +601,77 @@ describe("editor — a superseded in-flight Edit is reported once (d4)", () => {
 // seam in production (pinned by document-canonical.test.ts + the
 // mixed-eol-roundtrip e2e); these cases characterize the fallback, not a
 // user-facing path.
-describe("editor — CRLF/LF round-trip uniform scope (e)", () => {
-  it("CRLF seed is byte-identical and the line model is clean (no stray \\r in line 1)", () => {
+// The getDoc/liveDoc pairing, which no fixture-level assertion can see.
+//
+// ⚠️ The two reads are NOT symmetric, so one test cannot gate both (measured by
+// two independent reviewers):
+//   - `getDoc()` supplies the bytes edit-sync posts, and the ok-ack fold compares
+//     the host echo against them byte-exactly (`content === inFlight.content`,
+//     edit-sync.ts:957). Serialize it with the wrong EOL and every ack looks
+//     foreign -> reseed -> the keystroke rewind the fold exists to prevent.
+//   - `liveDoc` feeds ONLY `aheadOfHost` (editor.ts:884). An LF-only liveDoc is
+//     benign while the editor is ahead; it shows up instead as a FALSE
+//     aheadOfHost on an identical snapshot, which enters the reseed branch and
+//     collapses a multi-range selection to its main range.
+// Hence one test per side.
+describe("editor — the outbound serializer pairing (getDoc / liveDoc)", () => {
+  it("an ok-ack on a CRLF document folds instead of rewinding (getDoc side)", () => {
+    vi.useFakeTimers();
+    const { handle, view, commit } = mount();
+    handle.applyDocument("D1\r\n2", true, 1);
+    view.dispatch({ changes: { from: view.state.doc.length, insert: "3" } });
+    vi.advanceTimersByTime(300);
+    expect(editPosts()).toHaveLength(1);
+    // The wire carries the document's own EOL.
+    expect((editPosts()[0] as { content: string }).content).toBe("D1\r\n23");
+    // Keep typing during the in-flight window: buffered, not posted.
+    view.dispatch({ changes: { from: view.state.doc.length, insert: "4" } });
+    vi.advanceTimersByTime(300);
+    expect(editPosts()).toHaveLength(1);
+    // ⚠️ The ack must be written out as LITERAL CRLF bytes. Feeding back
+    // editPosts()[0].content would compare the serializer against itself and the
+    // test would pass whatever getDoc does — the one thing this test exists to
+    // catch.
+    handle.applyDocument("D1\r\n23", true, 2);
+    // No visible rewind: the "4" is still on screen. Read the interior here
+    // (sliceDoc() renders LF now), and the wire separately.
+    expect(view.state.doc.toString()).toBe("D1\n234");
+    commit(false);
+    expect(editPosts()).toHaveLength(2);
+    expect((editPosts()[1] as { content: string }).content).toBe("D1\r\n234");
+  });
+
+  it("an identical CRLF snapshot does not reseed, so multi-range selection survives (liveDoc side)", () => {
     const { handle, view } = mount();
     handle.applyDocument("a\r\nb\r\nc", true, 1);
-    expect(view.state.sliceDoc()).toBe("a\r\nb\r\nc");
+    view.dispatch({
+      selection: EditorSelection.create([EditorSelection.range(0, 1), EditorSelection.range(4, 5)]),
+    });
+    expect(view.state.selection.ranges).toHaveLength(2);
+    // Byte-identical host snapshot. With `liveDoc` serialized correctly this is
+    // NOT ahead of the host, so applyDocument takes no reseed branch and leaves
+    // the selection alone. An LF-only `liveDoc` would compare "a\nb\nc" against
+    // "a\r\nb\r\nc", enter the reseed branch, and restore only prevMain.
+    handle.applyDocument("a\r\nb\r\nc", true, 2);
+    expect(view.state.selection.ranges).toHaveLength(2);
+    expect(view.state.doc.lines).toBe(3);
+  });
+});
+
+describe("editor — CRLF/LF round-trip uniform scope (e)", () => {
+  it("CRLF seed is byte-identical and the line model is clean (no stray \\r in line 1)", () => {
+    // Two separate questions now, where sliceDoc() used to answer both: the CM
+    // INTERIOR is LF-only, and the OUTBOUND bytes carry the document's own EOL.
+    // sliceDoc() answers neither any more — EditorState.lineSeparator is never
+    // provided, so it renders LF like doc.toString().
+    const { handle, view } = mount();
+    handle.applyDocument("a\r\nb\r\nc", true, 1);
+    expect(hostBytes(view)).toBe("a\r\nb\r\nc");
     expect(view.state.doc.lines).toBe(3);
     expect(view.state.doc.line(1).text).toBe("a");
     view.dispatch({ changes: { from: view.state.doc.length, insert: "\r\nd" } });
-    expect(view.state.sliceDoc()).toBe("a\r\nb\r\nc\r\nd");
+    expect(hostBytes(view)).toBe("a\r\nb\r\nc\r\nd");
+    expect(view.state.doc.lines).toBe(4);
   });
 
   it("LF seed round-trips byte-identically", () => {
@@ -609,7 +685,11 @@ describe("editor — CRLF/LF round-trip uniform scope (e)", () => {
   it("mixed-EOL seed normalizes to CRLF (documented limitation per fix #22)", () => {
     const { handle, view } = mount();
     handle.applyDocument("a\r\nb\nc", true, 1);
-    expect(view.state.sliceDoc()).toBe("a\r\nb\r\nc");
+    // Interior: three real lines, no separator inside any of them.
+    expect(view.state.doc.lines).toBe(3);
+    expect(view.state.doc.line(1).text).toBe("a");
+    // Outbound: one uniform EOL, chosen by detectLineSeparator.
+    expect(hostBytes(view)).toBe("a\r\nb\r\nc");
   });
 
   it("CR-only seed defensively normalizes to LF (host seeds canonical; raw CR-only is unreachable in prod)", () => {
@@ -1851,7 +1931,7 @@ describe("editor — external reseed preserves unrelated folds (r)", () => {
     // External reseed changing an interior line (still CRLF).
     const next = doc.replace("charlie", "Charlie");
     expect(() => handle.applyDocument(next, true, 2)).not.toThrow();
-    expect(view.state.sliceDoc()).toBe(next); // byte-identical, no corruption
+    expect(hostBytes(view)).toBe(next); // byte-identical, no corruption
     expect(foldedCount(view)).toBe(1);
   });
 
