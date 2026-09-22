@@ -16,12 +16,13 @@
 import { copyLineDown, undo } from "@codemirror/commands";
 import { insertNewlineContinueMarkup } from "@codemirror/lang-markdown";
 import { replaceNext, SearchQuery, setSearchQuery } from "@codemirror/search";
-import { EditorSelection, Text } from "@codemirror/state";
+import { EditorSelection, EditorState, Text } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { autoCloseFenceOnEnter } from "../../src/webview/cm/fenced-code/fenced-code-enter-keymap.js";
 import { addPendingAnchor } from "../../src/webview/cm/image/image-paste.js";
 import { continueListOnEnter } from "../../src/webview/cm/list/list-continuation-keymap.js";
+import { quollDocumentEol } from "../../src/webview/cm/seed.js";
 import { type EditorHandle, mountEditor } from "../../src/webview/editor.js";
 import { initialState } from "../../src/webview/state.js";
 import { firePasteAt } from "./helpers/clipboard-double.js";
@@ -326,3 +327,79 @@ describe("boundary cases", () => {
     expectLineModel(view.state.doc, before);
   });
 });
+
+// The three pins that hold the fix in place once it lands. The first names the
+// single CAUSE this PR removes; the second and third observe the OUTBOUND path,
+// which no other test in the repo reaches (test/extension/e2e/crlf-roundtrip.ts
+// injects a hand-built `edit` message and never runs the webview serializer).
+describe("editor — the document EOL lives in state, not in CodeMirror's splitter", () => {
+  it("the mounted editor never installs a literal-EOL splitter (the root cause)", () => {
+    const { handle, view } = mount();
+    handle.applyDocument("a\r\nb", true, 1);
+    // Auxiliary to expectCleanLineModel: this names the ONE cause this PR
+    // removes. It is deliberately not the primary guard — a hand-built
+    // `Text.of(["x\ny"])` or a `ChangeSet.of(spec, len, "\r\n")` corrupts a
+    // facet-less state while this assertion stays green.
+    expect(view.state.facet(EditorState.lineSeparator)).toBeUndefined();
+    expect(view.state.lineBreak).toBe("\n");
+    // ...while the document's own EOL is still known, and lives in the state so
+    // that it is installed by the same commit as the document.
+    expect(view.state.facet(quollDocumentEol)).toBe("\r\n");
+  });
+
+  it("copy carries the document's EOL", () => {
+    // Asserted, not inherited: this fell out of the lineSeparator facet before
+    // and now rests on one explicit clipboardOutputFilter. (copyViaEvent focuses
+    // the view itself — CM's copy handler bails on hasSelection() in an
+    // unfocused happy-dom view.)
+    const { handle, view } = mount();
+    handle.applyDocument("a\r\nb", true, 1);
+    view.dispatch({ selection: { anchor: 0, head: view.state.doc.length } });
+    expect(copyViaEvent(view)).toBe("a\r\nb");
+    handle.applyDocument("a\nb", true, 2);
+    view.dispatch({ selection: { anchor: 0, head: view.state.doc.length } });
+    expect(copyViaEvent(view)).toBe("a\nb");
+  });
+
+  it("a CRLF document's Edit reaches the wire as CRLF", () => {
+    // ⚠️ A reseed posts NOTHING (editor.test.ts (r4) pins editPosts() empty), so
+    // the EOL cannot be observed straight after applyDocument. Observe it
+    // through a LOCAL edit plus the debounce (DEBOUNCE_MS = 300,
+    // edit-sync.ts:37). This is a REGRESSION pin, not a repro: it passes today
+    // because sliceDoc() renders CRLF through the facet, and it goes red if the
+    // outbound change lands only half-way.
+    vi.useFakeTimers();
+    const { handle, view } = mount();
+    handle.applyDocument("a\r\nb", true, 1);
+    expect(editPosts()).toHaveLength(0);
+    view.dispatch({ changes: { from: view.state.doc.length, insert: "c" } });
+    vi.advanceTimersByTime(300);
+    expect((editPosts()[0] as { content: string }).content).toBe("a\r\nbc");
+  });
+});
+
+/** Dispatch a real `copy` event with a stub `clipboardData` and return what
+ *  CodeMirror wrote, so the assertion covers `copiedRange` + the output filter
+ *  together rather than the filter alone.
+ *
+ *  focus() belongs INSIDE the helper, not at each call site: CM's copy handler
+ *  bails on `hasSelection(view.contentDOM, view.observer.selectionRange)`
+ *  (view/dist:5150), which is false in an unfocused happy-dom view — it writes
+ *  nothing and the assertion then fails for a reason unrelated to the EOL. */
+function copyViaEvent(view: EditorView): string {
+  view.focus();
+  let written = "";
+  const event = new Event("copy", { bubbles: true, cancelable: true });
+  Object.defineProperty(event, "clipboardData", {
+    value: {
+      // clearData is NOT optional: CM's copy handler calls it before setData
+      // (view/dist:5164), so a stub without it throws instead of writing.
+      clearData: () => {},
+      setData: (_type: string, data: string) => {
+        written = data;
+      },
+    },
+  });
+  view.contentDOM.dispatchEvent(event);
+  return written;
+}

@@ -13,6 +13,7 @@ import type { EditorView } from "@codemirror/view";
 import { applyEdits } from "../../../markdown/format/edit.js";
 import { formatDocumentEdits } from "../../../markdown/format/index.js";
 import { MAX_CONTENT_LENGTH } from "../../../shared/protocol.js";
+import { quollDocumentEol } from "../seed.js";
 
 /** Length of `text` once its `\n` newlines are serialized with `lineBreak`
  *  (edit-sync posts the CRLF-joined content; the LF-internal length under-counts). */
@@ -51,7 +52,12 @@ export function runFormatDocument(view: EditorView): boolean {
   if (edits.length === 0 || formatted === source) {
     return false;
   }
-  if (outboundContentLength(formatted, view.state.lineBreak) > MAX_CONTENT_LENGTH) {
+  // The document's EOL comes from Quoll's own facet, not state.lineBreak:
+  // EditorState.lineSeparator is deliberately never provided (cm/seed.ts), so
+  // state.lineBreak is always "\n" and would under-count a CRLF document's
+  // outbound bytes by one per line — letting an oversized result mutate the
+  // document before postEditMessage refuses to post it.
+  if (outboundContentLength(formatted, view.state.facet(quollDocumentEol)) > MAX_CONTENT_LENGTH) {
     // postEditMessage would refuse to post the oversized (CRLF-serialized) content
     // and show the webview serialize-error banner, leaving the doc formatted but
     // unsaved. Bail before mutating instead.

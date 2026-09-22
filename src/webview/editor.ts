@@ -60,7 +60,13 @@ import {
   pasteUrlOverSelection,
   richHtmlPaste,
 } from "./cm/paste/index.js";
-import { computeReseedChange, detectLineSeparator, splitToCmText } from "./cm/seed.js";
+import {
+  computeReseedChange,
+  detectLineSeparator,
+  quollDocumentEol,
+  serializeDocument,
+  splitToCmText,
+} from "./cm/seed.js";
 import { quollSwitchEditor } from "./cm/switch-editor.js";
 import { tableBlockField, tableSkeletonField } from "./cm/table/index.js";
 import { quollTaskCheckboxKeymap } from "./cm/task-checkbox/task-checkbox-command.js";
@@ -271,7 +277,10 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
   opts.parent.appendChild(mount);
 
   const editableComp = new Compartment();
-  const lineSepComp = new Compartment();
+  // Carries the document's EOL (cm/seed.ts's quollDocumentEol), NOT CodeMirror's
+  // lineSeparator. Reconfigured inside the reseed dispatch so the EOL and the
+  // document are installed by the same state commit.
+  const docEolComp = new Compartment();
   const lintGutterCompartment = new Compartment();
   const lintGutterExtension = quollLintGutter();
   // Opt-in advisory prose-lint gate: a Compartment holding the proseLintEnabled
@@ -313,7 +322,13 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
   // concern (see the canPostEdit contract). getState is the shell's stable
   // closure → no stale read.
   const sync = createEditSync({
-    getDoc: () => view.state.sliceDoc(),
+    // The host wants the document's own bytes; the CM interior is LF. This is the
+    // outbound EOL conversion (cm/seed.ts) — what state.sliceDoc() used to do
+    // implicitly through the lineSeparator facet. MUST stay paired with `liveDoc`
+    // below: edit-sync's buffers are getDoc() output and `liveDoc` is compared
+    // against the host's rawText, so a one-sided change makes every host echo look
+    // foreign and reseeds on every ack.
+    getDoc: () => serializeDocument(view.state.doc, view.state.facet(quollDocumentEol)),
     canPost: () => canPostEdit(opts.getState()),
     post: (content, baseDocVersion) => postEditMessage(opts.dispatch, content, baseDocVersion),
     onResyncStorm: opts.onResyncStorm,
@@ -819,7 +834,33 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
         // authoritative gate (sniff + size cap + read-only).
         imagePaste.extension,
         EditorView.lineWrapping,
-        lineSepComp.of(EditorState.lineSeparator.of("\n")),
+        // The document's EOL — NOT EditorState.lineSeparator. Providing that facet
+        // replaces CodeMirror's default insert splitter (/\r\n?|\n/) with a literal
+        // split, so a bare \n in a CRLF document (or a \r\n in an LF one) survives
+        // inside a line's text and doc.lines never advances. That broke six Quoll
+        // insert paths plus CodeMirror's own state.toText / DOMReader,
+        // copyLineUp/Down, search replace and lang-markdown's list continuation.
+        // See cm/seed.ts's quollDocumentEol for the full argument. The Compartment
+        // is what makes the EOL move WITH the document: it is reconfigured inside
+        // the reseed transaction, so both are installed by the same state commit
+        // even if that dispatch later throws from its DOM phase.
+        docEolComp.of(quollDocumentEol.of("\n")),
+        // Copy / cut / drag-out keep the document's EOL, as they did when the
+        // lineSeparator facet rendered them. CM joins the copied ranges with
+        // state.lineBreak (now LF) and hands the result to this filter, so one pass
+        // covers both the between-range joins and each range's interior. The INPUT
+        // direction needs no filter: CM splits incoming clipboard text with its
+        // default /\r\n?|\n/.
+        // ⚠️ Known cost, accepted deliberately: CM recognises a linewise copy only
+        // when `lastLinewiseCopy === text.toString()` (LF-joined), so CRLF on the
+        // clipboard makes multi-cursor linewise copy/paste unrecognisable. Dropping
+        // this filter would repair that at the price of putting LF on a Windows
+        // clipboard where VS Code's own editor puts CRLF — filed with its
+        // measurement prerequisite in docs/TODO.md, not spent here.
+        EditorView.clipboardOutputFilter.of((text, state) => {
+          const eol = state.facet(quollDocumentEol);
+          return eol === "\n" ? text : text.split("\n").join(eol);
+        }),
         editableComp.of([
           EditorView.editable.of(initialCanWrite),
           EditorState.readOnly.of(!initialCanWrite),
@@ -880,7 +921,10 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
       // captures an in-window keystroke into the buffer so it survives
       // the reseed and replays on the ack.
       sync.cancelPendingFlush();
-      const liveDoc = view.state.sliceDoc();
+      // Read BEFORE the reseed dispatch, so it must see the OLD EOL — it does,
+      // because docEolComp is reconfigured inside that dispatch. Do not hoist the
+      // facet read. Paired with getDoc above; see its note.
+      const liveDoc = serializeDocument(view.state.doc, view.state.facet(quollDocumentEol));
       const aheadOfHost = liveDoc !== rawText;
       // ok-ack fold (update-loop guard — ARCHITECTURE.md §3/§5/§7). A host
       // Document that merely ECHOES our own in-flight edit back is an ack, not
@@ -944,7 +988,7 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
           // (and from other addToHistory=false transactions).
           annotations: [Transaction.addToHistory.of(false), hostDocumentReseed.of(true)],
           effects: [
-            lineSepComp.reconfigure(EditorState.lineSeparator.of(detectLineSeparator(rawText))),
+            docEolComp.reconfigure(quollDocumentEol.of(detectLineSeparator(rawText))),
             editableComp.reconfigure([
               EditorView.editable.of(canWrite),
               EditorState.readOnly.of(!canWrite),
