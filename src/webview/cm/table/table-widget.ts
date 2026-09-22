@@ -185,13 +185,11 @@ function blockStartOf(widget: TableBlockWidget): AbsoluteOffset {
 function blockStartCaret(root: HTMLElement, widget: TableBlockWidget): AbsoluteOffset {
   const current = blockStart.get(root);
   if (current === undefined) {
-    // Unreached from the public widget surface: `toDOM` writes this entry in
-    // the same statement sequence that creates the root, before it attaches
-    // any listener, and the WeakMap is module-private — so no test can drive
-    // a miss without reaching into it. Treat a future sighting of this log
-    // line in production as the invariant actually having broken. `slice`
-    // identifies WHICH widget tripped it — a document can hold many tables,
-    // and `fallback` alone would not say which one.
+    // Unreachable from the public widget surface (see the docblock above); the
+    // WeakMap is module-private, so no test can drive this without reaching into
+    // it. Treat a sighting of this line in production as the invariant actually
+    // having broken. `slice` identifies WHICH widget tripped it — a document can
+    // hold many tables, and `fallback` alone would not say which.
     console.error("[quoll] table widget blockStart miss — invariant violated", {
       slice: widget.slice,
       fallback: widget.docFrom,
