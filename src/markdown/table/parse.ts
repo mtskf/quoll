@@ -15,8 +15,14 @@ import { alignFromRaw, makeTable } from "./model.js";
  * Parse the substring `source.slice(from, to)` as a GFM table.
  * Returns `null` if the slice is not a well-formed table (missing
  * delimiter row, malformed alignment markers, header/delimiter cell
- * count mismatch, fewer than 2 lines, etc.). Spans on the returned
- * model are absolute document offsets (UTF-16 code units).
+ * count mismatch, fewer than 2 lines, etc.).
+ *
+ * Spans on the returned model are UTF-16 offsets into the `source` STRING
+ * passed in — `splitLines` adds `from` to each in-slice index, so they are
+ * document coordinates only when `source` IS the whole document. A caller that
+ * hands over a slice (base 0) gets slice-relative spans, and one that hands
+ * over a substring of the document gets spans in THAT substring's coordinates.
+ * Read them against whatever you passed as `source`, never as "absolute".
  *
  * The slice MUST NOT include a trailing `\n` past the last row;
  * `Table.to === source.indexOf("\n") of the last row, or the slice end`.

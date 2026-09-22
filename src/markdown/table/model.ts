@@ -1,9 +1,13 @@
 // src/markdown/table/model.ts
 // Source-span-mapped GFM table model produced by parse.ts.
-// Spans are absolute document offsets (UTF-16 code units — same units
-// as JavaScript string.length and CodeMirror dispatch({from,to})) so a
-// downstream consumer (C6c editable cells) can splice a single cell
-// with a precise view.dispatch({ changes: { from, to, insert } }).
+// Spans are UTF-16 offsets into the `source` string handed to `parseTable`
+// (same units as JavaScript string.length and CodeMirror dispatch({from,to})),
+// so a downstream consumer that parsed the WHOLE document can splice a single
+// cell with a precise view.dispatch({ changes: { from, to, insert } }).
+// ⚠️ They are document coordinates only in that case. `parseTable(slice, 0, …)`
+// yields slice-relative spans, and a caller that parses a substring gets that
+// substring's coordinates — see parse.ts's docblock. Add the base yourself if
+// you need document offsets; nothing in this model records which space it is in.
 
 export type Align = "left" | "center" | "right" | null;
 
