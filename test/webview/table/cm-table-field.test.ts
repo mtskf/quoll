@@ -42,7 +42,7 @@ function mount(
   // Two-step create: build the state with no selection first so we can
   // read the resulting Text length (the string-length passed in may differ
   // from Text length when the input contains `\r\n` line separators — the
-  // default `lineSeparator` splitter collapses `\r\n` to one byte).
+  // default splitter, /\r\n?|\n/, collapses `\r\n` to one line break).
   //
   const baseState = EditorState.create({
     doc,

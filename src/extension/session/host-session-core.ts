@@ -315,8 +315,8 @@ function defaultMintEpochGeneration(): number {
 
 /** EOL-insensitive content equality shared by the `applyEditSettled` foreign-
  *  bytes, drain-eligibility, and ok-but-mismatch checks. One operand
- *  (`inFlightContent`) is raw webview bytes joined with the CM lineSeparator
- *  facet; the other (`currentContent`/`preApplyContent`) is canonicalised to
+ *  (`inFlightContent`) is raw webview bytes joined with the EOL the webview's
+ *  `quollDocumentEol` facet holds; the other (`currentContent`/`preApplyContent`) is canonicalised to
  *  `document.eol`. A pure byte compare would misread an EOL-only difference
  *  (a plain edit on a CRLF-eol doc whose webview facet is still LF) as
  *  foreign bytes.
@@ -805,7 +805,7 @@ export function createHostSessionCore(context: HostSessionContext, deps: HostSes
         // EOL-INSENSITIVE compare (contentMatches): `currentContent` /
         // `preApplyContent` are canonicalised to `document.eol` (readCanonical /
         // canonicalize), while `inFlightContent` is the raw webview bytes joined
-        // with the CM `lineSeparator` facet — which is "\n" whenever the seed
+        // with the webview's `quollDocumentEol` EOL — which is "\n" whenever the seed
         // carried no CRLF (an empty / single-line doc with eol=CRLF, e.g. every
         // new .md on Windows). A byte compare would then read a plain
         // newline-adding edit on such a doc as "foreign bytes" and bump the epoch

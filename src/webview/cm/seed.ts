@@ -85,9 +85,12 @@ export function splitToCmText(rawText: string): Text {
  *  {@link splitToCmText}). BOTH operands are CM `Text`, so the offsets are in
  *  CodeMirror's LF-internal coordinate space (`doc.length`) — the caller MUST
  *  pass `view.state.doc`, NOT `view.state.sliceDoc()`. `sliceDoc()` renders with
- *  the `lineSeparator` facet (`\r\n` for a CRLF doc), which would inflate the
- *  offsets and could push `to` past `doc.length` (a `RangeError` on dispatch, or
- *  a silently shifted insert); `Text.toString()` always joins with `\n`.
+ *  the document's EOL when one is applied, which would inflate the offsets and
+ *  could push `to` past `doc.length` (a `RangeError` on dispatch, or a silently
+ *  shifted insert); `Text.toString()` always joins with `\n`. (Today
+ *  `sliceDoc()` also renders LF, because `EditorState.lineSeparator` is never
+ *  provided — but the rule is about which COORDINATE SPACE the operands are in,
+ *  so it holds regardless.)
  *
  *  Trimming the common prefix + suffix is what keeps an external reseed from
  *  springing every fold open: `applyDocument`'s reseed used a wholesale

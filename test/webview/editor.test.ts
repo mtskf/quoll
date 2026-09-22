@@ -155,7 +155,7 @@ function mount(
 
 // (a) applyDocument(rawText, true, 1) puts rawText into view.state.sliceDoc().
 describe("editor — applyDocument seeds the CM doc (a)", () => {
-  it("rawText reaches view.state.sliceDoc() through the facet-aware read", () => {
+  it("rawText reaches the CM document (LF seed, so sliceDoc() is byte-identical)", () => {
     const { handle, view } = mount();
     handle.applyDocument("# hello\n\nworld", true, 1);
     expect(view.state.sliceDoc()).toBe("# hello\n\nworld");
@@ -1914,7 +1914,8 @@ describe("editor — external reseed preserves unrelated folds (r)", () => {
 
   it("(r3) a CRLF document reseed spanning interior lines does not throw and keeps folds", () => {
     const { handle, view } = mount();
-    // CRLF doc: sliceDoc() renders \r\n, but doc.length is LF-internal. This is
+    // CRLF doc: the interior is LF and doc.length is LF-internal, while the host
+    // bytes carry \r\n (hostBytes below). This is
     // the integration guard that the helper was NOT wired against sliceDoc(): if
     // it were, a diff in CRLF-inflated coordinates could overshoot doc.length and
     // throw. (The coordinate GUARANTEE itself is Task 1's unit test; this test

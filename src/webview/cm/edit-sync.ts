@@ -485,7 +485,7 @@ export function createEditSync(opts: EditSyncOptions): EditSync {
   // definition, so the two sides cannot drift apart about what "carries these
   // bytes" means. It is asked ONLY here, never to decide what to post: the host
   // canonicalises a Document to `document.eol` while this side posts whatever its
-  // `lineSeparator` facet held, so an EOL-only difference is routine skew between
+  // `quollDocumentEol` facet holds, so an EOL-only difference is routine skew between
   // the two sides, and reporting it as a lost edit trains the user to ignore a
   // notice that otherwise only fires on real loss.
   // `opts.getDoc()` IS that authoritative content whenever the first condition

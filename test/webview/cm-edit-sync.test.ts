@@ -1421,7 +1421,7 @@ describe("cm edit-sync — epoch-bounded buffers (S3b)", () => {
 
   it("does NOT fire onLocalEditDiscarded on an EOL-only difference", () => {
     // The host canonicalises a Document to document.eol while the webview posts
-    // its own lineSeparator bytes, so an EOL-only skew is routine — not a loss.
+    // its own document-EOL bytes, so an EOL-only skew is routine — not a loss.
     // Mirrors the host's own EOL-insensitive contentMatches.
     const onLocalEditDiscarded = vi.fn();
     const s = setup({ onLocalEditDiscarded });
