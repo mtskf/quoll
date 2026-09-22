@@ -251,8 +251,9 @@ describe("Quoll's own multi-line insert paths, in a CRLF document", () => {
     handle.runFormatDocument();
     // The format LANDED — the seed is already 4 clean lines, so without this the
     // assertions below are equally true of a document nothing happened to.
-    // (Values measured, and the same ones the direct-call pin in
-    // format/cm-format-document-command.test.ts asserts.)
+    // (Header/delimiter/body values measured, and the same ones the direct-call
+    // pin in format/cm-format-document-command.test.ts asserts; the trailing
+    // empty line is pinned only here.)
     expectLineModel(view.state.doc, ["| a   | bbbb |", "| --- | ---- |", "| 1   | 2    |", ""]);
     expectCleanLineModel(view.state.doc);
   });

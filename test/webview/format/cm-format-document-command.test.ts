@@ -128,6 +128,7 @@ describe("runFormatDocument", () => {
     // Every newline is a real \r\n — no stray bare LF embedded inside a line.
     expect(serialized.replace(/\r\n/g, "")).not.toContain("\n");
     expect(view.state.doc.line(1).text).toBe("| a   | bbbb |");
+    expect(view.state.doc.line(2).text).toBe("| --- | ---- |");
     expect(view.state.doc.line(3).text).toBe("| 1   | 2    |");
     view.destroy();
   });
