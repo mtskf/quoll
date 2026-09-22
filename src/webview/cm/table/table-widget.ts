@@ -159,10 +159,12 @@ const armedRelease = new WeakMap<HTMLElement, AbortController>();
  *  similarly-named, adjacent constructor field, and nothing at the type level
  *  tells them apart. `nodeFrom` is the Lezer `Table` node start (the CELL
  *  caret base), not the block line-start; the two differ whenever the node
- *  range is not line-aligned (doc-final-no-newline / partial-tree — see the
- *  constructor docblock), and reading `nodeFrom` here would land a margin
- *  click inside the table instead of at its first byte. Pinned by the "docFrom
- *  vs nodeFrom" test in cm-table-widget-caret.test.ts. */
+ *  START is not a line start — any 1-3-space-indented or list-nested table
+ *  (table-skeleton.ts's `blockFrom` snaps to `doc.lineAt(nodeFrom).from`,
+ *  which is earlier than `nodeFrom` there) — and reading `nodeFrom` here
+ *  would land a margin click inside the table instead of at its first byte.
+ *  Pinned by "keeps docFrom (margin) and nodeFrom (cell base) independent
+ *  when they differ" in cm-table-widget-render.test.ts. */
 function blockStartOf(widget: TableBlockWidget): AbsoluteOffset {
   return asAbsoluteOffset(widget.docFrom);
 }
@@ -183,15 +185,13 @@ function blockStartOf(widget: TableBlockWidget): AbsoluteOffset {
 function blockStartCaret(root: HTMLElement, widget: TableBlockWidget): AbsoluteOffset {
   const current = blockStart.get(root);
   if (current === undefined) {
-    // Unreached from the public widget surface: both `blockStart.set` sites
-    // (`toDOM`, `updateDOM`) are the only places this root's listeners are
-    // attached, and both write this entry unconditionally in the same call —
-    // so no test can drive a miss without reaching into the module-private
-    // WeakMap, which this module deliberately does not export. This is the
-    // one mint site with no test harness access; treat a future report of
-    // this log line in production as the invariant actually breaking.
-    // `slice` identifies WHICH widget tripped it — a document can hold many
-    // tables, and `fallback` alone would not say which one.
+    // Unreached from the public widget surface: `toDOM` writes this entry in
+    // the same statement sequence that creates the root, before it attaches
+    // any listener, and the WeakMap is module-private — so no test can drive
+    // a miss without reaching into it. Treat a future sighting of this log
+    // line in production as the invariant actually having broken. `slice`
+    // identifies WHICH widget tripped it — a document can hold many tables,
+    // and `fallback` alone would not say which one.
     console.error("[quoll] table widget blockStart miss — invariant violated", {
       slice: widget.slice,
       fallback: widget.docFrom,
@@ -489,10 +489,17 @@ export class TableBlockWidget extends WidgetType {
      *  call sites (`toDOM`, `updateDOM`) run on a live instance — `this` is
      *  never stale there — so leaving this field unbranded is NOT a staleness
      *  guard. What it buys is a single grep-visible mint site: branding
-     *  `docFrom` here would let `blockStart.set(root, this.docFrom)` compile
-     *  as a second, silent mint, alongside `blockStartOf`. The actual
-     *  staleness hazard is upstream of the type system, at the two READ sites
-     *  (the document `mouseup` seam, the root `click` handler): substituting
+     *  `docFrom` here would not compile silently — every `new
+     *  TableBlockWidget(...)` call site passing a plain number
+     *  (table-field.ts, widget-fixtures.ts and the other fixtures) would go
+     *  TS2345, forcing an explicit `asAbsoluteOffset` cast at each caller.
+     *  Leaving it unbranded keeps that crossing inside this module, at one
+     *  site (`blockStartOf`), instead of spreading it to every constructor
+     *  caller — the trade the deferred paragraph below declines for now.
+     *
+     *  The actual staleness hazard is upstream of the type system, at the
+     *  two READ sites (the document `mouseup` seam, the root `click`
+     *  handler): substituting
      *  `blockStartOf(this)` for `blockStartCaret(root, this)` there
      *  type-checks cleanly and reintroduces the stale-caret bug the
      *  `blockStart` WeakMap exists to prevent, because `blockStartCaret`
@@ -511,8 +518,9 @@ export class TableBlockWidget extends WidgetType {
      *  for each cell's caret offset (`nodeFrom + cell.from`). CodeMirror is
      *  LF-internal (seed.ts splitToCmText strips \r), so cell.from — an offset
      *  into the LF-normalised parse slice — is already a valid CM position and
-     *  needs NO CRLF correction. Usually equals docFrom; differs only when the
-     *  node range is not line-aligned (doc-final-no-newline / partial-tree). */
+     *  needs NO CRLF correction. Differs from `docFrom` whenever the node
+     *  START is not a line start — any 1-3-space-indented or list-nested
+     *  table (see `blockStartOf`'s docblock above for the mechanism). */
     readonly nodeFrom: number
   ) {
     super();
