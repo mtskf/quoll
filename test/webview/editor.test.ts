@@ -609,7 +609,7 @@ describe("editor — a superseded in-flight Edit is reported once (d4)", () => {
 //     the host echo against them byte-exactly (`content === inFlight.content`,
 //     edit-sync.ts:957). Serialize it with the wrong EOL and every ack looks
 //     foreign -> reseed -> the keystroke rewind the fold exists to prevent.
-//   - `liveDoc` feeds ONLY `aheadOfHost` (editor.ts:884). An LF-only liveDoc is
+//   - `liveDoc` feeds ONLY `aheadOfHost` (editor.ts:928). An LF-only liveDoc is
 //     benign while the editor is ahead; it shows up instead as a FALSE
 //     aheadOfHost on an identical snapshot, which enters the reseed branch and
 //     collapses a multi-range selection to its main range.
@@ -1946,8 +1946,11 @@ describe("editor — external reseed preserves unrelated folds (r)", () => {
 
   it("(r5) an EOL-only reseed (normalizes identical) is a no-op change, no throw, no edit, folds kept", () => {
     const { handle, view } = mount();
-    // Seed as CRLF so the facet renders \r\n; internal doc is "a\nb\nc".
+    // Seed as CRLF: the interior is "a\nb\nc" and only the OUTBOUND bytes carry
+    // \r\n. Pin the pre-reseed side too, so the flip below is observed in both
+    // directions rather than passing on a document that was LF all along.
     handle.applyDocument("a\r\nb\r\nc", true, 1);
+    expect(hostBytes(view)).toBe("a\r\nb\r\nc");
     const foldFrom = view.state.doc.line(1).to;
     view.dispatch({ effects: foldEffect.of({ from: foldFrom, to: view.state.doc.length }) });
     expect(foldedCount(view)).toBe(1);
@@ -1955,7 +1958,9 @@ describe("editor — external reseed preserves unrelated folds (r)", () => {
     // Reseed the SAME content as LF: raw differs (aheadOfHost true) but the
     // normalized Text is identical → computeReseedChange yields an empty change.
     expect(() => handle.applyDocument("a\nb\nc", true, 2)).not.toThrow();
-    expect(view.state.sliceDoc()).toBe("a\nb\nc"); // facet flipped to LF, content same
+    // Read the OUTBOUND bytes: sliceDoc() renders LF for every document, so it
+    // would answer "a\nb\nc" whether or not the EOL facet followed the reseed.
+    expect(hostBytes(view)).toBe("a\nb\nc"); // EOL flipped to LF, content same
     expect(editPosts()).toEqual([]);
     expect(foldedCount(view)).toBe(1); // empty change maps nothing away
   });
