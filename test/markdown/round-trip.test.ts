@@ -1,6 +1,9 @@
-import { EditorState } from "@codemirror/state";
 import { describe, expect, it } from "vitest";
-import { detectLineSeparator, splitToCmText } from "../../src/webview/cm/seed.js";
+import {
+  detectLineSeparator,
+  serializeDocument,
+  splitToCmText,
+} from "../../src/webview/cm/seed.js";
 import { loadFixtures } from "./load-fixtures.js";
 
 // Round-trip parity gate (C9a).
@@ -25,10 +28,9 @@ import { loadFixtures } from "./load-fixtures.js";
 //
 // `cmRoundTrip` drives editor.ts's seed→read byte path through the SAME
 // production helpers it uses: `splitToCmText` (split on /\r\n?|\n/ into a
-// CodeMirror `Text`) + `detectLineSeparator` (the whole-doc `lineSeparator`
-// facet), imported from src/webview/cm/seed.ts — NOT re-implemented here, so
-// the gate and production cannot silently drift. It then reads back via
-// `sliceDoc()`. The production wrapper `editor.ts#applyDocument` is byte-pinned
+// CodeMirror `Text`) inbound, then `detectLineSeparator` + `serializeDocument`
+// outbound, all imported from src/webview/cm/seed.ts — NOT re-implemented here,
+// so the gate and production cannot silently drift. The production wrapper `editor.ts#applyDocument` is byte-pinned
 // independently by test/webview/editor.test.ts (cases (a)/(e)/(f): CRLF, LF,
 // mixed-EOL, paste). No EditorView/DOM is needed — the byte contract lives
 // entirely in @codemirror/state (cm/seed.ts is DOM-free), so this stays in the
@@ -43,16 +45,18 @@ import { loadFixtures } from "./load-fixtures.js";
 // DOCUMENTED IMPROVEMENT the CM surface delivers (bytes preserved), NOT a
 // regression. The gate asserts text-identity; it never asserts PM-era output.
 
-/** Seed `source` into the canonical CM doc and read it back — the exact byte
- *  path editor.ts#applyDocument drives (`splitToCmText` + the `lineSeparator`
- *  facet from `detectLineSeparator`, both imported from src/webview/cm/seed.ts),
- *  minus the DOM view. */
+/** Seed `source` into the canonical CM line model and read it back — the exact
+ *  byte path editor.ts#applyDocument drives, expressible as a composition of two
+ *  pure helpers from src/webview/cm/seed.ts because the serializer takes the EOL
+ *  as an argument rather than reading editor state. No `EditorState` is needed
+ *  at all.
+ *
+ *  ⚠️ The EOL travels as a value here and, in the real editor, in Quoll's own
+ *  `quollDocumentEol` facet — NOT `EditorState.lineSeparator`, which Quoll
+ *  deliberately never provides so that CodeMirror keeps its default insert
+ *  splitter. See src/webview/cm/seed.ts for that argument. */
 function cmRoundTrip(source: string): string {
-  const state = EditorState.create({
-    doc: splitToCmText(source),
-    extensions: [EditorState.lineSeparator.of(detectLineSeparator(source))],
-  });
-  return state.sliceDoc();
+  return serializeDocument(splitToCmText(source), detectLineSeparator(source));
 }
 
 // Fixtures whose PM-bridge round-trip used to DIVERGE from the source. Under
