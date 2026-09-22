@@ -57,13 +57,8 @@ export function runFormatDocument(view: EditorView): boolean {
   if (edits.length === 0 || formatted === source) {
     return false;
   }
-  // The document's EOL comes from Quoll's own facet, not state.lineBreak:
-  // EditorState.lineSeparator is deliberately never provided (cm/seed.ts), so
-  // state.lineBreak is always "\n" and would under-count a CRLF document's
-  // outbound bytes by one per line — letting an oversized result mutate the
-  // document before postEditMessage refuses to post it. The `DocumentEol`
-  // parameter now rejects `state.lineBreak` outright; this note survives because
-  // WHICH of the two the size check must read is not something the type says.
+  // The size check must read Quoll's EOL facet, not state.lineBreak — see
+  // outboundContentLength's JSDoc for why the type alone does not say so.
   if (outboundContentLength(formatted, view.state.facet(quollDocumentEol)) > MAX_CONTENT_LENGTH) {
     // postEditMessage would refuse to post the oversized (CRLF-serialized) content
     // and show the webview serialize-error banner, leaving the doc formatted but
