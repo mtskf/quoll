@@ -4,15 +4,22 @@
 // globally (`:31`), so without this docblock every DOM operation in the mount
 // fails and the suite dies on the harness. editor.test.ts:1 carries the same line.
 //
-// Reproduce-first suite for ARCH-01a: CodeMirror's `EditorState.lineSeparator`
-// facet, as currently provided by editor.ts for a CRLF document, downgrades the
-// default insert splitter (`/\r\n?|\n/`) to a literal split on the facet's own
-// value. Every multi-line STRING insert that does not happen to contain that
-// exact separator survives as ONE CM line carrying a literal `\r`/`\n` inside its
-// text — corrupting the line model while `length` and `toString()` stay
-// unchanged (see `.claude/plans/arch-01a-lf-only-cm-interior.md`, "Measured
-// facts"). This file is both the repro and the permanent guard: it imports
-// nothing Task 2 introduces, so it is red on BEHAVIOUR against today's code.
+// The line-model guard for ARCH-01a. What it protects: Quoll never provides
+// `EditorState.lineSeparator`, so CodeMirror keeps its default insert splitter
+// `/\r\n?|\n/` — which handles every line ending — and a multi-line STRING
+// insert splits into real lines whatever the document's own EOL is. The
+// document's EOL lives in Quoll's own `quollDocumentEol` facet instead, and is
+// applied only on the way OUT (`serializeDocument`).
+//
+// Why it is worth a suite of its own: providing that facet downgrades the
+// splitter to a literal split on the facet's value, so a bare `\n` pasted into a
+// CRLF document — or a `\r\n` into an LF one — survives as ONE CM line carrying
+// a literal separator inside its text. Quoll did provide it until this change,
+// and six insert paths plus several of CodeMirror's own were corrupt. It went
+// unnoticed because a corrupt document and a correct one share a `length` AND a
+// `toString()`; only `Text.eq` differs (see
+// `.claude/plans/arch-01a-lf-only-cm-interior.md`, "Measured facts"). These
+// tests therefore assert the LINE MODEL, never the flattened string.
 import { copyLineDown, undo } from "@codemirror/commands";
 import { insertNewlineContinueMarkup } from "@codemirror/lang-markdown";
 import { replaceNext, SearchQuery, setSearchQuery } from "@codemirror/search";
@@ -29,8 +36,8 @@ import { firePasteAt } from "./helpers/clipboard-double.js";
 
 const postMessage = vi.fn();
 /** Only `edit` posts — orthogonal `lint-diagnostics` traffic must not invalidate
- *  assertions about Edit bytes. Mirrors editor.test.ts:45, which is module-local
- *  and therefore cannot be imported. */
+ *  assertions about Edit bytes. Mirrors editor.test.ts:46-47, which is
+ *  module-local and therefore cannot be imported. */
 const editPosts = () =>
   postMessage.mock.calls.map((c) => c[0]).filter((m) => (m as { type?: string })?.type === "edit");
 
@@ -39,7 +46,7 @@ const editPosts = () =>
 // constructor reaches createResizeHandle -> readPersistedState()
 // (resize-handle.ts:270), and a vitest factory mock THROWS on a missing export —
 // so a two-export mock makes mount() itself fail and the suite goes red on the
-// harness instead of on the behaviour under test. editor.test.ts:47-52 carries
+// harness instead of on the behaviour under test. editor.test.ts:49-54 carries
 // all four for exactly this reason.
 vi.mock("../../src/webview/host.js", () => ({
   getHost: () => ({ postMessage }),
@@ -54,9 +61,9 @@ let container: HTMLElement | null = null;
 beforeEach(() => {
   postMessage.mockClear();
   // ⚠️ The container must be CREATED here, not just declared. mount() passes it
-  // to mountEditor as `parent`, and editor.ts:271 calls `opts.parent.appendChild`
+  // to mountEditor as `parent`, and editor.ts:277 calls `opts.parent.appendChild`
   // — a null parent throws before any assertion runs, so the suite would again
-  // fail on the harness rather than on the behaviour. Mirrors editor.test.ts:76-80.
+  // fail on the harness rather than on the behaviour. Mirrors editor.test.ts:84-88.
   container = document.createElement("div");
   document.body.appendChild(container);
 });
@@ -66,7 +73,7 @@ beforeEach(() => {
 // not install fake timers) outlives the test and posts a stray Edit into the next
 // test's freshly reset postMessage trail. That cross-test leak made the full
 // parallel suite non-deterministically red once already — see editor.test.ts:57-64
-// and :76-90. Dispose BEFORE useRealTimers so dispose()'s clearTimeout runs in the
+// and :90-105. Dispose BEFORE useRealTimers so dispose()'s clearTimeout runs in the
 // same timer context the debounce was scheduled in.
 afterEach(() => {
   for (const handle of mounted.splice(0)) {
@@ -120,20 +127,20 @@ function expectLineModel(doc: Text, expected: readonly string[]): void {
 
 /** The cause-independent invariant: no line's text may contain a separator.
  *
- *  This is the guard. A pin on `EditorState.lineSeparator` being unset catches
- *  the one cause this PR removes, but it cannot see a hand-built
+ *  This is the guard. A pin on `EditorState.lineSeparator` being unset names the
+ *  one cause this suite was written for, but it cannot see a hand-built
  *  `Text.of(["x\ny"])` or a `ChangeSet.of(spec, len, "\r\n")` prepared with an
  *  explicit separator — both corrupt a facet-less state while that pin stays
- *  green (probed by both reviewers). This assertion is blind to the mechanism:
- *  it states what "clean line model" MEANS, so anything that breaks it on an
- *  exercised path reds.
+ *  green (measured). This assertion is blind to the mechanism: it states what
+ *  "clean line model" MEANS, so anything that breaks it on an exercised path
+ *  reds.
  *
- *  ⚠️ It deliberately does NOT also round-trip through the serializer. Both
- *  reviewers proved that check cannot fail when this one passes: with no
- *  separator inside any line, joining with either EOL and re-splitting on
- *  `/\r\n?|\n/` reproduces the same lines, so it is EOL-independent and says
- *  nothing about outbound bytes. Outbound bytes are asserted separately, at the
- *  wire (Task 3) and over every fixture (Task 5).
+ *  ⚠️ It deliberately does NOT also round-trip through the serializer. That
+ *  check cannot fail when this one passes: with no separator inside any line,
+ *  joining with either EOL and re-splitting on `/\r\n?|\n/` reproduces the same
+ *  lines, so it is EOL-independent and says nothing about outbound bytes.
+ *  Outbound bytes are asserted separately — at the wire, in the last describe
+ *  block below, and over every fixture in test/markdown/round-trip.test.ts.
  *
  *  Honest scope: this protects the paths this suite exercises. It is not a proof
  *  that every future insert path goes red. */
@@ -230,11 +237,13 @@ describe("Quoll's own multi-line insert paths, in a CRLF document", () => {
     expectCleanLineModel(view.state.doc);
   });
 
-  it("runFormatDocument over a multi-row table (regression pin, not a repro)", () => {
-    // ⚠️ Expected GREEN today: format-document-command.ts:66-78 already converts
-    // its own multi-line insert's newlines to the doc's separator before
-    // dispatching, so this case is a pin against Task 4 removing that
-    // conversion — not repro evidence. Do not count it as red in the PR report.
+  it("runFormatDocument over a multi-row table keeps a clean line model", () => {
+    // Format used to carry its own EOL join — the one site in the webview that
+    // did — and dispatched a pre-joined string. It no longer does
+    // (format-document-command.ts): its multi-line insert takes the same
+    // default-splitter path as every other insert here. This pin is what makes
+    // that equivalence observable, so re-introducing a bespoke join for a CRLF
+    // document reds.
     const { handle, view } = mount();
     handle.applyDocument("| a | bbbb |\r\n| - | - |\r\n| 1 | 2 |\r\n", true, 1);
     handle.runFormatDocument();
@@ -268,7 +277,7 @@ describe("CodeMirror's own multi-line insert paths, in a CRLF document", () => {
     expectCleanLineModel(view.state.doc);
   });
 
-  it("copyLineDown over a multi-line selection corrupts today (commands:1416)", () => {
+  it("copyLineDown over a multi-line selection keeps a clean line model (commands:1416)", () => {
     const { handle, view } = mount();
     handle.applyDocument("one\r\ntwo", true, 1);
     view.dispatch({ selection: { anchor: 0, head: view.state.doc.length } });
@@ -276,7 +285,7 @@ describe("CodeMirror's own multi-line insert paths, in a CRLF document", () => {
     expectCleanLineModel(view.state.doc);
   });
 
-  it("search replace with a \\n escape corrupts today (search:565,929)", () => {
+  it("search replace with a \\n escape keeps a clean line model (search:565,929)", () => {
     const { handle, view } = mount();
     handle.applyDocument("a\r\nb", true, 1);
     view.dispatch({
@@ -351,16 +360,17 @@ describe("boundary cases", () => {
   });
 });
 
-// The three pins that hold the fix in place once it lands. The first names the
-// single CAUSE this PR removes; the second and third observe the OUTBOUND path,
-// which no other test in the repo reaches (test/extension/e2e/crlf-roundtrip.ts
-// injects a hand-built `edit` message and never runs the webview serializer).
+// The three pins that hold the arrangement in place. The first names the single
+// CAUSE the suite above exists for; the second and third observe the OUTBOUND
+// path, which no other test in the repo reaches
+// (test/extension/e2e/crlf-roundtrip.test.ts injects a hand-built `edit` message
+// and never runs the webview serializer).
 describe("editor — the document EOL lives in state, not in CodeMirror's splitter", () => {
   it("the mounted editor never installs a literal-EOL splitter (the root cause)", () => {
     const { handle, view } = mount();
     handle.applyDocument("a\r\nb", true, 1);
-    // Auxiliary to expectCleanLineModel: this names the ONE cause this PR
-    // removes. It is deliberately not the primary guard — a hand-built
+    // Auxiliary to expectCleanLineModel: this names the ONE cause the suite
+    // above exists for. It is deliberately not the primary guard — a hand-built
     // `Text.of(["x\ny"])` or a `ChangeSet.of(spec, len, "\r\n")` corrupts a
     // facet-less state while this assertion stays green.
     expect(view.state.facet(EditorState.lineSeparator)).toBeUndefined();
@@ -388,9 +398,14 @@ describe("editor — the document EOL lives in state, not in CodeMirror's splitt
     // ⚠️ A reseed posts NOTHING (editor.test.ts (r4) pins editPosts() empty), so
     // the EOL cannot be observed straight after applyDocument. Observe it
     // through a LOCAL edit plus the debounce (DEBOUNCE_MS = 300,
-    // edit-sync.ts:37). This is a REGRESSION pin, not a repro: it passes today
-    // because sliceDoc() renders CRLF through the facet, and it goes red if the
-    // outbound change lands only half-way.
+    // edit-sync.ts:37).
+    //
+    // What produces those bytes is `getDoc()` —
+    // `serializeDocument(doc, state.facet(quollDocumentEol))` (editor.ts) — NOT
+    // the CM document's own rendering. `sliceDoc()` returns LF for every
+    // document now that `EditorState.lineSeparator` is never provided, so this
+    // assertion cannot be written against it; the wire is the only place the
+    // document's EOL reappears.
     vi.useFakeTimers();
     const { handle, view } = mount();
     handle.applyDocument("a\r\nb", true, 1);
