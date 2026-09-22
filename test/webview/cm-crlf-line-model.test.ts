@@ -180,6 +180,17 @@ describe("Quoll's own multi-line insert paths, in a CRLF document", () => {
     firePasteAt(view.contentDOM, {
       html: "<table><tr><th>A</th><th>B</th></tr><tr><td>1</td><td>2</td></tr></table>",
     });
+    // The insert LANDED — without this, expectCleanLineModel alone is true of a
+    // document nothing happened to, so a handler that never fires passes.
+    expectLineModel(view.state.doc, [
+      "intro",
+      "text",
+      "",
+      "| A | B |",
+      "| --- | --- |",
+      "| 1 | 2 |",
+      "",
+    ]);
     expectCleanLineModel(view.state.doc);
   });
 
@@ -188,6 +199,7 @@ describe("Quoll's own multi-line insert paths, in a CRLF document", () => {
     handle.applyDocument("intro\r\ntext", true, 1);
     view.dispatch({ selection: EditorSelection.cursor(view.state.doc.length) });
     firePasteAt(view.contentDOM, { html: "<ul><li>one</li><li>two</li></ul>" });
+    expectLineModel(view.state.doc, ["intro", "text", "", "- one", "- two", ""]);
     expectCleanLineModel(view.state.doc);
   });
 
@@ -201,6 +213,9 @@ describe("Quoll's own multi-line insert paths, in a CRLF document", () => {
     const caret = "- a\n  - b\n  ".length; // interior is LF-only regardless of source EOL
     view.dispatch({ selection: { anchor: caret } });
     firePasteAt(view.contentDOM, { text: "- x\n  - y" });
+    // Reindented to the caret's depth — proves the reindent handler ran, not
+    // just that the document stayed well-formed.
+    expectLineModel(view.state.doc, ["- a", "  - b", "  - x", "    - y", "  more"]);
     expectCleanLineModel(view.state.doc);
   });
 
@@ -211,6 +226,7 @@ describe("Quoll's own multi-line insert paths, in a CRLF document", () => {
     // standalone-block prefix), exercising the multi-line insert path.
     view.dispatch({ effects: addPendingAnchor.of({ requestId: "1", anchor: 1 }) });
     handle.resolveImageWrite("1", "./assets/x.png");
+    expectLineModel(view.state.doc, ["a", "![](./assets/x.png)", "b", "cd"]);
     expectCleanLineModel(view.state.doc);
   });
 
@@ -233,6 +249,7 @@ describe("CodeMirror's own multi-line insert paths, in a CRLF document", () => {
     handle.applyDocument("ab\r\ncd", true, 1);
     view.dispatch({ selection: EditorSelection.cursor(1) }); // mid "ab", not a list
     firePasteAt(view.contentDOM, { text: "x\ny" }); // no html/files: falls to CM's own doPaste
+    expectLineModel(view.state.doc, ["ax", "yb", "cd"]);
     expectCleanLineModel(view.state.doc);
   });
 
@@ -243,6 +260,11 @@ describe("CodeMirror's own multi-line insert paths, in a CRLF document", () => {
       selection: EditorSelection.create([EditorSelection.cursor(1), EditorSelection.cursor(4)]),
     });
     firePasteAt(view.contentDOM, { text: "x\ny" });
+    // ⚠️ Line COUNT cannot observe this one: with as many clipboard lines as
+    // ranges, CodeMirror hands one line to each caret instead of splitting at
+    // either, so the document keeps its two lines. Only the line TEXT shows
+    // that both carets received their half.
+    expectLineModel(view.state.doc, ["axb", "cyd"]);
     expectCleanLineModel(view.state.doc);
   });
 
@@ -296,6 +318,7 @@ describe("CodeMirror's own multi-line insert paths, in a CRLF document", () => {
     handle.applyDocument("ab\ncd", true, 1);
     view.dispatch({ selection: EditorSelection.cursor(1) });
     firePasteAt(view.contentDOM, { text: "x\r\ny" });
+    expectLineModel(view.state.doc, ["ax", "yb", "cd"]);
     expectCleanLineModel(view.state.doc);
   });
 });
