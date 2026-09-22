@@ -109,9 +109,13 @@ describe("crlf-roundtrip", function () {
     // In-memory contract: the host-re-emitted Document carries \r\n.
     // Document.content === canonicalDocumentText(document) in postDocument
     // (=== getText() for this uniform-CRLF doc), so this also pins the
-    // in-memory buffer's bytes. \r\n preservation here proves the
-    // document-EOL Compartment (editor.ts) + the host write path agree
-    // on the contract.
+    // in-memory buffer's bytes.
+    // ⚠️ Scope, per this file's header: the CRLF payload above is hand-built,
+    // so the webview serializer (serializeDocument + the quollDocumentEol
+    // Compartment) never ran. What \r\n preservation proves here is the HOST
+    // side alone — that the write path carries the bytes it was handed. The
+    // webview side is proved by editor.test.ts's getDoc/liveDoc pairing and
+    // cm-crlf-line-model.test.ts's wire pin.
     assert.ok(
       afterEdit.message.content.includes("\r\n"),
       `host re-emitted Document lost \\r\\n; got: ${JSON.stringify(afterEdit.message.content)}`
