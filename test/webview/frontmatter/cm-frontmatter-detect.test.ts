@@ -5,17 +5,20 @@ import {
   detectLeadingFrontmatterInState,
   leadingFrontmatterEnd,
 } from "../../../src/webview/cm/frontmatter/detect.js";
+import { quollDocumentEol } from "../../../src/webview/cm/seed.js";
 
 function lfState(doc: string): EditorState {
   return EditorState.create({ doc });
 }
 
-// Production seeding (editor.ts) pre-splits on /\r\n?|\n/ and sets the CRLF
-// lineSeparator; doc.line(n).text then carries no `\r`.
+// Production seeding (editor.ts) pre-splits on /\r\n?|\n/ and provides Quoll's
+// own quollDocumentEol facet (for outbound serialization only); CodeMirror's
+// EditorState.lineSeparator is never provided, so doc.line(n).text carries no
+// `\r` regardless.
 function crlfState(raw: string): EditorState {
   return EditorState.create({
     doc: Text.of(raw.split(/\r\n?|\n/)),
-    extensions: [EditorState.lineSeparator.of("\r\n")],
+    extensions: [quollDocumentEol.of("\r\n")],
   });
 }
 

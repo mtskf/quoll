@@ -15,10 +15,14 @@ import {
 /**
  * CRLF disk byte-identity (plan §Task 7 step 6).
  *
- * The unit-level CRLF coverage (test/webview/editor.test.ts) pins the CM
- * doc string round-trip via the `lineSeparator` Compartment + `sliceDoc()`
- * read. This e2e proves the END-TO-END contract that the unit test cannot
- * reach: a CRLF file on disk, edited through the real host write path
+ * The unit-level CRLF coverage (test/webview/editor.test.ts) pins the CM doc
+ * round-trip via the `quollDocumentEol` Compartment + `serializeDocument`.
+ * ⚠️ This e2e injects a hand-built `edit` message and therefore never runs the
+ * webview serializer: it gates the HOST's disk write only. The webview side is
+ * gated by editor.test.ts's getDoc/liveDoc pairing tests and the wire pin in
+ * test/webview/cm-crlf-line-model.test.ts. This e2e proves the END-TO-END
+ * contract that neither can reach: a CRLF file on disk, edited through the real
+ * host write path
  * (`workspace.applyEdit` of a whole-document range with the webview's
  * `\r\n` payload), retains its `\r\n` bytes both in the in-memory
  * TextDocument and on disk after save.
@@ -105,9 +109,13 @@ describe("crlf-roundtrip", function () {
     // In-memory contract: the host-re-emitted Document carries \r\n.
     // Document.content === canonicalDocumentText(document) in postDocument
     // (=== getText() for this uniform-CRLF doc), so this also pins the
-    // in-memory buffer's bytes. \r\n preservation here proves the
-    // lineSeparator Compartment (editor.ts) + the host write path agree
-    // on the contract.
+    // in-memory buffer's bytes.
+    // ⚠️ Scope, per this file's header: the CRLF payload above is hand-built,
+    // so the webview serializer (serializeDocument + the quollDocumentEol
+    // Compartment) never ran. What \r\n preservation proves here is the HOST
+    // side alone — that the write path carries the bytes it was handed. The
+    // webview side is proved by editor.test.ts's getDoc/liveDoc pairing and
+    // cm-crlf-line-model.test.ts's wire pin.
     assert.ok(
       afterEdit.message.content.includes("\r\n"),
       `host re-emitted Document lost \\r\\n; got: ${JSON.stringify(afterEdit.message.content)}`

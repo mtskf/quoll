@@ -6,9 +6,11 @@
 // fencedCodeBody is the copy payload: the code BETWEEN the opening fence line
 // (which carries the ```lang language tag) and the closing fence line, with any
 // blockquote/list continuation prefix stripped per line (see below). CodeMirror's
-// in-memory document is always LF-joined (the line-separator facet handles
-// serialization), so the copied text is the canonical code body regardless of
-// the file's on-disk EOL.
+// in-memory document is always LF-joined (Quoll never provides
+// EditorState.lineSeparator, and the document's own EOL is applied outward by
+// serializeDocument — see cm/seed.ts), so the copied text is the canonical code
+// body regardless of the file's on-disk EOL. Deliberately LF: this button copies
+// code for pasting into a terminal or another editor, not the document's bytes.
 
 import { syntaxTree } from "@codemirror/language";
 import type { EditorState, Line, Text } from "@codemirror/state";

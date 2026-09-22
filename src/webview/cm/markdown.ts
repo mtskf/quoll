@@ -72,8 +72,8 @@ function firstContentChild(node: SyntaxNode): SyntaxNode | null {
 //      emits no competing table widget inside it (`m.from < fmEnd`). A marker-line
 //      table inside a frontmatter fence parses, but renders as raw source with no
 //      widget (Codex Conf-74).
-//   2. parseTable rejects the CRLF-normalised per-node slice — a blockquote-nested
-//      table (continuation lines bear `>` markers) or a malformed slice (cell-count
+//   2. parseTable rejects the per-node slice — a blockquote-nested table
+//      (continuation lines bear `>` markers) or a malformed slice (cell-count
 //      mismatch). Both render as raw source (Codex Conf-84).
 // (buildAll's third gate, a degenerate zero-width block range, is unreachable for a
 // ListItem's first-content Table, which always spans at least the marker line.)
@@ -81,6 +81,10 @@ function tableEmitsBlockWidget(state: EditorState, from: number, to: number): bo
   if (from < leadingFrontmatterEnd(state)) {
     return false;
   }
+  // Deliberately byte-identical to table-skeleton.ts's `buildModel` — this gate
+  // and that capture path must agree on the slice they hand `parseTable`. That
+  // includes the `replace`, which matches nothing today; `buildModel` carries
+  // the why (the CM interior is LF-only by construction).
   const slice = state.sliceDoc(from, to).replace(/\r\n?/g, "\n");
   return parseTable(slice, 0, slice.length) !== null;
 }

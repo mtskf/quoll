@@ -9,7 +9,8 @@
 //
 // CRLF: CodeMirror's internal line model strips `\r` (production seeds via
 // Text.of(raw.split(/\r\n?|\n/))), so `line(n).text` never carries a `\r`, and
-// `doc.sliceString(...)` joins with LF regardless of the lineSeparator facet.
+// `doc.sliceString(...)` joins with LF (and Quoll never provides
+// EditorState.lineSeparator, so `state.sliceDoc()` renders LF too).
 // The detector therefore yields an LF `body` and CodeMirror positions on both
 // LF and CRLF documents.
 

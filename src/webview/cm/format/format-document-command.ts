@@ -13,11 +13,17 @@ import type { EditorView } from "@codemirror/view";
 import { applyEdits } from "../../../markdown/format/edit.js";
 import { formatDocumentEdits } from "../../../markdown/format/index.js";
 import { MAX_CONTENT_LENGTH } from "../../../shared/protocol.js";
+import { type DocumentEol, quollDocumentEol } from "../seed.js";
 
-/** Length of `text` once its `\n` newlines are serialized with `lineBreak`
- *  (edit-sync posts the CRLF-joined content; the LF-internal length under-counts). */
-export function outboundContentLength(text: string, lineBreak: string): number {
-  if (lineBreak.length <= 1) {
+/** Length of `text` once its `\n` newlines are serialized with the DOCUMENT's
+ *  own EOL (edit-sync posts the CRLF-joined content; the LF-internal length
+ *  under-counts). The parameter is `DocumentEol`, not `string`, so the one
+ *  wrong argument — CM's `state.lineBreak`, which is always `"\n"` here because
+ *  `EditorState.lineSeparator` is never provided (cm/seed.ts) — is a type error
+ *  rather than something prose has to warn about. Pass
+ *  `state.facet(quollDocumentEol)`. */
+export function outboundContentLength(text: string, eol: DocumentEol): number {
+  if (eol.length <= 1) {
     return text.length;
   }
   let newlines = 0;
@@ -26,7 +32,7 @@ export function outboundContentLength(text: string, lineBreak: string): number {
       newlines++;
     }
   }
-  return text.length + newlines * (lineBreak.length - 1);
+  return text.length + newlines * (eol.length - 1);
 }
 
 export function runFormatDocument(view: EditorView): boolean {
@@ -51,29 +57,26 @@ export function runFormatDocument(view: EditorView): boolean {
   if (edits.length === 0 || formatted === source) {
     return false;
   }
-  if (outboundContentLength(formatted, view.state.lineBreak) > MAX_CONTENT_LENGTH) {
+  // The size check must read the DOCUMENT's EOL (state.facet(quollDocumentEol)):
+  // the type rejects a plain `string`, but it cannot say WHICH of the two
+  // DocumentEol values this call must read. See outboundContentLength's JSDoc.
+  if (outboundContentLength(formatted, view.state.facet(quollDocumentEol)) > MAX_CONTENT_LENGTH) {
     // postEditMessage would refuse to post the oversized (CRLF-serialized) content
     // and show the webview serialize-error banner, leaving the doc formatted but
     // unsaved. Bail before mutating instead.
     console.error("[quoll] Format Document aborted: result exceeds the content size limit.");
     return false;
   }
-  // Inserts are LF-joined (the formatter works in CM's LF-internal space), but
-  // EditorState.changes splits insert text on the lineSeparator facet — on a CRLF
-  // doc a bare \n inside a multi-line insert (only table reformats span rows) would
-  // stay a literal char embedded in one line, corrupting the line model. Convert
-  // each insert's newlines to the doc's separator (no-op when lineBreak is "\n").
-  const lineBreak = view.state.lineBreak;
-  const changes =
-    lineBreak === "\n"
-      ? edits
-      : edits.map((e) => ({
-          from: e.from,
-          to: e.to,
-          insert: e.insert.split("\n").join(lineBreak),
-        }));
+  // The formatter works in CM's LF-internal space and CM splits string inserts
+  // with its own default /\r\n?|\n/ — EditorState.lineSeparator is deliberately
+  // never provided (cm/seed.ts) — so a multi-line insert needs NO conversion.
+  // This was the one site in the webview that carried its own; it now takes the
+  // same path as every other insert. `outboundContentLength` above still needs
+  // the document's EOL: how long these bytes are once the HOST sees them is an
+  // EOL-dependent question, and that is a different question from how CM splits
+  // them on the way in.
   try {
-    view.dispatch({ changes, userEvent: "quoll.formatDocument" });
+    view.dispatch({ changes: edits, userEvent: "quoll.formatDocument" });
   } catch (err) {
     console.error("[quoll] Format Document dispatch failed; no changes applied.", err);
     return false;

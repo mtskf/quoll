@@ -311,3 +311,30 @@ describe("list-nested table detection (real Lezer language)", () => {
     expect(models[0].table).toBeNull();
   });
 });
+
+// Local copy of the identity check used by test/extension/types-equality.test.ts's
+// "table model type pins" describe block. NOT re-exported from there: importing
+// TableModel into that file would pull @codemirror/* into the host-side unit
+// program (test/extension/tsconfig.unit.json).
+type AssertEqual<X, Y> =
+  (<T>() => T extends X ? 1 : 2) extends <T>() => T extends Y ? 1 : 2 ? true : false;
+
+describe("TableModel readonly contract (type-only compile pin)", () => {
+  it("keeps every field of TableModel readonly", () => {
+    // `slice` is the widget's eq() key (see the field doc in table-skeleton.ts) —
+    // it must stay readonly so a model can never be mutated after construction.
+    // The other fields (from/to/blockFrom/blockTo/table) carry the same
+    // never-patched-after-build contract (see buildModel / boundedUpdate).
+    //
+    // `Readonly<T>` is homomorphic, so `AssertEqual<T, Readonly<T>>` holds only
+    // when EVERY field of T is already readonly — including fields added later,
+    // which a per-field `@ts-expect-error` (the previous shape of this pin) would
+    // stop covering the moment the shape grows: it caught `slice` alone, so
+    // `from`/`to`/`blockFrom`/`blockTo`/`table` could each lose `readonly`
+    // without failing here. Revert-check: drop `readonly` from any single field
+    // in table-skeleton.ts and this assertion resolves to `false`, failing the
+    // `= true` assignment.
+    const _check: AssertEqual<TableModel, Readonly<TableModel>> = true;
+    expect(_check).toBe(true);
+  });
+});
