@@ -3,12 +3,19 @@
 // SINGLE source of truth shared by editor.ts#applyDocument and the round-trip
 // parity gate (test/markdown/round-trip.test.ts) — the two cannot drift.
 
-import { Text } from "@codemirror/state";
+import { Facet, Text } from "@codemirror/state";
 
-/** Detect the document's line separator for the CodeMirror `lineSeparator`
- *  facet. A single CRLF anywhere ⇒ CRLF; absent any \r\n ⇒ LF.
+/** A document's on-disk line ending. A lone `\r` is not a supported input —
+ *  see {@link splitToCmText}. */
+export type DocumentEol = "\r\n" | "\n";
+
+/** Detect the document's line ending, for the {@link quollDocumentEol} facet.
+ *  A single CRLF anywhere ⇒ CRLF; absent any \r\n ⇒ LF.
  *
- *  The host seeds canonicalDocumentText(document) (src/extension/
+ *  ⚠️ This does NOT feed `EditorState.lineSeparator`, which Quoll deliberately
+ *  never provides — see {@link quollDocumentEol} for why.
+ *
+ *  The host seeds canonicalDocumentText(document) (src/extension/session/
  *  document-canonical.ts), so `rawText` arrives uniform and this picks that
  *  one separator. The CR-only / mixed branch (no `\r\n` ⇒ LF) is defensive —
  *  it keeps the line model clean if a non-uniform string ever reached the
@@ -18,16 +25,57 @@ import { Text } from "@codemirror/state";
  *  Note: a lone CR (`\r` not followed by `\n`) is not a supported input — the
  *  CM text model splits on /\r\n?|\n/ (see `splitToCmText`), which strips a
  *  lone `\r`, so a CR-only source cannot round-trip identity. */
-export function detectLineSeparator(rawText: string): "\r\n" | "\n" {
+export function detectLineSeparator(rawText: string): DocumentEol {
   return rawText.includes("\r\n") ? "\r\n" : "\n";
 }
 
+/** The document's line ending, carried IN the editor state.
+ *
+ *  ⚠️ Why in the state, and not in a variable beside the view: the document and
+ *  its EOL must advance together. `view.dispatch` installs the new
+ *  `EditorState` first (@codemirror/view's `ViewState.update` assigns
+ *  `this.state = update.state` as its first statement) and only THEN runs the
+ *  DOM phase, where an unwrapped widget `toDOM` can throw. So a cache written
+ *  after `dispatch(...)` returns can be skipped while the document has already
+ *  moved. A Compartment reconfigure is folded into the state that same
+ *  installation commits, so there is no in-between. With a stale EOL every host
+ *  echo fails the byte-exact ok-ack comparison, every ack looks foreign, and the
+ *  keystroke-rewind race that fold exists to prevent comes back.
+ *
+ *  ⚠️ This is deliberately NOT `EditorState.lineSeparator`. That facet does two
+ *  jobs at once: it renders `sliceDoc()` / clipboard output, AND it replaces the
+ *  splitter applied to every STRING insert (`insert.split(lineSep ||
+ *  DefaultSplit)`). CodeMirror's default `DefaultSplit` is `/\r\n?|\n/` and
+ *  handles every ending; PROVIDING the facet downgrades it to a literal split,
+ *  so a bare `\n` in a CRLF document — or a `\r\n` in an LF one — survives
+ *  inside a line's text and `doc.lines` never advances. That broke six Quoll
+ *  insert paths plus CodeMirror's own `state.toText` / `DOMReader`,
+ *  `copyLineUp/Down`, `search` replace and `lang-markdown`'s list continuation.
+ *  Corrupt and correct documents share a `length` and a `toString()` — only
+ *  `Text.eq` differs — which is why it went unnoticed. Not providing the facet
+ *  keeps CodeMirror's own splitter and makes that corruption unreachable rather
+ *  than avoided.
+ *
+ *  `combine` takes the last provider (the `quollOpenExternalSink` idiom) and
+ *  defaults to LF, which is also right for an empty document. */
+export const quollDocumentEol = Facet.define<DocumentEol, DocumentEol>({
+  combine: (values) => (values.length > 0 ? values[values.length - 1] : "\n"),
+});
+
+/** Render a CM document as the HOST's bytes: LF interior → the document's own
+ *  EOL. Deliberately PURE — the EOL is an argument, not a state read — so the
+ *  round-trip parity gate can use it with no `EditorState` at all. Callers
+ *  inside the editor pass `state.facet(quollDocumentEol)`. */
+export function serializeDocument(doc: Text, eol: DocumentEol): string {
+  return doc.sliceString(0, doc.length, eol);
+}
+
 /** Split `rawText` into the clean CodeMirror `Text` line model the editor
- *  seeds regardless of `lineSeparator` facet timing. The split on /\r\n?|\n/
- *  strips a CRLF's `\r`, so the resulting `Text`'s length is the LF-internal
- *  UTF-16 code-unit count — which is exactly what CM selection positions are
- *  measured in (the facet affects only the `sliceDoc` render, not the
- *  underlying `doc.length`). */
+ *  seeds. The split on /\r\n?|\n/ strips a CRLF's `\r`, so the resulting
+ *  `Text`'s length is the LF-internal UTF-16 code-unit count — which is exactly
+ *  what CM selection positions are measured in. The CM interior is LF-only by
+ *  construction; the document's own EOL lives in {@link quollDocumentEol} and is
+ *  applied outward by {@link serializeDocument}. */
 export function splitToCmText(rawText: string): Text {
   return Text.of(rawText.split(/\r\n?|\n/));
 }
