@@ -81,12 +81,10 @@ function tableEmitsBlockWidget(state: EditorState, from: number, to: number): bo
   if (from < leadingFrontmatterEnd(state)) {
     return false;
   }
-  // Same dead normaliser as table-skeleton.ts's `buildModel`: the CM interior is
-  // LF-only by construction (cm/seed.ts `splitToCmText`) and `EditorState.
-  // lineSeparator` is deliberately never provided, so this `replace` matches
-  // nothing today. Kept belt-and-braces, and deliberately byte-identical to the
-  // capture path it must mirror — this gate and that one must agree on the slice
-  // they hand `parseTable`.
+  // Deliberately byte-identical to table-skeleton.ts's `buildModel` — this gate
+  // and that capture path must agree on the slice they hand `parseTable`. That
+  // includes the `replace`, which matches nothing today; `buildModel` carries
+  // the why (the CM interior is LF-only by construction).
   const slice = state.sliceDoc(from, to).replace(/\r\n?/g, "\n");
   return parseTable(slice, 0, slice.length) !== null;
 }

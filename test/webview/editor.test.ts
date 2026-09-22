@@ -698,12 +698,10 @@ describe("editor — CRLF/LF round-trip uniform scope (e)", () => {
     const { handle, view } = mount();
     handle.applyDocument("a\rb\rc", true, 1);
     // The split on /\r\n?|\n/ drops the lone CRs, so the CM interior is LF.
-    // ⚠️ sliceDoc() cannot observe the detection: with no lineSeparator facet it
-    // renders LF whatever detectLineSeparator returned, so an assertion on it
-    // would stay green even for "\r\n". Assert the OUTBOUND read, which can see
-    // it: with no "\r\n" in the source detectLineSeparator picks "\n". The host
-    // never delivers raw CR-only bytes (it seeds canonicalDocumentText), so this
-    // pins the seam's defensive behavior, not a user-facing path.
+    // ⚠️ sliceDoc() cannot observe the detection: with EditorState.lineSeparator
+    // never provided it renders LF whatever detectLineSeparator returned, so an
+    // assertion on it would stay green even for "\r\n". Assert the OUTBOUND read,
+    // which can see it: with no "\r\n" in the source detectLineSeparator picks "\n".
     expect(view.state.doc.lines).toBe(3);
     expect(hostBytes(view)).toBe("a\nb\nc");
   });
