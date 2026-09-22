@@ -311,3 +311,16 @@ describe("list-nested table detection (real Lezer language)", () => {
     expect(models[0].table).toBeNull();
   });
 });
+
+describe("TableModel readonly contract (type-only compile pin)", () => {
+  it("cannot assign to TableModel.slice after construction", () => {
+    const m: TableModel = { from: 0, to: 0, blockFrom: 0, blockTo: 0, slice: "", table: null };
+    expect(m.slice).toBe("");
+    // @ts-expect-error TS2540: `slice` is the widget's eq() key (see the field doc
+    // in table-skeleton.ts) — it must stay readonly so a model can never be mutated
+    // after construction. If `readonly` is dropped, TS2540 disappears here and this
+    // now-unused `@ts-expect-error` itself becomes a compile error (TS2578), so the
+    // regression is caught either way.
+    m.slice = "mutated";
+  });
+});
