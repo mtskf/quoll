@@ -131,6 +131,30 @@ describe("TableBlockWidget caret dispatch hardening", () => {
       consoleError.mockRestore();
     }
   });
+
+  // `blockStartOf` reads `widget.docFrom` — never `widget.nodeFrom`, a
+  // same-typed adjacent field nothing at the type level rules out (see its
+  // docblock). Pin the margin-click dispatch against a fixture where the two
+  // differ, so a future edit that swaps the field compiles clean and goes red
+  // here instead of shipping a margin click that lands inside the table.
+  // Assert the precondition on the widget itself (not just on a comment
+  // about `makeWidget`'s current default): if a later change to the helper
+  // stops distinguishing the two fields, this fails loudly here rather than
+  // silently pinning nothing. (The docFrom/nodeFrom mix-up is ALSO caught
+  // incidentally by ~11 other tests across this suite and
+  // cm-table-widget-render.test.ts / cm-table-widget-release.test.ts, since
+  // most fixtures already pass a non-zero docFrom with nodeFrom defaulted to
+  // 0 — this test exists to NAME the invariant at `blockStartOf` so that
+  // coverage isn't merely incidental and survives a fixture rewrite.)
+  it("blockStartOf's margin-click anchor tracks docFrom, not nodeFrom", () => {
+    const widget = makeWidget(SRC, 11); // docFrom 11, nodeFrom 0 (widget-fixtures.ts)
+    expect(widget.docFrom).not.toBe(widget.nodeFrom);
+    const dispatched: unknown[] = [];
+    const dom = widget.toDOM(stubView(dispatched));
+    document.body.appendChild(dom);
+    dom.click(); // the root div, not a cell
+    expect(dispatched).toEqual([{ selection: { anchor: widget.docFrom } }]);
+  });
 });
 
 // The offset-space brand at the sink. `dispatchSelection` is module-private, so

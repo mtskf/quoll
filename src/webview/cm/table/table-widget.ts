@@ -124,12 +124,14 @@ const pendingDrag = new WeakMap<HTMLElement, PendingDrag>();
  *
  *  It is nonetheless typed `AbsoluteOffset`, which is a TYPE gate rather than a
  *  runtime one and buys something the shape check could not: `this.table.from`
- *  is a plain `number` that sits in scope at both write sites, is named `from`,
- *  and is described by its own module as an "absolute document offset" — while
- *  on this path it is always 0 (see the header, and src/markdown/table/parse.ts
- *  on what that span is actually an offset INTO). Writing it here is a compile
- *  error now instead of a margin click that jumps to the document start.
- *  Entering the space goes through `blockStartOf` and nowhere else. */
+ *  is a plain `number` that sits in scope at both write sites and is named
+ *  `from` — but on this path it is always 0 under per-node slicing (see this
+ *  module's header re: `eq()`, and src/markdown/table/model.ts /
+ *  src/markdown/table/parse.ts for what a `Table` span is actually an offset
+ *  INTO: the `source` string passed to `parseTable`, not the document).
+ *  Writing it here is a compile error now instead of a margin click that
+ *  jumps to the document start. Entering the space goes through `blockStartOf`
+ *  and nowhere else. */
 const blockStart = new WeakMap<HTMLElement, AbsoluteOffset>();
 
 /** Aborts the document-level listeners armed for the gesture in flight on this
@@ -151,7 +153,16 @@ const armedRelease = new WeakMap<HTMLElement, AbortController>();
  *  constructor from `TableModel.blockFrom` (table-field.ts), which is
  *  `state.doc.lineAt(nodeFrom).from` or that value remapped through
  *  `tr.changes.mapPos` (table-skeleton.ts) — CodeMirror document positions, so
- *  there is nothing further to validate, only to name. */
+ *  there is nothing further to validate, only to name.
+ *
+ *  ⚠️ Read `widget.docFrom` here, NEVER `widget.nodeFrom` — same-typed,
+ *  similarly-named, adjacent constructor field, and nothing at the type level
+ *  tells them apart. `nodeFrom` is the Lezer `Table` node start (the CELL
+ *  caret base), not the block line-start; the two differ whenever the node
+ *  range is not line-aligned (doc-final-no-newline / partial-tree — see the
+ *  constructor docblock), and reading `nodeFrom` here would land a margin
+ *  click inside the table instead of at its first byte. Pinned by the "docFrom
+ *  vs nodeFrom" test in cm-table-widget-caret.test.ts. */
 function blockStartOf(widget: TableBlockWidget): AbsoluteOffset {
   return asAbsoluteOffset(widget.docFrom);
 }
@@ -172,6 +183,13 @@ function blockStartOf(widget: TableBlockWidget): AbsoluteOffset {
 function blockStartCaret(root: HTMLElement, widget: TableBlockWidget): AbsoluteOffset {
   const current = blockStart.get(root);
   if (current === undefined) {
+    // Unreached from the public widget surface: both `blockStart.set` sites
+    // (`toDOM`, `updateDOM`) are the only places this root's listeners are
+    // attached, and both write this entry unconditionally in the same call —
+    // so no test can drive a miss without reaching into the module-private
+    // WeakMap, which this module deliberately does not export. This is the
+    // one mint site with no test harness access; treat a future report of
+    // this log line in production as the invariant actually breaking.
     // `slice` identifies WHICH widget tripped it — a document can hold many
     // tables, and `fallback` alone would not say which one.
     console.error("[quoll] table widget blockStart miss — invariant violated", {
@@ -467,12 +485,27 @@ export class TableBlockWidget extends WidgetType {
      *  line-start). Margin-click caret fallback + part of eq().
      *
      *  ⚠️ Deliberately a plain `number` and NOT `AbsoluteOffset`, even though
-     *  the sentence above describes exactly that space. Leaving it unbranded is
-     *  what makes `blockStart.set(root, this.docFrom)` — writing the raw,
-     *  possibly stale closure value instead of the live WeakMap channel — a
-     *  compile error; branding it here to "match the docblock" would silently
-     *  re-open that. The block start enters the branded space through
-     *  `blockStartOf`, at one site, on purpose. */
+     *  the sentence above describes exactly that space. Both `blockStart.set`
+     *  call sites (`toDOM`, `updateDOM`) run on a live instance — `this` is
+     *  never stale there — so leaving this field unbranded is NOT a staleness
+     *  guard. What it buys is a single grep-visible mint site: branding
+     *  `docFrom` here would let `blockStart.set(root, this.docFrom)` compile
+     *  as a second, silent mint, alongside `blockStartOf`. The actual
+     *  staleness hazard is upstream of the type system, at the two READ sites
+     *  (the document `mouseup` seam, the root `click` handler): substituting
+     *  `blockStartOf(this)` for `blockStartCaret(root, this)` there
+     *  type-checks cleanly and reintroduces the stale-caret bug the
+     *  `blockStart` WeakMap exists to prevent, because `blockStartCaret`
+     *  reads the WeakMap FIRST and only falls back to the constructor value
+     *  on a miss. Freshness is `blockStartCaret`'s job, not this field's type.
+     *  The block start enters the branded space through `blockStartOf`, at
+     *  one site, on purpose.
+     *
+     *  (Deferred, out of scope here: minting at `TableModel.blockFrom`'s
+     *  origin in table-skeleton.ts instead would move the crossing to the
+     *  true source, turn a `docFrom`/`nodeFrom` constructor-argument swap
+     *  into a compile error, and remove `blockStartOf` entirely — it ripples
+     *  into the model, so not done in this PR.) */
     readonly docFrom: number,
     /** Absolute LF-internal doc offset of the Lezer `Table` node start — base
      *  for each cell's caret offset (`nodeFrom + cell.from`). CodeMirror is
