@@ -17,6 +17,7 @@ import {
 import { FrontmatterBlockWidget } from "../../../src/webview/cm/frontmatter/frontmatter-widget.js";
 import { frontmatterBlockField } from "../../../src/webview/cm/frontmatter/index.js";
 import { hostDocumentReseed } from "../../../src/webview/cm/host-reseed.js";
+import { quollDocumentEol, serializeDocument } from "../../../src/webview/cm/seed.js";
 
 // Extract the frontmatter block-replace ranges from the field-provided
 // decorations — pure state, no view layout, so it is non-flaky under happy-dom
@@ -390,7 +391,7 @@ describe("frontmatterBlockField — round-trip (byte-identical)", () => {
       doc: Text.of(raw.split(/\r\n?|\n/)),
       selection: EditorSelection.cursor(0),
       extensions: [
-        EditorState.lineSeparator.of("\r\n"),
+        quollDocumentEol.of("\r\n"),
         markdown({ base: markdownLanguage }),
         frontmatterBlockField,
       ],
@@ -401,7 +402,10 @@ describe("frontmatterBlockField — round-trip (byte-identical)", () => {
       if (v.kind === "collapsed") {
         expect(v.span.body).toBe("title: x");
       }
-      expect(view.state.sliceDoc()).toBe(raw); // CRLF preserved exactly
+      // CM-interior text is LF-only (no CM lineSeparator facet is ever
+      // provided); the CRLF bytes are recovered only on serialization for the
+      // host, which is what this asserts.
+      expect(serializeDocument(view.state.doc, view.state.facet(quollDocumentEol))).toBe(raw);
     } finally {
       view.destroy();
     }

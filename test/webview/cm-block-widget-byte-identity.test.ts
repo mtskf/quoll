@@ -52,7 +52,7 @@ import {
   frontmatterBlockField,
 } from "../../src/webview/cm/frontmatter/index.js";
 import { hostDocumentReseed } from "../../src/webview/cm/host-reseed.js";
-import { splitToCmText } from "../../src/webview/cm/seed.js";
+import { quollDocumentEol, serializeDocument, splitToCmText } from "../../src/webview/cm/seed.js";
 import {
   TableBlockWidget,
   tableBlockField,
@@ -461,40 +461,49 @@ describe("frontmatterBlockField byte-identity: bounded ≡ full", () => {
 // capture is a no-op and the byte anchors compare exact LF bytes. This block
 // exercises the CR path the LF fixtures cannot: a document seeded through the
 // PRODUCTION seed pair — `splitToCmText` (`Text.of(raw.split(/\r\n?|\n/))`, which
-// strips every `\r` so the CM line model is LF-internal) + a CRLF
-// `EditorState.lineSeparator` facet (which makes `state.sliceDoc` RENDER line
-// breaks back as `\r\n`). This is exactly editor.ts#applyDocument's seed for a
-// CRLF file, so a widget-capture regression that mishandles CR bytes surfaces
-// here where the LF fixtures stay silent.
+// strips every `\r` so the CM line model is LF-internal) + the Quoll
+// `quollDocumentEol` facet (which records the document's EOL for OUTBOUND
+// serialization only, via `serializeDocument`). CodeMirror's own
+// `EditorState.lineSeparator` is never provided, so `state.sliceDoc` always
+// renders LF — it no longer renders `\r\n` back for a CRLF document. This is
+// exactly editor.ts#applyDocument's seed for a CRLF file, so a widget-capture
+// regression that mishandles CR bytes surfaces here where the LF fixtures stay
+// silent.
 //
-// The two fields treat CR OPPOSITELY, and each anchor is written to that reality
-// (this is what "line-ending aware" means here — not a single normalise-both
-// shim, which would be vacuous):
+// With no CM facet, BOTH fields' captured slices are CM-interior LF text —
+// there is no longer an "opposite" pair (that was true only while
+// `state.sliceDoc` rode `EditorState.lineSeparator`). The one place CRLF bytes
+// still exist is the outbound serialization, so "line-ending aware" here means:
 //
 //   • TABLE — the widget slice is DELIBERATELY LF-normalised at capture
 //     (table-skeleton.ts: `sliceDoc(...).replace(/\r\n?/g, "\n")`, so a cell's
 //     `raw` never carries an embedded `\r` the DOM would render as stray
-//     whitespace). CR is therefore NOT expected to survive into `w.slice`. The
-//     load-bearing round-trip lives at the DOCUMENT level: `sliceDoc` over the
-//     block range must reproduce the exact CRLF source bytes. Anchor BOTH: the
-//     doc slice == the raw CRLF source (CR preserved in the canonical doc), and
-//     `w.slice` == its LF-normalised form (CR correctly stripped in the copy).
+//     whitespace). CR is therefore NOT expected to survive into `w.slice`, and
+//     the (now facet-free) `st.sliceDoc(...)` never renders CR back either.
+//     The load-bearing round-trip lives at the OUTBOUND-SERIALIZATION level:
+//     `serializeDocument(doc, eol)` over the whole document must reproduce the
+//     exact CRLF source bytes. Anchor BOTH: the document round-trips to the
+//     host's CRLF bytes via `serializeDocument`, and `w.slice` is the
+//     LF-normalised copy of that same range (CR correctly stripped).
 //
-//   • FRONTMATTER — `slice` is `state.sliceDoc(0, to)`, which RESPECTS the
-//     lineSeparator facet, so it carries CRLF verbatim; `body` is
-//     `doc.sliceString(...)` (no separator arg → always LF). Anchor that `slice`
-//     is byte-identical to the raw CRLF source (a regression that LF-normalised
-//     it — mirroring the table — would drop the `\r`) and that `body` is the
-//     LINE-ENDING-AWARE interior (`split(/\r\n?|\n/)`, NOT `split("\n")`, so the
-//     CR never leaks into a body line).
+//   • FRONTMATTER — `slice` is `state.sliceDoc(0, to)`, which is CM-interior
+//     text like `body` (`doc.sliceString(...)`, no separator arg → always LF)
+//     — confirmed against `frontmatter/detect.ts`'s own comment, and used by
+//     `frontmatter-widget.ts:93` for widget identity only, never for host
+//     bytes. Anchor that `slice` is the LF-normalised form of the raw CRLF
+//     source and that `body` is the LINE-ENDING-AWARE interior
+//     (`split(/\r\n?|\n/)`, NOT `split("\n")`, kept for robustness even though
+//     the slice it splits no longer carries CR either).
 //
 // Document-level CRLF round-trip is owned end-to-end by the host layer
 // (test/extension/e2e/crlf-roundtrip.test.ts, mixed-eol-roundtrip.test.ts,
-// test/markdown/round-trip.test.ts); this block only pins the widget-capture
-// slices, the one thing those host suites do not observe.
+// test/markdown/round-trip.test.ts); this block additionally pins
+// `serializeDocument`'s bytes once (the TABLE case) alongside the
+// widget-capture slices, since it is the one host-facing read these fixtures
+// otherwise do not exercise.
 
 describe("CRLF-seeded byte-identity: line-ending-aware widget anchors", () => {
-  it("table: the canonical doc keeps the CRLF bytes; the widget slice is its LF-normalised copy", () => {
+  it("table: the document round-trips to the host as CRLF; the widget slice is its LF-normalised copy", () => {
     const rawTable = "| H | I |\r\n| - | - |\r\n| a | b |";
     // Prose before the table + default cursor at 0 (in the prose) keeps the
     // caret off the table lines, so the field EMITS the widget rather than
@@ -507,7 +516,7 @@ describe("CRLF-seeded byte-identity: line-ending-aware widget anchors", () => {
     const view = new EditorView({
       state: EditorState.create({
         doc: splitToCmText(raw),
-        extensions: [EditorState.lineSeparator.of("\r\n"), ...tableExts()],
+        extensions: [quollDocumentEol.of("\r\n"), ...tableExts()],
       }),
       parent,
     });
@@ -518,24 +527,27 @@ describe("CRLF-seeded byte-identity: line-ending-aware widget anchors", () => {
       expect(emitted.length).toBe(1); // the table renders (guards against vacuity)
       const s = emitted[0];
       const w = s.widget as TableBlockWidget;
-      // (1) Document-level byte-identity: sliceDoc renders through the CRLF facet,
-      //     so the canonical doc reproduces the exact CR bytes over the block.
-      expect(st.sliceDoc(s.from, s.to)).toBe(rawTable);
+      // (1) Host-bytes round-trip: CM's interior text is LF-only (no CM
+      //     lineSeparator facet is ever provided), so the CRLF bytes only exist
+      //     again once the whole document is serialized for the host — verify
+      //     that reproduces the exact source bytes.
+      expect(serializeDocument(st.doc, st.facet(quollDocumentEol))).toBe(raw);
       // (2) The captured slice is the deliberate LF-normalised view — CR stripped.
-      //     Line-ending aware: the doc slice is CRLF, w.slice is its LF form.
+      //     Both sides are LF now (CM interior text carries no CR at all), so
+      //     this survives unchanged.
       expect(w.slice).toBe(rawTable.replace(/\r\n?/g, "\n"));
-      expect(w.slice).toBe(st.sliceDoc(s.from, s.to).replace(/\r\n?/g, "\n"));
+      expect(w.slice).toBe(st.sliceDoc(s.from, s.to));
     } finally {
       view.destroy();
     }
   });
 
-  it("frontmatter: the captured slice keeps the CRLF bytes; body is the LF-normalised interior", () => {
+  it("frontmatter: the captured slice is CM-interior LF text; body is the same LF-normalised interior", () => {
     const rawFm = "---\r\na: 1\r\n---"; // the collapsed span [0, span.to], CRLF
     const raw = `${rawFm}\r\nbody`;
     const state = EditorState.create({
       doc: splitToCmText(raw),
-      extensions: [EditorState.lineSeparator.of("\r\n"), ...frontmatterExts()],
+      extensions: [quollDocumentEol.of("\r\n"), ...frontmatterExts()],
     });
     const rs = state.field(frontmatterBlockField);
     expect(rs.kind).toBe("collapsed"); // the block forms (guards against vacuity)
@@ -543,12 +555,18 @@ describe("CRLF-seeded byte-identity: line-ending-aware widget anchors", () => {
       return;
     }
     const { span } = rs;
-    // (1) The frontmatter slice respects the lineSeparator facet, so it is
-    //     byte-identical to the raw CRLF source — CR preserved, not normalised.
-    expect(span.slice).toBe(rawFm);
+    // (1) "the widget reproduces the bytes of the range it replaced": with no
+    //     CM lineSeparator facet, `slice` (`state.sliceDoc(0, to)`) is
+    //     CM-interior text like `body` — always LF, never CRLF-verbatim.
+    //     frontmatter-widget.ts:93 only consumes it for widget identity, never
+    //     for host bytes, so this survives as the LF-normalised form of the
+    //     raw CRLF source.
+    expect(span.slice).toBe(rawFm.replace(/\r\n?/g, "\n"));
     expect(span.slice).toBe(state.sliceDoc(span.from, span.to)); // independent doc anchor
-    // (2) body drops the fences and stays LF — a LINE-ENDING-AWARE split of the
-    //     CRLF slice (split on /\r\n?|\n/, not "\n") so no `\r` leaks into it.
+    // (2) body drops the fences and stays LF — a LINE-ENDING-AWARE split of
+    //     `slice` (split on /\r\n?|\n/, not "\n"). `slice` itself no longer
+    //     carries any `\r` either, so this is now a no-op split kept for
+    //     robustness rather than a load-bearing CR strip.
     expect(span.body).toBe("a: 1");
     expect(span.body).toBe(
       span.slice
