@@ -5,11 +5,11 @@ import { EditorView } from "@codemirror/view";
 import { describe, expect, it, vi } from "vitest";
 import * as fmtIndex from "../../../src/markdown/format/index.js";
 import { MAX_CONTENT_LENGTH } from "../../../src/shared/protocol.js";
-import { quollDocumentEol, serializeDocument } from "../../../src/webview/cm/seed.js";
 import {
   outboundContentLength,
   runFormatDocument,
 } from "../../../src/webview/cm/format/format-document-command.js";
+import { quollDocumentEol, serializeDocument } from "../../../src/webview/cm/seed.js";
 
 function makeView(doc: string, readOnly = false): EditorView {
   return new EditorView({
