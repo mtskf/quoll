@@ -133,9 +133,12 @@ export type AbsoluteOffset = number & { readonly [absoluteOffsetBrand]: true };
  *  at each MINT, and a grep for `asAbsoluteOffset` is how a reader audits them.
  *  Deliberately not an enumeration: mints span modules — today `stampedOffset`
  *  (only what `Number.isSafeInteger` has just accepted), `cellPointAt` (clamped
- *  between two already-branded bounds), and table-widget.ts's outside-release
- *  seam (`view.posAtCoords`, which CodeMirror has already clamped to
- *  `[0, doc.length]`) — so no list written HERE can stay complete, and an
+ *  between two already-branded bounds), table-widget.ts's outside-release seam
+ *  (`view.posAtCoords`, which CodeMirror has already clamped to
+ *  `[0, doc.length]`), and table-widget.ts's `blockStartOf` (the widget's
+ *  `docFrom`, which reaches its constructor as `state.doc.lineAt(...).from` or
+ *  that value remapped through `tr.changes.mapPos` — CodeMirror document
+ *  positions either way) — so no list written HERE can stay complete, and an
  *  earlier one silently did not. The grep is the check; those are examples of
  *  what it should find at each hit. */
 export function asAbsoluteOffset(value: number): AbsoluteOffset {

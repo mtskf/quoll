@@ -117,12 +117,20 @@ const pendingDrag = new WeakMap<HTMLElement, PendingDrag>();
  *  needs a channel to the existing listener that moves exactly when the block
  *  moves, which `updateDOM` can write and the closure cannot.
  *
- *  A `number` end to end: unlike the per-CELL offsets it is never stringified,
- *  parsed, or read back from the DOM, so there is no malformed-value state to
- *  gate — which is why `stampedOffset` guards those stamps and not this one
- *  (its docblock has what CodeMirror does NOT catch). Same channel, same
- *  rationale, as image-widget.ts's `blockStart`. */
-const blockStart = new WeakMap<HTMLElement, number>();
+ *  No RUNTIME gate: unlike the per-CELL offsets this one is never stringified,
+ *  parsed, or read back from the DOM, so there is no malformed-value state for a
+ *  `stampedOffset`-style check to reject (that docblock has what CodeMirror does
+ *  NOT catch). Same channel, same rationale, as image-widget.ts's `blockStart`.
+ *
+ *  It is nonetheless typed `AbsoluteOffset`, which is a TYPE gate rather than a
+ *  runtime one and buys something the shape check could not: `this.table.from`
+ *  is a plain `number` that sits in scope at both write sites, is named `from`,
+ *  and is described by its own module as an "absolute document offset" — while
+ *  on this path it is always 0 (see the header, and src/markdown/table/parse.ts
+ *  on what that span is actually an offset INTO). Writing it here is a compile
+ *  error now instead of a margin click that jumps to the document start.
+ *  Entering the space goes through `blockStartOf` and nowhere else. */
+const blockStart = new WeakMap<HTMLElement, AbsoluteOffset>();
 
 /** Aborts the document-level listeners armed for the gesture in flight on this
  *  root. Kept OUT of `PendingDrag` because the two have different lifetimes:
@@ -133,16 +141,35 @@ const blockStart = new WeakMap<HTMLElement, number>();
  *  and by `destroy`, not left to garbage collection. */
 const armedRelease = new WeakMap<HTMLElement, AbortController>();
 
+/** THE crossing from a widget's constructor-supplied block start into the
+ *  absolute space the editor is dispatched in — the block-start counterpart of
+ *  `releaseRange`'s `view.posAtCoords` mint, and the ONLY mint this path has.
+ *  Named rather than inlined at its three call sites so the `asAbsoluteOffset`
+ *  grep cell-point.ts describes finds one claim to audit instead of three.
+ *
+ *  A cast, not a check, and what it asserts is traceable: `docFrom` reaches the
+ *  constructor from `TableModel.blockFrom` (table-field.ts), which is
+ *  `state.doc.lineAt(nodeFrom).from` or that value remapped through
+ *  `tr.changes.mapPos` (table-skeleton.ts) — CodeMirror document positions, so
+ *  there is nothing further to validate, only to name. */
+function blockStartOf(widget: TableBlockWidget): AbsoluteOffset {
+  return asAbsoluteOffset(widget.docFrom);
+}
+
 /** Margin-click caret: the block start this root currently points at.
  *
  *  Falling back to the toDOM-time `widget.docFrom` totalizes the
- *  `number | undefined` read; it is not the stale-closure hazard coming back.
- *  The entry is written in `toDOM` in the same breath as attaching the listener,
- *  and at that moment the closure value IS the current one — so a miss is
- *  unreachable by construction. Logged rather than trusted, so a future
+ *  `AbsoluteOffset | undefined` read; it is not the stale-closure hazard coming
+ *  back. The entry is written in `toDOM` in the same breath as attaching the
+ *  listener, and at that moment the closure value IS the current one — so a miss
+ *  is unreachable by construction. Logged rather than trusted, so a future
  *  regression of that invariant is observable instead of quietly reintroducing
- *  the stale-caret bug this WeakMap exists to prevent. */
-function blockStartCaret(root: HTMLElement, widget: TableBlockWidget): number {
+ *  the stale-caret bug this WeakMap exists to prevent.
+ *
+ *  ⚠️ The `AbsoluteOffset` return says which SPACE this offset lives in, not
+ *  that it is CURRENT. Freshness is still the WeakMap's job (`updateDOM`
+ *  re-points it), which is the whole reason this function exists. */
+function blockStartCaret(root: HTMLElement, widget: TableBlockWidget): AbsoluteOffset {
   const current = blockStart.get(root);
   if (current === undefined) {
     // `slice` identifies WHICH widget tripped it — a document can hold many
@@ -151,7 +178,7 @@ function blockStartCaret(root: HTMLElement, widget: TableBlockWidget): number {
       slice: widget.slice,
       fallback: widget.docFrom,
     });
-    return widget.docFrom;
+    return blockStartOf(widget);
   }
   return current;
 }
@@ -171,14 +198,34 @@ function blockStartCaret(root: HTMLElement, widget: TableBlockWidget): number {
  *  6.43.0), so tear-down races are a silent no-op, not a throw.
  *
  *  Either way the throw must not escape into a DOM listener unlogged: the
- *  gesture is lost, the editor keeps running. */
-function dispatchSelection(view: EditorView, selection: { anchor: number; head?: number }): void {
+ *  gesture is lost, the editor keeps running.
+ *
+ *  ⚠️ This is also the BRAND choke point. Both ends are `AbsoluteOffset`, so a
+ *  value from either of the cell spaces (`RenderedOffset` / `CellSourceOffset`,
+ *  cell-source-map.ts) is a compile error here rather than a silently wrong
+ *  selection — CodeMirror's own `checkSelection` tests only `range.to >
+ *  doc.length` and would accept any of them. That guard holds only while EVERY
+ *  selection dispatch in this widget comes through this function: `view.dispatch`
+ *  still takes plain `number`, so a future seam that calls it directly loses the
+ *  check with nothing to notice. Nothing enforces the funnel — keep it. */
+function dispatchSelection(
+  view: EditorView,
+  selection: { readonly anchor: AbsoluteOffset; readonly head?: AbsoluteOffset }
+): void {
   try {
     view.dispatch({ selection });
   } catch (err) {
     console.error("[quoll] table widget selection dispatch failed", { selection, err });
   }
 }
+
+/** The selection shape the sink above accepts, DERIVED from the function rather
+ *  than declared beside it, so the suite's type pins bind to `dispatchSelection`
+ *  itself: loosening its parameter back to `number` turns every pin into an
+ *  unused-directive error (TS2578) instead of leaving them quietly green — which
+ *  a free-standing `interface` would. Type-only, so this adds no runtime surface
+ *  to a module whose other exports are all values. */
+export type TableSelection = Parameters<typeof dispatchSelection>[1];
 
 /** THE constructor of a {@link ContentPoint} — the one sanctioned crossing from
  *  the viewport frame into the content frame, mirroring `asAbsoluteOffset`'s
@@ -393,14 +440,17 @@ function releaseRange(
   // position — clamped to `[0, doc.length]`, never a fraction — so there is
   // nothing further to validate, only to name.
   //
-  // NOT a whole-module guarantee, and a grep for `asAbsoluteOffset` will not
-  // find one. What IS branded end to end is `DragSelection`: both producers hand
-  // back minted ends. The CARET path is not — `docFrom`, `blockStart`,
-  // `blockStartCaret` and `dispatchSelection`'s own signature carry absolute
-  // offsets as plain `number` and reach `view.dispatch` unbranded, exactly as
-  // they did BEFORE this seam existed (nothing here widened them). Finishing
-  // that path is tracked separately: it changes `dispatchSelection`, the sink
-  // BOTH seams share, so it is not a local edit.
+  // One of the module's TWO mints, and the grep for `asAbsoluteOffset` finds
+  // exactly them: this one, and `blockStartOf` for the caret path. Both paths
+  // are now branded to the shared sink — `DragSelection` carries minted ends
+  // from either producer, `blockStart` / `blockStartCaret` carry the block
+  // start, and `dispatchSelection` accepts nothing else.
+  //
+  // What that does NOT buy: `view.dispatch` still takes plain `number`, so the
+  // guarantee is only as good as everything going through the sink (see its
+  // docblock); and a brand names a SPACE, never freshness — a stale value of the
+  // right space passes. Freshness stays with `updateDOM`'s re-point and the
+  // `pendingDrag` invalidation.
   const head = asAbsoluteOffset(raw);
   const start = armed.point;
   const anchor = start.offset ?? (head > start.cellFrom ? start.cellFrom : start.cellTo);
@@ -414,7 +464,15 @@ export class TableBlockWidget extends WidgetType {
      *  A byte change rebuilds; matches the pre-existing widget identity. */
     readonly slice: string,
     /** Absolute LF-internal doc offset of the widget's first byte (block
-     *  line-start). Margin-click caret fallback + part of eq(). */
+     *  line-start). Margin-click caret fallback + part of eq().
+     *
+     *  ⚠️ Deliberately a plain `number` and NOT `AbsoluteOffset`, even though
+     *  the sentence above describes exactly that space. Leaving it unbranded is
+     *  what makes `blockStart.set(root, this.docFrom)` — writing the raw,
+     *  possibly stale closure value instead of the live WeakMap channel — a
+     *  compile error; branding it here to "match the docblock" would silently
+     *  re-open that. The block start enters the branded space through
+     *  `blockStartOf`, at one site, on purpose. */
     readonly docFrom: number,
     /** Absolute LF-internal doc offset of the Lezer `Table` node start — base
      *  for each cell's caret offset (`nodeFrom + cell.from`). CodeMirror is
@@ -448,7 +506,7 @@ export class TableBlockWidget extends WidgetType {
     // tests that pin the re-stamp) and is NEVER read back — see `blockStart`
     // above for why this position must not be parsed back out of the DOM.
     root.dataset.docFrom = String(this.docFrom);
-    blockStart.set(root, this.docFrom);
+    blockStart.set(root, blockStartOf(this));
 
     // Resource base for relative in-cell image srcs. Static per editor
     // (resource-base.ts), so it is NOT part of eq() — reading it at
@@ -769,7 +827,7 @@ export class TableBlockWidget extends WidgetType {
     // inspection-only (see toDOM) — dropping THIS line would leave the reused
     // listener dispatching the old offset while the DOM still looked correct.
     dom.dataset.docFrom = String(this.docFrom);
-    blockStart.set(dom, this.docFrom);
+    blockStart.set(dom, blockStartOf(this));
     // Pure positional shift: the bytes are identical (from.slice === this.slice)
     // and only the absolute offsets moved. Re-stamp data-cell-from on each cell
     // and reuse the rendered inline children verbatim — skip `patchRow`'s

@@ -7,6 +7,13 @@ import { EditorState } from "@codemirror/state";
 import type { EditorView as EditorViewType } from "@codemirror/view";
 import { describe, expect, it, vi } from "vitest";
 
+import { asAbsoluteOffset } from "../../../src/webview/cm/table/cell-point.js";
+import {
+  asCellSourceOffset,
+  asRenderedOffset,
+} from "../../../src/webview/cm/table/cell-source-map.js";
+import type { TableSelection } from "../../../src/webview/cm/table/table-widget.js";
+
 import { makeWidget, press, SRC, stubView } from "./helpers/widget-fixtures.js";
 
 describe("TableBlockWidget caret dispatch hardening", () => {
@@ -123,5 +130,52 @@ describe("TableBlockWidget caret dispatch hardening", () => {
     } finally {
       consoleError.mockRestore();
     }
+  });
+});
+
+// The offset-space brand at the sink. `dispatchSelection` is module-private, so
+// the pin targets `TableSelection` — which is DERIVED from that function
+// (`Parameters<typeof dispatchSelection>[1]`), not declared beside it. That
+// derivation is the whole point: a free-standing interface would stay green if
+// someone loosened the function's own parameter back to `number`, which is the
+// exact regression these rows exist to catch. Each row is its own statement
+// because `@ts-expect-error` suppresses only the statement that follows it, and
+// each local is CONSUMED — `noUnusedLocals` is unset and Biome's
+// `noUnusedVariables` is a warning, so an unused pin would rot silently.
+// Same idiom as the `absolute offset brand` block in cm-table-cell-point.test.ts.
+describe("dispatchSelection offset-space brand", () => {
+  const abs = asAbsoluteOffset(12);
+
+  it("refuses a plain number as either end", () => {
+    // @ts-expect-error — a plain `number` is not an AbsoluteOffset.
+    const anchorRaw: TableSelection = { anchor: 12 };
+    // @ts-expect-error — a plain `number` is not an AbsoluteOffset.
+    const headRaw: TableSelection = { anchor: abs, head: 12 };
+    expect([anchorRaw.anchor, headRaw.head]).toEqual([12, 12]);
+  });
+
+  it("refuses a cell-relative source offset as either end", () => {
+    // @ts-expect-error — a CellSourceOffset is not an AbsoluteOffset.
+    const anchorCell: TableSelection = { anchor: asCellSourceOffset(3) };
+    // @ts-expect-error — a CellSourceOffset is not an AbsoluteOffset.
+    const headCell: TableSelection = { anchor: abs, head: asCellSourceOffset(3) };
+    expect([anchorCell.anchor, headCell.head]).toEqual([3, 3]);
+  });
+
+  it("refuses a rendered-text offset as either end", () => {
+    // @ts-expect-error — a RenderedOffset is not an AbsoluteOffset.
+    const anchorRendered: TableSelection = { anchor: asRenderedOffset(4) };
+    // @ts-expect-error — a RenderedOffset is not an AbsoluteOffset.
+    const headRendered: TableSelection = { anchor: abs, head: asRenderedOffset(4) };
+    expect([anchorRendered.anchor, headRendered.head]).toEqual([4, 4]);
+  });
+
+  // The positive half. Without it the rows above would still pass if the shape
+  // became uninhabitable (say `anchor: never`), and the second row pins that
+  // `head` is genuinely OPTIONAL rather than merely branded.
+  it("accepts an absolute offset, with and without a head", () => {
+    const caret: TableSelection = { anchor: abs };
+    const range: TableSelection = { anchor: abs, head: asAbsoluteOffset(20) };
+    expect([caret.head, range.head]).toEqual([undefined, 20]);
   });
 });
