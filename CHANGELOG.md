@@ -2,7 +2,7 @@
 
 All notable changes to Quoll are documented here.
 
-## 0.1.80 — 2026-09-15
+## 0.1.80 — 2026-09-22
 
 ### Fixed
 
