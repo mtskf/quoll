@@ -93,8 +93,8 @@ describe("runFormatDocument", () => {
     expect(outboundContentLength("no newline", "\r\n")).toBe(10);
   });
   it("outboundContentLength's second parameter is DocumentEol, not string (compile-time pin)", () => {
-    // `view.state.lineBreak` is typed `string`, not `DocumentEol` — passing it was
-    // the exact bug 5738307 fixed (silently under-counts CRLF outbound length).
+    // `view.state.lineBreak` is typed `string`, not `DocumentEol` — passing it
+    // silently under-counted a CRLF document's outbound length (PR #414).
     // This pins the narrowed parameter type so a future widening back to `string`
     // is a compile error, not just a runtime under-count.
     const wrong: string = "\n";
@@ -146,11 +146,13 @@ describe("runFormatDocument", () => {
 
 describe("runFormatDocument — the outbound size cap is measured in the document's EOL", () => {
   it("bails when the result fits the cap as LF but exceeds it as CRLF", () => {
-    // The guard this pins: `:54` must read Quoll's EOL facet, not
-    // `view.state.lineBreak`. Since EditorState.lineSeparator is never provided,
-    // state.lineBreak is ALWAYS "\n", so reading it under-counts a CRLF document
-    // by one byte per line — an oversized result would mutate the document and
-    // only then fail to post (editor.ts:207), leaving it formatted but unsaved.
+    // The guard this pins: format-document-command.ts's size check (the
+    // `outboundContentLength(...) > MAX_CONTENT_LENGTH` bail) must read Quoll's
+    // EOL facet, not `view.state.lineBreak`. Since EditorState.lineSeparator is
+    // never provided, state.lineBreak is ALWAYS "\n", so reading it under-counts
+    // a CRLF document by one byte per line — an oversized result would mutate the
+    // document and only then fail to post (editor.ts's postEditMessage cap
+    // check), leaving it formatted but unsaved.
     //
     // The insert sits exactly AT the cap under LF and over it under CRLF:
     //   length        = 2 * (MAX/2)           = MAX          (not > MAX: proceeds)
