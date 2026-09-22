@@ -24,10 +24,11 @@
  *  both normalise to LF before the compare, so an EOL-only difference reads as
  *  equal — routine skew between the two sides, since the host canonicalises to
  *  `document.eol` while the webview serialises with whatever EOL its
- *  `quollDocumentEol` facet holds (src/webview/cm/seed.ts). The `a === b` fast path runs first: byte-identical is the common case and
- *  stays allocation-free, and the normalise is paid only when the strings already
- *  differ. Whitespace other than line endings is NOT normalised — a trailing
- *  space is a real difference. */
+ *  `quollDocumentEol` facet holds (src/webview/cm/seed.ts). The `a === b` fast
+ *  path runs first: byte-identical is the common case and stays allocation-free,
+ *  and the normalise is paid only when the strings already differ. Whitespace
+ *  other than line endings is NOT normalised — a trailing space is a real
+ *  difference. */
 export function sameTextIgnoringEol(a: string, b: string): boolean {
   return a === b || a.replace(/\r\n|\r|\n/g, "\n") === b.replace(/\r\n|\r|\n/g, "\n");
 }

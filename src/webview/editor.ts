@@ -315,6 +315,19 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
   // no-op instead of a churn-inducing reconfigure — same posture as the gutter.
   let spellcheckEnabled = true;
 
+  // The live document as the HOST's bytes: the CM interior is LF, and the
+  // document's own EOL is applied on the way out (cm/seed.ts) — what
+  // state.sliceDoc() used to do implicitly through the lineSeparator facet.
+  // ONE definition on purpose, because both readers must agree byte for byte:
+  // edit-sync's buffers are this function's output, and `applyDocument` compares
+  // its result against the host's rawText. Two separately written conversions
+  // could drift, and then every host echo looks foreign — a reseed on every ack.
+  // Reads `view.state` at call time, so a call made BEFORE a reseed dispatch sees
+  // the OLD EOL (docEolComp is reconfigured inside that dispatch); never hoist
+  // the facet read out of this closure.
+  const serializeForHost = (): string =>
+    serializeDocument(view.state.doc, view.state.facet(quollDocumentEol));
+
   // edit-sync owns single-flight + debounce + buffer/replay. canPost is
   // the shared save-policy gate (canPostEdit, state.ts) — the SAME
   // predicate the reducer's post-edit case consults, so the gate cannot
@@ -322,13 +335,7 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
   // concern (see the canPostEdit contract). getState is the shell's stable
   // closure → no stale read.
   const sync = createEditSync({
-    // The host wants the document's own bytes; the CM interior is LF. This is the
-    // outbound EOL conversion (cm/seed.ts) — what state.sliceDoc() used to do
-    // implicitly through the lineSeparator facet. MUST stay paired with `liveDoc`
-    // below: edit-sync's buffers are getDoc() output and `liveDoc` is compared
-    // against the host's rawText, so a one-sided change makes every host echo look
-    // foreign and reseeds on every ack.
-    getDoc: () => serializeDocument(view.state.doc, view.state.facet(quollDocumentEol)),
+    getDoc: serializeForHost,
     canPost: () => canPostEdit(opts.getState()),
     post: (content, baseDocVersion) => postEditMessage(opts.dispatch, content, baseDocVersion),
     onResyncStorm: opts.onResyncStorm,
@@ -837,13 +844,12 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
         // The document's EOL — NOT EditorState.lineSeparator. Providing that facet
         // replaces CodeMirror's default insert splitter (/\r\n?|\n/) with a literal
         // split, so a bare \n in a CRLF document (or a \r\n in an LF one) survives
-        // inside a line's text and doc.lines never advances. That broke six Quoll
-        // insert paths plus CodeMirror's own state.toText / DOMReader,
-        // copyLineUp/Down, search replace and lang-markdown's list continuation.
-        // See cm/seed.ts's quollDocumentEol for the full argument. The Compartment
-        // is what makes the EOL move WITH the document: it is reconfigured inside
-        // the reseed transaction, so both are installed by the same state commit
-        // even if that dispatch later throws from its DOM phase.
+        // inside a line's text and doc.lines never advances. cm/seed.ts's
+        // quollDocumentEol carries the full argument and the roster of Quoll and
+        // CodeMirror paths that broke. The Compartment is what makes the EOL move
+        // WITH the document: it is reconfigured inside the reseed transaction, so
+        // both are installed by the same state commit even if that dispatch later
+        // throws from its DOM phase.
         docEolComp.of(quollDocumentEol.of("\n")),
         // Copy / cut / drag-out keep the document's EOL, as they did when the
         // lineSeparator facet rendered them. CM joins the copied ranges with
@@ -922,9 +928,10 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
       // the reseed and replays on the ack.
       sync.cancelPendingFlush();
       // Read BEFORE the reseed dispatch, so it must see the OLD EOL — it does,
-      // because docEolComp is reconfigured inside that dispatch. Do not hoist the
-      // facet read. Paired with getDoc above; see its note.
-      const liveDoc = serializeDocument(view.state.doc, view.state.facet(quollDocumentEol));
+      // because docEolComp is reconfigured inside that dispatch. The SAME
+      // serializer edit-sync's getDoc uses, so this comparison and edit-sync's
+      // buffers cannot disagree about what the document's bytes are.
+      const liveDoc = serializeForHost();
       const aheadOfHost = liveDoc !== rawText;
       // ok-ack fold (update-loop guard — ARCHITECTURE.md §3/§5/§7). A host
       // Document that merely ECHOES our own in-flight edit back is an ack, not

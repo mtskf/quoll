@@ -316,10 +316,10 @@ function defaultMintEpochGeneration(): number {
 /** EOL-insensitive content equality shared by the `applyEditSettled` foreign-
  *  bytes, drain-eligibility, and ok-but-mismatch checks. One operand
  *  (`inFlightContent`) is raw webview bytes joined with the EOL the webview's
- *  `quollDocumentEol` facet holds; the other (`currentContent`/`preApplyContent`) is canonicalised to
- *  `document.eol`. A pure byte compare would misread an EOL-only difference
- *  (a plain edit on a CRLF-eol doc whose webview facet is still LF) as
- *  foreign bytes.
+ *  `quollDocumentEol` facet holds; the other (`currentContent` /
+ *  `preApplyContent`) is canonicalised to `document.eol`. A pure byte compare
+ *  would misread an EOL-only difference (a plain edit on a CRLF-eol doc whose
+ *  webview facet is still LF) as foreign bytes.
  *  The comparison itself is `sameTextIgnoringEol` (src/shared/), which the
  *  webview's loss judgement asks of the same document — ONE definition, so the
  *  two sides cannot drift. This wrapper adds only the NULLABLE operand, which is
@@ -909,10 +909,10 @@ export function createHostSessionCore(context: HostSessionContext, deps: HostSes
         // EOL-INSENSITIVE compare (contentMatches): identical to the epoch
         // verdict above — `currentContent` is canonicalised to `document.eol`
         // while `inFlightContent` is the raw webview bytes joined with the
-        // webview's `quollDocumentEol` EOL, so a raw `===` would
-        // misread a plain edit on a CRLF-eol single-line doc as "external won"
-        // and DROP the stash instead of draining it (the webview's OWN acked
-        // lineage, not a foreign edit).
+        // webview's `quollDocumentEol` EOL, so a raw `===` would misread a plain
+        // edit on a CRLF-eol single-line doc as "external won" and DROP the stash
+        // instead of draining it (the webview's OWN acked lineage, not a foreign
+        // edit).
         // CONTENT NOT OBSERVED ⇒ NO drain (the ack LABEL is a separate
         // question, taken up next). The drain's safety condition is an OBSERVED
         // equality — "the settled document IS edit #1's exact result" — which is
