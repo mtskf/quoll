@@ -1,8 +1,8 @@
 // A bounded-maintained, document-ordered list of EVERY Lezer `Table` node as a
 // renderable table MODEL — `{from,to}` (the node range, produced by a full
 // `syntaxTree(state).iterate()` via `collectTableRanges`) PLUS the line-snapped
-// block range, the per-node CRLF-normalised source slice, and the cached
-// `parseTable` result.
+// block range, the per-node LF source slice (the CM interior is LF-only — see
+// `buildModel`), and the cached `parseTable` result.
 // `tableBlockField`'s `buildAll` reads THIS field instead of re-walking the tree
 // AND re-parsing every table per keystroke (~5 ms/MB whole-tree materialisation
 // + O(tables) `parseTable` — see PERF.md). The list includes NON-emitting `Table`
@@ -53,25 +53,30 @@ import { collectTableRanges } from "./table-ranges.js";
 export interface TableModel {
   /** Lezer `Table` node range — the bounded-reuse identity, re-walk dedup key,
    *  and document-order position within the array. */
-  from: number;
-  to: number;
+  readonly from: number;
+  readonly to: number;
   /** Whole-line-snapped block range — the block widget's `docFrom`..end. Block
    *  widgets must cover complete lines; precomputed here so `buildAll` does no
    *  per-keystroke `lineAt` over every table. */
-  blockFrom: number;
-  blockTo: number;
-  /** Per-node source slice. LF-only, because the CM document itself is (see
-   *  `buildModel`) — so no cell `raw` string carries an embedded `\r` the DOM
-   *  textNode would render as stray whitespace.
-   *  The widget's eq() key; the input the cached `table` was parsed from. */
-  slice: string;
+  readonly blockFrom: number;
+  readonly blockTo: number;
+  /** Per-node source slice. The widget's eq() key; the input the cached `table`
+   *  was parsed from. `readonly` because an eq() key that changed after
+   *  construction would make two models compare equal while rendering
+   *  differently — the field must be rebuilt, never patched.
+   *  LF-only, because the CM document itself is (see `buildModel`) — so no cell
+   *  `raw` string carries an embedded `\r` the DOM textNode would render as
+   *  stray whitespace. That invariant is NOT enforced here: `cm/seed.ts`'s
+   *  `splitToCmText` owns it upstream, at the one seam where host bytes become
+   *  CM text. */
+  readonly slice: string;
   /** Cached parse, or `null` for a `Table` node `parseTable` rejects — a
    *  blockquote-nested table (continuation lines bear `>` markers, not
    *  whitespace) or a malformed slice (cell-count mismatch). List- and
    *  space/tab-indented tables now parse, so they are NOT in this set. Still
    *  occupies an ordinal slot in the document-order array for stable index
    *  accounting. */
-  table: Table | null;
+  readonly table: Table | null;
 }
 
 /** Build one model from a `Table` node range: per-node slice + parse +
