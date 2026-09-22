@@ -908,7 +908,8 @@ export function createHostSessionCore(context: HostSessionContext, deps: HostSes
         // drains (the save failed; its own showError surfaces it).
         // EOL-INSENSITIVE compare (contentMatches): identical to the epoch
         // verdict above — `currentContent` is canonicalised to `document.eol`
-        // while `inFlightContent` is raw webview LF bytes, so a raw `===` would
+        // while `inFlightContent` is the raw webview bytes joined with the
+        // webview's `quollDocumentEol` EOL, so a raw `===` would
         // misread a plain edit on a CRLF-eol single-line doc as "external won"
         // and DROP the stash instead of draining it (the webview's OWN acked
         // lineage, not a foreign edit).

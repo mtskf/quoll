@@ -17,10 +17,12 @@ export type DocumentEol = "\r\n" | "\n";
  *
  *  The host seeds canonicalDocumentText(document) (src/extension/session/
  *  document-canonical.ts), so `rawText` arrives uniform and this picks that
- *  one separator. The CR-only / mixed branch (no `\r\n` ⇒ LF) is defensive —
- *  it keeps the line model clean if a non-uniform string ever reached the
- *  seam — but the host boundary, not this function, owns the single-EOL
- *  invariant.
+ *  one separator. Note a MIXED document (both `\n` and `\r\n`) takes the CRLF
+ *  branch, since one `\r\n` anywhere satisfies `includes`. The LF branch is
+ *  therefore the pure-LF documents (the ordinary case) plus a defensive
+ *  CR-only one — it keeps the line model clean if a non-uniform string ever
+ *  reached the seam — but the host boundary, not this function, owns the
+ *  single-EOL invariant.
  *
  *  Note: a lone CR (`\r` not followed by `\n`) is not a supported input — the
  *  CM text model splits on /\r\n?|\n/ (see `splitToCmText`), which strips a

@@ -60,8 +60,9 @@ export interface TableModel {
    *  per-keystroke `lineAt` over every table. */
   blockFrom: number;
   blockTo: number;
-  /** Per-node source slice, CRLF-normalised to LF (so cell `raw` strings cannot
-   *  carry an embedded `\r` the DOM textNode would render as stray whitespace).
+  /** Per-node source slice. LF-only, because the CM document itself is (see
+   *  `buildModel`) — so no cell `raw` string carries an embedded `\r` the DOM
+   *  textNode would render as stray whitespace.
    *  The widget's eq() key; the input the cached `table` was parsed from. */
   slice: string;
   /** Cached parse, or `null` for a `Table` node `parseTable` rejects — a
@@ -73,12 +74,16 @@ export interface TableModel {
   table: Table | null;
 }
 
-/** Build one model from a `Table` node range: per-node slice (CRLF→LF) + parse +
+/** Build one model from a `Table` node range: per-node slice + parse +
  *  whole-line snap. Pure reader of the passed state's lazy doc. */
 function buildModel(state: EditorState, nodeFrom: number, nodeTo: number): TableModel {
   const len = state.doc.length;
-  // Per-node slice — O(table-bytes). Never materialise the full doc. CRLF→LF for
-  // the widget's working slice (source doc keeps CRLF; only this copy normalises).
+  // Per-node slice — O(table-bytes). Never materialise the full doc.
+  // The `\r\n?` replace matches nothing today: the CM document is LF-only by
+  // construction (cm/seed.ts `splitToCmText` splits on /\r\n?|\n/) and
+  // `sliceDoc` renders that interior verbatim, because `EditorState.
+  // lineSeparator` is deliberately never provided. It is kept only as a
+  // belt-and-braces normaliser — NOT because the source doc carries CRLF.
   const slice = state.sliceDoc(nodeFrom, nodeTo).replace(/\r\n?/g, "\n");
   const table = parseTable(slice, 0, slice.length);
   // Snap to whole-line boundaries — `block: true` widgets must cover complete

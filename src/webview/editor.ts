@@ -954,10 +954,11 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
       const foldsOkAck =
         aheadOfHost && canWrite && sync.acksInFlightEdit(rawText, externalEpoch, epochGeneration);
       const needsReseed = aheadOfHost && !foldsOkAck;
-      // Capture BEFORE the reseed. The needsReseed branch issues a wholesale
-      // `0..doc.length` replace; CodeMirror's default selection mapping
-      // collapses mid-doc cursors through that delete (the typical
-      // accept-mid-typing race lands them at position 0). We re-set the
+      // Capture BEFORE the reseed. The needsReseed branch replaces ONE minimal
+      // span (computeReseedChange below, not a wholesale `0..doc.length`
+      // replace), but CodeMirror's default selection mapping still collapses a
+      // cursor that sits INSIDE the deleted span to that span's start — which
+      // is exactly where the accept-mid-typing race puts it. We re-set the
       // caret in the SAME transaction below, clamped to the new doc bounds,
       // so typing through an accept boundary keeps the edit point — and the
       // atomic doc+editable contract (test "l") still holds because it is

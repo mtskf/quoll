@@ -72,7 +72,7 @@ function firstContentChild(node: SyntaxNode): SyntaxNode | null {
 //      emits no competing table widget inside it (`m.from < fmEnd`). A marker-line
 //      table inside a frontmatter fence parses, but renders as raw source with no
 //      widget (Codex Conf-74).
-//   2. parseTable rejects the CRLF-normalised per-node slice — a blockquote-nested
+//   2. parseTable rejects the per-node slice — a blockquote-nested
 //      table (continuation lines bear `>` markers) or a malformed slice (cell-count
 //      mismatch). Both render as raw source (Codex Conf-84).
 // (buildAll's third gate, a degenerate zero-width block range, is unreachable for a
