@@ -457,43 +457,41 @@ describe("frontmatterBlockField byte-identity: bounded ≡ full", () => {
 
 // ── CRLF-seeded byte-identity (line-ending-aware anchors) ───────────────────────
 //
-// Every fixture above is LF-only, so the CRLF→LF normalisation in the table
-// capture is a no-op and the byte anchors compare exact LF bytes. This block
-// exercises the CR path the LF fixtures cannot: a document seeded through the
-// PRODUCTION seed pair — `splitToCmText` (`Text.of(raw.split(/\r\n?|\n/))`, which
-// strips every `\r` so the CM line model is LF-internal) + the Quoll
+// Every fixture above is LF-only. These two seed a CRLF document through the
+// PRODUCTION seed pair instead — `splitToCmText` (`Text.of(raw.split(/\r\n?|\n/))`,
+// which strips every `\r` so the CM line model is LF-internal) + the Quoll
 // `quollDocumentEol` facet (which records the document's EOL for OUTBOUND
-// serialization only, via `serializeDocument`). CodeMirror's own
+// serialization only, via `serializeDocument`) — i.e. exactly
+// editor.ts#applyDocument's seed for a CRLF file. CodeMirror's own
 // `EditorState.lineSeparator` is never provided, so `state.sliceDoc` always
-// renders LF — it no longer renders `\r\n` back for a CRLF document. This is
-// exactly editor.ts#applyDocument's seed for a CRLF file, so a widget-capture
-// regression that mishandles CR bytes surfaces here where the LF fixtures stay
-// silent.
+// renders LF; it does not render `\r\n` back for a CRLF document.
 //
-// With no CM facet, BOTH fields' captured slices are CM-interior LF text —
-// there is no longer an "opposite" pair (that was true only while
-// `state.sliceDoc` rode `EditorState.lineSeparator`). The one place CRLF bytes
-// still exist is the outbound serialization, so "line-ending aware" here means:
+// ⚠️ How much CR-detection power each case has is NOT the same, so do not read
+// the block as a whole that way (both halves measured 2026-09-22):
 //
-//   • TABLE — the widget slice is DELIBERATELY LF-normalised at capture
+//   • TABLE — EOL-SENSITIVE, and this is the case that earns the CRLF fixture.
+//     The widget slice is DELIBERATELY LF-normalised at capture
 //     (table-skeleton.ts: `sliceDoc(...).replace(/\r\n?/g, "\n")`, so a cell's
 //     `raw` never carries an embedded `\r` the DOM would render as stray
-//     whitespace). CR is therefore NOT expected to survive into `w.slice`, and
-//     the (now facet-free) `st.sliceDoc(...)` never renders CR back either.
-//     The load-bearing round-trip lives at the OUTBOUND-SERIALIZATION level:
-//     `serializeDocument(doc, eol)` over the whole document must reproduce the
-//     exact CRLF source bytes. Anchor BOTH: the document round-trips to the
-//     host's CRLF bytes via `serializeDocument`, and `w.slice` is the
-//     LF-normalised copy of that same range (CR correctly stripped).
+//     whitespace), so CR is not expected to survive into `w.slice`. The
+//     load-bearing read is the OUTBOUND one: `serializeDocument(doc, eol)` over
+//     the whole document must reproduce the exact CRLF source bytes. Making
+//     `serializeDocument` ignore its `eol` argument reds this test and nothing
+//     else here.
 //
-//   • FRONTMATTER — `slice` is `state.sliceDoc(0, to)`, which is CM-interior
-//     text like `body` (`doc.sliceString(...)`, no separator arg → always LF)
-//     — confirmed against `frontmatter/detect.ts`'s own comment, and used by
-//     `frontmatter-widget.ts:93` for widget identity only, never for host
-//     bytes. Anchor that `slice` is the LF-normalised form of the raw CRLF
-//     source and that `body` is the LINE-ENDING-AWARE interior
-//     (`split(/\r\n?|\n/)`, NOT `split("\n")`, kept for robustness even though
-//     the slice it splits no longer carries CR either).
+//   • FRONTMATTER — NOT EOL-sensitive, by construction. `slice` is
+//     `state.sliceDoc(0, to)`, CM-interior text like `body`
+//     (`doc.sliceString(...)`, no separator arg → always LF) — confirmed against
+//     `frontmatter/detect.ts`'s own comment, and consumed by
+//     `frontmatter-widget.ts:93` for widget identity only, never for host bytes.
+//     Every assertion therefore compares LF against LF, and the test passes
+//     byte-identically on an all-LF fixture: its CR-detection power is zero.
+//     That is correct for what it anchors — a capture that never reaches host
+//     bytes — and the CRLF fixture stays because the seam it exercises is the
+//     production one (raw CRLF in, `splitToCmText` to an LF interior), not
+//     because a CR could survive to be caught. `body`'s line-ending-aware split
+//     (`split(/\r\n?|\n/)`, not `split("\n")`) is likewise robustness now, not a
+//     load-bearing CR strip.
 //
 // Document-level CRLF round-trip is owned end-to-end by the host layer
 // (test/extension/e2e/crlf-roundtrip.test.ts, mixed-eol-roundtrip.test.ts,
