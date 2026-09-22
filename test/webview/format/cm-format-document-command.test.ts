@@ -9,7 +9,11 @@ import {
   outboundContentLength,
   runFormatDocument,
 } from "../../../src/webview/cm/format/format-document-command.js";
-import { quollDocumentEol, serializeDocument } from "../../../src/webview/cm/seed.js";
+import {
+  type DocumentEol,
+  quollDocumentEol,
+  serializeDocument,
+} from "../../../src/webview/cm/seed.js";
 
 function makeView(doc: string, readOnly = false): EditorView {
   return new EditorView({
@@ -87,6 +91,20 @@ describe("runFormatDocument", () => {
     expect(outboundContentLength("a\nb\nc", "\r\n")).toBe(7);
     expect(outboundContentLength("a\nb", "\n")).toBe(3);
     expect(outboundContentLength("no newline", "\r\n")).toBe(10);
+  });
+  it("outboundContentLength's second parameter is DocumentEol, not string (compile-time pin)", () => {
+    // `view.state.lineBreak` is typed `string`, not `DocumentEol` — passing it was
+    // the exact bug 5738307 fixed (silently under-counts CRLF outbound length).
+    // This pins the narrowed parameter type so a future widening back to `string`
+    // is a compile error, not just a runtime under-count.
+    const wrong: string = "\n";
+    // @ts-expect-error outboundContentLength's second parameter is DocumentEol, not string
+    outboundContentLength("x", wrong);
+    // Correct usage still type-checks (DocumentEol-typed value and literals) — expect
+    // the return value so a too-narrow parameter type would also fail here at runtime.
+    const right: DocumentEol = "\r\n";
+    expect(outboundContentLength("a\nb", right)).toBe(4);
+    expect(outboundContentLength("a\nb", "\n")).toBe(3);
   });
   it("keeps a real line model on a CRLF doc's multi-line insert", () => {
     // Realistic CRLF doc. CodeMirror splits a string insert with its own default
