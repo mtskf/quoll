@@ -64,22 +64,16 @@ export function runFormatDocument(view: EditorView): boolean {
     console.error("[quoll] Format Document aborted: result exceeds the content size limit.");
     return false;
   }
-  // Inserts are LF-joined (the formatter works in CM's LF-internal space), but
-  // EditorState.changes splits insert text on the lineSeparator facet — on a CRLF
-  // doc a bare \n inside a multi-line insert (only table reformats span rows) would
-  // stay a literal char embedded in one line, corrupting the line model. Convert
-  // each insert's newlines to the doc's separator (no-op when lineBreak is "\n").
-  const lineBreak = view.state.lineBreak;
-  const changes =
-    lineBreak === "\n"
-      ? edits
-      : edits.map((e) => ({
-          from: e.from,
-          to: e.to,
-          insert: e.insert.split("\n").join(lineBreak),
-        }));
+  // The formatter works in CM's LF-internal space and CM splits string inserts
+  // with its own default /\r\n?|\n/ — EditorState.lineSeparator is deliberately
+  // never provided (cm/seed.ts) — so a multi-line insert needs NO conversion.
+  // This was the one site in the webview that carried its own; it now takes the
+  // same path as every other insert. `outboundContentLength` above still needs
+  // the document's EOL: how long these bytes are once the HOST sees them is an
+  // EOL-dependent question, and that is a different question from how CM splits
+  // them on the way in.
   try {
-    view.dispatch({ changes, userEvent: "quoll.formatDocument" });
+    view.dispatch({ changes: edits, userEvent: "quoll.formatDocument" });
   } catch (err) {
     console.error("[quoll] Format Document dispatch failed; no changes applied.", err);
     return false;
