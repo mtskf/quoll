@@ -13,12 +13,17 @@ import type { EditorView } from "@codemirror/view";
 import { applyEdits } from "../../../markdown/format/edit.js";
 import { formatDocumentEdits } from "../../../markdown/format/index.js";
 import { MAX_CONTENT_LENGTH } from "../../../shared/protocol.js";
-import { quollDocumentEol } from "../seed.js";
+import { type DocumentEol, quollDocumentEol } from "../seed.js";
 
-/** Length of `text` once its `\n` newlines are serialized with `lineBreak`
- *  (edit-sync posts the CRLF-joined content; the LF-internal length under-counts). */
-export function outboundContentLength(text: string, lineBreak: string): number {
-  if (lineBreak.length <= 1) {
+/** Length of `text` once its `\n` newlines are serialized with the DOCUMENT's
+ *  own EOL (edit-sync posts the CRLF-joined content; the LF-internal length
+ *  under-counts). The parameter is `DocumentEol`, not `string`, so the one
+ *  wrong argument — CM's `state.lineBreak`, which is always `"\n"` here because
+ *  `EditorState.lineSeparator` is never provided (cm/seed.ts) — is a type error
+ *  rather than something prose has to warn about. Pass
+ *  `state.facet(quollDocumentEol)`. */
+export function outboundContentLength(text: string, eol: DocumentEol): number {
+  if (eol.length <= 1) {
     return text.length;
   }
   let newlines = 0;
@@ -27,7 +32,7 @@ export function outboundContentLength(text: string, lineBreak: string): number {
       newlines++;
     }
   }
-  return text.length + newlines * (lineBreak.length - 1);
+  return text.length + newlines * (eol.length - 1);
 }
 
 export function runFormatDocument(view: EditorView): boolean {
@@ -56,7 +61,9 @@ export function runFormatDocument(view: EditorView): boolean {
   // EditorState.lineSeparator is deliberately never provided (cm/seed.ts), so
   // state.lineBreak is always "\n" and would under-count a CRLF document's
   // outbound bytes by one per line — letting an oversized result mutate the
-  // document before postEditMessage refuses to post it.
+  // document before postEditMessage refuses to post it. The `DocumentEol`
+  // parameter now rejects `state.lineBreak` outright; this note survives because
+  // WHICH of the two the size check must read is not something the type says.
   if (outboundContentLength(formatted, view.state.facet(quollDocumentEol)) > MAX_CONTENT_LENGTH) {
     // postEditMessage would refuse to post the oversized (CRLF-serialized) content
     // and show the webview serialize-error banner, leaving the doc formatted but
