@@ -212,11 +212,12 @@ const ASSIGNMENT_TOKENS: ReadonlySet<ts.SyntaxKind> = new Set([
 /** Resolve `base` through intermediate classes the walk has seen, and keep only
  *  the ones that bottom out at `QuollWidget`.
  *
- *  WHY: `base` is heritage-clause TEXT (`t.expression.getText(sf)`), so before
- *  this a `class Leaf extends Mid` — with `Mid extends QuollWidget` declared
- *  right beside it — read as base `"Mid"` and fell out of ALL THREE consumers at
- *  once: the re-declaration check, the roster, and the listener scan. One
- *  intermediate class was enough to leave a widget completely unguarded.
+ *  WHY: `base` is a heritage-clause NAME and nothing more
+ *  (`heritageName(t.expression, sf)`), so before this a `class Leaf extends Mid`
+ *  — with `Mid extends QuollWidget` declared right beside it — read as base
+ *  `"Mid"` and fell out of ALL THREE consumers at once: the re-declaration
+ *  check, the roster, and the listener scan. One intermediate class was enough
+ *  to leave a widget completely unguarded.
  *
  *  ⚠️ Resolution is by NAME across the whole walk (a per-file map would reopen
  *  the same hole for a base imported from a sibling module). The `seen` set
@@ -490,18 +491,23 @@ function containWidgetRenderNames(text: string, fileName: string): string[] {
       }
     }
   }
+  /** `accessedName` plus the BARE identifier its header deliberately leaves out
+   *  — this is the one caller that header names as asking for it itself. Written
+   *  once because the two arms below ask the very same question of two different
+   *  expressions (a call's callee, an alias binding's initialiser); a rule
+   *  re-derived per arm is exactly the drift `accessedName`'s header describes. */
+  const resolvedName = (e: ts.Expression): string | undefined =>
+    ts.isIdentifier(e) ? e.text : accessedName(e);
   const visit = (node: ts.Node): void => {
     // `const cwr = containWidgetRender` renames the callee exactly as an aliased
     // import does, one line cheaper — refused for the same reason. The
-    // initializer goes through the shared `accessedName`, so
+    // initializer goes through the same resolution the callee does, so
     // `base.containWidgetRender` and `m["containWidgetRender"]` are the same
     // rename in a different spelling.
     if (
       ts.isVariableDeclaration(node) &&
       node.initializer !== undefined &&
-      (ts.isIdentifier(node.initializer)
-        ? node.initializer.text
-        : accessedName(node.initializer)) === CALLEE
+      resolvedName(node.initializer) === CALLEE
     ) {
       throw new Error(
         `${fileName}: ${CALLEE} is bound to '${node.name.getText(sf)}' — this guard matches the callee by name, so call it directly`
@@ -509,10 +515,7 @@ function containWidgetRenderNames(text: string, fileName: string): string[] {
     }
     if (ts.isCallExpression(node)) {
       // The callee's SPELLING is not the question — the name it resolves to is.
-      const callee = ts.isIdentifier(node.expression)
-        ? node.expression.text
-        : accessedName(node.expression);
-      if (callee === CALLEE) {
+      if (resolvedName(node.expression) === CALLEE) {
         const arg = node.arguments[0];
         if (arg === undefined || !ts.isStringLiteralLike(arg)) {
           throw new Error(
