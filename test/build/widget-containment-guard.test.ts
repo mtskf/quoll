@@ -26,13 +26,17 @@
 //     `class Mid extends QuollWidget` stands anywhere in the tree is a guarded
 //     widget like any other. ⚠️ Resolution keys on the identifier a subclass
 //     writes after `extends`, which is the DECLARED name and nothing else: a
-//     class EXPRESSION is therefore NOT resolved even though the walk sees it
-//     (`const Mid = class Inner …` is reachable only as `Mid` while `baseOf` gets
-//     the key `Inner`, and an anonymous one contributes no key at all). That is
-//     why every class expression in a `QuollWidget` ancestry is reported as a
-//     violation below rather than left to this gap. The same name-keyed
-//     resolution is why "class names in the walked tree are unique" is asserted
-//     below rather than assumed; a collision would silently mis-resolve
+//     class EXPRESSION is therefore resolved only in the one spelling where the
+//     binding repeats the class's own name (`const Mid = class Mid …`), never in
+//     the ones a reader actually meets (`const Mid = class Inner …` is reachable
+//     only as `Mid` while `baseOf` gets the key `Inner`, and an anonymous one
+//     contributes only the sentinel key `(anonymous)`, which no `extends` clause
+//     can name). That is why every class expression in a `QuollWidget` ancestry
+//     is reported as a violation below rather than left to this gap. The same
+//     name-keyed resolution is why "class names in the walked tree are unique"
+//     is asserted below rather than assumed (the sentinel is filtered out there
+//     for exactly this reason); a collision on a real name would silently
+//     mis-resolve
 //   - a hook replaced OUTSIDE the class body: `X.prototype.<hook> = …`,
 //     `Object.defineProperty(X.prototype, "<hook>", …)`, or either of those
 //     reached through a bound alias (`const P = X.prototype; P.destroy = …`).
@@ -46,12 +50,18 @@
 //     CONSTANT rather than a literal: `const K = "toDOM"; class X … { [K]() {} }`
 //     installs the same own property, but `memberName` / `accessedName` read the
 //     literal only, so the name is dropped. Resolving it needs a TypeChecker
-//   - a `containWidgetRender` alias whose MAKING this file never sees: a
-//     re-export (`export { containWidgetRender as cwr }` consumed from ANOTHER
-//     module — the rename is not in the scanned file at all) or a destructuring
-//     rename (`const { containWidgetRender: cwr } = ns`). A direct local binding
-//     IS refused, see the walk; these two are not, so a name they carry never
-//     reaches the latch-key set
+//   - a `containWidgetRender` alias made in any way OTHER than a variable
+//     declaration whose initialiser is the callee: the walk refuses exactly
+//     `import { containWidgetRender as x }` and `const x = containWidgetRender`
+//     (in any callee spelling `accessedName` resolves) — nothing else. An
+//     assignment after declaration (`let x; x = containWidgetRender`), a
+//     parameter default, a class field, an object-literal property, a cast
+//     (`… as T`), a destructuring rename (`const { containWidgetRender: x } =
+//     ns`) and a re-export (`export { containWidgetRender as x }` — refused
+//     neither in the re-exporting file nor in its consumer) all pass silently,
+//     so a name they carry never reaches the latch-key set. Measured, all seven.
+//     The deliberate line is that this walk matches names rather than resolving
+//     bindings
 //   - indirect listener-registration spellings: `el.addEventListener.call(…)` /
 //     `.apply(…)` / `.bind(…)`, `Reflect.apply(el.addEventListener, …)`, and
 //     `Object.assign(el, { onclick })`. The scan matches the callee and the
@@ -76,11 +86,14 @@
 //   - class declarations AND class expressions — and a class expression that
 //     descends from `QuollWidget` is itself a violation whether or not it is
 //     named, since `quollDescendants` resolves bases by the `extends` identifier
-//     and a class expression's own name is not that identifier
+//     and a class expression's own name is that identifier only in the one
+//     spelling where the binding repeats it
 //   - a base written in any spelling this walk can resolve — `extends Base`,
 //     `extends ns.Base` and `extends ns["Base"]` alike. A qualified base is the
-//     same base, and letting the raw heritage TEXT decide dropped the class out
-//     of all four consumers at once
+//     same base, and letting the raw heritage TEXT decide stopped a qualified
+//     `WidgetType` base matching the direct-extends check, while a qualified
+//     `QuollWidget` base fell out of all four descendant-derived consumers at
+//     once
 //   - class MEMBER names written as identifiers, string literals, or a computed
 //     name whose expression is itself a string LITERAL (`["toDOM"]()`), AND
 //     `this.<name> = …` written inside the class body — a constructor assignment
@@ -137,11 +150,12 @@ type Widget = {
   file: string;
   cls: string;
   base: string;
-  /** A class EXPRESSION's declared name is not the identifier a subclass writes
-   *  after `extends` — `const Mid = class Inner …` is reachable only as `Mid`,
-   *  and `baseOf` keys on `cls`. So EVERY class expression in an ancestry is
-   *  unresolvable, named or not, which is why this is a property of the record
-   *  rather than something encoded in a sentinel `cls` string. */
+  /** A class EXPRESSION's declared name need not be the identifier a subclass
+   *  writes after `extends` — `const Mid = class Inner …` is reachable only as
+   *  `Mid`, and `baseOf` keys on `cls`. So a class expression in an ancestry is
+   *  unresolvable unless the binding repeats its own name, and it is reported
+   *  either way — which is why this is a property of the record rather than
+   *  something encoded in a sentinel `cls` string. */
   isExpression: boolean;
   members: string[];
   /** Names the class takes over by ASSIGNMENT inside its own body
@@ -165,14 +179,15 @@ type Widget = {
  *  identical shape was closed for `addEventListener`. A resolution rule that
  *  lives inside one walk gets re-derived — or forgotten — by the next one, so the
  *  rule is one definition and the walks share it: the CALLEE of
- *  `x.addEventListener(…)` and `x.containWidgetRender(…)`, and the assignment
- *  TARGET of `x.onclick =` and `this.destroy =`.
+ *  `x.addEventListener(…)` and `x.containWidgetRender(…)`, the assignment
+ *  TARGET of `x.onclick =` and `this.destroy =`, and the BASE of
+ *  `class X extends ns.Base`.
  *
- *  A bare identifier deliberately stays `undefined`. The only caller that needs
- *  one asks for it itself (`containWidgetRenderNames`); widening this instead
- *  would silently add bare `addEventListener(…)` / `onclick = f` — implicit
- *  globals — to the listener scan's report, which is a different decision about a
- *  shape this tree does not contain. */
+ *  A bare identifier deliberately stays `undefined`. Both callers that need one
+ *  ask for it themselves (`heritageName`, `containWidgetRenderNames`); widening
+ *  this instead would silently add bare `addEventListener(…)` / `onclick = f` —
+ *  implicit globals — to the listener scan's report, which is a different
+ *  decision about a shape this tree does not contain. */
 const accessedName = (node: ts.Node): string | undefined => {
   if (ts.isPropertyAccessExpression(node)) {
     return node.name.text;
@@ -189,12 +204,14 @@ const accessedName = (node: ts.Node): string | undefined => {
  *  ⚠️ MODULE scope for the same reason `accessedName` is, and it reads that same
  *  shared resolver: the heritage clause used to decide on raw TEXT
  *  (`t.expression.getText(sf)`), so `extends view.WidgetType` produced the base
- *  `"view.WidgetType"` and fell out of ALL FOUR consumers at once — the roster,
- *  the re-declaration check, the assigned check and the latch key — while the
- *  identical spelling problem was already closed on the CALLEE side. A resolution
- *  rule re-derived per walk is exactly the drift `accessedName`'s own header
- *  describes. An unresolvable base falls back to its text, which keeps it opaque
- *  rather than silently renaming it. */
+ *  `"view.WidgetType"` and stopped matching the direct-extends check in
+ *  `violations` — while a qualified `QuollWidget` base fell out of all four
+ *  descendant-derived consumers at once (the roster, the re-declaration check,
+ *  the assigned check and the latch key) — and the identical spelling problem was
+ *  already closed on the CALLEE side. A resolution rule re-derived per walk is
+ *  exactly the drift `accessedName`'s own header describes. An unresolvable base
+ *  falls back to its text, which keeps it opaque rather than silently renaming
+ *  it. */
 const heritageName = (e: ts.Expression, sf: ts.SourceFile): string =>
   ts.isIdentifier(e) ? e.text : (accessedName(e) ?? e.getText(sf));
 
@@ -312,7 +329,8 @@ function unscopedListeners(text: string, fileName: string): string[] {
   const at = (node: ts.Node): string =>
     `${fileName}:${sf.getLineAndCharacterOfPosition(node.getStart(sf)).line + 1}`;
   /** `x.onfoo` / `x["onfoo"]` as an assignment TARGET, in EVERY assignment
-   *  spelling. `??=` / `||=` / `&&=` install a handler exactly as `=` does and no
+   *  spelling. `??=` / `||=` install a handler on a property that defaults to
+   *  `null` exactly as `=` does, and `&&=` replaces one that is already there; no
    *  `AbortSignal` can remove any of them, so resting the check on one token is
    *  the same bet the dotted-callee-only version of this predicate already lost —
    *  three tokens, and the arm stops being a statement about syntax. */
@@ -467,13 +485,12 @@ function widgetsIn(text: string, fileName: string): Widget[] {
  *  a guard quietly narrows, and the throw names the file so the next author
  *  decides deliberately. An ALIAS throws for the same reason — it renames the
  *  callee out of a by-name walk's reach entirely, and no syntactic match can
- *  follow it, so the one honest answer is to refuse it out loud. Both makings of
- *  one are refused: an aliased import, and a local binding
+ *  follow it, so the one honest answer is to refuse it out loud. Two makings are
+ *  refused: an aliased import, and a variable DECLARATION bound to it
  *  (`const cwr = containWidgetRender`, in any callee spelling `accessedName`
- *  resolves). ⚠️ What is NOT refused is an alias whose making is not in this file
- *  — a re-export consumed from another module, or a destructuring rename. Those
- *  are the header's KNOWN GAPS, and the deliberate line is that this walk matches
- *  names rather than resolving an import graph. */
+ *  resolves). ⚠️ Every other making is not — the header's KNOWN GAPS list them —
+ *  and the deliberate line is that this walk matches names rather than resolving
+ *  bindings. */
 function containWidgetRenderNames(text: string, fileName: string): string[] {
   const sf = ts.createSourceFile(fileName, text, ts.ScriptTarget.Latest, true);
   const out: string[] = [];
@@ -545,14 +562,15 @@ function violations(classes: Widget[]): string[] {
     // A class EXPRESSION in the ancestry defeats the whole walk, not just this
     // check: `baseOf` is keyed on `cls`, which is the class's own DECLARED name,
     // while a subclass can only write the identifier the expression is BOUND to.
-    // The two are never the same thing, so `class Leaf extends Mid` below a
+    // The two need not be the same thing, so `class Leaf extends Mid` below a
     // `const Mid = class … extends QuollWidget {}` resolves to nothing and leaves
     // `widgetClasses` entirely — taking the re-declaration check, the roster and
     // the latch key with it, while the intermediate keeps the roster's file count
     // and `widgetName` looking untouched. Measured: with that shape planted in
     // thematic-break-widget.ts the guard was 8/8 GREEN.
     //
-    // ⚠️ NAMING THE EXPRESSION DOES NOT HELP, which is why this keys on
+    // ⚠️ NAMING THE EXPRESSION DOES NOT RELIABLY HELP — only the one spelling
+    // that repeats the binding's name does — which is why this keys on
     // `isExpression` and not on a `"(anonymous)"` sentinel: `const Mid = class
     // Inner extends QuollWidget {}` puts the key `Inner` in `baseOf` while every
     // subclass writes `extends Mid`, so the leaf drops out exactly as it does
@@ -721,9 +739,10 @@ describe("widget containment cannot be bypassed", () => {
     // both spellings are flagged unconditionally.
     expect(unscopedListeners(`el.onclick = f;`, "x.ts")).toHaveLength(1);
     expect(unscopedListeners(`el["onchange"] = f;`, "x.ts")).toHaveLength(1);
-    // …and in every assignment spelling. `??=` / `||=` / `&&=` leave exactly the
-    // same unabortable handler on the element, so a predicate that reads only
-    // `=` is a statement about syntax rather than about listeners.
+    // …and in every assignment spelling. `??=` / `||=` install the same
+    // unabortable handler `=` does on a property that defaults to null, and
+    // `&&=` replaces one already installed, so a predicate that reads only `=`
+    // is a statement about syntax rather than about listeners.
     expect(unscopedListeners(`el.onclick ??= f;`, "x.ts")).toHaveLength(1);
     expect(unscopedListeners(`el.onclick ||= f;`, "x.ts")).toHaveLength(1);
     expect(unscopedListeners(`el["onclick"] &&= f;`, "x.ts")).toHaveLength(1);
@@ -770,15 +789,18 @@ describe("widget containment cannot be bypassed", () => {
       // widget and the base was enough to unguard it, in the same file.
       export class Mid extends QuollWidget {}
       export class Leaf extends Mid { toDOM() { return null as never; } }
-      // An ANONYMOUS intermediate. \`baseOf\` gets no key for it, so a leaf below
-      // it resolves to nothing and drops out of the re-declaration check, the
+      // An ANONYMOUS intermediate. \`baseOf\` gets only the sentinel key
+      // \`(anonymous)\` for it, which no subclass can write, so a leaf below it
+      // resolves to nothing and drops out of the re-declaration check, the
       // roster AND the latch key at once — while the intermediate itself keeps
       // the roster's file count and its \`widgetName\` looking untouched. Flagged
       // at the intermediate, which is where the declaration is missing.
       export const AnonMid = class extends QuollWidget {};
-      // A NAMED class expression is no more resolvable, and this pair is here so
-      // the two cannot drift apart: \`baseOf\` gets the key \`Inner\`, while the
-      // only identifier a subclass can write is \`AliasMid\`. So \`AliasLeaf\`
+      // A NAMED class expression is no more resolvable once the binding RENAMES
+      // it — \`const X = class X …\` is the one spelling that resolves — and this
+      // pair is here so the two cannot drift apart: \`baseOf\` gets the key
+      // \`Inner\`, while the only identifier a subclass can write is
+      // \`AliasMid\`. So \`AliasLeaf\`
       // contributes NO entry below — it falls out of \`quollDescendants\` exactly
       // as it would under the anonymous form, which is the whole finding. The
       // loud report has to come from the expression itself.
@@ -797,9 +819,14 @@ describe("widget containment cannot be bypassed", () => {
       export class Br extends QuollWidget {
         constructor() { super(); this["destroy"] = () => {}; }
       }
-      // …and under a LOGICAL assignment. \`??=\` installs the same own property
-      // \`=\` does — the operator changes when the write happens, never whether
-      // the base's \`destroy\` still runs.
+      // …and under a LOGICAL assignment. Deliberately OVER-approximating: with
+      // the base's \`destroy\` on the prototype (widget-base.ts:316) \`??=\` reads
+      // a function, finds it non-nullish and writes NOTHING, so this exact shape
+      // installs no own property at all and the base's \`destroy\` does still run
+      // — measured. The arm reports it anyway, because deciding on the operator
+      // would rest the check on syntax: \`this.destroy ??= …\` on a field that IS
+      // nullish, and \`el.onclick ??= f\` on a DOM property that defaults to null,
+      // both install exactly what \`=\` does.
       export class Lg extends QuollWidget {
         constructor() { super(); this.destroy ??= () => {}; }
       }
@@ -818,10 +845,16 @@ describe("widget containment cannot be bypassed", () => {
         m() { class Other { constructor() { this.destroy = 1; } } return Other; }
       }
       // A NAMESPACE-qualified base is the same base. Deciding on the heritage
-      // clause's raw TEXT read this one as \`"view.WidgetType"\` and dropped the
-      // class out of the roster, the re-declaration check, the assigned check
-      // and the latch key at once — the callee-side spelling bug, one walk over.
+      // clause's raw TEXT read this one as \`"view.WidgetType"\`, so the
+      // direct-extends check below never matched it — and the same spelling on a
+      // \`QuollWidget\` base would drop the class out of the roster, the
+      // re-declaration check, the assigned check and the latch key instead. The
+      // callee-side spelling bug, one walk over.
       export class Qualified extends view.WidgetType {}
+      // …and in the BRACKET spelling, which \`heritageName\` resolves through the
+      // same shared \`accessedName\` — pinned here so a re-derived resolver that
+      // reads only the dotted form goes red instead of quietly dropping it.
+      export class QualifiedBr extends view["WidgetType"] {}
       // ⚠️ Must NOT be flagged, and that is the DECLARED gap rather than an
       // accident: a computed name whose expression is a string-typed CONSTANT
       // reads as \`undefined\` in \`memberName\` / \`accessedName\`, and resolving
@@ -849,6 +882,7 @@ describe("widget containment cannot be bypassed", () => {
       "planted.ts: Leaf re-declares the guarded hook 'toDOM'",
       "planted.ts: Lg assigns over the guarded hook 'destroy'",
       "planted.ts: Qualified extends WidgetType directly",
+      "planted.ts: QualifiedBr extends WidgetType directly",
       "planted.ts: Reopened re-declares the guarded hook 'toDOM'",
       "planted.ts: Un assigns over the UNCONTAINED hook 'coordsAt' — see the guard's header",
     ]);
@@ -901,11 +935,13 @@ describe("widget containment cannot be bypassed", () => {
         "planted.ts"
       )
     ).toThrow(/is bound to 'cwr'/);
-    // ⚠️ The two alias shapes the header DECLARES as gaps stay silent, on
-    // purpose: neither rename is written in this file, so no by-name walk can
-    // see it. These two pin the declaration, not a detection — the only thing
-    // that can turn them red is someone closing the gap, which is exactly when
-    // the KNOWN GAPS entry has to change with them.
+    // ⚠️ Two of the alias shapes the header DECLARES as gaps stay silent, on
+    // purpose — and for two different reasons. The first rename is not written
+    // in this file at all (it lives in `reexport.js`); the second IS written
+    // here, and is missed anyway because the walk reads a variable declaration's
+    // INITIALISER, never its binding pattern. These two pin the declaration, not
+    // a detection — the only thing that can turn them red is someone closing the
+    // gap, which is exactly when the KNOWN GAPS entry has to change with them.
     expect(
       containWidgetRenderNames(
         `import { cwr } from "./reexport.js";\ncwr("Lit", () => el);`,
