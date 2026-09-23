@@ -17,19 +17,21 @@
 // popup; its options are a curated safe set, so the written value is always a known
 // identifier (the host write-gate re-validates regardless).
 //
-// updateDOM(): a language change (a pick OR a source edit of the language word,
+// patchDOM(): a language change (a pick OR a source edit of the language word,
 // INCLUDING crossing the "" boundary between bare and labelled) leaves openFrom
-// fixed, so eq is false but updateDOM syncs the value AND toggles `is-labeled` IN
-// PLACE — the focused <select> (and keyboard state) is preserved, and there is NO
-// destroy/recreate mid-pick (so no self-reentrant destroy while a change handler is
-// on the stack). CM only recreates when openFrom changes.
+// fixed, so sameAs() (the base's `eq`) is false but patchDOM syncs the value AND
+// toggles `is-labeled` IN PLACE — the focused <select> (and keyboard state) is
+// preserved, and there is NO destroy/recreate mid-pick (so no self-reentrant
+// destroy while a change handler is on the stack). CM only recreates when
+// openFrom changes.
 //
-// destroy(): because it mutates, this widget MUST clean up its listeners when CM
-// discards the DOM. A detached picker <select> whose native dropdown is still open
-// during an external reseed could otherwise fire a stale `change` and mis-write.
-// Listeners are attached with an AbortController signal (tracked per-<select> in a
-// module WeakMap) and aborted in destroy() (which resolves the select out of the
-// wrapper).
+// Teardown: because it mutates, this widget's listeners MUST die with its DOM. A
+// detached picker <select> whose native dropdown is still open during an external
+// reseed could otherwise fire a stale `change` and mis-write. That is now the BASE's
+// job, not this file's: both listeners are bound with the per-render `signal`
+// (QuollWidget.render), and `QuollWidget.destroy` aborts it unconditionally before
+// it even looks for a subclass `dispose` — so this widget needs no teardown hook of
+// its own (see widget-base.ts, and the note above `pickerState`).
 
 import type { EditorView } from "@codemirror/view";
 import { QuollWidget } from "../widget-base.js";
@@ -110,8 +112,8 @@ function selectOf(dom: HTMLElement): HTMLSelectElement | null {
   return dom.querySelector<HTMLSelectElement>(`.${PICKER_CLASS}`);
 }
 
-// Per-<select> state so updateDOM(dom) can reach the build-time openFrom
-// (updateDOM's same-slot guard) WITHOUT the widget instance holding mutable
+// Per-<select> state so patchDOM(dom) can reach the build-time openFrom
+// (patchDOM's same-slot guard) WITHOUT the widget instance holding mutable
 // state (widgets are value objects). WeakMap so a discarded select is GC'd
 // normally.
 //
@@ -125,7 +127,7 @@ const pickerState = new WeakMap<Element, { openFrom: OpenLineOffset }>();
 /** (Re)populate `select` with the curated options — plus the current language as a
  *  prepended option when it is a non-empty value outside the curated list, so an
  *  exotic language round-trips (stays selected) — and set the selected value.
- *  Shared by toDOM (initial) and updateDOM (in-place language sync). Setting
+ *  Shared by render (initial) and patchDOM (in-place language sync). Setting
  *  `.value` programmatically does NOT fire a `change` event. */
 function populateSelect(select: HTMLSelectElement, language: string): void {
   select.replaceChildren();
@@ -148,11 +150,11 @@ export class LanguagePickerWidget extends QuollWidget {
   readonly widgetName = "LanguagePickerWidget";
 
   constructor(
-    /** Open-line offset of the fenced block. Half the eq() key AND updateDOM's
-     *  same-slot guard: an openFrom change forces a fresh toDOM (correct listener
-     *  closures); a language-only change updates the value in place. */
+    /** Open-line offset of the fenced block. Half the sameAs() key AND patchDOM's
+     *  same-slot guard: an openFrom change forces a fresh render() (correct
+     *  listener closures); a language-only change updates the value in place. */
     readonly openFrom: OpenLineOffset,
-    /** Build-time language token — the other half of eq() and the select's
+    /** Build-time language token — the other half of sameAs() and the select's
      *  selected value. */
     readonly language: string
   ) {
@@ -185,7 +187,7 @@ export class LanguagePickerWidget extends QuollWidget {
       "change",
       (event) => {
         event.stopPropagation();
-        // this.openFrom is the live anchor: updateDOM keeps this DOM (and its
+        // this.openFrom is the live anchor: patchDOM keeps this DOM (and its
         // listener) when openFrom is unchanged; an openFrom shift recreates via
         // toDOM. All guards (readOnly, block-gone, no-op) live in the command.
         setFenceLanguage(view, this.openFrom, select.value);
@@ -201,7 +203,7 @@ export class LanguagePickerWidget extends QuollWidget {
     // the dropdown caret. `is-labeled` (language present) is a CSS gate — the theme
     // shows the wrapper as the left label ONLY in reading mode on a header-carrier
     // line, and hides it otherwise (a bare block and an editing/revealed block show no
-    // picker). Keeping ONE shape lets updateDOM sync the language IN PLACE across the
+    // picker). Keeping ONE shape lets patchDOM sync the language IN PLACE across the
     // "" boundary, so a pick never destroys/recreates the focused <select> (focus +
     // keyboard state preserved, and no self-reentrant destroy while a change handler is
     // on stack).

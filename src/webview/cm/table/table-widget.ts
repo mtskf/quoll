@@ -25,24 +25,25 @@
 // anchor snaps outward against it. That this widget owns listeners on the
 // DOCUMENT — which outlive its own DOM, since CodeMirror can replace a widget
 // root mid-gesture — is the most surprising fact about this module, and it is
-// exactly why `destroy()` and the seam's `isConnected` guard exist: without
+// exactly why `dispose()` and the seam's `isConnected` guard exist: without
 // them a discarded widget keeps answering for an editor that has forgotten it.
 // The seam is armed per gesture and disarmed by four paths — the gesture's own
 // PRIMARY-button release, any later press (capture phase), `dragstart`, and
-// `destroy` — each with its own comment at the site.
+// `dispose` — each with its own comment at the site.
 // The dispatched selection — caret or range — is what fires tableBlockField's
 // line-level reveal-on-caret, surfacing the source for editing.
 //
-// eq() is keyed on (docFrom, slice, nodeFrom). docFrom is the absolute
-// LF-internal doc offset of the widget's first byte (block line-start, NOT
-// table.from, which is always 0 under per-node slicing — see Codex re-review
-// Conf 82). nodeFrom is the Lezer Table node start — the base for each cell's
-// caret offset (nodeFrom + cell.from). Both are LF-internal (seed.ts
-// splitToCmText strips \r). Two tables at different doc positions or with
-// different Lezer node starts are NOT eq; same (docFrom, slice, nodeFrom) on
-// a rebuild reuses the existing DOM. updateDOM re-points both channels on reuse
-// (cell stamps on the DOM, block start in `blockStart`) so a margin/cell click
-// after a shift uses the new offsets, not a stale toDOM-time closure.
+// sameAs() (the base's `eq`) is keyed on (docFrom, slice, nodeFrom). docFrom is
+// the absolute LF-internal doc offset of the widget's first byte (block
+// line-start, NOT table.from, which is always 0 under per-node slicing — see
+// Codex re-review Conf 82). nodeFrom is the Lezer Table node start — the base
+// for each cell's caret offset (nodeFrom + cell.from). Both are LF-internal
+// (seed.ts splitToCmText strips \r). Two tables at different doc positions or
+// with different Lezer node starts are NOT the same widget; same (docFrom,
+// slice, nodeFrom) on a rebuild reuses the existing DOM. patchDOM re-points both
+// channels on reuse (cell stamps on the DOM, block start in `blockStart`) so a
+// margin/cell click after a shift uses the new offsets, not a stale
+// render()-time closure.
 
 import type { EditorView } from "@codemirror/view";
 
@@ -101,10 +102,10 @@ interface ContentPoint {
  *  gesture ending outside the widget cannot consult it, when those are exactly
  *  the gestures the outside-release seam exists for.
  *
- *  Keyed on the widget's root ELEMENT rather than held in the `toDOM` closure
- *  because `updateDOM` reuses that element across widget instances: the entry
+ *  Keyed on the widget's root ELEMENT rather than held in the `render` closure
+ *  because `patchDOM` reuses that element across widget instances: the entry
  *  has to be invalidated exactly when the cell stamps move, which is something
- *  `updateDOM` can do and the closure cannot. A WeakMap so a discarded widget
+ *  `patchDOM` can do and the closure cannot. A WeakMap so a discarded widget
  *  root takes its entry with it. */
 interface PendingDrag extends ContentPoint {
   readonly point: CellPoint | null;
@@ -112,11 +113,11 @@ interface PendingDrag extends ContentPoint {
 const pendingDrag = new WeakMap<HTMLElement, PendingDrag>();
 
 /** The block's CURRENT first-byte offset (margin-click caret target), keyed on
- *  the widget's root element for the same reason `pendingDrag` is: `updateDOM`
+ *  the widget's root element for the same reason `pendingDrag` is: `patchDOM`
  *  reuses that element across widget instances and cannot re-bind the click
  *  listener, whose captured `this` stays the OLD instance — so the new instance
  *  needs a channel to the existing listener that moves exactly when the block
- *  moves, which `updateDOM` can write and the closure cannot.
+ *  moves, which `patchDOM` can write and the closure cannot.
  *
  *  No RUNTIME gate: unlike the per-CELL offsets this one is never stringified,
  *  parsed, or read back from the DOM, so there is no malformed-value state for a
@@ -127,7 +128,7 @@ const pendingDrag = new WeakMap<HTMLElement, PendingDrag>();
  *  runtime one and buys something the shape check could not: `this.table.from`
  *  is a plain `number` that sits in scope at both write sites and is named
  *  `from` — but on this path it is always 0 under per-node slicing (see this
- *  module's header re: `eq()`, and src/markdown/table/model.ts /
+ *  module's header re: `sameAs()`, and src/markdown/table/model.ts /
  *  src/markdown/table/parse.ts for what a `Table` span is actually an offset
  *  INTO: the `source` string passed to `parseTable`, not the document).
  *  Writing it here is a compile error now instead of a margin click that
@@ -137,11 +138,11 @@ const blockStart = new WeakMap<HTMLElement, AbsoluteOffset>();
 
 /** Aborts the document-level listeners armed for the gesture in flight on this
  *  root. Kept OUT of `PendingDrag` because the two have different lifetimes:
- *  `updateDOM` drops the pending anchor when a doc edit invalidates it while the
+ *  `patchDOM` drops the pending anchor when a doc edit invalidates it while the
  *  gesture is still physically in progress, and that release must still be heard
  *  (it dispatches the block-start caret). A WeakMap so a discarded root takes its
  *  controller with it — though the listeners are removed by the gesture's own end
- *  and by `destroy`, not left to garbage collection. */
+ *  and by `dispose`, not left to garbage collection. */
 const armedRelease = new WeakMap<HTMLElement, AbortController>();
 
 /** THE crossing from a widget's constructor-supplied block start into the
@@ -172,16 +173,16 @@ function blockStartOf(widget: TableBlockWidget): AbsoluteOffset {
 
 /** Margin-click caret: the block start this root currently points at.
  *
- *  Falling back to the toDOM-time `widget.docFrom` totalizes the
+ *  Falling back to the render()-time `widget.docFrom` totalizes the
  *  `AbsoluteOffset | undefined` read; it is not the stale-closure hazard coming
- *  back. The entry is written in `toDOM` in the same breath as attaching the
+ *  back. The entry is written in `render` in the same breath as attaching the
  *  listener, and at that moment the closure value IS the current one — so a miss
  *  is unreachable by construction. Logged rather than trusted, so a future
  *  regression of that invariant is observable instead of quietly reintroducing
  *  the stale-caret bug this WeakMap exists to prevent.
  *
  *  ⚠️ The `AbsoluteOffset` return says which SPACE this offset lives in, not
- *  that it is CURRENT. Freshness is still the WeakMap's job (`updateDOM`
+ *  that it is CURRENT. Freshness is still the WeakMap's job (`patchDOM`
  *  re-points it), which is the whole reason this function exists. */
 function blockStartCaret(root: HTMLElement, widget: TableBlockWidget): AbsoluteOffset {
   const current = blockStart.get(root);
@@ -466,7 +467,7 @@ function releaseRange(
   // What that does NOT buy: `view.dispatch` still takes plain `number`, so the
   // guarantee is only as good as everything going through the sink (see its
   // docblock); and a brand names a SPACE, never freshness — a stale value of the
-  // right space passes. Freshness stays with `updateDOM`'s re-point and the
+  // right space passes. Freshness stays with `patchDOM`'s re-point and the
   // `pendingDrag` invalidation.
   const head = asAbsoluteOffset(raw);
   const start = armed.point;
@@ -479,15 +480,15 @@ export class TableBlockWidget extends QuollWidget {
 
   constructor(
     readonly table: Table,
-    /** LF-normalised source slice (table-skeleton's `m.slice`) — eq() key.
+    /** LF-normalised source slice (table-skeleton's `m.slice`) — sameAs() key.
      *  A byte change rebuilds; matches the pre-existing widget identity. */
     readonly slice: string,
     /** Absolute LF-internal doc offset of the widget's first byte (block
-     *  line-start). Margin-click caret fallback + part of eq().
+     *  line-start). Margin-click caret fallback + part of sameAs().
      *
      *  ⚠️ Deliberately a plain `number` and NOT `AbsoluteOffset`, even though
      *  the sentence above describes exactly that space. Both `blockStart.set`
-     *  call sites (`toDOM`, `updateDOM`) run on a live instance — `this` is
+     *  call sites (`render`, `patchDOM`) run on a live instance — `this` is
      *  never stale there — so leaving this field unbranded is NOT a staleness
      *  guard. What it buys is a single grep-visible mint site: branding
      *  `docFrom` here would not compile silently — every `new
@@ -551,8 +552,8 @@ export class TableBlockWidget extends QuollWidget {
     blockStart.set(root, blockStartOf(this));
 
     // Resource base for relative in-cell image srcs. Static per editor
-    // (resource-base.ts), so it is NOT part of eq() — reading it at
-    // toDOM/updateDOM time is always current.
+    // (resource-base.ts), so it is NOT part of sameAs() — reading it at
+    // render/patchDOM time is always current.
     const resourceBase = view.state.facet(quollResourceBaseUri);
     const align = tableAlign(this.table);
     const table = document.createElement("table");
@@ -622,7 +623,7 @@ export class TableBlockWidget extends QuollWidget {
         /** Stand this gesture down: nothing more can dispatch for it, and the
          *  armed anchor must not survive to be paired with a release that belongs
          *  to someone else. ONE definition for the two disarm listeners below so
-         *  they cannot drift apart. `destroy` — the FOURTH path in the header's
+         *  they cannot drift apart. `dispose` — the FOURTH path in the header's
          *  list — does not call this and does strictly more (it clears
          *  `armedRelease` too), because there the root itself is going away rather
          *  than just this gesture.
@@ -786,7 +787,7 @@ export class TableBlockWidget extends QuollWidget {
         // is lost, and a dead click (no reveal at all) is a worse answer for a
         // failure mode that only arises when something outside this widget wrote
         // its DOM. That "same table" guarantee is unconditional now that the block
-        // start comes from `blockStart`, which `updateDOM` re-points: it can no
+        // start comes from `blockStart`, which `patchDOM` re-points: it can no
         // longer be a stale closure value pointing at a DIFFERENT block.
         const caret =
           (cell === null ? null : stampedOffset(cell, "data-cell-from")) ??
@@ -882,7 +883,7 @@ export class TableBlockWidget extends QuollWidget {
     // Re-point the margin-click caret channel the click listener actually reads,
     // so a reused element tracks the new docFrom after a distant edit shifted
     // this table without changing its bytes. The attribute beside it is
-    // inspection-only (see toDOM) — dropping THIS line would leave the reused
+    // inspection-only (see `render`) — dropping THIS line would leave the reused
     // listener dispatching the old offset while the DOM still looked correct.
     dom.dataset.docFrom = String(this.docFrom);
     blockStart.set(dom, blockStartOf(this));
@@ -964,12 +965,14 @@ export class TableBlockWidget extends QuollWidget {
     return true;
   }
 
-  /** CodeMirror's documented teardown for a widget instance. The gesture
-   *  listeners live on the DOCUMENT and close over `root`, so without this a
-   *  widget destroyed mid-gesture keeps both the listeners and the DOM alive —
-   *  and the listeners keep answering for an editor that has forgotten them.
-   *  The `isConnected` guard in the release seam is not a substitute: `destroy`
-   *  can be called while the DOM is still in the tree. */
+  /** Quoll's teardown hook (`QuollWidget.dispose`, run from the base's `destroy`
+   *  after it has already aborted every listener bound during `render`). The
+   *  gesture listeners here live on the DOCUMENT under their OWN controller and
+   *  close over `root`, so the base's per-render signal cannot reach them: without
+   *  this they outlive the widget and keep answering for an editor that has
+   *  forgotten them. Aborting is the FIRST statement, per the base's dispose
+   *  contract. The `isConnected` guard in the release seam is not a substitute:
+   *  teardown can run while the DOM is still in the tree. */
   protected dispose(dom: HTMLElement): void {
     armedRelease.get(dom)?.abort();
     armedRelease.delete(dom);

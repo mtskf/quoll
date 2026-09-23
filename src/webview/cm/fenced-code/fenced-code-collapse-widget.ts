@@ -49,7 +49,7 @@ export class FencedCollapseToggleWidget extends QuollWidget {
     /** Current state: true → this is the "Show less" bar; false → "Show more". */
     readonly expanded: boolean,
     /** Count of concealed body lines (collapsed state) — shown in the label and
-     *  part of eq() so the label refreshes when the body grows/shrinks. */
+     *  part of sameAs() so the label refreshes when the body grows/shrinks. */
     readonly hiddenCount: number
   ) {
     super();

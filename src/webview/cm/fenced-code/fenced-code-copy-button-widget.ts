@@ -23,7 +23,7 @@
 // Copy feedback is ALSO announced to screen readers. The copy/failed state
 // otherwise shows up only as a swap of the button's own aria-label, and a label
 // change on an element that is not focused is not announced — so an SR user who
-// clicks (or presses Enter on) the button gets no confirmation. toDOM therefore
+// clicks (or presses Enter on) the button gets no confirmation. render therefore
 // returns a wrapper holding the button PLUS a visually-hidden `aria-live` status
 // node; the copy result is written into that region alongside the label swap
 // (polite for success, assertive for the failure path). The region is a SIBLING
@@ -114,7 +114,7 @@ export class CopyButtonWidget extends QuollWidget {
   readonly widgetName = "CopyButtonWidget";
 
   constructor(
-    /** Open-line offset of the fenced block — the sole eq() key. The button DOM is
+    /** Open-line offset of the fenced block — the sole sameAs() key. The button DOM is
      *  body- AND content-independent (a bare icon), so identity is purely
      *  positional: a body edit leaves openFrom fixed → the DOM (and its click
      *  handler) is REUSED with no per-keystroke body allocation; an edit above the
@@ -241,8 +241,11 @@ export class CopyButtonWidget extends QuollWidget {
           revertTimer = setTimeout(() => {
             // Safe even if the widget DOM was discarded mid-timeout: this only
             // mutates the button's own (possibly detached) glyph/attrs + the live
-            // region text — no view access, mirroring image-widget's post-discard
-            // load listener. Clearing the region (back to polite) lets a later
+            // region text — no view access. NOTE neither this timer nor the
+            // enclosing clipboard `.then` is reached by the base's per-render
+            // `signal`: it aborts LISTENERS, and pending async work is not one.
+            // So their safety rests on that no-view-access property, not on
+            // teardown. Clearing the region (back to polite) lets a later
             // identical copy re-announce instead of being deduped as unchanged.
             setIcon(button, COPY_ICON);
             button.setAttribute("aria-label", COPY_LABEL);

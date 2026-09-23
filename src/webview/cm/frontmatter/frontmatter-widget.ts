@@ -12,13 +12,14 @@
 // different structure than their (preserved) source. role="region" + aria-label
 // live on the root either way.
 //
-// eq() is keyed on `slice` AND `canWrite`: same source at the same place
-// (frontmatter is always at offset 0) reuses the DOM, but a writability flip must
-// rebuild because the writability-gated aria-description (below) is baked into the
-// DOM — without `canWrite` in the identity, a read-only flip (a config-only
-// reconfigure that never changes the doc/selection) would leave the stale hint on
-// a block that can no longer be revealed. `body` is a pure function of `slice`, so
-// it need not participate in eq().
+// sameAs() (the base's `eq`) is keyed on `slice` AND `canWrite`: same source at
+// the same place (frontmatter is always at offset 0) reuses the DOM, but a
+// writability flip must rebuild because the writability-gated aria-description
+// (below) is baked into the DOM — without `canWrite` in the identity, a
+// read-only flip (a config-only reconfigure that never changes the
+// doc/selection) would leave the stale hint on a block that can no longer be
+// revealed. `body` is a pure function of `slice`, so it need not participate in
+// sameAs().
 
 import type { EditorView } from "@codemirror/view";
 
@@ -80,10 +81,10 @@ export class FrontmatterBlockWidget extends QuollWidget {
   constructor(
     /** Raw frontmatter body (between the fences). */
     readonly body: string,
-    /** Full source slice `---\n…\n---` — part of the eq() key. */
+    /** Full source slice `---\n…\n---` — part of the sameAs() key. */
     readonly slice: string,
     /** Whether reveal-to-edit can actually succeed (isWritable — reveal-state.ts).
-     *  Part of the eq() key so a writability flip rebuilds the DOM and refreshes
+     *  Part of the sameAs() key so a writability flip rebuilds the DOM and refreshes
      *  the writability-gated aria-description. */
     readonly canWrite: boolean
   ) {
@@ -140,7 +141,8 @@ export class FrontmatterBlockWidget extends QuollWidget {
       "mousedown",
       (event) => {
         // Left button only — right/middle clicks must reach the context menu
-        // and must not consume the event (matches link-handlers.ts:249).
+        // and must not consume the event (same rule and rationale as
+        // `handleLinkMouseDown` in cm/link-handlers.ts).
         if (event.button !== 0) {
           return;
         }

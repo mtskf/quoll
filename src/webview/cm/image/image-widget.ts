@@ -17,11 +17,12 @@
 // live links). An image widget has no links, so the guard is unnecessary; the
 // "no <a>" invariant is pinned by a structural test.
 //
-// eq() is keyed on (docFrom, slice): a byte change OR a pure positional move
-// (same slice, different docFrom) both return false, triggering updateDOM.
-// updateDOM re-stamps docFrom and reuses the DOM when only the position moved
-// (slice unchanged); a byte change forces a full toDOM rebuild. `alt`/`safeUrl`
-// are pure functions of `slice`, so they need not participate in eq().
+// sameAs() (the base's `eq`) is keyed on (docFrom, slice): a byte change OR a
+// pure positional move (same slice, different docFrom) both return false,
+// triggering patchDOM. patchDOM re-stamps docFrom and reuses the DOM when only
+// the position moved (slice unchanged); a byte change forces a full render()
+// rebuild. `alt`/`safeUrl` are pure functions of `slice`, so they need not
+// participate in sameAs().
 
 import type { EditorView } from "@codemirror/view";
 import type { AllowlistedUrl } from "../../../markdown/url-allowlist.js";
@@ -38,14 +39,14 @@ let warnedImageLoadError = false;
 
 // The block's CURRENT first-byte offset, keyed on the widget's root element.
 //
-// Keyed on the element rather than held in the `toDOM` closure because
-// `updateDOM` reuses that element across widget instances: after a distant edit
-// shifts this block, CodeMirror builds a NEW widget, `eq()` returns false, and
-// `updateDOM` re-points the reused DOM — but it cannot re-bind the click
+// Keyed on the element rather than held in the `render` closure because
+// `patchDOM` reuses that element across widget instances: after a distant edit
+// shifts this block, CodeMirror builds a NEW widget, `sameAs()` returns false,
+// and `patchDOM` re-points the reused DOM — but it cannot re-bind the click
 // listener, whose captured `this` is the OLD instance. So the new instance
 // needs a channel to hand the current offset to the existing listener, and the
 // channel has to be updatable exactly when the position moves, which
-// `updateDOM` can do and the closure cannot. A WeakMap so a discarded root
+// `patchDOM` can do and the closure cannot. A WeakMap so a discarded root
 // takes its entry with it. Same pattern, same reason, as table-widget.ts's
 // `blockStart`.
 //
@@ -66,7 +67,7 @@ export class ImageBlockWidget extends QuollWidget {
     readonly alt: string,
     /** Render-gate verdict: the allowlisted URL, or null when blocked. */
     readonly safeUrl: AllowlistedUrl | null,
-    /** Source slice `![alt](url)` — in eq() so DOM tracks byte changes. */
+    /** Source slice `![alt](url)` — in sameAs() so DOM tracks byte changes. */
     readonly slice: string,
     /** Absolute doc offset of the widget's first byte (caret target). */
     readonly docFrom: number
@@ -114,11 +115,11 @@ export class ImageBlockWidget extends QuollWidget {
       img.alt = this.alt;
       // Record natural dimensions once the image has decoded, keyed by the
       // resolved src. Guard against a failed load (naturalWidth/Height === 0).
-      // The listener is not explicitly removed: it is attached to the <img>
-      // this widget owns, so it is garbage-collected with the DOM when CM
-      // discards the widget (same lifecycle as the `click` listener below). A
-      // load firing after discard merely writes the cache — no view access, no
-      // leak.
+      // Bound to the base's per-render `signal` (QuollWidget), so
+      // `QuollWidget.destroy` aborts it: a decode that lands AFTER CM discards
+      // this widget no longer seeds the cache. Accepted — the alternative is an
+      // unscoped listener, which is exactly the class this base exists to
+      // remove; the cost is one unreserved reflow on the next build of that src.
       img.addEventListener(
         "load",
         () => {
@@ -166,7 +167,7 @@ export class ImageBlockWidget extends QuollWidget {
       () => {
         // Falling back to `this.docFrom` totalizes the `number | undefined` read;
         // it is not the stale-closure hazard coming back. The entry is set above,
-        // in the same breath as attaching this listener, and at toDOM time the
+        // in the same breath as attaching this listener, and at render time the
         // closure value IS the current one — so a miss is unreachable by
         // construction. Logged, not silently trusted, so a future regression of
         // that invariant is observable instead of silently reintroducing the
@@ -210,13 +211,13 @@ export class ImageBlockWidget extends QuollWidget {
     _signal: AbortSignal
   ): boolean {
     // CM calls updateDOM only when eq() returned false, passing the prior
-    // same-class widget as `from`. eq() keys on (docFrom, slice); alt/safeUrl
+    // same-class widget as `from`. `sameAs()` keys on (docFrom, slice); alt/safeUrl
     // are pure functions of the slice (and the static resource-base facet). So
     // from.slice === this.slice means only docFrom shifted — re-stamp the caret
     // target and reuse the <img> (avoids per-keystroke <img> recreation + reflow
     // when typing above the image). A changed slice returns false so CM does a
     // full toDOM rebuild, which re-gates the URL via the freshly-passed
-    // safeUrl — updateDOM NEVER re-gates or mutates src itself.
+    // safeUrl — `patchDOM` NEVER re-gates or mutates src itself.
     if (!dom.classList.contains("quoll-image-block")) {
       return false;
     }
@@ -224,7 +225,7 @@ export class ImageBlockWidget extends QuollWidget {
       return false;
     }
     // Re-point the caret channel the click listener actually reads. The
-    // attribute beside it is inspection-only (see toDOM) — dropping THIS line
+    // attribute beside it is inspection-only (see `render`) — dropping THIS line
     // would leave the reused listener dispatching the old offset while the DOM
     // still looked correct.
     dom.dataset.docFrom = String(this.docFrom);
