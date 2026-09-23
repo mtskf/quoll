@@ -50,16 +50,17 @@
 //     CONSTANT rather than a literal: `const K = "toDOM"; class X … { [K]() {} }`
 //     installs the same own property, but `memberName` / `accessedName` read the
 //     literal only, so the name is dropped. Resolving it needs a TypeChecker
-//   - a `containWidgetRender` alias made in any way OTHER than a variable
-//     declaration whose initialiser is the callee: the walk refuses exactly
-//     `import { containWidgetRender as x }` and `const x = containWidgetRender`
-//     (in any callee spelling `accessedName` resolves) — nothing else. An
-//     assignment after declaration (`let x; x = containWidgetRender`), a
-//     parameter default, a class field, an object-literal property, a cast
-//     (`… as T`), a destructuring rename (`const { containWidgetRender: x } =
-//     ns`) and a re-export (`export { containWidgetRender as x }` — refused
-//     neither in the re-exporting file nor in its consumer) all pass silently,
-//     so a name they carry never reaches the latch-key set. Measured, all seven.
+//   - a `containWidgetRender` alias made in any way OTHER than an aliased
+//     import or a variable declaration whose initialiser is the callee: the
+//     walk refuses exactly `import { containWidgetRender as x }` and `const x =
+//     containWidgetRender` (in any callee spelling `accessedName` resolves) —
+//     nothing else. An assignment after declaration (`let x; x =
+//     containWidgetRender`), a parameter default, a class field, an
+//     object-literal property, a cast (`… as T`), a destructuring rename
+//     (`const { containWidgetRender: x } = ns`) and a re-export (`export {
+//     containWidgetRender as x }` — refused neither in the re-exporting file nor
+//     in its consumer) all pass silently, so a name they carry never reaches the
+//     latch-key set. Measured, all seven.
 //     The deliberate line is that this walk matches names rather than resolving
 //     bindings
 //   - indirect listener-registration spellings: `el.addEventListener.call(…)` /
@@ -92,8 +93,11 @@
 //     `extends ns.Base` and `extends ns["Base"]` alike. A qualified base is the
 //     same base, and letting the raw heritage TEXT decide stopped a qualified
 //     `WidgetType` base matching the direct-extends check, while a qualified
-//     `QuollWidget` base fell out of all four descendant-derived consumers at
-//     once
+//     `QuollWidget` base fell out of EVERY descendant-derived consumer at once.
+//     The asymmetry that matters: all of them but the listener scan pin a
+//     literal that can go red, whereas the scan's entry set IS `widgetClasses`,
+//     so `unscoped` merely gets easier and the entry-point check in its
+//     transitivity test iterates that same narrowed set
 //   - class MEMBER names written as identifiers, string literals, or a computed
 //     name whose expression is itself a string LITERAL (`["toDOM"]()`), AND
 //     `this.<name> = …` written inside the class body — a constructor assignment
@@ -205,13 +209,13 @@ const accessedName = (node: ts.Node): string | undefined => {
  *  shared resolver: the heritage clause used to decide on raw TEXT
  *  (`t.expression.getText(sf)`), so `extends view.WidgetType` produced the base
  *  `"view.WidgetType"` and stopped matching the direct-extends check in
- *  `violations` — while a qualified `QuollWidget` base fell out of all four
- *  descendant-derived consumers at once (the roster, the re-declaration check,
- *  the assigned check and the latch key) — and the identical spelling problem was
- *  already closed on the CALLEE side. A resolution rule re-derived per walk is
- *  exactly the drift `accessedName`'s own header describes. An unresolvable base
- *  falls back to its text, which keeps it opaque rather than silently renaming
- *  it. */
+ *  `violations` — while a qualified `QuollWidget` base fell out of EVERY
+ *  descendant-derived consumer at once, the listener scan's entry set included,
+ *  which is the one with no pin of its own — and the identical spelling problem
+ *  was already closed on the CALLEE side. A resolution rule re-derived per walk
+ *  is exactly the drift `accessedName`'s own header describes. An unresolvable
+ *  base falls back to its text, which keeps it opaque rather than silently
+ *  renaming it. */
 const heritageName = (e: ts.Expression, sf: ts.SourceFile): string =>
   ts.isIdentifier(e) ? e.text : (accessedName(e) ?? e.getText(sf));
 
@@ -232,9 +236,9 @@ const ASSIGNMENT_TOKENS: ReadonlySet<ts.SyntaxKind> = new Set([
  *  WHY: `base` is a heritage-clause NAME and nothing more
  *  (`heritageName(t.expression, sf)`), so before this a `class Leaf extends Mid`
  *  — with `Mid extends QuollWidget` declared right beside it — read as base
- *  `"Mid"` and fell out of ALL THREE consumers at once: the re-declaration
- *  check, the roster, and the listener scan. One intermediate class was enough
- *  to leave a widget completely unguarded.
+ *  `"Mid"` and fell out of EVERY descendant-derived consumer at once — the
+ *  listener scan's entry set included, which is the one that cannot go red for
+ *  it. One intermediate class was enough to leave a widget completely unguarded.
  *
  *  ⚠️ Resolution is by NAME across the whole walk (a per-file map would reopen
  *  the same hole for a base imported from a sibling module). The `seen` set
@@ -564,10 +568,10 @@ function violations(classes: Widget[]): string[] {
     // while a subclass can only write the identifier the expression is BOUND to.
     // The two need not be the same thing, so `class Leaf extends Mid` below a
     // `const Mid = class … extends QuollWidget {}` resolves to nothing and leaves
-    // `widgetClasses` entirely — taking the re-declaration check, the roster and
-    // the latch key with it, while the intermediate keeps the roster's file count
-    // and `widgetName` looking untouched. Measured: with that shape planted in
-    // thematic-break-widget.ts the guard was 8/8 GREEN.
+    // `widgetClasses` entirely — taking EVERY descendant-derived consumer with
+    // it, the listener scan's entry set included, while the intermediate keeps
+    // the roster's file count and `widgetName` looking untouched. Measured: with
+    // that shape planted in thematic-break-widget.ts the guard was 8/8 GREEN.
     //
     // ⚠️ NAMING THE EXPRESSION DOES NOT RELIABLY HELP — only the one spelling
     // that repeats the binding's name does — which is why this keys on
