@@ -91,6 +91,7 @@ import { pointInExclusionZone } from "../decorations/shared.js";
 import { isRenderableListItem } from "../list/list-geometry.js";
 import { buildSortedRangeSet } from "../sorted-range-set.js";
 import { expandToEnclosingBlock, requiresFullBoundedRebuild } from "../structural-guard.js";
+import { containWidgetRender } from "../widget-base.js";
 
 const SVG_NS = "http://www.w3.org/2000/svg";
 
@@ -153,35 +154,44 @@ export const ELLIPSIS_DOT_CX = [5, 12, 19] as const;
  *  deliberately DON'T set the `cm-foldPlaceholder` class, so CM's default box theme
  *  never matches — our own `quoll-fold-placeholder` class carries the whole look
  *  (see quollFoldTheme). View-layer only: folds are display-only, byte-identical
- *  round-trip. Exported for the DOM-contract unit test. */
+ *  round-trip. Exported for the DOM-contract unit test.
+ *
+ *  ⚠️ Not a `QuollWidget`: CodeMirror's OWN fold widget calls this callback
+ *  (`@codemirror/language/dist:1535`), so no base class of ours is on the
+ *  stack and inheritance cannot contain it. It runs in the same tile builder
+ *  as every other widget render, so it needs the same fallback — by hand, and
+ *  with its own test, because no structural guard can notice if this wrapper
+ *  is ever dropped. */
 export function foldPlaceholderDOM(view: EditorView, onclick: (event: Event) => void): HTMLElement {
-  const el = document.createElement("span");
-  el.className = "quoll-fold-placeholder";
-  el.title = view.state.phrase("unfold");
-  el.setAttribute("aria-label", view.state.phrase("folded content"));
-  el.onclick = onclick;
+  return containWidgetRender("foldPlaceholder", () => {
+    const el = document.createElement("span");
+    el.className = "quoll-fold-placeholder";
+    el.title = view.state.phrase("unfold");
+    el.setAttribute("aria-label", view.state.phrase("folded content"));
+    el.onclick = onclick;
 
-  const svg = document.createElementNS(SVG_NS, "svg");
-  for (const [k, v] of Object.entries({
-    viewBox: "0 0 24 24",
-    fill: "none",
-    stroke: "currentColor",
-    "stroke-width": "2",
-    "stroke-linecap": "round",
-    "stroke-linejoin": "round",
-    "aria-hidden": "true",
-  })) {
-    svg.setAttribute(k, v);
-  }
-  for (const cx of ELLIPSIS_DOT_CX) {
-    const dot = document.createElementNS(SVG_NS, "circle");
-    dot.setAttribute("cx", String(cx));
-    dot.setAttribute("cy", "12");
-    dot.setAttribute("r", "1");
-    svg.appendChild(dot);
-  }
-  el.appendChild(svg);
-  return el;
+    const svg = document.createElementNS(SVG_NS, "svg");
+    for (const [k, v] of Object.entries({
+      viewBox: "0 0 24 24",
+      fill: "none",
+      stroke: "currentColor",
+      "stroke-width": "2",
+      "stroke-linecap": "round",
+      "stroke-linejoin": "round",
+      "aria-hidden": "true",
+    })) {
+      svg.setAttribute(k, v);
+    }
+    for (const cx of ELLIPSIS_DOT_CX) {
+      const dot = document.createElementNS(SVG_NS, "circle");
+      dot.setAttribute("cx", String(cx));
+      dot.setAttribute("cy", "12");
+      dot.setAttribute("r", "1");
+      svg.appendChild(dot);
+    }
+    el.appendChild(svg);
+    return el;
+  });
 }
 
 // Heading levels whose CONTENT font-size exceeds the body (theme.ts
