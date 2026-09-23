@@ -798,9 +798,8 @@ describe("widget containment cannot be bypassed", () => {
       export const AnonMid = class extends QuollWidget {};
       // A NAMED class expression is no more resolvable once the binding RENAMES
       // it — \`const X = class X …\` is the one spelling that resolves — and this
-      // pair is here so the two cannot drift apart: \`baseOf\` gets the key
-      // \`Inner\`, while the only identifier a subclass can write is
-      // \`AliasMid\`. So \`AliasLeaf\`
+      // pair is here so the two cannot drift apart: \`baseOf\` gets the key \`Inner\`,
+      // while the only identifier a subclass can write is \`AliasMid\`. So \`AliasLeaf\`
       // contributes NO entry below — it falls out of \`quollDescendants\` exactly
       // as it would under the anonymous form, which is the whole finding. The
       // loud report has to come from the expression itself.
