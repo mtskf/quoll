@@ -2,11 +2,16 @@
 
 All notable changes to Quoll are documented here.
 
-## 0.1.80 — 2026-09-22
+## 0.1.81 — 2026-09-24
 
 ### Fixed
 
 - Editing a file saved with Windows line endings no longer scrambles its line breaks. Pressing Enter in a list, auto-closing a code fence, and pasting a table, a list or multi-line text all keep the document's line structure intact, and so do Shift+Alt+Down, replacing text with a newline, and pressing Enter inside a loose list.
+
+## 0.1.80 — 2026-09-22
+
+### Fixed
+
 - Quoll now tells you when edits are discarded as the document re-syncs — whether they were still waiting to be sent or had been sent and not yet confirmed — instead of dropping them silently. The notice explains that Undo cannot bring those edits back, so you can reapply anything missing, and it stays silent when the re-synced document comes back carrying exactly your text.
 
 ## 0.1.79 — 2026-09-15
