@@ -623,6 +623,20 @@ function cellFillSignal(cell: HTMLElement, outer: AbortSignal): AbortSignal {
   // unguarded `<a>` is not. Leaving the condition out means no future edit has an
   // invariant to get wrong here.
   //
+  // ⚠️ RESIDUAL, and it is why "blocked navigation" is TWO gestures and not
+  // three: `attachLinkClickGuard` blocks plain click and every `auxclick` ITSELF,
+  // but for Cmd/Ctrl+click on an absolute href it returns WITHOUT preventDefault
+  // and defers to the widget-root `click` listener (table-widget.ts:754) — the
+  // party that actually calls `quollOpenExternalSink`. That listener is bound with
+  // the widget's render `signal`, i.e. `outer`, so in exactly this already-aborted
+  // case it is gone and the native anchor handler runs, un-re-validated. NOT
+  // reachable today: no production call site hands `renderCellInto` an aborted
+  // signal — `scopeOf` mints a fresh controller, and `abortListeners` aborts AND
+  // deletes, so the map never holds an aborted one. Documented rather than closed
+  // because closing it would mean preventDefault-ing the modifier path whenever
+  // the router cannot be reached, i.e. teaching this guard about `outer.aborted`
+  // — the very condition this function exists without.
+  //
   // Scoped to the CHILD so the next fill's `abort()` above also deregisters this
   // forwarder: `outer` ends up holding one entry per cell, not one per fill,
   // which is the retention this whole helper exists to bound.

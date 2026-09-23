@@ -42,8 +42,9 @@
 // beats a guessed verdict. EVERY Quoll widget overrides it, by design, so the
 // tripwire deliberately does NOT list it (listing it would fail on a healthy tree).
 // Uncontained for the same "not on the tile-build path" reason, but overridden by
-// NO widget today: `estimatedHeight` / `lineBreaks` (read at `:5954`, after state
-// installation) and `coordsAt` (read during measurement). Those three ARE on the
+// NO widget today: `estimatedHeight` / `lineBreaks` (read at `:5954` / `:5955`,
+// and both again in `heightRelevant` `:353` — all after state installation) and
+// `coordsAt` (read during measurement, `:2112`). Those three ARE on the
 // tripwire's roster, so adding one is a deliberate, reviewed decision rather than
 // a default — see test/build/widget-containment-guard.test.ts.
 
@@ -144,8 +145,9 @@ export abstract class QuollWidget extends WidgetType {
    *  Nothing in the type system can see two identical string literals; the AST
    *  walk in test/build/widget-containment-guard.test.ts is the only place this is
    *  enforceable, and it collects BOTH halves of the namespace — every
-   *  `QuollWidget` subclass's `widgetName` and every direct `containWidgetRender`
-   *  literal outside this file. */
+   *  `QuollWidget` subclass's `widgetName` and every `containWidgetRender` literal
+   *  outside this file, in any callee spelling that walk can resolve by name (an
+   *  ALIASED import is refused there rather than skipped). */
   abstract readonly widgetName: string;
 
   /** Build this widget's DOM. Replaces `toDOM` — the base owns that name so the
@@ -290,10 +292,16 @@ export abstract class QuollWidget extends WidgetType {
       //    unconditional FIRST statement, ahead of `dispose` and therefore ahead
       //    of `makePlaceholder` below, and `destroy` is on the build guard's
       //    GUARDED roster (test/build/widget-containment-guard.test.ts) so no
-      //    subclass can substitute one that skips it. A separate abort here would
-      //    be observationally equivalent — and misleading, since it would cover
-      //    only this path while ordinary teardown (`destroyDropped` → `destroy`)
-      //    relies on that first statement regardless.
+      //    subclass can RE-DECLARE one that skips it — as a method, as a class
+      //    FIELD, or as a constructor `this.destroy = …`, all three of which the
+      //    guard's member walk collects. A `prototype` assignment outside the
+      //    class body and `Object.defineProperty` are NOT re-declarations and are
+      //    the guard's declared syntactic gap (see its KNOWN GAPS), so what this
+      //    rests on is "no subclass re-declares it", not "nothing can replace it".
+      //    A separate abort here would be observationally equivalent — and
+      //    misleading, since it would cover only this path while ordinary teardown
+      //    (`destroyDropped` → `destroy`) relies on that first statement
+      //    regardless.
       // 3. NEUTRALISE the element. Only observable in one case — `compare`'s
       //    `this == other` shortcut (`:140`) adopts a tile without consulting
       //    `eq` when a StateField re-emits the very same widget instance — and
@@ -376,11 +384,13 @@ function makePlaceholder(el: HTMLElement, widgetName: string): HTMLElement {
   for (const name of [...el.getAttributeNames()]) {
     el.removeAttribute(name);
   }
-  // CodeMirror stamps this OUTSIDE `toDOM` (`WidgetTile.of`, view dist:2147) and
-  // only when it is building the element itself, so the PATCH path — where the
-  // element is neutralised in place and can still be re-adopted through
-  // `compare`'s `this == other` shortcut (`:140`) — has to restore it here or
-  // nobody does. CM reads the attribute VALUE, not a flag it kept
+  // CodeMirror stamps this OUTSIDE `toDOM` (`WidgetTile.of` `:2144`; the stamp
+  // itself at view dist:2148, guarded by `!widget.editable` at `:2147`, which
+  // every Quoll widget satisfies) and only when it is building the element itself
+  // (`if (!dom)`, `:2145`), so the PATCH path — where the element is neutralised
+  // in place and can still be re-adopted through `compare`'s `this == other`
+  // shortcut (`:140`) — has to restore it here or nobody does. CM reads the
+  // attribute VALUE, not a flag it kept
   // (`betweenUneditable` `:3472`, `nextToUneditable` `:3515`), so a placeholder
   // that lost it is treated as editable content. The render path gets it stamped
   // again by CM regardless, which makes this line harmless there.

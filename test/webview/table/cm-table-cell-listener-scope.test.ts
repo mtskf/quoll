@@ -120,6 +120,17 @@ describe("renderCellInto listener scope", () => {
     // `attachLinkClickGuard` removed. Blocked navigation is the safe failure; an
     // unguarded `<a>` is not.
     //
+    // ⚠️ "Blocked navigation" covers TWO gestures, not three — the same
+    // qualification cell-render.ts carries beside the missing branch, kept here so
+    // the pair cannot drift. The cell guard preventDefaults plain click and every
+    // `auxclick` itself, but Cmd/Ctrl+click on an absolute href is deliberately
+    // left un-preventDefault'd for the widget-root listener
+    // (table-widget.ts:754) to route through `quollOpenExternalSink` — and that
+    // listener rides the render signal, i.e. the very `outer` this case has
+    // already aborted. Not reachable from production (nothing hands
+    // `renderCellInto` an aborted signal), which is why it is documented on both
+    // sides instead of closed here.
+    //
     // ⚠️ TWO assertions, because only the second can tell the two
     // implementations apart in this environment. happy-dom does not implement
     // "an already-aborted signal binds nothing" (measured), so `guardArmed`

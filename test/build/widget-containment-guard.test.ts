@@ -20,12 +20,34 @@
 // a convention guard is worth):
 //   - an aliased import: `import { WidgetType as W }` then `extends W`
 //   - an intermediate base whose DECLARATION this walk never sees (one imported
-//     from node_modules, or from outside `src/webview`). Intermediates declared
-//     anywhere in the walked tree ARE resolved — `quollDescendants` chases `cls -> base`
-//     by name, so `class Leaf extends Mid` where `Mid extends QuollWidget` is a
-//     guarded widget like any other. That resolution keys on the class NAME, so
-//     "class names in the walked tree are unique" is asserted below rather than
-//     assumed; a collision would silently mis-resolve
+//     from node_modules, or from outside `src/webview`). An intermediate DECLARED
+//     anywhere in the walked tree is resolved — `quollDescendants` chases
+//     `cls -> base` by name, so `class Leaf extends Mid` where
+//     `class Mid extends QuollWidget` stands anywhere in the tree is a guarded
+//     widget like any other. ⚠️ Resolution keys on the identifier a subclass
+//     writes after `extends`, which is the DECLARED name and nothing else: a
+//     class EXPRESSION is therefore NOT resolved even though the walk sees it
+//     (`const Mid = class Inner …` is reachable only as `Mid` while `baseOf` gets
+//     the key `Inner`, and an anonymous one contributes no key at all). That is
+//     why every class expression in a `QuollWidget` ancestry is reported as a
+//     violation below rather than left to this gap. The same name-keyed
+//     resolution is why "class names in the walked tree are unique" is asserted
+//     below rather than assumed; a collision would silently mis-resolve
+//   - a hook replaced OUTSIDE the class body: `X.prototype.<hook> = …`,
+//     `Object.defineProperty(X.prototype, "<hook>", …)`, or either of those
+//     reached through a bound alias (`const P = X.prototype; P.destroy = …`).
+//     The member walk reads `node.members` PLUS `this.<name> = …` written inside
+//     the class body, so a re-declaration (method or class field) and a
+//     constructor assignment are both visible and nothing outside the class body
+//     is. Measured green for all three. Closing them needs a second name-keyed
+//     resolution of `X` against the class roster, and the bound-alias form cannot
+//     be followed syntactically at all
+//   - indirect listener-registration spellings: `el.addEventListener.call(…)` /
+//     `.apply(…)` / `.bind(…)`, `Reflect.apply(el.addEventListener, …)`, and
+//     `Object.assign(el, { onclick })`. The scan matches the callee and the
+//     assignment target by NAME; the options argument sits in a different place
+//     in each of those spellings, and a bound alias needs a TypeChecker.
+//     Measured green for all of them
 //   - a widget owned by a library, given a Quoll renderer as a callback — not
 //     hypothetical: `foldPlaceholderDOM` is exactly that, which is why it carries
 //     its own test (Task 4) instead of relying on this guard. ⚠️ The LISTENER
@@ -39,18 +61,23 @@
 //     a promise about the whole tree.
 //   - a base picked at runtime (`extends pickBase()`)
 // What it DOES cover, deliberately, because these are the cheap bypasses:
-//   - class declarations AND class expressions — and an ANONYMOUS class
-//     expression that descends from `QuollWidget` is itself a violation, since
-//     `quollDescendants` resolves bases by NAME and cannot see through one
+//   - class declarations AND class expressions — and a class expression that
+//     descends from `QuollWidget` is itself a violation whether or not it is
+//     named, since `quollDescendants` resolves bases by the `extends` identifier
+//     and a class expression's own name is not that identifier
 //   - class MEMBER names written as identifiers, string literals, or computed
-//     string constants (`["toDOM"]()`). ⚠️ This is about member names only; the
-//     separate question of how a CALL's callee — or an `on*` assignment target —
-//     is spelled is handled by `unscopedListeners`' own `accessedName`
+//     string constants (`["toDOM"]()`), AND `this.<name> = …` written inside the
+//     class body — a constructor assignment installs the same own property a
+//     class FIELD does, and only the spelling differs. ⚠️ This is about the names
+//     a class takes over; how a CALL's callee — or an `on*` assignment target —
+//     is spelled is the separate job of the module-level `accessedName`
 //   - listener registrations in both call spellings (`el.addEventListener(…)`
-//     and `el["addEventListener"](…)`) and `on*` property handlers
-//     (`el.onclick = f`, `el["onclick"] = f`)
-// ⚠️ The `on*` arm is a deliberate OVER-approximation: it matches any `on*=`
-// assignment, including one on a non-element target. Measured, the whole
+//     and `el["addEventListener"](…)`) and `on*` property handlers in every
+//     assignment spelling (`el.onclick = f`, `el["onclick"] = f`, and the
+//     logical assignments `??=` / `||=` / `&&=`)
+// ⚠️ The `on*` arm is a deliberate OVER-approximation: it matches an `on*`
+// assignment TARGET in any of those spellings, including one on a non-element
+// target. Measured, the whole
 // `src/webview` tree holds three (`fold/index.ts:171`, and `image-paste.ts`'s
 // `reader.onload` / `reader.onerror` on a `FileReader`), all of them outside the
 // scanned closure today. A future reader who pulls `image-paste.ts` into the
@@ -71,9 +98,10 @@ const BASE_MODULE = join(WEBVIEW_SRC, "cm/widget-base.ts");
 const GUARDED = ["toDOM", "updateDOM", "eq", "destroy"];
 /** Uncontained hooks whose override should be a deliberate, reviewed decision
  *  rather than a default — `estimatedHeight` / `lineBreaks` are read after state
- *  installation (`@codemirror/view/dist:5954`, after `:6233`) and `coordsAt`
- *  during measurement, so a throwing one is the same hazard in a new place. No
- *  widget overrides any of them today.
+ *  installation (`@codemirror/view/dist:5954` / `:5955`, and both again in
+ *  `heightRelevant` `:353`, all after `:6233`) and `coordsAt` during measurement
+ *  (`:2112`), so a throwing one is the same hazard in a new place. No widget
+ *  overrides any of them today.
  *
  *  ⚠️ `ignoreEvent` is deliberately NOT here: all eight widgets override it, by
  *  design, and it is uncontained on purpose (the base's header says why). Listing
@@ -92,11 +120,62 @@ type Widget = {
   file: string;
   cls: string;
   base: string;
+  /** A class EXPRESSION's declared name is not the identifier a subclass writes
+   *  after `extends` — `const Mid = class Inner …` is reachable only as `Mid`,
+   *  and `baseOf` keys on `cls`. So EVERY class expression in an ancestry is
+   *  unresolvable, named or not, which is why this is a property of the record
+   *  rather than something encoded in a sentinel `cls` string. */
+  isExpression: boolean;
   members: string[];
+  /** Names the class takes over by ASSIGNMENT inside its own body
+   *  (`constructor() { this.destroy = … }`) rather than by declaration. Kept
+   *  apart from `members` only so the report can name which form it saw; at
+   *  runtime the two are the same own property. */
+  assigned: string[];
   /** The `widgetName` property's string-literal initialiser, when it has one.
    *  It is half of the log's latch key and the whole of the placeholder stamp. */
   widgetName: string | undefined;
 };
+
+/** The property name in `x.f` and `x["f"]` alike — BOTH spellings, because the
+ *  bracket form is the same access and was the measured bypass. `undefined` for
+ *  anything else (a computed name this walk cannot read).
+ *
+ *  ⚠️ MODULE scope, deliberately. It began as a `const` inside `unscopedListeners`,
+ *  and the bracket bypass it closes there promptly reopened in a SIBLING walk:
+ *  `containWidgetRenderNames` matched a bare-identifier callee only, so
+ *  `base.containWidgetRender("X", …)` was silently skipped one cycle after the
+ *  identical shape was closed for `addEventListener`. A resolution rule that
+ *  lives inside one walk gets re-derived — or forgotten — by the next one, so the
+ *  rule is one definition and the walks share it: the CALLEE of
+ *  `x.addEventListener(…)` and `x.containWidgetRender(…)`, and the assignment
+ *  TARGET of `x.onclick =` and `this.destroy =`.
+ *
+ *  A bare identifier deliberately stays `undefined`. The only caller that needs
+ *  one asks for it itself (`containWidgetRenderNames`); widening this instead
+ *  would silently add bare `addEventListener(…)` / `onclick = f` — implicit
+ *  globals — to the listener scan's report, which is a different decision about a
+ *  shape this tree does not contain. */
+const accessedName = (node: ts.Node): string | undefined => {
+  if (ts.isPropertyAccessExpression(node)) {
+    return node.name.text;
+  }
+  if (ts.isElementAccessExpression(node) && ts.isStringLiteralLike(node.argumentExpression)) {
+    return node.argumentExpression.text;
+  }
+  return undefined;
+};
+
+/** Every assignment operator that INSTALLS a value on the left-hand side. The
+ *  logical three are here because `el.onclick ??= f` leaves exactly the same
+ *  unabortable handler on the element that `el.onclick = f` does — the operator
+ *  changes when the write happens, never whether the listener can be removed. */
+const ASSIGNMENT_TOKENS: ReadonlySet<ts.SyntaxKind> = new Set([
+  ts.SyntaxKind.EqualsToken,
+  ts.SyntaxKind.QuestionQuestionEqualsToken,
+  ts.SyntaxKind.BarBarEqualsToken,
+  ts.SyntaxKind.AmpersandAmpersandEqualsToken,
+]);
 
 /** Resolve `base` through intermediate classes the walk has seen, and keep only
  *  the ones that bottom out at `QuollWidget`.
@@ -183,10 +262,11 @@ function importClosure(entries: string[]): string[] {
  *      the spelling of the callee differs, and `widgetsIn`'s `memberName` already
  *      resolves computed string names for class MEMBERS — that handling was never
  *      carried over here.
- *    - `x.onclick = f` / `x["onclick"] = f`. Reported unconditionally, with no
- *      options to inspect: an `on*` property handler has no registration options
- *      at all, so no `AbortSignal` can reach it and `QuollWidget.destroy` →
- *      `abortListeners` cannot remove it. That is precisely the class the base
+ *    - `x.onclick = f` / `x["onclick"] = f`, and the same two targets under the
+ *      logical assignments `??=` / `||=` / `&&=`. Reported unconditionally, with
+ *      no options to inspect: an `on*` property handler has no registration
+ *      options at all, so no `AbortSignal` can reach it and `QuollWidget.destroy`
+ *      → `abortListeners` cannot remove it. That is precisely the class the base
  *      exists to close, so it is a violation in every form. */
 function unscopedListeners(text: string, fileName: string): string[] {
   const sf = ts.createSourceFile(fileName, text, ts.ScriptTarget.Latest, true);
@@ -198,22 +278,13 @@ function unscopedListeners(text: string, fileName: string): string[] {
   // different call). This line is the test's only actionable output.
   const at = (node: ts.Node): string =>
     `${fileName}:${sf.getLineAndCharacterOfPosition(node.getStart(sf)).line + 1}`;
-  /** The property name in `x.f` and `x["f"]` alike — BOTH spellings, because the
-   *  bracket form is the same access and was the measured bypass. `undefined` for
-   *  anything else (a computed name this walk cannot read). Serves both arms: the
-   *  CALLEE of `x.addEventListener(…)` and the assignment TARGET of `x.onclick =`. */
-  const accessedName = (node: ts.Node): string | undefined => {
-    if (ts.isPropertyAccessExpression(node)) {
-      return node.name.text;
-    }
-    if (ts.isElementAccessExpression(node) && ts.isStringLiteralLike(node.argumentExpression)) {
-      return node.argumentExpression.text;
-    }
-    return undefined;
-  };
-  /** `x.onfoo` / `x["onfoo"]` as an assignment TARGET. */
+  /** `x.onfoo` / `x["onfoo"]` as an assignment TARGET, in EVERY assignment
+   *  spelling. `??=` / `||=` / `&&=` install a handler exactly as `=` does and no
+   *  `AbortSignal` can remove any of them, so resting the check on one token is
+   *  the same bet the dotted-callee-only version of this predicate already lost —
+   *  three tokens, and the arm stops being a statement about syntax. */
   const onHandlerTarget = (node: ts.Node): ts.Node | undefined => {
-    if (!ts.isBinaryExpression(node) || node.operatorToken.kind !== ts.SyntaxKind.EqualsToken) {
+    if (!ts.isBinaryExpression(node) || !ASSIGNMENT_TOKENS.has(node.operatorToken.kind)) {
       return undefined;
     }
     const name = accessedName(node.left);
@@ -237,6 +308,52 @@ function unscopedListeners(text: string, fileName: string): string[] {
     ts.forEachChild(node, visit);
   };
   ts.forEachChild(sf, visit);
+  return out;
+}
+
+/** Every name a class takes over by writing `this.<name> = …` (or
+ *  `this["<name>"] = …`) inside its OWN body — `constructor() { this.destroy =
+ *  … }` being the shape that matters.
+ *
+ *  WHY it is collected at all: it installs the very same own property a class
+ *  FIELD does, which `memberName` already sees, so treating one as a bypass and
+ *  the other as invisible would rest the guard on a spelling — the mistake the
+ *  bracket-callee form already cost this file once.
+ *
+ *  ⚠️ What it does NOT reach, and why that is a declared gap rather than an
+ *  oversight: `X.prototype.destroy = …` and `Object.defineProperty(X.prototype,
+ *  …)` sit OUTSIDE the class body, so seeing them means resolving `X` back to a
+ *  class by name — a second name-keyed resolution alongside `baseOf` — and the
+ *  bound-alias form (`const P = X.prototype`) needs a TypeChecker. Both are in
+ *  the header's KNOWN GAPS, measured.
+ *
+ *  ⚠️ Deliberately over-approximating in two directions, because a guard should
+ *  err loud: it reads the whole class body rather than the constructor only, and
+ *  a nested `function () { this.destroy = … }` rebinds `this` yet is still
+ *  attributed here. It stops at a nested CLASS, though — that `this` provably
+ *  belongs to someone else. */
+function assignedNames(cls: ts.ClassLikeDeclaration): string[] {
+  const out: string[] = [];
+  const visit = (node: ts.Node): void => {
+    if (ts.isClassDeclaration(node) || ts.isClassExpression(node)) {
+      return; // a different class's `this`
+    }
+    if (
+      ts.isBinaryExpression(node) &&
+      ASSIGNMENT_TOKENS.has(node.operatorToken.kind) &&
+      (ts.isPropertyAccessExpression(node.left) || ts.isElementAccessExpression(node.left)) &&
+      node.left.expression.kind === ts.SyntaxKind.ThisKeyword
+    ) {
+      const name = accessedName(node.left);
+      if (name !== undefined) {
+        out.push(name);
+      }
+    }
+    ts.forEachChild(node, visit);
+  };
+  for (const member of cls.members) {
+    ts.forEachChild(member, visit);
+  }
   return out;
 }
 
@@ -274,7 +391,9 @@ function widgetsIn(text: string, fileName: string): Widget[] {
           file: fileName,
           cls: node.name?.getText(sf) ?? "(anonymous)",
           base,
+          isExpression: ts.isClassExpression(node),
           members: node.members.map(memberName).filter((n): n is string => n !== undefined),
+          assigned: assignedNames(node),
           widgetName: node.members
             .filter(ts.isPropertyDeclaration)
             .filter((m) => ts.isIdentifier(m.name) && m.name.text === "widgetName")
@@ -293,7 +412,14 @@ function widgetsIn(text: string, fileName: string): Widget[] {
   return out;
 }
 
-/** Every name passed to a DIRECT `containWidgetRender("…", …)` call.
+/** Every name passed to a `containWidgetRender("…", …)` call, in every callee
+ *  spelling the walk can resolve — `containWidgetRender(…)`,
+ *  `base.containWidgetRender(…)` and `m["containWidgetRender"](…)` alike. It is
+ *  the name the callee RESOLVES to that decides, never how it is written: the
+ *  bare-identifier-only version of this walk skipped the other two silently, one
+ *  cycle after the identical bypass was closed for `addEventListener` — which is
+ *  why the resolution now comes from the shared module-level `accessedName`
+ *  rather than from a rule re-derived here.
  *
  *  WHY this is part of the latch-key set and not a separate concern: the name a
  *  caller hands `containWidgetRender` feeds `reportOnce("render", name, err)`
@@ -306,23 +432,41 @@ function widgetsIn(text: string, fileName: string): Widget[] {
  *
  *  A non-literal first argument THROWS rather than being skipped: skipping is how
  *  a guard quietly narrows, and the throw names the file so the next author
- *  decides deliberately. */
+ *  decides deliberately. An ALIASED import throws for the same reason — it
+ *  renames the callee out of a by-name walk's reach entirely, and no syntactic
+ *  match can follow it, so the one honest answer is to refuse it out loud. */
 function containWidgetRenderNames(text: string, fileName: string): string[] {
   const sf = ts.createSourceFile(fileName, text, ts.ScriptTarget.Latest, true);
   const out: string[] = [];
-  const visit = (node: ts.Node): void => {
-    if (
-      ts.isCallExpression(node) &&
-      ts.isIdentifier(node.expression) &&
-      node.expression.text === "containWidgetRender"
-    ) {
-      const arg = node.arguments[0];
-      if (arg === undefined || !ts.isStringLiteralLike(arg)) {
+  const CALLEE = "containWidgetRender";
+  for (const st of sf.statements) {
+    const bindings = ts.isImportDeclaration(st) ? st.importClause?.namedBindings : undefined;
+    if (bindings === undefined || !ts.isNamedImports(bindings)) {
+      continue;
+    }
+    for (const el of bindings.elements) {
+      if (el.propertyName?.text === CALLEE) {
         throw new Error(
-          `${fileName}: containWidgetRender's widget name must be a string literal so this guard can see it (got ${arg?.getText(sf) ?? "no argument"})`
+          `${fileName}: ${CALLEE} is imported as '${el.name.text}' — this guard matches the callee by name, so import it unaliased`
         );
       }
-      out.push(arg.text);
+    }
+  }
+  const visit = (node: ts.Node): void => {
+    if (ts.isCallExpression(node)) {
+      // The callee's SPELLING is not the question — the name it resolves to is.
+      const callee = ts.isIdentifier(node.expression)
+        ? node.expression.text
+        : accessedName(node.expression);
+      if (callee === CALLEE) {
+        const arg = node.arguments[0];
+        if (arg === undefined || !ts.isStringLiteralLike(arg)) {
+          throw new Error(
+            `${fileName}: ${CALLEE}'s widget name must be a string literal so this guard can see it (got ${arg?.getText(sf) ?? "no argument"})`
+          );
+        }
+        out.push(arg.text);
+      }
     }
     ts.forEachChild(node, visit);
   };
@@ -341,21 +485,27 @@ function violations(classes: Widget[]): string[] {
     }
   }
   for (const c of quollDescendants(classes)) {
-    // An ANONYMOUS class expression in the ancestry defeats the whole walk, not
-    // just this check: `quollDescendants` keys `baseOf` on the class NAME, so
-    // `const Mid = class extends QuollWidget {}` contributes no key, and a
-    // `class Leaf extends Mid` below it resolves to nothing and leaves
+    // A class EXPRESSION in the ancestry defeats the whole walk, not just this
+    // check: `baseOf` is keyed on `cls`, which is the class's own DECLARED name,
+    // while a subclass can only write the identifier the expression is BOUND to.
+    // The two are never the same thing, so `class Leaf extends Mid` below a
+    // `const Mid = class … extends QuollWidget {}` resolves to nothing and leaves
     // `widgetClasses` entirely — taking the re-declaration check, the roster and
-    // the latch key with it, while the anonymous intermediate keeps the roster's
-    // file count and `widgetName` looking untouched. Measured: with that shape
-    // planted in thematic-break-widget.ts the guard was 8/8 GREEN.
-    // ⚠️ Distinct from the header's declared gap ("an intermediate base whose
-    // DECLARATION this walk never sees"): this one IS seen, and was dropped on
-    // purpose by the `(anonymous)` filter in the uniqueness test. Naming the
-    // class costs one word and makes it resolvable, so this is a fix, not a gap.
-    if (c.cls === "(anonymous)") {
+    // the latch key with it, while the intermediate keeps the roster's file count
+    // and `widgetName` looking untouched. Measured: with that shape planted in
+    // thematic-break-widget.ts the guard was 8/8 GREEN.
+    //
+    // ⚠️ NAMING THE EXPRESSION DOES NOT HELP, which is why this keys on
+    // `isExpression` and not on a `"(anonymous)"` sentinel: `const Mid = class
+    // Inner extends QuollWidget {}` puts the key `Inner` in `baseOf` while every
+    // subclass writes `extends Mid`, so the leaf drops out exactly as it does
+    // under an anonymous one (re-measured: `descendants` holds `Inner` alone).
+    // Distinct from the header's declared gap ("an intermediate base whose
+    // DECLARATION this walk never sees"): this one IS seen. The fix is a class
+    // DECLARATION, so that is what the message asks for.
+    if (c.isExpression) {
       out.push(
-        `${c.file}: an anonymous class expression descends from QuollWidget — name it, the base resolver keys on the name`
+        `${c.file}: ${c.cls} is a class expression descending from QuollWidget — declare it with \`class ${c.cls === "(anonymous)" ? "<Name>" : c.cls} extends …\`, the base resolver keys on the \`extends\` identifier`
       );
     }
     for (const m of c.members) {
@@ -365,6 +515,19 @@ function violations(classes: Widget[]): string[] {
       if (UNGUARDED.includes(m)) {
         out.push(
           `${c.file}: ${c.cls} overrides the UNCONTAINED hook '${m}' — see the guard's header`
+        );
+      }
+    }
+    // Same containment loss, different spelling: `this.destroy = …` in a
+    // constructor installs the own property a class field would, so the verb is
+    // the only thing that separates these two reports.
+    for (const m of c.assigned) {
+      if (GUARDED.includes(m)) {
+        out.push(`${c.file}: ${c.cls} assigns over the guarded hook '${m}'`);
+      }
+      if (UNGUARDED.includes(m)) {
+        out.push(
+          `${c.file}: ${c.cls} assigns over the UNCONTAINED hook '${m}' — see the guard's header`
         );
       }
     }
@@ -412,8 +575,9 @@ describe("widget containment cannot be bypassed", () => {
     // it: two of them can carry the same string with `pnpm compile` green, and
     // the roster test above pins FILES, not names.
     //
-    // ⚠️ The set is the SUBCLASSES PLUS every direct `containWidgetRender`
-    // caller, because a name reaching the latch does not have to come from a
+    // ⚠️ The set is the SUBCLASSES PLUS every `containWidgetRender` caller
+    // outside the base module — in any callee spelling, see the walk — because a
+    // name reaching the latch does not have to come from a
     // class: `containWidgetRender(name, …)` feeds `name` to `reportOnce` and
     // `makePlaceholder` itself. Collecting only `widgetClasses` covered 8 of the
     // 9 names in the tree — `foldPlaceholderDOM`'s `"foldPlaceholder"` sat
@@ -456,8 +620,10 @@ describe("widget containment cannot be bypassed", () => {
       unscopedListeners(readFileSync(f, "utf8"), f.slice(REPO_ROOT.length + 1))
     );
     // ⚠️ MEASURED, not taken from the plan: the table arms its DOCUMENT-level
-    // drag listeners (mouseup / mousedown-capture / dragstart) from inside a
-    // handler, not from a hook, and owns them through its OWN bespoke
+    // drag listeners (mouseup / mousedown / dragstart — ALL THREE in CAPTURE,
+    // see table-widget.ts:671-687 for why that is load-bearing on the mouseup
+    // too) from inside a handler, not from a hook, and owns them through its OWN
+    // bespoke
     // `AbortController` (`release`, table-widget.ts) rather than the base's
     // per-render `signal` — `dispose` (`TableBlockWidget.dispose`) aborts it.
     // The scan below checks for a property literally NAMED `signal` in the
@@ -495,9 +661,16 @@ describe("widget containment cannot be bypassed", () => {
     // both spellings are flagged unconditionally.
     expect(unscopedListeners(`el.onclick = f;`, "x.ts")).toHaveLength(1);
     expect(unscopedListeners(`el["onchange"] = f;`, "x.ts")).toHaveLength(1);
+    // …and in every assignment spelling. `??=` / `||=` / `&&=` leave exactly the
+    // same unabortable handler on the element, so a predicate that reads only
+    // `=` is a statement about syntax rather than about listeners.
+    expect(unscopedListeners(`el.onclick ??= f;`, "x.ts")).toHaveLength(1);
+    expect(unscopedListeners(`el.onclick ||= f;`, "x.ts")).toHaveLength(1);
+    expect(unscopedListeners(`el["onclick"] &&= f;`, "x.ts")).toHaveLength(1);
     // …but only `on*`: an ordinary property assignment is not a registration.
     expect(unscopedListeners(`el.online = f;`, "x.ts")).toHaveLength(1); // matches /^on[a-z]+$/
     expect(unscopedListeners(`el.className = f;`, "x.ts")).toEqual([]);
+    expect(unscopedListeners(`el.className ??= f;`, "x.ts")).toEqual([]);
   });
 
   it("non-vacuity: the reported line is the CALL's line, not its leading trivia's", () => {
@@ -541,20 +714,36 @@ describe("widget containment cannot be bypassed", () => {
       // it resolves to nothing and drops out of the re-declaration check, the
       // roster AND the latch key at once — while the intermediate itself keeps
       // the roster's file count and its \`widgetName\` looking untouched. Flagged
-      // at the intermediate, which is where the name is missing.
+      // at the intermediate, which is where the declaration is missing.
       export const AnonMid = class extends QuollWidget {};
+      // A NAMED class expression is no more resolvable, and this pair is here so
+      // the two cannot drift apart: \`baseOf\` gets the key \`Inner\`, while the
+      // only identifier a subclass can write is \`AliasMid\`. So \`AliasLeaf\`
+      // contributes NO entry below — it falls out of \`quollDescendants\` exactly
+      // as it would under the anonymous form, which is the whole finding. The
+      // loud report has to come from the expression itself.
+      export const AliasMid = class Inner extends QuollWidget {};
+      export class AliasLeaf extends AliasMid { toDOM() { return null as never; } }
+      // The hook taken over by ASSIGNMENT rather than declaration. Runtime-
+      // identical to the class field \`destroy = (dom) => {}\`, which the member
+      // walk already collects — only the spelling differs.
+      export class Assigned extends QuollWidget {
+        constructor() { super(); this.destroy = () => {}; }
+      }
       // ⚠️ Must NOT be flagged — every real widget has one.
       export class Eventful extends QuollWidget { ignoreEvent() { return false; } }
     `;
     const got = violations(widgetsIn(planted, "planted.ts"));
     expect(got).toEqual([
       "planted.ts: (anonymous) extends WidgetType directly",
+      "planted.ts: (anonymous) is a class expression descending from QuollWidget — declare it with `class <Name> extends …`, the base resolver keys on the `extends` identifier",
+      "planted.ts: Assigned assigns over the guarded hook 'destroy'",
       "planted.ts: Bare extends WidgetType directly",
       "planted.ts: Computed re-declares the guarded hook 'updateDOM'",
       "planted.ts: Heighted overrides the UNCONTAINED hook 'estimatedHeight' — see the guard's header",
+      "planted.ts: Inner is a class expression descending from QuollWidget — declare it with `class Inner extends …`, the base resolver keys on the `extends` identifier",
       "planted.ts: Leaf re-declares the guarded hook 'toDOM'",
       "planted.ts: Reopened re-declares the guarded hook 'toDOM'",
-      "planted.ts: an anonymous class expression descends from QuollWidget — name it, the base resolver keys on the name",
     ]);
   });
 
@@ -568,7 +757,38 @@ describe("widget containment cannot be bypassed", () => {
     expect(containWidgetRenderNames(`containWidgetRender("Lit", () => el);`, "planted.ts")).toEqual(
       ["Lit"]
     );
+    // The qualified spellings are the SAME call — the callee resolves to the
+    // same name, so they are collected the same way. A bare-identifier-only
+    // match skipped both silently, which is how this guard quietly narrowed one
+    // cycle after the identical shape was closed for `addEventListener`.
+    expect(
+      containWidgetRenderNames(`base.containWidgetRender("Lit", () => el);`, "planted.ts")
+    ).toEqual(["Lit"]);
+    expect(
+      containWidgetRenderNames(`m["containWidgetRender"]("Lit", () => el);`, "planted.ts")
+    ).toEqual(["Lit"]);
+    // …and a non-literal name still throws through those spellings, or the
+    // widening above would have opened a new silent skip of its own.
+    expect(() =>
+      containWidgetRenderNames(`base.containWidgetRender(NAME, () => el);`, "planted.ts")
+    ).toThrow(/must be a string literal/);
+    // An ALIAS renames the callee out of a by-name walk's reach entirely and no
+    // syntactic match can follow it, so it is refused rather than skipped.
+    expect(() =>
+      containWidgetRenderNames(
+        `import { containWidgetRender as cwr } from "./widget-base.js";\ncwr("Lit", () => el);`,
+        "planted.ts"
+      )
+    ).toThrow(/imported as 'cwr'/);
+    // …but an UNALIASED import of it is the ordinary case and must stay quiet.
+    expect(
+      containWidgetRenderNames(
+        `import { containWidgetRender } from "./widget-base.js";\ncontainWidgetRender("Lit", () => el);`,
+        "planted.ts"
+      )
+    ).toEqual(["Lit"]);
     // Not a call to it — must not be collected.
     expect(containWidgetRenderNames(`other("Lit", () => el);`, "planted.ts")).toEqual([]);
+    expect(containWidgetRenderNames(`base.other("Lit", () => el);`, "planted.ts")).toEqual([]);
   });
 });

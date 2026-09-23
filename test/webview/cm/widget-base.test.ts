@@ -221,8 +221,9 @@ describe("QuollWidget", () => {
     expect(dom.getAttribute("aria-checked")).toBeNull();
     expect(dom.hasAttribute("tabindex")).toBe(false);
     // …but `contenteditable` must come BACK. CodeMirror stamps it outside
-    // `toDOM` (`WidgetTile.of`, view dist:2147) and only when the tile has no
-    // dom yet, so on this path — element neutralised in place, then re-adoptable
+    // `toDOM` (`WidgetTile.of` `:2144`, the stamp itself at view dist:2148) and
+    // only when the tile has no dom yet (`if (!dom)`, `:2145`), so on this path
+    // — element neutralised in place, then re-adoptable
     // through `compare`'s `this == other` shortcut (`:140`) — nobody else will
     // put it back. The strip above is what takes it off.
     expect(dom.getAttribute("contenteditable")).toBe("false");
