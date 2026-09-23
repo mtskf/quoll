@@ -21,7 +21,7 @@
 //   - an aliased import: `import { WidgetType as W }` then `extends W`
 //   - an intermediate base whose DECLARATION this walk never sees (one imported
 //     from node_modules, or from outside `src/webview`). Intermediates declared
-//     anywhere in the walked tree ARE resolved — `rootBase` chases `cls -> base`
+//     anywhere in the walked tree ARE resolved — `quollDescendants` chases `cls -> base`
 //     by name, so `class Leaf extends Mid` where `Mid extends QuollWidget` is a
 //     guarded widget like any other. That resolution keys on the class NAME, so
 //     "class names in the walked tree are unique" is asserted below rather than
@@ -362,10 +362,10 @@ describe("widget containment cannot be bypassed", () => {
       export class Computed extends QuollWidget { ["updateDOM"]() { return false; } }
       export class Heighted extends QuollWidget { get estimatedHeight() { return 1; } }
       export class Fine extends QuollWidget { render() { return null as never; } }
-      // An INTERMEDIATE base. Before \`rootBase\`, \`Leaf\` read as base "Mid" and
-      // dropped out of the re-declaration check, the roster and the listener
-      // scan all at once — one class between a widget and the base was enough
-      // to unguard it, in the same file.
+      // An INTERMEDIATE base. Before \`quollDescendants\` chased the base chain,
+      // \`Leaf\` read as base "Mid" and dropped out of the re-declaration check,
+      // the roster and the listener scan all at once — one class between a
+      // widget and the base was enough to unguard it, in the same file.
       export class Mid extends QuollWidget {}
       export class Leaf extends Mid { toDOM() { return null as never; } }
       // ⚠️ Must NOT be flagged — every real widget has one.
