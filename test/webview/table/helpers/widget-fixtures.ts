@@ -104,11 +104,21 @@ afterEach(() => {
   // Destroy BEFORE unparenting: the widget's own teardown is what removes the
   // document listeners, and it must not depend on the DOM still being attached.
   //
-  // Per-disposer catch, not a bare loop. No disposer can throw TODAY —
-  // `destroy` only calls `AbortController.abort()`, and nothing registers an
-  // `abort` listener on that signal, so no user code runs during teardown — but
-  // this loop is a throw-CAPABLE step sitting ahead of the two cleanups the
-  // comment above orders first, and the failure mode is silent three ways at
+  // Per-disposer catch, not a bare loop. No disposer is EXPECTED to throw TODAY,
+  // but "nothing runs during teardown" is no longer true: the disposer is
+  // `() => widget.destroy(dom)` (below), `QuollWidget.destroy` aborts the
+  // ELEMENT scope, and `cellFillSignal` (cm/table/cell-render.ts) registers one
+  // real `abort` forwarder per cell on exactly that signal —
+  // `TableBlockWidget.render` threads it through `buildRow` into
+  // `renderCellInto`. Those forwarders' bodies do nothing but
+  // `AbortController.abort()`, so they cannot throw — but the guarantee now
+  // rests on THEIR bodies, not on the signal having no listeners. (Before that
+  // change a `{ signal }` registration added an abort ALGORITHM, not a listener,
+  // so the old premise was accurate; `cm-table-cell-listener-scope.test.ts`'s
+  // "holds one registration on the caller's scope however many fills run"
+  // measures the listeners that now exist.) This loop is still a throw-CAPABLE
+  // step sitting ahead of the two cleanups the comment above orders first, and
+  // the failure mode is silent three ways at
   // once: the remaining disposers are skipped (leaking the very document
   // listeners this loop exists to remove), `replaceChildren` is skipped, and
   // the drain is skipped, pushing a recorded resolver failure into the NEXT

@@ -19,14 +19,17 @@
 // every top-level / container break, where the render is byte-identical to
 // before this field existed.
 
-import { WidgetType } from "@codemirror/view";
+import type { EditorView } from "@codemirror/view";
+import { QuollWidget } from "../widget-base.js";
 
-export class ThematicBreakWidget extends WidgetType {
+export class ThematicBreakWidget extends QuollWidget {
+  readonly widgetName = "ThematicBreakWidget";
+
   constructor(readonly indentCols = 0) {
     super();
   }
 
-  eq(other: WidgetType): boolean {
+  protected sameAs(other: QuollWidget): boolean {
     // Two widgets are interchangeable (CM may reuse the DOM) only when they
     // render the SAME rule — including the same list-child inset. instanceof
     // (NOT bare `true`) guards against reusing a foreign widget's DOM if a
@@ -35,7 +38,7 @@ export class ThematicBreakWidget extends WidgetType {
     return other instanceof ThematicBreakWidget && other.indentCols === this.indentCols;
   }
 
-  toDOM(): HTMLElement {
+  protected render(_view: EditorView, _signal: AbortSignal): HTMLElement {
     const el = document.createElement("span");
     el.className = "quoll-thematic-break";
     el.setAttribute("role", "separator");

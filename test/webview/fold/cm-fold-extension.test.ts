@@ -19,7 +19,7 @@ import {
   StateField,
 } from "@codemirror/state";
 import { EditorView, type GutterMarker } from "@codemirror/view";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { quollSyntaxExclusionZones } from "../../../src/webview/cm/decorations/orchestrator.js";
 import {
   CHEVRON_DOWN_PATH,
@@ -236,6 +236,22 @@ describe("foldPlaceholderDOM — inline collapsed-region pill (Lucide ellipsis)"
     expect(el.getAttribute("aria-label")).toBe("folded content");
     el.click();
     expect(clicked).toBe(1);
+  });
+
+  it("a throwing fold placeholder renders the inert stand-in, not a throw", () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const view = new EditorView({ state: EditorState.create({ doc: "" }) });
+    // The body that builds the placeholder is what throws; the containment is
+    // `foldPlaceholderDOM`'s own, since CodeMirror's fold widget — not a Quoll
+    // class — is what calls it (@codemirror/language/dist:1535).
+    const spy = vi.spyOn(document, "createElement").mockImplementationOnce(() => {
+      throw new Error("fold placeholder exploded");
+    });
+    const dom = foldPlaceholderDOM(view, () => {});
+    spy.mockRestore();
+    expect(dom.dataset.quollWidgetError).toBe("foldPlaceholder");
+    view.destroy();
+    vi.restoreAllMocks();
   });
 });
 

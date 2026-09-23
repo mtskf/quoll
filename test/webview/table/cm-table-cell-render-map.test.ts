@@ -39,7 +39,9 @@ describe("cell source map invariants", () => {
    *  pinned to the path the widget actually takes. */
   function mapFor(raw: string, resourceBase = ""): { cell: HTMLElement; map: CellSourceMap } {
     const cell = document.createElement("td");
-    renderCellInto(cell, raw, resourceBase);
+    // No widget lifecycle owns this fixture cell — a fresh, never-aborted
+    // controller matches every other direct `renderCellInto` call site.
+    renderCellInto(cell, raw, resourceBase, new AbortController().signal);
     const map = getCellSourceMap(cell);
     expect(map, `no map registered for ${JSON.stringify(raw)}`).not.toBeNull();
     return { cell, map: map as CellSourceMap };
@@ -180,7 +182,7 @@ describe("cell source map — walker rules", () => {
 
   function runsOf(raw: string, resourceBase = ""): readonly CellSourceRun[] {
     const cell = document.createElement("td");
-    renderCellInto(cell, raw, resourceBase);
+    renderCellInto(cell, raw, resourceBase, new AbortController().signal);
     return (getCellSourceMap(cell) as CellSourceMap).runs;
   }
 
@@ -271,15 +273,15 @@ describe("cell source map — walker rules", () => {
 describe("renderCellInto", () => {
   it("registers a map whose renderedText is the cell's own textContent", () => {
     const cell = document.createElement("td");
-    renderCellInto(cell, "**bold**");
+    renderCellInto(cell, "**bold**", "", new AbortController().signal);
     expect(cell.innerHTML).toBe("<strong>bold</strong>");
     expect(getCellSourceMap(cell)?.renderedText).toBe(cell.textContent);
   });
 
   it("replaces the previous map on re-render (a reused patchRow cell)", () => {
     const cell = document.createElement("td");
-    renderCellInto(cell, "**bold**");
-    renderCellInto(cell, "hi");
+    renderCellInto(cell, "**bold**", "", new AbortController().signal);
+    renderCellInto(cell, "hi", "", new AbortController().signal);
     expect(cell.textContent).toBe("hi");
     expect(getCellSourceMap(cell)).toEqual({
       runs: [{ from: 0, to: 2, outerFrom: 0, outerTo: 2 }],
@@ -303,7 +305,7 @@ describe("renderCellInto", () => {
       throw new Error("renderer exploded");
     });
     try {
-      renderCellInto(cell, "**bold**");
+      renderCellInto(cell, "**bold**", "", new AbortController().signal);
     } finally {
       spy.mockRestore();
       errSpy.mockRestore();

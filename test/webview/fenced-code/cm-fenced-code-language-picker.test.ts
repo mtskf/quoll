@@ -350,22 +350,26 @@ describe("LanguagePickerWidget", () => {
 
   it("updateDOM toggles is-labeled IN PLACE across the '' boundary (no recreate)", () => {
     const view = mkView("```\nx\n```\n");
-    const dom = new LanguagePickerWidget(off(0), "").toDOM(view);
+    let prev = new LanguagePickerWidget(off(0), "");
+    const dom = prev.toDOM(view);
     expect(dom.classList.contains(PICKER_LABELED_CLASS)).toBe(false);
     // Same openFrom, language ''→js: updateDOM returns true and toggles in place.
-    expect(new LanguagePickerWidget(off(0), "js").updateDOM(dom, view)).toBe(true);
+    const toJs = new LanguagePickerWidget(off(0), "js");
+    expect(toJs.updateDOM(dom, view, prev)).toBe(true);
     expect(dom.classList.contains(PICKER_LABELED_CLASS)).toBe(true);
     expect(pickerSelect(dom).value).toBe("js");
+    prev = toJs;
     // …and back: js→'' drops the modifier in place.
-    expect(new LanguagePickerWidget(off(0), "").updateDOM(dom, view)).toBe(true);
+    expect(new LanguagePickerWidget(off(0), "").updateDOM(dom, view, prev)).toBe(true);
     expect(dom.classList.contains(PICKER_LABELED_CLASS)).toBe(false);
     view.destroy();
   });
 
   it("updateDOM returns false on an openFrom change (CM recreates)", () => {
     const view = mkView("```js\nx\n```\n");
-    const dom = new LanguagePickerWidget(off(0), "js").toDOM(view);
-    expect(new LanguagePickerWidget(off(5), "js").updateDOM(dom, view)).toBe(false);
+    const prev = new LanguagePickerWidget(off(0), "js");
+    const dom = prev.toDOM(view);
+    expect(new LanguagePickerWidget(off(5), "js").updateDOM(dom, view, prev)).toBe(false);
     view.destroy();
   });
 

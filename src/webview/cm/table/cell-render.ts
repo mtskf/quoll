@@ -82,22 +82,26 @@ const LINK_TOOLTIP = `${IS_MAC ? "Cmd" : "Ctrl"}+click to open`;
 // over-length URL never becomes a live link — see renderReadonly).
 const ABSOLUTE_HREF_RE = /^(?:https?:|mailto:)/i;
 
-function attachLinkClickGuard(a: HTMLAnchorElement): void {
+function attachLinkClickGuard(a: HTMLAnchorElement, signal: AbortSignal): void {
   a.title = LINK_TOOLTIP;
-  a.addEventListener("click", (event) => {
-    if (event.metaKey || event.ctrlKey) {
-      const href = a.getAttribute("href") ?? "";
-      // Absolute scheme → leave un-preventDefault'd so the widget root handler
-      // routes it through the host open-external gate. Relative / fragment
-      // hrefs fall through to preventDefault → caret reveal (their in-webview
-      // navigation is undefined). No length check: renderableHref already
-      // guaranteed href.length <= MAX_HREF_LENGTH for every live link.
-      if (ABSOLUTE_HREF_RE.test(href)) {
-        return;
+  a.addEventListener(
+    "click",
+    (event) => {
+      if (event.metaKey || event.ctrlKey) {
+        const href = a.getAttribute("href") ?? "";
+        // Absolute scheme → leave un-preventDefault'd so the widget root handler
+        // routes it through the host open-external gate. Relative / fragment
+        // hrefs fall through to preventDefault → caret reveal (their in-webview
+        // navigation is undefined). No length check: renderableHref already
+        // guaranteed href.length <= MAX_HREF_LENGTH for every live link.
+        if (ABSOLUTE_HREF_RE.test(href)) {
+          return;
+        }
       }
-    }
-    event.preventDefault();
-  });
+      event.preventDefault();
+    },
+    { signal }
+  );
   // Button-1 (middle-click) activation rides `auxclick` + the browser's native
   // "open in new tab" default — it does NOT fire `click`, so the guard above
   // never runs and the widget root handler (also `click`-only) never routes it
@@ -116,9 +120,13 @@ function attachLinkClickGuard(a: HTMLAnchorElement): void {
   // so preventDefault every `auxclick` unconditionally (button-agnostic: a
   // narrowing to button 1 would reopen the guard for the back/forward buttons,
   // which fire `auxclick` too).
-  a.addEventListener("auxclick", (event) => {
-    event.preventDefault();
-  });
+  a.addEventListener(
+    "auxclick",
+    (event) => {
+      event.preventDefault();
+    },
+    { signal }
+  );
   // Right-click's native "Open Link" (context menu) is a sibling native gesture
   // that, like middle-click, bypasses the click-only guard and would navigate
   // using the live href without the host round-trip. It is deliberately NOT
@@ -235,7 +243,8 @@ function renderReadonly(
   raw: string,
   resourceBase: string,
   depth: number,
-  ctx: RenderContext
+  ctx: RenderContext,
+  signal: AbortSignal
 ): Node[] {
   const out: Node[] = [];
   let pendingText = "";
@@ -302,7 +311,7 @@ function renderReadonly(
               a.href = href;
               a.rel = "noopener noreferrer";
               a.textContent = raw.slice(leaf.label.from, leaf.label.to);
-              attachLinkClickGuard(a);
+              attachLinkClickGuard(a, signal);
               out.push(a);
             } else {
               // Unsafe or over-cap URL — render the full source slice inert, so
@@ -348,7 +357,7 @@ function renderReadonly(
               a.href = href;
               a.rel = "noopener noreferrer";
               a.textContent = raw.slice(leaf.content.from, leaf.content.to);
-              attachLinkClickGuard(a);
+              attachLinkClickGuard(a, signal);
               out.push(a);
             } else {
               renderInertSource(node.span);
@@ -379,7 +388,14 @@ function renderReadonly(
         ctx.pendingOpen ??= node.span.from;
         const runsBefore = ctx.runs.length;
         const el = document.createElement(node.tag);
-        for (const child of renderReadonly(node.children, raw, resourceBase, depth + 1, ctx)) {
+        for (const child of renderReadonly(
+          node.children,
+          raw,
+          resourceBase,
+          depth + 1,
+          ctx,
+          signal
+        )) {
           el.appendChild(child);
         }
         // Runs only ever grow, so this is "the wrapper's subtree rendered text".
@@ -447,10 +463,11 @@ export function resetCellRenderLogLatchesForTest(): void {
  *  runs while disagreeing with the DOM). */
 function renderCellWithMap(
   raw: string,
-  resourceBase: string
+  resourceBase: string,
+  signal: AbortSignal
 ): { nodes: Node[]; map: CellSourceMap } {
   const ctx = newRenderContext();
-  const nodes = renderReadonly(parseCellInline(raw), raw, resourceBase, 0, ctx);
+  const nodes = renderReadonly(parseCellInline(raw), raw, resourceBase, 0, ctx, signal);
   const renderedText = nodes.map((n) => n.textContent ?? "").join("");
   // The runs MUST tile `renderedText` exactly: `sourceOffsetAt`'s interior
   // arithmetic (`run.from + (within - rendered)`, where `rendered` is the
@@ -491,10 +508,11 @@ function renderCellWithMap(
  *  stale map of whatever it rendered before. */
 function renderCellSafely(
   raw: string,
-  resourceBase: string
+  resourceBase: string,
+  signal: AbortSignal
 ): { nodes: Node[]; map: CellSourceMap } {
   try {
-    return renderCellWithMap(raw, resourceBase);
+    return renderCellWithMap(raw, resourceBase, signal);
   } catch (err) {
     // The payload carries the failure's SHAPE and nothing from the cell: a
     // name and a length, per the edit-sync.ts precedent. `err.message` is
@@ -550,17 +568,110 @@ function renderCellSafely(
 }
 
 /** Nodes only — the general renderer API, for callers with no cell element and
- *  no drag to map (the raw-HTML inertness probes, the render tests). */
+ *  no drag to map (the raw-HTML inertness probes, the render tests). No widget
+ *  root owns these nodes' lifetime, so there is no lifecycle-scoped
+ *  `AbortSignal` to thread in from a caller — this mints its own, matching the
+ *  pre-containment behaviour (no scoping at all) for this signature. */
 export function renderCellInline(raw: string, resourceBase = ""): Node[] {
-  return renderCellSafely(raw, resourceBase).nodes;
+  return renderCellSafely(raw, resourceBase, new AbortController().signal).nodes;
+}
+
+// The listener scope of a cell's CURRENT fill. `renderCellInto` is the only way
+// to fill a cell, and it cuts the new scope and clears the cell in ONE
+// synchronous operation — the old anchors are briefly still in the tree but
+// nothing can dispatch to them before `cell.textContent = ""` detaches them.
+// That synchrony — NOT statement order — is what makes aborting the previous
+// fill's scope safe here and nowhere else: `cellFillSignal(...)` runs as an
+// ARGUMENT to `renderCellSafely`, i.e. BEFORE the clear, so anything that puts
+// an await / microtask between the two leaves live `<a>`s whose click and
+// auxclick guards are already aborted — reopening the middle-click bypass of
+// the host's `open-external` re-validation (widget-base.ts's "NOT re-cut per
+// patch" paragraph is the other half of this pair).
+const cellFillScope = new WeakMap<HTMLElement, AbortController>();
+
+/** A signal for ONE fill of `cell`, chained to the widget's `outer` scope.
+ *
+ *  Why not just hand `outer` down: `outer` lives as long as the widget's ELEMENT,
+ *  while `attachLinkClickGuard` binds two listeners per `<a>` on EVERY fill, and
+ *  `patchRow` re-fills every cell of the table on every keystroke that changes
+ *  the table's bytes. A `{ signal }` registration is kept alive by the signal's
+ *  abort-algorithm list, so without a per-fill scope a table with N links retains
+ *  2N more registrations — each holding a detached anchor — per keystroke, for
+ *  the life of the element. (⚠️ MECHANISM verified against the code and the DOM
+ *  abort-steps contract; the heap growth itself is NOT measured — happy-dom is
+ *  not a faithful oracle for listener retention, so this was not reproduced in a
+ *  real browser.)
+ *
+ *  Why the scope is cut HERE and not per patch in widget-base.ts: a patch does
+ *  not always rebuild what it bound to (`TableBlockWidget.patchDOM`'s
+ *  positional-shift arm re-stamps offsets and keeps the rendered cells), so
+ *  aborting an element-wide scope per patch would disarm the click/auxclick guard
+ *  on links that are still live. Only the code that clears the nodes knows their
+ *  listeners are dead. */
+function cellFillSignal(cell: HTMLElement, outer: AbortSignal): AbortSignal {
+  cellFillScope.get(cell)?.abort();
+  const controller = new AbortController();
+  cellFillScope.set(cell, controller);
+  // ⚠️ There is deliberately NO `outer.aborted` branch, and its absence is the
+  // FAIL-CLOSED direction rather than an oversight. `abort` is one-shot, so if
+  // `outer` has already fired, this forwarder simply never runs: the child
+  // controller stays live and the fill's click/auxclick guards bind ARMED. The
+  // alternative — aborting the child up front so the fill "starts disarmed" —
+  // binds no guard while `renderCellSafely` still assigns `a.href` and appends
+  // the anchor, i.e. a LIVE link with the middle-click choke point documented on
+  // `attachLinkClickGuard` removed. Blocked navigation is the safe failure; an
+  // unguarded `<a>` is not. Leaving the condition out means no future edit has an
+  // invariant to get wrong here.
+  //
+  // ⚠️ RESIDUAL, and it is why "blocked navigation" is TWO gestures and not
+  // three: `attachLinkClickGuard` blocks plain click and every `auxclick` ITSELF,
+  // but for Cmd/Ctrl+click on an absolute href it returns WITHOUT preventDefault
+  // and defers to the widget-root `click` listener (table-widget.ts:754) — the
+  // party that actually calls `quollOpenExternalSink`. That listener is bound with
+  // the widget's render `signal`, i.e. `outer`, so in exactly this already-aborted
+  // case it is gone and the native anchor handler runs, un-re-validated. NOT
+  // reachable today: no production call site hands `renderCellInto` an aborted
+  // signal — `scopeOf` mints a fresh controller, and `abortListeners` aborts AND
+  // deletes, so the map never holds an aborted one. Documented rather than closed
+  // because closing it would mean preventDefault-ing the modifier path whenever
+  // the router cannot be reached, i.e. teaching this guard about `outer.aborted`
+  // — the very condition this function exists without.
+  //
+  // Scoped to the CHILD so the next fill's `abort()` above also deregisters this
+  // forwarder: `outer` ends up holding one entry per cell, not one per fill,
+  // which is the retention this whole helper exists to bound.
+  outer.addEventListener("abort", () => controller.abort(), {
+    signal: controller.signal,
+    once: true,
+  });
+  return controller.signal;
 }
 
 /** Fill a rendered table cell: clear it, append the nodes, register the map —
  *  ONE operation, so a call site cannot append content without registering the
  *  map that describes it (which cell-point.ts would then read as "no mapping",
- *  or worse, satisfy with the previous render's map on a reused cell). */
-export function renderCellInto(cell: HTMLElement, raw: string, resourceBase = ""): void {
-  const { nodes, map } = renderCellSafely(raw, resourceBase);
+ *  or worse, satisfy with the previous render's map on a reused cell).
+ *
+ *  `signal` is REQUIRED (no default): this is the production widget's entry
+ *  point (table-widget.ts's `buildRow` / `patchRow`, both inside a QuollWidget
+ *  hook), and every link `<a>` it creates binds two listeners
+ *  (`attachLinkClickGuard`) that must die with the cell's element — a caller
+ *  that forgets to thread its hook's signal here is a type error, not an
+ *  unscoped listener.
+ *
+ *  ⚠️ `resourceBase` carries NO default either, though it reads like an optional
+ *  trailing option. It cannot: a parameter with an initializer that is followed
+ *  by a required one is still required (`Expected 4 arguments, but got 3`), so
+ *  the `= ""` that used to sit here advertised an optionality the type system
+ *  never honoured. Every call site passes it positionally, so making the
+ *  declaration honest changes no behaviour. */
+export function renderCellInto(
+  cell: HTMLElement,
+  raw: string,
+  resourceBase: string,
+  signal: AbortSignal
+): void {
+  const { nodes, map } = renderCellSafely(raw, resourceBase, cellFillSignal(cell, signal));
   cell.textContent = "";
   for (const node of nodes) {
     cell.appendChild(node);

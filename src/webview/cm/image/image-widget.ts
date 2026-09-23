@@ -17,14 +17,16 @@
 // live links). An image widget has no links, so the guard is unnecessary; the
 // "no <a>" invariant is pinned by a structural test.
 //
-// eq() is keyed on (docFrom, slice): a byte change OR a pure positional move
-// (same slice, different docFrom) both return false, triggering updateDOM.
-// updateDOM re-stamps docFrom and reuses the DOM when only the position moved
-// (slice unchanged); a byte change forces a full toDOM rebuild. `alt`/`safeUrl`
-// are pure functions of `slice`, so they need not participate in eq().
+// sameAs() (the base's `eq`) is keyed on (docFrom, slice): a byte change OR a
+// pure positional move (same slice, different docFrom) both return false,
+// triggering patchDOM. patchDOM re-stamps docFrom and reuses the DOM when only
+// the position moved (slice unchanged); a byte change forces a full render()
+// rebuild. `alt`/`safeUrl` are pure functions of `slice`, so they need not
+// participate in sameAs().
 
-import { type EditorView, WidgetType } from "@codemirror/view";
+import type { EditorView } from "@codemirror/view";
 import type { AllowlistedUrl } from "../../../markdown/url-allowlist.js";
+import { QuollWidget } from "../widget-base.js";
 import { imageDimensionCache } from "./image-dimension-cache.js";
 
 // Diagnostic latch: a live <img> that fails to load (file missing/renamed,
@@ -37,14 +39,14 @@ let warnedImageLoadError = false;
 
 // The block's CURRENT first-byte offset, keyed on the widget's root element.
 //
-// Keyed on the element rather than held in the `toDOM` closure because
-// `updateDOM` reuses that element across widget instances: after a distant edit
-// shifts this block, CodeMirror builds a NEW widget, `eq()` returns false, and
-// `updateDOM` re-points the reused DOM — but it cannot re-bind the click
+// Keyed on the element rather than held in the `render` closure because
+// `patchDOM` reuses that element across widget instances: after a distant edit
+// shifts this block, CodeMirror builds a NEW widget, `sameAs()` returns false,
+// and `patchDOM` re-points the reused DOM — but it cannot re-bind the click
 // listener, whose captured `this` is the OLD instance. So the new instance
 // needs a channel to hand the current offset to the existing listener, and the
 // channel has to be updatable exactly when the position moves, which
-// `updateDOM` can do and the closure cannot. A WeakMap so a discarded root
+// `patchDOM` can do and the closure cannot. A WeakMap so a discarded root
 // takes its entry with it. Same pattern, same reason, as table-widget.ts's
 // `blockStart`.
 //
@@ -55,7 +57,9 @@ let warnedImageLoadError = false;
 // selection that no try/catch can observe.)
 const blockStart = new WeakMap<HTMLElement, number>();
 
-export class ImageBlockWidget extends WidgetType {
+export class ImageBlockWidget extends QuollWidget {
+  readonly widgetName = "ImageBlockWidget";
+
   constructor(
     /** CommonMark-normalized image alt text (backslash/entity decode + emphasis
      *  flatten), computed upstream by `imageBlockField`. Drives `<img alt>` and
@@ -63,7 +67,7 @@ export class ImageBlockWidget extends WidgetType {
     readonly alt: string,
     /** Render-gate verdict: the allowlisted URL, or null when blocked. */
     readonly safeUrl: AllowlistedUrl | null,
-    /** Source slice `![alt](url)` — in eq() so DOM tracks byte changes. */
+    /** Source slice `![alt](url)` — in sameAs() so DOM tracks byte changes. */
     readonly slice: string,
     /** Absolute doc offset of the widget's first byte (caret target). */
     readonly docFrom: number
@@ -71,7 +75,7 @@ export class ImageBlockWidget extends WidgetType {
     super();
   }
 
-  eq(other: WidgetType): boolean {
+  protected sameAs(other: QuollWidget): boolean {
     return (
       other instanceof ImageBlockWidget &&
       other.docFrom === this.docFrom &&
@@ -79,7 +83,7 @@ export class ImageBlockWidget extends WidgetType {
     );
   }
 
-  toDOM(view: EditorView): HTMLElement {
+  protected render(view: EditorView, signal: AbortSignal): HTMLElement {
     // Wrapper <div> is the widget root, NOT <img>. It carries the
     // `quoll-block` marker whose `margin: 0` invariant (styles.css, widget
     // layer) keeps CM's getBoundingClientRect height measurement in lockstep
@@ -111,28 +115,43 @@ export class ImageBlockWidget extends WidgetType {
       img.alt = this.alt;
       // Record natural dimensions once the image has decoded, keyed by the
       // resolved src. Guard against a failed load (naturalWidth/Height === 0).
-      // The listener is not explicitly removed: it is attached to the <img>
-      // this widget owns, so it is garbage-collected with the DOM when CM
-      // discards the widget (same lifecycle as the `click` listener below). A
-      // load firing after discard merely writes the cache — no view access, no
-      // leak.
-      img.addEventListener("load", () => {
-        const width = img.naturalWidth;
-        const height = img.naturalHeight;
-        if (width > 0 && height > 0) {
-          imageDimensionCache.set(src, { width, height });
-        }
-      });
+      // Bound to the base's per-render `signal` (QuollWidget), so
+      // `QuollWidget.destroy` aborts it: a decode that lands AFTER CM discards
+      // this widget no longer seeds the cache. Accepted — the alternative is an
+      // unscoped listener, which is exactly the class this base exists to
+      // remove. ⚠️ The cost is NOT one reflow: this listener is the cache's only
+      // writer, so a widget discarded before its decode seeds NOTHING and the
+      // next build starts from an empty cache too. The cost is an unreserved
+      // reflow on EVERY build of that src until one build's decode completes
+      // while the widget is still attached — self-healing, but bounded by that
+      // CONDITION, not by a single occurrence. The `error` listener below is
+      // scoped identically, so the same discard also loses the one `console.warn`
+      // breadcrumb the session-level `warnedImageLoadError` latch allows.
+      img.addEventListener(
+        "load",
+        () => {
+          const width = img.naturalWidth;
+          const height = img.naturalHeight;
+          if (width > 0 && height > 0) {
+            imageDimensionCache.set(src, { width, height });
+          }
+        },
+        { signal }
+      );
       // Symmetric error breadcrumb: a load failure (missing/renamed file,
       // out-of-localResourceRoots, typo, corrupt) otherwise leaves only the
       // native broken-image glyph. Log once per session so a triage report has
       // a console signal; the glyph remains the visual outcome.
-      img.addEventListener("error", () => {
-        if (!warnedImageLoadError) {
-          warnedImageLoadError = true;
-          console.warn("[quoll] image failed to load", { src });
-        }
-      });
+      img.addEventListener(
+        "error",
+        () => {
+          if (!warnedImageLoadError) {
+            warnedImageLoadError = true;
+            console.warn("[quoll] image failed to load", { src });
+          }
+        },
+        { signal }
+      );
       root.appendChild(img);
     } else {
       // No <img>, no src — structurally impossible to fire a network request.
@@ -150,53 +169,62 @@ export class ImageBlockWidget extends WidgetType {
     // source surfaces and becomes editable. No <a> exists inside an image
     // widget, so (unlike the table widget) there is no modifier-click
     // navigation exception to guard.
-    root.addEventListener("click", () => {
-      // Falling back to `this.docFrom` totalizes the `number | undefined` read;
-      // it is not the stale-closure hazard coming back. The entry is set above,
-      // in the same breath as attaching this listener, and at toDOM time the
-      // closure value IS the current one — so a miss is unreachable by
-      // construction. Logged, not silently trusted, so a future regression of
-      // that invariant is observable instead of silently reintroducing the
-      // stale-caret bug this WeakMap exists to fix.
-      let anchor = blockStart.get(root);
-      if (anchor === undefined) {
-        // `slice` identifies WHICH widget tripped it — a document can hold many
-        // images, and `fallback` alone would not say which one. Matches the
-        // source-identifying payload of this file's other breadcrumb
-        // (`{ src }` on a failed load).
-        console.error("[quoll] image widget blockStart miss — invariant violated", {
-          slice: this.slice,
-          fallback: this.docFrom,
-        });
-        anchor = this.docFrom;
-      }
-      // A `number` anchor does not make the dispatch infallible — see
-      // table-widget.ts's `dispatchSelection` for the enumeration of what still
-      // throws (out-of-range after a shrinking edit, CodeMirror's re-entrancy
-      // error, a throwing transaction filter). The range bound is deliberately
-      // NOT re-checked against `view.state.doc.length`: CodeMirror owns that
-      // invariant and enforces it by throwing, and a second copy of the rule
-      // here could drift from it. The throw must not escape into a DOM listener
-      // unlogged — the gesture is lost, the editor keeps running.
-      try {
-        view.dispatch({ selection: { anchor } });
-      } catch (err) {
-        console.error("[quoll] image widget selection dispatch failed", { anchor, err });
-      }
-    });
+    root.addEventListener(
+      "click",
+      () => {
+        // Falling back to `this.docFrom` totalizes the `number | undefined` read;
+        // it is not the stale-closure hazard coming back. The entry is set above,
+        // in the same breath as attaching this listener, and at render time the
+        // closure value IS the current one — so a miss is unreachable by
+        // construction. Logged, not silently trusted, so a future regression of
+        // that invariant is observable instead of silently reintroducing the
+        // stale-caret bug this WeakMap exists to fix.
+        let anchor = blockStart.get(root);
+        if (anchor === undefined) {
+          // `slice` identifies WHICH widget tripped it — a document can hold many
+          // images, and `fallback` alone would not say which one. Matches the
+          // source-identifying payload of this file's other breadcrumb
+          // (`{ src }` on a failed load).
+          console.error("[quoll] image widget blockStart miss — invariant violated", {
+            slice: this.slice,
+            fallback: this.docFrom,
+          });
+          anchor = this.docFrom;
+        }
+        // A `number` anchor does not make the dispatch infallible — see
+        // table-widget.ts's `dispatchSelection` for the enumeration of what still
+        // throws (out-of-range after a shrinking edit, CodeMirror's re-entrancy
+        // error, a throwing transaction filter). The range bound is deliberately
+        // NOT re-checked against `view.state.doc.length`: CodeMirror owns that
+        // invariant and enforces it by throwing, and a second copy of the rule
+        // here could drift from it. The throw must not escape into a DOM listener
+        // unlogged — the gesture is lost, the editor keeps running.
+        try {
+          view.dispatch({ selection: { anchor } });
+        } catch (err) {
+          console.error("[quoll] image widget selection dispatch failed", { anchor, err });
+        }
+      },
+      { signal }
+    );
 
     return root;
   }
 
-  updateDOM(dom: HTMLElement, _view: EditorView, from: ImageBlockWidget): boolean {
+  protected patchDOM(
+    dom: HTMLElement,
+    _view: EditorView,
+    from: ImageBlockWidget,
+    _signal: AbortSignal
+  ): boolean {
     // CM calls updateDOM only when eq() returned false, passing the prior
-    // same-class widget as `from`. eq() keys on (docFrom, slice); alt/safeUrl
+    // same-class widget as `from`. `sameAs()` keys on (docFrom, slice); alt/safeUrl
     // are pure functions of the slice (and the static resource-base facet). So
     // from.slice === this.slice means only docFrom shifted — re-stamp the caret
     // target and reuse the <img> (avoids per-keystroke <img> recreation + reflow
     // when typing above the image). A changed slice returns false so CM does a
     // full toDOM rebuild, which re-gates the URL via the freshly-passed
-    // safeUrl — updateDOM NEVER re-gates or mutates src itself.
+    // safeUrl — `patchDOM` NEVER re-gates or mutates src itself.
     if (!dom.classList.contains("quoll-image-block")) {
       return false;
     }
@@ -204,7 +232,7 @@ export class ImageBlockWidget extends WidgetType {
       return false;
     }
     // Re-point the caret channel the click listener actually reads. The
-    // attribute beside it is inspection-only (see toDOM) — dropping THIS line
+    // attribute beside it is inspection-only (see `render`) — dropping THIS line
     // would leave the reused listener dispatching the old offset while the DOM
     // still looked correct.
     dom.dataset.docFrom = String(this.docFrom);

@@ -10,7 +10,8 @@
 // avoids innerHTML, so there is no CSP/inline-style concern). Same approach as
 // fenced-code-copy-button-widget.ts.
 
-import { type EditorView, WidgetType } from "@codemirror/view";
+import type { EditorView } from "@codemirror/view";
+import { QuollWidget } from "../widget-base.js";
 import { toggleFencedCollapse } from "./fenced-code-collapse-state.js";
 
 const SVG_NS = "http://www.w3.org/2000/svg";
@@ -39,20 +40,22 @@ function makeChevron(d: string): SVGSVGElement {
   return svg;
 }
 
-export class FencedCollapseToggleWidget extends WidgetType {
+export class FencedCollapseToggleWidget extends QuollWidget {
+  readonly widgetName = "FencedCollapseToggleWidget";
+
   constructor(
     /** Open-fence line.from offset of the owning block — the toggle key. */
     readonly key: number,
     /** Current state: true → this is the "Show less" bar; false → "Show more". */
     readonly expanded: boolean,
     /** Count of concealed body lines (collapsed state) — shown in the label and
-     *  part of eq() so the label refreshes when the body grows/shrinks. */
+     *  part of sameAs() so the label refreshes when the body grows/shrinks. */
     readonly hiddenCount: number
   ) {
     super();
   }
 
-  eq(other: WidgetType): boolean {
+  protected sameAs(other: QuollWidget): boolean {
     return (
       other instanceof FencedCollapseToggleWidget &&
       other.key === this.key &&
@@ -61,7 +64,7 @@ export class FencedCollapseToggleWidget extends WidgetType {
     );
   }
 
-  toDOM(view: EditorView): HTMLElement {
+  protected render(view: EditorView, signal: AbortSignal): HTMLElement {
     const root = document.createElement("div");
     root.className = "quoll-fenced-collapse-bar";
     // The `-collapsed` state class marks the COLLAPSED "Show more" bar, which is the
@@ -92,21 +95,29 @@ export class FencedCollapseToggleWidget extends WidgetType {
     // mousedown: block CodeMirror's caret-on-mousedown so clicking never moves the
     // selection into a (possibly concealed) line. preventDefault on mousedown does
     // NOT cancel the click, so keyboard Enter/Space still activates the button.
-    button.addEventListener("mousedown", (event) => {
-      if (event.button !== 0) {
-        return;
-      }
-      event.preventDefault();
-      event.stopPropagation();
-    });
-    button.addEventListener("click", (event) => {
-      if (event.button !== 0) {
-        return;
-      }
-      event.preventDefault();
-      event.stopPropagation();
-      toggleFencedCollapse(view, this.key, !this.expanded);
-    });
+    button.addEventListener(
+      "mousedown",
+      (event) => {
+        if (event.button !== 0) {
+          return;
+        }
+        event.preventDefault();
+        event.stopPropagation();
+      },
+      { signal }
+    );
+    button.addEventListener(
+      "click",
+      (event) => {
+        if (event.button !== 0) {
+          return;
+        }
+        event.preventDefault();
+        event.stopPropagation();
+        toggleFencedCollapse(view, this.key, !this.expanded);
+      },
+      { signal }
+    );
 
     root.appendChild(button);
     return root;

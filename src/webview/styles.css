@@ -606,6 +606,15 @@ html body {
     background-clip: content-box;
   }
 
+  /* Inert stand-in for a widget whose DOM hooks threw (cm/widget-base.ts).
+     Muted rather than alarming: the document's bytes are intact and only this
+     one element failed to draw. */
+  .quoll-widget-error {
+    opacity: 0.6;
+    cursor: help;
+    user-select: none;
+  }
+
   /* C6b: readonly GFM table widget. Root is
    * `<div class="quoll-block quoll-table-block">`; the inner `<table>` is
    * fully self-styled here. The PM-era `.quoll-editor table/th,td/a/code`
