@@ -504,8 +504,11 @@ function violations(classes: Widget[]): string[] {
     // DECLARATION this walk never sees"): this one IS seen. The fix is a class
     // DECLARATION, so that is what the message asks for.
     if (c.isExpression) {
+      // `(anonymous)` is this walk's own placeholder for a missing name, not a
+      // name to paste back into the suggested declaration.
+      const declareAs = c.cls === "(anonymous)" ? "<Name>" : c.cls;
       out.push(
-        `${c.file}: ${c.cls} is a class expression descending from QuollWidget — declare it with \`class ${c.cls === "(anonymous)" ? "<Name>" : c.cls} extends …\`, the base resolver keys on the \`extends\` identifier`
+        `${c.file}: ${c.cls} is a class expression descending from QuollWidget — declare it with \`class ${declareAs} extends …\`, the base resolver keys on the \`extends\` identifier`
       );
     }
     for (const m of c.members) {
