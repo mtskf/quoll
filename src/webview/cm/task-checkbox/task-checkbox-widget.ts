@@ -31,8 +31,9 @@
 // of a transiently stale SR announcement. Revisit if a11y audit flags
 // it.
 
-import { type EditorView, WidgetType } from "@codemirror/view";
+import type { EditorView } from "@codemirror/view";
 
+import { QuollWidget } from "../widget-base.js";
 import { toggleTaskCheckbox } from "./task-checkbox-command.js";
 
 // The marker's CURRENT `[` offset, keyed on the widget's root element.
@@ -73,7 +74,9 @@ function resolveToggleFrom(span: HTMLElement, widget: CheckboxWidget): number {
   return from;
 }
 
-export class CheckboxWidget extends WidgetType {
+export class CheckboxWidget extends QuollWidget {
+  readonly widgetName = "CheckboxWidget";
+
   constructor(
     readonly checked: boolean,
     /** Doc position of the `[` opening bracket — the toggle target sits
@@ -85,13 +88,13 @@ export class CheckboxWidget extends WidgetType {
     super();
   }
 
-  eq(other: WidgetType): boolean {
+  protected sameAs(other: QuollWidget): boolean {
     return (
       other instanceof CheckboxWidget && other.checked === this.checked && other.from === this.from
     );
   }
 
-  toDOM(view: EditorView): HTMLElement {
+  protected render(view: EditorView, signal: AbortSignal): HTMLElement {
     const span = document.createElement("span");
     span.className = "quoll-task-checkbox";
     span.setAttribute("role", "checkbox");
@@ -108,49 +111,62 @@ export class CheckboxWidget extends WidgetType {
     span.dataset.from = String(this.from);
     toggleTarget.set(span, this.from);
 
-    span.addEventListener("mousedown", (event) => {
-      // Left-click only — right/middle click stays as plain browser
-      // events (context menu / paste).
-      if (event.button !== 0) {
-        return;
-      }
-      // preventDefault stops CodeMirror's selection-on-mousedown from
-      // moving the caret into the (atomic) widget range. We intentionally
-      // do NOT call span.focus() here — round-3 #23 established that any
-      // focus on this span is destroyed by the post-dispatch widget
-      // DOM swap (eq() returns false on checked-state change → CM
-      // replaces the DOM → activeElement falls to <body>). Post-click
-      // Space/Enter activation cannot be reliably delivered through
-      // Decoration.replace widgets without orchestrator-level focus-
-      // restoration plumbing; the promise has been withdrawn for C5.
-      event.preventDefault();
-      event.stopPropagation();
-      toggleTaskCheckbox(view, resolveToggleFrom(span, this));
-    });
-
-    span.addEventListener("keydown", (event) => {
-      if (event.key === " " || event.key === "Enter") {
+    span.addEventListener(
+      "mousedown",
+      (event) => {
+        // Left-click only — right/middle click stays as plain browser
+        // events (context menu / paste).
+        if (event.button !== 0) {
+          return;
+        }
+        // preventDefault stops CodeMirror's selection-on-mousedown from
+        // moving the caret into the (atomic) widget range. We intentionally
+        // do NOT call span.focus() here — round-3 #23 established that any
+        // focus on this span is destroyed by the post-dispatch widget
+        // DOM swap (eq() returns false on checked-state change → CM
+        // replaces the DOM → activeElement falls to <body>). Post-click
+        // Space/Enter activation cannot be reliably delivered through
+        // Decoration.replace widgets without orchestrator-level focus-
+        // restoration plumbing; the promise has been withdrawn for C5.
         event.preventDefault();
         event.stopPropagation();
         toggleTaskCheckbox(view, resolveToggleFrom(span, this));
-        // Return focus to the editor so the keyboard user can keep
-        // typing — without this, focus stays on the now-replaced (or
-        // about-to-be-stale) widget DOM and the next keystroke goes
-        // nowhere (Codex round-3 #23 / EH round-3 minor). This runs
-        // UNCONDITIONALLY, not just on a successful toggle: Space/Enter
-        // has already preventDefault'd, so on any of toggleTaskCheckbox's
-        // false-returning guard paths (stale-from, readOnly, dead-view
-        // catch) focus would otherwise be stranded on the span. The
-        // mousedown handler intentionally does NOT do this (mouse users
-        // expect their pointer to drive the next action).
-        view.focus();
-      }
-    });
+      },
+      { signal }
+    );
+
+    span.addEventListener(
+      "keydown",
+      (event) => {
+        if (event.key === " " || event.key === "Enter") {
+          event.preventDefault();
+          event.stopPropagation();
+          toggleTaskCheckbox(view, resolveToggleFrom(span, this));
+          // Return focus to the editor so the keyboard user can keep
+          // typing — without this, focus stays on the now-replaced (or
+          // about-to-be-stale) widget DOM and the next keystroke goes
+          // nowhere (Codex round-3 #23 / EH round-3 minor). This runs
+          // UNCONDITIONALLY, not just on a successful toggle: Space/Enter
+          // has already preventDefault'd, so on any of toggleTaskCheckbox's
+          // false-returning guard paths (stale-from, readOnly, dead-view
+          // catch) focus would otherwise be stranded on the span. The
+          // mousedown handler intentionally does NOT do this (mouse users
+          // expect their pointer to drive the next action).
+          view.focus();
+        }
+      },
+      { signal }
+    );
 
     return span;
   }
 
-  updateDOM(dom: HTMLElement, _view: EditorView, from: CheckboxWidget): boolean {
+  protected patchDOM(
+    dom: HTMLElement,
+    _view: EditorView,
+    from: CheckboxWidget,
+    _signal: AbortSignal
+  ): boolean {
     // CM calls updateDOM only when eq() returned false, passing the prior
     // same-class widget as `from`. eq() keys on (checked, from). A checked
     // change is a TOGGLE: rebuild (return false) so the full DOM reconstruction

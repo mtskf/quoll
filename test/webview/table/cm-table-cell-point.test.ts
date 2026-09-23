@@ -38,7 +38,10 @@ function fixture(cells: Array<{ md: string; from: number; to: number }>): HTMLEl
     const td = document.createElement("td");
     td.dataset.cellFrom = String(c.from);
     td.dataset.cellTo = String(c.to);
-    renderCellInto(td, c.md);
+    // No widget lifecycle owns this fixture cell, so a fresh, never-aborted
+    // controller matches every other direct `renderCellInto` call site in the
+    // table test suites.
+    renderCellInto(td, c.md, "", new AbortController().signal);
     tr.appendChild(td);
   }
   tbody.appendChild(tr);

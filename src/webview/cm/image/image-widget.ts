@@ -23,8 +23,9 @@
 // (slice unchanged); a byte change forces a full toDOM rebuild. `alt`/`safeUrl`
 // are pure functions of `slice`, so they need not participate in eq().
 
-import { type EditorView, WidgetType } from "@codemirror/view";
+import type { EditorView } from "@codemirror/view";
 import type { AllowlistedUrl } from "../../../markdown/url-allowlist.js";
+import { QuollWidget } from "../widget-base.js";
 import { imageDimensionCache } from "./image-dimension-cache.js";
 
 // Diagnostic latch: a live <img> that fails to load (file missing/renamed,
@@ -55,7 +56,9 @@ let warnedImageLoadError = false;
 // selection that no try/catch can observe.)
 const blockStart = new WeakMap<HTMLElement, number>();
 
-export class ImageBlockWidget extends WidgetType {
+export class ImageBlockWidget extends QuollWidget {
+  readonly widgetName = "ImageBlockWidget";
+
   constructor(
     /** CommonMark-normalized image alt text (backslash/entity decode + emphasis
      *  flatten), computed upstream by `imageBlockField`. Drives `<img alt>` and
@@ -71,7 +74,7 @@ export class ImageBlockWidget extends WidgetType {
     super();
   }
 
-  eq(other: WidgetType): boolean {
+  protected sameAs(other: QuollWidget): boolean {
     return (
       other instanceof ImageBlockWidget &&
       other.docFrom === this.docFrom &&
@@ -79,7 +82,7 @@ export class ImageBlockWidget extends WidgetType {
     );
   }
 
-  toDOM(view: EditorView): HTMLElement {
+  protected render(view: EditorView, signal: AbortSignal): HTMLElement {
     // Wrapper <div> is the widget root, NOT <img>. It carries the
     // `quoll-block` marker whose `margin: 0` invariant (styles.css, widget
     // layer) keeps CM's getBoundingClientRect height measurement in lockstep
@@ -116,23 +119,31 @@ export class ImageBlockWidget extends WidgetType {
       // discards the widget (same lifecycle as the `click` listener below). A
       // load firing after discard merely writes the cache — no view access, no
       // leak.
-      img.addEventListener("load", () => {
-        const width = img.naturalWidth;
-        const height = img.naturalHeight;
-        if (width > 0 && height > 0) {
-          imageDimensionCache.set(src, { width, height });
-        }
-      });
+      img.addEventListener(
+        "load",
+        () => {
+          const width = img.naturalWidth;
+          const height = img.naturalHeight;
+          if (width > 0 && height > 0) {
+            imageDimensionCache.set(src, { width, height });
+          }
+        },
+        { signal }
+      );
       // Symmetric error breadcrumb: a load failure (missing/renamed file,
       // out-of-localResourceRoots, typo, corrupt) otherwise leaves only the
       // native broken-image glyph. Log once per session so a triage report has
       // a console signal; the glyph remains the visual outcome.
-      img.addEventListener("error", () => {
-        if (!warnedImageLoadError) {
-          warnedImageLoadError = true;
-          console.warn("[quoll] image failed to load", { src });
-        }
-      });
+      img.addEventListener(
+        "error",
+        () => {
+          if (!warnedImageLoadError) {
+            warnedImageLoadError = true;
+            console.warn("[quoll] image failed to load", { src });
+          }
+        },
+        { signal }
+      );
       root.appendChild(img);
     } else {
       // No <img>, no src — structurally impossible to fire a network request.
@@ -150,45 +161,54 @@ export class ImageBlockWidget extends WidgetType {
     // source surfaces and becomes editable. No <a> exists inside an image
     // widget, so (unlike the table widget) there is no modifier-click
     // navigation exception to guard.
-    root.addEventListener("click", () => {
-      // Falling back to `this.docFrom` totalizes the `number | undefined` read;
-      // it is not the stale-closure hazard coming back. The entry is set above,
-      // in the same breath as attaching this listener, and at toDOM time the
-      // closure value IS the current one — so a miss is unreachable by
-      // construction. Logged, not silently trusted, so a future regression of
-      // that invariant is observable instead of silently reintroducing the
-      // stale-caret bug this WeakMap exists to fix.
-      let anchor = blockStart.get(root);
-      if (anchor === undefined) {
-        // `slice` identifies WHICH widget tripped it — a document can hold many
-        // images, and `fallback` alone would not say which one. Matches the
-        // source-identifying payload of this file's other breadcrumb
-        // (`{ src }` on a failed load).
-        console.error("[quoll] image widget blockStart miss — invariant violated", {
-          slice: this.slice,
-          fallback: this.docFrom,
-        });
-        anchor = this.docFrom;
-      }
-      // A `number` anchor does not make the dispatch infallible — see
-      // table-widget.ts's `dispatchSelection` for the enumeration of what still
-      // throws (out-of-range after a shrinking edit, CodeMirror's re-entrancy
-      // error, a throwing transaction filter). The range bound is deliberately
-      // NOT re-checked against `view.state.doc.length`: CodeMirror owns that
-      // invariant and enforces it by throwing, and a second copy of the rule
-      // here could drift from it. The throw must not escape into a DOM listener
-      // unlogged — the gesture is lost, the editor keeps running.
-      try {
-        view.dispatch({ selection: { anchor } });
-      } catch (err) {
-        console.error("[quoll] image widget selection dispatch failed", { anchor, err });
-      }
-    });
+    root.addEventListener(
+      "click",
+      () => {
+        // Falling back to `this.docFrom` totalizes the `number | undefined` read;
+        // it is not the stale-closure hazard coming back. The entry is set above,
+        // in the same breath as attaching this listener, and at toDOM time the
+        // closure value IS the current one — so a miss is unreachable by
+        // construction. Logged, not silently trusted, so a future regression of
+        // that invariant is observable instead of silently reintroducing the
+        // stale-caret bug this WeakMap exists to fix.
+        let anchor = blockStart.get(root);
+        if (anchor === undefined) {
+          // `slice` identifies WHICH widget tripped it — a document can hold many
+          // images, and `fallback` alone would not say which one. Matches the
+          // source-identifying payload of this file's other breadcrumb
+          // (`{ src }` on a failed load).
+          console.error("[quoll] image widget blockStart miss — invariant violated", {
+            slice: this.slice,
+            fallback: this.docFrom,
+          });
+          anchor = this.docFrom;
+        }
+        // A `number` anchor does not make the dispatch infallible — see
+        // table-widget.ts's `dispatchSelection` for the enumeration of what still
+        // throws (out-of-range after a shrinking edit, CodeMirror's re-entrancy
+        // error, a throwing transaction filter). The range bound is deliberately
+        // NOT re-checked against `view.state.doc.length`: CodeMirror owns that
+        // invariant and enforces it by throwing, and a second copy of the rule
+        // here could drift from it. The throw must not escape into a DOM listener
+        // unlogged — the gesture is lost, the editor keeps running.
+        try {
+          view.dispatch({ selection: { anchor } });
+        } catch (err) {
+          console.error("[quoll] image widget selection dispatch failed", { anchor, err });
+        }
+      },
+      { signal }
+    );
 
     return root;
   }
 
-  updateDOM(dom: HTMLElement, _view: EditorView, from: ImageBlockWidget): boolean {
+  protected patchDOM(
+    dom: HTMLElement,
+    _view: EditorView,
+    from: ImageBlockWidget,
+    _signal: AbortSignal
+  ): boolean {
     // CM calls updateDOM only when eq() returned false, passing the prior
     // same-class widget as `from`. eq() keys on (docFrom, slice); alt/safeUrl
     // are pure functions of the slice (and the static resource-base facet). So

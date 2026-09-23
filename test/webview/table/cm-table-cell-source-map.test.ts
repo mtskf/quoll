@@ -34,7 +34,7 @@ const IMG = "![i](https://x.test/a.png)";
 
 function mapOf(raw: string): CellSourceMap {
   const cell = document.createElement("td");
-  renderCellInto(cell, raw);
+  renderCellInto(cell, raw, "", new AbortController().signal);
   const map = getCellSourceMap(cell);
   expect(map, `no map registered for ${JSON.stringify(raw)}`).not.toBeNull();
   return map as CellSourceMap;

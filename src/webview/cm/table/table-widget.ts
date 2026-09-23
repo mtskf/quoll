@@ -44,11 +44,12 @@
 // (cell stamps on the DOM, block start in `blockStart`) so a margin/cell click
 // after a shift uses the new offsets, not a stale toDOM-time closure.
 
-import { type EditorView, WidgetType } from "@codemirror/view";
+import type { EditorView } from "@codemirror/view";
 
 import { type Align, type Cell, type Table, tableAlign } from "../../../markdown/table/index.js";
 import { quollResourceBaseUri } from "../image/resource-base.js";
 import { quollOpenExternalSink } from "../open-external.js";
+import { QuollWidget } from "../widget-base.js";
 import {
   type AbsoluteOffset,
   asAbsoluteOffset,
@@ -473,7 +474,9 @@ function releaseRange(
   return anchor === head ? null : { anchor, head };
 }
 
-export class TableBlockWidget extends WidgetType {
+export class TableBlockWidget extends QuollWidget {
+  readonly widgetName = "TableBlockWidget";
+
   constructor(
     readonly table: Table,
     /** LF-normalised source slice (table-skeleton's `m.slice`) — eq() key.
@@ -524,7 +527,7 @@ export class TableBlockWidget extends WidgetType {
     super();
   }
 
-  eq(other: WidgetType): boolean {
+  protected sameAs(other: QuollWidget): boolean {
     return (
       other instanceof TableBlockWidget &&
       other.docFrom === this.docFrom &&
@@ -533,7 +536,7 @@ export class TableBlockWidget extends WidgetType {
     );
   }
 
-  toDOM(view: EditorView): HTMLElement {
+  protected render(view: EditorView, signal: AbortSignal): HTMLElement {
     // Wrapper <div> (not <table>) is the widget root: it carries the
     // `quoll-block` margin:0 invariant and delivers breathing room via padding,
     // which getBoundingClientRect INCLUDES (margin it excludes) so CM's
@@ -554,11 +557,13 @@ export class TableBlockWidget extends WidgetType {
     const align = tableAlign(this.table);
     const table = document.createElement("table");
     const thead = document.createElement("thead");
-    thead.appendChild(this.buildRow("th", this.table.header.cells, align, "header", resourceBase));
+    thead.appendChild(
+      this.buildRow("th", this.table.header.cells, align, "header", resourceBase, signal)
+    );
     table.appendChild(thead);
     const tbody = document.createElement("tbody");
     for (const row of this.table.rows) {
-      tbody.appendChild(this.buildRow("td", row.cells, align, "body", resourceBase));
+      tbody.appendChild(this.buildRow("td", row.cells, align, "body", resourceBase, signal));
     }
     table.appendChild(tbody);
     root.appendChild(table);
@@ -577,151 +582,155 @@ export class TableBlockWidget extends WidgetType {
     // The widget owns the gesture end to end because a drag CANNOT be recovered
     // from the browser selection at mouseup (cell-point.ts, "Why this exists"):
     // remember where the pointer went DOWN, dispatch a RANGE at click time.
-    root.addEventListener("mousedown", (event) => {
-      // Primary button only — a right/middle press is not a selection gesture,
-      // and letting it arm the anchor would pair a context-menu press with an
-      // unrelated later click.
-      if (event.button !== 0) {
-        return;
-      }
-      // No dispatch here: dispatching would fire the reveal mid-drag and pull
-      // the widget out from under the pointer.
-      pendingDrag.set(root, {
-        ...contentPoint(view, event),
-        // `cellPointAt` keeps taking VIEWPORT coordinates — it feeds
-        // `caretPositionFromPoint`, which is a viewport API. Only the travel
-        // measurement changes frame.
-        point: cellPointAt(
-          root,
-          event.clientX,
-          event.clientY,
-          view.state.facet(quollTableCaretResolver)
-        ),
-      });
+    root.addEventListener(
+      "mousedown",
+      (event) => {
+        // Primary button only — a right/middle press is not a selection gesture,
+        // and letting it arm the anchor would pair a context-menu press with an
+        // unrelated later click.
+        if (event.button !== 0) {
+          return;
+        }
+        // No dispatch here: dispatching would fire the reveal mid-drag and pull
+        // the widget out from under the pointer.
+        pendingDrag.set(root, {
+          ...contentPoint(view, event),
+          // `cellPointAt` keeps taking VIEWPORT coordinates — it feeds
+          // `caretPositionFromPoint`, which is a viewport API. Only the travel
+          // measurement changes frame.
+          point: cellPointAt(
+            root,
+            event.clientX,
+            event.clientY,
+            view.state.facet(quollTableCaretResolver)
+          ),
+        });
 
-      // The SECOND dispatch seam. A gesture released outside this root never
-      // delivers a `click` here — measured in real Chromium: the click is
-      // retargeted to `.cm-content`, the nearest common ancestor of the press
-      // and release targets — so the release has to be heard on the document,
-      // where every mouseup lands. Armed per gesture rather than kept
-      // permanently, so the listener that can dispatch is exactly the one
-      // belonging to the press in flight. Any controller left over from a
-      // previous press is aborted first, so at most one is ever armed.
-      armedRelease.get(root)?.abort();
-      const release = new AbortController();
-      armedRelease.set(root, release);
-      const doc = root.ownerDocument;
-      const armingPress = event;
-      /** Stand this gesture down: nothing more can dispatch for it, and the
-       *  armed anchor must not survive to be paired with a release that belongs
-       *  to someone else. ONE definition for the two disarm listeners below so
-       *  they cannot drift apart. `destroy` — the FOURTH path in the header's
-       *  list — does not call this and does strictly more (it clears
-       *  `armedRelease` too), because there the root itself is going away rather
-       *  than just this gesture.
-       *
-       *  ⚠️ The `mouseup` seam below deliberately does NOT call this — it aborts
-       *  and leaves `pendingDrag` alone, because a release INSIDE the root has
-       *  to leave the anchor armed for the click listener that owns it. Swapping
-       *  its `release.abort()` for `disarm()` would look tidier and would break
-       *  every inside-released drag. */
-      const disarm = (): void => {
-        release.abort();
-        pendingDrag.delete(root);
-      };
-      doc.addEventListener(
-        "mouseup",
-        (up: MouseEvent) => {
-          // BEFORE the abort, not after: a right-button press-and-release while
-          // the left button is held delivers a mouseup this gesture did not end.
-          // Aborting first would leave the real release with no listener.
-          if (up.button !== 0) {
-            return;
-          }
-          release.abort(); // one-shot: this gesture is over either way
-          // The root left the document mid-gesture — CodeMirror rebuilds a
-          // widget by REPLACING its root, and a detached root's stamps have
-          // stopped tracking the document. The click seam never had to check
-          // (a detached root receives no clicks); a document-level one does.
-          if (!root.isConnected) {
-            return;
-          }
-          // Released INSIDE: the click WILL reach this root, and it owns the
-          // dispatch — including the modifier-link `open-external` branch, which
-          // stays exactly where it was. Leave `pendingDrag` armed for it.
-          if (root.contains(up.target as Node | null)) {
-            return;
-          }
-          const pending = pendingDrag.get(root) ?? null;
+        // The SECOND dispatch seam. A gesture released outside this root never
+        // delivers a `click` here — measured in real Chromium: the click is
+        // retargeted to `.cm-content`, the nearest common ancestor of the press
+        // and release targets — so the release has to be heard on the document,
+        // where every mouseup lands. Armed per gesture rather than kept
+        // permanently, so the listener that can dispatch is exactly the one
+        // belonging to the press in flight. Any controller left over from a
+        // previous press is aborted first, so at most one is ever armed.
+        armedRelease.get(root)?.abort();
+        const release = new AbortController();
+        armedRelease.set(root, release);
+        const doc = root.ownerDocument;
+        const armingPress = event;
+        /** Stand this gesture down: nothing more can dispatch for it, and the
+         *  armed anchor must not survive to be paired with a release that belongs
+         *  to someone else. ONE definition for the two disarm listeners below so
+         *  they cannot drift apart. `destroy` — the FOURTH path in the header's
+         *  list — does not call this and does strictly more (it clears
+         *  `armedRelease` too), because there the root itself is going away rather
+         *  than just this gesture.
+         *
+         *  ⚠️ The `mouseup` seam below deliberately does NOT call this — it aborts
+         *  and leaves `pendingDrag` alone, because a release INSIDE the root has
+         *  to leave the anchor armed for the click listener that owns it. Swapping
+         *  its `release.abort()` for `disarm()` would look tidier and would break
+         *  every inside-released drag. */
+        const disarm = (): void => {
+          release.abort();
           pendingDrag.delete(root);
-          dispatchSelection(
-            view,
-            releaseRange(view, up, pending) ?? {
-              anchor: pending?.point?.cellFrom ?? blockStartCaret(root, this),
+        };
+        doc.addEventListener(
+          "mouseup",
+          (up: MouseEvent) => {
+            // BEFORE the abort, not after: a right-button press-and-release while
+            // the left button is held delivers a mouseup this gesture did not end.
+            // Aborting first would leave the real release with no listener.
+            if (up.button !== 0) {
+              return;
             }
-          );
-        },
-        // CAPTURE, for the same reason the disarm below is: this seam must not
-        // be starvable by a sibling widget that stops `mouseup`. Bubble rested
-        // on "none of today's siblings stops mouseup" — an enumeration, which is
-        // the class of assumption the disarm's own comment rejects — and the
-        // failure would be silent, because a starved seam dispatches nothing,
-        // which is precisely the pre-fix behaviour.
+            release.abort(); // one-shot: this gesture is over either way
+            // The root left the document mid-gesture — CodeMirror rebuilds a
+            // widget by REPLACING its root, and a detached root's stamps have
+            // stopped tracking the document. The click seam never had to check
+            // (a detached root receives no clicks); a document-level one does.
+            if (!root.isConnected) {
+              return;
+            }
+            // Released INSIDE: the click WILL reach this root, and it owns the
+            // dispatch — including the modifier-link `open-external` branch, which
+            // stays exactly where it was. Leave `pendingDrag` armed for it.
+            if (root.contains(up.target as Node | null)) {
+              return;
+            }
+            const pending = pendingDrag.get(root) ?? null;
+            pendingDrag.delete(root);
+            dispatchSelection(
+              view,
+              releaseRange(view, up, pending) ?? {
+                anchor: pending?.point?.cellFrom ?? blockStartCaret(root, this),
+              }
+            );
+          },
+          // CAPTURE, for the same reason the disarm below is: this seam must not
+          // be starvable by a sibling widget that stops `mouseup`. Bubble rested
+          // on "none of today's siblings stops mouseup" — an enumeration, which is
+          // the class of assumption the disarm's own comment rejects — and the
+          // failure would be silent, because a starved seam dispatches nothing,
+          // which is precisely the pre-fix behaviour.
+          //
+          // Capture also moves this ahead of CodeMirror's own document `mouseup`
+          // (`MouseSelection.up`), and that reordering is a no-op HERE by
+          // construction, not by luck: `eventBelongsToEditor` walks from the event
+          // target up to `contentDOM` and bails at any widget whose
+          // `ignoreEvent()` is true (@codemirror/view 6.43.0), so this widget's
+          // mousedown never reaches CM's `handlers.mousedown`, no `MouseSelection`
+          // is constructed, and its constructor is the ONLY thing that registers
+          // that document listener. For a gesture armed in this widget, CM has no
+          // document mouseup listener to be ordered against.
+          { signal: release.signal, capture: true }
+        );
+        // ⚠️ The guard that makes the seam safe rather than merely useful.
         //
-        // Capture also moves this ahead of CodeMirror's own document `mouseup`
-        // (`MouseSelection.up`), and that reordering is a no-op HERE by
-        // construction, not by luck: `eventBelongsToEditor` walks from the event
-        // target up to `contentDOM` and bails at any widget whose
-        // `ignoreEvent()` is true (@codemirror/view 6.43.0), so this widget's
-        // mousedown never reaches CM's `handlers.mousedown`, no `MouseSelection`
-        // is constructed, and its constructor is the ONLY thing that registers
-        // that document listener. For a gesture armed in this widget, CM has no
-        // document mouseup listener to be ordered against.
-        { signal: release.signal, capture: true }
-      );
-      // ⚠️ The guard that makes the seam safe rather than merely useful.
-      //
-      // A release this document never sees — the pointer leaves the webview
-      // iframe, focus is lost, Cmd+Tab — leaves the listener above armed, and
-      // the user's NEXT unrelated release would be read as this gesture's end:
-      // a range from a table cell to a point nobody dragged to. A press is the
-      // one thing that must precede any such release, so disarming here covers
-      // every focus-loss path, including the ones nobody enumerated.
-      //
-      // CAPTURE, and that is the load-bearing part. Four sibling widgets in this
-      // editor call stopPropagation() on mousedown — the task checkbox, the
-      // fenced-code copy and collapse buttons, the language picker — and NONE of
-      // them stops mouseup. A bubble-phase disarm is therefore starved by
-      // exactly those presses while the release still arrives, which is the one
-      // combination that dispatches a range the user never drew (measured
-      // against an element that stops mousedown: a bubble-phase listener
-      // fired 0 times, a capture-phase listener 1; the mouseup reached the
-      // document either way). Capture runs document → target, so nothing
-      // downstream can starve it.
-      //
-      // The identity check guards the other direction: this listener is added
-      // DURING the dispatch of the arming press. In capture that press has
-      // already passed the document, so it cannot reach here — but the check
-      // costs one line, says out loud what must stay true, and keeps the guard
-      // correct if the phase is ever changed back. Comparing the event OBJECT,
-      // not the target, which a second press in the same cell would match too.
-      doc.addEventListener(
-        "mousedown",
-        (down: MouseEvent) => {
-          if (down === armingPress || down.button !== 0) {
-            return;
-          }
-          disarm();
-        },
-        { signal: release.signal, capture: true }
-      );
-      // A native drag-and-drop ends in `dragend`, NOT in a mouseup. Measured: a
-      // plain cell drag starts no DnD at all, so this is for a press that begins
-      // on an in-cell <img> or <a>, both natively draggable. Nothing is
-      // preventDefault'ed — the selection seam simply stands down, because a
-      // drag-and-drop is not a text selection.
-      doc.addEventListener("dragstart", disarm, { signal: release.signal, capture: true });
-    });
+        // A release this document never sees — the pointer leaves the webview
+        // iframe, focus is lost, Cmd+Tab — leaves the listener above armed, and
+        // the user's NEXT unrelated release would be read as this gesture's end:
+        // a range from a table cell to a point nobody dragged to. A press is the
+        // one thing that must precede any such release, so disarming here covers
+        // every focus-loss path, including the ones nobody enumerated.
+        //
+        // CAPTURE, and that is the load-bearing part. Four sibling widgets in this
+        // editor call stopPropagation() on mousedown — the task checkbox, the
+        // fenced-code copy and collapse buttons, the language picker — and NONE of
+        // them stops mouseup. A bubble-phase disarm is therefore starved by
+        // exactly those presses while the release still arrives, which is the one
+        // combination that dispatches a range the user never drew (measured
+        // against an element that stops mousedown: a bubble-phase listener
+        // fired 0 times, a capture-phase listener 1; the mouseup reached the
+        // document either way). Capture runs document → target, so nothing
+        // downstream can starve it.
+        //
+        // The identity check guards the other direction: this listener is added
+        // DURING the dispatch of the arming press. In capture that press has
+        // already passed the document, so it cannot reach here — but the check
+        // costs one line, says out loud what must stay true, and keeps the guard
+        // correct if the phase is ever changed back. Comparing the event OBJECT,
+        // not the target, which a second press in the same cell would match too.
+        doc.addEventListener(
+          "mousedown",
+          (down: MouseEvent) => {
+            if (down === armingPress || down.button !== 0) {
+              return;
+            }
+            disarm();
+          },
+          { signal: release.signal, capture: true }
+        );
+        // A native drag-and-drop ends in `dragend`, NOT in a mouseup. Measured: a
+        // plain cell drag starts no DnD at all, so this is for a press that begins
+        // on an in-cell <img> or <a>, both natively draggable. Nothing is
+        // preventDefault'ed — the selection seam simply stands down, because a
+        // drag-and-drop is not a text selection.
+        doc.addEventListener("dragstart", disarm, { signal: release.signal, capture: true });
+      },
+      { signal }
+    );
 
     // Root click handler — the dispatch seam for a gesture released INSIDE this
     // root (the caret/range contract described at the top of this file); its
@@ -741,47 +750,51 @@ export class TableBlockWidget extends WidgetType {
     // cell-render's single-source-of-truth decision on whether the href opens
     // externally (relative / fragment / oversize hrefs are preventDefault'd
     // there and fall through to caret dispatch below).
-    root.addEventListener("click", (event) => {
-      // One-shot read: consumed here, above the modifier-link early return, so
-      // an anchor can never leak into the NEXT gesture.
-      const pending = pendingDrag.get(root) ?? null;
-      pendingDrag.delete(root);
-      const anchor = (event.target as Element | null)?.closest?.("a");
-      if (
-        anchor instanceof HTMLAnchorElement &&
-        (event.metaKey || event.ctrlKey) &&
-        !event.defaultPrevented
-      ) {
-        // Suppress the native anchor handler (it would open WITHOUT the host
-        // re-validation) and route through the sink. A transport throw (panel
-        // dispose mid-click) yields a dead-click by design — native nav is
-        // NEVER the fallback. The href is guaranteed absolute + within-cap by
-        // cell-render, so no empty/oversize guard is needed here.
-        event.preventDefault();
-        view.state.facet(quollOpenExternalSink)(anchor.getAttribute("href") ?? "");
-        return;
-      }
-      const cell = (event.target as Element | null)?.closest?.("th, td") ?? null;
-      // The CELL offset must stay on the DOM — `cellPointAt` resolves an
-      // arbitrary descendant under the pointer, so no closure knows which cell
-      // was clicked. That makes it a trust boundary, read through the SAME gate
-      // the drag path uses (`stampedOffset`) rather than a bare `Number(...)`;
-      // its docblock has the why — CodeMirror accepts a `NaN` anchor and
-      // installs a broken selection `dispatchSelection`'s catch never sees.
-      //
-      // A stamp that fails the gate degrades one step rather than dispatching
-      // nothing: reveal-on-caret is LINE-level, so the block start reveals the
-      // same table the cell offset would — only the intra-table caret precision
-      // is lost, and a dead click (no reveal at all) is a worse answer for a
-      // failure mode that only arises when something outside this widget wrote
-      // its DOM. That "same table" guarantee is unconditional now that the block
-      // start comes from `blockStart`, which `updateDOM` re-points: it can no
-      // longer be a stale closure value pointing at a DIFFERENT block.
-      const caret =
-        (cell === null ? null : stampedOffset(cell, "data-cell-from")) ??
-        blockStartCaret(root, this);
-      dispatchSelection(view, dragRange(view, root, event, pending) ?? { anchor: caret });
-    });
+    root.addEventListener(
+      "click",
+      (event) => {
+        // One-shot read: consumed here, above the modifier-link early return, so
+        // an anchor can never leak into the NEXT gesture.
+        const pending = pendingDrag.get(root) ?? null;
+        pendingDrag.delete(root);
+        const anchor = (event.target as Element | null)?.closest?.("a");
+        if (
+          anchor instanceof HTMLAnchorElement &&
+          (event.metaKey || event.ctrlKey) &&
+          !event.defaultPrevented
+        ) {
+          // Suppress the native anchor handler (it would open WITHOUT the host
+          // re-validation) and route through the sink. A transport throw (panel
+          // dispose mid-click) yields a dead-click by design — native nav is
+          // NEVER the fallback. The href is guaranteed absolute + within-cap by
+          // cell-render, so no empty/oversize guard is needed here.
+          event.preventDefault();
+          view.state.facet(quollOpenExternalSink)(anchor.getAttribute("href") ?? "");
+          return;
+        }
+        const cell = (event.target as Element | null)?.closest?.("th, td") ?? null;
+        // The CELL offset must stay on the DOM — `cellPointAt` resolves an
+        // arbitrary descendant under the pointer, so no closure knows which cell
+        // was clicked. That makes it a trust boundary, read through the SAME gate
+        // the drag path uses (`stampedOffset`) rather than a bare `Number(...)`;
+        // its docblock has the why — CodeMirror accepts a `NaN` anchor and
+        // installs a broken selection `dispatchSelection`'s catch never sees.
+        //
+        // A stamp that fails the gate degrades one step rather than dispatching
+        // nothing: reveal-on-caret is LINE-level, so the block start reveals the
+        // same table the cell offset would — only the intra-table caret precision
+        // is lost, and a dead click (no reveal at all) is a worse answer for a
+        // failure mode that only arises when something outside this widget wrote
+        // its DOM. That "same table" guarantee is unconditional now that the block
+        // start comes from `blockStart`, which `updateDOM` re-points: it can no
+        // longer be a stale closure value pointing at a DIFFERENT block.
+        const caret =
+          (cell === null ? null : stampedOffset(cell, "data-cell-from")) ??
+          blockStartCaret(root, this);
+        dispatchSelection(view, dragRange(view, root, event, pending) ?? { anchor: caret });
+      },
+      { signal }
+    );
 
     return root;
   }
@@ -793,7 +806,8 @@ export class TableBlockWidget extends WidgetType {
     // under `noUncheckedIndexedAccess: false` (see markdown/table/model.ts).
     align: readonly (Align | undefined)[],
     kind: "header" | "body",
-    resourceBase: string
+    resourceBase: string,
+    signal: AbortSignal
   ): HTMLTableRowElement {
     const tr = document.createElement("tr");
     for (let col = 0; col < cells.length; col++) {
@@ -822,13 +836,18 @@ export class TableBlockWidget extends WidgetType {
       // paths), so trimming was redundant, and dropping it makes "rendered text
       // is anchored at cellFrom" true by construction. An exotic space inside a
       // cell is content.
-      renderCellInto(el, cell.raw, resourceBase);
+      renderCellInto(el, cell.raw, resourceBase, signal);
       tr.appendChild(el);
     }
     return tr;
   }
 
-  updateDOM(dom: HTMLElement, view: EditorView, from: TableBlockWidget): boolean {
+  protected patchDOM(
+    dom: HTMLElement,
+    view: EditorView,
+    from: TableBlockWidget,
+    signal: AbortSignal
+  ): boolean {
     // CM calls updateDOM only when eq() returned false. Validate the grid shape;
     // any structural change → return false so CM does a full toDOM rebuild.
     if (!dom.classList.contains("quoll-table-block")) {
@@ -888,13 +907,14 @@ export class TableBlockWidget extends WidgetType {
     // grew above them.)
     const resourceBase = view.state.facet(quollResourceBaseUri);
     const align = tableAlign(this.table);
-    this.patchRow(headerRows[0], this.table.header.cells, align, resourceBase);
+    this.patchRow(headerRows[0], this.table.header.cells, align, resourceBase, signal);
     for (let rowIdx = 0; rowIdx < this.table.rows.length; rowIdx++) {
       this.patchRow(
         bodyRows[rowIdx] as Element,
         this.table.rows[rowIdx].cells,
         align,
-        resourceBase
+        resourceBase,
+        signal
       );
     }
     return true;
@@ -919,7 +939,8 @@ export class TableBlockWidget extends WidgetType {
     tr: Element,
     cells: readonly Cell[],
     align: readonly (Align | undefined)[],
-    resourceBase: string
+    resourceBase: string,
+    signal: AbortSignal
   ): void {
     const domCells = tr.querySelectorAll("th, td");
     for (let col = 0; col < cells.length; col++) {
@@ -935,7 +956,7 @@ export class TableBlockWidget extends WidgetType {
       // Verbatim `cell.raw` and the map-registering renderer, for the reasons
       // in buildRow: `renderCellInto` clears the cell itself, so a reused cell
       // can never keep the previous render's source map.
-      renderCellInto(el, cell.raw, resourceBase);
+      renderCellInto(el, cell.raw, resourceBase, signal);
     }
   }
 
@@ -949,7 +970,7 @@ export class TableBlockWidget extends WidgetType {
    *  and the listeners keep answering for an editor that has forgotten them.
    *  The `isConnected` guard in the release seam is not a substitute: `destroy`
    *  can be called while the DOM is still in the tree. */
-  destroy(dom: HTMLElement): void {
+  protected dispose(dom: HTMLElement): void {
     armedRelease.get(dom)?.abort();
     armedRelease.delete(dom);
     pendingDrag.delete(dom);

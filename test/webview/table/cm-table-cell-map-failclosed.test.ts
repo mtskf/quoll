@@ -57,7 +57,10 @@ afterEach(() => {
 
 function renderInto(raw: string): HTMLElement {
   const cell = document.createElement("td");
-  renderCellInto(cell, raw);
+  // `signal` is a plain test-owned AbortController — no widget lifecycle owns
+  // this cell, so nothing ever aborts it (matches every other direct
+  // `renderCellInto` call site in this suite).
+  renderCellInto(cell, raw, "", new AbortController().signal);
   return cell;
 }
 
