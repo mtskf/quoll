@@ -577,9 +577,16 @@ export function renderCellInline(raw: string, resourceBase = ""): Node[] {
 }
 
 // The listener scope of a cell's CURRENT fill. `renderCellInto` is the only way
-// to fill a cell and it always clears the cell first, so "the previous fill's
-// nodes are detached" is true by construction at exactly the moment a new scope
-// is cut — which is what makes aborting the old one safe here and nowhere else.
+// to fill a cell, and it cuts the new scope and clears the cell in ONE
+// synchronous operation — the old anchors are briefly still in the tree but
+// nothing can dispatch to them before `cell.textContent = ""` detaches them.
+// That synchrony — NOT statement order — is what makes aborting the previous
+// fill's scope safe here and nowhere else: `cellFillSignal(...)` runs as an
+// ARGUMENT to `renderCellSafely`, i.e. BEFORE the clear, so anything that puts
+// an await / microtask between the two leaves live `<a>`s whose click and
+// auxclick guards are already aborted — reopening the middle-click bypass of
+// the host's `open-external` re-validation (widget-base.ts's "NOT re-cut per
+// patch" paragraph is the other half of this pair).
 const cellFillScope = new WeakMap<HTMLElement, AbortController>();
 
 /** A signal for ONE fill of `cell`, chained to the widget's `outer` scope.
@@ -605,19 +612,24 @@ function cellFillSignal(cell: HTMLElement, outer: AbortSignal): AbortSignal {
   cellFillScope.get(cell)?.abort();
   const controller = new AbortController();
   cellFillScope.set(cell, controller);
-  if (outer.aborted) {
-    // An already-aborted signal never fires `abort` again, so a forwarder added
-    // now would never run — the fill has to start disarmed instead.
-    controller.abort();
-  } else {
-    // Scoped to the CHILD so the next fill's `abort()` above also deregisters
-    // this forwarder: `outer` ends up holding one entry per cell, not one per
-    // fill, which is the retention this whole helper exists to bound.
-    outer.addEventListener("abort", () => controller.abort(), {
-      signal: controller.signal,
-      once: true,
-    });
-  }
+  // ⚠️ There is deliberately NO `outer.aborted` branch, and its absence is the
+  // FAIL-CLOSED direction rather than an oversight. `abort` is one-shot, so if
+  // `outer` has already fired, this forwarder simply never runs: the child
+  // controller stays live and the fill's click/auxclick guards bind ARMED. The
+  // alternative — aborting the child up front so the fill "starts disarmed" —
+  // binds no guard while `renderCellSafely` still assigns `a.href` and appends
+  // the anchor, i.e. a LIVE link with the middle-click choke point documented on
+  // `attachLinkClickGuard` removed. Blocked navigation is the safe failure; an
+  // unguarded `<a>` is not. Leaving the condition out means no future edit has an
+  // invariant to get wrong here.
+  //
+  // Scoped to the CHILD so the next fill's `abort()` above also deregisters this
+  // forwarder: `outer` ends up holding one entry per cell, not one per fill,
+  // which is the retention this whole helper exists to bound.
+  outer.addEventListener("abort", () => controller.abort(), {
+    signal: controller.signal,
+    once: true,
+  });
   return controller.signal;
 }
 

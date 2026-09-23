@@ -27,9 +27,14 @@
 //
 // ⚠️ `eq` IS contained: `compare` runs at `:2552` INSIDE the reuse scan of the
 // very `builder.run(...)` whose return assigns `this.tile`, and delegates to `eq`
-// at `:140` (`findChangedDeco` calls it again at `:379`). `false` is not an
-// invented verdict — it is the conservative one, "not the same widget, rebuild
-// it", identical to what `updateDOM` already returns when it declines.
+// at `:140`. It is reached a SECOND time from the decoration diff, which runs
+// one line after `updateDeco()` and well before the tile build:
+// `findChangedDeco` (called `:2949`, declared `:3526`) → `RangeSet.compare` →
+// `PointDecoration.eq` (`:355`) → `widgetsEq` (`:379`) → `compare`. That is
+// inside the same `:2948`…`:2978` window, so a throw there wedges the view the
+// same way. `false` is not an invented verdict — it is the conservative one,
+// "not the same widget, rebuild it", identical to what `updateDOM` already
+// returns when it declines.
 //
 // ⚠️ NOT wrapped, deliberately: `ignoreEvent`. Unlike `eq` it is consulted while
 // dispatching a DOM event (`:4833`, `:7188`), never while a tile is being built,
@@ -128,14 +133,19 @@ export abstract class QuollWidget extends WidgetType {
    *  it is needed and nowhere a test could see. A literal per subclass survives
    *  minification.
    *
-   *  ⚠️ MUST be distinct from every other widget's. It is half of `reportOnce`'s
-   *  per-(hook, widget) latch key, so two widgets sharing a name means whichever
-   *  fails FIRST silently swallows the other's only log line — the very collapse
-   *  the per-pair latch exists to prevent — and both stamp the same
+   *  ⚠️ MUST be distinct from every other name that shares `reportOnce`'s
+   *  per-(hook, widget) latch key. That namespace is NOT just the subclasses: a
+   *  direct `containWidgetRender(name, …)` caller feeds its literal into the very
+   *  same latch and the very same `data-quoll-widget-error` stamp (today that is
+   *  `cm/fold/index.ts`'s `"foldPlaceholder"`). Two entries sharing a name means
+   *  whichever fails FIRST silently swallows the other's only log line — the very
+   *  collapse the per-pair latch exists to prevent — and both stamp the same
    *  `data-quoll-widget-error`, so the placeholders cannot be told apart either.
    *  Nothing in the type system can see two identical string literals; the AST
-   *  walk in test/build/widget-containment-guard.test.ts, which already collects
-   *  every `QuollWidget` subclass, is the only place this is enforceable. */
+   *  walk in test/build/widget-containment-guard.test.ts is the only place this is
+   *  enforceable, and it collects BOTH halves of the namespace — every
+   *  `QuollWidget` subclass's `widgetName` and every direct `containWidgetRender`
+   *  literal outside this file. */
   abstract readonly widgetName: string;
 
   /** Build this widget's DOM. Replaces `toDOM` — the base owns that name so the
@@ -171,9 +181,10 @@ export abstract class QuollWidget extends WidgetType {
    *  ⚠️ MUST be idempotent. This runs TWICE on the patch-failure path: the
    *  `updateDOM` catch calls `prev.destroy(dom)`, and because that catch then
    *  returns `false`, CodeMirror leaves the tile unreused and `destroyDropped`
-   *  (`:3461`) destroys it again in the same update (`:2142`). Both calls carry
-   *  the SAME element. Deleting from a WeakMap / aborting an already-aborted
-   *  controller is the shape that satisfies this — see `TableBlockWidget.dispose`.
+   *  (called at `:2979`, declared at `:3461`) destroys it again in the same
+   *  update (`:2142`). Both calls carry the SAME element. Deleting from a
+   *  WeakMap / aborting an already-aborted controller is the shape that
+   *  satisfies this — see `TableBlockWidget.dispose`.
    *
    *  ⚠️ Unlike `render` and `patchDOM`, a failure here has NO safe substitute:
    *  the job is to stop something, and there is nothing to return instead. A
@@ -259,11 +270,13 @@ export abstract class QuollWidget extends WidgetType {
       //
       // 1. TAINT the widget that owns this element. A tainted widget never
       //    compares equal (see `eq`) and is never patched (the guard above), so
-      //    its tile cannot be adopted at all — CodeMirror drops it and
-      //    `destroyDropped` (`:2979`) tears it down in this same update, and
-      //    every affected position is redrawn by a fresh `toDOM`. That is what
-      //    makes this cost nothing visually: a HEALTHY neighbour that happened
-      //    to share the tile is not left showing a placeholder for the session.
+      //    its tile cannot be adopted through either reuse route CodeMirror
+      //    consults — it drops it and `destroyDropped` (called at `:2979`) tears
+      //    it down in this same update, and every affected position is redrawn
+      //    by a fresh `toDOM`. (The one route the taint CANNOT close is
+      //    `compare`'s identity shortcut — see item 3.) That is what makes this
+      //    cost nothing visually: a HEALTHY neighbour that happened to share the
+      //    tile is not left showing a placeholder for the session.
       // 2. TEAR DOWN through the owning widget's own `destroy`, while the
       //    element is still the one the widget knows — a widget reaches its
       //    cleanup handle THROUGH it (`TableBlockWidget.dispose` looks up
@@ -272,12 +285,20 @@ export abstract class QuollWidget extends WidgetType {
       //    dispose implementations are required to be idempotent (see its
       //    contract), so CodeMirror destroying the unreused tile again in this
       //    same update is a no-op.
+      //    ⚠️ This step is also what aborts the element's listener scope, so the
+      //    catch does NOT call `abortListeners` itself: `destroy` runs it as its
+      //    unconditional FIRST statement, ahead of `dispose` and therefore ahead
+      //    of `makePlaceholder` below, and `destroy` is on the build guard's
+      //    GUARDED roster (test/build/widget-containment-guard.test.ts) so no
+      //    subclass can substitute one that skips it. A separate abort here would
+      //    be observationally equivalent — and misleading, since it would cover
+      //    only this path while ordinary teardown (`destroyDropped` → `destroy`)
+      //    relies on that first statement regardless.
       // 3. NEUTRALISE the element. Only observable in one case — `compare`'s
       //    `this == other` shortcut (`:140`) adopts a tile without consulting
       //    `eq` when a StateField re-emits the very same widget instance — and
       //    there an inert placeholder is the honest answer.
       tainted.add(prev);
-      abortListeners(dom);
       prev.destroy(dom);
       makePlaceholder(dom, this.widgetName);
       return false;

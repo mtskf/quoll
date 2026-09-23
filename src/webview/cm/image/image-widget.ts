@@ -119,7 +119,14 @@ export class ImageBlockWidget extends QuollWidget {
       // `QuollWidget.destroy` aborts it: a decode that lands AFTER CM discards
       // this widget no longer seeds the cache. Accepted — the alternative is an
       // unscoped listener, which is exactly the class this base exists to
-      // remove; the cost is one unreserved reflow on the next build of that src.
+      // remove. ⚠️ The cost is NOT one reflow: this listener is the cache's only
+      // writer, so a widget discarded before its decode seeds NOTHING and the
+      // next build starts from an empty cache too. The cost is an unreserved
+      // reflow on EVERY build of that src until one build's decode completes
+      // while the widget is still attached — self-healing, but bounded by that
+      // CONDITION, not by a single occurrence. The `error` listener below is
+      // scoped identically, so the same discard also loses the one `console.warn`
+      // breadcrumb the session-level `warnedImageLoadError` latch allows.
       img.addEventListener(
         "load",
         () => {
