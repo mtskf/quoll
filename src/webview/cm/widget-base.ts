@@ -34,9 +34,13 @@
 // ⚠️ NOT wrapped, deliberately: `ignoreEvent`. Unlike `eq` it is consulted while
 // dispatching a DOM event (`:4833`, `:7188`), never while a tile is being built,
 // so its failure costs a gesture rather than the editor — and there a loud throw
-// beats a guessed verdict. Same for `estimatedHeight` / `lineBreaks`, which no
-// Quoll widget overrides; the tripwire flags an override of any of them so the
-// decision is re-made deliberately rather than by default.
+// beats a guessed verdict. EVERY Quoll widget overrides it, by design, so the
+// tripwire deliberately does NOT list it (listing it would fail on a healthy tree).
+// Uncontained for the same "not on the tile-build path" reason, but overridden by
+// NO widget today: `estimatedHeight` / `lineBreaks` (read at `:5954`, after state
+// installation) and `coordsAt` (read during measurement). Those three ARE on the
+// tripwire's roster, so adding one is a deliberate, reviewed decision rather than
+// a default — see test/build/widget-containment-guard.test.ts.
 
 import { type EditorView, WidgetType } from "@codemirror/view";
 
@@ -62,8 +66,11 @@ function reportOnce(hook: WidgetHook, widget: string, err: unknown): void {
   // this handler from inside the very catch whose job is to contain it. A fixed
   // hook name, a fixed widget name and a coarse kind are what this module can
   // honestly vouch for; recovering more costs a breakpoint, which is the right
-  // trade for a path that only fires on a bug. Same reasoning, and the same
-  // wording, as `table/cell-render.ts:492`.
+  // trade for a path that only fires on a bug. Same reasoning, and nearly the same
+  // wording, as `table/cell-render.ts`'s `renderCellSafely` catch (the
+  // "anything finer costs a breakpoint" console.error) — which keeps `instanceof`
+  // and accepts the Proxy residual named just below it; here that residual is
+  // closed, see next paragraph.
   //
   // ⚠️ `typeof`, NOT `err instanceof Error`. `instanceof` runs the value's
   // `getPrototypeOf` trap, so a thrown Proxy (or a revoked one) makes the
@@ -119,7 +126,16 @@ export abstract class QuollWidget extends WidgetType {
    *  `data-quoll-widget-error="Ie"` and log `widget: "Ie"` while the unminified
    *  test build stays perfectly readable — the diagnostic would rot exactly where
    *  it is needed and nowhere a test could see. A literal per subclass survives
-   *  minification. */
+   *  minification.
+   *
+   *  ⚠️ MUST be distinct from every other widget's. It is half of `reportOnce`'s
+   *  per-(hook, widget) latch key, so two widgets sharing a name means whichever
+   *  fails FIRST silently swallows the other's only log line — the very collapse
+   *  the per-pair latch exists to prevent — and both stamp the same
+   *  `data-quoll-widget-error`, so the placeholders cannot be told apart either.
+   *  Nothing in the type system can see two identical string literals; the AST
+   *  walk in test/build/widget-containment-guard.test.ts, which already collects
+   *  every `QuollWidget` subclass, is the only place this is enforceable. */
   abstract readonly widgetName: string;
 
   /** Build this widget's DOM. Replaces `toDOM` — the base owns that name so the
@@ -152,14 +168,24 @@ export abstract class QuollWidget extends WidgetType {
 
   /** Optional teardown. Replaces `destroy`.
    *
+   *  ⚠️ MUST be idempotent. This runs TWICE on the patch-failure path: the
+   *  `updateDOM` catch calls `prev.destroy(dom)`, and because that catch then
+   *  returns `false`, CodeMirror leaves the tile unreused and `destroyDropped`
+   *  (`:3461`) destroys it again in the same update (`:2142`). Both calls carry
+   *  the SAME element. Deleting from a WeakMap / aborting an already-aborted
+   *  controller is the shape that satisfies this — see `TableBlockWidget.dispose`.
+   *
    *  ⚠️ Unlike `render` and `patchDOM`, a failure here has NO safe substitute:
    *  the job is to stop something, and there is nothing to return instead. A
-   *  `LanguagePickerWidget` whose listener survives can still fire a stale
-   *  `change` into `setFenceLanguage` and WRITE TO THE DOCUMENT; a
-   *  `TableBlockWidget` whose `AbortController` never aborts keeps document-level
-   *  pointer listeners alive. So the contract is on the implementor, not the
-   *  wrapper: **disarm listeners as the FIRST statement, before anything that can
-   *  throw.** The base contains the rest so one failed cleanup step cannot strand
+   *  `TableBlockWidget` whose `armedRelease` controller never aborts keeps
+   *  DOCUMENT-level pointer listeners alive — answering for an editor that has
+   *  forgotten it, and dispatching a selection over offsets that have moved.
+   *  (Listeners bound during `render` are NOT this hook's problem: the base has
+   *  already aborted their signal before it calls here. What lands here is what
+   *  the signal cannot reach — which today is exactly that one case.) So the
+   *  contract is on the implementor, not the wrapper: **disarm listeners as the
+   *  FIRST statement, before anything that can throw.** The base contains the
+   *  rest so one failed cleanup step cannot strand
    *  the tile builder, but it cannot make a half-torn-down widget inert for you. */
   protected dispose?(dom: HTMLElement): void;
 
@@ -202,10 +228,23 @@ export abstract class QuollWidget extends WidgetType {
     try {
       // ⚠️ The ELEMENT's signal, not a fresh one: a patch binds listeners too
       // (the table's `patchRow` → `renderCellInto` → `attachLinkClickGuard`
-      // makes new anchors with new click/auxclick handlers, `cell-render.ts:85,119`),
-      // and they must die with the element they were bound to, not with the
-      // widget instance that happened to bind them. `scopeOf` mints one for an
-      // element that predates the base rather than leaving the patch unscoped.
+      // makes new anchors with new click/auxclick handlers — both bindings are in
+      // `attachLinkClickGuard`, cell-render.ts), and they must die with the
+      // element they were bound to, not with the widget instance that happened to
+      // bind them. `scopeOf` mints one for an element that predates the base
+      // rather than leaving the patch unscoped.
+      //
+      // ⚠️ This scope is NOT re-cut per patch, deliberately. A patch that
+      // REBUILDS what it bound to must scope those listeners itself — the way
+      // `renderCellInto` (cell-render.ts) does, with a per-fill controller chained
+      // to this one — because only the code doing the rebuilding knows that the
+      // previous listeners' nodes are gone. Aborting this scope on every patch
+      // instead looks equivalent and is not: `TableBlockWidget.patchDOM`'s
+      // positional-shift arm (`from.slice === this.slice`) re-stamps offsets and
+      // leaves the rendered cells — and their LIVE anchors — in place, so a
+      // per-patch abort would disarm the click/auxclick guard on links the user
+      // can still click, silently reopening the middle-click bypass of the host's
+      // `open-external` re-validation.
       return this.patchDOM(dom, view, prev, scopeOf(dom).signal);
     } catch (err) {
       reportOnce("patchDOM", this.widgetName, err);
@@ -226,11 +265,13 @@ export abstract class QuollWidget extends WidgetType {
       //    makes this cost nothing visually: a HEALTHY neighbour that happened
       //    to share the tile is not left showing a placeholder for the session.
       // 2. TEAR DOWN through the owning widget's own `destroy`, while the
-      //    children are still present — a widget may reach its cleanup handle
-      //    through them (the language picker finds its `AbortController` by
-      //    querying for its `<select>`). Contained, and dispose implementations
-      //    are required to be idempotent, so CodeMirror calling it again is a
-      //    no-op.
+      //    element is still the one the widget knows — a widget reaches its
+      //    cleanup handle THROUGH it (`TableBlockWidget.dispose` looks up
+      //    `armedRelease.get(dom)` to abort the document-level drag listeners),
+      //    and the step below is about to strip that element bare. Contained, and
+      //    dispose implementations are required to be idempotent (see its
+      //    contract), so CodeMirror destroying the unreused tile again in this
+      //    same update is a no-op.
       // 3. NEUTRALISE the element. Only observable in one case — `compare`'s
       //    `this == other` shortcut (`:140`) adopts a tile without consulting
       //    `eq` when a StateField re-emits the very same widget instance — and
@@ -253,10 +294,14 @@ export abstract class QuollWidget extends WidgetType {
     try {
       this.dispose(dom);
     } catch (err) {
-      // Teardown runs from `destroyDropped` inside the same builder run
-      // (`:2142`), so a throw here wedges the view exactly like a render throw.
-      // Containing it keeps the editor alive; see `dispose`'s contract for what
-      // containment cannot do.
+      // Teardown runs from `destroyDropped` (`:2979`, just after `builder.run`
+      // returns; the widget hook itself is called at `:2142`), so a throw here
+      // escapes `DocView.update` mid-`updateInner` — it skips the height lock and
+      // the `tile.sync()` the rest of that method performs, and propagates into
+      // whatever dispatched. Unlike a render throw it does NOT strand a stale tile
+      // (the new one is already assigned at `:2978`), but it still must not escape
+      // into the caller. Containing it keeps the editor alive; see `dispose`'s
+      // contract for what containment cannot do.
       reportOnce("dispose", this.widgetName, err);
     }
   }
@@ -310,6 +355,15 @@ function makePlaceholder(el: HTMLElement, widgetName: string): HTMLElement {
   for (const name of [...el.getAttributeNames()]) {
     el.removeAttribute(name);
   }
+  // CodeMirror stamps this OUTSIDE `toDOM` (`WidgetTile.of`, view dist:2147) and
+  // only when it is building the element itself, so the PATCH path — where the
+  // element is neutralised in place and can still be re-adopted through
+  // `compare`'s `this == other` shortcut (`:140`) — has to restore it here or
+  // nobody does. CM reads the attribute VALUE, not a flag it kept
+  // (`betweenUneditable` `:3472`, `nextToUneditable` `:3515`), so a placeholder
+  // that lost it is treated as editable content. The render path gets it stamped
+  // again by CM regardless, which makes this line harmless there.
+  el.contentEditable = "false";
   // Belt and braces for anything the signal did not cover (a listener bound
   // outside `render`, a focusable descendant CodeMirror kept): an inert subtree
   // takes no pointer or keyboard interaction at all. Chromium 102+; the
@@ -317,7 +371,20 @@ function makePlaceholder(el: HTMLElement, widgetName: string): HTMLElement {
   el.inert = true;
   el.className = "quoll-widget-error";
   el.dataset.quollWidgetError = widgetName;
-  el.title = "Quoll could not draw this element";
+  // Actionable rather than merely descriptive: a block widget REPLACES its source
+  // text, so the first thing the reader needs to know is that the FILE is intact.
+  //
+  // ⚠️ Residual, accepted and NOT closed here: `inert` removes this element from
+  // the accessibility tree entirely, so `title` reaches sighted users only — for
+  // an AT user a failed block widget is a silent disappearance, and the only other
+  // trace is one `console.error` per (hook, widget) for the whole session. Closing
+  // that needs an announcement OUTSIDE this element, through the same notice
+  // channel the rest of the webview uses (`banners.ts`, `role="alert"`, as the
+  // discarded-edit notice does) — which `cm/` must not import directly. Out of
+  // scope for this change; dropping `inert` is not the alternative (it is what
+  // keeps a half-built widget from taking input).
+  el.title =
+    "Quoll could not draw this element. Your Markdown source is unchanged — reload the editor window to try again.";
   el.textContent = "⚠";
   return el;
 }

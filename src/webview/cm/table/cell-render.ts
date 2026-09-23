@@ -576,6 +576,51 @@ export function renderCellInline(raw: string, resourceBase = ""): Node[] {
   return renderCellSafely(raw, resourceBase, new AbortController().signal).nodes;
 }
 
+// The listener scope of a cell's CURRENT fill. `renderCellInto` is the only way
+// to fill a cell and it always clears the cell first, so "the previous fill's
+// nodes are detached" is true by construction at exactly the moment a new scope
+// is cut — which is what makes aborting the old one safe here and nowhere else.
+const cellFillScope = new WeakMap<HTMLElement, AbortController>();
+
+/** A signal for ONE fill of `cell`, chained to the widget's `outer` scope.
+ *
+ *  Why not just hand `outer` down: `outer` lives as long as the widget's ELEMENT,
+ *  while `attachLinkClickGuard` binds two listeners per `<a>` on EVERY fill, and
+ *  `patchRow` re-fills every cell of the table on every keystroke that changes
+ *  the table's bytes. A `{ signal }` registration is kept alive by the signal's
+ *  abort-algorithm list, so without a per-fill scope a table with N links retains
+ *  2N more registrations — each holding a detached anchor — per keystroke, for
+ *  the life of the element. (⚠️ MECHANISM verified against the code and the DOM
+ *  abort-steps contract; the heap growth itself is NOT measured — happy-dom is
+ *  not a faithful oracle for listener retention, so this was not reproduced in a
+ *  real browser.)
+ *
+ *  Why the scope is cut HERE and not per patch in widget-base.ts: a patch does
+ *  not always rebuild what it bound to (`TableBlockWidget.patchDOM`'s
+ *  positional-shift arm re-stamps offsets and keeps the rendered cells), so
+ *  aborting an element-wide scope per patch would disarm the click/auxclick guard
+ *  on links that are still live. Only the code that clears the nodes knows their
+ *  listeners are dead. */
+function cellFillSignal(cell: HTMLElement, outer: AbortSignal): AbortSignal {
+  cellFillScope.get(cell)?.abort();
+  const controller = new AbortController();
+  cellFillScope.set(cell, controller);
+  if (outer.aborted) {
+    // An already-aborted signal never fires `abort` again, so a forwarder added
+    // now would never run — the fill has to start disarmed instead.
+    controller.abort();
+  } else {
+    // Scoped to the CHILD so the next fill's `abort()` above also deregisters
+    // this forwarder: `outer` ends up holding one entry per cell, not one per
+    // fill, which is the retention this whole helper exists to bound.
+    outer.addEventListener("abort", () => controller.abort(), {
+      signal: controller.signal,
+      once: true,
+    });
+  }
+  return controller.signal;
+}
+
 /** Fill a rendered table cell: clear it, append the nodes, register the map —
  *  ONE operation, so a call site cannot append content without registering the
  *  map that describes it (which cell-point.ts would then read as "no mapping",
@@ -586,14 +631,21 @@ export function renderCellInline(raw: string, resourceBase = ""): Node[] {
  *  hook), and every link `<a>` it creates binds two listeners
  *  (`attachLinkClickGuard`) that must die with the cell's element — a caller
  *  that forgets to thread its hook's signal here is a type error, not an
- *  unscoped listener. */
+ *  unscoped listener.
+ *
+ *  ⚠️ `resourceBase` carries NO default either, though it reads like an optional
+ *  trailing option. It cannot: a parameter with an initializer that is followed
+ *  by a required one is still required (`Expected 4 arguments, but got 3`), so
+ *  the `= ""` that used to sit here advertised an optionality the type system
+ *  never honoured. Every call site passes it positionally, so making the
+ *  declaration honest changes no behaviour. */
 export function renderCellInto(
   cell: HTMLElement,
   raw: string,
-  resourceBase = "",
+  resourceBase: string,
   signal: AbortSignal
 ): void {
-  const { nodes, map } = renderCellSafely(raw, resourceBase, signal);
+  const { nodes, map } = renderCellSafely(raw, resourceBase, cellFillSignal(cell, signal));
   cell.textContent = "";
   for (const node of nodes) {
     cell.appendChild(node);
