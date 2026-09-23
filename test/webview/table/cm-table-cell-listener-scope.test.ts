@@ -110,27 +110,39 @@ describe("renderCellInto listener scope", () => {
     expect(guardArmed(a)).toBe(false);
   });
 
-  it("registers no forwarder when the caller's scope is already gone", () => {
-    // A signal that has already aborted never fires `abort` again, so a forwarder
-    // registered afterwards could never run — the fill has to notice and start
-    // disarmed instead. Reachable because `abortListeners` fires on the element
-    // scope while CodeMirror may still drive one more patch through it.
+  it("keeps a fill's guards armed when the caller's scope is already gone", () => {
+    // FAIL-CLOSED, and deliberately so: `cellFillSignal` has NO `outer.aborted`
+    // branch. `abort` is one-shot, so a forwarder registered on an
+    // already-aborted `outer` simply never runs and the fill's child scope stays
+    // LIVE. The alternative — aborting the child up front so the fill "starts
+    // disarmed" — binds no guard while `renderCellSafely` still assigns `a.href`
+    // and appends the anchor: a live link with the middle-click choke point on
+    // `attachLinkClickGuard` removed. Blocked navigation is the safe failure; an
+    // unguarded `<a>` is not.
     //
-    // ⚠️ What is pinned here is the BRANCH (no forwarder is registered), not the
-    // disarm it produces. In a real browser `addEventListener` with an
-    // already-aborted signal is a no-op, so the fill's guards never bind at all;
-    // happy-dom does not implement that check and binds them anyway (measured),
-    // so asserting `guardArmed === false` here would pin the emulator's gap
-    // rather than the contract. The disarm itself is unpinnable in this
-    // environment — declared, not quietly dropped.
+    // ⚠️ TWO assertions, because only the second can tell the two
+    // implementations apart in this environment. happy-dom does not implement
+    // "an already-aborted signal binds nothing" (measured), so `guardArmed`
+    // reads true under the fail-OPEN version too — the first assertion states
+    // the contract without discriminating. What discriminates is the NEXT fill:
+    // a live child scope is abortable, so the replaced anchor goes quiet. Under
+    // the fail-open version that child was aborted BEFORE its guards bound, so
+    // the later `abort()` is a no-op and the detached anchor stays armed for the
+    // life of the element — the leak this file exists to pin, arriving by the
+    // one path that also looked safe.
     const outer = new AbortController();
     outer.abort();
-    const counts = countSignalRegistrations(outer.signal);
     const cell = cellInDocument();
 
     renderCellInto(cell, "[one](https://example.com/1)", "", outer.signal);
+    const first = anchorIn(cell);
+    expect(guardArmed(first)).toBe(true);
 
-    expect(counts.added).toBe(0);
+    renderCellInto(cell, "[two](https://example.com/2)", "", outer.signal);
+
+    expect(first.isConnected).toBe(false);
+    expect(guardArmed(first)).toBe(false);
+    expect(guardArmed(anchorIn(cell))).toBe(true);
   });
 
   it("holds one registration on the caller's scope however many fills run", () => {

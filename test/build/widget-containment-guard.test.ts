@@ -28,11 +28,35 @@
 //     assumed; a collision would silently mis-resolve
 //   - a widget owned by a library, given a Quoll renderer as a callback — not
 //     hypothetical: `foldPlaceholderDOM` is exactly that, which is why it carries
-//     its own test (Task 4) instead of relying on this guard
+//     its own test (Task 4) instead of relying on this guard. ⚠️ The LISTENER
+//     scan inherits that gap, and it bites: the scan's file set is the import
+//     closure of the widget modules (41 modules as measured), and
+//     `cm/fold/index.ts` is not in it, so the `el.onclick = onclick` at `:171` —
+//     a real unabortable handler — is NOT reported. It is reached only by
+//     CodeMirror's own fold widget, so no `QuollWidget` teardown owns it either
+//     way; `widget-base.test.ts`'s `containWidgetRender` case is what covers
+//     that file. Named here because the `on*` arm below would otherwise read as
+//     a promise about the whole tree.
 //   - a base picked at runtime (`extends pickBase()`)
-// What it DOES cover, deliberately: class declarations AND class expressions,
-// and member names written as identifiers, string literals, or computed string
-// constants (`["toDOM"]()`), because those are the cheap bypasses.
+// What it DOES cover, deliberately, because these are the cheap bypasses:
+//   - class declarations AND class expressions — and an ANONYMOUS class
+//     expression that descends from `QuollWidget` is itself a violation, since
+//     `quollDescendants` resolves bases by NAME and cannot see through one
+//   - class MEMBER names written as identifiers, string literals, or computed
+//     string constants (`["toDOM"]()`). ⚠️ This is about member names only; the
+//     separate question of how a CALL's callee is spelled is handled by
+//     `unscopedListeners`' own `calleeName`
+//   - listener registrations in both call spellings (`el.addEventListener(…)`
+//     and `el["addEventListener"](…)`) and `on*` property handlers
+//     (`el.onclick = f`, `el["onclick"] = f`)
+// ⚠️ The `on*` arm is a deliberate OVER-approximation: it matches any `on*=`
+// assignment, including one on a non-element target. Measured, the whole
+// `src/webview` tree holds three (`fold/index.ts:171`, and `image-paste.ts`'s
+// `reader.onload` / `reader.onerror` on a `FileReader`), all of them outside the
+// scanned closure today. A future reader who pulls `image-paste.ts` into the
+// closure will get a report that is technically right — a `FileReader` handler
+// is no more abortable than an element's — but about a non-element; decide it
+// then rather than narrowing the arm now for a case that does not exist.
 
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
@@ -147,27 +171,76 @@ function importClosure(entries: string[]): string[] {
   return [...seen].sort();
 }
 
-/** Every `addEventListener(...)` call in `text` that does NOT pass an options
- *  argument carrying a `signal` property. A missed `{ signal }` is not a type
- *  error — it is a listener that outlives its element, which is the failure this
- *  PR exists to close — so it has to be a mechanism, not a review habit. */
+/** Every listener registration in `text` that no `AbortSignal` can ever remove.
+ *  A missed `{ signal }` is not a type error — it is a listener that outlives
+ *  its element, which is the failure this PR exists to close — so it has to be a
+ *  mechanism, not a review habit.
+ *
+ *  Two shapes, because both were measured walking past the dotted-call-only
+ *  version of this predicate while it reported a clean tree:
+ *    - `x.addEventListener(…)` AND `x["addEventListener"](…)` without a `signal`
+ *      property in the options argument. The bracket form is the same call; only
+ *      the spelling of the callee differs, and `widgetsIn`'s `memberName` already
+ *      resolves computed string names for class MEMBERS — that handling was never
+ *      carried over here.
+ *    - `x.onclick = f` / `x["onclick"] = f`. Reported unconditionally, with no
+ *      options to inspect: an `on*` property handler has no registration options
+ *      at all, so no `AbortSignal` can reach it and `QuollWidget.destroy` →
+ *      `abortListeners` cannot remove it. That is precisely the class the base
+ *      exists to close, so it is a violation in every form. */
 function unscopedListeners(text: string, fileName: string): string[] {
   const sf = ts.createSourceFile(fileName, text, ts.ScriptTarget.Latest, true);
   const out: string[] = [];
-  const visit = (node: ts.Node): void => {
+  // `getStart(sf)`, NOT `node.pos`, at every report site below: `pos` is the FULL
+  // start (leading trivia included), so in this comment-heavy tree it names the
+  // line of the PREVIOUS token — measured 19 lines early for cell-render.ts's
+  // `auxclick` guard (`:104` reported, `:123` real, the closing `);` of a
+  // different call). This line is the test's only actionable output.
+  const at = (node: ts.Node): string =>
+    `${fileName}:${sf.getLineAndCharacterOfPosition(node.getStart(sf)).line + 1}`;
+  /** The callee's name for `x.f(…)` and `x["f"](…)` alike. */
+  const calleeName = (call: ts.CallExpression): string | undefined => {
+    const callee = call.expression;
+    if (ts.isPropertyAccessExpression(callee)) {
+      return callee.name.text;
+    }
+    if (ts.isElementAccessExpression(callee) && ts.isStringLiteralLike(callee.argumentExpression)) {
+      return callee.argumentExpression.text;
+    }
+    return undefined;
+  };
+  /** `x.onfoo` / `x["onfoo"]` as an assignment TARGET. */
+  const onHandlerTarget = (node: ts.Node): ts.Node | undefined => {
+    if (!ts.isBinaryExpression(node) || node.operatorToken.kind !== ts.SyntaxKind.EqualsToken) {
+      return undefined;
+    }
+    const { left } = node;
+    if (ts.isPropertyAccessExpression(left) && /^on[a-z]+$/.test(left.name.text)) {
+      return left;
+    }
     if (
-      ts.isCallExpression(node) &&
-      ts.isPropertyAccessExpression(node.expression) &&
-      node.expression.name.text === "addEventListener"
+      ts.isElementAccessExpression(left) &&
+      ts.isStringLiteralLike(left.argumentExpression) &&
+      /^on[a-z]+$/.test(left.argumentExpression.text)
     ) {
+      return left;
+    }
+    return undefined;
+  };
+  const visit = (node: ts.Node): void => {
+    if (ts.isCallExpression(node) && calleeName(node) === "addEventListener") {
       const opts = node.arguments[2];
       const scoped =
         opts !== undefined &&
         ts.isObjectLiteralExpression(opts) &&
         opts.properties.some((prop) => prop.name?.getText(sf) === "signal");
       if (!scoped) {
-        out.push(`${fileName}:${sf.getLineAndCharacterOfPosition(node.pos).line + 1}`);
+        out.push(at(node));
       }
+    }
+    const handler = onHandlerTarget(node);
+    if (handler !== undefined) {
+      out.push(`${at(handler)} (on* property handler — bind with addEventListener + { signal })`);
     }
     ts.forEachChild(node, visit);
   };
@@ -228,6 +301,43 @@ function widgetsIn(text: string, fileName: string): Widget[] {
   return out;
 }
 
+/** Every name passed to a DIRECT `containWidgetRender("…", …)` call.
+ *
+ *  WHY this is part of the latch-key set and not a separate concern: the name a
+ *  caller hands `containWidgetRender` feeds `reportOnce("render", name, err)`
+ *  and `makePlaceholder(…, name)` — the SAME `${hook}:${widget}` latch and the
+ *  same `data-quoll-widget-error` stamp a subclass's `widgetName` produces. A
+ *  literal here colliding with a subclass's `widgetName` swallows one of the two
+ *  log lines exactly as two colliding subclasses would, and collecting only
+ *  class declarations cannot see it. `widget-base.ts` is excluded because its own
+ *  call passes `this.widgetName` — the subclass roster, already counted.
+ *
+ *  A non-literal first argument THROWS rather than being skipped: skipping is how
+ *  a guard quietly narrows, and the throw names the file so the next author
+ *  decides deliberately. */
+function containWidgetRenderNames(text: string, fileName: string): string[] {
+  const sf = ts.createSourceFile(fileName, text, ts.ScriptTarget.Latest, true);
+  const out: string[] = [];
+  const visit = (node: ts.Node): void => {
+    if (
+      ts.isCallExpression(node) &&
+      ts.isIdentifier(node.expression) &&
+      node.expression.text === "containWidgetRender"
+    ) {
+      const arg = node.arguments[0];
+      if (arg === undefined || !ts.isStringLiteralLike(arg)) {
+        throw new Error(
+          `${fileName}: containWidgetRender's widget name must be a string literal so this guard can see it (got ${arg?.getText(sf) ?? "no argument"})`
+        );
+      }
+      out.push(arg.text);
+    }
+    ts.forEachChild(node, visit);
+  };
+  ts.forEachChild(sf, visit);
+  return out;
+}
+
 function violations(classes: Widget[]): string[] {
   const out: string[] = [];
   for (const c of classes) {
@@ -239,6 +349,23 @@ function violations(classes: Widget[]): string[] {
     }
   }
   for (const c of quollDescendants(classes)) {
+    // An ANONYMOUS class expression in the ancestry defeats the whole walk, not
+    // just this check: `quollDescendants` keys `baseOf` on the class NAME, so
+    // `const Mid = class extends QuollWidget {}` contributes no key, and a
+    // `class Leaf extends Mid` below it resolves to nothing and leaves
+    // `widgetClasses` entirely — taking the re-declaration check, the roster and
+    // the latch key with it, while the anonymous intermediate keeps the roster's
+    // file count and `widgetName` looking untouched. Measured: with that shape
+    // planted in thematic-break-widget.ts the guard was 8/8 GREEN.
+    // ⚠️ Distinct from the header's declared gap ("an intermediate base whose
+    // DECLARATION this walk never sees"): this one IS seen, and was dropped on
+    // purpose by the `(anonymous)` filter in the uniqueness test. Naming the
+    // class costs one word and makes it resolvable, so this is a fix, not a gap.
+    if (c.cls === "(anonymous)") {
+      out.push(
+        `${c.file}: an anonymous class expression descends from QuollWidget — name it, the base resolver keys on the name`
+      );
+    }
     for (const m of c.members) {
       if (GUARDED.includes(m)) {
         out.push(`${c.file}: ${c.cls} re-declares the guarded hook '${m}'`);
@@ -285,17 +412,34 @@ describe("widget containment cannot be bypassed", () => {
     ]);
   });
 
-  it("every widget's latch key is distinct (a duplicate swallows the other's only log line)", () => {
+  it("every latch key is distinct (a duplicate swallows the other's only log line)", () => {
     // `reportOnce` latches on `${hook}:${widgetName}` and the placeholder stamps
     // `data-quoll-widget-error="<widgetName>"`. The base's long justification for
     // a PER-(hook, widget) latch — rather than one boolean for the session —
-    // rests entirely on these literals being distinct between classes, and
-    // nothing else enforces it: two classes can carry the same string literal
-    // with `pnpm compile` green, and the roster test above pins FILES, not names.
-    const names = widgetClasses.map((c) => c.widgetName);
+    // rests entirely on these literals being distinct, and nothing else enforces
+    // it: two of them can carry the same string with `pnpm compile` green, and
+    // the roster test above pins FILES, not names.
+    //
+    // ⚠️ The set is the SUBCLASSES PLUS every direct `containWidgetRender`
+    // caller, because a name reaching the latch does not have to come from a
+    // class: `containWidgetRender(name, …)` feeds `name` to `reportOnce` and
+    // `makePlaceholder` itself. Collecting only `widgetClasses` covered 8 of the
+    // 9 names in the tree — `foldPlaceholderDOM`'s `"foldPlaceholder"` sat
+    // outside the walk while the base's comment named this walk as the
+    // enforcement. Measured: renaming that literal to a widget's `widgetName`
+    // produced a real collision that the class-only version reported as green.
+    const names = [
+      ...widgetClasses.map((c) => c.widgetName),
+      ...tsFiles(WEBVIEW_SRC)
+        .filter((f) => f !== BASE_MODULE) // its own call passes `this.widgetName`
+        .flatMap((f) => containWidgetRenderNames(readFileSync(f, "utf8"), f)),
+    ];
     expect(names.filter((n) => n === undefined)).toEqual([]); // every widget declares one
     expect(new Set(names).size).toBe(names.length);
-    expect(names.length).toBe(8); // roster count, same convention as the roster test
+    // 8 `QuollWidget` subclasses (the roster above) + 1 direct caller
+    // (`cm/fold/index.ts`'s `"foldPlaceholder"`). Same convention as the roster
+    // test: a new one must be a deliberate edit here.
+    expect(names.length).toBe(9);
   });
 
   // Every module a widget can reach through local imports — DERIVED, not listed.
@@ -347,6 +491,39 @@ describe("widget containment cannot be bypassed", () => {
       unscopedListeners(`el.addEventListener("click", f, { passive: true });`, "x.ts")
     ).toHaveLength(1);
     expect(unscopedListeners(`el.addEventListener("click", f, { signal });`, "x.ts")).toEqual([]);
+    // The bracket spelling is the SAME call — it goes through the same
+    // `{ signal }` check, so it is flagged when unscoped and cleared when not.
+    // (A blanket ban on the spelling would pass the first of these two and be
+    // wrong about the second.)
+    expect(unscopedListeners(`el["addEventListener"]("click", f);`, "x.ts")).toHaveLength(1);
+    expect(unscopedListeners(`el["addEventListener"]("click", f, { signal });`, "x.ts")).toEqual(
+      []
+    );
+    // `on*` handlers have no options to inspect — no signal can reach them, so
+    // both spellings are flagged unconditionally.
+    expect(unscopedListeners(`el.onclick = f;`, "x.ts")).toHaveLength(1);
+    expect(unscopedListeners(`el["onchange"] = f;`, "x.ts")).toHaveLength(1);
+    // …but only `on*`: an ordinary property assignment is not a registration.
+    expect(unscopedListeners(`el.online = f;`, "x.ts")).toHaveLength(1); // matches /^on[a-z]+$/
+    expect(unscopedListeners(`el.className = f;`, "x.ts")).toEqual([]);
+  });
+
+  it("non-vacuity: the reported line is the CALL's line, not its leading trivia's", () => {
+    // `node.pos` is the FULL start, so it names the previous token's line — in
+    // the real `cell-render.ts` that was 19 lines early for the `auxclick`
+    // guard, pointing at the closing `);` of a different call. This is the sole
+    // actionable output of `expect(unscoped).toEqual([])` above, so the line
+    // number is a contract, not a detail. One-line fixtures cannot see the
+    // difference (`pos` and `getStart` agree there), hence the trivia here.
+    expect(
+      unscopedListeners(
+        `const x = 1;\n// leading\n/* trivia */\nel.addEventListener("click", f);`,
+        "x.ts"
+      )
+    ).toEqual(["x.ts:4"]);
+    expect(unscopedListeners(`const x = 1;\n// leading\nel.onclick = f;`, "x.ts")).toEqual([
+      "x.ts:3 (on* property handler — bind with addEventListener + { signal })",
+    ]);
   });
 
   it("non-vacuity: the walk flags every planted bypass", () => {
@@ -368,6 +545,12 @@ describe("widget containment cannot be bypassed", () => {
       // widget and the base was enough to unguard it, in the same file.
       export class Mid extends QuollWidget {}
       export class Leaf extends Mid { toDOM() { return null as never; } }
+      // An ANONYMOUS intermediate. \`baseOf\` gets no key for it, so a leaf below
+      // it resolves to nothing and drops out of the re-declaration check, the
+      // roster AND the latch key at once — while the intermediate itself keeps
+      // the roster's file count and its \`widgetName\` looking untouched. Flagged
+      // at the intermediate, which is where the name is missing.
+      export const AnonMid = class extends QuollWidget {};
       // ⚠️ Must NOT be flagged — every real widget has one.
       export class Eventful extends QuollWidget { ignoreEvent() { return false; } }
     `;
@@ -379,6 +562,21 @@ describe("widget containment cannot be bypassed", () => {
       "planted.ts: Heighted overrides the UNCONTAINED hook 'estimatedHeight' — see the guard's header",
       "planted.ts: Leaf re-declares the guarded hook 'toDOM'",
       "planted.ts: Reopened re-declares the guarded hook 'toDOM'",
+      "planted.ts: an anonymous class expression descends from QuollWidget — name it, the base resolver keys on the name",
     ]);
+  });
+
+  it("non-vacuity: a non-literal containWidgetRender name fails loudly rather than being skipped", () => {
+    // Skipping is how a guard quietly narrows: a name the walk cannot read is a
+    // name it cannot check for collision, and silence there is indistinguishable
+    // from "no collision". The throw names the file so the next author decides.
+    expect(() =>
+      containWidgetRenderNames(`containWidgetRender(NAME, () => el);`, "planted.ts")
+    ).toThrow(/must be a string literal/);
+    expect(containWidgetRenderNames(`containWidgetRender("Lit", () => el);`, "planted.ts")).toEqual(
+      ["Lit"]
+    );
+    // Not a call to it — must not be collected.
+    expect(containWidgetRenderNames(`other("Lit", () => el);`, "planted.ts")).toEqual([]);
   });
 });
