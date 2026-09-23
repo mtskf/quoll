@@ -19,7 +19,13 @@
 // KNOWN GAPS (syntactic — a full answer needs a TypeChecker, which is more than
 // a convention guard is worth):
 //   - an aliased import: `import { WidgetType as W }` then `extends W`
-//   - an intermediate base declared in another file
+//   - an intermediate base whose DECLARATION this walk never sees (one imported
+//     from node_modules, or from outside `src/webview`). Intermediates declared
+//     anywhere in the walked tree ARE resolved — `rootBase` chases `cls -> base`
+//     by name, so `class Leaf extends Mid` where `Mid extends QuollWidget` is a
+//     guarded widget like any other. That resolution keys on the class NAME, so
+//     "class names in the walked tree are unique" is asserted below rather than
+//     assumed; a collision would silently mis-resolve
 //   - a widget owned by a library, given a Quoll renderer as a callback — not
 //     hypothetical: `foldPlaceholderDOM` is exactly that, which is why it carries
 //     its own test (Task 4) instead of relying on this guard
@@ -28,11 +34,12 @@
 // and member names written as identifiers, string literals, or computed string
 // constants (`["toDOM"]()`), because those are the cheap bypasses.
 
-import { readdirSync, readFileSync, statSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
 import ts from "typescript";
 import { describe, expect, it } from "vitest";
 
+const REPO_ROOT = join(__dirname, "../..");
 const WEBVIEW_SRC = join(__dirname, "../../src/webview");
 const BASE_MODULE = join(WEBVIEW_SRC, "cm/widget-base.ts");
 /** The four entry points the base contains. A subclass re-declaring any of them
@@ -57,7 +64,88 @@ function tsFiles(dir: string): string[] {
   });
 }
 
-type Widget = { file: string; cls: string; base: string; members: string[] };
+type Widget = {
+  file: string;
+  cls: string;
+  base: string;
+  members: string[];
+  /** The `widgetName` property's string-literal initialiser, when it has one.
+   *  It is half of the log's latch key and the whole of the placeholder stamp. */
+  widgetName: string | undefined;
+};
+
+/** Resolve `base` through intermediate classes the walk has seen, and keep only
+ *  the ones that bottom out at `QuollWidget`.
+ *
+ *  WHY: `base` is heritage-clause TEXT (`t.expression.getText(sf)`), so before
+ *  this a `class Leaf extends Mid` — with `Mid extends QuollWidget` declared
+ *  right beside it — read as base `"Mid"` and fell out of ALL THREE consumers at
+ *  once: the re-declaration check, the roster, and the listener scan. One
+ *  intermediate class was enough to leave a widget completely unguarded.
+ *
+ *  ⚠️ Resolution is by NAME across the whole walk (a per-file map would reopen
+ *  the same hole for a base imported from a sibling module). The `seen` set
+ *  makes a cycle terminate instead of overflowing, and an unknown base name
+ *  stays opaque — the declared gap in the header.
+ *
+ *  ⚠️ It asks "is `QuollWidget` ANYWHERE in this ancestry", not "what is the
+ *  root of it". `QuollWidget extends WidgetType` is itself in the walked tree,
+ *  so a root-of-the-chain formulation walks straight past it and resolves every
+ *  real widget to `"WidgetType"` — measured: it emptied the roster while the
+ *  planted-string non-vacuity case, which has no `QuollWidget` declaration in
+ *  it to walk through, stayed green. */
+function quollDescendants(classes: Widget[]): Widget[] {
+  const baseOf = new Map(classes.map((c) => [c.cls, c.base]));
+  const descendsFromBase = (name: string, seen = new Set<string>()): boolean => {
+    if (name === "QuollWidget") {
+      return true;
+    }
+    const next = baseOf.get(name);
+    return next === undefined || seen.has(name) ? false : descendsFromBase(next, seen.add(name));
+  };
+  return classes.filter((c) => descendsFromBase(c.base));
+}
+
+/** Every local (`./` / `../`) module reachable from `entries`, transitively.
+ *
+ *  WHY the listener scan reads this instead of a hand-written list: the roster
+ *  is derived from the AST and follows the tree, but the scan's file set used to
+ *  be the widget files plus one hard-coded helper. The moment a helper that
+ *  `render` / `patchDOM` calls moved into a NEW file, an `addEventListener`
+ *  there with no `{ signal }` — the exact defect this base class exists to
+ *  close — was invisible to the guard while it stayed green. */
+function importClosure(entries: string[]): string[] {
+  const seen = new Set<string>();
+  const queue = [...entries];
+  while (queue.length > 0) {
+    const file = queue.pop();
+    if (file === undefined || seen.has(file)) {
+      continue;
+    }
+    seen.add(file);
+    const sf = ts.createSourceFile(file, readFileSync(file, "utf8"), ts.ScriptTarget.Latest, true);
+    for (const st of sf.statements) {
+      const spec =
+        (ts.isImportDeclaration(st) || ts.isExportDeclaration(st)) &&
+        st.moduleSpecifier !== undefined &&
+        ts.isStringLiteral(st.moduleSpecifier)
+          ? st.moduleSpecifier.text
+          : undefined;
+      if (spec === undefined || !spec.startsWith(".")) {
+        continue; // a package, not ours to scan
+      }
+      // The repo writes local specifiers with the emitted `.js` extension.
+      const stem = resolve(dirname(file), spec.replace(/\.js$/, ""));
+      for (const candidate of [`${stem}.ts`, join(stem, "index.ts")]) {
+        if (existsSync(candidate)) {
+          queue.push(candidate);
+          break;
+        }
+      }
+    }
+  }
+  return [...seen].sort();
+}
 
 /** Every `addEventListener(...)` call in `text` that does NOT pass an options
  *  argument carrying a `signal` property. A missed `{ signal }` is not a type
@@ -122,6 +210,15 @@ function widgetsIn(text: string, fileName: string): Widget[] {
           cls: node.name?.getText(sf) ?? "(anonymous)",
           base,
           members: node.members.map(memberName).filter((n): n is string => n !== undefined),
+          widgetName: node.members
+            .filter(ts.isPropertyDeclaration)
+            .filter((m) => ts.isIdentifier(m.name) && m.name.text === "widgetName")
+            .map((m) =>
+              m.initializer !== undefined && ts.isStringLiteralLike(m.initializer)
+                ? m.initializer.text
+                : undefined
+            )
+            .at(-1),
         });
       }
     }
@@ -134,19 +231,22 @@ function widgetsIn(text: string, fileName: string): Widget[] {
 function violations(classes: Widget[]): string[] {
   const out: string[] = [];
   for (const c of classes) {
+    // Stays a LITERAL check: if an intermediate extends WidgetType directly then
+    // that intermediate is itself flagged here, and saying the same of every
+    // leaf below it would be both noisy and untrue.
     if (c.base === "WidgetType" && c.file !== BASE_MODULE) {
       out.push(`${c.file}: ${c.cls} extends WidgetType directly`);
     }
-    if (c.base === "QuollWidget") {
-      for (const m of c.members) {
-        if (GUARDED.includes(m)) {
-          out.push(`${c.file}: ${c.cls} re-declares the guarded hook '${m}'`);
-        }
-        if (UNGUARDED.includes(m)) {
-          out.push(
-            `${c.file}: ${c.cls} overrides the UNCONTAINED hook '${m}' — see the guard's header`
-          );
-        }
+  }
+  for (const c of quollDescendants(classes)) {
+    for (const m of c.members) {
+      if (GUARDED.includes(m)) {
+        out.push(`${c.file}: ${c.cls} re-declares the guarded hook '${m}'`);
+      }
+      if (UNGUARDED.includes(m)) {
+        out.push(
+          `${c.file}: ${c.cls} overrides the UNCONTAINED hook '${m}' — see the guard's header`
+        );
       }
     }
   }
@@ -155,17 +255,24 @@ function violations(classes: Widget[]): string[] {
 
 describe("widget containment cannot be bypassed", () => {
   const classes = tsFiles(WEBVIEW_SRC).flatMap((f) => widgetsIn(readFileSync(f, "utf8"), f));
+  const widgetClasses = quollDescendants(classes);
 
   it("nothing extends WidgetType directly, re-declares a guarded hook, or overrides an uncontained one", () => {
     expect(violations(classes)).toEqual([]);
   });
 
+  it("class names in the walked tree are unique (the base resolver keys on the NAME)", () => {
+    // `quollDescendants` chases `cls -> base` by name across every file, so two
+    // classes sharing a name would silently resolve one of them to the other's
+    // ancestry. Asserting the premise costs one line; discovering it broken by
+    // way of a widget that quietly left the roster does not.
+    const named = classes.filter((c) => c.cls !== "(anonymous)").map((c) => c.cls);
+    expect(new Set(named).size).toBe(named.length);
+  });
+
   it("the roster is what we think it is (a new widget must be a deliberate edit)", () => {
     // Derived from the same AST walk, not a text regex — see the header.
-    const widgets = classes
-      .filter((c) => c.base === "QuollWidget")
-      .map((c) => c.file.slice(WEBVIEW_SRC.length + 1))
-      .sort();
+    const widgets = widgetClasses.map((c) => c.file.slice(WEBVIEW_SRC.length + 1)).sort();
     expect(widgets).toEqual([
       "cm/decorations/thematic-break-widget.ts",
       "cm/fenced-code/fenced-code-collapse-widget.ts",
@@ -178,14 +285,39 @@ describe("widget containment cannot be bypassed", () => {
     ]);
   });
 
+  it("every widget's latch key is distinct (a duplicate swallows the other's only log line)", () => {
+    // `reportOnce` latches on `${hook}:${widgetName}` and the placeholder stamps
+    // `data-quoll-widget-error="<widgetName>"`. The base's long justification for
+    // a PER-(hook, widget) latch — rather than one boolean for the session —
+    // rests entirely on these literals being distinct between classes, and
+    // nothing else enforces it: two classes can carry the same string literal
+    // with `pnpm compile` green, and the roster test above pins FILES, not names.
+    const names = widgetClasses.map((c) => c.widgetName);
+    expect(names.filter((n) => n === undefined)).toEqual([]); // every widget declares one
+    expect(new Set(names).size).toBe(names.length);
+    expect(names.length).toBe(8); // roster count, same convention as the roster test
+  });
+
+  // Every module a widget can reach through local imports — DERIVED, not listed.
+  const scanned = importClosure(widgetClasses.map((c) => c.file));
+
+  it("the listener scan follows helpers transitively, not a hand-written list", () => {
+    // `cell-source-map.ts` is imported by `cell-render.ts`, which is imported by
+    // `table-widget.ts` — depth 2. The hand-written list this replaced named
+    // `cell-render.ts` explicitly and stopped there, so a helper split out of a
+    // helper was outside the scan. If the closure ever stops walking, this goes
+    // red instead of the scan quietly narrowing to nothing.
+    expect(scanned).toContain(join(WEBVIEW_SRC, "cm/table/cell-render.ts"));
+    expect(scanned).toContain(join(WEBVIEW_SRC, "cm/table/cell-source-map.ts"));
+    // …and every widget module is still an entry point of it.
+    for (const c of widgetClasses) {
+      expect(scanned).toContain(c.file);
+    }
+  });
+
   it("every listener a widget binds is scoped to an AbortSignal", () => {
-    // The widget files themselves, plus cell-render.ts, which both hooks call.
-    const widgetFiles = classes
-      .filter((c) => c.base === "QuollWidget")
-      .map((c) => c.file)
-      .concat(join(WEBVIEW_SRC, "cm/table/cell-render.ts"));
-    const unscoped = [...new Set(widgetFiles)].flatMap((f) =>
-      unscopedListeners(readFileSync(f, "utf8"), f.slice(WEBVIEW_SRC.length + 1))
+    const unscoped = scanned.flatMap((f) =>
+      unscopedListeners(readFileSync(f, "utf8"), f.slice(REPO_ROOT.length + 1))
     );
     // ⚠️ MEASURED, not taken from the plan: the table arms its DOCUMENT-level
     // drag listeners (mouseup / mousedown-capture / dragstart) from inside a
@@ -201,10 +333,12 @@ describe("widget containment cannot be bypassed", () => {
     // is 0, confirmed by running this test — not 3. Both the root `mousedown` /
     // `click` listeners (bound during `render`, the base's own signal) and the
     // 3 document-level ones (their own signal, same property name) are scoped.
-    // An exact count either way, per the repo's allowlist convention: a NEW
-    // unscoped listener in this file must argue for itself in the same commit.
-    expect(unscoped.filter((u) => !u.startsWith("cm/table/table-widget.ts"))).toEqual([]);
-    expect(unscoped.filter((u) => u.startsWith("cm/table/table-widget.ts"))).toHaveLength(0);
+    // An EMPTY list, not a count, per the repo's allowlist convention: a NEW
+    // unscoped listener anywhere the widgets can reach must argue for itself in
+    // the same commit — and because the file set is now the derived import
+    // closure (41 modules as measured, versus the 9 the hand-written list
+    // covered), "anywhere they can reach" is what it says.
+    expect(unscoped).toEqual([]);
   });
 
   it("non-vacuity: the listener scan flags a missing signal and passes a present one", () => {
@@ -228,6 +362,12 @@ describe("widget containment cannot be bypassed", () => {
       export class Computed extends QuollWidget { ["updateDOM"]() { return false; } }
       export class Heighted extends QuollWidget { get estimatedHeight() { return 1; } }
       export class Fine extends QuollWidget { render() { return null as never; } }
+      // An INTERMEDIATE base. Before \`rootBase\`, \`Leaf\` read as base "Mid" and
+      // dropped out of the re-declaration check, the roster and the listener
+      // scan all at once — one class between a widget and the base was enough
+      // to unguard it, in the same file.
+      export class Mid extends QuollWidget {}
+      export class Leaf extends Mid { toDOM() { return null as never; } }
       // ⚠️ Must NOT be flagged — every real widget has one.
       export class Eventful extends QuollWidget { ignoreEvent() { return false; } }
     `;
@@ -237,6 +377,7 @@ describe("widget containment cannot be bypassed", () => {
       "planted.ts: Bare extends WidgetType directly",
       "planted.ts: Computed re-declares the guarded hook 'updateDOM'",
       "planted.ts: Heighted overrides the UNCONTAINED hook 'estimatedHeight' — see the guard's header",
+      "planted.ts: Leaf re-declares the guarded hook 'toDOM'",
       "planted.ts: Reopened re-declares the guarded hook 'toDOM'",
     ]);
   });

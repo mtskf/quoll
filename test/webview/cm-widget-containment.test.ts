@@ -148,10 +148,13 @@ it("a StateField block widget: a throwing table render settles the same way", ()
 
 it("a throwing table patch tears the old element down and never writes bytes", () => {
   // The containment path that has a real `dispose` behind it: force `patchDOM`
-  // to throw on a mounted table and pin that (a) nothing escapes, (b) the
-  // poisoned element is inert, (c) `destroy` running TWICE (once from the catch,
-  // once from CodeMirror's `destroyDropped`) still logs once and throws never,
-  // and (d) the document is byte-unchanged by the whole episode.
+  // to throw on a mounted table and pin that (a) nothing escapes, (b) the log is
+  // latched to one line, (c) `dispose` runs TWICE (once from the catch's
+  // `prev.destroy(dom)`, once from CodeMirror's `destroyDropped`) and throws
+  // never, and (d) the reseed's bytes land unchanged with no placeholder left
+  // over. Each of (a)-(d) has its own assertion below — (c) used to be claimed
+  // in this comment and observed by nothing, which let `prev.destroy(dom)` be
+  // deleted with this whole file still green.
   const { handle, view } = mount();
   // Same caret caveat as above: prose first, so the table is actually rendered.
   const v1 = "intro\n\n| a | b |\n| - | - |\n| 1 | 2 |\n";
@@ -162,6 +165,13 @@ it("a throwing table patch tears the old element down and never writes bytes", (
   const cell = document.querySelector(".quoll-table-block td") as HTMLElement | null;
   cell?.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, button: 0 }));
   const err = vi.spyOn(console, "error").mockImplementation(() => {});
+  // ⚠️ NOT mocked — the real teardown has to run. This counts it, which `err`
+  // cannot: `reportOnce` latches per (hook, widget) and counts LOG LINES, so its
+  // `1` is the same whether teardown ran twice, once, or not at all.
+  const disposed = vi.spyOn(
+    TableBlockWidget.prototype as unknown as { dispose: (dom: HTMLElement) => void },
+    "dispose"
+  );
   const spy = vi
     .spyOn(TableBlockWidget.prototype as unknown as { patchDOM: () => boolean }, "patchDOM")
     .mockImplementation(() => {
@@ -174,10 +184,22 @@ it("a throwing table patch tears the old element down and never writes bytes", (
   expect(err).toHaveBeenCalledTimes(1);
   expect(hostBytes(view)).toBe(v2);
   expect(before).not.toBe(hostBytes(view)); // the reseed really happened
-  // ⚠️ The honest pin is the OPPOSITE of "a placeholder is on screen": the taint
-  // stops the tile being reused, so `destroyDropped` drops it (`view dist:3461`,
-  // `r == null` → `tile.destroy()`) and the position is redrawn by a fresh,
-  // healthy `toDOM`. A conditional assertion here would pass either way.
+  // (c) The owning widget's OWN teardown really ran, TWICE: once from the catch
+  // (`prev.destroy(dom)` — the only route that reaches the widget that armed the
+  // document-level drag listeners, while its children are still in place), and
+  // once more from `destroyDropped` (`view dist:3461` → `:3465`), because the
+  // catch returns `false` so the tile is never marked reused. That double call
+  // is why `dispose` implementations are required to be idempotent.
+  expect(disposed).toHaveBeenCalledTimes(2);
+  // (d) The taint stops the tile being reused, so `destroyDropped` drops it and
+  // the position is redrawn by a fresh, healthy `toDOM`.
+  // ⚠️ This assertion does NOT pin the taint, despite what it used to claim:
+  // measured, it stays green with `tainted.add(prev)` deleted, because
+  // `destroyDropped` redraws the position either way. What it pins is the
+  // SYSTEM-level consequence — a failed patch leaves no placeholder on screen in
+  // a real mount. The taint's own two readers (`eq`, and `updateDOM`'s
+  // `tainted.has(prev)` arm) are pinned directly, one test each, in
+  // test/webview/cm/widget-base.test.ts.
   expect(document.querySelector("[data-quoll-widget-error]")).toBeNull();
   expect(document.querySelector(".quoll-table-block")).not.toBeNull();
 });

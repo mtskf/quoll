@@ -65,9 +65,12 @@ it("real browser: a widget that throws as it scrolls into view does not wedge th
     });
     expect(sawRule).toBe(true);
     // Premise: the break is below the fold and has NOT been drawn. Measured on
-    // the widget's own class (thematic-break-widget.ts:40) — asserting the
-    // ERROR placeholder is absent here would be vacuous, since nothing has
-    // thrown yet.
+    // the widget's own stamp (`render`'s `el.className` in
+    // thematic-break-widget.ts) — asserting the ERROR placeholder is absent here
+    // would be vacuous, since nothing has thrown yet. Named by symbol rather
+    // than by line: this selector only does its job while it still matches what
+    // the widget stamps, and the bare `:40` it used to carry had already drifted
+    // onto a blank line.
     expect(document.querySelector(".quoll-thematic-break")).toBeNull();
 
     vi.spyOn(console, "error").mockImplementation(() => {});

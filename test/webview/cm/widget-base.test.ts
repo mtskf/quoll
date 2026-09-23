@@ -45,6 +45,52 @@ class Working extends QuollWidget {
   }
 }
 
+/** The minimal HEALTHY patcher. Its only job is to be the other side of the
+ *  containment's refusals: every `false` this file pins would be indistinguishable
+ *  from "there is nothing to patch with" without a widget that demonstrably DOES
+ *  patch when nothing is wrong. Each test below establishes that baseline first. */
+class Patching extends QuollWidget {
+  readonly widgetName = "Patching";
+  patches = 0;
+  protected render(): HTMLElement {
+    const el = document.createElement("b");
+    el.textContent = "patched:0";
+    return el;
+  }
+  protected sameAs(other: QuollWidget): boolean {
+    return other instanceof Patching;
+  }
+  protected patchDOM(dom: HTMLElement): boolean {
+    this.patches += 1;
+    dom.textContent = `patched:${this.patches}`;
+    return true;
+  }
+}
+
+/** A healthy patcher that binds a listener from the PATCH path — the case
+ *  `scopeOf` exists for. `render` deliberately binds nothing, so the only
+ *  controller in play is the one the patch had to mint. */
+class Rebinder extends QuollWidget {
+  readonly widgetName = "Rebinder";
+  clicks = 0;
+  protected render(): HTMLElement {
+    return document.createElement("b");
+  }
+  protected sameAs(other: QuollWidget): boolean {
+    return other instanceof Rebinder;
+  }
+  protected patchDOM(dom: HTMLElement, _v: EditorView, _p: Rebinder, signal: AbortSignal): boolean {
+    dom.addEventListener(
+      "click",
+      () => {
+        this.clicks += 1;
+      },
+      { signal }
+    );
+    return true;
+  }
+}
+
 let view: EditorView;
 beforeEach(() => {
   // ⚠️ The latch is module state; `vi.restoreAllMocks()` does not touch it, and
@@ -88,8 +134,12 @@ describe("QuollWidget", () => {
     // ⚠️ console.error is NOT stubbed here. Stubbing it is what makes this
     // regression class invisible: the real console reads `message` / `stack` to
     // format, so a hostile or buggy Error subclass could re-enter the very
-    // failure the guard exists to contain. `cell-render.ts:492` reached the same
-    // conclusion one layer down — read NO property of a value you did not throw.
+    // failure the guard exists to contain. `renderCellSafely`'s catch in
+    // `cm/table/cell-render.ts` — the "anything finer costs a breakpoint"
+    // console.error — reached the same conclusion one layer down: read NO
+    // property of a value you did not throw. (Named by symbol, not by line: the
+    // bare `:492` this comment used to carry had already rotted onto the
+    // `return {` of a different function.)
     class Hostile extends Error {
       get message(): string {
         throw new Error("getter exploded");
@@ -142,18 +192,42 @@ describe("QuollWidget", () => {
 
   it("a throwing patchDOM leaves NO half-patched DOM behind for another widget to reuse", () => {
     vi.spyOn(console, "error").mockImplementation(() => {});
-    const dom = document.createElement("div");
+    // ⚠️ The element carries ATTRIBUTES, and that is load-bearing. Before this,
+    // both elements this file handed to `updateDOM` were attribute-free, so
+    // `makePlaceholder`'s strip loop had nothing to strip and every assertion
+    // about it was vacuous — measured: the loop could be made a no-op with all
+    // 3505 webview tests still green.
+    const dom = document.createElement("span");
+    dom.setAttribute("role", "checkbox");
+    dom.setAttribute("aria-checked", "true");
+    dom.tabIndex = 0;
     dom.textContent = "old";
     const w = new Throwing();
     expect(w.updateDOM(dom, view, w)).toBe(false);
-    // ⚠️ `false` alone is NOT enough: CodeMirror's `findWidget` (view dist:2539)
-    // leaves the rejected candidate in the reuse cache, so a LATER widget in the
-    // same builder run can adopt this element. Measured by Codex against a real
-    // EditorView: expected ["B", "A"], got ["B", "HALF-PATCHED"]. So the guard
-    // has to neutralise the element it could not finish patching.
+    // ⚠️ `false` alone is NOT enough: CodeMirror's `findWidget` (view dist:2540)
+    // leaves the rejected candidate in the reuse cache — its pass-1 arm neither
+    // splices the tile out (`:2554`) nor marks it reused (`:2558`) when
+    // `updateDOM` declines — so a LATER widget in the same builder run can adopt
+    // this element. Measured by Codex against a real EditorView: expected
+    // ["B", "A"], got ["B", "HALF-PATCHED"]. So the guard has to neutralise the
+    // element it could not finish patching.
     expect(dom.dataset.quollWidgetError).toBe("Throwing");
     expect(dom.textContent).toBe("⚠");
     expect(dom.querySelector("i")).toBeNull();
+    // A neutralised element must stop describing itself as the thing it failed
+    // to be: devtools and assistive tech both read these, and `inert` alone
+    // leaves the labels in place.
+    expect(dom.getAttribute("role")).toBeNull();
+    expect(dom.getAttribute("aria-checked")).toBeNull();
+    expect(dom.hasAttribute("tabindex")).toBe(false);
+    // …but `contenteditable` must come BACK. CodeMirror stamps it outside
+    // `toDOM` (`WidgetTile.of`, view dist:2147) and only when the tile has no
+    // dom yet, so on this path — element neutralised in place, then re-adoptable
+    // through `compare`'s `this == other` shortcut (`:140`) — nobody else will
+    // put it back. The strip above is what takes it off.
+    expect(dom.getAttribute("contenteditable")).toBe("false");
+    // Stamped AFTER the strip, or the strip would remove the stamp too.
+    expect(dom.dataset.quollWidgetError).toBe("Throwing");
   });
 
   it("a throwing dispose does not escape destroy", () => {
@@ -221,6 +295,73 @@ describe("QuollWidget", () => {
     // checkbox wrote `- [x] beta`). The signal makes that unreachable rather
     // than unlikely.
     expect(w.clicks).toBe(1);
+  });
+
+  // ── The taint (`tainted.add(prev)`), pinned at both of its readers ──────────
+  //
+  // ⚠️ Why here and not in cm-widget-containment.test.ts: that file's system-level
+  // case asserts the CONSEQUENCE of the taint (no placeholder survives a failed
+  // table patch, because the tile is dropped and redrawn). Measured: that
+  // assertion is green with `tainted.add(prev)` deleted, because `destroyDropped`
+  // redraws the position either way. The taint has exactly two readers — `eq` and
+  // `updateDOM`'s `tainted.has(prev)` arm — and each needs its own observation.
+
+  it("a widget whose patch threw never compares equal again", () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const victim = new Patching();
+    const dom = victim.toDOM(view);
+    expect(victim.eq(new Patching())).toBe(true); // baseline: it IS the same widget
+    expect(new Throwing().updateDOM(dom, view, victim as unknown as Throwing)).toBe(false);
+    // `eq` short-circuits on the taint before `sameAs` ever runs, so CodeMirror
+    // cannot reuse the tile of a widget whose patch left an element half-written.
+    expect(victim.eq(new Patching())).toBe(false);
+  });
+
+  it("a widget tainted on one element is never patched on any OTHER element", () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const victim = new Patching();
+    const poisoned = victim.toDOM(view);
+    // ⚠️ A SECOND element, and it never gets neutralised. Asserting on `poisoned`
+    // itself would measure the `dom.dataset.quollWidgetError` guard instead — that
+    // arm answers `false` whether or not the widget was tainted, so it would hide
+    // this one completely.
+    const other = victim.toDOM(view);
+    const healthy = new Patching();
+    expect(healthy.updateDOM(other, view, victim)).toBe(true); // baseline: patchable
+    expect(other.textContent).toBe("patched:1");
+    expect(new Throwing().updateDOM(poisoned, view, victim as unknown as Throwing)).toBe(false);
+    // `other` carries no error stamp, so the taint on `victim` is the only thing
+    // that can refuse this patch.
+    expect(healthy.updateDOM(other, view, victim)).toBe(false);
+    expect(other.textContent).toBe("patched:1"); // untouched
+  });
+
+  it("a placeholder element is never patched, even by a healthy widget", () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    // The other half of the pair above: here the WIDGET is clean and the ELEMENT
+    // is the neutralised one. CodeMirror's reuse cache does not know the
+    // difference, so both arms have to hold on their own.
+    const placeholder = new Throwing().toDOM(view);
+    const healthy = new Patching();
+    expect(healthy.updateDOM(placeholder, view, healthy)).toBe(false);
+    expect(placeholder.textContent).toBe("⚠"); // untouched by the patch
+    expect(healthy.patches).toBe(0); // `patchDOM` was never entered
+  });
+
+  it("a patch on a scope-less element mints a controller destroy can still reach", () => {
+    const w = new Rebinder();
+    // An element with no listener scope: `abortListeners` DELETES the entry, so
+    // any element that has been through a destroy or a failed patch is in this
+    // state, and CodeMirror's reuse cache can hand it back afterwards. If
+    // `scopeOf` minted a controller without persisting it, the patch's listeners
+    // would be bound to a signal no later teardown could find.
+    const bare = document.createElement("div");
+    expect(w.updateDOM(bare, view, w)).toBe(true);
+    bare.click();
+    expect(w.clicks).toBe(1); // the patch's listener is live
+    w.destroy(bare);
+    bare.click();
+    expect(w.clicks).toBe(1); // …and the MINTED controller was reachable from destroy
   });
 
   it("a failed patch also aborts the element's listeners and makes it inert", () => {
