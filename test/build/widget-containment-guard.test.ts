@@ -44,8 +44,8 @@
 //     `quollDescendants` resolves bases by NAME and cannot see through one
 //   - class MEMBER names written as identifiers, string literals, or computed
 //     string constants (`["toDOM"]()`). ⚠️ This is about member names only; the
-//     separate question of how a CALL's callee is spelled is handled by
-//     `unscopedListeners`' own `calleeName`
+//     separate question of how a CALL's callee — or an `on*` assignment target —
+//     is spelled is handled by `unscopedListeners`' own `accessedName`
 //   - listener registrations in both call spellings (`el.addEventListener(…)`
 //     and `el["addEventListener"](…)`) and `on*` property handlers
 //     (`el.onclick = f`, `el["onclick"] = f`)
@@ -198,14 +198,16 @@ function unscopedListeners(text: string, fileName: string): string[] {
   // different call). This line is the test's only actionable output.
   const at = (node: ts.Node): string =>
     `${fileName}:${sf.getLineAndCharacterOfPosition(node.getStart(sf)).line + 1}`;
-  /** The callee's name for `x.f(…)` and `x["f"](…)` alike. */
-  const calleeName = (call: ts.CallExpression): string | undefined => {
-    const callee = call.expression;
-    if (ts.isPropertyAccessExpression(callee)) {
-      return callee.name.text;
+  /** The property name in `x.f` and `x["f"]` alike — BOTH spellings, because the
+   *  bracket form is the same access and was the measured bypass. `undefined` for
+   *  anything else (a computed name this walk cannot read). Serves both arms: the
+   *  CALLEE of `x.addEventListener(…)` and the assignment TARGET of `x.onclick =`. */
+  const accessedName = (node: ts.Node): string | undefined => {
+    if (ts.isPropertyAccessExpression(node)) {
+      return node.name.text;
     }
-    if (ts.isElementAccessExpression(callee) && ts.isStringLiteralLike(callee.argumentExpression)) {
-      return callee.argumentExpression.text;
+    if (ts.isElementAccessExpression(node) && ts.isStringLiteralLike(node.argumentExpression)) {
+      return node.argumentExpression.text;
     }
     return undefined;
   };
@@ -214,21 +216,11 @@ function unscopedListeners(text: string, fileName: string): string[] {
     if (!ts.isBinaryExpression(node) || node.operatorToken.kind !== ts.SyntaxKind.EqualsToken) {
       return undefined;
     }
-    const { left } = node;
-    if (ts.isPropertyAccessExpression(left) && /^on[a-z]+$/.test(left.name.text)) {
-      return left;
-    }
-    if (
-      ts.isElementAccessExpression(left) &&
-      ts.isStringLiteralLike(left.argumentExpression) &&
-      /^on[a-z]+$/.test(left.argumentExpression.text)
-    ) {
-      return left;
-    }
-    return undefined;
+    const name = accessedName(node.left);
+    return name !== undefined && /^on[a-z]+$/.test(name) ? node.left : undefined;
   };
   const visit = (node: ts.Node): void => {
-    if (ts.isCallExpression(node) && calleeName(node) === "addEventListener") {
+    if (ts.isCallExpression(node) && accessedName(node.expression) === "addEventListener") {
       const opts = node.arguments[2];
       const scoped =
         opts !== undefined &&
