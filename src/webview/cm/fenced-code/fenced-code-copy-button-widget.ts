@@ -32,7 +32,8 @@
 // (src/webview/banners.ts, role="alert") use the same standalone-region pattern.
 
 import type { EditorState } from "@codemirror/state";
-import { type EditorView, WidgetType } from "@codemirror/view";
+import type { EditorView } from "@codemirror/view";
+import { QuollWidget } from "../widget-base.js";
 import type { OpenLineOffset } from "./fenced-code-node.js";
 
 const COPY_LABEL = "Copy code";
@@ -109,7 +110,9 @@ async function copyToClipboard(text: string): Promise<boolean> {
   }
 }
 
-export class CopyButtonWidget extends WidgetType {
+export class CopyButtonWidget extends QuollWidget {
+  readonly widgetName = "CopyButtonWidget";
+
   constructor(
     /** Open-line offset of the fenced block — the sole eq() key. The button DOM is
      *  body- AND content-independent (a bare icon), so identity is purely
@@ -128,11 +131,11 @@ export class CopyButtonWidget extends WidgetType {
     super();
   }
 
-  eq(other: WidgetType): boolean {
+  protected sameAs(other: QuollWidget): boolean {
     return other instanceof CopyButtonWidget && other.openFrom === this.openFrom;
   }
 
-  toDOM(view: EditorView): HTMLElement {
+  protected render(view: EditorView, signal: AbortSignal): HTMLElement {
     // Wrapper hosts the button PLUS a sibling live region (see the header). It is
     // NOT a positioning context (default static), so the absolutely-positioned
     // button still anchors to the `.cm-line.quoll-fenced-code-open` panel row, not
@@ -168,80 +171,88 @@ export class CopyButtonWidget extends WidgetType {
     // never moves the selection into the (hidden) fence line. preventDefault on
     // mousedown does NOT cancel the subsequent click, so keyboard Enter/Space
     // (which fires click WITHOUT mousedown) still activates the button.
-    button.addEventListener("mousedown", (event) => {
-      event.preventDefault();
-      event.stopPropagation();
-    });
+    button.addEventListener(
+      "mousedown",
+      (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+      },
+      { signal }
+    );
 
-    button.addEventListener("click", (event) => {
-      event.preventDefault();
-      event.stopPropagation();
-      // Resolve the CURRENT body at click time from the live state (view.state is
-      // a getter — always current, even for a DOM reused across edits). null → the
-      // block was deleted/reshaped since the last rebuild; nothing to copy, and we
-      // leave the button's feedback state untouched (no attempt bump, no timer).
-      const text = this.getBody(view.state, this.openFrom);
-      if (text === null) {
-        return;
-      }
-      const myAttempt = ++attempt;
-      // Cancel a pending revert from a PRIOR click immediately, so it cannot
-      // fire and flash the button back to the default "Copy code" state while
-      // THIS click's clipboard promise is still in flight (the stale timer
-      // would otherwise resolve between this click and its settle).
-      if (revertTimer !== undefined) {
-        clearTimeout(revertTimer);
-        revertTimer = undefined;
-      }
-      // Clear the live region at click START. The result text is written
-      // asynchronously, once the clipboard promise settles on a later tick, so the
-      // region goes empty → result even when the same result repeats — an
-      // observable mutation the AT re-announces. Without this, a second copy with
-      // an identical result writes the same text into a region that already holds
-      // it (no DOM mutation → no re-announce). The 1500ms revert stays as a
-      // fallback clear.
-      announce(status, "", false);
-      void copyToClipboard(text).then((ok) => {
-        // Drop a superseded (out-of-order) settle so the newest click wins.
-        if (myAttempt !== attempt) {
+    button.addEventListener(
+      "click",
+      (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        // Resolve the CURRENT body at click time from the live state (view.state is
+        // a getter — always current, even for a DOM reused across edits). null → the
+        // block was deleted/reshaped since the last rebuild; nothing to copy, and we
+        // leave the button's feedback state untouched (no attempt bump, no timer).
+        const text = this.getBody(view.state, this.openFrom);
+        if (text === null) {
           return;
         }
-        // Symmetric feedback: success → check glyph + "Copied"; failure →
-        // keep the copy glyph but flag "Copy failed" in the error colour. A
-        // clipboard rejection (permission denied / no recent user activation
-        // on vscode.dev) must NOT be silent — the user pressed a button and
-        // gets a visible result either way. Showing the failure state never
-        // disturbs the editor selection (it only touches this button).
+        const myAttempt = ++attempt;
+        // Cancel a pending revert from a PRIOR click immediately, so it cannot
+        // fire and flash the button back to the default "Copy code" state while
+        // THIS click's clipboard promise is still in flight (the stale timer
+        // would otherwise resolve between this click and its settle).
         if (revertTimer !== undefined) {
           clearTimeout(revertTimer);
+          revertTimer = undefined;
         }
-        if (ok) {
-          setIcon(button, CHECK_ICON);
-          button.setAttribute("aria-label", COPIED_LABEL);
-          button.classList.remove("is-copy-failed");
-          button.classList.add("is-copied");
-          // Polite: a success needn't interrupt the SR's current utterance.
-          announce(status, COPIED_LABEL, false);
-        } else {
-          button.setAttribute("aria-label", FAILED_LABEL);
-          button.classList.remove("is-copied");
-          button.classList.add("is-copy-failed");
-          // Assertive: the copy the user asked for did NOT happen — surface it now.
-          announce(status, FAILED_LABEL, true);
-        }
-        revertTimer = setTimeout(() => {
-          // Safe even if the widget DOM was discarded mid-timeout: this only
-          // mutates the button's own (possibly detached) glyph/attrs + the live
-          // region text — no view access, mirroring image-widget's post-discard
-          // load listener. Clearing the region (back to polite) lets a later
-          // identical copy re-announce instead of being deduped as unchanged.
-          setIcon(button, COPY_ICON);
-          button.setAttribute("aria-label", COPY_LABEL);
-          button.classList.remove("is-copied", "is-copy-failed");
-          announce(status, "", false);
-        }, COPIED_FEEDBACK_MS);
-      });
-    });
+        // Clear the live region at click START. The result text is written
+        // asynchronously, once the clipboard promise settles on a later tick, so the
+        // region goes empty → result even when the same result repeats — an
+        // observable mutation the AT re-announces. Without this, a second copy with
+        // an identical result writes the same text into a region that already holds
+        // it (no DOM mutation → no re-announce). The 1500ms revert stays as a
+        // fallback clear.
+        announce(status, "", false);
+        void copyToClipboard(text).then((ok) => {
+          // Drop a superseded (out-of-order) settle so the newest click wins.
+          if (myAttempt !== attempt) {
+            return;
+          }
+          // Symmetric feedback: success → check glyph + "Copied"; failure →
+          // keep the copy glyph but flag "Copy failed" in the error colour. A
+          // clipboard rejection (permission denied / no recent user activation
+          // on vscode.dev) must NOT be silent — the user pressed a button and
+          // gets a visible result either way. Showing the failure state never
+          // disturbs the editor selection (it only touches this button).
+          if (revertTimer !== undefined) {
+            clearTimeout(revertTimer);
+          }
+          if (ok) {
+            setIcon(button, CHECK_ICON);
+            button.setAttribute("aria-label", COPIED_LABEL);
+            button.classList.remove("is-copy-failed");
+            button.classList.add("is-copied");
+            // Polite: a success needn't interrupt the SR's current utterance.
+            announce(status, COPIED_LABEL, false);
+          } else {
+            button.setAttribute("aria-label", FAILED_LABEL);
+            button.classList.remove("is-copied");
+            button.classList.add("is-copy-failed");
+            // Assertive: the copy the user asked for did NOT happen — surface it now.
+            announce(status, FAILED_LABEL, true);
+          }
+          revertTimer = setTimeout(() => {
+            // Safe even if the widget DOM was discarded mid-timeout: this only
+            // mutates the button's own (possibly detached) glyph/attrs + the live
+            // region text — no view access, mirroring image-widget's post-discard
+            // load listener. Clearing the region (back to polite) lets a later
+            // identical copy re-announce instead of being deduped as unchanged.
+            setIcon(button, COPY_ICON);
+            button.setAttribute("aria-label", COPY_LABEL);
+            button.classList.remove("is-copied", "is-copy-failed");
+            announce(status, "", false);
+          }, COPIED_FEEDBACK_MS);
+        });
+      },
+      { signal }
+    );
 
     wrap.append(button, status);
     return wrap;

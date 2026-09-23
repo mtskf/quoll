@@ -1,8 +1,8 @@
 // @vitest-environment happy-dom
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
 import { EditorSelection, EditorState } from "@codemirror/state";
-import type { DecorationSet, EditorView } from "@codemirror/view";
-import { describe, expect, it, vi } from "vitest";
+import { type DecorationSet, EditorView } from "@codemirror/view";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { quollSyntaxReveal } from "../../../src/webview/cm/decorations/index.js";
 import { thematicBreakReveal } from "../../../src/webview/cm/decorations/thematic-break-reveal.js";
 import { ThematicBreakWidget } from "../../../src/webview/cm/decorations/thematic-break-widget.js";
@@ -17,8 +17,20 @@ vi.mock("../../../src/webview/host.js", () => ({
 }));
 
 describe("ThematicBreakWidget", () => {
+  // ⚠️ QuollWidget's `toDOM(view)` takes a REQUIRED EditorView now (widget-base.ts).
+  // These are pure-DOM structure tests with no view otherwise in scope, and
+  // ThematicBreakWidget.render() ignores its argument, so this view is a type
+  // obligation, not a behavioural one — see the plan's Task 2 note.
+  let view: EditorView;
+  beforeEach(() => {
+    view = new EditorView({ state: EditorState.create({ doc: "" }) });
+  });
+  afterEach(() => {
+    view.destroy();
+  });
+
   it("renders a separator span with the quoll-thematic-break class", () => {
-    const dom = new ThematicBreakWidget().toDOM();
+    const dom = new ThematicBreakWidget().toDOM(view);
     expect(dom.tagName).toBe("SPAN");
     expect(dom.classList.contains("quoll-thematic-break")).toBe(true);
     expect(dom.getAttribute("role")).toBe("separator");
@@ -38,13 +50,13 @@ describe("ThematicBreakWidget", () => {
     // A list-child break carries its source-indent column count; the widget
     // insets the hairline (background-clip:content-box, styles.css) to the
     // item's content column via padding-inline-start.
-    const dom = new ThematicBreakWidget(2).toDOM();
+    const dom = new ThematicBreakWidget(2).toDOM(view);
     expect(dom.style.paddingInlineStart).toBe("calc(2 * var(--quoll-prose-space, 1ch))");
   });
 
   it("does NOT set padding for a top-level break (indentCols 0 — byte-identical)", () => {
-    expect(new ThematicBreakWidget().toDOM().style.paddingInlineStart).toBe("");
-    expect(new ThematicBreakWidget(0).toDOM().style.paddingInlineStart).toBe("");
+    expect(new ThematicBreakWidget().toDOM(view).style.paddingInlineStart).toBe("");
+    expect(new ThematicBreakWidget(0).toDOM(view).style.paddingInlineStart).toBe("");
   });
 
   it("does NOT ignore events — clicks fall through to CM so click-to-reveal works", () => {

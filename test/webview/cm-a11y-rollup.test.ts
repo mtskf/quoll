@@ -79,7 +79,7 @@ describe("C8 a11y roll-up — frontmatter metadata block (C8a)", () => {
       "title: x\ndraft: true",
       "---\ntitle: x\ndraft: true\n---",
       true
-    ).toDOM();
+    ).toDOM(mockView);
     expect(dom.getAttribute("role")).toBe("region");
     expect(dom.getAttribute("aria-label")).toBe("Document metadata");
     expect(dom.querySelector("dl.quoll-frontmatter-list")).not.toBeNull();

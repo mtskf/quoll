@@ -1,5 +1,7 @@
 // @vitest-environment happy-dom
-import { describe, expect, it } from "vitest";
+import { EditorState } from "@codemirror/state";
+import { EditorView } from "@codemirror/view";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import {
   FrontmatterBlockWidget,
@@ -74,12 +76,23 @@ describe("parseFrontmatter", () => {
 });
 
 describe("FrontmatterBlockWidget — DOM structure (a11y, read-only)", () => {
+  // ⚠️ QuollWidget's `toDOM(view)` takes a REQUIRED EditorView (widget-base.ts).
+  // These tests probe DOM structure directly and don't otherwise need a view;
+  // the mousedown listener captures it but these assertions never fire it.
+  let view: EditorView;
+  beforeEach(() => {
+    view = new EditorView({ state: EditorState.create({ doc: "" }) });
+  });
+  afterEach(() => {
+    view.destroy();
+  });
+
   it("builds a role=region div with an aria-label and a <dl> (NOT an <hr>)", () => {
     const dom = new FrontmatterBlockWidget(
       "title: x\ndraft: true",
       "---\ntitle: x\ndraft: true\n---",
       true
-    ).toDOM();
+    ).toDOM(view);
     expect(dom.tagName).toBe("DIV");
     expect(dom.className).toBe("quoll-block quoll-frontmatter-block");
     expect(dom.getAttribute("role")).toBe("region");
@@ -101,7 +114,7 @@ describe("FrontmatterBlockWidget — DOM structure (a11y, read-only)", () => {
       "title: x\ndraft: true",
       "---\ntitle: x\ndraft: true\n---",
       true
-    ).toDOM();
+    ).toDOM(view);
     const description = dom.getAttribute("aria-description");
     expect(description).toBeTruthy();
     expect(description).toMatch(/caret|edit/i);
@@ -115,7 +128,7 @@ describe("FrontmatterBlockWidget — DOM structure (a11y, read-only)", () => {
       "title: x\ndraft: true",
       "---\ntitle: x\ndraft: true\n---",
       false
-    ).toDOM();
+    ).toDOM(view);
     expect(dom.getAttribute("aria-label")).toBe("Document metadata");
     expect(dom.getAttribute("aria-description")).toBeNull();
   });
@@ -125,7 +138,7 @@ describe("FrontmatterBlockWidget — DOM structure (a11y, read-only)", () => {
       "author:\n  name: x",
       "---\nauthor:\n  name: x\n---",
       true
-    ).toDOM();
+    ).toDOM(view);
     expect(dom.querySelector("dl")).toBeNull();
     const pre = dom.querySelector("pre.quoll-frontmatter-raw");
     expect(pre).not.toBeNull();

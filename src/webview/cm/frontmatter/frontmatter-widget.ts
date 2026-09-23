@@ -20,8 +20,9 @@
 // a block that can no longer be revealed. `body` is a pure function of `slice`, so
 // it need not participate in eq().
 
-import { type EditorView, WidgetType } from "@codemirror/view";
+import type { EditorView } from "@codemirror/view";
 
+import { QuollWidget } from "../widget-base.js";
 import { revealFrontmatterAt } from "./reveal-state.js";
 
 export interface FrontmatterRow {
@@ -73,7 +74,9 @@ export function parseFrontmatter(body: string): ParsedFrontmatter {
   return { kind: "pairs", rows };
 }
 
-export class FrontmatterBlockWidget extends WidgetType {
+export class FrontmatterBlockWidget extends QuollWidget {
+  readonly widgetName = "FrontmatterBlockWidget";
+
   constructor(
     /** Raw frontmatter body (between the fences). */
     readonly body: string,
@@ -87,7 +90,7 @@ export class FrontmatterBlockWidget extends WidgetType {
     super();
   }
 
-  eq(other: WidgetType): boolean {
+  protected sameAs(other: QuollWidget): boolean {
     return (
       other instanceof FrontmatterBlockWidget &&
       other.slice === this.slice &&
@@ -95,7 +98,7 @@ export class FrontmatterBlockWidget extends WidgetType {
     );
   }
 
-  toDOM(view?: EditorView): HTMLElement {
+  protected render(view: EditorView, signal: AbortSignal): HTMLElement {
     // Root carries the `quoll-block` marker (margin:0 measurement invariant);
     // vertical breathing room is padding, never vertical margin. (The horizontal
     // text-column inset IS a margin — the compound `.quoll-block.quoll-frontmatter-block`
@@ -131,10 +134,11 @@ export class FrontmatterBlockWidget extends WidgetType {
     // start — the first editable body line, or the closer line for an empty body
     // (`---\n---`). The `: 0` branch is dead-code defence: detect.ts returns null
     // for < 2 lines, so a collapsed widget (which only exists when a span was
-    // detected) always has >= 2 lines. `view` is absent only in unit tests that
-    // probe DOM structure directly — nothing to reveal without a view.
-    if (view) {
-      root.addEventListener("mousedown", (event) => {
+    // detected) always has >= 2 lines. `view` is now a required parameter of the
+    // base's `render` (QuollWidget), so it is always present here.
+    root.addEventListener(
+      "mousedown",
+      (event) => {
         // Left button only — right/middle clicks must reach the context menu
         // and must not consume the event (matches link-handlers.ts:249).
         if (event.button !== 0) {
@@ -143,8 +147,9 @@ export class FrontmatterBlockWidget extends WidgetType {
         event.preventDefault();
         const anchor = view.state.doc.lines >= 2 ? view.state.doc.line(2).from : 0;
         revealFrontmatterAt(view, anchor);
-      });
-    }
+      },
+      { signal }
+    );
 
     const parsed = parseFrontmatter(this.body);
     if (parsed.kind === "pairs") {
