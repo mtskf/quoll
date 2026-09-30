@@ -2,6 +2,12 @@
 
 All notable changes to Quoll are documented here.
 
+## 0.1.82 — 2026-10-01
+
+### Fixed
+
+- Typing in a file saved with Windows line endings that has no line break yet no longer makes the text you just typed flicker or briefly disappear when you press Enter. Quoll now takes the line-ending style straight from VS Code, and switching it in the status bar is picked up right away.
+
 ## 0.1.81 — 2026-09-24
 
 ### Fixed
