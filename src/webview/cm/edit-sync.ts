@@ -485,9 +485,11 @@ export function createEditSync(opts: EditSyncOptions): EditSync {
   // definition, so the two sides cannot drift apart about what "carries these
   // bytes" means. It is asked ONLY here, never to decide what to post: the host
   // canonicalises a Document to `document.eol` while this side posts whatever its
-  // `quollDocumentEol` facet holds, so an EOL-only difference is routine skew between
-  // the two sides, and reporting it as a lost edit trains the user to ignore a
-  // notice that otherwise only fires on real loss.
+  // `quollDocumentEol` facet holds. The facet takes the wire `eol`, so the two
+  // agree in steady state, but bytes held across an EOL-mode switch still carry
+  // the old EOL — an EOL-only difference is skew between the two sides, and
+  // reporting it as a lost edit trains the user to ignore a notice that
+  // otherwise only fires on real loss.
   // `opts.getDoc()` IS that authoritative content whenever the first condition
   // holds, which is why this needs no plumbing from editor.ts and no content
   // parameter on the RECORD-ONLY onHostSnapshot: supersession makes
