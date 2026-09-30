@@ -153,7 +153,7 @@ function mount(
   };
 }
 
-// (a) applyDocument(rawText, true, 1) puts rawText into view.state.sliceDoc().
+// (a) applyDocument({ content, eol, canWrite: true, docVersion: 1 }) puts content into view.state.sliceDoc().
 describe("editor — applyDocument seeds the CM doc (a)", () => {
   it("rawText reaches the CM document (LF seed, so sliceDoc() is byte-identical)", () => {
     const { handle, view } = mount();
@@ -227,7 +227,7 @@ describe("editor — idempotent reseed posts no Edit (b)", () => {
 
 // (c) Readonly via BOTH facets driven by the canWrite PARAM directly.
 describe("editor — canWrite param drives BOTH editable + readOnly facets (c)", () => {
-  it("applyDocument(_, false, _) flips readOnly+editable WITHOUT changing state.canWrite, then (_, true, _) flips back", () => {
+  it("canWrite:false flips readOnly+editable WITHOUT changing state.canWrite, then canWrite:true flips back", () => {
     const heldState = makeState({ canWrite: true });
     const { handle, view } = mount({ state: heldState });
     handle.applyDocument({ content: "body", eol: "\n", canWrite: false, docVersion: 1 });
@@ -242,7 +242,7 @@ describe("editor — canWrite param drives BOTH editable + readOnly facets (c)",
 // (d) Fresh-canWrite seed: applyDocument fires BEFORE getState would see the
 // next reducer commit, so the Compartment + replay gate must use the param.
 describe("editor — fresh canWrite from applyDocument drives Compartment + replay (d)", () => {
-  it("(rawText, true, _) with stale state.canWrite=false leaves view writable AND drains buffered Edit on commit", () => {
+  it("applyDocument({ canWrite: true, ... }) with stale state.canWrite=false leaves view writable AND drains buffered Edit on commit", () => {
     vi.useFakeTimers();
     const { handle, view, setState, commit } = mount({
       state: makeState({ canWrite: false }),
@@ -878,9 +878,9 @@ describe("editor — plain typing + paste round-trip posts the exact Edit (f)", 
   });
 });
 
-// (g) Parse-failure-shaped seed: identical 3-arg shape, same flip pattern.
+// (g) Parse-failure-shaped seed: identical snapshot-object shape, same flip pattern.
 describe("editor — parse-failure-shaped seed still tracks canWrite (g)", () => {
-  it("applyDocument(rawText, false, v) → readOnly+editable=false; (rawText, true, v+1) → readOnly+editable=true", () => {
+  it("applyDocument({ content, eol, canWrite: false, docVersion: v }) → readOnly+editable=false; canWrite:true, docVersion:v+1 → readOnly+editable=true", () => {
     const { handle, view } = mount({ state: makeState({ canWrite: true }) });
     handle.applyDocument({
       content: "raw with [broken",

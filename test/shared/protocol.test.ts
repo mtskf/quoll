@@ -97,12 +97,14 @@ describe("envelope rejections (both directions)", () => {
   });
 
   // Wrong protocol versions: anything other than the exact numeric constant
-  // must be rejected. Strict equality means "1" (string) is not 1 (number).
+  // must be rejected. Strict equality means String(PROTOCOL_VERSION) (string)
+  // is not PROTOCOL_VERSION (number) — derived from the constant so a future
+  // version bump can't quietly vacuate this case.
   const wrongProtocols: Array<unknown> = [
     0,
     PROTOCOL_VERSION + 1,
     PROTOCOL_VERSION - 0.5,
-    "1",
+    String(PROTOCOL_VERSION),
     null,
     undefined,
     true,

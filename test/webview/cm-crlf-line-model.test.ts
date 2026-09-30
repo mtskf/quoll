@@ -61,7 +61,7 @@ let container: HTMLElement | null = null;
 beforeEach(() => {
   postMessage.mockClear();
   // ⚠️ The container must be CREATED here, not just declared. mount() passes it
-  // to mountEditor as `parent`, and editor.ts:277 calls `opts.parent.appendChild`
+  // to mountEditor as `parent`, and mountEditor (editor.ts) calls `opts.parent.appendChild`
   // — a null parent throws before any assertion runs, so the suite would again
   // fail on the harness rather than on the behaviour. Mirrors editor.test.ts:84-88.
   container = document.createElement("div");

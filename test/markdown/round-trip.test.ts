@@ -16,7 +16,7 @@ import { loadFixtures } from "./load-fixtures.js";
 // "a\r\nb\nc" → "a\r\nb\r\nc", "a\rb" → "a\nb"). That is a documented design
 // choice, NOT a Markdown-semantic mutation. The normalization is now owned at
 // the host boundary by `canonicalDocumentText` (pinned by
-// test/extension/document-canonical.test.ts + the `mixed-eol-roundtrip` e2e);
+// test/extension/session/document-canonical.test.ts + the `mixed-eol-roundtrip` e2e);
 // test/webview/editor.test.ts case (e) additionally characterizes that the CM
 // seam serialises under the wire eol regardless of content. This corpus carries no mixed-EOL or lone-CR
 // fixture, so the gate deliberately asserts byte-identity only for the
@@ -86,7 +86,7 @@ const EX_PM_DIVERGENCES: Record<string, string> = {
   "mixed-task-bullet.md":
     "PM flipped bare bullets in a task list to a `[ ]` prefix. CM preserves bare bullets alongside `[x]` items.",
   "gfm-table-crlf.md":
-    "PM normalized CRLF line endings to LF. CM detects the whole-doc separator and preserves the \\r\\n bytes.",
+    "PM normalized CRLF line endings to LF. CM keeps an LF-only interior and serialises with the document's own EOL (the host's DocumentMessage.eol), so the \\r\\n bytes are preserved.",
   "table-trailing-line-ws.md":
     "PM stripped trailing whitespace after the closing `|`. CM preserves the trailing bytes.",
   "table-empty-cells.md":
