@@ -258,9 +258,9 @@ export function isDocumentEol(value: unknown): value is DocumentEol {
  *  authoritative). They are wire-OPTIONAL for one release so an old host that
  *  never sends them does not brick a new webview (absence = "no epoch info" =
  *  today's unconditional-replay behaviour). Since `PROTOCOL_VERSION` 2 an old
- *  host is rejected at `isProtocolMatch` before this field is read, so that
- *  tolerance is unreachable; making the pair required is a follow-up. Semantics (S3a plumbs them; S3b
- *  consumes them): `externalEpoch` is host-owned and monotonic WITHIN one host
+ *  host is rejected at `isProtocolMatch` before the pair is read, so that
+ *  tolerance is unreachable; making the pair required is a follow-up.
+ *  Semantics (S3a plumbs them; S3b consumes them): `externalEpoch` is host-owned and monotonic WITHIN one host
  *  session (starts at 0), advancing whenever document content changed by
  *  anything other than the webview's own acked edit lineage; `epochGeneration`
  *  is a per-host-session nonce (minted once at session start — a counter-salted
