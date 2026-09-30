@@ -14,8 +14,13 @@
 import { EndOfLine, type TextDocument } from "vscode";
 // DocumentMessage is defined in the protocol module; document-message.ts uses
 // it internally but does NOT re-export it, so import the type from the source.
-import type { DocumentEol, DocumentMessage, ThemeKind } from "../../shared/protocol.js";
-import { buildDocumentMessage } from "./document-message.js";
+import type { DocumentEol, DocumentMessage } from "../../shared/protocol.js";
+import { type BuildDocumentMessageInput, buildDocumentMessage } from "./document-message.js";
+
+/** Everything a Document message carries besides its bytes and separator —
+ *  derived from the builder input so both adapters below stay in lockstep
+ *  with it. */
+type DocumentMessageMetadata = Omit<BuildDocumentMessageInput, "content" | "eol">;
 
 /** Normalize a raw string's line endings to `eol`. The string-level core of
  *  `canonicalDocumentText`, exposed so a caller that ALREADY holds the raw
@@ -39,13 +44,7 @@ export function canonicalDocumentText(document: Pick<TextDocument, "eol" | "getT
 
 export function buildDocumentMessageFromDocument(
   document: Pick<TextDocument, "eol" | "getText">,
-  metadata: {
-    docVersion: number;
-    themeKind: ThemeKind;
-    canWrite: boolean;
-    externalEpoch: number;
-    epochGeneration: number;
-  }
+  metadata: DocumentMessageMetadata
 ): DocumentMessage {
   return buildDocumentMessage({
     content: canonicalDocumentText(document),
@@ -62,13 +61,7 @@ export function buildDocumentMessageFromDocument(
 export function buildRejectedDraftFromDocument(
   document: Pick<TextDocument, "eol">,
   content: string,
-  metadata: {
-    docVersion: number;
-    themeKind: ThemeKind;
-    canWrite: boolean;
-    externalEpoch: number;
-    epochGeneration: number;
-  }
+  metadata: DocumentMessageMetadata
 ): DocumentMessage {
   return buildDocumentMessage({
     content,
