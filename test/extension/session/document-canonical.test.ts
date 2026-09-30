@@ -3,6 +3,7 @@ import { EndOfLine, type TextDocument } from "vscode";
 
 import {
   buildDocumentMessageFromDocument,
+  buildRejectedDraftFromDocument,
   canonicalDocumentText,
   documentEolOf,
 } from "../../../src/extension/session/document-canonical.js";
@@ -112,5 +113,46 @@ describe("documentEolOf / buildDocumentMessageFromDocument eol", () => {
       "\r\n"
     );
     expect(buildDocumentMessageFromDocument(fakeDoc(EndOfLine.LF, "a"), metadata).eol).toBe("\n");
+  });
+});
+
+describe("buildRejectedDraftFromDocument", () => {
+  const metadata = {
+    docVersion: 4,
+    themeKind: "dark" as const,
+    canWrite: false,
+    externalEpoch: 3,
+    epochGeneration: 7,
+  };
+
+  it("stamps a CRLF document's eol, including a draft with no line break", () => {
+    const doc = fakeDoc(EndOfLine.CRLF, "unused");
+    expect(buildRejectedDraftFromDocument(doc, "a", metadata).eol).toBe("\r\n");
+    expect(buildRejectedDraftFromDocument(doc, "a\r\nb", metadata).eol).toBe("\r\n");
+  });
+
+  it("stamps an LF document's eol", () => {
+    expect(
+      buildRejectedDraftFromDocument(fakeDoc(EndOfLine.LF, "unused"), "a\nb", metadata).eol
+    ).toBe("\n");
+  });
+
+  it("keeps the draft's raw bytes — neither canonicalised nor read from the document", () => {
+    // An LF-joined draft against a CRLF document: the content must survive the
+    // rejection untouched, and must not be replaced by document.getText().
+    const msg = buildRejectedDraftFromDocument(
+      fakeDoc(EndOfLine.CRLF, "x\r\ny"),
+      "a\nb\nc",
+      metadata
+    );
+    expect(msg.content).toBe("a\nb\nc");
+    expect(msg.docVersion).toBe(4);
+    expect(msg.themeKind).toBe("dark");
+    expect(msg.canWrite).toBe(false);
+    expect(msg.externalEpoch).toBe(3);
+    expect(msg.epochGeneration).toBe(7);
+    expect(Object.keys(msg).sort()).toEqual(
+      Object.keys(buildDocumentMessageFromDocument(fakeDoc(EndOfLine.CRLF, "a"), metadata)).sort()
+    );
   });
 });

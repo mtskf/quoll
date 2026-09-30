@@ -104,13 +104,12 @@ import { buildWebviewHtml } from "../webview-html.js";
 import { canHostWrite } from "./can-host-write.js";
 import {
   buildDocumentMessageFromDocument,
+  buildRejectedDraftFromDocument,
   canonicalDocumentText,
   canonicalizeText,
-  documentEolOf,
 } from "./document-canonical.js";
 import {
   buildCaretApplyMessage,
-  buildDocumentMessage,
   buildEditorConfigMessage,
   buildEditRejectedMessage,
   buildThemeMessage,
@@ -475,10 +474,7 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
           epochGeneration,
         }),
       buildRejectedDraft: (content, docVersion, externalEpoch, epochGeneration) =>
-        buildDocumentMessage({
-          content,
-          // Read at build time, like themeKind / canWrite.
-          eol: documentEolOf(document.eol),
+        buildRejectedDraftFromDocument(document, content, {
           docVersion,
           themeKind: themeKindFromColorTheme(window.activeColorTheme.kind),
           canWrite: canWriteNow(),

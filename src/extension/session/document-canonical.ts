@@ -53,3 +53,26 @@ export function buildDocumentMessageFromDocument(
     ...metadata,
   });
 }
+
+/** The rejected-draft reseed: the webview's own draft bytes, passed through
+ *  as-is (NOT canonicalised — the draft is what the user typed and must survive
+ *  the rejection byte-for-byte), stamped with the document's `eol`. Taking the
+ *  document, not a pre-read separator, is what lets a unit test pin the wire
+ *  eol with a CRLF fake document. */
+export function buildRejectedDraftFromDocument(
+  document: Pick<TextDocument, "eol">,
+  content: string,
+  metadata: {
+    docVersion: number;
+    themeKind: ThemeKind;
+    canWrite: boolean;
+    externalEpoch: number;
+    epochGeneration: number;
+  }
+): DocumentMessage {
+  return buildDocumentMessage({
+    content,
+    eol: documentEolOf(document.eol),
+    ...metadata,
+  });
+}
