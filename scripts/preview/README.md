@@ -63,6 +63,7 @@ every request, so CSS tweaks show immediately.
 export default {
   doc: "test/markdown/fixtures/nested-lists.md", // repo-root-relative; or `content: "..."`
   theme: "light",                                 // "light" | "dark" | "hc-light" | "hc-dark"
+  // eol: "crlf",                                 // "lf" | "crlf"; absent → read off the doc's bytes
   variations: [
     { label: "baseline", css: "" },
     { label: "wider gap", css: ".cm-content { letter-spacing: 0.02em; }" },
@@ -86,10 +87,19 @@ The page stubs the VS Code webview runtime just enough to boot the real bundle:
 1. `window.acquireVsCodeApi` is defined (as a function) **before** the module
    bundle runs, else the webview paints its init-error banner.
 2. Seeding uses the real protocol handshake, not a blind timer: the webview
-   posts `{ protocol: 1, type: "ready" }` through the shim when it mounts (after
+   posts `{ protocol, type: "ready" }` through the shim when it mounts (after
    its `window` message listener is wired). The shim detects that and only then
    `window.postMessage`es the `document` seed
-   (`{ protocol: 1, type: "document", content, docVersion: 1, themeKind, canWrite: true }`).
+   (`{ protocol, type: "document", content, docVersion: 1, themeKind, canWrite: true, eol }`).
+   `protocol` is `serve.mjs`'s `PREVIEW_PROTOCOL_VERSION`, pinned equal to
+   `src/shared/protocol.ts`'s `PROTOCOL_VERSION` by
+   `test/build/preview-server-theme.test.ts` — a stale value makes the shell
+   drop the seed and the preview shows an empty editor.
+3. The preview plays the HOST, so `eol` is what `TextDocument.eol` would be: the
+   config's `eol` (`"lf"` / `"crlf"`, an unknown value is a 500), or — absent —
+   read off the doc's bytes. The content is canonicalised to that EOL the way the
+   host canonicalises it, so the seed is always a pair production could send.
+   `eol: "crlf"` is how to seed a CRLF document with no line break.
 
 ## The `--vscode-*` stubbing caveat
 

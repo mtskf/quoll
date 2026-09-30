@@ -1,4 +1,5 @@
-// Non-vacuity pins for scripts/preview/serve.mjs — theme handling only.
+// Non-vacuity pins for scripts/preview/serve.mjs — theme handling, plus the
+// seed's protocol version and document EOL (bottom of the file).
 //
 // Companion to theme-palettes.test.ts, which pins the palette MODULE. This file
 // pins the SERVER's use of it, because the two have different failure modes and
@@ -31,7 +32,10 @@ import type { Server } from "node:http";
 import { afterEach, describe, expect, it } from "vitest";
 
 // @ts-expect-error — plain .mjs with no bundled types; vitest transpiles it.
-import { createPreviewServer } from "../../scripts/preview/serve.mjs";
+import * as previewServer from "../../scripts/preview/serve.mjs";
+import { PROTOCOL_VERSION } from "../../src/shared/protocol.js";
+
+const { createPreviewServer, PREVIEW_PROTOCOL_VERSION } = previewServer;
 
 // The <body> stamps a real VS Code webview host applies, restated here as
 // literals ON PURPOSE: importing bodyThemeAttrs would make this assertion
@@ -115,4 +119,50 @@ describe("preview server — every real themeKind renders under its own label", 
       expect(body).toContain(`var THEME_KIND = ${JSON.stringify(kind)};`);
     });
   }
+});
+
+// The seed is a hand-rolled `document` message, so it must carry what the
+// shell's boundary validator requires: the CURRENT protocol version and a wire
+// `eol`. Either one wrong drops the seed whole — an empty editor, no error page.
+describe("preview server — the seed carries the current protocol and a wire eol", () => {
+  it("restates PROTOCOL_VERSION exactly (serve.mjs cannot import the TS constant)", () => {
+    expect(PREVIEW_PROTOCOL_VERSION).toBe(PROTOCOL_VERSION);
+  });
+
+  it("a served instance seeds that protocol version and an eol", async () => {
+    // Revert-check: put `protocol: 1` back in preview.template.html → red.
+    const { status, body } = await fetchInstance({ content: "# hi\n" });
+
+    expect(status).toBe(200);
+    expect(body).toContain(`protocol: ${PROTOCOL_VERSION},`);
+    expect(body).toContain("eol: DOC_EOL,");
+    // Absent eol: read off the doc's bytes (LF here).
+    expect(body).toContain('var DOC_EOL = "\\n";');
+  });
+
+  it('eol: "crlf" seeds "\\r\\n" for a document with no line break', async () => {
+    // The no-newline CRLF document is the case the explicit override exists for:
+    // its bytes carry no EOL evidence.
+    const noNewline = await fetchInstance({ eol: "crlf", content: "a" });
+    expect(noNewline.status).toBe(200);
+    expect(noNewline.body).toContain('var DOC_EOL = "\\r\\n";');
+    expect(noNewline.body).toContain('var DOC = "a";');
+  });
+
+  it('eol: "crlf" canonicalises mixed content the way the host does', async () => {
+    const mixed = await fetchInstance({ eol: "crlf", content: "a\nb\r\nc\rd" });
+    expect(mixed.body).toContain('var DOC = "a\\r\\nb\\r\\nc\\r\\nd";');
+  });
+
+  it('eol: "lf" canonicalises CRLF content to LF', async () => {
+    const { body } = await fetchInstance({ eol: "lf", content: "a\r\nb" });
+    expect(body).toContain('var DOC_EOL = "\\n";');
+    expect(body).toContain('var DOC = "a\\nb";');
+  });
+
+  it("an unknown eol returns 500 naming it", async () => {
+    const { status, body } = await fetchInstance({ eol: "cr", content: "a" });
+    expect(status).toBe(500);
+    expect(body).toContain('unknown eol "cr"');
+  });
 });

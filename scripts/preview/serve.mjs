@@ -26,6 +26,18 @@ const repoRoot = resolve(__dirname, "..", "..");
 const distWebview = resolve(repoRoot, "dist", "webview");
 const templatePath = resolve(__dirname, "preview.template.html");
 
+// The wire protocol version the hand-rolled seed carries. serve.mjs cannot import
+// the TS constant (src/shared/protocol.ts PROTOCOL_VERSION), so it is restated
+// here and test/build/preview-server-theme.test.ts pins the two equal: a stale
+// value makes the shell's boundary validator drop the seed WHOLE and the preview
+// renders an empty editor with nothing but a console line to say why.
+export const PREVIEW_PROTOCOL_VERSION = 2;
+
+// The document EOL vocabulary a config may name, mapped to the wire separator
+// (`DocumentMessage.eol`). `lf` / `crlf` rather than escape sequences so a config
+// file never has to spell a raw `\r\n`.
+const PREVIEW_EOLS = { lf: "\n", crlf: "\r\n" };
+
 const DEFAULT_PORT = 4599;
 const PORT_RETRIES = 10;
 
@@ -135,8 +147,26 @@ function normaliseConfig(cfg) {
     Array.isArray(cfg.variations) && cfg.variations.length > 0
       ? cfg.variations
       : [{ label: "baseline", css: "" }];
-  const content = typeof cfg.content === "string" ? cfg.content : "";
-  return { theme, variations, content };
+  const raw = typeof cfg.content === "string" ? cfg.content : "";
+  // The preview plays the HOST, so the seed must be a content/eol pair the host
+  // could send. An explicit `eol` stands in for `TextDocument.eol` — it is how the
+  // harness seeds a CRLF document with no line break, whose bytes carry no EOL
+  // evidence. Absent, the EOL is read off the doc's bytes (a stand-in only; the
+  // webview itself never infers it). Either way the content is canonicalised to
+  // that EOL exactly as the host's `canonicalizeText` does. A SUPPLIED unknown
+  // value throws, for the same reason as an unknown theme above.
+  let eol;
+  if (cfg.eol === undefined) {
+    eol = raw.includes("\r\n") ? PREVIEW_EOLS.crlf : PREVIEW_EOLS.lf;
+  } else if (Object.hasOwn(PREVIEW_EOLS, cfg.eol)) {
+    eol = PREVIEW_EOLS[cfg.eol];
+  } else {
+    throw new Error(
+      `preview: unknown eol ${JSON.stringify(cfg.eol)} (known: ${Object.keys(PREVIEW_EOLS).join(", ")})`
+    );
+  }
+  const content = raw.replace(/\r\n|\r|\n/g, eol);
+  return { theme, variations, content, eol };
 }
 
 // Read the config FRESH each request (cache-busted dynamic import) so editing
@@ -174,6 +204,8 @@ async function renderInstance(cfg, index) {
   const bodyAttrs = bodyThemeAttrs(cfg.theme);
   return template
     .replaceAll("{{DOC_JSON}}", jsStringLiteral(cfg.content))
+    .replaceAll("{{DOC_EOL}}", jsStringLiteral(cfg.eol))
+    .replaceAll("{{PROTOCOL_VERSION}}", String(PREVIEW_PROTOCOL_VERSION))
     .replaceAll("{{THEME_KIND}}", JSON.stringify(cfg.theme))
     .replaceAll("{{THEME_VARS}}", escapeStyle(themeVarsCss(cfg.theme)))
     .replaceAll("{{BODY_CLASS}}", escapeHtml(bodyAttrs.className))

@@ -63,7 +63,7 @@
       executes, or the webview paints its init-error banner.
 
       Seeding uses the REAL protocol handshake: the webview posts
-      { protocol:1, type:"ready" } through this shim's postMessage when it
+      { protocol, type:"ready" } through this shim's postMessage when it
       mounts (after its window "message" listener is wired). We detect that
       and only THEN window.postMessage the document seed, so the listener is
       guaranteed to be present. Variation JS runs after the seed via rAF.
@@ -71,6 +71,7 @@
     <script>
       (function () {
         var DOC = {{DOC_JSON}};
+        var DOC_EOL = {{DOC_EOL}};
         var THEME_KIND = {{THEME_KIND}};
         // Best-effort measurement handle for later getComputedStyle probing.
         // The EditorView instance is not reachable from the DOM without
@@ -91,12 +92,13 @@
             if (message && message.type === "ready") {
               window.postMessage(
                 {
-                  protocol: 1,
+                  protocol: {{PROTOCOL_VERSION}},
                   type: "document",
                   content: DOC,
                   docVersion: 1,
                   themeKind: THEME_KIND,
                   canWrite: true,
+                  eol: DOC_EOL,
                 },
                 "*"
               );
