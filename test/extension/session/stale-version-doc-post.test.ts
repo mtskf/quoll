@@ -24,7 +24,7 @@ import {
   type HostSessionEvent,
   type HostSessionState,
 } from "../../../src/extension/session/host-session-core.js";
-import type { HostToWebview } from "../../../src/shared/protocol.js";
+import { type HostToWebview, PROTOCOL_VERSION } from "../../../src/shared/protocol.js";
 
 const ctx = { uriString: "file:///x.md", fsPath: "/x.md" };
 const okValidate = () => ({ ok: true }) as const;
@@ -135,8 +135,9 @@ describe("stale-version Document post: executor pairs live version with live byt
         }),
       buildRejectedDraft: (content, docVersion, externalEpoch, epochGeneration) =>
         ({
-          protocol: 1,
+          protocol: PROTOCOL_VERSION,
           type: "document",
+          eol: "\n",
           content,
           docVersion,
           canWrite: true,
@@ -144,9 +145,10 @@ describe("stale-version Document post: executor pairs live version with live byt
           externalEpoch,
           epochGeneration,
         }) as HostToWebview,
-      buildTheme: (themeKind) => ({ protocol: 1, type: "theme", themeKind }) as HostToWebview,
+      buildTheme: (themeKind) =>
+        ({ protocol: PROTOCOL_VERSION, type: "theme", themeKind }) as HostToWebview,
       buildEditRejected: (error) =>
-        ({ protocol: 1, type: "edit-rejected", error }) as HostToWebview,
+        ({ protocol: PROTOCOL_VERSION, type: "edit-rejected", error }) as HostToWebview,
       applyEditSeam: {
         readText: () => fakeDoc.getText(),
         readVersion: () => fakeDoc.version,

@@ -127,6 +127,7 @@ describe("subscribeToHost — boundary validation + diagnostics", () => {
     docVersion: 1,
     themeKind: "dark",
     canWrite: true,
+    eol: "\n",
   });
 
   let subscribeToHost: HostModule["subscribeToHost"];
@@ -158,12 +159,13 @@ describe("subscribeToHost — boundary validation + diagnostics", () => {
     window.dispatchEvent(
       new MessageEvent("message", {
         data: {
-          protocol: 2,
+          protocol: PROTOCOL_VERSION + 1,
           type: "document",
           content: "x",
           docVersion: 1,
           themeKind: "dark",
           canWrite: true,
+          eol: "\n",
         },
       })
     );
@@ -172,7 +174,11 @@ describe("subscribeToHost — boundary validation + diagnostics", () => {
     expect(errorSpy).toHaveBeenCalledTimes(1);
     const [message, detail] = errorSpy.mock.calls[0];
     expect(String(message)).toContain("protocol mismatch");
-    expect(detail).toMatchObject({ expected: PROTOCOL_VERSION, got: 2, type: "document" });
+    expect(detail).toMatchObject({
+      expected: PROTOCOL_VERSION,
+      got: PROTOCOL_VERSION + 1,
+      type: "document",
+    });
   });
 
   it("rejects and logs a shapeless payload via the validator branch, previewing only type + keys", () => {

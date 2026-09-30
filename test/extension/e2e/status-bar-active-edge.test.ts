@@ -2,6 +2,7 @@ import * as assert from "node:assert";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import * as vscode from "vscode";
+import { PROTOCOL_VERSION } from "./constants";
 import { cleanupBetweenTests, getHarness, makeTempDir, tick, VIEW_TYPE } from "./harness";
 import type { PanelControlsShape, StatusBarItemProbeShape, TestHarnessShape } from "./types";
 
@@ -237,7 +238,7 @@ describe("status-bar-active-edge", function () {
   // Selection-count readout: a caret-report carrying a non-empty `selectedChars`
   // appends ` (N selected)` to the caret slot (statusBarItems[0], priority 102),
   // and it drops back to a bare `Ln X, Col Y` when the selection collapses.
-  const PROTOCOL = 1;
+  const PROTOCOL = PROTOCOL_VERSION;
   const caretSlotText = (panel: PanelControlsShape): string => panel.statusBarItems[0].text;
 
   it("appends `(N selected)` on a non-empty caret-report and drops it on a 0 report", async () => {

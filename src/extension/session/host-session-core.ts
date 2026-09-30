@@ -319,7 +319,8 @@ function defaultMintEpochGeneration(): number {
  *  `quollDocumentEol` facet holds; the other (`currentContent` /
  *  `preApplyContent`) is canonicalised to `document.eol`. A pure byte compare
  *  would misread an EOL-only difference (a plain edit on a CRLF-eol doc whose
- *  webview facet is still LF) as foreign bytes.
+ *  webview facet is still LF — an Edit held across an EOL-mode switch) as
+ *  foreign bytes.
  *  The comparison itself is `sameTextIgnoringEol` (src/shared/), which the
  *  webview's loss judgement asks of the same document — ONE definition, so the
  *  two sides cannot drift. This wrapper adds only the NULLABLE operand, which is
@@ -805,10 +806,12 @@ export function createHostSessionCore(context: HostSessionContext, deps: HostSes
         // EOL-INSENSITIVE compare (contentMatches): `currentContent` /
         // `preApplyContent` are canonicalised to `document.eol` (readCanonical /
         // canonicalize), while `inFlightContent` is the raw webview bytes joined
-        // with the webview's `quollDocumentEol` EOL — which is "\n" whenever the seed
-        // carried no CRLF (an empty / single-line doc with eol=CRLF, e.g. every
-        // new .md on Windows). A byte compare would then read a plain
-        // newline-adding edit on such a doc as "foreign bytes" and bump the epoch
+        // with the webview's `quollDocumentEol` EOL. That EOL comes from the wire
+        // (`DocumentMessage.eol`), so the two agree in steady state — but an Edit
+        // buffered or in flight across an EOL-mode switch (status bar →
+        // setEndOfLine, which advances the version and reposts through the
+        // lock-free `documentChanged` arm) still carries the OLD EOL. A byte
+        // compare would then read that edit as "foreign bytes" and bump the epoch
         // on the webview's OWN acked lineage. EOL mode is a canonicalisation
         // detail everywhere else in the pipeline, so the foreign-bytes verdict
         // must ignore it. The `a === b` fast path keeps the hot typing path
@@ -909,10 +912,10 @@ export function createHostSessionCore(context: HostSessionContext, deps: HostSes
         // EOL-INSENSITIVE compare (contentMatches): identical to the epoch
         // verdict above — `currentContent` is canonicalised to `document.eol`
         // while `inFlightContent` is the raw webview bytes joined with the
-        // webview's `quollDocumentEol` EOL, so a raw `===` would misread a plain
-        // edit on a CRLF-eol single-line doc as "external won" and DROP the stash
-        // instead of draining it (the webview's OWN acked lineage, not a foreign
-        // edit).
+        // webview's `quollDocumentEol` EOL, so across an EOL-mode switch (the
+        // skew described above) a raw `===` would misread the edit as "external
+        // won" and DROP the stash instead of draining it (the webview's OWN acked
+        // lineage, not a foreign edit).
         // CONTENT NOT OBSERVED ⇒ NO drain (the ack LABEL is a separate
         // question, taken up next). The drain's safety condition is an OBSERVED
         // equality — "the settled document IS edit #1's exact result" — which is

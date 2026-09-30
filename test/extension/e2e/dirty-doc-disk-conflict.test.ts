@@ -14,6 +14,7 @@ import * as assert from "node:assert";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import * as vscode from "vscode";
+import { PROTOCOL_VERSION } from "./constants";
 import {
   cleanupBetweenTests,
   getHarness,
@@ -63,7 +64,7 @@ describe("dirty-doc-disk-conflict", function () {
 
     // Drive a real webview→host edit to dirty the in-memory model.
     harness.activePanel?.simulateInbound({
-      protocol: 1,
+      protocol: PROTOCOL_VERSION,
       type: "edit",
       baseDocVersion: baseVersion,
       content: bodyEdit,

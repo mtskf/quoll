@@ -129,8 +129,8 @@ export function patchPersistedState(patch: Record<string, unknown>): void {
  *  Returns an unsubscribe function.
  *
  *  Why log on reject (not silent drop): a silent drop would let a host
- *  bug or protocol drift (`protocol: 2` from a future host) freeze the
- *  webview with no diagnostic — the user sees a stale document and no
+ *  bug or protocol drift (a future host's `protocol: PROTOCOL_VERSION + 1`)
+ *  freeze the webview with no diagnostic — the user sees a stale document and no
  *  console trail. Logging at this boundary gives triage a single
  *  greppable line ("[quoll] host message rejected"). */
 export function subscribeToHost(handler: (message: HostToWebview) => void): () => void {

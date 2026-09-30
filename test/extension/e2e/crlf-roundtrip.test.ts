@@ -29,6 +29,10 @@ import {
  *
  * Scope: uniform-CRLF only. Mixed-EOL is documented-normalized and is
  * NOT asserted here.
+ *
+ * The second case pins the other half of "EOL on the protocol": an EOL-mode
+ * switch (`TextEdit.setEndOfLine`) reaches the webview as a Document whose
+ * `eol` field carries the new separator — the webview never infers it.
  */
 describe("crlf-roundtrip", function () {
   this.timeout(20000);
@@ -146,5 +150,54 @@ describe("crlf-roundtrip", function () {
       editedCrlf,
       `on-disk bytes did not match the CRLF payload; got: ${JSON.stringify(diskAfter)}`
     );
+  });
+
+  it("an EOL-mode switch reaches the webview as a Document carrying the new eol", async () => {
+    // The webview never infers the EOL from content, so an EOL-mode switch
+    // (status bar -> setEndOfLine) must reach it on the wire. A no-newline doc
+    // is the sharp case: its bytes are identical under either EOL, so `eol` is
+    // the ONLY thing that changes.
+    const dir = await makeTempDir("eol-switch");
+    tempFile = path.join(dir, "no-newline.md");
+    await fs.writeFile(tempFile, "a");
+
+    const uri = vscode.Uri.file(tempFile);
+    await vscode.commands.executeCommand("vscode.openWith", uri, VIEW_TYPE);
+    const harness = await getHarness();
+    await harness.waitForEvent(isDocumentEvent, 8000);
+    const doc = await vscode.workspace.openTextDocument(uri);
+
+    async function setEol(eol: vscode.EndOfLine): Promise<void> {
+      const edit = new vscode.WorkspaceEdit();
+      edit.set(uri, [vscode.TextEdit.setEndOfLine(eol)]);
+      assert.strictEqual(await vscode.workspace.applyEdit(edit), true);
+      assert.strictEqual(doc.eol, eol, `doc.eol after setEndOfLine(${eol})`);
+    }
+
+    async function expectDocumentWithEol(eol: "\n" | "\r\n", after: number) {
+      // setEndOfLine advances the version (measured on the engines.vscode
+      // floor), so the next Document past `after` is the one it produced.
+      const event = await harness.waitForEvent(isDocumentAfter(after), 5000);
+      assert.strictEqual(event.message.eol, eol, "Document eol after the EOL-mode switch");
+      assert.strictEqual(event.message.docVersion, doc.version);
+      assert.strictEqual(event.message.content, doc.getText());
+      return event;
+    }
+
+    // Precondition checked, not assumed: a platform default of CRLF would make
+    // the CRLF step below a no-op.
+    if (doc.eol !== vscode.EndOfLine.LF) {
+      const before = doc.version;
+      await setEol(vscode.EndOfLine.LF);
+      await expectDocumentWithEol("\n", before);
+    }
+
+    const beforeCrlf = doc.version;
+    await setEol(vscode.EndOfLine.CRLF);
+    await expectDocumentWithEol("\r\n", beforeCrlf);
+
+    const beforeLf = doc.version;
+    await setEol(vscode.EndOfLine.LF);
+    await expectDocumentWithEol("\n", beforeLf);
   });
 });

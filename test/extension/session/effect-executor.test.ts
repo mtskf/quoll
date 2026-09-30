@@ -5,9 +5,9 @@ import {
   createEffectExecutor,
   type EffectExecutorDeps,
 } from "../../../src/extension/session/effect-executor.js";
-import type { HostToWebview } from "../../../src/shared/protocol.js";
+import { type HostToWebview, PROTOCOL_VERSION } from "../../../src/shared/protocol.js";
 
-const themeMsg: HostToWebview = { protocol: 1, type: "theme", themeKind: "dark" };
+const themeMsg: HostToWebview = { protocol: PROTOCOL_VERSION, type: "theme", themeKind: "dark" };
 
 // The seam's edit type. The executor never inspects an edit — it only
 // forwards the seam to `executeDocumentWrite`, which hands `build`'s output
@@ -34,8 +34,9 @@ function makeDeps(over: Partial<EffectExecutorDeps<FakeEdit>> = {}): EffectExecu
     showError: vi.fn(),
     canWrite: () => true,
     buildSeedDocument: (v, externalEpoch, epochGeneration) => ({
-      protocol: 1,
+      protocol: PROTOCOL_VERSION,
       type: "document",
+      eol: "\n",
       content: "",
       docVersion: v,
       canWrite: true,
@@ -44,8 +45,9 @@ function makeDeps(over: Partial<EffectExecutorDeps<FakeEdit>> = {}): EffectExecu
       epochGeneration,
     }),
     buildRejectedDraft: (content, v, externalEpoch, epochGeneration) => ({
-      protocol: 1,
+      protocol: PROTOCOL_VERSION,
       type: "document",
+      eol: "\n",
       content,
       docVersion: v,
       canWrite: true,
@@ -53,8 +55,8 @@ function makeDeps(over: Partial<EffectExecutorDeps<FakeEdit>> = {}): EffectExecu
       externalEpoch,
       epochGeneration,
     }),
-    buildTheme: (themeKind) => ({ protocol: 1, type: "theme", themeKind }),
-    buildEditRejected: (error) => ({ protocol: 1, type: "edit-rejected", error }),
+    buildTheme: (themeKind) => ({ protocol: PROTOCOL_VERSION, type: "theme", themeKind }),
+    buildEditRejected: (error) => ({ protocol: PROTOCOL_VERSION, type: "edit-rejected", error }),
     applyEditSeam: {
       readText: () => "",
       readVersion: () => 0,
@@ -1158,8 +1160,9 @@ describe("effect-executor runEffects other cases", () => {
     const buildSeedDocument = vi.fn(
       (v: number) =>
         ({
-          protocol: 1,
+          protocol: PROTOCOL_VERSION,
           type: "document",
+          eol: "\n",
           content: "x",
           docVersion: v,
           canWrite: true,
@@ -1480,8 +1483,9 @@ describe("effect-executor runEffects other cases", () => {
     });
     const buildSeedDocument = (v: number): HostToWebview =>
       ({
-        protocol: 1,
+        protocol: PROTOCOL_VERSION,
         type: "document",
+        eol: "\n",
         content: "",
         docVersion: v,
         canWrite: true,

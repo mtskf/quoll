@@ -1,35 +1,19 @@
 // The canonical CM document's seed path: how raw host Markdown becomes a
-// CodeMirror line model. Pure (@codemirror/state only, no DOM), so it is the
-// SINGLE source of truth shared by editor.ts#applyDocument and the round-trip
-// parity gate (test/markdown/round-trip.test.ts) — the two cannot drift.
+// CodeMirror line model, and how that model is serialised back to the host's
+// bytes. Pure (@codemirror/state only, no DOM), so the split/serialize pair is
+// the SINGLE source of truth shared by editor.ts#applyDocument and the
+// round-trip parity gate (test/markdown/round-trip.test.ts) — the two cannot
+// drift. The EOL itself is not derived here: it arrives on the wire.
 
 import { Facet, Text } from "@codemirror/state";
+// Type-only: the module stays `@codemirror/state`-only at runtime.
+import type { DocumentEol } from "../../shared/protocol.js";
 
-/** A document's on-disk line ending. A lone `\r` is not a supported input —
- *  see {@link splitToCmText}. */
-export type DocumentEol = "\r\n" | "\n";
-
-/** Detect the document's line ending, for the {@link quollDocumentEol} facet.
- *  A single CRLF anywhere ⇒ CRLF; absent any \r\n ⇒ LF.
- *
- *  ⚠️ This does NOT feed `EditorState.lineSeparator`, which Quoll deliberately
- *  never provides — see {@link quollDocumentEol} for why.
- *
- *  The host seeds canonicalDocumentText(document) (src/extension/session/
- *  document-canonical.ts), so `rawText` arrives uniform and this picks that
- *  one separator. Note a MIXED document (both `\n` and `\r\n`) takes the CRLF
- *  branch, since one `\r\n` anywhere satisfies `includes`. The LF branch is
- *  therefore the pure-LF documents (the ordinary case) plus a defensive
- *  CR-only one — it keeps the line model clean if a non-uniform string ever
- *  reached the seam — but the host boundary, not this function, owns the
- *  single-EOL invariant.
- *
- *  Note: a lone CR (`\r` not followed by `\n`) is not a supported input — the
- *  CM text model splits on /\r\n?|\n/ (see `splitToCmText`), which strips a
- *  lone `\r`, so a CR-only source cannot round-trip identity. */
-export function detectLineSeparator(rawText: string): DocumentEol {
-  return rawText.includes("\r\n") ? "\r\n" : "\n";
-}
+/** A document's on-disk line ending, as the host puts it on the wire
+ *  (`DocumentMessage.eol`). The webview never infers it from content: a
+ *  document with no line break carries no evidence of its EOL. A lone `\r` is
+ *  not a supported input — see {@link splitToCmText}. */
+export type { DocumentEol };
 
 /** The document's line ending, carried IN the editor state.
  *

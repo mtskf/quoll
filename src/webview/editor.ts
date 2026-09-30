@@ -13,6 +13,7 @@ import { Compartment, EditorState, Prec, Transaction } from "@codemirror/state";
 import { EditorView, keymap } from "@codemirror/view";
 import { perfNow, perfRecord } from "../shared/perf.js";
 import {
+  type DocumentMessage,
   type FormatAction,
   type LintDiagnosticWire,
   MAX_CONTENT_LENGTH,
@@ -62,7 +63,6 @@ import {
 } from "./cm/paste/index.js";
 import {
   computeReseedChange,
-  detectLineSeparator,
   quollDocumentEol,
   serializeDocument,
   splitToCmText,
@@ -141,15 +141,19 @@ export type EditorOptions = {
   onLocalEditDiscarded?: () => void;
 };
 
+/** The part of a host `DocumentMessage` the editor consumes. An object, not
+ *  positional arguments: three same-typed `number` fields would be swappable
+ *  without a type error, and the shell already holds exactly this shape.
+ *  `eol` is required — the editor never infers the document EOL from
+ *  `content` (see `DocumentMessage` in shared/protocol.ts). */
+export type HostSnapshot = Pick<
+  DocumentMessage,
+  "content" | "eol" | "canWrite" | "docVersion" | "externalEpoch" | "epochGeneration"
+>;
+
 export type EditorHandle = {
   /** Replace the editor's document from a host snapshot. */
-  applyDocument(
-    rawText: string,
-    canWrite: boolean,
-    baseDocVersion: number,
-    externalEpoch?: number,
-    epochGeneration?: number
-  ): void;
+  applyDocument(snapshot: HostSnapshot): void;
   /** Fired by the shell after every state-changing dispatch — the SOLE
    *  drain entry point. */
   onReducerCommit(editInFlight: boolean): void;
@@ -320,7 +324,7 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
   // state.sliceDoc() used to do implicitly through the lineSeparator facet.
   // ONE definition on purpose, because both readers must agree byte for byte:
   // edit-sync's buffers are this function's output, and `applyDocument` compares
-  // its result against the host's rawText. Two separately written conversions
+  // its result against the host's content. Two separately written conversions
   // could drift, and then every host echo looks foreign — a reseed on every ack.
   // Reads `view.state` at call time, so a call made BEFORE a reseed dispatch sees
   // the OLD EOL (docEolComp is reconfigured inside that dispatch); never hoist
@@ -921,7 +925,8 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
   }
 
   return {
-    applyDocument(rawText, canWrite, baseDocVersion, externalEpoch, epochGeneration) {
+    applyDocument(snapshot) {
+      const { content, eol, canWrite, docVersion, externalEpoch, epochGeneration } = snapshot;
       // Cancel a scheduled flush BEFORE writing the snapshot so a pending
       // debounced Edit cannot post the host's own bytes back — this also
       // captures an in-window keystroke into the buffer so it survives
@@ -932,7 +937,7 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
       // serializer edit-sync's getDoc uses, so this comparison and edit-sync's
       // buffers cannot disagree about what the document's bytes are.
       const liveDoc = serializeForHost();
-      const aheadOfHost = liveDoc !== rawText;
+      const aheadOfHost = liveDoc !== content;
       // ok-ack fold (update-loop guard — ARCHITECTURE.md §3/§5/§7). A host
       // Document that merely ECHOES our own in-flight edit back is an ack, not
       // a divergence. When the user kept typing during the in-flight window the
@@ -959,7 +964,7 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
       // host already superseded. Display and replay must obey one rule — see
       // `supersedesIdentity` in cm/edit-sync.ts.
       const foldsOkAck =
-        aheadOfHost && canWrite && sync.acksInFlightEdit(rawText, externalEpoch, epochGeneration);
+        aheadOfHost && canWrite && sync.acksInFlightEdit(content, externalEpoch, epochGeneration);
       const needsReseed = aheadOfHost && !foldsOkAck;
       // Capture BEFORE the reseed. The needsReseed branch replaces ONE minimal
       // span (computeReseedChange below, not a wholesale `0..doc.length`
@@ -977,9 +982,9 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
       // transaction. splitToCmText's length is what view.state.doc.length
       // will be after the change lands — the LF-internal UTF-16 code unit
       // count (the split strips a CRLF's \r), which is exactly what CM
-      // selection positions are measured in. Do NOT substitute rawText.length
+      // selection positions are measured in. Do NOT substitute content.length
       // here; see cm/seed.ts for the byte rationale.
-      const insertText = needsReseed ? splitToCmText(rawText) : null;
+      const insertText = needsReseed ? splitToCmText(content) : null;
       const newDocLength = insertText !== null ? insertText.length : view.state.doc.length;
       const prevMain = prevSelection?.main;
       // Computed BEFORE dispatch (needs the PRE-change view.state.doc — see the
@@ -996,7 +1001,11 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
           // (and from other addToHistory=false transactions).
           annotations: [Transaction.addToHistory.of(false), hostDocumentReseed.of(true)],
           effects: [
-            docEolComp.reconfigure(quollDocumentEol.of(detectLineSeparator(rawText))),
+            // The host's `eol`, never inferred from `content`. UNCONDITIONAL
+            // (fold or reseed alike): on a no-newline document the bytes are
+            // identical under either EOL, so an EOL-only switch there is not
+            // `aheadOfHost` and this effect is the only thing that installs it.
+            docEolComp.reconfigure(quollDocumentEol.of(eol)),
             editableComp.reconfigure([
               EditorView.editable.of(canWrite),
               EditorState.readOnly.of(!canWrite),
@@ -1034,7 +1043,7 @@ export function mountEditor(opts: EditorOptions): EditorHandle {
         // echo-Edit detection.
         seeding = false;
       }
-      sync.onHostSnapshot(baseDocVersion, canWrite, externalEpoch, epochGeneration);
+      sync.onHostSnapshot(docVersion, canWrite, externalEpoch, epochGeneration);
       setReadOnlyClass(canWrite);
       // Reconcile native folds that the minimal-span reseed REMAPPED. The diff maps
       // overlapping folds through the change (preserving them — PR #292), but an

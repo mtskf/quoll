@@ -14,8 +14,13 @@
 import { EndOfLine, type TextDocument } from "vscode";
 // DocumentMessage is defined in the protocol module; document-message.ts uses
 // it internally but does NOT re-export it, so import the type from the source.
-import type { DocumentMessage, ThemeKind } from "../../shared/protocol.js";
-import { buildDocumentMessage } from "./document-message.js";
+import type { DocumentEol, DocumentMessage } from "../../shared/protocol.js";
+import { type BuildDocumentMessageInput, buildDocumentMessage } from "./document-message.js";
+
+/** Everything a Document message carries besides its bytes and separator —
+ *  derived from the builder input so both adapters below stay in lockstep
+ *  with it. */
+type DocumentMessageMetadata = Omit<BuildDocumentMessageInput, "content" | "eol">;
 
 /** Normalize a raw string's line endings to `eol`. The string-level core of
  *  `canonicalDocumentText`, exposed so a caller that ALREADY holds the raw
@@ -23,8 +28,14 @@ import { buildDocumentMessage } from "./document-message.js";
  *  captured before applyEdit) can canonicalise them for a like-for-like compare
  *  against a canonical settlement read WITHOUT a second `getText()`. */
 export function canonicalizeText(text: string, eol: EndOfLine): string {
-  const separator = eol === EndOfLine.CRLF ? "\r\n" : "\n";
-  return text.replace(/\r\n|\r|\n/g, separator);
+  return text.replace(/\r\n|\r|\n/g, documentEolOf(eol));
+}
+
+/** The single `EndOfLine` → wire separator mapping. `canonicalizeText` uses it
+ *  too, so the separator the seed content is canonicalised to and the `eol`
+ *  the Document carries on the wire cannot drift apart. */
+export function documentEolOf(eol: EndOfLine): DocumentEol {
+  return eol === EndOfLine.CRLF ? "\r\n" : "\n";
 }
 
 export function canonicalDocumentText(document: Pick<TextDocument, "eol" | "getText">): string {
@@ -33,13 +44,28 @@ export function canonicalDocumentText(document: Pick<TextDocument, "eol" | "getT
 
 export function buildDocumentMessageFromDocument(
   document: Pick<TextDocument, "eol" | "getText">,
-  metadata: {
-    docVersion: number;
-    themeKind: ThemeKind;
-    canWrite: boolean;
-    externalEpoch: number;
-    epochGeneration: number;
-  }
+  metadata: DocumentMessageMetadata
 ): DocumentMessage {
-  return buildDocumentMessage({ content: canonicalDocumentText(document), ...metadata });
+  return buildDocumentMessage({
+    content: canonicalDocumentText(document),
+    eol: documentEolOf(document.eol),
+    ...metadata,
+  });
+}
+
+/** The rejected-draft reseed: the webview's own draft bytes, passed through
+ *  as-is (NOT canonicalised — the draft is what the user typed and must survive
+ *  the rejection byte-for-byte), stamped with the document's `eol`. Taking the
+ *  document, not a pre-read separator, is what lets a unit test pin the wire
+ *  eol with a CRLF fake document. */
+export function buildRejectedDraftFromDocument(
+  document: Pick<TextDocument, "eol">,
+  content: string,
+  metadata: DocumentMessageMetadata
+): DocumentMessage {
+  return buildDocumentMessage({
+    content,
+    eol: documentEolOf(document.eol),
+    ...metadata,
+  });
 }

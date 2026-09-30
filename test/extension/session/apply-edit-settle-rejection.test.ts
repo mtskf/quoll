@@ -66,7 +66,7 @@ import {
   type HostSessionState,
   isWriteLockHeld,
 } from "../../../src/extension/session/host-session-core.js";
-import type { HostToWebview } from "../../../src/shared/protocol.js";
+import { type HostToWebview, PROTOCOL_VERSION } from "../../../src/shared/protocol.js";
 import { createEditSync } from "../../../src/webview/cm/edit-sync.js";
 
 const ctx = { uriString: "file:///x.md", fsPath: "/x.md" };
@@ -173,8 +173,9 @@ function harness(options: HarnessOptions = {}) {
       }
       documents.push({ docVersion, externalEpoch, epochGeneration });
       return {
-        protocol: 1,
+        protocol: PROTOCOL_VERSION,
         type: "document",
+        eol: "\n",
         content: doc.text,
         docVersion,
         canWrite: true,
@@ -185,8 +186,9 @@ function harness(options: HarnessOptions = {}) {
     },
     buildRejectedDraft: (content, docVersion, externalEpoch, epochGeneration) =>
       ({
-        protocol: 1,
+        protocol: PROTOCOL_VERSION,
         type: "document",
+        eol: "\n",
         content,
         docVersion,
         canWrite: true,
@@ -194,8 +196,10 @@ function harness(options: HarnessOptions = {}) {
         externalEpoch,
         epochGeneration,
       }) as HostToWebview,
-    buildTheme: (themeKind) => ({ protocol: 1, type: "theme", themeKind }) as HostToWebview,
-    buildEditRejected: (error) => ({ protocol: 1, type: "edit-rejected", error }) as HostToWebview,
+    buildTheme: (themeKind) =>
+      ({ protocol: PROTOCOL_VERSION, type: "theme", themeKind }) as HostToWebview,
+    buildEditRejected: (error) =>
+      ({ protocol: PROTOCOL_VERSION, type: "edit-rejected", error }) as HostToWebview,
     applyEditSeam: {
       readText: () => {
         if (readTextFailure) {

@@ -45,7 +45,7 @@ function mount(doc: string, canWrite: boolean) {
   });
   mounted.push({ handle, parent });
   // Arm edit-sync with a host snapshot at v1 (same as a real seed).
-  handle.applyDocument(doc, canWrite, 1);
+  handle.applyDocument({ content: doc, eol: "\n", canWrite: canWrite, docVersion: 1 });
   const view = EditorView.findFromDOM(
     parent.querySelector(".cm-editor") as HTMLElement
   ) as EditorView;
