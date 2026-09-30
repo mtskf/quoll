@@ -487,6 +487,55 @@ describe("editor — the document EOL comes from the wire, not from the content"
   });
 });
 
+// The Done-when pin for "EOL on the protocol": a CRLF document with no line
+// break yet (every new .md on Windows). Inference read its EOL as LF, so the
+// first Enter posted "a\n"; the host canonicalised it to "a\r\n", the byte-exact
+// ack comparison failed, and the webview RESEEDED — visibly rewinding whatever
+// was typed while that Edit was in flight.
+describe("editor — a no-newline CRLF document's first Enter folds its ack", () => {
+  it("posts CRLF on the first Enter and folds the host echo instead of rewinding", () => {
+    // Revert-check: derive the facet from the content again
+    // (`quollDocumentEol.of(content.includes("\r\n") ? "\r\n" : "\n")`) → the
+    // first post is "a\n" and the echo reseeds, so both assertions below go red.
+    const G = 4242;
+    vi.useFakeTimers();
+    const { handle, view, commit } = mount();
+    handle.applyDocument({
+      content: "a",
+      eol: "\r\n",
+      canWrite: true,
+      docVersion: 1,
+      externalEpoch: 0,
+      epochGeneration: G,
+    });
+    // Enter: a "\n" insert (CodeMirror's default splitter keeps it ONE break).
+    view.dispatch({ changes: { from: view.state.doc.length, insert: "\n" } });
+    vi.advanceTimersByTime(300);
+    expect(editPosts()).toHaveLength(1);
+    // Soft, so a regression here still lets the fold assertion below report.
+    expect.soft((editPosts()[0] as { content: string }).content).toBe("a\r\n");
+    // Keep typing during the in-flight window: buffered, not posted.
+    view.dispatch({ changes: { from: view.state.doc.length, insert: "b" } });
+    vi.advanceTimersByTime(300);
+    expect(editPosts()).toHaveLength(1);
+    // The host echo, as LITERAL CRLF bytes (feeding back editPosts()[0].content
+    // would compare the serializer against itself).
+    handle.applyDocument({
+      content: "a\r\n",
+      eol: "\r\n",
+      canWrite: true,
+      docVersion: 2,
+      externalEpoch: 0,
+      epochGeneration: G,
+    });
+    // Folded, not reseeded: a reseed would install "a\n" and drop the "b".
+    expect(view.state.doc.toString()).toBe("a\nb");
+    commit(false);
+    expect(editPosts()).toHaveLength(2);
+    expect((editPosts()[1] as { content: string }).content).toBe("a\r\nb");
+  });
+});
+
 /** Dispatch a real `copy` event with a stub `clipboardData` and return what
  *  CodeMirror wrote, so the assertion covers `copiedRange` + the output filter
  *  together rather than the filter alone.
