@@ -2,6 +2,7 @@ import * as assert from "node:assert";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import * as vscode from "vscode";
+import { PROTOCOL_VERSION } from "./constants";
 import {
   cleanupBetweenTests,
   getHarness,
@@ -11,7 +12,7 @@ import {
   VIEW_TYPE,
 } from "./harness";
 
-const PROTOCOL = 1;
+const PROTOCOL = PROTOCOL_VERSION;
 
 describe("caret-handoff", function () {
   this.timeout(25000);

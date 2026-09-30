@@ -18,6 +18,7 @@ import * as assert from "node:assert";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import * as vscode from "vscode";
+import { PROTOCOL_VERSION } from "./constants";
 import {
   cleanupBetweenTests,
   getHarness,
@@ -27,7 +28,7 @@ import {
   VIEW_TYPE,
 } from "./harness";
 
-const PROTOCOL = 1;
+const PROTOCOL = PROTOCOL_VERSION;
 const INSERT_AT_MENTIONED = "claude-code.insertAtMentioned";
 
 describe("caret-handoff does not clobber the ⌘⌥K mention range", function () {
