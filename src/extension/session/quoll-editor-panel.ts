@@ -106,6 +106,7 @@ import {
   buildDocumentMessageFromDocument,
   canonicalDocumentText,
   canonicalizeText,
+  documentEolOf,
 } from "./document-canonical.js";
 import {
   buildCaretApplyMessage,
@@ -476,6 +477,8 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
       buildRejectedDraft: (content, docVersion, externalEpoch, epochGeneration) =>
         buildDocumentMessage({
           content,
+          // Read at build time, like themeKind / canWrite.
+          eol: documentEolOf(document.eol),
           docVersion,
           themeKind: themeKindFromColorTheme(window.activeColorTheme.kind),
           canWrite: canWriteNow(),

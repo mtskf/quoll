@@ -52,7 +52,12 @@ describe("outline navigation integration", () => {
       dispatch: () => {},
     });
     mounted.push(handle);
-    handle.applyDocument("# Alpha\n\n## Beta\n", true, 1);
+    handle.applyDocument({
+      content: "# Alpha\n\n## Beta\n",
+      eol: "\n",
+      canWrite: true,
+      docVersion: 1,
+    });
 
     const mountEl = container?.querySelector(".quoll-editor") as HTMLElement;
     const view = EditorView.findFromDOM(mountEl) as EditorView;

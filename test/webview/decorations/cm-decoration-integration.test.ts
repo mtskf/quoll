@@ -108,7 +108,12 @@ describe("orchestrator integration — providers wired", () => {
       dispatch: () => {},
     });
     try {
-      handle.applyDocument("# H1\n# H2\n# H3", true, 1);
+      handle.applyDocument({
+        content: "# H1\n# H2\n# H3",
+        eol: "\n",
+        canWrite: true,
+        docVersion: 1,
+      });
       const mountEl = parent.querySelector(".quoll-editor") as HTMLElement | null;
       if (!mountEl) {
         throw new Error("Editor mount node missing");

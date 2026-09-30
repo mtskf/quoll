@@ -6,12 +6,13 @@ import {
   buildEditRejectedMessage,
   buildThemeMessage,
 } from "../../../src/extension/session/document-message.js";
-import { PROTOCOL_VERSION } from "../../../src/shared/protocol.js";
+import { isHostToWebview, PROTOCOL_VERSION } from "../../../src/shared/protocol.js";
 
 describe("buildDocumentMessage", () => {
   it("constructs the final-shape Document with no reason field", () => {
     const msg = buildDocumentMessage({
       content: "hello",
+      eol: "\n",
       docVersion: 7,
       themeKind: "dark",
       canWrite: false,
@@ -25,6 +26,7 @@ describe("buildDocumentMessage", () => {
       docVersion: 7,
       themeKind: "dark",
       canWrite: false,
+      eol: "\n",
       externalEpoch: 3,
       epochGeneration: 777,
     });
@@ -34,6 +36,7 @@ describe("buildDocumentMessage", () => {
     expect(
       buildDocumentMessage({
         content: "",
+        eol: "\n",
         docVersion: 0,
         themeKind: "hc-dark",
         canWrite: true,
@@ -44,6 +47,7 @@ describe("buildDocumentMessage", () => {
     expect(
       buildDocumentMessage({
         content: "",
+        eol: "\n",
         docVersion: 0,
         themeKind: "hc-light",
         canWrite: true,
@@ -56,6 +60,7 @@ describe("buildDocumentMessage", () => {
   it("pins the emitted key set (so re-introducing reason on the emitter side fails CI; externalEpoch + epochGeneration always emitted)", () => {
     const msg = buildDocumentMessage({
       content: "",
+      eol: "\n",
       docVersion: 0,
       themeKind: "light",
       canWrite: true,
@@ -66,6 +71,7 @@ describe("buildDocumentMessage", () => {
       "canWrite",
       "content",
       "docVersion",
+      "eol",
       "epochGeneration",
       "externalEpoch",
       "protocol",
@@ -74,9 +80,41 @@ describe("buildDocumentMessage", () => {
     ]);
   });
 
+  it("carries the document eol through verbatim (the webview never infers it)", () => {
+    const base = {
+      content: "a",
+      docVersion: 1,
+      themeKind: "light" as const,
+      canWrite: true,
+      externalEpoch: 0,
+      epochGeneration: 1,
+    };
+    expect(buildDocumentMessage({ ...base, eol: "\r\n" }).eol).toBe("\r\n");
+    expect(buildDocumentMessage({ ...base, eol: "\n" }).eol).toBe("\n");
+  });
+
+  it("emits a message the webview-side boundary validator accepts", () => {
+    // This file is transpile-only (no tsconfig includes test/extension/session),
+    // so a field missing from the builder output would not fail tsc here — the
+    // runtime validator is the check that the emitted shape is wire-valid.
+    for (const eol of ["\n", "\r\n"] as const) {
+      const msg = buildDocumentMessage({
+        content: "a",
+        eol,
+        docVersion: 1,
+        themeKind: "light",
+        canWrite: true,
+        externalEpoch: 0,
+        epochGeneration: 1,
+      });
+      expect(isHostToWebview(msg)).toBe(true);
+    }
+  });
+
   it("carries the identity pair through (externalEpoch + epochGeneration)", () => {
     const msg = buildDocumentMessage({
       content: "",
+      eol: "\n",
       docVersion: 4,
       themeKind: "dark",
       canWrite: true,
@@ -90,6 +128,7 @@ describe("buildDocumentMessage", () => {
   it("preserves canWrite=false for readonly documents", () => {
     const msg = buildDocumentMessage({
       content: "",
+      eol: "\n",
       docVersion: 0,
       themeKind: "light",
       canWrite: false,

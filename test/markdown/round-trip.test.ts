@@ -1,9 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  detectLineSeparator,
-  serializeDocument,
-  splitToCmText,
-} from "../../src/webview/cm/seed.js";
+import { type DocumentEol, serializeDocument, splitToCmText } from "../../src/webview/cm/seed.js";
 import { loadFixtures } from "./load-fixtures.js";
 
 // Round-trip parity gate (C9a).
@@ -16,21 +12,25 @@ import { loadFixtures } from "./load-fixtures.js";
 //
 // SCOPE LIMITATION: the ONE byte transform the CM text layer still applies is
 // whole-doc line-ending normalization — a mixed-EOL source (LF alongside CRLF)
-// or a lone-CR source collapses to the single detected separator (e.g.
+// or a lone-CR source collapses to the document's single separator (e.g.
 // "a\r\nb\nc" → "a\r\nb\r\nc", "a\rb" → "a\nb"). That is a documented design
 // choice, NOT a Markdown-semantic mutation. The normalization is now owned at
 // the host boundary by `canonicalDocumentText` (pinned by
 // test/extension/document-canonical.test.ts + the `mixed-eol-roundtrip` e2e);
-// test/webview/editor.test.ts case (e) additionally characterizes the CM
-// seam's defensive fallback. This corpus carries no mixed-EOL or lone-CR
+// test/webview/editor.test.ts case (e) additionally characterizes that the CM
+// seam serialises under the wire eol regardless of content. This corpus carries no mixed-EOL or lone-CR
 // fixture, so the gate deliberately asserts byte-identity only for the
 // uniform-EOL class.
 //
 // `cmRoundTrip` drives editor.ts's seed→read byte path through the SAME
 // production helpers it uses: `splitToCmText` (split on /\r\n?|\n/ into a
-// CodeMirror `Text`) inbound, then `detectLineSeparator` + `serializeDocument`
-// outbound, all imported from src/webview/cm/seed.ts — NOT re-implemented here,
-// so the gate and production cannot silently drift. The production wrapper `editor.ts#applyDocument` is byte-pinned
+// CodeMirror `Text`) inbound, then `serializeDocument` outbound, both imported
+// from src/webview/cm/seed.ts — NOT re-implemented here, so the gate and
+// production cannot silently drift. The EOL is the one exception: production
+// takes it from the host's `DocumentMessage.eol` (it is never inferred from
+// content), and these fixtures carry no wire EOL, so `fixtureEol` below stands in
+// for `TextDocument.eol`. The gate is about byte identity of the split/serialize
+// pair, not about where the EOL comes from. The production wrapper `editor.ts#applyDocument` is byte-pinned
 // independently by test/webview/editor.test.ts (cases (a)/(e)/(f): CRLF, LF,
 // mixed-EOL, paste). No EditorView/DOM is needed — the byte contract lives
 // entirely in @codemirror/state (cm/seed.ts is DOM-free), so this stays in the
@@ -56,7 +56,13 @@ import { loadFixtures } from "./load-fixtures.js";
  *  deliberately never provides so that CodeMirror keeps its default insert
  *  splitter. See src/webview/cm/seed.ts for that argument. */
 function cmRoundTrip(source: string): string {
-  return serializeDocument(splitToCmText(source), detectLineSeparator(source));
+  return serializeDocument(splitToCmText(source), fixtureEol(source));
+}
+
+/** Test-local stand-in for `TextDocument.eol`: a fixture file has no host, so
+ *  its EOL is read off its (uniform-EOL) bytes. Production never does this. */
+function fixtureEol(source: string): DocumentEol {
+  return source.includes("\r\n") ? "\r\n" : "\n";
 }
 
 // Fixtures whose PM-bridge round-trip used to DIVERGE from the source. Under

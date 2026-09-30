@@ -7,7 +7,7 @@
 // Why re-validate on the host side after the webview already gates: the
 // webview is the untrusted boundary in a webview-extension architecture
 // (a future bug, a CSP escape, a corrupted bundle, or a hostile
-// `protocol:1`-shaped poster could feed an unsafe href). The host gate
+// protocol-valid poster could feed an unsafe href). The host gate
 // is the LAST line — keep it independent of webview behaviour.
 //
 // Why only http/https/mailto reach openExternal even though isAllowedUrl

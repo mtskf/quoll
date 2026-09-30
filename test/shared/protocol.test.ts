@@ -32,6 +32,7 @@ const validDocument = () =>
     docVersion: 0,
     themeKind: "light",
     canWrite: true,
+    eol: "\n",
   }) as const;
 
 const validTheme = () =>
@@ -74,7 +75,7 @@ describe("envelope rejections (both directions)", () => {
     ["false", false],
     ["symbol", Symbol("x")],
     ["empty array", []],
-    ["array of valid envelope", [{ protocol: 1, type: "document" }]],
+    ["array of valid envelope", [{ protocol: PROTOCOL_VERSION, type: "document" }]],
   ];
 
   it.each(nonObjects)("isHostToWebview rejects %s", (_label, value) => {
@@ -285,6 +286,35 @@ describe("isHostToWebview — document", () => {
   it("rejects missing canWrite", () => {
     const { canWrite: _omit, ...rest } = validDocument();
     expect(isHostToWebview(rest)).toBe(false);
+  });
+
+  // `eol` is REQUIRED (PROTOCOL_VERSION 2): the webview never infers it from
+  // content, so there is no fallback for an absent value. A bare "\r" is not a
+  // TextDocument EOL.
+  it.each(["\n", "\r\n"])("accepts eol %j", (eol) => {
+    expect(isHostToWebview({ ...validDocument(), eol })).toBe(true);
+  });
+
+  it("rejects missing eol", () => {
+    const { eol: _omit, ...rest } = validDocument();
+    expect(isHostToWebview(rest)).toBe(false);
+  });
+
+  it.each([
+    "\r",
+    "",
+    "lf",
+    "crlf",
+    "\n\n",
+    1,
+    0,
+    true,
+    null,
+    undefined,
+    {},
+    [],
+  ])("rejects invalid eol %j", (eol) => {
+    expect(isHostToWebview({ ...validDocument(), eol })).toBe(false);
   });
 });
 
@@ -851,7 +881,7 @@ describe("isHostToWebview — editor-config", () => {
   });
 
   it("rejects the wrong protocol version", () => {
-    expect(isHostToWebview({ ...valid(), protocol: 2 })).toBe(false);
+    expect(isHostToWebview({ ...valid(), protocol: PROTOCOL_VERSION + 1 })).toBe(false);
   });
 });
 

@@ -467,13 +467,7 @@ export function mountShell(root: HTMLElement, opts: ShellOptions): ShellHandle {
           return;
         }
         const applyStart = QUOLL_PERF ? perfNow() : 0;
-        editor.applyDocument(
-          message.content,
-          message.canWrite,
-          message.docVersion,
-          message.externalEpoch,
-          message.epochGeneration
-        );
+        editor.applyDocument(message);
         if (QUOLL_PERF) {
           const settled = perfNow();
           perfRecord("webview:doc-apply", settled - applyStart);

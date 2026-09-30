@@ -21,10 +21,9 @@
  *   lastAppliedDocVersion, and pushes the next authoritative Document.
  *
  * Why a separate `protocol` envelope field:
- *   `protocol: 1` is the negotiation point for any future incompatible change.
- *   When `protocol: 2` is needed, peers can detect mismatch at the boundary
- *   before parsing the payload. Adding the field now costs nothing; adding it
- *   later requires coordinated rollout.
+ *   `protocol: PROTOCOL_VERSION` is the negotiation point for any incompatible
+ *   change (a new REQUIRED field is one — version 2 added `DocumentMessage.eol`).
+ *   Peers detect a mismatch at the boundary before parsing the payload.
  *
  * Rules for this module:
  *   - No imports beyond TypeScript itself. No `vscode`, no `react`, no DOM.
@@ -38,7 +37,7 @@
  *     rule above, since BOTH sides of the bridge consume this module.
  */
 
-export const PROTOCOL_VERSION = 1;
+export const PROTOCOL_VERSION = 2;
 
 /** Hard cap on inbound webview→host content payload length, measured in UTF-16
  *  code units (i.e. `String.prototype.length`). 4 * 1024 * 1024 code units is
@@ -210,6 +209,21 @@ export function isThemeKind(value: unknown): value is ThemeKind {
   return typeof value === "string" && THEME_KIND_SET.has(value);
 }
 
+/** The two line separators a VS Code `TextDocument` can have (`EndOfLine.LF` /
+ *  `EndOfLine.CRLF`). A bare `"\r"` is not a document EOL — VS Code never
+ *  produces a CR-only document. */
+export const DOCUMENT_EOLS = ["\n", "\r\n"] as const;
+export type DocumentEol = (typeof DOCUMENT_EOLS)[number];
+
+const DOCUMENT_EOL_SET: ReadonlySet<string> = new Set(DOCUMENT_EOLS);
+
+/** True iff `value` is one of the two allowlisted DocumentEol literals.
+ *  Boundary guard for the `document` validator (same `new Set` posture as
+ *  `isThemeKind`). */
+export function isDocumentEol(value: unknown): value is DocumentEol {
+  return typeof value === "string" && DOCUMENT_EOL_SET.has(value);
+}
+
 /** Authoritative document snapshot. The host posts a Document on every
  *  observed change — initial mount, panel revive, external edit, or echo
  *  of a webview-accepted edit. The webview's reaction is identical across
@@ -222,8 +236,16 @@ export function isThemeKind(value: unknown): value is ThemeKind {
  *  pinned by the key-set test in
  *  test/extension/session/document-message.test.ts to never emit `reason`.
  *  Host and webview always ship together in one `.vsix`, so the wire
- *  never holds mismatched peers and `PROTOCOL_VERSION` does not need to
- *  bump for this shape.
+ *  never holds mismatched peers and `PROTOCOL_VERSION` did not need to
+ *  bump for the `reason` removal (dropping a field the receiver ignores).
+ *
+ *  `eol` is the document's line separator (`TextDocument.eol`), REQUIRED.
+ *  The webview never infers it from `content`: a document with no line break
+ *  carries no evidence of its EOL, and an inferred LF there made the first
+ *  Enter in a no-newline CRLF document post `\n`, which the host canonicalised
+ *  to `\r\n` — the byte-exact ack then failed and the webview reseeded,
+ *  visibly rewinding keystrokes typed in flight. Adding a required field is an
+ *  incompatible change, hence `PROTOCOL_VERSION` 2.
  *
  *  `content` is `canonicalDocumentText(document)` — `TextDocument.getText()`
  *  normalized to the document's `eol` (identical to `getText()` for the
@@ -235,7 +257,9 @@ export function isThemeKind(value: unknown): value is ThemeKind {
  *  both absent; a partial pair is a boundary-INVALID message (validator-
  *  authoritative). They are wire-OPTIONAL for one release so an old host that
  *  never sends them does not brick a new webview (absence = "no epoch info" =
- *  today's unconditional-replay behaviour). Semantics (S3a plumbs them; S3b
+ *  today's unconditional-replay behaviour). Since `PROTOCOL_VERSION` 2 an old
+ *  host is rejected at `isProtocolMatch` before this field is read, so that
+ *  tolerance is unreachable; making the pair required is a follow-up. Semantics (S3a plumbs them; S3b
  *  consumes them): `externalEpoch` is host-owned and monotonic WITHIN one host
  *  session (starts at 0), advancing whenever document content changed by
  *  anything other than the webview's own acked edit lineage; `epochGeneration`
@@ -255,6 +279,7 @@ export type DocumentMessage = Envelope & {
   docVersion: number;
   themeKind: ThemeKind;
   canWrite: boolean;
+  eol: DocumentEol;
   externalEpoch?: number;
   epochGeneration?: number;
 };
@@ -691,7 +716,9 @@ function isEpochComponent(value: unknown): value is number {
  *  boundary-INVALID message — the webview must never see a half-formed
  *  identity (its S3b drop-and-adopt logic enumerates only well-formed states:
  *  absent, or a valid pair). Absence is tolerated (old host → new webview
- *  skew): the webview falls back to today's unconditional-replay behaviour. */
+ *  skew): the webview falls back to today's unconditional-replay behaviour.
+ *  Since `PROTOCOL_VERSION` 2 an old host fails `isProtocolMatch` first, so
+ *  this tolerance is unreachable; making the pair required is a follow-up. */
 function isValidEpochIdentity(epoch: unknown, generation: unknown): boolean {
   const epochAbsent = epoch === undefined;
   const generationAbsent = generation === undefined;
@@ -722,6 +749,7 @@ export function isHostToWebview(value: unknown): value is HostToWebview {
         isValidDocVersion(v.docVersion) &&
         isThemeKind(v.themeKind) &&
         typeof v.canWrite === "boolean" &&
+        isDocumentEol(v.eol) &&
         isValidEpochIdentity(v.externalEpoch, v.epochGeneration)
       );
     case "theme":

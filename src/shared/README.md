@@ -7,9 +7,9 @@ and the webview (`src/webview/`).
 
 - **No imports.** No `vscode`, no `react`, no DOM, no Node built-ins. Either-side
   imports break the other side's build.
-- **Versioned envelope.** Every wire message carries `protocol: 1`. The version
-  field exists before any compatibility break does — when `protocol: 2` is
-  needed, peers can detect mismatch at the boundary.
+- **Versioned envelope.** Every wire message carries `protocol: PROTOCOL_VERSION`
+  (currently 2 — the bump that made `DocumentMessage.eol` required). Peers
+  detect a mismatch at the boundary before parsing the payload.
 - **docVersion authority.** The host owns `docVersion` (derived from VS Code's
   native `TextDocument.version`). Host→webview `Document` messages carry
   `docVersion: number`. Webview→host `Edit` messages carry `baseDocVersion: number`

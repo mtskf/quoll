@@ -73,7 +73,9 @@ describe("tryOpenLinkAt — safe URLs", () => {
     const pos = posOf(doc, "link") + 1;
     const handled = tryOpenLinkAt(state, pos, host, noScroll);
     expect(handled).toBe(true);
-    expect(posted).toEqual([{ protocol: 1, type: "open-external", href: "https://example.com" }]);
+    expect(posted).toEqual([
+      { protocol: PROTOCOL_VERSION, type: "open-external", href: "https://example.com" },
+    ]);
   });
 
   // Test-fixture convention: EditorState.create's default selection is

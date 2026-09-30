@@ -4,6 +4,7 @@ import { EndOfLine, type TextDocument } from "vscode";
 import {
   buildDocumentMessageFromDocument,
   canonicalDocumentText,
+  documentEolOf,
 } from "../../../src/extension/session/document-canonical.js";
 import { decideEdit } from "../../../src/extension/session/edit-decision.js";
 
@@ -43,6 +44,7 @@ describe("buildDocumentMessageFromDocument", () => {
       epochGeneration: 99,
     });
     expect(msg.content).toBe("a\r\nb\r\nc");
+    expect(msg.eol).toBe("\r\n");
     expect(msg.docVersion).toBe(3);
     expect(msg.externalEpoch).toBe(2);
     expect(msg.epochGeneration).toBe(99);
@@ -50,6 +52,7 @@ describe("buildDocumentMessageFromDocument", () => {
       "canWrite",
       "content",
       "docVersion",
+      "eol",
       "epochGeneration",
       "externalEpoch",
       "protocol",
@@ -84,5 +87,30 @@ describe("decideEdit + canonicalDocumentText wiring", () => {
       markdownValidator: () => ({ ok: true }),
     });
     expect(verdict.kind).toBe("accept");
+  });
+});
+
+describe("documentEolOf / buildDocumentMessageFromDocument eol", () => {
+  const metadata = {
+    docVersion: 1,
+    themeKind: "light" as const,
+    canWrite: true,
+    externalEpoch: 0,
+    epochGeneration: 1,
+  };
+
+  it("maps EndOfLine to the wire separator", () => {
+    expect(documentEolOf(EndOfLine.CRLF)).toBe("\r\n");
+    expect(documentEolOf(EndOfLine.LF)).toBe("\n");
+  });
+
+  it("emits the document's eol even when the content has no line break", () => {
+    // The case inference could never get right: a no-newline CRLF document
+    // carries no evidence of its EOL in its bytes. The wire eol comes from
+    // TextDocument.eol, not from the content.
+    expect(buildDocumentMessageFromDocument(fakeDoc(EndOfLine.CRLF, "a"), metadata).eol).toBe(
+      "\r\n"
+    );
+    expect(buildDocumentMessageFromDocument(fakeDoc(EndOfLine.LF, "a"), metadata).eol).toBe("\n");
   });
 });

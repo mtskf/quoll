@@ -14,6 +14,7 @@ import type { MarkdownError } from "../../markdown/errors.js";
 import {
   type CaretApplyMessage,
   type ContentWidthPref,
+  type DocumentEol,
   type DocumentMessage,
   type EditorConfigMessage,
   type EditRejectedMessage,
@@ -35,6 +36,9 @@ export type EditorPrefs = {
 
 export type BuildDocumentMessageInput = {
   content: string;
+  // The document's line separator (`TextDocument.eol`). Required: the webview
+  // never infers it from `content` — see the `DocumentMessage` doc block.
+  eol: DocumentEol;
   docVersion: number;
   themeKind: ThemeKind;
   canWrite: boolean;
@@ -61,6 +65,7 @@ export function buildDocumentMessage(input: BuildDocumentMessageInput): Document
     docVersion: input.docVersion,
     themeKind: input.themeKind,
     canWrite: input.canWrite,
+    eol: input.eol,
     externalEpoch: input.externalEpoch,
     epochGeneration: input.epochGeneration,
   };
