@@ -2,6 +2,12 @@
 
 All notable changes to Quoll are documented here.
 
+## 0.1.83 — 2026-10-01
+
+### Fixed
+
+- Switching a file's line endings (LF ↔ CRLF) from the status bar while you are typing no longer throws away the keystrokes Quoll had not saved yet. The switch used to be treated as an outside edit, so the text you had just typed was dropped or refused.
+
 ## 0.1.82 — 2026-10-01
 
 ### Fixed
