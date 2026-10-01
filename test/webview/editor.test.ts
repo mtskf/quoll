@@ -173,8 +173,8 @@ describe("editor — applyDocument seeds the CM doc (a)", () => {
 
 // (S3b) applyDocument threads the (externalEpoch, epochGeneration) pair into
 // edit-sync, so editor.isIdentityTransition reflects the recorded pair. Pins the
-// editor.ts threading: without it the pair would record as absent and the
-// same-generation query below would wrongly report a transition.
+// editor.ts threading by value: a constant, swapped, or stale pair would make a
+// same-generation query below report a transition.
 describe("editor — applyDocument threads the identity pair (S3b)", () => {
   it("isIdentityTransition reflects the recorded pair after seeding", () => {
     const { handle } = mount();

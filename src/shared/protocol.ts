@@ -254,7 +254,10 @@ export function isDocumentEol(value: unknown): value is DocumentEol {
  *  rationale.
  *
  *  `externalEpoch` + `epochGeneration` are both REQUIRED — a Document missing
- *  either is a boundary-INVALID message.
+ *  either is a boundary-INVALID message. Requiring them did not bump
+ *  `PROTOCOL_VERSION`, unlike `eol`: `buildDocumentMessage` already emitted
+ *  both before version 2 existed, so every version-2 host sends the pair and
+ *  the stricter validator rejects no message a conforming host produces.
  *  Semantics (S3a plumbs them; S3b consumes them): `externalEpoch` is host-owned and monotonic WITHIN one host
  *  session (starts at 0), advancing whenever document content changed by
  *  anything other than the webview's own acked edit lineage; `epochGeneration`
