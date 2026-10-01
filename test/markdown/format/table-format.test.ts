@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { applyEdits } from "../../../src/markdown/format/edit.js";
 import { classifyDocument } from "../../../src/markdown/format/segment.js";
 import { tableEdits } from "../../../src/markdown/format/table-format.js";
+import { parseTable } from "../../../src/markdown/table/index.js";
 
 // Realistic path: tables come from the Lezer classifier's tableRanges.
 const fmt = (s: string) => applyEdits(s, tableEdits(s, classifyDocument(s).tableRanges));
@@ -71,6 +72,28 @@ describe("tableEdits", () => {
     const src = "| a | b |\n:-- | --:\n| 1 | 2 |\n";
     expect(tableEdits(src, classifyDocument(src).tableRanges)).toEqual([]);
     expect(fmt(src)).toBe(src);
+  });
+
+  // The parser already strips the ASCII space/tab padding, so whatever is left
+  // at a cell's edge is content. One column per alignment (none/left/center/right).
+  it.each([
+    ["NBSP", "\u00a0"],
+    ["ideographic space", "\u3000"],
+    ["escaped tab", "\\\t"],
+  ])("keeps %s at both cell edges, in header and body, for every alignment", (_name, edge) => {
+    const row = (text: string) => `|${Array(4).fill(` ${edge}${text}${edge} `).join("|")}|\n`;
+    const src = `${row("h")}|-|:-|:-:|-:|\n${row("body")}`;
+    const cells = (s: string) => {
+      const table = parseTable(s, 0, s.length);
+      return table && [table.header, ...table.rows].map((r) => r.cells.map((c) => c.raw));
+    };
+    const out = fmt(src);
+    expect(out).not.toBe(src);
+    expect(cells(out)).toEqual([
+      Array(4).fill(`${edge}h${edge}`),
+      Array(4).fill(`${edge}body${edge}`),
+    ]);
+    expect(fmt(out)).toBe(out);
   });
 
   it("is idempotent", () => {

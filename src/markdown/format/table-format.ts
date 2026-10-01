@@ -10,7 +10,6 @@ import type { Edit } from "./edit.js";
 import type { Range } from "./segment.js";
 
 const MIN_WIDTH = 3;
-const display = (raw: string): string => raw.trim();
 
 function pad(text: string, width: number, align: Align | undefined): string {
   const gap = Math.max(0, width - text.length);
@@ -42,14 +41,14 @@ export function formatTableBlock(table: Table): string {
   const aligns = tableAlign(table);
   const widths: number[] = [];
   for (let c = 0; c < cols; c++) {
-    let w = Math.max(MIN_WIDTH, display(table.header.cells[c]?.raw ?? "").length);
+    let w = Math.max(MIN_WIDTH, (table.header.cells[c]?.raw ?? "").length);
     for (const row of table.rows) {
-      w = Math.max(w, display(row.cells[c]?.raw ?? "").length);
+      w = Math.max(w, (row.cells[c]?.raw ?? "").length);
     }
     widths[c] = w;
   }
   const renderRow = (cells: readonly { raw: string }[], indent: string, ending: string): string =>
-    `${indent}| ${widths.map((w, c) => pad(display(cells[c]?.raw ?? ""), w, aligns[c])).join(" | ")} |${ending}`;
+    `${indent}| ${widths.map((w, c) => pad(cells[c]?.raw ?? "", w, aligns[c])).join(" | ")} |${ending}`;
 
   let out = renderRow(table.header.cells, table.header.leadingIndent, table.header.lineEnding);
   out += `${table.delimiter.leadingIndent}| ${widths.map((w, c) => delimiterCell(w, aligns[c])).join(" | ")} |${table.delimiter.lineEnding}`;
