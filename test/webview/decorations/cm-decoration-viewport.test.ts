@@ -4,6 +4,7 @@ import type { DecorationSet } from "@codemirror/view";
 import { describe, expect, it } from "vitest";
 import { syntaxRevealProviders } from "../../../src/webview/cm/decorations/index.js";
 import type { BuildContext } from "../../../src/webview/cm/decorations/types.js";
+import { HEAVY_FIXTURE_TIMEOUT_MS } from "../../shared/heavy-fixture-timeout.js";
 import { fullTree } from "../helpers/full-tree.js";
 
 function bigMarkHeavyDoc(targetBytes: number): string {
@@ -74,19 +75,25 @@ describe("decoration providers — viewport-only build (functional contract)", (
     }
   });
 
-  it("for every provider, a 1MB doc with a tiny viewport emits FAR fewer decorations than the same doc with whole-doc viewport", () => {
-    const doc = bigMarkHeavyDoc(1_000_000); // 1MB
-    const tiny = ctx(doc, [{ from: 0, to: 1000 }]);
-    const whole = ctx(doc, [{ from: 0, to: doc.length }]);
-    for (const p of syntaxRevealProviders) {
-      const tinyCount = countDecorations(p.build(tiny));
-      const wholeCount = countDecorations(p.build(whole));
-      // 1MB has ~25k constructs; tiny viewport touches a handful. The ratio
-      // is functional, not wall-clock — a regression that walks state.doc
-      // would emit wholeCount decorations regardless of the supplied window.
-      expect(tinyCount).toBeLessThan(wholeCount / 10);
-    }
-  });
+  it(
+    "for every provider, a 1MB doc with a tiny viewport emits FAR fewer decorations than the same doc with whole-doc viewport",
+    () => {
+      const doc = bigMarkHeavyDoc(1_000_000); // 1MB
+      const tiny = ctx(doc, [{ from: 0, to: 1000 }]);
+      // Same state and tree, wider window: the two contexts differ only in
+      // visibleRanges, so the 1MB parse is paid once rather than twice.
+      const whole: BuildContext = { ...tiny, visibleRanges: [{ from: 0, to: doc.length }] };
+      for (const p of syntaxRevealProviders) {
+        const tinyCount = countDecorations(p.build(tiny));
+        const wholeCount = countDecorations(p.build(whole));
+        // 1MB has ~25k constructs; tiny viewport touches a handful. The ratio
+        // is functional, not wall-clock — a regression that walks state.doc
+        // would emit wholeCount decorations regardless of the supplied window.
+        expect(tinyCount).toBeLessThan(wholeCount / 10);
+      }
+    },
+    HEAVY_FIXTURE_TIMEOUT_MS
+  );
 
   it("orchestrator wires syntaxRevealProviders through createSyntaxReveal — no provider returns null", () => {
     const c = ctx("# h\n> q\n**b** *i* `c` ~~s~~", [{ from: 0, to: 100 }]);

@@ -23,6 +23,7 @@ import { quollOpenExternalSink } from "../../src/webview/cm/open-external.js";
 import { quollDocumentEol, serializeDocument } from "../../src/webview/cm/seed.js";
 import { type EditorHandle, mountEditor } from "../../src/webview/editor.js";
 import { type Action, initialState, type WebviewState } from "../../src/webview/state.js";
+import { HEAVY_FIXTURE_TIMEOUT_MS } from "../shared/heavy-fixture-timeout.js";
 import { fullTree } from "./helpers/full-tree.js";
 import { settledState } from "./helpers/settled-state.js";
 import { settledView } from "./helpers/settled-view.js";
@@ -1085,40 +1086,48 @@ describe("editor — postEditMessage survives a throwing post-edit dispatch (V-M
 // over-limit `edit` posts, editInFlight latches on the ack that never comes,
 // and every later keystroke replay-drops with NO user-visible signal.
 describe("editor — oversized edit is gated to the serialize-error banner (oversized-doc)", () => {
-  it("an over-limit doc posts NO edit, dispatches serialize-error, and never latches post-edit", () => {
-    vi.useFakeTimers();
-    const dispatchSpy = vi.fn();
-    const { handle, view } = mount({ onDispatch: dispatchSpy });
-    handle.applyDocument({ content: "seed", eol: "\n", canWrite: true, docVersion: 1 });
-    // Replace the whole doc with an over-limit body (one code unit past the cap).
-    const oversized = "a".repeat(MAX_CONTENT_LENGTH + 1);
-    view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: oversized } });
-    vi.advanceTimersByTime(300);
-    // The over-limit edit is intercepted on the post path — nothing reaches the host.
-    expect(editPosts()).toHaveLength(0);
-    const types = dispatchSpy.mock.calls.map(([a]) => (a as { type: string }).type);
-    // serialize-error surfaces the banner; post-edit is NEVER dispatched, so the
-    // reducer's editInFlight cannot latch.
-    expect(types).toContain("serialize-error");
-    expect(types).not.toContain("post-edit");
-    const errAction = dispatchSpy.mock.calls.find(
-      ([a]) => (a as { type: string }).type === "serialize-error"
-    )?.[0] as { error: { message: string } };
-    expect(errAction.error.message).toMatch(/too large/i);
-  });
+  it(
+    "an over-limit doc posts NO edit, dispatches serialize-error, and never latches post-edit",
+    () => {
+      vi.useFakeTimers();
+      const dispatchSpy = vi.fn();
+      const { handle, view } = mount({ onDispatch: dispatchSpy });
+      handle.applyDocument({ content: "seed", eol: "\n", canWrite: true, docVersion: 1 });
+      // Replace the whole doc with an over-limit body (one code unit past the cap).
+      const oversized = "a".repeat(MAX_CONTENT_LENGTH + 1);
+      view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: oversized } });
+      vi.advanceTimersByTime(300);
+      // The over-limit edit is intercepted on the post path — nothing reaches the host.
+      expect(editPosts()).toHaveLength(0);
+      const types = dispatchSpy.mock.calls.map(([a]) => (a as { type: string }).type);
+      // serialize-error surfaces the banner; post-edit is NEVER dispatched, so the
+      // reducer's editInFlight cannot latch.
+      expect(types).toContain("serialize-error");
+      expect(types).not.toContain("post-edit");
+      const errAction = dispatchSpy.mock.calls.find(
+        ([a]) => (a as { type: string }).type === "serialize-error"
+      )?.[0] as { error: { message: string } };
+      expect(errAction.error.message).toMatch(/too large/i);
+    },
+    HEAVY_FIXTURE_TIMEOUT_MS
+  );
 
-  it("an at-limit doc (exactly MAX_CONTENT_LENGTH) still posts a normal edit", () => {
-    vi.useFakeTimers();
-    const { handle, view } = mount();
-    handle.applyDocument({ content: "", eol: "\n", canWrite: true, docVersion: 1 });
-    // Exactly the cap is BOUNDED (isBoundedContent uses `<=`), so it must post.
-    const atLimit = "a".repeat(MAX_CONTENT_LENGTH);
-    view.dispatch({ changes: { from: 0, insert: atLimit } });
-    vi.advanceTimersByTime(300);
-    expect(editPosts()).toHaveLength(1);
-    const call = editPosts()[0] as { content: string };
-    expect(call.content.length).toBe(MAX_CONTENT_LENGTH);
-  });
+  it(
+    "an at-limit doc (exactly MAX_CONTENT_LENGTH) still posts a normal edit",
+    () => {
+      vi.useFakeTimers();
+      const { handle, view } = mount();
+      handle.applyDocument({ content: "", eol: "\n", canWrite: true, docVersion: 1 });
+      // Exactly the cap is BOUNDED (isBoundedContent uses `<=`), so it must post.
+      const atLimit = "a".repeat(MAX_CONTENT_LENGTH);
+      view.dispatch({ changes: { from: 0, insert: atLimit } });
+      vi.advanceTimersByTime(300);
+      expect(editPosts()).toHaveLength(1);
+      const call = editPosts()[0] as { content: string };
+      expect(call.content.length).toBe(MAX_CONTENT_LENGTH);
+    },
+    HEAVY_FIXTURE_TIMEOUT_MS
+  );
 });
 
 // (l) Atomic seed transaction — no readonly-empty intermediate.
