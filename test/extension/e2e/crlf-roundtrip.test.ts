@@ -152,11 +152,12 @@ describe("crlf-roundtrip", function () {
     );
   });
 
-  it("an EOL-mode switch reaches the webview as a Document carrying the new eol", async () => {
-    // The webview never infers the EOL from content, so an EOL-mode switch
-    // (status bar -> setEndOfLine) must reach it on the wire. A no-newline doc
-    // is the sharp case: its bytes are identical under either EOL, so `eol` is
-    // the ONLY thing that changes.
+  it("an EOL-mode switch keeps the webview's lineage: an Edit built before it is accepted and the next Document carries the new eol", async () => {
+    // An EOL switch advances the version without changing the text. It must not
+    // read as a foreign edit: no reseed goes out for it, and an Edit the webview
+    // built on the pre-switch version is still accepted. The webview learns the
+    // new EOL from the next Document (here: that Edit's ack). A no-newline doc is
+    // the sharp case — its bytes are identical under either EOL.
     const dir = await makeTempDir("eol-switch");
     tempFile = path.join(dir, "no-newline.md");
     await fs.writeFile(tempFile, "a");
@@ -164,8 +165,10 @@ describe("crlf-roundtrip", function () {
     const uri = vscode.Uri.file(tempFile);
     await vscode.commands.executeCommand("vscode.openWith", uri, VIEW_TYPE);
     const harness = await getHarness();
-    await harness.waitForEvent(isDocumentEvent, 8000);
+    const seed = await harness.waitForEvent(isDocumentEvent, 8000);
     const doc = await vscode.workspace.openTextDocument(uri);
+    const panel = harness.activePanel;
+    assert.ok(panel, "no active panel");
 
     async function setEol(eol: vscode.EndOfLine): Promise<void> {
       const edit = new vscode.WorkspaceEdit();
@@ -174,30 +177,66 @@ describe("crlf-roundtrip", function () {
       assert.strictEqual(doc.eol, eol, `doc.eol after setEndOfLine(${eol})`);
     }
 
-    async function expectDocumentWithEol(eol: "\n" | "\r\n", after: number) {
-      // setEndOfLine advances the version (measured on the engines.vscode
-      // floor), so the next Document past `after` is the one it produced.
-      const event = await harness.waitForEvent(isDocumentAfter(after), 5000);
-      assert.strictEqual(event.message.eol, eol, "Document eol after the EOL-mode switch");
-      assert.strictEqual(event.message.docVersion, doc.version);
-      assert.strictEqual(event.message.content, doc.getText());
-      return event;
+    // Switch, then send an Edit on the PRE-switch version; expect its ack.
+    async function switchThenEdit(eol: vscode.EndOfLine, base: number, content: string) {
+      await setEol(eol);
+      const switched = doc.version;
+      assert.ok(switched > base, "setEndOfLine advances the version");
+      panel?.simulateInbound({
+        protocol: PROTOCOL_VERSION,
+        type: "edit",
+        content,
+        baseDocVersion: base,
+      });
+      const ack = await harness.waitForEvent(isDocumentAfter(switched), 5000);
+      assert.strictEqual(
+        ack.message.content,
+        content,
+        "the pre-switch Edit was applied, not refused"
+      );
+      assert.strictEqual(ack.message.eol, eol === vscode.EndOfLine.CRLF ? "\r\n" : "\n");
+      assert.strictEqual(ack.message.docVersion, doc.version);
+      return ack;
     }
 
     // Precondition checked, not assumed: a platform default of CRLF would make
     // the CRLF step below a no-op.
+    let base = seed.message.docVersion;
     if (doc.eol !== vscode.EndOfLine.LF) {
-      const before = doc.version;
-      await setEol(vscode.EndOfLine.LF);
-      await expectDocumentWithEol("\n", before);
+      base = (await switchThenEdit(vscode.EndOfLine.LF, base, "a0")).message.docVersion;
     }
+    base = (await switchThenEdit(vscode.EndOfLine.CRLF, base, "ab")).message.docVersion;
+    await switchThenEdit(vscode.EndOfLine.LF, base, "abc");
+  });
 
-    const beforeCrlf = doc.version;
-    await setEol(vscode.EndOfLine.CRLF);
-    await expectDocumentWithEol("\r\n", beforeCrlf);
+  it("keystrokes typed before an EOL switch land on disk in the new EOL (Done-when)", async () => {
+    // Host body "a\nb"; the webview's Edit "a\nbc" was built before the switch to
+    // CRLF (old line endings, pre-switch base). It must be written, in CRLF.
+    const dir = await makeTempDir("eol-switch-pending");
+    tempFile = path.join(dir, "pending.md");
+    await fs.writeFile(tempFile, "a\nb");
 
-    const beforeLf = doc.version;
-    await setEol(vscode.EndOfLine.LF);
-    await expectDocumentWithEol("\n", beforeLf);
+    const uri = vscode.Uri.file(tempFile);
+    await vscode.commands.executeCommand("vscode.openWith", uri, VIEW_TYPE);
+    const harness = await getHarness();
+    const seed = await harness.waitForEvent(isDocumentEvent, 8000);
+    const doc = await vscode.workspace.openTextDocument(uri);
+    assert.strictEqual(doc.eol, vscode.EndOfLine.LF, "fixture opens as LF");
+
+    const edit = new vscode.WorkspaceEdit();
+    edit.set(uri, [vscode.TextEdit.setEndOfLine(vscode.EndOfLine.CRLF)]);
+    assert.strictEqual(await vscode.workspace.applyEdit(edit), true);
+    const switched = doc.version;
+
+    harness.activePanel?.simulateInbound({
+      protocol: PROTOCOL_VERSION,
+      type: "edit",
+      content: "a\nbc",
+      baseDocVersion: seed.message.docVersion,
+    });
+    const ack = await harness.waitForEvent(isDocumentAfter(switched), 5000);
+    assert.strictEqual(ack.message.content, "a\r\nbc");
+    assert.strictEqual(await doc.save(), true);
+    assert.strictEqual(await fs.readFile(tempFile, "utf8"), "a\r\nbc");
   });
 });

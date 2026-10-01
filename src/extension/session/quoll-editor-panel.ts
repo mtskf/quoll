@@ -114,6 +114,7 @@ import {
   buildEditRejectedMessage,
   buildThemeMessage,
 } from "./document-message.js";
+import { createEditLineage } from "./edit-lineage.js";
 import { createEditSettledBarrier } from "./edit-settled-barrier.js";
 import { createEffectExecutor } from "./effect-executor.js";
 import {
@@ -442,6 +443,26 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
     // document text/version, theme/canWrite reads, handleOpenExternal, the
     // message builders) is injected here. The builders are closures that read
     // live theme/canWrite at CALL time, preserving the freshness contract.
+    // The text last handed to the webview, for telling an EOL-only version
+    // advance from a foreign edit (session/edit-lineage.ts). Recorded as a side
+    // effect of the two docVersion-carrying builders — the one place that knows
+    // exactly which text went out under which label. A failed record resets it
+    // (every query then answers null = today's version-only judgement) and never
+    // blocks the post.
+    const lineage = createEditLineage();
+    const noteHandedText = (read: () => string, docVersion: number): void => {
+      try {
+        lineage.noteHandedText(read(), docVersion, document.version);
+      } catch (err) {
+        lineage.reset();
+        console.warn("[quoll] edit-lineage record failed; lineage reset", err);
+      }
+    };
+    // The lineage answer for a lock-free resync. `null` while the write lock is
+    // held: the reducer ignores it there, and no extra getText() runs under
+    // the lock.
+    const liveLineageSince = (readLiveText: () => string): number | null =>
+      isWriteLockHeld(state) ? null : lineage.lineageSince(readLiveText());
     const { post, runEffects } = createEffectExecutor({
       isDisposed: () => disposed,
       getState: () => state,
@@ -465,22 +486,30 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
       recordEvent: (m) => this.harness?.recordEvent(m, document.uri.toString()),
       showError,
       canWrite: canWriteNow,
-      buildSeedDocument: (docVersion, externalEpoch, epochGeneration) =>
-        buildDocumentMessageFromDocument(document, {
+      buildSeedDocument: (docVersion, externalEpoch, epochGeneration) => {
+        const message = buildDocumentMessageFromDocument(document, {
           docVersion,
           themeKind: themeKindFromColorTheme(window.activeColorTheme.kind),
           canWrite: canWriteNow(),
           externalEpoch,
           epochGeneration,
-        }),
-      buildRejectedDraft: (content, docVersion, externalEpoch, epochGeneration) =>
-        buildRejectedDraftFromDocument(document, content, {
+        });
+        noteHandedText(() => message.content, docVersion);
+        return message;
+      },
+      buildRejectedDraft: (content, docVersion, externalEpoch, epochGeneration) => {
+        const message = buildRejectedDraftFromDocument(document, content, {
           docVersion,
           themeKind: themeKindFromColorTheme(window.activeColorTheme.kind),
           canWrite: canWriteNow(),
           externalEpoch,
           epochGeneration,
-        }),
+        });
+        // The HOST text under this label, not the draft: the draft is the
+        // webview's own bytes, and its next Edit is built on this label.
+        noteHandedText(() => canonicalDocumentText(document), docVersion);
+        return message;
+      },
       buildTheme: (themeKind) => buildThemeMessage(themeKind),
       buildEditRejected: (error) => buildEditRejectedMessage(error),
       applyEditSeam: {
@@ -620,7 +649,11 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
           )
         ),
       dispatchDocumentChanged: (documentVersion) => {
-        dispatch({ type: "documentChanged", documentVersion });
+        dispatch({
+          type: "documentChanged",
+          documentVersion,
+          lineageSince: liveLineageSince(() => canonicalDocumentText(document)),
+        });
         // A documentChanged fire means the buffer content advanced — refresh the
         // word/char count slot off the same signal, no extra listener. (Routing —
         // immediate vs coalesced — lives in revert-rescue-wiring's onDocumentChange.)
@@ -830,14 +863,18 @@ export class QuollEditorPanel implements CustomTextEditorProvider {
           // an external edit that raced the apply→settle window wins instead of
           // being clobbered) and only then passes it into `decideEdit` alongside
           // the stash. No host re-read is needed here.
-          dispatch({
-            type: "edit",
-            baseDocVersion: raw.baseDocVersion,
-            content: raw.content,
-            documentVersion: document.version,
-            canWrite: canWriteNow(),
-            currentContent: isWriteLockHeld(state) ? "" : canonicalDocumentText(document),
-          });
+          {
+            const currentContent = isWriteLockHeld(state) ? "" : canonicalDocumentText(document);
+            dispatch({
+              type: "edit",
+              baseDocVersion: raw.baseDocVersion,
+              content: raw.content,
+              documentVersion: document.version,
+              canWrite: canWriteNow(),
+              currentContent,
+              lineageSince: liveLineageSince(() => currentContent),
+            });
+          }
           return;
         case "open-external":
           dispatch({ type: "openExternal", href: raw.href });

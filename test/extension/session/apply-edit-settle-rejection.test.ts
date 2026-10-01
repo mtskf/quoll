@@ -247,7 +247,11 @@ function harness(options: HarnessOptions = {}) {
         }
         doc.version += 1;
         if (!options.dropLockHeldDocumentChanged) {
-          dispatchEvent({ type: "documentChanged", documentVersion: doc.version });
+          dispatchEvent({
+            type: "documentChanged",
+            documentVersion: doc.version,
+            lineageSince: null,
+          });
         }
         return true;
       },
@@ -297,7 +301,7 @@ function harness(options: HarnessOptions = {}) {
     externalEdit: (text: string) => {
       doc.text = text;
       doc.version += 1;
-      dispatchEvent({ type: "documentChanged", documentVersion: doc.version });
+      dispatchEvent({ type: "documentChanged", documentVersion: doc.version, lineageSince: null });
     },
     // One keystroke, shaped as the panel shapes it: base = the version the
     // webview last received, document snapshots read live at dispatch time.
@@ -309,6 +313,7 @@ function harness(options: HarnessOptions = {}) {
         documentVersion: doc.version,
         canWrite: true,
         currentContent: doc.text,
+        lineageSince: null,
       });
     },
   };

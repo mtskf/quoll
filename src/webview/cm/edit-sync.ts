@@ -956,7 +956,11 @@ export function createEditSync(opts: EditSyncOptions): EditSync {
     // is nothing to carry forward, so the recorded pair is the right fallback.
     acksInFlightEdit: (content, externalEpoch, epochGeneration) =>
       inFlight !== null &&
-      content === inFlight.content &&
+      // EOL-insensitive: an ack that crossed an EOL-mode switch echoes our
+      // bytes in the document's NEW line endings (the host canonicalises) —
+      // still our ack. Lineage continuity below is what keeps a coincidental
+      // foreign match from folding.
+      sameTextIgnoringEol(content, inFlight.content) &&
       !supersedesIdentity({
         from: buffered ?? recordedIdentity(),
         to: incomingIdentity(externalEpoch, epochGeneration),

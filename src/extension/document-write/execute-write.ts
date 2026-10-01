@@ -38,6 +38,7 @@
 // and the dispatch on the single-threaded extension host.
 
 import { perfNow, perfRecord } from "../../shared/perf.js";
+import { sameTextIgnoringEol } from "../../shared/text-equality.js";
 import type { MinimalEditSpan } from "./minimal-edit.js";
 import { minimalEditSpan } from "./minimal-edit.js";
 
@@ -180,15 +181,20 @@ export async function executeDocumentWrite<TEdit>(
   // the reducer path holds the write lock, the rescue path is lock-free but
   // same-tick — no inbound edit interleaves before the first await).
   const oldText = adapter.readText();
-  const span = minimalEditSpan(oldText, content);
 
   // The two pre-apply snapshots the outcome always carries, canonicalised once
   // here (contract: every terminal outcome — including buildThrew — populates
   // all four fields, captured at verify time). `intendedContent` is the target
-  // canonicalised to the document EOL, so the divergence check below is a direct
-  // `===` against the equally-canonical settled read.
+  // canonicalised to the document EOL.
   const intendedContent = adapter.canonicalize(content);
   const preApplyContent = adapter.canonicalize(oldText);
+  // Diff against the CANONICAL target, not the raw content: an Edit built before
+  // an EOL-mode switch still carries the old line endings, and diffing those
+  // against the switched buffer would turn a one-character keystroke into a
+  // near-whole-document replace (caret/fold remap in a split text editor, one
+  // huge undo entry). Canonicalised, the span is the real edit, and an EOL-only
+  // difference is an empty span (the no-op short-circuit below).
+  const span = minimalEditSpan(oldText, intendedContent);
 
   // Read the settled snapshot + tag the outcome. Wrapped in the `host:settle-
   // verify` perf stage (the canonical settled read is the O(n) cost the S3a
@@ -266,9 +272,9 @@ export async function executeDocumentWrite<TEdit>(
     };
   };
 
-  // No-op short-circuit (defensive — the reducer already gates no-ops via the
-  // canonical currentContent compare; only a mixed-EOL literal-buffer match
-  // could reach here). Settle `applied` with the UNCHANGED document WITHOUT
+  // No-op short-circuit (defensive — the reducer already gates no-ops via its
+  // EOL-insensitive currentContent compare; only a mixed-EOL literal buffer, or
+  // the revert-rescue restore path that has no reducer gate, reaches here). Settle `applied` with the UNCHANGED document WITHOUT
   // submitting an empty WorkspaceEdit (the ok/refused of an empty edit is not
   // API-guaranteed). Never `diverged`: this path runs no compare at all. It yields
   // `applied`, or `appliedUnverified` if the settle-time content read throws — the
@@ -315,10 +321,12 @@ export async function executeDocumentWrite<TEdit>(
   }
 
   // Apply landed. POST-APPLY VERIFY: compare the canonical settled content
-  // against the canonical intended content. Both are normalised to the document
-  // EOL, so a direct `===` is exact (no EOL-insensitive compare needed here —
-  // unlike the reducer's inFlight compare, whose operands differ in EOL form). A
-  // mismatch means a racing edit spliced at a stale offset (S5: desktop
+  // against the canonical intended content, EOL-insensitively. Both are
+  // normalised to the document EOL — but to its EOL at two different moments:
+  // an EOL-mode switch landing inside the apply→settle window re-canonicalises
+  // the settled read to the new EOL, and the same text in new line endings is
+  // not a divergence (the reducer's inFlight compare is EOL-insensitive for the
+  // same reason; one predicate, `sameTextIgnoringEol`). A TEXT mismatch means a racing edit spliced at a stale offset (S5: desktop
   // MISPLACES) OR an external edit won the apply→settle race — indistinguishable
   // by bytes, handled identically by convergence (diverged). The one
   // undetectable escape: a wrong splice whose final bytes coincidentally equal
@@ -329,7 +337,7 @@ export async function executeDocumentWrite<TEdit>(
     // forces the reducer's foreign-bytes verdict and drops the replay buffer.
     return settled;
   }
-  return settled.settledContent === settled.intendedContent
+  return sameTextIgnoringEol(settled.settledContent, settled.intendedContent)
     ? settled
     : { ...settled, tag: "diverged" };
 }

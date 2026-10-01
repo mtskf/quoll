@@ -14,8 +14,7 @@ describe("decideEdit", () => {
     }) as const;
 
   const baseInput = {
-    baseDocVersion: 5,
-    lastAppliedDocVersion: 5,
+    baseIsCurrent: true,
     canWrite: true,
     content: "# hello\n",
     currentContent: "different\n",
@@ -26,18 +25,12 @@ describe("decideEdit", () => {
     expect(decideEdit(baseInput).kind).toBe("accept");
   });
 
-  it("rejects with kind=stale when baseDocVersion < lastAppliedDocVersion", () => {
-    // The webview was editing on top of an older version than the host now
-    // holds — the host must NOT applyEdit; it resyncs by posting the
-    // current authoritative Document on the call site.
-    expect(decideEdit({ ...baseInput, baseDocVersion: 4 }).kind).toBe("stale");
-  });
-
-  it("rejects with kind=stale when baseDocVersion > lastAppliedDocVersion", () => {
-    // Impossible from a correct webview (the webview never mints version
-    // numbers), but the host treats unexpected-newer the same as
-    // unexpected-older — both fail strict equality, both resync.
-    expect(decideEdit({ ...baseInput, baseDocVersion: 6 }).kind).toBe("stale");
+  it("rejects with kind=stale when the base is not the current text", () => {
+    // The webview was editing on top of text the host no longer holds — the
+    // host must NOT applyEdit; it resyncs by posting the current
+    // authoritative Document on the call site. (Which versions count as
+    // current is the reducer's decision — host-session-core.test.ts.)
+    expect(decideEdit({ ...baseInput, baseIsCurrent: false }).kind).toBe("stale");
   });
 
   it("rejects with kind=readonly when canWrite=false", () => {
@@ -54,8 +47,7 @@ describe("decideEdit", () => {
     const verdict = decideEdit({
       ...baseInput,
       canWrite: false,
-      baseDocVersion: 4,
-      lastAppliedDocVersion: 5,
+      baseIsCurrent: false,
     });
     expect(verdict.kind).toBe("readonly");
   });
@@ -75,6 +67,19 @@ describe("decideEdit", () => {
       ...baseInput,
       content: "# hello\n",
       currentContent: "# hello\n",
+    });
+    expect(verdict.kind).toBe("no-op");
+  });
+
+  it("treats an EOL-only difference as no-op, never validating or writing it", () => {
+    // An Edit built before an EOL-mode switch carries the old line endings;
+    // `currentContent` is canonicalised to the new ones. Same text → no-op, so
+    // the validator (here: one that would fail) is never consulted.
+    const verdict = decideEdit({
+      ...baseInput,
+      content: "a\nb",
+      currentContent: "a\r\nb",
+      markdownValidator: failValidator,
     });
     expect(verdict.kind).toBe("no-op");
   });

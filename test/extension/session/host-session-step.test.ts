@@ -904,6 +904,7 @@ describe("createHostSessionStep", () => {
       documentVersion: state.lastAppliedDocVersion,
       canWrite: true,
       currentContent: "edit1",
+      lineageSince: null,
     });
     expect(effects.some((e) => e.type === "applyEdit" && e.content === "next")).toBe(true);
   });

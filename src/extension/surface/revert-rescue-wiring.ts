@@ -372,8 +372,11 @@ export function createRevertRescueWiring(deps: RevertRescueWiringDeps): RevertRe
   // no-op. On a positive decision it BEST-EFFORT suppresses the debounced disk
   // (revert) repost — cancel() clears a timer a revert change-event may already
   // have scheduled, and the change-event caller ALSO early-returns so it never
-  // schedules one. The restore's OWN change event then reposts the authoritative
-  // dirty Document as the FINAL state. On restore FAILURE the onFailure reseeds the
+  // schedules one. The restore's OWN change event then resyncs the webview: it
+  // reposts the authoritative dirty Document as the FINAL state, unless the
+  // restored text is the text the webview was last handed (the usual case — the
+  // revert never reached it) — then the edit lineage (session/edit-lineage.ts)
+  // proves nothing changed for the webview and nothing is posted. On restore FAILURE the onFailure reseeds the
   // webview to the real (disk) doc so the live panel never silently diverges (the
   // toast already warned the user). Returns true iff a rescue was performed.
   // Skipped when the write lock is held (decideOnAliveRevert → rescue:false) so it

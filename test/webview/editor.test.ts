@@ -376,6 +376,45 @@ describe("editor — ok-ack while ahead does not reseed backwards (d2)", () => {
 // not, and resurface on the NEXT keystroke as bytes the host already superseded
 // (external-wins — NOT an `edit-rejected`; no banner is involved).
 // Display and replay must agree on one rule; see ARCHITECTURE.md §3/§5/§7.
+describe("editor — an ack that crossed an EOL-mode switch still folds (d2b)", () => {
+  it("does not rewind the ahead keystroke when the ack carries the new line endings", () => {
+    // EOL switched to CRLF while "a\nbc" was in flight; the host canonicalises
+    // and echoes "a\r\nbc". Revert-check: compare the ack byte-for-byte again
+    // and the view rewinds to "a\nbc" (the buffered "d" is lost on screen).
+    vi.useFakeTimers();
+    const onLocalEditDiscarded = vi.fn();
+    const { handle, view, commit } = mount({ onLocalEditDiscarded });
+    handle.applyDocument({
+      content: "a\nb",
+      eol: "\n",
+      canWrite: true,
+      docVersion: 1,
+      externalEpoch: 0,
+      epochGeneration: 11,
+    });
+    view.dispatch({ changes: { from: view.state.doc.length, insert: "c" } });
+    vi.advanceTimersByTime(300); // posts "a\nbc" — in flight
+    view.dispatch({ changes: { from: view.state.doc.length, insert: "d" } });
+    vi.advanceTimersByTime(300); // buffers "a\nbcd"
+    expect(editPosts()).toHaveLength(1);
+    handle.applyDocument({
+      content: "a\r\nbc",
+      eol: "\r\n",
+      canWrite: true,
+      docVersion: 2,
+      externalEpoch: 0,
+      epochGeneration: 11,
+    });
+    expect(view.state.sliceDoc()).toBe("a\nbcd"); // folded, no rewind
+    commit(false);
+    const replay = editPosts()[1] as { content: string; baseDocVersion: number };
+    // The buffer keeps the bytes it was stamped with; the host canonicalises.
+    expect(replay.content).toBe("a\nbcd");
+    expect(replay.baseDocVersion).toBe(2);
+    expect(onLocalEditDiscarded).not.toHaveBeenCalled();
+  });
+});
+
 describe("editor — ok-ack fold requires identity-lineage continuity (d3)", () => {
   // Types "2" (posted) then "3" (buffered) on top of a "D1" seed carrying the
   // given identity pair, leaving the editor AHEAD of the in-flight "D12".

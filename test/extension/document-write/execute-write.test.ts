@@ -413,3 +413,53 @@ describe("executeDocumentWrite — settle() is TOTAL (a verification read must n
     expect(o.tag).toBe("appliedUnverified");
   });
 });
+
+// An Edit built before an EOL-mode switch still carries the old line endings.
+// The write must diff against the CANONICAL target, and an EOL change landing
+// inside the apply→settle window is not a divergence.
+describe("executeDocumentWrite — EOL-mode switch", () => {
+  const toCrlf = (t: string) => t.replace(/\r\n|\r|\n/g, "\r\n");
+
+  function crlfFake(initial: string, onApply?: FakeOptions["onApply"]) {
+    const fake = makeFake({ initial, onApply });
+    const spans: MinimalEditSpan[] = [];
+    const adapter: DocumentWriteAdapter<MinimalEditSpan> = {
+      ...fake.adapter,
+      canonicalize: toCrlf,
+      build: (span) => {
+        spans.push(span);
+        return fake.adapter.build(span);
+      },
+    };
+    return { ...fake, adapter, spans };
+  }
+
+  it("an old-EOL keystroke on a CRLF buffer writes only the keystroke", async () => {
+    const { adapter, spans } = crlfFake("x\r\ny\r\nz", land("x\r\ny\r\nzq"));
+    const o = await executeDocumentWrite(adapter, "x\ny\nzq");
+    expect(spans).toEqual([{ from: 7, to: 7, insert: "q" }]);
+    expect(o.tag).toBe("applied");
+  });
+
+  it("an old-EOL Edit with the same text is a no-op (nothing built or applied)", async () => {
+    const { adapter, calls } = crlfFake("x\r\ny");
+    const o = await executeDocumentWrite(adapter, "x\ny");
+    expect(calls).not.toContain("build");
+    expect(calls).not.toContain("apply");
+    expect(o.tag).toBe("applied");
+  });
+
+  it("an EOL switch landing between apply and settle is applied, not diverged", async () => {
+    // Intended "a\nbc" on an LF buffer; by the settle read the document holds
+    // the same text in CRLF.
+    const { adapter } = makeFake({ initial: "a\nb", onApply: land("a\r\nbc") });
+    const o = await executeDocumentWrite(adapter, "a\nbc");
+    expect(o.tag).toBe("applied");
+  });
+
+  it("a real text difference is still diverged", async () => {
+    const { adapter } = makeFake({ initial: "a\nb", onApply: land("a\r\nbX") });
+    const o = await executeDocumentWrite(adapter, "a\nbc");
+    expect(o.tag).toBe("diverged");
+  });
+});
