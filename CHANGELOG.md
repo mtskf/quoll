@@ -2,6 +2,14 @@
 
 All notable changes to Quoll are documented here.
 
+## 0.1.84 — 2026-10-02
+
+### Fixed
+
+- Switching a file's line endings (LF ↔ CRLF) no longer collapses multiple cursors into one. Every cursor and selection now stays where you put it.
+- Format Document no longer deletes non-breaking spaces, full-width (ideographic) spaces or escaped tabs at the edge of a table cell.
+- Switching line endings while you are typing no longer loses unsaved keystrokes in a few remaining cases, such as when the editor tab has just become visible again.
+
 ## 0.1.83 — 2026-10-01
 
 ### Fixed
