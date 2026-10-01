@@ -5,6 +5,7 @@ import * as vscode from "vscode";
 import { PROTOCOL_VERSION } from "./constants";
 import {
   cleanupBetweenTests,
+  deferred,
   getHarness,
   isDocumentAfter,
   isDocumentEvent,
@@ -41,7 +42,9 @@ import {
  * lands before that debounce resyncs on the same epoch. The fifth pins the
  * converse: a host apply breaks the
  * lineage, so an external undo back to the pre-apply text does not let an Edit
- * on the pre-apply version overwrite it.
+ * on the pre-apply version overwrite it. The last two pin the remaining lineage
+ * wirings the same way (a visible-edge resync, and the recovery from a failed
+ * edit-rejected delivery), each acting from inside the switch's own change event.
  */
 describe("crlf-roundtrip", function () {
   this.timeout(20000);
@@ -319,6 +322,136 @@ describe("crlf-roundtrip", function () {
       settled.message.externalEpoch,
       "the switch must not advance the epoch"
     );
+  });
+
+  it("a visible-edge resync landing inside the EOL switch's debounce does not advance the epoch", async () => {
+    const dir = await makeTempDir("eol-switch-visible");
+    tempFile = path.join(dir, "visible.md");
+    await fs.writeFile(tempFile, "a\nb");
+
+    const uri = vscode.Uri.file(tempFile);
+    await vscode.commands.executeCommand("vscode.openWith", uri, VIEW_TYPE);
+    const harness = await getHarness();
+    const seed = await harness.waitForEvent(isDocumentEvent, 8000);
+    const doc = await vscode.workspace.openTextDocument(uri);
+    assert.strictEqual(doc.eol, vscode.EndOfLine.LF, "fixture opens as LF");
+    const panel = harness.activePanel;
+    assert.ok(panel, "no active panel");
+    // Wait for the webview's own `ready` (and its resync) instead of sleeping.
+    await harness.waitForInbound(
+      (e) => (e.raw as { type?: unknown } | null)?.type === "ready",
+      8000
+    );
+    const before = doc.version;
+
+    // Real view-state events are VS-Code-timed, so drive the visible-edge resync
+    // from inside the switch's own change event: synchronously ahead of the
+    // debounced `documentChanged`, so only that dispatch's lineage answer can keep
+    // the epoch.
+    let fired = 0;
+    const sub = vscode.workspace.onDidChangeTextDocument((e) => {
+      if (e.document.uri.toString() !== uri.toString()) {
+        return;
+      }
+      sub.dispose();
+      fired++;
+      panel.simulateViewStateVisible();
+    });
+    try {
+      const edit = new vscode.WorkspaceEdit();
+      edit.set(uri, [vscode.TextEdit.setEndOfLine(vscode.EndOfLine.CRLF)]);
+      assert.strictEqual(await vscode.workspace.applyEdit(edit), true);
+    } finally {
+      sub.dispose();
+    }
+    assert.strictEqual(fired, 1, "the switch fired no change event to resync from");
+
+    const resync = await harness.waitForEvent(isDocumentAfter(before), 5000);
+    assert.strictEqual(resync.message.docVersion, doc.version);
+    assert.strictEqual(resync.message.eol, "\r\n");
+    assert.strictEqual(
+      resync.message.externalEpoch,
+      seed.message.externalEpoch,
+      "the switch must not advance the epoch"
+    );
+  });
+
+  it("an edit-rejected delivery failure landing inside the EOL switch's debounce recovers without advancing the epoch", async () => {
+    const dir = await makeTempDir("eol-switch-reject-recovery");
+    tempFile = path.join(dir, "reject.md");
+    await fs.writeFile(tempFile, "a\nb");
+
+    const uri = vscode.Uri.file(tempFile);
+    await vscode.commands.executeCommand("vscode.openWith", uri, VIEW_TYPE);
+    const harness = await getHarness();
+    const seed = await harness.waitForEvent(isDocumentEvent, 8000);
+    const doc = await vscode.workspace.openTextDocument(uri);
+    assert.strictEqual(doc.eol, vscode.EndOfLine.LF, "fixture opens as LF");
+    const panel = harness.activePanel;
+    assert.ok(panel, "no active panel");
+    // The real `ready` must land BEFORE the rejection: one arriving while a
+    // rejection is pending replays it and re-stamps its delivery id, which would
+    // turn the gated failure below into a stale no-op.
+    await harness.waitForInbound(
+      (e) => (e.raw as { type?: unknown } | null)?.type === "ready",
+      8000
+    );
+
+    // Park the banner send on a gate so the rejection stays pending.
+    const gate = deferred<boolean>();
+    let bannerSends = 0;
+    harness.webviewPostMessageOverride = (m) => {
+      if (m.type === "edit-rejected") {
+        bannerSends++;
+        return gate.promise;
+      }
+      return Promise.resolve(true);
+    };
+    try {
+      // Fails the write gate (unsafe URL, same class as fixture unsafe-url.md).
+      panel.simulateInbound({
+        protocol: PROTOCOL_VERSION,
+        type: "edit",
+        content: "a\nb\n\n[bad](javascript:alert(1))\n",
+        baseDocVersion: seed.message.docVersion,
+      });
+      // The dispatch chain is synchronous: the banner send is already parked.
+      assert.strictEqual(bannerSends, 1, "the edit was not rejected, so no banner send is pending");
+      const before = doc.version;
+
+      // Refuse the delivery from inside the switch's own change event:
+      // synchronously ahead of the debounced `documentChanged`, so only the
+      // recovery's lineage answer can keep the epoch.
+      let fired = 0;
+      const sub = vscode.workspace.onDidChangeTextDocument((e) => {
+        if (e.document.uri.toString() !== uri.toString()) {
+          return;
+        }
+        sub.dispose();
+        fired++;
+        gate.resolve(false);
+      });
+      try {
+        const edit = new vscode.WorkspaceEdit();
+        edit.set(uri, [vscode.TextEdit.setEndOfLine(vscode.EndOfLine.CRLF)]);
+        assert.strictEqual(await vscode.workspace.applyEdit(edit), true);
+      } finally {
+        sub.dispose();
+      }
+      assert.strictEqual(fired, 1, "the switch fired no change event to refuse the delivery from");
+
+      const recovered = await harness.waitForEvent(isDocumentAfter(before), 5000);
+      assert.strictEqual(recovered.message.content, "a\r\nb");
+      assert.strictEqual(recovered.message.docVersion, doc.version);
+      assert.strictEqual(recovered.message.eol, "\r\n");
+      assert.strictEqual(
+        recovered.message.externalEpoch,
+        seed.message.externalEpoch,
+        "the switch must not advance the epoch"
+      );
+    } finally {
+      harness.webviewPostMessageOverride = null;
+    }
   });
 
   it("an external undo of a host apply is not the same lineage: an Edit on the pre-apply version is refused", async () => {

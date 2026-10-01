@@ -242,6 +242,7 @@ export interface PanelControlsShape {
   simulateInbound(message: WebviewToHostShape): void;
   rawSimulate(raw: unknown): void;
   readonly statusBarItems: readonly StatusBarItemProbeShape[];
+  simulateViewStateVisible(): void;
 }
 
 export interface TestHarnessShape {
