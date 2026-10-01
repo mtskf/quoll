@@ -46,6 +46,14 @@ describe("an exhausted parse budget is reported as a timeout", () => {
       /settledState: parse did not complete within 1ms for a 5000-code-unit document/
     );
   });
+
+  it("fullTree() forwards the budget its caller gives it", () => {
+    const state = EditorState.create({
+      doc: "x".repeat(5_000),
+      extensions: [neverFinishingLanguage()],
+    });
+    expect(() => fullTree(state, 7)).toThrow(/^fullTree: parse did not complete within 7ms/);
+  });
 });
 
 describe("settledState() republishes the language field's tree snapshot", () => {

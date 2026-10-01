@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import { validateMarkdownForWrite } from "../../src/markdown/validate-for-write.js";
+import { HEAVY_FIXTURE_TIMEOUT_MS } from "../shared/heavy-fixture-timeout.js";
 
 describe("validateMarkdownForWrite", () => {
   it("returns ok for benign markdown", () => {
@@ -170,21 +171,26 @@ describe("validateMarkdownForWrite", () => {
     }
   });
 
-  it("validates a ~1 MiB document of benign links without throwing or hanging", () => {
-    const ONE_LINK = "[t](https://example.com/x)\n";
-    const COPIES = Math.ceil((1 << 20) / ONE_LINK.length);
-    const src = ONE_LINK.repeat(COPIES);
-    expect(() => validateMarkdownForWrite(src)).not.toThrow();
-    const result = validateMarkdownForWrite(src);
-    // STRICT: benign 1-MiB content MUST round-trip as ok. Accepting
-    // `internal_error` here would mask a regression class where a
-    // future parser change throws on large inputs — the catch arm at
-    // validate-for-write.ts converts every throw to `internal_error`,
-    // the smoke test would stay green, and every user save of a
-    // moderately-sized file would surface an error toast in real use.
-    // The catch-arm wiring is already pinned by the mocked-throw
-    // tests above; this test pins the EFFICACY claim — the parser
-    // actually handles benign 1-MiB documents.
-    expect(result.ok).toBe(true);
-  }, 15_000);
+  it(
+    "validates a ~1 MiB document of benign links without throwing",
+    () => {
+      const ONE_LINK = "[t](https://example.com/x)\n";
+      const COPIES = Math.ceil((1 << 20) / ONE_LINK.length);
+      const src = ONE_LINK.repeat(COPIES);
+      // One call, not a not.toThrow() probe plus a second call: a throw here fails
+      // the test just the same, and each call is a full 1 MiB parse.
+      const result = validateMarkdownForWrite(src);
+      // STRICT: benign 1-MiB content MUST round-trip as ok. Accepting
+      // `internal_error` here would mask a regression class where a
+      // future parser change throws on large inputs — the catch arm at
+      // validate-for-write.ts converts every throw to `internal_error`,
+      // the smoke test would stay green, and every user save of a
+      // moderately-sized file would surface an error toast in real use.
+      // The catch-arm wiring is already pinned by the mocked-throw
+      // tests above; this test pins the EFFICACY claim — the parser
+      // actually handles benign 1-MiB documents.
+      expect(result.ok).toBe(true);
+    },
+    HEAVY_FIXTURE_TIMEOUT_MS
+  );
 });

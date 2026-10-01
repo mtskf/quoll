@@ -19,8 +19,11 @@ import { parseToEnd } from "./parse-to-end.js";
  * If the parse does not finish we THROW rather than silently fall back to a
  * partial tree: a "fullTree" that quietly returned an incomplete tree would
  * resurrect the exact flake this helper exists to kill. Tests that DELIBERATELY
- * tolerate a partial tree (e.g. the viewport ratio assertion over a 1MB doc)
- * keep their own `?? syntaxTree(state)` fallback and must NOT use this helper.
+ * tolerate a partial tree keep their own `?? syntaxTree(state)` fallback and
+ * must NOT use this helper.
+ *
+ * `budgetMs` defaults to `parseToEnd`'s 5 s. Only a MiB-scale fixture, whose
+ * parse can outlast that on a loaded machine, passes a wider one.
  *
  * The throw lives in `parseToEnd` so that this helper and `settledState()` —
  * documented below as a matched pair — report the same two `null` causes the
@@ -33,8 +36,8 @@ import { parseToEnd } from "./parse-to-end.js";
  * `foldable()`, any `foldService` / `foldNodeProp`) rather than through the
  * returned tree, use `settledState()` in ./settled-state.ts instead.
  */
-export function fullTree(state: EditorState) {
-  const tree = parseToEnd(state, "fullTree");
+export function fullTree(state: EditorState, budgetMs?: number) {
+  const tree = parseToEnd(state, "fullTree", budgetMs);
   // `ensureSyntaxTree` decides success from the parse CONTEXT's `treeLen`
   // (`stoppedAt ?? doc.length`), not from the tree it hands back, so a non-null
   // return is not by itself evidence that the tree reaches the doc end.
