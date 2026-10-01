@@ -90,9 +90,9 @@ export interface DocumentWriteAdapter<TEdit> {
 
 /** Complete outcome tag set — one per today's five `ApplyEditOutcome` kinds,
  *  plus `diverged` (an `ok` apply whose landed TEXT differs from intended, EOL
- *  aside) and `appliedUnverified` (the pipeline completed, but the settle-time CONTENT read
- *  threw so the divergence check could not run). The session wrapper and the
- *  rescue map 1:1 from these (see callers). */
+ *  aside) and `appliedUnverified` (the pipeline completed, but the settle-time
+ *  CONTENT read threw so the divergence check could not run). The session
+ *  wrapper and the rescue map 1:1 from these (see callers). */
 export type DocumentWriteTag =
   // ⚠️ "pipeline ok" means the pipeline COMPLETED without failing, NOT that an
   // apply landed: the no-op short-circuit reaches `applied` / `appliedUnverified`

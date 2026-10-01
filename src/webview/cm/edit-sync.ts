@@ -488,8 +488,9 @@ export function createEditSync(opts: EditSyncOptions): EditSync {
   // bytes" means. In this module it is asked here (the loss judgement) and in
   // `acksInFlightEdit` (is this Document our ack?), never to decide WHAT bytes
   // to post: the host canonicalises a Document to `document.eol` while this side
-  // posts whatever its `quollDocumentEol` facet holds. The facet takes the wire `eol`, so the two
-  // agree in steady state, but bytes held across an EOL-mode switch still carry
+  // posts whatever its `quollDocumentEol` facet holds. The facet takes the wire
+  // `eol`, so the two agree in steady state, but bytes held across an EOL-mode
+  // switch still carry
   // the old EOL — an EOL-only difference is skew between the two sides, and
   // reporting it as a lost edit trains the user to ignore a notice that
   // otherwise only fires on real loss.

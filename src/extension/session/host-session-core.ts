@@ -853,9 +853,9 @@ export function createHostSessionCore(context: HostSessionContext, deps: HostSes
         // setEndOfLine, which advances the version WITHOUT a repost when the
         // lineage proves the text unchanged — see the `documentChanged` arm —
         // so the webview learns the new EOL only from its next Document) still
-        // carries the OLD EOL. A byte
-        // compare would then read that edit as "foreign bytes" and bump the epoch
-        // on the webview's OWN acked lineage. EOL mode is a canonicalisation
+        // carries the OLD EOL. A byte compare would then read that edit as
+        // "foreign bytes" and bump the epoch on the webview's OWN acked
+        // lineage. EOL mode is a canonicalisation
         // detail everywhere else in the pipeline, so the foreign-bytes verdict
         // must ignore it. The `a === b` fast path keeps the hot typing path
         // (byte-identical settle) regex-free — the normalise only runs when the
