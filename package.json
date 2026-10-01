@@ -348,7 +348,7 @@
     "@vitest/browser-playwright": "^4.1.10",
     "@vitest/coverage-v8": "^4.1.10",
     "@vscode/test-electron": "^3.0.0",
-    "@vscode/vsce": "^3.9.1",
+    "@vscode/vsce": "^4.0.0",
     "esbuild": "^0.25.0",
     "happy-dom": "^20.10.6",
     "mocha": "^11",
