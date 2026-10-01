@@ -8,9 +8,12 @@
 // that switch reads as a foreign edit: the epoch advances and the webview drops
 // its unsent keystrokes, and an Edit built just before it is refused as stale.
 //
-// This records the one thing that settles it: the text the host last HANDED
-// the webview (on every docVersion-carrying post) and `since`, the first label
-// that carried that text. A later live text that equals it (EOL aside) is the
+// This records the one thing that settles it: the host's text under each
+// docVersion-carrying label — usually the text handed to the webview, but a
+// rejected-draft reseed hands the webview its own draft bytes instead and
+// records the host's canonical text here (see buildRejectedDraft in
+// quoll-editor-panel.ts) — and `since`, the first label that carried that
+// text. A later live text that equals it (EOL aside) is the
 // same lineage — every label from `since` on is a valid base for it. The panel
 // resets it on every host apply: from then on the document has carried text the
 // webview produced and was never handed, so an external undo back to the old
@@ -21,7 +24,9 @@
 import { sameTextIgnoringEol } from "../../shared/text-equality.js";
 
 export interface EditLineage {
-  /** Record the text a docVersion-carrying message was built from.
+  /** Record the host's text under a docVersion-carrying label — usually the
+   *  text handed to the webview, but a rejected-draft reseed hands the
+   *  webview its own draft bytes and records the host's canonical text here.
    *  `docVersion` is the label on the message; `liveVersion` is
    *  `document.version` at the time the text was read. */
   noteHandedText(read: () => string, docVersion: number, liveVersion: number): void;
