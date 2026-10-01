@@ -114,22 +114,24 @@ describe("htmlToMarkdown — inline constructs", () => {
   it("hoists a long <br> run fenced by text on both sides in linear time", () => {
     // Regression pin for the O(n²) backtracking a `^edge*? core edge*$` regex hit
     // on this exact shape (a long <br> run bounded by non-hoistable text). The
-    // linear-scan hoist keeps it O(n); the prior regex took >2s here for K=40000.
-    // Assert the MEDIAN of 3 samples, not min or a single reading: the median
-    // tolerates one transient CI load spike (no flake, the O(n) scan runs ~150ms)
-    // yet still fails when latency is sustained — the O(n²) regex was slow on every
-    // sample, so its median stays >2s (min-of-N would mask a consistently-slow op).
-    const K = 40000;
-    const html = `<p><strong>x${"<br>".repeat(K)}x</strong>y</p>`;
-    const samples: number[] = [];
-    for (let i = 0; i < 3; i++) {
-      const t0 = performance.now();
-      const md = convert(html);
-      samples.push(performance.now() - t0);
-      expect(md).not.toBeNull();
-    }
-    samples.sort((a, b) => a - b);
-    expect(samples[1]).toBeLessThan(1200); // median of 3
+    // linear-scan hoist keeps it O(n).
+    // Pin the GROWTH, not a wall-clock bound: an absolute ms limit goes red on a
+    // loaded machine, while load slows both sizes alike and leaves their ratio
+    // alone. For 4x the input, the linear scan measured 2.0–5.0x the time and the
+    // O(n²) regex 13.1–13.6x (16x diluted by the linear DOM parse), so 8 separates
+    // them. Min-of-3 per size: the fastest sample is the least load-disturbed one.
+    const fastestMs = (k: number): number => {
+      const html = `<p><strong>x${"<br>".repeat(k)}x</strong>y</p>`;
+      let fastest = Number.POSITIVE_INFINITY;
+      for (let i = 0; i < 3; i++) {
+        const t0 = performance.now();
+        expect(convert(html)).not.toBeNull();
+        fastest = Math.min(fastest, performance.now() - t0);
+      }
+      return fastest;
+    };
+    const K = 10000;
+    expect(fastestMs(4 * K) / fastestMs(K)).toBeLessThan(8);
   });
   it("converts inline code and does NOT escape its content", () => {
     expect(convert("<p><code>a*b_c</code></p>")).toBe("`a*b_c`");
